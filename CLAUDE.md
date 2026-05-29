@@ -33,14 +33,7 @@ pfBlockerNG/
 └── README.md
 ```
 
-Release archives include only `usr/` and `etc/`. Everything else (stubs, scripts, tests, CI, pyproject.toml, `.githooks/`) is dev-only.
-
----
-
-## Git hooks
-
-`.githooks/pre-push` enforces tag naming before pushes reach the remote.
-Activate once after cloning: `git config core.hooksPath .githooks`
+Release archives include only `usr/` and `etc/`. Everything else (stubs, scripts, tests, CI, pyproject.toml) is dev-only.
 
 ---
 
