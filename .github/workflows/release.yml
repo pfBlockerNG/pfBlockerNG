@@ -10,27 +10,34 @@ on:
       - 'v[0-9]*.[0-9]*.[0-9]*'
 
 jobs:
-  # ── 1. Test ──────────────────────────────────────────────────────────────
-  test:
-    name: pytest / Python ${{ matrix.python-version }}
+  # ── 1. Verify ────────────────────────────────────────────────────────────
+  verify-checks:
+    name: Verify commit checks passed
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        python-version: ['3.11', '3.12', '3.13']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
-      - run: python -m pytest
+      - name: Check 'All tests passed' status for tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.sha }}"
+          REPO="${{ github.repository }}"
+
+          CONCLUSION=$(gh api \
+            "repos/${REPO}/commits/${SHA}/check-runs" \
+            --jq '[.check_runs[] | select(.name == "All tests passed")]
+                  | sort_by(.completed_at) | last | .conclusion // "not_found"')
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "Error: 'All tests passed' for ${SHA} is '${CONCLUSION}'."
+            echo "Push the commit to a branch first and wait for CI to pass before tagging."
+            exit 1
+          fi
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: test
+    needs: verify-checks
     permissions:
       contents: write
 
