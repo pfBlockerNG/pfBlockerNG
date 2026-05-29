@@ -59,6 +59,21 @@ jobs:
             | head -1)
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
+          # Enforce tag naming convention per branch
+          case "$BRANCH" in
+            devel)
+              case "$TAG" in
+                *-devel) ;;
+                *) echo "Error: tags from 'devel' must match vX.X.X-devel (got '${TAG}')"; exit 1 ;;
+              esac
+              ;;
+            main)
+              case "$TAG" in
+                *-devel) echo "Error: tags from 'main' must not have -devel suffix (got '${TAG}')"; exit 1 ;;
+              esac
+              ;;
+          esac
+
           # Tags from 'devel' are pre-releases
           if [ "$BRANCH" = "devel" ]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
