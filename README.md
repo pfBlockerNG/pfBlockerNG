@@ -146,12 +146,12 @@ When a new version is ready to ship, tag the commit and push the tag:
 
 ```sh
 # From devel (pre-release)
-git tag v3.2.17
-git push origin v3.2.17
+git tag v3.2.17-devel
+git push origin v3.2.17-devel
 
 # From main (production release)
 git tag v3.2.16
-git push origin v3.2.16
+
 ```
 
 The release workflow will:
