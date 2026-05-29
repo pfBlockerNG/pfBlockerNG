@@ -22,9 +22,9 @@ alias="${1}"
 prefix="${2}"
 
 if [ "${prefix}" == '_v4' ]; then
-	cat "${alias}" | jq -r '.prefixes[] | select(.region | startswith("af-")) .ip_prefix' | iprange > "${tempfile}"
+	jq -r '.prefixes[] | select(.region | startswith("af-")) .ip_prefix' "${alias}" | iprange > "${tempfile}"
 else
-	cat "${alias}" | jq -r '.ipv6_prefixes[] | select(.region | startswith("af-")) .ipv6_prefix' > "${tempfile}"
+	jq -r '.ipv6_prefixes[] | select(.region | startswith("af-")) .ipv6_prefix' "${alias}" > "${tempfile}"
 fi
 
 if [ -s "${tempfile}" ]; then
