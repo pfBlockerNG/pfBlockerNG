@@ -481,6 +481,10 @@ def pfb_regex_match(q_name):
     return False
 
 
+def is_idn_domain(q_name: str) -> bool:
+    return q_name.startswith('xn--') or '.xn--' in q_name
+
+
 def get_q_name_qstate(qstate):
     q_name = ''
     try:
@@ -756,19 +760,22 @@ def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
         if q_ip == 'Unknown':
             q_ip = '127.0.0.1'
 
-        for i in range(2):
-            try:
-                timestamp = datetime.now().strftime("%b %-d %H:%M:%S")
-            except TypeError:
-                pass
-                continue
-            break
+        timestamp = make_timestamp()
 
         csv_line = ','.join('{}'.format(v) for v in ('DNSBL-python', timestamp, q_name, q_ip, isDNSBL['p_type'], isDNSBL['b_type'], isDNSBL['group'], isDNSBL['b_eval'], isDNSBL['feed'], dupEntry))
         log_entry(csv_line, '/var/log/pfblockerng/dnsbl.log')
         log_entry(csv_line, '/var/log/pfblockerng/unified.log')
 
     return True
+
+
+def make_timestamp() -> str:
+    for _ in range(2):
+        try:
+            return datetime.now().strftime("%b %-d %H:%M:%S")
+        except TypeError:
+            continue
+    return ''
 
 
 def log_entry(line, log):
@@ -942,13 +949,7 @@ def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
         else:
             ttl = ''
 
-    for i in range(2):
-        try:
-            timestamp = datetime.now().strftime("%b %-d %H:%M:%S")
-        except TypeError:
-            pass
-            continue
-        break
+    timestamp = make_timestamp()
 
     csv_line = ','.join('{}'.format(v) for v in ('DNS-reply', timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
     log_entry(csv_line, '/var/log/pfblockerng/dns_reply.log')
@@ -1054,6 +1055,39 @@ def deinit(id):
 def inform_super(id, qstate, superqstate, qdata):
     return True
 
+
+def find_zone_match(q_name: str, zone_db) -> tuple[str, dict] | tuple[None, None]:
+    q = q_name
+    for _ in range(q.count('.') + 1, 0, -1):
+        entry = zone_db.get(q)
+        if entry is not None:
+            return q, entry
+        q = q.split('.', 1)[-1]
+    return None, None
+
+
+def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db) -> str | None:
+    q = q_name.split('.', 1)[-1]
+    for _ in range(q.count('.'), 0, -1):
+        if noaaaa_db.get(q):
+            return q
+        q = q.split('.', 1)[-1]
+    return None
+
+
+def whitelist_check_domain(name: str, white_db, tld_seg: int) -> bool:
+    if white_db.get(name) is not None:
+        return True
+    if name.startswith('www.') and white_db.get(name[4:]) is not None:
+        return True
+    q = name.split('.', 1)[-1]
+    for x in range(q.count('.') + 1, 0, -1):
+        if x >= tld_seg and white_db.get(q):
+            return True
+        q = q.split('.', 1)[-1]
+    return False
+
+
 def operate(id, event, qstate, qdata):
     global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB
 
@@ -1083,24 +1117,10 @@ def operate(id, event, qstate, qdata):
 
             # Wildcard verification of domain
             if not isin_noAAAA:
-                q = q_name_original.split('.', 1)
-                q = q[-1]
-
-                # Validate to 2nd level TLD only
-                for x in range(q.count('.'), 0, -1):
-                    isnoAAAA = noAAAADB.get(q)
-
-                    # Determine if domain is a wildcard whitelist entry
-                    if isnoAAAA is not None and isnoAAAA:
-                        isin_noAAAA = True
-
-                        # Add sub-domain to noAAAA DB
-                        noAAAADB[q_name_original] = True
-
-                        break
-                    else:
-                        q = q.split('.', 1)
-                        q = q[-1]
+                parent = find_noaaaa_wildcard_parent(q_name_original, noAAAADB)
+                if parent is not None:
+                    isin_noAAAA = True
+                    noAAAADB[q_name_original] = True
 
             # Create FQDN Reply Message (AAAA -> A)
             if isin_noAAAA:
@@ -1383,26 +1403,19 @@ def operate(id, event, qstate, qdata):
 
                         # Determine if domain is in DNSBL 'zone' database (log to dnsbl.log)
                         if not isFound and pfb['zoneDB']:
-                            q = q_name
-                            for x in range(q.count('.') +1, 0, -1):
-                                isDomainInZone = zoneDB.get(q)
-                                if isDomainInZone is not None:
-                                    #print q_name + ' zone: ' + str(isDomainInZone)
-                                    isFound = True
-                                    log_type = isDomainInZone['log']
+                            matched_q, zone_entry = find_zone_match(q_name, zoneDB)
+                            if matched_q is not None:
+                                isFound = True
+                                log_type = zone_entry['log']
 
-                                    # Collect Feed/Group
-                                    feedGroup = feedGroupIndexDB.get(isDomainInZone['index'])
-                                    if feedGroup is not None:
-                                        feed = feedGroup['feed']
-                                        group = feedGroup['group']
+                                # Collect Feed/Group
+                                feedGroup = feedGroupIndexDB.get(zone_entry['index'])
+                                if feedGroup is not None:
+                                    feed = feedGroup['feed']
+                                    group = feedGroup['group']
 
-                                    b_type = 'TLD'
-                                    b_eval = q
-                                    break
-                                else:
-                                    q = q.split('.', 1)
-                                    q = q[-1]
+                                b_type = 'TLD'
+                                b_eval = matched_q
 
                     # Validate other python methods, if not blocked via DNSBL zone/data
                     if not isFound:
@@ -1414,7 +1427,7 @@ def operate(id, event, qstate, qdata):
                             group = 'DNSBL_TLD_Allow'
 
                         # Block IDN or 'xn--' Domains
-                        if not isFound and pfb['python_idn'] and (q_name.startswith('xn--') or '.xn--' in q_name):
+                        if not isFound and pfb['python_idn'] and is_idn_domain(q_name):
                             isFound = True
                             feed = 'IDN'
                             group = 'DNSBL_IDN'
@@ -1434,41 +1447,8 @@ def operate(id, event, qstate, qdata):
 
                     # Validate domain in DNSBL Whitelist
                     if isFound and pfb['whiteDB']:
-                        # print q_name + ' w'
-
-                        # Create list of Domain/CNAMES to be validated against Whitelist
-                        whitelist_validate = []
-                        whitelist_validate.append(q_name)
-
-                        if isCNAME:
-                            whitelist_validate.append(q_name_original)
-
-                        for w_q_name in whitelist_validate:
-
-                            # Determine full domain match
-                            isDomainInWhitelist = whiteDB.get(w_q_name)
-                            if isDomainInWhitelist is not None:
-                                isInWhitelist = True
-                            elif w_q_name.startswith('www.'):
-                               isDomainInWhitelist = whiteDB.get(w_q_name[4:])
-                               if isDomainInWhitelist is not None:
-                                    isInWhitelist = True
-
-                            # Determine TLD segment matches
-                            if not isInWhitelist:
-                                q = w_q_name.split('.', 1)
-                                q = q[-1]
-                                for x in range(q.count('.') +1, 0, -1):
-                                    if x >= pfb['python_tld_seg']:
-                                        isDomainInWhitelist = whiteDB.get(q)
-
-                                        # Determine if domain is a wildcard whitelist entry
-                                        if isDomainInWhitelist is not None and isDomainInWhitelist:
-                                            isInWhitelist = True
-                                            break
-                                        else:
-                                            q = q.split('.', 1)
-                                            q = q[-1]
+                        names = [q_name] + ([q_name_original] if isCNAME else [])
+                        isInWhitelist = any(whitelist_check_domain(n, whiteDB, pfb['python_tld_seg']) for n in names)
 
                     # Add domain to excludeDB to skip subsequent blacklist validation
                     if not isFound or isInWhitelist:
