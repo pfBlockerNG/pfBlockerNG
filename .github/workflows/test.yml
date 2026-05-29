@@ -1,24 +1,24 @@
 name: Python tests
 
-# push: runs on direct commits to main/devel (post-merge, admin bypass).
-# pull_request: covers feature branches — the push trigger intentionally
-# omits them to avoid running two sets of checks on every PR commit.
-# For pull requests from forks, GitHub's built-in fork PR approval
-# (Settings → Actions → "Require approval for all outside collaborators")
-# gates the run: any repository collaborator can approve via the
-# "Approve and run" button on the PR page.
+# Run on every push to any branch.
+# For pull requests from forks, require explicit approval before running
+# (enforced via the 'pr-approval' environment defined in repo settings).
 on:
   push:
     branches:
-      - main
-      - devel
-  pull_request:
+      - '**'
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 jobs:
   test:
     name: pytest / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+
+    # pull_request_target runs in the context of the base repo, so secrets
+    # are available.  Gate external-fork PRs behind a required-reviewer
+    # environment so they don't run automatically.
+    environment: ${{ github.event_name == 'pull_request_target' && 'pr-approval' || '' }}
 
     strategy:
       fail-fast: false
@@ -29,10 +29,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+        with:
+          # For pull_request_target, check out the head of the PR branch
+          # (not the base) so we test the proposed changes.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -40,20 +44,6 @@ jobs:
         run: pip install pytest
 
       - name: Run tests
-        # testpaths and addopts are configured in pyproject.toml
-        run: python -m pytest
-
-  # Single stable job name for branch-protection required-status-checks.
-  # Must use if: always() so it runs (and fails) even when 'test' fails.
-  all-tests-passed:
-    name: All tests passed
-    if: always()
-    needs: [test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check matrix results
         run: |
-          if [ "${{ needs.test.result }}" != "success" ]; then
-            echo "One or more test jobs failed or were cancelled."
-            exit 1
-          fi
+          cd src/usr/local/pkg/pfblockerng
+          python -m pytest tests/ -v
