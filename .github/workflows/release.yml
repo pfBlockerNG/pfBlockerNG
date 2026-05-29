@@ -47,7 +47,7 @@ jobs:
       branch: ${{ steps.meta.outputs.branch }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # need full history for changelog
 
@@ -152,7 +152,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: pfBlockerNG ${{ steps.meta.outputs.version }}
           body: ${{ steps.changelog.outputs.body }}
@@ -169,7 +169,7 @@ jobs:
 
     steps:
       - name: Checkout FreeBSD-ports fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: andrebrait/FreeBSD-ports
           token: ${{ secrets.PORTS_TOKEN }}
