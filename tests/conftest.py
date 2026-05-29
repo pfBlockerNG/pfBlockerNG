@@ -9,5 +9,5 @@ import builtins
 # be imported in a plain Python environment for unit testing.
 builtins.log_info = lambda msg: None
 
-# Make pfb_unbound importable from the parent directory without installation.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Make pfb_unbound importable from its installed location within the repo.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'usr', 'local', 'pkg', 'pfblockerng'))
