@@ -1,6 +1,8 @@
 name: Python tests
 
-# Run on every push to any branch.
+# push: runs on direct commits to main/devel (post-merge, admin bypass).
+# pull_request: covers feature branches — the push trigger intentionally
+# omits them to avoid running two sets of checks on every PR commit.
 # For pull requests from forks, GitHub's built-in fork PR approval
 # (Settings → Actions → "Require approval for all outside collaborators")
 # gates the run: any repository collaborator can approve via the
@@ -8,7 +10,8 @@ name: Python tests
 on:
   push:
     branches:
-      - '**'
+      - main
+      - devel
   pull_request:
     types: [opened, synchronize, reopened]
 
