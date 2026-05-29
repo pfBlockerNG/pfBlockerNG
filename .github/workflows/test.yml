@@ -37,6 +37,5 @@ jobs:
         run: pip install pytest
 
       - name: Run tests
-        run: |
-          cd src/usr/local/pkg/pfblockerng
-          python -m pytest tests/ -v
+        # testpaths and addopts are configured in pyproject.toml
+        run: python -m pytest

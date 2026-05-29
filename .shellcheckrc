@@ -1,0 +1,18 @@
+# ShellCheck configuration for pfBlockerNG shell scripts.
+#
+# All scripts in this repo use #!/bin/sh (POSIX sh), which ShellCheck detects
+# automatically from the shebang line.  FreeBSD's /bin/sh is a strict POSIX sh
+# implementation, so writing to the POSIX subset is both correct and portable.
+
+# ── Suppressed warnings ───────────────────────────────────────────────────────
+
+# SC1091 — Not following: <file>
+# pfSense shell library files (e.g. /etc/rc.subr, /usr/local/share/pfSense/…)
+# are only available on the target pfSense/FreeBSD system, not on development
+# machines.  ShellCheck cannot follow these 'source'/'.' calls locally.
+disable=SC1091
+
+# SC2154 — <var> is referenced but not assigned.
+# Several variables (e.g. $rcvar, $command, $name) are injected into scripts by
+# pfSense's rc(8) framework or set in a sourced file ShellCheck cannot read.
+disable=SC2154

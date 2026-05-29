@@ -1,0 +1,51 @@
+{
+  // ── File associations ─────────────────────────────────────────────────────
+  // pfSense uses .inc for PHP include files; associate them with PHP so that
+  // Intelephense, syntax highlighting, and formatters all activate correctly.
+  "files.associations": {
+    "*.inc": "php"
+  },
+
+  // ── PHP (Intelephense) ────────────────────────────────────────────────────
+  // pfSense CE 2.8 on FreeBSD 15 ships PHP 8.3.
+  "intelephense.environment.phpVersion": "8.3",
+
+  // stubs/pfsense/ contains hand-crafted declarations for pfSense functions,
+  // globals, and constants.  Intelephense discovers them automatically via
+  // workspace scanning — no explicit includePaths entry is required.
+  //
+  // Remaining "undefined" suppressions cover pfSense symbols that are not yet
+  // in the stubs (add them to stubs/pfsense/ rather than expanding this list).
+  "intelephense.diagnostics.undefinedFunctions": false,
+  "intelephense.diagnostics.undefinedTypes": false,
+  "intelephense.diagnostics.undefinedClassConstants": false,
+
+  // ── Python ────────────────────────────────────────────────────────────────
+  // testpaths and addopts are set in pyproject.toml; no path needed here.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [],
+  // Pylance: standard mode surfaces common type errors; flip to "basic" if noisy.
+  "python.analysis.typeCheckingMode": "standard",
+
+  // ── Shell ─────────────────────────────────────────────────────────────────
+  // ShellCheck auto-detects the shell dialect from each file's shebang line
+  // (#!/bin/sh for POSIX sh, which is correct for all scripts in this repo).
+  "shellcheck.run": "onSave",
+
+  // ── Search / file-watcher exclusions ─────────────────────────────────────
+  // The 26 ip_pre_AWS_*.sh scripts are auto-generated boilerplate.
+  // Exclude them from search results and the file watcher to reduce noise.
+  "search.exclude": {
+    "src/usr/local/pkg/pfblockerng/ip_pre_AWS_*.sh": true
+  },
+  "files.watcherExclude": {
+    "**/ip_pre_AWS_*.sh": true
+  },
+
+  // ── Editor defaults ───────────────────────────────────────────────────────
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  // 120-column ruler matches the wide alignment style used in the PHP files.
+  "editor.rulers": [120]
+}

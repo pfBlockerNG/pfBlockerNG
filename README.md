@@ -26,11 +26,55 @@ New features land in `devel` first. Once stable, `devel` is merged into
   ([pfsense/FreeBSD-ports](https://github.com/pfsense/FreeBSD-ports))
 - Python 3.11+ for running tests locally
 
+### IDE setup (VS Code)
+
+Open the repository in VS Code and install the recommended extensions when
+prompted (or run **Extensions: Show Recommended Extensions** from the command
+palette).  The workspace ships with a full configuration in `.vscode/`:
+
+| Extension | Purpose |
+| --------- | ------- |
+| [Intelephense](https://marketplace.visualstudio.com/items?itemName=bmewburn.vscode-intelephense-client) | PHP language server — `.inc` files are auto-associated as PHP |
+| [Python + Pylance](https://marketplace.visualstudio.com/items?itemName=ms-python.python) | Python language support and type analysis |
+| [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck) | POSIX sh linter — dialect is detected from the `#!/bin/sh` shebang |
+| [EditorConfig](https://marketplace.visualstudio.com/items?itemName=editorconfig.editorconfig) | Enforces `.editorconfig` rules (tabs for PHP/shell, spaces for Python) |
+
+#### PHP stubs
+
+`stubs/pfsense/` contains PHP function and global-variable declarations for the
+pfSense API.  Intelephense discovers these automatically and uses them for
+autocomplete and type-checking instead of reporting every pfSense call as
+"undefined".
+
+To regenerate the stubs after a pfSense CE version bump, run:
+
+```sh
+python scripts/update-pfsense-stubs.py --version X.Y.Z
+```
+
+The default version is the minimum pfSense CE release supported by this package
+(`MIN_PFSENSE_VERSION` at the top of the script).  The script fetches the
+relevant pfSense source files from GitHub and rewrites all stub files except
+`stubs/pfsense/globals.php`, which is manually maintained.
+
 ### Running the test suite locally
 
 ```sh
-cd src/usr/local/pkg/pfblockerng
-python3 -m pytest tests/ -v
+python3 -m pytest
+```
+
+Test paths and options are configured in `pyproject.toml`; no `cd` is required.
+
+### Linting
+
+[Ruff](https://docs.astral.sh/ruff/) is configured in `pyproject.toml` and can
+be run locally:
+
+```sh
+pip install ruff
+ruff check .        # lint
+ruff check . --fix  # lint and auto-fix
+ruff format .       # format
 ```
 
 ### Building via the FreeBSD ports system

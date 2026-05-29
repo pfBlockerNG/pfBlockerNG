@@ -1,0 +1,27 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+# PHP source files use tabs (matches existing pfSense/pfBlockerNG codebase style)
+[*.{php,inc}]
+indent_style = tab
+indent_size = 4
+
+# Python: PEP 8 spaces
+[*.py]
+indent_style = space
+indent_size = 4
+
+# Shell scripts: tabs (POSIX convention)
+[*.sh]
+indent_style = tab
+indent_size = 4
+
+# Data / config formats: 4-space
+[*.{json,yml,yaml,xml}]
+indent_style = space
+indent_size = 4

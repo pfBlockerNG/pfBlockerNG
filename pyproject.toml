@@ -1,0 +1,29 @@
+[tool.pytest.ini_options]
+# Run pytest from the repo root; no 'cd' needed in CI or locally.
+testpaths = ["tests"]
+addopts   = "-v"
+
+[tool.ruff]
+# Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
+target-version = "py311"
+line-length    = 120
+
+[tool.ruff.lint]
+# E/W = pycodestyle  F = pyflakes  I = isort
+select = ["E", "F", "W", "I"]
+# pfb_unbound.py uses module-level `global` declarations and bare except
+# clauses for optional-dependency guards; suppress those specific rules.
+ignore = [
+    "E402",  # module-level import not at top of file (intentional try/except guards)
+    "F401",  # imported but unused (some imports are conditional/side-effect)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pfb_unbound"]
+
+[tool.mypy]
+python_version       = "3.11"
+warn_unused_configs  = true
+ignore_missing_imports = true
+# pfb_unbound.py predates type annotations; add hints incrementally rather
+# than requiring full coverage up-front.

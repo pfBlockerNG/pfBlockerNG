@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    // PHP — Intelephense is far more capable than the built-in PHP language features
+    "bmewburn.vscode-intelephense-client",
+    // Python — language support + Pylance type checker
+    "ms-python.python",
+    "ms-python.pylance",
+    // Shell — ShellCheck linter; reads #!/bin/sh shebang and lints accordingly
+    "timonwong.shellcheck",
+    // EditorConfig — enforces .editorconfig rules across editors
+    "editorconfig.editorconfig"
+  ]
+}

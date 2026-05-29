@@ -24,9 +24,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest
-      - run: |
-          cd src/usr/local/pkg/pfblockerng
-          python -m pytest tests/ -v
+      - run: python -m pytest
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
