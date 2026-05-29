@@ -39,3 +39,18 @@ jobs:
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
+
+  # Single stable job name for branch-protection required-status-checks.
+  # Must use if: always() so it runs (and fails) even when 'test' fails.
+  all-tests-passed:
+    name: All tests passed
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "One or more test jobs failed or were cancelled."
+            exit 1
+          fi
