@@ -57,6 +57,27 @@ The default version is the minimum pfSense CE release supported by this package
 relevant pfSense source files from GitHub and rewrites all stub files except
 `stubs/pfsense/globals.php`, which is manually maintained.
 
+### Git hooks
+
+The repository ships a `pre-push` hook in `.githooks/` that enforces the tag
+naming convention before anything is pushed to the remote:
+
+| Commit reachable from | Required tag form  |
+| --------------------- | ------------------ |
+| `origin/main`         | `vX.X.X`           |
+| `origin/devel` only   | `vX.X.X-devel`     |
+| Neither               | push is rejected   |
+
+Activate the hook once after cloning:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+This is a local client-side guard. The CI release workflow enforces the same
+rules server-side, so tags that bypass the hook are still rejected by GitHub
+Actions.
+
 ### Running the test suite locally
 
 ```sh
