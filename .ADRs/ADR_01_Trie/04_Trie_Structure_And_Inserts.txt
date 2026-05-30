@@ -1,0 +1,113 @@
+================================================================================
+PHASE 4 PROMPT — Trie data structure + insert/lookup functions + their tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-3 committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing Phase 4. You are ADDING a
+new trie data structure and its pure insert/lookup functions, PLUS tests that
+prove the trie lookups are equivalent to the existing dict-based matchers. You
+do NOT wire the trie into operate() or init_standard() yet. The old dicts and
+helpers remain the oracle.
+
+WHY THIS PHASE EXISTS
+This is the first phase that introduces the target structure. By building it
+behind a pure API and proving equivalence against the retained dict
+implementation (and the Phase 3 oracle tests), we de-risk the actual swap
+(Phase 6) to a no-behavior-change reader change.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 2 (TrieNode shape + semantics contract).
+- .ADRs/ADR_01_Trie/RESULTS/03_Results.md — Phase 3 handoff: test classes added,
+  add_* helper names/locations, and golden test coverage confirmed.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the pure matchers from Phases
+  1-2 you must match: find_zone_match (zone wildcard incl self, returns matched
+  parent), whitelist_check_domain (exact + www-strip + tld_seg-gated walk),
+  find_noaaaa_wildcard_parent (parent-only), hsts_check_domain (step -2),
+  data exact lookup, resolve_feed_group, iter_domain_suffixes.
+- tests/test_pfb_unbound.py — the Phase 3 oracle/property tests and add_* helpers.
+- CLAUDE.md — stdlib only, 4-space indent, type hints, __future__ annotations.
+
+ACTION PLAN (ordered)
+
+1. Define TrieNode (use __slots__ for memory):
+       class TrieNode:
+           __slots__ = ('children', 'data', 'zone', 'white', 'white_wild',
+                        'noaaaa', 'noaaaa_wild', 'hsts')
+   - children: dict[str, TrieNode] allocated lazily (None until first child).
+   - data: exact-match payload {log, index} or None.
+   - zone: wildcard payload {log, index} or None.
+   - white / white_wild: bool. noaaaa / noaaaa_wild: bool. hsts: bool.
+   Initialize all to None/False in __init__.
+
+2. Insert API. Add reverse-label insertion (TLD-first):
+       def trie_split_labels(name: str) -> list[str]      # ['com','example','ads'] for 'ads.example.com'
+       def trie_insert_data(root, domain, payload) -> None
+       def trie_insert_zone(root, domain, payload) -> None      # wildcard flag on terminal node
+       def trie_insert_white(root, domain, wildcard: bool) -> None
+       def trie_insert_noaaaa(root, domain, wildcard: bool) -> None
+       def trie_insert_hsts(root, domain) -> None
+   Each walks/creates nodes label-by-label in reverse order and sets the
+   appropriate flag/payload on the terminal node. Empty/blank labels must be
+   handled the way the current loaders implicitly do (skip or no-op — verify
+   against how the CSV loaders treat malformed rows; do not crash).
+
+3. Lookup API. Add ONE descent primitive plus thin category wrappers:
+       def trie_lookup_exact(root, name) -> payload | None        # data: terminal node's .data
+       def trie_lookup_zone(root, name) -> tuple[str, payload] | tuple[None, None]
+            # deepest ancestor (incl self) whose .zone is set; return (matched_domain, payload).
+            # matched_domain MUST equal what find_zone_match returns (drives b_eval).
+       def trie_lookup_white(root, name, tld_seg: int) -> bool
+            # reproduce exact + 'www.'-strip exact + suffix-walk gated by x >= tld_seg.
+       def trie_lookup_noaaaa(root, name) -> bool
+            # exact OR wildcard-PARENT (parent only, not self), matching find_noaaaa_wildcard_parent.
+       def trie_lookup_hsts(root, name, hsts_tlds, tld) -> tuple[bool, str]
+            # reproduce hsts_check_domain INCLUDING the step -2 stride semantics.
+   Implementation note: a reverse-label trie naturally walks from TLD inward,
+   which corresponds to checking progressively LONGER suffixes; map this
+   carefully onto each matcher's stride/offset/gate. The tld_seg gate and the
+   hsts -2 stride are the two highest-risk reproductions — get them right.
+
+4. Tests — equivalence oracle. In tests/test_pfb_unbound.py (or a new
+   tests/test_trie.py), add a class that:
+   - builds BOTH a dict set (via the Phase 3 add_* helpers / raw dicts) and a
+     trie (via trie_insert_*) from the SAME randomized corpus, then asserts, for
+     a large randomized set of query domains, that:
+         trie_lookup_exact     == dataDB.get(...)
+         trie_lookup_zone      == find_zone_match(...)
+         trie_lookup_white     == whitelist_check_domain(...)
+         trie_lookup_noaaaa    == (find_noaaaa_wildcard_parent / exact logic)
+         trie_lookup_hsts      == hsts_check_domain(...)
+   - re-runs the Phase 3 hand-written edge cases through the trie lookups.
+   - seeds randomness for reproducibility.
+
+5. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- Trie code is PURE: no Unbound globals, no qstate, no pfb[...] reads, no I/O.
+- Do NOT modify operate() or init_standard() in this phase. Do NOT remove or
+  alter the dict matchers — they are the oracle.
+- stdlib only; __slots__ on TrieNode; lazy children; 4-space indent; type hints.
+
+VERIFICATION
+- `python -m pytest` → all tests green, including the new equivalence tests.
+- `ruff check .` / `ruff format .` → clean.
+- The equivalence test must exercise: multi-label domains, wildcard vs exact,
+  tld_seg boundary cases, and an hsts -2 stride case.
+
+EXPECTED RESULT / OBSERVATIONS
+- A fully tested trie API exists in parallel with the dicts, proven equivalent.
+- Nothing in the runtime path uses it yet; blocking behavior is unchanged.
+
+COMMIT
+    pfb_unbound: add domain trie structure and lookup API (unused, tested vs dicts)
+Push policy as in earlier phases.
+
+HANDOFF
+Report the TrieNode shape, the insert/lookup signatures, and the equivalence
+test results (especially the tld_seg and hsts -2 cases). Phase 5 will populate
+this trie at load time alongside the dicts.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/04_Results.md`.

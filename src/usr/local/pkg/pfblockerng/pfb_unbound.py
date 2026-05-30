@@ -26,7 +26,8 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -115,35 +116,39 @@ if TYPE_CHECKING:
 try:
     import queue  # noqa: F811
     import threading  # noqa: F811
-    pfb['mod_threading'] = True
+
+    pfb["mod_threading"] = True
     threads: list[Any] = list()
 except Exception as e:
-    pfb['mod_threading'] = False
-    pfb['mod_threading_e'] = e
+    pfb["mod_threading"] = False
+    pfb["mod_threading_e"] = e
     pass
 
 try:
     import ipaddress  # noqa: F811
-    pfb['mod_ipaddress'] = True
+
+    pfb["mod_ipaddress"] = True
 except Exception as e:
-    pfb['mod_ipaddress'] = False
-    pfb['mod_ipaddress_e'] = e
+    pfb["mod_ipaddress"] = False
+    pfb["mod_ipaddress_e"] = e
     pass
 
 try:
     import maxminddb  # noqa: F811
-    pfb['mod_maxminddb'] = True
+
+    pfb["mod_maxminddb"] = True
 except Exception as e:
-    pfb['mod_maxminddb'] = False
-    pfb['mod_maxminddb_e'] = e
+    pfb["mod_maxminddb"] = False
+    pfb["mod_maxminddb_e"] = e
     pass
 
 try:
     import sqlite3  # noqa: F811
-    pfb['mod_sqlite3'] = True
+
+    pfb["mod_sqlite3"] = True
 except Exception as e:
-    pfb['mod_sqlite3'] = False
-    pfb['mod_sqlite3_e'] = e
+    pfb["mod_sqlite3"] = False
+    pfb["mod_sqlite3_e"] = e
     pass
 
 
@@ -164,7 +169,7 @@ def pfb_async_worker() -> None:
             err = sys.__stderr__
             if err is not None:
                 try:
-                    err.write("[pfBlockerNG]: async I/O worker error: {}\n" .format(e))
+                    err.write("[pfBlockerNG]: async I/O worker error: {}\n".format(e))
                 except Exception:
                     pass
         finally:
@@ -176,139 +181,187 @@ def pfb_async(func: Callable[..., Any], *args: Any) -> None:
     # synchronous execution when the worker is not running (during init, in the
     # test suite, or when threading is unavailable). Drops the task if the
     # bounded queue is saturated, so the DNS response path is never blocked.
-    if pfb.get('async_worker'):
+    if pfb.get("async_worker"):
         try:
             pfb_task_queue.put_nowait((func, args))
             return
         except queue.Full:
-            pfb['async_dropped'] = pfb.get('async_dropped', 0) + 1
+            pfb["async_dropped"] = pfb.get("async_dropped", 0) + 1
             return
     func(*args)
 
 
 def init_standard(id: int, env: module_env) -> bool:
-    global pfb, rcodeDB, dataDB, zoneDB, regexDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB, maxmindReader, pfb_task_queue, pfb_worker_thread
+    global \
+        pfb, \
+        rcodeDB, \
+        dataDB, \
+        zoneDB, \
+        regexDB, \
+        hstsDB, \
+        whiteDB, \
+        excludeDB, \
+        excludeAAAADB, \
+        excludeSS, \
+        dnsblDB, \
+        noAAAADB, \
+        gpListDB, \
+        safeSearchDB, \
+        feedGroupIndexDB, \
+        maxmindReader, \
+        pfb_task_queue, \
+        pfb_worker_thread
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
-        log_info('[pfBlockerNG]: Failed register_inplace_cb_reply')
+        log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
         return False
 
     if not register_inplace_cb_reply_cache(inplace_cb_reply_cache, env, id):
-        log_info('[pfBlockerNG]: Failed register_inplace_cb_reply_cache')
+        log_info("[pfBlockerNG]: Failed register_inplace_cb_reply_cache")
         return False
 
     if not register_inplace_cb_reply_local(inplace_cb_reply_local, env, id):
-        log_info('[pfBlockerNG]: Failed register_inplace_cb_reply_local')
+        log_info("[pfBlockerNG]: Failed register_inplace_cb_reply_local")
         return False
 
     if not register_inplace_cb_reply_servfail(inplace_cb_reply_servfail, env, id):
-        log_info('[pfBlockerNG]: Failed register_inplace_cb_reply_servfail')
+        log_info("[pfBlockerNG]: Failed register_inplace_cb_reply_servfail")
         return False
 
     # Store previous error message to avoid repeating
-    pfb['p_err'] = ''
+    pfb["p_err"] = ""
 
     # Log stderr to file
     class log_stderr(object):
         def __init__(self, logger: logging.Logger) -> None:
             self.logger = logger
-            self.linebuf = ''
+            self.linebuf = ""
 
         def write(self, msg: str) -> None:
-            if msg != pfb['p_err']:
+            if msg != pfb["p_err"]:
                 pfb_async(self.logger.log, logging.ERROR, msg.rstrip())
-            pfb['p_err'] = msg
+            pfb["p_err"] = msg
 
     # Create python error logfile
-    logfile = '/var/log/pfblockerng/py_error.log'
+    logfile = "/var/log/pfblockerng/py_error.log"
 
     for i in range(2):
         try:
-            logging.basicConfig(format = '%(asctime)s|%(levelname)s| %(message)s', filename = logfile, filemode = 'a')
+            logging.basicConfig(format="%(asctime)s|%(levelname)s| %(message)s", filename=logfile, filemode="a")
             break
         except IOError:
             # Remove logfile if ownership is not 'unbound:unbound'
             if os.path.isfile(logfile):
                 os.remove(logfile)
-    sys.stderr = log_stderr(logging.getLogger('pfb_stderr'))
+    sys.stderr = log_stderr(logging.getLogger("pfb_stderr"))
 
     # Validate write access to log files
-    for l_file in ('dnsbl', 'dns_reply', 'unified'):
-        lfile = '/var/log/pfblockerng/' + l_file + '.log'
+    for l_file in ("dnsbl", "dns_reply", "unified"):
+        lfile = "/var/log/pfblockerng/" + l_file + ".log"
 
         try:
             if os.path.isfile(lfile) and not os.access(lfile, os.W_OK):
-                new_file = '/var/log/pfblockerng/' + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
+                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
                 os.rename(lfile, new_file)
         except Exception as e:
-            sys.stderr.write("[pfBlockerNG]: Failed to validate write permission: {}.log: {}" .format(l_file, e))
+            sys.stderr.write("[pfBlockerNG]: Failed to validate write permission: {}.log: {}".format(l_file, e))
             if os.path.isfile(lfile):
-                new_file = '/var/log/pfblockerng/' + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
+                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
                 os.rename(lfile, new_file)
             pass
 
-    if not pfb['mod_threading']:
-        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'threading': {}" .format(pfb['mod_threading_e']))
+    if not pfb["mod_threading"]:
+        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'threading': {}".format(pfb["mod_threading_e"]))
 
-    if not pfb['mod_ipaddress']:
-        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'ipaddress': {}" .format(pfb['mod_ipaddress_e']))
+    if not pfb["mod_ipaddress"]:
+        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'ipaddress': {}".format(pfb["mod_ipaddress_e"]))
 
-    if not pfb['mod_maxminddb']:
-        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'maxminddb': {}" .format(pfb['mod_maxminddb_e']))
+    if not pfb["mod_maxminddb"]:
+        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'maxminddb': {}".format(pfb["mod_maxminddb_e"]))
 
-    if not pfb['mod_sqlite3']:
-        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'sqlite3': {}" .format(pfb['mod_sqlite3_e']))
+    if not pfb["mod_sqlite3"]:
+        sys.stderr.write("[pfBlockerNG]: Failed to load python module 'sqlite3': {}".format(pfb["mod_sqlite3_e"]))
 
     # Initialize default settings
-    pfb['dnsbl_ipv4'] = ''
-    pfb['dnsbl_ipv6'] = ''
-    pfb['dataDB'] = False
-    pfb['zoneDB'] = False
-    pfb['hstsDB'] = False
-    pfb['whiteDB'] = False
-    pfb['regexDB'] = False
-    pfb['whiteDB'] = False
-    pfb['gpListDB'] = False
-    pfb['noAAAADB'] = False
-    pfb['python_idn'] = False
-    pfb['python_hsts'] = False
-    pfb['python_reply'] = False
-    pfb['python_cname'] = False
-    pfb['safeSearchDB'] = False
-    pfb['group_policy'] = False
-    pfb['python_enable'] = False
-    pfb['python_nolog'] = False
-    pfb['python_control'] = False
-    pfb['python_maxmind'] = False
-    pfb['python_blocking'] = False
-    pfb['python_blacklist'] = False
-    pfb['sqlite3_dnsbl_con'] = False
-    pfb['sqlite3_resolver_con'] = False
-    pfb['async_worker'] = False
+    pfb["dnsbl_ipv4"] = ""
+    pfb["dnsbl_ipv6"] = ""
+    pfb["dataDB"] = False
+    pfb["zoneDB"] = False
+    pfb["hstsDB"] = False
+    pfb["whiteDB"] = False
+    pfb["regexDB"] = False
+    pfb["whiteDB"] = False
+    pfb["gpListDB"] = False
+    pfb["noAAAADB"] = False
+    pfb["python_idn"] = False
+    pfb["python_hsts"] = False
+    pfb["python_reply"] = False
+    pfb["python_cname"] = False
+    pfb["safeSearchDB"] = False
+    pfb["group_policy"] = False
+    pfb["python_enable"] = False
+    pfb["python_nolog"] = False
+    pfb["python_control"] = False
+    pfb["python_maxmind"] = False
+    pfb["python_blocking"] = False
+    pfb["python_blacklist"] = False
+    pfb["sqlite3_dnsbl_con"] = False
+    pfb["sqlite3_resolver_con"] = False
+    pfb["async_worker"] = False
 
     # DNSBL Python files
-    pfb['pfb_unbound.ini'] = 'pfb_unbound.ini'
-    pfb['pfb_py_whitelist'] = 'pfb_py_whitelist.txt'
-    pfb['pfb_py_zone'] = 'pfb_py_zone.txt'
-    pfb['pfb_py_data'] = 'pfb_py_data.txt'
-    pfb['pfb_py_hsts'] = 'pfb_py_hsts.txt'
-    pfb['pfb_py_ss'] = 'pfb_py_ss.txt'
-    pfb['pfb_py_dnsbl'] = 'pfb_py_dnsbl.sqlite'
-    pfb['pfb_py_cache'] = 'pfb_py_cache.sqlite'
-    pfb['pfb_py_resolver'] = 'pfb_py_resolver.sqlite'
-    pfb['maxminddb'] = '/usr/local/share/GeoIP/GeoLite2-Country.mmdb'
+    pfb["pfb_unbound.ini"] = "pfb_unbound.ini"
+    pfb["pfb_py_whitelist"] = "pfb_py_whitelist.txt"
+    pfb["pfb_py_zone"] = "pfb_py_zone.txt"
+    pfb["pfb_py_data"] = "pfb_py_data.txt"
+    pfb["pfb_py_hsts"] = "pfb_py_hsts.txt"
+    pfb["pfb_py_ss"] = "pfb_py_ss.txt"
+    pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
+    pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
+    pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
+    pfb["maxminddb"] = "/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 
     # Remove DNSBL cache file (For Reports tab query)
-    if os.path.isfile(pfb['pfb_py_cache']):
-        os.remove(pfb['pfb_py_cache'])
+    if os.path.isfile(pfb["pfb_py_cache"]):
+        os.remove(pfb["pfb_py_cache"])
 
     # DNSBL validation on these RR_TYPES only
-    pfb['rr_types'] = (RR_TYPE_A, RR_TYPE_AAAA, RR_TYPE_ANY, RR_TYPE_CNAME, RR_TYPE_DNAME, RR_TYPE_SIG, \
-                       RR_TYPE_MX, RR_TYPE_NS, RR_TYPE_PTR, RR_TYPE_SRV, RR_TYPE_TXT, 64, 65)
+    pfb["rr_types"] = (
+        RR_TYPE_A,
+        RR_TYPE_AAAA,
+        RR_TYPE_ANY,
+        RR_TYPE_CNAME,
+        RR_TYPE_DNAME,
+        RR_TYPE_SIG,
+        RR_TYPE_MX,
+        RR_TYPE_NS,
+        RR_TYPE_PTR,
+        RR_TYPE_SRV,
+        RR_TYPE_TXT,
+        64,
+        65,
+    )
 
     # List of HSTS preload TLDs
-    pfb['hsts_tlds'] = ('android', 'app', 'bank', 'chrome', 'dev', 'foo', 'gle', 'gmail', 'google', 'hangout', \
-                        'insurance', 'meet', 'new', 'page', 'play', 'search', 'youtube')
+    pfb["hsts_tlds"] = (
+        "android",
+        "app",
+        "bank",
+        "chrome",
+        "dev",
+        "foo",
+        "gle",
+        "gmail",
+        "google",
+        "hangout",
+        "insurance",
+        "meet",
+        "new",
+        "page",
+        "play",
+        "search",
+        "youtube",
+    )
 
     # Initialize dicts/lists
     dataDB = defaultdict(list)
@@ -328,133 +381,157 @@ def init_standard(id: int, env: module_env) -> bool:
     excludeSS = []
 
     # Read pfb_unbound.ini settings
-    if os.path.isfile(pfb['pfb_unbound.ini']):
+    if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
-            config.read(pfb['pfb_unbound.ini'])
+            config.read(pfb["pfb_unbound.ini"])
         except Exception as e:
-            sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}" .format(e))
+            sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}".format(e))
             pass
 
-        if config.has_section('MAIN'):
-            if config.has_option('MAIN', 'python_enable'):
-                pfb['python_enable'] = config.getboolean('MAIN', 'python_enable')
-            if config.has_option('MAIN', 'python_reply'):
-                pfb['python_reply'] = config.getboolean('MAIN', 'python_reply')
-            if config.has_option('MAIN', 'python_blocking'):
-                pfb['python_blocking'] = config.getboolean('MAIN', 'python_blocking')
-            if config.has_option('MAIN', 'python_hsts'):
-                pfb['python_hsts'] = config.getboolean('MAIN', 'python_hsts')
-            if config.has_option('MAIN', 'python_idn'):
-                pfb['python_idn'] = config.getboolean('MAIN', 'python_idn')
-            if config.has_option('MAIN', 'python_tld_seg'):
-                pfb['python_tld_seg'] = config.getint('MAIN', 'python_tld_seg')
-            if config.has_option('MAIN', 'python_tld'):
-                pfb['python_tld'] = config.getboolean('MAIN', 'python_tld')
-            if config.has_option('MAIN', 'python_tlds'):
-                pfb['python_tlds'] = config.get('MAIN', 'python_tlds').split(',')
-            if config.has_option('MAIN', 'dnsbl_ipv4'):
-                pfb['dnsbl_ipv4'] = config.get('MAIN', 'dnsbl_ipv4')
-            if config.has_option('MAIN', 'dnsbl_ipv6'):
-                pfb['dnsbl_ipv6'] = config.get('MAIN', 'dnsbl_ipv6')
-            if config.has_option('MAIN', 'python_nolog'):
-                pfb['python_nolog'] = config.getboolean('MAIN', 'python_nolog')
-            if config.has_option('MAIN', 'python_cname'):
-                pfb['python_cname'] = config.getboolean('MAIN', 'python_cname')
-            if config.has_option('MAIN', 'python_control'):
-                pfb['python_control'] = config.getboolean('MAIN', 'python_control')
+        if config.has_section("MAIN"):
+            if config.has_option("MAIN", "python_enable"):
+                pfb["python_enable"] = config.getboolean("MAIN", "python_enable")
+            if config.has_option("MAIN", "python_reply"):
+                pfb["python_reply"] = config.getboolean("MAIN", "python_reply")
+            if config.has_option("MAIN", "python_blocking"):
+                pfb["python_blocking"] = config.getboolean("MAIN", "python_blocking")
+            if config.has_option("MAIN", "python_hsts"):
+                pfb["python_hsts"] = config.getboolean("MAIN", "python_hsts")
+            if config.has_option("MAIN", "python_idn"):
+                pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
+            if config.has_option("MAIN", "python_tld_seg"):
+                pfb["python_tld_seg"] = config.getint("MAIN", "python_tld_seg")
+            if config.has_option("MAIN", "python_tld"):
+                pfb["python_tld"] = config.getboolean("MAIN", "python_tld")
+            if config.has_option("MAIN", "python_tlds"):
+                pfb["python_tlds"] = config.get("MAIN", "python_tlds").split(",")
+            if config.has_option("MAIN", "dnsbl_ipv4"):
+                pfb["dnsbl_ipv4"] = config.get("MAIN", "dnsbl_ipv4")
+            if config.has_option("MAIN", "dnsbl_ipv6"):
+                pfb["dnsbl_ipv6"] = config.get("MAIN", "dnsbl_ipv6")
+            if config.has_option("MAIN", "python_nolog"):
+                pfb["python_nolog"] = config.getboolean("MAIN", "python_nolog")
+            if config.has_option("MAIN", "python_cname"):
+                pfb["python_cname"] = config.getboolean("MAIN", "python_cname")
+            if config.has_option("MAIN", "python_control"):
+                pfb["python_control"] = config.getboolean("MAIN", "python_control")
 
-            if pfb['dnsbl_ipv6'] == '':
-                pfb['dnsbl_ipv6'] = '::'
+            if pfb["dnsbl_ipv6"] == "":
+                pfb["dnsbl_ipv6"] = "::"
 
             # List of DNS R_CODES
-            rcodeDB = {0: 'NoError', 1: 'FormErr', 2: 'ServFail', 3: 'NXDOMAIN', 4: 'NotImp', 5: 'Refused', 6: 'YXDomain',
-                       7: 'YXRRSet', 8: 'NXRRSet', 9: 'NotAuth', 10: 'NotZone', 11: 'DSOTYPENI', 16: 'BADVERS', 17: 'BADKEY',
-                       18: 'BADTIME', 19: 'BADMODE', 20: 'BADNAME', 21: 'BADALG', 22: 'BADTRUNC', 23: 'BADCOOKIE' }
+            rcodeDB = {
+                0: "NoError",
+                1: "FormErr",
+                2: "ServFail",
+                3: "NXDOMAIN",
+                4: "NotImp",
+                5: "Refused",
+                6: "YXDomain",
+                7: "YXRRSet",
+                8: "NXRRSet",
+                9: "NotAuth",
+                10: "NotZone",
+                11: "DSOTYPENI",
+                16: "BADVERS",
+                17: "BADKEY",
+                18: "BADTIME",
+                19: "BADMODE",
+                20: "BADNAME",
+                21: "BADALG",
+                22: "BADTRUNC",
+                23: "BADCOOKIE",
+            }
 
-        if pfb['python_enable']:
-
+        if pfb["python_enable"]:
             # Enable the Blacklist functions (IDN)
-            if pfb['python_idn']:
-                pfb['python_blacklist'] = True
+            if pfb["python_idn"]:
+                pfb["python_blacklist"] = True
 
             # Enable the Blacklist functions (TLD Allow)
-            if pfb['python_tld'] and pfb['python_tlds'] != '':
-                pfb['python_blacklist'] = True
+            if pfb["python_tld"] and pfb["python_tlds"] != "":
+                pfb["python_blacklist"] = True
 
             # Collect user-defined Regex patterns
-            if config.has_section('REGEX'):
-                regex_config = config.items('REGEX')
+            if config.has_section("REGEX"):
+                regex_config = config.items("REGEX")
                 if regex_config:
                     r_count = 1
                     for name, pattern in regex_config:
                         try:
                             regexDB[name] = re.compile(pattern)
-                            pfb['regexDB'] = True
-                            pfb['python_blacklist'] = True
+                            pfb["regexDB"] = True
+                            pfb["python_blacklist"] = True
                         except Exception as e:
-                            sys.stderr.write("[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}" .format(name, pattern, r_count, e))
+                            sys.stderr.write(
+                                "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
+                                    name, pattern, r_count, e
+                                )
+                            )
                             pass
                         r_count += 1
 
             # Collect user-defined no AAAA domains
-            if config.has_section('noAAAA'):
-                noaaaa_config = config.items('noAAAA')
+            if config.has_section("noAAAA"):
+                noaaaa_config = config.items("noAAAA")
                 if noaaaa_config:
                     try:
                         for key, line in noaaaa_config:
-                            data = line.rstrip('\r\n').split(',')
+                            data = line.rstrip("\r\n").split(",")
                             if data and len(data) == 2:
-                                if data[1] == '1':
+                                if data[1] == "1":
                                     wildcard = True
                                 else:
                                     wildcard = False
                                 noAAAADB[data[0]] = wildcard
                             else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: noAAAA: row:{} line:{}" .format(key, line))
+                                sys.stderr.write(
+                                    "[pfBlockerNG]: Failed to parse: noAAAA: row:{} line:{}".format(key, line)
+                                )
 
-                        pfb['noAAAADB'] = True
+                        pfb["noAAAADB"] = True
                     except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load no AAAA domain list: {}" .format(e))
+                        sys.stderr.write("[pfBlockerNG]: Failed to load no AAAA domain list: {}".format(e))
                         pass
 
             # Collect user-defined Group Policy Global Bypass List
-            if config.has_section('GP_Bypass_List'):
-                gp_bypass_list = config.items('GP_Bypass_List')
+            if config.has_section("GP_Bypass_List"):
+                gp_bypass_list = config.items("GP_Bypass_List")
                 if gp_bypass_list:
                     try:
                         for key, line in gp_bypass_list:
-                            gpListDB[line.rstrip('\r\n')] = 0
+                            gpListDB[line.rstrip("\r\n")] = 0
 
-                        pfb['gpListDB'] = True
+                        pfb["gpListDB"] = True
                     except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}" .format(e))
+                        sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}".format(e))
                         pass
 
             # Collect SafeSearch Redirection list
-            if os.path.isfile(pfb['pfb_py_ss']):
+            if os.path.isfile(pfb["pfb_py_ss"]):
                 try:
-                    with open(pfb['pfb_py_ss']) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=',')
+                    with open(pfb["pfb_py_ss"]) as csv_file:
+                        csv_reader = csv.reader(csv_file, delimiter=",")
                         for row in csv_reader:
                             if row and len(row) == 3:
-                                safeSearchDB[row[0]] = {'A': row[1], 'AAAA': row[2]}
+                                safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2]}
                             else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}" .format(pfb['pfb_py_ss'], row))
+                                sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_ss"], row))
 
-                        pfb['safeSearchDB'] = True
+                        pfb["safeSearchDB"] = True
                 except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}" .format(pfb['pfb_py_zone'], e))
+                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
                     pass
 
             # While reading 'data|zone' CSV files: Replace 'Feed/Group' pairs with an index value (Memory performance)
             feedGroup_index = 0
 
             # Zone dicts
-            if os.path.isfile(pfb['pfb_py_zone']):
+            if os.path.isfile(pfb["pfb_py_zone"]):
                 try:
-                    with open(pfb['pfb_py_zone']) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=',')
+                    with open(pfb["pfb_py_zone"]) as csv_file:
+                        csv_reader = csv.reader(csv_file, delimiter=",")
                         for row in csv_reader:
                             if row and len(row) == 6:
                                 # Query Feed/Group/index
@@ -463,7 +540,7 @@ def init_standard(id: int, env: module_env) -> bool:
                                 # Add Feed/Group/index
                                 if isInFeedGroupDB is None:
                                     feedGroupDB[row[4] + row[5]] = feedGroup_index
-                                    feedGroupIndexDB[feedGroup_index] = {'feed': row[4], 'group': row[5]}
+                                    feedGroupIndexDB[feedGroup_index] = {"feed": row[4], "group": row[5]}
                                     final_index = feedGroup_index
                                     feedGroup_index += 1
 
@@ -471,21 +548,23 @@ def init_standard(id: int, env: module_env) -> bool:
                                 else:
                                     final_index = isInFeedGroupDB
 
-                                zoneDB[row[1]] = {'log': row[3], 'index': final_index}
+                                zoneDB[row[1]] = {"log": row[3], "index": final_index}
                             else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}" .format(pfb['pfb_py_zone'], row))
+                                sys.stderr.write(
+                                    "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_zone"], row)
+                                )
 
-                        pfb['zoneDB'] = True
-                        pfb['python_blacklist'] = True
+                        pfb["zoneDB"] = True
+                        pfb["python_blacklist"] = True
                 except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}" .format(pfb['pfb_py_zone'], e))
+                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
                     pass
 
             # Data dicts
-            if os.path.isfile(pfb['pfb_py_data']):
+            if os.path.isfile(pfb["pfb_py_data"]):
                 try:
-                    with open(pfb['pfb_py_data']) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=',')
+                    with open(pfb["pfb_py_data"]) as csv_file:
+                        csv_reader = csv.reader(csv_file, delimiter=",")
                         for row in csv_reader:
                             if row and len(row) == 6:
                                 # Query Feed/Group/index
@@ -494,7 +573,7 @@ def init_standard(id: int, env: module_env) -> bool:
                                 # Add Feed/Group/index
                                 if isInFeedGroupDB is None:
                                     feedGroupDB[row[4] + row[5]] = feedGroup_index
-                                    feedGroupIndexDB[feedGroup_index] = {'feed': row[4], 'group': row[5]}
+                                    feedGroupIndexDB[feedGroup_index] = {"feed": row[4], "group": row[5]}
                                     final_index = feedGroup_index
                                     feedGroup_index += 1
 
@@ -502,146 +581,146 @@ def init_standard(id: int, env: module_env) -> bool:
                                 else:
                                     final_index = isInFeedGroupDB
 
-                                dataDB[row[1]] = {'log': row[3], 'index': final_index}
+                                dataDB[row[1]] = {"log": row[3], "index": final_index}
                             else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}" .format(pfb['pfb_py_data'], row))
+                                sys.stderr.write(
+                                    "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_data"], row)
+                                )
 
-                        pfb['dataDB'] = True
-                        pfb['python_blacklist'] = True
+                        pfb["dataDB"] = True
+                        pfb["python_blacklist"] = True
                 except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}" .format(pfb['pfb_py_data'], e))
+                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
                     pass
 
             # Clear temporary Feed/Group/Index list
             feedGroupDB.clear()
 
-            if pfb['python_blacklist']:
-
+            if pfb["python_blacklist"]:
                 # Collect user-defined Whitelist
-                if os.path.isfile(pfb['pfb_py_whitelist']):
+                if os.path.isfile(pfb["pfb_py_whitelist"]):
                     try:
-                        with open(pfb['pfb_py_whitelist']) as csv_file:
-                            csv_reader = csv.reader(csv_file, delimiter=',')
+                        with open(pfb["pfb_py_whitelist"]) as csv_file:
+                            csv_reader = csv.reader(csv_file, delimiter=",")
                             for row in csv_reader:
                                 if row and len(row) == 2:
-                                    if row[1] == '1':
+                                    if row[1] == "1":
                                         wildcard = True
                                     else:
                                         wildcard = False
                                     whiteDB[row[0]] = wildcard
-                                    pfb['whiteDB'] = True
+                                    pfb["whiteDB"] = True
                                 else:
-                                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}" .format(pfb['pfb_py_whitelist'], row))
+                                    sys.stderr.write(
+                                        "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_whitelist"], row)
+                                    )
 
                     except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}" .format(pfb['pfb_py_whitelist'], e))
+                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e))
                         pass
 
                 # HSTS dicts
-                if pfb['python_hsts'] and os.path.isfile(pfb['pfb_py_hsts']):
+                if pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"]):
                     try:
-                        with open(pfb['pfb_py_hsts']) as hsts:
+                        with open(pfb["pfb_py_hsts"]) as hsts:
                             for line in hsts:
-                                hstsDB[line.rstrip('\r\n')] = 0
-                            pfb['hstsDB'] = True
+                                hstsDB[line.rstrip("\r\n")] = 0
+                            pfb["hstsDB"] = True
                     except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}" .format(pfb['pfb_py_hsts'], e))
+                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
                         pass
 
             # Validate SQLite3 database connections
-            if pfb['mod_sqlite3']:
-
+            if pfb["mod_sqlite3"]:
                 # Enable Resolver query statistics
                 for i in range(2):
                     try:
-                        if write_sqlite(1, '', False):
-                            pfb['sqlite3_resolver_con'] = True
+                        if write_sqlite(1, "", False):
+                            pfb["sqlite3_resolver_con"] = True
                             break
                     except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database (Attempt: {}/2): {}" .format(i+1, e))
+                        sys.stderr.write(
+                            "[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database (Attempt: {}/2): {}".format(
+                                i + 1, e
+                            )
+                        )
                         pass
-                        if os.path.isfile(pfb['pfb_py_resolver']):
-                            os.remove(pfb['pfb_py_resolver'])
+                        if os.path.isfile(pfb["pfb_py_resolver"]):
+                            os.remove(pfb["pfb_py_resolver"])
 
                 # Enable DNSBL statistics
-                if pfb['python_blacklist']:
+                if pfb["python_blacklist"]:
                     for i in range(2):
                         try:
-                            if write_sqlite(2, '', False):
-                                pfb['sqlite3_dnsbl_con'] = True
+                            if write_sqlite(2, "", False):
+                                pfb["sqlite3_dnsbl_con"] = True
                                 break
                         except Exception as e:
-                            sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}" .format(i+1, e))
+                            sys.stderr.write(
+                                "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(
+                                    i + 1, e
+                                )
+                            )
                             pass
-                            if os.path.isfile(pfb['pfb_py_dnsbl']):
-                                os.remove(pfb['pfb_py_dnsbl'])
+                            if os.path.isfile(pfb["pfb_py_dnsbl"]):
+                                os.remove(pfb["pfb_py_dnsbl"])
 
             # Open MaxMind db reader for DNS Reply GeoIP logging
-            if pfb['mod_maxminddb'] and pfb['python_reply'] and os.path.isfile(pfb['maxminddb']):
+            if pfb["mod_maxminddb"] and pfb["python_reply"] and os.path.isfile(pfb["maxminddb"]):
                 try:
-                    maxmindReader = maxminddb.open_database(pfb['maxminddb'])
-                    pfb['python_maxmind'] = True
+                    maxmindReader = maxminddb.open_database(pfb["maxminddb"])
+                    pfb["python_maxmind"] = True
                 except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to open MaxMind DB: {}" .format(e))
+                    sys.stderr.write("[pfBlockerNG]: Failed to open MaxMind DB: {}".format(e))
                     pass
     else:
-        log_info('[pfBlockerNG]: Failed to load ini configuration. Ini file missing.')
+        log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
 
     # Start background I/O worker (off-loads file/sqlite writes from the DNS path)
-    if pfb['mod_threading'] and not pfb.get('async_worker'):
+    if pfb["mod_threading"] and not pfb.get("async_worker"):
         try:
             pfb_task_queue = queue.Queue(maxsize=PFB_QUEUE_MAXSIZE)
-            pfb_worker_thread = threading.Thread(name='pfb_async_io', target=pfb_async_worker, daemon=True)
+            pfb_worker_thread = threading.Thread(name="pfb_async_io", target=pfb_async_worker, daemon=True)
             pfb_worker_thread.start()
-            pfb['async_worker'] = True
+            pfb["async_worker"] = True
         except Exception as e:
-            pfb['async_worker'] = False
-            sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}" .format(e))
+            pfb["async_worker"] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}".format(e))
 
-    log_info('[pfBlockerNG]: init_standard script loaded')
+    log_info("[pfBlockerNG]: init_standard script loaded")
     return True
 
 
-def pfb_regex_match(q_name: str) -> str | bool:
-    global regexDB
-
-    if q_name:
-        for k,r in regexDB.items():
-            if r.search(q_name):
-                return k
-    return False
-
-
 def is_idn_domain(q_name: str) -> bool:
-    return q_name.startswith('xn--') or '.xn--' in q_name
+    return q_name.startswith("xn--") or ".xn--" in q_name
 
 
 def get_q_name_qstate(qstate: module_qstate | None) -> str:
-    q_name = ''
+    q_name = ""
     try:
         if qstate and qstate.qinfo and qstate.qinfo.qname_str and qstate.qinfo.qname_str.strip():
-            q_name = qstate.qinfo.qname_str.rstrip('.')
+            q_name = qstate.qinfo.qname_str.rstrip(".")
         elif qstate and qstate.return_msg and qstate.return_msg.qinfo and qstate.return_msg.qinfo.qname_str.strip():
-            q_name = qstate.return_msg.qinfo.qname_str.rstrip('.')
+            q_name = qstate.return_msg.qinfo.qname_str.rstrip(".")
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qstate: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qstate: {}".format(e))
         pass
     return is_unknown(q_name)
 
 
 def get_q_name_qinfo(qinfo: query_info | None) -> str:
-    q_name = ''
+    q_name = ""
     try:
         if qinfo and qinfo.qname_str and qinfo.qname_str.strip():
-            q_name = qinfo.qname_str.rstrip('.')
+            q_name = qinfo.qname_str.rstrip(".")
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qinfo: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qinfo: {}".format(e))
         pass
     return is_unknown(q_name)
 
 
 def get_q_ip(qstate: module_qstate) -> str:
-    q_ip = ''
+    q_ip = ""
 
     try:
         if qstate and qstate.mesh_info.reply_list:
@@ -652,28 +731,28 @@ def get_q_ip(qstate: module_qstate) -> str:
                     break
                 reply_list = reply_list.next
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed get_q_ip: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG]: Failed get_q_ip: {}".format(e))
         pass
     return is_unknown(q_ip)
 
 
 def get_q_ip_comm(kwargs: dict[str, Any] | None) -> str:
-    q_ip = ''
+    q_ip = ""
 
     try:
-        if kwargs and kwargs is not None and ('pfb_addr' in kwargs):
-            q_ip = kwargs['pfb_addr']
-        elif kwargs and kwargs is not None and kwargs['repinfo'] and kwargs['repinfo'].addr:
-            q_ip = kwargs['repinfo'].addr
+        if kwargs and kwargs is not None and ("pfb_addr" in kwargs):
+            q_ip = kwargs["pfb_addr"]
+        elif kwargs and kwargs is not None and kwargs["repinfo"] and kwargs["repinfo"].addr:
+            q_ip = kwargs["repinfo"].addr
     except Exception as e:
         for a in e.args:
-            sys.stderr.write("[pfBlockerNG]: Failed get_q_ip_comm: {}" .format(a))
+            sys.stderr.write("[pfBlockerNG]: Failed get_q_ip_comm: {}".format(a))
         pass
     return is_unknown(q_ip)
 
 
 def get_q_type(qstate: module_qstate | None, qinfo: query_info | None) -> str:
-    q_type = ''
+    q_type = ""
     if qstate and qstate.qinfo.qtype_str:
         q_type = qstate.qinfo.qtype_str
     elif qinfo and qinfo.qtype_str:
@@ -682,77 +761,83 @@ def get_q_type(qstate: module_qstate | None, qinfo: query_info | None) -> str:
 
 
 def get_o_type(qstate: module_qstate | None, rep: reply_info | None) -> str:
-    o_type = ''
+    o_type = ""
     if qstate:
-        if qstate.return_msg and qstate.return_msg.rep and qstate.return_msg.rep.rrsets[0] and qstate.return_msg.rep.rrsets[0].rk:
+        if (
+            qstate.return_msg
+            and qstate.return_msg.rep
+            and qstate.return_msg.rep.rrsets[0]
+            and qstate.return_msg.rep.rrsets[0].rk
+        ):
             o_type = qstate.return_msg.rep.rrsets[0].rk.type_str
         elif qstate.qinfo.qtype_str:
             o_type = qstate.qinfo.qtype_str
         elif rep is not None and rep.rrsets[0] is not None and rep.rrsets[0].rk is not None:
-             o_type = rep.rrsets[0].rk.type_str
+            o_type = rep.rrsets[0].rk.type_str
     return is_unknown(o_type)
 
 
 def get_rep_ttl(rep: reply_info | None) -> str:
-    ttl = ''
+    ttl = ""
     if rep and rep.ttl:
         ttl = rep.ttl
-    return str(is_unknown(ttl)).replace('Unknown', 'Unk')
+    return str(is_unknown(ttl)).replace("Unknown", "Unk")
 
 
 def get_tld(qstate: module_qstate) -> str:
-    tld = ''
+    tld = ""
     if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
         tld = qstate.qinfo.qname_list[-2]
     return tld
 
 
 def convert_ipv4(x: Any) -> str:
-    ipv4 = ''
+    ipv4 = ""
     if x:
         ipv4 = "{}.{}.{}.{}".format(x[2], x[3], x[4], x[5])
     return is_unknown(ipv4)
 
 
 def convert_ipv6(x: Any) -> str:
-    ipv6 = ''
+    ipv6 = ""
     if x:
-        ipv6 = "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}" \
-            .format(x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12],x[13],x[14],x[15],x[16],x[17])
+        ipv6 = (
+            "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}"
+        ).format(x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17])
     return is_unknown(ipv6)
 
 
 def convert_other(x: Any) -> str:
-    final = ''
+    final = ""
     if x:
         for i in x[3:]:
             val = i
             if val == 0:
-                i = '|'
+                i = "|"
             elif 1 <= val <= 12:
-                i = '.'
+                i = "."
             elif val == 13:
                 break
             elif val == 32:
-                i = ' '
+                i = " "
             elif val == 58:
-                i = ':'
+                i = ":"
             elif val <= 33 or val > 126:
                 continue
             else:
                 i = chr(i)
             final += i
-        final = final.strip('.|')
+        final = final.strip(".|")
     return is_unknown(final)
 
 
 def is_unknown(x: Any) -> Any:
     try:
         if not x or x is None:
-            return 'Unknown'
+            return "Unknown"
     except Exception as e:
         for a in e.args:
-            sys.stderr.write("[pfBlockerNG]: Failed is_unknown: {}" .format(a))
+            sys.stderr.write("[pfBlockerNG]: Failed is_unknown: {}".format(a))
         pass
     return x
 
@@ -761,11 +846,11 @@ def write_sqlite(db: int, groupname: str, update: Any) -> bool:
     global pfb
 
     if db == 1:
-        db_file = pfb['pfb_py_resolver']
+        db_file = pfb["pfb_py_resolver"]
     elif db == 2:
-        db_file = pfb['pfb_py_dnsbl']
+        db_file = pfb["pfb_py_dnsbl"]
     elif db == 3:
-        db_file = pfb['pfb_py_cache']
+        db_file = pfb["pfb_py_cache"]
     else:
         return False
 
@@ -777,7 +862,7 @@ def write_sqlite(db: int, groupname: str, update: Any) -> bool:
             if sqlite3Db:
                 sqlite3Db.close()
             if i == 2:
-                sys.stderr.write("[pfBlockerNG]: Failed to open sqlite3 db {}: {}" .format(db_file, e))
+                sys.stderr.write("[pfBlockerNG]: Failed to open sqlite3 db {}: {}".format(db_file, e))
                 return False
             else:
                 time.sleep(0.25)
@@ -785,34 +870,48 @@ def write_sqlite(db: int, groupname: str, update: Any) -> bool:
         break
 
     isException = False
-    for i in range(1,5):
+    for i in range(1, 5):
         try:
             if sqlite3Db:
                 sqlite3DbCursor = sqlite3Db.cursor()
 
                 if db == 1:
-                    sqlite3DbCursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
+                    sqlite3DbCursor.execute(
+                        "CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)"
+                    )
 
                     # Create row if not found
                     sqlite3DbCursor.execute("SELECT COUNT(*) FROM resolver")
                     py_validate = sqlite3DbCursor.fetchone()
                     if py_validate[0] == 0:
-                        sqlite3DbCursor.execute("INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 )")
+                        sqlite3DbCursor.execute(
+                            "INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 )"
+                        )
 
                     # Increment resolver totalqueries
                     if update:
                         sqlite3DbCursor.execute("UPDATE resolver SET totalqueries = totalqueries + 1 WHERE row = 0")
 
                 elif db == 2:
-                    sqlite3DbCursor.execute("CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )")
+                    sqlite3DbCursor.execute(
+                        "CREATE TABLE IF NOT EXISTS dnsbl"
+                        " ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
+                    )
 
                     # Increment DNSBL Groupname counter
                     if update:
-                        sqlite3DbCursor.execute("UPDATE dnsbl SET counter = counter + 1 WHERE groupname = ?", (groupname,) )
+                        sqlite3DbCursor.execute(
+                            "UPDATE dnsbl SET counter = counter + 1 WHERE groupname = ?", (groupname,)
+                        )
 
                 elif db == 3:
-                    sqlite3DbCursor.execute("CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );")
-                    sqlite3DbCursor.execute("INSERT INTO dnsblcache (type, domain, groupname, final, feed ) VALUES (?,?,?,?,?);", update)
+                    sqlite3DbCursor.execute(
+                        "CREATE TABLE IF NOT EXISTS dnsblcache"
+                        " ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
+                    )
+                    sqlite3DbCursor.execute(
+                        "INSERT INTO dnsblcache (type, domain, groupname, final, feed ) VALUES (?,?,?,?,?);", update
+                    )
 
                 sqlite3Db.commit()
                 isException = False
@@ -822,11 +921,11 @@ def write_sqlite(db: int, groupname: str, update: Any) -> bool:
                 if sqlite3Db:
                     sqlite3Db.close()
 
-                sys.stderr.write("[pfBlockerNG]: Failed to write to sqlite3 db {}: {}" .format(db_file, e))
+                sys.stderr.write("[pfBlockerNG]: Failed to write to sqlite3 db {}: {}".format(db_file, e))
 
                 # Attempt to clear DNSBL Cache file on error
-                if db == 3 and os.path.isfile(pfb['pfb_py_cache']):
-                    os.remove(pfb['pfb_py_cache'])
+                if db == 3 and os.path.isfile(pfb["pfb_py_cache"]):
+                    os.remove(pfb["pfb_py_cache"])
                     sys.stderr.write("[pfBlockerNG]: DNSBL Cache database cleared OK")
 
                 pass
@@ -846,8 +945,11 @@ def write_sqlite(db: int, groupname: str, update: Any) -> bool:
 
 
 def get_details_dnsbl(
-    m_type: str, qinfo: query_info | None, qstate: module_qstate | None,
-    rep: reply_info | None, kwargs: dict[str, Any] | None,
+    m_type: str,
+    qinfo: query_info | None,
+    qstate: module_qstate | None,
+    rep: reply_info | None,
+    kwargs: dict[str, Any] | None,
 ) -> bool:
     global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
 
@@ -859,44 +961,58 @@ def get_details_dnsbl(
         return True
 
     # Increment totalqueries counter
-    if pfb['sqlite3_resolver_con']:
-        pfb_async(write_sqlite, 1, '', True)
+    if pfb["sqlite3_resolver_con"]:
+        pfb_async(write_sqlite, 1, "", True)
 
     # Determine if event is a 'reply' or DNSBL block
     isDNSBL = dnsblDB.get(q_name)
     if isDNSBL is not None:
-
-        # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver) except for Python nullblock events
-        if pfb['python_nolog'] and not isDNSBL['null']:
+        # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
+        # except for Python nullblock events
+        if pfb["python_nolog"] and not isDNSBL["null"]:
             return True
 
         # Increment dnsblgroup counter
-        if pfb['sqlite3_dnsbl_con'] and isDNSBL['group'] != '':
-            pfb_async(write_sqlite, 2, isDNSBL['group'], True)
+        if pfb["sqlite3_dnsbl_con"] and isDNSBL["group"] != "":
+            pfb_async(write_sqlite, 2, isDNSBL["group"], True)
 
-        dupEntry = '+'
-        lastEvent = dnsblDB.get('last-event')
+        dupEntry = "+"
+        lastEvent = dnsblDB.get("last-event")
         if lastEvent is not None:
             if str(lastEvent) == str(isDNSBL):
-                dupEntry = '-'
+                dupEntry = "-"
             else:
-                dnsblDB['last-event'] = isDNSBL
+                dnsblDB["last-event"] = isDNSBL
         else:
-            dnsblDB['last-event'] = isDNSBL
+            dnsblDB["last-event"] = isDNSBL
 
         # Skip logging
-        if isDNSBL['log'] == '2':
+        if isDNSBL["log"] == "2":
             return True
 
         q_ip = get_q_ip_comm(kwargs)
-        if q_ip == 'Unknown':
-            q_ip = '127.0.0.1'
+        if q_ip == "Unknown":
+            q_ip = "127.0.0.1"
 
         timestamp = make_timestamp()
 
-        csv_line = ','.join('{}'.format(v) for v in ('DNSBL-python', timestamp, q_name, q_ip, isDNSBL['p_type'], isDNSBL['b_type'], isDNSBL['group'], isDNSBL['b_eval'], isDNSBL['feed'], dupEntry))
-        pfb_async(log_entry, csv_line, '/var/log/pfblockerng/dnsbl.log')
-        pfb_async(log_entry, csv_line, '/var/log/pfblockerng/unified.log')
+        csv_line = ",".join(
+            "{}".format(v)
+            for v in (
+                "DNSBL-python",
+                timestamp,
+                q_name,
+                q_ip,
+                isDNSBL["p_type"],
+                isDNSBL["b_type"],
+                isDNSBL["group"],
+                isDNSBL["b_eval"],
+                isDNSBL["feed"],
+                dupEntry,
+            )
+        )
+        pfb_async(log_entry, csv_line, "/var/log/pfblockerng/dnsbl.log")
+        pfb_async(log_entry, csv_line, "/var/log/pfblockerng/unified.log")
 
     return True
 
@@ -907,17 +1023,17 @@ def make_timestamp() -> str:
             return datetime.now().strftime("%b %-d %H:%M:%S")
         except TypeError:
             continue
-    return ''
+    return ""
 
 
 def log_entry(line: str, log: str) -> None:
-    for i in range(1,5):
+    for i in range(1, 5):
         try:
-            with open(log, 'a') as append_log:
-                append_log.write(line + '\n')
+            with open(log, "a") as append_log:
+                append_log.write(line + "\n")
         except Exception as e:
             if i == 4:
-                sys.stderr.write("[pfBlockerNG]: log_entry: {}: {}" .format(i, e))
+                sys.stderr.write("[pfBlockerNG]: log_entry: {}: {}".format(i, e))
             time.sleep(0.25)
             pass
             continue
@@ -925,8 +1041,11 @@ def log_entry(line: str, log: str) -> None:
 
 
 def get_details_reply(
-    m_type: str, qinfo: query_info | None, qstate: module_qstate | None,
-    rep: reply_info | None, kwargs: dict[str, Any] | None,
+    m_type: str,
+    qinfo: query_info | None,
+    qstate: module_qstate | None,
+    rep: reply_info | None,
+    kwargs: dict[str, Any] | None,
 ) -> bool:
     global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
 
@@ -938,37 +1057,37 @@ def get_details_reply(
         return True
 
     q_ip = get_q_ip_comm(kwargs)
-    if q_ip == 'Unknown' or q_ip == '127.0.0.1':
-        q_ip = '127.0.0.1'
-        m_type = 'resolver'
+    if q_ip == "Unknown" or q_ip == "127.0.0.1":
+        q_ip = "127.0.0.1"
+        m_type = "resolver"
 
     o_type = get_q_type(qstate, qinfo)
-    if m_type == 'cache' or o_type == 'PTR':
+    if m_type == "cache" or o_type == "PTR":
         q_type = o_type
     else:
         q_type = get_o_type(qstate, rep)
 
     # Collect 'python_control' and 'noAAAA' events from inplace_cb_reply
-    if m_type == 'reply-x':
+    if m_type == "reply-x":
         is_reply = False
-        if q_name.startswith('python_control.'):
+        if q_name.startswith("python_control."):
             is_reply = True
-        if not is_reply and q_type == 'AAAA' and noAAAADB.get(q_name) is not None:
+        if not is_reply and q_type == "AAAA" and noAAAADB.get(q_name) is not None:
             is_reply = True
 
         if not is_reply:
             return True
-        m_type = 'reply'
+        m_type = "reply"
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
-    if pfb['sqlite3_resolver_con'] and q_ip != '127.0.0.1':
-        pfb_async(write_sqlite, 1, '', True)
+    if pfb["sqlite3_resolver_con"] and q_ip != "127.0.0.1":
+        pfb_async(write_sqlite, 1, "", True)
 
     # Do not log Replies, if disabled
-    if not pfb['python_reply']:
+    if not pfb["python_reply"]:
         return True
 
-    r_addr = ''
+    r_addr = ""
     if rep and rep is not None:
         if rep.an_numrrsets and rep.an_numrrsets > 0:
             for i in range(0, rep.an_numrrsets):
@@ -976,119 +1095,123 @@ def get_details_reply(
                     e = rep.rrsets[i].rk
                     if e.type_str:
                         d = rep.rrsets[i].entry.data
-                        if e.type_str == 'CNAME' and d.count > 1:
+                        if e.type_str == "CNAME" and d.count > 1:
                             continue
 
                         for j in range(0, d.count):
                             x = d.rr_data[j]
-                            if e.type_str == 'A':
+                            if e.type_str == "A":
                                 r_addr = convert_ipv4(x)
                                 break
-                            elif e.type_str == 'AAAA':
-                                if pfb['mod_ipaddress']:
+                            elif e.type_str == "AAAA":
+                                if pfb["mod_ipaddress"]:
                                     r_addr = convert_ipv6(x)
                                     try:
                                         r_addr = ipaddress.ip_address(r_addr).compressed
                                     except Exception as ex:
-                                        sys.stderr.write("[pfBlockerNG]: Failed to compress IPv6: {}, {}" .format(r_addr, ex))
+                                        sys.stderr.write(
+                                            "[pfBlockerNG]: Failed to compress IPv6: {}, {}".format(r_addr, ex)
+                                        )
                                         pass
                                 break
-                            elif e.type_str in ('DNSKEY', 'DS'):
-                                r_addr = 'DNSSEC'
+                            elif e.type_str in ("DNSKEY", "DS"):
+                                r_addr = "DNSSEC"
                                 break
                             else:
-                                r_addr = r_addr + '|' + convert_other(x)
-                                r_addr = r_addr.strip('|')
+                                r_addr = r_addr + "|" + convert_other(x)
+                                r_addr = r_addr.strip("|")
                             if not r_addr:
-                                r_addr = 'NXDOMAIN'
+                                r_addr = "NXDOMAIN"
 
         else:
             # No Answer section found
-            r_addr = 'NXDOMAIN'
+            r_addr = "NXDOMAIN"
 
     # Collect RCODE for non-NOError codes
     try:
         if qstate and qstate.return_rcode is not None and qstate.return_rcode != 0:
             isrcode = rcodeDB.get(qstate.return_rcode)
             if isrcode is not None:
-               r_addr = isrcode
+                r_addr = isrcode
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: RCODE {}: {}" .format(e, q_name))
+        sys.stderr.write("[pfBlockerNG]: RCODE {}: {}".format(e, q_name))
         pass
 
     r_addr = is_unknown(r_addr)
 
-    if q_type == 'SOA' and r_addr == 'NXDOMAIN':
-        r_addr = 'SOA'
+    if q_type == "SOA" and r_addr == "NXDOMAIN":
+        r_addr = "SOA"
 
-    if q_type == 'NSEC3' and r_addr == 'NXDOMAIN':
-        r_addr = 'NSEC3'
+    if q_type == "NSEC3" and r_addr == "NXDOMAIN":
+        r_addr = "NSEC3"
 
-    if q_type == 'NS' and q_name == 'Unknown':
-        q_name = 'NS'
+    if q_type == "NS" and q_name == "Unknown":
+        q_name = "NS"
 
     # Determine if domain was noAAAA blocked
-    if r_addr == 'NXDOMAIN' and q_type == 'AAAA' and noAAAADB.get(q_name) is not None:
-        r_addr = 'noAAAA'
+    if r_addr == "NXDOMAIN" and q_type == "AAAA" and noAAAADB.get(q_name) is not None:
+        r_addr = "noAAAA"
 
-    if pfb['python_maxmind'] and r_addr not in ('', 'Unknown', 'NXDOMAIN', 'NODATA', 'DNSSEC', 'SOA', 'NS'):
-        version: int | str = ''
+    if pfb["python_maxmind"] and r_addr not in ("", "Unknown", "NXDOMAIN", "NODATA", "DNSSEC", "SOA", "NS"):
+        version: int | str = ""
         try:
             version = ipaddress.ip_address(r_addr).version
         except Exception:
             pass
 
-        if version != '':
+        if version != "":
             try:
                 isPrivate = ipaddress.ip_address(r_addr).is_private
                 isLoopback = ipaddress.ip_address(r_addr).is_loopback
 
                 if isPrivate:
-                    iso_code = 'prv'
+                    iso_code = "prv"
                 elif isLoopback:
-                    iso_code = 'l.b.'
+                    iso_code = "l.b."
                 else:
                     geoip = maxmindReader.get(r_addr)
                     if geoip:
-                        if 'country' in geoip:
-                            country = geoip['country']
-                            if 'iso_code' in country:
-                                iso_code = geoip['country']['iso_code']
+                        if "country" in geoip:
+                            country = geoip["country"]
+                            if "iso_code" in country:
+                                iso_code = geoip["country"]["iso_code"]
                             else:
-                                iso_code = 'unk'
-                        elif 'continent' in geoip:
-                            continent = geoip['continent']
-                            if 'code' in continent:
-                                iso_code = geoip['continent']['code']
+                                iso_code = "unk"
+                        elif "continent" in geoip:
+                            continent = geoip["continent"]
+                            if "code" in continent:
+                                iso_code = geoip["continent"]["code"]
                             else:
-                                iso_code = 'unk'
+                                iso_code = "unk"
                         else:
-                            iso_code = 'unk'
+                            iso_code = "unk"
                     else:
-                        iso_code = 'unk'
+                        iso_code = "unk"
 
             except Exception as e:
-                sys.stderr.write("[pfBlockerNG]: MaxMind Reader failed: {}: IP: {}" .format(e, r_addr))
-                iso_code = 'unk'
+                sys.stderr.write("[pfBlockerNG]: MaxMind Reader failed: {}: IP: {}".format(e, r_addr))
+                iso_code = "unk"
                 pass
         else:
-            iso_code = 'unk'
+            iso_code = "unk"
     else:
-        iso_code = 'unk'
+        iso_code = "unk"
 
     ttl = get_rep_ttl(rep)
     # Cached TTLs are in unix timestamp (time remaining)
-    if m_type == 'cache':
+    if m_type == "cache":
         if ttl.isdigit() and len(ttl) == 10:
             ttl = str(int(ttl) - int(time.time()))
         else:
-            ttl = ''
+            ttl = ""
 
     timestamp = make_timestamp()
 
-    csv_line = ','.join('{}'.format(v) for v in ('DNS-reply', timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
-    pfb_async(log_entry, csv_line, '/var/log/pfblockerng/dns_reply.log')
-    pfb_async(log_entry, csv_line, '/var/log/pfblockerng/unified.log')
+    csv_line = ",".join(
+        "{}".format(v) for v in ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code)
+    )
+    pfb_async(log_entry, csv_line, "/var/log/pfblockerng/dns_reply.log")
+    pfb_async(log_entry, csv_line, "/var/log/pfblockerng/unified.log")
 
     return True
 
@@ -1103,9 +1226,10 @@ def python_control_duration(duration: str) -> int | bool:
                 return value
         return False
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] python_control_duration: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG] python_control_duration: {}".format(e))
         pass
     return False
+
 
 # Is thread still active
 def python_control_thread(tname: str) -> bool:
@@ -1116,9 +1240,10 @@ def python_control_thread(tname: str) -> bool:
             if t.name == tname:
                 return True
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] python_control_thread: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG] python_control_thread: {}".format(e))
         pass
     return False
+
 
 # Python_control Start Thread
 def python_control_start_thread(tname: str, fcall: Callable[..., Any], arg1: Any, arg2: Any) -> bool:
@@ -1130,7 +1255,7 @@ def python_control_start_thread(tname: str, fcall: Callable[..., Any], arg1: Any
         t1.start()
         return True
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] python_control_start_thread: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG] python_control_start_thread: {}".format(e))
         pass
     return False
 
@@ -1141,9 +1266,9 @@ def python_control_sleep(duration: int, arg: Any) -> bool:
 
     try:
         time.sleep(duration)
-        pfb['python_blacklist'] = True
+        pfb["python_blacklist"] = True
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] python_control_sleep: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG] python_control_sleep: {}".format(e))
         pass
     return True
 
@@ -1158,99 +1283,279 @@ def python_control_addbypass(duration: int, b_ip: str) -> bool:
             gpListDB.pop(b_ip)
             return True
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] python_control_addbypass: {}" .format(e))
+        sys.stderr.write("[pfBlockerNG] python_control_addbypass: {}".format(e))
         pass
     return False
 
+
 def inplace_cb_reply(
-    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
-    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+    qinfo: query_info,
+    qstate: module_qstate,
+    rep: reply_info,
+    rcode: int,
+    edns: Any,
+    opt_list_out: Any,
+    region: Any,
+    **kwargs: Any,
 ) -> bool:
-    get_details_reply('reply-x', qinfo, qstate, rep, kwargs)
+    get_details_reply("reply-x", qinfo, qstate, rep, kwargs)
     return True
+
 
 def inplace_cb_reply_cache(
-    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
-    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+    qinfo: query_info,
+    qstate: module_qstate,
+    rep: reply_info,
+    rcode: int,
+    edns: Any,
+    opt_list_out: Any,
+    region: Any,
+    **kwargs: Any,
 ) -> bool:
-    get_details_reply('cache', qinfo, qstate, rep, kwargs)
+    get_details_reply("cache", qinfo, qstate, rep, kwargs)
     return True
+
 
 def inplace_cb_reply_local(
-    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
-    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+    qinfo: query_info,
+    qstate: module_qstate,
+    rep: reply_info,
+    rcode: int,
+    edns: Any,
+    opt_list_out: Any,
+    region: Any,
+    **kwargs: Any,
 ) -> bool:
-    get_details_reply('local', qinfo, qstate, rep, kwargs)
+    get_details_reply("local", qinfo, qstate, rep, kwargs)
     return True
 
+
 def inplace_cb_reply_servfail(
-    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
-    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+    qinfo: query_info,
+    qstate: module_qstate,
+    rep: reply_info,
+    rcode: int,
+    edns: Any,
+    opt_list_out: Any,
+    region: Any,
+    **kwargs: Any,
 ) -> bool:
-    get_details_reply('servfail', qinfo, qstate, rep, kwargs)
+    get_details_reply("servfail", qinfo, qstate, rep, kwargs)
     return True
+
 
 def deinit(id: int) -> bool:
     global pfb, maxmindReader, pfb_task_queue, pfb_worker_thread
 
-    if pfb['python_maxmind']:
+    if pfb["python_maxmind"]:
         maxmindReader.close()
 
     # Drain and stop the background I/O worker
-    if pfb.get('async_worker'):
+    if pfb.get("async_worker"):
         try:
             pfb_task_queue.put(None)
             pfb_worker_thread.join(timeout=5)
         except Exception:
             pass
-        pfb['async_worker'] = False
+        pfb["async_worker"] = False
 
-    log_info('[pfBlockerNG]: pfb_unbound.py script exiting')
+    log_info("[pfBlockerNG]: pfb_unbound.py script exiting")
     return True
+
 
 def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qdata: Any) -> bool:
     return True
 
 
+def iter_domain_suffixes(name: str) -> Iterator[str]:
+    q = name
+    for _ in range(name.count(".") + 1, 0, -1):
+        yield q
+        q = q.split(".", 1)[-1]
+
+
 def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:
-    q = q_name
-    for _ in range(q.count('.') + 1, 0, -1):
+    for q in iter_domain_suffixes(q_name):
         entry = zone_db.get(q)
         if entry is not None:
             return q, entry
-        q = q.split('.', 1)[-1]
     return None, None
 
 
 def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db: dict[str, Any]) -> str | None:
-    q = q_name.split('.', 1)[-1]
-    for _ in range(q.count('.'), 0, -1):
+    q = q_name.split(".", 1)[-1]
+    for _ in range(q.count("."), 0, -1):
         if noaaaa_db.get(q):
             return q
-        q = q.split('.', 1)[-1]
+        q = q.split(".", 1)[-1]
     return None
 
 
 def whitelist_check_domain(name: str, white_db: dict[str, Any], tld_seg: int) -> bool:
     if white_db.get(name) is not None:
         return True
-    if name.startswith('www.') and white_db.get(name[4:]) is not None:
+    if name.startswith("www.") and white_db.get(name[4:]) is not None:
         return True
-    q = name.split('.', 1)[-1]
-    for x in range(q.count('.') + 1, 0, -1):
+    q = name.split(".", 1)[-1]
+    for x in range(q.count(".") + 1, 0, -1):
         if x >= tld_seg and white_db.get(q):
             return True
-        q = q.split('.', 1)[-1]
+        q = q.split(".", 1)[-1]
     return False
 
 
+def resolve_feed_group(index: Any, feed_group_index_db: dict[int, Any]) -> tuple[Any, Any]:
+    feedGroup = feed_group_index_db.get(index)
+    if feedGroup is not None:
+        return feedGroup["feed"], feedGroup["group"]
+    return "Unknown", "Unknown"
+
+
+def hsts_check_domain(
+    name: str,
+    hsts_db: dict[str, Any],
+    hsts_tlds: tuple[str, ...] | list[str],
+    tld: str,
+) -> tuple[bool, str]:
+    if tld in hsts_tlds:
+        return True, "HSTS_TLD"
+    q = name
+    for _ in range(q.count(".") + 1, 0, -2):
+        if hsts_db.get(q) is not None:
+            return True, "HSTS"
+        q = q.split(".", 1)[-1]
+    return False, "Python"
+
+
+@dataclass
+class DnsblDecision:
+    is_found: bool
+    in_whitelist: bool
+    in_hsts: bool
+    null_blocking: bool
+    log_type: Any
+    b_type: str
+    p_type: str
+    feed: Any
+    group: Any
+    b_eval: str
+
+
+def evaluate_domain(
+    q_name: str,
+    q_name_original: str,
+    tld: str,
+    is_cname: bool,
+    cfg: dict[str, Any],
+    containers: dict[str, Any],
+) -> DnsblDecision:
+    is_found = False
+    log_type: Any = False
+    in_whitelist = False
+    in_hsts = False
+    null_blocking = True
+    b_type = "Python"
+    p_type = "Python"
+    feed: Any = "Unknown"
+    group: Any = "Unknown"
+    b_eval = ""
+
+    data_db: dict[str, Any] = containers["dataDB"]
+    zone_db: dict[str, Any] = containers["zoneDB"]
+    white_db: dict[str, Any] = containers["whiteDB"]
+    regex_db: dict[str, Any] = containers["regexDB"]
+    feed_group_index_db: dict[int, Any] = containers["feedGroupIndexDB"]
+    hsts_db: dict[str, Any] = containers["hstsDB"]
+
+    if cfg["python_blocking"]:
+        if cfg["dataDB"]:
+            data_entry = data_db.get(q_name)
+            if data_entry is not None:
+                is_found = True
+                log_type = data_entry["log"]
+                feed, group = resolve_feed_group(data_entry["index"], feed_group_index_db)
+                b_type = "DNSBL"
+                b_eval = q_name
+
+        if not is_found and cfg["zoneDB"]:
+            matched_q, zone_entry = find_zone_match(q_name, zone_db)
+            if matched_q is not None and zone_entry is not None:
+                is_found = True
+                log_type = zone_entry["log"]
+                feed, group = resolve_feed_group(zone_entry["index"], feed_group_index_db)
+                b_type = "TLD"
+                b_eval = matched_q
+
+    if not is_found:
+        if (
+            cfg["python_tld"]
+            and tld != ""
+            and q_name not in (cfg["dnsbl_ipv4"], cfg["dnsbl_ipv6"])
+            and tld not in cfg["python_tlds"]
+        ):
+            is_found = True
+            feed = "TLD_Allow"
+            group = "DNSBL_TLD_Allow"
+
+        if not is_found and cfg["python_idn"] and is_idn_domain(q_name):
+            is_found = True
+            feed = "IDN"
+            group = "DNSBL_IDN"
+
+        if not is_found and cfg["regexDB"] and q_name:
+            for k, r in regex_db.items():
+                if r.search(q_name):
+                    is_found = True
+                    feed = k
+                    group = "DNSBL_Regex"
+                    break
+
+        if is_found:
+            b_eval = q_name
+            log_type = "1"
+
+    if is_found and cfg["whiteDB"]:
+        names = [q_name] + ([q_name_original] if is_cname else [])
+        in_whitelist = any(whitelist_check_domain(n, white_db, cfg["python_tld_seg"]) for n in names)
+
+    if is_found and not in_whitelist:
+        if cfg["hstsDB"]:
+            in_hsts, p_type = hsts_check_domain(q_name, hsts_db, cfg["hsts_tlds"], tld)
+
+        if log_type == "1" and not in_hsts:
+            null_blocking = False
+
+        if is_cname:
+            b_type = b_type + "_CNAME"
+
+    return DnsblDecision(
+        is_found=is_found,
+        in_whitelist=in_whitelist,
+        in_hsts=in_hsts,
+        null_blocking=null_blocking,
+        log_type=log_type,
+        b_type=b_type,
+        p_type=p_type,
+        feed=feed,
+        group=group,
+        b_eval=b_eval,
+    )
+
+
+def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
+    if noaaaa_db.get(q_name) is not None:
+        return True
+    return find_noaaaa_wildcard_parent(q_name, noaaaa_db) is not None
+
+
 def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
-    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB
+    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, excludeDB, excludeAAAADB
+    global excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB
 
     qstate_valid = False
     q_type: Any = None
-    q_name_original = ''
-    q_ip = ''
+    q_name_original = ""
+    q_ip = ""
     try:
         if qstate is not None and qstate.qinfo.qtype is not None:
             qstate_valid = True
@@ -1260,29 +1565,19 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         else:
             sys.stderr.write("[pfBlockerNG] qstate is not None and qstate.qinfo.qtype is not None")
     except Exception as e:
-        sys.stderr.write("[pfBlockerNG] qstate_valid: {}: {}" .format(event, e))
+        sys.stderr.write("[pfBlockerNG] qstate_valid: {}: {}".format(event, e))
         pass
 
     if (event == MODULE_EVENT_NEW) or (event == MODULE_EVENT_PASS):
-
         # no AAAA validation
-        if qstate_valid and q_type == RR_TYPE_AAAA and pfb['noAAAADB'] and q_name_original not in excludeAAAADB:
-            isin_noAAAA = False
-
-            # Determine full domain match
-            isnoAAAA = noAAAADB.get(q_name_original)
-            if isnoAAAA is not None:
-                isin_noAAAA = True
-
-            # Wildcard verification of domain
-            if not isin_noAAAA:
-                parent = find_noaaaa_wildcard_parent(q_name_original, noAAAADB)
-                if parent is not None:
-                    isin_noAAAA = True
-                    noAAAADB[q_name_original] = True
+        if qstate_valid and q_type == RR_TYPE_AAAA and pfb["noAAAADB"] and q_name_original not in excludeAAAADB:
+            isin_noAAAA = evaluate_noaaaa(q_name_original, noAAAADB)
 
             # Create FQDN Reply Message (AAAA -> A)
             if isin_noAAAA:
+                if noAAAADB.get(q_name_original) is None:
+                    noAAAADB[q_name_original] = True
+
                 msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
                 if msg is None or not msg.set_return_msg(qstate):
                     qstate.ext_state[id] = MODULE_ERROR
@@ -1297,44 +1592,52 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             else:
                 excludeAAAADB.append(q_name_original)
 
-
         # SafeSearch Redirection validation
-        if qstate_valid and pfb['safeSearchDB']:
-
+        if qstate_valid and pfb["safeSearchDB"]:
             # Determine if domain has been previously validated
             if q_name_original not in excludeSS:
                 isSafeSearch = safeSearchDB.get(q_name_original)
 
                 # Validate 'www.' Domains
-                if isSafeSearch is None and not q_name_original.startswith('www.'):
-                    isSafeSearch = safeSearchDB.get('www.' + q_name_original)
+                if isSafeSearch is None and not q_name_original.startswith("www."):
+                    isSafeSearch = safeSearchDB.get("www." + q_name_original)
 
                 # TODO: See CNAME message below
-                #if isSafeSearch is None and q_name_original != 'safe.duckduckgo.com' and q_name_original.endswith('duckduckgo.com'):
+                # if isSafeSearch is None and q_name_original != 'safe.duckduckgo.com'
+                #        and q_name_original.endswith('duckduckgo.com'):
                 #    isSafeSearch = safeSearchDB.get('duckduckgo.com')
-                #if isSafeSearch is None and q_name_original != 'safesearch.pixabay.com' and q_name_original.endswith('pixabay.com'):
+                # if isSafeSearch is None and q_name_original != 'safesearch.pixabay.com'
+                #        and q_name_original.endswith('pixabay.com'):
                 #    isSafeSearch = safeSearchDB.get('pixabay.com')
 
                 if isSafeSearch is not None:
-
                     ss_found = False
                     msg = None
                     cname_msg = None
-                    if isSafeSearch['A'] == 'nxdomain':
+                    if isSafeSearch["A"] == "nxdomain":
                         qstate.return_rcode = RCODE_NXDOMAIN
                         qstate.ext_state[id] = MODULE_FINISHED
                         return True
 
-                    # TODO: Wait for Unbound code changes to allow for this functionality, using local-zone/local-data entries for CNAMES for now
-                    elif isSafeSearch['A'] == 'cname':
-                        if isSafeSearch['AAAA'] is not None and isSafeSearch['AAAA'] != '':
+                    # TODO: Wait for Unbound code changes to allow for this functionality,
+                    # using local-zone/local-data entries for CNAMES for now
+                    elif isSafeSearch["A"] == "cname":
+                        if isSafeSearch["AAAA"] is not None and isSafeSearch["AAAA"] != "":
                             if q_type == RR_TYPE_A:
-                                cname_msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA)
-                                cname_msg.answer.append("{} 3600 IN CNAME {}" .format(qstate.qinfo.qname_str, isSafeSearch['AAAA']))
+                                cname_msg = DNSMessage(
+                                    qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
+                                )
+                                cname_msg.answer.append(
+                                    "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
+                                )
                                 ss_found = True
                             elif q_type == RR_TYPE_AAAA:
-                                cname_msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA)
-                                cname_msg.answer.append("{} 3600 IN CNAME {}" .format(qstate.qinfo.qname_str, isSafeSearch['AAAA']))
+                                cname_msg = DNSMessage(
+                                    qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
+                                )
+                                cname_msg.answer.append(
+                                    "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
+                                )
                                 ss_found = True
 
                             if ss_found:
@@ -1347,13 +1650,17 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                                 qstate.ext_state[id] = MODULE_RESTART_NEXT
                                 return True
                     else:
-                        if (q_type == RR_TYPE_A and isSafeSearch['A'] != '') or (q_type == RR_TYPE_AAAA and isSafeSearch['AAAA'] == ''):
+                        if (q_type == RR_TYPE_A and isSafeSearch["A"] != "") or (
+                            q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] == ""
+                        ):
                             msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
-                            msg.answer.append("{} 300 IN {} {}" .format(qstate.qinfo.qname_str, 'A', isSafeSearch['A']))
+                            msg.answer.append("{} 300 IN {} {}".format(qstate.qinfo.qname_str, "A", isSafeSearch["A"]))
                             ss_found = True
-                        elif q_type == RR_TYPE_AAAA and isSafeSearch['AAAA'] != '':
+                        elif q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] != "":
                             msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RA)
-                            msg.answer.append("{} 300 IN {} {}" .format(qstate.qinfo.qname_str, 'AAAA', isSafeSearch['AAAA']))
+                            msg.answer.append(
+                                "{} 300 IN {} {}".format(qstate.qinfo.qname_str, "AAAA", isSafeSearch["AAAA"])
+                            )
                             ss_found = True
 
                     if ss_found:
@@ -1371,107 +1678,114 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 excludeSS.append(q_name_original)
 
         # Python_control - Receive TXT commands from pfSense local IP
-        if qstate_valid and q_type == RR_TYPE_TXT and q_name_original.startswith('python_control.'):
-
+        if qstate_valid and q_type == RR_TYPE_TXT and q_name_original.startswith("python_control."):
             control_rcd = False
-            control_msg = ''
-            if pfb['python_control'] and q_ip == '127.0.0.1':
-
-                control_command = q_name_original.split('.')
-                if (len(control_command) >= 2):
-
-                    if control_command[1] == 'disable':
+            control_msg = ""
+            if pfb["python_control"] and q_ip == "127.0.0.1":
+                control_command = q_name_original.split(".")
+                if len(control_command) >= 2:
+                    if control_command[1] == "disable":
                         control_rcd = True
-                        control_msg = 'Python_control: DNSBL disabled'
-                        pfb['python_blacklist'] = False
+                        control_msg = "Python_control: DNSBL disabled"
+                        pfb["python_blacklist"] = False
 
                         # If duration specified, disable DNSBL Blocking for specified time in seconds
-                        if pfb['mod_threading'] and len(control_command) == 3 and control_command[2] != '':
-
+                        if pfb["mod_threading"] and len(control_command) == 3 and control_command[2] != "":
                             # Validate Duration argument
                             duration = python_control_duration(control_command[2])
                             if duration:
-
                                 # Ensure thread is not active
-                                if not python_control_thread('sleep'):
-
+                                if not python_control_thread("sleep"):
                                     # Start Thread
-                                    if not python_control_start_thread('sleep', python_control_sleep, duration, None):
+                                    if not python_control_start_thread("sleep", python_control_sleep, duration, None):
                                         control_rcd = False
-                                        control_msg = 'Python_control: DNSBL disabled: Thread failed'
+                                        control_msg = "Python_control: DNSBL disabled: Thread failed"
                                     else:
-                                        control_msg = "{} for {} second(s)" .format(control_msg, duration)
+                                        control_msg = "{} for {} second(s)".format(control_msg, duration)
                                 else:
                                     control_rcd = False
-                                    control_msg = 'Python_control: DNSBL disabled: Previous call still in progress'
+                                    control_msg = "Python_control: DNSBL disabled: Previous call still in progress"
                             else:
                                 control_rcd = False
-                                control_msg = "Python_control: DNSBL disabled: duration [ {} ] out of range (1-3600sec)" .format(control_command[2])
+                                control_msg = (
+                                    "Python_control: DNSBL disabled: duration [ {} ] out of range (1-3600sec)".format(
+                                        control_command[2]
+                                    )
+                                )
 
-                    elif control_command[1] == 'enable':
+                    elif control_command[1] == "enable":
                         control_rcd = True
-                        control_msg = 'Python_control: DNSBL enabled'
-                        pfb['python_blacklist'] = True
+                        control_msg = "Python_control: DNSBL enabled"
+                        pfb["python_blacklist"] = True
 
-                    elif control_command[1] == 'addbypass' or control_command[1] == 'removebypass':
-                        b_ip = (control_command[2]).replace('-', '.')
+                    elif control_command[1] == "addbypass" or control_command[1] == "removebypass":
+                        b_ip = (control_command[2]).replace("-", ".")
                         isIPValid = ipaddress.ip_address(b_ip)
 
                         if isIPValid:
-                            if not pfb['gpListDB']:
-                                pfb['gpListDB'] = True
+                            if not pfb["gpListDB"]:
+                                pfb["gpListDB"] = True
 
                             control_rcd = True
-                            if control_command[1] == 'addbypass':
-                                control_msg = "Python_control: Add bypass for IP: [ {} ]" .format(b_ip)
+                            if control_command[1] == "addbypass":
+                                control_msg = "Python_control: Add bypass for IP: [ {} ]".format(b_ip)
 
                                 # If duration specified, disable DNSBL Blocking for specified time in seconds
-                                if pfb['mod_threading'] and len(control_command) == 4 and control_command[3] != '':
-
+                                if pfb["mod_threading"] and len(control_command) == 4 and control_command[3] != "":
                                     # Validate Duration argument
                                     duration = python_control_duration(control_command[3])
                                     if duration:
-
                                         # Ensure thread is not active
-                                        if not python_control_thread('addbypass' + b_ip):
-
+                                        if not python_control_thread("addbypass" + b_ip):
                                             # Start Thread
-                                            if not python_control_start_thread('addbypass' + b_ip, python_control_addbypass, duration, b_ip):
+                                            if not python_control_start_thread(
+                                                "addbypass" + b_ip, python_control_addbypass, duration, b_ip
+                                            ):
                                                 control_rcd = False
-                                                control_msg = "Python_control: Add bypass for IP: [ {} ] thread failed" .format(b_ip)
+                                                control_msg = (
+                                                    "Python_control: Add bypass for IP: [ {} ] thread failed".format(
+                                                        b_ip
+                                                    )
+                                                )
                                             else:
-                                                control_msg = "{} for {} second(s)" .format(control_msg, duration)
+                                                control_msg = "{} for {} second(s)".format(control_msg, duration)
                                         else:
                                             control_rcd = False
-                                            control_msg = "Python_control: Add bypass for IP: [ {} ]: Previous call still in progress" .format(b_ip)
+                                            control_msg = (
+                                                "Python_control: Add bypass for IP:"
+                                                " [ {} ]: Previous call still in progress"
+                                            ).format(b_ip)
                                     else:
                                         control_rcd = False
-                                        control_msg = "Python_control: Add bypass for IP: [ {} ]: duration [ {} ] out of range (1-3600sec)" .format(b_ip, control_command[3])
+                                        control_msg = (
+                                            "Python_control: Add bypass for IP:"
+                                            " [ {} ]: duration [ {} ] out of range (1-3600sec)"
+                                        ).format(b_ip, control_command[3])
                                 else:
                                     # Add bypass called without duration
                                     if control_rcd:
                                         gpListDB[b_ip] = 0
 
-                            elif control_command[1] == 'removebypass':
+                            elif control_command[1] == "removebypass":
                                 if gpListDB.get(b_ip) is not None:
-                                    control_msg = "Python_control: Remove bypass for IP: [ {} ]" .format(b_ip)
+                                    control_msg = "Python_control: Remove bypass for IP: [ {} ]".format(b_ip)
                                     gpListDB.pop(b_ip)
                                 else:
-                                    control_msg = "Python_control: IP not in Group Policy: [ {} ]" .format(b_ip)
+                                    control_msg = "Python_control: IP not in Group Policy: [ {} ]".format(b_ip)
 
                 if control_rcd:
-                    q_reply = 'python_control'
+                    q_reply = "python_control"
                 else:
-                    if control_msg == '':
-                        control_msg = "Python_control: Command not authorized! [ {} ]" .format(q_name_original)
-                    q_reply = 'python_control_fail'
+                    if control_msg == "":
+                        control_msg = "Python_control: Command not authorized! [ {} ]".format(q_name_original)
+                    q_reply = "python_control_fail"
 
                 txt_msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_TXT, RR_CLASS_IN, PKT_QR | PKT_RA)
-                txt_msg.answer.append("{}. 0 IN TXT \"{}\"" .format(q_reply, control_msg))
+                txt_msg.answer.append('{}. 0 IN TXT "{}"'.format(q_reply, control_msg))
 
                 if txt_msg is None or not txt_msg.set_return_msg(qstate):
-                     qstate.ext_state[id] = MODULE_ERROR
-                     return True
+                    qstate.ext_state[id] = MODULE_ERROR
+                    return True
 
                 qstate.return_rcode = RCODE_NOERROR
                 qstate.return_msg.rep.security = 2
@@ -1479,14 +1793,13 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 return True
 
     # DNSBL Validation for specific RR_TYPES only
-    if qstate_valid and pfb['python_blacklist'] and q_type in pfb['rr_types']:
-
+    if qstate_valid and pfb["python_blacklist"] and q_type in pfb["rr_types"]:
         # Group Policy - Bypass DNSBL Validation
         bypass_dnsbl = False
-        if pfb['gpListDB']:
+        if pfb["gpListDB"]:
             q_ip = get_q_ip(qstate)
 
-            if q_ip != 'Unknown':
+            if q_ip != "Unknown":
                 isgpBypass = gpListDB.get(q_ip)
 
                 if isgpBypass is not None:
@@ -1496,198 +1809,138 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         validate = []
 
         # Skip 'in-addr.arpa' domains
-        if not q_name_original.endswith('.in-addr.arpa') and not bypass_dnsbl:
+        if not q_name_original.endswith(".in-addr.arpa") and not bypass_dnsbl:
             validate.append(q_name_original)
 
             # DNSBL CNAME Validation
-            if pfb['python_cname'] and qstate.return_msg:
+            if pfb["python_cname"] and qstate.return_msg:
                 r = qstate.return_msg.rep
                 if r.an_numrrsets > 1:
-                    for i in range (0, r.an_numrrsets):
+                    for i in range(0, r.an_numrrsets):
                         rr = r.rrsets[i]
 
-                        if rr.rk.type_str != 'CNAME':
+                        if rr.rk.type_str != "CNAME":
                             continue
 
                         for j in range(0, rr.entry.data.count):
                             domain = convert_other(rr.entry.data.rr_data[j]).lower()
-                            if domain != 'Unknown':
+                            if domain != "Unknown":
                                 validate.append(domain)
 
         isCNAME = False
         for val_counter, q_name in enumerate(validate, start=1):
-
             if val_counter > 1:
                 isCNAME = True
 
             # Determine if domain has been previously validated
             if q_name not in excludeDB:
-
                 isFound = False
-                log_type: Any = False
                 isInWhitelist = False
-                isInHsts = False
                 nullBlocking = True
-                b_type = 'Python'
-                p_type = 'Python'
-                feed: Any = 'Unknown'
-                group = 'Unknown'
-                b_eval = ''
-
-                # print "v0: " + q_name
 
                 # Determine if domain was previously DNSBL blocked
                 isDomainInDNSBL = dnsblDB.get(q_name)
                 if isDomainInDNSBL is None:
                     tld = get_tld(qstate)
-
-                    # Determine if domain is in DNSBL 'data|zone' database
-                    if pfb['python_blocking']:
-
-                        # Determine if domain is in DNSBL 'data' database (log to dnsbl.log)
-                        isDomainInData: Any = False
-                        if pfb['dataDB']:
-                            isDomainInData = dataDB.get(q_name)
-                            if isDomainInData is not None:
-                                #print q_name + ' data: ' + str(isDomainInData)
-                                isFound = True
-                                log_type = isDomainInData['log']
-
-                                # Collect Feed/Group
-                                feedGroup = feedGroupIndexDB.get(isDomainInData['index'])
-                                if feedGroup is not None:
-                                    feed = feedGroup['feed']
-                                    group = feedGroup['group']
-
-                                b_type = 'DNSBL'
-                                b_eval = q_name
-
-                        # Determine if domain is in DNSBL 'zone' database (log to dnsbl.log)
-                        if not isFound and pfb['zoneDB']:
-                            matched_q, zone_entry = find_zone_match(q_name, zoneDB)
-                            if matched_q is not None and zone_entry is not None:
-                                isFound = True
-                                log_type = zone_entry['log']
-
-                                # Collect Feed/Group
-                                feedGroup = feedGroupIndexDB.get(zone_entry['index'])
-                                if feedGroup is not None:
-                                    feed = feedGroup['feed']
-                                    group = feedGroup['group']
-
-                                b_type = 'TLD'
-                                b_eval = matched_q
-
-                    # Validate other python methods, if not blocked via DNSBL zone/data
-                    if not isFound:
-
-                        # Allow only approved TLDs
-                        if pfb['python_tld'] and tld != '' and q_name not in (pfb['dnsbl_ipv4'], pfb['dnsbl_ipv6']) and tld not in pfb['python_tlds']:
-                            isFound = True
-                            feed = 'TLD_Allow'
-                            group = 'DNSBL_TLD_Allow'
-
-                        # Block IDN or 'xn--' Domains
-                        if not isFound and pfb['python_idn'] and is_idn_domain(q_name):
-                            isFound = True
-                            feed = 'IDN'
-                            group = 'DNSBL_IDN'
-
-                        # Block via Regex
-                        if not isFound and pfb['regexDB']:
-                            isRegexMatch = pfb_regex_match(q_name)
-                            #print q_name + ' regex: ' + str(isRegexMatch)
-                            if isRegexMatch:
-                                isFound = True
-                                feed = isRegexMatch
-                                group = 'DNSBL_Regex'
-
-                        if isFound:
-                            b_eval = q_name
-                            log_type = '1'
-
-                    # Validate domain in DNSBL Whitelist
-                    if isFound and pfb['whiteDB']:
-                        names = [q_name] + ([q_name_original] if isCNAME else [])
-                        isInWhitelist = any(whitelist_check_domain(n, whiteDB, pfb['python_tld_seg']) for n in names)
+                    cfg = {
+                        "python_blocking": pfb["python_blocking"],
+                        "dataDB": pfb["dataDB"],
+                        "zoneDB": pfb["zoneDB"],
+                        "python_tld": pfb["python_tld"],
+                        "python_tlds": pfb["python_tlds"],
+                        "dnsbl_ipv4": pfb["dnsbl_ipv4"],
+                        "dnsbl_ipv6": pfb["dnsbl_ipv6"],
+                        "python_idn": pfb["python_idn"],
+                        "regexDB": pfb["regexDB"],
+                        "whiteDB": pfb["whiteDB"],
+                        "python_tld_seg": pfb["python_tld_seg"],
+                        "hstsDB": pfb["hstsDB"],
+                        "hsts_tlds": pfb["hsts_tlds"],
+                    }
+                    containers = {
+                        "dataDB": dataDB,
+                        "zoneDB": zoneDB,
+                        "whiteDB": whiteDB,
+                        "regexDB": regexDB,
+                        "feedGroupIndexDB": feedGroupIndexDB,
+                        "hstsDB": hstsDB,
+                    }
+                    dec = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
+                    isFound = dec.is_found
+                    isInWhitelist = dec.in_whitelist
+                    nullBlocking = dec.null_blocking
+                    b_type = dec.b_type
+                    p_type = dec.p_type
+                    log_type = dec.log_type
+                    feed = dec.feed
+                    group = dec.group
+                    b_eval = dec.b_eval
 
                     # Add domain to excludeDB to skip subsequent blacklist validation
                     if not isFound or isInWhitelist:
-                        #print "Add to Pass: " + q_name
                         excludeDB.append(q_name)
 
                     # Domain to be blocked and is not whitelisted
                     if isFound and not isInWhitelist:
-
-                        # Determine if domain is in HSTS database (Null blocking)
-                        if pfb['hstsDB']:
-                            #print q_name + ' hsts:'
-
-                            # Determine if TLD is in HSTS database
-                            if tld in pfb['hsts_tlds']:
-                                isInHsts = True
-                                p_type = 'HSTS_TLD'
-                                #print q_name + " HSTS"
-                            else:
-                                q = q_name
-                                for _ in range(q.count('.') +1, 0, -2):
-                                    # print q_name + ' validate: ' + q
-                                    isDomainInHsts = hstsDB.get(q)
-                                    if isDomainInHsts is not None:
-                                        #print q_name + " q: " + q + " HSTS blacklist"
-                                        isInHsts = True
-                                        p_type = 'HSTS'
-                                        break
-                                    else:
-                                        q = q.split('.', 1)[-1]
-
-                                # print q_name + ' break'
-
-                        # Determine blocked IP type (DNSBL VIP vs Null Blocking)
-                        if log_type == '1' and not isInHsts:
-                            nullBlocking = False
-
-                        # Add 'CNAME' suffix to Block type (CNAME Validation)
                         if isCNAME:
-                            b_type = b_type + '_CNAME'
                             q_name = q_name_original
 
-                        # Skip subsequent DNSBL validation for domain, and add domain to dict for get_details_dnsbl function
-                        dnsblDB[q_name] = {'qname': q_name, 'b_type': b_type, 'p_type': p_type, 'null': nullBlocking, 'log': log_type, 'feed': feed, 'group': group, 'b_eval': b_eval }
-                        # Skip subsequent DNSBL validation for original domain (CNAME validation), and add domain to dict for get_details_dnsbl function
+                        # Skip subsequent DNSBL validation for domain, add to dict for get_details_dnsbl
+                        dnsblDB[q_name] = {
+                            "qname": q_name,
+                            "b_type": b_type,
+                            "p_type": p_type,
+                            "null": nullBlocking,
+                            "log": log_type,
+                            "feed": feed,
+                            "group": group,
+                            "b_eval": b_eval,
+                        }
+                        # Skip subsequent DNSBL validation for original domain (CNAME validation),
+                        # add to dict for get_details_dnsbl
                         if isCNAME and dnsblDB.get(q_name_original) is None:
-                            dnsblDB[q_name_original] = {'qname': q_name_original, 'b_type': b_type, 'p_type': p_type, 'null': nullBlocking, 'log': log_type, 'feed': feed, 'group': group, 'b_eval': b_eval }
+                            dnsblDB[q_name_original] = {
+                                "qname": q_name_original,
+                                "b_type": b_type,
+                                "p_type": p_type,
+                                "null": nullBlocking,
+                                "log": log_type,
+                                "feed": feed,
+                                "group": group,
+                                "b_eval": b_eval,
+                            }
 
                         # Add domain data to DNSBL cache for Reports tab
-                        write_sqlite(3, '', [b_type, q_name, group, b_eval, feed])
+                        write_sqlite(3, "", [b_type, q_name, group, b_eval, feed])
 
                 # Use previously blocked domain details
                 else:
-                    nullBlocking = isDomainInDNSBL['null']
+                    nullBlocking = isDomainInDNSBL["null"]
                     isFound = True
-                    # print "v: " + q_name
 
                 if isFound and not isInWhitelist:
-
                     # Create FQDN Reply Message
                     msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
 
                     if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
-                        msg.answer.append("{}. 3600 IN A {}" .format(q_name, '0.0.0.0' if nullBlocking else pfb['dnsbl_ipv4']))
+                        msg.answer.append(
+                            "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if nullBlocking else pfb["dnsbl_ipv4"])
+                        )
                     if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
-                        msg.answer.append("{}. 3600 IN AAAA {}" .format(q_name, '::' if nullBlocking else pfb['dnsbl_ipv6']))
+                        msg.answer.append(
+                            "{}. 3600 IN AAAA {}".format(q_name, "::" if nullBlocking else pfb["dnsbl_ipv6"])
+                        )
 
-                    msg.set_return_msg(qstate)
                     if msg is None or not msg.set_return_msg(qstate):
                         qstate.ext_state[id] = MODULE_ERROR
                         return True
 
                     # Log entry
-                    kwargs = {'pfb_addr': q_ip}
+                    kwargs = {"pfb_addr": q_ip}
                     if qstate.return_msg:
-                        get_details_dnsbl('dnsbl', None, qstate, qstate.return_msg.rep, kwargs)
+                        get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs)
                     else:
-                        get_details_dnsbl('dnsbl', None, qstate, None, kwargs)
+                        get_details_dnsbl("dnsbl", None, qstate, None, kwargs)
 
                     qstate.return_rcode = RCODE_NOERROR
                     qstate.return_msg.rep.security = 2
@@ -1699,19 +1952,19 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         return True
 
     if event == MODULE_EVENT_MODDONE:
-
         # Log entry
         if qstate_valid and qstate.return_msg:
-            kwargs = {'pfb_addr': q_ip}
-            get_details_reply('reply', None, qstate, qstate.return_msg.rep, kwargs)
+            kwargs = {"pfb_addr": q_ip}
+            get_details_reply("reply", None, qstate, qstate.return_msg.rep, kwargs)
         else:
-            get_details_reply('reply', None, qstate, None, None)
+            get_details_reply("reply", None, qstate, None, None)
 
         qstate.ext_state[id] = MODULE_FINISHED
         return True
 
-    log_err('[pfBlockerNG]: BAD event')
+    log_err("[pfBlockerNG]: BAD event")
     qstate.ext_state[id] = MODULE_ERROR
     return True
 
-log_info('[pfBlockerNG]: pfb_unbound.py script loaded')
+
+log_info("[pfBlockerNG]: pfb_unbound.py script loaded")

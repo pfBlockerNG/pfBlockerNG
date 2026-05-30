@@ -33,7 +33,6 @@ MODE_FD: int
 """Load from an already-open file descriptor passed as the ``database``
 argument to open_database(). Database is read into memory."""
 
-
 class Reader:
     """Low-level reader for MaxMind DB files (e.g. GeoLite2-City.mmdb).
 
@@ -87,7 +86,6 @@ class Reader:
 
     def __enter__(self) -> Reader: ...
     def __exit__(self, *args: Any) -> None: ...
-
 
 def open_database(database: Any, mode: int = ...) -> Reader:
     """Open a MaxMind DB database file and return a :class:`Reader`.

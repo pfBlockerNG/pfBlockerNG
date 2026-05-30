@@ -1,0 +1,4 @@
+# Dev-only benchmark dependencies (not shipped; release archives contain only src/).
+# Install:  python -m pip install -r benchmarks/requirements.txt
+pytest-benchmark>=5,<6   # latency/throughput (the `benchmark` fixture)
+pympler>=1,<2            # asizeof: deep retained object-graph size (memory)

@@ -1,0 +1,95 @@
+================================================================================
+PHASE 6 PROMPT — Swap readers to the trie
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-5 committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing Phase 6 — the actual
+behavior-relevant switch. You will repoint the matching reads from the dict
+helpers to the Phase 4 trie lookups. The dicts remain populated (from Phase 5)
+but become unused by the runtime path. This is intended to be a NO-OBSERVABLE-
+CHANGE swap, guaranteed by the Phase 3/4 oracle tests.
+
+WHY THIS PHASE EXISTS
+This is where the trie starts doing the work. Because Phases 1-2 made matching a
+set of pure functions and Phase 4 proved the trie equivalent, the change here is
+localized to the lookup calls inside evaluate_domain / evaluate_noaaaa / the
+hsts path — not scattered through operate().
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 2 semantics contract; Section 4 Phase 6.
+- .ADRs/ADR_01_Trie/RESULTS/05_Results.md — Phase 5 handoff: domainTrie init
+  location, which loaders dual-write, and the consistency-check result.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    * evaluate_domain() — the data/zone/whitelist/hsts lookup calls (from Phase 2).
+    * evaluate_noaaaa() — the exact/wildcard-parent lookup (from Phase 2).
+    * the trie lookup API: trie_lookup_exact, trie_lookup_zone,
+      trie_lookup_white, trie_lookup_noaaaa, trie_lookup_hsts (Phase 4).
+    * the pfb[...] enable gates (pfb['dataDB'], pfb['zoneDB'], pfb['whiteDB'],
+      pfb['hstsDB'], pfb['noAAAADB']) — KEEP these as cheap short-circuits.
+- tests/test_pfb_unbound.py — Phase 3 golden tests + Phase 4 equivalence tests.
+
+ACTION PLAN (ordered)
+
+1. Thread `domainTrie` into evaluate_domain / evaluate_noaaaa (pass it as an
+   argument from operate(); do not read it as a global inside the pure
+   functions — keep them pure).
+
+2. Replace lookups, one category at a time, RUNNING TESTS AFTER EACH:
+   - data:   dataDB.get(q_name)                  -> trie_lookup_exact(domainTrie, q_name)
+   - zone:   find_zone_match(q_name, zoneDB)      -> trie_lookup_zone(domainTrie, q_name)
+             (preserve matched-parent string -> b_eval)
+   - white:  whitelist_check_domain(n, whiteDB, tld_seg)
+                                                 -> trie_lookup_white(domainTrie, n, tld_seg)
+   - hsts:   hsts_check_domain(...)               -> trie_lookup_hsts(domainTrie, name, hsts_tlds, tld)
+   - noaaaa: exact + find_noaaaa_wildcard_parent  -> trie_lookup_noaaaa(domainTrie, q_name)
+   Keep the pfb[...] enable-flag guards exactly as they are (only call the trie
+   lookup when the corresponding feature is enabled, same as today).
+
+3. Preserve the noAAAA memo write behavior decided in Phase 2 (the
+   `noAAAADB[q_name] = True` cache on a wildcard-parent hit). If you keep that
+   write, it now caches into a dict that is otherwise unused at runtime; decide
+   whether to (a) keep it as a harmless exact-hit memo for the trie path too, or
+   (b) replace it with trie_insert_noaaaa(domainTrie, q_name, False) so the memo
+   lives in the trie. Prefer (b) for consistency, but ONLY if a test confirms the
+   subsequent-query fast path still behaves identically. Document the choice.
+
+4. Do NOT delete the dicts or the old helpers yet (Phase 8). They stay as a
+   safety net and remain the oracle for the equivalence tests.
+
+5. Run the full suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- No observable behavior change: identical blocking outcomes, dnsblDB/exclude*
+  contents, DNSMessage answers, qstate transitions.
+- evaluate_domain / evaluate_noaaaa stay PURE (trie passed in, no globals).
+- Keep the enable-flag short-circuits; do not start walking the trie for
+  disabled features.
+- stdlib only; 4-space indent; type hints.
+
+VERIFICATION
+- `python -m pytest` → all green after EACH category swap and at the end.
+  The Phase 3 golden tests (evaluate_domain/evaluate_noaaaa outcomes) and the
+  TestOperateDnsbl / TestOperateNoAAAA end-to-end tests are the gate.
+- `ruff check .` / `ruff format .` → clean.
+- Re-confirm the two highest-risk cases pass: tld_seg whitelist boundary and
+  hsts -2 stride.
+
+EXPECTED RESULT / OBSERVATIONS
+- Runtime matching now flows through the trie; dicts are populated but unread by
+  operate(). Behavior is identical to pre-phase.
+- If any test fails, the trie lookup diverges from the contract — fix the trie
+  lookup (Phase 4 code), not the test.
+
+COMMIT
+    pfb_unbound: read DNSBL/noAAAA matches from the trie
+Push policy as in earlier phases.
+
+HANDOFF
+Report each swapped call site, the noAAAA memo decision, and confirm the golden
++ equivalence tests pass. Phase 7 (optional) fuses the per-category walks; Phase
+8 removes the now-dead dicts and helpers.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/06_Results.md`.

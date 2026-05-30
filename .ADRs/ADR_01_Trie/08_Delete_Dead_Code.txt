@@ -1,0 +1,115 @@
+================================================================================
+PHASE 8 PROMPT — Delete dead code + finalize
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-6 committed and green (Phase 7 optional).
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing the final Phase 8. The
+trie is now the sole runtime matcher. You will remove the now-dead dict
+containers and their walk helpers, migrate any remaining tests/fixtures to the
+trie, update documentation if developer workflow changed, and move the ADR to
+Accepted.
+
+WHY THIS PHASE EXISTS
+Until now the dicts were retained as a safety net and equivalence oracle. Once
+the trie path is trusted (all golden + equivalence tests green through Phase 6/7),
+the dicts and ad-hoc walkers are pure overhead — memory at load and cognitive
+load in the code. Removing them realizes the memory win and leaves a single
+source of truth.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 2 (what is kept vs removed), Section 7 (done).
+- .ADRs/ADR_01_Trie/RESULTS/07_Results.md — Phase 7 handoff: fused descent
+  signature and traversal evidence, or the skip rationale if Phase 7 was deferred.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    * module-level annotated globals (dataDB/zoneDB/whiteDB/noAAAADB/hstsDB and
+      friends) and the `global ...` lists in init_standard() and operate().
+    * the loaders in init_standard() that fill those dicts.
+    * the helpers find_zone_match, find_noaaaa_wildcard_parent,
+      whitelist_check_domain (dict versions) and the trie equivalents.
+- tests/test_pfb_unbound.py and tests/conftest.py — the add_* helpers (Phase 3)
+  and the equivalence tests (Phase 4) that reference the dicts.
+- CLAUDE.md — "Updating documentation" section (when README/stubs must change).
+
+ACTION PLAN (ordered)
+
+1. Identify what is TRULY dead. KEEP: gpListDB, safeSearchDB, regexDB, dnsblDB,
+   excludeDB, excludeAAAADB, excludeSS, feedGroupIndexDB, and all pfb[...] enable
+   flags. REMOVE: dataDB, zoneDB, whiteDB, noAAAADB, hstsDB and their dict-walk
+   helpers (find_zone_match, find_noaaaa_wildcard_parent, whitelist_check_domain,
+   and the dict-based hsts path if a separate one lingers).
+
+2. Stop populating the removed dicts in init_standard(): delete the dict writes
+   in the zone/data/whitelist/hsts/noAAAA loaders, leaving ONLY the
+   trie_insert_* calls. Delete the dicts from the container-init block, the
+   module-level annotated declarations, and the `global` statements where they
+   no longer appear.
+
+3. Remove the now-unused dict helpers. If the Phase 4 equivalence tests import
+   them as the oracle, those tests have served their purpose — either (a) delete
+   the pure old-vs-new equivalence tests, keeping the Phase 3 golden tests and a
+   brute-force reference INSIDE the test as the oracle, or (b) keep a tiny
+   brute-force reference matcher in the test module to retain property testing
+   without shipping dead code in production. Prefer (b): production stays lean,
+   tests keep their randomized safety net using a local reference.
+
+4. Migrate the Phase 3 add_* helpers to populate the trie (trie_insert_*)
+   instead of the dicts. Because tests were insulated in Phase 3, the test
+   BODIES should not need changes — only the helper internals. Confirm
+   TestOperateDnsbl / TestOperateNoAAAA still pass via the trie-backed helpers.
+
+5. Sweep for stragglers: grep for each removed name across src/ and tests/ to
+   ensure no references remain (loaders, type hints, comments, globals,
+   conftest resets). Ensure conftest's per-test reset now resets domainTrie
+   (re-create a fresh TrieNode) instead of clearing removed dicts.
+
+6. Documentation: if any developer-facing workflow changed (it likely did not —
+   test/deploy commands are unchanged), update README.md per CLAUDE.md rules.
+   No stub changes are expected (no new pfSense API calls). Do not regenerate
+   stubs unless a genuinely new pfSense function was introduced (it should not
+   be).
+
+7. Update .ADRs/ADR_01_Trie/ADR.md: set Status to Accepted, and record the
+   manual pfSense smoke-test result (see VERIFICATION) and, if Phase 7 was
+   skipped, the deferral note.
+
+8. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- No behavior change: the trie already drives matching; this phase only removes
+  unused structures and re-homes fixtures.
+- Do not remove anything in the KEEP list. Do not alter dnsblDB/exclude* runtime
+  memo semantics.
+- stdlib only; 4-space indent; keep type hints accurate after removals.
+
+VERIFICATION
+- `python -m pytest` → all green with the dicts gone and fixtures trie-backed.
+- `ruff check .` / `ruff format .` → clean.
+- grep confirms zero remaining references to dataDB/zoneDB/whiteDB/noAAAADB/
+  hstsDB (production) outside of git history.
+- MANUAL (record result in ADR): deploy to a pfSense test box via
+  scripts/deploy.sh, enable DNSBL Python mode, and confirm a known blocked
+  domain (exact + subdomain/wildcard), a whitelisted domain, and an AAAA noAAAA
+  case behave as before. CI cannot cover the live Unbound loader, so this manual
+  smoke is the final gate before release.
+
+EXPECTED RESULT / OBSERVATIONS
+- A single domainTrie is the only static blocklist structure; the five dicts and
+  their walkers are gone. Load-time memory drops on large feeds (shared
+  suffixes). Code path is a single fused (or per-category) trie descent.
+- Tests green; ADR Accepted with smoke-test evidence.
+
+COMMIT
+    pfb_unbound: remove dict matchers; trie is the sole DNSBL structure
+(plus a docs/ADR commit if separated). Push policy as in earlier phases: push
+directly to devel; open a PR only if the push is rejected by branch protection,
+using --body-file for the PR body.
+
+HANDOFF
+Report removed symbols, fixture migration result, grep-clean confirmation,
+pytest/ruff status, and the manual smoke-test outcome recorded in the ADR.
+Migration complete.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/08_Results.md`.

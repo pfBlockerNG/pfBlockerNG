@@ -62,17 +62,17 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # RR types (IANA DNS resource-record type numbers)
 # ---------------------------------------------------------------------------
-RR_TYPE_A = 1       # IPv4 host address
-RR_TYPE_NS = 2      # Authoritative name server
-RR_TYPE_CNAME = 5   # Canonical name (alias)
-RR_TYPE_SIG = 24    # DNSSEC signature (legacy; superseded by RRSIG type 46)
-RR_TYPE_MX = 15     # Mail exchange
-RR_TYPE_PTR = 12    # Domain name pointer (reverse DNS)
-RR_TYPE_TXT = 16    # Text record
-RR_TYPE_AAAA = 28   # IPv6 host address
-RR_TYPE_SRV = 33    # Service locator
+RR_TYPE_A = 1  # IPv4 host address
+RR_TYPE_NS = 2  # Authoritative name server
+RR_TYPE_CNAME = 5  # Canonical name (alias)
+RR_TYPE_SIG = 24  # DNSSEC signature (legacy; superseded by RRSIG type 46)
+RR_TYPE_MX = 15  # Mail exchange
+RR_TYPE_PTR = 12  # Domain name pointer (reverse DNS)
+RR_TYPE_TXT = 16  # Text record
+RR_TYPE_AAAA = 28  # IPv6 host address
+RR_TYPE_SRV = 33  # Service locator
 RR_TYPE_DNAME = 39  # Non-terminal name redirection (subtree alias)
-RR_TYPE_ANY = 255   # Wildcard match — any RR type (query only)
+RR_TYPE_ANY = 255  # Wildcard match — any RR type (query only)
 
 # RR class: Internet (the only class used in practice)
 RR_CLASS_IN = 1
@@ -87,22 +87,22 @@ PKT_RA = 0x0080  # RA bit: recursion available (server supports recursion)
 # ---------------------------------------------------------------------------
 # Response codes (RCODE field in DNS header)
 # ---------------------------------------------------------------------------
-RCODE_NOERROR = 0   # No error; query answered successfully
+RCODE_NOERROR = 0  # No error; query answered successfully
 RCODE_NXDOMAIN = 3  # Non-existent domain; name does not exist
 
 # ---------------------------------------------------------------------------
 # Module events — passed as the ``event`` argument to operate()
 # ---------------------------------------------------------------------------
-MODULE_EVENT_NEW = 0     # New query arrived; first module to handle it
-MODULE_EVENT_PASS = 1    # Query passed from a previous module for further processing
-MODULE_EVENT_MODDONE = 3 # Downstream module finished; resume this module
+MODULE_EVENT_NEW = 0  # New query arrived; first module to handle it
+MODULE_EVENT_PASS = 1  # Query passed from a previous module for further processing
+MODULE_EVENT_MODDONE = 3  # Downstream module finished; resume this module
 
 # ---------------------------------------------------------------------------
 # Module external states — set on qstate.ext_state[id] inside operate()
 # ---------------------------------------------------------------------------
-MODULE_FINISHED = 4     # Module completed successfully; pass to next module
+MODULE_FINISHED = 4  # Module completed successfully; pass to next module
 MODULE_WAIT_MODULE = 2  # Module is waiting for another module to finish
-MODULE_ERROR = 5        # Module encountered an error; abort query processing
+MODULE_ERROR = 5  # Module encountered an error; abort query processing
 
 
 def log_info(msg: object) -> None:
@@ -193,17 +193,13 @@ def register_inplace_cb_reply_servfail(*_: Any) -> bool:
 class _Struct:
     """Base for SWIG-like Unbound structs with a dynamic attribute surface."""
 
-    def __getattr__(self, name: str) -> Any:
-        ...
+    def __getattr__(self, name: str) -> Any: ...
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        ...
+    def __setattr__(self, name: str, value: Any) -> None: ...
 
-    def __getitem__(self, item: Any) -> Any:
-        ...
+    def __getitem__(self, item: Any) -> Any: ...
 
-    def __setitem__(self, key: Any, value: Any) -> None:
-        ...
+    def __setitem__(self, key: Any, value: Any) -> None: ...
 
 
 class module_env(_Struct):

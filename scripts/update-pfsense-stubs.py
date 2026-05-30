@@ -37,10 +37,10 @@ MIN_PFSENSE_VERSION = "2.8.0"
 
 # Map output stub filename → pfSense include files to parse for that module.
 STUB_MODULES: dict[str, list[str]] = {
-    "config.php":    ["config.lib.inc"],
-    "util.php":      ["util.inc", "pfsense-utils.inc"],
-    "services.php":  ["services.inc", "service-utils.inc", "pkg-utils.inc"],
-    "system.php":    ["functions.inc", "filter.inc"],
+    "config.php": ["config.lib.inc"],
+    "util.php": ["util.inc", "pfsense-utils.inc"],
+    "services.php": ["services.inc", "service-utils.inc", "pkg-utils.inc"],
+    "system.php": ["functions.inc", "filter.inc"],
     "guiconfig.php": ["guiconfig.inc"],
     # logging.php is derived from util.inc (already covered above); the hand-
     # crafted version covers the gettext/file_notice subset used by pfBlockerNG.
@@ -68,12 +68,14 @@ STUB_HEADER_TEMPLATE = """\
 
 # ── Version → tag conversion ──────────────────────────────────────────────────
 
+
 def version_to_tag(version: str) -> str:
     """Convert dotted version to a pfSense RELENG tag: '2.8.0' → 'RELENG_2_8_0'."""
     return "RELENG_" + version.replace(".", "_")
 
 
 # ── Source fetching ───────────────────────────────────────────────────────────
+
 
 def fetch_source(tag: str, filename: str) -> str | None:
     """Fetch a raw pfSense source file from GitHub. Returns None on failure."""
@@ -94,16 +96,14 @@ def fetch_source(tag: str, filename: str) -> str | None:
 # Excludes access-modifier prefixes (public/protected/private/abstract/static)
 # which indicate a class method.
 _FUNC_START_RE = re.compile(
-    r'^(?![ \t]*(?:public|protected|private|abstract|static)\s)'
-    r'[ \t]*function[ \t]+(\w+)[ \t]*\(',
+    r"^(?![ \t]*(?:public|protected|private|abstract|static)\s)"
+    r"[ \t]*function[ \t]+(\w+)[ \t]*\(",
     re.MULTILINE,
 )
 
 # Matches an optional return-type annotation followed by the opening brace.
 # Handles nullable (?T), union (A|B), intersection (A&B), and namespaced types.
-_RETURN_TYPE_RE = re.compile(
-    r'\s*(?::\s*([\?\\a-zA-Z0-9_|&\[\]]+(?:\|[\?\\a-zA-Z0-9_|&\[\]]+)*))?\s*\{'
-)
+_RETURN_TYPE_RE = re.compile(r"\s*(?::\s*([\?\\a-zA-Z0-9_|&\[\]]+(?:\|[\?\\a-zA-Z0-9_|&\[\]]+)*))?\s*\{")
 
 
 def _collect_params(source: str, open_paren: int) -> int | None:
@@ -115,9 +115,9 @@ def _collect_params(source: str, open_paren: int) -> int | None:
     depth = 0
     for i in range(open_paren, min(open_paren + 8192, len(source))):
         ch = source[i]
-        if ch == '(':
+        if ch == "(":
             depth += 1
-        elif ch == ')':
+        elif ch == ")":
             depth -= 1
             if depth == 0:
                 return i
@@ -135,7 +135,7 @@ def extract_functions(source: str) -> list[str]:
         fn_start = m.start()
 
         # Locate the opening '(' — guaranteed by the regex.
-        open_paren = source.index('(', fn_start)
+        open_paren = source.index("(", fn_start)
         close_paren = _collect_params(source, open_paren)
         if close_paren is None:
             continue
@@ -152,7 +152,7 @@ def extract_functions(source: str) -> list[str]:
 
         # Build and normalise the signature (collapse internal whitespace).
         raw_sig = source[fn_start : close_paren + 1]
-        sig = re.sub(r'\s+', ' ', raw_sig).strip()
+        sig = re.sub(r"\s+", " ", raw_sig).strip()
 
         if ret_type:
             stubs.append(f"{sig}: {ret_type} {{}}")
@@ -163,6 +163,7 @@ def extract_functions(source: str) -> list[str]:
 
 
 # ── Stub file writer ──────────────────────────────────────────────────────────
+
 
 def write_stub_file(
     path: Path,
@@ -191,6 +192,7 @@ def write_stub_file(
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
