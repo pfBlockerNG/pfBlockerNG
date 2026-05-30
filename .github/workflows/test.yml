@@ -1,4 +1,4 @@
-name: Python tests
+name: Tests
 
 # push: runs on direct commits to main/devel (post-merge, admin bypass).
 # pull_request: covers feature branches — the push trigger intentionally
@@ -43,17 +43,91 @@ jobs:
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
 
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Parse-check all shell scripts (sh -n)
+        # Cheap syntax gate (shell analogue of php -l). Catches unterminated
+        # quotes and other parse errors even if ShellCheck is ever disabled.
+        # ip_pre_AWS_*.sh files are auto-generated — excluded.
+        run: find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | xargs -n1 sh -n
+
+      - name: Run ShellCheck
+        # ip_pre_AWS_*.sh files are auto-generated — excluded from analysis.
+        # .shellcheckrc in the repo root configures suppressions.
+        run: find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | xargs shellcheck --severity=warning
+
+  php-syntax:
+    name: PHP syntax check (php -l)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: none
+
+      - name: Syntax-check all PHP and .inc files
+        run: find src -name '*.php' -o -name '*.inc' | sort | xargs -n1 php -l
+
+  php-static-analysis:
+    name: PHPStan static analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+
+      - name: Install PHPStan
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPStan
+        # phpstan.neon configures paths, level, stubs, and includes the
+        # baseline (phpstan-baseline.neon) so existing legacy errors are
+        # suppressed; new errors introduced by future changes will fail CI.
+        run: vendor/bin/phpstan analyse --no-progress
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
     name: All tests passed
     if: always()
-    needs: [test]
+    needs: [test, shellcheck, php-syntax, php-static-analysis]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
-            echo "One or more test jobs failed or were cancelled."
+            echo "One or more Python test jobs failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.shellcheck.result }}" != "success" ]; then
+            echo "ShellCheck failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-syntax.result }}" != "success" ]; then
+            echo "PHP syntax check failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-static-analysis.result }}" != "success" ]; then
+            echo "PHPStan static analysis failed or was cancelled."
             exit 1
           fi

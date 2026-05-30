@@ -1,0 +1,19 @@
+# Flake8 configuration for pfBlockerNG.
+#
+# Ruff is the canonical Python linter for this repo (see pyproject.toml
+# [tool.ruff] and CLAUDE.md). Flake8 cannot read pyproject.toml, so on its own it
+# falls back to a 79-column limit and to pycodestyle checks that Ruff deliberately
+# delegates to `ruff format`. This file keeps Flake8 from contradicting Ruff for
+# contributors (or editor extensions) that run it.
+
+[flake8]
+max-line-length = 120
+
+# E1/E2/E3 — indentation, whitespace and blank-line conventions handled by
+#            `ruff format`; Ruff's linter does not report them.
+# E402/F401 — intentional import placement and conditional/TYPE_CHECKING imports
+#            (mirrors the ignore list in pyproject.toml [tool.ruff.lint]).
+# E501 — legacy long `.format()` strings; line length is not enforced on this
+#            code (Ruff still tolerates the same lines).
+# E502/E704/F824 — pre-existing patterns Ruff does not flag.
+extend-ignore = E1,E2,E3,E402,E501,E502,E704,F401,F824

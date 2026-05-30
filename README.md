@@ -88,6 +88,8 @@ Test paths and options are configured in `pyproject.toml`; no `cd` is required.
 
 ### Linting
 
+#### Python
+
 [Ruff](https://docs.astral.sh/ruff/) is configured in `pyproject.toml` and can
 be run locally:
 
@@ -97,6 +99,30 @@ ruff check .        # lint
 ruff check . --fix  # lint and auto-fix
 ruff format .       # format
 ```
+
+#### PHP
+
+[PHPStan](https://phpstan.org/) runs at level 0 and is configured in
+`phpstan.neon`.  Pre-existing legacy errors are suppressed via
+`phpstan-baseline.neon`; only errors introduced by new changes will fail.
+
+Install dependencies once (requires [Composer](https://getcomposer.org/)):
+
+```sh
+composer install
+```
+
+Then run the analysis:
+
+```sh
+vendor/bin/phpstan analyse
+```
+
+#### Shell
+
+[ShellCheck](https://www.shellcheck.net/) is available as a VS Code extension
+(see IDE setup above) and is also enforced in CI at `--severity=warning`.
+Configuration is in `.shellcheckrc`.
 
 ### Building via the FreeBSD ports system
 
@@ -151,10 +177,12 @@ git push origin v3.2.17-devel
 
 # From main (production release)
 git tag v3.2.16
+git push origin v3.2.16
 
 ```
 
 The release workflow will:
+
 1. Run the test suite.
 2. Publish a GitHub Release with a changelog.
 3. Open a PR on [pfsense/FreeBSD-ports](https://github.com/pfsense/FreeBSD-ports)

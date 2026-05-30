@@ -21,7 +21,7 @@ tempfile=/tmp/pfbtemp1_$rvar
 alias="${1}"
 prefix="${2}"
 
-if [ "${prefix}" == '_v4' ]; then
+if [ "${prefix}" = '_v4' ]; then
 	jq -r '.prefixes[] | select(.region | startswith("eu-")) .ip_prefix' "${alias}" | iprange > "${tempfile}"
 else
 	jq -r '.ipv6_prefixes[] | select(.region | startswith("eu-")) .ipv6_prefix' "${alias}" > "${tempfile}"

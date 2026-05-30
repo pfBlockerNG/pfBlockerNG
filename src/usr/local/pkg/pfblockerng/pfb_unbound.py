@@ -18,33 +18,112 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from datetime import datetime
-import logging
-import time
+from __future__ import annotations
+
 import csv
-import sys
-import re
+import logging
 import os
+import re
+import sys
+import time
+from collections.abc import Callable
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Symbols injected by Unbound's embedded Python interpreter (pythonmod) into
+    # this script's globals at runtime. They are imported here only so static
+    # type checkers can resolve them; the import is never executed at runtime.
+    from unboundmodule import (  # noqa: F401
+        MODULE_ERROR,
+        MODULE_EVENT_MODDONE,
+        MODULE_EVENT_NEW,
+        MODULE_EVENT_PASS,
+        MODULE_FINISHED,
+        MODULE_WAIT_MODULE,
+        PKT_QR,
+        PKT_RA,
+        PKT_RD,
+        RCODE_NOERROR,
+        RCODE_NXDOMAIN,
+        RR_CLASS_IN,
+        RR_TYPE_A,
+        RR_TYPE_AAAA,
+        RR_TYPE_ANY,
+        RR_TYPE_CNAME,
+        RR_TYPE_DNAME,
+        RR_TYPE_MX,
+        RR_TYPE_NS,
+        RR_TYPE_PTR,
+        RR_TYPE_SIG,
+        RR_TYPE_SRV,
+        RR_TYPE_TXT,
+        DNSMessage,
+        log_err,
+        log_info,
+        module_env,
+        module_qstate,
+        query_info,
+        register_inplace_cb_reply,
+        register_inplace_cb_reply_cache,
+        register_inplace_cb_reply_local,
+        register_inplace_cb_reply_servfail,
+        reply_info,
+    )
 
 global pfb
-pfb = {}
-
-from configparser import ConfigParser
+pfb: dict[str, Any] = {}
 
 from collections import defaultdict
+from configparser import ConfigParser
+
+# Module-level globals populated by init_standard() at runtime. Declared here
+# without assignment (PEP 526) so type checkers can resolve them across the
+# functions that reference them via `global`; no runtime object is created.
+rcodeDB: dict[int, str]
+dataDB: defaultdict[str, Any]
+zoneDB: defaultdict[str, Any]
+regexDB: defaultdict[str, Any]
+hstsDB: defaultdict[str, Any]
+whiteDB: defaultdict[str, Any]
+gpListDB: defaultdict[str, Any]
+noAAAADB: defaultdict[str, Any]
+dnsblDB: defaultdict[str, Any]
+safeSearchDB: defaultdict[str, Any]
+feedGroupIndexDB: defaultdict[int, Any]
+excludeDB: list[str]
+excludeAAAADB: list[str]
+excludeSS: list[str]
+maxmindReader: Any
+
+# Background I/O worker (file + sqlite writes off the DNS response path)
+pfb_task_queue: queue.Queue
+pfb_worker_thread: Any
+
+if TYPE_CHECKING:
+    # Modules imported defensively in the try/except guards below. Declared here
+    # unconditionally so static checkers treat them as always bound (the runtime
+    # guards leave them possibly-unbound). This block never executes at runtime.
+    import ipaddress
+    import queue
+    import sqlite3
+    import threading
+
+    import maxminddb
 
 # Import additional python modules
 try:
-    import threading
+    import queue  # noqa: F811
+    import threading  # noqa: F811
     pfb['mod_threading'] = True
-    threads = list()
+    threads: list[Any] = list()
 except Exception as e:
     pfb['mod_threading'] = False
     pfb['mod_threading_e'] = e
     pass
 
 try:
-    import ipaddress
+    import ipaddress  # noqa: F811
     pfb['mod_ipaddress'] = True
 except Exception as e:
     pfb['mod_ipaddress'] = False
@@ -52,7 +131,7 @@ except Exception as e:
     pass
 
 try:
-    import maxminddb
+    import maxminddb  # noqa: F811
     pfb['mod_maxminddb'] = True
 except Exception as e:
     pfb['mod_maxminddb'] = False
@@ -60,7 +139,7 @@ except Exception as e:
     pass
 
 try:
-    import sqlite3
+    import sqlite3  # noqa: F811
     pfb['mod_sqlite3'] = True
 except Exception as e:
     pfb['mod_sqlite3'] = False
@@ -68,8 +147,47 @@ except Exception as e:
     pass
 
 
-def init_standard(id, env):
-    global pfb, rcodeDB, dataDB, zoneDB, regexDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB, maxmindReader
+PFB_QUEUE_MAXSIZE = 5000
+
+
+def pfb_async_worker() -> None:
+    # Single background consumer for file/sqlite I/O. FIFO order is preserved so
+    # query counters and log lines stay consistent and chronological.
+    while True:
+        task = pfb_task_queue.get()
+        try:
+            if task is None:
+                break
+            func, args = task
+            func(*args)
+        except Exception as e:
+            err = sys.__stderr__
+            if err is not None:
+                try:
+                    err.write("[pfBlockerNG]: async I/O worker error: {}\n" .format(e))
+                except Exception:
+                    pass
+        finally:
+            pfb_task_queue.task_done()
+
+
+def pfb_async(func: Callable[..., Any], *args: Any) -> None:
+    # Enqueue file/sqlite I/O for the background worker. Falls back to
+    # synchronous execution when the worker is not running (during init, in the
+    # test suite, or when threading is unavailable). Drops the task if the
+    # bounded queue is saturated, so the DNS response path is never blocked.
+    if pfb.get('async_worker'):
+        try:
+            pfb_task_queue.put_nowait((func, args))
+            return
+        except queue.Full:
+            pfb['async_dropped'] = pfb.get('async_dropped', 0) + 1
+            return
+    func(*args)
+
+
+def init_standard(id: int, env: module_env) -> bool:
+    global pfb, rcodeDB, dataDB, zoneDB, regexDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB, maxmindReader, pfb_task_queue, pfb_worker_thread
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info('[pfBlockerNG]: Failed register_inplace_cb_reply')
@@ -92,13 +210,13 @@ def init_standard(id, env):
 
     # Log stderr to file
     class log_stderr(object):
-        def __init__(self, logger):
+        def __init__(self, logger: logging.Logger) -> None:
             self.logger = logger
             self.linebuf = ''
 
-        def write(self, msg):
+        def write(self, msg: str) -> None:
             if msg != pfb['p_err']:
-                self.logger.log(logging.ERROR, msg.rstrip())
+                pfb_async(self.logger.log, logging.ERROR, msg.rstrip())
             pfb['p_err'] = msg
 
     # Create python error logfile
@@ -166,6 +284,7 @@ def init_standard(id, env):
     pfb['python_blacklist'] = False
     pfb['sqlite3_dnsbl_con'] = False
     pfb['sqlite3_resolver_con'] = False
+    pfb['async_worker'] = False
 
     # DNSBL Python files
     pfb['pfb_unbound.ini'] = 'pfb_unbound.ini'
@@ -173,7 +292,7 @@ def init_standard(id, env):
     pfb['pfb_py_zone'] = 'pfb_py_zone.txt'
     pfb['pfb_py_data'] = 'pfb_py_data.txt'
     pfb['pfb_py_hsts'] = 'pfb_py_hsts.txt'
-    pfb['pfb_py_ss'] = 'pfb_py_ss.txt'  
+    pfb['pfb_py_ss'] = 'pfb_py_ss.txt'
     pfb['pfb_py_dnsbl'] = 'pfb_py_dnsbl.sqlite'
     pfb['pfb_py_cache'] = 'pfb_py_cache.sqlite'
     pfb['pfb_py_resolver'] = 'pfb_py_resolver.sqlite'
@@ -203,15 +322,15 @@ def init_standard(id, env):
     hstsDB = defaultdict(str)
     gpListDB = defaultdict(str)
     noAAAADB = defaultdict(str)
-    feedGroupDB = defaultdict(str)
+    feedGroupDB: defaultdict[str, Any] = defaultdict(str)
     excludeDB = []
     excludeAAAADB = []
     excludeSS = []
 
     # Read pfb_unbound.ini settings
     if os.path.isfile(pfb['pfb_unbound.ini']):
+        config = ConfigParser()
         try:
-            config = ConfigParser()
             config.read(pfb['pfb_unbound.ini'])
         except Exception as e:
             sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}" .format(e))
@@ -283,7 +402,7 @@ def init_standard(id, env):
                 noaaaa_config = config.items('noAAAA')
                 if noaaaa_config:
                     try:
-                        for row, line in noaaaa_config:
+                        for key, line in noaaaa_config:
                             data = line.rstrip('\r\n').split(',')
                             if data and len(data) == 2:
                                 if data[1] == '1':
@@ -292,7 +411,7 @@ def init_standard(id, env):
                                     wildcard = False
                                 noAAAADB[data[0]] = wildcard
                             else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: noAAAA: row:{} line:{}" .format(row, line))
+                                sys.stderr.write("[pfBlockerNG]: Failed to parse: noAAAA: row:{} line:{}" .format(key, line))
 
                         pfb['noAAAADB'] = True
                     except Exception as e:
@@ -304,13 +423,13 @@ def init_standard(id, env):
                 gp_bypass_list = config.items('GP_Bypass_List')
                 if gp_bypass_list:
                     try:
-                        for row, line in gp_bypass_list:
+                        for key, line in gp_bypass_list:
                             gpListDB[line.rstrip('\r\n')] = 0
 
                         pfb['gpListDB'] = True
                     except Exception as e:
                         sys.stderr.write("[pfBlockerNG]: Failed to load GP Bypass List: {}" .format(e))
-                        pass 
+                        pass
 
             # Collect SafeSearch Redirection list
             if os.path.isfile(pfb['pfb_py_ss']):
@@ -468,10 +587,22 @@ def init_standard(id, env):
     else:
         log_info('[pfBlockerNG]: Failed to load ini configuration. Ini file missing.')
 
+    # Start background I/O worker (off-loads file/sqlite writes from the DNS path)
+    if pfb['mod_threading'] and not pfb.get('async_worker'):
+        try:
+            pfb_task_queue = queue.Queue(maxsize=PFB_QUEUE_MAXSIZE)
+            pfb_worker_thread = threading.Thread(name='pfb_async_io', target=pfb_async_worker, daemon=True)
+            pfb_worker_thread.start()
+            pfb['async_worker'] = True
+        except Exception as e:
+            pfb['async_worker'] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}" .format(e))
+
     log_info('[pfBlockerNG]: init_standard script loaded')
+    return True
 
 
-def pfb_regex_match(q_name):
+def pfb_regex_match(q_name: str) -> str | bool:
     global regexDB
 
     if q_name:
@@ -485,7 +616,7 @@ def is_idn_domain(q_name: str) -> bool:
     return q_name.startswith('xn--') or '.xn--' in q_name
 
 
-def get_q_name_qstate(qstate):
+def get_q_name_qstate(qstate: module_qstate | None) -> str:
     q_name = ''
     try:
         if qstate and qstate.qinfo and qstate.qinfo.qname_str and qstate.qinfo.qname_str.strip():
@@ -498,7 +629,7 @@ def get_q_name_qstate(qstate):
     return is_unknown(q_name)
 
 
-def get_q_name_qinfo(qinfo):
+def get_q_name_qinfo(qinfo: query_info | None) -> str:
     q_name = ''
     try:
         if qinfo and qinfo.qname_str and qinfo.qname_str.strip():
@@ -509,7 +640,7 @@ def get_q_name_qinfo(qinfo):
     return is_unknown(q_name)
 
 
-def get_q_ip(qstate):
+def get_q_ip(qstate: module_qstate) -> str:
     q_ip = ''
 
     try:
@@ -526,7 +657,7 @@ def get_q_ip(qstate):
     return is_unknown(q_ip)
 
 
-def get_q_ip_comm(kwargs):
+def get_q_ip_comm(kwargs: dict[str, Any] | None) -> str:
     q_ip = ''
 
     try:
@@ -535,13 +666,13 @@ def get_q_ip_comm(kwargs):
         elif kwargs and kwargs is not None and kwargs['repinfo'] and kwargs['repinfo'].addr:
             q_ip = kwargs['repinfo'].addr
     except Exception as e:
-        for a in e:
+        for a in e.args:
             sys.stderr.write("[pfBlockerNG]: Failed get_q_ip_comm: {}" .format(a))
         pass
     return is_unknown(q_ip)
 
 
-def get_q_type(qstate, qinfo):
+def get_q_type(qstate: module_qstate | None, qinfo: query_info | None) -> str:
     q_type = ''
     if qstate and qstate.qinfo.qtype_str:
         q_type = qstate.qinfo.qtype_str
@@ -550,7 +681,7 @@ def get_q_type(qstate, qinfo):
     return is_unknown(q_type)
 
 
-def get_o_type(qstate, rep):
+def get_o_type(qstate: module_qstate | None, rep: reply_info | None) -> str:
     o_type = ''
     if qstate:
         if qstate.return_msg and qstate.return_msg.rep and qstate.return_msg.rep.rrsets[0] and qstate.return_msg.rep.rrsets[0].rk:
@@ -562,28 +693,28 @@ def get_o_type(qstate, rep):
     return is_unknown(o_type)
 
 
-def get_rep_ttl(rep):
+def get_rep_ttl(rep: reply_info | None) -> str:
     ttl = ''
     if rep and rep.ttl:
         ttl = rep.ttl
     return str(is_unknown(ttl)).replace('Unknown', 'Unk')
 
 
-def get_tld(qstate):
+def get_tld(qstate: module_qstate) -> str:
     tld = ''
     if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
         tld = qstate.qinfo.qname_list[-2]
     return tld
 
 
-def convert_ipv4(x):
+def convert_ipv4(x: Any) -> str:
     ipv4 = ''
     if x:
         ipv4 = "{}.{}.{}.{}".format(x[2], x[3], x[4], x[5])
     return is_unknown(ipv4)
 
 
-def convert_ipv6(x):
+def convert_ipv6(x: Any) -> str:
     ipv6 = ''
     if x:
         ipv6 = "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}" \
@@ -591,7 +722,7 @@ def convert_ipv6(x):
     return is_unknown(ipv6)
 
 
-def convert_other(x):
+def convert_other(x: Any) -> str:
     final = ''
     if x:
         for i in x[3:]:
@@ -615,18 +746,18 @@ def convert_other(x):
     return is_unknown(final)
 
 
-def is_unknown(x):
+def is_unknown(x: Any) -> Any:
     try:
         if not x or x is None:
             return 'Unknown'
     except Exception as e:
-        for a in e:
+        for a in e.args:
             sys.stderr.write("[pfBlockerNG]: Failed is_unknown: {}" .format(a))
         pass
     return x
 
 
-def write_sqlite(db, groupname, update):
+def write_sqlite(db: int, groupname: str, update: Any) -> bool:
     global pfb
 
     if db == 1:
@@ -709,12 +840,15 @@ def write_sqlite(db, groupname, update):
         finally:
             if not isException and sqlite3Db:
                 sqlite3Db.close()
-            break
+        break
 
     return True
 
 
-def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
+def get_details_dnsbl(
+    m_type: str, qinfo: query_info | None, qstate: module_qstate | None,
+    rep: reply_info | None, kwargs: dict[str, Any] | None,
+) -> bool:
     global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
 
     if qstate and qstate is not None:
@@ -726,7 +860,7 @@ def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
 
     # Increment totalqueries counter
     if pfb['sqlite3_resolver_con']:
-        write_sqlite(1, '', True)
+        pfb_async(write_sqlite, 1, '', True)
 
     # Determine if event is a 'reply' or DNSBL block
     isDNSBL = dnsblDB.get(q_name)
@@ -738,7 +872,7 @@ def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
 
         # Increment dnsblgroup counter
         if pfb['sqlite3_dnsbl_con'] and isDNSBL['group'] != '':
-            write_sqlite(2, isDNSBL['group'], True)
+            pfb_async(write_sqlite, 2, isDNSBL['group'], True)
 
         dupEntry = '+'
         lastEvent = dnsblDB.get('last-event')
@@ -754,8 +888,6 @@ def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
         if isDNSBL['log'] == '2':
             return True
 
-        m_type = isDNSBL['b_type']
-
         q_ip = get_q_ip_comm(kwargs)
         if q_ip == 'Unknown':
             q_ip = '127.0.0.1'
@@ -763,8 +895,8 @@ def get_details_dnsbl(m_type, qinfo, qstate, rep, kwargs):
         timestamp = make_timestamp()
 
         csv_line = ','.join('{}'.format(v) for v in ('DNSBL-python', timestamp, q_name, q_ip, isDNSBL['p_type'], isDNSBL['b_type'], isDNSBL['group'], isDNSBL['b_eval'], isDNSBL['feed'], dupEntry))
-        log_entry(csv_line, '/var/log/pfblockerng/dnsbl.log')
-        log_entry(csv_line, '/var/log/pfblockerng/unified.log')
+        pfb_async(log_entry, csv_line, '/var/log/pfblockerng/dnsbl.log')
+        pfb_async(log_entry, csv_line, '/var/log/pfblockerng/unified.log')
 
     return True
 
@@ -778,7 +910,7 @@ def make_timestamp() -> str:
     return ''
 
 
-def log_entry(line, log):
+def log_entry(line: str, log: str) -> None:
     for i in range(1,5):
         try:
             with open(log, 'a') as append_log:
@@ -792,7 +924,10 @@ def log_entry(line, log):
         break
 
 
-def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
+def get_details_reply(
+    m_type: str, qinfo: query_info | None, qstate: module_qstate | None,
+    rep: reply_info | None, kwargs: dict[str, Any] | None,
+) -> bool:
     global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
 
     if qstate and qstate is not None:
@@ -827,7 +962,7 @@ def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
     if pfb['sqlite3_resolver_con'] and q_ip != '127.0.0.1':
-        write_sqlite(1, '', True)
+        pfb_async(write_sqlite, 1, '', True)
 
     # Do not log Replies, if disabled
     if not pfb['python_reply']:
@@ -854,8 +989,8 @@ def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
                                     r_addr = convert_ipv6(x)
                                     try:
                                         r_addr = ipaddress.ip_address(r_addr).compressed
-                                    except Exception as e:
-                                        sys.stderr.write("[pfBlockerNG]: Failed to compress IPv6: {}, {}" .format(r_addr, e))
+                                    except Exception as ex:
+                                        sys.stderr.write("[pfBlockerNG]: Failed to compress IPv6: {}, {}" .format(r_addr, ex))
                                         pass
                                 break
                             elif e.type_str in ('DNSKEY', 'DS'):
@@ -897,10 +1032,10 @@ def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
         r_addr = 'noAAAA'
 
     if pfb['python_maxmind'] and r_addr not in ('', 'Unknown', 'NXDOMAIN', 'NODATA', 'DNSSEC', 'SOA', 'NS'):
+        version: int | str = ''
         try:
             version = ipaddress.ip_address(r_addr).version
-        except Exception as e:
-            version = ''
+        except Exception:
             pass
 
         if version != '':
@@ -945,27 +1080,27 @@ def get_details_reply(m_type, qinfo, qstate, rep, kwargs):
     # Cached TTLs are in unix timestamp (time remaining)
     if m_type == 'cache':
         if ttl.isdigit() and len(ttl) == 10:
-            ttl = int(ttl) - int(time.time())
+            ttl = str(int(ttl) - int(time.time()))
         else:
             ttl = ''
 
     timestamp = make_timestamp()
 
     csv_line = ','.join('{}'.format(v) for v in ('DNS-reply', timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
-    log_entry(csv_line, '/var/log/pfblockerng/dns_reply.log')
-    log_entry(csv_line, '/var/log/pfblockerng/unified.log')
+    pfb_async(log_entry, csv_line, '/var/log/pfblockerng/dns_reply.log')
+    pfb_async(log_entry, csv_line, '/var/log/pfblockerng/unified.log')
 
     return True
 
 
 # Is sleep duration valid
-def python_control_duration(duration):
+def python_control_duration(duration: str) -> int | bool:
 
     try:
         if duration.isnumeric():
-            duration = int(duration)
-            if 0 < duration <= 3600:
-                return duration
+            value = int(duration)
+            if 0 < value <= 3600:
+                return value
         return False
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] python_control_duration: {}" .format(e))
@@ -973,7 +1108,7 @@ def python_control_duration(duration):
     return False
 
 # Is thread still active
-def python_control_thread(tname):
+def python_control_thread(tname: str) -> bool:
     global threads
 
     try:
@@ -986,7 +1121,7 @@ def python_control_thread(tname):
     return False
 
 # Python_control Start Thread
-def python_control_start_thread(tname, fcall, arg1, arg2):
+def python_control_start_thread(tname: str, fcall: Callable[..., Any], arg1: Any, arg2: Any) -> bool:
     global threads
 
     try:
@@ -1001,12 +1136,12 @@ def python_control_start_thread(tname, fcall, arg1, arg2):
 
 
 # Python_control sleep timer
-def python_control_sleep(duration, arg):
+def python_control_sleep(duration: int, arg: Any) -> bool:
     global pfb
 
     try:
         time.sleep(duration)
-        pfb['python_blacklist'] = True;
+        pfb['python_blacklist'] = True
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] python_control_sleep: {}" .format(e))
         pass
@@ -1014,7 +1149,7 @@ def python_control_sleep(duration, arg):
 
 
 # Python_control Add Bypass IP for specified duration
-def python_control_addbypass(duration, b_ip):
+def python_control_addbypass(duration: int, b_ip: str) -> bool:
     global pfb, gpListDB
 
     try:
@@ -1027,36 +1162,57 @@ def python_control_addbypass(duration, b_ip):
         pass
     return False
 
-def inplace_cb_reply(qinfo, qstate, rep, rcode, edns, opt_list_out, region, **kwargs):
+def inplace_cb_reply(
+    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
+    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+) -> bool:
     get_details_reply('reply-x', qinfo, qstate, rep, kwargs)
     return True
 
-def inplace_cb_reply_cache(qinfo, qstate, rep, rcode, edns, opt_list_out, region, **kwargs):
+def inplace_cb_reply_cache(
+    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
+    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+) -> bool:
     get_details_reply('cache', qinfo, qstate, rep, kwargs)
     return True
 
-def inplace_cb_reply_local(qinfo, qstate, rep, rcode, edns, opt_list_out, region, **kwargs):
+def inplace_cb_reply_local(
+    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
+    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+) -> bool:
     get_details_reply('local', qinfo, qstate, rep, kwargs)
     return True
 
-def inplace_cb_reply_servfail(qinfo, qstate, rep, rcode, edns, opt_list_out, region, **kwargs):
+def inplace_cb_reply_servfail(
+    qinfo: query_info, qstate: module_qstate, rep: reply_info, rcode: int,
+    edns: Any, opt_list_out: Any, region: Any, **kwargs: Any
+) -> bool:
     get_details_reply('servfail', qinfo, qstate, rep, kwargs)
     return True
 
-def deinit(id):
-    global pfb, maxmindReader
+def deinit(id: int) -> bool:
+    global pfb, maxmindReader, pfb_task_queue, pfb_worker_thread
 
     if pfb['python_maxmind']:
         maxmindReader.close()
 
+    # Drain and stop the background I/O worker
+    if pfb.get('async_worker'):
+        try:
+            pfb_task_queue.put(None)
+            pfb_worker_thread.join(timeout=5)
+        except Exception:
+            pass
+        pfb['async_worker'] = False
+
     log_info('[pfBlockerNG]: pfb_unbound.py script exiting')
     return True
 
-def inform_super(id, qstate, superqstate, qdata):
+def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qdata: Any) -> bool:
     return True
 
 
-def find_zone_match(q_name: str, zone_db) -> tuple[str, dict] | tuple[None, None]:
+def find_zone_match(q_name: str, zone_db: dict[str, Any]) -> tuple[str, dict] | tuple[None, None]:
     q = q_name
     for _ in range(q.count('.') + 1, 0, -1):
         entry = zone_db.get(q)
@@ -1066,7 +1222,7 @@ def find_zone_match(q_name: str, zone_db) -> tuple[str, dict] | tuple[None, None
     return None, None
 
 
-def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db) -> str | None:
+def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db: dict[str, Any]) -> str | None:
     q = q_name.split('.', 1)[-1]
     for _ in range(q.count('.'), 0, -1):
         if noaaaa_db.get(q):
@@ -1075,7 +1231,7 @@ def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db) -> str | None:
     return None
 
 
-def whitelist_check_domain(name: str, white_db, tld_seg: int) -> bool:
+def whitelist_check_domain(name: str, white_db: dict[str, Any], tld_seg: int) -> bool:
     if white_db.get(name) is not None:
         return True
     if name.startswith('www.') and white_db.get(name[4:]) is not None:
@@ -1088,10 +1244,13 @@ def whitelist_check_domain(name: str, white_db, tld_seg: int) -> bool:
     return False
 
 
-def operate(id, event, qstate, qdata):
+def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
     global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, excludeDB, excludeAAAADB, excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB, feedGroupIndexDB
 
     qstate_valid = False
+    q_type: Any = None
+    q_name_original = ''
+    q_ip = ''
     try:
         if qstate is not None and qstate.qinfo.qtype is not None:
             qstate_valid = True
@@ -1134,7 +1293,7 @@ def operate(id, event, qstate, qdata):
                 qstate.ext_state[id] = MODULE_FINISHED
                 return True
 
-            # Add domain to excludeAAAADB to skip subsequent no AAAA validation 
+            # Add domain to excludeAAAADB to skip subsequent no AAAA validation
             else:
                 excludeAAAADB.append(q_name_original)
 
@@ -1152,13 +1311,15 @@ def operate(id, event, qstate, qdata):
 
                 # TODO: See CNAME message below
                 #if isSafeSearch is None and q_name_original != 'safe.duckduckgo.com' and q_name_original.endswith('duckduckgo.com'):
-                #    isSafeSearch = safeSearchDB.get('duckduckgo.com') 
+                #    isSafeSearch = safeSearchDB.get('duckduckgo.com')
                 #if isSafeSearch is None and q_name_original != 'safesearch.pixabay.com' and q_name_original.endswith('pixabay.com'):
                 #    isSafeSearch = safeSearchDB.get('pixabay.com')
 
                 if isSafeSearch is not None:
 
                     ss_found = False
+                    msg = None
+                    cname_msg = None
                     if isSafeSearch['A'] == 'nxdomain':
                         qstate.return_rcode = RCODE_NXDOMAIN
                         qstate.ext_state[id] = MODULE_FINISHED
@@ -1177,7 +1338,6 @@ def operate(id, event, qstate, qdata):
                                 ss_found = True
 
                             if ss_found:
-                                cname_msg.set_return_msg(qstate)
                                 if cname_msg is None or not cname_msg.set_return_msg(qstate):
                                     qstate.ext_state[id] = MODULE_ERROR
                                     return True
@@ -1197,7 +1357,6 @@ def operate(id, event, qstate, qdata):
                             ss_found = True
 
                     if ss_found:
-                        msg.set_return_msg(qstate)
                         if msg is None or not msg.set_return_msg(qstate):
                             qstate.ext_state[id] = MODULE_ERROR
                             return True
@@ -1215,6 +1374,7 @@ def operate(id, event, qstate, qdata):
         if qstate_valid and q_type == RR_TYPE_TXT and q_name_original.startswith('python_control.'):
 
             control_rcd = False
+            control_msg = ''
             if pfb['python_control'] and q_ip == '127.0.0.1':
 
                 control_command = q_name_original.split('.')
@@ -1251,7 +1411,7 @@ def operate(id, event, qstate, qdata):
                     elif control_command[1] == 'enable':
                         control_rcd = True
                         control_msg = 'Python_control: DNSBL enabled'
-                        pfb['python_blacklist'] = True;
+                        pfb['python_blacklist'] = True
 
                     elif control_command[1] == 'addbypass' or control_command[1] == 'removebypass':
                         b_ip = (control_command[2]).replace('-', '.')
@@ -1315,9 +1475,9 @@ def operate(id, event, qstate, qdata):
 
                 qstate.return_rcode = RCODE_NOERROR
                 qstate.return_msg.rep.security = 2
-                qstate.ext_state[id] = MODULE_FINISHED 
+                qstate.ext_state[id] = MODULE_FINISHED
                 return True
- 
+
     # DNSBL Validation for specific RR_TYPES only
     if qstate_valid and pfb['python_blacklist'] and q_type in pfb['rr_types']:
 
@@ -1364,14 +1524,15 @@ def operate(id, event, qstate, qdata):
             if q_name not in excludeDB:
 
                 isFound = False
-                log_type = False
+                log_type: Any = False
                 isInWhitelist = False
                 isInHsts = False
                 nullBlocking = True
                 b_type = 'Python'
                 p_type = 'Python'
-                feed = 'Unknown'
+                feed: Any = 'Unknown'
                 group = 'Unknown'
+                b_eval = ''
 
                 # print "v0: " + q_name
 
@@ -1384,11 +1545,11 @@ def operate(id, event, qstate, qdata):
                     if pfb['python_blocking']:
 
                         # Determine if domain is in DNSBL 'data' database (log to dnsbl.log)
-                        isDomainInData = False
+                        isDomainInData: Any = False
                         if pfb['dataDB']:
                             isDomainInData = dataDB.get(q_name)
                             if isDomainInData is not None:
-                                #print q_name + ' data: ' + str(isDomainInData) 
+                                #print q_name + ' data: ' + str(isDomainInData)
                                 isFound = True
                                 log_type = isDomainInData['log']
 
@@ -1404,7 +1565,7 @@ def operate(id, event, qstate, qdata):
                         # Determine if domain is in DNSBL 'zone' database (log to dnsbl.log)
                         if not isFound and pfb['zoneDB']:
                             matched_q, zone_entry = find_zone_match(q_name, zoneDB)
-                            if matched_q is not None:
+                            if matched_q is not None and zone_entry is not None:
                                 isFound = True
                                 log_type = zone_entry['log']
 
@@ -1452,7 +1613,7 @@ def operate(id, event, qstate, qdata):
 
                     # Add domain to excludeDB to skip subsequent blacklist validation
                     if not isFound or isInWhitelist:
-                        #print "Add to Pass: " + q_name 
+                        #print "Add to Pass: " + q_name
                         excludeDB.append(q_name)
 
                     # Domain to be blocked and is not whitelisted
@@ -1469,7 +1630,7 @@ def operate(id, event, qstate, qdata):
                                 #print q_name + " HSTS"
                             else:
                                 q = q_name
-                                for x in range(q.count('.') +1, 0, -2):
+                                for _ in range(q.count('.') +1, 0, -2):
                                     # print q_name + ' validate: ' + q
                                     isDomainInHsts = hstsDB.get(q)
                                     if isDomainInHsts is not None:
@@ -1478,8 +1639,7 @@ def operate(id, event, qstate, qdata):
                                         p_type = 'HSTS'
                                         break
                                     else:
-                                        q = q.split('.', 1)
-                                        q = q[-1]
+                                        q = q.split('.', 1)[-1]
 
                                 # print q_name + ' break'
 
@@ -1505,7 +1665,7 @@ def operate(id, event, qstate, qdata):
                 else:
                     nullBlocking = isDomainInDNSBL['null']
                     isFound = True
-                    # print "v: " + q_name 
+                    # print "v: " + q_name
 
                 if isFound and not isInWhitelist:
 
@@ -1516,7 +1676,7 @@ def operate(id, event, qstate, qdata):
                         msg.answer.append("{}. 3600 IN A {}" .format(q_name, '0.0.0.0' if nullBlocking else pfb['dnsbl_ipv4']))
                     if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
                         msg.answer.append("{}. 3600 IN AAAA {}" .format(q_name, '::' if nullBlocking else pfb['dnsbl_ipv6']))
-                    
+
                     msg.set_return_msg(qstate)
                     if msg is None or not msg.set_return_msg(qstate):
                         qstate.ext_state[id] = MODULE_ERROR
@@ -1535,7 +1695,7 @@ def operate(id, event, qstate, qdata):
                     return True
 
     if (event == MODULE_EVENT_NEW) or (event == MODULE_EVENT_PASS):
-        qstate.ext_state[id] = MODULE_WAIT_MODULE  
+        qstate.ext_state[id] = MODULE_WAIT_MODULE
         return True
 
     if event == MODULE_EVENT_MODDONE:

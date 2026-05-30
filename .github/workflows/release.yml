@@ -123,7 +123,7 @@ jobs:
             --pretty=format:"- %s" \
             --no-merges \
             -- \
-            usr/ etc/ scripts/ \
+            src/ scripts/ \
             | head -50)
 
           {
@@ -140,15 +140,11 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           ARCHIVE="pfBlockerNG-${VERSION}.tar.gz"
 
-          # Include all package files, exclude test/CI infra
+          # src/ is the production filesystem overlay; dev tooling is outside it
           tar -czf "$ARCHIVE" \
-            --exclude=".git" \
-            --exclude=".github" \
-            --exclude="scripts" \
-            --exclude="usr/local/pkg/pfblockerng/tests" \
             --exclude="*.pyc" \
             --exclude="__pycache__" \
-            usr/ etc/
+            src/
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release

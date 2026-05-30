@@ -4,7 +4,7 @@
 # automatically from the shebang line.  FreeBSD's /bin/sh is a strict POSIX sh
 # implementation, so writing to the POSIX subset is both correct and portable.
 
-# ── Suppressed warnings ───────────────────────────────────────────────────────
+# ── Suppressed warnings ────────────────────────────────────────────────────────────────────
 
 # SC1091 — Not following: <file>
 # pfSense shell library files (e.g. /etc/rc.subr, /usr/local/share/pfSense/…)
@@ -16,3 +16,16 @@ disable=SC1091
 # Several variables (e.g. $rcvar, $command, $name) are injected into scripts by
 # pfSense's rc(8) framework or set in a sourced file ShellCheck cannot read.
 disable=SC2154
+
+# SC2038 — Use -print0/-0 or -exec + to allow for non-alphanumeric filenames.
+# All paths handled by find|xargs in this codebase are pfSense-managed data
+# files whose names are restricted to alias identifiers, IP addresses, and
+# domain labels — none of which can contain whitespace or special characters.
+disable=SC2038
+
+# SC2012 — Use find instead of ls to better handle non-alphanumeric filenames.
+# A few stats routines parse `ls` (incl. `ls -lahtr` for time-sorted, human-
+# readable listings that find cannot reproduce without stat(1) gymnastics).  The
+# listed paths are the same pfSense-managed data files described above, whose
+# names never contain whitespace or special characters.
+disable=SC2012

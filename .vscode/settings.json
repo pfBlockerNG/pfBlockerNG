@@ -2,8 +2,10 @@
   // ── File associations ─────────────────────────────────────────────────────
   // pfSense uses .inc for PHP include files; associate them with PHP so that
   // Intelephense, syntax highlighting, and formatters all activate correctly.
+  // *_global_usage are plain-text Blacklist feed definitions (no extension).
   "files.associations": {
-    "*.inc": "php"
+    "*.inc": "php",
+    "*_global_usage": "plaintext"
   },
 
   // ── PHP (Intelephense) ────────────────────────────────────────────────────
@@ -27,21 +29,25 @@
   "python.testing.pytestArgs": [],
   // Pylance: standard mode surfaces common type errors; flip to "basic" if noisy.
   "python.analysis.typeCheckingMode": "standard",
+  // Resolve imports that are not installed as packages:
+  //  - stubs/python      holds unboundmodule.py, the dev/test stand-in for the
+  //    symbols Unbound injects into pfb_unbound.py at runtime.
+  //  - the pfblockerng pkg dir lets the tests' `import pfb_unbound` resolve.
+  "python.analysis.extraPaths": [
+    "stubs/python",
+    "src/usr/local/pkg/pfblockerng"
+  ],
+  // maxminddb is resolved via stubs/python/maxminddb.pyi; the actual module is
+  // provided by pfSense's py-maxminddb at runtime and is not installed in the
+  // dev environment, so suppress the (expected) "missing source" notice.
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none"
+  },
 
   // ── Shell ─────────────────────────────────────────────────────────────────
   // ShellCheck auto-detects the shell dialect from each file's shebang line
   // (#!/bin/sh for POSIX sh, which is correct for all scripts in this repo).
   "shellcheck.run": "onSave",
-
-  // ── Search / file-watcher exclusions ─────────────────────────────────────
-  // The 26 ip_pre_AWS_*.sh scripts are auto-generated boilerplate.
-  // Exclude them from search results and the file watcher to reduce noise.
-  "search.exclude": {
-    "src/usr/local/pkg/pfblockerng/ip_pre_AWS_*.sh": true
-  },
-  "files.watcherExclude": {
-    "**/ip_pre_AWS_*.sh": true
-  },
 
   // ── Editor defaults ───────────────────────────────────────────────────────
   "files.trimTrailingWhitespace": true,

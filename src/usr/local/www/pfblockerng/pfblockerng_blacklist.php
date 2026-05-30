@@ -27,6 +27,16 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+/*
+ * Discover available Blacklist providers by globbing '*_global_usage' files in
+ * the package directory. Each file is a plain-text feed definition (KEY: value)
+ * describing one squidguard-style provider: metadata (XML/TITLE/DESCR/FEED/SIZE/
+ * WEBSITE/LICENSE) plus the list of categories it offers (NAME: lines, with
+ * per-language NAME/DESC variants). Dropping in a new '*_global_usage' file adds
+ * a provider to this page with no code changes; it is parsed below into
+ * $blacklist_types / $blacklist_options. Feeds are fetched from FEED and
+ * extracted into /var/db/pfblockerng/<XML>/ by pfblockerng.inc.
+ */
 $blacklist_types = glob("/usr/local/pkg/pfblockerng/*_global_usage");
 
 // Temporarily Discontinue Shallalist

@@ -25,5 +25,8 @@ known-first-party = ["pfb_unbound"]
 python_version       = "3.11"
 warn_unused_configs  = true
 ignore_missing_imports = true
+# Resolve `unboundmodule` (Unbound's runtime-injected API) to the dev/test stub
+# in stubs/python/ so the TYPE_CHECKING import in pfb_unbound.py type-checks.
+mypy_path            = "stubs/python"
 # pfb_unbound.py predates type annotations; add hints incrementally rather
 # than requiring full coverage up-front.

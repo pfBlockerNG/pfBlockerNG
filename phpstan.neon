@@ -1,0 +1,18 @@
+includes:
+    - phpstan-baseline.neon
+
+parameters:
+    paths:
+        - src
+    level: 0
+    fileExtensions:
+        - php
+        - inc
+    # pfSense runtime functions and globals declared in stubs/ — scan so
+    # PHPStan knows the symbols exist without analysing the stubs themselves.
+    scanDirectories:
+        - stubs/pfsense
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # pfSense runtime include files don't exist outside the appliance.
+        - '#is not a file or it does not exist#'
