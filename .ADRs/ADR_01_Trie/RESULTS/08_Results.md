@@ -1,0 +1,154 @@
+# Phase 8 — Delete dead code + finalize: Results
+
+## Summary
+
+The domain trie became the sole runtime matcher in Phases 6+7. Phase 8 deletes
+the now-dead dict containers and their dict-walk helpers, re-homes the Phase 4
+equivalence oracle as test-local brute-force reference matchers, migrates the
+remaining noAAAA logging-classifier reads onto the trie, and finalizes the ADR
+(status note + outstanding manual smoke-test checklist).
+
+No behavior change: the trie already drove all matching. 203 pytest cases pass;
+ruff lint + format clean.
+
+## Removed symbols and where each was deleted
+
+`src/usr/local/pkg/pfblockerng/pfb_unbound.py`:
+
+### Dict containers (`dataDB`, `zoneDB`, `whiteDB`, `noAAAADB`, `hstsDB`)
+- **Module-level PEP 526 annotations** (top of file): removed the five
+  `... : defaultdict[str, Any]` declarations. Kept: `rcodeDB`, `regexDB`,
+  `gpListDB`, `dnsblDB`, `safeSearchDB`, `feedGroupIndexDB`, `excludeDB`,
+  `excludeAAAADB`, `excludeSS`, `domainTrie`.
+- **`init_standard()` container-init block**: removed `dataDB = defaultdict(list)`,
+  `zoneDB = defaultdict(list)`, `whiteDB = defaultdict(str)`,
+  `hstsDB = defaultdict(str)`, `noAAAADB = defaultdict(str)`. Updated the stale
+  "Readers remain on the dicts until Phase 6" trie comment.
+- **`init_standard()` `global` list**: removed `dataDB, zoneDB, hstsDB, whiteDB,
+  noAAAADB`.
+- **Loader dual-writes**: deleted the dict half of each dual-write, leaving only
+  the `trie_insert_*` call:
+  - noAAAA loader: removed `noAAAADB[data[0]] = wildcard`
+  - zone loader: removed `zoneDB[row[1]] = {...}`
+  - data loader: removed `dataDB[row[1]] = {...}`
+  - whitelist loader: removed `whiteDB[row[0]] = wildcard`
+  - hsts loader: removed `hstsDB[domain] = 0`
+- **`operate()` `global` list**: removed `dataDB, zoneDB, hstsDB, whiteDB,
+  noAAAADB` (operate's body already read exclusively via the trie).
+
+### Dict-walk helpers
+- **`find_zone_match()`**, **`find_noaaaa_wildcard_parent()`**,
+  **`whitelist_check_domain()`**: the three dict-based walkers deleted outright.
+  `iter_domain_suffixes()` (their shared utility) is **kept** — it is a generic
+  helper still unit-tested directly and is not in the removal list.
+
+### noAAAA logging-classifier reads (the one true behavioral migration)
+`get_details_reply()` had two `noAAAADB.get(q_name) is not None` reads used to
+label a response as `noAAAA`-blocked in logs. These were exact-presence checks
+(config entry OR AAAA-path memo). Migrated to the trie:
+- Added **`trie_has_noaaaa_exact(root, name)`** next to the trie lookups: walks
+  to the terminal node and returns `node.noaaaa is not None`. Exact-only; no
+  ancestor/wildcard walk — matches the old `dict.get(name) is not None`.
+- Replaced both reads with `trie_has_noaaaa_exact(domainTrie, q_name)`.
+- Removed `noAAAADB` from the `global` of both `get_details_dnsbl` (declared but
+  never read) and `get_details_reply`; added `domainTrie` to `get_details_reply`'s
+  global.
+
+Also refreshed now-stale docstrings/comments that named the removed helpers
+("mirrors find_zone_match / dataDB.get / whitelist_check_domain" etc.) to be
+self-describing against the trie primitives.
+
+## Test fixture migration
+
+`tests/test_pfb_unbound.py`:
+- **`add_data/add_zone/add_white/add_noaaaa/add_hsts`**: helper *bodies* now call
+  only `trie_insert_*` (plus the `pfb[...]` enable flag). The dict writes
+  (`pfb_unbound.dataDB[...] = ...` etc.) were removed. Because tests were
+  insulated in Phase 3, no test *bodies* changed for these.
+- **Phase 4 equivalence oracle re-homed**: the import of `find_zone_match`,
+  `find_noaaaa_wildcard_parent`, `whitelist_check_domain` from `pfb_unbound` was
+  dropped. Three **module-local** brute-force reference functions of the same
+  names were added at the top of the test file. They operate on **plain local
+  dicts** passed in by callers — never on `pfb_unbound` module globals — so the
+  equivalence/property tests keep asserting trie == linear-walk reference.
+- **`TestDomainTrieConsistency`** (the only test class that had built the module
+  dicts as a parallel oracle): its `_load()` now writes into **local mirror
+  dicts** (`self.data_db/zone_db/white_db/hsts_db/noaaaa_db`) alongside the trie
+  inserts; the assertions reference those instead of `pfb_unbound.{dataDB,...}`.
+- All other equivalence/golden tests already used local dicts (`zone_db`,
+  `white_db`, `noaaaa_db`, `_make_containers(dataDB=...)` kwargs that project into
+  a fresh trie), so they needed no change. `TestOperateDnsbl`/`TestOperateNoAAAA`
+  pass unchanged via the trie-backed `add_*` helpers.
+
+`tests/conftest.py`:
+- Per-test `reset_pfb_globals` no longer resets the removed module dicts. It now
+  resets only the kept dicts (`dnsblDB`, `safeSearchDB`, `feedGroupIndexDB`,
+  `regexDB`, `gpListDB`), the lists, `threads`, and a fresh
+  `domainTrie = TrieNode()`. The `pfb["dataDB"]/["zoneDB"]/...` **enable-flag**
+  keys are retained (they are flags, not the removed containers).
+
+## grep-clean confirmation
+
+```
+$ grep -rn "dataDB\|zoneDB\|whiteDB\|noAAAADB\|hstsDB\|find_zone_match\|find_noaaaa_wildcard_parent\|whitelist_check_domain" src/ tests/ \
+    | grep -v 'pfb\["' | grep -v 'pfb_unbound\.pfb\["' | grep -v 'cfg\["'
+```
+
+Remaining hits are all legitimate (no production dead refs):
+- `tests/` — the test-local brute-force reference functions and the
+  `_make_containers(dataDB=...)`/`_make_cfg(dataDB=True)` helper **keyword
+  arguments** + `cfg[...]` keys (the production `evaluate_domain` cfg/containers
+  contract, unchanged).
+- `conftest.py` / test `pfb[...]` dicts — the `"dataDB": False` etc. **enable
+  flags** (KEEP list).
+- `src/...pfb_unbound.py:1669` — a single docstring line in the new
+  `trie_has_noaaaa_exact()` explaining the migrated semantics
+  ("mirrors the old ``noAAAADB.get(name) is not None``"). No code reference.
+
+No production code references any removed dict container or dict-walk helper.
+
+## Verification
+
+```
+$ python -m pytest
+============================= 203 passed in 0.08s ==============================
+
+$ ruff check .
+All checks passed!
+
+$ ruff format . --check
+7 files already formatted
+```
+
+## ADR finalization state
+
+`.ADRs/ADR_01_Trie/ADR.md`:
+- **Status** left as **Proposed**, with the appended note:
+  "Proposed → pending manual pfSense smoke test before Accepted (code/tests
+  complete as of Phase 8)."
+- Added a **"Phase 8 / Manual smoke test"** subsection under Section 7 listing
+  the OUTSTANDING checks (owner: maintainer):
+  1. Known blocked domain — exact `data` match → blocked + logged.
+  2. Known blocked domain — subdomain of a wildcard `zone` entry → blocked.
+  3. Whitelisted domain (incl. `www.`-strip and tld_seg-gated suffix) → resolves,
+     not blocked.
+  4. AAAA `noAAAA` case (exact + wildcard-parent subdomain) → AAAA→A suppression,
+     reply logged as `noAAAA`.
+
+**ADR acceptance is BLOCKED on the human-run smoke test.** It cannot be run here
+(no live Unbound; requires `scripts/deploy.sh` to a live pfSense box). No
+smoke-test results were fabricated or claimed.
+
+## Surprises
+
+- `get_details_dnsbl()` declared `noAAAADB` in its `global` but never actually
+  read it — a pre-existing dead `global` entry. Removed it while there.
+- The two `noAAAADB.get(q_name) is not None` reads in `get_details_reply()` were
+  the only remaining *behavioral* dict consumers (logging classification, not
+  blocking). The AAAA blocking path in `operate()` had already moved its memo to
+  the trie in Phase 6, so a small exact-presence trie helper
+  (`trie_has_noaaaa_exact`) was the clean equivalent. This was the only spot
+  where Phase 8 added code rather than just deleting it.
+- Two commits: code/tests (`pfb_unbound: remove dict matchers; trie is the sole
+  DNSBL structure`) and ADR docs (`docs: ADR-01 Phase 8 — note acceptance
+  blocked on manual smoke test`). Not pushed (parent session owns push/merge).

@@ -9,6 +9,7 @@ build/
 .venv/
 venv/
 .mypy_cache/
+.benchmarks/
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store

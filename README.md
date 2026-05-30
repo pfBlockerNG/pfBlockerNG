@@ -86,6 +86,19 @@ python3 -m pytest
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
 
+### Benchmarks
+
+`benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the
+flat-dict matcher it replaced (latency on positive/negative queries, and memory
+footprint). It is dev-only, not shipped, and not collected by the default
+`pytest` run. See [`benchmarks/README.md`](benchmarks/README.md):
+
+```sh
+python -m pip install -r benchmarks/requirements.txt
+python -m pytest benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
+python -m pytest benchmarks/test_memory.py -s
+```
+
 ### Linting
 
 #### Python

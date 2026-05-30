@@ -1,0 +1,129 @@
+================================================================================
+PHASE 1 PROMPT — Extract pure domain-match helpers + unify signatures
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+================================================================================
+
+ROLE
+You are working in the pfBlockerNG repository on the `devel` branch. You are
+performing Phase 1 of the trie migration described in
+.ADRs/ADR_01_Trie/ADR.md. This phase is STRICTLY BEHAVIOR-PRESERVING: you are
+extracting existing inline logic into named pure functions and unifying their
+signatures. No matching behavior changes. No data structure changes.
+
+WHY THIS PHASE EXISTS (read before coding)
+The DNSBL matching logic lives inline inside the ~450-line `operate()` function
+in src/usr/local/pkg/pfblockerng/pfb_unbound.py, tangled with qstate mutation
+and I/O. Before any data structure can be swapped, the matching must be pulled
+into small pure functions that can be pinned by tests and later reimplemented.
+This phase extracts the remaining inline walk (HSTS), deduplicates the
+feed/group lookup, introduces one canonical suffix-iteration generator, and
+makes all matcher signatures consistent so that trie versions become drop-in
+replacements in later phases.
+
+REQUIRED READING (inspect these before editing)
+- .ADRs/ADR_01_Trie/ADR.md  — full plan and the semantics contract (Section 2).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    * find_zone_match()            — existing extracted helper; zone wildcard walk (incl. self).
+    * find_noaaaa_wildcard_parent()— existing helper; parent-only wildcard walk.
+    * whitelist_check_domain()     — existing helper; exact + www-strip + suffix walk gated by tld_seg.
+    * operate()                    — the DNSBL block; locate the inline HSTS walk
+                                     (the `if pfb['hstsDB']:` block that loops
+                                     `for _ in range(q.count('.') + 1, 0, -2)` and
+                                     does `q = q.split('.', 1)[-1]`).
+    * the data branch and zone branch inside operate() that each do
+      `feedGroup = feedGroupIndexDB.get(...); feed = feedGroup['feed']; group = feedGroup['group']`.
+- tests/test_pfb_unbound.py        — existing tests (TestOperateDnsbl, TestOperateNoAAAA);
+                                     do not break any of them.
+- tests/conftest.py                — how Unbound globals are stubbed onto builtins.
+- CLAUDE.md                        — code standards (4-space indent, type hints, stdlib only, no die/exit).
+
+ACTION PLAN (ordered)
+1. A3 first — `iter_domain_suffixes`.
+   Add a pure generator:
+       def iter_domain_suffixes(name: str) -> Iterator[str]
+   It must yield the same sequence of progressively-shorter suffixes that the
+   existing `q = q.split('.', 1)[-1]` loops produce, STARTING FROM `name`
+   itself (i.e. yields name, then name with leftmost label removed, ... down to
+   the last label). Do NOT yet change any matcher to use it in a way that alters
+   output — first prove equivalence with a quick local check, then refactor
+   `find_zone_match`, `find_noaaaa_wildcard_parent`, and `whitelist_check_domain`
+   to use it INTERNALLY only where the iteration is identical. IMPORTANT: the
+   three existing walkers do NOT share the same start offset or stride:
+     - find_zone_match: starts at full name, stride 1, includes self.
+     - find_noaaaa_wildcard_parent: starts at PARENT (name.split('.',1)[-1]), stride 1.
+     - whitelist_check_domain: exact + 'www.'-strip + parent walk gated by `x >= tld_seg`.
+   Preserve each walker's exact start/stride/gate. If a walker's iteration does
+   not map cleanly onto the generator, leave that walker's loop as-is rather
+   than forcing it. The generator is a shared primitive, not a behavior change.
+
+2. A2 — `resolve_feed_group`.
+   Add:
+       def resolve_feed_group(index: Any) -> tuple[Any, Any]
+   returning (feed, group) with the SAME fallback behavior as the inline code
+   (when `feedGroupIndexDB.get(index)` is None, the caller currently leaves the
+   pre-initialized defaults `feed = 'Unknown'`, `group = 'Unknown'`). Decide and
+   document: either return ('Unknown','Unknown') on miss, OR return a sentinel
+   the caller maps to its existing defaults. Match current observable behavior
+   exactly. Replace BOTH inline occurrences (data branch, zone branch) in
+   operate() with calls to this function.
+
+3. A1 — `hsts_check_domain`.
+   Extract the inline HSTS block into:
+       def hsts_check_domain(name: str, hsts_db: dict[str, Any],
+                             hsts_tlds: tuple[str, ...] | list[str], tld: str)
+                             -> tuple[bool, str]
+   returning (is_in_hsts, p_type) where p_type is 'HSTS_TLD' when the TLD is in
+   hsts_tlds, 'HSTS' when a suffix membership hit occurs, and unchanged
+   otherwise. CRITICAL: preserve the step −2 stride
+   (`range(q.count('.') + 1, 0, -2)`). Do not silently change it to −1. In
+   operate(), replace the inline block with a call; keep the surrounding
+   nullBlocking / p_type assignment behavior identical.
+
+4. B — Unify signatures.
+   Normalize the matcher helpers to a consistent leading argument order:
+   `(container, name, *opts)`. Today find_zone_match is `(q_name, zone_db)` while
+   whitelist_check_domain is `(name, white_db, tld_seg)`. Pick `(container, name, ...)`
+   (container first) OR `(name, container, ...)` (name first) — choose whichever
+   requires the fewest call-site edits, apply it to ALL domain matchers
+   (find_zone_match, find_noaaaa_wildcard_parent, whitelist_check_domain,
+   hsts_check_domain), and update every call site in operate(). Keep return
+   shapes unchanged.
+
+5. Run the suite and linters (see VERIFICATION).
+
+CONSTRAINTS
+- Pure functions only: no references to Unbound-injected globals, no qstate,
+  no I/O, no `pfb[...]` reads inside the extracted matchers (pass needed config
+  in as arguments, e.g. tld_seg, hsts_tlds).
+- 4-space indent; add type hints to all new/modified function signatures;
+  stdlib only; no die()/exit(); follow surrounding style.
+- Do NOT touch gpListDB, safeSearchDB, regexDB, dnsblDB, exclude* logic.
+- Do NOT introduce the trie yet. Do NOT change which domains get blocked.
+
+VERIFICATION (must all pass before you consider the phase done)
+- `python -m pytest`  → all existing tests green, zero behavior change.
+- `ruff check .`      → clean.
+- `ruff format .`     → clean (apply formatting).
+- Manually diff-read operate(): the data/zone/hsts branches now call the new
+  helpers; logic is otherwise identical.
+
+EXPECTED RESULT / OBSERVATIONS
+- New pure functions exist: iter_domain_suffixes, resolve_feed_group,
+  hsts_check_domain; the three pre-existing matchers share a unified signature.
+- operate() is smaller; the only inline domain walk remaining (HSTS) is gone.
+- No test changes required to keep green (tests still pass unmodified). If a
+  test breaks, you changed behavior — revert and re-extract more carefully.
+
+COMMIT
+Single commit, message:
+    pfb_unbound: extract pure domain-match helpers and unify signatures
+Do not push unless instructed. If push is needed, push directly to `devel`
+first; only open a PR if the direct push is rejected by branch protection.
+
+HANDOFF
+Report: functions added, call sites updated, pytest/ruff results. Leave a note
+for Phase 2 (02_Extract_A4_A5.txt) confirming the matcher signatures are now
+unified and what the chosen argument order is.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/01_Results.md`.

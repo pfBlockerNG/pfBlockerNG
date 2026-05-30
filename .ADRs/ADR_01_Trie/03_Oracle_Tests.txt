@@ -1,0 +1,122 @@
+================================================================================
+PHASE 3 PROMPT — Oracle/property tests + test-fixture insulation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-2 committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing Phase 3. You are ADDING
+TESTS ONLY — no production logic changes (except, if needed, adding small
+test-only insert helpers used by the tests). The goal is to pin the current
+matching behavior as a golden reference BEFORE the trie reimplementation, and to
+insulate the test suite from the upcoming data-structure swap.
+
+WHY THIS PHASE EXISTS
+There is no live Unbound in CI; correctness of the trie swap can only be
+guaranteed by comparing the new implementation against the current one. After
+Phases 1-2 the matchers and orchestration are pure functions with stable
+signatures — ideal oracle targets. Several existing tests also poke module
+globals directly (e.g. `pfb_unbound.dataDB['evil.com'] = {...}`); if left as-is,
+the Phase 8 removal of those dicts would force rewriting many tests at the worst
+time. Routing fixtures through insert helpers now means the swap later changes
+only the helper body.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 2 (the semantics contract you are pinning).
+- .ADRs/ADR_01_Trie/RESULTS/02_Results.md — Phase 2 handoff: DnsblDecision shape,
+  evaluate_domain/evaluate_noaaaa signatures, cfg/containers split, noAAAA memo
+  write location, and any corrections made post-phase.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the Phase 1/2 functions:
+  iter_domain_suffixes, resolve_feed_group, hsts_check_domain, find_zone_match,
+  find_noaaaa_wildcard_parent, whitelist_check_domain, evaluate_domain,
+  evaluate_noaaaa, and the DnsblDecision type.
+- tests/test_pfb_unbound.py — existing structure/style (pytest classes,
+  monkeypatch usage, make_qstate helper, DNSMessage.instances). Match the style.
+- tests/conftest.py — how Unbound symbols are stubbed; how pfb globals are reset
+  between tests (understand fixture/reset semantics before adding tests).
+
+ACTION PLAN (ordered)
+
+1. Test-only insert helpers (insulation).
+   In the test module (or conftest), add small helpers that populate the current
+   containers, e.g.:
+       def add_data(domain, log='1', index=0): ...
+       def add_zone(domain, log='1', index=0): ...
+       def add_white(domain, wildcard=False): ...
+       def add_noaaaa(domain, wildcard=False): ...
+       def add_hsts(domain): ...
+       def set_feed_group(index, feed, group): ...
+   Each helper sets the corresponding global AND the enabling pfb[...] flag where
+   the production code requires it (e.g. add_data also sets pfb['dataDB']=True).
+   Convert EXISTING tests that currently assign globals directly
+   (TestOperateDnsbl: dataDB/zoneDB/whiteDB/regexDB/feedGroupIndexDB/gpListDB;
+   TestOperateNoAAAA: noAAAADB) to use these helpers. Behavior of tests must be
+   unchanged — they should still pass identically. This is the insulation layer:
+   in Phase 8 you will repoint these helpers at the trie and the test bodies
+   won't change.
+
+2. Oracle/property tests for the pure matchers.
+   Add a test class that, for a corpus of domains, asserts the matcher outputs.
+   Build the corpus two ways and test both:
+     (a) Hand-written edge cases that encode the contract explicitly:
+         - data exact: 'evil.com' matches 'evil.com', NOT 'x.evil.com'.
+         - zone wildcard incl self: 'example.com' matches 'example.com' and
+           'a.b.example.com'; matched parent string is returned correctly
+           (drives b_eval).
+         - whitelist: exact; 'www.' strip; suffix walk respecting tld_seg
+           (include a case where a short suffix is BELOW tld_seg and must NOT
+           match, and one at/above tld_seg that must match).
+         - noaaaa: exact match; wildcard-parent match (parent only — assert a
+           wildcard entry on 'example.com' matches 'sub.example.com' but the
+           SELF case follows current behavior); confirm parent-only semantics.
+         - hsts: TLD-in-hsts_tlds -> ('HSTS_TLD'); suffix membership ->
+           ('HSTS'); and explicitly assert the step -2 stride by constructing a
+           name where a -1 walk WOULD hit an intermediate label but the -2 walk
+           does NOT (this locks the quirk).
+     (b) Randomized property test: generate random multi-label domains and random
+         blocklist entries; compute "expected" using a straightforward reference
+         (you may inline a trivial brute-force suffix check in the test as the
+         reference), and assert each matcher agrees. Keep the generator seeded
+         for reproducibility.
+
+3. Golden tests for the orchestration (evaluate_domain / evaluate_noaaaa).
+   Add tests that call evaluate_domain / evaluate_noaaaa directly (pure, no
+   qstate) across representative inputs and assert the full DnsblDecision /
+   bool result, including: data hit, zone hit (b_type='TLD', b_eval=parent),
+   tld-allow, idn, regex, whitelist override, hsts null-blocking interaction,
+   and CNAME b_type suffixing. These become the contract the trie-backed
+   implementation must reproduce verbatim in Phase 6.
+
+4. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- No production behavior changes. The only production-side edits permitted are
+  trivial test-support hooks if unavoidable; prefer keeping helpers in tests.
+- Tests must be deterministic (seed any randomness).
+- Match existing test style/imports; keep `python -m pytest` fast.
+- stdlib + pytest only.
+
+VERIFICATION
+- `python -m pytest` → all tests (old + new) green. The new oracle tests should
+  pass against the CURRENT implementation (that is the point — they capture the
+  golden behavior).
+- `ruff check .` and `ruff format .` → clean.
+
+EXPECTED RESULT / OBSERVATIONS
+- A documented, executable specification of the matching contract now exists.
+- Existing tests no longer touch raw global dicts directly; they go through
+  add_* helpers.
+- You now have a regression net that will FAIL loudly if Phases 4-8 change any
+  blocking outcome.
+
+COMMIT
+    test: add oracle/property tests for domain matching and insulate fixtures
+Push policy as in earlier phases.
+
+HANDOFF
+Report the new test classes, the add_* helper names/locations, and confirm the
+golden tests pass against the current (dict-based) implementation. Phase 4 will
+add the trie and reuse these exact tests as the equivalence oracle.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/03_Results.md`.
