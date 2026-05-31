@@ -1739,7 +1739,7 @@ server.pid-file			= "/var/run/dnsbl.pid"
 
 EOF;
 
-if (!$pfb['dnsbl_py_blacklist'] || $pfb['dnsbl_py_nolog'] == 'on') {
+if ($pfb['dnsbl_py_nolog'] == 'on') {
 	$pfb_conf .= <<<EOF
 server.errorlog			= "|/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl"
 
@@ -1747,13 +1747,13 @@ EOF;
 }
 
 	if (file_exists('/usr/local/lib/lighttpd/mod_openssl.so')) {
-		if (!$pfb['dnsbl_py_blacklist'] || $pfb['dnsbl_py_nolog'] == 'on') {
+		if ($pfb['dnsbl_py_nolog'] == 'on') {
 			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_auth", "mod_accesslog", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		} else {
 			$pfb_conf .= 'server.modules			= ( "mod_auth", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		}
 	} else {
-		if (!$pfb['dnsbl_py_blacklist'] || $pfb['dnsbl_py_nolog'] == 'on') {
+		if ($pfb['dnsbl_py_nolog'] == 'on') {
 			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_auth", "mod_accesslog", "mod_fastcgi", "mod_rewrite" )';
 		} else {
 			$pfb_conf .= 'server.modules			= ( "mod_auth", "mod_fastcgi", "mod_rewrite" )';
@@ -1768,7 +1768,7 @@ url.access-deny			= ( "~", ".inc" )
 fastcgi.server			= ( ".php" => ( "localhost" => ( "socket" => "/var/run/php-fpm.socket", "broken-scriptfilename" => "enable" ) ) )
 
 EOF;
-	if (!$pfb['dnsbl_py_blacklist'] || $pfb['dnsbl_py_nolog'] == 'on') {
+	if ($pfb['dnsbl_py_nolog'] == 'on') {
 
 	$pfb_conf .= <<<EOF
 debug.log-condition-handling	= "enable"
@@ -1780,7 +1780,7 @@ EOF;
 }
 	// Lighttpd v1.4.58+ conditional error log with 'ssl.verifyclient.activate' to collect the domain name
 	$lighty_ver = exec('/usr/local/sbin/lighttpd -v 2>&1');
-	if ((!$pfb['dnsbl_py_blacklist'] || $pfb['dnsbl_py_nolog'] == 'on') &&
+	if (($pfb['dnsbl_py_nolog'] == 'on') &&
   	    (strpos($lighty_ver, 'lighttpd/1.4.58') !== FALSE ||
 	    strpos($lighty_ver, 'lighttpd/1.4.59') !== FALSE ||
 	    strpos($lighty_ver, 'lighttpd/1.4.60') !== FALSE ||
@@ -2078,14 +2078,7 @@ function pfb_unbound_dnsbl($mode) {
 		// Append DNSBL Unbound pfSense conf integration
 		if (!strstr($unbound_custom, 'pfb_dnsbl.*conf')) {
 			if ($mode == 'enabled') {
-				if (!$pfb['dnsbl_py_blacklist']) {
-					$pfbupdate = TRUE;
-					$unbound_custom .= "\n{$unbound_include}";
-					$log = "\nAdding DNSBL Unbound mode (Resolver adv. setting)";
-				}
-
-				// To be removed when SafeSearch CNAME python mode has been fixed
-				elseif ($pfb['safesearch_enable'] !== 'Disable') {
+				if ($pfb['safesearch_enable'] !== 'Disable') {
 					$pfbupdate = TRUE;
 					$unbound_custom .= "\n{$unbound_include}";
 					$log = "\nAdding DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
@@ -2095,43 +2088,27 @@ function pfb_unbound_dnsbl($mode) {
 		else {
 			// Remove DNSBL Unbound pfSense conf integration when disabled
 			// or when DNSBL python mode is enabled but not when SafeSearch is enabled
-			if ($mode == 'disabled' || $pfb['dnsbl_py_blacklist']) {
-				$custom = explode ("\n", $unbound_custom);
-				foreach ($custom as $key => $line) {
-					if (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
-						if (!$pfb['dnsbl_py_blacklist']) {
-							$log = "\nRemoving DNSBL SafeSearch mode (Resolver adv. setting)";
-							unset($custom[$key]);
-							$pfbupdate = TRUE;
-						}
+			$custom = explode ("\n", $unbound_custom);
+			foreach ($custom as $key => $line) {
+				if (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
+					if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
+						//
+					}
 
-						// To be removed when SafeSearch CNAME python mode has been fixed
-						elseif ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
-							//
-						}
-
-						else {
-							$log = "\nRemoving DNSBL Unbound mode and/or DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
-							unset($custom[$key]);
-							$pfbupdate = TRUE;
-						}
+					else {
+						$log = "\nRemoving DNSBL Unbound mode and/or DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
+						unset($custom[$key]);
+						$pfbupdate = TRUE;
 					}
 				}
-				$unbound_custom = implode("\n", $custom);
 			}
+			$unbound_custom = implode("\n", $custom);
 		}
 	}
 	else {
 		// Add DNSBL Unbound pfSense conf integration
 		if ($mode == 'enabled') {
-			if (!$pfb['dnsbl_py_blacklist']) {
-				$pfbupdate = TRUE;
-				$unbound_custom = "{$unbound_include}";
-				$log = "\nAdding DNSBL Unbound mode (Resolver adv. setting)";
-			}
-
-			// To be removed when SafeSearch CNAME python mode has been fixed
-			elseif ($pfb['safesearch_enable'] !== 'Disable') {
+			if ($pfb['safesearch_enable'] !== 'Disable') {
 				$pfbupdate = TRUE;
 				$unbound_custom = "{$unbound_include}";
 				$log = "\nAdding DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
@@ -2179,12 +2156,7 @@ function pfb_unbound_dnsbl($mode) {
 
 			elseif (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
 				if ($mode == 'enabled') {
-					if (!$pfb['dnsbl_py_blacklist']) {
-						$unbound = TRUE;
-					}
-
-					// To be removed when SafeSearch CNAME python mode has been fixed
-					elseif ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
+					if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
 						$unbound = TRUE;
 					}
 
@@ -2201,7 +2173,7 @@ function pfb_unbound_dnsbl($mode) {
 			}
 
 			elseif (strpos($line, 'module-config:') !== FALSE) {
-				if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+				if ($mode == 'enabled') {
 					// Ensure the python module is loaded. The pfb_unbound.py script
 					// block is tracked separately ($unbound_py_script) and ensured
 					// after the loop, so do NOT infer its presence from this line.
@@ -2230,7 +2202,7 @@ function pfb_unbound_dnsbl($mode) {
 			}
 
 			elseif (strpos($line, 'python-script: pfb_unbound.py') !== FALSE) {
-				if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+				if ($mode == 'enabled') {
 					$unbound_py_script = TRUE;
 				} else {
 					$u_update = TRUE;
@@ -2243,14 +2215,7 @@ function pfb_unbound_dnsbl($mode) {
 
 		// Add Unbound include line
 		if (!$unbound && $mode == 'enabled') {
-			if (!$pfb['dnsbl_py_blacklist']) {
-				$u_update = TRUE;
-				$u_msg .= "  Added DNSBL Unbound mode\n";
-				$conf[] = "\nserver:include: {$pfb['dnsbl_file']}.*conf\n";
-			}
-
-			// To be removed when SafeSearch CNAME python mode has been fixed
-			elseif ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
+			if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
 				$u_update = TRUE;
 				$u_msg .= "  Added DNSBL SafeSearch CNAME mode\n";
 				$conf[] = "\nserver:include: {$pfb['dnsbl_file']}.*conf\n";
@@ -2258,13 +2223,13 @@ function pfb_unbound_dnsbl($mode) {
 		}
 
 		// Add python script line
-		if (!$unbound_py_script && $mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+		if (!$unbound_py_script && $mode == 'enabled') {
 			$u_update = TRUE;
 			$u_msg .= "  Added DNSBL Unbound Python mode script\n";
 			$conf[] = "\npython:\npython-script: pfb_unbound.py\n";
 		}
 
-		if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+		if ($mode == 'enabled') {
 			if (!file_exists("{$g['unbound_chroot_path']}/pfb_unbound.py")) {
 				@copy("/usr/local/pkg/pfblockerng/pfb_unbound.py", "{$g['unbound_chroot_path']}/pfb_unbound.py");
 			}
@@ -2358,7 +2323,7 @@ function pfb_unbound_python($mode) {
 
 	// Add python settings to DNS Resolver configuration
 	$python_enable = 'off';
-	if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+	if ($mode == 'enabled') {
 		$python_enable = 'on';
 
 		if (!config_path_enabled('unbound', 'python') ||
@@ -2375,23 +2340,15 @@ function pfb_unbound_python($mode) {
 		}
 
 		// If DNSBL python blocking mode enabled
-		if ($pfb['dnsbl_py_blacklist']) {
 
-			// Create DNSBL Whitelist
-			$dnsbl_whitelist = pfb_unbound_python_whitelist();
+		// Create DNSBL Whitelist
+		$dnsbl_whitelist = pfb_unbound_python_whitelist();
 
-			// Compare previous DNSBL Whitelist to new Whitelist
-			$pfb_py_whitelist_ex = @file_get_contents($pfb['unbound_py_wh']);
-			if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
-				$pfbpython = TRUE;
-				@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
-			}
-		}
-
-		// Remove previous whitelist and reload
-		elseif (file_exists($pfb['unbound_py_wh'])) {
-			unlink_if_exists($pfb['unbound_py_wh']);
+		// Compare previous DNSBL Whitelist to new Whitelist
+		$pfb_py_whitelist_ex = @file_get_contents($pfb['unbound_py_wh']);
+		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
 			$pfbpython = TRUE;
+			@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
 		}
 
 		if (!isset($tld_segments)) {
@@ -2404,9 +2361,7 @@ function pfb_unbound_python($mode) {
 		}
 
 		$python_blocking = 'off';
-		if ($pfb['dnsbl_py_blacklist']) {
-			$python_blocking = 'on';
-		}
+		$python_blocking = 'on';
 
 		$python_hsts = 'off';
 		if ($pfb['dnsbl_hsts'] == 'on') {
