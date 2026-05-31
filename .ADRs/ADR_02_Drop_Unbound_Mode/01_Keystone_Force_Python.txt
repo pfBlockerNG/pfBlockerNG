@@ -1,0 +1,108 @@
+================================================================================
+PHASE 1 PROMPT — Keystone: force Python-only + migrate config
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md  (read it first, esp. §1, §2, §6)
+================================================================================
+
+ROLE
+You are working in the pfBlockerNG repository on the `edge` branch (feature
+branch off `devel`). You are performing Phase 1 of ADR-02 "Drop the non-Python
+(native Unbound) DNSBL mode". This phase is the KEYSTONE: it makes every install
+behave as Python-only DNSBL and migrates stored config, WITHOUT yet deleting any
+native code. Native branches become unreachable but remain in the tree (later
+phases delete them). This keeps the diff reviewable and the package working at
+every commit.
+
+WHY THIS PHASE EXISTS (read before coding)
+DNSBL "mode" is two config keys collapsing into one boolean (ADR §1):
+  dnsbl_mode ∈ {dnsbl_unbound, dnsbl_python}  +  pfb_py_block ∈ {on, off}
+    → $pfb['dnsbl_py_blacklist'] = (dnsbl_mode==dnsbl_python && pfb_py_block==on)
+TRUE = Python blocks; FALSE = native Unbound blocks. By pinning this boolean to
+TRUE in code (the runtime safety net) AND rewriting stored config (the cleanup),
+every state becomes state 3 (Python-only). Nothing downstream needs to change in
+this phase — the existing native branches simply stop executing.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff to read. Start from the ADR below.
+  (You WRITE the handoff for Phase 2 at the end — see HANDOFF.)
+- .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    * the keystone read block (~L844–864): $pfb['dnsbl_mode'], $pfb['dnsbl_py_block'],
+      and the $pfb['dnsbl_py_blacklist'] = FALSE / if(...) TRUE resolution.
+    * the python config generation that emits `python_blocking` (search
+      "python_blocking" / "$python_blocking") — confirm it derives from
+      dnsbl_py_blacklist, so pinning TRUE keeps `python_blocking = on`.
+- src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+    * the existing VIP-migration block (L34–107) — COPY ITS STYLE: read config/0,
+      mutate, write_config, idempotent.
+    * the $upgrade_type loop (L211+) for how per-package config upgrades run.
+- CLAUDE.md — PHP standards (tabs, PHP 8.3, no die/exit, stubs for pfSense fns).
+
+ACTION PLAN (ordered)
+1. pfblockerng.inc keystone (~L844–864):
+   - Force the mode: assign $pfb['dnsbl_mode'] = 'dnsbl_python'; (ignore the
+     stored value — runtime safety net for not-yet-migrated configs).
+   - Force the switch: replace the L861–863 conditional with
+     $pfb['dnsbl_py_blacklist'] = TRUE;
+   - Leave the other py_* reads (pfb_py_reply, pfb_py_block, pfb_hsts, …) intact
+     for now; later phases prune pfb_py_block. Do NOT delete native branches yet.
+   - Add a short comment: "// ADR-02: DNSBL is Python-only; native Unbound mode removed."
+
+2. pfblockerng_install.inc — add an idempotent migration (place it near the VIP
+   migration, after L107, before the $upgrade_type loop):
+   - $cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+   - If $cfg is non-empty AND (dnsbl_mode !== 'dnsbl_python' || (pfb_py_block ?? '') !== 'on'):
+       set dnsbl_mode = 'dnsbl_python'; set pfb_py_block = 'on';
+       (optionally unset native-only TLD-Whitelist keys IF you can identify them
+        unambiguously — otherwise leave them; they become inert. Do NOT touch
+        pfb_tld / wildcard-blocking keys.)
+       config_set_path(...); write_config('pfBlockerNG: migrated DNSBL to Python-only mode');
+   - Guard so re-running on an already-migrated config is a no-op (the if-condition
+     above already provides this).
+   - Do NOT force a reload here directly; the standard install/upgrade flow
+     rebuilds DNSBL. (If the surrounding code has an established reload trigger
+     used by other migrations, follow it; otherwise leave the rebuild to the
+     normal sync.)
+
+CONSTRAINTS
+- PHP: tabs; PHP 8.3; no die()/exit() in library code; pfSense functions resolve
+  from stubs/pfsense/ (add a stub if intelephense flags a genuinely new fn — do
+  not expand suppressions).
+- Do NOT delete any native code path in this phase. Do NOT touch the UI, shell,
+  alerts, widget, or pfb_unbound.py.
+- Keep `python_blocking = on` being emitted (verify, don't assume).
+
+VERIFICATION
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` and
+  `php -l src/usr/local/pkg/pfblockerng/pfblockerng_install.inc` → no syntax errors
+  (if php is unavailable in the env, say so and rely on careful diff-read).
+- grep: $pfb['dnsbl_py_blacklist'] is now assigned TRUE unconditionally and the
+  former FALSE/if resolution is gone.
+- `python -m pytest` → still green (pfb_unbound.py untouched; sanity only).
+- Reason through the migration: a config with dnsbl_mode=dnsbl_unbound, and one
+  with dnsbl_python+pfb_py_block=off, both end on dnsbl_python+pfb_py_block=on;
+  a second run is a no-op.
+
+EXPECTED RESULT
+- Fresh installs and upgraded installs both run Python-only DNSBL.
+- Native branches are dead-but-present (deleted in Phases 2–5).
+- No behavior change for users already in state 3.
+
+COMMIT
+Single commit:
+    pfblockerng: force Python-only DNSBL and migrate legacy mode config (ADR-02 P1)
+Land on `edge`. Push directly; open a PR only if the push is rejected by branch
+protection. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/01_Results.txt`
+This file is a HANDOFF for the agent that will perform the NEXT phase
+(02_UI_Remove_Toggle.txt) — NOT merely a changelog of this phase. Write it as
+plain text (.txt, not markdown), and make it self-sufficient: the next agent
+should be able to start from it without re-deriving this phase's work. Include:
+- State after this phase: $pfb['dnsbl_py_blacklist'] is now a constant TRUE; both
+  legacy config states migrate to dnsbl_python + pfb_py_block=on.
+- What changed: exact lines edited in the keystone; the migration block added.
+- Verification results: php -l / pytest output; confirmation that
+  `python_blocking = on` is still emitted.
+- Watch-outs and any deviation from this prompt the next agent must know.
+- Go-ahead for Phase 2: the UI selector/toggle can now be removed safely.
