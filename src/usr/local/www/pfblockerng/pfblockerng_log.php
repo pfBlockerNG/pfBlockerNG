@@ -185,11 +185,7 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						)
 		);
 
-if ($pfb['dnsbl_py_blacklist']) {
-	unset($pfb_logtypes['unbound']);
-} else {
-	unset($pfb_logtypes['python']);
-}
+unset($pfb_logtypes['unbound']);
 
 // Dynamically add any configured DNSBL Categeory Feeds
 if ($pfb['blconfig'] &&

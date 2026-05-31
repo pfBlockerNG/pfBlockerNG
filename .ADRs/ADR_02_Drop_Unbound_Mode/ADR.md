@@ -1,6 +1,6 @@
 # ADR-02: Drop the non-Python (native Unbound) DNSBL mode
 
-- **Status:** **PROPOSED** (2026-05-31)
+- **Status:** **IMPLEMENTED (pending smoke test)** (2026-05-31) — Phases 1–5 complete on branch `edge`; code is Python-only DNSBL with auto-migration. Acceptance is blocked on the manual smoke test (§7 / `RESULTS/05_Results.txt`), which cannot be automated (no live Unbound in CI).
 - **Date:** 2026-05-31
 - **Component:** DNSBL subsystem — PHP glue (`pfblockerng.inc`, `pfblockerng_install.inc`), Web UI (`pfblockerng_dnsbl.php`, `pfblockerng_alerts.php`, `pfblockerng.widget.php`), shell (`pfblockerng.sh`); the Python plugin (`pfb_unbound.py`) is barely touched.
 - **Target runtime:** pfSense CE 2.8 (PHP 8.3, FreeBSD 15), Unbound `pythonmod` + embedded Python 3.11+.
