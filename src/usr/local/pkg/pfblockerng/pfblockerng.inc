@@ -841,7 +841,7 @@ function pfb_global() {
 	$pfb['dnsbl_sync']	= $pfb['dnsblconfig']['pfb_dnsbl_sync'];								// Live Updates to Resolver without a Reload
 	$pfb['dnsbl_global_log']= isset($pfb['dnsblconfig']['global_log']) 	? $pfb['dnsblconfig']['global_log']	 : '';		// Global Logging/Blocking mode
 
-	$pfb['dnsbl_mode']	= $pfb['dnsblconfig']['dnsbl_mode'];			// DNSBL Mode (Unbound/python mode)
+	$pfb['dnsbl_mode']	= 'dnsbl_python';					// ADR-02: DNSBL is Python-only; native Unbound mode removed.
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
 	$pfb['dnsbl_py_block']	= $pfb['dnsblconfig']['pfb_py_block'];			// DNSBL Resolver python blocking mode
 	$pfb['dnsbl_hsts']	= $pfb['dnsblconfig']['pfb_hsts'];			// DNSBL Resolver python block HSTS via Null Block mode
@@ -858,10 +858,8 @@ function pfb_global() {
 	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'];	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// DNSBL Resolver mode (Unbound/Python)
-	$pfb['dnsbl_py_blacklist'] = FALSE;
-	if ($pfb['dnsbl_mode'] == 'dnsbl_python' && $pfb['dnsbl_py_block'] == 'on') {
-		$pfb['dnsbl_py_blacklist'] = TRUE;
-	}
+	// ADR-02: DNSBL is Python-only; native Unbound mode removed.
+	$pfb['dnsbl_py_blacklist'] = TRUE;
 
 	// SafeSearch
 	$pfb['safesearch_enable']	= config_get_path('installedpackages/pfblockerngsafesearch/safesearch_enable', 'Disable');

@@ -106,6 +106,16 @@ if (
 	pfb_global();
 }
 
+// ADR-02: Migrate DNSBL mode to Python-only.
+$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+if (!empty($cfg) && ($cfg['dnsbl_mode'] !== 'dnsbl_python' || ($cfg['pfb_py_block'] ?? '') !== 'on')) {
+	$cfg['dnsbl_mode']    = 'dnsbl_python';
+	$cfg['pfb_py_block']  = 'on';
+	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg);
+	write_config('pfBlockerNG: migrated DNSBL to Python-only mode');
+}
+unset($cfg);
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
