@@ -13,7 +13,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-DEBUG=0
 
 now=$(/bin/date +%m/%d/%y' '%T)
 
@@ -49,12 +48,10 @@ mastercat=/var/db/pfblockerng/mastercat
 geoiplog=/var/log/pfblockerng/geoip.log
 errorlog=/var/log/pfblockerng/error.log
 extraslog=/var/log/pfblockerng/extras.log
-dnsbl_file=/var/unbound/pfb_dnsbl
 
 # Folder Locations
 etdir=/var/db/pfblockerng/ET
 tmpxlsx=/tmp/xlsx/
-dnsbl_tmp=/tmp/DNSBL_TMP/
 pfbdb=/var/db/pfblockerng/
 pfbdeny=/var/db/pfblockerng/deny/
 pfborig=/var/db/pfblockerng/original/
@@ -82,12 +79,6 @@ domainmaster=/tmp/pfbtemp9_$rvar
 
 dnsbl_tld_remove=/tmp/dnsbl_tld_remove
 
-dnsbl_add=/tmp/dnsbl_add
-dnsbl_add_zone=/tmp/dnsbl_add_zone
-dnsbl_add_data=/tmp/dnsbl_add_data
-dnsbl_remove=/tmp/dnsbl_remove
-dnsbl_remove_zone=/tmp/dnsbl_remove_zone
-dnsbl_remove_data=/tmp/dnsbl_remove_data
 
 dnsbl_python_data=/var/unbound/pfb_py_data.txt
 dnsbl_python_zone=/var/unbound/pfb_py_zone.txt
@@ -471,116 +462,10 @@ dnsbl_scrub() {
 
 
 # Function to process TLD
-domaintld() {
-	# List of Feeds
-	dnsbl_files="${cc}";
-
-	: > "${tempfile}"; : > "${tempfile2}"; : > "${dupfile}"
-
-	if [ -s "${dnsbl_file}.raw" ]; then
-		sort -u "${dnsbl_file}.raw" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_file}.raw"
-		countto="$(grep -v '"transparent"\|\"static\"' ${dnsbl_file}.raw | grep -c ^)"
-	else
-		countto=0
-	fi
-
-	if [ -s "${dnsbl_tld_remove}" ]; then
-		sort -u "${dnsbl_tld_remove}" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_tld_remove}"
-		counttm="$(grep -c '^\.' ${dnsbl_tld_remove})"
-	else
-		counttm=0
-	fi
-
-	if [ "${DEBUG}" = 1 ] && [ -e "${dnsbl_file}.raw" ]; then
-		cp "${dnsbl_file}.raw" "${dnsbl_file}.raw.orig"
-	fi
-
-	printf "."
-
-	# 'Redirect zone'
-	# Collect DNSBL TLD files (by smallest line count first) and merge
-	dnsbl_tmp_files="$(grep -Hc ^ ${dnsbl_tmp}DNSBL_*.txt | sort -t : -k 2,2n | cut -d':' -f1)"
-	if [ ! -z "${dnsbl_tmp_files}" ]; then
-		for file in ${dnsbl_tmp_files}; do
-			# For each file, place 'local-zone' before 'local-data'
-			head -1 "${file}" >> "${dupfile}"
-			tail -n +2 "${file}" | sort -u >> "${dupfile}"
-		done
-
-		# Remove redundant Domains (in 'redirect zone')
-		if [ -s "${dnsbl_tld_remove}" ] && [ -s "${dupfile}" ]; then
-
-			if [ "${DEBUG}" = 1 ]; then
-				cp "${dupfile}" "${dnsbl_file}.dup"
-			fi
-
-			/usr/local/bin/ggrep -vF -f "${dnsbl_tld_remove}" "${dupfile}" > "${tempfile}"
-		else
-			mv -f "${dupfile}" "${tempfile}"
-		fi
-	fi
-
-	# 'Transparent zone'
-	# Remove redundant Domains (in 'transparent zone')
-	if [ -s "${dnsbl_tld_remove}.tsp" ] && [ -s "${dnsbl_file}.tsp" ]; then
-		/usr/local/bin/ggrep -vF -f "${dnsbl_tld_remove}.tsp" "${dnsbl_file}.tsp" | sort -u > "${tempfile2}"
-	else
-		echo "XXX"
-		# XXXX to be confirmed!
-		# mv -f "${dnsbl_tld_remove}.tsp" "${tempfile2}"
-
-	fi
-
-	# Merge all TLD files
-	if [ -f "${tempfile}" ] || [ -f "${tempfile2}" ]; then
-		: > "${dnsbl_file}.raw"
-		cat "${tempfile}" "${tempfile2}" >> "${dnsbl_file}.raw"
-	fi
-
-	if [ "${DEBUG}" = 1 ] && [ -e "${dnsbl_file}.raw" ]; then
-		cp "${dnsbl_file}.raw" "${dnsbl_file}.raw.final"
-	fi
-
-	# Sort 'Transparent zone' remove file
-	if [ -s "${dnsbl_tld_remove}.tsp" ]; then
-		sort -u "${dnsbl_tld_remove}.tsp" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_tld_remove}.tsp"
-	fi
-
-	# Remove redundant Domains in DNSBL files
-	# Need to re-process all Feeds for TLD (Remove any recently added TLD Domains)
-	if [ -s "${dnsbl_tld_remove}.tsp" ]; then
-		for i in ${dnsbl_files}; do
-			alias="${i%*,}"
-			printf "."
-
-			if [ "${DEBUG}" = 1 ] && [ -f "${pfbdomain}${alias}.txt" ]; then
-				cp "${pfbdomain}${alias}.txt" "${pfbdomain}${alias}.xxx"
-			fi
-
-			# Remove redundant TLD Domains
-			if [ -s "${pfbdomain}${alias}.txt" ]; then
-				/usr/local/bin/ggrep -vF -f "${dnsbl_tld_remove}.tsp" "${pfbdomain}${alias}.txt" > "${tempfile}"
-				mv -f "${tempfile}" "${pfbdomain}${alias}.txt"
-			fi
-		done
-	fi
-
-	counttf="$(grep -v '"transparent"\|\"static\"' ${dnsbl_file}.raw | grep -c ^)"
-	counttr="$((countto - counttf))"
-
-	echo
-	echo ' ----------------------------------------'
-	printf "%-12s %-10s %-10s %-10s\n" ' Original' 'Matches' 'Removed' 'Final'
-	echo ' ----------------------------------------'
-	printf "%-12s %-10s %-10s %-10s\n" " ${countto}" "${counttm}" "${counttr}" "${counttf}"
-	printf ' -----------------------------------------'
-}
 
 
 # Function to process TLD python
 domaintldpy() {
-	# List of Feeds
-	dnsbl_files="${cc}";
 
 	if [ -s "${dnsbl_python_data}.raw" ]; then
 		sort -u "${dnsbl_python_data}.raw" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_python_data}.raw"
@@ -640,83 +525,6 @@ domaintldpy() {
 
 
 # Function to compare previous and current DNSBL Unbound conf file, and create Add/Remove files for unbound-control cmds
-dnsbl_livesync() {
-
-	if [ "${DEBUG}" = 1 ]; then
-		if [ -e "${dnsbl_file}.conf" ]; then
-			cp "${dnsbl_file}.conf" "${dnsbl_file}.bkr"
-		fi
-		if [ -e "${dnsbl_file}.raw" ]; then
-			cp "${dnsbl_file}.raw" "${dnsbl_file}.bkraw"
-		fi
-	fi
-
-	rm -f "${dnsbl_add}"*
-	rm -f "${dnsbl_remove}"*
-
-	: > "${dnsbl_add}"
-	: > "${dnsbl_add_zone}"
-	: > "${dnsbl_add_data}"
-	: > "${dnsbl_remove}"
-	: > "${dnsbl_remove_zone}"
-	: > "${dnsbl_remove_data}"
-
-	if [ -s "${dnsbl_file}.conf" ] && [ -s "${dnsbl_file}.raw" ]; then
-		# Collect all changes to DNSBL (add/remove)
-		printf "."
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${dnsbl_file}.conf" "${dnsbl_file}.raw" > "${dnsbl_add}"
-		printf "."
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${dnsbl_file}.raw" "${dnsbl_file}.conf" > "${dnsbl_remove}"
-		printf "."
-	elif [ -s "${dnsbl_file}.raw" ]; then
-		printf "."
-		cp "${dnsbl_file}.raw" "${dnsbl_add}"
-
-		# Add a file marker to instruct Unbound to do a reload
-		: > "${dnsbl_file}.reload"
-	else
-		printf "."
-		# Add a file marker to instruct Unbound to do a reload
-		: > "${dnsbl_file}.reload"
-	fi
-
-	# Example Unbound sinkhole lines:
-	# local-zone: "example.com" redirect local-data: "example.com 60 IN A 10.10.10.1"
-	# local-data: "example.com 60 IN A 10.10.10.1"
-	# local-zone: "com" "transparent"
-	# local-zone: "ru" "static"
-
-	# Read 'Remove' file and format local-zone/local-data removal files
-	if [ -s "${dnsbl_remove}" ]; then
-
-		# Collect any local-zone removals
-		grep "local-zone:" "${dnsbl_remove}" | cut -d '"' -f2 > "${dnsbl_remove_zone}"
-
-		# Collect any local-data removals
-		grep "^local-data:" "${dnsbl_remove}" | cut -d ' ' -f2 | tr -d '"' > "${dnsbl_remove_data}"
-	fi
-
-	# Read 'Add' file and format local-zone/local-data addition files
-	if [ -s "${dnsbl_add}" ]; then
-
-		# Collect local-zone additions
-		grep '"transparent"\|\"static\"' "${dnsbl_add}" | cut -d '"' -f2,4 | tr '"', ' ' > "${dnsbl_add_zone}"
-		grep "^local-zone:" "${dnsbl_add}" | cut -d ' ' -f2-3 | tr -d '"' >> "${dnsbl_add_zone}"
-
-		# Collect local-data additions
-		grep -v '"transparent"\|\"static\"' "${dnsbl_add}" | grep "^local-zone:" | cut -d ' ' -f5-9 | tr -d '"' >> "${dnsbl_add_data}"
-		grep "^local-data:" "${dnsbl_add}" | awk '{gsub (/" local/,"\nlocal")}1' | cut -d ' ' -f2-6 | tr -d '"' >> "${dnsbl_add_data}"
-
-		# Create 'transparent' TLD zone for any local-data
-		if [ -s "${dnsbl_add_data}" ]; then
-			cut -d ' ' -f1 "${dnsbl_add_data}" | rev | cut -d '.' -f1 | rev | sed 's/$/ transparent/' >> "${dnsbl_add_zone}"
-		fi
-	fi
-
-	if [ -e "${dnsbl_file}.raw" ]; then
-		mv -f "${dnsbl_file}.raw" "${dnsbl_file}.conf"
-	fi
-}
 
 
 # Function to convert Domains/ASs to its respective IP addresses
@@ -1314,14 +1122,8 @@ case "${1}" in
 	dnsbl_scrub)
 		dnsbl_scrub
 		;;
-	domaintld)
-		domaintld
-		;;
 	domaintldpy)
 		domaintldpy
-		;;
-	dnsbl_livesync)
-		dnsbl_livesync
 		;;
 	cidr_aggregate)
 		agg_folder=true
