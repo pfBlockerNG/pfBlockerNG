@@ -54,17 +54,7 @@ $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default
 $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
 $pconfig['pfb_dnsbl_sync']	= $pfb['dconfig']['pfb_dnsbl_sync']			?: '';
 
-$pconfig['dnsbl_mode']		= $pfb['dconfig']['dnsbl_mode']				?: '';
-if (isset($pfb['dconfig']['pfb_python'])) {
-	if ($pfb['dconfig']['pfb_python'] == 'on') {
-		$pconfig['dnsbl_mode'] = 'dnsbl_python';
-	} else {
-		$pconfig['dnsbl_mode'] = 'dnsbl_unbound';
-	}
-}
-
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
-$pconfig['pfb_py_block']	= isset($pfb['dconfig']['pfb_py_block'])		? $pfb['dconfig']['pfb_py_block'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
 $pconfig['pfb_idn']		= $pfb['dconfig']['pfb_idn']				?: '';
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
@@ -111,40 +101,27 @@ $pconfig['alexa_inclusion']	= explode(',', $pfb['dconfig']['alexa_inclusion'])	?
 
 $pconfig['tldexclusion']	= base64_decode($pfb['dconfig']['tldexclusion'])	?: '';
 $pconfig['tldblacklist']	= base64_decode($pfb['dconfig']['tldblacklist'])	?: '';
-$pconfig['tldwhitelist']	= base64_decode($pfb['dconfig']['tldwhitelist'])	?: '';
 
 // Select field options
 
-$options_dnsbl_mode		= [ 'dnsbl_unbound' => 'Unbound mode', 'dnsbl_python' => 'Unbound python mode' ];
 $options_dnsbl_interface	= pfb_build_if_list(FALSE, FALSE);
 $options_dnsbl_interface_all	= array_merge(array('lo0' => 'Localhost'), $options_dnsbl_interface);
 $options_dnsbl_interface_cnt	= count($options_dnsbl_interface) ?: '1';
 
 $options_dnsbl_allow_int	= $options_dnsbl_interface;
 
-if ($pfb['dnsbl_py_blacklist']) {
-	$options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
-				. 'Enabling this option will overide the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
-				. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
-				. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-				. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-				. 'Blocked domains will be reported to the Alert/Python Block Table.<br /><br />'
-				. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
+$options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
+			. 'Enabling this option will overide the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
+			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
+			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
+			. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
+			. 'Blocked domains will be reported to the Alert/Python Block Table.<br /><br />'
+			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
 
-	$options_global_log	= [	''		=> 'No Global mode',
-					'disabled_log'	=> 'Null Block (logging)',
-					'enabled'	=> 'DNSBL WebServer/VIP',
-					'disabled'	=> 'Null Block (no logging)'];
-} else {
-	$options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
-					. '&#8226 When \'Enabled\', Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-					. '&#8226 When \'Disabled\', <strong>\'0.0.0.0\'</strong> will be used instead of the DNSBL VIP.<br />'
-					. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
-
-	$options_global_log	= [	''		=> 'No Global mode',
-					'enabled'	=> 'DNSBL WebServer/VIP',
-					'disabled'	=> 'Null Block (no logging)'];
-}
+$options_global_log	= [	''		=> 'No Global mode',
+				'disabled_log'	=> 'Null Block (logging)',
+				'enabled'	=> 'DNSBL WebServer/VIP',
+				'disabled'	=> 'Null Block (no logging)'];
 
 $options_dnsbl_webpage = array();
 $indexdir = '/usr/local/www/pfblockerng/www';
@@ -353,8 +330,7 @@ if ($_POST) {
 		}
 
 		// Validate Select field options
-		$select_options = array(	'dnsbl_mode'		=> 'dnsbl_unbound',
-						'dnsbl_interface'	=> 'lo0',
+		$select_options = array(						'dnsbl_interface'	=> 'lo0',
 						'global_log'		=> '',
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'alexa_type'		=> 'tranco',
@@ -441,8 +417,7 @@ if ($_POST) {
 				'pfb_gp_bypass_list'	=> 'ip',
 				'suppression'		=> 'domain',
 				'tldexclusion'		=> 'hostname',
-				'tldblacklist'		=> 'tld',
-				'tldwhitelist'		=> 'tldwhite' ) as $custom_type => $custom_format) {
+				'tldblacklist'		=> 'tld' ) as $custom_type => $custom_format) {
 
 				if (!empty($_POST[$custom_type])) {
 					$customlist = explode("\r\n", $_POST[$custom_type]);
@@ -476,17 +451,6 @@ if ($_POST) {
 									}
 									break;
 								case 'tld':
-									if (empty(pfb_filter($value[0], PFB_FILTER_TLD, 'dnsbl'))) {
-										$input_errors[] = "Customlist {$custom_type}: Invalid TLD entry: [ " . htmlspecialchars($line) . " ]";
-									}
-									break;
-								case 'tldwhite':
-									if (strpos($value[0], '|') !== FALSE) {
-										list($value[0], $host) = array_map('trim', explode('|', $value[0]));
-										if (empty(pfb_filter($host, PFB_FILTER_IP, 'dnsbl'))) {
-											$input_errors[] = "Customlist {$custom_type}: Invalid TLD IP entry: [ " . htmlspecialchars($line) . " ]"; 
-										}
-									}
 									if (empty(pfb_filter($value[0], PFB_FILTER_TLD, 'dnsbl'))) {
 										$input_errors[] = "Customlist {$custom_type}: Invalid TLD entry: [ " . htmlspecialchars($line) . " ]";
 									}
@@ -591,7 +555,6 @@ if ($_POST) {
 			$pfb['dconfig']['suppression']		= base64_encode($_POST['suppression'])					?: '';
 			$pfb['dconfig']['tldexclusion']		= base64_encode($_POST['tldexclusion'])					?: '';
 			$pfb['dconfig']['tldblacklist']		= base64_encode($_POST['tldblacklist'])					?: '';
-			$pfb['dconfig']['tldwhitelist']		= base64_encode($_POST['tldwhitelist'])					?: '';
 
 			// Reset TOP1M Database/Whitelist on user changes
 			if ($pfb['dconfig']['alexa_type'] != $_POST['alexa_type']) {
@@ -607,19 +570,6 @@ if ($_POST) {
 			}
 			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
 
-			// Remove DNSBL blocking files, when user changes blocking mode
-			if (($pfb['dconfig']['pfb_py_block'] != $_POST['pfb_py_block']) ||
-			    ($pfb['dconfig']['dnsbl_mode'] !== $_POST['dnsbl_mode'] && $_POST['pfb_py_block'] == 'on')) {
-
-				unlink_if_exists("{$pfb['dnsbl_file']}.conf");
-				unlink_if_exists($pfb['unbound_py_data']);
-				unlink_if_exists($pfb['unbound_py_zone']);
-				unlink_if_exists($pfb['unbound_py_wh']);
-				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
-				$savemsg = "A Force Reload DNSBL must be run to complete the blocking mode changes! The previous DNSBL database has been deleted!";
-			}
-			$pfb['dconfig']['pfb_py_block']		= pfb_filter($_POST['pfb_py_block'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['dnsbl_mode']		= $_POST['dnsbl_mode']							?: 'dnsbl_unbound';
 
 			$pfb['dconfig']['pfb_dnsvip4']		= $_POST['pfb_dnsvip4']							?: '';
 			$pfb['dconfig']['dnsbl_interface']	= $_POST['dnsbl_interface']						?: 'lo0';
@@ -721,15 +671,11 @@ $section->addInput(new Form_Checkbox(
 
 $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all Sub-Domains should be wildcard blocked for each listed Domain.<br />
 		<span class="text-danger">Click infoblock</span> before enabling this feature!&emsp;
-		<div id="dnsbl_unbound_tld_info" class="infoblock">
+		<div id="dnsbl_tld_info" class="infoblock">
 
-		<span class="dnsbl_unbound_tld"><strong>This Feature is not recommended for Low-Perfomance/Low-Memory installations!</strong><br /></span>
 		<strong>Definition: TLD</strong> -
 		&emsp;represents the last segment of a domain name. IE: example.com (TLD = com), example.uk.com (TLD = uk.com)<br /><br />
 
-		<span class="dnsbl_unbound_tld">The \'Unbound Resolver Reloads\' can take several seconds or more to complete and may temporarily interrupt
-		DNS Resolution until the Resolver has been fully Reloaded with the updated Domain changes.
-		Consider updating the DNSBL Feeds <strong>\'Once per Day\'</strong>, if network issues arise.<br /><br /></span>
 
 		When enabled and after all downloads for DNSBL Feeds have completed; TLD will process the Domains.<br />
 		TLD uses a predetermined list of TLDs, to determine if the listed Domains should be wildcard blocked (Block all sub-Domains).<br />
@@ -745,42 +691,10 @@ $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all 
 		&emsp;&emsp;&emsp;&emsp;Either add the domain to the TLD Exclusion, or wildcard Whitelist the whole domain.<br /><br />
 
 		<strong>TLD Blacklist</strong>, can be used to block whole TLDs. &emsp;IE: <strong>xyz</strong><br />
-		<span class="dnsbl_unbound_tld"><strong>TLD Whitelist</strong> is <strong><u>only</u></strong> used in conjunction with
-		<strong> TLD Blacklist</strong> and is used to allow access to a Domain that is being blocked by a TLD Blacklist.<br /><br /></span>
 
 		When Enabling/Disabling this option, a <strong>Force Reload - DNSBL</strong> is required.<br /><br />
 
-		<span class="dnsbl_unbound_tld">Once the TLD Domain limit below is exceeded, the balance of the Domains will be listed as-is.
-		IE: Blocking only the listed Domain (Not Sub-Domains)<br /><strong>TLD Domain Limit Restrictions:</strong><br />
-		<ul>
-			<li>< 1.0GB RAM - Max 100k Domains</li>
-			<li>< 1.5GB RAM - Max 150k Domains</li>
-			<li>< 2.0GB RAM - Max 200k Domains</li>
-			<li>< 2.5GB RAM - Max 250k Domains</li>
-			<li>< 3.0GB RAM - Max 400k Domains</li>
-			<li>< 4.0GB RAM - Max 600k Domains</li>
-			<li>< 5.0GB RAM - Max 1.0M Domains</li>
-			<li>< 6.0GB RAM - Max 1.5M Domains</li>
-			<li>< 7.0GB RAM - Max 2.5M Domains</li>
-			<li>> 7.0GB RAM - > 2.5M Domains</li>
-		</ul></span>
 	</div>';
-
-$section->addInput(new Form_Select(
-	'dnsbl_mode',
-	gettext('DNSBL Mode'),
-	$pconfig['dnsbl_mode'],
-	$options_dnsbl_mode
-))->setHelp('Select the DNSBL mode.&emsp;'
-		. '<div class="infoblock">'
-		. '<strong>Unbound Mode</strong>:<br />'
-		. '&emsp;&emsp;&emsp;&emsp;This mode will utilize Unbound local-zone/local-data entries for DNSBL (requires more memory).<br />'
-		. '<strong>Unbound Python Mode</strong>:<br />'
-		. '&emsp;&emsp;&emsp;&emsp;This mode is only available for pfSense version 2.4.5 and above.<br />'
-		. '&emsp;&emsp;&emsp;&emsp;This mode will utilize the python integration of Unbound for DNSBL.<br />'
-		. '&emsp;&emsp;&emsp;&emsp;This mode will allow logging of DNS Replies, and more advanced DNSBL Blocking features.<br />'
-		. '&emsp;&emsp;&emsp;&emsp;This mode requires substantially less memory </div>'
-);
 
 $section->addInput(new Form_Checkbox(
 	'pfb_tld',
@@ -829,21 +743,6 @@ $section->addInput(new Form_Checkbox(
 	$pconfig['pfb_py_reply'] === 'on' ? true:false,
 	'on'
 ))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_py_block',
-	gettext('DNSBL Blocking') . '(py)',
-	'Enable',
-	$pconfig['pfb_py_block'] === 'on' ? true:false,
-	'on'
-))->setHelp('Enable the DNSBL python blocking mode.<div class="infoblock">'
-	. '<strong>DNSBL python blocking order</strong>:<br /><br />'
-	. '1) DNSBL python blocking mode option (Block any domains listed in the Feeds via DNSBL/TLD/DNSBL_TLD)<br />'
-	. '2) TLD Allow option (Only allow these TLDs to the next validation steps)<br />'
-	. '3) IDN Blocking option (Block any IDN domain or IDNs in punycode (ascii) format)<br />'
-	. '4) Regex Blocking option (User defined regular expression rules)<br /><br />'
-	. 'Blocked events (#2-4) will be <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocked</strong> and reported in the python log</div>'
-);
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_sync',
@@ -2841,16 +2740,13 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-$section = new Form_Section('TLD Blacklist/Whitelist', 'TLD_BW_list', COLLAPSIBLE|SEC_CLOSED);
+$section = new Form_Section('TLD Blacklist', 'TLD_BW_list', COLLAPSIBLE|SEC_CLOSED);
 
 $section->addInput(new Form_StaticText(
 	'Note:',
 	'The TLD Blacklist is used to block a whole TLD (IE: pw).<br /><br />'
 	. '<span class="text-danger">Note:</span><br />'
-	. 'DO NOT add domains to the TLD Whitelist, Instead, add them to any DNSBL Group Customlist or to a Source URL (Feed) that you manage.<br /><br />'
-	. 'The TLD Whitelist is used to allow access to the specific domain/sub-domains that is blocked by a TLD Blacklist; while blocking all others.<br />'
 	. 'TLD Blacklist/Whitelist: A <strong>static</strong> zone entry is used in the DNS Resolver for this feature, therefore no Alerts will be generated.<br />'
-	. '<br />When the \'python Blocking mode\' feature is enabled. The TLD Whitelist is not utilized and instead uses the DNSBL Whitelist.'
 ));
 
 $tld_blacklist_text = 'Enter TLD(s) to be blacklisted.&emsp;
@@ -2872,39 +2768,6 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'background:#fafafa; width: 100%')
   ->setHelp($tld_blacklist_text);
-
-$tld_whitelist_text = 'Enter <strong>each specific</strong> Domain and/or Sub-Domains to be Whitelisted.
-			(Used in conjunction with <strong>TLD Blacklist only</strong>)&emsp;
-			<div class="infoblock">
-				Enter one &emsp;<strong>Domain</strong>&emsp;per line<br />Examples:<br />
-				<ul>
-					<li>example.com</li>
-					<li>example.com|x.x.x.x&emsp;&emsp;(Replace x.x.x.x with associated Domain/Sub-Domain IP Address.</li>
-				</ul>
-				The First option above will collect the IP Address on each Cron run,
-				while the second option will define a Static IP Address.<br /><br />
-
-				You must Whitelist every Domain or Sub-Domain individually.<br />
-				No Regex Entries and no leading/trailing \'dot\' allowed!<br />
-				You may use "<strong>#</strong>" after any Domain/Sub-Domain to add comments. IE: (example.com|x.x.x.x # TLD Whitelist)<br />
-				This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-			</div>';
-
-if ($pfb['dnsbl_py_blacklist']) {
-	$tld_whitelist_text = "<span class=\"text-danger\">TLD Whitelist is not utilized for Unbound python mode! Use DNSBL Whitelist instead.</span><br /><br />{$tld_whitelist_text}";
-}
-
-$section->addInput(new Form_Textarea(
-	'tldwhitelist',
-	'TLD Whitelist',
-	$pconfig['tldwhitelist']
-))->removeClass('form-control')
-  ->addClass('row-fluid col-sm-12')
-  ->setAttribute('columns', '90')
-  ->setAttribute('rows', '15')
-  ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
-  ->setHelp($tld_whitelist_text);
 
 $form->add($section);
 
@@ -3101,66 +2964,23 @@ function enable_ports() {
 }
 
 function enable_python() {
-
-	var python = true;
-	if ($('#dnsbl_mode').val() == 'dnsbl_unbound') {
-		var python = false;
-	};
-
-	if (python && $('#pfb_py_block').prop('checked')) {
-		hideCheckbox('pfb_dnsbl_sync', true);
-	} else {
-		hideCheckbox('pfb_dnsbl_sync', false);
-	}
-
-	hideCheckbox('pfb_control', !python);
-	hideCheckbox('pfb_py_reply', !python);
-	hideCheckbox('pfb_py_block', !python);
-	hideCheckbox('pfb_hsts', !python);
-	hideCheckbox('pfb_idn', !python);
-	hideCheckbox('pfb_regex', !python);
-	hideCheckbox('pfb_noaaaa', !python);
-	hideCheckbox('pfb_cname', !python);
-	hideCheckbox('pfb_gp', !python);
-	hideInput('pfb_regex_list', !python);
-	hideInput('pfb_noaaaa_list', !python);
-	hideInput('pfb_gp_bypass_list', !python);
-	hideCheckbox('pfb_pytld', !python);
-	hideCheckbox('pfb_pytld_sort', !python);
-	hideMultiClass('pfb_python', !python);
-	hideCheckbox('pfb_py_nolog', !python);
-
-	if (!python) {
-		$('.dnsbl_unbound_tld').show();
-		$('#tldwhitelist').attr('readonly', false).css('background-color', '#FAFAFA');
-	} else {
-		$('.dnsbl_unbound_tld').hide();
-		$('#tldwhitelist').attr('readonly', true).css('background-color', '#DEDEDE');
-	}
-
-	if ($('#dnsbl_mode').val() == 'dnsbl_python' && $('#pfb_py_block').prop('checked') == false) {
-		$('.dnsbl_unbound_tld').show();
-	}
+	hideCheckbox('pfb_dnsbl_sync', true);
 }
 
 function enable_python_pytld() {
-	if ($('#dnsbl_mode').val() == 'dnsbl_python') {
-		if ($('#pfb_pytld').prop('checked')) {
-			hideCheckbox('pfb_pytld_sort', false);
-			hideMultiClass('pfb_python', false);
-			$('#dnsbl_python_tld_allow_text').show();
-		} else {
-			hideCheckbox('pfb_pytld_sort', true);
-			hideMultiClass('pfb_python', true);
-			$('#dnsbl_python_tld_allow_text').hide();
-		}
+	if ($('#pfb_pytld').prop('checked')) {
+		hideCheckbox('pfb_pytld_sort', false);
+		hideMultiClass('pfb_python', false);
+		$('#dnsbl_python_tld_allow_text').show();
 	} else {
+		hideCheckbox('pfb_pytld_sort', true);
 		hideMultiClass('pfb_python', true);
+		$('#dnsbl_python_tld_allow_text').hide();
 	}
 }
 
 function enable_python_regex() {
-	if ($('#dnsbl_mode').val() == 'dnsbl_python' && $('#pfb_regex').prop('checked')) {
+	if ($('#pfb_regex').prop('checked')) {
 		$('#Python_regex_list').show();
 	} else {
 		$('#Python_regex_list').hide();
@@ -3168,7 +2988,7 @@ function enable_python_regex() {
 }
 
 function enable_python_noaaaa() {
-	if ($('#dnsbl_mode').val() == 'dnsbl_python' && $('#pfb_noaaaa').prop('checked')) {
+	if ($('#pfb_noaaaa').prop('checked')) {
 		$('#Python_noaaaa_list').show();
 	} else {
 		$('#Python_noaaaa_list').hide();
@@ -3176,7 +2996,7 @@ function enable_python_noaaaa() {
 }
 
 function enable_python_gp() {
-	if ($('#dnsbl_mode').val() == 'dnsbl_python' && $('#pfb_gp').prop('checked')) {
+	if ($('#pfb_gp').prop('checked')) {
 		$('#Python_Group_Policy').show();
 	} else {
 		$('#Python_Group_Policy').hide();
@@ -3206,19 +3026,7 @@ events.push(function(){
 	});
 	enable_ports();
 
-	$('#dnsbl_mode').click(function() {
-		enable_python();
-		enable_python_pytld();
-		enable_python_regex();
-		enable_python_noaaaa();
-		enable_python_gp();
-	});
 	enable_python();
-
-	$('#pfb_py_block').click(function() {
-		enable_python();
-		enable_python_pytld();
-	});
 
 	$('#pfb_pytld').click(function() {
 		enable_python_pytld();
