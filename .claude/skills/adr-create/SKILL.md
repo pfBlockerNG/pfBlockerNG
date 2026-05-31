@@ -68,28 +68,58 @@ claims and cite real symbols + `file:line`:
 2. **Problem.** What hurts, and how would you *measure* it? If the justification
    is performance or memory, there must be a **baseline** — without it you
    cannot know the change helps (ADR-01's failure mode).
-3. **Decision / approach.** The proposed change. A per-area decision table
-   (ADR-03 §2) is the target shape when the change spans components.
-4. **Scrutiny — your value-add. Be skeptical out loud.** Flag: hidden coupling,
+3. **Prior art, tooling & libraries.** Before designing anything, check what
+   already solves this. **In-repo:** is there an existing knob/helper/flag you'd
+   otherwise reinvent? (ADR-03 found the `log_max_*` line-cap already existed — so
+   no new knob was added.) **Out-of-repo:** how do the platform and sibling
+   packages handle the same need — e.g. read `../FreeBSD-ports/` for how other
+   pfSense packages do internal sqlite queries/connections and file logging.
+   Prefer **proven, well-tested tools** (stdlib `logging`, sqlite
+   WAL/`busy_timeout`) over bespoke code, and respect the hard constraints
+   (stdlib-only inside Unbound's loader; POSIX sh). Settle the tooling/library
+   choice here, with its justification.
+4. **Decision / approach.** The proposed change. A per-area decision table
+   (ADR-03 §2) is the target shape when the change spans components. Note any
+   **opportunistic improvements** you might fold in, and decide explicitly whether
+   each is in scope or belongs under "Explicitly kept / out of scope."
+5. **Scrutiny — your value-add. Be skeptical out loud.** Flag: hidden coupling,
    concurrent access (e.g. PHP writing the same sqlite files), failure &
    recovery scope, platform constraints (stdlib-only inside Unbound's loader; no
    live Unbound in CI; POSIX-sh shell), and **simpler alternatives**. Ask
    whether the premise even holds and how you'd **falsify** it cheaply *before*
    building phases. If it looks unjustified, say so plainly and propose the
    experiment that would settle it.
-5. **The contract.** Enumerate the semantics that MUST be preserved, each one
+6. **The contract.** Enumerate the semantics that MUST be preserved, each one
    pinned by a test *before* any swap. These are the things a silent regression
    would break.
-6. **Validation strategy.** Concrete and falsifiable: golden/property tests with
+7. **Validation strategy.** Concrete and falsifiable: golden/property tests with
    the current implementation as the oracle; a benchmark *with methodology and a
    kill-threshold* if the claim is perf/memory; and a **manual smoke checklist**
    for whatever CI cannot cover (no live Unbound). Define the **Definition of
    Done** and, explicitly, **what evidence would cause the ADR to be REJECTED.**
-7. **Phase plan.** Ordered phases. Each is **one commit**, leaves
+8. **Preparatory de-risking & simplification (the "pre-ADR" pass).** Before the
+   core change, deliberately hunt for **behaviour-preserving** prep that makes the
+   implementation **safer, simpler, faster, or leaner** — the more axes at once,
+   the better:
+   - *Safer:* extract the stable / side-effect-free pieces the ADR will touch (or
+     whose callers it will touch) into named functions and pin them with
+     **regression tests**, so the later change cannot silently break them. (ADR-01's
+     Phases 1–3 did exactly this — and being behaviour-preserving with their own
+     tests, they were **retained even after the trie was rejected**: prep has
+     standalone value.)
+   - *Simpler:* refactors that cut steps, collapse branches, remove corner cases,
+     or lower cyclomatic complexity in the area being changed — so the ADR applies
+     to a smaller, cleaner surface.
+   - *Faster / leaner:* cheap, independent wins in the touched code (drop dead
+     code, hoist invariants, remove redundant work).
+   Each prep item must be **independently valuable and behaviour-preserving**, and
+   becomes one of the **first phases** of the plan.
+9. **Phase plan.** Ordered phases. Each is **one commit**, leaves
    `python -m pytest` green, and is behaviour-preserving where possible.
-   Front-load the **de-riskers** (extract pure functions + lay down oracle tests
-   *before* swapping data structures or I/O). Each phase becomes one
-   `NN_Name.txt` prompt.
+   **Front-load the preparatory phases from (8)** — extract pure functions + lay
+   down oracle/regression tests, and do the simplifying refactors — *before* any
+   risky swap of data structures or I/O. Each phase becomes one `NN_Name.txt`
+   prompt.
 
 Use `AskUserQuestion` only for genuine forks. Periodically reflect the evolving
 ADR back to the user in prose so they can correct course.
@@ -116,7 +146,9 @@ section set; the canonical skeleton is:
 ## 4. Requirements (acceptance)
 ## 5. Constraints (from CLAUDE.md)
 ## 6. Action plan    (### Phase N — <title> / Prompt: NN_Name.txt / bullets +
-                      that phase's own tests)
+                      that phase's own tests; the EARLY phases are the
+                      behaviour-preserving preparatory de-risking/simplification
+                      pass, before the core change)
 ## 7. Definition of done   (incl. the manual smoke checklist — owner: maintainer —
                             and the explicit reject criteria)
 ```
