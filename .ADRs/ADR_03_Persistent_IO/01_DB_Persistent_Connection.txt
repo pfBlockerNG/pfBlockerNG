@@ -1,0 +1,112 @@
+================================================================================
+PHASE 1 PROMPT — DB subsystem: persistent connection + WAL + batching + reconnect
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_03_Persistent_IO/ADR.md   (read it first — esp. §2 Decision, the
+     "contract" sub-section, and §1 constraints 1–3 & 5)
+================================================================================
+
+ROLE
+You are on the `adr/03` branch (off `devel`) performing Phase 1 of ADR-03. Replace
+the per-call sqlite open/close in pfb_unbound.py with ONE persistent connection per
+DB file, owned by a dedicated DB-worker thread, and make the PHP side coexist with
+it under WAL. This phase is BEHAVIOUR-PRESERVING for observable DB state: the same
+rows/values must result. Work inline on `adr/03`, one commit, push directly (no
+worktree isolation — project workflow).
+
+WHY THIS PHASE EXISTS
+`write_sqlite()` opens a new connection (`CREATE TABLE` every time) and closes it
+per call — wasteful syscalls hidden behind the async worker. Unbound shares one
+Python interpreter (GIL) and the worker is created once, so a connection held by a
+worker thread is a single writer → a persistent connection is feasible. BUT the PHP
+side WRITES these same files live (`pfBlockerNG_clearsqlite` resets counters from
+the UI with no Unbound restart), so a long-lived Python writer only coexists safely
+under WAL + busy_timeout on BOTH sides. Counters must stay RELATIVE so a concurrent
+reset is never clobbered.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff. Start from the ADR.
+- .ADRs/ADR_03_Persistent_IO/ADR.md
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    * write_sqlite()                 ~L845  (the 3 DBs: db1=resolver/totalqueries+=1,
+                                      db2=dnsbl/counter+=1 WHERE groupname,
+                                      db3=dnsblcache/INSERT row; note the per-call
+                                      connect(timeout=100s), CREATE TABLE, close,
+                                      and the cache-file-remove-on-error at ~L927).
+    * pfb_async() / pfb_async_worker() ~L158–191, PFB_QUEUE_MAXSIZE ~L155, worker
+                                      creation in init_standard ~L680.
+    * deinit()                        ~L1347 (drains queue, 5s join).
+    * the sqlite3_resolver_con flag   ~L309/639/964/1083 (fold its meaning into the
+                                      new connection state; don't add a parallel flag).
+    * call sites: pfb_async(write_sqlite, ...) — find them (grep write_sqlite).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    * pfb_open_sqlite() ~L5807, pfb_close_sqlite(), pfBlockerNG_clearsqlite() ~L6743
+      (UPDATE resolver/dnsbl SET ...=0), and the `PRAGMA journal_mode = delete` ~L6297.
+- tests/conftest.py, tests/test_pfb_unbound.py  (sqlite3 is real stdlib — golden
+  tests can use real temp DB files via tmp_path).
+- CLAUDE.md.
+
+ACTION PLAN (ordered — golden tests FIRST)
+1. GOLDEN ORACLE (no production change yet): add tests that drive the CURRENT
+   write_sqlite over a fixed op sequence (resolver increments, dnsbl group counters,
+   cache inserts incl. a repeated domain) against real temp sqlite files, then dump
+   each table (sorted) and assert exact rows/values. This is the equivalence oracle
+   the swap must keep green. Add a test where a SECOND connection performs an UPDATE
+   ...=0 (simulating PHP `clearsqlite`) between writes, asserting the reset is not
+   clobbered (relative-increment semantics).
+2. DB-WORKER THREAD: introduce a dedicated DB worker thread + bounded queue
+   (drop-on-full, like pfb_async) that owns the connections. Route write_sqlite work
+   to it (e.g. pfb_db_enqueue). Leave log_entry on the existing pfb_async worker for
+   now (Phase 2 replaces logging). Keep the idempotent "create once" guard pattern.
+3. CONNECTION MANAGER (in the DB-worker thread only): lazy-open one connection per
+   file; on (re)connect run `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=<ms>;
+   PRAGMA synchronous=NORMAL;` then `CREATE TABLE IF NOT EXISTS`. Keep open.
+4. BATCHING: accumulate counter increments as a per-key delta
+   ({ "resolver": n, dnsbl-groupname: n, ... }) and flush as RELATIVE
+   `SET ... = ... + :delta`; buffer cache rows in a FIFO list and flush via one
+   `executemany` transaction (preserve insert order). Flush on a short timer
+   (e.g. ~1s) AND on demand. NEVER write an absolute counter value.
+5. RECONNECT-ON-FAULT: wrap execute/commit; on OperationalError / "malformed" /
+   file-missing → close, reconnect, re-CREATE TABLE, RE-RUN the pending op (bounded
+   retries). Never silently drop a dequeued write. Preserve the existing final-error
+   behaviour (cache: remove file + stderr) only after retries are exhausted.
+6. deinit(): flush the DB batch + drain the DB queue + join the DB worker (bounded
+   timeout) BEFORE exit. This is the "≥ today / better" durability win.
+7. PHP coexistence (src/usr/local/pkg/pfblockerng/pfblockerng.inc): make
+   pfb_open_sqlite set `journal_mode=WAL` + `busy_timeout` for these DBs, and
+   reconcile the `PRAGMA journal_mode = delete` at ~L6297 (determine why it exists;
+   make journal_mode consistent so nothing flips the file out of WAL under the live
+   Python connection). Keep behaviour identical otherwise.
+
+CONSTRAINTS
+- Python: stdlib only; 4-space; type hints on new fns; no bare except; the DB
+  connection is used ONLY from the DB-worker thread (check_same_thread holds).
+- Counters RELATIVE only (`+= delta`). Never block the DNS path (bounded queue,
+  drop-on-full). Do NOT touch log_entry / the logging path (Phase 2). Do NOT change
+  the line-cap (pfb_log_mgmt / log_max_*).
+- PHP: tabs; PHP 8.3; pfSense fns via stubs; no die()/exit().
+
+VERIFICATION
+- `python -m pytest` → all tests green, incl. the new golden + reset-survives tests.
+- `ruff check .` / `ruff format .` clean.
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` clean (or note php absence).
+- Reason through WAL coexistence: a Python WAL writer + a PHP WAL reader/writer +
+  busy_timeout → no `database is locked`; no path forces journal_mode=delete.
+- Confirm: no absolute counter writes anywhere; cache insert order preserved.
+
+EXPECTED RESULT
+- write_sqlite no longer connects/closes per call; one persistent WAL connection per
+  file in the DB-worker thread, batched relative writes, reconnect-on-fault, flush on
+  timer + deinit. PHP reads/resets the same DBs under WAL without locking. Observable
+  table state unchanged.
+
+COMMIT (single)
+    pfb_unbound: persistent sqlite connection with WAL + batched writes (ADR-03 P1)
+Push directly to `adr/03`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_03_Persistent_IO/RESULTS/01_Results.txt` (plain .txt)
+Handoff for the NEXT phase (02_Logging_Persistent_Handles.txt). Include: the DB
+worker/queue/connection-manager API you added and where; the flush-timer interval +
+queue sizes chosen; the PRAGMA set; how reconnect-on-fault behaves; what you did
+about the PHP journal_mode=delete path; golden/pytest/ruff/php-l results; any
+deviation; and confirmation that logging is still on the OLD pfb_async worker
+(Phase 2's job to split off).
