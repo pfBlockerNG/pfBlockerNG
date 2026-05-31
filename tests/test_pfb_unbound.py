@@ -282,114 +282,117 @@ class TestLogEntry:
         assert log.exists()
 
 
-class TestWriteSqlite:
-    def test_invalid_db_returns_false(self):
-        assert pfb_unbound.write_sqlite(0, "", False) is False
+class TestDbSubsystem:
+    """Persistent sqlite subsystem (ADR-03). With no DB worker running, pfb_db_enqueue
+    falls back to synchronous execution, so these drive the same SQL the worker batches."""
 
-    def test_db1_creates_table_and_seed_row(self, tmp_path):
+    def _resolver(self, tmp_path):
         db = str(tmp_path / "resolver.sqlite")
         pfb_unbound.pfb["pfb_py_resolver"] = db
-        assert pfb_unbound.write_sqlite(1, "", False) is True
+        pfb_unbound.pfb["sqlite3_resolver_con"] = True
+        return db
 
+    def test_validate_creates_table_and_seed_row(self, tmp_path):
+        db = self._resolver(tmp_path)
+        assert pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER) is True
         import sqlite3
 
         con = sqlite3.connect(db)
         try:
-            cur = con.cursor()
-            cur.execute("SELECT totalqueries FROM resolver WHERE row = 0")
-            assert cur.fetchone()[0] == 0
+            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0
         finally:
             con.close()
 
-    def test_db1_increments_totalqueries_on_update(self, tmp_path):
+    def test_resolver_counter_accumulates(self, tmp_path):
+        self._resolver(tmp_path)
+        for _ in range(5):
+            pfb_unbound.pfb_db_enqueue(("resolver",))
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 5
+
+    def test_resolver_counting_gated_by_flag(self, tmp_path):
         db = str(tmp_path / "resolver.sqlite")
         pfb_unbound.pfb["pfb_py_resolver"] = db
-        pfb_unbound.write_sqlite(1, "", False)
-        pfb_unbound.write_sqlite(1, "", True)
-        pfb_unbound.write_sqlite(1, "", True)
+        pfb_unbound.pfb["sqlite3_resolver_con"] = False
+        pfb_unbound.pfb_db_enqueue(("resolver",))
+        # Gated off -> no connection opened, nothing written.
+        assert pfb_unbound.DB_RESOLVER not in pfb_unbound._db_conns
 
+    def test_relative_increment_survives_concurrent_reset(self, tmp_path):
+        db = self._resolver(tmp_path)
+        pfb_unbound.pfb_db_enqueue(("resolver",))
+        pfb_unbound.pfb_db_enqueue(("resolver",))
+        # Simulate a concurrent PHP pfBlockerNG_clearsqlite reset on a 2nd connection.
         import sqlite3
 
-        con = sqlite3.connect(db)
+        other = sqlite3.connect(db)
         try:
-            cur = con.cursor()
-            cur.execute("SELECT totalqueries FROM resolver WHERE row = 0")
-            assert cur.fetchone()[0] == 2
+            other.execute("UPDATE resolver SET totalqueries = 0 WHERE row = 0")
+            other.commit()
         finally:
-            con.close()
+            other.close()
+        pfb_unbound.pfb_db_enqueue(("resolver",))  # relative += 1, must not clobber the reset
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
 
-    def test_db1_idempotent_create(self, tmp_path):
-        db = str(tmp_path / "resolver.sqlite")
-        pfb_unbound.pfb["pfb_py_resolver"] = db
-        assert pfb_unbound.write_sqlite(1, "", False) is True
-        assert pfb_unbound.write_sqlite(1, "", False) is True
-
-        import sqlite3
-
-        con = sqlite3.connect(db)
-        try:
-            cur = con.cursor()
-            cur.execute("SELECT COUNT(*) FROM resolver")
-            assert cur.fetchone()[0] == 1
-        finally:
-            con.close()
-
-    def test_db2_creates_table(self, tmp_path):
+    def test_dnsbl_counter_per_group(self, tmp_path):
         db = str(tmp_path / "dnsbl.sqlite")
         pfb_unbound.pfb["pfb_py_dnsbl"] = db
-        assert pfb_unbound.write_sqlite(2, "", False) is True
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+        pfb_unbound.pfb_db_validate(pfb_unbound.DB_DNSBL)
+        con = pfb_unbound._db_conns[pfb_unbound.DB_DNSBL]
+        con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('G1', '', 0, 0)")
+        con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('G2', '', 0, 0)")
+        con.commit()
+        for _ in range(3):
+            pfb_unbound.pfb_db_enqueue(("dnsbl", "G1"))
+        pfb_unbound.pfb_db_enqueue(("dnsbl", "G2"))
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0] == 1
 
-        import sqlite3
-
-        con = sqlite3.connect(db)
-        try:
-            cur = con.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='dnsbl'")
-            assert cur.fetchone() is not None
-        finally:
-            con.close()
-
-    def test_db2_increments_counter(self, tmp_path):
-        db = str(tmp_path / "dnsbl.sqlite")
-        pfb_unbound.pfb["pfb_py_dnsbl"] = db
-        pfb_unbound.write_sqlite(2, "", False)
-
-        import sqlite3
-
-        con = sqlite3.connect(db)
-        try:
-            con.execute(
-                "INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES (?,?,?,?)", ("TestGroup", "ts", 0, 0)
-            )
-            con.commit()
-        finally:
-            con.close()
-
-        pfb_unbound.write_sqlite(2, "TestGroup", True)
-
-        con = sqlite3.connect(db)
-        try:
-            cur = con.cursor()
-            cur.execute("SELECT counter FROM dnsbl WHERE groupname = 'TestGroup'")
-            assert cur.fetchone()[0] == 1
-        finally:
-            con.close()
-
-    def test_db3_inserts_row(self, tmp_path):
+    def test_cache_inserts_preserve_order(self, tmp_path):
         db = str(tmp_path / "cache.sqlite")
         pfb_unbound.pfb["pfb_py_cache"] = db
-        row = ["DNSBL", "evil.com", "TestGroup", "evil.com", "TestFeed"]
-        assert pfb_unbound.write_sqlite(3, "", row) is True
+        for d in ["a.com", "b.com", "a.com"]:
+            pfb_unbound.pfb_db_enqueue(("cache", ("DNSBL", d, "G", d, "feed")))
+        con = pfb_unbound._db_conns[pfb_unbound.DB_CACHE]
+        rows = [r[0] for r in con.execute("SELECT domain FROM dnsblcache").fetchall()]
+        assert rows == ["a.com", "b.com", "a.com"]
 
-        import sqlite3
+    def test_reconnect_after_db_removed(self, tmp_path):
+        # pfb removes a DB file underneath us (init / write-error path); the next
+        # write must transparently reconnect, re-create the table, and not lose
+        # the subsequent op.
+        import os as _os
 
-        con = sqlite3.connect(db)
+        db = self._resolver(tmp_path)
+        pfb_unbound.pfb_db_enqueue(("resolver",))
+        pfb_unbound._db_close(pfb_unbound.DB_RESOLVER)
+        if _os.path.isfile(db):
+            _os.remove(db)
+        pfb_unbound.pfb_db_enqueue(("resolver",))  # reconnect + re-create + write
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
+
+    def test_worker_batches_and_flushes(self, tmp_path):
+        import queue as _queue
+        import threading as _threading
+
+        self._resolver(tmp_path)
+        pfb_unbound.pfb_db_queue = _queue.Queue(maxsize=100)
+        pfb_unbound.pfb["db_worker"] = True
+        th = _threading.Thread(target=pfb_unbound.pfb_db_worker, daemon=True)
+        th.start()
         try:
-            cur = con.cursor()
-            cur.execute("SELECT type, domain, groupname, final, feed FROM dnsblcache")
-            assert cur.fetchone() == ("DNSBL", "evil.com", "TestGroup", "evil.com", "TestFeed")
+            for _ in range(10):
+                pfb_unbound.pfb_db_enqueue(("resolver",))
+            pfb_unbound.pfb_db_queue.put(("stop",))
+            th.join(timeout=5)
+            assert not th.is_alive()
         finally:
-            con.close()
+            pfb_unbound.pfb["db_worker"] = False
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10
 
 
 class TestGetRepTtl:
@@ -594,7 +597,7 @@ class TestOperateDnsbl:
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
         monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
-        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
 
     def test_data_lookup_blocks_with_dnsbl_ipv4(self, monkeypatch):
         self._enable(monkeypatch)
@@ -742,7 +745,7 @@ class TestGetDetailsReplyNoaaaa:
 
     def test_reply_x_aaaa_exact_noaaaa_proceeds(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(pfb_unbound, "pfb_async", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         add_noaaaa("blocked.example.com", wildcard=False)
         qstate = self._aaaa_qstate("blocked.example.com.")
@@ -753,7 +756,7 @@ class TestGetDetailsReplyNoaaaa:
 
     def test_reply_x_aaaa_without_noaaaa_short_circuits(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(pfb_unbound, "pfb_async", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         qstate = self._aaaa_qstate("notblocked.example.com.")
         rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})

@@ -1,0 +1,69 @@
+ADR-03 Phase 1 Results — DB subsystem: persistent connection + WAL + batching
+=============================================================================
+
+Files: pfb_unbound.py, pfblockerng.inc, tests/test_pfb_unbound.py, tests/conftest.py
+
+STATE AFTER THIS PHASE
+-----------------------
+DB writes no longer open/close a connection per call. New persistent subsystem in
+pfb_unbound.py:
+- _db_conns: one persistent sqlite3 connection per file, opened with
+  check_same_thread=False and serialized by _db_lock (so the DB worker thread and
+  the synchronous fallback share them safely). On (re)connect: PRAGMA journal_mode=WAL,
+  busy_timeout=100000, synchronous=NORMAL, then CREATE TABLE IF NOT EXISTS.
+- pfb_db_worker() / pfb_db_queue (bounded 5000, drop-on-full): a dedicated DB-worker
+  thread that BATCHES — counters accumulate as per-key deltas and flush as RELATIVE
+  `... = ... + :delta` (resolver totalqueries, dnsbl counter per groupname); cache
+  rows buffer FIFO and flush via executemany. Flush on a 1.0s timer, a size
+  threshold, when idle, and on stop.
+- _db_run(db, work): reconnect-on-fault (close, reconnect = re-create tables,
+  re-run the pending op; bounded retries; clear a corrupt cache db only after
+  retries exhausted — preserves the old behaviour).
+- pfb_db_enqueue(task): enqueue to the worker, drop on full; SYNCHRONOUS fallback
+  (_db_apply) when no worker is running (init, tests, threading off).
+- pfb_db_validate(db): init-time "ensure DB/table exists" used to set the
+  sqlite3_resolver_con / sqlite3_dnsbl_con gates.
+- write_sqlite() REMOVED. Call sites rerouted:
+    init validate:  write_sqlite(1/2,"",False)            -> pfb_db_validate(1/2)
+    resolver count: pfb_async(write_sqlite,1,"",True)      -> pfb_db_enqueue(("resolver",))   (x2)
+    dnsbl count:    pfb_async(write_sqlite,2,grp,True)      -> pfb_db_enqueue(("dnsbl", grp))
+    cache insert:   write_sqlite(3,"",[...])               -> pfb_db_enqueue(("cache",(...)))
+- init_standard starts the DB worker (pfb["db_worker"]); deinit stops it (drain +
+  flush + 5s join) and closes all connections, in addition to the existing async worker.
+
+PHP (pfblockerng.inc):
+- pfb_open_sqlite now runs `PRAGMA journal_mode = WAL;` right after open (outside any
+  transaction; WAL is sticky to the file) so the persistent Python writer and the PHP
+  readers/writers (widget, alerts, pfBlockerNG_clearsqlite resets) coexist without
+  'database is locked'. busyTimeout was already set on both open paths.
+- Removed the dead `PRAGMA journal_mode = delete` from the table-create transaction
+  (journal_mode changes are ignored inside a transaction, so it was a no-op that
+  contradicted WAL). All PHP DB access goes through pfb_open_sqlite (only `new SQLite3`
+  sites are inside it), so every opener inherits WAL.
+
+VERIFICATION
+------------
+- python -m pytest -> 164 passed (was 163; net +1). New TestDbSubsystem covers:
+  validate/seed, resolver accumulation, flag-gating, relative-increment-survives a
+  concurrent reset (the no-clobber contract), dnsbl per-group, cache FIFO order,
+  reconnect-after-db-removed, and the worker batch+flush path.
+- ruff check / ruff format -> clean.
+- php -l pfblockerng.inc -> no syntax errors (php 8.5 via brew).
+
+WATCH-OUTS / NOTES FOR PHASE 2
+------------------------------
+- Logging is STILL on the OLD pfb_async worker (log_entry unchanged). Phase 2 replaces
+  it with stdlib QueueListener + WatchedFileHandler. After that, the pfb_async worker
+  will have NO users (DB moved off it in P1) -> retire it, and update deinit (which
+  currently stops both async_worker and db_worker).
+- conftest resets pfb_unbound._db_conns between tests (the :memory: DBs are
+  per-connection; a leaked persistent connection would carry state).
+- Flush interval = PFB_DB_FLUSH_INTERVAL (1.0s); queue = PFB_DB_QUEUE_MAXSIZE (5000);
+  batch threshold = PFB_DB_MAX_BATCH (2000). Tune in P3 if the perf benchmark warrants.
+- Reconnect is tested for the "file removed -> reconnect" path; deeper fault injection
+  (locks, corruption, PHP-reset interleave under a live worker) is Phase 3.
+
+GO-AHEAD FOR PHASE 2
+---------------------
+DB subsystem is independent and green. Proceed to the logging swap; the DB worker and
+its queue are separate and untouched by P2.

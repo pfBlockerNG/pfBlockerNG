@@ -97,3 +97,9 @@ def reset_pfb_globals():
     pfb_unbound.excludeAAAADB = []
     pfb_unbound.excludeSS = []
     pfb_unbound.threads = []
+
+    # Reset the persistent sqlite connection cache between tests (the :memory:
+    # DBs above are per-connection, so a leaked connection would carry state).
+    for _db in list(pfb_unbound._db_conns.keys()):
+        pfb_unbound._db_close(_db)
+    pfb_unbound._db_conns.clear()
