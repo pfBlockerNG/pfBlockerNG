@@ -2733,7 +2733,7 @@ $section->addInput(new Form_StaticText(
 	'Note:',
 	'The TLD Blacklist is used to block a whole TLD (IE: pw).<br /><br />'
 	. '<span class="text-danger">Note:</span><br />'
-	. 'TLD Blacklist/Whitelist: A <strong>static</strong> zone entry is used in the DNS Resolver for this feature, therefore no Alerts will be generated.<br />'
+	. 'TLD Blacklist: A <strong>static</strong> zone entry is used in the DNS Resolver for this feature, therefore no Alerts will be generated.<br />'
 ));
 
 $tld_blacklist_text = 'Enter TLD(s) to be blacklisted.&emsp;
