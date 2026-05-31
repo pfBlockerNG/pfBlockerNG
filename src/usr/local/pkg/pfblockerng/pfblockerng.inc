@@ -2625,9 +2625,7 @@ function tld_analysis() {
 	$pfb_found = FALSE;				// Flag to determine if TLD 'redirect' zones found
 
 	rmdir_recursive("{$pfb['dnsbl_tmpdir']}");
-	if (!$pfb['dnsbl_py_blacklist']) {
-		safe_mkdir("{$pfb['dnsbl_tmpdir']}");
-	}
+
 	unlink_if_exists("{$pfb['dnsbl_file']}.tsp");
 	unlink_if_exists("{$pfb['dnsbl_tld_txt']}.*");
 	unlink_if_exists("{$pfb['dnsbl_tld_remove']}.tsp");
@@ -2655,23 +2653,21 @@ function tld_analysis() {
 	}
 
 	// DNSBL python - create file handles for data, zone, and remove files
-	if ($pfb['dnsbl_py_blacklist']) {
-		$p_data = @fopen("{$pfb['unbound_py_data']}.raw", 'w');
-		$p_zone = @fopen("{$pfb['unbound_py_zone']}.raw", 'w');
-		$p_tsp = @fopen("{$pfb['dnsbl_tld_remove']}", 'w');
+	$p_data = @fopen("{$pfb['unbound_py_data']}.raw", 'w');
+	$p_zone = @fopen("{$pfb['unbound_py_zone']}.raw", 'w');
+	$p_tsp = @fopen("{$pfb['dnsbl_tld_remove']}", 'w');
 
-		if ((get_resource_type($p_data) != 'stream') ||
-		    (get_resource_type($p_zone) != 'stream') ||
-		    (get_resource_type($p_tsp) != 'stream')) {
+	if ((get_resource_type($p_data) != 'stream') ||
+	    (get_resource_type($p_zone) != 'stream') ||
+	    (get_resource_type($p_tsp) != 'stream')) {
 
-			pfb_logger("\nFailed to create DNSBL python data|zone|remove file handles! Exiting\n", 1);
-			foreach (array($p_data, $p_zone, $p_tsp) as $handlex) {
-				if ($handlex) {
-					@fclose($handlex);
-				}
+		pfb_logger("\nFailed to create DNSBL python data|zone|remove file handles! Exiting\n", 1);
+		foreach (array($p_data, $p_zone, $p_tsp) as $handlex) {
+			if ($handlex) {
+				@fclose($handlex);
 			}
-			return;
 		}
+		return;
 	}
 
 	// Collect TLD Blacklist(s). If configured the whole TLD will be blocked
@@ -2682,10 +2678,7 @@ function tld_analysis() {
 
 	// Collect TLD Whitelist(s). If configured, create a 'static local-zone' Resolver entry (Not required for python mode blocking)
 	$whitelist = array();
-	if (!$pfb['dnsbl_py_blacklist']) {
-		$whitelist = pfbng_text_area_decode($pfb['dnsblconfig']['tldwhitelist'], TRUE, FALSE, TRUE);
-		$tld_whitelist = array();
-	}
+
 
 	$extdns_esc = escapeshellarg("@{$pfb['extdns']}");
 
@@ -2746,102 +2739,25 @@ function tld_analysis() {
 			$tld_blacklist[$tld] = '';			// Add new TLD entry
 
 			// DNSBL python - TLD Blacklist (Set logging type to enabled '1')
-			if ($pfb['dnsbl_py_blacklist']) {
-				$tld_cnt++;
-				$pfb_found = TRUE;
-				$tld_segments = @max((array((substr_count($tld, '.') +1), $tld_segments) ?: 1));
+			$tld_cnt++;
+			$pfb_found = TRUE;
+			$tld_segments = @max((array((substr_count($tld, '.') +1), $tld_segments) ?: 1));
 
-				pfb_logger("{$tld}|", 1);
-				@fwrite($p_zone, ",{$tld},,1,DNSBL_TLD,DNSBL_TLD\n");
+			pfb_logger("{$tld}|", 1);
+			@fwrite($p_zone, ",{$tld},,1,DNSBL_TLD,DNSBL_TLD\n");
 
-				// Add TLD to remove file
-				@fwrite($p_tsp, ".{$tld},,\n");
+			// Add TLD to remove file
+			@fwrite($p_tsp, ".{$tld},,\n");
 
-				// Collect List of TLDs and save to DNSBL folder
-				$tld_list .= ",{$tld},,\n";
+			// Collect List of TLDs and save to DNSBL folder
+			$tld_list .= ",{$tld},,\n";
 
-				// Remove any 'TLD Blacklists' from the 'TLD master list'
-				if (isset($tlds[$tld])) {
-					unset($tlds[$tld]);
-				}
-				continue;
+			// Remove any 'TLD Blacklists' from the 'TLD master list'
+			if (isset($tlds[$tld])) {
+				unset($tlds[$tld]);
 			}
+			continue;
 
-			// (Unbound mode only. Cannot have duplicate zones defined
-			elseif (!empty($pfb['safesearch_tlds']) && isset($pfb['safesearch_tlds'][$tld])) {
-				pfb_logger("\n{$tld}(Removed due to SafeSearch conflict)", 1);
-				continue;
-			}
-
-			$dnsbl_file = "{$pfb['dnsbl_tmpdir']}/DNSBL_{$tld}.txt";
-			if (!file_exists($dnsbl_file)) {
-
-				$tld_cnt++;
-				$pfb_found = TRUE;
-				$tld_segments = @max((array((substr_count($tld, '.') +1), $tld_segments) ?: 1));
-
-				// If a 'TLD Whitelist' exists, use 'static local-zone'
-				if (isset($tld_whitelist[$tld])) {
-
-					pfb_logger("{$tld}(static)|", 1);
-					$dnsbl_line = "local-zone: \"{$tld}\" \"static\"\n";
-					$whitelist = $tld_whitelist[$tld];
-
-					foreach ($whitelist as $list) {
-						$ip_type = is_ipaddr($list[1]);
-						$ip_esc = escapeshellarg($list[0]);
-
-						switch ($ip_type) {
-							case 4:
-								$dnsbl_line .= "local-data: \"{$list[0]} A {$list[1]}\"\n";
-								$tld_list .= "{$tld} | {$list[0]} A {$list[1]}\n";
-								if (!empty($pfb['dnsbl_vip6'])) {
-									$r = exec("/usr/bin/drill {$extdns_esc} AAAA {$ip_esc} | grep -v '^;\|^\$' | head -1 | cut -f5 2>&1");
-									if (is_ipaddrv6($r)) {
-										$dnsbl_line .= "local-data: \"{$list[0]} AAAA {$r}\"\n";
-										$tld_list .= "{$list[0]} AAAA {$r}\"\n";
-									}
-								}
-								break;
-							case 6:
-								$r = exec("/usr/bin/drill {$extdns_esc} A {$ip_esc} | grep -v '^;\|^\$' | head -1 | cut -f5 2>&1");
-								if (is_ipaddrv4($r)) {
-									$dnsbl_line .= "local-data: \"{$list[0]} A {$r}\"\n";
-									$tld_list .= "{$tld} | {$list[0]} A {$r}\"\n";
-								}
-								$dnsbl_line .= "local-data: \"{$list[0]} AAAA {$list[1]}\"\n";
-								$tld_list .= "{$tld} | {$list[0]} AAAA {$list[1]}\"\n";
-								break;
-							default:
-								break;
-						}
-					}
-				}
-
-				// Create 'redirect' zone for whole TLD
-				else {
-					pfb_logger("{$tld}|", 1);
-
-					$ipv6_dnsbl = '';
-					if (!empty($pfb['dnsbl_vip6'])) {
-						$ipv6_dnsbl = " local-data: \"{$tld} 60 IN AAAA {$pfb['dnsbl_vip6']}\"";
-					}
-					$dnsbl_line = "local-zone: \"{$tld}\" redirect local-data: \"{$tld} 60 IN A {$pfb['dnsbl_vip4']}\"{$ipv6_dnsbl}\n";
-
-					// Collect List of TLDs and save to DNSBL folder
-					$tld_list .= "{$tld}\n";
-				}
-
-				@file_put_contents($dnsbl_file, $dnsbl_line, LOCK_EX);
-
-				// Add TLD to remove file (To be removed from 'transparent' zone)
-				@file_put_contents("{$pfb['dnsbl_tld_remove']}.tsp", ".{$tld} 60\n", FILE_APPEND | LOCK_EX);
-
-				// Remove any 'TLD Blacklists' from the 'TLD master list'
-				if (isset($tlds[$tld])) {
-					unset($tlds[$tld]);
-				}
-			}
 		}
 
 		// Save a list of TLDs in DNSBL folder (DNSBL total line count verification)
@@ -3061,13 +2977,11 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 
 	$final = array();
 	$type = '';
-	if ($mode == 'enabled' && $pfb['dnsbl_py_blacklist']) {
+	if ($mode == 'enabled') {
 		$type = ' (DNSBL python)';
 	}
 
-	if (!$pfb['dnsbl_py_blacklist'] && file_exists("{$pfb['dnsbl_file']}.raw")) {
-		@rename("{$pfb['dnsbl_file']}.raw", "{$pfb['dnsbl_file']}.conf");
-	}
+
 
 	$cache_dumpfile = tempnam('/var/tmp/', 'unbound_cache_');
 	if ($mode == 'enabled' && is_process_running('unbound') && !$pfb['dnsbl_python_unmount'] && !$pfbpython) {
@@ -3088,31 +3002,9 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 
 		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.conf.error");
 		if ($mode == 'enabled') {
-			if (!$pfb['dnsbl_py_blacklist']) {
-				$log = "\nDNSBL {$mode} FAIL - restoring Unbound conf *** Fix error(s) and a Force Reload required! ***\n";
-
-				// Try to restore previous DNSBL database
-				if (file_exists("{$pfb['dnsbl_file']}.bk")) {
-					@rename("{$pfb['dnsbl_file']}.bk", "{$pfb['dnsbl_file']}.conf");
-				}
-
-				// Wipe DNSBL database
-				else {
-					$log .= ' Restore previous database Failed!';
-					unlink_if_exists("{$pfb['dnsbl_file']}.conf");
-					touch("{$pfb['dnsbl_file']}.conf");
-
-					// Restore previous unbound.conf
-					if (file_exists("{$pfb['dnsbldir']}/unbound.bk")) {
-						@rename("{$pfb['dnsbldir']}/unbound.bk", "{$pfb['dnsbldir']}/unbound.conf");
-					}
-				}
-			}
-			else {
-				$log = "\nDNSBL {$mode} FAIL  *** Fix error(s) and a Force Reload required! ***\n";
-				if (file_exists("{$pfb['dnsbldir']}/unbound.bk")) {
-					@rename("{$pfb['dnsbldir']}/unbound.bk", "{$pfb['dnsbldir']}/unbound.conf");
-				}
+			$log = "\nDNSBL {$mode} FAIL  *** Fix error(s) and a Force Reload required! ***\n";
+			if (file_exists("{$pfb['dnsbldir']}/unbound.bk")) {
+				@rename("{$pfb['dnsbldir']}/unbound.bk", "{$pfb['dnsbldir']}/unbound.conf");
 			}
 			pfb_logger("{$log}", 2);
 		}
@@ -3244,55 +3136,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	if (is_service_running('unbound')) {
 
 		// 'Live sync' new DNSBL updates utilizing unbound-control
-		if (!$pfb['dnsbl_py_blacklist'] && $pfb['dnsbl_sync'] && !$pfbpython &&
-		    file_exists("{$pfb['dnsbl_file']}.conf") && filesize("{$pfb['dnsbl_file']}.conf") > 0) {
-
-			$sync_fail = FALSE;
-
-			pfb_logger("\nResolver Live Sync analysis", 1);
-			exec("{$pfb['script']} dnsbl_livesync >> {$pfb['log']} 2>&1");
-			pfb_logger(" completed [ NOW ]", 1);
-
-			$ucsync = array(array(	'dnsbl_remove_zone',	'local_zones_remove',	'Remove local-zone(s)' ),
-					array(	'dnsbl_remove_data',	'local_datas_remove',	'Remove local-data(s)' ),
-					array(	'dnsbl_add_zone',	'local_zones',		'Add local-zone(s)' ),
-					array(	'dnsbl_add_data',	'local_datas',		'Add local-data(s)' ));
-
-			// Disable zone updates when TLD is disabled
-			if (!$pfb['dnsbl_tld']) {
-				unset($ucsync[0], $ucsync[2]);
-			}
-
-			pfb_logger("\nResolver Live Sync finalizing:", 1);
-			foreach ($ucsync as $skey => $sync) {
-				$file = $pfb[$sync[0]];
-
-				if (filesize("{$file}") > 0) {
-					$result = array();
-					exec("{$pfb['chroot_cmd']} {$sync[1]} < {$file}", $result, $retval);
-					$result	= implode("\n", $result);
-					$log	= "\n\t{$sync[2]}:\t\t{$result}";
-				}
-				else {
-					$log	= "\n\t{$sync[2]}:\t\tno changes";
-				}
-				pfb_logger("{$log}", 1);
-
-				if (!$sync_fail && !empty($retval)) {
-					$sync_fail = TRUE;
-				}
-			}
-
-			if ($sync_fail) {
-				pfb_logger("\nResolver Live Sync ... FAILED!", 1);
-				pfb_reload_unbound('reload', FALSE, $pfbpython);
-			}
-		}
-
-		// Do a full Reload of Unbound
-		else {
-			pfb_reload_unbound($mode, TRUE, $pfbpython);
-		}
+		pfb_reload_unbound($mode, TRUE, $pfbpython);
 	}
 
 	// Start Unbound Service with new DNSBL Updates
@@ -3309,52 +3153,18 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	$dnsbl_cnt = exec("/bin/cat {$pfb['dnsdir']}/*.txt | {$pfb['grep']} -c ^ 2>&1");
 
 	// Unbound blocking mode enabled
-	if (!$pfb['dnsbl_py_blacklist']) {
-		$final_cnt = exec("{$pfb['grep']} -v '\"transparent\"\|\"static\"' {$pfb['dnsbl_file']}.conf | {$pfb['grep']} -c ^ 2>&1");
-		if ($final_cnt == $dnsbl_cnt) {
-			$log = "\nDNSBL update [ {$final_cnt} | PASSED  ]... completed [ NOW ]";
-		} else {
-			$log = "\n*** DNSBL update [ {$final_cnt} ] [ {$dnsbl_cnt} ] ... OUT OF SYNC ! *** [ NOW ]";
-		}
-		pfb_logger("{$log}", 1);
+	$tld_cnt = @file_get_contents($pfb['unbound_py_count']);
+	$dnsbl_cnt = $dnsbl_cnt - $tld_cnt;
+	$final_cnt = exec("/usr/bin/find {$pfb['unbound_py_data']} {$pfb['unbound_py_zone']} -type f 2>/dev/null | xargs cat | {$pfb['grep']} -c ^ 2>&1");
+	if ($final_cnt == $dnsbl_cnt) {
+		$log = "\nDNSBL update [ {$final_cnt} | PASSED  ]... completed [ NOW ]";
+	} else {
+		$log = "\n*** DNSBL update [ {$final_cnt} ] [ {$dnsbl_cnt} ] ... OUT OF SYNC ! *** [ NOW ]";
 	}
-
-	// Python blocking mode enabled
-	else {
-		$tld_cnt = @file_get_contents($pfb['unbound_py_count']);
-		$dnsbl_cnt = $dnsbl_cnt - $tld_cnt;
-		$final_cnt = exec("/usr/bin/find {$pfb['unbound_py_data']} {$pfb['unbound_py_zone']} -type f 2>/dev/null | xargs cat | {$pfb['grep']} -c ^ 2>&1");
-		if ($final_cnt == $dnsbl_cnt) {
-			$log = "\nDNSBL update [ {$final_cnt} | PASSED  ]... completed [ NOW ]";
-		} else {
-			$log = "\n*** DNSBL update [ {$final_cnt} ] [ {$dnsbl_cnt} ] ... OUT OF SYNC ! *** [ NOW ]";
-		}
-		pfb_logger("{$log}", 1);
-	}
+	pfb_logger("{$log}", 1);
 
 	// DEBUG Live Sync
-	if (!$pfb['dnsbl_py_blacklist'] && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_sync'] && !$pfbupdate && !$pfbpython && !$sync_fail) {
-		pfb_logger("\n\nDNSBL DEBUG", 1);
-		$datacnt = $zonecnt = 0;
 
-		exec("{$pfb['chroot_cmd']} list_local_data | {$pfb['grep']} '{$pfb['dnsbl_vip4']}\|0\.0\.0\.0\$' | {$pfb['grep']} -v 'AAAA' | {$pfb['grep']} -c ^ 2>&1", $datacnt, $retval);
-		$datacnt = implode($datacnt);
-		pfb_logger('.', 1);
-
-		if ($pfb['dnsbl_tld']) {
-			exec("{$pfb['chroot_cmd']} list_local_zones | {$pfb['grep']} \"redirect\" | {$pfb['grep']} -c ^ 2>&1", $zonecnt, $retval);
-			pfb_logger('.', 1);
-			$zonecnt = implode($zonecnt);
-
-			$tldcnt = array('0');
-			if (file_exists('/var/db/pfblockerng/dnsbl/DNSBL_TLD.txt')) {
-				exec("{$pfb['grep']} -c ' A \| AAAA ' /var/db/pfblockerng/dnsbl/DNSBL_TLD.txt 2>&1", $tldcnt, $retval);
-			}
-			$tldcnt = implode($tldcnt);
-			$datacnt = $datacnt + $tldcnt;
-		}
-		pfb_logger("[ Data(s): {$datacnt}\tZone(s): {$zonecnt} | NOW ]", 1);
-	}
 
 	// Clear work files
 	pfb_unbound_clear_work_files();
@@ -3405,11 +3215,7 @@ function pfblockerng_top1m() {
 				$x++;
 
 				// Create three whitelist options per TOP1M whitelisted Domain
-				if ($pfb['dnsbl_py_blacklist']) {
-					@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
-				} else {
-					@fwrite($pfb_output, ".{$csvline[1]} 60\n\"{$csvline[1]} 60\n\"www.{$csvline[1]} 60\n");
-				}
+				@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
 			}
 
 			if ($x >= $pfb['dnsbl_alexa_cnt']) {
@@ -5687,86 +5493,41 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 		while (TRUE) {
 
 			$domainparse = str_replace('.', '\.', $domain);
-			if ($pfb['dnsbl_py_blacklist']) {
-				$dquery_esc	= escapeshellarg(",{$domainparse},,");
-				$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
-			} else {
-				$dquery_esc	= escapeshellarg(" \"{$domainparse} 60");
-				$pfb_feed	= pfb_parse_line(exec("{$pfb['grep']} -sHm1 {$dquery_esc} {$pfb['dnsdir']}/*.txt 2>&1"));
-			}
+			$dquery_esc	= escapeshellarg(",{$domainparse},,");
+			$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
 			$pfb_group = $pfb_mode = $pfb_final = 'Unknown';
 
 			// Exact Domain match found
 			if (!empty($pfb_feed)) {
 
-				if ($pfb['dnsbl_py_blacklist']) {
-					list($dummy, $pfb_final, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
-					$pfb_mode = 'DNSBL';
-				}
-				else {
-					$pfb_group = pfb_parse_line(exec("{$pfb['grep']} -sHm1 {$dquery_esc} {$pfb['dnsalias']}/* 2>&1"));
-
-					// Determine DNSBL Type
-					$pfb_mode = 'DNSBL';
-					$ip = gethostbyname("dnsbl.test.{$domain}");
-					if ($ip == $pfb['dnsbl_vip4'] || text_to_compressed_ip6($ip) == text_to_compressed_ip6("{$pfb['dnsbl_vip6']}") || $ip == '0.0.0.0') {
-						$pfb_mode = 'TLD';
-					}
-					$pfb_final = $domain;
-				}
+				list($dummy, $pfb_final, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
+				$pfb_mode = 'DNSBL';
 			}
 
 			else {
 				$dparts = explode('.', $domain);
-				if (!$pfb['dnsbl_py_blacklist']) {
-					unset($dparts[0]);
-				}
+
 				$dcnt = count($dparts);
 
 				for ($i=0; $i <= $dcnt; $i++) {
 
 					$domainparse		= str_replace('.', '\.', implode('.', $dparts));
 					$domainparse_esc	= escapeshellarg("^{$domainparse}$");
-					if (!$pfb['dnsbl_py_blacklist']) {
-						$dquery_esc = escapeshellarg(" \"{$domainparse} 60");
 
-						// Determine if TLD exists in TLD Blacklist
-						if (file_exists("{$pfb['dnsbl_tld_txt']}")) {
-							exec("/usr/bin/grep -l {$domainparse_esc} {$pfb['dnsbl_tld_txt']} 2>&1", $match);
-							if (!empty($match[0])) {
-								$pfb_group = $pfb_feed = $pfb_mode = 'DNSBL_TLD';
-								$pfb_final = $domainparse;
-								break;
-							}
+
+					$dquery_esc	= escapeshellarg(",{$domainparse},,");
+					$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
+
+					// Collect Alias Group name
+					if (!empty($pfb_feed)) {
+						list($dummy, $d_found, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
+
+						$pfb_final = str_replace('\.', '.', $domainparse);
+						$pfb_mode = 'TLD';
+						if ($pfb_feed == 'DNSBL_TLD') {
+							$pfb_mode = 'DNSBL_TLD';
 						}
-					}
-
-					if ($pfb['dnsbl_py_blacklist']) {
-						$dquery_esc	= escapeshellarg(",{$domainparse},,");
-						$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
-
-						// Collect Alias Group name
-						if (!empty($pfb_feed)) {
-							list($dummy, $d_found, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
-
-							$pfb_final = str_replace('\.', '.', $domainparse);
-							$pfb_mode = 'TLD';
-							if ($pfb_feed == 'DNSBL_TLD') {
-								$pfb_mode = 'DNSBL_TLD';
-							}
-							break;
-						}
-					}
-					else {
-						$pfb_feed = pfb_parse_line(exec("{$pfb['grep']} -sHm1 {$dquery_esc} {$pfb['dnsdir']}/*.txt 2>&1"));
-					
-						// Collect Alias Group name
-						if (!empty($pfb_feed)) {
-							$pfb_group	= pfb_parse_line(exec("{$pfb['grep']} -sHm1 {$dquery_esc} {$pfb['dnsalias']}/* 2>&1"));
-							$pfb_mode	= 'TLD';
-							$pfb_final	= str_replace('\.', '.', $domainparse);
-							break;
-						}
+						break;
 					}
 					unset($dparts[$i]);
 				}
@@ -6945,11 +6706,9 @@ function sync_package_pfblockerng($cron='') {
 		'32000' => '8000000'
 	];
 
-	if ($pfb['dnsbl_py_blacklist']) {
-		array_walk($pfb['pfs_mem'], function (&$value) {
-			$value = $value * 3;
-		});
-	}
+	array_walk($pfb['pfs_mem'], function (&$value) {
+		$value = $value * 3;
+	});
 
 	foreach ($pfb['pfs_mem'] as $pfb_mem => $domain_max) {
 		if ($pfs_memory >= $pfb_mem) {
@@ -7334,37 +7093,33 @@ function sync_package_pfblockerng($cron='') {
 				$dnsbl_missing = TRUE;
 			}
 
-			if ($pfb['dnsbl_py_blacklist']) {
 
-				// When DNSBL python blocking mode is enabled, zone should not exist, and data should exist
-				if (!$pfb['dnsbl_tld']) {
-					if (file_exists($pfb['unbound_py_zone'])) {
-						$dnsbl_missing = TRUE;
-					}
-					if (!file_exists($pfb['unbound_py_data'])) {
-						$dnsbl_missing = TRUE;
-					}
+			// When DNSBL python blocking mode is enabled, zone should not exist, and data should exist
+			if (!$pfb['dnsbl_tld']) {
+				if (file_exists($pfb['unbound_py_zone'])) {
+					$dnsbl_missing = TRUE;
 				}
+				if (!file_exists($pfb['unbound_py_data'])) {
+					$dnsbl_missing = TRUE;
+				}
+			}
 
-				// When DNSBL python blocking mode is enabled, atleast one 'data or zone' file must exist
-				else {
-					$found = FALSE;
-					if (file_exists($pfb['unbound_py_data'])) {
-						$found = TRUE;
-					}
-					if (file_exists($pfb['unbound_py_zone'])) {
-						$found = TRUE;
-					} 
-					if (!$found) {
-						$dnsbl_missing = TRUE;
-					}
+			// When DNSBL python blocking mode is enabled, atleast one 'data or zone' file must exist
+			else {
+				$found = FALSE;
+				if (file_exists($pfb['unbound_py_data'])) {
+					$found = TRUE;
+				}
+				if (file_exists($pfb['unbound_py_zone'])) {
+					$found = TRUE;
+				} 
+				if (!$found) {
+					$dnsbl_missing = TRUE;
 				}
 			}
 
 			// Check if DNSBL database is missing, when DNSBL python blocking mode is not enabled
-			if (!$pfb['dnsbl_py_blacklist'] && !file_exists("{$pfb['dnsbl_file']}.conf")) {
-				$dnsbl_missing = TRUE;
-			}
+
 
 			if ($dnsbl_missing) {
 				$log = "\n Missing DNSBL stats and/or Unbound DNSBL files - Rebuilding\n";
@@ -7427,151 +7182,66 @@ function sync_package_pfblockerng($cron='') {
 						}
 					}
 
-					if ($pfb['dnsbl_py_blacklist']) {
 
-						// Python Mode determine if user manually entered these SafeSearch CNAMES to avoid duplicate zone errors
-						if ($safe_type[0] == 'safesearch_enable') {
-							$DDG = $PIX = $ss_cname = FALSE;
-							if (file_exists('/var/unbound/unbound.conf')) {
-								$pfb_py_conf_ex = @file_get_contents('/var/unbound/unbound.conf');
-								if (strstr($pfb_py_conf_ex, 'duckduckgo.com')) {
-									$CNAME_LOG = "\n *** Found manual Resolver entry for duckduckgo.com. This manual entry should be removed in future!\n";
-									$DDG = TRUE;
-								}
-								if (strstr($pfb_py_conf_ex, 'pixabay.com')) {
-									$CNAME_LOG .= "\n *** Found manual Resolver entry for pixabay.com. This manual entry should be removed in future!\n";
-									$PIX = TRUE;
-								}
+					// Python Mode determine if user manually entered these SafeSearch CNAMES to avoid duplicate zone errors
+					if ($safe_type[0] == 'safesearch_enable') {
+						$DDG = $PIX = $ss_cname = FALSE;
+						if (file_exists('/var/unbound/unbound.conf')) {
+							$pfb_py_conf_ex = @file_get_contents('/var/unbound/unbound.conf');
+							if (strstr($pfb_py_conf_ex, 'duckduckgo.com')) {
+								$CNAME_LOG = "\n *** Found manual Resolver entry for duckduckgo.com. This manual entry should be removed in future!\n";
+								$DDG = TRUE;
 							}
-							$ss_ex = @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
-						}
-						unlink_if_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf"); // Remove Unbound mode file
-
-						$safesearch_file = file($pfb["dnsbl_{$safe_type[2]}"]);
-						if (!empty($safesearch_file)) {
-							foreach ($safesearch_file as $host) {
-
-								if (substr($host, 0, 1) == '#') {
-									continue;
-								}
-
-								$line = str_replace('"', '', strstr($host, '"', False));
-								$host_ip = trim(str_replace('A ', '', strstr($line, 'A ', FALSE)));
-								$domain = strstr($line, ' ', TRUE);
-								if (substr($domain, 0, 4) == 'www.') {
-									$domain = substr($domain, 4);
-								}
-
-								if (strpos($line, ' A ') !== FALSE) {
-									$safesearch_hosts[$domain]['A'] = $host_ip;
-								} elseif (strpos($line, ' AAAA ') !== FALSE) {
-									$safesearch_hosts[$domain]['AAAA'] = $host_ip;
-
-								# CNAME SafeSearch is not compatible in Python Mode, use Unbound mode for now
-								} elseif (strpos($line, ' CNAME ') !== FALSE) {
-									$ss_cname = TRUE;
-									if (!$DDG && strpos($line, 'duckduckgo.com') !== FALSE) {
-										@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
-									}
-									if (!$PIX && strpos($line, 'pixabay.com') !== FALSE) {
-										@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
-									}
-									# $cname = trim(str_replace('CNAME ', '', strstr($line, 'CNAME', FALSE)));
-									# $safesearch_hosts[$domain]['A'] = 'cname';
-									# $safesearch_hosts[$domain]['AAAA'] = $cname;
-								} elseif (strpos($line, 'always_nxdomain') !== FALSE) {
-									$safesearch_hosts[$domain]['nxdomain'] = '';
-								}
+							if (strstr($pfb_py_conf_ex, 'pixabay.com')) {
+								$CNAME_LOG .= "\n *** Found manual Resolver entry for pixabay.com. This manual entry should be removed in future!\n";
+								$PIX = TRUE;
 							}
 						}
+						$ss_ex = @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
+					}
+					unlink_if_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf"); // Remove Unbound mode file
 
-						if ($safe_type[2] == 'safesearch' && ($ss_cname && $ss_ex !== @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) ||
-						    (($DDG || $PIX) && !$ss_cname)) {
-							$safesearch_update = TRUE;
+					$safesearch_file = file($pfb["dnsbl_{$safe_type[2]}"]);
+					if (!empty($safesearch_file)) {
+						foreach ($safesearch_file as $host) {
+
+							if (substr($host, 0, 1) == '#') {
+								continue;
+							}
+
+							$line = str_replace('"', '', strstr($host, '"', False));
+							$host_ip = trim(str_replace('A ', '', strstr($line, 'A ', FALSE)));
+							$domain = strstr($line, ' ', TRUE);
+							if (substr($domain, 0, 4) == 'www.') {
+								$domain = substr($domain, 4);
+							}
+
+							if (strpos($line, ' A ') !== FALSE) {
+								$safesearch_hosts[$domain]['A'] = $host_ip;
+							} elseif (strpos($line, ' AAAA ') !== FALSE) {
+								$safesearch_hosts[$domain]['AAAA'] = $host_ip;
+
+							# CNAME SafeSearch is not compatible in Python Mode, use Unbound mode for now
+							} elseif (strpos($line, ' CNAME ') !== FALSE) {
+								$ss_cname = TRUE;
+								if (!$DDG && strpos($line, 'duckduckgo.com') !== FALSE) {
+									@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
+								}
+								if (!$PIX && strpos($line, 'pixabay.com') !== FALSE) {
+									@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
+								}
+								# $cname = trim(str_replace('CNAME ', '', strstr($line, 'CNAME', FALSE)));
+								# $safesearch_hosts[$domain]['A'] = 'cname';
+								# $safesearch_hosts[$domain]['AAAA'] = $cname;
+							} elseif (strpos($line, 'always_nxdomain') !== FALSE) {
+								$safesearch_hosts[$domain]['nxdomain'] = '';
+							}
 						}
 					}
-					else {
-						unlink_if_exists("/var/unbound/pfb_py_ss.*"); // Remove Python mode file
-						$ss_cname = FALSE;
 
-						// Determine if user manually entered these SafeSearch CNAMES to avoid duplicate zone errors
-						if ($safe_type[0] == 'safesearch_enable') {
-
-							// Step one - See if DDG and PIX are manually configured
-							$DDG = $PIX = FALSE;
-							if (file_exists('/var/unbound/unbound.conf')) {
-								$pfb_py_conf_ex = @file_get_contents('/var/unbound/unbound.conf');
-								if (strstr($pfb_py_conf_ex, 'duckduckgo.com')) {
-									$CNAME_LOG = "\n *** Found manual Resolver entry for duckduckgo.com. This manual entry should be removed in future!\n";
-									$DDG = TRUE;
-								}
-								if (strstr($pfb_py_conf_ex, 'pixabay.com')) {
-									$CNAME_LOG .= "\n *** Found manual Resolver entry for pixabay.com. This manual entry should be removed in future!\n";
-									$PIX = TRUE;
-								}
-							}
-
-							// Step two - If they are configured rebuild SafeSearch file
-							$safesearch_file = file($pfb["dnsbl_{$safe_type[2]}"]);
-							$ss_lines = '';
-							if (!empty($safesearch_file)) {
-								foreach ($safesearch_file as $host) {
-									if ($DDG && strpos($host, 'duckduckgo.com') !== FALSE) {
-										$ss_lines .= "# {$host}";
-										$ss_cname = TRUE;
-									}
-									elseif ($PIX && strpos($host, 'pixabay.com') !== FALSE) {
-										$ss_lines .= "# {$host}";
-										$ss_cname = TRUE;
-									}
-									else {
-										$ss_lines .= "{$host}";
-									}
-								}
-							}
-
-							// Step three - Compare previous SafeSearch file to new and update if changes are found 
-							if ($ss_cname) {
-								if (file_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) {
-									$ss_lines_ex = @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
-
-									if ($ss_lines !== $ss_lines_ex) {
-										@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", $ss_lines, LOCK_EX);
-										$safesearch_update = TRUE;
-									}
-								}
-								else {
-									@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", $ss_lines, LOCK_EX);
-									$safesearch_update = TRUE;
-								}
-							}
-						}
-
-						// Copy file if not exists or has been updated
-						if (!file_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf") ||
-							@md5_file($pfb["dnsbl_{$safe_type[2]}"]) !==
-							@md5_file("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) {
-
-							// Temp Workaround for Duplicate CNAME Zone issue:
-							if (!$ss_cname) {
-								@copy($pfb["dnsbl_{$safe_type[2]}"], "{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
-								$safesearch_update = TRUE;
-							}
-						}
-
-						// Collect SafeSearch domains for wildcard whitelisting
-						exec("cut -d '\"' -f2 {$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf | cut -d ' ' -f1", $safesearch_hosts);
-
-						// Collect all Domains/TLDs for 'TLD Blacklist' validation (Unbound mode only. Cannot have duplicate zones)
-						if (!$pfb['dnsbl_py_blacklist'] && !empty($safesearch_hosts)) {
-							foreach ($safesearch_hosts as $host) {
-								$safesearch_tlds[$host] = '';
-								for ($i= substr_count($host, '.'); $i > 0; $i--) {
-									$host = ltrim(strstr($host, '.', FALSE), '.');
-									$pfb['safesearch_tlds'][$host] = '';
-								}
-							}
-						}
+					if ($safe_type[2] == 'safesearch' && ($ss_cname && $ss_ex !== @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) ||
+					    (($DDG || $PIX) && !$ss_cname)) {
+						$safesearch_update = TRUE;
 					}
 				}
 				elseif (file_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) {
@@ -7581,7 +7251,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// Python mode create a CSV list of SafeSearch hosts
-			if ($pfb['dnsbl_py_blacklist'] && !empty($safesearch_hosts)) {
+			if (!empty($safesearch_hosts)) {
 				foreach ($safesearch_hosts as $host => $data) {
 					if (isset($data['nxdomain'])) {
 						$line = "{$host},nxdomain,nxdomain\n";
@@ -7608,24 +7278,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Wildcard whitelist SafeSearch domains (Unbound mode only)
 			$pfb_whitelist = '';
-			if (!$pfb['dnsbl_py_blacklist'] && !empty($safesearch_hosts)) {
-				$safesearch_hosts = array_unique($safesearch_hosts);
-				foreach ($safesearch_hosts as $line) {
-					if (!empty($line)) {
 
-						// Remove 'www.' prefix
-						if (substr($line, 0, 4) == 'www.') {
-							$line = substr($line, 4);
-						}
-
-						if ($pfb['dnsbl_py_blacklist']) {
-							$pfb_whitelist .= ".{$line},,\n,{$line},,\n";
-						} else {
-							$pfb_whitelist .= ".{$line} 60\n\"{$line} 60\n";
-						}
-					}
-				}
-			}
 
 			$s_log = ' disabled';
 			if ($pfb_found) {
@@ -7651,38 +7304,21 @@ function sync_package_pfblockerng($cron='') {
 						}
 
 						if ($wildcard) {
-							if ($pfb['dnsbl_py_blacklist']) {
-								$pfb_whitelist .= ".{$line},,\n,{$line},,\n";
-							} else {
-								$pfb_whitelist .= ".{$line} 60\n\"{$line} 60\n";
-							}
+							$pfb_whitelist .= ".{$line},,\n,{$line},,\n";
 						} else {
-							if ($pfb['dnsbl_py_blacklist']) {
-								$pfb_whitelist .= ",{$line},,\n,www.{$line},,\n";
-							} else {
-								$pfb_whitelist .= "\"{$line} 60\n\"www.{$line} 60\n";
-							}
+							$pfb_whitelist .= ",{$line},,\n,www.{$line},,\n";
 						}
 					}
 				}
 			}
 
 			//  Added due to SWC Feed
-			if ($pfb['dnsbl_py_blacklist']) {
-				$pfb_whitelist .= ",localhost.localdomain,,\n";
-			} else {
-				$pfb_whitelist .= "\"localhost.localdomain 60\n";
-			}
+			$pfb_whitelist .= ",localhost.localdomain,,\n";
 
 			@file_put_contents("{$pfb['dnsbl_supptxt']}", $pfb_whitelist, LOCK_EX);
 			pfb_logger(" completed", 1);
 
-			if (!$pfb['dnsbl_py_blacklist'] && $safesearch_update) {
-				$log = "\n DNSBL - SafeSearch changes found - Rebuilding!\n";
-				pfb_logger("{$log}", 1);
-				$pfb['reuse_dnsbl'] = 'on';
-				touch("{$pfb['dnsbl_file']}.reload");
-			}
+
 
 			// Call TOP1M whitelist process
 			if ($pfb['dnsbl_alexa'] == 'on') {
@@ -7924,9 +7560,7 @@ function sync_package_pfblockerng($cron='') {
 							}
 
 							// Force Unbound mode Logging for 'disabled_log' to 'enabled'
-							if (!$pfb['dnsbl_py_blacklist'] && $list['logging'] == 'disabled_log') {
-								$list['logging'] = 'enabled';
-							}
+
 
 							// If Null Blocking mode is selected, use '0.0.0.0|::0', otherwise utilize DNSBL WebServer/DNSBL VIP
 							if ($list['logging'] == 'disabled') {
@@ -8373,19 +8007,8 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											// For DNSBL python, save domain and Logging type
-											if ($pfb['dnsbl_py_blacklist']) {
-												$domain_data = ',' . strtolower($line)
-													. ",,{$logging_type},{$header},{$alias}\n";
-											}
-											else {
-												$ipv6_dnsbl = "\n";
-												if (!empty($pfb['dnsbl_vip6']) && !$pfb['dnsbl_tld']) {
-													$ipv6_dnsbl = " local-data: \"" . strtolower($line)
-															. " 60 IN AAAA {$sinkhole_type6}\"\n";
-												}
-												$domain_data = "local-data: \"" . strtolower($line)
-														. " 60 IN A {$sinkhole_type4}\"{$ipv6_dnsbl}";
-											}
+											$domain_data = ',' . strtolower($line)
+												. ",,{$logging_type},{$header},{$alias}\n";
 											@fwrite($dhandle, $domain_data);
 										}
 									}
@@ -8433,9 +8056,7 @@ function sync_package_pfblockerng($cron='') {
 
 									// DNSBL python requires a different deduplication process
 									$dup_mode = '';
-									if ($pfb['dnsbl_py_blacklist']) {
-										$dup_mode = 'python';
-									}
+									$dup_mode = 'python';
 
 									// Call script to process DNSBL 'De-Duplication / Whitelisting / TOP1M Whitelisting'
 									exec("{$pfb['script']} dnsbl_scrub {$header_esc} {$pfb_alexa} {$dup_mode} {$elog}");
@@ -8444,12 +8065,7 @@ function sync_package_pfblockerng($cron='') {
 										pfb_logger("  IPv4 count={$ip_cnt}\n", 1);
 									}
 
-									if (!$pfb['dnsbl_py_blacklist']) {
-										$result = array();
-										exec("/usr/local/sbin/unbound-checkconf {$pfb['dnsbldir']}/check.conf 2>&1", $result);
-									} else {
-										$result = array('unbound-checkconf: no errors');
-									}
+									$result = array('unbound-checkconf: no errors');
 									unlink_if_exists("{$pfb['dnsbldir']}/check.conf");
 								}
 								else {
@@ -8465,16 +8081,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 
 								// If parse error found, use previously downloaded file if available
-								if (!$pfb['dnsbl_py_blacklist'] && !preg_grep("/unbound-checkconf: no errors/", $result)) {
-									unlink_if_exists("{$pfbfolder}/{$header}.bk");
 
-									pfb_logger("\n  DNSBL FAIL - Skipped! Use previous data, if found:\n", 2);
-									$log = htmlspecialchars(implode("\n", $result));
-									pfb_logger("{$log}\n", 1);
-
-									// Create failed marker file
-									touch("{$pfbfolder}/{$header}.fail");
-								}
 
 								// Save DNSBL feed info for next steps
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
@@ -8532,34 +8139,32 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		// Add DNSBL Python options to widget statistics
-		if ($pfb['dnsbl_mode'] == 'dnsbl_python') {
-			if ($pfb['dnsbl_idn'] == 'on') {
-				$idn_cnt = 1;
-				$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
-				dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt);
-			}
-			if ($pfb['dnsbl_pytld'] == 'on') {
-				$pytld_cnt = 0;
-				foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $pytld) {
-					if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $pytld]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $pytld])) {
-						$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $pytld]));
-						if (is_numeric($p_cnt) && $p_cnt > 0) {
-							$pytld_cnt += $p_cnt;
-						}
+		if ($pfb['dnsbl_idn'] == 'on') {
+			$idn_cnt = 1;
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
+			dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt);
+		}
+		if ($pfb['dnsbl_pytld'] == 'on') {
+			$pytld_cnt = 0;
+			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $pytld) {
+				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $pytld]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $pytld])) {
+					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $pytld]));
+					if (is_numeric($p_cnt) && $p_cnt > 0) {
+						$pytld_cnt += $p_cnt;
 					}
 				}
+			}
 
-				$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
-				dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt);
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
+			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt);
+		}
+		if ($pfb['dnsbl_regex'] == 'on') {
+			$regex_cnt = 0;
+			if (isset($pfb['dnsbl_regex_list'])) {
+				$regex_cnt = count(pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
 			}
-			if ($pfb['dnsbl_regex'] == 'on') {
-				$regex_cnt = 0;
-				if (isset($pfb['dnsbl_regex_list'])) {
-					$regex_cnt = count(pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
-				}
-				$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
-				dnsbl_alias_update('update', 'DNSBL_Regex', '', '', $regex_cnt);
-			}
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
+			dnsbl_alias_update('update', 'DNSBL_Regex', '', '', $regex_cnt);
 		}
 
 		// Save DNSBL Alias statistics (Not for TLD mode)
@@ -8630,7 +8235,7 @@ function sync_package_pfblockerng($cron='') {
 			pfb_logger("... completed [ NOW ]", 1);
 
 			// DNSBL Python blocking mode, if TLD is not enabled
-			if ($pfb['dnsbl_py_blacklist'] && !$pfb['dnsbl_tld']) {
+			if (!$pfb['dnsbl_tld']) {
 				unlink_if_exists($pfb['unbound_py_data']);
 				unlink_if_exists($pfb['unbound_py_zone']);
 				unlink_if_exists($pfb['unbound_py_count']);
@@ -8652,19 +8257,10 @@ function sync_package_pfblockerng($cron='') {
 				$pfb['domain_clear'] = TRUE;
 
 				// Clear out Unbound pfb_dnsbl.conf file
-				if (!$pfb['dnsbl_py_blacklist']) {
-					$pfb_output = @fopen("{$pfb['dnsbl_file']}.conf", 'w');
-					@fwrite($pfb_output, '');
-					@fclose($pfb_output);
-				}
-
-				// Remove DNSBL Python files
-				else {
-					unlink_if_exists($pfb['unbound_py_data']);
-					unlink_if_exists($pfb['unbound_py_zone']);
-					unlink_if_exists($pfb['unbound_py_wh']);
-					unlink_if_exists($pfb['unbound_py_count']);
-				}
+				unlink_if_exists($pfb['unbound_py_data']);
+				unlink_if_exists($pfb['unbound_py_zone']);
+				unlink_if_exists($pfb['unbound_py_wh']);
+				unlink_if_exists($pfb['unbound_py_count']);
 			}
 		}
 		else {
@@ -8702,9 +8298,7 @@ function sync_package_pfblockerng($cron='') {
 	if ($pfb['domain_update'] || $pfbupdate || $pfbpython ||$pfb['domain_clear'] || $safesearch_update) {
 
 		// Create backup of existing DNSBL Unbound database
-		if (!$pfb['dnsbl_py_blacklist'] && file_exists("{$pfb['dnsbl_file']}.conf")) {
-			@copy("{$pfb['dnsbl_file']}.conf", "{$pfb['dnsbl_file']}.bk");
-		}
+
 
 		pfb_update_unbound($mode, $pfbupdate, $pfbpython);
 	}
