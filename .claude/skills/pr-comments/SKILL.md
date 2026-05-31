@@ -1,0 +1,120 @@
+---
+name: pr-comments
+description: >
+  Retrieve a pull request's review comments — CodeRabbit's inline findings PLUS
+  its nitpick and outside-diff-range findings (and human reviewer comments) —
+  validate each against the CURRENT code, apply the ones that genuinely hold
+  (skip the rest with a reason, defer pre-existing ones to their own PR), then
+  reply on every thread. Args: [PR number] (defaults to the PR for the current
+  branch). Use when the user says "address the PR comments", "fix the CodeRabbit
+  comments", "handle the review feedback on PR N", or invokes /pr-comments.
+---
+
+You resolve review feedback on a PR. The non-negotiable principle: **validate
+each finding against the current code before touching anything** — reviewers
+(CodeRabbit especially) comment on a specific commit, so a finding may be stale,
+unenforced, out of scope, or its suggested fix may itself be wrong. Never paste a
+suggested diff blindly. Apply what holds, skip what doesn't (with a reason), and
+reply to every thread.
+
+## Step 1 — Identify the PR and branch
+
+- If a PR number was given, use it. Else find the PR for the current branch:
+  `gh pr view --json number,headRefName,baseRefName,url,state`. If there is none,
+  stop and ask.
+- Resolve `OWNER/REPO` with `gh repo view --json nameWithOwner -q .nameWithOwner`.
+- Be on the PR's **head** branch (checkout if needed) so fixes land on it.
+
+## Step 2 — Reconcile the branch first
+
+Reviewers/bots may have pushed to the PR branch (e.g. a "CodeRabbit Generated Unit
+Tests" commit). `git fetch origin <head>` and **fast-forward** the local head to
+`origin/<head>` before editing, so you don't diverge. If tests/files were added,
+run the suite once to see the baseline.
+
+## Step 3 — Fetch ALL comment sources (the inline list is NOT the whole set)
+
+CodeRabbit spreads findings across three places — pull all three:
+
+1. **Inline review comments** (the "actionable" ones; each carries a
+   "🤖 Prompt for AI Agents" block):
+   `gh api repos/OWNER/REPO/pulls/N/comments --paginate -q '.[] | "── \(.id) | \(.path):\(.line // .original_line) | \(.user.login) ──\n\(.body)\n"'`
+2. **Review summary bodies** — this is where "🧹 Nitpick comments" and
+   "⚠️ Outside diff range comments" live (collapsed `<details>`, each often with
+   its own AI-prompt block). These have **no inline thread**, so they are easy to
+   miss:
+   `gh api repos/OWNER/REPO/pulls/N/reviews --paginate -q '.[] | select(.body != "") | .body'`
+3. **Top-level issue/summary comment(s)**:
+   `gh api repos/OWNER/REPO/issues/N/comments --paginate -q '.[] | "── \(.id) | \(.user.login) ──\n\(.body)\n"'`
+
+Bodies are large — save them to a file and `grep -nE "Nitpick comments|Outside
+diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
+enumerate every finding (inline + nitpick + outside-diff-range) and its location.
+Build the full list before fixing anything.
+
+## Step 4 — Validate each finding against the CURRENT code (the crux)
+
+For every finding, decide a verdict — do **not** auto-apply:
+
+- **Read the cited code as it is now.** The finding may already be **stale/fixed**
+  by a later commit on the branch. Confirm it still applies.
+- **Is the rule even enforced here?** Check repo config before "fixing" a lint nit
+  — e.g. in this repo ruff `select = [E,F,W,I]` (so `S110`/`BLE001` don't fire,
+  and ruff doesn't implement `F824` at all). A nit for an unenforced rule is noise;
+  skip it.
+- **Scope, via `git blame`.** Is the code the PR introduced, or **pre-existing /
+  outside the diff**? A pre-existing latent bug is real but usually belongs in its
+  own PR, not bloating this one.
+- **Sanity-check the suggested fix itself.** CodeRabbit's proposed diff can be
+  wrong or unsafe (e.g. producing malformed output). Validate the *suggestion*,
+  not just the *problem*.
+- **Verdict:** **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
+  wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
+  pre-existing/orthogonal → its own branch+PR).
+
+## Step 5 — Apply the valid fixes
+
+- Minimal changes, matching repo conventions (see `CLAUDE.md`).
+- Re-run the gates: `python -m pytest`, `ruff check .` / `ruff format .`, `php -l`
+  / ShellCheck for any PHP/shell touched. Nothing red.
+- Commit (`<scope>: <imperative summary>`) and push to the PR head branch (direct
+  push; the PR updates itself).
+
+## Step 6 — Reply to every finding
+
+Use `--body-file` / `-F body=@<file>` for **all** replies — never inline `--body`
+(the shell mangles backticks and `${...}` in CodeRabbit-style text).
+
+**Attribution footer (required).** Everything you post here goes through the
+user's `gh` account, so it shows up under *their* name. To avoid any confusion
+about who is actually writing, append a footer to **every** body you send — inline
+replies, top-level comments, and the bodies of any PR you open (Step 7) —
+separated by a `---` line:
+
+```
+---
+🤖 Generated by [Claude Code](https://claude.com/claude-code), posted via @<gh-login>'s account on their behalf.
+```
+
+Resolve `<gh-login>` once with `gh api user -q .login`. Add this footer to the
+body file before posting.
+
+- **Inline review comments** → threaded reply:
+  `gh api --method POST repos/OWNER/REPO/pulls/N/comments/{COMMENT_ID}/replies -F body=@<file> -q .html_url`
+- **Nitpick / outside-diff-range findings** (live in the review body, no thread)
+  → one top-level PR comment: `gh pr comment N --body-file <file>`. Address
+  `@coderabbitai` directly when you want it to re-check or acknowledge.
+- Each reply states the verdict plainly: **applied** (cite the commit),
+  **skipped** (the validated reason), or **deferred** (link the new PR).
+
+## Step 7 — Deferred findings → their own PR (optional)
+
+For a valid-but-pre-existing finding, branch off the base, fix it there, and open
+a separate PR (`--body-file` for the body; push the branch first, PR only if
+direct push is blocked). Link that PR in the reply on the original thread.
+
+## Step 8 — Report back
+
+Summarize: findings by source (inline / nitpick / outside-diff-range), how many
+**applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ PR
+links); gate results; and any thread you could not resolve.
