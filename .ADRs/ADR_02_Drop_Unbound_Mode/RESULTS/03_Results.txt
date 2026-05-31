@@ -1,0 +1,88 @@
+ADR-02 Phase 3 Results — Core: remove native DNSBL blocking from pfblockerng.inc
+================================================================================
+
+Landed as FOUR verified sub-commits on `edge` (per user request to split P3):
+  3a  pfblockerng: remove native DNSBL resolver-queries daemon
+  3b  pfblockerng: collapse native branches in tld_analysis()
+  3c  pfblockerng: remove native DNSBL config from resolver/lighttpd builders
+  3d  pfblockerng: collapse remaining native DNSBL branches in pfblockerng.inc
+
+STATE AFTER THIS PHASE
+-----------------------
+pfblockerng.inc now has a SINGLE (Python) DNSBL path. Every
+`$pfb['dnsbl_py_blacklist']` and `$pfb['dnsbl_mode'] == 'dnsbl_python'`
+conditional has been collapsed (python branch kept/unwrapped, native branch
+deleted, native-only conjuncts dropped). The ONLY remaining reference to
+dnsbl_py_blacklist is its DEFINITION:
+    L862:  $pfb['dnsbl_py_blacklist'] = TRUE;
+This definition is intentionally RETAINED — alerts.php and widget.php still read
+$pfb['dnsbl_py_blacklist'] and $pfb['dnsbl_mode'] and are not collapsed until P5.
+Likewise the P1 keystone `$pfb['dnsbl_mode'] = 'dnsbl_python';` is still in place.
+=> P5 removes both definitions AFTER alerts/widget are converted.
+
+What was removed:
+- The native resolver-queries daemon: rc start/stop wiring, the `queries` argv
+  entry, and pfb_daemon_queries(). (pfb_dnsbl_parse retained — shared with the
+  webserver collectors and alerts.php's pfb_dnsbl_parse('alerts',...).)
+- tld_analysis(): native local-zone/local-data parsing & writes, the native
+  TLD-Blacklist skip, the native `domaintld` exec, and 69 lines of dead native
+  fall-through in the TLD-blacklist loop.
+- Resolver/lighttpd config: native `server:include: pfb_dnsbl.*conf` add/remove
+  and module-config/python-script mode guards; lighttpd event logging now gated
+  only on pfb_py_nolog.
+- pfb_reload_unbound / pfb_update_unbound: the Resolver Live Sync path (incl. the
+  `dnsbl_livesync` exec) -> always a full reload; native .raw->.conf rename,
+  native unbound-checkconf, pfb_dnsbl.conf backup/clear, native count check.
+- top1m / SafeSearch / feed-build: native local-data formats -> python CSV.
+
+SHELL EXECS (for Phase 4)
+-------------------------
+pfblockerng.inc now invokes ONLY:
+    L2906:  exec("{$pfb['script']} domaintldpy >> {$pfb['log']} 2>&1");
+The native `domaintld` exec (removed in 3b) and `dnsbl_livesync` exec (removed in
+3d) are GONE from PHP. => Phase 4 can safely delete the domaintld() and
+dnsbl_livesync() shell functions + their `case` dispatch arms in
+pfblockerng.sh; KEEP domaintldpy(). (Verify with:
+    grep -rn "domaintld\b\|dnsbl_livesync" src/   # expect only the .sh definitions/dispatch)
+
+KEPT INTACT (do NOT remove)
+---------------------------
+- lighttpd webserver / DNSBL VIP / NAT / pfb_create_lighttpd() (Python returns
+  the VIP -> webserver serves block page + logs).
+- pfb_tld / $pfb['dnsbl_tld'] (Wildcard Blocking TLD) — used in Python mode.
+- SafeSearch CNAME path: still writes/serves a native pfb_dnsbl.<type>.conf
+  (DDG/PIX) static-zone include in Python mode (documented "to be removed when
+  SafeSearch CNAME python mode is fixed"). Its safesearch_enable branches were
+  deliberately preserved.
+- `python_blocking = on` still emitted (resolver config, ~L2427).
+
+VERIFICATION RESULTS
+--------------------
+- php is now INSTALLED (Homebrew, php 8.5; `brew uninstall php` to revert).
+  `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` -> No syntax errors.
+- Delimiter balance (string/heredoc/comment-aware checker): BALANCED ({}/()/[]
+  deltas unchanged vs. pre-edit valid file).
+- `python -m pytest` -> 163 passed (pfb_unbound.py untouched).
+- grep: zero dnsbl_py_blacklist conditionals (only the L862 def); zero
+  dnsbl_mode == 'dnsbl_python' guards.
+- Collapses were applied by a string/heredoc-aware brace-matching tool
+  (/tmp/pfcollapse.py) + literal substring simplifications, each count-asserted;
+  the full diff was reviewed hunk-by-hunk.
+
+WATCH-OUTS / DEVIATIONS
+------------------------
+1. dnsbl_py_blacklist var def (L862) and dnsbl_mode keystone retained until P5
+   (see above). Do NOT remove them in P4.
+2. $pfb['dnsbl_sync'] (config read, ~L841) is now effectively unused (Live Sync
+   removed). Harmless leftover; can be dropped with the Resolver Live Sync UI
+   field (pfb_dnsbl_sync) in a later cleanup. The UI field is still present but
+   hidden (per P2).
+3. Minor cosmetic: a redundant `$python_blocking = 'off';` immediately followed
+   by `$python_blocking = 'on';` (the 'on' is now unconditional). Harmless.
+4. A few cosmetic double-blank-lines remain where blocks were removed.
+
+GO-AHEAD FOR PHASE 4
+---------------------
+The shell is now the only place the native builder/live-sync functions live.
+Proceed to delete domaintld() and dnsbl_livesync() (+ dispatch arms) from
+pfblockerng.sh; keep domaintldpy(). No PHP caller invokes them anymore.
