@@ -1,0 +1,93 @@
+================================================================================
+PHASE 1 PROMPT — Spike & kill-gate: prove KVM boot + control round-trip
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §1 facts, §2 Runner/VM rows,
+     and §7 "Reject criteria" FIRST — this phase exists to test the premise)
+================================================================================
+
+ROLE
+You are on the `adr/04` branch (off `devel`) performing Phase 1 of ADR-04. This is
+a DE-RISKING SPIKE, not the real harness: prove that a GitHub-hosted `ubuntu-latest`
+runner can boot a real pfSense VM under KVM and that we can drive it (SSH + pfctl +
+dig + the pfBlockerNG PHP CLI). Produce MEASURED numbers and a go/no-go against the
+kill-threshold in §7 BEFORE any Packer work (Phase 2) is attempted. Work inline on
+`adr/04`, one commit, push directly (no worktree isolation — project workflow).
+
+WHY THIS PHASE EXISTS
+ADR-01 was fully built (8 phases) and then REJECTED because its premise did not
+hold. This ADR's premise — "a GH-hosted runner can cheaply boot+drive a pfSense CE
+VM" — is unproven on TWO axes: (a) /dev/kvm is exposed and fast enough for a FreeBSD
+guest; (b) the SSH/pfctl/dig/PHP-CLI round-trip works post-boot. If either fails the
+budget, we pivot to self-hosted or a gated trigger — and we must learn that NOW, for
+the price of one workflow, not after building the Packer template and the matrix.
+This phase uses a HAND-BUILT pfSense+pfBlockerNG qcow2 (maintainer-provided, stored
+privately); making that image reproducible is Phase 2's job, deliberately deferred.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff. Start from the ADR.
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md  (§1 facts 1-5; §2 Runner/VM/Deploy/Reload rows;
+  §3 risks; §7 reject criteria + kill-threshold).
+- scripts/deploy.sh  (the SSH/rsync + `pfSsh.php playback svc restart` it already does —
+  you reuse the SSH-reachability + key model, not necessarily the rsync here).
+- src/usr/local/www/pfblockerng/pfblockerng.php  (the CLI verbs: :66 clearip, :72
+  cleardnsbl, :173/:179 switch, :188 update, :184-185 updateip/updatednsbl).
+- .github/workflows/test.yml  (house workflow style: ubuntu-latest, checkout@v6,
+  triggers; MIRROR it — but this is a SEPARATE workflow).
+- CLAUDE.md  (POSIX-sh for shell; commit style; push-direct).
+
+ACTION PLAN (ordered — prove the cheapest thing first)
+1. KVM PRESENCE: a workflow step that asserts `/dev/kvm` exists and is usable on
+   `ubuntu-latest` (e.g. `kvm-ok` or `ls -l /dev/kvm` + a tiny qemu accel probe).
+   If absent, that alone is a partial no-go — record it.
+2. BOOT HELPER (POSIX sh, quoted, absolute paths): `tests/smoke/boot_vm.sh` (or
+   similar) that launches `qemu-system-x86_64 -enable-kvm` headless, serial console,
+   with QEMU user-net `hostfwd` mapping: tcp 2222->22 (SSH) and udp+tcp <p>->53 (DNS),
+   and the host alias 10.0.2.2 reachable from the guest. Image path is a parameter.
+3. READINESS WAIT (no fixed sleeps): poll until SSH answers on 2222 with bounded
+   backoff + a hard timeout; capture boot-to-ready seconds.
+4. CONTROL ROUND-TRIP over SSH (baked key): `pfctl -sr` returns rules; run
+   `/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update` and capture
+   exit status; `dig +short @127.0.0.1 -p <p> <a-baked-local-data-name>` from the
+   runner returns the expected answer. (The image must have a known local-data name
+   baked in for a deterministic dig; the maintainer provides it with the image.)
+5. STABILITY: run the boot+round-trip N>=5 times (matrix or loop); record pass count
+   and boot-time distribution.
+6. WORKFLOW: `.github/workflows/smoke-spike.yml` (workflow_dispatch) wiring 1-5 and
+   printing the numbers. How the hand-built image reaches the runner (private GHCR via
+   oras, or a temporary secret-guarded URL) is a spike convenience — document whatever
+   you choose; Phase 2 replaces it with the reproducible GHCR image.
+
+CONSTRAINTS
+- Do NOT write the Packer template or any matrix here (Phases 2/5). This is a spike.
+- Do NOT touch `src/` (shipped code). Do NOT add deps to the default pytest run.
+- Shell: POSIX sh, quoted, absolute binary paths, ShellCheck-clean.
+- `python -m pytest` (default, no -m smoke) must remain green and unchanged.
+- Secrets (image URL/creds, SSH key) via GitHub Actions secrets — never commit keys.
+
+VERIFICATION (must all pass before the phase is done)
+- The `smoke-spike.yml` run completes on GH-hosted CI and prints: /dev/kvm status,
+  boot-to-ready seconds per run, pass/fail count over N>=5, and the round-trip output
+  (pfctl rules present, php update exit 0, dig answer correct).
+- `python -m pytest` → green (unchanged).  `ruff check .`/`ruff format .` → clean.
+- ShellCheck clean on the boot helper.
+- Compare measured numbers to §7 kill-threshold (~<=20 min/job, >=4/5 clean) and
+  state GO or NO-GO explicitly.
+
+EXPECTED RESULT
+A runnable spike workflow that BOOTS a real pfSense VM on a GH-hosted runner and
+proves (or disproves) the SSH/pfctl/dig/PHP-CLI round-trip, with recorded numbers
+and an explicit go/no-go. No Packer, no matrix.
+
+COMMIT (single)
+    ci: spike pfSense VM boot + control round-trip on GH-hosted KVM (ADR-04 P1)
+Push directly to `adr/04`; open a PR only if the direct push is rejected.
+PR body (if any) via --body-file.
+
+HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/01_Results.txt` (plain .txt)
+For Phase 2 (Packer). Include: GO or NO-GO vs the kill-threshold and the raw numbers
+(/dev/kvm status, boot-to-ready distribution, N and pass count); the EXACT working
+qemu invocation + hostfwd map; the SSH user/key model and how the guest exposes
+SSH/DNS/10.0.2.2; how the hand-built image was obtained and what is baked into it
+(local-data control name(s), SSH key, pfBlockerNG-devel present?); any flake/timing
+gotchas; and — if NO-GO — the recorded pivot (self-hosted / gated trigger) so Phase 2
+targets the right platform. If GO, the go-ahead to build the reproducible image.
