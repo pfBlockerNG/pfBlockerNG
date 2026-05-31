@@ -6262,9 +6262,15 @@ function pfb_open_sqlite($table, $message) {
 		// coexist without 'database is locked'. WAL is a sticky property of the
 		// database file and must be set outside of a transaction.
 		try {
-			$db_handle->exec('PRAGMA journal_mode = WAL;');
+			// querySingle both sets and returns the effective journal mode, so we
+			// can confirm WAL stuck (exec() returns only success, not the mode).
+			$journal_mode = strtolower((string) $db_handle->querySingle('PRAGMA journal_mode = WAL;'));
+			if ($journal_mode !== 'wal') {
+				@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to enable WAL ({$journal_mode}) - {$message}", FILE_APPEND | LOCK_EX);
+			}
 		}
 		catch (Exception $e) {
+			@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to enable WAL - {$message}", FILE_APPEND | LOCK_EX);
 		}
 
 		// Validate database integrity

@@ -1573,8 +1573,11 @@ def deinit(id: int) -> bool:
         except Exception:
             pass
         pfb["db_worker"] = False
-    for _db in list(_db_conns.keys()):
-        _db_close(_db)
+    # Close under the lock: if the worker outlived the join timeout it may still be
+    # mid-_db_run (which holds _db_lock), so serialize the close to avoid a race.
+    with _db_lock:
+        for _db in list(_db_conns.keys()):
+            _db_close(_db)
 
     # Stop the logging pipeline (QueueListener flushes queued records on stop)
     if pfb.get("log_listener"):
