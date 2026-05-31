@@ -2191,7 +2191,7 @@ function pfb_unbound_dnsbl($mode) {
 		}
 
 		$unbound = FALSE;	// Unbound mode
-		$unbound_py = FALSE;	// Unbound python mode
+		$unbound_py_script = FALSE;	// pfb_unbound.py 'python:' script block present
 
 		$u_update = FALSE;
 		$u_msg = '';
@@ -2226,9 +2226,10 @@ function pfb_unbound_dnsbl($mode) {
 
 			elseif (strpos($line, 'module-config:') !== FALSE) {
 				if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
-					if (strpos($line, 'module-config: "python') !== FALSE) {
-						$unbound_py = TRUE;
-					} else {
+					// Ensure the python module is loaded. The pfb_unbound.py script
+					// block is tracked separately ($unbound_py_script) and ensured
+					// after the loop, so do NOT infer its presence from this line.
+					if (strpos($line, 'module-config: "python') === FALSE) {
 						$u_update = TRUE;
 						$u_msg .= "  Added DNSBL Unbound Python mode\n";
 						$conf[$key] = str_replace('module-config: "', 'module-config: "python ', $line);
@@ -2254,7 +2255,7 @@ function pfb_unbound_dnsbl($mode) {
 
 			elseif (strpos($line, 'python-script: pfb_unbound.py') !== FALSE) {
 				if ($mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
-					$unbound_py = TRUE;
+					$unbound_py_script = TRUE;
 				} else {
 					$u_update = TRUE;
 					$u_msg .= "  Removed DNSBL Unbound Python mode script\n";
@@ -2281,7 +2282,7 @@ function pfb_unbound_dnsbl($mode) {
 		}
 
 		// Add python script line
-		if (!$unbound_py && $mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+		if (!$unbound_py_script && $mode == 'enabled' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
 			$u_update = TRUE;
 			$u_msg .= "  Added DNSBL Unbound Python mode script\n";
 			$conf[] = "\npython:\npython-script: pfb_unbound.py\n";
