@@ -6270,6 +6270,16 @@ function pfb_open_sqlite($table, $message) {
 
 	if ($db_handle) {
 
+		// ADR-03: use WAL so the persistent pfb_unbound.py connection and the PHP
+		// readers/writers (widget, alerts, pfBlockerNG_clearsqlite counter resets)
+		// coexist without 'database is locked'. WAL is a sticky property of the
+		// database file and must be set outside of a transaction.
+		try {
+			$db_handle->exec('PRAGMA journal_mode = WAL;');
+		}
+		catch (Exception $e) {
+		}
+
 		// Validate database integrity
 		$validate = $pfb_validate = FALSE;
 		try {
@@ -6294,7 +6304,7 @@ function pfb_open_sqlite($table, $message) {
 		}
 
 		try {
-			$db_handle->exec("BEGIN TRANSACTION; PRAGMA journal_mode = delete;"
+			$db_handle->exec("BEGIN TRANSACTION;"
 					. "{$db_create}"
 					. "END TRANSACTION;");
 		}
