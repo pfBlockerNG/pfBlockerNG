@@ -52,7 +52,6 @@ $pconfig['dnsbl_allow_int']	= explode(',', $pfb['dconfig']['dnsbl_allow_int'])	?
 $pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
-$pconfig['pfb_dnsbl_sync']	= $pfb['dconfig']['pfb_dnsbl_sync']			?: '';
 
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
@@ -500,7 +499,6 @@ if ($_POST) {
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_dnsbl_sync']	= pfb_filter($_POST['pfb_dnsbl_sync'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -743,17 +741,6 @@ $section->addInput(new Form_Checkbox(
 	$pconfig['pfb_py_reply'] === 'on' ? true:false,
 	'on'
 ))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_sync',
-	gettext('Resolver Live Sync'),
-	'Enable',
-	$pconfig['pfb_dnsbl_sync'] === 'on' ? true:false,
-	'on'
-))->setHelp('When enabled, updates to the DNS Resolver DNSBL database will be performed Live without reloading the Resolver.<br />'
-	. 'This will allow for more frequent DNSBL Updates (ie: Hourly) without losing DNS Resolution.<br />'
-	. 'This option is not required when DNSBL python blocking mode is enabled.<br />'
-	. '<span class="text-danger">Note:</span> A Force Reload will run a full Reload of Unbound');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
@@ -2963,10 +2950,6 @@ function enable_ports() {
 	}
 }
 
-function enable_python() {
-	hideCheckbox('pfb_dnsbl_sync', true);
-}
-
 function enable_python_pytld() {
 	if ($('#pfb_pytld').prop('checked')) {
 		hideCheckbox('pfb_pytld_sort', false);
@@ -3025,8 +3008,6 @@ events.push(function(){
 		enable_ports();
 	});
 	enable_ports();
-
-	enable_python();
 
 	$('#pfb_pytld').click(function() {
 		enable_python_pytld();

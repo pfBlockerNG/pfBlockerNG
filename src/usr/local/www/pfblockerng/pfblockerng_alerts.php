@@ -3938,10 +3938,8 @@ if (!$alert_summary):
 
 					if ($logtype == 'DNSBL Block') {
 						continue 2;
-						break;
 					}
 					elseif ($logtype == 'DNSBL Python') {
-
 						break;
 					}
 				}
