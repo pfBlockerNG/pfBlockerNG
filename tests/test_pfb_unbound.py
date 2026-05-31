@@ -415,7 +415,7 @@ class TestDbConcurrencyAndPerf:
             try:
                 for _ in range(n):
                     pfb_unbound.pfb_db_enqueue(("resolver",))  # sync -> persistent WAL conn
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 errors.append(e)
 
         def php_side():
@@ -428,7 +428,7 @@ class TestDbConcurrencyAndPerf:
                     con.execute("UPDATE resolver SET totalqueries = totalqueries + 1 WHERE row = 0")
                     con.commit()
                 con.close()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 errors.append(e)
 
         t1 = threading.Thread(target=py_side)
