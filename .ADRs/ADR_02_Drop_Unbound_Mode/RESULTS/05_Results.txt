@@ -76,6 +76,34 @@ WATCH-OUTS / KNOWN RESIDUALS (harmless; optional later cleanup)
   `break;` is unreachable after the unconditional `continue 2;` (cosmetic).
 - A few orphaned comments / double-blank-lines where native blocks were removed.
 
+UPDATE (post-P5 follow-up — commit acb31a7): the residuals listed above are RESOLVED
+-------------------------------------------------------------------------------------
+The "KNOWN RESIDUALS" text above is left intact as originally written. After P5, a
+dedicated follow-up commit (acb31a7) cleaned all three items:
+- Removed the dead $pfb['dnsbl_sync'] read and the "Resolver Live Sync"
+  (pfb_dnsbl_sync) UI field — its pconfig seed, POST save, and the now-empty
+  enable_python() JS function + its call.
+- Removed the unreachable `break;` after `continue 2;` in the DNSBL Block log filter
+  (and a stray blank line).
+- Removed the orphaned "// DEBUG Live Sync" comment.
+Re-verified after acb31a7: php -l clean, delimiter-balanced, ruff clean, pytest 163;
+`grep -rn "pfb_dnsbl_sync\|dnsbl_sync" src/` -> no matches.
+
+Why this divergence existed (the residuals were known but deferred, not missed):
+Each ADR-02 phase was committed atomically and verified strictly against its own
+phase prompt's scope, to keep the history reviewable and bisectable. The P5 prompt
+scoped the phase to "collapse the dnsbl_mode / dnsbl_py_blacklist branches in
+alerts/widget, then remove the now-unread definitions." These three items were NOT
+mode branches — they were code that became DEAD as a side effect of EARLIER phases
+(the Live Sync feature was deleted in P3/P4; the `break;` only went dead once P5
+made the preceding `continue 2;` unconditional). Folding that unrelated dead-code
+removal into P5 would have widened the commit past its stated contract and mixed two
+concerns, and the Resolver Live Sync UI removal also touched a different file region
+(the DNSBL settings form) than P5's targets. So they were deliberately deferred,
+recorded here as residuals, and then cleaned in a separate single-purpose commit at
+the maintainer's request. Net effect on the package is identical; only the commit
+boundary differs.
+
 ================================================================================
 OUTSTANDING — MANUAL SMOKE TEST (owner: MAINTAINER)  ** required before Accept **
 ================================================================================
