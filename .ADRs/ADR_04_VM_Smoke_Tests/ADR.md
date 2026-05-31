@@ -1,0 +1,174 @@
+# ADR-04: End-to-end smoke tests against a real pfSense VM in CI
+
+- **Status:** **Proposed** (2026-05-31)
+- **Date:** 2026-05-31
+- **Branch:** `adr/04` (off `devel`) / **Component(s):** new dev-only tooling — `packer/`, `tests/smoke/`, `.github/workflows/` (a build workflow + a smoke workflow); reuses `scripts/deploy.sh`. **No shipped (`src/`) code changes.**
+- **Target runtime:** the harness runs on a GitHub-hosted `ubuntu-latest` runner (Python 3.11+, **dev-only third-party deps allowed** — see §5). The system under test is **pfSense CE (latest stable, CE only)** in a QEMU/KVM VM, driving the real `pfb_unbound.py` (Python in Unbound's `pythonmod`) and the real PHP/`pfctl` IP path.
+- **Test suite:** new `tests/smoke/` (pytest, marker `smoke`, **deselected from the default run**); existing `tests/test_pfb_unbound.py` is untouched.
+
+---
+
+## 1. Context
+
+### Today
+Every prior ADR (01 §3, 02, 03 §3/§7) records the same hole: **there is no live Unbound — and no live pfSense — in CI.** Correctness of the DNSBL hot path and the IP/firewall path is verified only by:
+
+- `tests/test_pfb_unbound.py` — a pytest **oracle** that imports `pfb_unbound.py` with Unbound's API symbols stubbed (`stubs/python/unboundmodule.py`, copied onto `builtins` by `tests/conftest.py`). It pins *matcher logic*, not the running resolver.
+- A **manual smoke checklist owned by the maintainer** (ADR-01 §7, ADR-03 §7 / `RESULTS/03_Results.txt`) — run by hand on a physical/VM pfSense box via `scripts/deploy.sh`, never automated.
+
+So a regression that only manifests inside a running Unbound, or in the `pfctl` alias-table / firewall-rule path, or in the PHP↔Python sqlite coexistence, is **invisible to CI** and caught only if a human remembers to run the checklist. ADR-03 shipped "IMPLEMENTED (pending smoke test)" precisely because of this.
+
+### Load-bearing facts (verified)
+1. **Deploy already exists.** `scripts/deploy.sh <ssh-target>` rsyncs `src/usr/` and `src/etc/` to a live box, then `pfSsh.php playback svc restart unbound` + `... svc restart nginx`. It is the deploy mechanism the harness reuses unchanged — only an SSH-reachable target is needed.
+2. **pfBlockerNG has a first-class PHP CLI** (the cron entry point), in `src/usr/local/www/pfblockerng/pfblockerng.php`:
+   - `:66` `clearip`, `:72` `cleardnsbl` — reset state.
+   - `:173` gate → `:179` switch: `:188` **`update`** → `sync_package_pfblockerng('cron')` (Force update, IP **and** DNSBL); `:184` **`updateip`** / `:185` **`updatednsbl`** (targeted, faster per matrix case); `:180` `cron`.
+   - Invoked as **`/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update`** — the *exact* production entry point: the cron job is `… pfblockerng.php cron` (`pfblockerng.inc:10610`, installed `:10631`) and the package self-invokes the same way (`inc:7961/8086/9000`). The harness uses it for **fidelity** (drives the real path, no wrapper) — *not* because `pfSsh.php playback` is worse. Note there is **no `pfblockerng` playback script** shipped (the `pfSsh.php playback pfblockerng update` at `deploy.sh:93` is only an echoed tip, unverified); the `svc restart` playbacks deploy.sh runs are real pfSense built-ins.
+3. **The IP path is observable over SSH.** `pfblockerng.sh` drives `pathpfctl=/sbin/pfctl`; pfBlockerNG materialises each list into a pf alias table. `pfctl -t <alias> -T show` dumps a table's members and `pfctl -sr` dumps the ruleset — enough to assert the IP side without a UI.
+4. **The DNSBL response set is small and enumerable.** `pfb_unbound.py` returns one of a few shapes: `NXDOMAIN` (9 refs), a null IP (`0.0.0.0`/configured null-block VIP), or a DNSBL-webserver/VIP answer (`set_return_msg`, 24 refs). A `dig`-level assertion (rcode + record) distinguishes them.
+5. **Existing CI shape to mirror.** `.github/workflows/test.yml` runs on `push` (main/devel) + `pull_request`, on `ubuntu-latest`, a `python-version` matrix (3.11–3.13), `pip install pytest` → `python -m pytest`. The smoke workflow is a **separate** workflow (different cost/runtime profile), not a new job in `test.yml`.
+6. **Dev-only third-party deps are already precedent.** Shipped code (`pfb_unbound.py`) is stdlib-only because it runs in Unbound's loader; **dev tooling is not** — ADR-01's `benchmarks/requirements.txt` pulled in `pytest-benchmark`/`pympler`. The smoke harness (in `tests/smoke/`, never shipped in the release archive) may therefore depend on `dnspython`/`paramiko`/`oras`.
+7. **No pfSense cloud image exists to borrow; the OS install is the only hard part.** pfSense CE ships only as installer media; there is no free, redistributable cloud image. Fully unattended install **is possible but unofficial and fragile** — it needs media surgery (an `etc/installerconfig` script + `rc.local` edits: `TERM=vt100`, comment out the console-type dialog) or brittle `boot_command` keystrokes; Netgate doesn't support it (uses `pfi.conf`, not clean FreeBSD `installerconfig`), reports say it doesn't fully automate, and it is version-fragile. **Key seam:** everything downstream consumes only the published qcow2 (`oras pull`), so it is **install-method-agnostic** — the OS install can be automated *or* done by hand once per CE version without affecting the harness. pfSense **Plus** is license-encumbered and **out of scope** (CE only).
+
+---
+
+## 2. Decision
+
+Build a CI smoke harness that boots a **real pfSense CE VM**, deploys the branch-under-test with the existing `scripts/deploy.sh`, drives pfBlockerNG via its PHP CLI, feeds it lists from **mock HTTP servers on the runner**, and asserts both the IP path (`pfctl`) and the DNS path (`dig`) with **pytest**. Image **build** and per-PR **test** are two separate workflows; the image is cached in GHCR.
+
+**The premise is unproven and is falsified first (Phase 1), before any Packer investment** — exactly the discipline ADR-01 lacked (built 8 phases, then rejected on evidence).
+
+| Area | Decision |
+| --- | --- |
+| **Runner** | GitHub-hosted `ubuntu-latest` with `/dev/kvm` (nested virt). **Spike-gated** (Phase 1): if boot-time/flakiness misses the kill-threshold (§7), pivot to a self-hosted runner — recorded in the ADR, not shipped flaky. |
+| **VM** | QEMU `x86_64` + KVM accel, headless, serial console. Single **pfSense CE (latest stable)** guest. Booted in the test job with plain `qemu-system-x86_64` — **Packer is not invoked at test time**. |
+| **Image build (split: base OS vs provisioning)** | Two layers, **one output contract** (a versioned qcow2 in GHCR), so the fragile part is isolated. **(a) Base OS — canonical mode is "seed once, upgrade in place":** a maintainer does **one clean manual install**, archived as the seed; each subsequent CE release is produced by **booting the prior image and running pfSense's own upgrader** (`pfSense-upgrade`, the CLI behind System → Update) → re-snapshot → publish. **Re-baseline with a fresh clean install on a MAJOR version jump** (where the upgrader is riskiest and cruft matters); upgrade-in-place for patch/minor. *(Packer-from-ISO via installerconfig/keystrokes stays an optional, spike-gated automation of the clean install — not required.)* **(b) Provisioning — always automated** (Packer `qemu` builder booting the base via `disk_image = true`, or a script): bakes in a **test SSH key** (root SSH), **pfBlockerNG-devel installed**, a known base `config.xml`, serial console, Unbound `local-data` for the hermetic control domains. Parameterised by `PFSENSE_CE_VERSION`. Because `deploy.sh` rsyncs pfBlockerNG **fresh every test run**, only the package's deps/dirs (not its code) must survive an upgrade. The bakeable layer stays scripted, so neither manual install nor in-place upgrade poisons reproducibility — **provided the seed + each snapshot are archived** (see versioning). |
+| **Image store / versioning** | Built `qcow2` pushed to **GHCR as an OCI artifact** via `oras`, tagged by `PFSENSE_CE_VERSION`. **Single supported version = latest stable CE** (no broad matrix; **CE only, no Plus**). Build workflow is **`workflow_dispatch` + scheduled**, re-run on a CE bump; the test workflow pulls the current tag. **Retain the archived clean-install seed AND every published version snapshot** (don't overwrite) — this is what makes the upgrade-in-place chain recoverable (rebuild from the last good clean base) and auditable (how each tag was produced), restoring the reproducibility a long upgrade chain would otherwise erode. The GHCR package is **private to the org** (see §3 redistribution risk). |
+| **Deploy** | Reuse **`scripts/deploy.sh <ssh-target>`** unchanged (rsync `src/` + restart unbound/nginx). The harness only provides the SSH target (port-forwarded) and the baked-in key. |
+| **Config injection** | Per matrix case, set the pfBlockerNG config over SSH via a **`php -r` snippet** using pfSense's config API (`parse_config` / `config_set_path` / `write_config`) — set the feed URL(s), DNSBL response mode, whitelist, wildcard/exact, etc. |
+| **Reload / update** | `ssh <vm> /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php <verb>` — `updatednsbl` / `updateip` for targeted (fast) per-case reloads, `update` for full; `clearip` / `cleardnsbl` to reset between cases. (Fact 2.) |
+| **Mock feeds** | A small **stdlib `http.server`** on the runner serving fixture IP lists + DNSBL lists; the guest fetches them at `http://10.0.2.2:<port>/...` (QEMU user-net host alias). No external network needed for feeds. |
+| **DNS probe** | `dig`/`dnspython` against the guest's port 53 (QEMU `hostfwd` udp/tcp 53→runner). Assert **rcode + record** vs the expected block shape (fact 4). |
+| **IP probe** | `ssh <vm> /sbin/pfctl -t <alias> -T show` (table members) and `pfctl -sr` (rules) vs the IPs the mock feed served. |
+| **Hermetic DNS** | Non-blocked "control" domains resolve via **Unbound `local-data`** baked into the image (or a mock upstream), so positive/passthrough cases are deterministic **without runner internet** and don't depend on real DNS. |
+| **Test driver / isolation** | **pytest** in `tests/smoke/`, every VM test under marker **`smoke`**, **deselected from the default `python -m pytest`** (config in `pyproject.toml`). Only the smoke workflow runs `pytest -m smoke` (it needs KVM + the GHCR image). Deps (`dnspython`, `paramiko`, `oras`) live in `tests/smoke/requirements.txt`. |
+
+### Semantics that MUST be preserved (the contract — pin before relying on it)
+This ADR adds tooling, not behaviour; the "contract" is **the probe→expectation invariants the harness encodes**, each pinned by a passing case in the thin slice (Phase 5) before the matrix is trusted/expanded:
+
+- **The harness must distinguish a true block from a true pass.** A blocked domain returns the configured block shape (NXDOMAIN / null-IP / VIP per fact 4); a whitelisted or unlisted control domain returns its `local-data` answer — and a *failure to inject/reload* must make the assertion **fail**, not silently pass (guard: a deliberately-wrong expectation must go red).
+- **IP path:** an IP present in the served feed appears in the named pf alias table (`pfctl -T show`); an IP not in the feed does not. A rule referencing the alias exists (`pfctl -sr`).
+- **Determinism without internet:** every assertion resolves from mock feeds + `local-data`; a run with the runner's egress blocked must still pass (no hidden dependency on real upstreams/feeds).
+- **Reset between cases:** `clearip`/`cleardnsbl` + reload returns the VM to a known state so cases don't leak into each other (or each case gets a fresh boot/snapshot — Phase 3 decides).
+
+### Explicitly kept / out of scope
+- **Web-UI browsing / Selenium** — out (per the request; UI is exercised only via the PHP CLI + SSH).
+- **pfSense Plus**, and a **multi-version matrix** — out (CE latest-stable only; licensing + scope).
+- **GeoIP/MaxMind/ASN feeds** (`dc`/`bu`/`asn` verbs) — out (license-encumbered downloads); the mock feeds cover plain IP + DNSBL lists only.
+- **Stable channel** — the harness deploys `devel` only initially (`deploy.sh` default).
+- **Broad DNSBL matrix** (SafeSearch, regex, HSTS, TLD, full noAAAA/AAAA) — deferred; Phase 5 lands a **thin vertical slice** and §7 documents how to extend it.
+- **`src/` code** — unchanged. If a smoke test reveals a bug, the fix is a **separate** change with its own unit test; this ADR only builds the harness.
+
+---
+
+## 3. Consequences
+
+**Positive**
+- Closes the "no live Unbound/pfSense in CI" gap that every prior ADR deferred to a human — the manual smoke checklist (ADR-01 §7, ADR-03 §7) becomes (partly) automated and regression-guarded.
+- Exercises the **real** integrated system: Unbound + `pfb_unbound.py`, the PHP reload/cron path, `pfctl` tables/rules, and the PHP↔Python sqlite coexistence (ADR-03) — none of which the unit oracle can reach.
+- A parametrised pytest matrix makes "test all combinations of DNSBL settings" a tractable, growable target instead of a manual ritual.
+- The "seed once, upgrade in place" image strategy tests an **upgraded** box — what most production pfSense installs actually are — so it exercises upgrade-path effects (config migration, package re-add) a pristine install never would.
+
+**Negative / risks**
+- **Premise risk (highest):** unattended pfSense CE install may not be cleanly automatable/reproducible; GH-hosted KVM may be too slow or flaky for a FreeBSD guest. **Mitigated by the Phase 1 spike + explicit kill-threshold (§7) before any Packer work.**
+- **Redistribution risk:** a built pfSense image carries Netgate binaries/trademarks; publishing it could violate Netgate's terms. **Mitigated:** GHCR package **private to the org**; ADR requires reviewing Netgate's distribution terms before any public image, and building from CE installer media we are licensed to use.
+- **Maintenance cost:** the image must be rebuilt when CE bumps (tied into the CLAUDE.md "minimum supported CE version changes" checklist); the matrix and fixtures need upkeep as pfBlockerNG evolves.
+- **CI cost/time:** booting a VM per PR is far heavier than the unit suite — hence build/test split, image caching, targeted (`updatednsbl`) reloads, and a thin slice. If per-PR time is unacceptable, the smoke workflow can be gated (label / `workflow_dispatch` / nightly) rather than every-PR — decided in Phase 6.
+- **Flake surface:** networking (`hostfwd`), boot races, and reload timing are classic CI flake sources; the harness must wait on readiness signals, not sleeps, and retry the SSH/DNS round-trip with bounded backoff.
+- **Image drift (upgrade-in-place):** an image walked across many CE releases accumulates cruft and diverges from a clean install of the same version. Mitigated by **re-baselining on major version jumps** and **archiving the seed + every snapshot** (rebuild from the last clean base; audit trail). A half-completed upgrade can brick a snapshot — kept recoverable by the retained seed.
+
+---
+
+## 4. Requirements (acceptance)
+1. **Boots & controls in CI:** the GH-hosted smoke workflow pulls the GHCR image, boots the pfSense VM, SSHes in, and runs `pfctl` + `dig` — green, within the time/stability budget (§7).
+2. **Deploys the branch-under-test:** `scripts/deploy.sh` lands the working-tree `src/` onto the VM and the reload (`pfblockerng.php update`) succeeds.
+3. **Asserts both paths (thin slice):** at least one IP alias-table+rule case and the DNSBL cases (exact→NXDOMAIN/null, one wildcard, one whitelist passthrough) pass — and a deliberately-wrong expectation goes red (no false-green).
+4. **Hermetic:** the whole matrix passes with the runner's external egress blocked (mock feeds + `local-data` only).
+5. **Default suite unaffected:** `python -m pytest` (no `-m smoke`) runs exactly as today — no new deps, no VM, no failures.
+
+---
+
+## 5. Constraints (from `CLAUDE.md`)
+- **Shipped code is untouched.** The stdlib-only rule applies to `pfb_unbound.py` (runs in Unbound); it does **not** bind the dev harness. `tests/smoke/` may use third-party deps (`dnspython`, `paramiko`, `oras`) pinned in `tests/smoke/requirements.txt` — precedent: `benchmarks/requirements.txt`. None of this ships in the release archive (which contains only `src/`).
+- **Python harness:** 3.11+; 4-space indent; type hints on new fns; no bare `except`. Run `python -m pytest` after any `tests/` change; it must stay green **and** the `smoke` marker must be deselected by default (`pyproject.toml` `addopts`/`markers`).
+- **Shell:** any new shell (boot helper, install hooks) is **POSIX `sh`**, quoted expansions, absolute binary paths; ShellCheck clean (`.shellcheckrc` rules).
+- **Packer/HCL & YAML:** match `.editorconfig`; keep workflows lint-clean.
+- `ruff check .` / `ruff format .` clean before each commit; keep `.flake8` in sync if Ruff config changes.
+- Commit style `<scope>: <imperative summary>` (e.g. `ci:`, `dev:`, `test:`); **work inline on `adr/04`, one commit per phase, push directly** (PR only if the push is rejected). PR bodies via `--body-file`.
+- **Docs:** updating the supported CE version (and thus rebuilding the image) is added to the CLAUDE.md / README version-bump checklist (Phase 6).
+
+---
+
+## 6. Action plan
+Each phase is one commit, leaves `python -m pytest` (default, no `-m smoke`) green, and pushes to `adr/04`. The **de-risking spike is front-loaded** (Phase 1) so the expensive Packer/matrix work is never built on an unproven premise.
+
+### Phase 1 — Spike & kill-gate: prove KVM boot + control round-trip
+Prompt: `01_Spike_Boot_Roundtrip.txt`
+- On `ubuntu-latest`: confirm `/dev/kvm`; boot a **hand-built** pfSense+pfBlockerNG `qcow2` (maintainer-provided, stored privately for the spike) headless via `qemu-system-x86_64` with the `hostfwd` map (SSH + DNS).
+- SSH in (baked key) → `pfctl -sr`; `dig @<vm>` a baked `local-data` name; run `pfblockerng.php update`.
+- **Measure** boot-to-ready time and pass/fail over N≥5 runs; **record vs the kill-threshold (§7)**. Lands a minimal `.github/workflows/smoke-spike.yml` + boot helper + the recorded numbers in `RESULTS/01_Results.txt`.
+- **Gate:** miss the threshold → STOP; record the pivot (self-hosted) before Phase 2.
+
+### Phase 2 — Packer template + image-build workflow → GHCR
+Prompt: `02_Packer_Image_GHCR.txt`
+- `packer/` QEMU template: unattended pfSense CE install (serial console + installer config), `PFSENSE_CE_VERSION` parameter; bake test SSH key (root SSH), pfBlockerNG-devel, base `config.xml`, Unbound `local-data` control domains.
+- `.github/workflows/build-image.yml` (`workflow_dispatch` + scheduled): build, then `oras push` the `qcow2` to **private GHCR** tagged by CE version (+ template hash).
+- Reproduce the spike's hand-built image **reproducibly**; verify the published image boots and passes the Phase 1 round-trip.
+
+### Phase 3 — pytest smoke scaffolding: VM fixture + marker + mock feeds
+Prompt: `03_Pytest_Smoke_Scaffolding.txt`
+- `tests/smoke/` with `requirements.txt` (`dnspython`, `paramiko`, `oras`); `pyproject.toml`: register marker `smoke`, **deselect by default**.
+- Session-scoped fixture: `oras pull` the GHCR image → boot VM → wait on readiness (SSH+DNS reachable, not a sleep) → yield connection info → teardown. Decide per-case isolation (fresh boot vs snapshot-revert vs `clear*`+reload).
+- Stdlib mock HTTP feed server fixture (serves fixture IP/DNSBL lists at `10.0.2.2:<port>`).
+- A trivial `pytest -m smoke` test (boot + SSH `pfctl -sr` + `dig` a `local-data` name) proves the scaffolding; the **default** `python -m pytest` still ignores everything `smoke`.
+
+### Phase 4 — Config-injection + deploy + reload helpers
+Prompt: `04_Config_Inject_Deploy_Reload.txt`
+- Helper to `scripts/deploy.sh` the working tree onto the VM (SSH target from the fixture).
+- `php -r` config-injection helper: set feed URL(s), DNSBL response mode, whitelist, wildcard/exact for a case via the pfSense config API; reload via `pfblockerng.php updatednsbl`/`updateip`/`update`; reset via `clearip`/`cleardnsbl`.
+- DNS-probe and pfctl-probe helpers (rcode+record; table members + rule presence). Pin them with a self-test: a wrong expectation must fail.
+
+### Phase 5 — Thin vertical-slice matrix
+Prompt: `05_Thin_Slice_Matrix.txt`
+- IP: feed N IPs → assert alias table membership + rule presence; assert a non-fed IP is absent.
+- DNSBL (parametrised): exact block → NXDOMAIN **and** null-IP modes; one wildcard (`*.example.com` blocks `a.b.example.com`, self); one whitelist passthrough (resolves via `local-data`).
+- Hermetic check: passes with egress blocked. False-green guard: a deliberately-wrong case is xfail/asserted-red.
+
+### Phase 6 — Per-PR workflow wiring + docs + DoD
+Prompt: `06_Workflow_Docs_DoD.txt`
+- `.github/workflows/smoke.yml`: pull GHCR image → `pytest -m smoke`; decide the trigger (every-PR vs label/`workflow_dispatch`/nightly) on the Phase 1 timing.
+- README: how to run smoke locally, how to rebuild the image on a CE bump, how to **extend the matrix**; add the image-rebuild step to the CE-version-bump checklist (CLAUDE.md/README).
+- Fold the spike workflow into the final one; finalise §7 manual checklist + reject criteria.
+
+---
+
+## 7. Definition of done
+- `python -m pytest` (default) green and **unchanged** — no new deps pulled, `smoke` deselected.
+- `pytest -m smoke` green in the smoke workflow on GH-hosted KVM: VM boots from the GHCR image, branch deploys via `scripts/deploy.sh`, the thin-slice IP + DNSBL cases pass, the run is **hermetic** (egress blocked), and a deliberately-wrong expectation goes **red**.
+- The Packer image builds reproducibly and is published (private GHCR) tagged by CE version; rebuild-on-bump documented in the CE-version checklist.
+- `ruff` clean; ShellCheck clean on any new `sh`; workflows lint-clean.
+- README documents run/rebuild/extend.
+- Status → **Accepted** only after the smoke workflow is green on `adr/04`'s CI **and** the maintainer confirms the manual items below on a live box.
+
+### Reject criteria (what kills this ADR — decide cheaply, in Phase 1, before Packer)
+- **Unattended CE install not automatable:** this is **NOT a reject** — it is the accepted fallback. If Packer can't headlessly install CE, the maintainer hand-installs the base OS once per CE version and the automated provisioning layer + `oras push` proceed unchanged (§2 "Image build"). It becomes a reject **only** if *even a manually-built base + automated provisioning* cannot produce a working bootable GHCR image — which the Phase-1 spike (which boots a hand-built image) already disproves before any Packer work.
+- **GH-hosted KVM unfit:** if boot-to-ready + thin-slice run cannot complete reliably within the budget — proposed kill-threshold **≤ ~20 min per job and ≥ 4/5 clean runs** in Phase 1 (tune with the maintainer) — → do **not** ship flaky every-PR CI; pivot to self-hosted or a gated (nightly/label) trigger, recorded in the ADR.
+- **Redistribution blocked:** if Netgate's terms forbid storing the built image even in private GHCR → reject the GHCR-caching approach; fall back to build-in-job or maintainer-hosted storage.
+
+### Manual smoke (owner: maintainer) — required before Accept
+The automated matrix is a thin slice; before flipping to Accepted, the maintainer confirms on a live box that the harness's expectations match real behaviour for at least:
+- [ ] An exact DNSBL block returns the configured response (NXDOMAIN / null-IP / VIP) and is logged.
+- [ ] A wildcard `zone` block catches a deep subdomain and the parent.
+- [ ] A whitelisted domain resolves normally.
+- [ ] An IP feed populates the expected pf alias table and a rule references it.
+- [ ] The smoke workflow's pass/fail matches these observations (no false-green / false-red).
