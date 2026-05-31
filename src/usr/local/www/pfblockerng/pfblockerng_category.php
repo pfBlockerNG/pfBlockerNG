@@ -497,25 +497,14 @@ if (isset($savemsg)) {
 
 						$log_error = '';
 						if ($gtype == 'dnsbl') {
-							if ($pfb['dnsbl_py_blacklist']) {
-								$log_options = ['enabled'	=> 'DNSBL WebServer/VIP',
-										'disabled'	=> 'Null Block (no logging)',
-										'disabled_log'	=> 'Null Block (logging)'];
-							} else {
-								$log_options = ['enabled'	=> 'DNSBL WebServer/VIP',
-										'disabled'	=> 'Null Block (no logging)'];
-							}
+							$log_options = ['enabled'	=> 'DNSBL WebServer/VIP',
+									'disabled'	=> 'Null Block (no logging)',
+									'disabled_log'	=> 'Null Block (logging)'];
 
 							// Global DNSBL Logging/Blocking mode
 							if (!empty($pfb['dnsbl_global_log'])) {
-								if (!$pfb['dnsbl_py_blacklist'] && $pfb['dnsbl_global_log'] == 'disabled_log') {
-									$logtype		= 'enabled';
-									$log_error		= "Global Log 'Null Block (logging)' not available in Unbound Mode."
-												. " Re-configure Global Log option!";
-								} else {
-									$logtype		= $pfb['dnsbl_global_log'];
-									$log_options[$logtype]	= "{$log_options[$logtype]} (Global)";
-								}
+								$logtype		= $pfb['dnsbl_global_log'];
+								$log_options[$logtype]	= "{$log_options[$logtype]} (Global)";
 							}
 						}
 						else {

@@ -418,14 +418,9 @@ $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
 
 $options_order			= [ 'default' => 'Default', 'primary' => 'Primary' ];
 
-if ($pfb['dnsbl_py_blacklist']) {
-	$options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
-					'disabled'	=> 'Null Blocking (no logging)',
-					'disabled_log'	=> 'Null Blocking (logging)' ];
-} else {
-	$options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
-					'disabled'	=> 'Null Blocking (no logging)' ];
-}
+$options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
+				'disabled'	=> 'Null Blocking (no logging)',
+				'disabled_log'	=> 'Null Blocking (logging)' ];
 
 $options_suppression_cidr	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 17, 1), range(1, 17, 1));
 
@@ -1508,21 +1503,13 @@ if ($gtype == 'dnsbl') {
 			. 'When set as \'Primary\', this DNSBL Group will be processed before all other DNSBL Groups/Category(s)')
 	  ->setAttribute('style', 'width: auto');
 
-	if ($pfb['dnsbl_py_blacklist']) {
-		$log_text = 'Default: <strong>DNSBL WebServer/VIP</strong><br />'
-				. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-				. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-				. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br /><br />'
-				. 'Blocked domains will be reported to the Alert/Python Block Table.<br />'
-				. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
-				. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
-	} else {
-		$log_text = 'Default: <strong>Enabled</strong><br />'
-				. '&#8226 When \'Enabled\', Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-				. '&#8226 When \'Disabled\', <strong>\'0.0.0.0\'</strong> will be used instead of the DNSBL VIP.<br />'
-				. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
-				. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
-	}
+	$log_text = 'Default: <strong>DNSBL WebServer/VIP</strong><br />'
+			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
+			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
+			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br /><br />'
+			. 'Blocked domains will be reported to the Alert/Python Block Table.<br />'
+			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
+			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
 
 	$section->addInput(new Form_Select(
 		'logging',

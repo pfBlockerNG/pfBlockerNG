@@ -610,16 +610,9 @@ function pfBlockerNG_get_header($mode='') {
 
 	$unbound_validate = FALSE;
 	if (file_exists("{$pfb['dnsbldir']}/unbound.conf")) {
-		if ($pfb['dnsbl_mode'] == 'dnsbl_python') {
-			$py_mode = '(Python mode)';
-			if (strpos(file_get_contents("{$pfb['dnsbldir']}/unbound.conf"), 'pfb_unbound.py') !== FALSE) {
-				$unbound_validate = TRUE;
-			}
-		} else {
-			$py_mode = '(Unbound mode)';
-			if (strpos(file_get_contents("{$pfb['dnsbldir']}/unbound.conf"), 'pfb_dnsbl') !== FALSE) {
-				$unbound_validate = TRUE;
-			}
+		$py_mode = '(Python mode)';
+		if (strpos(file_get_contents("{$pfb['dnsbldir']}/unbound.conf"), 'pfb_unbound.py') !== FALSE) {
+			$unbound_validate = TRUE;
 		}
 	}
 
@@ -637,7 +630,7 @@ function pfBlockerNG_get_header($mode='') {
 		}
 
 		// Check for any Python Integration errors
-		if ($pfb['dnsbl_mode'] == 'dnsbl_python' && (int)@filesize($pfb['pyerrlog']) > 0) {
+		if ((int)@filesize($pfb['pyerrlog']) > 0) {
 			$dnsbl_status	= 'fa-solid fa-exclamation-circle text-warning';
 			$dnsbl_msg	= "DNSBL {$py_mode} errors Found! Review py_error.log";
 		}
@@ -645,7 +638,7 @@ function pfBlockerNG_get_header($mode='') {
 		$dnsbl_status		= 'fa-solid fa-times-circle text-danger';
 
 		// Check for any Python Integration errors
-		if ($pfb['dnsbl_mode'] == 'dnsbl_python' && (int)@filesize($pfb['pyerrlog']) > 0) {
+		if ((int)@filesize($pfb['pyerrlog']) > 0) {
 			$dnsbl_msg = "DNSBL {$py_mode} is Disabled with errors! Review py_error.log";
 		} else {
 			$dnsbl_msg = "DNSBL {$py_mode} is Disabled.";

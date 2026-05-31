@@ -429,7 +429,7 @@ $options_pfbdnsblstat	= [	'dnsblchart'	=> 'DNSBL Event Timeline',
 				'dnsblgpblock'	=> 'Top Blocked Group',
 				'dnsblfeed'	=> 'Top Blocked Feed',
 				'dnsblip'	=> 'Top Source IP',
-				'dnsblagent'	=> $pfb['dnsbl_py_blacklist'] ? 'Top Blocking mode' : 'Top User-Agent',
+				'dnsblagent'	=> 'Top Blocking mode',
 				'dnsbltld'	=> 'Top TLD',
 				'dnsblwebtype'	=> 'Top Webpage Types',
 				'dnsblmode'	=> 'Top DNSBL Modes',
@@ -941,17 +941,9 @@ if (isset($_POST) && !empty($_POST)) {
 
 			// Collect Domains/Sub-Domains to Whitelist (used by grep -vF -f cmd to remove Domain/Sub-Domains)
 			if ($wildcard) {
-				if ($pfb['dnsbl_py_blacklist']) {
-					$dnsbl_remove = ".{$domain},,\n,{$domain},,\n";
-				} else {
-					$dnsbl_remove = ".{$domain} 60\n\"{$domain} 60\n";
-				}
+				$dnsbl_remove = ".{$domain},,\n,{$domain},,\n";
 			} else {
-				if ($pfb['dnsbl_py_blacklist']) {
-					$dnsbl_remove = ",{$domain},,\n,www.{$domain},,\n";
-				} else {
-					$dnsbl_remove = "\"{$domain} 60\n\"www.{$domain} 60\n";
-				}
+				$dnsbl_remove = ",{$domain},,\n,www.{$domain},,\n";
 			}
 
 			if (!empty($descr)) {
@@ -985,20 +977,12 @@ if (isset($_POST) && !empty($_POST)) {
 
 					$removed .= "{$cname} | ";
 
-					if ($pfb['dnsbl_py_blacklist']) {
-						$dnsbl_remove .= ",{$cname},,\n";
-					} else {
-						$dnsbl_remove .= "\"{$cname} 60\n";
-					}
+					$dnsbl_remove .= ",{$cname},,\n";
 
 					if ($wildcard) {
 						$whitelist .= '.';
 
-						if ($pfb['dnsbl_py_blacklist']) {
-							$dnsbl_remove .= ".{$cname},,\n";
-						} else {
-							$dnsbl_remove .= ".{$cname} 60\n";
-						}
+						$dnsbl_remove .= ".{$cname},,\n";
 					}
 					$whitelist .= "{$cname} # CNAME for ({$domain})";
 
@@ -1034,41 +1018,16 @@ if (isset($_POST) && !empty($_POST)) {
 			@file_put_contents("{$tmp}.adup", $dnsbl_remove, LOCK_EX);
 
 			if (file_exists("{$tmp}.adup") && filesize("{$tmp}.adup") > 0) {
-				if ($pfb['dnsbl_py_blacklist']) {
-					exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_data']} > "
-						. escapeshellarg("{$tmp}.tmp") . "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_data']}"); 
-					exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_zone']} > " . escapeshellarg("{$tmp}.tmp")
-						. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_zone']}");
-					pfb_unbound_python_whitelist('alerts');
-					pfb_reload_unbound('enabled', FALSE);
-				} else {
-					// Collect all matching whitelisted Domain/CNAME(s)
-					exec("{$pfb['ggrep']} -F -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['dnsbl_file']}.conf > " . escapeshellarg("{$tmp}.supp") . " 2>&1");
-
-					// Remove Whitelisted Domain from Unbound database
-					exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['dnsbl_file']}.conf > " . escapeshellarg("{$tmp}.tmp")
-						. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['dnsbl_file']}.conf");
-
-					// Remove Whitelisted Domain from DNSBL Feed
-					$table_esc = escapeshellarg("{$pfb['dnsdir']}/{$table}.txt");
-					exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$table_esc} > " . escapeshellarg("{$tmp}.tmp")
-						. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$table_esc}");
-				}
+				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_data']} > "
+					. escapeshellarg("{$tmp}.tmp") . "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_data']}"); 
+				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_zone']} > " . escapeshellarg("{$tmp}.tmp")
+					. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_zone']}");
+				pfb_unbound_python_whitelist('alerts');
+				pfb_reload_unbound('enabled', FALSE);
 			}
 
 			// Remove all Whitelisted Domain/CNAME(s) from Unbound using unbound-control
-			if (!$pfb['dnsbl_py_blacklist'] && file_exists("{$tmp}.supp") && filesize("{$tmp}.supp") > 0) {
 
-				exec("{$pfb['grep']} 'local-zone:' " . escapeshellarg("{$tmp}.supp") . " | {$pfb['cut']} -d '\"' -f2 > " . escapeshellarg("{$tmp}.zone") . " 2>&1");
-				exec("{$pfb['grep']} '^local-data:' " . escapeshellarg("{$tmp}.supp") . " | {$pfb['cut']} -d ' ' -f2 | tr -d '\"' > " . escapeshellarg("{$tmp}.data") . " 2>&1");
-
-				if (file_exists("{$tmp}.zone") && filesize("{$tmp}.zone") > 0) {
-					exec("{$pfb['chroot_cmd']} local_zones_remove < " . escapeshellarg("{$tmp}.zone") . " 2>&1");
-				}
-				if (file_exists("{$tmp}.data") && filesize("{$tmp}.data") > 0) {
-					exec("{$pfb['chroot_cmd']} local_datas_remove < " . escapeshellarg("{$tmp}.data") . " 2>&1");
-				}
-			}
 			unlink_if_exists("{$tmp}*");
 
 			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache
@@ -1179,13 +1138,8 @@ if (isset($_POST) && !empty($_POST)) {
 						unset($clists['dnsblwhitelist']['data']['www' . $entry]);
 					}
 
-					if ($pfb['dnsbl_py_blacklist']) {
-						@file_put_contents($pfb['unbound_py_data'], ",{$entry},,1,,\n", FILE_APPEND);
-						$dnsbl_py_changes = TRUE;
-					} elseif ($pfb['dnsbl'] == 'on') {
-						$domain_esc = escapeshellarg($entry);
-						exec("{$pfb['chroot_cmd']} local_data {$domain_esc} '60 IN A {$pfb['dnsbl_vip4']}' 2>&1");
-					}
+					@file_put_contents($pfb['unbound_py_data'], ",{$entry},,1,,\n", FILE_APPEND);
+					$dnsbl_py_changes = TRUE;
 				}
 			case 'delete_domainwildcard':
 				$type = 'DNSBL Whitelist';
@@ -1202,14 +1156,8 @@ if (isset($_POST) && !empty($_POST)) {
 							unset($clists['dnsblwhitelist']['data'][$entry]);
 						}
 
-						if ($pfb['dnsbl_py_blacklist']) {
-							@file_put_contents($pfb['unbound_py_zone'], ",{$entry},,1,,\n", FILE_APPEND);
-							$dnsbl_py_changes = TRUE;
-						} elseif ($pfb['dnsbl'] == 'on') {
-							$domain_esc = escapeshellarg($entry);
-							exec("{$pfb['chroot_cmd']} local_zone {$domain_esc} redirect 2>&1");
-							exec("{$pfb['chroot_cmd']} local_data {$domain_esc} '60 IN A {$pfb['dnsbl_vip4']}' 2>&1");
-						}
+						@file_put_contents($pfb['unbound_py_zone'], ",{$entry},,1,,\n", FILE_APPEND);
+						$dnsbl_py_changes = TRUE;
 					}
 				}
 
@@ -1357,7 +1305,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// For DNSBL python - Lock/unlock - Collect missing Feed/Group Name
-		if ($pfb['dnsbl_py_blacklist'] && $_POST['dnsbl_remove'] != 'unlock' && $dnsbl_type != 'python') {
+		if ($_POST['dnsbl_remove'] != 'unlock' && $dnsbl_type != 'python') {
 			$log_type = '1';
 			$pfb_feed = $pfb_group = 'Unknown';
 			if (file_exists("{$pfb['dnsbl_unlock']}.data")) {
@@ -1379,22 +1327,18 @@ if (isset($_POST) && !empty($_POST)) {
 				$py_file = $pfb['unbound_py_zone'];
 			}
 
-			if ($pfb['dnsbl_py_blacklist']) {
-				if ($dnsbl_type == 'python') {
-					@file_put_contents($pfb['unbound_py_wh'], "{$domain},0\n", FILE_APPEND | LOCK_EX);
-				}
-				else {
-					$tmp = tempnam('/tmp', 'dnsbl_alert_');
-					@file_put_contents("{$tmp}.adup", ",{$domain},,\n", LOCK_EX);
-					exec("{$pfb['ggrep']} -F -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} >> {$pfb['dnsbl_unlock']}.data"); // Store DNSBL Feed/Group Data
-					exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} > " . escapeshellarg("{$tmp}.tmp") . "; mv -f "
-						. escapeshellarg("{$tmp}.tmp") . " {$py_file}");
-					unlink_if_exists("{$tmp}*");
-				}
-				pfb_reload_unbound('enabled', FALSE);
-			} else {
-				exec("{$pfb['chroot_cmd']} {$cmd} {$domain_esc} 2>&1");
+			if ($dnsbl_type == 'python') {
+				@file_put_contents($pfb['unbound_py_wh'], "{$domain},0\n", FILE_APPEND | LOCK_EX);
 			}
+			else {
+				$tmp = tempnam('/tmp', 'dnsbl_alert_');
+				@file_put_contents("{$tmp}.adup", ",{$domain},,\n", LOCK_EX);
+				exec("{$pfb['ggrep']} -F -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} >> {$pfb['dnsbl_unlock']}.data"); // Store DNSBL Feed/Group Data
+				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} > " . escapeshellarg("{$tmp}.tmp") . "; mv -f "
+					. escapeshellarg("{$tmp}.tmp") . " {$py_file}");
+				unlink_if_exists("{$tmp}*");
+			}
+			pfb_reload_unbound('enabled', FALSE);
 
 			exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
 
@@ -1420,28 +1364,19 @@ if (isset($_POST) && !empty($_POST)) {
 
 		// Lock Domain
 		elseif ($_POST['dnsbl_remove'] == 'lock') {
-			if ($pfb['dnsbl_py_blacklist']) {
-				if ($dnsbl_type == 'python') {
-					pfb_unbound_python_whitelist('alerts');
-				}
-				else {
-					if ($dnsbl_type == 'TLD') {
-						$py_file = $pfb['unbound_py_zone'];
-					} else {
-						$py_file = $pfb['unbound_py_data'];
-					}
-
-					@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-				}
-				pfb_reload_unbound('enabled', FALSE);
+			if ($dnsbl_type == 'python') {
+				pfb_unbound_python_whitelist('alerts');
 			}
-			elseif ($pfb['dnsbl'] == 'on') {
-
+			else {
 				if ($dnsbl_type == 'TLD') {
-					exec("{$pfb['chroot_cmd']} local_zone {$domain_esc} redirect 2>&1");
+					$py_file = $pfb['unbound_py_zone'];
+				} else {
+					$py_file = $pfb['unbound_py_data'];
 				}
-				exec("{$pfb['chroot_cmd']} local_data {$domain_esc} '60 IN A {$pfb['dnsbl_vip4']}' 2>&1");
+
+				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
 			}
+			pfb_reload_unbound('enabled', FALSE);
 
 			// Remove Domain from unlock file
 			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
@@ -1449,27 +1384,18 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 		elseif ($_POST['dnsbl_remove'] == 'relock') {
 
-			if ($pfb['dnsbl_py_blacklist']) {
-				if ($dnsbl_type == 'python') {
-					pfb_unbound_python_whitelist('alerts');
-				}
-				else {
-					if ($dnsbl_type == 'TLD') {
-						$py_file = $pfb['unbound_py_zone'];
-					} else {
-						$py_file = $pfb['unbound_py_data'];
-					}
-					@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-				}
-				pfb_reload_unbound('enabled', FALSE);
+			if ($dnsbl_type == 'python') {
+				pfb_unbound_python_whitelist('alerts');
 			}
-			elseif ($pfb['dnsbl'] == 'on') {
-
+			else {
 				if ($dnsbl_type == 'TLD') {
-					exec("{$pfb['chroot_cmd']} local_zone {$domain_esc} redirect 2>&1");
+					$py_file = $pfb['unbound_py_zone'];
+				} else {
+					$py_file = $pfb['unbound_py_data'];
 				}
-				exec("{$pfb['chroot_cmd']} local_data {$domain_esc} '60 IN A {$pfb['dnsbl_vip4']}' 2>&1");
+				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
 			}
+			pfb_reload_unbound('enabled', FALSE);
 
 			// Add Domain to unlock file
 			pfb_unlock('unlock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
@@ -1477,28 +1403,18 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 		elseif ($_POST['dnsbl_remove'] == 'reunlock') {
 
-			if ($pfb['dnsbl_py_blacklist']) {
-				if ($dnsbl_type == 'python') {
-					pfb_unbound_python_whitelist('alerts');
-				}
-				else {
-					if ($dnsbl_type == 'TLD') {
-						$py_file = $pfb['unbound_py_zone'];
-					} else {
-						$py_file = $pfb['unbound_py_data'];
-					}
-					@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-				}
-				pfb_reload_unbound('enabled', FALSE);
+			if ($dnsbl_type == 'python') {
+				pfb_unbound_python_whitelist('alerts');
 			}
 			else {
-				$cmd = 'local_data_remove';
 				if ($dnsbl_type == 'TLD') {
-					$cmd = 'local_zone_remove';
+					$py_file = $pfb['unbound_py_zone'];
+				} else {
+					$py_file = $pfb['unbound_py_data'];
 				}
-				exec("{$pfb['chroot_cmd']} {$cmd} {$domain_esc} 2>&1");
-				exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
+				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
 			}
+			pfb_reload_unbound('enabled', FALSE);
 
 			// Remove Domain from unlock file
 			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
@@ -1820,7 +1736,7 @@ if ($alert_summary) {
 			if ($alert_view != 'dnsbl_stat') {
 				$unknown_msg = 'Unknown';
 			} else {
-				$unknown_msg = $pfb['dnsbl_py_blacklist'] ? 'DNSBL Webserver/VIP' : 'Not available for HTTPS alerts';
+				$unknown_msg = 'DNSBL Webserver/VIP';
 			}
 
 			$agent_cmd = '';
@@ -2064,25 +1980,14 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 			. "DNSBL Groupname:&emsp;[ {$fields[6]} ]\n"
 			. "DNSBL Feedname:&emsp;&nbsp;&nbsp;[ {$fields[8]} ]\n\n";
 
-		if ($pfb['dnsbl_py_blacklist']) {
-			$s_txt .= "Whitelist [ {$fields[2]} ]\n\n"
-				. "Note:&emsp;This will immediately remove the blocked Domain\n"
-				. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n" 
-				. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
-				. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
-				. "Whitelisting Options:\n\n"
-				. "1) Wildcard whitelist [ .{$fields[2]} ]\n"
-				. "2) Whitelist only [ {$fields[2]} ]\n";
-		} else {
-			$s_txt .= "Whitelisting Options:\n\n"
-				. "1) Wildcard whitelist [ .{$fields[7]} ]\n"
-				. "&emsp;This will immediately remove the blocked Domain/CNAMES from DNSBL.\n"
-				. "&emsp;(CNAMES: Define the external DNS server in Alert settings\n"
-				. "&emsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
-				. "2) Add [ {$fields[7]} ] to the 'TLD Exclusion customlist'\n"
-				. "&emsp;A Force Reload-DNSBL is Required!\n"
-				. "&emsp;After a Reload any new blocked Domains can be Whitelisted at that time.";
-		}
+		$s_txt .= "Whitelist [ {$fields[2]} ]\n\n"
+			. "Note:&emsp;This will immediately remove the blocked Domain\n"
+			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n" 
+			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
+			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
+			. "Whitelisting Options:\n\n"
+			. "1) Wildcard whitelist [ .{$fields[2]} ]\n"
+			. "2) Whitelist only [ {$fields[2]} ]\n";
 	}
 	else {
 		$s_txt = "Whitelist [ {$fields[2]} ]\n\n"
@@ -2434,51 +2339,47 @@ function convert_dnsbl_log($mode, $fields) {
 	// Lock/Unlock Domain Icon
 	$s_txt = '';
 	$unlock_dom = '&nbsp;&nbsp;&nbsp;';
-	if (($fields[6] != 'Unknown' && !$pfb['dnsbl_py_blacklist'] && $isMatch) || ($pfb['dnsbl_py_blacklist'])) {
 
-		if ((!$pfb['dnsbl_py_blacklist'] && $fields[5] != 'DNSBL_TLD') || $pfb['dnsbl_py_blacklist']) {
 
-			$tnote = "\n\nNote:&emsp;&#8226; Unlocking Domain(s) is temporary and may be automatically\n"
-				. "&emsp;&emsp;&emsp;&emsp;re-locked on a Cron or Force command with an Unbound Reload!\n"
-				. "&emsp;&emsp;&emsp;&nbsp;&#8226; Review Threat Source ( i ) Icon for Domain details.\n"
-				. "&emsp;&emsp;&emsp;&nbsp;&#8226; Clear your Browser and OS cache after each Lock/Unlock!";
+	$tnote = "\n\nNote:&emsp;&#8226; Unlocking Domain(s) is temporary and may be automatically\n"
+		. "&emsp;&emsp;&emsp;&emsp;re-locked on a Cron or Force command with an Unbound Reload!\n"
+		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Review Threat Source ( i ) Icon for Domain details.\n"
+		. "&emsp;&emsp;&emsp;&nbsp;&#8226; Clear your Browser and OS cache after each Lock/Unlock!";
 
-			if ($isPython) {
-				$unlock_type = 'python';
-			} else {
-				$unlock_type = $fields[5];
-			}
+	if ($isPython) {
+		$unlock_type = 'python';
+	} else {
+		$unlock_type = $fields[5];
+	}
 
-			if (!isset($dnsbl_unlock[$qdomain])) {
-				if ($isWhitelist_found) {
-					$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-						. "Whitelisted:&emsp;[ {$qdomain} ]\n\n"
-						. "This Domain can be temporarily Relocked into DNSBL\n"
-						. "by selecting the Unlock Icon!";
+	if (!isset($dnsbl_unlock[$qdomain])) {
+		if ($isWhitelist_found) {
+			$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
+				. "Whitelisted:&emsp;[ {$qdomain} ]\n\n"
+				. "This Domain can be temporarily Relocked into DNSBL\n"
+				. "by selecting the Unlock Icon!";
 
-					$unlock_dom = '<i class="fa-solid fa-unlock text-warning" id="DNSBL_RELCK|'
-							. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
-				}
-				else {
-					$unlock_dom = '<i class="fa-solid fa-lock text-danger" id="DNSBL_ULCK|'
-							. $qdomain . '|' . $unlock_type
-							. '" title="Unlock Domain: [ ' . $qdomain . '] from DNSBL?' . $tnote . '" ></i>';
-				}
-			} else {
-				if ($isWhitelist_found) {
-					$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-						. "Whitelisted:&emsp;[ {$wt_line} ]\n\n"
-						. "Unlock this Domain by selecting the Unlock Icon!";
+			$unlock_dom = '<i class="fa-solid fa-unlock text-warning" id="DNSBL_RELCK|'
+					. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
+		}
+		else {
+			$unlock_dom = '<i class="fa-solid fa-lock text-danger" id="DNSBL_ULCK|'
+					. $qdomain . '|' . $unlock_type
+					. '" title="Unlock Domain: [ ' . $qdomain . '] from DNSBL?' . $tnote . '" ></i>';
+		}
+	} else {
+		if ($isWhitelist_found) {
+			$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
+				. "Whitelisted:&emsp;[ {$wt_line} ]\n\n"
+				. "Unlock this Domain by selecting the Unlock Icon!";
 
-					$unlock_dom = '<i class="fa-solid fa-lock text-warning" id="DNSBL_REULCK|'
-						. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
-				}
-				else {
-					$unlock_dom = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|'
-						. $qdomain . '|' . $unlock_type . '" title="Re-Lock Domain: ['
-						. $qdomain . ' ] back into DNSBL?' . $tnote . '" ></i>';
-				}
-			}
+			$unlock_dom = '<i class="fa-solid fa-lock text-warning" id="DNSBL_REULCK|'
+				. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
+		}
+		else {
+			$unlock_dom = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|'
+				. $qdomain . '|' . $unlock_type . '" title="Re-Lock Domain: ['
+				. $qdomain . ' ] back into DNSBL?' . $tnote . '" ></i>';
 		}
 	}
 
@@ -3219,10 +3120,8 @@ $tab_array[] = array(gettext('IP Block Stats'),		$active['ip_block'],	'/pfblocke
 $tab_array[] = array(gettext('IP Permit Stats'),	$active['ip_permit'],	'/pfblockerng/pfblockerng_alerts.php?view=ip_permit_stat');
 $tab_array[] = array(gettext('IP Match Stats'),		$active['ip_match'],	'/pfblockerng/pfblockerng_alerts.php?view=ip_match_stat');
 
-if ($pfb['dnsbl_mode'] == 'dnsbl_python') {
-	$tab_array[] = array(gettext('DNS Reply'),		$active['reply'],		'/pfblockerng/pfblockerng_alerts.php?view=reply');
-	$tab_array[] = array(gettext('DNS Reply Stats'),	$active['dnsbl_reply_stat'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_reply_stat');
-}
+$tab_array[] = array(gettext('DNS Reply'),		$active['reply'],		'/pfblockerng/pfblockerng_alerts.php?view=reply');
+$tab_array[] = array(gettext('DNS Reply Stats'),	$active['dnsbl_reply_stat'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_reply_stat');
 $tab_array[] = array(gettext('DNSBL Block Stats'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat');
 display_top_tabs($tab_array, true);
 
@@ -3486,7 +3385,7 @@ if ($pfb['dnsbl'] == 'on') {
 }
 $section->add($group);
 
-if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_mode'] == 'dnsbl_python') {
+if ($pfb['dnsbl'] == 'on') {
 	$group = new Form_Group('DNS Reply Log Options');
 	$group->add(new Form_Select(
 		'pfbreplytypes',
@@ -3786,7 +3685,7 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 		))->setAttribute('title', 'Enter filter \'Group name\'.');
 		$section->add($group);
 
-		$f19_title = ($pfb['dnsbl_mode'] == 'dnsbl_python' ? gettext("DNSBL: Blocking Type") : gettext("DNSBL: Domain/Referer|URI|Agent"));
+		$f19_title = (gettext("DNSBL: Blocking Type"));
 		$group = new Form_Group(NULL);
 		$group->add(new Form_Input(
 			'filterlogentries_dnsbltype',
@@ -3807,77 +3706,75 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 
 if (!$alert_summary && ($alert_title == 'DNS Reply' || $alert_title == 'Unified Logs')) {
 
-	if ($pfb['dnsbl_mode'] == 'dnsbl_python') {
-		$group = new Form_Group('DNS Reply');
-		$group->add(new Form_Input(
-			'filterlogentries_replydate',
-			'Reply - Date',
-			'text',
-			$filterfieldsarray[2][89]
-		))->setAttribute('title', 'Enter filter \'DNS Reply Date\'.');
+	$group = new Form_Group('DNS Reply');
+	$group->add(new Form_Input(
+		'filterlogentries_replydate',
+		'Reply - Date',
+		'text',
+		$filterfieldsarray[2][89]
+	))->setAttribute('title', 'Enter filter \'DNS Reply Date\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replydomain',
-			'Reply - Domain',
-			'text',
-			$filterfieldsarray[2][85]
-		))->setAttribute('title', 'Enter filter \'DNS Reply Domain\'.');
-		$section->add($group);
+	$group->add(new Form_Input(
+		'filterlogentries_replydomain',
+		'Reply - Domain',
+		'text',
+		$filterfieldsarray[2][85]
+	))->setAttribute('title', 'Enter filter \'DNS Reply Domain\'.');
+	$section->add($group);
 
-		$group = new Form_Group(NULL);
-		$group->add(new Form_Input(
-			'filterlogentries_replysrcip',
-			'Reply - Source IP',
-			'text',
-			$filterfieldsarray[2][86]
-		))->setAttribute('title', 'Enter filter \'DNS Reply SRC IP\'.');
+	$group = new Form_Group(NULL);
+	$group->add(new Form_Input(
+		'filterlogentries_replysrcip',
+		'Reply - Source IP',
+		'text',
+		$filterfieldsarray[2][86]
+	))->setAttribute('title', 'Enter filter \'DNS Reply SRC IP\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replydstip',
-			'Reply - Resolved IP',
-			'text',
-			$filterfieldsarray[2][87]
-		))->setAttribute('title', 'Enter filter \'DNS Resolved IP\'.');
+	$group->add(new Form_Input(
+		'filterlogentries_replydstip',
+		'Reply - Resolved IP',
+		'text',
+		$filterfieldsarray[2][87]
+	))->setAttribute('title', 'Enter filter \'DNS Resolved IP\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replygeoip',
-			'Reply - GeoIP',
-			'text',
-			$filterfieldsarray[2][88]
-		))->setAttribute('title', 'Enter filter \'DNS Reply GeoIP\'.')
-		  ->setwidth(2);
-		$section->add($group);
+	$group->add(new Form_Input(
+		'filterlogentries_replygeoip',
+		'Reply - GeoIP',
+		'text',
+		$filterfieldsarray[2][88]
+	))->setAttribute('title', 'Enter filter \'DNS Reply GeoIP\'.')
+	  ->setwidth(2);
+	$section->add($group);
 
-		$group = new Form_Group(NULL);
-		$group->add(new Form_Input(
-			'filterlogentries_replytype',
-			'Reply - Type',
-			'text',
-			$filterfieldsarray[2][81]
-		))->setAttribute('title', 'Enter filter \'DNS Reply Type\'.');
+	$group = new Form_Group(NULL);
+	$group->add(new Form_Input(
+		'filterlogentries_replytype',
+		'Reply - Type',
+		'text',
+		$filterfieldsarray[2][81]
+	))->setAttribute('title', 'Enter filter \'DNS Reply Type\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replyorec',
-			'Reply - Original Record',
-			'text',
-			$filterfieldsarray[2][82]
-		))->setAttribute('title', 'Enter filter \'DNS Reply Orig Record\'.');
+	$group->add(new Form_Input(
+		'filterlogentries_replyorec',
+		'Reply - Original Record',
+		'text',
+		$filterfieldsarray[2][82]
+	))->setAttribute('title', 'Enter filter \'DNS Reply Orig Record\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replyrec',
-			'Reply - DNS Record',
-			'text',
-			$filterfieldsarray[2][83]
-		))->setAttribute('title', 'Enter filter \'DNS Reply Record\'.');
+	$group->add(new Form_Input(
+		'filterlogentries_replyrec',
+		'Reply - DNS Record',
+		'text',
+		$filterfieldsarray[2][83]
+	))->setAttribute('title', 'Enter filter \'DNS Reply Record\'.');
 
-		$group->add(new Form_Input(
-			'filterlogentries_replyttl',
-			'Reply - TTL',
-			'text',
-			$filterfieldsarray[2][84]
-		))->setAttribute('title', 'Enter filter \'DNS Reply TTL\'.');
-		$section->add($group);
-	}
+	$group->add(new Form_Input(
+		'filterlogentries_replyttl',
+		'Reply - TTL',
+		'text',
+		$filterfieldsarray[2][84]
+	))->setAttribute('title', 'Enter filter \'DNS Reply TTL\'.');
+	$section->add($group);
 }
 
 if (!$alert_summary) {
@@ -4040,15 +3937,11 @@ if (!$alert_summary):
 					}
 
 					if ($logtype == 'DNSBL Block') {
-						if ($pfb['dnsbl_py_blacklist']) {
-							continue 2;
-						}
+						continue 2;
 						break;
 					}
 					elseif ($logtype == 'DNSBL Python') {
-						if (!$pfb['dnsbl_py_blacklist']) {
-							continue 2;
-						}
+
 						break;
 					}
 				}
@@ -4441,8 +4334,8 @@ $stats = array( 'dnsblchart'	=> array("DNSBL Event Timeline&emsp;<small>(Last <s
 		'dnsblgpblock'	=> array('Top Blocked Group',			'Found', 'DNSBL Group(s)',	FALSE, ''),
 		'dnsblfeed'	=> array('Top Feed',				'Found', 'Feed(s)',		FALSE, ''),
 		'dnsblip'	=> array('Top Source IP',			'Found', 'Source IP(s)',	FALSE, ''),
-		'dnsblagent'	=> array($pfb['dnsbl_py_blacklist'] ? 'Blocking Type' : 'Top User-Agent', 'Found',
-					$pfb['dnsbl_py_blacklist'] ? 'Type(s)' : 'User-Agent(s)',		FALSE, ''),
+		'dnsblagent'	=> array('Blocking Type', 'Found',
+					'Type(s)',		FALSE, ''),
 		'dnsbltld'	=> array('Top TLD',				'Found', 'TLD(s)',		FALSE, ''),
 		'dnsblwebtype'	=> array('Top Blocked Webpage Types',		'Found', 'Blocked Webpage Type(s)',	FALSE, ''),
 		'dnsblmode'	=> array('Top DNSBL Modes',			'Found', 'Blocked DNSBL Mode(s)',	FALSE, ''),
@@ -4489,9 +4382,7 @@ foreach ($stats as $stat_type => $stype):
 	if ($stat_type == 'ipasn' && $pfb['asn_reporting'] == 'disabled') {
 		continue;
 	}
-	elseif ($alert_view == 'dnsbl_stat' && substr($stat_type, 0,6) == 'python' && $pfb['dnsbl_mode'] != 'dnsbl_python') {
-		continue;
-	}
+
 
 	$topcount = $sumlines = 0;
 	if (!empty($alert_stats[$alert_view][$stat_type])) {
@@ -4695,7 +4586,7 @@ foreach ($stats as $stat_type => $stype):
 							}
 
 							if ($stat_type == 'dnsblagent' && $data == 'Unknown') {
-								$data = $pfb['dnsbl_py_blacklist'] ? 'DNSBL Webserver/VIP' : 'Not available for HTTPS alerts';
+								$data = 'DNSBL Webserver/VIP';
 							}
 
 							if ($stat_type == 'ipdstport') {
