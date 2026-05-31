@@ -104,7 +104,7 @@ section set; the canonical skeleton is:
 
 - **Status:** **Proposed** (<today's date>)
 - **Date:** <today's date>
-- **Branch:** <feature branch, if decided> / **Component(s):** <files>
+- **Branch:** `adr/{NN}` (off <base, e.g. devel>) / **Component(s):** <files>
 - **Target runtime:** <e.g. Python 3.11+ in Unbound pythonmod, stdlib only; PHP 8.3>
 - **Test suite:** <paths>
 
@@ -192,7 +192,10 @@ will create it).
 ## Step 6 — Report back
 
 Tell the user: the assigned number, the directory, the `ADR.md`, the ordered
-list of phase-prompt files, and that they can now run `/adr-phase {NN}` (or
-`/adr-phase {NN} 1`). Restate that Status is **Proposed** until they accept the
-plan, and that acceptance ultimately depends on the validation evidence /
-manual smoke defined in §7.
+list of phase-prompt files, and how to implement it — `/adr-phase {NN} 1` for a
+single phase, or `/adr-phase {NN} all` to build the whole ADR end-to-end on a
+clean branch off the base (each phase reviewed against its objectives before its
+handoff), landing as a PR (default) or a rebase onto the base when complete.
+Restate that Status is **Proposed** until they accept the plan, and that
+acceptance ultimately depends on the validation evidence / manual smoke defined
+in §7.
