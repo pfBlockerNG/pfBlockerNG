@@ -103,3 +103,14 @@ def reset_pfb_globals():
     for _db in list(pfb_unbound._db_conns.keys()):
         pfb_unbound._db_close(_db)
     pfb_unbound._db_conns.clear()
+
+    # Reset the logging pipeline between tests (stop a leaked QueueListener thread
+    # and drop the cached per-file loggers so the synchronous fallback is used by
+    # default and pipeline tests start clean).
+    _listener = getattr(pfb_unbound, "pfb_log_listener", None)
+    if _listener is not None:
+        try:
+            _listener.stop()
+        except Exception:
+            pass
+    pfb_unbound.pfb_loggers.clear()
