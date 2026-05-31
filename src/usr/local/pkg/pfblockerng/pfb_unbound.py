@@ -100,6 +100,8 @@ maxmindReader: Any
 # Background I/O worker (file + sqlite writes off the DNS response path)
 pfb_task_queue: queue.Queue
 pfb_worker_thread: Any
+pfb_db_queue: queue.Queue
+pfb_db_worker_thread: Any
 
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
@@ -210,7 +212,9 @@ def init_standard(id: int, env: module_env) -> bool:
         feedGroupIndexDB, \
         maxmindReader, \
         pfb_task_queue, \
-        pfb_worker_thread
+        pfb_worker_thread, \
+        pfb_db_queue, \
+        pfb_db_worker_thread
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
@@ -635,7 +639,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 # Enable Resolver query statistics
                 for i in range(2):
                     try:
-                        if write_sqlite(1, "", False):
+                        if pfb_db_validate(1):
                             pfb["sqlite3_resolver_con"] = True
                             break
                     except Exception as e:
@@ -652,7 +656,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 if pfb["python_blacklist"]:
                     for i in range(2):
                         try:
-                            if write_sqlite(2, "", False):
+                            if pfb_db_validate(2):
                                 pfb["sqlite3_dnsbl_con"] = True
                                 break
                         except Exception as e:
@@ -675,6 +679,17 @@ def init_standard(id: int, env: module_env) -> bool:
                     pass
     else:
         log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
+
+    # Start background DB-write worker (persistent sqlite connection, batched)
+    if pfb["mod_threading"] and not pfb.get("db_worker"):
+        try:
+            pfb_db_queue = queue.Queue(maxsize=PFB_DB_QUEUE_MAXSIZE)
+            pfb_db_worker_thread = threading.Thread(name="pfb_db_io", target=pfb_db_worker, daemon=True)
+            pfb_db_worker_thread.start()
+            pfb["db_worker"] = True
+        except Exception as e:
+            pfb["db_worker"] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start DB I/O worker: {}".format(e))
 
     # Start background I/O worker (off-loads file/sqlite writes from the DNS path)
     if pfb["mod_threading"] and not pfb.get("async_worker"):
@@ -842,106 +857,229 @@ def is_unknown(x: Any) -> Any:
     return x
 
 
-def write_sqlite(db: int, groupname: str, update: Any) -> bool:
-    global pfb
+class _NullLock:
+    def __enter__(self) -> Any:
+        return self
 
-    if db == 1:
-        db_file = pfb["pfb_py_resolver"]
-    elif db == 2:
-        db_file = pfb["pfb_py_dnsbl"]
-    elif db == 3:
-        db_file = pfb["pfb_py_cache"]
-    else:
+    def __exit__(self, *exc: Any) -> bool:
         return False
 
-    sqlite3Db = None
-    for i in range(2):
+
+# All connection access is serialized by _db_lock; connections are opened with
+# check_same_thread=False so the DB worker and the synchronous fallback (init,
+# tests) can share them safely under the lock.
+_db_lock: Any = threading.Lock() if pfb.get("mod_threading") else _NullLock()
+_db_conns: dict[int, Any] = {}
+
+PFB_DB_QUEUE_MAXSIZE = 5000
+PFB_DB_FLUSH_INTERVAL = 1.0
+PFB_DB_MAX_BATCH = 2000
+
+DB_RESOLVER = 1
+DB_DNSBL = 2
+DB_CACHE = 3
+
+
+def _db_file(db: int) -> str:
+    if db == DB_RESOLVER:
+        return pfb["pfb_py_resolver"]
+    if db == DB_DNSBL:
+        return pfb["pfb_py_dnsbl"]
+    if db == DB_CACHE:
+        return pfb["pfb_py_cache"]
+    return ""
+
+
+def _db_create(db: int, cursor: Any) -> None:
+    if db == DB_RESOLVER:
+        cursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
+        cursor.execute("SELECT COUNT(*) FROM resolver")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 )")
+    elif db == DB_DNSBL:
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
+        )
+    elif db == DB_CACHE:
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
+        )
+
+
+def _db_connect(db: int) -> Any:
+    con = sqlite3.connect(_db_file(db), timeout=100000, check_same_thread=False)
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=100000")
+        con.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    _db_create(db, con.cursor())
+    con.commit()
+    return con
+
+
+def _db_close(db: int) -> None:
+    con = _db_conns.pop(db, None)
+    if con is not None:
         try:
-            sqlite3Db = sqlite3.connect(db_file, timeout=100000)
-        except Exception as e:
-            if sqlite3Db:
-                sqlite3Db.close()
-            if i == 2:
-                sys.stderr.write("[pfBlockerNG]: Failed to open sqlite3 db {}: {}".format(db_file, e))
-                return False
-            else:
-                time.sleep(0.25)
-                continue
-        break
+            con.close()
+        except Exception:
+            pass
 
-    isException = False
-    for i in range(1, 5):
+
+def _db_run(db: int, work: Callable[[Any], None]) -> bool:
+    # Run work(con) against the persistent connection and commit. On fault,
+    # reconnect (which re-creates the tables) and re-run, bounded retries, so a
+    # dequeued write is never silently dropped on a transient error.
+    with _db_lock:
+        for attempt in range(4):
+            try:
+                con = _db_conns.get(db)
+                if con is None:
+                    con = _db_connect(db)
+                    _db_conns[db] = con
+                work(con)
+                con.commit()
+                return True
+            except Exception as e:
+                _db_close(db)
+                if attempt == 3:
+                    sys.stderr.write("[pfBlockerNG]: sqlite write failed db {}: {}\n".format(_db_file(db), e))
+                    # Preserve historical behaviour: clear a corrupt DNSBL cache db.
+                    if db == DB_CACHE:
+                        try:
+                            if os.path.isfile(pfb["pfb_py_cache"]):
+                                os.remove(pfb["pfb_py_cache"])
+                        except Exception:
+                            pass
+                    return False
+                time.sleep(0.25)
+        return False
+
+
+def _db_flush_resolver(delta: int) -> bool:
+    if not delta or not pfb["sqlite3_resolver_con"]:
+        return True
+    return _db_run(
+        DB_RESOLVER,
+        lambda con: con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,)),
+    )
+
+
+def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
+    if not deltas or not pfb["sqlite3_dnsbl_con"]:
+        return True
+    rows = [(d, g) for g, d in deltas.items()]
+    return _db_run(
+        DB_DNSBL, lambda con: con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
+    )
+
+
+def _db_flush_cache(rows: list[Any]) -> bool:
+    if not rows:
+        return True
+    return _db_run(
+        DB_CACHE,
+        lambda con: con.executemany(
+            "INSERT INTO dnsblcache (type, domain, groupname, final, feed) VALUES (?,?,?,?,?)", rows
+        ),
+    )
+
+
+def pfb_db_validate(db: int) -> bool:
+    # Ensure the database/table exists (used at init to gate statistics).
+    return _db_run(db, lambda con: None)
+
+
+def _db_apply(task: tuple) -> None:
+    # Synchronous fallback when no DB worker is running (init, tests).
+    kind = task[0]
+    if kind == "resolver":
+        _db_flush_resolver(1)
+    elif kind == "dnsbl":
+        _db_flush_dnsbl({task[1]: 1})
+    elif kind == "cache":
+        _db_flush_cache([task[1]])
+
+
+def pfb_db_worker() -> None:
+    # Batch DB writes off the DNS path. Counter increments accumulate as per-key
+    # deltas (commutative); cache rows keep FIFO order. Flush on a timer, on a
+    # size threshold, when idle, and on stop.
+    resolver_delta = 0
+    dnsbl_deltas: dict[str, int] = {}
+    cache_rows: list[Any] = []
+    last_flush = time.monotonic()
+    stop = False
+
+    def accumulate(t: tuple) -> None:
+        nonlocal resolver_delta
+        if t[0] == "resolver":
+            resolver_delta += 1
+        elif t[0] == "dnsbl":
+            dnsbl_deltas[t[1]] = dnsbl_deltas.get(t[1], 0) + 1
+        elif t[0] == "cache":
+            cache_rows.append(t[1])
+
+    def flush() -> None:
+        nonlocal resolver_delta, dnsbl_deltas, cache_rows, last_flush
+        if resolver_delta and _db_flush_resolver(resolver_delta):
+            resolver_delta = 0
+        if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas):
+            dnsbl_deltas = {}
+        if cache_rows and _db_flush_cache(cache_rows):
+            cache_rows = []
+        last_flush = time.monotonic()
+
+    while True:
         try:
-            if sqlite3Db:
-                sqlite3DbCursor = sqlite3Db.cursor()
-
-                if db == 1:
-                    sqlite3DbCursor.execute(
-                        "CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)"
-                    )
-
-                    # Create row if not found
-                    sqlite3DbCursor.execute("SELECT COUNT(*) FROM resolver")
-                    py_validate = sqlite3DbCursor.fetchone()
-                    if py_validate[0] == 0:
-                        sqlite3DbCursor.execute(
-                            "INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 )"
-                        )
-
-                    # Increment resolver totalqueries
-                    if update:
-                        sqlite3DbCursor.execute("UPDATE resolver SET totalqueries = totalqueries + 1 WHERE row = 0")
-
-                elif db == 2:
-                    sqlite3DbCursor.execute(
-                        "CREATE TABLE IF NOT EXISTS dnsbl"
-                        " ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
-                    )
-
-                    # Increment DNSBL Groupname counter
-                    if update:
-                        sqlite3DbCursor.execute(
-                            "UPDATE dnsbl SET counter = counter + 1 WHERE groupname = ?", (groupname,)
-                        )
-
-                elif db == 3:
-                    sqlite3DbCursor.execute(
-                        "CREATE TABLE IF NOT EXISTS dnsblcache"
-                        " ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
-                    )
-                    sqlite3DbCursor.execute(
-                        "INSERT INTO dnsblcache (type, domain, groupname, final, feed ) VALUES (?,?,?,?,?);", update
-                    )
-
-                sqlite3Db.commit()
-                isException = False
-
-        except Exception as e:
-            if i == 4:
-                if sqlite3Db:
-                    sqlite3Db.close()
-
-                sys.stderr.write("[pfBlockerNG]: Failed to write to sqlite3 db {}: {}".format(db_file, e))
-
-                # Attempt to clear DNSBL Cache file on error
-                if db == 3 and os.path.isfile(pfb["pfb_py_cache"]):
-                    os.remove(pfb["pfb_py_cache"])
-                    sys.stderr.write("[pfBlockerNG]: DNSBL Cache database cleared OK")
-
-                pass
-                return False
-
-            else:
-                time.sleep(0.25)
-                isException = True
-                continue
-
+            task = pfb_db_queue.get(timeout=PFB_DB_FLUSH_INTERVAL)
+        except queue.Empty:
+            task = None
+        try:
+            if task is not None:
+                if task[0] == "stop":
+                    while True:
+                        try:
+                            t = pfb_db_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        try:
+                            if t is not None and t[0] != "stop":
+                                accumulate(t)
+                        finally:
+                            pfb_db_queue.task_done()
+                    stop = True
+                else:
+                    accumulate(task)
         finally:
-            if not isException and sqlite3Db:
-                sqlite3Db.close()
-        break
+            if task is not None:
+                pfb_db_queue.task_done()
 
-    return True
+        if (
+            stop
+            or task is None
+            or (resolver_delta + len(dnsbl_deltas) + len(cache_rows)) >= PFB_DB_MAX_BATCH
+            or (time.monotonic() - last_flush) >= PFB_DB_FLUSH_INTERVAL
+        ):
+            flush()
+        if stop:
+            break
+
+
+def pfb_db_enqueue(task: tuple) -> None:
+    # Enqueue a DB op for the worker; drop on a saturated queue so the DNS
+    # response path is never blocked. Falls back to synchronous execution when
+    # no worker is running (init, tests, threading unavailable).
+    if pfb.get("db_worker"):
+        try:
+            pfb_db_queue.put_nowait(task)
+            return
+        except queue.Full:
+            pfb["db_dropped"] = pfb.get("db_dropped", 0) + 1
+            return
+    _db_apply(task)
 
 
 def get_details_dnsbl(
@@ -962,7 +1100,7 @@ def get_details_dnsbl(
 
     # Increment totalqueries counter
     if pfb["sqlite3_resolver_con"]:
-        pfb_async(write_sqlite, 1, "", True)
+        pfb_db_enqueue(("resolver",))
 
     # Determine if event is a 'reply' or DNSBL block
     isDNSBL = dnsblDB.get(q_name)
@@ -974,7 +1112,7 @@ def get_details_dnsbl(
 
         # Increment dnsblgroup counter
         if pfb["sqlite3_dnsbl_con"] and isDNSBL["group"] != "":
-            pfb_async(write_sqlite, 2, isDNSBL["group"], True)
+            pfb_db_enqueue(("dnsbl", isDNSBL["group"]))
 
         dupEntry = "+"
         lastEvent = dnsblDB.get("last-event")
@@ -1081,7 +1219,7 @@ def get_details_reply(
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
     if pfb["sqlite3_resolver_con"] and q_ip != "127.0.0.1":
-        pfb_async(write_sqlite, 1, "", True)
+        pfb_db_enqueue(("resolver",))
 
     # Do not log Replies, if disabled
     if not pfb["python_reply"]:
@@ -1345,10 +1483,21 @@ def inplace_cb_reply_servfail(
 
 
 def deinit(id: int) -> bool:
-    global pfb, maxmindReader, pfb_task_queue, pfb_worker_thread
+    global pfb, maxmindReader, pfb_task_queue, pfb_worker_thread, pfb_db_queue, pfb_db_worker_thread
 
     if pfb["python_maxmind"]:
         maxmindReader.close()
+
+    # Drain and stop the background DB-write worker, then close connections
+    if pfb.get("db_worker"):
+        try:
+            pfb_db_queue.put(("stop",))
+            pfb_db_worker_thread.join(timeout=5)
+        except Exception:
+            pass
+        pfb["db_worker"] = False
+    for _db in list(_db_conns.keys()):
+        _db_close(_db)
 
     # Drain and stop the background I/O worker
     if pfb.get("async_worker"):
@@ -1911,7 +2060,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                             }
 
                         # Add domain data to DNSBL cache for Reports tab
-                        write_sqlite(3, "", [b_type, q_name, group, b_eval, feed])
+                        pfb_db_enqueue(("cache", (b_type, q_name, group, b_eval, feed)))
 
                 # Use previously blocked domain details
                 else:
