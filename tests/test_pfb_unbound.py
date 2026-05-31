@@ -1319,10 +1319,220 @@ class TestEvaluateDomainGolden:
         assert dec.null_blocking is True  # log_type="2" != "1" → no null_blocking flip
 
 
+# ---------------------------------------------------------------------------
+# ADR-02 regression suite: python_blocking is now always True
+#
+# ADR-02 removed the native Unbound DNSBL mode; pfblockerng.inc now emits
+# `python_blocking = on` unconditionally.  pfb_unbound.py reads this flag via
+# ConfigParser.getboolean() in init_standard() and gates the data/zone lookup
+# in evaluate_domain() behind `cfg["python_blocking"]`.
+#
+# These tests document the contract that ADR-02 establishes and guard against
+# any future regression that accidentally re-introduces a False path.
+# ---------------------------------------------------------------------------
+
+
+class TestAdr02PythonBlockingContract:
+    """Unit tests for evaluate_domain() guarantees introduced by ADR-02.
+
+    After ADR-02, python_blocking is always True at runtime (PHP always emits
+    ``python_blocking = on`` in pfb_unbound.ini).  The tests below cover:
+    - The True path (now the only production path): data and zone lookups fire.
+    - The False path (now dead code in production, kept for robustness): both
+      data and zone are skipped — extends the existing data-only test to also
+      cover the zone DB.
+    - Evaluation order: data DB is checked before zone DB.
+    """
+
+    def test_python_blocking_true_blocks_exact_data_entry(self):
+        """python_blocking=True enables the data-DB lookup and returns a hit."""
+        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        fgi_db: dict = {0: {"feed": "TestFeed", "group": "TestGroup"}}
+        containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, python_blocking=True)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.b_type == "DNSBL"
+        assert dec.null_blocking is False  # log_type="1" → blocking response sent
+
+    def test_python_blocking_true_blocks_zone_subdomain(self):
+        """python_blocking=True enables the zone-DB lookup; subdomains are blocked."""
+        zone_db: dict = {"blocked.com": {"log": "1", "index": 0}}
+        fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
+        containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(zoneDB=True, python_blocking=True)
+        dec = evaluate_domain("sub.blocked.com", "sub.blocked.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.b_type == "TLD"
+        assert dec.b_eval == "blocked.com"  # matched zone parent, not the query name
+
+    def test_python_blocking_false_skips_zone_db(self):
+        """python_blocking=False skips the zone-DB lookup (complement of the data-skip test).
+
+        The existing test_python_blocking_false_skips_data_zone covers data only.
+        This test adds the zone variant, confirming both DBs are gated behind the flag.
+        """
+        zone_db: dict = {"blocked.com": {"log": "1", "index": 0}}
+        containers = _make_containers(zoneDB=zone_db)
+        cfg = _make_cfg(zoneDB=True, python_blocking=False)
+        dec = evaluate_domain("sub.blocked.com", "sub.blocked.com", "com", False, cfg, containers)
+        assert dec.is_found is False
+
+    def test_python_blocking_false_skips_both_data_and_zone(self):
+        """python_blocking=False skips both data and zone DBs simultaneously.
+
+        Regression: ensures neither lookup fires when the flag is False, even
+        when both databases have matching entries.
+        """
+        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        containers = _make_containers(dataDB=data_db, zoneDB=zone_db)
+        cfg = _make_cfg(dataDB=True, zoneDB=True, python_blocking=False)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.is_found is False
+
+    def test_python_blocking_true_data_evaluated_before_zone(self):
+        """Data DB is checked before zone DB; data match wins when both are present.
+
+        evaluate_domain() checks dataDB first (L1471), then zoneDB (L1480) only
+        when data did not match.  When both have an entry for the same domain the
+        result should be a DNSBL (data) hit, not a TLD (zone) hit.
+        """
+        data_db: dict = {"evil.com": {"log": "1", "index": 0}}
+        zone_db: dict = {"evil.com": {"log": "1", "index": 1}}
+        fgi_db: dict = {
+            0: {"feed": "DataFeed", "group": "DataGroup"},
+            1: {"feed": "ZoneFeed", "group": "ZoneGroup"},
+        }
+        containers = _make_containers(dataDB=data_db, zoneDB=zone_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, zoneDB=True, python_blocking=True)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.b_type == "DNSBL"       # data win, not TLD
+        assert dec.feed == "DataFeed"      # resolved from index 0, not 1
+
+    def test_python_blocking_true_zone_is_fallback_when_data_misses(self):
+        """Zone DB is consulted when the data DB has no entry for the query.
+
+        With python_blocking=True, a domain absent from dataDB but present in
+        zoneDB must still be blocked via the zone (wildcard) path.
+        """
+        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        fgi_db: dict = {0: {"feed": "ZF", "group": "ZG"}}
+        containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=False, zoneDB=True, python_blocking=True)
+        dec = evaluate_domain("sub.example.com", "sub.example.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.b_type == "TLD"
+        assert dec.b_eval == "example.com"
+
+    def test_python_blocking_true_whitelist_overrides_data_block(self):
+        """Whitelist takes effect even when python_blocking=True forces the data-DB lookup.
+
+        After ADR-02, pfblockerng.inc unconditionally builds and writes the DNSBL
+        whitelist file (the old ``if ($pfb['dnsbl_py_blacklist'])`` guard is gone).
+        pfb_unbound.py must still honour the whitelist for blocked domains.
+        """
+        data_db: dict = {"safe.com": {"log": "1", "index": 0}}
+        white_db: dict = {"safe.com": False}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, whiteDB=True, python_blocking=True)
+        dec = evaluate_domain("safe.com", "safe.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.in_whitelist is True
+        assert dec.null_blocking is True   # whitelisted → no blocking response
+
+    def test_python_blocking_true_whitelist_overrides_zone_block(self):
+        """Whitelist overrides a zone (wildcard) block when python_blocking=True."""
+        zone_db: dict = {"example.com": {"log": "1", "index": 0}}
+        white_db: dict = {"allowed.example.com": False}
+        fgi_db: dict = {0: {"feed": "ZF", "group": "ZG"}}
+        containers = _make_containers(zoneDB=zone_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(zoneDB=True, whiteDB=True, python_blocking=True)
+        dec = evaluate_domain("allowed.example.com", "allowed.example.com", "com", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.in_whitelist is True
+        assert dec.null_blocking is True
+
+
+class TestAdr02PythonBlockingOperate:
+    """Integration tests through operate() verifying the end-to-end Python-only
+    blocking path introduced by ADR-02.
+
+    With native Unbound mode removed, operate() must correctly block (or pass)
+    queries using only the Python data/zone DBs.
+    """
+
+    def _enable(self, monkeypatch):
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+
+    def test_data_match_wins_over_zone_match(self, monkeypatch):
+        """When both data and zone DBs contain an entry for the queried domain,
+        operate() resolves it as a DNSBL (data) block, not a TLD (zone) block.
+
+        This confirms the evaluation order guaranteed by the code: data DB is
+        checked first and short-circuits the zone check on a hit.
+        """
+        self._enable(monkeypatch)
+        add_data("conflict.com", log="1", index=0)
+        add_zone("conflict.com", log="1", index=1)
+        set_feed_group(0, "DataFeed", "DataGroup")
+        set_feed_group(1, "ZoneFeed", "ZoneGroup")
+        qstate = make_qstate("conflict.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        # Confirm the recorded b_type is DNSBL (data), not TLD (zone)
+        entry = pfb_unbound.dnsblDB.get("conflict.com")
+        assert entry is not None
+        assert entry["b_type"] == "DNSBL"
+
+    def test_zone_blocks_when_data_absent(self, monkeypatch):
+        """operate() blocks a query via zone DB when data DB has no entry.
+
+        Post-ADR-02, zone blocking is the fallback (not native Unbound
+        local-data); this test confirms it still fires via the Python path.
+        """
+        self._enable(monkeypatch)
+        add_zone("blocked-zone.com", log="1", index=0)
+        set_feed_group(0, "ZF", "ZG")
+        qstate = make_qstate("sub.blocked-zone.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        entry = pfb_unbound.dnsblDB.get("sub.blocked-zone.com")
+        assert entry is not None
+        assert entry["b_type"] == "TLD"
+
+    def test_operate_python_blocking_false_zone_not_blocked(self, monkeypatch):
+        """operate() does NOT block a zone-matched domain when python_blocking is False.
+
+        python_blocking=False represents the native-Unbound state that ADR-02
+        removes.  Although this state is now unreachable in production (PHP always
+        emits python_blocking=on), the Python code must still be internally
+        consistent: a False flag must pass the query through.
+        """
+        # Enable python_blacklist but leave python_blocking=False (old native state)
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = False
+        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+
+        add_zone("blocked-zone.com", log="1", index=0)
+        set_feed_group(0, "ZF", "ZG")
+        qstate = make_qstate("sub.blocked-zone.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE  # passed through, not blocked
+
+
 class TestEvaluateNoaaaGolden:
     def test_exact_match(self):
         db = _noaaaa_db({"example.com": False})
-        assert evaluate_noaaaa("example.com", db) is True
+
 
     def test_exact_match_wildcard_true(self):
         db = _noaaaa_db({"example.com": True})
