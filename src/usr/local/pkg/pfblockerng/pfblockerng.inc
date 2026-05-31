@@ -1023,19 +1023,14 @@ function pfb_dnsbl_service() {
 	# Ensure all processes are stopped
 	rc_stop
 
-	# Start DNSBL Lighttpd webserver (Unbound/Python mode) and DNSBL HTTPS Daemon (Unbound mode only)
+	# Start DNSBL Lighttpd webserver (Python mode)
 	if [ -e '/var/unbound/pfb_dnsbl_lighty.conf' ]; then
 		/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver started"
 		/usr/local/sbin/lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf
 	fi
 
-	# Check if Unbound mode is enabled
-	unbound_mode="\$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngdnsblsettings/config/dnsbl_mode)"
-
-	# Start DNSBL Resolver queries Daemon
-	if [ "\${unbound_mode}" == 'dnsbl_unbound' ]; then
-		/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc queries &
-	elif [ ! -e '/var/unbound/pfb_unbound.py' ]; then
+	# Warn if the DNSBL python script is missing
+	if [ ! -e '/var/unbound/pfb_unbound.py' ]; then
 		/usr/bin/logger -p daemon.err -t php_pfb "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL missing python script - forced reload required"
 	fi
 
@@ -1047,14 +1042,6 @@ EOF;
 	pidnum="\$(/bin/pgrep lighttpd_pfb)"
 	if [ ! -z "\${pidnum}" ]; then
 		/usr/bin/killall lighttpd_pfb
-	fi
-
-	# Terminate DNSBL queries Daemon, if found
-	pidnum="\$(/bin/ps -wax | /usr/bin/grep '[p]fblockerng.inc queries' | /usr/bin/awk '{print \$1}')"
-	if [ ! -z "\${pidnum}" ]; then
-		for i in \${pidnum}; do
-			/bin/kill -9 "\${i}"
-		done
 	fi
 
 EOF;
@@ -1098,15 +1085,6 @@ if (isset($argv[1])) {
 			ignore_user_abort(TRUE);
 			set_time_limit(0);
 			pfb_daemon_dnsbl_index();
-			exit;
-	}
-
-	// DNSBL daemon to monitor Resolver queries and manage SQLite3 database
-	elseif ($argv[1] == 'queries') {
-			pfb_global();
-			ignore_user_abort(TRUE);
-			set_time_limit(0);
-			pfb_daemon_queries();
 			exit;
 	}
 
@@ -6449,103 +6427,6 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 
 
 // Function to collect and update the Unbound Resolver query/pid entries into SQLite3 database
-function pfb_daemon_queries() {
-	global $g, $pfb;
-
-	$sleep_freq	= config_get_path('installedpackages/pfblockerngglobal/widget-dnsblquery', 5);
-
-	$nice		= '/usr/bin/nice -n20';
-	$unbound_pid	= "{$g['varrun_path']}/unbound.pid";
-
-	while (TRUE) {
-		sleep($sleep_freq);
-
-		// If 'Live Sync' file marker exists skip DNSBL Queries daemon to avoid unbound-control collisions
-		if (is_platform_booting() || $g['pfblockerng_install'] || file_exists("{$pfb['dnsbl_file']}.sync")) {
-			continue;
-		}
-
-		// Collect Unbound Resolver pid
-		$pid = exec("{$nice} /usr/bin/pgrep -anx 'unbound' 2>&1");
-		if (!empty($pid)) {
-			$output	= exec("{$pfb['chroot_cmd']} stats_noreset | {$nice} {$pfb['grep']} 'total.num.queries=' | cut -d '=' -f2 2>&1");
-			$query	= intval($output);
-			if (!is_numeric($query)) {
-				$query = '';
-			}
-
-			// On an Unbound Reload, the query stat is reset, therefore reuse previous query value
-			if ($query < $p_query) {
-				$t_query	= $query;
-				$query		= $query + $p_query;
-				$pid		= '';
-			}
-		}
-
-		// On initial daemon load
-		if (empty($p_pid)) {
-			$p_pid = $pid;
-			continue;
-		}
-
-		$pfb_found		= FALSE;
-		$stats			= array();
-		$stats['totalqueries']	= 0;
-		$stats['queries']	= 0;
-
-		$db_handle = pfb_open_sqlite(3, 'Resolver collect queries');
-		if ($db_handle) {
-			$result = $db_handle->query("SELECT * FROM resolver WHERE row = 0;");
-			if ($result) {
-				while ($res = $result->fetchArray(SQLITE3_ASSOC)) {
-					$stats = $res;
-					$pfb_found = TRUE;
-				}
-			}
-
-			// Create new row
-			if (!$pfb_found) {
-				$db_update = "INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 );";
-				$db_handle->exec("BEGIN TRANSACTION;"
-						. "{$db_update}"
-						. "END TRANSACTION;");
-			}
-		}
-		pfb_close_sqlite($db_handle);
-
-		// If Unbound Resolver pid has changed, clear SQLite database 'queries' entry, and update 'totalqueries/pid' entries
-		if ($pfb_found && $pid != $p_pid) {
-			$totalqueries = ($stats['totalqueries'] ?: 0) + ($query ?: 0);
-			pfBlockerNG_clearsqlite('update_totalqueries', $totalqueries);
-		}
-		else {
-			if ($query != '' && $query != $p_query && is_numeric($query)) {
-
-				// Update existing row
-				$db_handle = pfb_open_sqlite(3, 'Widget update queries');
-				if ($db_handle) {
-					$db_update = "UPDATE resolver SET queries = :query WHERE row = 0";
-					$stmt = $db_handle->prepare($db_update);
-					if ($stmt) {
-						$stmt->bindValue(':query', $query, SQLITE3_INTEGER);
-						$stmt->execute();
-					}
-				}
-				pfb_close_sqlite($db_handle);
-			}
-		}
-
-		$p_pid = $pid;
-		if (isset($t_query)) {
-			$p_query = $t_query;
-			unset($t_query);
-		} else {
-			$p_query = $query;
-		}
-	}
-}
-
-
 // Read logfile in realtime (livetail)
 // Reference: http://stackoverflow.com/questions/3218895/php-how-to-read-a-file-live-that-is-constantly-being-written-to
 function pfb_livetail($logfile, $mode) {
