@@ -265,20 +265,20 @@ class TestGetQIpComm:
 class TestLogEntry:
     def test_normal_write(self, tmp_path):
         log = tmp_path / "dnsbl.log"
-        pfb_unbound.log_entry("a,b,c", str(log))
+        pfb_unbound._log_entry_direct("a,b,c", str(log))
         assert log.read_text() == "a,b,c\n"
 
     def test_multiple_calls_accumulate(self, tmp_path):
         log = tmp_path / "dnsbl.log"
-        pfb_unbound.log_entry("line1", str(log))
-        pfb_unbound.log_entry("line2", str(log))
+        pfb_unbound._log_entry_direct("line1", str(log))
+        pfb_unbound._log_entry_direct("line2", str(log))
         assert log.read_text() == "line1\nline2\n"
 
     def test_file_created_when_missing(self, tmp_path):
         log = tmp_path / "sub" / "unified.log"
         log.parent.mkdir()
         assert not log.exists()
-        pfb_unbound.log_entry("x", str(log))
+        pfb_unbound._log_entry_direct("x", str(log))
         assert log.exists()
 
 
@@ -393,6 +393,59 @@ class TestDbSubsystem:
             pfb_unbound.pfb["db_worker"] = False
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10
+
+
+class TestLogging:
+    """Persistent-handle logging pipeline (ADR-03 P2): QueueHandler -> QueueListener
+    -> WatchedFileHandler. Lines must be byte-identical to the old open/append."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        paths = (
+            str(tmp_path / "dnsbl.log"),
+            str(tmp_path / "dns_reply.log"),
+            str(tmp_path / "unified.log"),
+        )
+        monkeypatch.setattr(pfb_unbound, "PFB_LOG_FILES", paths)
+        pfb_unbound.pfb_setup_logging()
+        return paths
+
+    def test_pipeline_writes_exact_lines_to_correct_files(self, tmp_path, monkeypatch):
+        dnsbl, dns_reply, unified = self._setup(tmp_path, monkeypatch)
+        pfb_unbound.pfb_log(dnsbl, "a.com,blocked")
+        pfb_unbound.pfb_log(dnsbl, "b.com,100%match")  # literal % must not be formatted
+        pfb_unbound.pfb_log(unified, "u-1")
+        pfb_unbound.pfb_log(dns_reply, "r-1")
+        pfb_unbound.pfb_log_listener.stop()  # flush + join
+        pfb_unbound.pfb["log_listener"] = False
+        with open(dnsbl) as f:
+            assert f.read() == "a.com,blocked\nb.com,100%match\n"
+        with open(unified) as f:
+            assert f.read() == "u-1\n"
+        with open(dns_reply) as f:
+            assert f.read() == "r-1\n"
+
+    def test_fallback_direct_append_when_no_pipeline(self, tmp_path):
+        log = str(tmp_path / "x.log")
+        pfb_unbound.pfb_log(log, "direct-1")
+        pfb_unbound.pfb_log(log, "direct-2")
+        with open(log) as f:
+            assert f.read() == "direct-1\ndirect-2\n"
+
+    def test_watched_handler_reopens_after_external_rotation(self, tmp_path, monkeypatch):
+        import os
+
+        dnsbl = self._setup(tmp_path, monkeypatch)[0]
+        pfb_unbound.pfb_log(dnsbl, "before")
+        pfb_unbound.pfb_log_queue.join()  # wait for the listener to write+flush
+        os.rename(dnsbl, dnsbl + ".rotated")  # simulate the line-cap trim (mv)
+        pfb_unbound.pfb_log(dnsbl, "after")
+        pfb_unbound.pfb_log_queue.join()
+        pfb_unbound.pfb_log_listener.stop()
+        pfb_unbound.pfb["log_listener"] = False
+        with open(dnsbl) as f:  # WatchedFileHandler reopened/recreated it
+            assert f.read() == "after\n"
+        with open(dnsbl + ".rotated") as f:
+            assert "before" in f.read()
 
 
 class TestGetRepTtl:
@@ -596,7 +649,7 @@ class TestOperateDnsbl:
     def _enable(self, monkeypatch):
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
-        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
 
     def test_data_lookup_blocks_with_dnsbl_ipv4(self, monkeypatch):

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import logging.handlers
 import os
 import re
 import sys
@@ -102,6 +103,9 @@ pfb_task_queue: queue.Queue
 pfb_worker_thread: Any
 pfb_db_queue: queue.Queue
 pfb_db_worker_thread: Any
+pfb_log_queue: queue.Queue
+pfb_log_listener: Any
+pfb_loggers: dict[str, Any] = {}
 
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
@@ -702,6 +706,8 @@ def init_standard(id: int, env: module_env) -> bool:
             pfb["async_worker"] = False
             sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}".format(e))
 
+    pfb_setup_logging()
+
     log_info("[pfBlockerNG]: init_standard script loaded")
     return True
 
@@ -1149,8 +1155,8 @@ def get_details_dnsbl(
                 dupEntry,
             )
         )
-        pfb_async(log_entry, csv_line, "/var/log/pfblockerng/dnsbl.log")
-        pfb_async(log_entry, csv_line, "/var/log/pfblockerng/unified.log")
+        pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
+        pfb_log("/var/log/pfblockerng/unified.log", csv_line)
 
     return True
 
@@ -1164,7 +1170,9 @@ def make_timestamp() -> str:
     return ""
 
 
-def log_entry(line: str, log: str) -> None:
+def _log_entry_direct(line: str, log: str) -> None:
+    # Synchronous fallback used when the logging pipeline is not running (during
+    # init, in the test suite, or if it failed to start): open/append/close per line.
     for i in range(1, 5):
         try:
             with open(log, "a") as append_log:
@@ -1173,9 +1181,78 @@ def log_entry(line: str, log: str) -> None:
             if i == 4:
                 sys.stderr.write("[pfBlockerNG]: log_entry: {}: {}".format(i, e))
             time.sleep(0.25)
-            pass
             continue
         break
+
+
+PFB_LOG_QUEUE_MAXSIZE = 5000
+
+PFB_LOG_FILES = (
+    "/var/log/pfblockerng/dnsbl.log",
+    "/var/log/pfblockerng/dns_reply.log",
+    "/var/log/pfblockerng/unified.log",
+)
+
+
+class _PfbLogFilter(logging.Filter):
+    # Route each record to exactly one file handler, by logger name.
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self._name = name
+
+    def filter(self, record: Any) -> bool:
+        return record.name == self._name
+
+
+class _PfbDropQueueHandler(logging.handlers.QueueHandler):
+    # Never block the DNS path: drop the record when the bounded queue is full.
+    def enqueue(self, record: Any) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            pfb["log_dropped"] = pfb.get("log_dropped", 0) + 1
+
+
+def pfb_setup_logging() -> None:
+    # One persistent-handle file logger per app log, written from a single
+    # QueueListener thread off the DNS path. WatchedFileHandler reopens the file
+    # when it is rotated/truncated externally (the line-cap trim, the viewer clear).
+    global pfb_log_queue, pfb_log_listener
+    if pfb.get("log_listener"):
+        return
+    try:
+        pfb_log_queue = queue.Queue(maxsize=PFB_LOG_QUEUE_MAXSIZE)
+        handlers = []
+        for path in PFB_LOG_FILES:
+            name = "pfb.applog." + path
+            logger = logging.getLogger(name)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+            logger.handlers = [_PfbDropQueueHandler(pfb_log_queue)]
+            pfb_loggers[path] = logger
+
+            handler = logging.handlers.WatchedFileHandler(path, mode="a", delay=True)
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            handler.addFilter(_PfbLogFilter(name))
+            handlers.append(handler)
+
+        pfb_log_listener = logging.handlers.QueueListener(pfb_log_queue, *handlers)
+        pfb_log_listener.start()
+        pfb["log_listener"] = True
+    except Exception as e:
+        pfb["log_listener"] = False
+        pfb_loggers.clear()
+        sys.stderr.write("[pfBlockerNG]: Failed to start log listener: {}".format(e))
+
+
+def pfb_log(log: str, line: str) -> None:
+    # Emit a line to an app log via the async logging pipeline; fall back to a
+    # synchronous append when the pipeline is not running (init, tests).
+    logger = pfb_loggers.get(log)
+    if logger is not None:
+        logger.info(line)
+    else:
+        _log_entry_direct(line, log)
 
 
 def get_details_reply(
@@ -1348,8 +1425,8 @@ def get_details_reply(
     csv_line = ",".join(
         "{}".format(v) for v in ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code)
     )
-    pfb_async(log_entry, csv_line, "/var/log/pfblockerng/dns_reply.log")
-    pfb_async(log_entry, csv_line, "/var/log/pfblockerng/unified.log")
+    pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
+    pfb_log("/var/log/pfblockerng/unified.log", csv_line)
 
     return True
 
@@ -1498,6 +1575,14 @@ def deinit(id: int) -> bool:
         pfb["db_worker"] = False
     for _db in list(_db_conns.keys()):
         _db_close(_db)
+
+    # Stop the logging pipeline (QueueListener flushes queued records on stop)
+    if pfb.get("log_listener"):
+        try:
+            pfb_log_listener.stop()
+        except Exception:
+            pass
+        pfb["log_listener"] = False
 
     # Drain and stop the background I/O worker
     if pfb.get("async_worker"):
