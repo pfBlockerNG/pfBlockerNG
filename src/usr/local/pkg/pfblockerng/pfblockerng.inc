@@ -838,7 +838,6 @@ function pfb_global() {
 	$pfb['dnsbl_alexa']	= $pfb['dnsblconfig']['alexa_enable'];									// TOP1M whitelist
 	$pfb['dnsbl_alexatype'] = isset($pfb['dnsblconfig']['alexa_type'])	? $pfb['dnsblconfig']['alexa_type'] 	 : 'tranco';	// TOP1M type (Tranco, Alexa or Cisco)
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];									// DNSBL Option to backup/restore Resolver cache
-	$pfb['dnsbl_sync']	= $pfb['dnsblconfig']['pfb_dnsbl_sync'];								// Live Updates to Resolver without a Reload
 	$pfb['dnsbl_global_log']= isset($pfb['dnsblconfig']['global_log']) 	? $pfb['dnsblconfig']['global_log']	 : '';		// Global Logging/Blocking mode
 
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
@@ -3155,9 +3154,6 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 		$log = "\n*** DNSBL update [ {$final_cnt} ] [ {$dnsbl_cnt} ] ... OUT OF SYNC ! *** [ NOW ]";
 	}
 	pfb_logger("{$log}", 1);
-
-	// DEBUG Live Sync
-
 
 	// Clear work files
 	pfb_unbound_clear_work_files();
