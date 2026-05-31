@@ -2954,50 +2954,15 @@ function tld_analysis() {
 			}
 
 			// DNSBL python blocking mode
-			if ($pfb['dnsbl_py_blacklist']) {
-				$eparts = explode(',', $line, 3);
-				$domain = $eparts[1];
-				$dparts = explode('.', $domain);
-				$dcnt   = count($dparts);
-				$tld    = end($dparts);
-				$d_info = $eparts[2]; // Logging Type/Header/Alias group details
-				$dfound	= '';
-			}
+			$eparts = explode(',', $line, 3);
+			$domain = $eparts[1];
+			$dparts = explode('.', $domain);
+			$dcnt   = count($dparts);
+			$tld    = end($dparts);
+			$d_info = $eparts[2]; // Logging Type/Header/Alias group details
+			$dfound	= '';
 
-			// DNSBL Unbound blocking mode
-			else {
-				$eparts = explode(' ', str_replace('"', '', $line), 3);
-				$domain = $eparts[1];
-				$s_info = trim($eparts[2]);
 
-				if (!empty($pfb['dnsbl_vip6'])) {
-					// Determine if DNSBL Logging is disabled and switch to '::0'
-					if (strpos($s_info, ' A 0.0.0.0') !== FALSE) {
-						$s_info6 = str_replace(' A 0.0.0.0', ' AAAA ::0', $s_info);
-					} else {
-						$s_info6 = str_replace(' A ', ' AAAA ::', $s_info);
-					}
-				}
-
-				$dparts = explode('.', $domain);
-				$dcnt	= count($dparts);
-				$tld	= end($dparts);
-				$dfound = '';
-			}
-
-			// Determine if TLD exists in TLD Blacklist (skip for DNSBL python)
-			if (!$pfb['dnsbl_py_blacklist'] && !empty($tld_blacklist)) {
-
-				// Determine minimum 'tld level' for loop efficiency
-				$min_cnt = @min(array($tld_segments, ($dcnt -1)));
-
-				for ($i=1; $i <= $min_cnt; $i++) {
-					$d_query = implode('.', array_slice($dparts, -$i, $i, TRUE));
-					if (isset($tld_blacklist[$d_query])) {
-						continue 2;			// Whole TLD being blocked
-					}
-				}
-			}
 
 			if ($domain_cnt <= $pfb['domain_max_cnt']) {
 
@@ -3031,58 +2996,16 @@ function tld_analysis() {
 				$pfb_found = TRUE;
 
 				// DNSBL python blocking mode
-				if ($pfb['dnsbl_py_blacklist']) {
-					@fwrite($p_zone, ",{$dfound},{$d_info}");
+				@fwrite($p_zone, ",{$dfound},{$d_info}");
 
-					// TLD remove files - See below for description
-					@fwrite($p_tsp, ".{$dfound},,\n");
-				}
-				else {
-					$ipv6_dnsbl = '';
-					if (!empty($pfb['dnsbl_vip6'])) {
-						$ipv6_dnsbl = " local-data: \"{$dfound} {$s_info6}\"";
-					}
-					$domain_line = "local-zone: \"{$dfound}\" redirect local-data: \"{$dfound} {$s_info}\"{$ipv6_dnsbl}\n";
-					@file_put_contents("{$pfb['dnsbl_file']}.tsp", $domain_line, FILE_APPEND | LOCK_EX);
-
-					// Add Domain to remove file for [ 1- 'redirect zone' Domains 2- Unbound memory domains ]
-					// This removes any of these domains and sub-domains
-					@file_put_contents("{$pfb['dnsbl_tld_remove']}", ".{$dfound} 60\n\"{$dfound} 60\n", FILE_APPEND | LOCK_EX);
-
-					// Add Domain to remove file for 'transparent zone' domains
-					// This removes any of these sub-domains
-					@file_put_contents("{$pfb['dnsbl_tld_remove']}.tsp", ".{$dfound} 60\n", FILE_APPEND | LOCK_EX);
-				}
+				// TLD remove files - See below for description
+				@fwrite($p_tsp, ".{$dfound},,\n");
 			}
 
 			// Create 'transparent zone' for Sub-Domain
 			else {
 				// DNSBL python blocking mode
-				if ($pfb['dnsbl_py_blacklist']) {
-					@fwrite($p_data, ",{$domain},{$d_info}");
-				}
-				else {
-					if (!empty($tld)) {
-						$dnsbl_file = "{$pfb['dnsbl_tmpdir']}/DNSBL_{$tld}.txt";
-
-						// Create a temp file for each TLD. w/ 'transparent' header followed by each 'local-data' line
-						if (!file_exists($dnsbl_file)) {
-							$dnsbl_header = "local-zone: \"{$tld}\" \"transparent\"\n";
-							@file_put_contents($dnsbl_file, $dnsbl_header, LOCK_EX);
-						}
-
-						$ipv6_dnsbl = '';
-						if (!empty($pfb['dnsbl_vip6'])) {
-							$ipv6_dnsbl = " local-data: \"{$domain} {$s_info6}\"";
-						}
-						$domain_line = "local-data: \"{$domain} {$s_info}\"{$ipv6_dnsbl}\n";
-						@file_put_contents($dnsbl_file, $domain_line, FILE_APPEND | LOCK_EX);
-					}
-					else {
-						$oline = htmlentities($line);
-						pfb_logger("\nDebug: Missing TLD: {$oline}", 1);
-					}
-				}
+				@fwrite($p_data, ",{$domain},{$d_info}");
 			}
 
 			// Increment Domain counter
@@ -3108,26 +3031,7 @@ function tld_analysis() {
 		pfb_logger("{$log}", 1);
 
 		// Execute Domain De-duplication
-		if ($pfb['dnsbl_py_blacklist']) {
-			exec("{$pfb['script']} domaintldpy >> {$pfb['log']} 2>&1");
-		}
-		else {
-			// Create a csv list of 'recently updated' DNSBL Feeds, as ordered by User
-			$dnsbl_feeds = '';
-			if (!empty($pfb['tld_update'])) {
-				foreach ($pfb['tld_update'] as $alias => $data) {
-					foreach ($data['feeds'] as $feed) {
-						$dnsbl_feeds .= "{$feed},";
-					}
-				}
-			}
-
-			if (!empty(pfb_filter($dnsbl_feeds, PFB_FILTER_CSV, 'tld_analysis'))) {
-				exec("{$pfb['script']} domaintld x x x {$dnsbl_feeds} >> {$pfb['log']} 2>&1");
-			} else {
-				pfb_logger("\nFailed to create list of DNSBL Feeds", 1);
-			}
-		}
+		exec("{$pfb['script']} domaintldpy >> {$pfb['log']} 2>&1");
 		pfb_logger("\nTLD finalize... completed [ NOW ]\n", 1);
 
 		// Update DNSBL Alias and Widget Stats
@@ -3150,7 +3054,7 @@ function tld_analysis() {
 	// Save DNSBL Alias statistics
 	dnsbl_save_stats();
 
-	if ($pfb['dnsbl_py_blacklist'] && file_exists("{$pfb['dnsbl_file']}.raw")) {
+	if (file_exists("{$pfb['dnsbl_file']}.raw")) {
 		unlink_if_exists("{$pfb['dnsbl_file']}.raw");
 	}
 }
