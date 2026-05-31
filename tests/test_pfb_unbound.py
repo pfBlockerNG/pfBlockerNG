@@ -395,6 +395,77 @@ class TestDbSubsystem:
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10
 
 
+class TestDbConcurrencyAndPerf:
+    """ADR-03 P3: validate WAL coexistence with a concurrent (PHP-style) writer and
+    that the persistent connection actually eliminates per-call connects."""
+
+    def test_wal_concurrent_writers_no_lock(self, tmp_path):
+        import sqlite3
+        import threading
+
+        db = str(tmp_path / "resolver.sqlite")
+        pfb_unbound.pfb["pfb_py_resolver"] = db
+        pfb_unbound.pfb["sqlite3_resolver_con"] = True
+        pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER)  # create table+row, sets WAL
+
+        n = 100
+        errors: list = []
+
+        def py_side():
+            try:
+                for _ in range(n):
+                    pfb_unbound.pfb_db_enqueue(("resolver",))  # sync -> persistent WAL conn
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        def php_side():
+            # Mimics pfBlockerNG_clearsqlite / widget: a separate connection writing
+            # the same WAL db with a busy timeout, concurrently.
+            try:
+                con = sqlite3.connect(db, timeout=30)
+                con.execute("PRAGMA busy_timeout=30000")
+                for _ in range(n):
+                    con.execute("UPDATE resolver SET totalqueries = totalqueries + 1 WHERE row = 0")
+                    con.commit()
+                con.close()
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        t1 = threading.Thread(target=py_side)
+        t2 = threading.Thread(target=php_side)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert errors == [], errors  # no 'database is locked'
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        # Every increment from both writers was applied (relative += 1, no clobber).
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 2 * n
+
+    def test_persistent_connection_single_connect(self, tmp_path, monkeypatch):
+        import sqlite3
+
+        db = str(tmp_path / "resolver.sqlite")
+        pfb_unbound.pfb["pfb_py_resolver"] = db
+        pfb_unbound.pfb["sqlite3_resolver_con"] = True
+
+        real_connect = sqlite3.connect
+        count = {"n": 0}
+
+        def counting_connect(*a, **k):
+            count["n"] += 1
+            return real_connect(*a, **k)
+
+        monkeypatch.setattr(pfb_unbound.sqlite3, "connect", counting_connect)
+        for _ in range(20):
+            pfb_unbound.pfb_db_enqueue(("resolver",))
+        # Persistent: one connect for 20 writes (the per-call design connected 20 times).
+        assert count["n"] == 1
+        con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 20
+
+
 class TestLogging:
     """Persistent-handle logging pipeline (ADR-03 P2): QueueHandler -> QueueListener
     -> WatchedFileHandler. Lines must be byte-identical to the old open/append."""

@@ -26,6 +26,9 @@ python -m pytest benchmarks/test_memory.py -s
 
 # Larger / different memory corpus sizes
 PFB_BENCH_MEM_SIZES="10000,100000,1000000" python -m pytest benchmarks/test_memory.py -s
+
+# ADR-03 I/O pattern: per-call open/connect vs persistent handle + batched writes
+python -m pytest benchmarks/test_bench_io.py --benchmark-columns=min,mean,ops
 ```
 
 `test_decision_equivalence` runs first and asserts the dict, fused-trie and
