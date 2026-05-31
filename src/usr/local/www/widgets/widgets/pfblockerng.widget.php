@@ -609,8 +609,8 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	$unbound_validate = FALSE;
+	$py_mode = '(Python mode)';
 	if (file_exists("{$pfb['dnsbldir']}/unbound.conf")) {
-		$py_mode = '(Python mode)';
 		if (strpos(file_get_contents("{$pfb['dnsbldir']}/unbound.conf"), 'pfb_unbound.py') !== FALSE) {
 			$unbound_validate = TRUE;
 		}
