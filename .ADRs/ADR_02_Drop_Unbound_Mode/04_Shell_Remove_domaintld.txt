@@ -1,0 +1,83 @@
+================================================================================
+PHASE 4 PROMPT — Shell: drop the native conf builder + live-sync
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+================================================================================
+
+ROLE
+You are on the `edge` branch performing Phase 4 of ADR-02. Phase 3 removed the
+PHP exec calls to the native shell functions. Now delete those now-unreachable
+functions and their dispatch cases from
+src/usr/local/pkg/pfblockerng/pfblockerng.sh, keeping the Python builder.
+
+WHY THIS PHASE EXISTS
+The shell has two DNSBL data builders: domaintld() emits Unbound
+local-zone/local-data (native, removed) and domaintldpy() emits the Python data
+files (kept). dnsbl_livesync() implements native live-update-without-reload
+(removed). Phase 3 stopped PHP from invoking domaintld and dnsbl_livesync; this
+phase removes the dead shell code.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/03_Results.txt — it states the actual
+  post-Phase-3 code state and which shell execs were removed. If it is missing,
+  Phase 3 is not complete; STOP and report.
+- .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh
+    * domaintld()      — ~L474 (native local-zone/local-data builder — REMOVE)
+    * domaintldpy()    — ~L581 (Python data/zone builder — KEEP)
+    * dnsbl_livesync() — ~L643 (native live-sync — REMOVE)
+    * the dispatch `case "${1}" in … esac` (~L1304–1368): the `domaintld)`,
+      `domaintldpy)`, `dnsbl_livesync)` arms.
+    * top-of-file variable definitions for any temp files used ONLY by domaintld /
+      dnsbl_livesync (e.g. native local-zone/local-data add/remove temp paths).
+- CLAUDE.md — POSIX sh only; quote expansions; absolute binary paths; ShellCheck.
+
+ACTION PLAN
+1. Confirm (grep the whole repo) that nothing still invokes `domaintld` (the
+   native one, distinct from `domaintldpy`) or `dnsbl_livesync`:
+     grep -rn "domaintld\b\|dnsbl_livesync" src/   # expect: only definitions/dispatch in the .sh
+   If any PHP exec remains, STOP — Phase 3 was incomplete; report it.
+2. Delete the domaintld() function body and its `domaintld)` dispatch arm.
+   KEEP domaintldpy() and its `domaintldpy)` arm untouched.
+3. Delete the dnsbl_livesync() function body and its `dnsbl_livesync)` dispatch arm.
+4. Remove top-of-file variables and any helper used ONLY by the deleted functions
+   (verify each is unused elsewhere via grep before removing — domaintldpy may
+   share some temp files; do NOT remove anything domaintldpy still uses).
+5. Re-check the dispatch `case` is still well-formed (no empty arms, `esac` intact).
+
+CONSTRAINTS
+- POSIX sh only (#!/bin/sh): no bash-isms ([[, arrays, $RANDOM). Quote all
+  expansions. Absolute paths for binaries.
+- Be conservative on shared temp-file vars: when in doubt, leave the variable
+  (an unused var is harmless; removing one domaintldpy needs breaks DNSBL builds).
+
+VERIFICATION
+- ShellCheck clean: `shellcheck -s sh src/usr/local/pkg/pfblockerng/pfblockerng.sh`
+  (only the .shellcheckrc-sanctioned SC1091/SC2154 may remain). If shellcheck is
+  unavailable in the env, say so and diff-read carefully for sh syntax.
+- `sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh` → parses (no syntax error).
+- grep: no remaining `domaintld\b` (native) or `dnsbl_livesync` definition/dispatch;
+  `domaintldpy` definition + dispatch still present.
+- `python -m pytest` → green (sanity).
+
+EXPECTED RESULT
+- pfblockerng.sh builds only the Python DNSBL data files; native builder and
+  live-sync functions are gone; dispatch handles domaintldpy (+ other surviving
+  commands) only.
+
+COMMIT
+    pfblockerng: remove native DNSBL shell builders domaintld and dnsbl_livesync (ADR-02 P4)
+Land on `edge`. Push directly; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/04_Results.txt`
+This file is a HANDOFF for the agent that will perform the NEXT phase
+(05_Alerts_Widget_Finalize.txt) — NOT merely a changelog of this phase. Write it
+as plain text (.txt, not markdown), self-sufficient for the next agent. Include:
+- State after this phase: pfblockerng.sh builds only the Python data files;
+  domaintld() and dnsbl_livesync() and their dispatch arms are gone; domaintldpy
+  retained.
+- What changed: functions / dispatch arms / variables removed.
+- Verification results: ShellCheck / `sh -n` / grep / pytest output.
+- Watch-outs and any deviation from this prompt the next agent must know.
+- Go-ahead for Phase 5: shell is Python-only; only alerts/widget + final sweep remain.
