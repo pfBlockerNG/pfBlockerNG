@@ -1,6 +1,6 @@
 # ADR-03: Persistent sqlite connection + persistent log handles (eliminate per-call open/close)
 
-- **Status:** **PROPOSED** (2026-05-31)
+- **Status:** **IMPLEMENTED (pending smoke test)** (2026-05-31) — Phases 1–3 complete on branch `adr/03`. Persistent WAL connection + batched relative-increment writes (DB worker) and stdlib `QueueListener` + `WatchedFileHandler` logging are in; PHP coexists under WAL. Acceptance is blocked on the manual smoke test (§7 / `RESULTS/03_Results.txt`) — no live Unbound in CI.
 - **Date:** 2026-05-31
 - **Branch:** `adr/03` (off `devel`)
 - **Components:**
