@@ -108,7 +108,7 @@ if (
 
 // ADR-02: Migrate DNSBL mode to Python-only.
 $cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
-if (!empty($cfg) && ($cfg['dnsbl_mode'] !== 'dnsbl_python' || ($cfg['pfb_py_block'] ?? '') !== 'on')) {
+if (!empty($cfg) && (($cfg['dnsbl_mode'] ?? '') !== 'dnsbl_python' || ($cfg['pfb_py_block'] ?? '') !== 'on')) {
 	$cfg['dnsbl_mode']    = 'dnsbl_python';
 	$cfg['pfb_py_block']  = 'on';
 	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg);
