@@ -7319,7 +7319,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// ADD DNSBL IP
-			if ($ltype == 'pfblockernglistsv4' && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled') {
+			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled') {
 				$list = array();
 				$list['action'] = "{$pfb['dnsbl_ip']}";
 				$list['row'][]	= array('format'	=> 'auto',
@@ -8188,6 +8188,7 @@ function sync_package_pfblockerng($cron='') {
 							$liteparser	= FALSE;	// Minimal DNSBL Parser
 							$rev_format	= FALSE;	// Host style format is reversed
 							$domain_data_ip	= array();	// Array of IPs found in feed
+							$domain_data_ip6 = array();	// Array of IPv6 IPs found in feed
 							$domain_data	= '';		// List of Domains found in feed
 
 							// If row is a custom_list, set flag.
@@ -8307,7 +8308,7 @@ function sync_package_pfblockerng($cron='') {
 
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
-								$ipcount = $ip_cnt = 0;
+								$ipcount = $ip_cnt = $ip_cnt6 = 0;
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
@@ -8470,6 +8471,15 @@ function sync_package_pfblockerng($cron='') {
 																	$ipcount++;
 																}
 															}
+															// Collect additional IPv6 csv entry
+															if (is_ipaddrv6($csvline[0]) &&
+															    $pfb['dnsbl_ip'] != 'Disabled') {
+																if (validate_ipv6($line)) {
+																	$domain_data_ip6[] = $line;
+																	$pfb['updateip'] = TRUE;
+																	$ipcount++;
+																}
+															}
 														}
 														break;
 													case 'et':
@@ -8610,6 +8620,17 @@ function sync_package_pfblockerng($cron='') {
 												}
 												continue;
 											}
+											// Collect any IPv6 IPs found in domain feed
+											if (is_ipaddrv6($line)) {
+												if ($pfb['dnsbl_ip'] != 'Disabled') {
+													if (validate_ipv6($line)) {
+														$domain_data_ip6[] = $line;
+														$pfb['updateip'] = TRUE;
+														$ipcount++;
+													}
+												}
+												continue;
+											}
 
 											// Convert IDN (Unicode domains) to ASCII (punycode)
 											if (!empty($line) && !ctype_print($line)) {
@@ -8690,6 +8711,17 @@ function sync_package_pfblockerng($cron='') {
 									unlink_if_exists("{$pfbfolder}/{$header}_v4.ip");
 								}
 
+								// Remove duplicates and save any IPv6 IPs found in domain feed
+								if (!empty($domain_data_ip6)) {
+									$domain_data_ip6 = implode("\n", array_unique($domain_data_ip6)) . "\n";
+									@file_put_contents("{$pfbfolder}/{$header}_v6.ip", $domain_data_ip6, LOCK_EX);
+									$ip_cnt6 = exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}_v6.ip"));
+								}
+								else {
+									// Remove previous IPv6 feed
+									unlink_if_exists("{$pfbfolder}/{$header}_v6.ip");
+								}
+
 								// Validate feed with Unbound-checkconf
 								if (!empty($domain_data)) {
 									$conf  = "server:\n";
@@ -8721,6 +8753,9 @@ function sync_package_pfblockerng($cron='') {
 
 									if ($ip_cnt > 0) {
 										pfb_logger("  IPv4 count={$ip_cnt}\n", 1);
+									}
+									if ($ip_cnt6 > 0) {
+										pfb_logger("  IPv6 count={$ip_cnt6}\n", 1);
 									}
 
 									if (!$pfb['dnsbl_py_blacklist']) {
@@ -8880,6 +8915,41 @@ function sync_package_pfblockerng($cron='') {
 	if ($pfb['dnsbl_ip'] == 'Disabled') {
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt");
 		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v4.*");
+	}
+
+	// Collect all DNSBL IP feeds (IPv6 only) into DNSBLIP_v6.txt
+	if ($pfb['dnsbl_ip'] != 'Disabled' && ($pfb['updateip'] || !file_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt"))) {
+
+		$dnsbl_ip = glob("{$pfb['dnsdir']}/*_v6.ip");
+		if (!empty($dnsbl_ip)) {
+			$pfb_ips = @fopen("{$pfb['dbdir']}/DNSBLIP_v6.txt", 'w');
+			foreach ($dnsbl_ip as $d_ip) {
+				if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
+					while (($line = @fgets($handle)) !== FALSE) {
+						@fwrite($pfb_ips, $line);
+					}
+				}
+				if ($handle) {
+					@fclose($handle);
+				}
+			}
+			if ($pfb_ips) {
+				@fclose($pfb_ips);
+			}
+		}
+
+		// Add empty placeholder IP
+		else {
+			@file_put_contents("{$pfb['dbdir']}/DNSBLIP_v6.txt", "::{$pfb['ip_ph']}\n", LOCK_EX);
+		}
+		unlink_if_exists($pfb['ip_cache']);
+		touch("{$pfb['denydir']}/DNSBLIP_v6.update");
+	}
+
+	// Remove DNSBL IP feed, if disabled
+	if ($pfb['dnsbl_ip'] == 'Disabled') {
+		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt");
+		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v6.*");
 	}
 
 	#########################################
@@ -9249,8 +9319,8 @@ function sync_package_pfblockerng($cron='') {
 				$lists[] = $list;
 			}
 
-			// Add DNSBLIP, if configured (IPv4 only)
-			if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && $vtype == '_v4') {
+			// Add DNSBLIP, if configured (IPv4 + IPv6)
+			if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 				$list = array(	'aliasname'	=> 'DNSBLIP',
 						'vtype'		=> "{$vtype}",
@@ -9846,8 +9916,8 @@ function sync_package_pfblockerng($cron='') {
 	foreach ($ip_types as $ip_type => $vtype) {
 		$lists = config_get_path("installedpackages/{$ip_type}/config");
 
-		// Add DNSBLIP, if configured (IPv4 only)
-		if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && $vtype == '_v4') {
+		// Add DNSBLIP, if configured (IPv4 + IPv6)
+		if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 			$list = array(	'aliasname'	=> 'DNSBLIP',
 					'vtype'		=> "{$vtype}",
