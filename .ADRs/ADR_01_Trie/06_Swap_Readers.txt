@@ -20,7 +20,7 @@ hsts path — not scattered through operate().
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md — Section 2 semantics contract; Section 4 Phase 6.
-- .ADRs/ADR_01_Trie/RESULTS/05_Results.md — Phase 5 handoff: domainTrie init
+- .ADRs/ADR_01_Trie/RESULTS/05_Results.txt — Phase 5 handoff: domainTrie init
   location, which loaders dual-write, and the consistency-check result.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py
     * evaluate_domain() — the data/zone/whitelist/hsts lookup calls (from Phase 2).
@@ -92,4 +92,4 @@ Report each swapped call site, the noAAAA memo decision, and confirm the golden
 + equivalence tests pass. Phase 7 (optional) fuses the per-category walks; Phase
 8 removes the now-dead dicts and helpers.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/06_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/06_Results.txt`.

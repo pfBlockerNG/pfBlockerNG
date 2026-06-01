@@ -37,6 +37,7 @@ palette).  The workspace ships with a full configuration in `.vscode/`:
 | [Intelephense](https://marketplace.visualstudio.com/items?itemName=bmewburn.vscode-intelephense-client) | PHP language server — `.inc` files are auto-associated as PHP |
 | [Python + Pylance](https://marketplace.visualstudio.com/items?itemName=ms-python.python) | Python language support and type analysis |
 | [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck) | POSIX sh linter — dialect is detected from the `#!/bin/sh` shebang |
+| [markdownlint](https://marketplace.visualstudio.com/items?itemName=DavidAnson.vscode-markdownlint) | Markdown linter — reads `.markdownlint.jsonc` / `.markdownlint-cli2.jsonc` |
 | [EditorConfig](https://marketplace.visualstudio.com/items?itemName=editorconfig.editorconfig) | Enforces `.editorconfig` rules (tabs for PHP/shell, spaces for Python) |
 
 #### PHP stubs
@@ -136,6 +137,22 @@ vendor/bin/phpstan analyse
 [ShellCheck](https://www.shellcheck.net/) is available as a VS Code extension
 (see IDE setup above) and is also enforced in CI at `--severity=warning`.
 Configuration is in `.shellcheckrc`.
+
+#### Markdown
+
+[markdownlint](https://github.com/DavidAnson/markdownlint) runs as a VS Code
+extension (see IDE setup above) and on the command line, and is enforced in CI:
+
+```sh
+npx markdownlint-cli2          # lint
+npx markdownlint-cli2 --fix    # lint and auto-fix
+```
+
+The rule set is in `.markdownlint.jsonc` and the runner globs/ignores are in
+`.markdownlint-cli2.jsonc`. The ruleset is pragmatic: it disables rules that
+fight the documentation style (`MD013` line length, `MD060` table alignment,
+`MD036` inline sub-headers, `MD041` first-line heading) and ignores the verbatim
+`TRANSCRIPT.md`.
 
 ### Building via the FreeBSD ports system
 

@@ -21,7 +21,7 @@ the redundant traversals — the main motivation for a trie over the dicts.
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md — Section 1 (problem: redundant walks) and Section 2.
-- .ADRs/ADR_01_Trie/RESULTS/06_Results.md — Phase 6 handoff: swapped call sites,
+- .ADRs/ADR_01_Trie/RESULTS/06_Results.txt — Phase 6 handoff: swapped call sites,
   noAAAA memo decision, and golden/equivalence test confirmation.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py
     * trie lookup wrappers from Phase 4 and the descent primitive they share.
@@ -90,4 +90,4 @@ HANDOFF
 Report the fused descent signature, the before/after traversal evidence, and
 confirm golden + equivalence tests pass. Phase 8 removes the dead dicts/helpers.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/07_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/07_Results.txt`.

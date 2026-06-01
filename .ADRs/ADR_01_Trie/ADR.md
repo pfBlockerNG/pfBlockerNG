@@ -98,41 +98,57 @@ These are load-bearing and easy to break. Each must be pinned by an oracle test 
 Each phase is an independent commit, leaves `python -m pytest` green, and (Phases 1–3) is strictly behavior-preserving. Phases 1–3 are the de-riskers: they turn the trie swap from "surgery inside `operate()`" into "reimplement five pure functions that already have golden tests."
 
 ### Phase 1 — Extract pure domain-match helpers + unify signatures (behavior-preserving)
+
 Prompt: `01_Extract_A1_A3_and_B.txt`
+
 - **A1** `hsts_check_domain(...)` — extract the only remaining inline suffix walk (HSTS), preserving the step −2 stride.
 - **A2** `resolve_feed_group(index) -> (feed, group)` — dedup the feed/group lookup duplicated in the data and zone branches.
 - **A3** `iter_domain_suffixes(name)` — one generator for the `q.split('.', 1)[-1]` walk reused by every matcher; surfaces the per-matcher offset differences in one place.
 - **B** Unify matcher signatures to a consistent `(container, name, *opts)` shape so trie versions are drop-in.
 
 ### Phase 2 — Split decision from side-effects (behavior-preserving)
+
 Prompt: `02_Extract_A4_A5.txt`
+
 - **A4** `evaluate_domain(...) -> Decision | None` — pure decision (data → zone → tld → idn → regex → whitelist). Side effects (`dnsblDB[...]=`, `excludeDB.append`, `write_sqlite`, DNSMessage build) stay in `operate()`.
 - **A5** `evaluate_noaaaa(q_name) -> bool` — pull the noAAAA match+memo orchestration out of `operate()`, keeping DNSMessage build in `operate()`.
 
 ### Phase 3 — Oracle/property tests + test-fixture insulation
+
 Prompt: `03_Oracle_Tests.txt`
+
 - Property tests against the extracted helpers (random domains; current impl = golden).
 - Convert tests that poke globals directly (`dataDB[...] =`, `zoneDB[...] =`, `noAAAADB[...] =`) to go through insert helpers, so the eventual swap changes only the helper body, not the tests.
 
 ### Phase 4 — Trie data structure + insert/lookup functions + their tests
+
 Prompt: `04_Trie_Structure_And_Inserts.txt`
+
 - Add `TrieNode`, `trie_insert`, `trie_lookup_exact` (data), `trie_lookup_zone`, `trie_lookup_white`, `trie_lookup_noaaaa`, `trie_lookup_hsts`. Keep the old dict helpers as the oracle.
 - Property test: random domains → new trie lookups == old dict-walk results.
 
 ### Phase 5 — Build the trie at load (dual-populate)
+
 Prompt: `05_Build_Trie_At_Load.txt`
+
 - Populate the trie in the existing CSV/ini load loops in `init_standard()`, alongside the old dicts (transitional dual-populate). No reader changes yet.
 
 ### Phase 6 — Swap readers to the trie
+
 Prompt: `06_Swap_Readers.txt`
+
 - Point `evaluate_domain` / `evaluate_noaaaa` / hsts at the trie lookups. Retain the `pfb['dataDB']`/etc. gate flags.
 
 ### Phase 7 — Single-walk fusion (optional perf win)
+
 Prompt: `07_Single_Walk_Fusion.txt`
+
 - Compute the label list once and descend once, collecting data/zone/white hits in a single pass. Only after Phase 6 is green.
 
 ### Phase 8 — Delete dead code + finalize
+
 Prompt: `08_Delete_Dead_Code.txt`
+
 - Remove old dicts (`dataDB`, `zoneDB`, `whiteDB`, `noAAAADB`, `hstsDB`), old walk helpers, their module-level type declarations and `global` lists. Migrate any remaining tests/conftest to the trie. Update docs if developer workflow changed.
 
 ---
@@ -209,7 +225,7 @@ feed-shaped corpus (~70% exact data / 20% wildcard zone / 5% white / 3% hsts /
 2% noAAAA) with shared suffixes; dict and trie verified to return identical
 decisions before timing. Figures below: CPython 3.14 / macOS, 100k-entry corpus,
 seed 1234 — machine-/corpus-dependent; treat ratios as the signal. Full results
-in `RESULTS/09_Benchmark_Results.md`.
+in `RESULTS/09_Benchmark_Results.txt`.
 
 **Latency (dict = 1.0×; higher = slower):**
 

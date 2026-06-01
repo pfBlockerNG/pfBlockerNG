@@ -105,12 +105,29 @@ jobs:
         # suppressed; new errors introduced by future changes will fail CI.
         run: vendor/bin/phpstan analyse --no-progress
 
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Run markdownlint-cli2
+        # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
+        run: npx --yes markdownlint-cli2
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
     name: All tests passed
     if: always()
-    needs: [test, shellcheck, php-syntax, php-static-analysis]
+    needs: [test, shellcheck, php-syntax, php-static-analysis, markdownlint]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -129,5 +146,9 @@ jobs:
           fi
           if [ "${{ needs.php-static-analysis.result }}" != "success" ]; then
             echo "PHPStan static analysis failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.markdownlint.result }}" != "success" ]; then
+            echo "markdownlint failed or was cancelled."
             exit 1
           fi
