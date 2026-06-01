@@ -24,7 +24,7 @@ step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
 skip() { skipped="${skipped} $1"; }
 
-# --- Python: ruff lint + format (canonical per CLAUDE.md; not in CI) ---
+# --- Python: ruff lint + format (canonical per CLAUDE.md; also enforced in CI) ---
 ruff_bin=''
 if [ -x .venv/bin/ruff ]; then
 	ruff_bin=.venv/bin/ruff

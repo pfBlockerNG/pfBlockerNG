@@ -104,8 +104,8 @@ python -m pytest benchmarks/test_memory.py -s
 
 #### Python
 
-[Ruff](https://docs.astral.sh/ruff/) is configured in `pyproject.toml` and can
-be run locally:
+[Ruff](https://docs.astral.sh/ruff/) is configured in `pyproject.toml`, enforced
+in CI (`ruff check .` + `ruff format --check .`), and can be run locally:
 
 ```sh
 pip install ruff
