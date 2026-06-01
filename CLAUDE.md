@@ -50,6 +50,15 @@ to `.githooks`; or run `git config core.hooksPath .githooks` directly). git cann
 auto-apply a committed hooks path — cloning must not silently install hooks — so
 this one-time opt-in is required.
 
+**Claude: before working in this repo, ensure the hooks are active.** If
+`git config core.hooksPath` is not `.githooks`, run `sh scripts/setup-hooks.sh`
+once at the start of the session (idempotent; safe to re-run).
+
+**Claude: any GitHub Actions workflow that commits code must activate the hooks
+first.** Have the workflow run `sh scripts/setup-hooks.sh` before its commit/push
+steps (after checkout) so automated commits go through the same `pre-commit` /
+`pre-push` checks — subject to which tools the runner has installed.
+
 - **`.githooks/pre-commit`** runs the fast linters (and the unit suite) and blocks
   the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
   `markdownlint-cli2`, `sh -n` + `shellcheck`, and `php -l`. Each check runs only
