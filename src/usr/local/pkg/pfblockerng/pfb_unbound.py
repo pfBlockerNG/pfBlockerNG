@@ -27,7 +27,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -1602,6 +1602,420 @@ def deinit(id: int) -> bool:
 
 def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qdata: Any) -> bool:
     return True
+
+
+# --------------------------------------------------------------------------- #
+# DNSBL build layer (ADR-06) -- pure, stdlib-only, Unbound-symbol-free.
+#
+# Moves the DNSBL list preprocessing (parse -> normalise -> classify data/zone ->
+# build dicts) out of shell/PHP into this plugin. The boundary is "shell/PHP fetch
+# + tag; Python parse -> normalise -> classify -> build dicts -> emit counts"
+# (ADR.md SS2). This phase introduces the layer and unit-tests it against the
+# Phase-2 decision oracle; it is NOT yet wired into init() (Phase 4) and removes no
+# shell/PHP (Phase 5).
+#
+# Design notes the contract pins (RESULTS/01_Results.txt, RESULTS/02_Results.txt):
+#   * Build-time OPTIMISATIONS are dropped, not reimplemented: no within/cross-feed
+#     dedup, no subdomain collapse, no build-time user-whitelist or TOP1M removal.
+#     The dict load dedups keys for free (last-wins) and redundant subdomains stay
+#     because the parent zone still matches them.
+#   * Data/zone CLASSIFICATION is kept (it is not an optimisation) and mirrors
+#     tld_analysis/tld_search exactly: a registrable parent -> wildcard ZONE; a
+#     deeper sub-domain whose parent is not a known public suffix -> exact DATA;
+#     TLD exclusion forces exact DATA; a blacklisted TLD -> a whole-TLD ZONE entry.
+#   * Whitelisting is QUERY-TIME: build() loads the user whitelist into whiteDB
+#     (input normalisation moves here) and loads the TOP1M list into whiteDB ONLY
+#     when enabled. No list pruning at build time.
+#   * IP extraction is NOT Python's job -- it stays in PHP (Phase 5). The parser
+#     SKIPS non-domain lines (bare IPs fail domain validation); it never produces
+#     firewall input.
+#   * ENTRY MODEL: every entry carries a ``kind`` tag (block | allow | regex) so the
+#     model is ABP-ready, BUT this phase produces ONLY ``block`` and still IGNORES
+#     ``@@`` exceptions, regex rules, element-hiding (``##`` / ``#@#``), path/URL
+#     rules and non-domain ``$options`` -- exactly as today. The allow/regex kinds
+#     and their query-time matching are the future ABP ADR, not here.
+#   * build() is REENTRANT: it returns a NEW structure-set and mutates no module
+#     global, so a future zero-downtime reload can run it on a background thread and
+#     atomically swap the result in (the swap itself is not built here).
+#
+# No Unbound symbol is referenced below; only the stdlib (csv) is used.
+# --------------------------------------------------------------------------- #
+
+# Entry kinds (ABP-ready seam). This phase emits ONLY BLOCK; ALLOW/REGEX are
+# shaped for the future ABP ADR and are never produced or applied here.
+DNSBL_KIND_BLOCK = "block"
+DNSBL_KIND_ALLOW = "allow"
+DNSBL_KIND_REGEX = "regex"
+
+# Classification outcomes for an entry's key.
+DNSBL_CLASS_DATA = "data"  # exact match  (loaded into dataDB)
+DNSBL_CLASS_ZONE = "zone"  # wildcard-incl-self match (loaded into zoneDB)
+
+# Lower-cased label alphabet for the domain-shape gate (mirrors PFB_FILTER_DOMAIN,
+# pfblockerng.inc:7995-8016: labels of [a-z0-9-], not edge-hyphenated, with a dot).
+_DNSBL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+
+
+@dataclass
+class ParsedEntry:
+    """One parsed feed line, pre-normalisation.
+
+    ``kind`` is the ABP-ready tag; this phase only ever sets ``DNSBL_KIND_BLOCK``.
+    ``value`` is the raw domain token extracted from the line (not yet validated /
+    lower-cased). ``feed`` / ``group`` / ``log`` come from the per-feed manifest row.
+    """
+
+    kind: str
+    value: str
+    feed: str
+    group: str
+    log: str
+
+
+@dataclass
+class DnsblEntry:
+    """A normalised, classified blocklist entry ready to load into the matcher dicts.
+
+    ``cls`` is ``DNSBL_CLASS_DATA`` (exact) or ``DNSBL_CLASS_ZONE`` (wildcard); ``key``
+    is the registrable parent for a ZONE or the exact domain for DATA.
+    """
+
+    kind: str
+    cls: str
+    key: str
+    feed: str
+    group: str
+    log: str
+
+
+@dataclass
+class BuildResult:
+    """The structure-set build() returns -- decision-equivalent to the loader
+    contract (RESULTS/01_Results.txt SS1f). All dicts are FRESH (no module global
+    is mutated), so the result is safe to atomically swap in later.
+
+    Shapes (identical to what pfb_unbound init() loads today):
+        data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>}
+        zone_db[registrable]     = {"log": <flag>,        "index": <int>}
+        feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
+        white_db[domain]         = <bool wildcard>
+    ``counts`` is the LOADED total (len(data_db) + len(zone_db)); Phase 4 emits it as
+    pfb_py_count (its value legitimately rises -- lists are un-pruned).
+    """
+
+    data_db: dict[str, dict[str, Any]]
+    zone_db: dict[str, dict[str, Any]]
+    feed_group_index_db: dict[int, dict[str, str]]
+    white_db: dict[str, bool]
+    counts: int
+
+
+def _dnsbl_is_ipv4(token: str) -> bool:
+    """Mirror is_ipaddrv4: dotted-quad, each octet 0-255, no leading zeros.
+
+    Used only to RECOGNISE and SKIP bare-IP lines (the firewall path stays in PHP);
+    Python never emits IPs.
+    """
+    parts = token.split(".")
+    if len(parts) != 4:
+        return False
+    for p in parts:
+        if not p.isdigit() or not (0 <= int(p) <= 255) or (len(p) > 1 and p[0] == "0"):
+            return False
+    return True
+
+
+def _dnsbl_parse_abp_line(line: str) -> str | None:
+    """Current basic-ABP token-strip (pfblockerng.inc:7706-7717).
+
+    Keep ONLY a plain ``||domain^`` network line and strip the ``||`` / ``^`` tokens
+    to a bare domain. IGNORE everything else exactly as today: ``@@`` exceptions,
+    ``##`` / ``#@#`` element-hiding, ``$options``, ``*`` and ``/`` (path / regex).
+    Returns the bare domain or ``None``. (The future ABP ADR replaces this.)
+    """
+    if not line.startswith("||") or not line.endswith("^"):
+        return None
+    if "$" in line or "*" in line or "/" in line:
+        return None
+    return line[2:-1]
+
+
+def _dnsbl_strip_hosts_prefix(line: str) -> str:
+    """Hosts format: ``<sink-ip> <domain>`` -> take the domain token (inc:7899-7907).
+
+    Handles ``0.0.0.0 domain`` and ``127.0.0.1 domain``; a non-IP first token keeps
+    the chars before the space (PHP's behaviour).
+    """
+    if " " in line:
+        first, _, rest = line.partition(" ")
+        rest = rest.strip()
+        if _dnsbl_is_ipv4(first):
+            return rest
+        return first
+    return line
+
+
+def parse(format_hint: str, line: str) -> ParsedEntry | None:
+    """Parse one raw feed line into a kind-tagged block entry, or ``None`` to skip.
+
+    ``format_hint`` dispatches the per-format handler (the manifest replaces the old
+    in-loop CSV-type sniffing). This subsumes the current basic-ABP token-strip and
+    reproduces today's per-format behaviour, including which lines are IGNORED.
+
+    Bare-IP lines and the csv:pon col-0 IP are NOT returned here -- IP extraction is
+    a PHP/firewall concern (Phase 5); a stray bare IP simply yields ``None`` (and
+    would fail domain validation anyway). ``feed`` / ``group`` / ``log`` are attached
+    by build() from the manifest row, so parse() only resolves the domain token.
+
+    NOTE: the ABP-ready ``kind`` field is always ``DNSBL_KIND_BLOCK`` in this phase;
+    ``@@`` / regex / element / ``$options`` lines are dropped, not emitted as allow /
+    regex kinds (that is the future ABP ADR).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    if format_hint == "abp":
+        # ABP control / comment lines (header, '!', '[') are dropped first.
+        if stripped.startswith("!") or stripped.startswith("["):
+            return None
+        host = _dnsbl_parse_abp_line(stripped)
+        if host is None:
+            return None
+        return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=host, feed="", group="", log="")
+
+    if format_hint == "csv:pon":
+        # 9-col CSV: domain = col2 (always kept). col0 is handled by the PHP DNSBL-IP
+        # pass (Phase 5); Python ignores it here.
+        if stripped.startswith("!") or stripped.lower().startswith("timestamp"):
+            return None
+        try:
+            row = next(csv.reader([stripped]))
+        except (csv.Error, StopIteration):
+            return None
+        if len(row) != 9:
+            return None
+        domain = row[2]
+        if not domain:
+            return None
+        return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=domain, feed="", group="", log="")
+
+    # hosts / plain
+    if stripped.startswith("#") or stripped.startswith("!"):
+        return None
+    token = _dnsbl_strip_hosts_prefix(stripped)
+    token = token.strip().strip(".")
+    if not token:
+        return None
+    # Bare IP -> firewall path (PHP); skipped from the domain build.
+    if _dnsbl_is_ipv4(token):
+        return None
+    return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=token, feed="", group="", log="")
+
+
+def normalise(value: str) -> str | None:
+    """Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:7995-8016).
+
+    Returns the validated, lower-cased domain or ``None`` when the token is not a
+    valid domain (which is how stray non-domain entries -- including any IP that
+    slipped past parse() -- are dropped without ever reaching the dicts).
+    """
+    host = value.strip().strip(".").lower()
+    if "." not in host:
+        return None
+    for label in host.split("."):
+        if not label or label[0] == "-" or label[-1] == "-":
+            return None
+        if any(c not in _DNSBL_LABEL_CHARS for c in label):
+            return None
+    return host
+
+
+def _dnsbl_load_tld_master(
+    suffix_lines: Iterable[str],
+    tld_blacklist: Iterable[str],
+    tld_exclusion: Iterable[str],
+) -> dict[str, dict[str, str]]:
+    """Build the public-suffix oracle tlds[tld][full-suffix] (tld_analysis:2630-2642),
+    minus any blacklisted or excluded TLD (inc:2749-2751 / 2791-2793)."""
+    blacklist = {t.strip(".") for t in tld_blacklist}
+    exclusion_keys = {e.strip(".") for e in tld_exclusion}
+    tlds: dict[str, dict[str, str]] = {}
+    for line in suffix_lines:
+        suffix = line.strip()
+        if not suffix or suffix.startswith("#"):
+            continue
+        tld = suffix.rsplit(".", 1)[-1]
+        if tld in blacklist or tld in exclusion_keys:
+            continue
+        tlds.setdefault(tld, {})[suffix] = ""
+    return tlds
+
+
+def _dnsbl_tld_search(tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int) -> str | None:
+    """tld_search (inc:2595-2603): if the j-label suffix is a known public suffix,
+    the registrable parent is the k-label slice."""
+    tld_query = ".".join(dparts[-j:])
+    if tld_query in tlds.get(tld, {}):
+        return ".".join(dparts[-k:])
+    return None
+
+
+def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
+    """Return ``(DNSBL_CLASS_ZONE, registrable-parent)`` or ``(DNSBL_CLASS_DATA, domain)``.
+
+    Mirrors tld_analysis:2832-2874 exactly: a registrable parent -> wildcard ZONE; a
+    deeper sub-domain whose parent is not a known public suffix -> exact DATA; a
+    whole-domain TLD exclusion forces exact DATA (transparent, not wildcarded).
+    """
+    dparts = domain.split(".")
+    dcnt = len(dparts)
+    tld = dparts[-1]
+    dfound = ""
+
+    if dcnt > 5:
+        dfound = ""
+    elif dcnt == 5:
+        dfound = _dnsbl_tld_search(tlds, tld, dparts, 4, 5) or ""
+    elif dcnt == 4:
+        dfound = _dnsbl_tld_search(tlds, tld, dparts, 3, 4) or ""
+    elif dcnt == 3:
+        dfound = _dnsbl_tld_search(tlds, tld, dparts, 2, 3) or ""
+    elif dcnt == 2:
+        dfound = ".".join(dparts[-2:])
+
+    # TLD exclusion: whole domain in the exclusion set -> force exact DATA.
+    if domain in exclusion:
+        dfound = ""
+
+    if dfound:
+        return DNSBL_CLASS_ZONE, dfound
+    return DNSBL_CLASS_DATA, domain
+
+
+def _dnsbl_normalise_whitelist(
+    user_whitelist: Iterable[str],
+    top1m_list: Iterable[str],
+    top1m_enabled: bool,
+) -> dict[str, bool]:
+    """User-whitelist normalisation (pfb_unbound_python_whitelist, inc:2259) into the
+    query-time whiteDB shape (inc:609-619): www-strip; leading-dot -> wildcard True
+    else False. TOP1M entries are loaded ONLY when enabled (bare domains -> False).
+    No build-time list pruning -- this only populates whiteDB."""
+    white_db: dict[str, bool] = {}
+    for raw in user_whitelist:
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("www."):
+            line = line[4:]
+        if line.startswith("."):
+            white_db[line.lstrip(".")] = True
+        else:
+            white_db[line] = False
+
+    if top1m_enabled:
+        for raw in top1m_list:
+            dom = raw.strip()
+            if dom:
+                white_db.setdefault(dom, False)
+
+    return white_db
+
+
+def build(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    line_reader: Callable[[str], Iterable[str]],
+    top1m_enabled: bool = False,
+) -> BuildResult:
+    """Pure, reentrant DNSBL build: raw feeds + config -> matcher structure-set.
+
+    ``manifest`` is the per-feed boundary (RESULTS/01_Results.txt SS1i): one row per
+    raw feed file mapping it to ``{raw, feed, group, format_hint, log_flag}``.
+    ``config`` carries the classification + whitelist inputs (``tld_master`` suffix
+    lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``top1m_list``).
+    ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
+    this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
+    init wiring in Phase 4 supplies a file-backed reader).
+
+    Returns a FRESH ``BuildResult`` and mutates no module global -- calling it twice
+    yields equal structures (reentrant / zero-downtime-ready). It performs NO dedup,
+    NO subdomain collapse and NO build-time whitelist/TOP1M removal: duplicate keys
+    are simply overwritten last-wins by dict assignment (the documented attribution
+    change, ADR.md SS2), and redundant subdomains stay because their parent zone still
+    matches them.
+    """
+    suffix_lines = list(config.get("tld_master", []))
+    tld_blacklist = list(config.get("tld_blacklist", []))
+    tld_exclusion = list(config.get("tld_exclusion", []))
+    exclusion = {e.strip(".") for e in tld_exclusion}
+
+    tlds = _dnsbl_load_tld_master(suffix_lines, tld_blacklist, tld_exclusion)
+
+    data_db: dict[str, dict[str, Any]] = {}
+    zone_db: dict[str, dict[str, Any]] = {}
+    feed_group_index_db: dict[int, dict[str, str]] = {}
+    feed_group_db: dict[str, int] = {}
+    next_index = 0
+
+    def index_for(feed: str, group: str) -> int:
+        nonlocal next_index
+        key = feed + group
+        idx = feed_group_db.get(key)
+        if idx is None:
+            idx = next_index
+            feed_group_db[key] = idx
+            feed_group_index_db[idx] = {"feed": feed, "group": group}
+            next_index += 1
+        return idx
+
+    # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
+    # (inc:2740 ``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``).
+    for raw_tld in tld_blacklist:
+        tld = raw_tld.strip(".")
+        if not tld:
+            continue
+        idx = index_for("DNSBL_TLD", "DNSBL_TLD")
+        zone_db[tld] = {"log": "1", "index": idx}
+
+    white_db = _dnsbl_normalise_whitelist(
+        config.get("user_whitelist", []),
+        config.get("top1m_list", []),
+        top1m_enabled,
+    )
+
+    for feed_row in manifest.get("feeds", []):
+        feed = feed_row["feed"]
+        group = feed_row["group"]
+        fmt = feed_row["format_hint"]
+        log_flag = feed_row["log_flag"]
+        for raw_line in line_reader(feed_row["raw"]):
+            entry = parse(fmt, raw_line)
+            if entry is None:
+                continue
+            domain = normalise(entry.value)
+            if domain is None:
+                continue
+            # Only BLOCK is produced this phase (ABP-ready seam; see module header).
+            if entry.kind != DNSBL_KIND_BLOCK:
+                continue
+            idx = index_for(feed, group)
+            cls, key = classify(domain, tlds, exclusion)
+            payload = {"log": log_flag, "index": idx}
+            if cls == DNSBL_CLASS_ZONE:
+                zone_db[key] = payload  # last-wins (dict; ADR-06 SS2 attribution change)
+            else:
+                data_db[key] = payload
+
+    return BuildResult(
+        data_db=data_db,
+        zone_db=zone_db,
+        feed_group_index_db=feed_group_index_db,
+        white_db=white_db,
+        counts=len(data_db) + len(zone_db),
+    )
 
 
 def iter_domain_suffixes(name: str) -> Iterator[str]:
