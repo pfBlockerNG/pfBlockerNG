@@ -1673,8 +1673,8 @@ class TestADR02PythonOnlyBlocking:
         # domain in dataDB when python_blocking=True.
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
-        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
-        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
         add_data("adr02-blocked.com", log="1", index=0)
         set_feed_group(0, "ADR02Feed", "ADR02Group")
         qstate = make_qstate("adr02-blocked.com.", qtype=RR_A)
@@ -1692,8 +1692,8 @@ class TestADR02PythonOnlyBlocking:
         # the single control point.
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = False
-        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
-        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
         add_data("adr02-not-blocked.com", log="1", index=0)
         set_feed_group(0, "ADR02Feed", "ADR02Group")
         qstate = make_qstate("adr02-not-blocked.com.", qtype=RR_A)
@@ -1706,8 +1706,8 @@ class TestADR02PythonOnlyBlocking:
         # Wildcard/zone blocking via operate() with the ADR-02 invariant state.
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
-        monkeypatch.setattr(pfb_unbound, "log_entry", lambda *a: None)
-        monkeypatch.setattr(pfb_unbound, "write_sqlite", lambda *a: True)
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
         add_zone("blocked-zone.net", log="1", index=0)
         set_feed_group(0, "ZoneFeed", "ZoneGroup")
         qstate = make_qstate("any.subdomain.blocked-zone.net.", qtype=RR_A)
