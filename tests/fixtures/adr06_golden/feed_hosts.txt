@@ -1,0 +1,12 @@
+# Hosts-file format feed (sinkhole-IP + domain per line).
+# Feed=HostsFeed Group=Ads  log_flag=1
+# Exercises: hosts "0.0.0.0 domain" + "127.0.0.1 domain" shapes; a 2-label
+# registrable domain (-> ZONE wildcard, blocks itself + every subdomain); a deep
+# sub-domain whose registrable parent is NOT otherwise listed (-> exact DATA, so
+# only that exact name blocks); an embedded bare IPv4 (-> firewall path, stripped
+# from Python); a www-prefixed domain; and a comment line (ignored).
+0.0.0.0 tracker.org
+127.0.0.1 evilads.net
+0.0.0.0 deep.host.cleandata.com
+0.0.0.0 198.51.100.23
+0.0.0.0 www.bannerfarm.com

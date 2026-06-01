@@ -1,0 +1,12 @@
+{
+  "_doc": "Per-feed manifest (Phase 1 §1i / §2 contract). One row per raw feed file mapping it to {feed, group, format_hint, log_flag}. This is the shell->Python boundary the build consumes; the oracle uses it to drive the reference preprocessor in the same order the current pipeline concatenates feeds.",
+  "version": 1,
+  "feeds": [
+    { "raw": "feed_hosts.txt",   "feed": "HostsFeed", "group": "Ads",     "format_hint": "hosts", "log_flag": "1" },
+    { "raw": "feed_plain.txt",   "feed": "PlainFeed", "group": "Malware", "format_hint": "plain", "log_flag": "1" },
+    { "raw": "feed_abp.txt",     "feed": "AbpFeed",   "group": "AbpAds",  "format_hint": "abp",   "log_flag": "1" },
+    { "raw": "feed_csv_pon.txt", "feed": "PonFeed",   "group": "Threat",  "format_hint": "csv:pon", "log_flag": "1" },
+    { "raw": "feed_extra.txt",   "feed": "ExtraFeed", "group": "Extra",   "format_hint": "plain", "log_flag": "1" },
+    { "raw": "feed_nolog.txt",   "feed": "NoLogFeed", "group": "NoLog",   "format_hint": "plain", "log_flag": "2" }
+  ]
+}
