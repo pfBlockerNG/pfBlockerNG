@@ -137,6 +137,9 @@ function safe_mkdir(string $path, int $mode = 0755): bool {}
 /** Delete $fn if it exists; silently succeed if it does not. */
 function unlink_if_exists(string $fn): void {}
 
+/** Recursively delete $path (file or directory tree, glob-capable); follow symlinks when $follow_links. */
+function rmdir_recursive(string $path, bool $follow_links = false): bool {}
+
 // ── pfSense global array helpers ──────────────────────────────────────────────
 
 /** Return the value of key $key from the pfSense global $g array. */
