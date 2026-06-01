@@ -235,12 +235,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Function rmdir_recursive not found\.$#'
-			identifier: function.notFound
-			count: 14
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Function sigkillbypid not found\.$#'
 			identifier: function.notFound
 			count: 1
@@ -304,12 +298,6 @@ parameters:
 			message: '#^Function localize_text not found\.$#'
 			identifier: function.notFound
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Function rmdir_recursive not found\.$#'
-			identifier: function.notFound
-			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
@@ -953,12 +941,6 @@ parameters:
 			identifier: class.notFound
 			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
-
-		-
-			message: '#^Function rmdir_recursive not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
 		-
 			message: '#^Instantiated class Form not found\.$#'

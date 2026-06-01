@@ -9,6 +9,8 @@
     "**/node_modules/**",
     ".venv",
     "**/.venv/**",
+    "vendor",
+    "**/vendor/**",
     // Verbatim conversation transcript (a historical record, not maintained
     // documentation): its repeated "User"/"Assistant" headings and multiple
     // H1s are inherent to the format, so it is not linted.
