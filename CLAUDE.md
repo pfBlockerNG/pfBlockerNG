@@ -44,8 +44,15 @@ Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI
 
 ## Git hooks
 
-`.githooks/pre-push` enforces tag naming before pushes reach the remote.
 Activate once after cloning: `git config core.hooksPath .githooks`
+
+- **`.githooks/pre-commit`** runs the fast linters (and the unit suite) and blocks
+  the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
+  `markdownlint-cli2`, `sh -n` + `shellcheck`, and `php -l`. Each check runs only
+  when its tool is installed (a missing tool is reported and skipped — CI is the
+  hard gate); PHPStan runs only when `vendor/bin/phpstan` exists. Bypass in an
+  emergency with `git commit --no-verify`.
+- **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---
 
@@ -100,6 +107,12 @@ markdownlint via the VS Code "markdownlint" extension and the CLI. Run from repo
 npx markdownlint-cli2          # lint
 npx markdownlint-cli2 --fix    # lint + autofix
 ```
+
+When writing Markdown, produce compliant output directly: put a blank line around
+every heading, list, and fenced code block; give each fenced block a language
+(use a `text` fence for plain output, trees, or ASCII); and end the file with a
+single trailing newline. Long lines and compact (unaligned) tables are fine — `MD013`
+and `MD060` are disabled.
 
 Rule set is in `.markdownlint.jsonc` (read by both the extension and the CLI);
 globs/ignores are in `.markdownlint-cli2.jsonc`. The ruleset is pragmatic — it

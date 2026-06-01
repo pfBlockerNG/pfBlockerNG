@@ -1,0 +1,101 @@
+#!/bin/sh
+# Runs the project's fast linters (and the unit suite) before each commit and
+# blocks the commit on any failure. Mirrors the commands in CLAUDE.md and
+# .github/workflows/test.yml.
+#
+# Each check runs only when its tool is available: a contributor missing a tool
+# is warned and that check is skipped, never blocked (CI is the hard gate).
+# PHPStan is run only when the Composer vendor tree is present (too heavy to
+# require locally). All checks run even after one fails, so every problem is
+# reported in a single pass. Bypass in an emergency with `git commit --no-verify`.
+#
+# Enable: git config core.hooksPath .githooks
+
+set -u
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+fail=0
+skipped=''
+
+have() { command -v "$1" >/dev/null 2>&1; }
+step() { printf '[pre-commit] %s\n' "$1"; }
+failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
+skip() { skipped="${skipped} $1"; }
+
+# --- Python: ruff lint + format (canonical per CLAUDE.md; not in CI) ---
+ruff_bin=''
+if [ -x .venv/bin/ruff ]; then
+	ruff_bin=.venv/bin/ruff
+elif have ruff; then
+	ruff_bin=ruff
+fi
+if [ -n "$ruff_bin" ]; then
+	step 'ruff check'
+	"$ruff_bin" check . || failed 'ruff check .'
+	step 'ruff format --check'
+	"$ruff_bin" format --check . || failed 'ruff format --check .'
+else
+	skip ruff
+fi
+
+# --- Python: unit suite (fast; the CI correctness gate) ---
+py_bin=''
+if [ -x .venv/bin/python ]; then
+	py_bin=.venv/bin/python
+elif have python; then
+	py_bin=python
+elif have python3; then
+	py_bin=python3
+fi
+if [ -n "$py_bin" ]; then
+	step 'pytest'
+	"$py_bin" -m pytest -q || failed 'python -m pytest'
+else
+	skip pytest
+fi
+
+# --- Markdown: markdownlint-cli2 (reads .markdownlint*.jsonc) ---
+if have npx; then
+	step 'markdownlint'
+	npx --yes markdownlint-cli2 || failed 'markdownlint-cli2'
+else
+	skip markdownlint
+fi
+
+# --- Shell: sh -n parse gate + shellcheck (generated ip_pre_AWS_*.sh excluded) ---
+if have shellcheck; then
+	step 'shell (sh -n + shellcheck)'
+	find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | while IFS= read -r f; do
+		sh -n "$f" || exit 1
+	done || failed 'sh -n'
+	find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort \
+		| xargs shellcheck --severity=warning || failed 'shellcheck'
+else
+	skip shellcheck
+fi
+
+# --- PHP: php -l syntax check (output shown only for files that fail) ---
+if have php; then
+	step 'php -l'
+	find src \( -name '*.php' -o -name '*.inc' \) | sort | while IFS= read -r f; do
+		out=$(php -l "$f" 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
+	done || failed 'php -l'
+else
+	skip php
+fi
+
+# --- PHP: PHPStan (heavy; only when the Composer vendor tree is installed) ---
+if [ -x vendor/bin/phpstan ]; then
+	step 'phpstan'
+	vendor/bin/phpstan analyse --no-progress || failed 'phpstan'
+fi
+
+[ -n "$skipped" ] && printf '[pre-commit] skipped (tool not found):%s\n' "$skipped" >&2
+
+if [ "$fail" != 0 ]; then
+	printf '[pre-commit] One or more checks failed (see above). Fix them, or bypass with: git commit --no-verify\n' >&2
+	exit 1
+fi
+exit 0
