@@ -2730,9 +2730,7 @@ function tld_analysis() {
 		$p_zone = @fopen("{$pfb['unbound_py_zone']}.raw", 'w');
 		$p_tsp = @fopen("{$pfb['dnsbl_tld_remove']}", 'w');
 
-		if ((get_resource_type($p_data) != 'stream') ||
-		    (get_resource_type($p_zone) != 'stream') ||
-		    (get_resource_type($p_tsp) != 'stream')) {
+		if ($p_data === FALSE || $p_zone === FALSE || $p_tsp === FALSE) {
 
 			pfb_logger("\nFailed to create DNSBL python data|zone|remove file handles! Exiting\n", 1);
 			foreach (array($p_data, $p_zone, $p_tsp) as $handlex) {
