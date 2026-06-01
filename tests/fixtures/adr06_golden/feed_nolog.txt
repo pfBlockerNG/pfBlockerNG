@@ -1,0 +1,7 @@
+# Plain-domain feed with log_flag '2' (block-but-skip-log).
+# Feed=NoLogFeed Group=NoLog  log_flag=2
+# Per Phase 1 (1b) + the matcher: log '2' still BLOCKS the domain, but
+# null_blocking stays True (only log '1' flips it to a null-route reply) and
+# get_details_dnsbl skips the log line (pfb_unbound.py:1134). This pins the
+# distinct "blocked, log '2'" decision shape.
+silentblock.com

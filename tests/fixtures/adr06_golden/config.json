@@ -1,0 +1,24 @@
+{
+  "_doc": "Config inputs to the CURRENT DNSBL pipeline for the golden oracle. These mirror dnsblconfig keys read by tld_analysis / pfb_unbound_python_whitelist and the python init flags. The oracle loads two scenarios off this single config: TOP1M disabled (default) and TOP1M enabled.",
+
+  "tld_blacklist": ["zip"],
+  "_tld_blacklist_doc": "Whole-TLD block: every domain under .zip is wildcard-blocked via a synthetic DNSBL_TLD zone entry (inc:2740). .zip is also removed from the TLD master.",
+
+  "tld_exclusion": ["excluded.com"],
+  "_tld_exclusion_doc": "Force exact DATA (transparent) classification for this whole domain even though as a 2-label registrable domain it would otherwise be a wildcard ZONE (inc:2855). Present in feed_extra.txt.",
+
+  "user_whitelist": ["www.adblock.com", ".wildwhite.org", "phishing.net"],
+  "_user_whitelist_doc": "User DNSBL whitelist (dnsblconfig['suppression']). Normalised by pfb_unbound_python_whitelist (inc:2259): www-strip, leading-dot -> wildcard '1' else '0'. Applied at QUERY TIME via whiteDB (un-blocks), never as a build-time removal in ADR-06's target.",
+
+  "top1m_list": ["popularcdn.com"],
+  "_top1m_doc": "TOP1M (Alexa/Tranco) popularity whitelist. Loaded into whiteDB ONLY when TOP1M is enabled; un-blocks popular domains at query time. When disabled, these domains block normally.",
+
+  "hsts_domains": ["hstslisted.com"],
+  "_hsts_doc": "HSTS exclusion list (pfb_py_hsts). A blocked domain on this list (or under an hsts_tld) resolves real (HSTS bypass) instead of being null-blocked.",
+
+  "noaaaa_domains": [["noaaaa.com", "0"], ["noaaaawild.net", "1"]],
+  "_noaaaa_doc": "noAAAA list: [domain, wildcard]. An AAAA query for a listed domain (or subdomain when wildcard='1') is blocked (NODATA), independent of the DNSBL blocklist.",
+
+  "log_default": "1",
+  "python_tld_seg": 1
+}

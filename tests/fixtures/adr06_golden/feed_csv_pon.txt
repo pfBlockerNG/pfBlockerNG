@@ -1,0 +1,10 @@
+timestamp,ignored,domain,c3,c4,c5,c6,c7,c8
+! Structured CSV "pon" (Ponmocup) feed. Feed=PonFeed Group=Threat log_flag=1
+! Per the current loop (pfblockerng.inc:7819-7835): a 9-column row uses
+! csvline[2] as the DOMAIN handed to Python AND, when csvline[0] is an IPv4,
+! ALSO routes that IP to the firewall path (DNSBLIP_v4) -- it does NOT skip the
+! domain. So this feed exercises BOTH the domain sink AND the embedded-IP
+! handoff from a CSV column, on the SAME row.
+2026-01-01T00:00:00Z,x,ponmocup.com,a,b,c,d,e,f
+198.51.100.77,x,ponip.net,a,b,c,d,e,f
+192.0.2.140,x,deep.node.cleanpon.com,a,b,c,d,e,f
