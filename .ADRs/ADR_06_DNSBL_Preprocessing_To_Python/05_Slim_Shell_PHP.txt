@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 5 PROMPT — Slim shell/PHP to download+tag; delete dead native logic
-Target model: Claude Sonnet 4.6
+Target model: Claude Opus 4.8 (effort xhigh)
 ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
      (read §2 Boundary + Dead-code rows, §3 risks first)
 ================================================================================

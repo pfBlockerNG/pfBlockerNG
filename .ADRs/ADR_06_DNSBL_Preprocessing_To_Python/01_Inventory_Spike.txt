@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 1 PROMPT — Inventory the contract + spike & kill-gate (init-time/memory)
-Target model: Claude Sonnet 4.6
+Target model: Claude Opus 4.8 (effort xhigh)
 ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
      (read §1 facts, §2 Boundary/Build/Counts rows, and §7 Reject criteria FIRST —
       this phase exists to test the premise BEFORE the move is built)

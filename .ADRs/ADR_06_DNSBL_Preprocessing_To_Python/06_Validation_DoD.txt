@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 6 PROMPT — Validation, manual smoke, Definition of Done
-Target model: Claude Sonnet 4.6
+Target model: Claude Opus 4.8 (effort xhigh)
 ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
      (read §4 acceptance, §7 DoD + reject + manual smoke first)
 ================================================================================
