@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 4 PROMPT — Wire init to build from raw + emit counts (new contract)
-Target model: Claude Sonnet 4.6
+Target model: Claude Opus 4.8 (effort xhigh)
 ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
      (read §2 Counts + User-whitelist + Reentrancy rows first)
 ================================================================================
