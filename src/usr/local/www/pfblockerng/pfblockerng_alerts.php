@@ -1019,10 +1019,15 @@ if (isset($_POST) && !empty($_POST)) {
 
 			if (file_exists("{$tmp}.adup") && filesize("{$tmp}.adup") > 0) {
 				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_data']} > "
-					. escapeshellarg("{$tmp}.tmp") . "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_data']}"); 
+					. escapeshellarg("{$tmp}.tmp") . "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_data']}");
 				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_zone']} > " . escapeshellarg("{$tmp}.tmp")
 					. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_zone']}");
+
+				// ADR-06: the user whitelist is now applied at QUERY TIME via the
+				// Python whiteDB. Refresh the legacy whitelist input AND the manifest's
+				// config.user_whitelist so the next build's whiteDB un-blocks this domain.
 				pfb_unbound_python_whitelist('alerts');
+				pfb_unbound_python_sources_whitelist();
 				pfb_reload_unbound('enabled', FALSE);
 			}
 

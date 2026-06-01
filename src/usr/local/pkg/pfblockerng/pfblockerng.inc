@@ -111,6 +111,8 @@ $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
+$pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
+$pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// ADR-06: per-feed IP-stripped raw feeds referenced by the manifest
 
 $pfb['dnsbl_safesearch']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf';
 $pfb['dnsbl_youtube_restrict']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.youtube_restrict.conf';
@@ -2293,6 +2295,172 @@ function pfb_unbound_python_whitelist($mode='') {
 }
 
 
+// ADR-06: Collect the user DNSBL whitelist as a normalised list of source lines
+// for the Python build manifest (config.user_whitelist). The Python build performs
+// the www-strip / leading-dot->wildcard normalisation itself (pfb_unbound.py
+// _dnsbl_normalise_whitelist), so this hands the RAW suppression lines through.
+function pfb_dnsbl_whitelist_lines() {
+	global $pfb;
+
+	$lines = pfbng_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+	$out = array();
+	if (!empty($lines)) {
+		foreach ($lines as $line) {
+			$line = trim($line);
+			if ($line !== '') {
+				$out[] = $line;
+			}
+		}
+	}
+	return $out;
+}
+
+
+// ADR-06: Build the shell->Python contract. Writes the per-feed manifest
+// ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
+// lower-cased domain per line) referenced by the manifest. The Python plugin's
+// init (pfb_unbound.py dnsbl_build_from_manifest) consumes this to build the
+// DNSBL structures from raw -- replacing the previous data/zone CSV load.
+//
+// The per-feed raw is the bare-domain extraction of the already-parsed per-feed
+// '.txt' (col1 of the 6-col CSV produced by the download loop). The download loop
+// already routes embedded IPs to the firewall '*_v4.ip' path and excludes them
+// from '.txt', so the raw handed to Python carries NO bare-IP lines (ADR-06 §3b;
+// Python would ignore stray IPs anyway). format_hint is 'plain' for every feed:
+// PHP has already done all per-format extraction (hosts/CSV/basic-ABP/IDN), so
+// Python only revalidates + lower-cases the bare domains -- decision-equivalent.
+//
+// $feeds: array of rows [ 'header' => <feed>, 'group' => <alias>, 'log' => <flag> ].
+function pfb_unbound_python_sources($feeds) {
+	global $pfb;
+
+	if (!is_array($feeds)) {
+		$feeds = array();
+	}
+
+	// Per-feed raw directory (recreated each build)
+	rmdir_recursive("{$pfb['unbound_py_rawdir']}");
+	safe_mkdir("{$pfb['unbound_py_rawdir']}");
+
+	$manifest_feeds = array();
+	foreach ($feeds as $feed) {
+		$header	= isset($feed['header']) ? $feed['header'] : '';
+		$group	= isset($feed['group'])  ? $feed['group']  : '';
+		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
+
+		if ($header === '') {
+			continue;
+		}
+
+		$src	= "{$pfb['dnsdir']}/{$header}.txt";
+		if (!file_exists($src)) {
+			continue;
+		}
+
+		// Extract bare domains (col1) from the 6-col CSV; this is already IP-free
+		// (IPs went to the firewall path) and already cleaned/validated by the loop.
+		$rawpath	= "{$pfb['unbound_py_rawdir']}/{$header}.raw";
+		$raw_h		= @fopen($rawpath, 'w');
+		if (($in_h = @fopen($src, 'r')) !== FALSE) {
+			while (($line = @fgets($in_h)) !== FALSE) {
+				$cols = explode(',', $line, 3);
+				if (isset($cols[1]) && $cols[1] !== '') {
+					@fwrite($raw_h, "{$cols[1]}\n");
+				}
+			}
+			@fclose($in_h);
+		}
+		if ($raw_h) {
+			@fclose($raw_h);
+		}
+
+		$manifest_feeds[] = array(
+			'raw'		=> $rawpath,
+			'feed'		=> $header,
+			'group'		=> $group,
+			'format_hint'	=> 'plain',
+			'log_flag'	=> $logf
+		);
+	}
+
+	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
+	// as whole-TLD ZONE entries from config.tld_blacklist, so no raw file is needed.
+
+	// TOP1M (Alexa/Tranco) popularity whitelist -> query-time whiteDB only when on.
+	$top1m_enabled	= ($pfb['dnsbl_alexa'] == 'on' &&
+			   file_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt"));
+	$top1m_list	= array();
+	if ($top1m_enabled) {
+		$alexa = @file("{$pfb['dbdir']}/pfbalexawhitelist.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		if (is_array($alexa)) {
+			$top1m_list = $alexa;
+		}
+	}
+
+	$tld_blacklist	= pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
+	$tld_exclusion	= pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
+
+	$manifest = array(
+		'version'	=> 1,
+		'config'	=> array(
+			'tld_master'	=> $pfb['dnsbl_tld_data'],
+			'tld_blacklist'	=> array_values($tld_blacklist),
+			'tld_exclusion'	=> array_values($tld_exclusion),
+			'user_whitelist'=> pfb_dnsbl_whitelist_lines(),
+			'top1m_list'	=> array_values($top1m_list),
+			'top1m_enabled'	=> $top1m_enabled
+		),
+		'feeds'		=> $manifest_feeds
+	);
+
+	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	if ($json !== FALSE) {
+		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
+		@chown($pfb['unbound_py_sources'], 'unbound');
+		@chgrp($pfb['unbound_py_sources'], 'unbound');
+	}
+
+	return $manifest;
+}
+
+
+// ADR-06: Update only the manifest's config.user_whitelist in place (used by the
+// alerts "add to whitelist" button, which changes the suppression config without a
+// full feed re-enumeration). The query-time whiteDB is rebuilt from this on reload.
+function pfb_unbound_python_sources_whitelist() {
+	global $pfb;
+
+	if (!file_exists($pfb['unbound_py_sources'])) {
+		return FALSE;
+	}
+
+	$json = @file_get_contents($pfb['unbound_py_sources']);
+	if ($json === FALSE) {
+		return FALSE;
+	}
+
+	$manifest = json_decode($json, TRUE);
+	if (!is_array($manifest)) {
+		return FALSE;
+	}
+
+	if (!isset($manifest['config']) || !is_array($manifest['config'])) {
+		$manifest['config'] = array();
+	}
+	$manifest['config']['user_whitelist'] = pfb_dnsbl_whitelist_lines();
+
+	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	if ($json !== FALSE) {
+		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
+		@chown($pfb['unbound_py_sources'], 'unbound');
+		@chgrp($pfb['unbound_py_sources'], 'unbound');
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
 // Unbound python configuration file
 function pfb_unbound_python($mode) {
 	global $pfb;
@@ -2342,6 +2510,11 @@ function pfb_unbound_python($mode) {
 		if ($dnsbl_whitelist !== $pfb_py_whitelist_ex) {
 			$pfbpython = TRUE;
 			@file_put_contents($pfb['unbound_py_wh'], $dnsbl_whitelist, LOCK_EX);
+
+			// ADR-06: keep the manifest's config.user_whitelist (the source for the
+			// query-time whiteDB) in sync with a settings-textarea whitelist edit, so
+			// the change applies even when no feed update rewrites the full manifest.
+			pfb_unbound_python_sources_whitelist();
 		}
 
 		if (!isset($tld_segments)) {
@@ -2621,8 +2794,6 @@ function tld_analysis() {
 
 	unlink_if_exists("{$pfb['dnsbl_file']}.tsp");
 	unlink_if_exists("{$pfb['dnsbl_tld_txt']}.*");
-	unlink_if_exists("{$pfb['dnsbl_tld_remove']}.tsp");
-	unlink_if_exists("{$pfb['dnsbl_tld_remove']}");
 	unlink_if_exists("{$pfb['dnsbl_tmp']}.sup");
 	unlink_if_exists("{$pfb['dnsbl_tmp']}.adup");
 
@@ -2645,15 +2816,14 @@ function tld_analysis() {
 		return;
 	}
 
-	// DNSBL python - create file handles for data, zone, and remove files
+	// DNSBL python - create file handles for data and zone files
 	$p_data = @fopen("{$pfb['unbound_py_data']}.raw", 'w');
 	$p_zone = @fopen("{$pfb['unbound_py_zone']}.raw", 'w');
-	$p_tsp = @fopen("{$pfb['dnsbl_tld_remove']}", 'w');
 
-	if ($p_data === FALSE || $p_zone === FALSE || $p_tsp === FALSE) {
+	if ($p_data === FALSE || $p_zone === FALSE) {
 
-		pfb_logger("\nFailed to create DNSBL python data|zone|remove file handles! Exiting\n", 1);
-		foreach (array($p_data, $p_zone, $p_tsp) as $handlex) {
+		pfb_logger("\nFailed to create DNSBL python data|zone file handles! Exiting\n", 1);
+		foreach (array($p_data, $p_zone) as $handlex) {
 			if ($handlex) {
 				@fclose($handlex);
 			}
@@ -2667,53 +2837,10 @@ function tld_analysis() {
 		$tld_blacklist = array_flip($tld_blacklist);
 	}
 
-	// Collect TLD Whitelist(s). If configured, create a 'static local-zone' Resolver entry (Not required for python mode blocking)
-	$whitelist = array();
-
-
-	$extdns_esc = escapeshellarg("@{$pfb['extdns']}");
-
-	if (!empty($tld_blacklist) && !empty($whitelist)) {
-		foreach ($whitelist as $domain) {
-
-			// Use user-defined IP address
-			if (strpos($domain, '|') !== FALSE) {
-				list($domain, $resolved_host) = array_map('trim', explode('|', $domain));
-			}
-
-			// Resolve Domain IP address
-			else {
-				$domain_esc = escapeshellarg($domain);
-				$resolved_host = exec("/usr/bin/drill {$extdns_esc} {$domain_esc} | grep -v '^;\|^\$' | head -1 | cut -f5 2>&1");
-			}
-
-			$tld = '';
-			if (strpos($domain, '.') !== FALSE && is_ipaddr($resolved_host)) {
-				$dparts = explode('.', $domain);
-				$dcnt	= count($dparts);
-				$tld	= end($dparts);
-
-				for ($i=($dcnt-1); $i > 0; $i--) {
-					$d_query = implode('.', array_slice($dparts, -$i, $i, TRUE));
-					if (isset($tlds[$tld][$d_query])) {
-						$tld = $d_query;
-						break;
-					}
-				}
-			}
-
-			$resolved_host = pfb_filter($resolved_host, PFB_FILTER_IP, 'tld_analysis');
-			if (!empty($tld) && !empty($resolved_host)) {
-				if (!is_array($tld_whitelist[$tld])) {
-					$tld_whitelist[$tld] = array();
-				}
-				$tld_whitelist[$tld][] = array($domain, $resolved_host);
-				pfb_logger(" TLD Whitelist {$domain}|{$resolved_host}\n", 1);
-			} elseif (!empty($resolved_host)) {
-				pfb_logger("\n TLD Whitelist - Missing data | {$domain} | {$resolved_host} |\n", 1);
-			}
-		}
-	}
+	// ADR-06: The native-mode 'static local-zone' TLD-whitelist resolver block
+	// (drill-resolve a whitelisted domain to a user/real IP) was a leftover from
+	// the removed native Unbound mode -- '$whitelist' was always empty and it is
+	// not required for python-mode blocking. It has been removed.
 
 	// Process TLD Blacklist(s). If configured the whole TLD will be blocked
 	if (!empty($tld_blacklist)) {
@@ -2736,9 +2863,6 @@ function tld_analysis() {
 
 			pfb_logger("{$tld}|", 1);
 			@fwrite($p_zone, ",{$tld},,1,DNSBL_TLD,DNSBL_TLD\n");
-
-			// Add TLD to remove file
-			@fwrite($p_tsp, ".{$tld},,\n");
 
 			// Collect List of TLDs and save to DNSBL folder
 			$tld_list .= ",{$tld},,\n";
@@ -2794,11 +2918,7 @@ function tld_analysis() {
 
 	pfb_logger("TLD analysis", 1);
 
-	// [ $pfb['dnsbl_file']}.tsp	] Final DNSBL output file (using 'transparent' zone)
-	// [ $pfb['dnsbl_tld_remove']	] File of Sub-Domains to be removed (from 'redirect' zone)
-
-	// DNSBL Unbound: Analyse DNSBL: 1) 'redirect' zone for whole Domain 2) 'transparent' zone only
-	// DNSBL python: Analyse DNSBL into local and zone files
+	// DNSBL python: Analyse DNSBL into data (transparent/exact) and zone (wildcard) files
 
 	if (($fhandle = @fopen("{$pfb['dnsbl_file']}.raw", 'r')) !== FALSE) {
 		while (($line = @fgets($fhandle)) !== FALSE) {
@@ -2860,9 +2980,6 @@ function tld_analysis() {
 
 				// DNSBL python blocking mode
 				@fwrite($p_zone, ",{$dfound},{$d_info}");
-
-				// TLD remove files - See below for description
-				@fwrite($p_tsp, ".{$dfound},,\n");
 			}
 
 			// Create 'transparent zone' for Sub-Domain
@@ -2876,7 +2993,7 @@ function tld_analysis() {
 		}
 	}
 
-	foreach (array($fhandle, $p_data, $p_zone, $p_tsp) as $handlex) {
+	foreach (array($fhandle, $p_data, $p_zone) as $handlex) {
 		if ($handlex) {
 			@fclose($handlex);
 		}
@@ -2893,8 +3010,16 @@ function tld_analysis() {
 		$log .= "TLD finalize";
 		pfb_logger("{$log}", 1);
 
-		// Execute Domain De-duplication
-		exec("{$pfb['script']} domaintldpy >> {$pfb['log']} 2>&1");
+		// ADR-06: The shell domaintldpy pass (sort -u dedup + subdomain COLLAPSE via
+		// ggrep -vF dnsbl_tld_remove + pfb_py_count write) is DROPPED -- the Python
+		// dict load dedups keys for free and a redundant sub-domain is matched by its
+		// parent zone, so no collapse is needed. Promote the classified .raw files to
+		// their final paths directly; Python emits pfb_py_count itself at load.
+		foreach (array($pfb['unbound_py_data'], $pfb['unbound_py_zone']) as $py_final) {
+			if (file_exists("{$py_final}.raw")) {
+				@rename("{$py_final}.raw", $py_final);
+			}
+		}
 		pfb_logger("\nTLD finalize... completed [ NOW ]\n", 1);
 
 		// Update DNSBL Alias and Widget Stats
@@ -3143,15 +3268,15 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 
 	$dnsbl_cnt = exec("/bin/cat {$pfb['dnsdir']}/*.txt | {$pfb['grep']} -c ^ 2>&1");
 
-	// Unbound blocking mode enabled
-	$tld_cnt = @file_get_contents($pfb['unbound_py_count']);
-	$dnsbl_cnt = $dnsbl_cnt - $tld_cnt;
-	$final_cnt = exec("/usr/bin/find {$pfb['unbound_py_data']} {$pfb['unbound_py_zone']} -type f 2>/dev/null | xargs cat | {$pfb['grep']} -c ^ 2>&1");
-	if ($final_cnt == $dnsbl_cnt) {
-		$log = "\nDNSBL update [ {$final_cnt} | PASSED  ]... completed [ NOW ]";
-	} else {
-		$log = "\n*** DNSBL update [ {$final_cnt} ] [ {$dnsbl_cnt} ] ... OUT OF SYNC ! *** [ NOW ]";
-	}
+	// ADR-06: pfb_py_count is now Python-emitted and means the LOADED entry total
+	// (len(dataDB)+len(zoneDB)), written by pfb_unbound.py dnsbl_emit_count(). The
+	// lists are no longer dedup/collapse/whitelist/TOP1M-pruned at build time, so
+	// this value legitimately differs from (and is typically >=) the raw '*.txt'
+	// feed line count. The old subtract-and-compare sync-check (which assumed the
+	// count meant 'entries removed by subdomain collapse') no longer applies; just
+	// report both numbers for visibility.
+	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
+	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed [ NOW ]";
 	pfb_logger("{$log}", 1);
 
 	// Clear work files
@@ -7036,6 +7161,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['tld_update']		= array();	// Array of all DNSBL Aliases/Feeds used for TLD Function
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
+	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
 
 	$dnsbl_error = FALSE;
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
@@ -7591,6 +7717,7 @@ function sync_package_pfblockerng($cron='') {
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
+								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type);
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
 								$alias_cnt		= $alias_cnt + $list_cnt;
@@ -8068,20 +8195,12 @@ function sync_package_pfblockerng($cron='') {
 
 									pfb_logger(".\n", 1);
 
-									// Bypass TOP1M whitelist, if user configured
-									$pfb_alexa = 'Disabled';
-									if ($pfb['dnsbl_alexa'] == 'on' &&
-									    $list['filter_alexa'] == 'on' &&
-									    file_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt")) {
-										$pfb_alexa = 'on';
-									}
-
-									// DNSBL python requires a different deduplication process
-									$dup_mode = '';
-									$dup_mode = 'python';
-
-									// Call script to process DNSBL 'De-Duplication / Whitelisting / TOP1M Whitelisting'
-									exec("{$pfb['script']} dnsbl_scrub {$header_esc} {$pfb_alexa} {$dup_mode} {$elog}");
+									// ADR-06: The build-time De-Duplication / user-whitelist /
+									// TOP1M removal passes (dnsbl_scrub) are DROPPED. The Python
+									// dict load dedups keys for free, the user whitelist + TOP1M
+									// are applied at QUERY TIME via the whiteDB, and redundant
+									// subdomains are matched by their parent zone -- so no
+									// build-time list pruning is performed here anymore.
 
 									if ($ip_cnt > 0) {
 										pfb_logger("  IPv4 count={$ip_cnt}\n", 1);
@@ -8112,6 +8231,7 @@ function sync_package_pfblockerng($cron='') {
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
+								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type);
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {
@@ -8301,6 +8421,12 @@ function sync_package_pfblockerng($cron='') {
 				unlink_if_exists($pfb['unbound_py_count']);
 				rename("{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data']);
 			}
+
+			// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
+			// plugin's init builds the DNSBL structures from. Python then owns
+			// parse/normalise/classify (the dropped shell/PHP passes) and emits
+			// pfb_py_count itself.
+			pfb_unbound_python_sources($pfb_py_feeds);
 		}
 
 		else {
@@ -8321,6 +8447,8 @@ function sync_package_pfblockerng($cron='') {
 				unlink_if_exists($pfb['unbound_py_zone']);
 				unlink_if_exists($pfb['unbound_py_wh']);
 				unlink_if_exists($pfb['unbound_py_count']);
+				unlink_if_exists($pfb['unbound_py_sources']);
+				rmdir_recursive("{$pfb['unbound_py_rawdir']}");
 			}
 		}
 		else {
@@ -8330,6 +8458,8 @@ function sync_package_pfblockerng($cron='') {
 					@unlink($pfb_file);
 				}
 			}
+			unlink_if_exists($pfb['unbound_py_sources']);
+			rmdir_recursive("{$pfb['unbound_py_rawdir']}");
 		}
 	}
 
