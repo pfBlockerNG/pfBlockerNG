@@ -18,7 +18,7 @@ pfBlockerNG/
 │       │   ├── pfblockerng_install.inc
 │       │   ├── pfblockerng_extra.inc
 │       │   ├── pfb_unbound_include.inc
-│       │   ├── pfb_unbound.py         # Unbound Python plugin
+│       │   ├── pfb_unbound.py         # Unbound Python plugin (matcher + DNSBL list build: parse/classify/build from the manifest)
 │       │   ├── pfblockerng.sh         # Shell script (POSIX sh)
 │       │   └── ip_pre_AWS_*.sh        # Per-region AWS IP-prefix pre-scripts (hand-maintained)
 │       ├── share/             # Package metadata (info.xml)
@@ -81,6 +81,15 @@ Run after **any** change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or
 `tests/` — in-loop, for fast feedback; don't wait for the commit to find breakage.
 The pre-commit hook re-runs the suite at commit time and CI is the final authority,
 so a separate manual pre-commit run is not needed.
+
+DNSBL list preprocessing (parse → normalise → classify data/zone → build dicts +
+feed/group index + `whiteDB`, then emit `pfb_py_count`) lives in `pfb_unbound.py`'s
+pure `dnsbl_build_from_manifest()` / `build()`, fed by the PHP/shell-written
+manifest (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only
+download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned by
+`tests/test_adr06_*` (golden oracle, build module, init-from-raw, PHP boundary);
+the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py`. See
+`.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
 
 ---
 

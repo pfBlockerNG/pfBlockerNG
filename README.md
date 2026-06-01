@@ -101,6 +101,39 @@ python3 -m pytest
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
 
+### DNSBL list build (Python)
+
+DNSBL blocklist preprocessing lives in the Python plugin
+(`src/usr/local/pkg/pfblockerng/pfb_unbound.py`), not in shell/PHP. PHP/shell only
+**download** each feed, run the **DNSBL-IP firewall pass** (embedded IPs →
+`DNSBLIP_v4` pf alias, stripped from Python's input), and write a per-feed
+**manifest** that the plugin reads at `init`:
+
+- `/var/unbound/pfb_py_sources.json` — the manifest: a `config` block (TLD master
+  path, TLD blacklist/exclusion, user whitelist, TOP1M list + enabled flag) plus
+  one `feeds` row per raw file (`{raw, feed, group, format_hint, log_flag}`).
+- `/var/unbound/pfb_py_raw/<feed>.raw` — per-feed IP-stripped bare-domain raw.
+
+`pfb_unbound.dnsbl_build_from_manifest()` then does **parse → normalise → classify
+(data/zone via the public-suffix master) → build** `dataDB`/`zoneDB` +
+feed/group index + query-time `whiteDB`, and emits the loaded-entry total to
+`/var/unbound/pfb_py_count`. The build performs **no** dedup, subdomain collapse,
+or build-time whitelist/TOP1M removal (dict keys dedup for free; whitelist + TOP1M
+apply at query time via `whiteDB`). It is a pure, reentrant `(manifest, config) →
+BuildResult` function — no Unbound symbols, fully unit-testable. See
+[ADR-06](.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md) for the full contract.
+
+The decision-equivalence of this move (block/resolve/whitelist/HSTS/noAAAA across
+hosts/plain/basic-ABP/csv:pon, plus feed/group attribution and the emitted count)
+is pinned by the golden + build unit tests in the default `pytest` run:
+
+```sh
+python -m pytest tests/test_adr06_golden_oracle.py \
+                 tests/test_adr06_build_module.py \
+                 tests/test_adr06_init_from_raw.py \
+                 tests/test_adr06_php_boundary.py
+```
+
 ### Benchmarks
 
 `benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the
@@ -112,6 +145,15 @@ footprint). It is dev-only, not shipped, and not collected by the default
 python -m pip install -r benchmarks/requirements.txt
 python -m pytest benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
 python -m pytest benchmarks/test_memory.py -s
+```
+
+It also holds the ADR-06 init-time / peak-RAM spike for the Python DNSBL build —
+the kill-gate that gated moving preprocessing into the plugin (build wall-time and
+retained dict footprint on a large, un-pruned ≥1M-entry corpus):
+
+```sh
+python -m pip install pympler    # dev-only retained-footprint tool (ADR-05 §3a)
+SPIKE_N=5 SPIKE_SIZES=1000000 python benchmarks/spike_adr06_build.py
 ```
 
 ### Linting
