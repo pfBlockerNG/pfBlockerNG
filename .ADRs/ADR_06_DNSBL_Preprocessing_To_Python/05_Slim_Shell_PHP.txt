@@ -1,0 +1,85 @@
+================================================================================
+PHASE 5 PROMPT — Slim shell/PHP to download+tag; delete dead native logic
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §2 Boundary + Dead-code rows, §3 risks first)
+================================================================================
+
+ROLE
+You are on `adr/06` (off `next`), Phase 5 of ADR-06. This phase DELETES code but is
+behaviour-preserving for observable DNSBL output: remove the shell/PHP preprocessing
+now owned by Python, leaving shell/PHP responsible only for download + feed/group
+tagging + the manifest/raw + writing the user-whitelist input. Work inline on `adr/06`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Only after Phase 4 proved the Python build equivalent do we remove the duplicated/dead
+shell+PHP logic — including native-mode-only leftovers ADR-02 stranded. This is the
+"slim down" the ADR is named for.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/04_Results.txt — it must confirm
+  old==new output and list exactly which producers are SAFE to remove. If missing or
+  it does NOT confirm equivalence, STOP and report.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§2 Boundary/Dead-code; §4; §7).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — tld_analysis (:2607-2920, esp. the
+  native-only static-local-zone path :2672), the basic-ABP `$e_replace` pass
+  (:7665-7900), pfb_unbound_python_whitelist (:2259 — keep producing the whitelist
+  INPUT Python consumes), the counts consumer (:3149 — now reads Python-emitted count).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh :470-523 (sort -u / ggrep / count).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php + pfblockerng_alerts.php
+  (whitelist entry points — MUST keep working; UI count read).
+- CLAUDE.md (POSIX sh; PHP tabs; ShellCheck; php -l).
+
+ACTION PLAN
+1. DELETE the dropped build-time list processing entirely (NOT reimplemented anywhere):
+   `dnsbl_scrub` (within/cross-list dedup + user-whitelist removal + TOP1M removal),
+   `domaintldpy` (dedup + subdomain collapse), `tld_analysis`'s collapse/remove-file
+   logic (the `.{parent}` -> dnsbl_tld_remove + ggrep path), the shell finalize
+   (`sort -u`/`ggrep -vF dnsbl_tld_remove`/count), and the basic-ABP `$e_replace` pass.
+   Python loads the un-pruned raw (dict dedups keys; redundant subdomains stay).
+2. KEEP `tld_analysis`'s data/zone CLASSIFICATION — but it now lives in the Python build
+   (Phase 3), so remove the PHP copy. Remove native-mode-only leftovers (:2672 etc.).
+   Preserve the feed/group/log attribution INPUT Python needs (the manifest).
+3. Keep the user-whitelist source path (settings textarea + alerts "add to whitelist"
+   button → the whitelist input Python loads into whiteDB at query time). The TOP1M
+   list is likewise handed to Python (loaded into whiteDB only when enabled), NOT used
+   to prune lists. Update the UI to read the Python-emitted count.
+3b. KEEP the "DNSBL IP" firewall feature ENTIRELY in PHP. Refactor it OUT of the old
+    domain-parse loop into an independent lightweight pass over the downloaded feeds:
+    detect IPs (is_ipaddrv4 after minimal cleaning; the CSV-format IP columns), write
+    `*_v4.ip`, build the `DNSBLIP_v4` pf alias + rules (action) as today, and STRIP the
+    bare-IP lines from the raw handed to Python. Remove only the now-duplicated DOMAIN
+    parsing (basic-ABP `$e_replace`, etc.) — NOT the IP extraction or the pf-alias
+    creation. Python emits no IP handoff (Phase 4); it just ignores stray IP lines.
+4. Update tests/fixtures as needed so the golden oracle now drives the new path end to
+   end; ensure no test depends on the removed shell/PHP files.
+
+CONSTRAINTS
+- Do NOT remove anything RESULTS/04 did not confirm as redundant. When in doubt, leave
+  it and note it.
+- Do NOT touch the download/feeds.json/auth/scheduling logic, IP lists, GeoIP/ASN, or
+  the matcher.
+- POSIX sh only, quoted, absolute paths, ShellCheck-clean. PHP tabs, php -l clean,
+  no die()/exit() in library code.
+
+VERIFICATION
+- `python -m pytest` → green (golden oracle now exercises the new path). ruff clean.
+- `php -l` on changed PHP; ShellCheck on changed shell — clean.
+- Diff-read: whitelist entry points (settings + alerts button) still write the input
+  Python consumes; UI count read points at the Python-emitted file.
+
+EXPECTED RESULT
+shell/PHP reduced to download + tag + manifest/raw + whitelist input; dead native-mode
+and now-duplicated preprocessing removed; observable DNSBL output unchanged.
+
+COMMIT (single)
+    pfblockerng: ADR-06 P5 — slim shell/PHP DNSBL preprocessing; drop dead native logic
+Push directly to `adr/06`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/05_Results.txt`
+For Phase 6. Include: what was removed (files/functions/blocks) and what remains in
+shell/PHP; confirmation the whitelist + counts + feed/group UI paths still work in
+tests; any residual native-mode remnants intentionally left; and the go-ahead to run
+final validation + manual smoke.

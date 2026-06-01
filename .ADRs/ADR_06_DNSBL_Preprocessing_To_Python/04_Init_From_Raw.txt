@@ -1,0 +1,67 @@
+================================================================================
+PHASE 4 PROMPT — Wire init to build from raw + emit counts (new contract)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §2 Counts + User-whitelist + Reentrancy rows first)
+================================================================================
+
+ROLE
+You are on `adr/06` (off `next`), Phase 4 of ADR-06. Behaviour-preserving for observable
+output: switch the Python load path to BUILD FROM RAW via the Phase-3 module and emit
+counts, producing identical dicts/decisions to today. Shell/PHP still also produce the
+old files at this point (Phase 5 removes the duplication). Work inline on `adr/06`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+This is the switch that makes Python the source of truth for the built structures and
+counts. Doing it BEFORE deleting shell/PHP (Phase 5) means the old pipeline remains as
+a live fallback/cross-check until the new path is proven equivalent on a real box.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/03_Results.txt — the build API +
+  returned structure-set + reentrancy confirmation. If missing, STOP and report.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§2 Counts/Whitelist/Reentrancy; §4).
+- RESULTS/01_Results.txt (the new manifest+config contract) and RESULTS/02_Results.txt
+  (golden oracle to diff against).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py :505-639 (current loader to replace) and
+  the counts consumer side (pfb_py_count; PHP reads it at inc:3149).
+- CLAUDE.md.
+
+ACTION PLAN (equivalence FIRST)
+1. Implement reading the new manifest + raw feeds (per RESULTS/01 contract) and call
+   the Phase-3 build() in init to populate dataDB/zoneDB/whiteDB/feed-group index.
+   Whitelist input-normalisation now runs in the build; APPLICATION stays query-time
+   (whiteDB unchanged in the matcher).
+2. After build, WRITE pfb_py_count (total) + the per-feed/group tallies the UI needs.
+   Python does NOT touch the firewall/IP path: it skips stray IP lines and emits no IP
+   handoff (the "DNSBL IP" feature stays in PHP — Phase 5). Do NOT create pf aliases.
+3. Keep the build call site isolated as the future zero-downtime swap point (build →
+   atomic assign), but do NOT add background-thread/restart-free behaviour here.
+4. Extend tests: init-from-raw produces the SAME dicts/counts/decisions as the golden
+   oracle (Phase 2) and as the old loader for the fixtures.
+
+CONSTRAINTS
+- Do NOT yet remove tld_analysis / shell finalize / PHP basic-ABP (Phase 5). They may
+  keep producing the old files in parallel; init now prefers the raw build.
+- Do NOT change query-time whitelist semantics or the matcher.
+- stdlib only; no Unbound symbol added without updating stubs/python/unboundmodule.py.
+
+VERIFICATION
+- `python -m pytest` → green incl. init-from-raw equivalence vs the oracle. ruff clean.
+- Counts emitted by Python match the loaded entry counts in tests.
+- Diff-read: confirm whiteDB application path in the matcher is untouched.
+
+EXPECTED RESULT
+init builds the DNSBL structures from raw via the pure build layer and emits counts;
+behaviour identical to today; old shell/PHP still present (removed next phase).
+
+COMMIT (single)
+    pfb_unbound: ADR-06 P4 — build DNSBL structures from raw at load + emit counts
+Push directly to `adr/06`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/04_Results.txt`
+For Phase 5. Include: the exact new files init now consumes (manifest/raw paths) and
+the count/tally files it now writes; confirmation old + new produce equal output; which
+shell/PHP producers are now redundant and SAFE to remove; the whitelist path status;
+and the go-ahead to slim shell/PHP.
