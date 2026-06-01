@@ -2361,6 +2361,10 @@ function pfb_unbound_python_sources($feeds) {
 		// (IPs went to the firewall path) and already cleaned/validated by the loop.
 		$rawpath	= "{$pfb['unbound_py_rawdir']}/{$header}.raw";
 		$raw_h		= @fopen($rawpath, 'w');
+		if ($raw_h === FALSE) {
+			pfb_logger("\nFailed to create DNSBL python raw feed [ {$rawpath} ]", 2);
+			continue;
+		}
 		if (($in_h = @fopen($src, 'r')) !== FALSE) {
 			while (($line = @fgets($in_h)) !== FALSE) {
 				$cols = explode(',', $line, 3);
