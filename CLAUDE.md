@@ -26,6 +26,7 @@ pfBlockerNG/
 ├── tests/                 # Python test suite (pytest)
 ├── scripts/               # Developer tooling (deploy, stub generation)
 │   ├── deploy.sh          # Push files to live pfSense over SSH
+│   ├── setup-hooks.sh     # One-time: point git at .githooks (core.hooksPath)
 │   └── update-pfsense-stubs.py  # Regenerate stubs from pfSense source
 ├── stubs/pfsense/         # PHP stubs for Intelephense (IDE only, not shipped)
 ├── stubs/python/          # unboundmodule.py stub for Pylance/mypy + tests (not shipped)
@@ -44,7 +45,10 @@ Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI
 
 ## Git hooks
 
-Activate once after cloning: `git config core.hooksPath .githooks`
+Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`
+to `.githooks`; or run `git config core.hooksPath .githooks` directly). git cannot
+auto-apply a committed hooks path — cloning must not silently install hooks — so
+this one-time opt-in is required.
 
 - **`.githooks/pre-commit`** runs the fast linters (and the unit suite) and blocks
   the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
