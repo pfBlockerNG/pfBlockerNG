@@ -1,0 +1,71 @@
+================================================================================
+PHASE 2 PROMPT — Golden oracle harness (pin current behaviour before any move)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §2 "Semantics that MUST be preserved" first)
+================================================================================
+
+ROLE
+You are on `adr/06` (off `next`), Phase 2 of ADR-06. Behaviour-preserving: you add
+TESTS/FIXTURES only — the oracle every later phase diffs against. No production logic
+changes. Work inline on `adr/06`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+This is the DNS blocking path; the move (Phases 3-5) must be provably equivalent. We
+capture the CURRENT pipeline's outputs as golden fixtures NOW, while the old shell/PHP
+path is still authoritative, so a silent regression later goes red. Like ADR-01's
+oracle phases, this has standalone value and is kept even if the boundary is trimmed.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/01_Results.txt — it must record
+  GO vs the kill-threshold AND the current/new contract. If it is missing or records
+  NO-GO without a resolved pivot, STOP and report.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§2 contract; §4 acceptance).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py :505-639 (loader → dataDB/zoneDB/
+  whiteDB/hstsDB/safeSearchDB shapes) and the matcher decision functions exercised by
+  tests/test_pfb_unbound.py.
+- tests/test_pfb_unbound.py, tests/conftest.py (existing oracle patterns).
+- CLAUDE.md.
+
+ACTION PLAN (golden/oracle FIRST — this whole phase is the oracle)
+1. Assemble small, representative RAW feed fixtures covering each format the current
+   pipeline accepts: hosts-file, plain-domain, and basic-ABP (`||domain^`, `.^`)
+   lines — plus config inputs (TLD blacklist, TLD exclusion, user whitelist, TOP1M).
+   INCLUDE feeds that carry embedded IPs (the CSV/IP formats that trigger the "DNSBL
+   IP" feature) so the IP-handoff output is part of the oracle.
+2. Produce GOLDEN expected outputs from the CURRENT pipeline (per Phase-1 inventory):
+   for a REPRESENTATIVE QUERY SET (incl. exact-block, zone-subdomain, user-whitelisted,
+   TOP1M-when-enabled, HSTS, noAAAA, and pass-through queries), record the
+   block/resolve DECISION (block shape / resolve / whitelist / HSTS / noAAAA) through the
+   existing matcher. ALSO record the **extracted-IP set** (the `*_v4.ip`/DNSBLIP input).
+   The oracle asserts DECISIONS — NOT identical data/zone list contents or counts, which
+   change by design (ADR-06 drops dedup/collapse/whitelist-pruning). Store as committed
+   fixtures under tests/.
+3. Add a pytest module that asserts the current loader + matcher reproduce the golden
+   DECISIONS for these fixtures (locks today's net behaviour, incl. current basic-ABP
+   token-strip and that `@@`/`##`/regex are ignored for now). Later phases must keep
+   these decisions identical even though the loaded lists differ.
+
+CONSTRAINTS
+- TESTS/FIXTURES ONLY. Do NOT change pfb_unbound.py load/match logic, tld_analysis,
+  the shell, or the UI.
+- stdlib only; pure Python (no live Unbound). 4-space; type hints on new helpers.
+
+VERIFICATION
+- `python -m pytest` → green incl. the new golden module. ruff clean.
+- The golden fixtures are human-readable and documented (what each asserts).
+
+EXPECTED RESULT
+A committed golden oracle (raw inputs → expected dicts/counts/decisions) that pins
+current DNSBL behaviour for hosts/plain/basic-ABP, ready to diff the new build against.
+
+COMMIT (single)
+    test: ADR-06 P2 — golden oracle for current DNSBL preprocessing behaviour
+Push directly to `adr/06`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/02_Results.txt`
+For Phase 3. Include: where the fixtures/oracle live and how to run them; the exact
+expected-output shapes (so Phase 3's build targets them); any format edge cases the
+fixtures encode (basic-ABP strip, www-strip, wildcard whitelist, TLD removals); and
+the go-ahead to build the pure module.

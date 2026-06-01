@@ -1,0 +1,105 @@
+================================================================================
+PHASE 1 PROMPT — Inventory the contract + spike & kill-gate (init-time/memory)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §1 facts, §2 Boundary/Build/Counts rows, and §7 Reject criteria FIRST —
+      this phase exists to test the premise BEFORE the move is built)
+================================================================================
+
+ROLE
+You are on the `adr/06` branch (off `next`) performing Phase 1 of ADR-06. This is a
+DE-RISKING SPIKE + INVENTORY, not the real build layer: (a) write down the exact
+current shell/PHP→Python DNSBL contract that must be preserved, and (b) prove that a
+pure-Python build (parse→dedup→classify→build dicts+counts) can run inside Unbound's
+init within an init-time/peak-memory budget, on a large corpus. Produce MEASURED
+numbers and a GO/NO-GO vs §7 BEFORE any production move (Phases 3-5). Work inline on
+`adr/06`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+ADR-01 was fully built then REJECTED on evidence. ADR-06 moves heavy preprocessing
+INTO the Unbound resolver process; the open risk is that init becomes too slow / too
+memory-hungry at realistic feed sizes (≥1M entries). Learn that NOW, for the price of
+a standalone prototype, not after rewiring init and deleting the shell/PHP pipeline.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff. Start from the ADR.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§1 facts; §2 contract; §7).
+- .ADRs/ADR_05_Trie_Reattempt/ADR.md §3a (the ~274 B/entry dict baseline + method).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — `tld_analysis()` (:2607-2920, the
+  data/zone classifier + dnsbl_tld_remove), the download/parse loop (:~7600-8248,
+  incl. the basic-ABP `$e_replace` pass :7665-7900), `pfb_unbound_python_whitelist()`
+  (:2259). Note who attaches feed/group and the master `{dnsbl_file}.raw` line shape.
+- THE "DNSBL IP" FIREWALL FEATURE: `$pfb['dnsbl_ip']`/`dnsblconfig['action']` (:6526),
+  IP extraction during the parse (generic bare-IP :7962-7973, CSV-format :7824-7833) →
+  `$domain_data_ip` → `*_v4.ip` files (:8035) → `DNSBLIP_v4` pf alias (:8183-8212, rules
+  :8574/:9171), UI in pfblockerng_dnsbl.php (`dnsbl_ip` class). Inventory this path
+  EXACTLY — it must be preserved and stays ENTIRELY IN PHP, refactored OUT of the
+  domain-parse loop into an independent lightweight pass. Recommend where it best
+  lives and how PHP strips IP entries from Python's input. Split is uniform — entry is
+  an IP → PHP firewall, else domain → Python; note which structured CSV formats (e.g.
+  pon) surface the entry via a specific column that PHP must read first.
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh :470-523 (sort -u / ggrep / count).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py :505-639 (the CSV loader: data/zone
+  6-col, white 2-col, hsts, ss, GP-bypass).
+- benchmarks/_corpus.py, benchmarks/test_memory.py (corpus + asizeof/tracemalloc).
+- CLAUDE.md (stdlib-only plugin; POSIX sh; commit style; push-direct).
+
+ACTION PLAN (ordered — write the contract down first, then measure)
+1. INVENTORY (doc): produce a precise map of the current pipeline — every file
+   format and field (master raw line shape; how feed/group/log are attached;
+   data vs zone classification rule; build-time removals = TLD-exclusion
+   `dnsbl_tld_remove` + TOP1M `pfbalexawhitelist.txt`; query-time `whiteDB`; the
+   counts path `pfb_py_count`→`inc:3149`; AND the "DNSBL IP" path — how feed-embedded
+   IPs reach `*_v4.ip`/`DNSBLIP_v4` and which CSV/IP formats trigger it; AND what the
+   REPORTING page (alerts/widget/stats) reads and from where — pfb_py_count, the sqlite
+   tables (resolver/dnsbl/dnsblcache), the log files, any per-feed counts — noting that
+   operate() writes those at query time via feedGroupIndexDB + the per-entry log flag).
+   Confirm the "one raw file <-> one feed/group/log" assumption the per-file manifest
+   relies on (else the manifest/raw must keep per-line feed/group/log tags). This is the
+   contract Phases 2-5 preserve.
+2. PROPOSE the new shell→Python contract (manifest mapping raw feed file →
+   {feed,group,format_hint,log_flag} + the config blob Python needs). Concrete shape.
+3. SPIKE (standalone, may live under benchmarks/ or a throwaway script — NOT wired
+   into init): pure-Python parse→normalise→classify data/zone→build dicts + feed/group
+   index + counts, from a generated raw corpus (reuse benchmarks/_corpus.py; ≥1M entries;
+   feed-shaped mix incl. some basic-ABP lines AND some bare-IP lines). IMPORTANT: build
+   from the UN-PRUNED raw — NO dedup (dict keys dedup for free), NO subdomain collapse,
+   NO build-time whitelist/TOP1M removal — because ADR-06 drops those, so the realistic
+   list (and thus init time + peak RAM) is LARGER than today's pruned lists; measure on
+   that. The Python build SKIPS IP lines (IP extraction stays in PHP, Phase 5), so the
+   spike does NOT emit an IP handoff. stdlib only; no Unbound symbols.
+4. MEASURE: init/build wall-time and peak RAM (tracemalloc) for the build; compare
+   retained dict size to the ~274 B/entry baseline. Run N≥3, report distribution.
+5. GATE: state GO or NO-GO vs the kill-threshold (propose added-reload-time ≤ a few
+   seconds and peak RAM not materially worse than today; tune with maintainer in the
+   handoff). If NO-GO, record the pivot (Moderate/Conservative boundary, or keep
+   heavy work in shell).
+
+CONSTRAINTS
+- Do NOT modify the production load path, tld_analysis, the shell finalize, or the
+  UI here. Do NOT delete anything. This is inventory + a standalone prototype only.
+- Plugin/prototype code: stdlib only, no Unbound symbols, 4-space, type hints.
+- `python -m pytest` (default) must remain green and unchanged. ruff clean.
+
+VERIFICATION (must all pass before the phase is done)
+- The inventory + proposed contract are written into the handoff (precise, with
+  file:line refs).
+- The spike runs and prints: build wall-time + peak RAM over N≥3 at ≥1M entries,
+  retained dict bytes/entry vs the 274 B/entry baseline, and an explicit GO/NO-GO.
+- `python -m pytest` → green (unchanged). `ruff check .` / `ruff format .` → clean.
+
+EXPECTED RESULT
+A written contract-to-preserve + a measured go/no-go on doing the build inside
+Unbound. No production code moved.
+
+COMMIT (single)
+    dev: ADR-06 P1 — inventory DNSBL contract + spike Python build init cost
+Push directly to `adr/06`; PR only if the push is rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/01_Results.txt`
+For Phase 2. Include: the full current-pipeline contract (formats/fields/flow) and
+the proposed new shell→Python manifest+config contract; GO or NO-GO vs the agreed
+kill-threshold with the raw numbers (build time distribution, peak RAM, bytes/entry);
+which removals are build-time vs query-time; any streaming/iterative-build notes if
+memory was tight; and — if NO-GO — the recorded boundary pivot. If GO, the go-ahead
+to build the golden oracle.

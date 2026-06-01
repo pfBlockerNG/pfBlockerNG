@@ -1,0 +1,78 @@
+================================================================================
+PHASE 3 PROMPT — Pure pfb_dnsbl_build module (parse→dedup→classify→build), not wired
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §2 Build-layer/Reentrancy rows first)
+================================================================================
+
+ROLE
+You are on `adr/06` (off `next`), Phase 3 of ADR-06. Behaviour-preserving and ADDITIVE:
+introduce the new pure build layer and unit-test it against the Phase-2 oracle, but do
+NOT yet wire it into init (Phase 4) or remove any shell/PHP (Phase 5). Work inline on
+`adr/06`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The whole ADR hinges on a pure, stdlib-only, Unbound-symbol-free build layer that
+reproduces the current pipeline exactly — and is structured so (a) a future ABP parser
+plugs in as one format handler, and (b) a future zero-downtime reload can call it on a
+background thread and atomically swap. Build and prove it in isolation first.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/02_Results.txt — the oracle
+  location, expected output shapes, and edge cases. If missing, STOP and report.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§2 Build-layer + contract; §5).
+- RESULTS/01_Results.txt (the current+new contract, build-time vs query-time removals).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py (loader shapes :505-639; matcher
+  data/zone/white/hsts/noaaaa semantics it must feed).
+- CLAUDE.md (stdlib only; no Unbound symbols; type hints; no bare except).
+
+ACTION PLAN (oracle-driven — each function tested vs Phase-2 golden before moving on)
+1. Add pure functions (Unbound-symbol-free), e.g.:
+   - parse(format_hint, line) -> normalised DOMAIN entries  [format-pluggable; subsumes
+     the current basic-ABP token-strip. SKIP non-domain lines (bare IPs fail domain
+     validation) — IP extraction is NOT Python's job (it stays in PHP, Phase 5).]
+   - ENTRY MODEL: give each entry a `kind` tag (block | allow | regex) so the type is
+     ABP-ready, BUT this phase produces ONLY `block` and the parser still IGNORES
+     `@@` exceptions, regex rules, element-hiding (`##`/`#@#`), path/URL rules, and
+     non-domain `$options` — exactly as today. Shape the `kind` field now; do NOT
+     populate or apply allow/regex (those + their query-time matching are the ABP ADR).
+   - normalise(entry), classify(entry) -> data|zone (public-suffix rule per Phase-1
+     inventory), build(sources, config) -> {dataDB, zoneDB, whiteDB, feed/group index,
+     counts}.  (No IP output — Python never produces firewall input.)
+   - DO NOT IMPLEMENT the build-time optimisations being dropped: no dedup (the dict
+     load dedups keys for free), no subdomain collapse (redundant subdomains stay; the
+     parent zone still matches them), no build-time whitelist/TOP1M removal.
+   - WHITELISTING IS QUERY-TIME: build() loads the user whitelist into whiteDB (input
+     normalisation moves here), AND loads the TOP1M list into whiteDB ONLY when the user
+     enabled it (dnsbl_alexa/filter_alexa). No build-time list pruning.
+   - build() MUST be reentrant: returns a NEW structure-set, mutates no module global.
+2. Unit-test every function and build() end-to-end against the Phase-2 DECISION oracle:
+   identical block/resolve decisions (incl. whitelisted + TOP1M-when-enabled + zone
+   subdomains) for the fixtures — NOT identical list contents/counts (those change by
+   design: un-pruned).
+3. Keep it import-safe under the test harness (no Unbound import side effects).
+
+CONSTRAINTS
+- ADDITIVE ONLY: do NOT call the new build from init yet; do NOT touch tld_analysis,
+  the shell finalize, or the UI; do NOT delete anything.
+- stdlib only, no Unbound symbols, 4-space, type hints, no bare except,
+  `from __future__ import annotations`.
+
+VERIFICATION
+- `python -m pytest` → green incl. new build unit tests matching the oracle. ruff clean.
+- A quick check that build() is pure/reentrant (calling twice yields equal structures;
+  no global mutation).
+
+EXPECTED RESULT
+A standalone, unit-tested pure build layer that reproduces the current pipeline's
+data/zone/white/counts from raw inputs — not yet used by init.
+
+COMMIT (single)
+    pfb_unbound: ADR-06 P3 — pure DNSBL build layer (parse/dedup/classify/build)
+Push directly to `adr/06`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/03_Results.txt`
+For Phase 4. Include: the build module's public API (function names/signatures), the
+structure-set it returns, where counts/feed-group come from, how the ABP seam is left
+open, confirmation it is pure/reentrant, and the go-ahead to wire init.
