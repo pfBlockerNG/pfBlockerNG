@@ -79,11 +79,13 @@ Concretely:
 ## 3. Consequences
 
 **Positive**
+
 - One DNSBL code path. ~50 `!dnsbl_py_blacklist` branches and a parallel blocklist file format disappear; the `queries` log-tailing daemon and its parser disappear.
 - UI/alerts stop branching on mode → simpler pages, fewer states to reason about and test.
 - Removes a class of "works in one mode, broken in the other" bugs.
 
 **Negative / risks**
+
 - **No automated PHP tests** in this repo. Correctness of the deletion is verified by `intelephense`/lint and **manual smoke on a live pfSense box** (`scripts/deploy.sh`). The smoke checklist (§7) is therefore non-negotiable.
 - **Config migration must be idempotent and safe** for the population currently on `dnsbl_unbound` (or `dnsbl_python` + `pfb_py_block=off`). A botched migration silently changes blocking behavior on upgrade.
 - Risk of over-deletion: removing something on the TRUE side or an unconditional dependency (lighttpd/VIP, `pfb_tld`). Mitigated by the §2 deletion rule and the "kept" list.
@@ -96,25 +98,35 @@ Concretely:
 Each phase is an independent commit that leaves the package installable and `python -m pytest` green (the py suite barely moves). **Phase 1 is the keystone**: pin the switch to TRUE first, so the package becomes Python-only behaviorally while the native branches go dead-but-present. Phases 2–5 are then mechanical dead-code deletion that can be reviewed in isolation.
 
 ### Phase 1 — Keystone: force Python + migrate config
+
 Prompt: `01_Keystone_Force_Python.txt`
+
 - `pfblockerng_install.inc`: add migration — rewrite `dnsbl_unbound` → `dnsbl_python`, set `pfb_py_block = on`, drop the now-meaningless keys; idempotent; follows the existing VIP-migration precedent (`pfblockerng_install.inc` L35–106).
 - `pfblockerng.inc`: at the keystone read (~L844–863), hard-set `$pfb['dnsbl_mode'] = 'dnsbl_python'` and `$pfb['dnsbl_py_blacklist'] = TRUE` (still emit `python_blocking = on`). No branch deletion yet.
 - Result: every install behaves as state 3; native branches are unreachable but still in the tree.
 
 ### Phase 2 — Web UI: remove the selector + native-only controls
+
 Prompt: `02_UI_Remove_Toggle.txt`
+
 - `pfblockerng_dnsbl.php`: remove `dnsbl_mode` select, `$options_dnsbl_mode`, `pfb_py_block` checkbox, `.dnsbl_unbound_tld` infoblocks + JS, TLD-Whitelist UI, validation default, and POST handling for the removed fields.
 
 ### Phase 3 — Core: delete native blocking + the queries daemon
+
 Prompt: `03_Core_Remove_Native.txt`
+
 - `pfblockerng.inc`: collapse all `dnsbl_py_blacklist` branches per the §2 rule; delete `pfb_dnsbl.conf` `local-zone`/`local-data` generation, native safesearch/youtube/doh `.conf` writes, the `queries` daemon launch and `pfb_dnsbl_parse('daemon',…)`, and native-only `dnsbl_sync`/`dnsbl_livesync`. Keep lighttpd/VIP/NAT and `pfb_tld`. Remove the `dnsbl_py_blacklist` variable itself.
 
 ### Phase 4 — Shell: drop the native conf builder
+
 Prompt: `04_Shell_Remove_domaintld.txt`
+
 - `pfblockerng.sh`: delete `domaintld()` and native-only TLD-remove plumbing; keep `domaintldpy()`. Update any PHP call sites/arguments that selected the native builder. ShellCheck clean (POSIX sh).
 
 ### Phase 5 — Alerts/widget + finalize
+
 Prompt: `05_Alerts_Widget_Finalize.txt`
+
 - `pfblockerng_alerts.php` + `pfblockerng.widget.php`: collapse mode guards to unconditional. Ensure PHP still emits `python_blocking = on`. Update `README.md` if any workflow/min-version text references the modes; sweep for stray `dnsbl_unbound` / `pfb_py_block` references package-wide. `python -m pytest`, `ruff`, ShellCheck, and intelephense clean.
 
 ---
@@ -132,10 +144,12 @@ Prompt: `05_Alerts_Widget_Finalize.txt`
 ## 6. Config migration (Phase 1 detail)
 
 Existing installs may hold:
+
 - `dnsbl_mode = dnsbl_unbound` (state 1), or
 - `dnsbl_mode = dnsbl_python` + `pfb_py_block` ≠ `on` (state 2).
 
 On package upgrade, in `pfblockerng_install.inc` (idempotent, guarded so it no-ops on already-migrated configs):
+
 - set `dnsbl_mode = dnsbl_python`;
 - set `pfb_py_block = on`;
 - optionally drop keys that only ever fed the native path (TLD-Whitelist settings), leaving the wildcard-blocking `pfb_tld` intact;
