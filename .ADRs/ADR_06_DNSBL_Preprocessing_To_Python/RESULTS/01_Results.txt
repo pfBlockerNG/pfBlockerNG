@@ -1,0 +1,355 @@
+================================================================================
+ADR-06 — PHASE 1 RESULTS / HANDOFF FOR PHASE 2
+Inventory the DNSBL contract + spike & kill-gate (init-time / peak memory)
+Branch: adr/06   Commit: dev: ADR-06 P1 — inventory DNSBL contract + spike Python build init cost
+================================================================================
+
+VERDICT (headline): GO at the ADR's >=1M-entry target, with a documented
+time-scaling caveat above ~1.5M. Peak RAM is a NON-issue at every size (dead-on
+the ADR-05 274 B/entry baseline). The only risk axis is build wall-time, which is
+linear in raw-line count.
+
+--------------------------------------------------------------------------------
+0. WHAT WAS DONE / SCOPE
+--------------------------------------------------------------------------------
+* Inventory written below (the contract Phases 2-5 must preserve), with file:line
+  refs for every required path.
+* Standalone spike added under benchmarks/ (NOT wired into init, NOT production):
+    - benchmarks/_corpus_raw.py        un-pruned raw-feed corpus generator
+    - benchmarks/spike_adr06_build.py  pure-Python parse->normalise->classify->
+                                       build + measurement harness + GO/NO-GO gate
+* NO production file touched: pfblockerng.inc / pfblockerng.sh / pfb_unbound.py /
+  www/ UI all unchanged. tld_analysis, the shell finalize, the load path — all
+  untouched. Nothing deleted. Default `python -m pytest` = 184 passed (unchanged).
+  `ruff check .` clean, `ruff format` clean.
+
+Run the spike (dev box, pympler is a dev-only tool used for ADR-05 §3a parity):
+    python -m pip install pympler
+    SPIKE_N=5 SPIKE_SIZES=1000000 python benchmarks/spike_adr06_build.py
+
+================================================================================
+1. CURRENT PIPELINE — THE CONTRACT TO PRESERVE  (verified on `next`, post-ADR-02)
+================================================================================
+
+DATA FLOW (download -> tag -> assemble -> classify -> finalize -> load):
+
+  PHP download/parse loop (pfblockerng.inc:7600-8248)
+    -> per-feed `{header}.bk` then `{header}.txt`        [6-col CSV, per-line tag]
+    -> dnsbl_scrub (shell, pfblockerng.sh:357-461)       [DEDUP+WHITELIST+TOP1M]
+    -> assemble master `{dnsbl_file}.raw`  (inc:8221-8240)
+    -> tld_analysis (inc:2607-2925)                      [CLASSIFY data/zone]
+         -> writes pfb_py_data.raw / pfb_py_zone.raw + dnsbl_tld_remove
+         -> exec domaintldpy (shell, pfblockerng.sh:468-524) [sort -u + COLLAPSE]
+              -> final pfb_py_data / pfb_py_zone + writes pfb_py_count
+    -> pfb_unbound.py init (:535-639) loads CSVs into dataDB/zoneDB/whiteDB/...
+
+NOTE — TLD-mode branch only: tld_analysis + domaintldpy run ONLY when
+$pfb['dnsbl_tld'] is set. When TLD is NOT enabled, the assembled master raw is
+RENAMED DIRECTLY to pfb_py_data (inc:8244-8248) with NO data/zone split, NO
+collapse, and pfb_py_count is unlinked (inc:8247). So in non-TLD mode there is
+effectively no zone file and no count. ADR-06's Python classify must produce the
+data/zone split unconditionally (it replaces tld_analysis), which is fine — it is
+a superset of today's non-TLD behaviour and matches TLD-mode decisions.
+
+--- 1a. MASTER RAW LINE SHAPE -------------------------------------------------
+Per-feed line written at inc:8015-8018:
+    ,<domain>,,<logging_type>,<header>,<alias>\n      (6-col CSV, EMPTY col0/col2)
+    col0 = ''                  (empty)
+    col1 = domain (lower-cased) <- the KEY
+    col2 = ''                  (empty)
+    col3 = logging_type        <- the LOG FLAG ("0"/"1"/"2")
+    col4 = <header>            <- FEED  (the list/header name)
+    col5 = <alias>             <- GROUP (the DNSBL alias the feed belongs to)
+These per-feed files concatenate verbatim into `{dnsbl_file}.raw` (inc:8228-8237).
+tld_analysis re-reads that raw with explode(',', line, 3): eparts[1]=domain,
+eparts[2]="<log>,<feed>,<group>\n" (it keeps cols 3-5 as an opaque d_info tail,
+inc:2822-2827) and re-emits ,<key>,<d_info> into pfb_py_data.raw/pfb_py_zone.raw.
+=> The data/zone CSVs are ALSO 6-col with the SAME column meaning; the loader
+reads them as such (see 1f).
+
+--- 1b. FEED / GROUP / LOG ATTACHMENT -----------------------------------------
+* feed  = $header  (inc:8017 col4) — the individual list header name.
+* group = $alias   (inc:8017 col5) — the DNSBL alias grouping the feed.
+* log   = $logging_type (inc:8017 col3) — "0"/"1" log, "2" = block-but-skip-log
+          (pfb_unbound.py:1134 `if isDNSBL["log"] == "2": return True`).
+Attachment is PER LINE, written at parse time. TLD-blacklist entries get a
+synthetic tag ",<tld>,,1,DNSBL_TLD,DNSBL_TLD" (inc:2740).
+
+--- 1c. DATA vs ZONE CLASSIFICATION (tld_analysis, inc:2805-2877) -------------
+Rule (the decision that MUST be preserved):
+* Load the public-suffix MASTER list `{dnsbl_tld_data}` into $tlds[tld][suffix]
+  (inc:2630-2642). This is the registrable-suffix oracle.
+* For each domain split into labels (dcnt = label count):
+    - dcnt > 5            : no TLD search -> treated as data (transparent zone)
+    - dcnt 2..5          : tld_search() finds the registrable parent ($dfound)
+                           against $tlds (inc:2836-2851).
+    - dcnt == 2          : registrable parent = the 2 labels themselves -> ZONE.
+* If $dfound (a registrable parent found) -> ZONE: write ",<dfound>,<d_info>" to
+  pfb_py_zone.raw (wildcard-incl-self) AND ".<dfound>,," to dnsbl_tld_remove
+  (inc:2860-2868).  Else -> DATA: write ",<domain>,<d_info>" to pfb_py_data.raw
+  (inc:2871-2874).
+* TLD EXCLUSION (dnsblconfig['tldexclusion'], inc:2778-2795): if the WHOLE domain
+  is in the exclusion set, force $dfound='' -> DATA (transparent), i.e. exact-only,
+  not wildcarded (inc:2854-2857).  Excluded TLDs are also removed from $tlds.
+* TLD BLACKLIST (dnsblconfig['tldblacklist'], inc:2666-2773): whole-TLD block —
+  emits a ZONE entry ",<tld>,,1,DNSBL_TLD,DNSBL_TLD" so the entire TLD is wildcard-
+  blocked, and removes that TLD from $tlds.
+* domain_max_cnt cap (inc:2814/2832/2892): beyond the cap, domains are emitted
+  "as-is" (data) with no TLD search — a memory guard. ADR-06 drops this guard
+  (no per-domain redirect-zone limit in Python); behaviourally a superset.
+=> CONTRACT: registrable-parent -> wildcard ZONE; deeper sub-domain -> exact DATA;
+   TLD exclusion -> exact DATA; TLD blacklist -> whole-TLD ZONE. The public-suffix
+   master `{dnsbl_tld_data}` becomes a PYTHON build INPUT (Phase 3).
+
+--- 1d. SHELL DEDUP / FILTER / COUNT (the work ADR-06 DROPS) -------------------
+dnsbl_scrub (pfblockerng.sh:357-461), per feed, dup_mode='python':
+    :363  sort -u  (within-list dedup)
+    :379  awk -F',' '!($2 in a)'  (CROSS-list dedup vs master of other feeds —
+          a domain in several feeds kept ONCE, attributed to the FIRST feed seen)
+    :394  /usr/local/bin/ggrep -vF -f pfbdnsblsuppression  (USER-WHITELIST removal,
+          strips whitelisted domains AND subdomains)
+    :425  /usr/local/bin/ggrep -vF -f pfbalexa  (TOP1M removal; only when
+          dnsbl_alexa + list filter_alexa on)
+domaintldpy (pfblockerng.sh:468-524):
+    :471/:478  sort -u data.raw / zone.raw  (dedup again)
+    :499/:508  ggrep -vF -f dnsbl_tld_remove  (SUBDOMAIN COLLAPSE — drop data
+          entries already covered by a parent zone)
+    :523  echo "${counttr}" > dnsbl_python_count  (pfb_py_count, see 1e)
+ALL of dnsbl_scrub + domaintldpy's collapse are BUILD-TIME OPTIMISATIONS ADR-06
+deletes (the dict load dedups keys for free; redundant subdomains stay because the
+parent zone still matches them). The data/zone CLASSIFICATION (1c) is NOT an
+optimisation and is KEPT (moves to Python).
+
+--- 1e. THE COUNTS PATH (pfb_py_count) — SUBTLE -------------------------------
+* pfb_py_count file = /var/unbound/pfb_py_count (inc:113, sh:85).
+* WRITTEN by domaintldpy (sh:523) as `counttr` = number of entries REMOVED by the
+  subdomain-collapse (Original - Final), NOT the loaded blocklist size.
+* READ at inc:3149: `$tld_cnt = @file_get_contents(unbound_py_count)`, then
+  inc:3150 `$dnsbl_cnt = $dnsbl_cnt - $tld_cnt` and inc:3151-3156 a SYNC-CHECK:
+  (sum of *.txt lines) - removed == (data+zone final lines) ? "PASSED" : "OUT OF
+  SYNC". It is a verification/log line, not the number shown to the user.
+* CONTRACT for ADR-06: Python must EMIT pfb_py_count after the build in the same
+  file/format the UI reads. Because ADR-06 drops collapse, "removed" -> 0 (or the
+  semantics change). RECOMMENDATION (Phase 4): redefine pfb_py_count to the LOADED
+  entry total (len(dataDB)+len(zoneDB)) and adjust the inc:3149-3156 sync-check to
+  compare against that (its value legitimately rises — lists un-pruned). Flag this
+  to the maintainer; the UI's primary blocklist count comes from the per-alias
+  stats (dnsbl_alias_update / dnsbl_save_stats, see 1g), NOT from pfb_py_count.
+
+--- 1f. PYTHON LOADER FORMAT (pfb_unbound.py:535-639) — the LOAD CONTRACT ------
+* zoneDB (load :539-569) and dataDB (load :572-602): 6-col CSV, len(row)==6:
+      key = row[1]; payload = {"log": row[3], "index": final_index}
+      feed=row[4], group=row[5] folded into an INDEX via:
+        feedGroupDB[row[4]+row[5]] -> feedGroup_index (temp, CLEARED at :605)
+        feedGroupIndexDB[index] = {"feed": row[4], "group": row[5]}   (:551/:584)
+      LAST-WINS on a duplicate key (dict assignment) — see attribution note below.
+* whiteDB (load :609-624): 2-col CSV `domain,wildcard`; wildcard "1"->True else
+      False; whiteDB[row[0]] = wildcard.  Applied at QUERY TIME (per-query in the
+      matcher), NOT as a build subtraction.
+* hstsDB (:631-639): 1-col, hstsDB[line]=0.
+* safeSearchDB (:519-533): 3-col domain,A,AAAA.
+* GP_Bypass_List (:507-517), noAAAADB (above :501).
+=> THE STRUCTURES Phases 3-5 MUST REPRODUCE IDENTICALLY (decision-level):
+     dataDB[domain]  = {"log": <flag>, "index": <int>}
+     zoneDB[domain]  = {"log": <flag>, "index": <int>}
+     feedGroupIndexDB[index] = {"feed": <str>, "group": <str>}
+     whiteDB[domain] = <bool wildcard>
+   The matcher resolves index->(feed,group) at resolve_feed_group (:1647) and
+   builds dnsblDB[q_name] payload (:2126) with feed/group/b_type/b_eval/p_type;
+   get_details_dnsbl (:1091-1161) logs those. operate() is UNCHANGED by ADR-06 ->
+   reporting stays correct IFF these loaded structures + log flags are identical.
+
+ATTRIBUTION CHANGE (documented & accepted by the ADR): today a cross-feed
+duplicate is attributed to the FIRST feed (shell awk :379 keeps first). After
+ADR-06 the dict load keeps LAST (dict assignment overwrites). Per-feed counts for
+duplicated domains therefore change. This is by design (§2 contract).
+
+--- 1g. WHAT THE REPORTING PAGE READS (alerts / widget / stats) ---------------
+ALL query-time artifacts, written by operate()/get_details_* (UNCHANGED here):
+* sqlite DBs (pfb_unbound.py): table `resolver` (row,totalqueries,queries; :901),
+  table `dnsblcache` (type,domain,groupname,final,feed; :911/:991), and a `dnsbl`
+  group-counter enqueue (:1120-1121). These carry feed/group resolved through
+  feedGroupIndexDB — so correct IFF the loaded index<->feed/group map is correct.
+* LOG FILES: /var/log/pfblockerng/dnsbl.log + unified.log (:1158-1159), csv with
+  q_name, p_type, b_type, group, b_eval, feed (all from the matched entry's
+  payload). dns_reply.log similarly for replies.
+* PER-ALIAS stats (PHP, the user-visible blocklist counts): dnsbl_alias_update()
+  + dnsbl_save_stats() (called inc:2911/2920, inc:8118/8151/8165/8173/8178) write
+  per-alias summary files the widget/alerts read. These are driven by $alias_cnt
+  (line counts of *.txt, inc:8107-8108) — INDEPENDENT of pfb_py_count and largely
+  unaffected by the Python move (the *.txt feed files still exist; their line
+  counts simply no longer reflect post-dedup/collapse sizes).
+* pfb_py_count: see 1e — only the sync-check log, not a displayed total.
+=> CONTRACT: reporting is preserved as long as (a) the loaded dataDB/zoneDB/
+   feedGroupIndexDB + log flags are decision-identical, and (b) Python emits a
+   valid pfb_py_count. operate() is not touched.
+
+--- 1h. THE "DNSBL IP" FIREWALL PATH (must stay, ENTIRELY IN PHP) --------------
+Feed-embedded IPs -> pf alias, distinct from the standalone IP-feed pipeline:
+* Trigger: $pfb['dnsbl_ip'] = dnsblconfig['action'] (UI: pfblockerng_dnsbl.php,
+  `dnsbl_ip` class) != 'Disabled'.
+* Detection (two sites in the parse loop):
+    - GENERIC bare-IP: inc:7962-7973 — after line cleaning, is_ipaddrv4($line) ->
+      sanitize_ipaddr -> validate_ipv4 -> $domain_data_ip[] ; the IP line is
+      `continue`-skipped from the domain output.
+    - STRUCTURED CSV 'pon' (Ponmocup): inc:7819-7835 — csvline[2] is the domain
+      (col read by PHP) AND is_ipaddrv4(csvline[0]) routes col0 to $domain_data_ip.
+      i.e. for some structured threat-feeds the IP/domain surface via SPECIFIC
+      COLUMNS, which PHP must read first (the split is still uniform: an entry that
+      is an IP -> firewall; else domain -> Python).
+* Sink: inc:8032-8041 -> per-header `{header}_v4.ip` (array_unique).
+* Aggregate: inc:8182-8209 -> all *_v4.ip globbed into {dbdir}/DNSBLIP_v4.txt ->
+  DNSBLIP_v4 pf alias with the configured action; rules reference it (per ADR §1.7,
+  rules at inc:8574/:9171). Disabled -> files removed (inc:8211-8215).
+* CONTRACT: this is a pf/firewall op the Unbound Python plugin CANNOT and MUST NOT
+  do. It stays in PHP. RECOMMENDATION (Phase 5): refactor the IP detection OUT of
+  the domain-parse loop into an INDEPENDENT lightweight pass over each downloaded
+  raw feed (is_ipaddrv4 after minimal cleaning + the known CSV-IP columns like
+  'pon' csvline[0]), route IPs to the existing *_v4.ip -> DNSBLIP_v4 machinery, and
+  STRIP bare-IP lines from what Python receives. Python would skip stray IPs anyway
+  (they fail domain validation — confirmed in the spike: 20k IP lines -> 20k
+  skipped, 0 leaked into dicts).
+
+--- 1i. ONE-RAW-FILE <-> ONE-FEED/GROUP/LOG ASSUMPTION -------------------------
+CHECKED: FALSE at the file level, but the per-LINE tags already carry it.
+* Each per-feed `.bk`/`.txt` file is single-feed/single-group (feed=$header,
+  group=$alias for that list), BUT they are all CONCATENATED into ONE master
+  `{dnsbl_file}.raw` (inc:8228-8237), so the master raw is MULTI-feed.
+* The feed/group/log are encoded PER LINE (cols 3-5, see 1a), not per file.
+=> CONSEQUENCE FOR THE MANIFEST (Phase 2/4): a manifest mapping ONE raw file ->
+   ONE {feed,group,format_hint,log_flag} IS viable IF the boundary hands Python
+   the PER-FEED raw files (the downloaded `{header}.orig` or the per-feed `.txt`),
+   one manifest row each. It is NOT viable against the single concatenated master
+   raw. RECOMMENDATION: the manifest enumerates PER-FEED raw files (one row per
+   feed), and Python concatenates/streams them in build order. This also preserves
+   the format_hint per feed (needed for the CSV threat-feeds). If a future feed
+   ever needs per-line tags within one file, fall back to keeping the 6-col tagged
+   lines — but per-feed-file + manifest is cleaner and matches today's per-feed
+   structure.
+
+================================================================================
+2. PROPOSED NEW SHELL -> PYTHON CONTRACT  (for Phase 2 to pin, Phase 4 to wire)
+================================================================================
+Boundary (Aggressive, per ADR §2): shell/PHP = download each feed + run the
+independent DNSBL-IP pass (strip IPs) + write a manifest; Python = parse ->
+normalise -> classify -> build dicts + feed/group index + emit counts.
+
+MANIFEST (e.g. /var/unbound/pfb_py_sources.json) — one entry PER FEED raw file:
+    {
+      "version": 1,
+      "config": {
+        "tld_master": "/path/to/dnsbl_tld_data",     # public-suffix oracle (classify)
+        "tld_blacklist": ["<tld>", ...],              # whole-TLD ZONE block
+        "tld_exclusion": ["<domain>", ...],           # force exact DATA
+        "whitelist_src": "/var/unbound/pfb_py_whitelist",  # user whitelist (query-time whiteDB)
+        "top1m": {"enabled": false, "path": "/.../pfbalexawhitelist.txt"},  # query-time whiteDB when on
+        "log_default": "1",
+        "safesearch": "...", "hsts": "..."            # unchanged file inputs
+      },
+      "feeds": [
+        { "raw": "/.../<header>.txt",   # the per-feed raw (IP-stripped) file
+          "feed": "<header>",           # was col4
+          "group": "<alias>",           # was col5
+          "format_hint": "hosts|plain|abp|csv:pon|csv:otx|...",  # parse dispatch
+          "log_flag": "0|1|2" },        # was col3
+        ...
+      ]
+    }
+Versioned + pinned by tests. format_hint replaces the in-loop CSV-type sniffing;
+log_flag/feed/group move from per-line CSV cols to per-feed manifest rows (valid
+because each raw file is single-feed — see 1i).
+
+PYTHON BUILD OUTPUT (decision-equivalent to the loader contract, 1f):
+    build(manifest) -> { dataDB, zoneDB, feedGroupIndexDB, whiteDB, counts }
+  with EXACT payload shapes from 1f. Reentrant (returns a fresh structure-set;
+  no global mutation until an atomic swap — zero-downtime-ready, swap not built).
+  Kind-tagged entries (block|allow|regex) shaped now but only `block` emitted.
+
+WHITELIST: user whitelist normalisation (pfb_unbound_python_whitelist, inc:2259 —
+www-strip, smallest-tld-segment, leading-dot->wildcard "1" else "0") MOVES into the
+Python build and loads whiteDB; TOP1M loads whiteDB ONLY when enabled. No build-
+time list pruning. Net "resolves" preserved; whitelisted entries stay in lists and
+are un-blocked at query time (appear in counts/logs as whitelist hits).
+
+================================================================================
+3. SPIKE RESULTS — MEASURED  (CPython 3.14, macOS/darwin; N runs per size)
+================================================================================
+Corpus = UN-PRUNED raw feed lines (hosts ~40% / plain ~40% / basic-ABP ~20%),
+~18% cross-feed duplicates kept, +2% bare-IP lines (firewall path, build skips
+them). NO dedup / collapse / whitelist / TOP1M removal applied (ADR-06 drops them).
+Payload shapes identical to the production loader (1f). Retained size via
+pympler.asizeof (same method as ADR-05 §3a baseline).
+
+  size (domain lines)  build wall-time (s)            peak RAM     loaded     retained
+                       min / median / max  (N)        (tracemalloc) entries   B/entry
+  ----------------------------------------------------------------------------------
+  1,000,000            5.27 / 5.36 / 5.42  (N=5)       193.8 MiB    746,224    274.9  (+0% vs 274)
+  2,000,000            10.66 / 10.88 / 10.95 (N=5)     388.4 MiB  1,493,123    276.0  (+1% vs 274)
+
+* MEMORY: dead-on the ADR-05 §3a 274 B/entry baseline at BOTH sizes (+0% / +1%).
+  The Python build is NOT materially worse than today on RAM. This fully de-risks
+  the memory axis — confirms the ADR's premise that the lever was never a trie.
+* TIME: linear, ~5.4 microseconds per raw line. 1M -> ~5.4s; 2M -> ~10.9s.
+
+FAIR COMPARISON (net added time): the work ADR-06 DELETES from the shell, measured
+on an equivalent 1M-line master raw on the SAME box:
+    sort -u (dedup)             ~2.1s   (domaintldpy runs sort -u 2-3x)
+    awk -F',' cross-list dedup  ~2.7s   (dnsbl_scrub :379)
+    ggrep -vF whitelist/TOP1M   seconds more — pathologically slow with BSD grep
+                                here (>2min, killed); GNU ggrep on pfSense faster,
+                                but still grows with pattern-file size.
+=> today already spends ~4.8s+ of OUT-OF-PROCESS passes per build that the move
+   REMOVES. So the Python build's ~5.4s at 1M is roughly a WASH (net added ~+0.6s),
+   not a fresh 5.4s tax. The relevant budget is ADDED reload time, not the build in
+   isolation.
+
+================================================================================
+4. KILL-THRESHOLD + GATE
+================================================================================
+Proposed threshold (TUNE WITH MAINTAINER):
+  * build wall-time <= ~8s absolute  (= "a few seconds" ADDED over the ~4.8s+ of
+    shell passes it replaces; net added must stay within a few seconds), AND
+  * retained footprint not materially worse than 274 B/entry baseline
+    (ceiling ~410 B/entry = ~1.5x headroom).
+
+GATE RESULT:
+  * 1M entries (the ADR's stated >=1M target): GO.
+      time 5.36s median (<=8s PASS; net +0.6s), mem 274.9 B/entry (PASS).
+  * 2M entries: time 10.9s EXCEEDS the 8s cap (mem still PASS at 276 B/entry).
+      Linear time means very large deployments (>~1.5M raw lines) push reload time
+      up. This is the one residual risk to flag.
+
+================================================================================
+5. VERDICT FOR PHASE 2:  GO (build the golden oracle)
+================================================================================
+GO to proceed to Phase 2 (decision-level golden oracle) and the build. Rationale:
+  * Memory is a non-issue at every size (baseline parity) — the highest-cited risk
+    in ADR §3 ("peak RAM in the resolver") is RETIRED by measurement.
+  * At the ADR's >=1M target, build time is within budget and roughly a wash vs the
+    shell passes it deletes.
+  * Time scales linearly; the mitigation if a deployment is very large is
+    STREAMING/ITERATIVE build (read+parse+insert line-by-line rather than
+    materialising the full line list — the spike already inserts as it parses, so
+    the structure cost is the floor; the win is avoiding holding raw text). That is
+    a Phase-3/4 implementation detail, not a blocker.
+
+CARRY-OVER NOTES / DECISIONS FOR LATER PHASES:
+  * BUILD-TIME (dropped) removals: dedup (dnsbl_scrub :363/:379), user-whitelist
+    removal (:394), TOP1M removal (:425), subdomain collapse (domaintldpy
+    :499/:508). QUERY-TIME (kept) = whiteDB (user whitelist + TOP1M-when-enabled).
+    CLASSIFICATION (kept, moved to Python) = tld_analysis data/zone split.
+  * pfb_py_count semantics MUST be redefined (1e) — it currently means "entries
+    removed by collapse"; with collapse gone, emit the LOADED total and fix the
+    inc:3149-3156 sync-check. Confirm exact UI expectation with the maintainer.
+  * The manifest is PER-FEED-FILE (1i), not against the concatenated master raw.
+  * DNSBL-IP pass (1h) stays in PHP, refactored to an independent pass; the 'pon'
+    CSV-IP column (csvline[0]) and generic bare-IP both route to *_v4.ip. Confirmed
+    in the spike that Python skips IP lines cleanly (0 leaked).
+  * TLD-mode-only branch (1c note): today data/zone split only happens in TLD mode;
+    Python does it unconditionally — a decision-equivalent superset.
+  * domain_max_cnt redirect-zone cap (1c) is dropped — accepted (un-pruned by
+    design); watch only if a deployment's reload time becomes the binding limit.
+
+GATES (this phase): python -m pytest = 184 passed (unchanged); ruff check . clean;
+ruff format clean. No production code touched; nothing deleted.
+================================================================================
