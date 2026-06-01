@@ -77,11 +77,19 @@ python -m pytest
 
 Run from repo root. `pyproject.toml` sets `testpaths` and `-v`. No `cd` needed.
 
-Run after **any** change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or `tests/`.
+Run after **any** change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or
+`tests/` — in-loop, for fast feedback; don't wait for the commit to find breakage.
+The pre-commit hook re-runs the suite at commit time and CI is the final authority,
+so a separate manual pre-commit run is not needed.
 
 ---
 
 ## Linting
+
+Run the linters below **while working**, for fast feedback. Enforcement is layered,
+so treat them as feedback rather than a manual pre-commit checklist: the
+`.githooks/pre-commit` hook blocks any commit that fails them, and CI is the final
+authority. (CI runs them even when the local hook is inactive or a tool is missing.)
 
 ### Python
 
@@ -135,8 +143,9 @@ documentation style: `MD013` (line length), `MD060` (table-column alignment),
 (frontmatter-led files such as `.claude/skills/*.md` don't open with an H1);
 `MD024` is `siblings_only`. `**/TRANSCRIPT.md` is ignored (verbatim transcript,
 not maintained docs). Keep the disabled-rule rationale in `.markdownlint.jsonc`
-in sync if the set changes. Lint must be clean (`0 error(s)`) before committing
-Markdown changes; it is enforced in CI (`test.yml`) alongside ShellCheck/PHP.
+in sync if the set changes. A clean lint (`0 error(s)`) is enforced by the
+pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
+`npx markdownlint-cli2 --fix` while editing for fast feedback.
 
 ---
 
