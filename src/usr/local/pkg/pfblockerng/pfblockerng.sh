@@ -41,8 +41,8 @@ pathasndat="/usr/local/share/GeoIP/asn.mmdb"
 pathasncsv="/usr/local/share/GeoIP/asn.csv"
 pathasntable="/usr/local/www/pfblockerng/pfblockerng_asn.txt"
 pfbsuppression=/var/db/pfblockerng/pfbsuppression.txt
-pfbdnsblsuppression=/var/db/pfblockerng/pfbdnsblsuppression.txt
-pfbalexa=/var/db/pfblockerng/pfbalexawhitelist.txt
+# ADR-06: pfbdnsblsuppression / pfbalexa removed (only used by the dropped
+# dnsbl_scrub build-time whitelist/TOP1M removal; now applied at query time).
 masterfile=/var/db/pfblockerng/masterfile
 mastercat=/var/db/pfblockerng/mastercat
 geoiplog=/var/log/pfblockerng/geoip.log
@@ -75,14 +75,9 @@ dedupfile=/tmp/pfbtemp4_$rvar
 addfile=/tmp/pfbtemp5_$rvar
 matchfile=/tmp/pfbtemp7_$rvar
 tempmatchfile=/tmp/pfbtemp8_$rvar
-domainmaster=/tmp/pfbtemp9_$rvar
 
-dnsbl_tld_remove=/tmp/dnsbl_tld_remove
-
-
-dnsbl_python_data=/var/unbound/pfb_py_data.txt
-dnsbl_python_zone=/var/unbound/pfb_py_zone.txt
-dnsbl_python_count=/var/unbound/pfb_py_count
+# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
+# along with dnsbl_scrub + domaintldpy (the dropped build-time DNSBL passes).
 
 ip_placeholder="$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngipsettings/config/ip_placeholder)"
 if [ -z "${ip_placeholder}" ]; then
@@ -353,175 +348,14 @@ duplicate() {
 
 
 
-# Function for DNSBL (De-Duplication, Whitelist, and Alexa Whitelist)
-dnsbl_scrub() {
-
-	counto="$(grep -c ^ "${pfbdomain}${alias}.bk")"
-	alexa_enable="${max}"
-
-	# Process De-Duplication
-	sort -u "${pfbdomain}${alias}.bk" > "${pfbdomain}${alias}.bk2"
-	countu="$(grep -c ^ "${pfbdomain}${alias}.bk2")"
-
-	if [ -d "${pfbdomain}" ] && [ "$(ls -A ${pfbdomain}*.txt 2>/dev/null)" ]; then
-		find "${pfbdomain}"*.txt ! -name "${alias}.txt" | xargs cat > "${domainmaster}"
-
-		# Only execute awk command, if master domain file contains data.
-		query_size="$(grep -c ^ "${domainmaster}")"
-		if [ "${query_size}" -gt 0 ]; then
-
-			# Unbound blocking mode dedup
-			if [ "${dedup}" = '' ]; then
-				awk 'FNR==NR{a[$2];next}!($2 in a)' "${domainmaster}" "${pfbdomain}${alias}.bk2" > "${pfbdomain}${alias}.bk"
-
-			# Unbound python blocking mode dedup
-			else
-				awk -F',' 'FNR==NR{a[$2];next}!($2 in a)' "${domainmaster}" "${pfbdomain}${alias}.bk2" > "${pfbdomain}${alias}.bk"
-			fi
-		fi
-
-		rm -f "${domainmaster}"
-	else
-		mv -f "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk"
-	fi
-
-	countf="$(grep -c ^ "${pfbdomain}${alias}.bk")"
-	countd="$((countu - countf))"
-	rm -f "${pfbdomain}${alias}.bk2"
-
-	# Remove Whitelisted Domains and Sub-Domains, if configured
-	if [ -s "${pfbdnsblsuppression}" ] && [ -s "${pfbdomain}${alias}.bk" ]; then
-		/usr/local/bin/ggrep -vF -f "${pfbdnsblsuppression}" "${pfbdomain}${alias}.bk" > "${pfbdomain}${alias}.bk2"
-		countx="$(grep -c ^ "${pfbdomain}${alias}.bk2")"
-		countw="$((countf - countx))"
-
-		if [ "${countw}" -gt 0 ]; then
-			if [ "${dedup}" = '' ]; then
-				data="$(awk 'FNR==NR{a[$0];next}!($0 in a)' "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk" | \
-					cut -d '"' -f2 | cut -d ' ' -f1 | sort -u | tr '\n' '|')"
-			else
-				data="$(awk 'FNR==NR{a[$0];next}!($0 in a)' "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk" | \
-					cut -d ',' -f2 | sort -u | tr '\n' '|')"
-			fi
-
-			if [ -z "${data}" ]; then
-				if [ "${dedup}" = '' ]; then
-					data="$(cut -d '"' -f2 "${pfbdomain}${alias}.bk" | cut -d ' ' -f1 | sort -u | tr '\n' '|')"
-				else
-					data="$(cut -d ',' -f2 "${pfbdomain}${alias}.bk" | sort -u | tr '\n' '|')"
-				fi
-			fi
-
-			echo "  Whitelist: ${data}"
-			mv -f "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk"
-		fi
-	else
-		countw=0
-	fi
-
-	# Process TOP1M Whitelist
-	if [ "${alexa_enable}" = "on" ] && [ -s "${pfbalexa}" ] && [ -s "${pfbdomain}${alias}.bk" ]; then
-		countf="$(grep -c ^ "${pfbdomain}${alias}.bk")"
-		/usr/local/bin/ggrep -vF -f "${pfbalexa}" "${pfbdomain}${alias}.bk" > "${pfbdomain}${alias}.bk2"
-		countx="$(grep -c ^ "${pfbdomain}${alias}.bk2")"
-		counta="$((countf - countx))"
-
-		if [ "${counta}" -gt 0 ]; then
-			if [ "${dedup}" = '' ]; then
-				data="$(awk 'FNR==NR{a[$0];next}!($0 in a)' "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk" | \
-					cut -d '"' -f2 | cut -d ' ' -f1 | sort -u | tr '\n' '|')"
-			else
-				data="$(awk 'FNR==NR{a[$0];next}!($0 in a)' "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk" | \
-					cut -d ',' -f2 | sort -u | tr '\n' '|')"
-			fi
-
-			if [ -z "${data}" ]; then
-				if [ "${dedup}" = '' ]; then
-					data="$(cut -d '"' -f2 "${pfbdomain}${alias}.bk" | cut -d ' ' -f1 | sort -u | tr '\n' '|')"
-				else
-					data="$(cut -d ',' -f2 "${pfbdomain}${alias}.bk" | sort -u | tr '\n' '|')"
-				fi
-			fi
-
-			echo "  TOP1M Whitelist: ${data}"
-			mv -f "${pfbdomain}${alias}.bk2" "${pfbdomain}${alias}.bk"
-		fi
-	else
-		counta=0
-	fi
-
-	countf="$(grep -c ^ "${pfbdomain}${alias}.bk")"
-	rm -f "${pfbdomain}${alias}.bk2"
-
-	echo '  ----------------------------------------------------------------------'
-	printf "%-10s %-10s %-10s %-10s %-10s %-10s\n" '  Orig.' 'Unique' '# Dups' '# White' '# TOP1M' 'Final'
-	echo '  ----------------------------------------------------------------------'
-	printf "%-10s %-10s %-10s %-10s %-10s %-10s\n" "  ${counto}" "${countu}" "${countd}" "${countw}" "${counta}" "${countf}"
-	echo '  ----------------------------------------------------------------------'
-}
-
-
-# Function to process TLD
-
-
-# Function to process TLD python
-domaintldpy() {
-
-	if [ -s "${dnsbl_python_data}.raw" ]; then
-		sort -u "${dnsbl_python_data}.raw" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_python_data}.raw"
-		countd="$(grep -c ^ ${dnsbl_python_data}.raw)"
-	else
-		countd=0
-	fi
-
-	if [ -s "${dnsbl_python_zone}.raw" ]; then
-		sort -u "${dnsbl_python_zone}.raw" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_python_zone}.raw"
-		countz="$(grep -c ^ ${dnsbl_python_zone}.raw)"
-	else
-		countz=0
-	fi
-
-	printf "."
-
-	countto="$((countd + countz))"
-
-	if [ -s "${dnsbl_tld_remove}" ]; then
-		sort -u "${dnsbl_tld_remove}" > "${tempfile}" && mv -f "${tempfile}" "${dnsbl_tld_remove}"
-		counttm="$(grep -c '^\.' ${dnsbl_tld_remove})"
-	else
-		counttm=0
-	fi
-
-	printf "."
-
-	# Remove redundant Domains (in data)
-	if [ -s "${dnsbl_tld_remove}" ] && [ -s "${dnsbl_python_data}.raw" ]; then
-		/usr/local/bin/ggrep -vF -f "${dnsbl_tld_remove}" "${dnsbl_python_data}.raw" > "${dnsbl_python_data}"
-	elif [ -e "${dnsbl_python_data}.raw" ]; then
-		mv "${dnsbl_python_data}.raw" "${dnsbl_python_data}"
-	fi
-
-	printf "."
-
-	# Remove redundant Domains (in zone)
-	if [ -s "${dnsbl_tld_remove}" ] && [ -s "${dnsbl_python_zone}.raw" ]; then
-		/usr/local/bin/ggrep -vF -f "${dnsbl_tld_remove}" "${dnsbl_python_zone}.raw" > "${dnsbl_python_zone}"
-	elif [ -e "${dnsbl_python_zone}.raw" ]; then
-		mv "${dnsbl_python_zone}.raw" "${dnsbl_python_zone}"
-	fi
-
-	counttf="$(cat ${dnsbl_python_data} ${dnsbl_python_zone} | grep -c ^)"
-	counttr="$((countto - counttf))"
-
-	echo
-	echo ' ----------------------------------------'
-	printf "%-12s %-10s %-10s %-10s\n" ' Original' 'Matches' 'Removed' 'Final'
-	echo ' ----------------------------------------'
-	printf "%-12s %-10s %-10s %-10s\n" " ${countto}" "${counttm}" "${counttr}" "${counttf}"
-	printf ' -----------------------------------------'
-
-	echo "${counttr}" > "${dnsbl_python_count}"
-}
+# ADR-06: dnsbl_scrub (build-time within/cross-feed De-Duplication + user-
+# whitelist removal + TOP1M removal) and domaintldpy (sort -u dedup + subdomain
+# COLLAPSE via ggrep -vF dnsbl_tld_remove + pfb_py_count write) have been REMOVED.
+# They were build-time list optimisations the Python plugin no longer needs: the
+# dict load dedups keys for free, a redundant sub-domain is matched by its parent
+# zone, and the user whitelist + TOP1M are applied at QUERY TIME via the whiteDB.
+# The Python build (pfb_unbound.py) owns this and emits pfb_py_count itself; PHP
+# hands it the per-feed raw via pfblockerng.inc pfb_unbound_python_sources().
 
 
 # Function to compare previous and current DNSBL Unbound conf file, and create Add/Remove files for unbound-control cmds
@@ -1118,12 +952,6 @@ case "${1}" in
 		;;
 	continent)
 		duplicate
-		;;
-	dnsbl_scrub)
-		dnsbl_scrub
-		;;
-	domaintldpy)
-		domaintldpy
 		;;
 	cidr_aggregate)
 		agg_folder=true
