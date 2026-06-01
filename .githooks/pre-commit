@@ -89,7 +89,7 @@ fi
 # --- PHP: PHPStan (heavy; only when the Composer vendor tree is installed) ---
 if [ -x vendor/bin/phpstan ]; then
 	step 'phpstan'
-	vendor/bin/phpstan analyse --no-progress || failed 'phpstan'
+	vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
 fi
 
 [ -n "$skipped" ] && printf '[pre-commit] skipped (tool not found):%s\n' "$skipped" >&2

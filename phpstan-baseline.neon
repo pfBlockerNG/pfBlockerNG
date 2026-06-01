@@ -79,195 +79,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Function array_init_path not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function cert_create not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function convert_friendly_interface_to_friendly_descr not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function convert_real_interface_to_friendly_descr not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function dhcp_is_backend not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function find_interface_subnet not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function find_interface_subnetv6 not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function gen_subnetv6 not found\.$#'
-			identifier: function.notFound
-			count: 4
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_interface_with_descr not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_ip_addresses not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_ipv6_addresses not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_vip_interface not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_vip_ipv4 not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_vip_ipv6 not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_configured_vip_list not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_dns_servers not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_interfaces_with_gateway not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_real_interface not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_single_sysctl not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function get_specialnet not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function ip2long32 not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function ip_in_subnet not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function ip_range_to_subnet_array not found\.$#'
-			identifier: function.notFound
-			count: 3
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function ipsec_enabled not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Function localize_text not found\.$#'
 			identifier: function.notFound
 			count: 16
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function resolve_host_addresses not found\.$#'
-			identifier: function.notFound
-			count: 5
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function sigkillbypid not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function subnetv4_expand not found\.$#'
-			identifier: function.notFound
-			count: 3
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function system_get_kea4leases not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function text_to_compressed_ip6 not found\.$#'
-			identifier: function.notFound
-			count: 4
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function where_is_ipaddr_configured not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function write_rcfile not found\.$#'
-			identifier: function.notFound
-			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -343,12 +157,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Function ip_in_subnet not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Instantiated class Form not found\.$#'
 			identifier: class.notFound
 			count: 1
@@ -395,18 +203,6 @@ parameters:
 			identifier: class.notFound
 			count: 5
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
 			message: '#^Instantiated class Form not found\.$#'
@@ -457,52 +253,10 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 4
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
 			message: '#^Instantiated class Form_Select not found\.$#'
 			identifier: class.notFound
 			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
-			message: '#^Function alias_get_type not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function convert_friendly_interface_to_friendly_descr not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function get_configured_interface_list_by_realif not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function get_ipprotocols not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function isAjax not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function is_alias not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
 			message: '#^Function phpsession_begin not found\.$#'
@@ -514,18 +268,6 @@ parameters:
 			message: '#^Function phpsession_end not found\.$#'
 			identifier: function.notFound
 			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
@@ -583,36 +325,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
-			message: '#^Function get_ipprotocols not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
-			message: '#^Function invalidaliasnamemsg not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
-			message: '#^Function is_validaliasname not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
 			message: '#^Instantiated class Form not found\.$#'
 			identifier: class.notFound
 			count: 1
@@ -667,12 +379,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
 			message: '#^Instantiated class Form_Button not found\.$#'
 			identifier: class.notFound
 			count: 1
@@ -695,18 +401,6 @@ parameters:
 			identifier: class.notFound
 			count: 5
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
 			message: '#^Instantiated class Form not found\.$#'
@@ -743,24 +437,6 @@ parameters:
 			identifier: class.notFound
 			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
-
-		-
-			message: '#^Function where_is_ipaddr_configured not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
 
 		-
 			message: '#^Instantiated class Form not found\.$#'
@@ -847,18 +523,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
 
 		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
-
-		-
 			message: '#^Instantiated class Form not found\.$#'
 			identifier: class.notFound
 			count: 1
@@ -881,18 +545,6 @@ parameters:
 			identifier: class.notFound
 			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
-
-		-
-			message: '#^Function print_callout not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
-
-		-
-			message: '#^Function print_input_errors not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
 
 		-
 			message: '#^Instantiated class Form not found\.$#'
@@ -991,37 +643,7 @@ parameters:
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
 
 		-
-			message: '#^Function alias_info_popup not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
 			message: '#^Function pfSense_get_pf_rules not found\.$#'
 			identifier: function.notFound
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Function clear_subsystem_dirty not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/wizards/pfblockerng_wizard.inc
-
-		-
-			message: '#^Function services_unbound_configure not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/wizards/pfblockerng_wizard.inc
-
-		-
-			message: '#^Function system_dhcpleases_configure not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/wizards/pfblockerng_wizard.inc
-
-		-
-			message: '#^Function system_resolvconf_generate not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/wizards/pfblockerng_wizard.inc
