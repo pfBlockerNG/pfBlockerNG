@@ -1,0 +1,224 @@
+================================================================================
+ADR-06 -- PHASE 4 RESULTS / HANDOFF FOR PHASE 5
+Wire init to BUILD DNSBL structures from raw + emit counts (new contract)
+Branch: adr/06   Commit: pfb_unbound: ADR-06 P4 -- build DNSBL structures from raw at load + emit counts
+================================================================================
+
+VERDICT: GO. init now BUILDS dataDB/zoneDB/whiteDB/feedGroupIndexDB from the raw
+feeds via the Phase-3 build() layer when the per-feed manifest is present, assigns
+them into the matcher globals, and EMITS pfb_py_count (the LOADED total). New tests
+prove the init-from-raw path is decision-equivalent to BOTH the Phase-2 golden
+oracle AND the Phase-2 ReferencePipeline (old-loader stand-in), for both TOP1M
+scenarios + noAAAA + no-IP-leak. Old shell/PHP producers are UNTOUCHED (Phase 5
+removes them). `python -m pytest` = 252 passed (was 234, +18). ruff check + ruff
+format clean. No Unbound symbol added (no stub change). No PHP/shell touched.
+
+--------------------------------------------------------------------------------
+0. WHAT / WHERE
+--------------------------------------------------------------------------------
+Production change (ONE file): src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  * NEW path keys in init_standard() (after the pfb_py_* file defs, ~line 328):
+        pfb["pfb_py_sources"] = "pfb_py_sources.json"   # the per-feed manifest
+        pfb["pfb_py_count"]   = "pfb_py_count"           # Python-emitted entry total
+    (bare filenames; the plugin runs with cwd=/var/unbound, matching the existing
+     pfb_py_* keys and the PHP-side /var/unbound/pfb_py_count at inc:113.)
+  * NEW build-wiring helpers (after build(), ~lines 2061-2175), pure, stdlib-only,
+    NO Unbound symbol:
+        _dnsbl_file_line_reader(base_dir) -> Callable[[str], Iterable[str]]
+            File-backed, LAZY (generator) line_reader for build(); resolves a feed
+            raw ref (absolute or relative-to-manifest-dir) and yields newline-
+            stripped lines. A single missing/unreadable feed is LOGGED + SKIPPED
+            (not fatal) so the other feeds still load.
+        _dnsbl_config_from_manifest(manifest, base_dir) -> config blob
+            Shapes manifest["config"] into the build() config: reads tld_master
+            (a FILE PATH on-box, or a list of lines) into suffix lines; passes
+            tld_blacklist/tld_exclusion/user_whitelist/top1m_list through as lists.
+        dnsbl_build_from_manifest(manifest_path) -> BuildResult | None
+            THE init swap point. Reads the manifest JSON, builds a file-backed
+            reader, calls build(); returns None when the manifest is absent or
+            unparseable (init then falls back to the legacy CSV load). top1m_enabled
+            is read from manifest["config"]["top1m_enabled"].
+        dnsbl_emit_count(count_path, count) -> bool
+            Writes the LOADED total to pfb_py_count in the UI's format ("<n>\n").
+  * WIRED into init_standard() DNSBL load block (~lines 543-571): BEFORE the legacy
+    zone/data CSV load, call dnsbl_build_from_manifest(pfb["pfb_py_sources"]); on a
+    non-None result, ATOMICALLY assign result.data_db/zone_db/feed_group_index_db/
+    white_db into the module globals dataDB/zoneDB/feedGroupIndexDB/whiteDB, set the
+    pfb["dataDB"/"zoneDB"/"whiteDB"/"python_blacklist"] flags, emit pfb_py_count,
+    and set dnsbl_built=True. The legacy zone CSV, data CSV and user-whitelist CSV
+    loads are each now gated `if not dnsbl_built and os.path.isfile(...)` -- they are
+    the FALLBACK only. HSTS load is unchanged (not part of the build).
+  * `import json` added at the top.
+
+New tests: tests/test_adr06_init_from_raw.py (18 tests). REUSES the Phase-2 oracle's
+fixtures, golden tables, decision driver AND the ReferencePipeline (old-loader
+stand-in) so the new path is validated against the EXACT same contract:
+    from tests.test_adr06_golden_oracle import (FIXTURES, GOLDEN_EXTRACTED_IPS,
+        GOLDEN_TOP1M_DISABLED, GOLDEN_TOP1M_ENABLED_OVERRIDES, ReferencePipeline,
+        _build_cfg, _decision_label, _evaluate, _load_json, _read_lines)
+Fixtures unchanged: tests/fixtures/adr06_golden/.
+
+Run:
+    python -m pytest tests/test_adr06_init_from_raw.py -v   # just the init wiring
+    python -m pytest                                        # full suite (252)
+
+--------------------------------------------------------------------------------
+1. THE EXACT NEW FILES init NOW CONSUMES (manifest + raw)
+--------------------------------------------------------------------------------
+init reads ONE manifest JSON: /var/unbound/pfb_py_sources.json (pfb["pfb_py_sources"]).
+Its shape (RESULTS/01 SS2, validated by the tests):
+
+    {
+      "version": 1,
+      "config": {
+        "tld_master":     "/var/unbound/<public-suffix-master>",  # PATH (read here)
+        "tld_blacklist":  ["<tld>", ...],     # whole-TLD ZONE block -> DNSBL_TLD
+        "tld_exclusion":  ["<domain>", ...],  # force exact DATA
+        "user_whitelist": ["<entry>", ...],   # query-time whiteDB (normalised here)
+        "top1m_list":     ["<domain>", ...],  # query-time whiteDB ONLY when enabled
+        "top1m_enabled":  false                # drives the TOP1M whiteDB load
+      },
+      "feeds": [
+        { "raw": "/var/unbound/<header>.txt",  # per-feed raw (IP-STRIPPED) file
+          "feed": "<header>", "group": "<alias>",
+          "format_hint": "hosts|plain|abp|csv:pon",
+          "log_flag": "0|1|2" },
+        ...
+      ]
+    }
+
+  * feeds[].raw : per-feed raw file (absolute, or relative to the manifest dir).
+    Read LAZILY by the file-backed reader. IP lines are skipped by the parser; the
+    DNSBL-IP firewall pass (Phase 5) must STRIP bare-IP lines from these before
+    Python sees them (Python ignores stray IPs, 0 leak -- pinned).
+  * config.tld_master : PATH to the public-suffix oracle (Python reads the lines).
+    A list of lines is also accepted (used by the Phase-3 unit tests).
+  * top1m_enabled lives in config (NOT a separate flag); Phase 5 sets it from
+    dnsbl_alexa + per-list filter_alexa.
+
+WHAT init NOW WRITES:
+  /var/unbound/pfb_py_count (pfb["pfb_py_count"]) -- the Python-emitted LOADED entry
+  total (len(dataDB)+len(zoneDB)), format "<n>\n". This is the ONLY count/tally file
+  Python produces (see SS3). No IP file, no pf alias, no per-feed tally file.
+
+--------------------------------------------------------------------------------
+2. CONFIRMATION: OLD == NEW (decision-equivalent) -- the gate
+--------------------------------------------------------------------------------
+Pinned by tests/test_adr06_init_from_raw.py:
+  * TestInitFromRawDecisionsTop1mDisabled / _Top1mEnabled: the init-from-raw
+    structures reproduce EVERY Phase-2 golden decision (block-null / block-nolog /
+    whitelist / hsts / pass / zone-subdomain / b_type / group), BOTH TOP1M scenarios.
+  * TestInitFromRawEqualsOldLoader[False,True]: every query's FULL decision dict
+    (decision/b_type/feed/group/b_eval) from the NEW build == the OLD loader
+    (ReferencePipeline) -- decision-for-decision, both scenarios.
+  * TestInitGlobalAssignment: mimics the init glue (assign BuildResult into the
+    module globals dataDB/zoneDB/whiteDB/feedGroupIndexDB) and evaluates THROUGH the
+    globals exactly as operate() builds its containers (pfb_unbound.py:2660-2667) --
+    proving the wiring, AND that the query-time whiteDB application is unchanged
+    (adblock.com listed-but-whitelisted -> "whitelist").
+  * TestInitFromRawNoAAAA: noAAAA decisions unchanged. TestInitFromRawNoIpLeak: no
+    GOLDEN_EXTRACTED_IPS leak into data_db/zone_db. TestInitFromRawCounts:
+    pfb_py_count == loaded total and is written in the UI's format.
+Decisions -- NOT list contents/counts -- are the contract (ADR.md SS2): the built
+dicts differ from today's pruned lists BY DESIGN (no dedup/collapse/whitelist/TOP1M
+removal); pfb_py_count legitimately RISES. Every block/resolve outcome is identical.
+
+--------------------------------------------------------------------------------
+3. COUNTS / FEED-GROUP TALLIES -- what Python writes vs what the UI reads
+--------------------------------------------------------------------------------
+  * pfb_py_count: Python now emits the LOADED total (len(dataDB)+len(zoneDB)) via
+    dnsbl_emit_count(). REDEFINED from "entries removed by collapse" -> "loaded
+    total" (RESULTS/01 SS1e). Its value legitimately RISES (lists un-pruned).
+  * The inc:3149-3156 SYNC-CHECK is STILL the old semantics
+    ($dnsbl_cnt = $dnsbl_cnt - $tld_cnt; compares to data+zone line counts) and will
+    read "OUT OF SYNC" against the new pfb_py_count value. THIS IS LEFT FOR PHASE 5
+    to reconcile (it owns shell/PHP edits): redefine the check against the LOADED
+    total, or drop the subtraction. Flagged here; no PHP touched in Phase 4.
+  * PER-FEED/GROUP TALLIES: Python does NOT write a per-feed tally file -- it never
+    did. The build POPULATES feedGroupIndexDB (feed/group<->index), which init
+    assigns into the global; the per-blocked-domain feed/group ATTRIBUTION then
+    flows at QUERY TIME through resolve_feed_group() into the sqlite rows + log
+    lines (operate() UNCHANGED). The UI's per-alias visible counts come from PHP's
+    dnsbl_alias_update()/dnsbl_save_stats() driven by the *.txt feed line counts
+    (RESULTS/01 SS1g) -- INDEPENDENT of pfb_py_count and unaffected by this phase.
+    So "emit the per-feed/group tallies the UI needs" = build+assign feedGroupIndexDB
+    (done) + emit pfb_py_count (done); there is no extra tally artifact to write.
+
+--------------------------------------------------------------------------------
+4. WHITELIST PATH STATUS
+--------------------------------------------------------------------------------
+  * INPUT NORMALISATION now runs in the build (_dnsbl_normalise_whitelist, Phase 3):
+    www-strip; leading-dot -> wildcard True else False; TOP1M loaded into whiteDB
+    ONLY when top1m_enabled. build() returns white_db; init assigns it to the global.
+  * APPLICATION is QUERY-TIME and UNCHANGED: the matcher's evaluate_domain whiteDB
+    check was NOT touched (diff-read confirms zero changes to evaluate_domain / the
+    matcher). Verified by TestInitGlobalAssignment::test_whitelist_unblocks_through_
+    globals (listed-but-whitelisted resolves) over the module globals.
+  * The legacy pfb_py_whitelist.txt CSV load is now FALLBACK only (gated by
+    `not dnsbl_built`). When the manifest is present, whiteDB comes from the build.
+
+--------------------------------------------------------------------------------
+5. WHICH SHELL/PHP PRODUCERS ARE NOW REDUNDANT / SAFE TO REMOVE (Phase 5)
+--------------------------------------------------------------------------------
+With init preferring the raw build, these producers of the OLD files become
+redundant ONCE Phase 5 makes PHP/shell WRITE the manifest (pfb_py_sources.json) +
+per-feed IP-stripped raw feeds. They are STILL PRESENT now (deliberate live
+fallback/cross-check) and MUST NOT be deleted until the manifest is emitted:
+
+  REDUNDANT (DROP in Phase 5 -- the build subsumes/deletes them):
+    * pfblockerng.sh dnsbl_scrub (:357-461): within/cross-feed dedup, user-whitelist
+      removal, TOP1M removal -- ALL build-time optimisations ADR-06 drops.
+    * pfblockerng.sh domaintldpy (:468-524): sort -u dedup + subdomain COLLAPSE
+      (ggrep -vF -f dnsbl_tld_remove) + the counttr -> pfb_py_count write (:523).
+    * pfblockerng.inc tld_analysis (:2607-2925) COLLAPSE/remove-file machinery
+      (dnsbl_tld_remove emission); the data/zone CLASSIFICATION moves to Python
+      (build) -- so tld_analysis's classify is also now redundant for the Python
+      path. Keep ONLY what feeds the manifest (the public-suffix master becomes a
+      Python build input via config.tld_master).
+    * The PHP basic-ABP $e_replace token-strip pass (:7665-7900) -- subsumed by
+      parse(format_hint="abp", ...). Native-mode leftovers (:2672).
+    * The PHP master-raw assembly + rename-to-pfb_py_data path (:8221-8248) and the
+      pfb_py_data.txt / pfb_py_zone.txt / pfb_py_whitelist.txt producers -- replaced
+      by the manifest + per-feed raw. (Legacy load stays as the fallback; once PHP
+      writes the manifest, the CSV producers can go.)
+
+  KEEP (Phase 5 must preserve):
+    * The DNSBL-IP firewall pass -> *_v4.ip -> DNSBLIP_v4 pf alias (inc:7962-7973,
+      :7819-7835 csv:pon col0, :8032-8215). Refactor it to an INDEPENDENT pass that
+      detects IPs and STRIPS bare-IP lines from the per-feed raw BEFORE Python reads
+      them. Python never produces firewall input (0 IP leak pinned).
+      Phase-5 IP set to reproduce = GOLDEN_EXTRACTED_IPS
+        {198.51.100.23, 203.0.113.45, 198.51.100.77, 192.0.2.140}.
+    * The download mechanism, feed catalog, scheduling, per-feed *.txt files (the
+      UI's per-alias line counts read them -- SS3), HSTS/SafeSearch/noAAAA inputs.
+    * The pfb_py_count READ (inc:3149) -- but FIX the sync-check semantics (SS3).
+
+--------------------------------------------------------------------------------
+6. GO-AHEAD FOR PHASE 5 (slim shell/PHP) + carry-over
+--------------------------------------------------------------------------------
+GO. Phase 5 should:
+  1. Make PHP/shell WRITE /var/unbound/pfb_py_sources.json (the manifest in SS1) +
+     the per-feed IP-stripped raw feeds, with config.top1m_enabled driven by
+     dnsbl_alexa + filter_alexa, config.tld_master = the public-suffix master path.
+  2. Run the INDEPENDENT DNSBL-IP pass (detect IPs -> *_v4.ip -> DNSBLIP_v4; strip
+     bare-IP lines from the per-feed raw). Reproduce GOLDEN_EXTRACTED_IPS.
+  3. DELETE the redundant producers in SS5 (dnsbl_scrub, domaintldpy, tld_analysis
+     collapse/remove-file, PHP basic-ABP $e_replace, native-mode leftovers, the
+     pfb_py_data/zone/whitelist CSV producers).
+  4. FIX the inc:3149-3156 pfb_py_count sync-check to compare against the LOADED
+     total (or drop the subtraction) -- it currently means "removed by collapse".
+  5. Run php -l + ShellCheck; keep the Phase-2 oracle + Phase-4 init-from-raw tests
+     green (decision-equivalence is the gate).
+
+Carry-over reminders (still binding):
+  * The manifest is PER-FEED-FILE (RESULTS/01 SS1i), not the concatenated master raw.
+  * No dedup / collapse / build-time whitelist / TOP1M removal -- Python drops them.
+  * DNSBL-IP firewall pass stays in PHP; Python skips IPs (0 leak, pinned).
+  * Last-wins cross-feed attribution (dict) is by design (ADR.md SS2).
+  * The build call site (dnsbl_build_from_manifest) is the future zero-downtime swap
+    point; NO background-thread/restart-free behaviour was added (out of scope).
+
+GATES (this phase): python -m pytest = 252 passed (+18); ruff check clean; ruff
+format clean. No Unbound symbol added (no stub change). No PHP/shell/UI touched;
+nothing deleted. init prefers the raw build, falls back to the legacy CSV load.
+================================================================================

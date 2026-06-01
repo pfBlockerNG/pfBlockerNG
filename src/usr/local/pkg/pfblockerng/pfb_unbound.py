@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import logging.handlers
 import os
@@ -324,6 +325,13 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_data"] = "pfb_py_data.txt"
     pfb["pfb_py_hsts"] = "pfb_py_hsts.txt"
     pfb["pfb_py_ss"] = "pfb_py_ss.txt"
+    # ADR-06: per-feed manifest (the new shell->Python boundary) and the
+    # Python-emitted entry count. When the manifest is present, init builds the
+    # DNSBL structures from the raw feeds via the pure build() layer (ADR-06 P4);
+    # otherwise it falls back to the legacy data/zone CSV load (shell/PHP still
+    # produce those files until Phase 5 removes the duplication).
+    pfb["pfb_py_sources"] = "pfb_py_sources.json"
+    pfb["pfb_py_count"] = "pfb_py_count"
     pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
     pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
     pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
@@ -532,11 +540,42 @@ def init_standard(id: int, env: module_env) -> bool:
                     sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
                     pass
 
+            # ADR-06 P4: prefer BUILDING the DNSBL structures from the raw feeds via
+            # the pure build() layer (the new shell->Python boundary). When the
+            # per-feed manifest is present, Python parses -> normalises -> classifies
+            # (data/zone) -> builds dataDB/zoneDB/feedGroupIndexDB/whiteDB and emits
+            # the entry count -- it is now the source of truth for the built
+            # structures. The legacy data/zone/whitelist CSV load below is the
+            # FALLBACK (shell/PHP still produce those files until Phase 5 removes the
+            # duplication), used only when no manifest is present. Python ignores
+            # stray IP lines and never touches the firewall/IP path (DNSBL-IP stays
+            # in PHP). The build call site is the future zero-downtime swap point;
+            # no background-thread/restart-free behaviour is added here.
+            dnsbl_built = False
+            build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
+            if build_result is not None:
+                # Atomic assign of the freshly-built structures into the module
+                # globals (build() mutated nothing global; this is the swap).
+                dataDB = build_result.data_db
+                zoneDB = build_result.zone_db
+                feedGroupIndexDB = build_result.feed_group_index_db
+                whiteDB = build_result.white_db
+
+                pfb["zoneDB"] = bool(zoneDB)
+                pfb["dataDB"] = bool(dataDB)
+                pfb["whiteDB"] = bool(whiteDB)
+                if dataDB or zoneDB:
+                    pfb["python_blacklist"] = True
+
+                # Emit pfb_py_count (the LOADED total) for the UI (inc:3149).
+                dnsbl_emit_count(pfb["pfb_py_count"], build_result.counts)
+                dnsbl_built = True
+
             # While reading 'data|zone' CSV files: Replace 'Feed/Group' pairs with an index value (Memory performance)
             feedGroup_index = 0
 
             # Zone dicts
-            if os.path.isfile(pfb["pfb_py_zone"]):
+            if not dnsbl_built and os.path.isfile(pfb["pfb_py_zone"]):
                 try:
                     with open(pfb["pfb_py_zone"]) as csv_file:
                         csv_reader = csv.reader(csv_file, delimiter=",")
@@ -569,7 +608,7 @@ def init_standard(id: int, env: module_env) -> bool:
                     pass
 
             # Data dicts
-            if os.path.isfile(pfb["pfb_py_data"]):
+            if not dnsbl_built and os.path.isfile(pfb["pfb_py_data"]):
                 try:
                     with open(pfb["pfb_py_data"]) as csv_file:
                         csv_reader = csv.reader(csv_file, delimiter=",")
@@ -605,8 +644,9 @@ def init_standard(id: int, env: module_env) -> bool:
             feedGroupDB.clear()
 
             if pfb["python_blacklist"]:
-                # Collect user-defined Whitelist
-                if os.path.isfile(pfb["pfb_py_whitelist"]):
+                # Collect user-defined Whitelist (legacy CSV path -- the build()
+                # already loaded whiteDB from the manifest config when dnsbl_built).
+                if not dnsbl_built and os.path.isfile(pfb["pfb_py_whitelist"]):
                     try:
                         with open(pfb["pfb_py_whitelist"]) as csv_file:
                             csv_reader = csv.reader(csv_file, delimiter=",")
@@ -2016,6 +2056,122 @@ def build(
         white_db=white_db,
         counts=len(data_db) + len(zone_db),
     )
+
+
+def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
+    """A file-backed ``line_reader`` for build(): map a feed_row["raw"] reference to
+    its raw lines, streamed lazily so peak RAM stays at the dict floor (RESULTS/01).
+
+    ``raw`` may be an absolute path or a name relative to ``base_dir`` (the directory
+    holding the manifest). Yields stripped-of-newline lines; a missing/unreadable feed
+    yields nothing (and is logged by the caller) rather than aborting the whole build.
+    """
+
+    def reader(raw: str) -> Iterable[str]:
+        path = raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError as e:
+            # A single missing/unreadable feed is logged and skipped -- it must not
+            # abort the whole build (the other feeds still load).
+            sys.stderr.write("[pfBlockerNG]: Failed to read DNSBL feed '{}': {}".format(path, e))
+            return
+        with fh:
+            for line in fh:
+                yield line.rstrip("\r\n")
+
+    return reader
+
+
+def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict[str, Any]:
+    """Shape the manifest's ``config`` block into the build() config blob.
+
+    The on-box manifest carries ``tld_master`` as a FILE PATH (the public-suffix
+    oracle); the build takes the suffix LINES directly (pure, filesystem-decoupled),
+    so read the file here. ``tld_blacklist`` / ``tld_exclusion`` / ``user_whitelist``
+    / ``top1m_list`` are passed through as lists. Missing keys default empty so a
+    partial manifest still builds.
+    """
+    config = manifest.get("config", {})
+
+    tld_master_lines: list[str] = []
+    tld_master = config.get("tld_master")
+    if isinstance(tld_master, list):
+        tld_master_lines = list(tld_master)
+    elif isinstance(tld_master, str) and tld_master:
+        path = tld_master if os.path.isabs(tld_master) else os.path.join(base_dir, tld_master)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                tld_master_lines = fh.read().splitlines()
+        except OSError as e:
+            sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
+
+    return {
+        "tld_master": tld_master_lines,
+        "tld_blacklist": list(config.get("tld_blacklist", [])),
+        "tld_exclusion": list(config.get("tld_exclusion", [])),
+        "user_whitelist": list(config.get("user_whitelist", [])),
+        "top1m_list": list(config.get("top1m_list", [])),
+    }
+
+
+def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
+    """Read the per-feed manifest JSON and BUILD the DNSBL structure-set from raw.
+
+    This is the ADR-06 P4 init swap point: a pure ``(manifest+raw) -> BuildResult``
+    step (build() mutates no global) that a future zero-downtime reload can run on a
+    background thread and atomically swap in. This phase only calls it synchronously
+    at init and assigns the result into the module globals -- no background/restart-
+    free behaviour is added here.
+
+    The manifest carries ``feeds`` (one row per raw feed file) and a ``config`` block
+    (RESULTS/01 SS2). ``top1m_enabled`` is taken from ``config["top1m_enabled"]``.
+    Returns ``None`` when the manifest is absent or cannot be parsed (init then falls
+    back to the legacy CSV load -- shell/PHP still produce those files until Phase 5).
+    """
+    if not os.path.isfile(manifest_path):
+        return None
+
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError) as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load DNSBL manifest '{}': {}".format(manifest_path, e))
+        return None
+
+    base_dir = os.path.dirname(os.path.abspath(manifest_path))
+    config = _dnsbl_config_from_manifest(manifest, base_dir)
+    top1m_enabled = bool(manifest.get("config", {}).get("top1m_enabled", False))
+
+    try:
+        return build(
+            manifest,
+            config,
+            line_reader=_dnsbl_file_line_reader(base_dir),
+            top1m_enabled=top1m_enabled,
+        )
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to build DNSBL structures from raw: {}".format(e))
+        return None
+
+
+def dnsbl_emit_count(count_path: str, count: int) -> bool:
+    """Write the Python-emitted entry total to ``pfb_py_count`` (the UI reads it at
+    pfblockerng.inc:3149).
+
+    ADR-06 redefines ``pfb_py_count`` to the LOADED entry total (len(dataDB)+len(
+    zoneDB)); its value legitimately RISES vs today because the lists are no longer
+    dedup/collapse/whitelist/TOP1M-pruned (RESULTS/01 SS1e). The sync-check at
+    inc:3149-3156 still subtracts this value -- it must be reconciled when shell/PHP
+    is slimmed (Phase 5); flagged in the handoff. Returns True on success.
+    """
+    try:
+        with open(count_path, "w", encoding="utf-8") as fh:
+            fh.write("{}\n".format(count))
+        return True
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to write DNSBL count '{}': {}".format(count_path, e))
+        return False
 
 
 def iter_domain_suffixes(name: str) -> Iterator[str]:
