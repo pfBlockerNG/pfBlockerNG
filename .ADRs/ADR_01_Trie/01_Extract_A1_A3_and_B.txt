@@ -126,4 +126,4 @@ Report: functions added, call sites updated, pytest/ruff results. Leave a note
 for Phase 2 (02_Extract_A4_A5.txt) confirming the matcher signatures are now
 unified and what the chosen argument order is.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/01_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/01_Results.txt`.

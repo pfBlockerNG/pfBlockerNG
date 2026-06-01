@@ -7,6 +7,8 @@
     "ms-python.pylance",
     // Shell — ShellCheck linter; reads #!/bin/sh shebang and lints accordingly
     "timonwong.shellcheck",
+    // Markdown — markdownlint; reads .markdownlint.jsonc / .markdownlint-cli2.jsonc
+    "DavidAnson.vscode-markdownlint",
     // EditorConfig — enforces .editorconfig rules across editors
     "editorconfig.editorconfig"
   ]

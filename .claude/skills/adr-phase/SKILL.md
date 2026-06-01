@@ -128,6 +128,7 @@ general-purpose`) — **without** `isolation: "worktree"`, since the worktree
 already exists. Give it a **self-contained** brief — no carry-over from this
 conversation, though it has the full worktree (the whole codebase) to read and
 edit:
+
 - The **full text** of the phase prompt `{ADR_DIR}/{MM}_*.txt`.
 - "Work **entirely inside** the worktree at `<path>` — all edits and all git
   commands there (`git -C <path> …`). Do not touch the main checkout."
@@ -172,6 +173,7 @@ complete the ADR, stop after Step 6b and report — the branch is already pushed
 
 The branch `adr/{NN}` is already on the remote (pushed each phase). **Ask the
 user** (AskUserQuestion) how to land it — confirm the base if unclear:
+
 - **Create a PR** *(default; expected for `… all`)*: `gh pr list --head adr/{NN}
   --base <base>`; if none, `gh pr create --base <base> --head adr/{NN}
   --title "ADR-NN: <ADR title>" --body-file <tmpfile>` (always `--body-file`; seed
@@ -187,6 +189,7 @@ PR is merged / commits have landed; otherwise leave it for follow-up.
 ## Step 8 — Report back
 
 Summarize:
+
 - The worktree path and branch `adr/{NN}`; that the main checkout was untouched;
   whether the run **resumed** (and from which phase).
 - Per phase: which ADR/phase, the sub-agent's gate results and **review verdict**,

@@ -8,7 +8,7 @@
 
 ## Repository structure
 
-```
+```text
 pfBlockerNG/
 ├── src/                   # Production code — root mirrors pfSense filesystem
 │   ├── etc/inc/priv/      # pfSense privilege definitions (.priv.inc)
@@ -32,6 +32,8 @@ pfBlockerNG/
 ├── .editorconfig          # Indent rules per language
 ├── .shellcheckrc          # ShellCheck suppressions
 ├── .flake8                # Flake8 config mirroring Ruff (Flake8 can't read pyproject.toml)
+├── .markdownlint.jsonc    # markdownlint rule set (VS Code extension + markdownlint-cli2)
+├── .markdownlint-cli2.jsonc  # markdownlint-cli2 globs + ignores
 ├── pyproject.toml         # pytest + ruff + mypy config
 └── README.md
 ```
@@ -90,11 +92,32 @@ ShellCheck via VS Code extension. All scripts use `#!/bin/sh` (POSIX sh, not bas
 `.shellcheckrc` suppresses SC1091 (pfSense source files unreachable locally) and
 SC2154 (rc(8)-injected variables). Do not suppress other rules without justification.
 
+### Markdown
+
+markdownlint via the VS Code "markdownlint" extension and the CLI. Run from repo root:
+
+```sh
+npx markdownlint-cli2          # lint
+npx markdownlint-cli2 --fix    # lint + autofix
+```
+
+Rule set is in `.markdownlint.jsonc` (read by both the extension and the CLI);
+globs/ignores are in `.markdownlint-cli2.jsonc`. The ruleset is pragmatic — it
+enforces structural/consistency rules but disables ones that fight the
+documentation style: `MD013` (line length), `MD060` (table-column alignment),
+`MD036` (the ADR `**Positive**`/`**Negative**` inline sub-headers), and `MD041`
+(frontmatter-led files such as `.claude/skills/*.md` don't open with an H1);
+`MD024` is `siblings_only`. `**/TRANSCRIPT.md` is ignored (verbatim transcript,
+not maintained docs). Keep the disabled-rule rationale in `.markdownlint.jsonc`
+in sync if the set changes. Lint must be clean (`0 error(s)`) before committing
+Markdown changes; it is enforced in CI (`test.yml`) alongside ShellCheck/PHP.
+
 ---
 
 ## Code standards
 
 ### PHP
+
 - Indent: **tabs** (enforced by `.editorconfig`)
 - Target: PHP 8.3 (pfSense CE 2.8)
 - Functions injected by pfSense at runtime (from `util.inc`, `config.lib.inc`, etc.)
@@ -102,6 +125,7 @@ SC2154 (rc(8)-injected variables). Do not suppress other rules without justifica
 - No `die()`/`exit()` in library code; return values or throw
 
 ### Python
+
 - Indent: **4 spaces**
 - Target: Python 3.11+; use `from __future__ import annotations` for forward refs
 - Add type hints to new functions; leave existing untyped code alone unless touching it
@@ -114,6 +138,7 @@ SC2154 (rc(8)-injected variables). Do not suppress other rules without justifica
   onto `builtins` (see `tests/conftest.py`). Add a new injected symbol there.
 
 ### Shell
+
 - POSIX sh only (`#!/bin/sh`), no bash-isms (`[[`, arrays, `$RANDOM`, etc.)
 - Quote all variable expansions: `"$var"`, `"${var}"`
 - Use absolute paths for all binaries (pfSense convention); do not rely on `$PATH`
@@ -126,15 +151,19 @@ SC2154 (rc(8)-injected variables). Do not suppress other rules without justifica
 ## Updating documentation
 
 Update `README.md` when:
+
 - Workflow steps change (test command, deploy command, release steps)
 - Minimum supported pfSense CE version changes
 - New developer tooling is added
 
 Update `stubs/pfsense/` when:
+
 - Minimum supported pfSense CE version is bumped — run:
+
   ```sh
   python scripts/update-pfsense-stubs.py --version X.Y.Z
   ```
+
 - pfBlockerNG starts calling a new pfSense API function not yet stubbed — add it
   to the appropriate file in `stubs/pfsense/` manually
 - `globals.php` is **always** manually maintained (array shapes can't be auto-derived)

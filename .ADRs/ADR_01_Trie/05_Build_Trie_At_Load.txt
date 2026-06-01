@@ -19,7 +19,7 @@ trie==dict consistency during development.
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md — Section 4 Phase 5.
-- .ADRs/ADR_01_Trie/RESULTS/04_Results.md — Phase 4 handoff: TrieNode shape,
+- .ADRs/ADR_01_Trie/RESULTS/04_Results.txt — Phase 4 handoff: TrieNode shape,
   insert/lookup signatures, and equivalence test results (esp. tld_seg and hsts
   -2 stride cases).
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — init_standard():
@@ -97,4 +97,4 @@ Report where domainTrie is declared/initialized, which loaders now dual-write,
 and the consistency-check result. Phase 6 will flip operate()/evaluate_* readers
 to the trie.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/05_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/05_Results.txt`.

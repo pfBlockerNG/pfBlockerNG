@@ -21,7 +21,7 @@ source of truth.
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md — Section 2 (what is kept vs removed), Section 7 (done).
-- .ADRs/ADR_01_Trie/RESULTS/07_Results.md — Phase 7 handoff: fused descent
+- .ADRs/ADR_01_Trie/RESULTS/07_Results.txt — Phase 7 handoff: fused descent
   signature and traversal evidence, or the skip rationale if Phase 7 was deferred.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py
     * module-level annotated globals (dataDB/zoneDB/whiteDB/noAAAADB/hstsDB and
@@ -112,4 +112,4 @@ Report removed symbols, fixture migration result, grep-clean confirmation,
 pytest/ruff status, and the manual smoke-test outcome recorded in the ADR.
 Migration complete.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/08_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/08_Results.txt`.

@@ -1,0 +1,29 @@
+{
+  // pfBlockerNG markdown lint config.
+  // Read by both the VS Code "markdownlint" extension and markdownlint-cli2
+  // (run: `npx markdownlint-cli2`). Globs/ignores live in
+  // `.markdownlint-cli2.jsonc`; this file holds only the rule set.
+  //
+  // Pragmatic ruleset: structural/consistency rules are enforced; style rules
+  // that fight the deliberate documentation style are disabled. Keep this in
+  // sync with the rationale in CLAUDE.md if it changes.
+  "default": true,
+
+  // line-length: ADRs/README use long prose and wide tables on purpose.
+  "MD013": false,
+
+  // table-column-style: compact (unaligned) pipe tables are the house style.
+  "MD060": false,
+
+  // emphasis-as-heading: ADRs use **Positive** / **Negative / risks** as
+  // intentional inline sub-headers within a section.
+  "MD036": false,
+
+  // first-line-heading: frontmatter-led files (e.g. .claude/skills/*.md) begin
+  // with a YAML block rather than an H1.
+  "MD041": false,
+
+  // duplicate-heading: allow the same heading text under different parents
+  // (e.g. repeated "Positive"/"Negative" across ADR sections).
+  "MD024": { "siblings_only": true }
+}

@@ -22,7 +22,7 @@ that entry point and a parallel one for the noAAAA path.
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md  — Section 2 semantics contract; Section 4 Phase 2.
-- .ADRs/ADR_01_Trie/RESULTS/01_Results.md — Phase 1 handoff: functions added,
+- .ADRs/ADR_01_Trie/RESULTS/01_Results.txt — Phase 1 handoff: functions added,
   call sites updated in operate(), and the signature convention for Phase 2.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py
     * operate() DNSBL block — the per-`q_name` loop (`for val_counter, q_name in
@@ -135,4 +135,4 @@ Report the DnsblDecision shape, evaluate_domain/evaluate_noaaaa signatures, the
 cfg/containers you threaded through, and where the noAAAA memo write now lives.
 Phase 3 will write golden tests against exactly these signatures.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/02_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/02_Results.txt`.

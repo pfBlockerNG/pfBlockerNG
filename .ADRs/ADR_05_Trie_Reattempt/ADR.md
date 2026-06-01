@@ -4,13 +4,14 @@
 - **Date:** 2026-06-01
 - **Branch:** documentation-only (no `adr/05` implementation branch — rejected pre-implementation) / **Component(s) it *would* have touched:** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the DNSBL matcher) and, for the C variant, the FreeBSD port `net/pfSense-pkg-pfBlockerNG-devel`.
 - **Target runtime (had it shipped):** Python 3.11+ inside Unbound's `pythonmod` (stdlib only); the C variant would have added a compiled extension.
-- **Evidence:** `benchmarks/` (`_baseline.py` dict matcher, `_trie.py` rejected ADR-01 trie, `_corpus.py`); ADR-01 `§8` + `RESULTS/09_Benchmark_Results.md`; a throwaway dict-baseline measurement (script reproduced in **Appendix A**).
+- **Evidence:** `benchmarks/` (`_baseline.py` dict matcher, `_trie.py` rejected ADR-01 trie, `_corpus.py`); ADR-01 `§8` + `RESULTS/09_Benchmark_Results.txt`; a throwaway dict-baseline measurement (script reproduced in **Appendix A**).
 
 ---
 
 ## 1. Context
 
 ### Today
+
 The DNSBL hot path in `pfb_unbound.py` matches each query against **five flat dicts** — `dataDB` (exact), `zoneDB` (wildcard-incl-self), `whiteDB`, `hstsDB`, `noAAAADB`. The match sequence is reproduced verbatim in `benchmarks/_baseline.py::decide_dict`:
 
 - exact: `dataDB.get(q_name)` — one C-level hash lookup on the full name;
@@ -18,10 +19,13 @@ The DNSBL hot path in `pfb_unbound.py` matches each query against **five flat di
 - white / hsts / noaaaa run **only when a block already matched** (`decide_dict:107-110`) — so the common **negative** path is just "data-miss + zone-walk" and stops.
 
 ### Precedent — ADR-01
+
 ADR-01 replaced these dicts with a reversed-label trie (`TrieNode` + per-category lookups + a Phase-7 fused single-descent). It was **fully implemented (8 phases), correct, and oracle-tested — then REJECTED** (ADR-01 §8) when benchmarks showed its core premises ("one walk → less CPU", "shared suffixes → less memory") did not hold in CPython. The frozen trie and the dict baseline are kept in `benchmarks/` precisely to guard future proposals against the same trap.
 
 ### The proposal that prompted this ADR
+
 "Do the trie again, but **write it in C** so it's faster and uses less memory." On scrutiny this splits into two distinct ideas, both examined below:
+
 1. a **second pure-Python trie**, redesigned to avoid ADR-01's mistakes;
 2. a **C-extension trie** called from `pfb_unbound.py`.
 
@@ -41,6 +45,7 @@ Goal as stated: win on **both** speed and memory.
 ## 3. Findings (why it was rejected)
 
 ### 3a. The baseline ADR-01 never recorded
+
 ADR-01 reported only **trie/dict ratios**, never the dict's absolute cost — so "the dicts are too slow / too big" was never substantiated. Measured here (dict only, via `_corpus.py` + `_baseline.py`, CPython 3.14/macOS, the same environment as ADR-01 §8; reproduction script in **Appendix A**):
 
 | feed (deduped) | retained | **bytes/entry** | build peak | match latency (ns/query) |
@@ -53,9 +58,11 @@ ADR-01 reported only **trie/dict ratios**, never the dict's absolute cost — so
 Steady state **~274 B/entry**; projection **1M ≈ 261 MiB, 2M ≈ 523 MiB, 3M ≈ 785 MiB** retained. Structural match is **~0.7–1.9 µs/query at every size**.
 
 ### 3b. Speed is a non-problem
+
 A DNS query is **millisecond**-scale (Unbound processing + upstream network); the structural match is **~1 µs**, three to four orders of magnitude smaller, and the DB/log writes already run **off the response path** on the async worker. There is no measurable latency to win. ADR-01 §8 further showed the trie *adds* latency in CPython, and a C trie called per query pays a Python↔C boundary cost (`PyArg_ParseTuple`, return-object build, refcounts) on every lookup that erases any algorithmic gain at these depths.
 
 ### 3c. A second Python trie hits the same intrinsic CPython walls
+
 These are properties of CPython + node-based structures, not artifacts of ADR-01's code, so a redesign cannot escape them:
 
 - **Exact match is unbeatable.** `dataDB.get(full_name)` is one C-level call (`O(1)`); any trie must `split` + walk labels in **interpreted Python** (`O(depth)`). ADR-01 measured exact `data` **1.6–1.8×** slower and exact `noAAAA` **~6×** slower for exactly this reason (ADR-01 §8).
@@ -66,10 +73,12 @@ These are properties of CPython + node-based structures, not artifacts of ADR-01
 A redesign's realistic ceiling is "approach parity on zone, stay worse on exact + negative, stay worse on memory" — i.e. never a win on either axis the proposal targets.
 
 ### 3d. The C variant carries blockers a benchmark cannot retire
+
 - **A — distribution model.** The port `net/pfSense-pkg-pfBlockerNG-devel/Makefile` is `NO_BUILD=yes`, `NO_MTREE=yes`, arch-independent; `pkg-plist` ships **zero `.so`** (all `INSTALL_DATA`/`INSTALL_SCRIPT` of text). A compiled extension means dropping `NO_BUILD`, building per-arch (`amd64` **and** `arm64`), and **ABI-locking** to the box's exact CPython — a Python minor bump on pfSense would stop Unbound loading the module (**DNS down**), and FreeBSD-ports/Netgate must accept a compiled port. ADR-01 §5 already forbade this ("no Cython/Rust extension permitted").
 - **B — safety regression (worst failure mode).** Pure Python cannot segfault Unbound (a bug is a catchable, logged exception). A C extension running in Unbound's loader can **segfault or corrupt memory → crash the firewall's resolver process**. For a security/networking appliance that is a categorical downgrade ADR-01 never had to pay.
 
 ### 3e. Even the *only* arguably-real axis doesn't need a trie — and isn't hurting anyone
+
 The 274 B/entry is dominated by the **per-entry payload dict** `{"log":"1","index":0}` (`_corpus.py:106-107`) attached to ~80% of entries (data + zone). A trie *keeps* those payload dicts and *adds nodes* — which is exactly why ADR-01 grew +40%. If DNSBL memory ever needed cutting, the lever is **flat compaction** (store the index as the value directly, fold `log` into a bit; `sys.intern` shared suffixes) — pure-Python, ships under `NO_BUILD`, none of blockers A/B. **However, the maintainer confirms (2026-06-01) memory is not hurting real deployments**, so even flat compaction is unjustified today.
 
 ---
@@ -88,6 +97,7 @@ This ADR is documentation only; **no phase plan, no implementation**. Like ADR-0
 ---
 
 ## 5. Constraints (from `CLAUDE.md`) that shaped the rejection
+
 - **Shipped code is stdlib-only** — `pfb_unbound.py` runs in Unbound's Python loader; no third-party deps, and (per ADR-01 §5) no compiled extension.
 - **The release archive is `src/` text only**, and the port is `NO_BUILD`/arch-independent — adding native code is a port-model change, not a code tweak.
 - Any future memory work must stay pure-Python, keep `python -m pytest` green, and remain behaviour-preserving for every observable DNSBL decision (the `tests/test_pfb_unbound.py` oracle).
@@ -95,6 +105,7 @@ This ADR is documentation only; **no phase plan, no implementation**. Like ADR-0
 ---
 
 ## 6. What would reopen this
+
 Only a **measured** report that the flat dicts cost too much **on a real box** — e.g. a large-feed deployment OOM-ing or paging on a low-RAM appliance. If that ever happens, the response is a **falsify-first, pure-Python flat-compaction** ADR (pack the payload dict + `sys.intern`), benchmarked against the §3a baseline with an explicit kill-threshold **before** any code — **not** a trie, and **not** C.
 
 ---
@@ -191,4 +202,3 @@ def main():
 if __name__ == "__main__":
     main()
 ```
-

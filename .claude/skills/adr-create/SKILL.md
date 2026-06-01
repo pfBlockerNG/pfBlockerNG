@@ -129,7 +129,7 @@ ADR back to the user in prose so they can correct course.
 Create `.ADRs/ADR_{NN}_{Name}/ADR.md` (**markdown**). Mirror the latest ADR's
 section set; the canonical skeleton is:
 
-```
+```text
 # ADR-NN: <imperative title>
 
 - **Status:** **Proposed** (<today's date>)
@@ -161,7 +161,7 @@ its prompt file.
 For each phase create `.ADRs/ADR_{NN}_{Name}/{NN}_{Name}.txt` (**plain text**),
 using the banner template:
 
-```
+```text
 ================================================================================
 PHASE N PROMPT — <title>
 Target model: <e.g. Claude Sonnet 4.6>
@@ -209,6 +209,7 @@ HANDOFF — write `.ADRs/ADR_NN_Name/RESULTS/<NN>_Results.txt` (plain .txt)
 ```
 
 Rules:
+
 - Phase 1 has **no** prior-handoff line; **every later phase** opens REQUIRED
   READING with the "FIRST, read RESULTS/(N-1)_Results.txt … else STOP" gate.
 - Each phase ends with the HANDOFF block naming `RESULTS/{NN}_Results.txt`.

@@ -20,7 +20,7 @@ implementation (and the Phase 3 oracle tests), we de-risk the actual swap
 
 REQUIRED READING
 - .ADRs/ADR_01_Trie/ADR.md — Section 2 (TrieNode shape + semantics contract).
-- .ADRs/ADR_01_Trie/RESULTS/03_Results.md — Phase 3 handoff: test classes added,
+- .ADRs/ADR_01_Trie/RESULTS/03_Results.txt — Phase 3 handoff: test classes added,
   add_* helper names/locations, and golden test coverage confirmed.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — the pure matchers from Phases
   1-2 you must match: find_zone_match (zone wildcard incl self, returns matched
@@ -110,4 +110,4 @@ Report the TrieNode shape, the insert/lookup signatures, and the equivalence
 test results (especially the tld_seg and hsts -2 cases). Phase 5 will populate
 this trie at load time alongside the dicts.
 
-Now document these results in `.ADRs/ADR_01_Trie/RESULTS/04_Results.md`.
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/04_Results.txt`.
