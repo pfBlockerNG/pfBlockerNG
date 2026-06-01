@@ -126,7 +126,7 @@ jobs:
         # phpstan.neon configures paths, level, stubs, and includes the
         # baseline (phpstan-baseline.neon) so existing legacy errors are
         # suppressed; new errors introduced by future changes will fail CI.
-        run: vendor/bin/phpstan analyse --no-progress
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
   markdownlint:
     name: markdownlint

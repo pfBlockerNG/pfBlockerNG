@@ -29,21 +29,34 @@ from pathlib import Path
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 PFSENSE_REPO = "pfsense/pfsense"
-RAW_URL = "https://raw.githubusercontent.com/{repo}/{tag}/src/etc/inc/{file}"
+RAW_URL = "https://raw.githubusercontent.com/{repo}/{tag}/src/{path}"
 
-# Default: minimum pfSense CE version supported by this package.
-# Update this constant when bumping the minimum supported version.
+# Minimum pfSense CE version this package supports.
 MIN_PFSENSE_VERSION = "2.8.0"
 
-# Map output stub filename → pfSense include files to parse for that module.
+# pfSense CE version whose source the stubs are generated FROM. Netgate's public
+# GitHub mirror (pfsense/pfsense) is frozen at RELENG_2_7_2 — there is no
+# RELENG_2_8_0 tag/branch — so we fetch 2.7.2, the newest public release. These
+# util/interface/cert signatures are stable across 2.7→2.8, which is all PHPStan
+# level 0 needs (symbol existence). Override with --version when a newer public
+# ref appears (or when generating from a local 2.8 checkout).
+STUB_SOURCE_VERSION = "2.7.2"
+
+# Map output stub filename → pfSense source files to parse for that module.
+# A bare filename resolves under src/etc/inc/; an entry containing '/' is taken
+# as a full src-relative path (e.g. usr/local/www/guiconfig.inc).
 STUB_MODULES: dict[str, list[str]] = {
     "config.php": ["config.lib.inc"],
-    "util.php": ["util.inc", "pfsense-utils.inc"],
+    "util.php": ["util.inc", "pfsense-utils.inc", "globals.inc"],
     "services.php": ["services.inc", "service-utils.inc", "pkg-utils.inc"],
-    "system.php": ["functions.inc", "filter.inc"],
-    "guiconfig.php": ["guiconfig.inc"],
-    # logging.php is derived from util.inc (already covered above); the hand-
-    # crafted version covers the gettext/file_notice subset used by pfBlockerNG.
+    "system.php": ["functions.inc", "filter.inc", "system.inc"],
+    "interfaces.php": ["interfaces.inc"],
+    "certs.php": ["certs.inc"],
+    "ipsec.php": ["ipsec.inc"],
+    "guiconfig.php": ["usr/local/www/guiconfig.inc"],
+    # logging.php is hand-crafted (the gettext/file_notice subset used by
+    # pfBlockerNG) and is never regenerated; its symbols seed the cross-file
+    # dedup set so generated modules don't redeclare them.
 }
 
 STUB_HEADER_TEMPLATE = """\
@@ -77,16 +90,25 @@ def version_to_tag(version: str) -> str:
 # ── Source fetching ───────────────────────────────────────────────────────────
 
 
-def fetch_source(tag: str, filename: str) -> str | None:
+def _src_path(source: str) -> str:
+    """Resolve a STUB_MODULES source entry to its src-relative path.
+
+    Bare filenames live under etc/inc/; an entry containing '/' is used as-is
+    (e.g. usr/local/www/guiconfig.inc).
+    """
+    return source if "/" in source else f"etc/inc/{source}"
+
+
+def fetch_source(tag: str, source: str) -> str | None:
     """Fetch a raw pfSense source file from GitHub. Returns None on failure."""
-    url = RAW_URL.format(repo=PFSENSE_REPO, tag=tag, file=filename)
+    url = RAW_URL.format(repo=PFSENSE_REPO, tag=tag, path=_src_path(source))
     try:
         with urllib.request.urlopen(url, timeout=20) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
-        print(f"    WARNING: {filename}: HTTP {exc.code} — {url}", file=sys.stderr)
+        print(f"    WARNING: {source}: HTTP {exc.code} — {url}", file=sys.stderr)
     except Exception as exc:
-        print(f"    WARNING: {filename}: {exc}", file=sys.stderr)
+        print(f"    WARNING: {source}: {exc}", file=sys.stderr)
     return None
 
 
@@ -124,15 +146,17 @@ def _collect_params(source: str, open_paren: int) -> int | None:
     return None
 
 
-def extract_functions(source: str) -> list[str]:
+def extract_functions(source: str) -> list[tuple[str, str]]:
     """
     Extract top-level PHP function declarations from *source* and return them
-    as stub strings (empty bodies, return types preserved where present).
+    as (name, stub) pairs (empty bodies, return types preserved where present).
+    The name lets the caller deduplicate across source files and stub modules.
     """
-    stubs: list[str] = []
+    stubs: list[tuple[str, str]] = []
 
     for m in _FUNC_START_RE.finditer(source):
         fn_start = m.start()
+        name = m.group(1)
 
         # Locate the opening '(' — guaranteed by the regex.
         open_paren = source.index("(", fn_start)
@@ -155,9 +179,9 @@ def extract_functions(source: str) -> list[str]:
         sig = re.sub(r"\s+", " ", raw_sig).strip()
 
         if ret_type:
-            stubs.append(f"{sig}: {ret_type} {{}}")
+            stubs.append((name, f"{sig}: {ret_type} {{}}"))
         else:
-            stubs.append(f"/** @return mixed */\n{sig} {{}}")
+            stubs.append((name, f"/** @return mixed */\n{sig} {{}}"))
 
     return stubs
 
@@ -201,9 +225,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--version",
-        default=MIN_PFSENSE_VERSION,
+        default=STUB_SOURCE_VERSION,
         metavar="X.Y.Z",
-        help=f"pfSense CE version to fetch (default: {MIN_PFSENSE_VERSION}, the minimum supported version)",
+        help=f"pfSense CE version to fetch (default: {STUB_SOURCE_VERSION}, newest public source; "
+        f"package supports {MIN_PFSENSE_VERSION})",
     )
     parser.add_argument(
         "--output",
@@ -236,6 +261,18 @@ def main() -> None:
         print("  globals.php — not found; create it or run without --output to use the default")
     print()
 
+    # Seed the global dedup set with functions already declared in hand-
+    # maintained stub files we never regenerate (globals.php, logging.php, …),
+    # so generated modules don't redeclare them ("Function X already declared").
+    regenerated = set(STUB_MODULES)
+    seen: set[str] = set()
+    if out_dir.is_dir():
+        for existing in sorted(out_dir.glob("*.php")):
+            if existing.name in regenerated:
+                continue
+            for m in _FUNC_START_RE.finditer(existing.read_text(encoding="utf-8")):
+                seen.add(m.group(1))
+
     total_stubs = 0
     errors = 0
 
@@ -248,10 +285,18 @@ def main() -> None:
             source = fetch_source(tag, src_file)
             if source is None:
                 errors += 1
+                print("FAILED")
                 continue
-            funcs = extract_functions(source)
-            print(f"{len(funcs)} functions")
-            all_functions.extend(funcs)
+            # Deduplicate by function name across every source file and module
+            # (first declaration wins) — PHPStan errors on a redeclared symbol.
+            kept = 0
+            for name, stub in extract_functions(source):
+                if name in seen:
+                    continue
+                seen.add(name)
+                all_functions.append(stub)
+                kept += 1
+            print(f"{kept} functions")
 
         if not all_functions:
             print(f"    WARNING: no functions extracted; {stub_file} will be empty")

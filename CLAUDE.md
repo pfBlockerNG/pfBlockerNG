@@ -196,12 +196,23 @@ Update `stubs/pfsense/` when:
 - Minimum supported pfSense CE version is bumped — run:
 
   ```sh
+  python scripts/update-pfsense-stubs.py            # defaults to the newest public source
   python scripts/update-pfsense-stubs.py --version X.Y.Z
   ```
 
+  The generator downloads pfSense source from GitHub and emits one stub file per
+  module (`util.php`, `interfaces.php`, `certs.php`, …) with cross-file dedup. It
+  defaults to **2.7.2** (`STUB_SOURCE_VERSION`): Netgate's public mirror is frozen
+  there — no `RELENG_2_8_0` ref — and those signatures are stable across 2.7→2.8,
+  which is all PHPStan level 0 needs (symbol existence). Generate from a real 2.8
+  checkout if/when one is available.
 - pfBlockerNG starts calling a new pfSense API function not yet stubbed — add it
   to the appropriate file in `stubs/pfsense/` manually
-- `globals.php` is **always** manually maintained (array shapes can't be auto-derived)
+- `globals.php` is **always** manually maintained (array shapes can't be auto-derived);
+  `logging.php` and `supplemental.php` are likewise hand-maintained and never
+  regenerated (`supplemental.php` holds pfSense functions used on CE 2.8 that are
+  absent from the 2.7.2 stub source, e.g. `config_read_file`). PHPStan is the gate:
+  prefer stubbing a real pfSense function over a `phpstan-baseline.neon` suppression.
 
 ---
 
