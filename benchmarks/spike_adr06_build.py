@@ -162,6 +162,9 @@ def build(lines: list[str], feeds: list[str], log_flag: str = "1") -> dict[str, 
     pruning -- dict keys dedup for free, last feed wins on a duplicate key (the
     documented attribution change). Reentrant: nothing global is touched.
     """
+    if len(lines) != len(feeds):
+        raise ValueError(f"lines and feeds must be equal length: {len(lines)} != {len(feeds)}")
+
     data_db: dict[str, dict[str, Any]] = {}
     zone_db: dict[str, dict[str, Any]] = {}
     feed_group_index_db: dict[int, dict[str, str]] = {}
@@ -237,6 +240,8 @@ def _retained_bytes(structures: dict[str, Any]) -> int | None:
 
 
 def run(n_domain_lines: int, n_runs: int) -> None:
+    if n_runs < 1:
+        raise ValueError(f"n_runs must be >= 1, got {n_runs}")
     print("=" * 78)
     print(
         "ADR-06 P1 SPIKE  Python DNSBL build cost  (CPython {}.{}, {})".format(

@@ -1650,9 +1650,9 @@ def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qda
 # Moves the DNSBL list preprocessing (parse -> normalise -> classify data/zone ->
 # build dicts) out of shell/PHP into this plugin. The boundary is "shell/PHP fetch
 # + tag; Python parse -> normalise -> classify -> build dicts -> emit counts"
-# (ADR.md SS2). This phase introduces the layer and unit-tests it against the
-# Phase-2 decision oracle; it is NOT yet wired into init() (Phase 4) and removes no
-# shell/PHP (Phase 5).
+# (ADR.md SS2). The layer is wired into init() via dnsbl_build_from_manifest()
+# (Phase 4), and the duplicated shell/PHP preprocessing has since been removed
+# (Phase 5); decision-equivalence is pinned against the Phase-2 oracle.
 #
 # Design notes the contract pins (RESULTS/01_Results.txt, RESULTS/02_Results.txt):
 #   * Build-time OPTIMISATIONS are dropped, not reimplemented: no within/cross-feed

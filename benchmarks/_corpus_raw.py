@@ -75,6 +75,11 @@ def generate_raw_corpus(
     registrable-parent sharing), ~70/20/5/3/2 across label depth — but here every
     entry is emitted as raw text, un-classified and un-pruned.
     """
+    if n_domain_lines < 0:
+        raise ValueError(f"n_domain_lines must be >= 0, got {n_domain_lines}")
+    if n_feeds < 1:
+        raise ValueError(f"n_feeds must be >= 1, got {n_feeds}")
+
     rng = random.Random(seed)
     n_slds = max(1, n_domain_lines // 8)
     slds = ["{}{}.{}".format(rng.choice(LABELS), rng.randrange(100_000), rng.choice(TLDS)) for _ in range(n_slds)]

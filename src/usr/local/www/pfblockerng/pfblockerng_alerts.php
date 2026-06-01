@@ -1279,6 +1279,7 @@ if (isset($_POST) && !empty($_POST)) {
 			write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", false);
 			if ($dnsbl_py_changes) {
 				pfb_unbound_python_whitelist('alerts');
+				pfb_unbound_python_sources_whitelist();
 				pfb_reload_unbound('enabled', FALSE);
 			}
 		}
