@@ -60,8 +60,15 @@ relevant pfSense source files from GitHub and rewrites all stub files except
 
 ### Git hooks
 
-The repository ships a `pre-push` hook in `.githooks/` that enforces the tag
-naming convention before anything is pushed to the remote:
+The repository ships hooks in `.githooks/` — a tracked directory, so they are
+shared and reviewed (the default `.git/hooks` is local-only and cannot be
+committed):
+
+- **`pre-commit`** runs the fast linters and the unit suite (Ruff, pytest,
+  markdownlint, ShellCheck + `sh -n`, `php -l`; PHPStan only when `vendor/` is
+  present) and blocks the commit on any failure. A check whose tool is not
+  installed is skipped (CI is the hard gate); bypass with `git commit --no-verify`.
+- **`pre-push`** enforces the tag naming convention before anything is pushed:
 
 | Commit reachable from | Required tag form  |
 | --------------------- | ------------------ |
@@ -69,14 +76,15 @@ naming convention before anything is pushed to the remote:
 | `origin/devel` only   | `vX.X.X-devel`     |
 | Neither               | push is rejected   |
 
-Activate the hook once after cloning:
+Activate the hooks once after cloning (git cannot auto-apply a committed hooks
+path):
 
 ```sh
-git config core.hooksPath .githooks
+sh scripts/setup-hooks.sh    # sets core.hooksPath to .githooks
 ```
 
-This is a local client-side guard. The CI release workflow enforces the same
-rules server-side, so tags that bypass the hook are still rejected by GitHub
+These are local client-side guards. CI enforces the same checks (and the tag
+rules) server-side, so anything that bypasses a hook is still caught by GitHub
 Actions.
 
 ### Running the test suite locally
