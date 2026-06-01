@@ -1,0 +1,198 @@
+================================================================================
+ADR-06 -- PHASE 6 RESULTS / FINAL (validation, init/mem evidence, DoD, smoke)
+Validation + docs only; no runtime behaviour changed. Status NOT flipped to Accepted.
+Branch: adr/06   Commit: docs: ADR-06 P6 -- DNSBL preprocessing move validation + DoD
+================================================================================
+
+VERDICT: GO confirmed. The DNSBL-preprocessing-into-Python move is DECISION-
+EQUIVALENT across all formats and the init/memory kill-gate PASSES with comfortable
+headroom on the PRODUCTION build path (re-measured on adr/06). The §7 boundary pivot
+was NOT triggered. Status set to "Implemented -- pending live smoke"; it flips to
+Accepted only after the maintainer runs the live manual smoke (checklist below).
+
+--------------------------------------------------------------------------------
+0. SCOPE OF THIS PHASE
+--------------------------------------------------------------------------------
+Validation + docs ONLY. No production .py/.inc/.sh touched. Three files changed:
+  * .ADRs/.../ADR.md          -- Status line; §7 Build-evidence block; reject-criteria
+                                 outcomes; expanded maintainer manual-smoke checklist.
+  * README.md                 -- new "DNSBL list build (Python)" subsection (the new
+                                 shell->Python contract + how to run golden tests) and
+                                 the ADR-06 init/mem spike in the Benchmarks section.
+  * CLAUDE.md                 -- pfb_unbound.py now annotated as owning the DNSBL list
+                                 build; a "Running tests" note on the manifest contract
+                                 + where the golden tests / kill-gate live.
+No production code, no test code, no new behaviour. Status NOT "Accepted".
+
+--------------------------------------------------------------------------------
+1. EQUIVALENCE RESULT -- PASS (golden across hosts / plain / basic-ABP / csv:pon)
+--------------------------------------------------------------------------------
+`python -m pytest` => 255 passed (incl. 71 ADR-06 tests). ruff check + ruff
+format --check clean. markdownlint-cli2 => 0 errors on the 3 changed md files.
+(No PHP/shell touched this phase, so php -l / ShellCheck not re-run here; they were
+clean in Phase 5.)
+
+The decision-equivalence chain (decisions, NOT list contents/counts -- the ADR §2
+relaxation) is proven by four test modules, each mapped to an acceptance item:
+
+  * tests/test_adr06_golden_oracle.py -- the reference preprocessor loads the
+    PRODUCTION matcher's runtime structures and the oracle drives the PRODUCTION
+    decision fns pfb_unbound.evaluate_domain / evaluate_noaaaa over the golden query
+    set, for BOTH TOP1M scenarios (disabled + enabled overrides) and the noAAAA
+    surface. Fixtures (tests/fixtures/adr06_golden/) exercise ALL formats:
+    feed_hosts.txt (hosts), feed_plain.txt/feed_extra.txt/feed_nolog.txt (plain),
+    feed_abp.txt (basic-ABP), feed_csv_pon.txt (csv:pon). The firewall-IP extraction
+    set GOLDEN_EXTRACTED_IPS is asserted AND confirmed absent from the block lists.
+    => ACCEPTANCE 1 (decision-equivalent across formats) + 5 (DNSBL-IP set) + the
+       whitelist/TLD/TOP1M cases (ACCEPTANCE 3).
+
+  * tests/test_adr06_build_module.py -- the pure parse/normalise/classify/build
+    layer, unit by unit (the Phase-3 module). => the build primitives.
+
+  * tests/test_adr06_init_from_raw.py -- the PRODUCTION dnsbl_build_from_manifest()
+    over an on-box-shaped manifest JSON (config block + per-feed raw rows), asserted
+    decision-equal to BOTH the golden map AND the reference pipeline, parametrised
+    over both TOP1M scenarios. Also pins: feed/group attribution through
+    feedGroupIndexDB; top1m_enabled flowing from config; no IP leak into block lists;
+    and dnsbl_emit_count writing the LOADED total (len(data)+len(zone)) to
+    pfb_py_count -- cross-checked == the structures the matcher uses.
+    => ACCEPTANCE 1 + 3 + 4 (Python-emitted counts) + feed/group attribution.
+
+  * tests/test_adr06_php_boundary.py -- the SHIPPED PHP boundary ("clean each feed to
+    bare domains, emit as format_hint=plain"), simulated by running the reference
+    per-format extract/validate then round-tripping through the PRODUCTION build +
+    evaluate_domain; every golden decision holds (both TOP1M scenarios) and the
+    diverted firewall-IP set == GOLDEN_EXTRACTED_IPS with 0 leak.
+    => proves the actual shell/PHP path Phase 5 ships is decision-equivalent.
+
+Two behaviour changes are INTENDED (accepted by ADR §2, NOT regressions), each now
+called out in the smoke checklist:
+  * cross-feed-duplicate attribution is LAST-WINS (was first-feed) -- dict assignment.
+  * TOP1M is a single GLOBAL query-time whiteDB toggle (the old per-list filter_alexa
+    build-time prune cannot be expressed query-time) -> with TOP1M enabled, popular
+    domains un-block across ALL lists.
+
+--------------------------------------------------------------------------------
+2. INIT/MEMORY NUMBERS vs THRESHOLD -- RE-MEASURED ON adr/06 -- PASS (GO)
+--------------------------------------------------------------------------------
+Kill-threshold (RESULTS/01 §4): build wall-time <= ~8 s absolute AND retained dict
+footprint <= ~410 B/entry (vs the ADR-05 §3a 274 B/entry baseline), on a large
+(>=1M-entry) UN-PRUNED corpus.
+
+Re-measured on adr/06 (CPython 3.14, macOS dev box, N>=5):
+
+  build path                         size       build median (max)   peak RAM   B/entry  verdict
+  -------------------------------------------------------------------------------------------------
+  PRODUCTION dnsbl_build_from_manifest  1,000,000  2.28 s (2.33)       141.5 MiB  281.5 (+3%)  PASS
+  PRODUCTION dnsbl_build_from_manifest  2,000,000  4.39 s (4.43)       266.8 MiB  284.7 (+4%)  PASS
+  Phase-1 spike prototype               1,000,000  1.47 s              193.8 MiB  274.9 (+0%)  PASS
+
+  * Build wall-time is LINEAR (~2.2 us/raw-line). Even 2M -- the RESULTS/01 residual-
+    risk size -- is 4.4 s, well under the 8 s cap. The production fn is ~1.55x the
+    spike prototype (real parse() dispatch + per-label normalise() + public-suffix
+    classify() + ParsedEntry dataclass + file I/O), still comfortably within budget.
+  * Memory is at baseline parity (281-285 B/entry, +3-4%) -- the trie was never the
+    lever, confirmed again. Peak RAM is the dict floor because the production build
+    STREAMS feeds lazily (_dnsbl_file_line_reader); the spike's higher peak is only
+    because it materialises the full line list.
+
+MEASUREMENT NOTE (important -- fixes a misread that RESULTS/01 baked in):
+  Wall-time MUST be timed with tracemalloc OFF. tracemalloc instruments every
+  allocation and inflates this allocation-heavy build ~3-4x. The committed spike
+  (benchmarks/spike_adr06_build.py) and RESULTS/01 time the build INSIDE
+  tracemalloc.start(), so their reported figures are INSTRUMENTED, not real:
+      spike instrumented:  5.3 s / 1M ; 10.9 s / 2M  (RESULTS/01 -- and where its "2M
+                           exceeds the 8 s cap" residual-risk flag came from)
+      spike un-instrumented: 1.47 s / 1M
+      PRODUCTION un-instr.:  2.28 s / 1M ; 4.39 s / 2M  <- the real init cost, decided on
+  So RESULTS/01's "2M may exceed budget" caveat was an instrumentation artifact; the
+  un-instrumented production path is comfortably under the cap at BOTH 1M and 2M.
+  (The spike code was left UNCHANGED this phase -- validation/docs only, no behaviour
+  change. The methodology + both numbers are recorded in ADR §7 and README. A future
+  cleanup could split the spike's timing pass from its tracemalloc/asizeof pass; not
+  done here to stay in scope.)
+
+How to reproduce (production path) -- throwaway harness used this phase (NOT committed;
+the committed kill-gate is benchmarks/spike_adr06_build.py): write the un-pruned
+>=1M-line corpus from benchmarks/_corpus_raw.py to per-feed raw files + an on-box
+manifest with a real public-suffix tld_master, then time pfb_unbound.
+dnsbl_build_from_manifest() with tracemalloc OFF (timing) and a separate tracemalloc
+pass for peak RAM + pympler.asizeof for retained B/entry.
+
+GATE OUTCOME: GO confirmed on the production build path. No §7 boundary pivot taken.
+
+--------------------------------------------------------------------------------
+3. DOCS UPDATED
+--------------------------------------------------------------------------------
+  * ADR.md
+      - Status: Proposed -> "Implemented -- pending live smoke" (NOT Accepted).
+      - New "### Build evidence (Phase 6, recorded on adr/06)" block: the test->
+        acceptance mapping + the init/mem table + the tracemalloc measurement note.
+      - Reject-criteria: both criteria annotated "Outcome (Phase 6): NOT triggered"
+        with the recorded numbers + the two accepted-by-design behaviour changes.
+      - Manual-smoke checklist expanded (see §4) with an explicit Accept gate header.
+  * README.md
+      - New "### DNSBL list build (Python)" subsection: the shell->Python contract
+        (manifest /var/unbound/pfb_py_sources.json + per-feed raw; build ->
+        data/zone/whiteDB/feedGroupIndex + pfb_py_count; no dedup/collapse/build-time
+        whitelist/TOP1M removal), and the command to run the four golden test modules.
+      - Benchmarks section: added the ADR-06 init/mem spike invocation.
+  * CLAUDE.md
+      - pfb_unbound.py annotated as owning the DNSBL list build in the repo tree.
+      - "Running tests" note: the manifest contract + where the golden tests and the
+        kill-gate live.
+
+--------------------------------------------------------------------------------
+4. MAINTAINER MANUAL-SMOKE CHECKLIST (the gate CI cannot reach)
+--------------------------------------------------------------------------------
+*** ACCEPT GATE: Status flips Proposed/Implemented -> ACCEPTED ONLY after every box
+    below passes on a LIVE pfSense CE box. CI cannot reach Unbound's Python loader or
+    pf. Run after a full DNSBL update (so the manifest + per-feed raw + pfb_py_count
+    are freshly written) and a resolver reload. ***
+
+  [ ] Block decisions unchanged: exact (data) block, wildcard/zone block AND a
+      sub-domain of it, an HSTS entry, a noAAAA entry; a non-listed domain resolves.
+  [ ] Whitelist BOTH entry points: settings-textarea whitelist resolves; alerts
+      "add to whitelist" button resolves (after its reload). Wildcard (leading-dot)
+      un-blocks sub-domains. Whitelisted domain stays in-list as a whitelist hit.
+  [ ] Counts/UI: alerts/stats/widget + per-alias counts render. pfb_py_count is the
+      LOADED total, may be HIGHER than before (un-pruned -- expected). No "OUT OF
+      SYNC"; update log shows "[ feed lines: N | loaded entries: M ]".
+  [ ] TLD blacklist (whole-TLD block) + TLD exclusion (forced exact) behave. TOP1M
+      ENABLED -> a popular feed domain resolves; DISABLED -> it blocks. NOTE the
+      accepted change: TOP1M is now GLOBAL (un-blocks across all lists when enabled).
+  [ ] DNSBL-IP firewall feature: a feed with embedded IPs still populates DNSBLIP_v4
+      (configured action) + the rule references it; IP set unchanged; no IP in DNS.
+  [ ] Reload picks up feed AND whitelist changes.
+  [ ] Retained CSV consumers (RESULTS/05 §5): alerts "add domain to group", "add to
+      whitelist", unlock/detail still work off pfb_py_data/pfb_py_zone.
+  [ ] Cross-feed duplicate attribution is now LAST-WINS (was first-feed); spot-check a
+      known duplicated domain's reported feed/group is sane (count shift expected).
+
+--------------------------------------------------------------------------------
+5. RESIDUALS / FUTURE (out of ADR-06 scope -- noted, not done)
+--------------------------------------------------------------------------------
+  * Retire the PHP data/zone classification COPY + the pfb_py_data/zone CSV producers
+    by migrating the alerts/detail consumers (RESULTS/05 §5) onto the manifest/whiteDB/
+    sqlite -- a UI-side change. Until then the CSVs are intentionally kept.
+  * Add the missing CSV threat-feed parsers (pt/bbc/h3x/otx/et) to pfb_unbound.parse()
+    if the boundary should ever hand Python the ORIGINAL raw per format instead of the
+    PHP-cleaned "plain" (the eventual conformant-ABP ADR shape). test_adr06_init_from_
+    raw.py already pins the hosts/abp/csv:pon path for that direction.
+  * Optional: split the spike's timing pass from its tracemalloc/asizeof pass so its
+    reported wall-time is un-instrumented (cosmetic; the real numbers are in ADR §7).
+  * Residual native remnant $pfb['dnsbl_tld_remove'] path key (inc:126) is unused;
+    safe to drop in a later cleanup (RESULTS/05 §5).
+
+--------------------------------------------------------------------------------
+6. GATES (this phase)
+--------------------------------------------------------------------------------
+python -m pytest      => 255 passed (71 ADR-06: golden_oracle, build_module,
+                         init_from_raw, php_boundary -- all green).
+ruff check .          => All checks passed!
+ruff format --check . => 20 files already formatted.
+npx markdownlint-cli2 => 0 error(s) on README.md, CLAUDE.md, ADR.md.
+php -l / ShellCheck   => not re-run (no PHP/shell touched this phase; clean in P5).
+Init/mem kill-gate    => PASS (production build 2.28 s/1M, 4.39 s/2M; 281-285 B/entry).
+Status                => "Implemented -- pending live smoke" (NOT Accepted).
+================================================================================

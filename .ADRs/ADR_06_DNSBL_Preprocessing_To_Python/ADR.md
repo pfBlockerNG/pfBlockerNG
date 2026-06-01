@@ -1,6 +1,6 @@
 # ADR-06: Move DNSBL list preprocessing out of shell/PHP into the Python plugin
 
-- **Status:** **Proposed** (2026-06-01)
+- **Status:** **Implemented — pending live smoke** (2026-06-01) — Phases 1–6 landed on `adr/06`; CI gates green and the init/memory kill-gate is met (see §7 build evidence). Flips to **Accepted** only after the maintainer runs the live manual smoke (§7).
 - **Date:** 2026-06-01
 - **Branch:** `adr/06` (off **`next`** — depends on ADR-02 "Python-only DNSBL" having landed) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new build/parse layer + load path), `pfblockerng.inc` (`tld_analysis`, the download/parse loop, `pfb_unbound_python_whitelist`), `pfblockerng.sh` (`:470-523` finalize/dedup/count), `pfblockerng_dnsbl.php` / `pfblockerng_alerts.php` (UI reads of counts; whitelist entry points — preserved).
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only**; PHP 8.3; POSIX `sh`.
@@ -171,16 +171,89 @@ Prompt: `06_Validation_DoD.txt`
 - The build is a pure reentrant function (zero-downtime-ready) and the parser is format-pluggable (ABP-ready) — neither feature implemented here.
 - Status → **Accepted** only after the manual smoke (below) passes on a live pfSense box.
 
+### Build evidence (Phase 6, recorded on `adr/06`)
+
+**Decision-equivalence — PASS.** Golden + build unit tests pin identical
+block/resolve/whitelist/HSTS/noAAAA/zone-subdomain decisions across **all** formats:
+
+- `tests/test_adr06_golden_oracle.py` — reference preprocessor → **production**
+  `pfb_unbound.evaluate_domain`/`evaluate_noaaaa` over the golden query set, both
+  TOP1M-disabled and TOP1M-enabled scenarios; the firewall-IP extraction set is
+  asserted (`GOLDEN_EXTRACTED_IPS`) and confirmed absent from the block lists.
+  Fixtures exercise **hosts / plain / basic-ABP / csv:pon** (`tests/fixtures/adr06_golden/`).
+- `tests/test_adr06_build_module.py` — the pure `parse`/`normalise`/`classify`/`build`
+  layer unit by unit.
+- `tests/test_adr06_init_from_raw.py` — the **production** `dnsbl_build_from_manifest`
+  over an on-box-shaped manifest, asserted decision-equal to **both** the golden map
+  **and** the reference pipeline (parametrised over both TOP1M scenarios), plus
+  feed/group attribution, the no-IP-leak invariant, and `dnsbl_emit_count` writing
+  the loaded-entry total to `pfb_py_count`.
+- `tests/test_adr06_php_boundary.py` — the shipped PHP "clean → emit as `plain`"
+  boundary, round-tripped through the production build, decision-equal with no IP leak.
+
+Full suite: **`python -m pytest` → 255 passed**; `ruff check .` / `ruff format --check .`
+clean; `php -l` + ShellCheck clean (Phase 5).
+
+**Init/memory kill-gate — GO (PASS, comfortable headroom).** Re-measured on `adr/06`
+at the agreed ≥1M-entry un-pruned corpus (CPython 3.14, macOS dev box; threshold
+build ≤ 8 s AND retained ≤ 410 B/entry vs the 274 B/entry ADR-05 §3a baseline):
+
+| build path | size | build wall-time (median, N≥5) | peak RAM | retained B/entry | verdict |
+| --- | --- | --- | --- | --- | --- |
+| production `dnsbl_build_from_manifest` | 1,000,000 | **2.28 s** (max 2.33) | 141.5 MiB | 281.5 (+3%) | **PASS** |
+| production `dnsbl_build_from_manifest` | 2,000,000 | **4.39 s** (max 4.43) | 266.8 MiB | 284.7 (+4%) | **PASS** |
+| Phase-1 spike prototype | 1,000,000 | 1.47 s | 193.8 MiB¹ | 274.9 (+0%) | PASS |
+
+Time is linear (~2.2 µs/raw-line); even 2M — the RESULTS/01 residual-risk size — is
+4.4 s, well under the cap. Memory is at baseline parity (the trie was never the lever).
+**Measurement note:** wall-time must be timed with `tracemalloc` **off** — instrumenting
+every allocation inflates the build ~3–4×. The committed spike (`spike_adr06_build.py`)
+and RESULTS/01 report the *instrumented* figure (5.3 s / 1M; 10.9 s / 2M); the
+un-instrumented production figures above are the real init cost and the ones this gate
+is decided on. ¹Spike peak RAM is higher because it materialises the full line list;
+the production build streams feeds lazily (`_dnsbl_file_line_reader`), so its peak is
+the dict floor.
+
 ### Reject criteria (decide cheaply, Phase 1, before the move)
 
-- **Init/memory blows the budget:** if building from raw inside Unbound exceeds the agreed reload-time/peak-RAM threshold on a large corpus and cannot be brought under it (streaming/iterative build) → do **not** ship a slow reload; fall back to the Moderate/Conservative boundary (keep dedup/classify in shell/PHP) or keep it as-is. Recorded in the ADR.
-- **Behaviour cannot be matched:** if the Python build cannot reproduce the current pipeline's decisions/attribution for some format → STOP and reconcile before deleting any shell/PHP.
+- **Init/memory blows the budget:** if building from raw inside Unbound exceeds the agreed reload-time/peak-RAM threshold on a large corpus and cannot be brought under it (streaming/iterative build) → do **not** ship a slow reload; fall back to the Moderate/Conservative boundary (keep dedup/classify in shell/PHP) or keep it as-is. Recorded in the ADR. **Outcome (Phase 6): NOT triggered** — the production build is 2.28 s / 1M (4.39 s / 2M), well under the 8 s cap, and 281.5 B/entry, well under the 410 B/entry ceiling. The streaming reader already gives the dict-floor peak RAM, so no boundary pivot is needed. (If a *future* deployment's raw line count is so large that the linear build pushes reload time past the maintainer's tolerance, the documented fallback remains: move dedup/classify back to shell/PHP, or stage the build off-thread per the reentrant seam.)
+- **Behaviour cannot be matched:** if the Python build cannot reproduce the current pipeline's decisions/attribution for some format → STOP and reconcile before deleting any shell/PHP. **Outcome (Phase 6): NOT triggered** — decisions are pinned identical across hosts/plain/basic-ABP/csv:pon (see Build evidence). Two *intended* behaviour changes are accepted by design (not regressions): cross-feed-duplicate attribution is now **last-wins** (was first-feed), and the TOP1M whitelist is a single **global** query-time `whiteDB` toggle (the old per-list `filter_alexa` build-time prune cannot be expressed query-time, so with TOP1M enabled popular domains are un-blocked across *all* lists). Both are called out in the smoke checklist below.
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-- [ ] Block decisions unchanged for a known feed set (exact, wildcard/zone, HSTS, noAAAA).
-- [ ] A domain whitelisted via the **settings textarea** resolves normally; ditto one added via the **alerts "add to whitelist" button**.
-- [ ] Alerts/stats/widget render correctly (Python-emitted `pfb_py_count`; counts may be higher than before — expected, lists un-pruned).
-- [ ] TLD blacklist (whole-TLD block) and TLD exclusion behave as before. With TOP1M **enabled**, a popular domain present in a feed resolves (un-blocked via `whiteDB`); with it **disabled**, it blocks.
-- [ ] A DNSBL feed containing IPs still populates the `DNSBLIP_v4` pf alias (with the configured action) and the firewall rule references it.
-- [ ] A reload picks up feed + whitelist changes correctly.
+> **Gate: Status flips to Accepted ONLY after every box below passes on a live
+> pfSense CE box.** CI cannot reach Unbound's Python loader or pf, so these are the
+> checks no automated test covers. Run after a full DNSBL update (so the manifest
+> `/var/unbound/pfb_py_sources.json` + `/var/unbound/pfb_py_raw/` and `pfb_py_count`
+> are freshly written) and a resolver reload.
+
+- [ ] **Block decisions unchanged** for a known feed set: an exact (data) block, a
+  wildcard/zone block *and a sub-domain of it*, an HSTS entry, and a noAAAA entry all
+  behave as before. A non-listed domain resolves.
+- [ ] **Whitelist — both entry points.** A domain whitelisted via the **settings
+  textarea** resolves normally; so does one added via the **alerts "add to whitelist"
+  button** (after the reload it triggers). Confirm a **wildcard** whitelist
+  (leading-dot) un-blocks sub-domains too. The domain now stays *in* the list and
+  shows as a whitelist hit (not absent) — expected.
+- [ ] **Counts/UI.** Alerts, stats widget, and per-alias counts render. `pfb_py_count`
+  (`/var/unbound/pfb_py_count`) is the **loaded-entry total** and may be **higher**
+  than the old value — expected (lists are no longer dedup/collapse/whitelist/TOP1M
+  pruned). No "OUT OF SYNC" log line; the update log shows `[ feed lines: N | loaded
+  entries: M ]`.
+- [ ] **TLD blacklist** (whole-TLD block) and **TLD exclusion** (forced exact) behave
+  as before. With **TOP1M enabled**, a popular domain present in a feed resolves
+  (un-blocked via `whiteDB`); with it **disabled**, the same domain blocks. **Note the
+  accepted change:** TOP1M is now **global** — when enabled it un-blocks popular
+  domains across *all* lists, not only the lists that had per-list `filter_alexa`.
+- [ ] **DNSBL-IP firewall feature.** A DNSBL feed containing embedded IPs still
+  populates the `DNSBLIP_v4` pf alias (with the configured action) and the firewall
+  rule references it. The IP set is unchanged and no IP leaks into DNS blocking.
+- [ ] **Reload** picks up both feed changes and whitelist changes correctly.
+- [ ] **Retained CSV consumers (RESULTS/05 §5).** The alerts-page features that still
+  read `pfb_py_data`/`pfb_py_zone` work: "add domain to group", "add to whitelist",
+  and unlock/detail. (These PHP-produced CSVs are intentionally kept this ADR;
+  migrating them onto the manifest/sqlite is a future follow-up.)
+- [ ] **Cross-feed duplicate attribution** is now **last-wins** (a domain in several
+  feeds is attributed to the last feed loaded, was first). Spot-check that a known
+  duplicated domain's reported feed/group is sane — its per-feed count shifting is
+  expected, not a regression.
