@@ -4394,7 +4394,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'any';
+				$rule['direction'] = 'out';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -4421,9 +4421,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
-				if ($pfb['float'] == 'on') {
-					$rule['direction'] = 'out';
-				}
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['deny_outbound'][] = $rule;
@@ -4437,7 +4434,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'any';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			$rule['source'] = array('address' => "{$pfb_alias}");
@@ -4464,9 +4461,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
-				if ($pfb['float'] == 'on') {
-					$rule['direction'] = 'in';
-				}
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['deny_inbound'][] = $rule;
@@ -4479,7 +4473,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'any';
+				$rule['direction'] = 'out';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -4506,9 +4500,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
-				if ($pfb['float'] == 'on') {
-					$rule['direction'] = 'out';
-				}
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['permit_outbound'][] = $rule;
@@ -4522,7 +4513,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'any';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			$rule['source'] = array('address' => "{$pfb_alias}");
@@ -4549,9 +4540,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
-				if ($pfb['float'] == 'on') {
-					$rule['direction'] = 'in';
-				}
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['permit_inbound'][] = $rule;
@@ -4564,7 +4552,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			$rule['direction'] = 'any';
+			$rule['direction'] = 'out';
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
 				$rule['source'] = array('address' => "{$asrc_out}");
@@ -4590,7 +4578,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
-				$rule['direction'] = 'out';
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['match_outbound'][] = $rule;
@@ -4604,7 +4591,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			$rule['direction'] = 'any';
+			$rule['direction'] = 'in';
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			$rule['source'] = array('address' => "{$pfb_alias}");
 			if ($aaddrnot_in == 'on') {
@@ -4630,7 +4617,6 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
-				$rule['direction'] = 'in';
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['match_inbound'][] = $rule;
