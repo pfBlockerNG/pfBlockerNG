@@ -2408,9 +2408,10 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_regex_cap'] === 'on' ? true:false,
 	'on'
-))->setHelp('Best-effort ReDoS safeguard. When enabled, over-long or nested-quantifier (catastrophic-backtracking) regex patterns are dropped at load '
-		. 'for both feed (ABP) and the Python Regex List above. Dropped patterns are logged. '
-		. 'A always-on runtime guard also evicts any pattern whose match exceeds the time ceiling, regardless of this setting.');
+))->setHelp('Best-effort ReDoS safeguard (opt-in). When enabled, over-long or nested-quantifier (catastrophic-backtracking) regex patterns are dropped at load, '
+		. 'before they ever run, for both feed (ABP) and the Python Regex List above; each dropped pattern is logged. '
+		. 'Independently, an always-on runtime guard times every regex match and, regardless of this setting, logs a warning over the warn ceiling and EVICTS the pattern from the live database over the evict ceiling (so it cannot hang the resolver twice). '
+		. 'Accepted residual risk: the first match of a pathological pattern can still slow that one query until it returns (Python re cannot be interrupted mid-match); enabling this cap removes the worst offenders before that can happen.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_cname',

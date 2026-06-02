@@ -1,6 +1,6 @@
 # ADR-07: Full ABP-style DNSBL list support (DNS-only, in the Python build)
 
-- **Status:** **Proposed** (2026-06-02)
+- **Status:** **Implemented — pending live smoke** (2026-06-02; flips to **Accepted** only after the §7 manual smoke passes on a live pfSense box)
 - **Date:** 2026-06-02
 - **Branch:** `adr/07` (off **`next`** — depends on ADR-06 "DNSBL preprocessing → Python" having landed) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the build layer + the query-time matcher), `pfblockerng.inc` (`$easylist` lite parser, the manifest writer `pfb_unbound_python_sources`, the DNSBL-IP firewall pass, the user-regex feature), `src/usr/local/www/pfblockerng/*` (the new "Limit long/complex regex" opt-in setting).
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (no subprocess, no out-of-stdlib regex engine; note 3.11+ gives atomic groups + possessive quantifiers in `re`); PHP 8.3; POSIX `sh`.
@@ -196,6 +196,59 @@ Prompt: `09_Validation_Smoke_DoD.txt`
 - PHP `$easylist` lite pass deleted; ABP parse is one Python parser; DNSBL-IP (incl. ABP-anchored) intact; user `pfb_regex_list` now behind the same runtime safeguard.
 - The opt-in "Limit long/complex regex" setting works; runtime warn/evict is active by default.
 - Status → **Accepted** only after the manual smoke (below) passes on a live pfSense box.
+
+### Build evidence (recorded Phase 9, on `adr/07`)
+
+CPython 3.11, Linux; `tracemalloc` OFF (ADR-06 measurement note). All numbers
+reproduced on-branch in Phase 9 — they match the Phase-1 spike (no drift).
+
+**Test equivalence (`python -m pytest`): 917 passed, 0 failed.** Of these:
+
+- **No-regression (ADR-06 golden oracle retained-green): 71 passed** —
+  `test_adr06_golden_oracle.py` + `test_adr06_build_module.py` +
+  `test_adr06_init_from_raw.py` + `test_adr06_php_boundary.py`. The non-ABP fast
+  path (`important_rules` false) is byte-identical to today; every block/resolve/
+  whitelist/HSTS/noAAAA/zone-subdomain decision is unchanged old-vs-new.
+- **ABP DNS equivalence (Phase-2 spec/oracle): 662 passed** —
+  `test_adr07_decision_spec.py` (spec/oracle), `_parser.py`, `_reconcile.py`,
+  `_matcher_strata.py`, `_emit_wire.py`, `_regex_safety.py`, `_php_boundary.py`.
+  Production (`build()` + `evaluate_domain` + the slimmed PHP boundary, end-to-end)
+  is decision-equal to the spec across hosts/plain/abp incl. `@@` (block & allow),
+  reducible + irreducible regex (block & allow), `$important`, `$badfilter`
+  (feed-only prune), provenance/sovereignty bands, and element/path/`$option` skip.
+- Remaining ~184 are the retained `test_pfb_unbound.py` matcher/init suite (also
+  green) — the full default run.
+
+**Perf / ReDoS benchmark (`benchmarks/spike_adr07_regex.py`, on `adr/07`):**
+**GATE = GO.**
+
+| metric | measured (on-branch) | kill-threshold | result |
+| --- | --- | --- | --- |
+| regex reduction ratio (`/re/` → dict, zero per-query cost) | 46% (18 of 39 fold) | ≥ 30% | PASS |
+| per-irreducible-pattern added latency (negative query, worst case) | 0.1647 µs/pattern (linear) | "a few µs" / 50 µs hard ceiling | PASS |
+| budget-bounded irreducible count at 50 µs | ~303 patterns | feed-scale ≫ realistic count | PASS |
+| ReDoS: pathological (≥2 s) caught by static cap / MISSED | 1 caught / 0 missed (all nested-quantifier) | static cap catches catastrophic shapes | PASS |
+| worst cap-passing first-hit on a ≤253-char input | 0.109 ms | ≤ 500 ms (evict ceiling 100 ms) | PASS |
+| GIL demo: thread/asyncio timeout cancels a runaway `re` match? | NO — waiter forced to 216× its 1 ms deadline; match uncancellable | (confirms accept-first-hit-then-evict is the only stdlib option) | — |
+
+**Decision:** GO — no reject-criterion tripped. Irreducible regex is ~0.16 µs/
+pattern (budget bounds to ~300; reduction + the `important_rules` fast path keep
+typical deployments far under that); the only genuinely catastrophic shapes are
+nested-quantifier patterns the cheap opt-in static cap drops with no execution and
+no corpus false-negatives; the residual one-slow-first-hit is irreducible without a
+subprocess/re2 (both out of scope) and is bounded by always-on runtime warn/evict.
+
+**Runtime safety ceilings (shipped defaults):** warn 10 ms / evict 100 ms thread-CPU
+per match (`time.thread_time`, jitter-robust); opt-in static cap drops length-/
+nested-quantifier-over-cap patterns at load. Both apply to feed **and** user
+`pfb_regex_list`. Eviction is snapshot-iterate + evict-after-loop (thread-safe under
+the GIL).
+
+**Docs / setting finalised:** README.md gains an "Full ABP/EasyList support (ADR-07)"
+section + the `spike_adr07_regex.py` benchmark note; the "Limit long/complex regex"
+setting help text (`pfblockerng_dnsbl.php`) states what it drops, the always-on
+runtime warn/evict, and the accepted residual risk. CLAUDE.md's `pfb_unbound.py`
+note updated to mention the ABP parser.
 
 ### Reject criteria (decide cheaply, Phase 1, before building)
 
