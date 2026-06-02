@@ -61,6 +61,7 @@ This ADR adds tooling, not behaviour; the "contract" is **the probe→expectatio
 
 - **The harness must distinguish a true block from a true pass.** A blocked domain returns the configured block shape (NXDOMAIN / null-IP / VIP per fact 4); a whitelisted or unlisted control domain returns its `local-data` answer — and a *failure to inject/reload* must make the assertion **fail**, not silently pass (guard: a deliberately-wrong expectation must go red).
 - **IP path:** an IP present in the served feed appears in the named pf alias table (`pfctl -T show`); an IP not in the feed does not. A rule referencing the alias exists (`pfctl -sr`).
+- **DNSBL-IP is dual-stack:** with the DNSBL-IP firewall feature enabled and a feed carrying both families, the IPs embedded in the DNSBL list must populate **two distinct** pf alias tables — `pfB_DNSBLIP_v4` *and* `pfB_DNSBLIP_v6` — never collide on one. The hardcoded `DNSBLIP` base name is suffixed per address family downstream (`pfB_{aliasname}{vtype}`, `inc:8680`/`inc:9260`), so `pfctl -sTables | grep pfB_DNSBLIP` must list **both**, each table holding only its own family's addresses. A run that produced only one table (or merged the families) must go red.
 - **Determinism without internet:** every assertion resolves from mock feeds + `local-data`; a run with the runner's egress blocked must still pass (no hidden dependency on real upstreams/feeds).
 - **Reset between cases:** `clearip`/`cleardnsbl` + reload returns the VM to a known state so cases don't leak into each other (or each case gets a fresh boot/snapshot — Phase 3 decides).
 
@@ -160,6 +161,7 @@ Prompt: `04_Config_Inject_Deploy_Reload.txt`
 Prompt: `05_Thin_Slice_Matrix.txt`
 
 - IP: feed N IPs → assert alias table membership + rule presence; assert a non-fed IP is absent.
+- IP (DNSBL-embedded, dual-stack): a DNSBL feed carrying both IPv4 and IPv6 entries → assert **both** `pfB_DNSBLIP_v4` and `pfB_DNSBLIP_v6` tables exist, are partitioned by family (no collision from the shared `DNSBLIP` base name), and that the inet/inet6 rules reference the matching table.
 - DNSBL (parametrised): exact block → NXDOMAIN **and** null-IP modes; one wildcard (`*.example.com` blocks `a.b.example.com`, self); one whitelist passthrough (resolves via `local-data`).
 - Hermetic check: passes with egress blocked. False-green guard: a deliberately-wrong case is xfail/asserted-red.
 
@@ -196,4 +198,5 @@ The automated matrix is a thin slice; before flipping to Accepted, the maintaine
 - [ ] A wildcard `zone` block catches a deep subdomain and the parent.
 - [ ] A whitelisted domain resolves normally.
 - [ ] An IP feed populates the expected pf alias table and a rule references it.
+- [ ] The DNSBL-IP feature, fed a list with both IPv4 and IPv6 addresses, creates **both** `pfB_DNSBLIP_v4` and `pfB_DNSBLIP_v6` pf tables (distinct, each holding only its own family) and the inet/inet6 rules reference the matching table — v4 and v6 do not overwrite each other.
 - [ ] The smoke workflow's pass/fail matches these observations (no false-green / false-red).
