@@ -1692,8 +1692,10 @@ def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qda
 # No Unbound symbol is referenced below; only the stdlib (csv) is used.
 # --------------------------------------------------------------------------- #
 
-# Entry kinds (ABP-ready seam). This phase emits ONLY BLOCK; ALLOW/REGEX are
-# shaped for the future ABP ADR and are never produced or applied here.
+# Entry kinds (ABP-ready seam). The ADR-06 plain/hosts/csv path emits ONLY BLOCK;
+# the ADR-07 ABP Stage-A parser (``parse_abp``) emits BLOCK *and* ALLOW. ``REGEX``
+# here is an entry kind kept for the legacy ParsedEntry seam; the ABP Rule model
+# below uses ``RULE_TARGET_*`` to say whether a rule targets a domain or a regex.
 DNSBL_KIND_BLOCK = "block"
 DNSBL_KIND_ALLOW = "allow"
 DNSBL_KIND_REGEX = "regex"
@@ -1702,9 +1704,86 @@ DNSBL_KIND_REGEX = "regex"
 DNSBL_CLASS_DATA = "data"  # exact match  (loaded into dataDB)
 DNSBL_CLASS_ZONE = "zone"  # wildcard-incl-self match (loaded into zoneDB)
 
+# --------------------------------------------------------------------------- #
+# ADR-07 -- the intermediate ABP Rule model (Stage A).
+#
+# ``parse_abp(line, ...) -> Rule | None`` turns one raw ABP line into a typed
+# Rule (or None to skip). This is PURE + ADDITIVE: it is NOT wired into build()
+# / init in this phase (the reconcile/reduce/emit + the live matcher are later
+# phases). The reference TARGET for this parser is the Phase-2 oracle
+# (tests/test_adr07_decision_spec.py::parse_abp_line); this production parser
+# agrees with it on every corpus line.
+#
+# A Rule's ``target`` says what it matches:
+#   RULE_TARGET_DOMAIN -- an exact-or-wildcard domain literal (``wildcard`` says
+#                         whether subdomains are covered); ``key`` is the domain.
+#   RULE_TARGET_REGEX  -- an irreducible regex pattern (NOT compiled here -- the
+#                         raw inner pattern is stored in ``key``; compile/load is
+#                         a later phase, runtime safety is a later phase).
+# A Rule's ``kind`` is DNSBL_KIND_BLOCK (``||`` / hosts / plain / ``/re/``) or
+# DNSBL_KIND_ALLOW (``@@||`` / ``@@/re/``).
+# A Rule's ``provenance`` is RULE_PROV_FEED (a downloaded feed line) or
+# RULE_PROV_USER (a user-supplied rule -- sovereign, $badfilter-immune, fact 7).
+# --------------------------------------------------------------------------- #
+RULE_TARGET_DOMAIN = "domain"
+RULE_TARGET_REGEX = "regex"
+
+RULE_PROV_USER = "user"
+RULE_PROV_FEED = "feed"
+
 # Lower-cased label alphabet for the domain-shape gate (mirrors PFB_FILTER_DOMAIN,
 # pfblockerng.inc:7995-8016: labels of [a-z0-9-], not edge-hyphenated, with a dot).
 _DNSBL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One typed, DNS-only ABP rule (Stage A) -- the output of ``parse_abp``.
+
+    This is the intermediate model the reconcile / precedence stages (Phase 5+)
+    stand on; it carries everything ``$badfilter`` / ``$important`` / provenance
+    resolution need, none of which can survive being folded into a domain-keyed
+    dict. Mirrors the Phase-2 oracle Rule (tests/test_adr07_decision_spec.py) and
+    RESULTS/01_Results.txt SS1c.
+
+    Fields:
+        kind            DNSBL_KIND_BLOCK (``||`` / hosts / plain / ``/re/``) or
+                        DNSBL_KIND_ALLOW (``@@||`` / ``@@/re/``).
+        target          RULE_TARGET_DOMAIN (``key_or_pattern`` is a domain literal;
+                        ``wildcard`` says whether subdomains are covered) or
+                        RULE_TARGET_REGEX (``key_or_pattern`` is the raw inner regex
+                        pattern -- NOT compiled here; compile/load is a later phase).
+        key_or_pattern  the validated, lower-cased domain (DOMAIN) or the raw regex
+                        inner pattern (REGEX).
+        wildcard        DOMAIN only: True -> domain + all subdomains (zone); False ->
+                        exact (data). Ignored for REGEX.
+        important       the rule carried ``$important`` (raises its feed band 1/2 ->
+                        3/4). Always meaningless for, but recorded on, USER rules
+                        (they are sovereign regardless).
+        badfilter       the rule carried ``$badfilter`` (feed-only prune key; the
+                        rule itself emits no decision -- Phase 5 consumes it).
+        provenance      RULE_PROV_USER (sovereign, $badfilter-immune, fact 7) or
+                        RULE_PROV_FEED.
+        feed/group/log  the per-feed manifest row metadata (attached by the caller;
+                        ``parse_abp`` plumbs whatever it is given through unchanged).
+        signature       the ``$badfilter`` match key:
+                        ``(key_or_pattern, tuple(sorted DNS-options)) MINUS $badfilter``.
+                        Two rules with the same signature are the same target+options
+                        (a feed ``$badfilter`` prunes a feed rule with a matching
+                        signature in Phase 5).
+    """
+
+    kind: str
+    target: str
+    key_or_pattern: str
+    important: bool
+    badfilter: bool
+    provenance: str
+    feed: str
+    group: str
+    log: str
+    signature: tuple[str, tuple[str, ...]]
+    wildcard: bool = False
 
 
 @dataclass
@@ -1790,6 +1869,241 @@ def _dnsbl_parse_abp_line(line: str) -> str | None:
     if "$" in line or "*" in line or "/" in line:
         return None
     return line[2:-1]
+
+
+# --------------------------------------------------------------------------- #
+# ADR-07 Stage-A -- DNS-only ABP option / scope classification.
+#
+# A ``$options`` tail is KEPT only if EVERY option is DNS-relevant ($important /
+# $badfilter). Any page-context option ($third-party / $domain= / $script /
+# $image / $csp / ...), any non-DNS AdGuard modifier whose only effect is a
+# rewrite ($dnsrewrite / $dnstype / $client / $ctag), OR any UNRECOGNISED option
+# makes the whole rule out of DNS scope -> the rule is skipped (parse_abp returns
+# None). Mirrors the Phase-2 oracle _classify_options + ADR.md SS2 "Scope".
+# --------------------------------------------------------------------------- #
+# Options that DO modify a DNS block/allow decision (kept):
+_DNSBL_DNS_RELEVANT_OPTS = frozenset({"important", "badfilter"})
+# Options that imply a page/element context, never a DNS decision (-> SKIP rule):
+_DNSBL_PAGE_CONTEXT_OPTS = frozenset(
+    {
+        "third-party",
+        "~third-party",
+        "domain",  # $domain=...
+        "script",
+        "image",
+        "stylesheet",
+        "object",
+        "subdocument",
+        "document",
+        "xmlhttprequest",
+        "websocket",
+        "ping",
+        "media",
+        "font",
+        "popup",
+        "csp",
+        "elemhide",
+        "generichide",
+        "genericblock",
+        "rewrite",  # $rewrite= (response rewriting, not a DNS decision)
+    }
+)
+# AdGuard DNS modifiers whose ONLY effect is a rewrite, not block/allow (-> SKIP):
+_DNSBL_NON_DNS_MODIFIERS = frozenset({"dnsrewrite", "dnstype", "client", "ctag"})
+
+
+def _dnsbl_opt_name(opt: str) -> str:
+    """Bare option name: drop a ``=value`` tail and a leading ``~`` is preserved
+    only via the explicit ``~third-party`` membership (we never KEEP a ``~`` opt)."""
+    return opt.split("=", 1)[0].strip()
+
+
+def _dnsbl_classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool] | None:
+    """Parse the ``$...`` suffix. Return ``(sorted_dns_opts, important, badfilter)``
+    if EVERY option is DNS-relevant, else ``None`` (skip the rule).
+
+    ``sorted_dns_opts`` is the sorted tuple of DNS-relevant option NAMES that are
+    NOT ``$badfilter`` (i.e. ``("important",)`` or ``()``) -- it feeds the rule's
+    $badfilter signature (Phase 5). A page-context option, a non-DNS modifier, or
+    an unrecognised option returns None (conservative: never invent a DNS decision
+    for a modifier we do not model).
+    """
+    important = False
+    badfilter = False
+    kept: list[str] = []
+    for raw in opts_str.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        name = _dnsbl_opt_name(raw)
+        if name in _DNSBL_PAGE_CONTEXT_OPTS or name in _DNSBL_NON_DNS_MODIFIERS:
+            return None
+        if name == "important":
+            important = True
+            kept.append(name)
+            continue
+        if name == "badfilter":
+            badfilter = True
+            continue  # excluded from the signature by design
+        # An unrecognised option -> out of DNS scope (skip the whole rule).
+        return None
+    return tuple(sorted(kept)), important, badfilter
+
+
+def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str] | None:
+    """Recognise a regex rule. Return ``(kind, inner)`` for ``/re/`` (block) or
+    ``@@/re/`` (allow), else ``None``. ``inner`` is the raw pattern between the
+    slashes (NOT compiled here -- reduction is Phase 5, compile/load is Phase 6)."""
+    if stripped.startswith("@@/") and stripped.endswith("/") and len(stripped) > 4:
+        return DNSBL_KIND_ALLOW, stripped[3:-1]
+    if stripped.startswith("/") and stripped.endswith("/") and len(stripped) > 2:
+        return DNSBL_KIND_BLOCK, stripped[1:-1]
+    return None
+
+
+def parse_abp(
+    line: str,
+    *,
+    provenance: str = RULE_PROV_FEED,
+    feed: str = "",
+    group: str = "",
+    log: str = "",
+) -> Rule | None:
+    """The full DNS-only ABP Stage-A parser: one raw ABP line -> a typed ``Rule``
+    (or ``None`` to skip). PURE -- no Unbound symbol, no side effect; NOT wired into
+    build()/init this phase. The reference TARGET is the Phase-2 oracle
+    (tests/test_adr07_decision_spec.py::parse_abp_line); this agrees with it on
+    every corpus line.
+
+    KEEP (-> Rule):
+        ``||domain^`` (+DNS-options)                 block, domain, wildcard
+        ``@@||domain^`` (+DNS-options)               allow, domain, wildcard
+        ``<ip> domain`` (hosts)                      block, domain, wildcard
+        plain bare ``domain``                        block, domain, wildcard
+        ``/re/`` (block) / ``@@/re/`` (allow)        block/allow, regex (raw inner)
+    SKIP (-> None):
+        comment / control (``!`` / ``[``), plain ``#`` lines, element-hiding
+        (``##`` / ``#@#`` / ``#?#`` / ``#%#`` / ``#$#``), path/URL rules (``/`` or
+        ``*`` in the anchor), page-context / non-DNS / unrecognised ``$options``,
+        and IP-VALUED anchors (``||1.2.3.4^``, hosts ``<ip> <ip>``) -- those are the
+        PHP firewall path (no-leak contract, ADR-06 fact 7).
+
+    ``feed`` / ``group`` / ``log`` / ``provenance`` are plumbed through unchanged
+    (the caller supplies them from the manifest row). Domain targets pass through
+    ``normalise()`` (lower-case + shape gate); an invalid domain -> ``None``.
+    """
+    s = line.strip()
+    if not s:
+        return None
+    # comment / control headers
+    if s.startswith("!") or s.startswith("["):
+        return None
+    if s.startswith("#"):
+        # a plain-feed ``#`` comment (element-hiding needs a ``##`` token, caught next)
+        return None
+    # element-hiding / cosmetic (``##`` / ``#@#`` / ``#?#`` / ``#%#`` / ``#$#``) -> SKIP
+    if "##" in s or "#@#" in s or "#?#" in s or "#%#" in s or "#$#" in s:
+        return None
+
+    # ---- regex rules: /re/ (block) or @@/re/ (allow) --------------------- #
+    regex_hit = _dnsbl_parse_abp_regex(s)
+    if regex_hit is not None:
+        kind, inner = regex_hit
+        return Rule(
+            kind=kind,
+            target=RULE_TARGET_REGEX,
+            key_or_pattern=inner,
+            important=False,
+            badfilter=False,
+            provenance=provenance,
+            feed=feed,
+            group=group,
+            log=log,
+            signature=(inner, ()),
+            wildcard=False,
+        )
+
+    # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
+    is_allow = s.startswith("@@||")
+    is_block = s.startswith("||")
+    if is_allow or is_block:
+        rest = s[4:] if is_allow else s[2:]
+        anchor, _, opts_str = rest.partition("$")
+        # split the anchor at the ABP separator ``^``; reject any path token
+        host = anchor.split("^", 1)[0]
+        tail = anchor.split("^", 1)[1] if "^" in anchor else ""
+        if "/" in host or "*" in host or "/" in tail or tail.strip("^"):
+            return None
+        if _dnsbl_is_ipv4(host):
+            return None  # IP-anchored -> PHP firewall path; Python skips (no leak)
+        dom = normalise(host)
+        if dom is None:
+            return None
+        if opts_str:
+            classified = _dnsbl_classify_options(opts_str)
+            if classified is None:
+                return None
+            dns_opts, important, badfilter = classified
+        else:
+            dns_opts, important, badfilter = (), False, False
+        return Rule(
+            kind=DNSBL_KIND_ALLOW if is_allow else DNSBL_KIND_BLOCK,
+            target=RULE_TARGET_DOMAIN,
+            key_or_pattern=dom,
+            important=important,
+            badfilter=badfilter,
+            provenance=provenance,
+            feed=feed,
+            group=group,
+            log=log,
+            signature=(dom, dns_opts),
+            wildcard=True,  # ||domain^ / @@||domain^ cover the domain + subdomains
+        )
+
+    # ---- hosts: "<ip> <domain>" ----------------------------------------- #
+    if " " in s:
+        first, _, target = s.partition(" ")
+        target = target.strip()
+        if not _dnsbl_is_ipv4(first):
+            return None  # not a hosts line (a real ABP line never has a bare space)
+        if _dnsbl_is_ipv4(target):
+            return None  # "<ip> <ip>" -> firewall path
+        dom = normalise(target)
+        if dom is None:
+            return None
+        return Rule(
+            kind=DNSBL_KIND_BLOCK,
+            target=RULE_TARGET_DOMAIN,
+            key_or_pattern=dom,
+            important=False,
+            badfilter=False,
+            provenance=provenance,
+            feed=feed,
+            group=group,
+            log=log,
+            signature=(dom, ()),
+            wildcard=True,  # plain/hosts cover the domain + subdomains (Phase-2 spec)
+        )
+
+    # ---- bare plain domain ---------------------------------------------- #
+    if "/" in s or "*" in s:
+        return None
+    dom = normalise(s)
+    if dom is None:
+        return None
+    return Rule(
+        kind=DNSBL_KIND_BLOCK,
+        target=RULE_TARGET_DOMAIN,
+        key_or_pattern=dom,
+        important=False,
+        badfilter=False,
+        provenance=provenance,
+        feed=feed,
+        group=group,
+        log=log,
+        signature=(dom, ()),
+        wildcard=True,
+    )
 
 
 def _dnsbl_strip_hosts_prefix(line: str) -> str:
