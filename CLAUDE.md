@@ -191,6 +191,22 @@ download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned 
 the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py`. See
 `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
 
+ABP/EasyList feeds are parsed **entirely in Python** (ADR-07): PHP header-sniffs an
+ABP feed, tags it `format_hint='abp'`, and passes its raw lines through verbatim
+(IP anchors `||1.2.3.4^` and hosts IPs still divert to the DNSBL-IP firewall pass);
+the old PHP `$easylist` lite parser is deleted. `parse('abp', …)` is the one DNS-only
+ABP parser — it adds `@@` allow exceptions, regex (block `regexDB` / allow
+`allowRegexDB`, with anchored patterns folded to dicts), and `$important`/`$badfilter`
+precedence resolved by a 6-band numeric scale, with a build-emitted `important_rules`
+flag preserving a byte-identical fast path when no ABP precedence feature is loaded.
+Untrusted feed + user regex is guarded by an opt-in "Limit long/complex regex" static
+cap (drops over-long/nested-quantifier patterns at load) plus an always-on runtime
+warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
+evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser,
+reconcile, matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS
+kill-gate is `benchmarks/spike_adr07_regex.py`. See
+`.ADRs/ADR_07_ABP_DNSBL_Support/`.
+
 ---
 
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`

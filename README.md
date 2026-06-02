@@ -123,15 +123,53 @@ apply at query time via `whiteDB`). It is a pure, reentrant `(manifest, config) 
 BuildResult` function — no Unbound symbols, fully unit-testable. See
 [ADR-06](.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md) for the full contract.
 
-The decision-equivalence of this move (block/resolve/whitelist/HSTS/noAAAA across
-hosts/plain/basic-ABP/csv:pon, plus feed/group attribution and the emitted count)
-is pinned by the golden + build unit tests in the default `pytest` run:
+#### Full ABP/EasyList support (ADR-07)
+
+ABP/EasyList feeds are parsed **entirely in Python** — the old PHP `$easylist`
+lite parser is gone. PHP header-sniffs an ABP feed, tags it `format_hint = 'abp'`,
+and passes its **raw** lines through verbatim (IP anchors `||1.2.3.4^` and hosts
+IPs still diverted to the DNSBL-IP firewall pass). `parse('abp', line)` is the one
+DNS-only ABP parser; it adds the rules the lite parser silently dropped:
+
+- **`@@` allow exceptions** (block + allow) — fixes the systematic over-blocking.
+- **Regex** `/re/` and `@@/re/`: anchored-reducible patterns fold to `dataDB`/
+  `zoneDB`/`whiteDB` (zero per-query cost); only irreducible regex compiles into
+  `regexDB` (block) / `allowRegexDB` (allow).
+- **`$important` / `$badfilter`** precedence, resolved by a 6-band numeric scale
+  (user allow/block always win; feed `$important` > feed plain; `@@` > `||`). A
+  build-emitted `important_rules` flag keeps a **byte-identical fast path** when no
+  ABP precedence feature is loaded (the no-regression guarantee).
+- **Out of scope, parsed-and-skipped:** element-hiding (`##`/`#@#`/`#?#`),
+  path/URL rules, and page-context `$options` — never approximated as DNS blocks.
+
+Untrusted regex (feed **and** the user Python Regex List) is kept tolerable by a
+best-effort safeguard, **not** vetting: an opt-in "Limit long/complex regex"
+static cap drops over-long / nested-quantifier patterns at load, and an always-on
+runtime guard times each match — warns over a ceiling and **evicts** the pattern
+over a higher one (snapshot-iterate, evict-after-loop; thread-safe under the GIL).
+The accepted residual is a single slow first-hit before eviction (`re` cannot be
+interrupted mid-match). The `DNSBL_Regex` alias count now reflects the **admitted**
+(cap-filtered) regex total, emitted by Python to `/var/unbound/pfb_py_regex_count`.
+See [ADR-07](.ADRs/ADR_07_ABP_DNSBL_Support/ADR.md) for the full contract.
+
+The decision-equivalence of the ADR-06 move (block/resolve/whitelist/HSTS/noAAAA
+across hosts/plain/csv:pon, plus feed/group attribution and the emitted count) is
+pinned by the golden + build unit tests, and the ADR-07 ABP semantics + the
+no-regression fast path by the `test_adr07_*` suite — all in the default `pytest`
+run:
 
 ```sh
 python -m pytest tests/test_adr06_golden_oracle.py \
                  tests/test_adr06_build_module.py \
                  tests/test_adr06_init_from_raw.py \
-                 tests/test_adr06_php_boundary.py
+                 tests/test_adr06_php_boundary.py \
+                 tests/test_adr07_decision_spec.py \
+                 tests/test_adr07_parser.py \
+                 tests/test_adr07_reconcile.py \
+                 tests/test_adr07_matcher_strata.py \
+                 tests/test_adr07_emit_wire.py \
+                 tests/test_adr07_regex_safety.py \
+                 tests/test_adr07_php_boundary.py
 ```
 
 ### Benchmarks
@@ -154,6 +192,16 @@ retained dict footprint on a large, un-pruned ≥1M-entry corpus):
 ```sh
 python -m pip install pympler    # dev-only retained-footprint tool (ADR-05 §3a)
 SPIKE_N=5 SPIKE_SIZES=1000000 python benchmarks/spike_adr06_build.py
+```
+
+…and the ADR-07 regex/ReDoS spike (`spike_adr07_regex.py`, stdlib only) — the
+de-risking measurement for full ABP support: regex reduction ratio, irreducible
+count, added per-query latency at feed scale, and the worst real ReDoS first-hit
+on a ≤253-char input vs the kill-threshold (run with `tracemalloc` off):
+
+```sh
+python benchmarks/spike_adr07_regex.py
+SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python benchmarks/spike_adr07_regex.py
 ```
 
 ### Linting
