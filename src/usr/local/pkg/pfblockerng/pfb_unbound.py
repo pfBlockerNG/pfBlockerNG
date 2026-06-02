@@ -306,6 +306,12 @@ def init_standard(id: int, env: module_env) -> bool:
     # existing early-exit path while important_rules is False (behaviour-preserving).
     pfb["allowRegexDB"] = False
     pfb["important_rules"] = False
+    # ADR-07 P7 regex-safety defaults: cap OFF (nothing dropped at load unless the
+    # user enables "Limit long/complex regex"); runtime warn/evict ALWAYS on at the
+    # Phase-1 ceilings. The ini MAIN section overrides these.
+    pfb["regex_cap"] = False
+    pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
+    pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
     pfb["whiteDB"] = False
     pfb["gpListDB"] = False
     pfb["noAAAADB"] = False
@@ -395,6 +401,10 @@ def init_standard(id: int, env: module_env) -> bool:
 
     regexDB = defaultdict(str)
     allowRegexDB = defaultdict(str)
+    # ADR-07 P7: clear the runtime warn rate-limit + perf-fallback strike state on a
+    # (re)load so a fresh regex set starts with clean warn/evict bookkeeping.
+    _regex_warned.clear()
+    _regex_perf_strikes.clear()
     whiteDB = defaultdict(str)
     hstsDB = defaultdict(str)
     gpListDB = defaultdict(str)
@@ -441,6 +451,24 @@ def init_standard(id: int, env: module_env) -> bool:
             if config.has_option("MAIN", "python_control"):
                 pfb["python_control"] = config.getboolean("MAIN", "python_control")
 
+            # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
+            # long/complex regex" static pre-filter (drops over-long/nested-quantifier
+            # patterns at load -- feed AND user). ``regex_warn_ms`` / ``regex_evict_ms``
+            # are the always-on runtime warn/evict ceilings (per-match thread CPU). All
+            # default to OFF / the Phase-1 defaults when absent.
+            if config.has_option("MAIN", "regex_cap"):
+                pfb["regex_cap"] = config.getboolean("MAIN", "regex_cap")
+            if config.has_option("MAIN", "regex_warn_ms"):
+                try:
+                    pfb["regex_warn_ms"] = config.getfloat("MAIN", "regex_warn_ms")
+                except ValueError:
+                    pass
+            if config.has_option("MAIN", "regex_evict_ms"):
+                try:
+                    pfb["regex_evict_ms"] = config.getfloat("MAIN", "regex_evict_ms")
+                except ValueError:
+                    pass
+
             if pfb["dnsbl_ipv6"] == "":
                 pfb["dnsbl_ipv6"] = "::"
 
@@ -483,6 +511,17 @@ def init_standard(id: int, env: module_env) -> bool:
                 if regex_config:
                     r_count = 1
                     for name, pattern in regex_config:
+                        # ADR-07 P7: the opt-in static cap also covers the un-vetted
+                        # USER regex list -- an over-long / nested-quantifier user
+                        # pattern is dropped at load (logged, not compiled) when the
+                        # "Limit long/complex regex" setting is enabled.
+                        if pfb["regex_cap"] and _regex_exceeds_static_cap(pattern):
+                            sys.stderr.write(
+                                "[pfBlockerNG]: dropping long/complex user regex [ {} ] pattern [ {} ] "
+                                "on line #{} (static cap)".format(name, pattern, r_count)
+                            )
+                            r_count += 1
+                            continue
                         try:
                             regexDB[name] = re.compile(pattern)
                             pfb["regexDB"] = True
@@ -2573,8 +2612,136 @@ def _dnsbl_normalise_whitelist(
     return white_db
 
 
+# ============================================================================ #
+# ADR-07 P7 -- regex safety (opt-in static cap + always-on runtime warn/evict)  #
+# ============================================================================ #
+# `re` does not release the GIL during a match and a Python thread cannot be
+# killed (ADR.md fact 2), so a query-time timeout CANNOT interrupt a catastrophic
+# match. The accepted design is a bounded residual: a pathological pattern's FIRST
+# match may block one query, but it is then EVICTED so it cannot hang again. Two
+# layers, both stdlib + in-process, applied to FEED *and* user regex:
+#   (1) opt-in static cap -- drop over-long / nested-quantifier patterns at LOAD
+#       (no execution) when the "Limit long/complex regex" setting is enabled;
+#   (2) always-on runtime timing -- time each match (per-thread CPU); over a WARN
+#       ceiling log (rate-limited), over a higher EVICT ceiling log + remove the
+#       pattern from the live regexDB/allowRegexDB (snapshot-iterate, evict-after-
+#       loop -- never mutate mid-iteration; dict.pop is atomic under the GIL).
+
+# Static-cap defaults (Phase-1 RESULTS/01 SS3c heuristic): a pattern over this
+# many characters, OR carrying a nested/overlapping unbounded quantifier, is the
+# genuinely catastrophic shape and is dropped at load when the cap is enabled.
+REGEX_STATIC_LEN_CAP = 200
+
+# A quantified group that itself sits inside a quantifier: (a+)+, (a*)*, (\w+\.)+,
+# ([a-z]+)*, (.*a){20}. Phase-1 measured this catching 1/1 catastrophic patterns in
+# the corpus with no false-negatives and no false-positives on the cap-passing set.
+_REGEX_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
+
+# Runtime warn/evict ceilings (milliseconds of per-match thread CPU; Phase-1
+# defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
+# (regex_warn_ms / regex_evict_ms) -> cfg, so they are not hardcoded magic.
+REGEX_WARN_MS_DEFAULT = 10.0
+REGEX_EVICT_MS_DEFAULT = 100.0
+
+# perf_counter fallback needs TWO consecutive over-evict strikes before evicting,
+# so a single wall-clock spike (a descheduled thread) cannot false-evict a good
+# pattern. thread_time is jitter-robust and evicts on the first crossing.
+REGEX_PERF_STRIKES = 2
+
+# `time.thread_time` is present on CPython/FreeBSD (CLOCK_THREAD_CPUTIME_ID); fall
+# back to `time.perf_counter` (+ the 2-strike guard) only where it is absent.
+_REGEX_HAVE_THREAD_TIME = hasattr(time, "thread_time")
+
+# Rate-limit the WARN log to one line per pattern name (a slow pattern warns once,
+# not on every query) and track perf_counter strikes per name. Module-level dicts
+# mutated under the GIL; small + bounded by the loaded regex count.
+_regex_warned: set[str] = set()
+_regex_perf_strikes: dict[str, int] = {}
+
+
+def _regex_exceeds_static_cap(pattern: str) -> bool:
+    """Pure static-cap check (NO execution): True if ``pattern`` is over the length
+    ceiling OR matches the nested-quantifier heuristic. Used at LOAD time, gated by
+    the opt-in "Limit long/complex regex" setting -- when the setting is OFF nothing
+    is dropped. Catches the catastrophic shapes cheaply without running the regex."""
+    if len(pattern) > REGEX_STATIC_LEN_CAP:
+        return True
+    return _REGEX_NESTED_QUANTIFIER.search(pattern) is not None
+
+
+def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:
+    """Run ``pattern.search(q_name)`` and return ``(match, elapsed_ms)`` where
+    ``elapsed_ms`` is per-thread CPU time (``time.thread_time``) when available, else
+    wall clock (``time.perf_counter``). Thread CPU is jitter-robust: a thread merely
+    descheduled under load does not inflate the measurement, so a good pattern is not
+    false-evicted. NO timeout is attempted -- a match cannot be interrupted (fact 2);
+    this only MEASURES so the caller can warn/evict AFTER the (first) match returns."""
+    if _REGEX_HAVE_THREAD_TIME:
+        start = time.thread_time()
+        match = pattern.search(q_name)
+        elapsed_ms = (time.thread_time() - start) * 1000.0
+    else:
+        start = time.perf_counter()
+        match = pattern.search(q_name)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return match, elapsed_ms
+
+
+def _regex_should_evict(name: str, elapsed_ms: float, warn_ms: float, evict_ms: float, group: str, feed: Any) -> bool:
+    """Apply the runtime warn/evict policy for ONE match of pattern ``name`` that took
+    ``elapsed_ms``. Logs a rate-limited warning over ``warn_ms`` (once per name) and
+    returns True when the pattern should be EVICTED (over ``evict_ms``). With
+    ``time.thread_time`` an over-evict crossing evicts on the FIRST hit; on the
+    perf_counter fallback it requires ``REGEX_PERF_STRIKES`` consecutive crossings so
+    a lone wall-clock spike cannot false-evict. The caller collects names to evict and
+    pops them AFTER the scan loop (snapshot-iterate; never mutate mid-iteration)."""
+    if elapsed_ms <= warn_ms:
+        # A fast match clears any accumulated perf-fallback strike streak.
+        if not _REGEX_HAVE_THREAD_TIME:
+            _regex_perf_strikes.pop(name, None)
+        return False
+
+    if elapsed_ms <= evict_ms:
+        if name not in _regex_warned:
+            _regex_warned.add(name)
+            sys.stderr.write(
+                "[pfBlockerNG]: slow {} regex [ {} ] feed [ {} ] took {:.1f} ms (warn ceiling {:.1f} ms)".format(
+                    group, name, feed, elapsed_ms, warn_ms
+                )
+            )
+        if not _REGEX_HAVE_THREAD_TIME:
+            _regex_perf_strikes.pop(name, None)
+        return False
+
+    # Over the EVICT ceiling.
+    if not _REGEX_HAVE_THREAD_TIME:
+        strikes = _regex_perf_strikes.get(name, 0) + 1
+        _regex_perf_strikes[name] = strikes
+        if strikes < REGEX_PERF_STRIKES:
+            return False
+        _regex_perf_strikes.pop(name, None)
+
+    sys.stderr.write(
+        "[pfBlockerNG]: EVICTING {} regex [ {} ] feed [ {} ] -- match took {:.1f} ms (evict ceiling {:.1f} ms); "
+        "it will no longer be evaluated".format(group, name, feed, elapsed_ms, evict_ms)
+    )
+    _regex_warned.discard(name)
+    return True
+
+
+def _regex_evict_names(db: dict[str, Any], names: Iterable[str]) -> None:
+    """Pop evicted pattern keys from a live regex DB AFTER the scan loop. ``dict.pop``
+    is atomic under the GIL, so this is safe even though the matcher runs across many
+    Unbound query threads; the scan iterates a SNAPSHOT (list(...)) so this never
+    mutates a dict mid-iteration (ADR.md fact 3)."""
+    for name in names:
+        db.pop(name, None)
+
+
 def _dnsbl_compile_regex_rules(
     regex_rules: Iterable[RegexRule],
+    *,
+    static_cap: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], int]:
     """Compile a list of irreducible ``RegexRule`` into the live regex-DB shape.
 
@@ -2582,13 +2749,24 @@ def _dnsbl_compile_regex_rules(
     bool, "band": int}`` and ``admitted`` is the count of patterns that compiled.
     A pattern that fails ``re.compile`` is logged and skipped (mirrors the init REGEX
     load) -- it never aborts the build. Names are unique per pattern occurrence so two
-    feeds carrying the same pattern both load. NO runtime cap/evict guard is applied
-    here (that is Phase 7); this only compiles + loads.
+    feeds carrying the same pattern both load.
+
+    ADR-07 P7: when ``static_cap`` is True (the opt-in "Limit long/complex regex"
+    setting) an over-length / nested-quantifier pattern is DROPPED at load (logged,
+    not compiled, not counted) -- the cheap no-execution pre-filter. The always-on
+    runtime warn/evict guard lives in the matcher (it is what bounds the residual).
     """
     db: dict[str, dict[str, Any]] = {}
     admitted = 0
     seq = 0
     for rule in regex_rules:
+        if static_cap and _regex_exceeds_static_cap(rule.pattern):
+            sys.stderr.write(
+                "[pfBlockerNG]: dropping long/complex {} regex feed [ {} ] pattern [ {} ] (static cap)".format(
+                    rule.kind, rule.feed, rule.pattern
+                )
+            )
+            continue
         try:
             compiled = re.compile(rule.pattern)
         except re.error as e:
@@ -2635,6 +2813,10 @@ def build(
     tld_blacklist = list(config.get("tld_blacklist", []))
     tld_exclusion = list(config.get("tld_exclusion", []))
     exclusion = {e.strip(".") for e in tld_exclusion}
+
+    # ADR-07 P7: the opt-in static cap (drop over-long / nested-quantifier feed regex
+    # at load). Read from the manifest config; OFF by default so nothing is dropped.
+    static_cap = bool(config.get("regex_cap", False))
 
     tlds = _dnsbl_load_tld_master(suffix_lines, tld_blacklist, tld_exclusion)
 
@@ -2738,8 +2920,10 @@ def build(
         # (Phase 6); a broken pattern is logged + skipped, mirroring the init regex
         # load (pfb_unbound.py REGEX section). NO runtime cap/evict guard yet (P7).
         # Iterate over a stable list so the emit order is deterministic.
-        regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible)
-        allow_regex_db, allow_admitted = _dnsbl_compile_regex_rules(result.allow_regex_irreducible)
+        regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible, static_cap=static_cap)
+        allow_regex_db, allow_admitted = _dnsbl_compile_regex_rules(
+            result.allow_regex_irreducible, static_cap=static_cap
+        )
         regex_count = block_admitted + allow_admitted
 
     return BuildResult(
@@ -2803,12 +2987,19 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         except OSError as e:
             sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
 
+    # ADR-07 P7: the static-cap flag reaches build() via the ini-derived pfb setting
+    # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest
+    # ``config.regex_cap`` (if present) takes precedence so the build stays a pure
+    # function of (manifest+config) in tests that inject it directly.
+    regex_cap = bool(config.get("regex_cap", pfb.get("regex_cap", False)))
+
     return {
         "tld_master": tld_master_lines,
         "tld_blacklist": list(config.get("tld_blacklist", [])),
         "tld_exclusion": list(config.get("tld_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),
         "top1m_list": list(config.get("top1m_list", [])),
+        "regex_cap": regex_cap,
     }
 
 
@@ -3070,30 +3261,54 @@ def _scan_block_band(
             if entry is not None:
                 best = max(best, _block_entry_band(entry))
     if cfg.get("regexDB") and q_name:
+        # Snapshot-iterate + time each match (ADR-07 P7), same warn/evict policy as the
+        # fast-path discovery scan; collect evicted names and pop AFTER the loop.
+        warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
+        evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
+        to_evict: list[str] = []
         for _k, r in list(regex_db.items()):
             pattern = r.get("re") if isinstance(r, dict) else r
-            if pattern.search(q_name):
+            match, elapsed_ms = _regex_timed_search(pattern, q_name)
+            if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", _k):
+                to_evict.append(_k)
+                continue
+            if match:
                 best = max(best, _block_entry_band(r))
+        if to_evict:
+            _regex_evict_names(regex_db, to_evict)
     return best
 
 
-def _scan_allow_regex_band(q_name: str, allow_regex_db: dict[str, Any]) -> int:
+def _scan_allow_regex_band(
+    q_name: str,
+    allow_regex_db: dict[str, Any],
+    warn_ms: float = REGEX_WARN_MS_DEFAULT,
+    evict_ms: float = REGEX_EVICT_MS_DEFAULT,
+) -> int:
     """Highest allow band over the allow-regex (@@/re/) entries that match ``q_name``;
     0 if none match. Values mirror regexDB's tolerant shape: a bare compiled pattern,
-    or a {"re", "important", "band"} payload. Iterates a SNAPSHOT (list(...)) so the
-    Phase-7 runtime eviction can mutate the live DB without corrupting this scan.
-    Runtime warn/evict timing itself is a later phase (P7)."""
+    or a {"re", "important", "band"} payload. Iterates a SNAPSHOT (list(...)) and TIMES
+    each match (ADR-07 P7): over the warn ceiling logs once, over the evict ceiling is
+    removed from the live allow-regex DB AFTER the loop (snapshot-iterate, evict-after-
+    loop -- the same warn/evict policy as the block-regex scans; fact 3)."""
     if not q_name:
         return 0
     best = 0
+    to_evict: list[str] = []
     for _k, r in list(allow_regex_db.items()):
         pattern = r.get("re") if isinstance(r, dict) else r
-        if pattern.search(q_name):
+        match, elapsed_ms = _regex_timed_search(pattern, q_name)
+        if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_AllowRegex", _k):
+            to_evict.append(_k)
+            continue
+        if match:
             important = bool(r.get("important", False)) if isinstance(r, dict) else False
             band = r.get("band") if isinstance(r, dict) else None
             if not isinstance(band, int):
                 band = _allow_priority(important)
             best = max(best, band)
+    if to_evict:
+        _regex_evict_names(allow_regex_db, to_evict)
     return best
 
 
@@ -3149,7 +3364,15 @@ def _resolve_numeric_allow(
             allow_band = max(allow_band, whitelist_lookup_band(n, white_db, cfg["python_tld_seg"]))
 
     if cfg.get("allowRegexDB", False):
-        allow_band = max(allow_band, _scan_allow_regex_band(q_name, allow_regex_db))
+        allow_band = max(
+            allow_band,
+            _scan_allow_regex_band(
+                q_name,
+                allow_regex_db,
+                cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT),
+                cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT),
+            ),
+        )
 
     return allow_band >= block_band
 
@@ -3227,19 +3450,31 @@ def evaluate_domain(
             group = "DNSBL_IDN"
 
         if not is_found and cfg["regexDB"] and q_name:
-            # Snapshot-iterate (list(...)) so the Phase-7 runtime eviction can mutate
-            # the live regexDB without corrupting this scan (fact 3).
+            # Snapshot-iterate (list(...)) so the runtime eviction can mutate the live
+            # regexDB without corrupting this scan (fact 3). Each match is TIMED (per-
+            # thread CPU); a pattern over the warn ceiling logs once, over the evict
+            # ceiling is removed from the live DB AFTER the loop -- so it cannot hang
+            # twice (the accepted residual is the single slow first-hit; fact 2).
+            warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
+            evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
+            to_evict: list[str] = []
             for k, r in list(regex_db.items()):
                 # regexDB values may be a bare compiled pattern (today / user-regex) or
                 # a {"re", "important", "band"} payload (ABP feed block-regex). Read
                 # both shapes; the bare-pattern path is byte-identical to today.
                 pattern = r.get("re") if isinstance(r, dict) else r
-                if pattern.search(q_name):
+                match, elapsed_ms = _regex_timed_search(pattern, q_name)
+                if _regex_should_evict(k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", k):
+                    to_evict.append(k)
+                    continue
+                if match:
                     is_found = True
                     feed = k
                     group = "DNSBL_Regex"
                     block_band = _block_entry_band(r)
                     break
+            if to_evict:
+                _regex_evict_names(regex_db, to_evict)
 
         if is_found:
             b_eval = q_name
@@ -3613,6 +3848,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                         "whiteDB": pfb["whiteDB"],
                         "allowRegexDB": pfb["allowRegexDB"],
                         "important_rules": pfb["important_rules"],
+                        "regex_warn_ms": pfb["regex_warn_ms"],
+                        "regex_evict_ms": pfb["regex_evict_ms"],
                         "python_tld_seg": pfb["python_tld_seg"],
                         "hstsDB": pfb["hstsDB"],
                         "hsts_tlds": pfb["hsts_tlds"],

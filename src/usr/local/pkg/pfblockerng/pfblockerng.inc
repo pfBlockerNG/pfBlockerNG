@@ -847,6 +847,7 @@ function pfb_global() {
 	$pfb['dnsbl_idn']	= $pfb['dnsblconfig']['pfb_idn'];			// DNSBL Resolver python block IDN domains
 	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'];		// DNSBL Resolver python regex list
+	$pfb['dnsbl_regex_cap']	= $pfb['dnsblconfig']['pfb_regex_cap'] ?? '';		// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= $pfb['dnsblconfig']['pfb_cname'];			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_pytld']	= $pfb['dnsblconfig']['pfb_pytld'];			// DNSBL Resolver python TLD Allow option
 	$pfb['dnsbl_py_nolog']	= $pfb['dnsblconfig']['pfb_py_nolog'];			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
@@ -2603,6 +2604,15 @@ function pfb_unbound_python($mode) {
 			$python_nolog = 'on';
 		}
 
+		// ADR-07: opt-in "Limit long/complex regex" static cap (drops over-long /
+		// nested-quantifier patterns at load -- feed AND user regex). The always-on
+		// runtime warn/evict guard does not need a toggle; its ceilings default in
+		// Python (warn 10 ms / evict 100 ms) and are advanced-only knobs here.
+		$regex_cap = 'off';
+		if ($pfb['dnsbl_regex_cap'] == 'on') {
+			$regex_cap = 'on';
+		}
+
 		$now = date('m/j/y H:i:s', time());
 
 		$pfb_py_conf = <<<EOF
@@ -2622,6 +2632,7 @@ python_tlds	= {$python_tlds}
 python_nolog	= {$python_nolog}
 python_cname	= {$python_cname}
 python_control	= {$python_control}
+regex_cap	= {$regex_cap}
 
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
