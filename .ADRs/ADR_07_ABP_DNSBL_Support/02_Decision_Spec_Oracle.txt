@@ -1,0 +1,76 @@
+================================================================================
+PHASE 2 PROMPT — ABP DNS decision SPEC + golden oracle (pin the TARGET behaviour)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 contract + §1 facts 6/7 first)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 2 of ADR-07. ADDITIVE + behaviour-preserving:
+you add a pure pytest spec/oracle and fixtures only — NO production code changes. Work
+inline on `adr/07`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Unlike ADR-06, there is NO existing-code oracle: the PHP $easylist lite parser is the
+buggy thing we are replacing (it drops @@/regex), so it cannot define "correct". We must
+author the TARGET — the ABP DNS-only decision semantics — as the oracle EVERY later phase
+diffs against, derived from the ABP/AdGuard references, before any logic is written.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/01_Results.txt — the contract-to-preserve, the
+  corpus + line-type distribution, and the GO/pivot. If it is missing, Phase 1 is not
+  complete; STOP and report.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 scope + precedence + contract; §1 facts 6/7).
+- The ABP/AdGuard references in ADR §0 header (cheatsheet; AdGuard own-filters incl.
+  $important/$badfilter; AdGuardHome adblock-style syntax).
+- tests/test_adr06_golden_oracle.py — the SHAPE to mirror (fixtures + decision driver).
+- CLAUDE.md.
+
+ACTION PLAN (author the TARGET, not the old behaviour)
+1. Write the DNS-only ABP semantics as a DECISION TABLE + fixtures under
+   tests/fixtures/adr07_spec/ and tests/test_adr07_decision_spec.py. Each case is
+   (rule-set, query) -> expected decision {block-shape / resolve / which-rule-wins}.
+2. COVER, at minimum:
+   - Block: ||domain^, hosts `IP domain`, plain domain. Zone vs data via classify.
+   - Allow: @@||domain^ (GLOBAL un-block; ABP-faithful).
+   - Regex REDUCIBLE: /^(.+\.)?d$/ etc. -> identical decision to its dict/wildcard form.
+   - Regex IRREDUCIBLE: /re/ block and @@/re/ allow -> matches as written.
+   - $options KEEP vs SKIP: keep only DNS-relevant options AND a domain/regex target;
+     SKIP $third-party/$domain=/$script/$image/$csp/... and ALL element(##/#@#/#?#)/path/URL.
+   - $important: feed ||x^$important beats feed @@x^ (inverts allow-vs-block in the feed band).
+   - $badfilter: feed ||y^$badfilter removes feed ||y^ (signature = pattern+sorted-opts minus
+     $badfilter); the badfilter rule itself does not block.
+   - PROVENANCE / SOVEREIGNTY (fact 7): user allow (6) > user block (5) > feed-important-allow
+     (4) > feed-important-block (3) > feed-allow (2) > feed-block (1). User rules are
+     $badfilter-IMMUNE. TOP1M-when-enabled == user allow.
+   - NO-REGRESSION anchor: a non-ABP set (plain/hosts, no @@/regex/important) decides exactly
+     as the ADR-06 oracle would (cross-check against tests/test_adr06_*).
+3. Make the oracle a PURE reference function (no Unbound symbols) + a decision-label driver
+   the later phases import, so parser/reconcile/matcher all diff against the same table.
+4. Where the references are ambiguous for DNS, RECORD the chosen interpretation in a comment
+   + the handoff (e.g. plain `domain` treated as a domain block, AdGuardHome-style; bare
+   `@@||d^` un-blocks d and subdomains).
+
+CONSTRAINTS
+- ADDITIVE ONLY: no production code touched; nothing deleted.
+- Pure Python, stdlib only, no Unbound symbols, 4-space, type hints, no bare except,
+  `from __future__ import annotations`. CI-runnable (no live Unbound).
+
+VERIFICATION
+- python -m pytest → green incl. the new spec tests (they assert the reference oracle against
+  its own expected table — self-consistent now; later phases assert PRODUCTION against it).
+- ruff check . / ruff format . → clean.
+
+EXPECTED RESULT
+A pure, CI-runnable ABP DNS decision spec/oracle + fixtures that encodes the TARGET semantics
+(block/allow/regex/$important/$badfilter/provenance, DNS-only) — the contract every later
+phase is graded against.
+
+COMMIT (single)
+    tests: ADR-07 P2 — ABP DNS decision spec + golden oracle
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/02_Results.txt`
+For Phase 3. Include: the oracle/fixture locations; the decision-label driver API later
+phases import; the chosen interpretations for ambiguous cases; the precedence band table as
+encoded; the no-regression cross-check to ADR-06; and the go-ahead to refactor the matcher.

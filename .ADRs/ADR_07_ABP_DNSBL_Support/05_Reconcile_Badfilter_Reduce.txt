@@ -1,0 +1,77 @@
+================================================================================
+PHASE 5 PROMPT — Stage-B reconcile: $badfilter prune + regex reduction + classify + bands
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 $badfilter / Regex-reduction / Precedence rows)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 5 of ADR-07. ADDITIVE + pure: take the typed Rule
+stream from Phase 4 and reconcile it in-memory into the pre-emit rule sets — still NOT wired
+into build()/init (Phase 6). Work inline on `adr/07`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+This is the "reconcile in-memory, then emit" stage the maintainer asked for. It is where
+$badfilter deletes feed rules, anchored regex folds into dicts (the per-query-cost lever),
+domains classify into data/zone, and every rule gets its priority band — all before anything
+is folded into the matcher dicts. It must be PURE (reentrant) and oracle-correct.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/04_Results.txt — the Rule dataclass + signature, the
+  parser API, reducible-vs-irreducible tagging. If missing, STOP and report.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 $badfilter / Regex-reduction / Precedence rows; §1 fact 7).
+- RESULTS/01_Results.txt (the reducible-regex grammar + reduction-ratio measurement) and
+  RESULTS/02_Results.txt (the decision spec + band table).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: classify ~1904 (REUSE), _dnsbl_load_tld_master
+  ~1874, build() ~1966 (the structure to extend later, not now).
+- CLAUDE.md.
+
+ACTION PLAN (oracle-driven vs Phase-2)
+1. $BADFILTER PRUNE (feed-only): collect the signatures of feed rules carrying $badfilter;
+   remove every FEED rule whose signature matches; $badfilter rules themselves do not emit.
+   USER rules (provenance=user) are SKIPPED by the prune — sovereignty, immune (fact 7).
+2. REGEX REDUCTION: for each regex Rule tagged reducible (Phase 4), fold it into a
+   domain/wildcard rule (block -> data/zone; allow -> whiteDB-wildcard) per the RESULTS/01
+   reducible grammar. Irreducible regex rules pass through unchanged into the irreducible set
+   (compiled + safeguarded in Phase 6/7 — DO NOT compile/execute here).
+3. CLASSIFY domain blocks data vs zone via the existing classify()/tld master (reuse ADR-06;
+   do not reimplement). Allows do not classify (they go to whiteDB / allowRegex sets).
+4. ASSIGN PRIORITY BANDS to every surviving rule:
+     6 user allow · 5 user block · 4 feed allow+important · 3 feed block+important ·
+     2 feed allow · 1 feed block.
+   (provenance already on the Rule; important already on the Rule.)
+5. PRODUCE the typed pre-emit rule sets (pure return value, no globals touched), e.g.:
+     block_domains(data/zone, +band/important/feed/group/log),
+     allow_domains(whiteDB-shape, +band/important),
+     block_regex_irreducible(+band/important/feed), allow_regex_irreducible(+band/important),
+     plus the counts inputs.
+   Make this a pure reconcile(rules, tlds, config) -> ReconcileResult (reentrant).
+6. Unit-test (tests/test_adr07_reconcile.py) vs the Phase-2 spec/oracle: $badfilter removes
+   exactly the matching feed rule and nothing user; reduction yields the SAME decision as the
+   irreducible form would; classification matches ADR-06 classify; the band assignment matches
+   the spec's precedence cases (incl. user-sovereign and $important inversions).
+
+CONSTRAINTS
+- ADDITIVE + PURE: no global mutation, no build()/init wiring, no compile/execute of regex,
+  no PHP/shell/UI, delete nothing.
+- stdlib only, no Unbound symbols, 4-space, type hints, no bare except,
+  `from __future__ import annotations`. Reentrant (two calls -> equal results).
+
+VERIFICATION
+- python -m pytest → green incl. the new reconcile tests vs Phase-2; ADR-06 oracle still green.
+- ruff check . / ruff format . → clean.
+- Reentrancy spot-check: reconcile() called twice yields equal ReconcileResult.
+
+EXPECTED RESULT
+A pure, reentrant Stage-B reconcile producing the banded, $badfilter-pruned, reduced,
+classified pre-emit rule sets — proven correct against the Phase-2 oracle, not yet wired.
+
+COMMIT (single)
+    pfb_unbound: ADR-07 P5 — Stage-B reconcile ($badfilter prune + regex reduction + bands)
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/05_Results.txt`
+For Phase 6. Include: the reconcile() API + ReconcileResult shape; how $badfilter / reduction
+/ classify / banding are encoded; the irreducible-regex set handed to Phase 6 (raw patterns +
+band/feed, NOT compiled); the counts inputs; confirmation it is pure/reentrant + ADR-06 oracle
+green; and the go-ahead to emit + wire + go live.

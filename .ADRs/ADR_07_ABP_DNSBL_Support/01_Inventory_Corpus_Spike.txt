@@ -1,0 +1,101 @@
+================================================================================
+PHASE 1 PROMPT — Inventory the contract + ABP corpus + measure (regex/ReDoS/reduction)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §1 Context + §7 reject criteria first)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 1 of ADR-07. This phase is INVESTIGATION +
+MEASUREMENT ONLY — it writes down the contract to preserve and de-risks the two real
+risks (per-query regex latency; ReDoS) BEFORE any code moves. No production code change.
+Work inline on `adr/07`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The premise (full ABP is worth doing) is ACCEPTED — the maintainer stated the pain
+(dropped `@@` exceptions + regex => perceived over-blocking vs AdGuard Home). What is
+NOT yet proven is that the implementation is safe/cheap enough: (a) how much feed regex
+folds to dicts vs stays an irreducible per-query cost (ADR-01-class latency risk), and
+(b) how the ReDoS guard must be built. This phase measures both and records a GO or a
+documented pivot (ADR §7 reject criteria).
+
+REQUIRED READING
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§1 Context, §2 Decision table, §7).
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (the build layer this extends) and
+  its RESULTS/01_Results.txt (the manifest/contract shape).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    * `$easylist` lite parser ~7796-7847 ($e_replace).
+    * manifest writer `pfb_unbound_python_sources` ~2319-2427 (format_hint='plain' :2385).
+    * user-regex feature: dnsbl_regex/dnsbl_regex_list ~848-849, regex template ~2608-2635,
+      DNSBL_Regex alias count ~8324-8330.
+    * pfb_py_count read ~3149.  DNSBL-IP firewall pass (ADR-06 fact 7).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    * parse('abp')/_dnsbl_parse_abp_line ~1768-1853; build() ~1966; classify ~1904.
+    * regexDB load (init ~479) + per-query scan ~2312-2318; whiteDB ~659 / whitelist_check_domain
+      ~2201; evaluate_domain ~2251 + allow override ~2324.
+- benchmarks/ (ADR-05 dict baseline + corpus tooling; ~1 µs/query reference).
+- CLAUDE.md (stdlib only inside Unbound; no live Unbound in CI; POSIX sh).
+
+ACTION PLAN
+1. INVENTORY (write `RESULTS/01_Results.txt` as the contract):
+   - Current ABP path (PHP $easylist) — exact kept/dropped line classes.
+   - The manifest contract today (per-feed rows; format_hint always 'plain') and the
+     MINIMAL change to carry 'abp' + raw pass-through.
+   - regexDB / whiteDB / evaluate_domain shapes the matcher refactor (Phase 3) must widen.
+   - The user-regex feature end-to-end (un-safeguarded today) — it gets the same runtime cap/evict in Phase 7.
+   - DNSBL-IP pass: confirm ABP feeds may carry IP-anchored lines (||1.2.3.4^) and how the
+     PHP IP pass + Python skip must coexist (ADR §2 DNSBL-IP row).
+   - UI counts (pfb_py_count, DNSBL_Regex alias): format + where read.
+2. CORPUS: assemble a real ABP DNS-feed corpus (AdGuard DNS filter, AdGuardHome, EasyList
+   DNS-subset, hagezi) under tests/fixtures/adr07_corpus/ and/or benchmarks/. Categorise
+   and COUNT line types: ||domain^, @@||domain^, /re/, @@/re/, $options variants, ##/#@#,
+   path/URL, IP-anchored. Record the distribution.
+3. MEASURE (standalone spike script under benchmarks/, like ADR-06's spike_adr06_build.py):
+   - regex REDUCTION RATIO: % of /re/ + @@/re/ that fold to a domain/wildcard (define the
+     reducible grammar: ^(.+\.)?d$, ^d$, (^|\.)d$, plain-anchored, etc.).
+   - irreducible regex COUNT at feed scale.
+   - per-query LATENCY of an inline compiled-regex scan at that count (vs ~1 µs baseline) —
+     time with tracemalloc OFF (ADR-06 measurement note).
+   - ReDoS EXPOSURE: how many irreducible patterns a static checker flags dangerous, AND how
+     slow the worst real-feed patterns actually run on a <=253-char input (the accepted
+     residual is a single slow first-hit; quantify the worst real-world first-hit).
+4. CONFIRM the runtime-safety design + propose ceilings (NO subprocess / NO vetting —
+   maintainer's call): the warn/evict ceilings measured as per-thread CPU (time.thread_time —
+   VERIFY it exists on FreeBSD/pfSense, else fall back to perf_counter + a 2-strike guard;
+   proposed defaults warn 10 ms / evict 100 ms thread-CPU, confirm/tune), the snapshot-iterate
+   + evict-after-loop eviction (evict immediately on first crossing), and the opt-in static-cap
+   heuristic (length / nested quantifier). Demonstrate with a tiny throwaway (e.g. (a+)+$) that a thread/asyncio timeout
+   CANNOT interrupt a catastrophic re match (GIL; fact 2) — which is WHY the design accepts a
+   first-hit then evicts rather than vetting. (re2 would dodge this but is a non-stdlib
+   compiled dep -> out of scope; note availability in one line, nothing more.)
+5. GATE: record GO/NO-GO vs the kill-threshold (propose: added median query latency <= a few
+   us at the measured irreducible count; reduction ratio high enough to bound it; the worst
+   first-hit on a <=253-char input not pathological — agree the numbers with the maintainer).
+   Miss => pick a documented pivot (translate-only / drop irreducible / cap-on-by-default)
+   and record it.
+
+CONSTRAINTS
+- NO production code change this phase (inventory + fixtures + throwaway spike only).
+- Spike is standalone/out-of-tree-style (benchmarks/), stdlib only.
+- Do not commit huge raw feeds; commit a representative trimmed corpus + the counts.
+
+VERIFICATION
+- python -m pytest → still green (you only ADDED fixtures/benchmarks, touched no prod code).
+- ruff check . / ruff format . → clean on any new .py.
+- The measurement numbers + GO/pivot are written into RESULTS/01_Results.txt.
+
+EXPECTED RESULT
+A written contract-to-preserve, a representative ABP corpus with a line-type distribution,
+the reduction-ratio / irreducible-count / latency / ReDoS + worst-first-hit measurements,
+and a recorded GO (or pivot) against the agreed threshold.
+
+COMMIT (single)
+    pfblockerng: ADR-07 P1 — inventory + ABP corpus + regex/ReDoS measurement (de-risk)
+Push directly to `adr/07`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/01_Results.txt` (plain .txt)
+For Phase 2. Include: the contract-to-preserve (current shapes + minimal manifest change);
+the corpus location + line-type distribution; the measured reduction ratio / irreducible
+count / per-query latency / ReDoS exposure + worst first-hit; the agreed kill-threshold and
+the GO-or-pivot decision; the proposed warn/evict ceilings + the opt-in static-cap heuristic
+(the in-process runtime-safety design — NO subprocess); and the go-ahead (or the pivot the
+rest of the ADR must follow).

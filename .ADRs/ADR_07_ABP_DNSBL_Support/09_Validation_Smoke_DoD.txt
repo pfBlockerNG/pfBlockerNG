@@ -1,0 +1,74 @@
+================================================================================
+PHASE 9 PROMPT — Validation, perf/ReDoS benchmark, manual smoke, Definition of Done
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §4 Requirements + §7 DoD/smoke/reject)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 9 (final) of ADR-07. Close it out: prove the full
+ABP equivalence + no-regression, re-run the Phase-1 latency/ReDoS measurement on-branch,
+finalise docs + the setting text, and write the manual-smoke checklist the maintainer runs
+on a live box. Work inline on `adr/07`, one commit, push directly. STATUS STAYS "Proposed/
+Implemented — pending live smoke"; only the maintainer flips it to Accepted after the smoke.
+
+WHY THIS PHASE EXISTS
+The ADR is decided on evidence (CLAUDE.md / ADR-01 lesson). This phase assembles the evidence:
+full golden across formats, the no-regression guard, the on-branch perf/ReDoS numbers vs the
+Phase-1 kill-threshold, and the live checks CI cannot do (no Unbound/pf in CI).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/08_Results.txt — the final PHP boundary + counts. If
+  missing, STOP and report.
+- All prior RESULTS/0N_Results.txt (the full chain) — especially RESULTS/01 (the kill-threshold).
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§4 Requirements; §7 DoD + reject criteria + smoke).
+- README.md + CLAUDE.md (update if the build/contract, the new setting, or test commands changed).
+- benchmarks/ (the Phase-1 spike to re-run on-branch).
+- CLAUDE.md.
+
+ACTION PLAN
+1. FULL GOLDEN EQUIVALENCE: ensure tests/test_adr07_* assert PRODUCTION (wired build +
+   evaluate_domain + PHP boundary) decision-equal to the Phase-2 spec across hosts/plain/abp
+   incl. @@ / reducible+irreducible regex (block & allow) / $important / $badfilter /
+   provenance-sovereignty / element-path-$option skipping. tests/test_adr06_* UNCHANGED-green
+   (no regression on non-ABP input). Record the pass count.
+2. PERF / ReDoS BENCHMARK on adr/07: re-run the Phase-1 measurement (reduction ratio,
+   irreducible count, added per-query latency at feed scale, worst first-hit on a <=253-char
+   input) and record the numbers vs the agreed kill-threshold. Confirm GO (or document the
+   pivot taken). Note: time with tracemalloc OFF (ADR-06 measurement note).
+3. DOCS + SETTING: finalise the "Limit long/complex regex" setting help text (what it does,
+   the accepted residual risk, the warn/evict behaviour). Update README.md / CLAUDE.md where
+   the DNSBL build/contract, the new setting, or test commands changed.
+4. FILL the ADR §7 "Build evidence" with the recorded numbers + the equivalence summary
+   (mirror ADR-06's §7 evidence block). Set Status to "Implemented — pending live smoke".
+5. MANUAL SMOKE CHECKLIST (owner: maintainer): finalise the §7 boxes as a runnable checklist
+   on a live pfSense box — @@ un-block, reducible/irreducible regex (block & allow),
+   $important/$badfilter precedence, USER SOVEREIGNTY (whitelist both entry points; user block
+   beats feed @@$important; no feed $badfilter removes a user rule; TOP1M==user allow), the
+   REGEX SAFETY box (opt-in cap drops over-long at load; a slow regex warns-then-evicts and the
+   resolver recovers; user pfb_regex_list same), DNSBL-IP intact (incl. ||ip^), no regression,
+   reload picks up feed/whitelist/regex-list/setting changes.
+
+CONSTRAINTS
+- Do NOT flip Status to Accepted — that is the maintainer's call after the live smoke.
+- No new shipped deps (stdlib only, no subprocess). Markdownlint-clean on docs (npx markdownlint-cli2).
+- stdlib only, ruff clean, php -l + ShellCheck clean on anything touched.
+
+VERIFICATION
+- python -m pytest → green (full ADR-07 + retained ADR-06); ruff / php -l / ShellCheck /
+  markdownlint clean. The §7 evidence block is filled with real numbers.
+
+EXPECTED RESULT
+ADR-07 implemented end-to-end with the evidence recorded (equivalence + no-regression + on-branch
+perf/ReDoS vs threshold), docs + setting finalised, Status "Implemented — pending live smoke",
+and a maintainer-runnable manual-smoke checklist. Accept is the maintainer's call.
+
+COMMIT (single)
+    pfblockerng: ADR-07 P9 — full ABP validation, perf/ReDoS evidence, smoke checklist + DoD
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/09_Results.txt`
+Final wrap-up: the full pass count; the on-branch perf/ReDoS numbers vs the kill-threshold
+(GO or pivot); what docs/setting changed; the Status set to "Implemented — pending live smoke";
+and the manual-smoke checklist location for the maintainer. (Remind: this also unblocks the
+parked homoglyph-protection ADR — bring it up once ADR-07 is Accepted.)
