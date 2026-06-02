@@ -111,6 +111,7 @@ $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
+$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07 P8: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// ADR-06: per-feed IP-stripped raw feeds referenced by the manifest
 
@@ -2316,6 +2317,55 @@ function pfb_dnsbl_whitelist_lines() {
 	return $out;
 }
 
+// ADR-07 P8: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
+// firewall pass (coexistence). The raw ABP line itself still flows to Python, which
+// SKIPS IP-valued anchors (parse_abp returns None) -- so IP -> firewall only,
+// domain/regex -> Python only (no double-handling, no leak; ADR-06 fact 7).
+// Recognises:
+//   ||1.2.3.4^            -> '1.2.3.4'   (ABP network anchor with an IP host)
+//   ||1.2.3.4^$options    -> '1.2.3.4'   (options stripped before the IP test)
+//   <sink-ip> <ip>        -> the second token (hosts line whose target is an IP)
+// Returns the IP string when the line carries one, else ''.
+function pfb_dnsbl_abp_extract_ip($line) {
+	$s = trim($line);
+	if ($s === '') {
+		return '';
+	}
+
+	// ABP network anchor: ||host^[$options]
+	if (substr($s, 0, 2) == '||') {
+		$rest	= substr($s, 2);
+		// Drop any $options modifier suffix.
+		if (($dpos = strpos($rest, '$')) !== FALSE) {
+			$rest = substr($rest, 0, $dpos);
+		}
+		// The host is the token before the ABP separator '^'.
+		$host = $rest;
+		if (($cpos = strpos($host, '^')) !== FALSE) {
+			$host = substr($host, 0, $cpos);
+		}
+		$host = trim($host);
+		if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
+			return $host;
+		}
+		return '';
+	}
+
+	// hosts line: "<sink-ip> <target>" where the target is itself an IP.
+	if (strpos($s, ' ') !== FALSE) {
+		$parts = preg_split('/\s+/', $s);
+		if (is_array($parts) && count($parts) >= 2 &&
+		    (is_ipaddrv4($parts[0]) || is_ipaddrv6($parts[0]))) {
+			$target = trim($parts[1]);
+			if (is_ipaddrv4($target) || is_ipaddrv6($target)) {
+				return $target;
+			}
+		}
+	}
+
+	return '';
+}
+
 
 // ADR-06: Build the shell->Python contract. Writes the per-feed manifest
 // ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
@@ -2323,15 +2373,22 @@ function pfb_dnsbl_whitelist_lines() {
 // init (pfb_unbound.py dnsbl_build_from_manifest) consumes this to build the
 // DNSBL structures from raw -- replacing the previous data/zone CSV load.
 //
-// The per-feed raw is the bare-domain extraction of the already-parsed per-feed
-// '.txt' (col1 of the 6-col CSV produced by the download loop). The download loop
-// already routes embedded IPs to the firewall '*_v4.ip' path and excludes them
-// from '.txt', so the raw handed to Python carries NO bare-IP lines (ADR-06 §3b;
-// Python would ignore stray IPs anyway). format_hint is 'plain' for every feed:
-// PHP has already done all per-format extraction (hosts/CSV/basic-ABP/IDN), so
-// Python only revalidates + lower-cases the bare domains -- decision-equivalent.
+// For 'plain' feeds the per-feed raw is the bare-domain extraction of the already-
+// parsed per-feed '.txt' (col1 of the 6-col CSV produced by the download loop). The
+// download loop already routes embedded IPs to the firewall '*_v4.ip' path and
+// excludes them from '.txt', so the raw handed to Python carries NO bare-IP lines
+// (ADR-06 §3b; Python would ignore stray IPs anyway). PHP has already done all
+// per-format extraction (hosts/CSV/IDN), so Python only revalidates + lower-cases
+// the bare domains -- decision-equivalent.
 //
-// $feeds: array of rows [ 'header' => <feed>, 'group' => <alias>, 'log' => <flag> ].
+// ADR-07 P8: ABP/EasyList feeds are tagged format_hint='abp' (via the row 'format'
+// key, set from $easylist in the download loop). Their '.txt' holds RAW ABP lines
+// (the PHP lite parser is deleted) which are copied to the per-feed raw VERBATIM, so
+// the full DNS-only ABP parser in Python (parse_abp: @@/regex/$important/$badfilter)
+// sees them intact. Non-ABP feeds stay 'plain' exactly as ADR-06 left them.
+//
+// $feeds: array of rows [ 'header' => <feed>, 'group' => <alias>, 'log' => <flag>,
+//         'format' => 'abp'|'plain' ].
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
@@ -2348,6 +2405,9 @@ function pfb_unbound_python_sources($feeds) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
 		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
+		// ADR-07 P8: 'abp' feeds carry RAW ABP lines verbatim to the Python parser;
+		// every other feed stays 'plain' (PHP-extracted bare domains, ADR-06).
+		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
 
 		if ($header === '') {
 			continue;
@@ -2358,8 +2418,6 @@ function pfb_unbound_python_sources($feeds) {
 			continue;
 		}
 
-		// Extract bare domains (col1) from the 6-col CSV; this is already IP-free
-		// (IPs went to the firewall path) and already cleaned/validated by the loop.
 		$rawpath	= "{$pfb['unbound_py_rawdir']}/{$header}.raw";
 		$raw_h		= @fopen($rawpath, 'w');
 		if ($raw_h === FALSE) {
@@ -2368,6 +2426,19 @@ function pfb_unbound_python_sources($feeds) {
 		}
 		if (($in_h = @fopen($src, 'r')) !== FALSE) {
 			while (($line = @fgets($in_h)) !== FALSE) {
+				if ($format === 'abp') {
+					// ADR-07 P8: pass the RAW ABP line through unmodified -- the
+					// '.txt' of an 'abp' feed already holds raw ABP lines (the
+					// lite parser is gone). Python's parse_abp does all parsing.
+					$line = rtrim($line, "\r\n");
+					if ($line !== '') {
+						@fwrite($raw_h, "{$line}\n");
+					}
+					continue;
+				}
+				// 'plain': extract bare domains (col1) from the 6-col CSV; this is
+				// already IP-free (IPs went to the firewall path) and already
+				// cleaned/validated by the download loop.
 				$cols = explode(',', $line, 3);
 				if (isset($cols[1]) && $cols[1] !== '') {
 					@fwrite($raw_h, "{$cols[1]}\n");
@@ -2390,7 +2461,7 @@ function pfb_unbound_python_sources($feeds) {
 			'raw'		=> basename($pfb['unbound_py_rawdir']) . "/{$header}.raw",
 			'feed'		=> $header,
 			'group'		=> $group,
-			'format_hint'	=> 'plain',
+			'format_hint'	=> $format,
 			'log_flag'	=> $logf
 		);
 	}
@@ -7751,7 +7822,10 @@ function sync_package_pfblockerng($cron='') {
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type);
+								// ADR-07 P8: a reused feed isn't re-parsed, so read the
+								// persisted '.abp' marker to carry its format_hint forward.
+								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
+									'format' => file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain');
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
 								$alias_cnt		= $alias_cnt + $list_cnt;
@@ -7808,9 +7882,11 @@ function sync_package_pfblockerng($cron='') {
 									$liteparser = TRUE;
 								}
 
-								// Variables for Easylists
+								// ADR-07 P8: ABP/EasyList feeds are header-sniffed (below) and
+								// tagged format_hint='abp'; their RAW lines pass through to the
+								// Python parser. The old PHP lite parser ($e_replace token-strip)
+								// is deleted -- $easylist now only flags the feed as ABP.
 								$easylist = $validate_header = FALSE;
-								$e_replace = array( '||', '.^', '^' );
 
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
@@ -7850,16 +7926,53 @@ function sync_package_pfblockerng($cron='') {
 											$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");
 
 											if ($easylist) {
-												if (substr($line, 0, 2) !== '||' ||
-												    substr($line, -1) !== '^' ||
-												    strpos($line, '$') !== FALSE ||
-												    strpos($line, '*') !== FALSE ||
-												    strpos($line, '/') !== FALSE) {
+												// ADR-07 P8: the PHP $easylist lite parser is
+												// DELETED. ABP feeds are tagged format_hint='abp'
+												// and their RAW lines are passed through verbatim
+												// to the Python parser (parse_abp), which is now
+												// the one DNS-only ABP parser (@@/regex/$important/
+												// $badfilter, not just ||domain^). PHP no longer
+												// extracts domains from ABP feeds.
+												//
+												// DNSBL-IP coexistence (ADR-06 fact 7): the firewall
+												// IP pass still runs over ABP feeds -- pull any
+												// ABP-anchored / hosts IP (||1.2.3.4^, <ip> <ip>)
+												// to DNSBLIP_v4/_v6; Python skips IP-valued anchors.
+												if ($pfb['dnsbl_ip'] != 'Disabled') {
+													$abp_ip = pfb_dnsbl_abp_extract_ip($line);
+													if ($abp_ip !== '') {
+														if (is_ipaddrv4($abp_ip)) {
+															$parsed = sanitize_ipaddr($abp_ip, $custom, 'Disabled');
+															if (validate_ipv4($parsed)) {
+																$domain_data_ip[] = $parsed;
+																$pfb['updateip'] = TRUE;
+																$ipcount++;
+															}
+														}
+														elseif (is_ipaddrv6($abp_ip) && validate_ipv6($abp_ip)) {
+															$domain_data_ip6[] = $abp_ip;
+															$pfb['updateip'] = TRUE;
+															$ipcount++;
+														}
+														// IP -> firewall only; do not pass IP anchors
+														// to Python (no double-handling, no leak).
+														continue;
+													}
+												}
+
+												// Skip ABP comment / control lines so the raw feed
+												// passed to Python is dense (Python skips them too).
+												if ($line === '' || substr($line, 0, 1) === '!' ||
+												    substr($line, 0, 1) === '[') {
 													continue;
 												}
 
-												$lite = TRUE;
-												$line = str_replace($e_replace, '', $line);
+												// Pass the RAW ABP line through to Python verbatim
+												// (NO domain extraction). The manifest writer copies
+												// 'abp' feed .txt lines into the per-feed raw as-is.
+												@fwrite($dhandle, "{$line}\n");
+												$domain_data = "{$line}\n";
+												continue;
 											}
 											else {
 												// If 'tab' character found, replace with whitespace
@@ -8265,7 +8378,19 @@ function sync_package_pfblockerng($cron='') {
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type);
+								// ADR-07 P8: tag ABP feeds 'abp' so the manifest writer passes
+								// their RAW lines through to the Python parser (parse_abp); all
+								// other feeds stay 'plain' (PHP-extracted bare domains).
+								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
+									'format' => $easylist ? 'abp' : 'plain');
+
+								// ADR-07 P8: persist the ABP marker so a future reuse build (which
+								// does not re-parse the feed) carries the format_hint forward.
+								if ($easylist) {
+									@touch("{$pfbfolder}/{$header}.abp");
+								} else {
+									unlink_if_exists("{$pfbfolder}/{$header}.abp");
+								}
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {
@@ -8337,10 +8462,29 @@ function sync_package_pfblockerng($cron='') {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
 			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt);
 		}
-		if ($pfb['dnsbl_regex'] == 'on') {
-			$regex_cnt = 0;
-			if (isset($pfb['dnsbl_regex_list'])) {
-				$regex_cnt = count(pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
+		// ADR-07 P8: the DNSBL_Regex alias count now reflects the ADMITTED
+		// (cap-filtered) feed + user regex total emitted by Python (regexDB +
+		// allowRegexDB after the static cap drops over-cap patterns at load) --
+		// value changes by design (ADR §2 "Emit + counts"). The Python count file
+		// is written at resolver (re)load, so it may be stale/absent on the first
+		// run or before a reload; fall back to the configured user-regex line count
+		// (today's behaviour) when it is not yet present. Surface the alias when the
+		// user regex feature is on OR Python reports admitted feed regex.
+		$py_regex_cnt = NULL;
+		if (file_exists($pfb['unbound_py_regex_count'])) {
+			$raw_rc = trim((string) @file_get_contents($pfb['unbound_py_regex_count']));
+			if ($raw_rc !== '' && ctype_digit($raw_rc)) {
+				$py_regex_cnt = (int) $raw_rc;
+			}
+		}
+		if ($pfb['dnsbl_regex'] == 'on' || ($py_regex_cnt !== NULL && $py_regex_cnt > 0)) {
+			if ($py_regex_cnt !== NULL) {
+				$regex_cnt = $py_regex_cnt;
+			} else {
+				$regex_cnt = 0;
+				if (isset($pfb['dnsbl_regex_list'])) {
+					$regex_cnt = count(pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
+				}
 			}
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
 			dnsbl_alias_update('update', 'DNSBL_Regex', '', '', $regex_cnt);
@@ -8481,6 +8625,7 @@ function sync_package_pfblockerng($cron='') {
 				unlink_if_exists($pfb['unbound_py_zone']);
 				unlink_if_exists($pfb['unbound_py_wh']);
 				unlink_if_exists($pfb['unbound_py_count']);
+				unlink_if_exists($pfb['unbound_py_regex_count']);	// ADR-07 P8
 				unlink_if_exists($pfb['unbound_py_sources']);
 				rmdir_recursive("{$pfb['unbound_py_rawdir']}");
 			}
