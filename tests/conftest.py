@@ -54,6 +54,9 @@ def reset_pfb_globals():
         "regexDB": False,
         "allowRegexDB": False,
         "important_rules": False,
+        "regex_cap": False,
+        "regex_warn_ms": pfb_unbound.REGEX_WARN_MS_DEFAULT,
+        "regex_evict_ms": pfb_unbound.REGEX_EVICT_MS_DEFAULT,
         "whiteDB": False,
         "hstsDB": False,
         "gpListDB": False,
@@ -92,6 +95,10 @@ def reset_pfb_globals():
     pfb_unbound.feedGroupIndexDB = defaultdict(list)
     pfb_unbound.regexDB = defaultdict(str)
     pfb_unbound.allowRegexDB = defaultdict(str)
+    # ADR-07 P7: reset the per-pattern warn rate-limit + perf-fallback strike state so
+    # each test starts with a clean runtime warn/evict bookkeeping.
+    pfb_unbound._regex_warned.clear()
+    pfb_unbound._regex_perf_strikes.clear()
     pfb_unbound.whiteDB = defaultdict(str)
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)

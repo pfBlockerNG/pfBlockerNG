@@ -57,6 +57,7 @@ $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconf
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
 $pconfig['pfb_idn']		= $pfb['dconfig']['pfb_idn']				?: '';
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
+$pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
 $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
 $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
@@ -504,6 +505,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_idn']		= pfb_filter($_POST['pfb_idn'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_noaaaa']		= pfb_filter($_POST['pfb_noaaaa'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -2399,6 +2401,16 @@ $section->addInput(new Form_Checkbox(
 	$pconfig['pfb_regex'] === 'on' ? true:false,
 	'on'
 ))->setHelp('Enable the Python Regex blocking feature. Regex list below: [Python Regex List]');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_regex_cap',
+	gettext('Limit long/complex regex') . '(py)',
+	'Enable',
+	$pconfig['pfb_regex_cap'] === 'on' ? true:false,
+	'on'
+))->setHelp('Best-effort ReDoS safeguard. When enabled, over-long or nested-quantifier (catastrophic-backtracking) regex patterns are dropped at load '
+		. 'for both feed (ABP) and the Python Regex List above. Dropped patterns are logged. '
+		. 'A always-on runtime guard also evicts any pattern whose match exceeds the time ceiling, regardless of this setting.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_cname',
