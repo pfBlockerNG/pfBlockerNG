@@ -1,0 +1,31 @@
+! ADR-07 regex patterns that SHOULD fold to a domain/wildcard rule at build time
+! (zero added per-query cost). Each line: a /re/ (block) or @@/re/ (allow) whose
+! anchored grammar reduces to exact-domain (data) or wildcard-subtree (zone).
+!
+! --- ^(.+\.)?domain$  ->  wildcard zone (domain + all subdomains) ---
+/^(.+\.)?doubleclick\.net$/
+/^(.+\.)?google-analytics\.com$/
+/^(.+\.)?adservice\.example\.com$/
+/^(.+\.)?scorecardresearch\.com$/
+/^(.+\.)?moatads\.com$/
+!
+! --- (^|\.)domain$  ->  wildcard zone (same meaning, alt anchoring) ---
+/(^|\.)adnxs\.com$/
+/(^|\.)rubiconproject\.com$/
+/(^|\.)criteo\.com$/
+/(^|\.)taboola\.com$/
+/(^|\.)outbrain\.com$/
+!
+! --- ^domain$  ->  exact data ---
+/^pixel\.example\.com$/
+/^beacon\.metrics\.example$/
+/^t\.co$/
+!
+! --- plain fully-anchored, no metachars in body (still reducible) ---
+/^ads\.tracker\.example\.net$/
+/^collect\.vendor\.example$/
+!
+! --- @@ allow forms that reduce to a whiteDB entry ---
+@@/^(.+\.)?cdn\.example\.com$/
+@@/^login\.example\.org$/
+@@/(^|\.)static\.example\.net$/

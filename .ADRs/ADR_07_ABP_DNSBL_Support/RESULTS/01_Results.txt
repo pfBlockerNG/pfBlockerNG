@@ -1,0 +1,374 @@
+================================================================================
+ADR-07 — PHASE 1 RESULTS / HANDOFF FOR PHASE 2
+Inventory the contract + ABP corpus + measure (regex reduction / latency / ReDoS)
+Branch: adr/07   Commit: pfblockerng: ADR-07 P1 — inventory + ABP corpus + regex/ReDoS measurement (de-risk)
+================================================================================
+
+VERDICT (headline): GO (with mitigations). Full ABP DNS support is safe/cheap
+enough to build. The irreducible-regex per-query cost is ~0.16 us/pattern on a
+negative query, so the ~50 us added-latency budget bounds to ~300 irreducible
+patterns — comfortably above any realistic per-deployment count once anchored
+patterns fold to dicts (measured 46% reduction on a metachar-heavy corpus; real
+DNS feeds fold far higher because most /re/ are simple anchored-domain forms).
+The accepted ReDoS residual is real but bounded: a static nested-quantifier+length
+cap catches the genuinely catastrophic shapes (the only pattern that ran >2 s in
+the corpus was nested-quantifier-flagged), and every cap-passing pattern's worst
+first-hit on a <=253-char DNS name was <0.15 ms. The GIL demo confirms a
+thread/asyncio timeout CANNOT cancel a runaway match — which is exactly why the
+design accepts one slow first-hit then EVICTS, rather than vetting.
+
+NO production code changed this phase. Added only: a representative corpus under
+tests/fixtures/adr07_corpus/ and a standalone measurement spike under benchmarks/.
+Default suite: 255 passed (unchanged). ruff check + ruff format: clean.
+
+--------------------------------------------------------------------------------
+0. WHAT WAS DONE / SCOPE
+--------------------------------------------------------------------------------
+* Inventory written below (Section 1): the exact current ABP/regex/whitelist/
+  matcher/IP/UI contract Phases 2-8 must preserve, with file:line refs.
+* Representative ABP corpus (Section 2) — tests/fixtures/adr07_corpus/:
+    - abp_sample.txt          mixed ABP feed (all DNS-scope line categories)
+    - regex_reducible.txt     /re/ + @@/re/ that fold to domain/wildcard
+    - regex_irreducible.txt   /re/ that stay compiled, incl. ReDoS exemplars
+    - README.md               category table + provenance note (hand-curated,
+                              NOT a vendored copyrighted feed — per the constraint)
+* Standalone spike (Section 3) — benchmarks/spike_adr07_regex.py (stdlib only,
+  NOT wired into init, NOT production): categorises the corpus, measures the
+  reduction ratio, irreducible count, per-query inline-scan latency sweep, ReDoS
+  static exposure + worst real first-hit (timed in a KILLABLE subprocess so the
+  spike itself can't hang on a catastrophic pattern), and the GIL demo. Prints a
+  GO/NO-GO gate.
+* NO production file touched: pfblockerng.inc / pfblockerng.sh / pfb_unbound.py /
+  www/ all unchanged. Nothing deleted.
+
+Run the spike (dev box):
+    python benchmarks/spike_adr07_regex.py
+    SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python benchmarks/spike_adr07_regex.py
+
+================================================================================
+1. THE CONTRACT TO PRESERVE  (verified on adr/07, post-ADR-06)
+================================================================================
+
+--- 1a. CURRENT ABP PATH — PHP $easylist lite parser (KEPT lines) -------------
+Site: pfblockerng.inc:7781-7833 (header sniff :7798-7812; $e_replace=['||','.^',
+'^'] :7783; the keep/strip :7822-7833).
+* Header sniff sets $easylist=TRUE on any of: '[Adblock Plus ', '[Adblock Plus]',
+  '[uBlock Origin', '! Title: AdGuard'  (:7799-7805). Lines starting '!' before
+  the header are skipped (:7806-7808).
+* When $easylist: a line is KEPT only if ALL hold (:7823-7829):
+      starts '||'  AND  ends '^'  AND  no '$'  AND  no '*'  AND  no '/'
+  then str_replace(['||','.^','^'],'') -> bare domain (:7832).
+* DROPPED SILENTLY (the over-blocking bug + lost rules):
+      @@ exceptions, ##/#@#/#?# element-hiding, $options (anything with '$'),
+      paths/URLs (anything with '/'), wildcards ('*'), and ALL regex ('/.../').
+* The Python mirror of this lite pass is _dnsbl_parse_abp_line (pfb_unbound.py:
+  1768-1780) + parse('abp', …) (:1818-1825): same keep-only-||domain^, drop the
+  rest. parse('abp') EXISTS but production never reaches it (PHP pre-cleans and
+  tags every feed 'plain' — see 1b). It returns ParsedEntry(kind=BLOCK,…) only.
+=> ADR-07 REPLACES both the PHP lite pass (Phase 8 deletes $easylist/$e_replace)
+   and the Python _dnsbl_parse_abp_line stub with the full DNS-only ABP parser.
+
+--- 1b. MANIFEST CONTRACT TODAY + the MINIMAL change ---------------------------
+Writer: pfb_unbound_python_sources($feeds) (pfblockerng.inc:2334-2428). Path
+$pfb['unbound_py_sources'] = /var/unbound/pfb_py_sources.json (inc:114-ish).
+Per-feed raw dir $pfb['unbound_py_rawdir'] recreated each build (:2342-2343).
+Per-feed row shape (:2381-2387):
+    { 'raw': <rawpath>, 'feed': <header>, 'group': <alias>,
+      'format_hint': 'plain',           <-- ALWAYS 'plain' today (:2385)
+      'log_flag': <"0"|"1"|"2"> }
+The raw file is the bare-domain extraction of col1 from the 6-col '.txt'
+(:2360-2374) — IP-free (IPs already went to the firewall path) and pre-cleaned.
+config block (:2407-2417): tld_master, tld_blacklist, tld_exclusion,
+user_whitelist (pfb_dnsbl_whitelist_lines()), top1m_list, top1m_enabled.
+Python consumer: build(manifest, config, line_reader=…) (pfb_unbound.py:1966-2058)
+iterates feeds[], calls parse(format_hint, line) then normalise() -> classify()
+-> dataDB/zoneDB; whiteDB from config; counts = len(data)+len(zone).
+MINIMAL CHANGE for ABP (ADR §2 "Parse boundary" row):
+  (1) PHP header-sniffs ABP feeds and writes 'format_hint':'abp' (Phase 8), and
+      passes the RAW ABP lines through (NOT the col1 bare-domain extraction —
+      raw '@@', '/re/', '$options' must reach Python intact). Non-ABP feeds stay
+      'plain' exactly as ADR-06 left them.
+  (2) Python build() learns to consume 'abp' feeds via the full parser (Phases
+      4-6). parse() return type widens from ParsedEntry to a Rule (1c below).
+  Manifest VERSION stays 1 unless a new config key is needed; Phase 7 adds the
+  static-cap setting + ceilings into config (e.g. config.regex_cap_enabled,
+  config.regex_warn_ms, config.regex_evict_ms).
+
+--- 1c. PARSE / RULE MODEL the refactor must widen -----------------------------
+Today: parse(format_hint, line) -> ParsedEntry|None  (pfb_unbound.py:1798-1853);
+ParsedEntry(kind, value, feed, group, log); only kind=DNSBL_KIND_BLOCK ever
+produced. build() drops any non-BLOCK (:2042-2043).
+ADR-07 (Phase 4): parse('abp', line) -> Rule|None where (ADR §2 "Rule model"):
+    Rule(kind=block|allow, target=domain|regex, key-or-pattern, important: bool,
+         badfilter: bool, provenance=user|feed, feed, group, log, signature)
+    signature = (pattern, sorted DNS-options) minus $badfilter  (for $badfilter
+    matching). Reuse DNSBL_KIND_BLOCK + add allow/regex kind constants.
+Keep parse() PURE / no Unbound symbols (unit-testable; CLAUDE.md). feed/group/log
+still attached by build() from the manifest row, NOT inside parse().
+
+--- 1d. regexDB — load + the per-query scan (the ADR-01-class cost) ------------
+LOAD (init): pfb_unbound.py:472-489. [REGEX] config section -> regexDB[name] =
+re.compile(pattern); sets pfb['regexDB']=True, pfb['python_blacklist']=True. A
+compile error is caught + logged + skipped (:482-488). regexDB is keyed by the
+rule NAME (the user's label), value is the compiled pattern. UN-VETTED today.
+PER-QUERY SCAN: evaluate_domain (pfb_unbound.py:2312-2318): only when no data/
+zone/tld/idn match yet AND q_name set:
+    for k, r in regex_db.items():
+        if r.search(q_name): is_found=True; feed=k; group="DNSBL_Regex"; break
+O(n) over compiled patterns, first-hit wins, group hard-coded "DNSBL_Regex".
+This is THE per-query cost the spike measured (~0.16 us/pattern, negative query).
+ADR-07 (Phase 3/6): regexDB payload widens to carry an `important` field; a NEW
+allowRegexDB container is added (allow-regex / @@/re/); the scan gains the
+runtime warn/evict timing (Phase 7). The matcher gains the 6-band resolution.
+
+--- 1e. whiteDB shape + whitelist_check_domain --------------------------------
+LOAD: pfb_unbound.py:650-668. CSV 'domain,wildcard'; whiteDB[row[0]] = (row[1]=="1").
+i.e. whiteDB[d] is a BARE BOOL (wildcard?), NOT a dict. Built in the pure path by
+_dnsbl_normalise_whitelist (:1936-1963) — www-strip, leading-dot->wildcard True
+else False; TOP1M loaded only when enabled (bare -> False).
+MATCH: whitelist_check_domain(name, white_db, tld_seg) (:2201-2211): exact, then
+'www.'-stripped, then walk parent suffixes honouring tld_seg for wildcard entries.
+APPLY: evaluate_domain :2324-2326 — checked AFTER a block is found, as an OVERRIDE
+("a block is found, then an allow can override it"). No rule priority today.
+ADR-07 (Phase 3): whiteDB[d] -> {"wildcard": bool, "important": bool}. The
+matcher refactor MUST keep today's exact decisions when no important flag is set
+(retained ADR-06 oracle). whitelist_check_domain widens to return the matched
+entry (so its `important` participates in the 6-band resolution), or stays a bool
+with a sibling lookup — implementer's call, but keep the ADR-06 fast path byte-
+identical.
+
+--- 1f. evaluate_domain — the allow-override seam ------------------------------
+pfb_unbound.py:2251-2349. Order: dataDB (exact) -> zoneDB (wildcard) -> tld-allow
+-> idn -> regexDB; then whiteDB override (:2324); then hsts / null-blocking /
+CNAME tag. Returns DnsblDecision (dataclass :2237-2248): is_found, in_whitelist,
+in_hsts, null_blocking, log_type, b_type, p_type, feed, group, b_eval.
+ADR-07 (Phase 3 refactor, Phase 6 live): add an allowRegexDB check, an `important`
+field on data/zone/regex/white payloads, and the 6-BAND numeric resolution:
+    6 user allow · 5 user block · 4 feed allow+important · 3 feed block+important
+    · 2 feed allow (@@) · 1 feed block (||).  Blocked iff block matches AND
+    block_prio > allow_prio (no ties; block∈{1,3,5}, allow∈{2,4,6}).
+FAST PATH (ADR §2 "Query-time matcher"): a build-emitted pfb["important_rules"]
+flag; FALSE (no $important/$badfilter/feed-@@/feed-regex loaded) keeps today's
+early-exit matcher unchanged. Full numeric resolution engages ONLY when important
+feed rules exist. THIS is the no-regression guarantee — pin with the retained
+ADR-06 oracle (tests/test_adr06_*) BEFORE adding ABP.
+
+--- 1g. USER-REGEX feature end-to-end (un-safeguarded today) -------------------
+* PHP config: $pfb['dnsbl_regex']=dnsblconfig['pfb_regex'] (on/off),
+  $pfb['dnsbl_regex_list']=dnsblconfig['pfb_regex_list'] (inc:848-849).
+* PHP writes the [REGEX] python-config section (inc:2608-2638): decodes the
+  textarea, derives a sanitized key per pattern (label or Regex_N, :2615-2629),
+  emits "key = pattern" lines. NO validation of the pattern itself.
+* Python compiles them into regexDB at init (1d). A bad user pattern can ALREADY
+  ReDoS the resolver — ADR-07 Phase 7 finally puts the SAME static cap + runtime
+  warn/evict on the user list as on feed regex.
+* UI count: dnsbl_alias_update('update','DNSBL_Regex','','',$regex_cnt) where
+  $regex_cnt = count(pfbng_text_area_decode($dnsbl_regex_list,…)) (inc:8310-8316).
+  i.e. today the alias count = number of CONFIGURED user regex lines.
+
+--- 1h. DNSBL-IP firewall pass — ABP IP-anchored coexistence ------------------
+Stays ENTIRELY in PHP (ADR-06 fact 7 / RESULTS 1h). Trigger
+$pfb['dnsbl_ip'] != 'Disabled'. Today's parse loop detects bare IPs + the 'pon'
+csvline[0] IP and routes them to per-header '*_v4.ip' -> globbed into
+DNSBLIP_v4.txt (inc:8325-8341) -> DNSBLIP_v4 pf alias.
+ABP feeds CAN carry IP-anchored lines: ||1.2.3.4^  and hosts  0.0.0.0 1.2.3.4.
+COEXISTENCE (ADR §2 "DNSBL-IP" row, Phase 8):
+  - PHP's IP pass must learn ABP-anchored IP syntax (||IP^, hosts-IP) and route
+    those IPs to DNSBLIP_v4/_v6 exactly as today.
+  - Python parse('abp') MUST SKIP IP-valued anchors (return None) — same no-leak
+    contract as ADR-06 (a stray IP also fails normalise()'s domain gate :1856-
+    1871). VERIFIED in this spike's categoriser: ||203.0.113.7^, ||198.51.100.42^,
+    and 0.0.0.0 203.0.113.99 all classify as `ip_anchored` (3 lines), NOT block.
+  - No double-handling: IP -> firewall only; domain/regex -> Python only.
+
+--- 1i. UI counts: pfb_py_count + DNSBL_Regex alias ---------------------------
+* pfb_py_count: $pfb['unbound_py_count'] = /var/unbound/pfb_py_count (inc:113).
+  Post-ADR-06 it means the LOADED entry total (len(dataDB)+len(zoneDB)), emitted
+  by Python (dnsbl_emit_count). READ at inc:3282 for the "loaded entries" log
+  line (inc:3275-3284). ADR-07 keeps emitting it; its value rises legitimately
+  (un-pruned + reducible-regex-folded entries) — NOT a regression.
+* DNSBL_Regex alias: inc:8310-8316 (count) + the matcher's group="DNSBL_Regex"
+  (1d). ADR §2 "Emit + counts": this alias count now reflects the ADMITTED
+  (cap-filtered) feed+user regex total — value changes BY DESIGN. Phase 6/7 must
+  recompute it from the loaded/admitted regex set, not just the user-config count.
+
+================================================================================
+2. THE ABP CORPUS — LINE-TYPE DISTRIBUTION
+================================================================================
+Location: tests/fixtures/adr07_corpus/  (representative, trimmed, hand-curated to
+mirror AdGuard DNS / AdGuardHome / EasyList-DNS / hagezi syntax; NOT a verbatim
+feed — we do not vendor large copyrighted feeds, per the Phase-1 constraint).
+
+Measured distribution over the whole corpus (spike Section 1; 85 non-comment +
+51 comment lines). Categories map 1:1 to ADR §2 scope:
+
+  category            count   DNS decision
+  ------------------  -----   ----------------------------------------------
+  regex_block          33     /re/  (block; reducible-or-irreducible)
+  block                10     ||domain^                  -> block domain
+  allow                 6     @@||domain^                -> un-block (global)
+  regex_allow           6     @@/re/                     -> allow regex
+  page_context_opts     6     $third-party/$script/...   -> SKIP (not DNS)
+  element_hiding        5     ## / #@# / #?#             -> SKIP (not DNS)
+  hosts                 4     0.0.0.0 domain             -> block domain
+  path_url              4     ||domain/path , /banners/* -> SKIP (not DNS)
+  plain                 3     bare domain                -> block domain
+  ip_anchored           3     ||IP^ , hosts-IP           -> PHP firewall; Py skip
+  block_important       2     ||domain^$important        -> block + precedence
+  badfilter             2     ||domain^$badfilter        -> feed-only prune
+  non_dns_modifier      1     $dnsrewrite/$dnstype/...   -> SKIP (do block/allow)
+
+Note the corpus is DELIBERATELY metachar-heavy on the regex side (39 /re/ total)
+to stress the reducer + ReDoS layer; a real DNS feed is dominated by plain
+||domain^ blocks with far fewer regex, and those regex are mostly simple anchored-
+domain forms (so the real-world reduction ratio is HIGHER than the corpus's 46%).
+
+================================================================================
+3. MEASUREMENTS  (CPython 3.11.15, linux; spike_adr07_regex.py)
+================================================================================
+
+--- 3a. REGEX REDUCTION RATIO -------------------------------------------------
+Reducible grammar (folds to a domain/wildcard rule, ZERO per-query cost):
+    ^(.+\.)?D$   |  (^|\.)D$   |  ^(?:.+\.)?D$   ->  wildcard ZONE (D + subs)
+    ^D$          |  ^(www\.)?D$  (folded to D)  ->  exact DATA
+  where D = labels of [a-z0-9-] joined by ESCAPED dots (\.), no other metachar.
+  Anything with a char-class, label quantifier, body alternation, or floating
+  dot is IRREDUCIBLE (kept as a compiled pattern). Per ADR §2 we DO NOT expand
+  finite classes (ad[0-9]\.x stays a regex).
+MEASURED: 39 total /re/+@@/re/  ->  18 reducible (46%)  /  21 irreducible.
+  Reduced examples: /^(.+\.)?doubleclick\.net$/ -> ('zone','doubleclick.net');
+  /^pixel\.example\.com$/ -> ('data','pixel.example.com'); @@ forms fold to a
+  whiteDB wildcard/exact entry.
+
+--- 3b. IRREDUCIBLE COUNT + PER-QUERY LATENCY (the ADR-01-class risk) ----------
+Inline O(n) compiled-scan, NEGATIVE query (worst case — scanned against EVERY
+pattern; positive queries short-circuit on first hit). tracemalloc OFF.
+  irreducible count   added us/query   us/pattern
+            10              1.88          0.188
+            50              8.37          0.167
+           100             16.6           0.166
+           200             33.8           0.169
+           500             81.2           0.162
+          1000            160.6           0.161
+  => ~0.16 us per irreducible pattern (linear, negative query). Against a ~50 us
+     added-latency budget this bounds to ~310 irreducible patterns. Positive
+     queries are cheaper (first-hit break). The dict baseline is ~1 us/query
+     (ADR-05 §3a) and is UNCHANGED — regex only runs when data/zone/tld/idn all
+     miss (evaluate_domain :2312 gate), i.e. mostly on negative/non-blocked names.
+
+--- 3c. ReDoS EXPOSURE + worst real first-hit ---------------------------------
+Static heuristic (the opt-in "Limit long/complex regex" cap candidate, cheap, NO
+execution): flag if pattern length > 200 OR a NESTED QUANTIFIER
+(regex \([^()]*[+*][^()]*\)\s*[+*{] — a quantified group inside a quantifier:
+(a+)+, (a*)*, (\w+\.)+, ([a-z]+)*, (.*a){20}).
+MEASURED on the 21 irreducible patterns:
+  * 4 statically flagged (all nested-quantifier): (a+)+$, (\w+\.)+\w+$,
+    ([a-z]+)*\.example$, (.*a){20}$.
+  * Worst real first-hit on a <=253-char input (timed in a KILLABLE subprocess,
+    2 s hard cap):
+        ([a-z]+)*\.example$   >= 2000 ms  (TIMED OUT/killed)   [flagged]
+        (.*a){20}$               ~44 ms                        [flagged]
+        [a-z0-9]{8,}\.cloudfront-ads\.example$  ~0.14 ms       (cap-passing)
+        ... all other cap-passing patterns  < 0.05 ms
+  * Pathological (>= 2 s) patterns: 1 caught by the static cap, 0 MISSED.
+  * WORST CAP-PASSING first-hit: ~0.14 ms. i.e. once the static cap drops the
+    nested-quantifier shapes, NO surviving pattern in the corpus runs slow enough
+    to matter for a single first-hit.
+
+--- 3d. GIL DEMO — a thread/asyncio timeout CANNOT interrupt a runaway match ---
+Worker thread runs (a+)+$ on a failing ~23-char input; a waiter calls
+join(timeout=1 ms). MEASURED: the waiter was forced to wait ~270 ms (~270x its
+1 ms deadline); the match ran to completion UNCANCELLED; there is no API to kill
+the worker. CONFIRMS ADR fact 2: a query-time thread/asyncio timeout is futile
+under the GIL — the C-level re.search holds the GIL so the waiter can't even wake
+to honour the deadline, and the runaway worker can't be cancelled. THIS is WHY
+the design accepts a single slow first-hit then EVICTS, rather than vetting or a
+query-time timeout. (re2 would give linear-time matching and dodge this, but it
+is a non-stdlib compiled dependency -> out of scope, ADR §2.)
+
+--- 3e. runtime-safety mechanism CONFIRMED ------------------------------------
+* time.thread_time() IS available on this CPython (and on FreeBSD/pfSense it maps
+  to CLOCK_THREAD_CPUTIME_ID — present). Use it for per-match thread-CPU timing
+  (jitter-robust vs wall clock: a descheduled thread can't false-evict a good
+  pattern). FALLBACK if a target lacks it: time.perf_counter() + a 2-strike guard
+  (don't evict on a single wall-clock spike). Verify on the live box in Phase 9.
+* EVICTION must snapshot-iterate + evict-AFTER-loop (never mutate regexDB/
+  allowRegexDB mid-iteration); under the GIL a dict.pop is atomic, so collect the
+  keys to evict during the scan and pop them after the for-loop. Applies to feed
+  AND user regex.
+* STATIC CAP heuristic (opt-in): length cap + nested-quantifier detection (the
+  exact regex above caught 1/1 catastrophic, 0 false-negatives, 0 false-positives
+  on the corpus's cap-passing set). Drop over-cap patterns at LOAD (no execution).
+
+================================================================================
+4. KILL-THRESHOLD + GATE  (proposed; TUNE WITH MAINTAINER)
+================================================================================
+Proposed kill-threshold:
+  (a) Added MEDIAN per-query latency from the inline irreducible scan stays "a
+      few us" at the realistic irreducible count, with a 50 us hard ceiling;
+      bounded by the reduction ratio. Per-pattern ~0.16 us => >=300 irreducible
+      patterns fit the 50 us ceiling.
+  (b) Reduction ratio high enough to keep the irreducible count well under (a):
+      floor 30% on the metachar-heavy corpus (real feeds reduce higher).
+  (c) Worst CAP-PASSING first-hit on a <=253-char input is sub-second (proposed
+      evict ceiling 100 ms thread-CPU; warn 10 ms). Measured worst cap-passing
+      ~0.14 ms — three orders of magnitude under the evict ceiling.
+
+GATE RESULT (spike, default corpus):
+  reduction ratio          46%  >= 30%                 : PASS
+  per-pattern cost   0.16 us  (>=300 fit 50 us budget) : PASS
+  worst cap-passing first-hit  ~0.14 ms <= 500 ms      : PASS
+  VERDICT: GO (with mitigations)
+
+PROPOSED CEILINGS (confirm/tune with maintainer; ADR §2 defaults):
+  warn  = 10 ms  thread-CPU per match  (log a warning)
+  evict = 100 ms thread-CPU per match  (log error + remove pattern from live DB)
+  static cap (opt-in): length > ~200 chars OR nested-quantifier -> drop at load.
+  All configurable (advanced settings, Phase 7).
+
+================================================================================
+5. GO / PIVOT DECISION FOR PHASE 2
+================================================================================
+GO — proceed to Phase 2 (ABP DNS decision spec + golden oracle) and build the
+full ABP path. Rationale:
+  * The two front-loaded risks are bounded by measurement: irreducible regex is
+    ~0.16 us/pattern (budget bounds to ~300 patterns; reduction + the
+    important_rules fast path keep typical deployments far under that), and the
+    only genuinely catastrophic shapes are nested-quantifier patterns the cheap
+    static cap catches with no execution and no false-negatives on the corpus.
+  * The GIL demo confirms the residual (one slow first-hit) is irreducible
+    without a subprocess/re2 — both out of scope — so the accept-then-evict design
+    is the right minimum-effort mitigation, not a shortcut.
+  * No reject-criterion (ADR §7) was tripped.
+
+PIVOTS HELD IN RESERVE (record if a later phase or a real-feed re-measurement in
+Phase 9 trips a threshold — ADR §7):
+  * If real-feed irreducible counts blow the latency budget: translate-only (fold
+    reducible regex into dicts, DROP irreducible), or force the opt-in static cap
+    ON by default.
+  * If real feeds carry patterns that hang long enough to matter even with warn/
+    evict AND the cap can't catch them cheaply: translate-only.
+  * If sovereignty/precedence can't be reproduced on the Phase-2 spec: STOP and
+    reconcile before deleting the PHP lite pass.
+
+================================================================================
+6. WHAT PHASE 2 SHOULD DO WITH THIS
+================================================================================
+* Author the ABP DNS-only decision table + fixtures (tests/test_adr07_*),
+  derived from the ABP/AdGuard references (ADR §References), covering every
+  category in Section 2's table: block (||/hosts/plain), @@ allow (global),
+  reducible + irreducible regex (block & allow), $options keep/skip,
+  $important precedence, $badfilter feed-only prune, provenance/sovereignty bands
+  (1f's 6-band scale), and element/path/page-$option skipping (the SKIP rows).
+* Use Section 1c's Rule shape as the spec's input model and Section 1f's 6-band
+  resolution as the expected-decision engine. Pin the no-regression contract by
+  KEEPING the retained ADR-06 oracle green (the fast path == today).
+* The corpus in Section 2 is the line-type source; the spike's categorise() and
+  reduce_pattern() are reference implementations of "is this in DNS scope?" and
+  "does this fold?" — Phase 2's spec should agree with them (and Phase 4-5 will
+  re-implement the production versions in pfb_unbound.py).
+
+GATES (this phase): python -m pytest = 255 passed (unchanged, no prod code
+touched); ruff check . clean; ruff format . clean. No production code touched;
+nothing deleted.
+================================================================================
