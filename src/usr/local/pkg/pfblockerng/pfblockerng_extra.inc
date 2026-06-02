@@ -21,4 +21,46 @@
  */
 
 // This file is used to 'include functions' not yet merged into pfSense
+
+// logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
+// on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
+// fallbacks ONLY when core does not provide them, so this package runs on both:
+// where core has them (Plus/master) these definitions are skipped and core wins
+// unchanged; on CE 2.8.1 they fill the gap. Behaviour mirrors the core versions.
+if (!function_exists('localize_text')) {
+	function localize_text(...$args) {
+		$arg0_len = strlen($args[0]);
+		if (($arg0_len > 0) && ($arg0_len < 4096)) {
+			$args[0] = gettext($args[0]);
+		}
+		return (count($args) == 1) ? $args[0] : sprintf(...$args);
+	}
+}
+
+if (!function_exists('logger')) {
+	function logger(int $priority, mixed $message, ?string $prefix = null, ?int $facilities = null): void {
+		$log_prefix = match ($priority) {
+			LOG_EMERG	=> 'EMERGENCY',
+			LOG_ALERT	=> 'ALERT',
+			LOG_CRIT	=> 'CRITICAL',
+			LOG_ERR		=> 'ERROR',
+			LOG_WARNING	=> 'WARNING',
+			LOG_NOTICE	=> 'NOTICE',
+			LOG_INFO	=> 'INFO',
+			LOG_DEBUG	=> 'DEBUG',
+			default		=> 'DEBUG'
+		};
+		if (isset($prefix)) {
+			$log_prefix .= ' [' . gettext($prefix) . ']';
+		}
+		$pri = isset($facilities) ? ($priority | $facilities) : $priority;
+		if (is_string($message)) {
+			$message = str_replace(PHP_EOL, '', $message);
+			$log_string = (strlen($message) > 0) ? "{$log_prefix} {$message}" : $log_prefix;
+		} else {
+			$log_string = $log_prefix . ' ' . str_replace(PHP_EOL, '', var_export($message, true));
+		}
+		syslog($pri, $log_string);
+	}
+}
 ?>

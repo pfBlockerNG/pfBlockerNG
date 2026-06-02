@@ -10,11 +10,12 @@
 
 // ── Syslog ────────────────────────────────────────────────────────────────────
 
-/**
- * Write $message to the system logger (syslog) with the default facility.
- * Prefer log_error() for error-level messages.
- */
-function logger(string $message): void {}
+// logger() is intentionally NOT stubbed here. pfBlockerNG ships a
+// function_exists()-guarded fallback in pfblockerng_extra.inc (for pfSense CE
+// <= 2.8.1, whose core lacks logger()/localize_text()), and PHPStan resolves
+// that source declaration — with the correct signature logger(int $priority,
+// mixed $message, ?string $prefix, ?int $facilities). A stub here would only
+// duplicate it (and the old logger(string) signature was wrong).
 
 /** Write $error to syslog at LOG_ERR level. */
 function log_error(string $error): void {}

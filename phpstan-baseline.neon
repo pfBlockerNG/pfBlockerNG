@@ -79,12 +79,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Function localize_text not found\.$#'
-			identifier: function.notFound
-			count: 16
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Instantiated class pfsense_xmlrpc_client not found\.$#'
 			identifier: class.notFound
 			count: 1
@@ -107,12 +101,6 @@ parameters:
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Function localize_text not found\.$#'
-			identifier: function.notFound
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
 			message: '#^Undefined variable\: \$coptions4$#'
