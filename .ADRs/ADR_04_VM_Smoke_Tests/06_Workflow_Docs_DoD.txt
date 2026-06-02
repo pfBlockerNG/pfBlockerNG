@@ -63,6 +63,11 @@ CONSTRAINTS
 - Do NOT touch `src/`. Secrets via Actions secrets; GHCR package stays private.
 - YAML lint-clean; any shell POSIX sh + ShellCheck-clean; commit-style scope `ci:`/
   `docs:` as appropriate.
+- FORWARD-COMPAT (ADR-09): make the smoke workflow `workflow_call`-able and take the image
+  tag/digest as an INPUT (default to the single supported version) — ADR-09's
+  version-tracker invokes it per CE version. Do NOT hardcode a single tag, and do NOT build
+  version-selection / scheduling / the matrix here — that is ADR-09 (this workflow validates
+  ONE version; ADR-09 fans it out).
 
 VERIFICATION (must all pass before the phase is done)
 - `smoke.yml` runs on its trigger and `pytest -m smoke` is green in CI (pulls GHCR

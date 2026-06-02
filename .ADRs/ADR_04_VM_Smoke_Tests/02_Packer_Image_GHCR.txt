@@ -55,8 +55,10 @@ ACTION PLAN (ordered)
      pfSense upgrader over SSH (`pfSense-upgrade` — the CLI behind System > Update;
      confirm the exact non-interactive flags during the spike, don't guess), wait on a
      readiness signal (upgrade done + reboot + services up, NOT a fixed sleep),
-     re-snapshot. RE-BASELINE with a fresh manual seed on a MAJOR version jump (the
-     upgrader is riskiest there and cruft matters); upgrade-in-place for patch/minor.
+     re-snapshot. UPGRADE-IN-PLACE for ALL bumps incl. major — the seed is minimal so the
+     chain accumulates little cruft, and a post-upgrade SANITY GATE (the smoke suite) is
+     the publish guard (publish on pass, fail closed). A fresh manual re-seed is a
+     FALLBACK only when the gate fails. (ADR-09 automates the refresh + sanity gate.)
    - OPTIONAL (spike-gated, NOT required): automate the clean install with Packer
      from ISO (installerconfig/rc.local surgery or boot_command keystrokes). Time-box
      it; if fragile, the manual seed already covers it — MOVE ON, do not rabbit-hole.
@@ -126,7 +128,7 @@ For Phase 3 (pytest scaffolding). Include: whether the qcow2 was Packer-built or
 WHOLESALE by the maintainer, and the path to the build/bake runbook; the base-OS strategy
 as built — the manual SEED runbook (clean install), the scripted UPGRADE-IN-PLACE step +
 the exact `pfSense-upgrade` non-interactive flags + readiness signal used, and the
-re-baseline-on-MAJOR rule; where the seed + each version snapshot are archived in
+upgrade-in-place + sanity-gate publish rule (manual re-seed only as a fallback); where the seed + each version snapshot are archived in
 GHCR; the GHCR ref + tag scheme and exact
 `oras pull` command; PFSENSE_CE_VERSION used; what is baked into the image (SSH user
 + key secret name, pfBlockerNG-devel path, base config specifics, the exact

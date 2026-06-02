@@ -77,6 +77,11 @@ CONSTRAINTS
 - Do NOT touch `src/`. Mock server is stdlib-only (it's simple; keep deps for the
   driver/asserts, not the server).
 - No matrix / config-injection here (Phase 4-5).
+- FORWARD-COMPAT (ADR-09): the GHCR image ref/digest is a PARAMETER (env/fixture input),
+  never a hardcoded literal — ADR-09 supplies N tags to fan out. Shape the boot+probe
+  assertions (SSH up, pfctl loads, dig a control name) so they can double as a reusable
+  HEALTH/SANITY gate ADR-09's image-refresh reuses; don't bury them where only the pytest
+  run can call them.
 
 VERIFICATION (must all pass before the phase is done)
 - `python -m pytest` (default) → green AND collects the same test set as before P3
