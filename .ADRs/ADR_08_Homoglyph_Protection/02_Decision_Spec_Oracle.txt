@@ -1,0 +1,72 @@
+================================================================================
+PHASE 2 PROMPT — TR39 decision spec + golden oracle (pin the TARGET behaviour)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §2 tiers + contract first)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 2 of ADR-08. ADDITIVE + behaviour-preserving: add a
+pure pytest spec/oracle + fixtures only — NO production code change. Work inline on `adr/08`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+There is NO existing-code oracle (today's feature blocks ALL IDN — the buggy bluntness we are
+replacing). So we author the TARGET — the TR39-grounded (label -> severity -> action) mapping
+— as the oracle every later phase diffs against, before any analyzer code exists.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/01_Results.txt — the finalised confusable-script
+  rule (incl. Cyrillic+Greek), the legit allow-set, the Script-vs-Script_Extensions decision,
+  and the corpus. If missing, STOP and report.
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§2 tiers + "Semantics that MUST be preserved").
+- The UTS#39 reference (Restriction Levels) in the ADR header.
+- tests/test_adr06_golden_oracle.py / tests/test_adr07_* — the SHAPE to mirror (fixtures +
+  decision driver).
+- CLAUDE.md.
+
+ACTION PLAN (author the TARGET)
+1. Write (label -> resolved-script-set -> restriction-level -> severity -> action) as a
+   DECISION TABLE + fixtures (tests/fixtures/adr08_spec/, tests/test_adr08_decision_spec.py).
+2. COVER, at minimum:
+   - ASCII-only -> no-op.
+   - Single-script legit (all-Latin/accented, all-Cyrillic, all-Greek, Arabic, Thai) -> no-op.
+   - Latin + CJK (Jpan / Kore / Hanb) -> LEGIT no-op (UTS#39 Highly Restrictive). [the FP guard]
+   - Common-only mixes (digits/hyphen with one script) -> no-op.
+   - MALICIOUS -> block: Latin+Cyrillic, Latin+Greek, AND **Cyrillic+Greek** (>=2 of the
+     confusable set).
+   - SUSPICIOUS -> alert: fails Highly Restrictive but not the confusable-pair rule
+     (e.g. Latin+Armenian / Latin+Cherokee, multi-script oddities) — per RESULTS/01.
+   - WHOLE-SCRIPT confusable (all-Cyrillic look-alike of a Latin word) -> NOT caught
+     (single-script); assert it is a no-op and COMMENT it as the documented limitation.
+   - PER-LABEL: a legit ASCII/Latin SLD under an IDN ccTLD (example.рф, site.中国) -> OK
+     (each label single-script); a malicious SUBDOMAIN label (раypal.example.com) -> block.
+     Assert the analyzer NEVER unions scripts across the dot.
+   - Malformed / undecodable xn-- -> flagged severity, NOT an exception.
+3. Make the oracle a PURE reference function (no Unbound symbols) + a decision-label driver
+   later phases import, so analyzer + matcher diff against the same table.
+4. Where UTS#39 leaves a borderline (e.g. which candidate scripts are malicious vs suspicious),
+   RECORD the chosen call in a comment + the handoff (consistent with RESULTS/01).
+
+CONSTRAINTS
+- ADDITIVE ONLY: no production code; nothing deleted.
+- Pure Python, stdlib only, no Unbound symbols, 4-space, type hints, no bare except,
+  `from __future__ import annotations`. CI-runnable.
+
+VERIFICATION
+- python -m pytest → green incl. the new spec tests (self-consistent now; later phases assert
+  PRODUCTION against this table). ruff check . / ruff format . clean.
+
+EXPECTED RESULT
+A pure, CI-runnable TR39 decision spec/oracle + fixtures encoding the TARGET severities/actions
+(incl. Cyrillic+Greek malicious, CJK legit, whole-script NOT-caught), the contract every later
+phase is graded against.
+
+COMMIT (single)
+    tests: ADR-08 P2 — TR39 IDN homoglyph decision spec + golden oracle
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/02_Results.txt`
+For Phase 3. Include: the oracle/fixture locations; the decision-label driver API later phases
+import; the severity->action mapping as encoded; the documented borderline calls + the
+whole-script limitation; and the go-ahead to extract the IDN unit + add the mode plumbing.

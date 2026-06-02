@@ -1,0 +1,70 @@
+================================================================================
+PHASE 6 PROMPT — UI mode selector + sub-toggles + PHP config + alerts display
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §2 Feature-shape + fact 6 migration)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 6 of ADR-08. Surface the feature: turn the pfb_idn
+on/off control into the Off | All-IDN | Confusable mode selector + the two sub-toggles, plumb
+the config to the plugin, and tie the alerts display to the decoded form. Backward-compatible.
+Work inline on `adr/08`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 3-5 made the modes/sub-toggles real in the plugin but driven by raw cfg fields. This
+phase gives them a UI + persists them via dnsblconfig + writes them into the plugin's python
+config, preserving the existing pfb_idn='on' behaviour (-> All-IDN).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/05_Results.txt — the cfg field names + sub-toggle
+  defaults + feed/group labels. If missing, STOP and report.
+- RESULTS/01_Results.txt (the 'on' -> All-IDN migration; the config write path).
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§2 Feature-shape + Attribution rows; fact 6).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php: the pfb_idn control + help ~2388-2393;
+  the dconfig read ~58 / POST handling ~505.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: python_idn config write ~2540-2599; DNSBL_IDN
+  alias/count ~8305-8308; dnsblconfig pfb_idn ~847.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php: idn_to_utf8 display ~2234.
+- CLAUDE.md (PHP tabs, 8.3, no die/exit in lib, pfSense fns via stubs; markdownlint for help text).
+
+ACTION PLAN
+1. UI (pfblockerng_dnsbl.php): replace the pfb_idn on/off with a MODE selector
+   Off | All-IDN | Confusable, plus two sub-toggles shown for Confusable: "Block clearly-malicious
+   homoglyphs" (default ON) and "Block suspicious mixed-script (else alert only)" (default OFF).
+   Help text MUST state the scope + limitation: catches cross-script confusable homographs
+   (Latin/Cyrillic/Greek mixes incl. Cyrillic+Greek); does NOT catch whole-script confusables or
+   pure-ASCII typosquats.
+2. CONFIG: persist the mode + sub-toggles in dnsblconfig; in pfblockerng.inc write them into the
+   plugin python config (extend the python_idn block ~2540-2599) as the fields Phase 5 reads.
+   BACKWARD COMPAT: an existing pfb_idn='on' must come up as All-IDN (identical behaviour); empty/
+   off -> Off. Map cleanly (fact 6).
+3. COUNTS/ALERTS: keep DNSBL_IDN (All-IDN) as today; surface the new Homoglyph / Homoglyph_Suspect
+   feed/group in the alias/count + alerts. Ensure the alerts page shows the decoded Unicode
+   (idn_to_utf8) next to the xn-- form for homoglyph hits.
+4. Validate inputs with the existing pfb_filter helpers; no die()/exit() in lib code.
+
+CONSTRAINTS
+- Backward compatible: no behaviour change for existing on/off configs (on->All, off->Off).
+- PHP: tabs, 8.3, pfSense fns via stubs (add to stubs/pfsense/ if a new one is called; prefer a
+  stub over a phpstan baseline). Plugin cfg field names MUST match Phase 5 (RESULTS/05).
+- Do NOT change the matcher decision logic (Phase 5 owns it); this phase is config/UI/plumbing.
+
+VERIFICATION
+- python -m pytest → green (matcher unchanged; if a fixture encodes the cfg fields, update it).
+- php -l on changed .php/.inc; ShellCheck on any .sh; markdownlint on any help/doc text; ruff
+  clean on any .py touched. PHPStan green (stub any new pfSense fn).
+- Diff-read: 'on' -> All-IDN mapping; Confusable shows the two sub-toggles with the stated defaults.
+
+EXPECTED RESULT
+The mode selector + sub-toggles are live in the UI and persisted to the plugin, backward-compatible
+with existing pfb_idn, with help text stating scope + limitations and alerts showing decoded forms.
+
+COMMIT (single)
+    pfblockerng: ADR-08 P6 — IDN mode selector + homoglyph sub-toggles UI + config plumbing
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/06_Results.txt`
+For Phase 7. Include: the UI control + sub-toggle labels/defaults; the dnsblconfig keys + how
+they map to the plugin python config; the 'on'->All-IDN migration as implemented; the alerts/
+count surfacing; php -l/PHPStan/markdownlint green; and the go-ahead to final validation + smoke.
