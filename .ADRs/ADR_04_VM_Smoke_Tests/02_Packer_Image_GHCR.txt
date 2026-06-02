@@ -7,12 +7,16 @@ ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §2 "Image build"/"Image store"
 
 ROLE
 You are on the `adr/04` branch (off `devel`) performing Phase 2 of ADR-04. Produce a
-REPRODUCIBLE, version-tagged pfSense CE qcow2 and publish it to PRIVATE GHCR via oras.
-The build is SPLIT into two layers with one output contract: (a) the BASE OS install
-and (b) the PROVISIONING layer. The provisioning layer MUST be automated; the base OS
-install is automated IF the spike showed it's feasible, ELSE the maintainer
-hand-installs the base once per CE version — both are accepted. Do NOT burn this phase
-fighting fragile installer keystrokes. Work inline on `adr/04`, one commit, push
+version-tagged pfSense CE qcow2 and publish it to PRIVATE GHCR via oras. The image
+build sits behind ONE output contract — the published qcow2 — so HOW it is built is
+swappable: (a) BASE OS install and (b) PROVISIONING. Automate each with Packer WHERE
+FEASIBLE, but the base install may be a manual seed and — per §7 — if Packer cannot
+drive the build AT ALL, the maintainer PROVIDES A READY-MADE qcow2 WHOLESALE, built by
+hand per a documented runbook. All three modes are accepted. The phase's HARD
+deliverables are: the publish pipeline (oras -> private GHCR, versioned), a maintainer
+RUNBOOK of exactly what is baked, and a VERIFICATION that the published image passes the
+Phase-1 round-trip — NOT a working Packer template. Do NOT burn this phase fighting
+fragile installer keystrokes or Packer. Work inline on `adr/04`, one commit, push
 directly.
 
 WHY THIS PHASE EXISTS
@@ -42,7 +46,11 @@ ACTION PLAN (ordered)
 1. BASE OS — CANONICAL mode is "seed once, upgrade in place":
    - SEED (manual, once): a documented runbook for the maintainer to do ONE clean
      manual pfSense CE install -> archive it as the immutable seed qcow2. This is the
-     reproducibility anchor; never overwrite it.
+     reproducibility anchor; never overwrite it. In practice the seed is the Proxmox VM's
+     disk exported/converted to qcow2 (`qemu-img convert`); the runbook MUST record the
+     source VM's HARDWARE PROFILE — machine type, scsihw/disk bus, virtio-net model + the
+     pinned MAC (`BC:24:11:37:9C:AC`), cpu/cores/mem — so the boot helper mirrors it and
+     pfSense doesn't re-detect hardware (NIC type/MAC/count changes break the boot).
    - VERSION BUMP (scripted, default path): boot the prior published image, run the
      pfSense upgrader over SSH (`pfSense-upgrade` — the CLI behind System > Update;
      confirm the exact non-interactive flags during the spike, don't guess), wait on a
@@ -54,11 +62,16 @@ ACTION PLAN (ordered)
      it; if fragile, the manual seed already covers it — MOVE ON, do not rabbit-hole.
    - In all cases the Packer QEMU builder consumes the base via `disk_image = true`
      (boot existing qcow2, no ISO) and runs only the provisioning in step 2.
-2. PROVISIONERS (always automated, run on whichever base) — bake in, idempotently:
-   - a TEST SSH public key + root SSH enabled (the key the harness uses);
+2. PROVISIONING — automate with Packer (qemu builder, disk_image=true) WHERE FEASIBLE;
+   else the maintainer bakes these by hand into the qcow2 per the runbook. Either way the
+   image MUST contain, idempotently:
+   - a TEST SSH public key (from secret `SMOKE_SSH_PUB_KEY`) into root's authorized_keys
+     + root SSH enabled — the harness connects with the matching private key
+     (`SMOKE_SSH_PRIV_KEY`);
    - pfBlockerNG-devel INSTALLED (so all deps/dirs exist; the harness then rsyncs the
      branch over it via deploy.sh);
-   - a known base config.xml (interfaces, services up);
+   - a known base config.xml (interfaces, services up) with the `admin` password set to
+     match secret `SMOKE_ADMIN_PASSWORD` (store its bcrypt hash in config.xml);
    - Unbound `local-data` for the hermetic control domain(s) named in 01_Results.txt;
    - serial console retained for CI boot logs.
 3. OUTPUT: a qcow2. Keep it small (compact/zero free space) — it travels over GHCR.
@@ -66,8 +79,10 @@ ACTION PLAN (ordered)
    `workflow_dispatch` (inputs: target PFSENSE_CE_VERSION, and base-source = seed |
    prior-version-to-upgrade) + `schedule`. Steps: ensure /dev/kvm; install packer +
    qemu + oras; `oras pull` the chosen base (seed or prior snapshot); if upgrading, run
-   the pfSense-upgrade step (step 1) before provisioning; `packer build` (provisioning
-   via disk_image=true); `oras push` the result to ghcr.io/<org>/<repo>/pfsense-ce
+   the pfSense-upgrade step (step 1) before provisioning; run `packer build`
+   (provisioning via disk_image=true) IF Packer is used, ELSE accept a maintainer-provided
+   qcow2 as the build input (skip build entirely); `oras push` the result to
+   ghcr.io/<org>/<repo>/pfsense-ce
    tagged `:<PFSENSE_CE_VERSION>`. **RETAIN the seed and every version snapshot — never
    overwrite** (recoverability + audit; ADR §2 versioning). Use GITHUB_TOKEN with
    packages:write; the package is PRIVATE.
@@ -81,10 +96,11 @@ CONSTRAINTS
   private key, ISO credentials, or any secret — use Actions secrets.
 - Do NOT touch `src/`. Do NOT add to the default pytest run.
 - HCL/YAML indent per .editorconfig; any shell is POSIX sh, ShellCheck-clean.
-- A non-automatable installer is NOT a reject — switch to the hand-installed-base
-  fallback (step 1) and keep the provisioning + GHCR publish automated. Only a base
-  image that can't even be hand-built into a bootable, round-trip-passing qcow2 is a
-  reject (§7) — and Phase 1 already disproved that. Never fake a green.
+- Neither a non-automatable installer NOR non-automatable provisioning is a reject —
+  fall back to a maintainer-built base, hand-baked provisioning, or a READY-MADE qcow2
+  PROVIDED WHOLESALE (§7); keep the GHCR publish + verification automated and write the
+  runbook. Only a qcow2 that can't be made bootable + round-trip-passing AT ALL is a
+  reject (§7) — Phase 1 already disproved that. Never fake a green.
 
 VERIFICATION (must all pass before the phase is done)
 - `packer build` produces a qcow2 (locally or in CI); `oras push` lands a PRIVATE
@@ -94,22 +110,27 @@ VERIFICATION (must all pass before the phase is done)
 - `python -m pytest` → green (unchanged).  `ruff`/ShellCheck → clean.
 
 EXPECTED RESULT
-A reproducible, parameterised pfSense CE image build that publishes a private,
-version-tagged qcow2 to GHCR, verified to boot and pass the control round-trip.
+A private, version-tagged pfSense CE qcow2 in GHCR — produced by Packer where feasible
+or provided wholesale by the maintainer — with an automated publish + verification
+pipeline and a runbook of what is baked, verified to boot and pass the control round-trip.
 
 COMMIT (single)
-    ci: add Packer pfSense CE image build publishing to private GHCR (ADR-04 P2)
+    ci: add pfSense CE image publish-to-GHCR pipeline + build runbook (ADR-04 P2)
 Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
 
 HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt` (plain .txt)
-For Phase 3 (pytest scaffolding). Include: the base-OS strategy as built — the manual
-SEED runbook (clean install), the scripted UPGRADE-IN-PLACE step + the exact
-`pfSense-upgrade` non-interactive flags + readiness signal used, and the
+For Phase 3 (pytest scaffolding). Include: whether the qcow2 was Packer-built or PROVIDED
+WHOLESALE by the maintainer, and the path to the build/bake runbook; the base-OS strategy
+as built — the manual SEED runbook (clean install), the scripted UPGRADE-IN-PLACE step +
+the exact `pfSense-upgrade` non-interactive flags + readiness signal used, and the
 re-baseline-on-MAJOR rule; where the seed + each version snapshot are archived in
 GHCR; the GHCR ref + tag scheme and exact
 `oras pull` command; PFSENSE_CE_VERSION used; what is baked into the image (SSH user
 + key secret name, pfBlockerNG-devel path, base config specifics, the exact
-local-data control name(s) + their expected answers, DNS/SSH listen setup); the
+local-data control name(s) + their expected answers, DNS/SSH listen setup, AND the
+source-VM HARDWARE PROFILE — machine type, scsihw/disk bus, virtio-net model + the pinned
+MAC (`BC:24:11:37:9C:AC`), cpu/cores/mem — the boot helper must mirror, plus how the Proxmox disk
+was exported to qcow2); the
 qcow2 size + boot-to-ready from the published image; how to rebuild on a CE bump; any
 install-automation gotchas; and confirmation the published image passes the Phase 1
 round-trip. If reject criteria were hit, say so plainly and stop.

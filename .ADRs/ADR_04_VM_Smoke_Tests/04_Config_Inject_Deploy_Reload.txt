@@ -43,11 +43,16 @@ ACTION PLAN (ordered — pin each helper with a self-test)
    pfblockerng.php update exit 0). Self-test: after deploy, a file we changed is
    present on the VM (sanity that the branch-under-test is what's running).
 2. CONFIG-INJECTION HELPER (`php -r` over SSH): given a case spec (feed url(s) +
-   alias name, DNSBL response mode, whitelist entries, wildcard/exact, etc.), apply it
-   to the VM's pfBlockerNG config via the pfSense config API (parse_config /
-   config_get_path / config_set_path / write_config). Keep it declarative: input a
-   small dict/dataclass, emit the php that sets exactly those fields. Self-test: inject
-   a value, read it back via php, assert it stuck.
+   alias name, DNSBL response mode, whitelist entries, wildcard/exact, AND the case's
+   control-domain local-data: {name -> A/AAAA} + any local-zone), apply it to the VM's
+   pfBlockerNG config AND Unbound config via the pfSense config API (parse_config /
+   config_get_path / config_set_path / write_config). The control records are Unbound
+   Host Overrides / Custom Options (local-zone:/local-data:) so passthrough/whitelist
+   cases resolve hermetically under blocked egress — set them HERE in config (NOT via
+   live `unbound-control`) and BEFORE the feed `update`, so they survive the reload that
+   regenerates unbound.conf. Keep it declarative: input a small dict/dataclass, emit the
+   php that sets exactly those fields. Self-test: inject a value, read it back via php,
+   assert it stuck; inject a control name, query it, assert it resolves.
 3. RELOAD/RESET HELPERS: `reload(scope)` -> php pfblockerng.php
    update|updatednsbl|updateip (prefer the targeted verb for speed); `reset()` ->
    clearip/cleardnsbl (+ reload) to return to a known baseline per the isolation

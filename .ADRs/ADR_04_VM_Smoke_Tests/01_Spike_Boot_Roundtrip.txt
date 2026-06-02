@@ -41,15 +41,58 @@ ACTION PLAN (ordered — prove the cheapest thing first)
    If absent, that alone is a partial no-go — record it.
 2. BOOT HELPER (POSIX sh, quoted, absolute paths): `tests/smoke/boot_vm.sh` (or
    similar) that launches `qemu-system-x86_64 -enable-kvm` headless, serial console,
-   with QEMU user-net `hostfwd` mapping: tcp 2222->22 (SSH) and udp+tcp <p>->53 (DNS),
-   and the host alias 10.0.2.2 reachable from the guest. Image path is a parameter.
+   with QEMU user-net `hostfwd` mapping: tcp 2222->22 (SSH), tcp 8080->80 (WebUI/nginx, HTTP),
+   and udp+tcp <p>->53 (DNS), and the host alias 10.0.2.2 reachable from the guest.
+   Image path is a parameter.
+   HARDWARE MUST MIRROR the source Proxmox VM (pfSense is sensitive to NIC type/MAC/count and
+   re-detects hardware otherwise): a single virtio-net-pci NIC with the MAC pinned to the
+   source VM's MAC `BC:24:11:37:9C:AC` (hardcoded — a MAC is not sensitive)
+   (`-device virtio-net-pci,netdev=net0,mac=BC:24:11:37:9C:AC`); a VirtIO-SCSI disk; and
+   `-cpu host -smp 2 -m 4096` with the machine type matching Proxmox. EASIEST: run
+   `qm showcmd <vmid> --pretty` on the Proxmox host to dump the exact qemu args, then in the
+   helper swap ONLY (a) the Proxmox bridge `-netdev` for `-netdev user,...,hostfwd=...` and
+   (b) the disk path -> the pulled qcow2; keep cpu/smp/mem/machine/scsihw and the pinned MAC
+   identical.
+
+   REFERENCE INVOCATION (translated from the source VM's `qm showcmd 103 --pretty`; Proxmox
+   host-glue dropped, net backend + disk swapped). MAC is the source VM's, hardcoded below
+   (not sensitive):
+       qemu-system-x86_64 \
+         -enable-kvm -machine pc -cpu host \
+         -smp 2,sockets=1,cores=2 -m 4096 \
+         -smbios type=1,uuid=58fd7964-c40c-4f47-bf02-3fdad18f8b00 \
+         -device virtio-scsi-pci,id=virtioscsi0 \
+         -drive file="$IMG",if=none,id=drive-scsi0,format=qcow2,cache=unsafe,discard=unmap,detect-zeroes=unmap \
+         -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
+         -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80,hostfwd=tcp::5353-:53,hostfwd=udp::5353-:53 \
+         -device virtio-net-pci,mac=BC:24:11:37:9C:AC,netdev=net0,id=net0 \
+         -display none -serial mon:stdio
+   Mapping/notes: `-machine pc` <- Proxmox `pc+pve0` (i440fx; `pc+pve0` is Proxmox-only).
+   virtio-scsi disk preserved (guest sees da0). `-cpu host` keeps AES-NI and is safe across
+   runners (CPU is NOT a pfSense fingerprint axis; FreeBSD re-probes at boot). Source disk is
+   a raw ZFS zvol -> export with `qemu-img convert -f raw -O qcow2
+   /dev/zvol/rpool/data/vm-103-disk-1 pfsense.qcow2` (VM powered off). This VM is VGA/VNC-only,
+   so `-serial mon:stdio` shows guest boot logs ONLY if the image enables serial console
+   (loader.conf console="comconsole,vidconsole" or System > Advanced); else gauge readiness
+   by SSH alone.
 3. READINESS WAIT (no fixed sleeps): poll until SSH answers on 2222 with bounded
    backoff + a hard timeout; capture boot-to-ready seconds.
 4. CONTROL ROUND-TRIP over SSH (baked key): `pfctl -sr` returns rules; run
    `/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update` and capture
    exit status; `dig +short @127.0.0.1 -p <p> <a-baked-local-data-name>` from the
-   runner returns the expected answer. (The image must have a known local-data name
-   baked in for a deterministic dig; the maintainer provides it with the image.)
+   runner returns the expected answer; WebUI reachable — `curl http://127.0.0.1:8080`
+   returns the login page. (The image must have a known local-data name baked in for a
+   deterministic dig; the maintainer provides it with the image. This single baked name
+   is a SPIKE convenience only — the real harness injects control local-data per case
+   over SSH (Phase 4); do NOT build that here.)
+   PRECONDITION — single-NIC WAN is default-deny with NO anti-lockout, so SSH/WebUI/DNS
+   are all blocked until WAN is opened, AND Unbound refuses WAN-side recursion by default
+   (returns REFUSED): the hand-built image MUST boot with (a) WAN pass rules host->22/80/53
+   (WebUI is HTTP on :80) and (b) an Unbound `access-control: 10.0.2.0/24 allow` (the stock
+   ACL is LAN-only). Block-private/Block-bogons are NOT auto-added on a single-interface
+   install — disable only if present (10.0.2.2 is RFC1918). All of this MUST be baked into
+   the image (or applied via the serial console) — it cannot be added over SSH, since SSH
+   itself is blocked until the rule exists.
 5. STABILITY: run the boot+round-trip N>=5 times (matrix or loop); record pass count
    and boot-time distribution.
 6. WORKFLOW: `.github/workflows/smoke-spike.yml` (workflow_dispatch) wiring 1-5 and
@@ -62,12 +105,18 @@ CONSTRAINTS
 - Do NOT touch `src/` (shipped code). Do NOT add deps to the default pytest run.
 - Shell: POSIX sh, quoted, absolute binary paths, ShellCheck-clean.
 - `python -m pytest` (default, no -m smoke) must remain green and unchanged.
-- Secrets (image URL/creds, SSH key) via GitHub Actions secrets — never commit keys.
+- Secrets via GitHub Actions secrets — never commit keys. The runner connects with the
+  PRIVATE key from `SMOKE_SSH_PRIV_KEY` (write to a mode-600 temp file, `ssh -i`); the
+  matching PUBLIC key (`SMOKE_SSH_PUB_KEY`) is already baked into the hand-built image's
+  root authorized_keys (Phase 2 bakes it from that secret). Image URL/creds also via secrets.
+  The pfSense admin password is in `SMOKE_ADMIN_PASSWORD` (baked into config.xml to match) —
+  NOT exercised by this spike's round-trip (SSH=key, WebUI=reachability only); it's there for
+  an authenticated WebUI/console check if the scope grows.
 
 VERIFICATION (must all pass before the phase is done)
 - The `smoke-spike.yml` run completes on GH-hosted CI and prints: /dev/kvm status,
   boot-to-ready seconds per run, pass/fail count over N>=5, and the round-trip output
-  (pfctl rules present, php update exit 0, dig answer correct).
+  (pfctl rules present, php update exit 0, dig answer correct, WebUI curl returns login).
 - `python -m pytest` → green (unchanged).  `ruff check .`/`ruff format .` → clean.
 - ShellCheck clean on the boot helper.
 - Compare measured numbers to §7 kill-threshold (~<=20 min/job, >=4/5 clean) and
@@ -86,8 +135,12 @@ PR body (if any) via --body-file.
 HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/01_Results.txt` (plain .txt)
 For Phase 2 (Packer). Include: GO or NO-GO vs the kill-threshold and the raw numbers
 (/dev/kvm status, boot-to-ready distribution, N and pass count); the EXACT working
-qemu invocation + hostfwd map; the SSH user/key model and how the guest exposes
-SSH/DNS/10.0.2.2; how the hand-built image was obtained and what is baked into it
-(local-data control name(s), SSH key, pfBlockerNG-devel present?); any flake/timing
+qemu invocation + hostfwd map (incl. the pinned NIC MAC `BC:24:11:37:9C:AC`, the machine
+type, scsihw/disk bus, `-cpu host -smp 2 -m 4096` — the source Proxmox VM hardware profile
+the helper mirrors); the SSH user/key model and how the guest exposes
+SSH/WebUI/DNS/10.0.2.2; how the hand-built image was obtained and what is baked into it
+(local-data control name(s), SSH key, pfBlockerNG-devel present?, WAN opened — pass
+rules host->22/80/53 + Unbound `access-control` allow for 10.0.2.0/24 + Block-private/
+Block-bogons off if present?); any flake/timing
 gotchas; and — if NO-GO — the recorded pivot (self-hosted / gated trigger) so Phase 2
 targets the right platform. If GO, the go-ahead to build the reproducible image.

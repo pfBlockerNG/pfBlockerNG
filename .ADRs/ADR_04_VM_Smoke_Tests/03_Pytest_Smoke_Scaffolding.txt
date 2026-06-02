@@ -44,13 +44,19 @@ ACTION PLAN (ordered)
    default run without them installed still collects cleanly (skip/condition the smoke
    module, don't hard-import at top level of a default-collected file).
 3. VM FIXTURE (`tests/smoke/conftest.py`, session-scoped): `oras pull` the GHCR image
-   (ref from 02_Results.txt) → boot via the Phase-1 qemu/hostfwd invocation → WAIT on
-   readiness (SSH answers + DNS answers; bounded backoff + hard timeout; NO fixed
-   sleeps) → yield an object exposing {ssh target, ssh key, dns host+port, feed base
-   url 10.0.2.2:<port>} → teardown (kill qemu, clean temp). Decide and DOCUMENT the
-   per-case isolation strategy: fresh boot per case is simplest but slow; prefer a
-   snapshot-revert or a `clearip`/`cleardnsbl`+reload reset (Phase 4 provides the
-   reset). State the choice in the handoff.
+   BY DIGEST (ref from 02_Results.txt) → boot via the Phase-1 qemu/hostfwd invocation ON AN
+   EPHEMERAL COPY-ON-WRITE OVERLAY so the base qcow2 is NEVER mutated (either
+   `-drive …,snapshot=on` = auto-discarded on qemu exit, or `qemu-img create -b base -F
+   qcow2 run.qcow2` kept on failure for post-mortem) → WAIT on readiness (SSH answers + DNS
+   answers; bounded backoff + hard timeout; NO fixed sleeps) → yield an object exposing {ssh
+   target, ssh key, dns host+port, feed base url 10.0.2.2:<port>} → teardown (kill qemu,
+   discard the overlay/temp). CONCURRENCY: the base is read-only so N instances share it
+   safely; the SAME hardcoded MAC is fine (each user-net VM is its own isolated SLIRP NAT,
+   no shared L2); the ONLY contention is `hostfwd` host ports — fixed is OK across GH jobs
+   (each job = its own runner), but allocate per-instance ports if several VMs run on one
+   runner. Decide and DOCUMENT the per-case isolation strategy: fresh boot per case is
+   simplest but slow; prefer a snapshot-revert or a `clearip`/`cleardnsbl`+reload reset
+   (Phase 4 provides the reset). State the choice in the handoff.
 4. MOCK FEED SERVER FIXTURE (stdlib `http.server`, no third-party): serves fixture
    files (IP lists, DNSBL lists) from a tests/smoke/fixtures dir on a port reachable
    by the guest at http://10.0.2.2:<port>/<name>. Function/module scoped as needed.
@@ -87,7 +93,9 @@ Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
 HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/03_Results.txt` (plain .txt)
 For Phase 4 (config-injection/deploy/reload). Include: the fixture API (what the VM
 fixture yields — ssh target/key, dns host+port, feed base URL); the chosen per-case
-isolation strategy (fresh boot vs snapshot vs clear+reload) and why; the mock-feed
+isolation strategy (fresh boot vs snapshot vs clear+reload) and why; the run-level
+immutability mechanism (CoW overlay / `snapshot=on`, base pulled by digest) + how concurrent
+instances are isolated (per-instance hostfwd ports; same MAC safe under user-net); the mock-feed
 server API (how a test registers fixture lists + the guest-facing URL); how the
 default run is kept clean (the exact deselection mechanism); pytest/ruff results; and
 the go-ahead.
