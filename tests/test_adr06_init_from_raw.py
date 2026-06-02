@@ -176,9 +176,14 @@ class TestInitFromRawDecisionsTop1mEnabled:
         # The manifest's config.top1m_enabled drives the whiteDB load: enabled ->
         # the popular domain is un-blocked; disabled -> it blocks. ADR-07 P3 widened
         # the whiteDB value to {"wildcard", "important"} (TOP1M is a user allow ->
-        # important=True); the net DNS decision is unchanged (pinned by the oracle).
+        # important=True); ADR-07 P6 added the numeric ``band`` (user-allow band 6).
+        # The net DNS decision is unchanged (pinned by the oracle).
         enabled = _build_from_manifest(tmp_path, top1m_enabled=True)
-        assert enabled.white_db.get("popularcdn.com") == {"wildcard": False, "important": True}
+        assert enabled.white_db.get("popularcdn.com") == {
+            "wildcard": False,
+            "important": True,
+            "band": pfb_unbound.PRIO_USER_ALLOW,
+        }
         disabled = _build_from_manifest(tmp_path, top1m_enabled=False)
         assert "popularcdn.com" not in disabled.white_db
 

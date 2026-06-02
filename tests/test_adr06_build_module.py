@@ -260,21 +260,27 @@ class TestClassify:
 
 class TestWhitelistNormalisation:
     # ADR-07 P3 widened the whiteDB value from a bare wildcard bool to
-    # {"wildcard": bool, "important": bool}; user whitelist + TOP1M are user allows
-    # -> important=True. The net DNS decision is unchanged (pinned by the oracle).
+    # {"wildcard": bool, "important": bool}; ADR-07 P6 added the numeric ``band``
+    # (user whitelist + TOP1M are user allows -> important=True, band 6, the
+    # sovereign user-allow band). The net DNS decision is unchanged (pinned by the
+    # oracle).
     def test_www_strip_and_exact(self) -> None:
         wl = pfb_unbound._dnsbl_normalise_whitelist(["www.adblock.com"], [], False)
-        assert wl == {"adblock.com": {"wildcard": False, "important": True}}
+        assert wl == {"adblock.com": {"wildcard": False, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
     def test_leading_dot_wildcard(self) -> None:
         wl = pfb_unbound._dnsbl_normalise_whitelist([".wildwhite.org"], [], False)
-        assert wl == {"wildwhite.org": {"wildcard": True, "important": True}}
+        assert wl == {"wildwhite.org": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
     def test_top1m_only_when_enabled(self) -> None:
         disabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], False)
         assert "popularcdn.com" not in disabled
         enabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], True)
-        assert enabled.get("popularcdn.com") == {"wildcard": False, "important": True}
+        assert enabled.get("popularcdn.com") == {
+            "wildcard": False,
+            "important": True,
+            "band": pfb_unbound.PRIO_USER_ALLOW,
+        }
 
 
 # --------------------------------------------------------------------------- #
