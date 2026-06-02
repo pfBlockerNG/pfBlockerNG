@@ -204,6 +204,27 @@ See [`scripts/deploy.sh`](scripts/deploy.sh) for full options.
 
 ---
 
+## Image pipeline (smoke-test base)
+
+The CI smoke harness (ADR-04) boots a real pfSense CE VM. Three dev-only scripts
+build and drive its disk image — no Packer, since pfBlockerNG compiles nothing:
+
+- [`scripts/image-publish.sh`](scripts/image-publish.sh) — on the Proxmox host,
+  export a powered-off VM's ZFS disk to a compressed qcow2 and `oras push` it to
+  GHCR, tagged by CE version (older tags kept).
+- [`scripts/image-upgrade.sh`](scripts/image-upgrade.sh) — pull a published tag,
+  boot it, run `pfSense-upgrade`, power off, and publish the result as a new
+  version tag (the source tag is left untouched).
+- [`scripts/install-from-repo.sh`](scripts/install-from-repo.sh) — install
+  pfBlockerNG onto a clean pfSense **from this repo's `src/`** (no Netgate pkg),
+  via the port's `rc.packages … POST-INSTALL` hook. pfBlockerNG is not baked into
+  the image; the harness runs this after every boot (the disk is immutable).
+
+These produce one image per supported minor CE version; CI runs the smoke matrix
+across all of them. See [`.ADRs/ADR_04_VM_Smoke_Tests/`](.ADRs/ADR_04_VM_Smoke_Tests/).
+
+---
+
 ## Updating pfSense's ports repository
 
 When a new version is ready to ship, tag the commit and push the tag:
