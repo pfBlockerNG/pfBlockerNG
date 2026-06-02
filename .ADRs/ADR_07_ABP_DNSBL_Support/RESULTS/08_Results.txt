@@ -1,0 +1,227 @@
+================================================================================
+ADR-07 -- PHASE 8 RESULTS / HANDOFF FOR PHASE 9
+Slim PHP: full-Python ABP boundary + DNSBL-IP coexistence + admitted-regex count
+Branch: adr/07   Commit: pfblockerng: ADR-07 P8 -- slim PHP to abp tag+raw passthrough; delete lite parser; keep DNSBL-IP
+================================================================================
+
+VERDICT (headline): DONE. The shell<->Python boundary is redrawn to the aggressive
+ADR-06 target for ABP feeds. PHP HEADER-SNIFFS ABP/EasyList feeds (unchanged sniff
+strings) -> tags them format_hint='abp' -> passes their RAW lines through VERBATIM
+to the per-feed raw the manifest references. The PHP $easylist LITE PARSER IS
+DELETED ($e_replace + the keep-only-||domain^ token-strip are gone) -- Python's
+parse_abp is now the one DNS-only ABP parser (@@/regex/$important/$badfilter). The
+DNSBL-IP firewall pass STILL WORKS over the now-raw ABP feeds: a new helper
+pfb_dnsbl_abp_extract_ip() pulls ABP-anchored IPs (||1.2.3.4^, incl. $options) and
+hosts IPs (<ip> <ip>) into DNSBLIP_v4/_v6; Python parse_abp independently SKIPS
+IP-valued anchors (returns None) -> IP -> firewall only, domain/regex -> Python
+only (no double-handling, no leak). The DNSBL_Regex alias count is reconciled to
+the ADMITTED (cap-filtered) feed+user regex total emitted by Python. Both oracles
+green: ADR-06 (no-regression, OFF) UNCHANGED; ADR-07 spec/parser/reconcile/strata/
+emit_wire/regex_safety (ON) green; + a NEW php-boundary equivalence test. GO-AHEAD
+to Phase 9 (final validation + smoke).
+
+GATES (this phase):
+  python -m pytest   -> 917 passed (was 910 after P7; +7 are the new php-boundary
+                        round-trip tests tests/test_adr07_php_boundary.py).
+                        ADR-06 golden oracle + ALL ADR-07 suites green.
+  ruff check .       -> All checks passed!
+  ruff format .      -> clean (the new test file was auto-formatted; suite re-run green).
+  php -l             -> pfblockerng.inc: No syntax errors detected.
+                        (Pre-existing unrelated "continue targeting switch" WARNING --
+                         now reported at inc:687, was inc:686; it shifted by 1 line
+                         because P8 added one line at inc:114. NOT introduced here,
+                         NOT mine, ignore per the phase prompt.)
+  ShellCheck         -> N/A (NO .sh touched this phase).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  A tests/test_adr07_php_boundary.py   (7 round-trip boundary tests, pure pytest)
+
+================================================================================
+1. THE MANIFEST 'abp' TAGGING + WHAT THE RAW NOW CONTAINS
+================================================================================
+* pfb_unbound_python_sources($feeds) (inc:~2385) now reads a per-row 'format' key
+  ('abp'|'plain'; defaults 'plain' if absent) and writes it as the manifest
+  format_hint. For an 'abp' feed it copies the per-feed '.txt' lines into the
+  per-feed '.raw' VERBATIM (rtrim \r\n only; skip empty) -- NO col1 extraction, NO
+  comma-split (so a /re/ with commas survives intact). For a 'plain' feed it keeps
+  the ADR-06 col1 bare-domain extraction unchanged.
+* WHO SETS 'format' (two $pfb_py_feeds[] sites in the DNSBL download loop):
+    - parse path  (inc:~8362): 'format' => $easylist ? 'abp' : 'plain'.
+    - reuse path  (inc:~7806): 'format' => file_exists("{$header}.abp") ? 'abp'
+      : 'plain'  (a reused feed is NOT re-parsed, so $easylist is unknown there).
+* THE '.abp' MARKER (inc:~8367): on the parse path, when $easylist is TRUE PHP
+  @touch()es "{$pfbfolder}/{$header}.abp"; otherwise unlink_if_exists() it. This
+  persists the ABP-ness so the reuse path carries the format_hint forward across
+  builds. (It lives next to the feed's .txt/.orig; the unused-alias sweep at
+  inc:~8410 only globs $pfb['dnsalias'], so the marker is not collected there.)
+* WHAT REACHES PYTHON for an 'abp' feed: the RAW ABP lines as downloaded, minus
+  (a) the ABP header line + '!'/'[' comment/control lines (PHP `continue`s on them
+  so the raw is dense; Python's parse_abp would skip them anyway), and (b) the
+  IP-anchored/hosts-IP lines (diverted to the firewall, SS3). Everything else --
+  ||domain^, @@||domain^, /re/, @@/re/, $important, $badfilter, $options,
+  ##/path/page-context lines -- flows VERBATIM; parse_abp keeps the in-scope ones
+  and skips the out-of-scope ones (Phase-4/6 logic, unchanged this phase).
+* The '.txt' content for an 'abp' feed is now raw ABP lines (written by the loop's
+  new easylist branch, SS2). $list_cnt = grep -c ^ {header}.txt still counts lines.
+  The hardcoded unbound-checkconf $result (inc:~8290) is a post-ADR-06 no-op (it
+  never runs checkconf), so the '.bk' holding raw ABP lines is harmless.
+
+================================================================================
+2. EXACTLY WHAT PHP WAS DELETED vs KEPT
+================================================================================
+DELETED (the lite parser):
+  * $e_replace = array('||','.^','^')   declaration (was inc:7794) -- GONE.
+  * The easylist keep-only filter + str_replace token-strip (was inc:7833-7844):
+        if (substr(...)!=='||' || substr(...,-1)!=='^' || strpos $/*// ...) continue;
+        $lite = TRUE; $line = str_replace($e_replace,'',$line);
+    -- GONE. PHP no longer extracts a bare domain from an ABP line.
+KEPT (reused / untouched):
+  * The HEADER SNIFF (inc:~7882-7886): the four strings '[Adblock Plus ',
+    '[Adblock Plus]', '[uBlock Origin', '! Title: AdGuard' still set
+    $easylist=$validate_header=TRUE. $easylist now ONLY flags the feed as ABP
+    (for tagging + the marker); it no longer drives a lite parse.
+  * The DNSBL-IP PASS: the generic bare-IP collection for non-ABP feeds
+    (inc:~8170-8190, is_ipaddrv4/v6 -> $domain_data_ip[]/_ip6[]) is UNTOUCHED; the
+    'pon' CSV IP collection is UNTOUCHED. ABP feeds get their OWN IP extraction in
+    the new easylist branch (SS3).
+  * IDN conversion, CSV sniffers (pt/bbc/h3x/otx/pon/et), hosts/plain extraction --
+    all in the `!$easylist` path, UNTOUCHED (non-ABP feeds behave exactly as today).
+
+================================================================================
+3. THE DNSBL-IP ABP-ANCHOR HANDLING (coexistence, ADR-06 fact 7)
+================================================================================
+NEW helper pfb_dnsbl_abp_extract_ip($line) -> string (inc:~2320):
+  * ||host^[$options]   -> strips the $options suffix, takes the token before '^',
+    returns it iff is_ipaddrv4||is_ipaddrv6 (else '').  e.g. ||1.2.3.4^ -> '1.2.3.4'.
+  * "<sink-ip> <target>" (hosts) -> returns the 2nd token iff BOTH tokens are IPs
+    (e.g. 0.0.0.0 203.0.113.99 -> '203.0.113.99'). A hosts line whose target is a
+    DOMAIN returns '' (the domain flows to Python as a raw line).
+NEW easylist branch in the download loop (inc:~7907 onward):
+  1. if dnsbl_ip != 'Disabled': $abp_ip = pfb_dnsbl_abp_extract_ip($line).
+       - IPv4 -> sanitize_ipaddr/validate_ipv4 -> $domain_data_ip[]; updateip=TRUE.
+       - IPv6 -> validate_ipv6 -> $domain_data_ip6[]; updateip=TRUE.
+       - then `continue` -- IP -> firewall ONLY, NOT passed to Python.
+     (When dnsbl_ip IS 'Disabled', the IP-anchored line falls through to the raw
+      passthrough; Python's parse_abp then drops it via the IP-anchor skip -> still
+      no DNS leak, exactly today's "firewall off" intent.)
+  2. skip '' / '!' / '[' lines (raw stays dense).
+  3. else: @fwrite($dhandle, "{$line}\n"); $domain_data="{$line}\n"; `continue`.
+     The raw ABP line is the output; $domain_data is set non-empty so the feed
+     takes the success/validation path (inc:~8290) and is kept.
+The $domain_data_ip/_ip6 arrays then flow UNCHANGED into the existing dedup ->
+{header}_v4.ip/_v6.ip -> glob -> DNSBLIP_v4.txt/_v6.txt -> DNSBLIP_v4/_v6 pf alias
+machinery (inc:~8190+, ~8480+). NO double-handling: IP keys never enter dataDB/
+zoneDB/regexDB (proven by the new test, SS5), domains/regex never enter the IP set.
+
+================================================================================
+4. THE COUNTS / inc:3149 + DNSBL_Regex SYNC-CHECK RESOLUTION
+================================================================================
+pfb_py_count (the LOADED entry total, inc:~3364) -- UNCHANGED. Python still emits
+len(dataDB)+len(zoneDB) via dnsbl_emit_count(pfb["pfb_py_count"], ...). Its value
+rises legitimately as ABP @@/regex/un-pruned entries load (by design, NOT a
+regression; ADR §2). No PHP change needed for it this phase.
+
+DNSBL_Regex alias (the P6/P7 carry-over item) -- RECONCILED:
+  * PYTHON now emits the ADMITTED regex total to a NEW file
+    /var/unbound/pfb_py_regex_count (pfb["pfb_py_regex_count"]) at init, AFTER both
+    the user REGEX-ini load AND the feed-regex merge:
+        dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
+    Because the P7 static cap drops over-cap feed AND user patterns at load, this
+    live size is exactly the cap-filtered admitted count (= user-admitted + feed
+    block-admitted + feed allow-admitted). Single source of truth.
+  * PHP reads it for the alias (inc:~8443): $pfb['unbound_py_regex_count']. The
+    alias is now surfaced when dnsbl_regex=='on' OR the Python file reports a
+    non-zero admitted count (so FEED regex with no user regex still shows). When the
+    file exists+numeric it is used; else PHP FALLS BACK to today's configured
+    user-regex line count (the file is written at resolver (re)load, so on a first
+    run / pre-reload it may be stale or absent -- same nature as pfb_py_count).
+  * The file is unlink_if_exists()'d on the full DNSBL clear path (inc:~8609) so a
+    stale count doesn't linger. Value CHANGES BY DESIGN (ADR §2 "Emit + counts").
+inc:3149 note (RESULTS/01/06): no further reconcile required -- pfb_py_count policy
+is unchanged; the only count whose value/semantics shift is the DNSBL_Regex alias,
+handled above.
+
+================================================================================
+5. THE NEW PHP-BOUNDARY TEST  (tests/test_adr07_php_boundary.py, 7 tests, pure)
+================================================================================
+Pattern: mirrors tests/test_adr06_php_boundary.py. A Python reference of the
+slimmed PHP ABP branch (_php_abp_boundary + _php_abp_extract_ip, the mirror of
+pfb_dnsbl_abp_extract_ip) runs over a raw ABP feed -> diverts IP anchors to a
+firewall set + emits surviving raw lines verbatim -> builds an 'abp' manifest ->
+runs the PRODUCTION build() + evaluate_domain -> compares to the Phase-2 oracle
+spec.decide().
+  TestRawAbpBoundaryDecisions
+    - test_decisions_match_oracle: a feed with block/@@/regex/$important/$badfilter
+      + skip lines (header/!/##/path/$third-party) -> live NET outcome (block vs
+      not-block) == oracle for every query. (Compares net outcome to absorb the
+      resolve-vs-pass mapping caveat from RESULTS/06 SS5: production returns "pass"
+      where the spec returns "resolve" when an allow matched with no covering
+      block -- same net "not null-routed" DNS result.)
+    - test_exact_block_decisions: pins the exact labels -- zone block, zone
+      SUBDOMAIN block, @@ carve-out resolves, $important blocks, irreducible regex
+      blocks, $badfilter-pruned name not blocked.
+    - test_raw_passthrough_reaches_python: @@/regex/$important survive the boundary
+      (white_db non-empty, regex_db non-empty, allow_regex_db non-empty,
+      important_rules True) -- proving the lite-parser-dropped rules now arrive.
+    - test_user_whitelist_sovereign_over_feed_important: a user whitelist un-blocks
+      a feed ||x^$important end-to-end (fact 7).
+  TestDnsblIpCoexistence
+    - test_ip_anchors_routed_to_firewall: ||203.0.113.7^, ||198.51.100.42^$important,
+      hosts 0.0.0.0 203.0.113.99 -> the firewall set {those 3 IPs}.
+    - test_no_ip_leaks_into_domain_or_regex_build: no firewall IP is a dataDB/zoneDB
+      key and no compiled regex pattern contains an IP literal (0 leak).
+    - test_domains_alongside_ips_still_block: domains in the same feed still block;
+      an IP-anchored host name itself is NOT a DNS block (it went firewall-only).
+NOTE on fixture domains: uses REGISTRABLE-parent domains (example.com / tracker.net,
+with com/net/org as the test public suffixes) so ||domain^ classifies to a wildcard
+ZONE that covers subdomains -- matching the Phase-2 oracle's wildcard semantics. A
+sub-of-registrable ||ads.example.com^ classifies to dataDB (exact) and would NOT
+cover its subdomains (that is the ADR-06 registrable-parent classify behaviour, not
+a P8 change); Phase 9's real-feed validation should keep this in mind.
+
+================================================================================
+6. BOTH ORACLES STAY GREEN  (preserved-semantics contract)
+================================================================================
+* ADR-06 GOLDEN ORACLE (no-regression, important_rules OFF): UNCHANGED-green. P8
+  touched only the PHP boundary + the Python COUNT EMIT (a side-effect file write)
+  + a new test. The Python DECISION PATH (parse/normalise/classify/reconcile/
+  evaluate_domain) is BYTE-UNCHANGED this phase -- no matcher edit. Non-ABP 'plain'/
+  'hosts' feeds take the identical col1 path; their decisions are identical.
+* ADR-07 spec/parser/reconcile/strata/emit_wire/regex_safety (ON): all green; the
+  new php-boundary test additionally pins the END-TO-END boundary round-trip ==
+  decide().
+* The count emit (len(regexDB)+len(allowRegexDB)) is a pure read of already-built
+  dicts; it cannot change any decision.
+
+================================================================================
+7. GO-AHEAD FOR PHASE 9 (final validation + smoke + DoD)
+================================================================================
+GO. No reject-criterion (ADR §7) tripped: sovereignty/precedence reproduce decide()
+through the full boundary; the fast path is byte-identical; DNSBL-IP is intact +
+ABP-aware; regex admission is cap-filtered and counted. Phase 9 (09_Validation_
+Smoke_DoD.txt) should:
+  * Re-run the Phase-1 latency/ReDoS benchmark on adr/07 vs the threshold (real or
+    representative ABP feeds), confirm the irreducible count stays in budget.
+  * Finalise the "Limit long/complex regex" setting UI text + update README/CLAUDE.md
+    (the build/contract changed: ABP parse is now one Python parser; PHP only
+    downloads + tags + runs the DNSBL-IP pass; new admitted-regex count file).
+  * MANUAL SMOKE (live pfSense box -- CI cannot reach Unbound/pf), per ADR §7:
+      - @@ un-blocks a carve-out subdomain while the rest of the zone stays blocked.
+      - reducible/irreducible/@@ regex; DNSBL_Regex alias reflects ADMITTED regex
+        (NOW from /var/unbound/pfb_py_regex_count -- verify it renders post-reload).
+      - $important beats feed @@; $badfilter removes a feed block; neither touches
+        a user rule.
+      - user sovereignty (whitelist both entry points; user block beats feed
+        @@$important; no $badfilter removes a user rule; TOP1M as user allow).
+      - regex safety: cap ON drops an over-long feed/user regex at load; a slow
+        regex warns then EVICTS; resolver recovers.
+      - DNSBL-IP: a feed with ||1.2.3.4^ / hosts IPs still populates DNSBLIP_v4/_v6
+        with the configured action; NO IP leaks into DNS blocking. VERIFY the '.abp'
+        marker round-trips a REUSE build (unchanged feed -> still tagged 'abp').
+      - no regression (plain/hosts feed); pfb_py_count renders; reload picks up
+        feed/whitelist/regex-list/setting changes.
+KEEP GREEN: python -m pytest (ADR-06 + all ADR-07 incl. php_boundary), ruff check/
+format, php -l (+ ShellCheck if any .sh is touched in P9).
+================================================================================

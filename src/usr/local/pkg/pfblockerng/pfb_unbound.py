@@ -345,6 +345,11 @@ def init_standard(id: int, env: module_env) -> bool:
     # produce those files until Phase 5 removes the duplication).
     pfb["pfb_py_sources"] = "pfb_py_sources.json"
     pfb["pfb_py_count"] = "pfb_py_count"
+    # ADR-07 P8: the ADMITTED (cap-filtered) feed+user regex total -- the count the
+    # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
+    # allowRegexDB AFTER both the user REGEX-ini load and the feed-regex merge, so
+    # patterns the static cap dropped are excluded (value changes by design, ADR §2).
+    pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
     pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
     pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
@@ -739,6 +744,15 @@ def init_standard(id: int, env: module_env) -> bool:
                     except Exception as e:
                         sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
                         pass
+
+            # ADR-07 P8: emit the ADMITTED regex total for the DNSBL_Regex UI alias
+            # (inc:8329). regexDB now holds USER regex (REGEX-ini) + FEED block regex
+            # (merged from build()); allowRegexDB holds FEED @@/re/ allow regex. Both
+            # have already had over-cap patterns dropped at load when the static cap is
+            # on, so this live size is the cap-filtered admitted count (value changes by
+            # design, ADR §2). Emitted whenever the plugin is enabled so the alias is
+            # accurate even with feed regex but no user regex.
+            dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
 
             # Validate SQLite3 database connections
             if pfb["mod_sqlite3"]:
