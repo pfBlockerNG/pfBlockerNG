@@ -1,0 +1,68 @@
+================================================================================
+PHASE 1 PROMPT — PREP (behaviour-preserving): hook runner + config schema (unwired)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_12_Update_Hooks/ADR.md   (read §2 table + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/12` branch performing Phase 1 of ADR-12. Behaviour-PRESERVING:
+land the hook RUNNER + the config schema as an ISOLATED, lint-clean building block,
+WITHOUT wiring it into the update pass. No observable change yet. Standalone-valuable.
+Work inline on `adr/12`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The runner is the one piece with real operational risk (running a root command from
+the update pass safely: timeout, output capture, never abort). Landing + hardening it
+in isolation keeps Phase 2 to pure plumbing (the two call sites).
+
+REQUIRED READING (inspect before editing)
+- .ADRs/ADR_12_Update_Hooks/ADR.md (§2 table, contract, §5).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the config-read pattern
+  (config_get_path of the pfBlockerNG config), the logger `pfb_logger`, how the package
+  already shells out (`exec("{$pfb['script']} …")`), and the shellcmd schema it writes
+  (:4406-4468) as a config-shape precedent.
+- pfSense `mwexec`/`mwexec_bg` semantics (stubs/pfsense/) for a timed, root exec with
+  output capture; add a stub if a needed fn is missing (PHPStan is the gate).
+- CLAUDE.md (PHP tabs/8.3, no die()/exit() in lib; POSIX sh; PHPStan/ShellCheck).
+
+ACTION PLAN (ordered)
+1. CONFIG SCHEMA: define the hooks list shape — entries `{command, when: pre|post,
+   enabled: bool, description, timeout?}` under the pfBlockerNG config. A read helper
+   returns the enabled entries for a given `when`, in list order.
+2. RUNNER `pfb_run_hooks(string $when, array $ctx): void`:
+   - For each enabled hook matching `$when` (in order): build the env from `$ctx`
+     (PFB_* vars), run the command **as root** via `mwexec` **with a per-hook timeout**
+     (default e.g. 60s, overridable), capture stdout+stderr to `pfb_logger` under a
+     clear per-hook header.
+   - **Non-zero exit OR timeout → log it and CONTINUE** (never throw, never abort).
+   - Confirm the timeout reliably kills a child (this is the reject-criteria check from
+     §7 — if mwexec's timeout can't kill a hung child, record it and propose the
+     detached-exec pivot).
+3. CLI TEST PATH: a small manual invocation (e.g. an argv branch) to run a `when` with a
+   synthetic ctx, for live testing — without touching the update pass.
+4. Keep it UNWIRED: sync_package_pfblockerng is NOT modified this phase.
+
+CONSTRAINTS
+- Behaviour-PRESERVING: nothing in the update pass calls the runner yet → no observable
+  change. No die()/exit() in library code. PHP tabs/8.3; any new pfSense fn → stubs.
+- Do NOT touch Python/tests. POSIX sh for any shell helper.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck → clean.
+- Manual: invoke the CLI test path → a sample hook runs as root, env vars present,
+  output logged; a non-zero hook logs + returns; a sleeping hook is killed at timeout.
+
+EXPECTED RESULT
+A hardened, lint-clean `pfb_run_hooks()` + config schema, isolated and unwired — proven
+to time out and to never abort.
+
+COMMIT (single)
+    pfblockerng: ADR-12 P1 add pre/post update hook runner + schema (ADR-12 P1)
+Push directly to `adr/12`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_12_Update_Hooks/RESULTS/01_Results.txt` (plain .txt)
+State: the config schema (keys + defaults); the `pfb_run_hooks` signature + the exact
+env-var names it sets; the timeout mechanism + whether it reliably kills a child (and the
+detached-exec pivot decision if not); the CLI test path; the go-ahead for Phase 2.

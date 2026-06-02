@@ -1,0 +1,70 @@
+================================================================================
+PHASE 4 PROMPT — HAProxy recipe + docs + manual smoke + DoD
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_12_Update_Hooks/ADR.md   (read §2 "HAProxy = recipe", §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/12` branch performing Phase 4 of ADR-12 — the closing phase: document
+the worked HAProxy recipe, finish the docs, and finalise the DoD + reject criteria + the
+live-box manual smoke. Work inline on `adr/12`, one commit, push directly (PR only if
+rejected).
+
+WHY THIS PHASE EXISTS
+The generic hooks are only as useful as their documentation. The HAProxy recipe is the
+motivating worked example that proves the mechanism end-to-end (and closes the loop ADR-11
+opened); CI cannot run it, so the manual smoke is the gate.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_12_Update_Hooks/RESULTS/03_Results.txt (and 01-02). If missing, STOP.
+- .ADRs/ADR_12_Update_Hooks/ADR.md (§2 HAProxy-recipe row, §7).
+- README.md + CLAUDE.md (where to document the feature + recipe).
+- The HAProxy package reload entry: ../FreeBSD-ports/net/pfSense-pkg-haproxy-devel/files/
+  usr/local/pkg/haproxy/haproxy.inc — the reload (`haproxy_check_run`/`haproxy_configure`,
+  ~:2491/:1349), the official `source_ip` `ipalias_*.lst` emission (:1085), the validation
+  testpath (:1358). Cross-check with the memory note "haproxy-integration-findings".
+- The ADR-11 deliverables (pfB_Aggregate_* alias + the never-empty consumer file) the
+  recipe consumes.
+
+ACTION PLAN (ordered)
+1. RECIPE: document a worked HAProxy recipe in README/CLAUDE.md:
+   - a `post` hook guarded on `[ "$PFB_IP_CHANGED" = "1" ]` whose command triggers a
+     **graceful HAProxy reload** (give the exact, POSIX-sh-safe command that invokes the
+     package's reload); note it runs on the HA node that updates.
+   - the HAProxy config pattern: one `source_ip` ACL referencing `pfB_Aggregate_v4` (so
+     the package emits `ipalias_pfB_Aggregate_v4.lst`); a header ACL
+     (`req.hdr_ip(CF-Connecting-IP)` / XFF) referencing that file to deny; the security
+     note (only trust the header from Cloudflare ranges); ADR-11's never-empty file
+     removes the dummy-IP hack.
+2. DOCS: feature overview (pre/post update hooks, env vars, run-as-root, timeout/log-and-
+   continue, HA-sync). markdownlint clean.
+3. DoD + SMOKE: finalise §7 — the reject/pivot criteria (unsafe sync exec → detached;
+   recipe still needs hacks → record) and the live-box manual smoke checklist.
+
+CONSTRAINTS
+- Docs + the recipe only (the mechanism landed in P1-P3). If a tiny code tweak is needed
+  for the recipe, keep it behaviour-neutral.
+- php -l + PHPStan + ShellCheck + markdownlint clean; python -m pytest untouched/green.
+- Do NOT edit other ADRs' docs or benchmarks/README.md.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck + markdownlint → clean.
+- The recipe command is POSIX-sh-safe + uses the real HAProxy reload entry; README/
+  CLAUDE.md describe the feature + env vars; §7 smoke checklist is complete + actionable.
+
+EXPECTED RESULT
+ADR-12 is implementation-complete with a documented HAProxy recipe + feature docs and a
+maintainer smoke checklist — Proposed until the live smoke passes.
+
+COMMIT (single)
+    docs: ADR-12 HAProxy recipe + update-hooks docs + DoD (ADR-12 P4)
+Push directly to `adr/12`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_12_Update_Hooks/RESULTS/04_Results.txt` (plain .txt)
+Final summary: the documented recipe (the exact reload command + the ACL config); the
+feature docs added; the manual-smoke checklist status; whether ADR-12 is ready to flip
+from Proposed toward Accepted pending the maintainer's live smoke (incl. the HAProxy
+recipe end-to-end).
