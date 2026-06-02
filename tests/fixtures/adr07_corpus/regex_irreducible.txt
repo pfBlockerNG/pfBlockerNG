@@ -1,0 +1,32 @@
+! ADR-07 regex patterns that stay REAL compiled patterns (cannot fold to a
+! domain/wildcard). These become per-query cost; the spike measures the inline
+! scan latency at feed scale and the ReDoS exposure on a <=253-char input.
+!
+! --- finite char-class / quantified label bodies (NOT expanded by design) ---
+/ad[0-9]\.example\.com$/
+/^ads?[0-9]*\.tracker\.example$/
+/^cdn[a-z]{1,3}\.ads\.example$/
+/track(er|ing)\.example\.(com|net)$/
+/^(www\.)?ad-?serv(er|ice)\.example$/
+/metrics?-[0-9a-f]{6,}\.example$/
+/[a-z0-9]{8,}\.cloudfront-ads\.example$/
+/^banner\d+\.(rotate|serve)\.example$/
+!
+! --- substring / unanchored (matches anywhere in the name) ---
+/analytics/
+/-ads?-/
+/\.doubleclick\./
+/cdn[0-9]+/
+!
+! --- @@ allow, irreducible ---
+@@/safe-(cdn|static)[0-9]*\.example/
+@@/whitelist-[a-z]+\.example$/
+!
+! --- deliberately ReDoS-shaped patterns (catastrophic-backtracking exemplars).
+!     Real feeds rarely ship these, but the safety layer must handle them; the
+!     spike times their worst real first-hit on a <=253-char crafted input. ---
+/^(a+)+$/
+/^(a|a)+$/
+/^(\w+\.)+\w+$/
+/^([a-z]+)*\.example$/
+/^(.*a){20}$/
