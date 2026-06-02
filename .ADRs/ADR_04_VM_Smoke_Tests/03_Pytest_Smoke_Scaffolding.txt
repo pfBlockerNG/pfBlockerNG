@@ -60,6 +60,11 @@ ACTION PLAN (ordered)
 4. MOCK FEED SERVER FIXTURE (stdlib `http.server`, no third-party): serves fixture
    files (IP lists, DNSBL lists) from a tests/smoke/fixtures dir on a port reachable
    by the guest at http://10.0.2.2:<port>/<name>. Function/module scoped as needed.
+   HERMETIC GUARD (egress block): the workflow blocks the runner's outbound *after* the
+   GHCR pull — the 10.0.2.2 feed path is SLIRP-internal (loopback on the runner) so it
+   survives, while real internet + the SLIRP DNS upstream 10.0.2.3 go dark. Sequence is
+   pull -> block -> boot/deploy/run (Phase 6 wires the actual block; here just don't
+   assume real egress).
 5. TRIVIAL SMOKE TEST (`tests/smoke/test_smoke_boot.py`, `@pytest.mark.smoke`): boot
    fixture up → SSH `pfctl -sr` returns rules → `dig` a baked local-data name returns
    its known answer → assert. Proves the scaffolding end-to-end.
