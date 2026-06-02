@@ -1,0 +1,73 @@
+================================================================================
+PHASE 6 PROMPT — Validation, benchmark, manual smoke, DoD
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §4, §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 6 of ADR-10 — the closing phase:
+re-run the kill-gate benchmark on the branch, prove idle decision-identity, document
+the new update/reload contract, and finalise the Definition of Done + reject criteria
++ the live-box manual smoke (the headline zero-downtime guarantee CI cannot prove).
+Work inline on `adr/10`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The zero-downtime guarantee (no dropped queries, shared-global visibility, C-cache
+correctness) lives where CI cannot reach — a live Unbound. This phase ties the bow:
+the automated guards (oracles + benchmark) green on the branch, the docs updated, and
+a precise maintainer smoke checklist that flips Status to Accepted.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/05_Results.txt — the wired end-to-end path.
+  If missing, STOP and report.
+- Also read RESULTS/01..04 — the kill-threshold, the cache decisions, the sentinel
+  contract, the swap semantics.
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (§4 requirements, §7 DoD/reject/smoke).
+- benchmarks/spike_adr06_build.py (the RAM harness from Phase 1) — re-run on adr/10.
+- README.md + CLAUDE.md — the update/reload contract to document.
+- tests/test_adr06_*/test_adr07_*/test_adr10_* — the full guard set.
+
+ACTION PLAN (ordered)
+1. BENCHMARK. Re-run the Phase-1 peak-RAM (build-while-old-live + swap) on adr/10 vs
+   the kill-threshold; record the number. Confirm it still fits the min-spec box (or
+   the RAM-gated fallback engages as designed).
+2. EQUIVALENCE. Full idle decision-identity: test_adr06_* + test_adr07_* pass
+   unchanged; the test_adr10_* suite (snapshot equivalence, fail-closed swap, watcher)
+   passes. No regression off the swap path.
+3. DOCS. Update README.md + CLAUDE.md with the new update/reload contract: a DNSBL
+   DATA update is a zero-downtime background swap (no restart); a CONFIG change still
+   restarts; the fallback conditions; the cache behaviour (Reports reset; allow->block
+   per the chosen C-cache strategy; block->allow immediate). markdownlint clean.
+4. DoD + REJECT + SMOKE. Finalise §7: the reject criteria (visibility-isolated / 2x-RAM
+   OOM / swap can't beat restart) and the live-box manual smoke checklist (zero dropped
+   queries under load; flip add/remove incl. C-cache; fail-closed on a broken manifest;
+   data-vs-config fork; RAM on the smallest box; shared-global visibility; no control
+   collision). Mark Status to flip to Accepted ONLY after the maintainer passes it.
+
+CONSTRAINTS
+- No new shipped behaviour this phase (validation + docs). If a doc-only or comment
+  fix is needed, keep it behaviour-neutral.
+- ruff / php -l / ShellCheck / markdownlint clean; python -m pytest green.
+- Do not edit other ADRs' docs or benchmarks/README.md.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green (full ADR-06/07/10 guard set).
+- ruff / markdownlint / (php -l, ShellCheck if touched) → clean.
+- The branch RAM number is recorded vs threshold; README/CLAUDE.md describe the
+  contract; §7 smoke checklist is complete and actionable.
+
+EXPECTED RESULT
+ADR-10 is implementation-complete with green automated guards and a documented
+contract; the only thing between Proposed and Accepted is the maintainer's live-box
+smoke. The reject criteria are pinned.
+
+COMMIT (single)
+    docs: ADR-10 validation + update/reload contract + DoD (ADR-10 P6)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/06_Results.txt` (plain .txt)
+Final summary: the branch benchmark number vs threshold; the full guard-set status;
+the documented contract; the manual-smoke checklist status; and whether the ADR is
+ready to flip from Proposed toward Accepted pending the maintainer's live smoke.

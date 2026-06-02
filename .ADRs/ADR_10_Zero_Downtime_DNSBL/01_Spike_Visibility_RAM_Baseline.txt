@@ -1,0 +1,104 @@
+================================================================================
+PHASE 1 PROMPT — Spike & kill-gate: pythonmod visibility, ~2x RAM, restart baseline
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §1 "premise to falsify", §2
+     cache rows, §6 Phase 1, §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 1 of ADR-10. This is a DE-RISKING
+SPIKE, not a feature: prove (or kill) the load-bearing premise + bound the cost
+BEFORE any machinery is built. Behaviour-NEUTRAL on shipped code (no `src/` change):
+you add a measurement harness + a method doc + recorded numbers only. Work inline
+on `adr/10`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The whole ADR (one background build + one atomic global-ref swap serving all query
+threads) holds ONLY IF Unbound's `pythonmod` worker threads share one interpreter
+and one set of module globals. If they are isolated, a single swap is invisible to
+the other workers and the design is REJECTED. Separately, the build transiently
+doubles DNSBL RAM (~274 B/entry x millions) — on a small box that can OOM mid-swap.
+Building anything before these are settled would repeat the ADR-01 trap (machinery
+on an unproven premise). We also need the CURRENT restart downtime as the baseline
+the swap must beat, and the cache benchmarks that drive Phases 3/5.
+
+REQUIRED READING (inspect before measuring)
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md — §1 (premise + Context 6/7 caches), §2
+  (the three cache rows), §6 Phase 1, §7 reject criteria.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — init_standard (:201), the globals
+  (:87-96, init :383-390), the build+swap site (:552-562), build() (:1966) +
+  dnsbl_build_from_manifest() (:2118), the worker threads (:728-746) + _db_lock
+  (:917), no_cache_store (:2456), the Reports sqlite (path :336, removed-at-init
+  :340-342, written :2721, table :951).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_reload_unbound (:3095),
+  pfb_stop_start_unbound (:3055-3061), dump_cache/load_cache (:3113/:3153), the
+  DNSBL-queries-daemon control marker (:3211).
+- benchmarks/spike_adr06_build.py — REUSE this peak-RAM harness; do NOT edit
+  benchmarks/README.md (it is ADR-01's shared doc — leave other ADRs' docs alone).
+- CLAUDE.md (stdlib-only inside Unbound; no live Unbound in CI).
+- Unbound `pythonmod` documentation (external) for the threading model — cite it.
+
+ACTION PLAN (ordered)
+1. VISIBILITY PREMISE (the gate). Determine whether `pythonmod` query threads share
+   module globals. Two parts:
+   (a) CI/local-provable: document from Unbound's pythonmod source/docs how the
+       interpreter + module are loaded across `num-threads`, and whether init_standard
+       runs per-thread against shared module globals. Cite refs.
+   (b) Live-box probe (owner: MAINTAINER — CI cannot reach Unbound): a minimal probe
+       (set a module sentinel from one thread/init, observe it from another worker
+       under num-threads>1). Write the exact procedure; leave a result slot in
+       RESULTS/01. **NO-GO if isolated** — record the rejection or the per-thread
+       fallback.
+2. ~2x RAM. Extend/reuse benchmarks/spike_adr06_build.py to measure peak RSS of
+   *build-while-the-old-structures-stay-live, then swap* at ABP feed scale (use the
+   ADR-07 corpus if present, else a synthetic multi-million-entry set). This part IS
+   agent-runnable → produce a real number. Compare to a realistic min-spec box (state
+   it, e.g. a 1 GB appliance). Propose the kill-threshold + the mitigation if it
+   busts (RAM-gated fallback to restart / lower-peak build).
+3. RESTART BASELINE (owner: MAINTAINER, live box). Procedure to measure today's
+   downtime: dropped/refused queries + latency spike during a Python-mode DNSBL
+   update (the restart window). This is the number the swap must beat (target: zero
+   dropped). Document the method; result slot in RESULTS/01.
+4. CACHE BENCHMARKS (drive Phases 3/5). (a) Per-block Reports-sqlite write overhead
+   (pfb_db_enqueue("cache",…) :2721) vs the ~1 us matcher — agent-measurable as a
+   micro-bench → is the async log path overkill / droppable / generation-keyable?
+   (b) Targeted C-cache delta-flush cost vs accepting TTL-bounded staleness — document
+   the method (typical newly-blocked delta sizes + real feed TTLs); live parts =
+   maintainer.
+5. GO/NO-GO. Write the verdict + thresholds + cache recommendations in RESULTS/01.
+
+CONSTRAINTS
+- NO shipped (`src/`) change this phase — benchmark/harness + docs + recorded numbers
+  only. Python harness is stdlib-only, ruff-clean. Do NOT edit benchmarks/README.md
+  or any other ADR's docs.
+- The visibility premise + the live restart baseline + on-real-box RAM are MAINTAINER-
+  run (no live Unbound in CI); the agent lands the harness + the exact procedures +
+  the CI/local-runnable RAM and sqlite-overhead numbers, and leaves clearly-marked
+  result slots for the maintainer.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest (default) → green/unchanged (this phase adds no unit behaviour).
+- ruff check . / ruff format . → clean on any new harness.
+- RESULTS/01_Results.txt records: the visibility verdict (or the maintainer procedure
+  + slot), a real peak-RAM number + threshold + mitigation, the restart-baseline
+  procedure, and the cache-benchmark outcomes — with an explicit GO/NO-GO.
+
+EXPECTED RESULT
+A GO/NO-GO on the zero-downtime premise backed by evidence: the threading verdict,
+the ~2x-RAM number vs a min-spec box + threshold, the restart-downtime baseline
+method, and the cache decisions (keep/drop/generation-key the Reports log; flush vs
+TTL for the C-cache). On NO-GO, the ADR is rejected or re-scoped here — before any
+machinery.
+
+COMMIT (single)
+    bench: ADR-10 P1 spike — pythonmod visibility, 2x-RAM, restart baseline (ADR-10 P1)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/01_Results.txt` (plain .txt)
+State: the visibility verdict (shared globals? GO/NO-GO; or the maintainer procedure +
+result slot); the peak-RAM number + kill-threshold + chosen mitigation; the restart-
+downtime baseline (method + slot); the cache-benchmark outcomes + the recommended
+Phase-3 Reports-log strategy (clear / generation-key / drop) and Phase-5 C-cache
+strategy (delta-flush / TTL); and an explicit GO/NO-GO for Phase 2. If NO-GO, say so
+and stop the chain.
