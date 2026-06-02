@@ -1,0 +1,68 @@
+================================================================================
+PHASE 5 PROMPT — Settings UI + docs + benchmark + manual smoke + DoD
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §4, §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/11` branch performing Phase 5 of ADR-11 — the closing phase: finish
+the settings UI + help text, document the feature, re-run the cost benchmark on the
+branch, and finalise the Definition of Done + reject criteria + the live-box manual
+smoke (CI cannot load pf tables or run HAProxy). Work inline on `adr/11`, one commit,
+push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The two toggles need clear UI + help; the feature's RAM/opt-in caveat + naming must be
+documented for the next maintainer; and the manual smoke is the gate (no automated
+oracle for PHP/shell alias building).
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_11_Uber_Aliases/RESULTS/04_Results.txt (and 03). If missing, STOP.
+- Also RESULTS/01_Results.txt — the cost numbers + build strategy + RAM caveat to
+  document.
+- .ADRs/ADR_11_Uber_Aliases/ADR.md (§4, §7).
+- The pfBlockerNG settings page(s) under src/usr/local/www/pfblockerng/ + the settings
+  schema; README.md + CLAUDE.md.
+- benchmarks/ (the Phase-1 script) to re-run on the branch.
+
+ACTION PLAN (ordered)
+1. UI: finalise the two opt-in toggles (Deny aggregate, GeoIP aggregate) on the
+   settings page with clear help text — what they create (pfB_Aggregate_{v4,v6} /
+   pfB_GeoAggregate_{v4,v6}), that they are Native (no rule), and the RAM caveat.
+2. DOCS: README.md + CLAUDE.md — the feature, the fixed alias names, the opt-in/default-
+   off + RAM note, the lockstep/in-pass build, and the ADR-12 hand-off (the never-empty
+   consumer file + Native alias are what HAProxy will consume; freshness in ADR-12 is a
+   pfBlockerNG-triggered graceful HAProxy reload, NOT a socket push). markdownlint clean.
+3. BENCHMARK: re-run the Phase-1 union-cost benchmark on adr/11; record the branch
+   numbers vs the soft budget.
+4. DoD + SMOKE: finalise §7 — the reject/pivot criteria (cost-prohibitive → incremental;
+   cannot-stay-additive → STOP) and the live-box manual smoke checklist. Status flips to
+   Accepted only after the maintainer passes it.
+
+CONSTRAINTS
+- No new shipped behaviour beyond UI wiring + docs (the build logic landed in P2-P4).
+- php -l + PHPStan + ShellCheck + markdownlint clean; python -m pytest untouched/green.
+- Do NOT edit other ADRs' docs or benchmarks/README.md.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck + markdownlint → clean.
+- The settings toggles render with help; README/CLAUDE.md describe the feature + caveats;
+  the branch benchmark number is recorded; §7 smoke checklist is complete + actionable.
+
+EXPECTED RESULT
+ADR-11 is implementation-complete with lint-clean code, documented settings + caveats,
+a branch cost number, and a maintainer smoke checklist — Proposed until the live smoke
+passes.
+
+COMMIT (single)
+    docs: ADR-11 settings UI + aggregate-alias docs + DoD (ADR-11 P5)
+Push directly to `adr/11`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/05_Results.txt` (plain .txt)
+Final summary: the two toggles + help; the docs added; the branch benchmark vs budget;
+the manual-smoke checklist status; whether ADR-11 is ready to flip from Proposed toward
+Accepted pending the maintainer's live smoke; and the explicit ADR-12 hand-off (Native
+aggregate + never-empty file; reload-trigger freshness, no socket).

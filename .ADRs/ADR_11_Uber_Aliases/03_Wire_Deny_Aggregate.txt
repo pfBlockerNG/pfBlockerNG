@@ -1,0 +1,75 @@
+================================================================================
+PHASE 3 PROMPT — Wire the Deny-aggregate into the pass + register urltable alias (opt-in)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §2 table + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/11` branch performing Phase 3 of ADR-11 — the core wiring: when an
+opt-in toggle is on, build the Deny-aggregate in the update pass and register it as a
+Native `urltable` alias. ADDITIVE: existing aliases/tables/rules unchanged; toggle off
+= byte-identical to today. Work inline on `adr/11`, one commit, push directly (PR only
+if rejected).
+
+WHY THIS PHASE EXISTS
+Phase 2 produced the union building blocks in isolation. This phase runs them in
+lockstep with the feed update and exposes the result as a real pfSense alias (so it is
+referenceable by name — incl. by HAProxy in ADR-12), with no firewall rule (Native).
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_11_Uber_Aliases/RESULTS/02_Results.txt — the `aggregate` action interface +
+  the member-helper. If missing, STOP and report.
+- Also RESULTS/01_Results.txt — the build strategy (full vs incremental).
+- .ADRs/ADR_11_Uber_Aliases/ADR.md (§2 table, contract, §4).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — sync_package_pfblockerng (:6556) for
+  the hook point (after members materialise, with/just before pfb_aliastables :4402);
+  the urltable registration block to MIRROR (:9512-9520); pfb_firewall_rule (:4139) —
+  which is SKIPPED for Native; empty-alias prune (:9495-9498); the settings read
+  (config_get_path of the pfBlockerNG config) for the new toggle.
+- The settings schema (pfblockerng.xml / the general settings page) for adding a toggle.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. SETTING: add an opt-in "Create aggregate Deny alias" toggle (default OFF) to the
+   pfBlockerNG settings (config + the settings page field). Off must remain the
+   default on upgrade.
+2. WIRE: in sync_package_pfblockerng(), after the Deny members are materialised, when
+   the toggle is on: call the member-helper (Phase 2) -> run `pfblockerng.sh aggregate`
+   per family -> write {aliasdir}/pfB_Aggregate_{v4,v6}.txt + the never-empty consumer
+   file -> register pfB_Aggregate_{v4,v6} as a `urltable` Native alias (mirror
+   :9512-9520; descr/detail "DO NOT EDIT"; updatefreq like siblings) -> ensure it loads
+   via pfb_aliastables. **Do NOT call pfb_firewall_rule** (Native = no rule). Honour the
+   Phase-1 build strategy (full vs incremental).
+3. TEARDOWN: when the toggle is off (or pfBlockerNG disabled), remove the
+   pfB_Aggregate_* alias/table/files cleanly (no orphans) — symmetric with how pfB
+   removes its other aliases.
+4. ADDITIVE GUARANTEE: confirm member aliases, their tables, and all existing rules are
+   untouched; only the new Native alias/table is added.
+
+CONSTRAINTS
+- ADDITIVE only. Toggle off ⇒ no new alias/file/table; behaviour identical to today.
+- Native ⇒ NO firewall rule for the aggregate, ever.
+- PHP tabs/8.3, no die()/exit() in library code; new pfSense fns -> stubs/pfsense/.
+  POSIX sh for any shell. Do NOT touch Python/tests.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck → clean.
+- diff-read: the aggregate registration mirrors :9512-9520, calls NO pfb_firewall_rule,
+  runs inside the pass (lockstep), and is gated on the toggle; teardown path present.
+
+EXPECTED RESULT
+With the toggle on, pfB_Aggregate_{v4,v6} appear as Native urltable aliases holding the
+deduped+aggregated effective Deny set, rebuilt in-pass, no firewall rule; toggle off =
+today.
+
+COMMIT (single)
+    pfblockerng: ADR-11 P3 wire Deny aggregate alias (opt-in, Native) (ADR-11 P3)
+Push directly to `adr/11`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/03_Results.txt` (plain .txt)
+State: the toggle name + default; the exact hook point in sync_package_pfblockerng; the
+alias registration shape + the never-rule guarantee; the teardown behaviour; the
+go-ahead for Phase 4 (GeoIP aggregate via the same mechanism).
