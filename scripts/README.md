@@ -25,15 +25,31 @@ boots a real pfSense CE VM. **No Packer**: pfBlockerNG compiles nothing.
 
 | Script | Use |
 | --- | --- |
-| [`image-publish.sh`](image-publish.sh) | On the Proxmox host: export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR by CE version. Old tags kept. |
+| [`image-publish.sh`](image-publish.sh) | Export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR by CE version. Old tags kept. |
 | [`image-upgrade.sh`](image-upgrade.sh) | Pull a tag → boot a **copy** → `pfSense-upgrade` → power off → publish a new version tag. Source image untouched. |
 
+### Driving from your machine
+
+Both scripts run **from your laptop** against a remote Proxmox/KVM host — pass
+`--proxmox [user@]host` (+ `--proxmox-port` / `--proxmox-ssh-key`, or the
+`PROXMOX_SSH_HOST`/`USER`/`PORT`/`KEY` env vars). The **native** steps
+(`qm`/`pvesm`/`qemu-img`/`qemu-system` — all shipped with Proxmox VE) run there
+over SSH; **`oras` runs locally**, so no GHCR creds and nothing extra need
+installing on Proxmox. The image is converted/compressed on Proxmox and
+**streamed** over SSH. For `image-upgrade.sh` the guest is reached by **jumping
+through Proxmox** (`ProxyCommand -W`), so the guest SSH key never leaves your
+machine. Omit `--proxmox` to run directly on the host, as before.
+
 ```sh
-# publish the seed image (on the Proxmox host)
-./scripts/image-publish.sh 2.8.1
+# publish the seed image (driving a remote Proxmox host)
+./scripts/image-publish.sh 2.8.1 --proxmox root@pve.lan
 
 # bump a published image to a newer CE release
-./scripts/image-upgrade.sh --from 2.8.1 --ssh-key ~/.ssh/smoke_key
+./scripts/image-upgrade.sh --from 2.8.1 --proxmox pve.lan --ssh-key ~/.ssh/smoke_key
+
+# or set the host once and call bare
+export PROXMOX_SSH_HOST=pve.lan PROXMOX_SSH_USER=root
+./scripts/image-publish.sh 2.8.1
 ```
 
 ## Two install paths: CI/local vs release
