@@ -174,9 +174,11 @@ class TestInitFromRawDecisionsTop1mEnabled:
 
     def test_top1m_enabled_flows_from_manifest_config(self, tmp_path: Any) -> None:
         # The manifest's config.top1m_enabled drives the whiteDB load: enabled ->
-        # the popular domain is un-blocked; disabled -> it blocks.
+        # the popular domain is un-blocked; disabled -> it blocks. ADR-07 P3 widened
+        # the whiteDB value to {"wildcard", "important"} (TOP1M is a user allow ->
+        # important=True); the net DNS decision is unchanged (pinned by the oracle).
         enabled = _build_from_manifest(tmp_path, top1m_enabled=True)
-        assert enabled.white_db.get("popularcdn.com") is False
+        assert enabled.white_db.get("popularcdn.com") == {"wildcard": False, "important": True}
         disabled = _build_from_manifest(tmp_path, top1m_enabled=False)
         assert "popularcdn.com" not in disabled.white_db
 
