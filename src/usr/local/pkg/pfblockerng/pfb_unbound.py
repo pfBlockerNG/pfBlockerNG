@@ -29,7 +29,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -2257,6 +2257,259 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
     if dfound:
         return DNSBL_CLASS_ZONE, dfound
     return DNSBL_CLASS_DATA, domain
+
+
+# --------------------------------------------------------------------------- #
+# ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + classify +
+# priority bands. PURE / reentrant -- consumes the typed ``Rule`` stream from
+# Stage-A (parse_abp) and produces the pre-emit rule sets. NOT wired into
+# build()/init (Phase 6) and NEVER compiles/executes a regex.
+#
+# The reference TARGETs are tests/test_adr07_decision_spec.py (reduce_regex /
+# reconcile / priority / decide) and benchmarks/spike_adr07_regex.reduce_pattern;
+# this agrees with both. ADR.md SS2 ($badfilter / Regex-reduction / Precedence).
+# --------------------------------------------------------------------------- #
+
+# Regex-reduction grammar (mirrors the Phase-2 oracle reduce_regex + the spike
+# reduce_pattern). A reducible ``/re/`` decides IDENTICALLY to a domain/wildcard
+# rule, so it folds to a domain Rule at zero per-query cost. ``D`` is a domain
+# literal: labels of [a-z0-9-] joined by ESCAPED dots (``\.``), no other metachar.
+_DNSBL_RX_DOMAIN_LITERAL = re.compile(r"^[a-z0-9-]+(?:\\\.[a-z0-9-]+)+$")
+# Prefixes that mean "domain + all subdomains" (-> wildcard zone after fold):
+_DNSBL_RX_WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
+# Prefix that means "exact domain only" (-> exact data after fold):
+_DNSBL_RX_EXACT_PREFIXES = (r"^",)
+# A leading ``(www\.)?`` after ``^`` is exact-with-optional-www -> still exact.
+_DNSBL_RX_WWW_OPT = r"(www\.)?"
+
+
+def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
+    """Return ``(wildcard, domain)`` if a regex inner pattern folds to a
+    domain/wildcard rule, else ``None`` (irreducible -- stays a compiled pattern).
+
+    ``wildcard`` True -> domain + subdomains (zone); False -> exact (data). Mirrors
+    the Phase-2 oracle ``reduce_regex`` + ``spike.reduce_pattern`` exactly (so a
+    reducible feed regex == its dict form). Pure; does NOT compile the pattern.
+    Per ADR.md SS2 we do NOT expand finite classes (``ad[0-9]\\.x`` stays a regex).
+    """
+    if not inner.endswith("$"):
+        return None
+    body = inner[:-1]
+    for pre in _DNSBL_RX_WILDCARD_PREFIXES:
+        if body.startswith(pre):
+            lit = body[len(pre) :]
+            if _DNSBL_RX_DOMAIN_LITERAL.match(lit):
+                return True, lit.replace("\\.", ".")
+            return None
+    for pre in _DNSBL_RX_EXACT_PREFIXES:
+        if body.startswith(pre):
+            lit = body[len(pre) :]
+            if lit.startswith(_DNSBL_RX_WWW_OPT):
+                lit = lit[len(_DNSBL_RX_WWW_OPT) :]
+            if _DNSBL_RX_DOMAIN_LITERAL.match(lit):
+                return False, lit.replace("\\.", ".")
+            return None
+    return None
+
+
+def _dnsbl_rule_band(rule: Rule) -> int:
+    """The numeric priority band (1-6) for a surviving rule (ADR.md SS2 / the P3
+    PRIO_* constants). USER -> band 5/6 (sovereign); FEED -> 1/2, +$important ->
+    3/4. ``important`` is meaningless for USER rules (they are always sovereign)."""
+    user = rule.provenance == RULE_PROV_USER
+    if rule.kind == DNSBL_KIND_ALLOW:
+        return _allow_priority(rule.important, user=user)
+    return _block_priority(rule.important, user=user)
+
+
+@dataclass(frozen=True)
+class BlockDomainRule:
+    """A reconciled domain BLOCK ready to emit into dataDB/zoneDB (Phase 6).
+
+    ``cls`` is DNSBL_CLASS_DATA (exact) or DNSBL_CLASS_ZONE (wildcard); ``key`` is
+    the registrable parent for a ZONE or the exact domain for DATA (from classify).
+    """
+
+    cls: str
+    key: str
+    band: int
+    important: bool
+    provenance: str
+    feed: str
+    group: str
+    log: str
+
+
+@dataclass(frozen=True)
+class AllowDomainRule:
+    """A reconciled domain ALLOW ready to emit into whiteDB (Phase 6).
+
+    ``wildcard`` True -> domain + subdomains; False -> exact. ``important`` raises a
+    feed allow's band to 4 (and is always effectively sovereign for USER rules)."""
+
+    domain: str
+    wildcard: bool
+    band: int
+    important: bool
+    provenance: str
+
+
+@dataclass(frozen=True)
+class RegexRule:
+    """A reconciled IRREDUCIBLE regex (block or allow) handed to Phase 6 to
+    COMPILE (raw ``pattern`` -- NOT compiled here; Stage B never executes a regex).
+
+    ``kind`` is DNSBL_KIND_BLOCK or DNSBL_KIND_ALLOW. ``band`` is the priority band;
+    ``important`` is carried for the 6-band resolution."""
+
+    pattern: str
+    kind: str
+    band: int
+    important: bool
+    provenance: str
+    feed: str
+    group: str
+    log: str
+
+
+@dataclass
+class ReconcileResult:
+    """The Stage-B pre-emit rule sets (pure return value -- no global is touched).
+
+    Phase 6 folds these into the matcher dicts + compiles the irreducible regex:
+        block_domains            -> dataDB/zoneDB (+band/important/feed/group/log)
+        allow_domains            -> whiteDB ({wildcard, important} + band)
+        block_regex_irreducible  -> regexDB     (compiled in Phase 6)
+        allow_regex_irreducible  -> allowRegexDB (compiled in Phase 6)
+    ``important_rules`` is the build-emitted fast-path flag (ADR.md SS2 "Query-time
+    matcher"): True iff ANY surviving rule would engage the numeric 6-band branch
+    (any $important, any feed allow/@@ or feed regex). False keeps today's matcher.
+    ``pruned`` / ``reduced`` / ``skipped_badfilter`` are diagnostic counts."""
+
+    block_domains: list[BlockDomainRule] = field(default_factory=list)
+    allow_domains: list[AllowDomainRule] = field(default_factory=list)
+    block_regex_irreducible: list[RegexRule] = field(default_factory=list)
+    allow_regex_irreducible: list[RegexRule] = field(default_factory=list)
+    important_rules: bool = False
+    pruned: int = 0
+    reduced: int = 0
+    skipped_badfilter: int = 0
+
+
+def reconcile(
+    rules: Iterable[Rule],
+    tlds: dict[str, dict[str, str]],
+    exclusion: set[str],
+) -> ReconcileResult:
+    """Stage-B: reconcile the typed ``Rule`` stream into the pre-emit rule sets.
+
+    PURE + REENTRANT: builds and returns a FRESH ``ReconcileResult``, mutates no
+    argument and no module global, never compiles/executes a regex -- two calls on
+    equal inputs yield equal results. Steps (ADR.md SS2 / RESULTS/04 SS7):
+
+      1. $BADFILTER PRUNE (feed-only): collect the signatures of FEED rules carrying
+         ``$badfilter``; drop every FEED rule with a matching signature; the
+         ``$badfilter`` rules themselves emit nothing. USER rules are IMMUNE (never
+         collected, never pruned -- sovereignty, fact 7).
+      2. REGEX REDUCTION: a reducible regex Rule folds to a domain rule (block ->
+         data/zone via classify, allow -> whiteDB wildcard); irreducible regex
+         passes through into the irreducible set (compiled in Phase 6).
+      3. CLASSIFY domain blocks data vs zone via ``classify`` (reuse ADR-06).
+      4. ASSIGN priority BANDS to every surviving rule (``_dnsbl_rule_band``).
+
+    ``tlds`` / ``exclusion`` are the classify inputs (same shapes build() uses).
+    Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
+    """
+    rule_list = list(rules)
+
+    # --- Step 1: feed-only $badfilter prune ------------------------------- #
+    bad_sigs = {r.signature for r in rule_list if r.badfilter and r.provenance == RULE_PROV_FEED}
+    result = ReconcileResult()
+    survivors: list[Rule] = []
+    for r in rule_list:
+        if r.badfilter:
+            result.skipped_badfilter += 1
+            continue  # the $badfilter rule itself never emits a decision
+        if r.provenance == RULE_PROV_FEED and r.signature in bad_sigs:
+            result.pruned += 1
+            continue  # pruned by a feed $badfilter (USER rules are never here)
+        survivors.append(r)
+
+    # --- Steps 2-4: reduce, classify, band -------------------------------- #
+    for r in survivors:
+        # A surviving rule engages the numeric 6-band branch (vs today's fast path)
+        # whenever it is $important, or a feed ALLOW (@@), or a feed regex -- i.e.
+        # anything beyond a band-1 feed block / a user rule the fast path handles.
+        if r.important or (r.provenance == RULE_PROV_FEED and r.kind == DNSBL_KIND_ALLOW):
+            result.important_rules = True
+
+        if r.target == RULE_TARGET_REGEX:
+            reduced = _dnsbl_reduce_regex(r.key_or_pattern)
+            if reduced is None:
+                # Irreducible -> hand the RAW pattern to Phase 6 (compile candidate).
+                if r.provenance == RULE_PROV_FEED:
+                    result.important_rules = True  # any feed regex engages numeric path
+                regex_rule = RegexRule(
+                    pattern=r.key_or_pattern,
+                    kind=r.kind,
+                    band=_dnsbl_rule_band(r),
+                    important=r.important,
+                    provenance=r.provenance,
+                    feed=r.feed,
+                    group=r.group,
+                    log=r.log,
+                )
+                if r.kind == DNSBL_KIND_ALLOW:
+                    result.allow_regex_irreducible.append(regex_rule)
+                else:
+                    result.block_regex_irreducible.append(regex_rule)
+                continue
+            # Reducible -> fold to a domain rule (zero per-query cost).
+            result.reduced += 1
+            wildcard, domain = reduced
+        elif r.target == RULE_TARGET_DOMAIN:
+            wildcard, domain = r.wildcard, r.key_or_pattern
+        else:  # pragma: no cover - defensive; parse_abp only emits domain/regex
+            continue
+
+        band = _dnsbl_rule_band(r)
+        if r.kind == DNSBL_KIND_ALLOW:
+            result.allow_domains.append(
+                AllowDomainRule(
+                    domain=domain,
+                    wildcard=wildcard,
+                    band=band,
+                    important=r.important,
+                    provenance=r.provenance,
+                )
+            )
+        else:
+            # BLOCK domain -> classify data vs zone (reuse ADR-06 classify). A
+            # wildcard=False fold (exact /^D$/) is forced to DATA; otherwise the
+            # registrable-parent classify decides (matching the plain/hosts path).
+            if wildcard:
+                cls, key = classify(domain, tlds, exclusion)
+            else:
+                cls, key = DNSBL_CLASS_DATA, domain
+            result.block_domains.append(
+                BlockDomainRule(
+                    cls=cls,
+                    key=key,
+                    band=band,
+                    important=r.important,
+                    provenance=r.provenance,
+                    feed=r.feed,
+                    group=r.group,
+                    log=r.log,
+                )
+            )
+        # NOTE: a user rule alone does NOT force ``important_rules`` -- today's fast
+        # path already handles a pure user whitelist (important whiteDB) + user
+        # blocks (P3 SS3). The flag is about the feed $important/@@/regex the fast
+        # path cannot resolve; once that is set, the numeric branch sees the user
+        # bands (5/6) too.
+
+    return result
 
 
 def _dnsbl_normalise_whitelist(
