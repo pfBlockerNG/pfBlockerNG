@@ -1,0 +1,201 @@
+================================================================================
+ADR-07 — PHASE 2 RESULTS / HANDOFF FOR PHASE 3
+ABP DNS-only decision SPEC + golden oracle (pin the TARGET behaviour)
+Branch: adr/07   Commit: tests: ADR-07 P2 — ABP DNS decision spec + golden oracle
+================================================================================
+
+VERDICT (headline): DONE. The TARGET ABP DNS-only decision semantics are now an
+executable, CI-runnable pure-Python oracle + a committed decision table. This is
+the contract every later phase (4 parser, 5 reconcile, 6 emit/matcher) diffs its
+PRODUCTION output against. Self-consistent now (oracle vs its own expected table);
+later phases assert production vs the SAME table. GO-AHEAD to Phase 3 (matcher
+strata/priority refactor — behaviour-preserving).
+
+ADDITIVE ONLY. No production code touched (pfb_unbound.py / pfblockerng.inc /
+*.sh / www all unchanged; nothing deleted). One new file.
+
+GATES (this phase):
+  python -m pytest      -> 421 passed (was 255 pre-P1; P1 added corpus/spike but
+                           no tests; this phase adds 166 spec tests -> 421).
+                           The retained ADR-06 oracle (tests/test_adr06_*) stays
+                           GREEN (no-regression contract intact).
+  ruff check .          -> All checks passed!
+  ruff format .         -> clean (1 file reformatted = the new file, then clean).
+  php -l / ShellCheck   -> N/A (no PHP/shell changed this phase).
+
+--------------------------------------------------------------------------------
+0. WHAT WAS ADDED
+--------------------------------------------------------------------------------
+* tests/test_adr07_decision_spec.py — the pure reference oracle + decision table.
+  Stdlib only, no Unbound symbols, `from __future__ import annotations`, type
+  hints, no bare except. Self-contained (does not import pfb_unbound — it is the
+  TARGET spec, not a wrapper around today's code).
+* No new fixtures created: the spec reuses the Phase-1 corpus under
+  tests/fixtures/adr07_corpus/ (abp_sample.txt / regex_reducible.txt /
+  regex_irreducible.txt) and CROSS-CHECKS itself against the Phase-1 spike
+  (benchmarks/spike_adr07_regex.py: categorise() + reduce_pattern()), so the spec
+  and the spike cannot drift.
+
+================================================================================
+1. THE DECISION-LABEL DRIVER API  (import this in Phases 4-6)
+================================================================================
+Module: tests/test_adr07_decision_spec.py. Public reference surface:
+
+  Enums:
+    Kind        = BLOCK | ALLOW
+    Target      = DOMAIN | REGEX          (DOMAIN = exact-or-wildcard literal;
+                                           REGEX = irreducible compiled pattern)
+    Provenance  = USER | FEED
+
+  @dataclass(frozen=True) Rule:
+    kind: Kind, target: Target, key: str, provenance: Provenance,
+    wildcard: bool=False, important: bool=False, badfilter: bool=False,
+    options: tuple[str,...]=(), signature: tuple[str, tuple[str,...]]=("", ())
+      - key       = domain literal (DOMAIN) or regex inner pattern (REGEX)
+      - wildcard  = True -> covers domain + ALL subdomains (zone); False -> exact
+      - signature = (pattern, sorted DNS-options) MINUS $badfilter  (badfilter key)
+
+  parse_abp_line(line: str, provenance: Provenance) -> Rule | None
+      The full DNS-only ABP grammar. None for any out-of-scope line. This is the
+      REFERENCE for Phase-4 production parse('abp', line) — Phase 4 must agree
+      with it on every corpus line (the spike-agreement tests enforce the scope).
+
+  reduce_regex(inner: str) -> tuple[bool, str] | None
+      (wildcard, domain) if a regex body folds to a domain rule, else None.
+      Mirrors spike.reduce_pattern. Phase 5's production reducer must match it.
+
+  reconcile(rules: Iterable[Rule]) -> list[Rule]
+      Feed-only $badfilter prune (signature match) + drop the badfilter rules.
+      USER rules immune. This is the Phase-5 reconcile contract.
+
+  priority(rule: Rule) -> int          (the 6-band scale; see SS2)
+  decide(rules: Iterable[Rule], query: str) -> Decision
+      Reconcile + 6-band resolution. Decision(outcome, block_prio, allow_prio,
+      winner). outcome in {"block","resolve","pass"}:
+        block   = a block wins (block_prio > allow_prio)
+        resolve = something matched but an allow wins (or no block matched)
+        pass    = nothing matched
+      This is the canonical net-DNS-decision label later phases reduce to.
+
+  rules_from(lines, provenance=FEED) -> list[Rule]   (parse helper)
+
+NOTE on mapping to the production matcher (Phase 3/6): the spec's "resolve"
+collapses two production outcomes — whitelist-override (a block matched but an
+allow wins) and pure pass-when-an-allow-matched. The production matcher
+(evaluate_domain / DnsblDecision) distinguishes is_found+in_whitelist from
+not-found; when Phase 6 diffs production against this oracle, map:
+  spec "block"   -> DnsblDecision blocked (is_found, not in_whitelist, not hsts)
+  spec "resolve" -> resolves (in_whitelist OR allow-regex hit OR not is_found
+                    after an allow wins) — i.e. the name is NOT null-routed
+  spec "pass"    -> not is_found (no rule matched)
+HSTS / noAAAA / log-flag shaping are ORTHOGONAL to ABP precedence and are pinned
+by the ADR-06 oracle, not re-encoded here (this spec is the ABP decision layer).
+
+================================================================================
+2. PRECEDENCE BANDS — AS ENCODED  (priority(); RESULTS-P1 SS1f; ADR.md SS2)
+================================================================================
+  6  user allow              (sovereign; $badfilter-immune)
+  5  user block              (sovereign; $badfilter-immune)
+  4  feed allow + $important
+  3  feed block + $important
+  2  feed allow (@@)
+  1  feed block (||)
+Blocked iff a block matches AND block_prio > allow_prio. No ties possible
+(block in {1,3,5}, allow in {2,4,6}). TOP1M (enabled) is modelled as a USER allow
+(band 6). This IS today's "allow beats block" (2>1) PLUS the $important tiers and
+the sovereign user band — so the no-important fast path (only band-1 blocks, no
+allow) reduces to today's block-or-pass.
+
+================================================================================
+3. CHOSEN INTERPRETATIONS (references DNS-ambiguous — Phases 4-6 MUST follow)
+================================================================================
+* Plain bare `domain` (no ||/^) = a DOMAIN BLOCK covering the domain AND its
+  subdomains (wildcard=True). AdGuardHome hosts-blocklist adblock-style; also
+  matches the current plain/hosts path (registrable parent -> wildcard zone).
+* `hosts` "IP domain" = same as plain (the sink IP is ignored). "0.0.0.0 <ip>"
+  (IP target) -> None (firewall path).
+* `||domain^` and `@@||domain^` cover the domain AND all subdomains (wildcard=
+  True). `^` is the ABP separator; `||` host-anchors.
+* Reducible regex folds to its literal shape: ^(.+\.)?D$ / (^|\.)D$ -> wildcard
+  (zone); ^D$ / ^(www\.)?D$ -> exact (data). A reducible /re/ decides IDENTICALLY
+  to its dict form (test_regex_reducible_*). Shared grammar with spike.
+* Irreducible regex: re.search over the lower-cased, dot-stripped query name
+  (substring semantics for unanchored patterns — /\.doubleclick\./ matches
+  ad.doubleclick.net, not doubleclick.net).
+* $options: a rule is KEPT only if EVERY option is DNS-relevant (currently just
+  $important / $badfilter) AND the target is a bare domain or domain-regex. ANY
+  page-context option ($third-party/$domain=/$script/$image/$csp/$subdocument/
+  …), any element/path/URL, OR any non-DNS modifier whose only effect is a
+  rewrite ($dnsrewrite/$dnstype/$client/$ctag) -> SKIP (return None). An
+  UNRECOGNISED option is conservatively treated as out-of-scope (skip) — do NOT
+  invent a DNS decision for a modifier we do not model. (Phase 4: if you add a
+  newly-recognised DNS-relevant option, update _classify_options here too.)
+* $important raises a feed rule from band 1/2 to 3/4 (inverts allow-vs-block
+  WITHIN the feed: feed ||x^$important (3) beats feed @@x^ (2); feed @@y^$important
+  (4) beats feed ||y^ (1); when both important, allow(4) still beats block(3)).
+* $badfilter: feed-only; removes the matching FEED rule by signature (pattern +
+  sorted DNS-opts minus $badfilter); the $badfilter rule itself emits NO decision.
+  A different option = different signature = NOT pruned. A USER rule with the same
+  signature is NEVER pruned (sovereignty, fact 7).
+* IP-valued anchors (||1.2.3.4^, hosts-IP) -> None on the Python side (PHP
+  firewall pass owns IPs; no-leak contract, ADR-06 fact 7 / RESULTS-P1 SS1h).
+
+================================================================================
+4. NO-REGRESSION CROSS-CHECK TO ADR-06
+================================================================================
+* The retained ADR-06 golden oracle (tests/test_adr06_golden_oracle.py +
+  build_module/init_from_raw/php_boundary) is UNCHANGED and STILL GREEN this
+  phase — the non-ABP net-DNS-decision contract is intact.
+* The spec encodes the no-ABP-feature equivalence directly:
+    - test_no_regression_plain_hosts_only: a plain/hosts/||domain^ set with NO
+      @@/regex/important/badfilter decides block-or-pass with every block at
+      band 1, allow_prio 0 — the same outcomes the ADR-06 plain/hosts path gives
+      (block name + subdomains; unrelated -> pass).
+    - test_no_regression_no_important_rules_flag: such a set has
+      max(priority)==1 and no allow/important/badfilter — the model of the
+      build-emitted pfb["important_rules"] == False fast-path flag (ADR.md SS2
+      "Query-time matcher") Phase 3 introduces. When that flag is False the
+      production matcher MUST keep today's early-exit path byte-for-byte.
+* Phase 3 is the behaviour-preserving matcher refactor: it must reduce to today's
+  exact decisions (ADR-06 oracle) with NO ABP rules loaded; the bands/allowRegexDB
+  /important field are added but inert (important_rules=False).
+
+================================================================================
+5. SPEC <-> SPIKE AGREEMENT (anti-drift)
+================================================================================
+* test_spec_parser_agrees_with_spike_scope (parametrised over the whole corpus):
+  parse_abp_line's in-scope verdict matches spike.categorise() for every line.
+  $badfilter lines DO parse to a Rule (badfilter=True) but emit no decision after
+  reconcile, so they are scope-agreement-exempt and checked separately.
+* test_spec_reduction_agrees_with_spike: every reducible-corpus line folds to the
+  same (wildcard, domain) as spike.reduce_pattern().
+* test_spec_irreducible_stays_regex: every irreducible-corpus line stays a
+  REGEX-target rule (does not fold).
+=> Phase 4/5 production parse()/reduce() should be checked against THIS spec
+   (the canonical TARGET), and the spec is already pinned to the spike — so all
+   three stay consistent.
+
+================================================================================
+6. GO-AHEAD + WHAT PHASE 3 SHOULD DO
+================================================================================
+GO-AHEAD: refactor the matcher. No reject-criterion (ADR.md SS7) tripped —
+sovereignty + ABP precedence are reproducible on this spec (SS8 of the spec's
+tests prove the full band ordering, user-immunity, and TOP1M-as-user-allow).
+
+Phase 3 (03_Matcher_Strata_Prep.txt) — behaviour-preserving:
+  * Refactor evaluate_domain (pfb_unbound.py:2251) into the user-strata +
+    feed-priority resolution SHAPE matching SS2's bands. Widen payloads:
+    dataDB/zoneDB/regexDB gain an `important` field (default False); whiteDB[d]
+    -> {"wildcard": bool, "important": bool}; add an empty allowRegexDB container
+    and the pfb["important_rules"] flag (False today).
+  * MUST reduce to today's exact decisions with NO ABP loaded — pin with the
+    retained ADR-06 oracle (still no ABP rules in Phase 3). Use SS4's two
+    no-regression spec tests as the conceptual contract for the fast path.
+  * Do NOT wire any ABP parse/reconcile yet (that is Phases 4-6). Phase 3 is a
+    pure refactor + payload widening; standalone-valuable.
+  * When Phase 6 goes live, reduce the production DnsblDecision to the spec's
+    {block,resolve,pass} label (mapping in SS1 NOTE) and diff against decide().
+
+GATES TO KEEP GREEN going forward: python -m pytest (incl. ADR-06 oracle + this
+spec), ruff check/format, php -l + ShellCheck on any PHP/shell touched.
+================================================================================
