@@ -52,6 +52,8 @@ def reset_pfb_globals():
         "dataDB": False,
         "zoneDB": False,
         "regexDB": False,
+        "allowRegexDB": False,
+        "important_rules": False,
         "whiteDB": False,
         "hstsDB": False,
         "gpListDB": False,
@@ -89,6 +91,7 @@ def reset_pfb_globals():
     pfb_unbound.safeSearchDB = defaultdict(list)
     pfb_unbound.feedGroupIndexDB = defaultdict(list)
     pfb_unbound.regexDB = defaultdict(str)
+    pfb_unbound.allowRegexDB = defaultdict(str)
     pfb_unbound.whiteDB = defaultdict(str)
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)

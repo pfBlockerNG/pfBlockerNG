@@ -569,10 +569,22 @@ def init_standard(id: int, env: module_env) -> bool:
                 feedGroupIndexDB = build_result.feed_group_index_db
                 whiteDB = build_result.white_db
 
+                # ADR-07 P6: MERGE the ABP feed block-regex into regexDB (preserving the
+                # user-regex patterns compiled from the REGEX ini section above) and load
+                # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
+                # band + $important; user regex stay bare compiled (feed band 1).
+                regexDB.update(build_result.regex_db)
+                allowRegexDB.update(build_result.allow_regex_db)
+
                 pfb["zoneDB"] = bool(zoneDB)
                 pfb["dataDB"] = bool(dataDB)
                 pfb["whiteDB"] = bool(whiteDB)
-                if dataDB or zoneDB:
+                pfb["regexDB"] = bool(regexDB)
+                pfb["allowRegexDB"] = bool(allowRegexDB)
+                # The fast path stays byte-identical while important_rules is False; it
+                # flips True only when an ABP $important / feed @@ / feed regex loaded.
+                pfb["important_rules"] = bool(build_result.important_rules)
+                if dataDB or zoneDB or regexDB or allowRegexDB:
                     pfb["python_blacklist"] = True
 
                 # Emit pfb_py_count (the LOADED total) for the UI (inc:3149).
@@ -1824,21 +1836,31 @@ class BuildResult:
     contract (RESULTS/01_Results.txt SS1f). All dicts are FRESH (no module global
     is mutated), so the result is safe to atomically swap in later.
 
-    Shapes (ADR-07 P3 widened payloads; behaviour-preserving -- ``important`` is
-    ``False`` for every entry until a later phase parses ABP ``$important`` rules):
-        data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>, "important": bool}
-        zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool}
+    Shapes (ADR-07 widened payloads). For a non-ABP (plain/hosts/csv) build every
+    ``important`` is ``False`` and ``band`` is the feed-block band (1); the ABP path
+    (Phase 6, format_hint='abp') sets ``important``/``band`` from the reconciled rule:
+        data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>, "important": bool, "band": int}
+        zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
-        white_db[domain]         = {"wildcard": bool, "important": bool}
-    ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits it as
-    pfb_py_count (its value legitimately rises -- lists are un-pruned).
+        white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
+        regex_db[name]           = {"re": <compiled>, "important": bool, "band": int}   (ABP block-regex)
+        allow_regex_db[name]     = {"re": <compiled>, "important": bool, "band": int}   (ABP @@/re/ allow-regex)
+    ``important_rules`` is the build-emitted fast-path gate (ADR.md SS2): True iff any
+    surviving rule needs the numeric 6-band branch (any $important / feed @@ / feed
+    regex). ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits
+    it as pfb_py_count (its value legitimately rises -- lists are un-pruned).
+    ``regex_count`` is the ADMITTED feed-regex total for the DNSBL_Regex alias (UI).
     """
 
     data_db: dict[str, dict[str, Any]]
     zone_db: dict[str, dict[str, Any]]
     feed_group_index_db: dict[int, dict[str, str]]
-    white_db: dict[str, dict[str, bool]]
+    white_db: dict[str, dict[str, Any]]
     counts: int
+    regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
+    allow_regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
+    important_rules: bool = False
+    regex_count: int = 0
 
 
 def _dnsbl_is_ipv4(token: str) -> bool:
@@ -2516,7 +2538,7 @@ def _dnsbl_normalise_whitelist(
     user_whitelist: Iterable[str],
     top1m_list: Iterable[str],
     top1m_enabled: bool,
-) -> dict[str, dict[str, bool]]:
+) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation (pfb_unbound_python_whitelist, inc:2259) into the
     query-time whiteDB shape: www-strip; leading-dot -> wildcard True else False.
     TOP1M entries are loaded ONLY when enabled (bare domains -> exact). No build-time
@@ -2529,7 +2551,7 @@ def _dnsbl_normalise_whitelist(
     ``important`` flag is only consulted by the (currently unreachable) numeric
     6-band branch of ``evaluate_domain``.
     """
-    white_db: dict[str, dict[str, bool]] = {}
+    white_db: dict[str, dict[str, Any]] = {}
     for raw in user_whitelist:
         line = raw.strip()
         if not line:
@@ -2537,17 +2559,52 @@ def _dnsbl_normalise_whitelist(
         if line.startswith("www."):
             line = line[4:]
         if line.startswith("."):
-            white_db[line.lstrip(".")] = {"wildcard": True, "important": True}
+            white_db[line.lstrip(".")] = {"wildcard": True, "important": True, "band": PRIO_USER_ALLOW}
         else:
-            white_db[line] = {"wildcard": False, "important": True}
+            white_db[line] = {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW}
 
     if top1m_enabled:
         for raw in top1m_list:
             dom = raw.strip()
             if dom:
-                white_db.setdefault(dom, {"wildcard": False, "important": True})
+                # TOP1M behaves as a user allow (sovereign, band 6) -- fact 7.
+                white_db.setdefault(dom, {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW})
 
     return white_db
+
+
+def _dnsbl_compile_regex_rules(
+    regex_rules: Iterable[RegexRule],
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """Compile a list of irreducible ``RegexRule`` into the live regex-DB shape.
+
+    Returns ``(db, admitted)`` where ``db[name] = {"re": <compiled>, "important":
+    bool, "band": int}`` and ``admitted`` is the count of patterns that compiled.
+    A pattern that fails ``re.compile`` is logged and skipped (mirrors the init REGEX
+    load) -- it never aborts the build. Names are unique per pattern occurrence so two
+    feeds carrying the same pattern both load. NO runtime cap/evict guard is applied
+    here (that is Phase 7); this only compiles + loads.
+    """
+    db: dict[str, dict[str, Any]] = {}
+    admitted = 0
+    seq = 0
+    for rule in regex_rules:
+        try:
+            compiled = re.compile(rule.pattern)
+        except re.error as e:
+            sys.stderr.write(
+                "[pfBlockerNG]: ABP regex compile error feed [ {} ] pattern [ {} ]: {}".format(
+                    rule.feed, rule.pattern, e
+                )
+            )
+            continue
+        # Key by feed + a per-build sequence so identical patterns from different feeds
+        # (or the same feed) do not collide and each is independently evictable (P7).
+        name = "{}#{}".format(rule.feed or "DNSBL", seq)
+        seq += 1
+        db[name] = {"re": compiled, "important": rule.important, "band": rule.band}
+        admitted += 1
+    return db, admitted
 
 
 def build(
@@ -2605,7 +2662,7 @@ def build(
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
-        zone_db[tld] = {"log": "1", "index": idx, "important": False}
+        zone_db[tld] = {"log": "1", "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
 
     white_db = _dnsbl_normalise_whitelist(
         config.get("user_whitelist", []),
@@ -2613,11 +2670,25 @@ def build(
         top1m_enabled,
     )
 
+    # ADR-07 P6: ABP feeds (format_hint='abp') are parsed into the typed Rule stream
+    # (Stage A, parse_abp) and reconciled (Stage B) into the banded pre-emit rule
+    # sets; non-ABP feeds keep the ADR-06 lite parse() -> block-only path unchanged.
+    # The reconciled ABP structures (incl. @@/regex/important/badfilter) are emitted
+    # below alongside the plain blocks. Each ABP rule carries its manifest-row
+    # feed/group/log straight through parse_abp onto the Rule.
+    abp_rules: list[Rule] = []
+
     for feed_row in manifest.get("feeds", []):
         feed = feed_row["feed"]
         group = feed_row["group"]
         fmt = feed_row["format_hint"]
         log_flag = feed_row["log_flag"]
+        if fmt == "abp":
+            for raw_line in line_reader(feed_row["raw"]):
+                rule = parse_abp(raw_line, provenance=RULE_PROV_FEED, feed=feed, group=group, log=log_flag)
+                if rule is not None:
+                    abp_rules.append(rule)
+            continue
         for raw_line in line_reader(feed_row["raw"]):
             entry = parse(fmt, raw_line)
             if entry is None:
@@ -2625,19 +2696,51 @@ def build(
             domain = normalise(entry.value)
             if domain is None:
                 continue
-            # Only BLOCK is produced this phase (ABP-ready seam; see module header).
+            # Only BLOCK is produced by the lite path (ABP-ready seam; module header).
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
             idx = index_for(feed, group)
             cls, key = classify(domain, tlds, exclusion)
-            # ADR-07 P3: ``important`` is always False here -- no ABP rule is parsed
-            # yet (build() still emits only BLOCK from the plain/abp-lite path). A
-            # later phase sets it from a parsed ``$important`` Rule.
-            payload = {"log": log_flag, "index": idx, "important": False}
+            # Non-ABP block: feed-block band 1, never $important (no $options grammar).
+            payload = {"log": log_flag, "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
             if cls == DNSBL_CLASS_ZONE:
                 zone_db[key] = payload  # last-wins (dict; ADR-06 SS2 attribution change)
             else:
                 data_db[key] = payload
+
+    # ---- Stage-B reconcile + Stage-C emit for the ABP rule stream -------------- #
+    regex_db: dict[str, dict[str, Any]] = {}
+    allow_regex_db: dict[str, dict[str, Any]] = {}
+    important_rules = False
+    regex_count = 0
+    if abp_rules:
+        result = reconcile(abp_rules, tlds, exclusion)
+        important_rules = result.important_rules
+
+        # Domain blocks -> dataDB/zoneDB (carry band + $important).
+        for b in result.block_domains:
+            idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
+            payload = {"log": b.log or "1", "index": idx, "important": b.important, "band": b.band}
+            if b.cls == DNSBL_CLASS_ZONE:
+                zone_db[b.key] = payload
+            else:
+                data_db[b.key] = payload
+
+        # Domain allows (@@||domain^ and reduced @@/re/) -> whiteDB. A user whitelist
+        # entry (band 6) must never be downgraded by a feed allow on the SAME key, so
+        # only write when the key is absent or the existing band is lower.
+        for a in result.allow_domains:
+            existing = white_db.get(a.domain)
+            if existing is None or _white_entry_band(existing) < a.band:
+                white_db[a.domain] = {"wildcard": a.wildcard, "important": a.important, "band": a.band}
+
+        # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here
+        # (Phase 6); a broken pattern is logged + skipped, mirroring the init regex
+        # load (pfb_unbound.py REGEX section). NO runtime cap/evict guard yet (P7).
+        # Iterate over a stable list so the emit order is deterministic.
+        regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible)
+        allow_regex_db, allow_admitted = _dnsbl_compile_regex_rules(result.allow_regex_irreducible)
+        regex_count = block_admitted + allow_admitted
 
     return BuildResult(
         data_db=data_db,
@@ -2645,6 +2748,10 @@ def build(
         feed_group_index_db=feed_group_index_db,
         white_db=white_db,
         counts=len(data_db) + len(zone_db),
+        regex_db=regex_db,
+        allow_regex_db=allow_regex_db,
+        important_rules=important_rules,
+        regex_count=regex_count,
     )
 
 
@@ -2810,6 +2917,19 @@ def _white_entry_important(entry: Any) -> bool:
     return False
 
 
+def _white_entry_band(entry: Any) -> int:
+    """Numeric band of a whiteDB value (ADR-07 P6). A dict entry carries an explicit
+    ``band`` (feed allow 2/4, user allow 6); else it is derived from ``important``
+    (an important entry is a user allow -> band 6, a bare-bool/legacy feed allow ->
+    band 2). Consulted only by the numeric 6-band branch."""
+    if isinstance(entry, dict):
+        band = entry.get("band")
+        if isinstance(band, int):
+            return band
+        return PRIO_USER_ALLOW if entry.get("important", False) else PRIO_FEED_ALLOW
+    return PRIO_FEED_ALLOW
+
+
 def whitelist_lookup_domain(name: str, white_db: dict[str, Any], tld_seg: int) -> tuple[bool, bool]:
     """Resolve a whitelist hit to ``(matched, important)``.
 
@@ -2911,19 +3031,95 @@ def _allow_priority(important: bool, *, user: bool = False) -> int:
     return PRIO_FEED_ALLOW_IMPORTANT if important else PRIO_FEED_ALLOW
 
 
-def _scan_allow_regex(q_name: str, allow_regex_db: dict[str, Any]) -> tuple[bool, bool] | None:
-    """First allow-regex (@@/re/) hit -> (matched=True, important). None if no hit.
+def _block_entry_band(entry: Any) -> int:
+    """Numeric band of a block payload (dataDB / zoneDB / regexDB value).
 
-    Values mirror regexDB's tolerant shape: a bare compiled pattern, or a
-    {"re", "important"} payload. Runtime warn/evict timing is a later phase (P7)."""
+    A payload carries an explicit ``band`` (ABP feed/user block, 1/3/5); a payload
+    without one is the historical feed block and is derived from its ``important``
+    flag (band 3 if $important, else feed block band 1) -- so a synthetic strata-test
+    payload (no ``band`` key) still resolves to the right band. A bare compiled
+    pattern (legacy/user regex) is a non-important feed block (band 1)."""
+    if isinstance(entry, dict):
+        band = entry.get("band")
+        if isinstance(band, int):
+            return band
+        return _block_priority(bool(entry.get("important", False)))
+    return PRIO_FEED_BLOCK
+
+
+def _scan_block_band(
+    q_name: str,
+    cfg: dict[str, Any],
+    data_db: dict[str, Any],
+    zone_db: dict[str, Any],
+    regex_db: dict[str, Any],
+) -> int:
+    """Highest block band that matches ``q_name`` across dataDB (exact), zoneDB (the
+    suffix walk) and the block-regex DB; 0 if none match. Used by the numeric 6-band
+    resolution to take the max block band (decide() semantics) -- the fast-path
+    discovery short-circuits on the first hit, which is wrong for the max. Snapshot-
+    iterates the regex DB (Phase-7 eviction safety)."""
+    best = 0
+    if cfg.get("dataDB"):
+        entry = data_db.get(q_name)
+        if entry is not None:
+            best = max(best, _block_entry_band(entry))
+    if cfg.get("zoneDB"):
+        for q in iter_domain_suffixes(q_name):
+            entry = zone_db.get(q)
+            if entry is not None:
+                best = max(best, _block_entry_band(entry))
+    if cfg.get("regexDB") and q_name:
+        for _k, r in list(regex_db.items()):
+            pattern = r.get("re") if isinstance(r, dict) else r
+            if pattern.search(q_name):
+                best = max(best, _block_entry_band(r))
+    return best
+
+
+def _scan_allow_regex_band(q_name: str, allow_regex_db: dict[str, Any]) -> int:
+    """Highest allow band over the allow-regex (@@/re/) entries that match ``q_name``;
+    0 if none match. Values mirror regexDB's tolerant shape: a bare compiled pattern,
+    or a {"re", "important", "band"} payload. Iterates a SNAPSHOT (list(...)) so the
+    Phase-7 runtime eviction can mutate the live DB without corrupting this scan.
+    Runtime warn/evict timing itself is a later phase (P7)."""
     if not q_name:
-        return None
-    for _k, r in allow_regex_db.items():
+        return 0
+    best = 0
+    for _k, r in list(allow_regex_db.items()):
         pattern = r.get("re") if isinstance(r, dict) else r
         if pattern.search(q_name):
             important = bool(r.get("important", False)) if isinstance(r, dict) else False
-            return True, important
-    return None
+            band = r.get("band") if isinstance(r, dict) else None
+            if not isinstance(band, int):
+                band = _allow_priority(important)
+            best = max(best, band)
+    return best
+
+
+def whitelist_lookup_band(name: str, white_db: dict[str, Any], tld_seg: int) -> int:
+    """Highest whiteDB allow band that matches ``name`` (exact, ``www.``-strip, then
+    the wildcard suffix walk gated by ``tld_seg``); 0 if no whitelist entry matches.
+    A user whitelist / TOP1M entry is band 6; a feed @@/reduced-allow entry carries
+    its reconciled band (2 or 4). The match algorithm is identical to
+    whitelist_lookup_domain; this variant returns the numeric band for the 6-band
+    resolution instead of a bare ``important`` bool."""
+    entry = white_db.get(name)
+    if entry is not None:
+        return _white_entry_band(entry)
+    if name.startswith("www."):
+        entry = white_db.get(name[4:])
+        if entry is not None:
+            return _white_entry_band(entry)
+    best = 0
+    q = name.split(".", 1)[-1]
+    for x in range(q.count(".") + 1, 0, -1):
+        if x >= tld_seg:
+            entry = white_db.get(q)
+            if entry is not None and _white_entry_wildcard(entry):
+                best = max(best, _white_entry_band(entry))
+        q = q.split(".", 1)[-1]
+    return best
 
 
 def _resolve_numeric_allow(
@@ -2933,36 +3129,29 @@ def _resolve_numeric_allow(
     cfg: dict[str, Any],
     white_db: dict[str, Any],
     allow_regex_db: dict[str, Any],
-    block_important: bool,
+    block_band: int,
 ) -> bool:
     """Numeric 6-band resolution (ADR.md SS2): return True iff an ALLOW overrides the
     matched BLOCK (i.e. the name resolves) -- mapped onto ``in_whitelist`` so the
     downstream hsts/null-blocking logic is shared with the fast path.
 
-    A block always matched here (the caller gates on ``is_found``). Blocked iff
-    ``block_prio > allow_prio``; with no allow match ``allow_prio`` is 0 so the block
-    stands. UNREACHABLE in production today (important_rules is always False); proven
-    against the Phase-2 band table by synthetic-payload unit tests.
+    A block always matched here (the caller gates on ``is_found``); ``block_band`` is
+    its highest matching band (computed by the caller over data/zone/block-regex).
+    Blocked iff ``block_band > allow_band``; with no allow match ``allow_band`` is 0
+    so the block stands. Engaged only when ``important_rules`` is True (an ABP
+    $important / feed @@ / feed regex was loaded); proven against the Phase-2 band
+    table by synthetic-payload unit tests and the production ABP equivalence tests.
     """
-    block_prio = _block_priority(block_important)
-
-    allow_prio = 0
+    allow_band = 0
     names = [q_name] + ([q_name_original] if is_cname else [])
     if cfg["whiteDB"]:
         for n in names:
-            matched, important = whitelist_lookup_domain(n, white_db, cfg["python_tld_seg"])
-            if matched:
-                # A whiteDB entry is a user allow (band 6) when important (settings
-                # whitelist / TOP1M); a bare-bool legacy entry is a plain feed allow.
-                allow_prio = max(allow_prio, _allow_priority(important, user=important))
+            allow_band = max(allow_band, whitelist_lookup_band(n, white_db, cfg["python_tld_seg"]))
 
     if cfg.get("allowRegexDB", False):
-        ar = _scan_allow_regex(q_name, allow_regex_db)
-        if ar is not None:
-            _matched, important = ar
-            allow_prio = max(allow_prio, _allow_priority(important))
+        allow_band = max(allow_band, _scan_allow_regex_band(q_name, allow_regex_db))
 
-    return allow_prio >= block_prio
+    return allow_band >= block_band
 
 
 def evaluate_domain(
@@ -2984,9 +3173,10 @@ def evaluate_domain(
     group: Any = "Unknown"
     b_eval = ""
 
-    # ``block_important`` carries the matched block's $important flag into the numeric
-    # resolution below; it stays False on the fast path (no important rule loaded).
-    block_important = False
+    # ``block_band`` carries the discovered block's numeric band (1-5) into the numeric
+    # resolution below; it stays at the feed-block default on the fast path. The fast
+    # path never reads it (the historical "allow overrides block" early-exit).
+    block_band = 0
 
     data_db: dict[str, Any] = containers["dataDB"]
     zone_db: dict[str, Any] = containers["zoneDB"]
@@ -3008,7 +3198,7 @@ def evaluate_domain(
                 feed, group = resolve_feed_group(data_entry["index"], feed_group_index_db)
                 b_type = "DNSBL"
                 b_eval = q_name
-                block_important = bool(data_entry.get("important", False))
+                block_band = _block_entry_band(data_entry)
 
         if not is_found and cfg["zoneDB"]:
             matched_q, zone_entry = find_zone_match(q_name, zone_db)
@@ -3018,7 +3208,7 @@ def evaluate_domain(
                 feed, group = resolve_feed_group(zone_entry["index"], feed_group_index_db)
                 b_type = "TLD"
                 b_eval = matched_q
-                block_important = bool(zone_entry.get("important", False))
+                block_band = _block_entry_band(zone_entry)
 
     if not is_found:
         if (
@@ -3037,16 +3227,18 @@ def evaluate_domain(
             group = "DNSBL_IDN"
 
         if not is_found and cfg["regexDB"] and q_name:
-            for k, r in regex_db.items():
-                # ADR-07 P3: regexDB values may be a bare compiled pattern (today /
-                # user-regex) or a {"re", "important"} payload (a later ABP phase). Read
+            # Snapshot-iterate (list(...)) so the Phase-7 runtime eviction can mutate
+            # the live regexDB without corrupting this scan (fact 3).
+            for k, r in list(regex_db.items()):
+                # regexDB values may be a bare compiled pattern (today / user-regex) or
+                # a {"re", "important", "band"} payload (ABP feed block-regex). Read
                 # both shapes; the bare-pattern path is byte-identical to today.
                 pattern = r.get("re") if isinstance(r, dict) else r
                 if pattern.search(q_name):
                     is_found = True
                     feed = k
                     group = "DNSBL_Regex"
-                    block_important = bool(r.get("important", False)) if isinstance(r, dict) else False
+                    block_band = _block_entry_band(r)
                     break
 
         if is_found:
@@ -3064,6 +3256,16 @@ def evaluate_domain(
                 names = [q_name] + ([q_name_original] if is_cname else [])
                 in_whitelist = any(whitelist_check_domain(n, white_db, cfg["python_tld_seg"]) for n in names)
         else:
+            # NUMERIC 6-band path (an ABP $important / feed @@ / feed regex is loaded).
+            # decide() resolves by the HIGHEST matching block band vs the highest
+            # matching allow band, so augment the first-discovered block's band with a
+            # full scan over every matching block (data/zone-suffix/block-regex) -- the
+            # discovery above short-circuits on the first hit (right for metadata, but
+            # the resolution needs the max band).
+            block_band = max(
+                block_band,
+                _scan_block_band(q_name, cfg, data_db, zone_db, regex_db),
+            )
             in_whitelist = _resolve_numeric_allow(
                 q_name,
                 q_name_original,
@@ -3071,7 +3273,7 @@ def evaluate_domain(
                 cfg,
                 white_db,
                 allow_regex_db,
-                block_important,
+                block_band,
             )
 
     if is_found and not in_whitelist:
@@ -3409,6 +3611,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                         "python_idn": pfb["python_idn"],
                         "regexDB": pfb["regexDB"],
                         "whiteDB": pfb["whiteDB"],
+                        "allowRegexDB": pfb["allowRegexDB"],
+                        "important_rules": pfb["important_rules"],
                         "python_tld_seg": pfb["python_tld_seg"],
                         "hstsDB": pfb["hstsDB"],
                         "hsts_tlds": pfb["hsts_tlds"],
@@ -3418,6 +3622,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                         "zoneDB": zoneDB,
                         "whiteDB": whiteDB,
                         "regexDB": regexDB,
+                        "allowRegexDB": allowRegexDB,
                         "feedGroupIndexDB": feedGroupIndexDB,
                         "hstsDB": hstsDB,
                     }
