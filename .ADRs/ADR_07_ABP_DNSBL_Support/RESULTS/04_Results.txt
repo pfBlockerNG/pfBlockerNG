@@ -1,0 +1,223 @@
+================================================================================
+ADR-07 -- PHASE 4 RESULTS / HANDOFF FOR PHASE 5
+Intermediate Rule model + Stage-A parse_abp (pure, additive)
+Branch: adr/07   Commit: pfb_unbound: ADR-07 P4 -- Rule model + DNS-only ABP Stage-A parser
+================================================================================
+
+VERDICT (headline): DONE. The typed intermediate `Rule` model and the FULL
+DNS-only ABP line parser `parse_abp()` are landed in pfb_unbound.py -- PURE and
+ADDITIVE. Each raw ABP line -> a typed Rule (block/allow, domain/regex,
+important/badfilter/provenance) or None (out of DNS scope). NOT wired into
+build()/init; NO reconcile/reduce/compile (those are Phase 5/6). The ADR-06 lite
+`parse()` path is UNTOUCHED (the build_module abp tests + the ADR-06 golden oracle
+stay green). GO-AHEAD to Phase 5 (reconcile: $badfilter prune + regex reduction +
+classify + bands).
+
+GATES (this phase):
+  python -m pytest   -> 825 passed (was 451 after P3; +374 are the new parser
+                        tests, mostly parametrized over the Phase-1 corpus). The
+                        ADR-06 golden oracle + the Phase-2 ABP decision spec are
+                        UNCHANGED-green.
+  ruff check .       -> All checks passed!
+  ruff format .      -> 24 files left unchanged (clean).
+  php -l / ShellCheck-> N/A (Python-only phase; no .php/.inc/.sh changed).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py  (Rule + constants + parse_abp)
+  A tests/test_adr07_parser.py                     (the P4 test entry points)
+
+================================================================================
+1. THE Rule DATACLASS  (what Phase 5 consumes)
+================================================================================
+pfb_unbound.Rule -- @dataclass(frozen=True). Fields (order):
+
+  kind           : str  = DNSBL_KIND_BLOCK | DNSBL_KIND_ALLOW
+  target         : str  = RULE_TARGET_DOMAIN | RULE_TARGET_REGEX
+  key_or_pattern : str  = the validated lower-cased DOMAIN literal (DOMAIN target)
+                          OR the raw regex inner pattern (REGEX target; NOT compiled)
+  important      : bool = carried $important (raises feed band 1/2 -> 3/4)
+  badfilter      : bool = carried $badfilter (feed-only prune key; emits no decision)
+  provenance     : str  = RULE_PROV_USER | RULE_PROV_FEED
+  feed           : str  } per-feed manifest-row metadata, plumbed through unchanged
+  group          : str  }   by parse_abp (NOT derived inside it)
+  log            : str  }
+  signature      : tuple[str, tuple[str, ...]]
+  wildcard       : bool = False   (DOMAIN only: True -> domain + ALL subdomains
+                          (zone); False -> exact (data). Ignored for REGEX.)
+
+Module constants (importable):
+  DNSBL_KIND_BLOCK="block"  DNSBL_KIND_ALLOW="allow"  (DNSBL_KIND_REGEX exists but
+    is the LEGACY ParsedEntry tag -- the Rule model uses RULE_TARGET_* for
+    domain-vs-regex, NOT kind).
+  RULE_TARGET_DOMAIN="domain"  RULE_TARGET_REGEX="regex"
+  RULE_PROV_USER="user"  RULE_PROV_FEED="feed"
+
+SIGNATURE DEFINITION (the $badfilter match key, Phase 5 uses it):
+  signature = (key_or_pattern, tuple(sorted DNS-options))  MINUS $badfilter.
+  * DOMAIN rule: (domain, dns_opts) where dns_opts is the SORTED tuple of
+    DNS-relevant option NAMES excluding badfilter -> ("important",) or ().
+  * REGEX rule: (inner_pattern, ()).  ($options on a /re/ are not parsed -- regex
+    rules carry no options in this grammar.)
+  Two rules with the same signature are the same target + options. A FEED
+  $badfilter prunes a FEED rule with a matching signature (Phase 5). Worked
+  examples (pinned in tests):
+    ||x^$important,badfilter  -> important=True, badfilter=True, sig=("x",("important",))
+    ||x^$badfilter            -> badfilter=True,  important=False, sig=("x",())
+    ||x^$important            -> important=True,  badfilter=False, sig=("x",("important",))
+  i.e. ||x^$badfilter prunes ||x^ (sigs both ("x",())); it does NOT prune
+  ||x^$important (sig ("x",("important",))) -- a different option = different sig.
+
+================================================================================
+2. THE PARSER -- PUBLIC SIGNATURE + DISPATCH
+================================================================================
+  parse_abp(line: str, *, provenance: str = RULE_PROV_FEED, feed: str = "",
+            group: str = "", log: str = "") -> Rule | None
+
+PURE: no Unbound symbol, no module-global mutation, no compile/execute of the
+regex. provenance/feed/group/log are plumbed straight onto the Rule (the caller
+-- Phase 6's build() -- supplies them from the manifest row; the user-regex /
+user-whitelist callers pass provenance=RULE_PROV_USER).
+
+NOTE ON THE DISPATCHER: the existing `parse(format_hint, line) -> ParsedEntry|None`
+(the ADR-06 lite path incl. the lite `abp` branch) is LEFT UNCHANGED -- the
+build_module abp tests + the ADR-06 oracle depend on it. parse_abp is a SEPARATE,
+additive function (the comment seam at the Rule model already named it). Phase 6
+will route format_hint=='abp' feeds through parse_abp instead of the lite branch;
+the lite `parse('abp')` + `_dnsbl_parse_abp_line` are removed in Phase 8.
+
+================================================================================
+3. KEEP / SKIP GRAMMAR IMPLEMENTED  (agrees with the Phase-2 oracle on scope)
+================================================================================
+KEEP (-> Rule):
+  ||domain^ (+DNS-opts)        block, DOMAIN, wildcard=True   sig=(dom,opts)
+  ||domain  (no ^, no path)    block, DOMAIN, wildcard=True   (host anchor)
+  @@||domain^ (+DNS-opts)      allow, DOMAIN, wildcard=True
+  <ip> domain   (hosts)        block, DOMAIN, wildcard=True   (sink IP ignored)
+  plain bare domain            block, DOMAIN, wildcard=True
+  /re/                         block, REGEX, key=raw inner    sig=(inner,())
+  @@/re/                       allow, REGEX, key=raw inner
+  Domain targets pass through normalise() (lower-case + PFB_FILTER_DOMAIN shape
+  gate); an invalid domain -> None.
+
+SKIP ALWAYS (-> None):
+  blank; comment/control (!/[); a plain '#' comment line;
+  element-hiding / cosmetic: ## , #@# , #?# , #%# , #$# ;
+  path/URL rules: '/' or '*' in the host/anchor (||a^/path, ||a.b/x.js,
+    /banners/*.gif, ||wild.*^);
+  $options that are NOT all-DNS-relevant (page-context / non-DNS modifier /
+    UNRECOGNISED -- see SS4);
+  IP-VALUED anchors: ||1.2.3.4^ , hosts "<ip> <ip>"  -> PHP firewall path,
+    Python returns None (no-leak contract, ADR-06 fact 7; _dnsbl_is_ipv4 gate).
+
+REFERENCE AMBIGUITIES RESOLVED (== the Phase-2 oracle's chosen interpretations,
+RESULTS/02_Results.txt SS3 -- followed exactly):
+  * plain bare domain AND hosts "<ip> domain" => BLOCK + wildcard=True (domain +
+    subdomains), matching the ADR-06 plain/hosts path.
+  * ||domain^ / @@||domain^ => wildcard=True (the ^ separator + || host anchor
+    cover the domain and all subdomains).
+  * a line with a bare space whose first token is NOT an IPv4 => None (not a
+    hosts line; a real ABP rule never carries a bare space).
+  * an UNRECOGNISED $option => skip the whole rule (conservative -- never invent a
+    DNS decision for a modifier we do not model).
+  * regex INNER pattern is stored RAW and NOT compiled/validated here -- a broken
+    /re/ still yields a REGEX Rule (compile/vet/reduce are Phases 5-7).
+
+================================================================================
+4. important / badfilter / provenance -- HOW THEY ARE SET
+================================================================================
+* important / badfilter come ONLY from the $options tail of a ||/@@|| network
+  rule, via _dnsbl_classify_options(opts_str) -> (sorted_dns_opts, important,
+  badfilter) | None:
+    - DNS-relevant (KEEP): $important (-> important=True, IN the signature opts),
+      $badfilter (-> badfilter=True, EXCLUDED from the signature opts).
+    - page-context (-> skip rule): third-party/~third-party/domain/script/image/
+      stylesheet/object/subdocument/document/xmlhttprequest/websocket/ping/media/
+      font/popup/csp/elemhide/generichide/genericblock/rewrite.
+    - non-DNS modifiers (-> skip rule): dnsrewrite/dnstype/client/ctag.
+    - any other / unrecognised opt -> skip rule.
+    - ONE bad opt poisons the whole rule (||a^$important,third-party -> None).
+  REGEX rules + hosts + plain set important=False, badfilter=False (no $options
+  grammar on those).
+* provenance is whatever the caller passes (default RULE_PROV_FEED). parse_abp
+  does NOT infer it. Phase 5/6 MUST pass RULE_PROV_USER for user-supplied rules
+  (settings block list, user regex, whitelist, TOP1M) so they reach bands 5/6 and
+  are $badfilter-immune (fact 7). [Ties into the P3 caveat: user-block -> band 5
+  is still un-wired; the provenance field is now the carrier for it.]
+
+================================================================================
+5. REDUCIBLE-vs-IRREDUCIBLE REGEX TAGGING  (classification only; reduce = Phase 5)
+================================================================================
+Stage A does NOT reduce. EVERY /re/ and @@/re/ -- reducible or not -- becomes a
+RULE_TARGET_REGEX rule with key_or_pattern = the raw inner pattern. The
+classification flag pinned this phase is just "this line is a regex rule" (target
+== REGEX), proven across BOTH corpus files (regex_reducible.txt AND
+regex_irreducible.txt all parse to REGEX-target rules).
+
+PHASE 5 ACTION: run the reducer on every RULE_TARGET_REGEX rule:
+  * a reducible inner pattern folds to a RULE_TARGET_DOMAIN rule (block ->
+    data/zone, allow -> whiteDB wildcard) -- ZERO per-query cost;
+  * an irreducible inner pattern stays REGEX (compiled in Phase 6).
+The reduction grammar is already authored + pinned TWICE:
+  - tests/test_adr07_decision_spec.py::reduce_regex  (the TARGET; Phase 5's
+    production reducer must match it), and
+  - benchmarks/spike_adr07_regex.reduce_pattern  (the spike reference).
+Both agree on the corpus (Phase-2 SS5). NOTE the oracle's parse_abp_line ALREADY
+folds reducible regex at parse time (so its reducible lines are DOMAIN targets);
+production parse_abp intentionally does NOT (it defers to Phase 5), so the
+production-vs-oracle agreement test compares the in/out SCOPE verdict only, not
+the target. Phase 5's reducer makes production == oracle on target too.
+
+================================================================================
+6. TEST ENTRY POINTS  (tests/test_adr07_parser.py)
+================================================================================
+  TestBlockDomain   -- ||domain^ / ||domain (no ^) / hosts (0.0.0.0 + 127.0.0.1)
+                       / plain / leading-dot-strip / case-lowering.
+  TestAllowDomain   -- @@||domain^ , @@||domain^$important.
+  TestRegex         -- /re/ + @@/re/ raw-inner; reducible-stays-REGEX; broken
+                       regex NOT compiled; parametrized over BOTH corpus regex
+                       files (every line -> REGEX target).
+  TestOptions       -- keep $important/$badfilter (+ signature exclusion of
+                       badfilter); skip page-context/non-DNS/unrecognised; one bad
+                       opt poisons the rule.
+  TestSkip          -- blank/comment/control/element-hiding(##,#@#,#?#,#%#,#$#)/
+                       path-URL/wildcard; IP-valued anchors; invalid-domain gate.
+  TestProvenance    -- default FEED; USER plumbed; feed/group/log plumbed (domain
+                       + regex).
+  TestPurity        -- Rule is frozen; parse_abp does not touch dataDB/zoneDB.
+  TestSpecAgreement -- parametrized over the WHOLE corpus: scope agrees with the
+                       Phase-1 spike categoriser AND the Phase-2 oracle
+                       parse_abp_line; core fields (kind/important/badfilter/key/
+                       wildcard/signature) match the oracle for the domain cases.
+
+The canonical TARGET remains tests/test_adr07_decision_spec.py (decide(); Phase 2)
+and the matcher strata tests (tests/test_adr07_matcher_strata.py; Phase 3). Phase 5
+reconcile/precedence should be diffed against decide() once it folds + bands.
+
+================================================================================
+7. GO-AHEAD + WHAT PHASE 5 SHOULD DO
+================================================================================
+GO-AHEAD: reconcile. No reject-criterion (ADR.md SS7) tripped -- the Rule model
+carries everything precedence/$badfilter need; scope agrees with both the oracle
+and the spike on the whole corpus.
+
+Phase 5 (05_Reconcile_Badfilter_Reduce.txt) -- PURE, still NOT live in the matcher:
+  * $badfilter prune: collect FEED $badfilter signatures (Rule.signature on
+    badfilter=True FEED rules); drop every FEED rule with a matching signature;
+    the $badfilter rules themselves emit nothing. USER rules are IMMUNE (never
+    pruned; fact 7). Reference: tests/test_adr07_decision_spec.py::reconcile.
+  * regex REDUCTION: fold reducible RULE_TARGET_REGEX rules to RULE_TARGET_DOMAIN
+    (block -> data/zone via classify, allow -> whiteDB wildcard); irreducible
+    stays REGEX (the Phase-6 compile candidate list). Match reduce_regex / the
+    spike reduce_pattern.
+  * classify: reuse the ADR-06 classify() (data vs zone) on reduced/domain blocks.
+  * BANDS: assign priority per RESULTS/02 SS2 / the P3 6-band constants
+    (PRIO_FEED_BLOCK..PRIO_USER_ALLOW). USER -> band 5/6 (always sovereign);
+    FEED -> 1/2, +$important -> 3/4. Use Rule.provenance (now carried) to drive
+    the user-block -> band 5 wiring the P3 handoff flagged as still un-wired.
+  * Output: the typed pre-emit rule sets + the irreducible-regex candidate list
+    (input to Phase 6). Diff reconciliation/precedence against the Phase-2 decide().
+
+GATES TO KEEP GREEN: python -m pytest (ADR-06 oracle + ADR-07 spec + strata +
+these parser tests), ruff check/format, php -l + ShellCheck on any PHP/shell
+touched.
+================================================================================
