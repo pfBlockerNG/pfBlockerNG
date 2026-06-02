@@ -1,0 +1,83 @@
+================================================================================
+PHASE 1 PROMPT — Spike & kill-gate: build an installable .pkg in a GHA FreeBSD VM
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §1 facts 2-3, §2
+     "Release .pkg artifacts" row, and §7 "Reject criteria" FIRST — this phase
+     exists to test the build premise)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch (off `devel`) performing Phase 1 of ADR-09. This is a
+DE-RISKING SPIKE, not the release pipeline: prove that a GitHub-hosted FreeBSD VM can
+build the pfSense-pkg-pfBlockerNG[-devel] port into an INSTALLABLE .pkg from this
+repo's source, for the current CE's FreeBSD major. Produce MEASURED numbers and a
+go/no-go against the kill-threshold (§7) BEFORE the release wiring (Phase 3). Work
+inline on `adr/09`, one commit, push directly (no worktree isolation — project workflow).
+
+WHY THIS PHASE EXISTS
+ADR-01 was fully built and then REJECTED because its premise did not hold. ADR-09's
+release-side premise — "a GH FreeBSD VM can build our port into an installable .pkg
+cheaply" — is unproven IN CI. The maintainer already builds it manually via
+`make package` (README "Building via the FreeBSD ports system"), so the risk is
+reproducing that in a VM action within budget, with deps (net/libmaxminddb) resolving.
+If it can't, the release artifact falls back to manual build+upload — learn that NOW,
+for the price of one workflow, not after building the matrix + release wiring.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff. Start from the ADR.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§1 facts 2-3; §2 Release row; §7 reject).
+- README.md  ("Building via the FreeBSD ports system" — the manual `make package` recipe
+  and where the .pkg lands: work/pkg/).
+- ../FreeBSD-ports/net/pfSense-pkg-pfBlockerNG-devel/  (Makefile: PORTNAME, RUN_DEPENDS,
+  USES, GH_TAGNAME/GH_ACCOUNT/GH_PROJECT, do-install; pkg-plist; files/pkg-install.in).
+- scripts/install-from-repo.sh  (how the package is otherwise staged/installed — for the
+  post-build `pkg add` sanity-check shape).
+- .github/workflows/test.yml + release.yml  (house workflow style: ubuntu-latest,
+  checkout, triggers; MIRROR it — this is a SEPARATE workflow).
+- CLAUDE.md  (POSIX-sh; commit style; push-direct).
+
+ACTION PLAN (ordered — prove the cheapest thing first)
+1. FREEBSD VM: a workflow that runs a FreeBSD VM whose version MATCHES the current CE's
+   FreeBSD major (e.g. FreeBSD 15 for CE 2.8). Use `vmactions/freebsd-vm` (pin the
+   version) or a hand-rolled QEMU FreeBSD VM; document the choice + version.
+2. PORTS TREE + SOURCE: inside the VM, make the port build from THIS repo's working tree
+   (override GH_TAGNAME/WRKSRC, or stage src/ into WRKSRC) rather than fetching a tag, so
+   the spike proves the branch builds. Resolve build deps (php, python, libmaxminddb)
+   from the FreeBSD pkg repo.
+3. BUILD: `make package` (or `make stage && make package`) → confirm a .pkg in work/pkg/.
+   Capture build wall-time.
+4. INSTALL CHECK: `pkg add` the produced .pkg on a clean pkg root inside the VM (or
+   `pkg install` from a file repo) → confirm it installs and the dep (libmaxminddb)
+   resolves. Capture exit status + the .pkg's ABI tag (`pkg query -F <file> '%q'`).
+5. WORKFLOW: `.github/workflows/build-spike.yml` (workflow_dispatch) wiring 1-4 and
+   printing the numbers. Record them in RESULTS/01_Results.txt.
+6. GATE: compare to §7 kill-threshold and state GO or NO-GO explicitly.
+
+CONSTRAINTS
+- Do NOT write the matrix, the release wiring, or any CI-image phase here (Phases 2-6).
+- Do NOT touch src/ (shipped code). Do NOT add deps to the default pytest run.
+- Any shell is POSIX sh, quoted, ShellCheck-clean. Workflows lint-clean.
+- python -m pytest (default) must remain green and unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- The build-spike workflow completes on GH-hosted CI and prints: FreeBSD version used,
+  build wall-time, the produced .pkg name + ABI tag, and `pkg add` exit status.
+- python -m pytest → green (unchanged). ruff/ShellCheck/markdownlint → clean.
+- Compare measured build time to §7 kill-threshold; state GO or NO-GO.
+
+EXPECTED RESULT
+A runnable spike workflow that BUILDS an installable .pkg for the current FreeBSD major
+in a GH-hosted FreeBSD VM, with recorded numbers and an explicit go/no-go. No matrix,
+no release wiring.
+
+COMMIT (single)
+    ci: spike pfSense .pkg build in a GH-hosted FreeBSD VM (ADR-09 P1)
+Push directly to `adr/09`; open a PR only if the direct push is rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/01_Results.txt` (plain .txt)
+For Phase 3 (release artifacts). Include: GO or NO-GO vs the kill-threshold + the raw
+numbers (FreeBSD version, build wall-time, .pkg ABI tag, pkg-add status); the EXACT
+working VM recipe (action + version, ports-tree + source override, dep install, the
+make/pkg commands); how to build from a tagged source vs a branch; any gotchas (deps,
+framework bits, time); and — if NO-GO — the recorded fallback (manual make package +
+manual upload) so Phase 3 targets that instead.

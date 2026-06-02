@@ -1,0 +1,71 @@
+================================================================================
+PHASE 5 PROMPT — [GATED on ADR-04] CI smoke-image refresh: upgrade-in-place + sanity gate
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §2 "CI image refresh" +
+     "Sanity gate" rows, §3 risks, §7 reject FIRST)
+================================================================================
+
+GATE — STOP unless ADR-04 is ACCEPTED
+This phase consumes ADR-04's VM smoke harness + GH-hosted KVM, which are UNPROVEN until
+ADR-04 is Accepted (its Phase-1 KVM kill-gate must have passed and the image pipeline
+must exist). Before doing anything: check ADR-04's Status (.ADRs/ADR_04_VM_Smoke_Tests/
+ADR.md). If it is NOT Accepted, STOP and report "blocked on ADR-04" — do not build.
+
+ROLE
+You are on the `adr/09` branch performing Phase 5 of ADR-09 (GATED). Automate the GHCR
+CE smoke-image refresh: upgrade-in-place to a new CE version, SANITY-GATE it, and publish
+ONLY on pass. Work inline on `adr/09`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+A new CE version needs a fresh GHCR smoke image with no manual re-seed (§1 fact 6 — the
+seed is minimal, upgrades are appliance-grade, even across majors). The sanity gate is
+the safety net: a bad upgrade must NEVER be published.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read RESULTS/04_Results.txt (the tracker's gated trigger for this step) AND
+  ADR-04's RESULTS (the qemu/boot recipe + image-upgrade.sh contract). If missing or
+  ADR-04 not Accepted, STOP.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 image-refresh + sanity-gate rows;
+  §7 reject).
+- scripts/image-upgrade.sh + scripts/install-from-repo.sh + scripts/image-publish.sh.
+- .ADRs/ADR_04_VM_Smoke_Tests/  (the harness this consumes) + its RESULTS.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. REFRESH WORKFLOW: on a KVM runner, triggered by the version-tracker (Phase 4) for a
+   new CE entry: `image-upgrade.sh --from <current-tag>` -> pfSense-upgrade (any bump,
+   incl. major) -> produce the candidate image.
+2. SANITY GATE (the publish guard — §2): boots; SSH answers; /etc/version == expected
+   release; `pfctl -sr` loads; `install-from-repo.sh` installs pfBlockerNG and
+   `pfblockerng.php update` exits 0; a `dig` of a baked control/blocked name returns the
+   expected shape. ANY miss -> DO NOT publish; fail the job.
+3. PUBLISH ON PASS ONLY: oras push the new tag only when the gate passes. Keep the old
+   tag (don't overwrite). On fail, leave GHCR untouched and surface the failure.
+4. FALLBACK NOTE: document that a gate failure -> manual seed (image-publish.sh) for that
+   version is the fallback (not the default).
+5. SELF-TEST (false-green guard): a deliberately-broken upgrade (or a forced bad
+   /etc/version) MUST fail the gate and publish nothing.
+
+CONSTRAINTS
+- GATED on ADR-04 Accepted — STOP otherwise.
+- A broken image MUST NEVER be published (fail closed). Keep old tags.
+- Do NOT touch src/. POSIX sh; workflows lint-clean; secrets via Actions secrets.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- On a good upgrade: the new tag is published and passes the sanity gate.
+- On a broken upgrade: the gate fails, NOTHING is published (false-green guard).
+- ruff/ShellCheck/markdownlint clean; pytest green/unchanged.
+
+EXPECTED RESULT
+A KVM refresh workflow that upgrades-in-place, sanity-gates, and publishes a new GHCR CE
+image only on pass — fail-closed.
+
+COMMIT (single)
+    ci: GHCR CE image refresh via upgrade-in-place + sanity gate (ADR-09 P5)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/05_Results.txt` (plain .txt)
+For Phase 6/7. Include: the refresh trigger + the exact sanity-gate checks; the
+publish-on-pass-only proof; the false-green guard result; the manual-seed fallback;
+any major-jump gotchas observed; and the go-ahead.

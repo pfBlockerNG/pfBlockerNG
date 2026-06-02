@@ -1,0 +1,65 @@
+================================================================================
+PHASE 4 PROMPT — Version-tracker workflow (scheduled; curated detect + react)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §1 facts 1,5; §2
+     "Detect vs react" row + contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch performing Phase 4 of ADR-09. Build the scheduled
+"react" engine: when the matrix gains a version, drive the release build and (gated)
+the CI refresh/fan-out — and an OPTIONAL best-effort probe that only NUDGES (PR/issue),
+never edits the matrix and never touches channel branches. Work inline on `adr/09`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Detection has no clean API (§1 fact 5), so DETECT stays curated (a human edits the
+matrix). This phase automates the REACT half and keeps the curated nudge optional. It
+MUST honour §1 fact 1 — never commit to / force-push main/devel/next.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read RESULTS/02_Results.txt (matrix location + reader) AND RESULTS/03_Results.txt
+  (the release build entry points to trigger). If either is missing, STOP and report.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 Detect/react row; §2 contract;
+  §6 Phase 4).
+- .github/workflows/release.yml + the Phase-3 build job + the Phase-2 reader (what to
+  trigger and how).
+- CLAUDE.md  (no channel-branch force-push; secrets; commit style).
+
+ACTION PLAN (ordered)
+1. TRACKER WORKFLOW: `.github/workflows/version-tracker.yml` (`schedule` +
+   `workflow_dispatch`): read the matrix; for each entry, REACT — trigger the release
+   artifact build (Phase 3) and, GATED, the CI refresh + smoke fan-out (Phases 5-6, only
+   once ADR-04 is Accepted; until then those steps are no-ops with a clear log line).
+2. NO CHANNEL-BRANCH WRITES: the tracker MUST NOT commit to or force-push
+   main/devel/next. Assert this in the design + a comment.
+3. OPTIONAL PROBE: a best-effort step that scans pfsense/FreeBSD-ports `RELENG_*` (or the
+   pkg ABI list) and, on a version NOT in the matrix, OPENS a PR/issue NUDGE for a human
+   — it never edits the matrix. Make it easy to disable.
+4. SELF-TEST: workflow_dispatch run that, against the seed matrix, logs the reactions it
+   WOULD trigger (and shows the CI-side steps are gated/no-op pre-ADR-04).
+
+CONSTRAINTS
+- NEVER commit to / force-push main/devel/next. The probe NUDGES only.
+- Do NOT touch src/. POSIX sh; workflows lint-clean; secrets via Actions secrets.
+- The CI-side reactions are GATED on ADR-04 — wire them as no-ops until then.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- version-tracker.yml runs on schedule + dispatch, reads the matrix, triggers the
+  release build, and shows the CI-side steps gated; it makes NO channel-branch writes.
+- The optional probe opens a nudge (or is cleanly disabled); ruff/ShellCheck/markdownlint
+  clean; pytest green/unchanged.
+
+EXPECTED RESULT
+A scheduled version-tracker that reacts to the curated matrix (release build now,
+CI-side gated) and an optional nudge-only probe — with zero channel-branch writes.
+
+COMMIT (single)
+    ci: add scheduled version-tracker (curated detect + automated react) (ADR-09 P4)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt` (plain .txt)
+For Phase 5/6/7. Include: the tracker's triggers + what it reacts to; how the CI-side
+steps are gated (the exact gate condition keyed on ADR-04 status); the probe's behaviour
++ how to disable; proof of no channel-branch writes; and the go-ahead.

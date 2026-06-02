@@ -1,0 +1,73 @@
+================================================================================
+PHASE 2 PROMPT — Decoupled supported-version matrix + runtime reader
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §1 fact 1, §2 "matrix"
+     + "lifecycle" rows, §2 contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch performing Phase 2 of ADR-09. Build the SINGLE SOURCE OF
+TRUTH for which pfSense versions we support — DECOUPLED from the main/devel/next channel
+branches — plus a small reader the other workflows consume. No release wiring or CI
+image work here. Work inline on `adr/09`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The version set must drive builds + (gated) CI WITHOUT ever committing to / force-pushing
+the channel branches (§1 fact 1 — linearity is sacrosanct). So the matrix lives OFF the
+channel branches and is read at runtime. This phase lays that foundation before anything
+reacts to it.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/01_Results.txt — the build premise
+  GO/NO-GO + the FreeBSD-major-per-version reality. If missing, STOP and report.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 matrix/lifecycle rows; §2 contract).
+- scripts/update-pfsense-stubs.py  (the existing MIN_PFSENSE_VERSION pin — the only
+  version config today; reference it, do not duplicate its intent).
+- .github/workflows/test.yml  (how a matrix is expressed in this repo's workflows).
+- CLAUDE.md  (POSIX sh; no channel-branch force-push; commit style).
+
+ACTION PLAN (ordered)
+1. STORAGE — `ci-metadata` orphan ref: store `supported-versions.json` on a `ci-metadata`
+   ORPHAN branch (its own history, NOT in main->devel->next), the single source of truth.
+   NOT a repo variable (variables have no git audit trail on a user repo — no
+   diff/blame/rollback/PR review — and need a privileged token to write). Protect the
+   branch (PR-only) and add a STATIC POINTER to it in scripts/README.md + CLAUDE.md so it
+   is discoverable. Workflows read it at runtime (e.g. `git show
+   origin/ci-metadata:supported-versions.json`, or actions/checkout of that ref with the
+   default token). A future move to a dedicated public `pfBlockerNG-ci-infra` repo (read
+   via raw URL, no token) is a mechanical swap — NOTE it, do not build it.
+2. SCHEMA: each entry `{ pfsense_version, channel: CE|Plus, freebsd_major, status:
+   beta|GA, ci: bool }`. Seed today's set: 2.7.x->FreeBSD 14 (CE, GA, ci:true),
+   2.8.x->FreeBSD 15 (CE, GA, ci:true), current Plus->its FreeBSD major (Plus, GA,
+   ci:false). Keep it minimal.
+3. READER: a composite action or POSIX-sh helper that reads the matrix and emits, as
+   workflow outputs: (a) the BUILD matrix = the set of DISTINCT freebsd_major values;
+   (b) the CI matrix = the `ci: true` CE entries. Pure read; no writes anywhere.
+4. LIFECYCLE DOC: document the policy next to the matrix — ADD on beta (curated), DROP
+   the oldest CE only when the newest CE goes GA; Plus is always ci:false (build-only).
+5. SELF-TEST: a tiny workflow (workflow_dispatch) that runs the reader and prints both
+   emitted matrices, proving it parses the seed correctly.
+
+CONSTRAINTS
+- The matrix MUST NOT live on main/devel/next and the reader MUST NOT write anywhere.
+- Do NOT touch src/. POSIX sh; workflows/YAML lint-clean.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- The self-test workflow prints the BUILD matrix (distinct FreeBSD majors) and the CI
+  matrix (ci:true CE) from the seed.
+- ruff/ShellCheck/markdownlint clean; pytest green/unchanged.
+
+EXPECTED RESULT
+A decoupled, runtime-read supported-version matrix + a reader that emits build & CI
+matrices, with the lifecycle policy documented. No reactions wired yet.
+
+COMMIT (single)
+    ci: add decoupled supported-version matrix + reader (ADR-09 P2)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/02_Results.txt` (plain .txt)
+For Phase 3/4. Include: where the matrix lives + how to edit it; the exact schema +
+seed; the reader's interface (inputs/outputs, how a workflow consumes the build & CI
+matrices); the lifecycle policy; and the go-ahead.
