@@ -68,8 +68,11 @@ ACTION PLAN (ordered)
    - a TEST SSH public key (from secret `SMOKE_SSH_PUB_KEY`) into root's authorized_keys
      + root SSH enabled — the harness connects with the matching private key
      (`SMOKE_SSH_PRIV_KEY`);
-   - pfBlockerNG-devel INSTALLED (so all deps/dirs exist; the harness then rsyncs the
-     branch over it via deploy.sh);
+   - do NOT bake pfBlockerNG — the image is clean pfSense CE; the harness installs the
+     branch from src/ after boot via scripts/install-from-repo.sh (the port's
+     `php -f /etc/rc.packages <pkg> POST-INSTALL` hook — all local, no internet). The
+     image is therefore pfBlockerNG-version-agnostic and reused across the per-minor
+     CE matrix;
    - a known base config.xml (interfaces, services up) with the `admin` password set to
      match secret `SMOKE_ADMIN_PASSWORD` (store its bcrypt hash in config.xml);
    - Unbound `local-data` for the hermetic control domain(s) named in 01_Results.txt;

@@ -221,7 +221,8 @@ build and drive its disk image — no Packer, since pfBlockerNG compiles nothing
   the image; the harness runs this after every boot (the disk is immutable).
 
 These produce one image per supported minor CE version; CI runs the smoke matrix
-across all of them. See [`.ADRs/ADR_04_VM_Smoke_Tests/`](.ADRs/ADR_04_VM_Smoke_Tests/).
+across all of them. See [`scripts/README.md`](scripts/README.md) for the build/ABI
+details and [`.ADRs/ADR_04_VM_Smoke_Tests/`](.ADRs/ADR_04_VM_Smoke_Tests/).
 
 ---
 
