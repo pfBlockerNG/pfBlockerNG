@@ -34,7 +34,6 @@ import statistics
 import sys
 import threading
 import time
-from typing import Callable
 
 # --------------------------------------------------------------------------- #
 # Corpus location.
@@ -203,6 +202,11 @@ def reduce_pattern(pat: str) -> tuple[str, str] | None:
 #     exponential-backtracking shape.
 STATIC_LEN_CAP = 200  # proposed default length ceiling for the opt-in cap
 _NESTED_QUANT = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
+# Alternation-overlap: a quantified group whose body contains an alternation `|`
+# (e.g. (a|a)+, (a|ab)*). Overlapping/ambiguous alternatives under a quantifier
+# backtrack catastrophically yet have no INNER quantifier, so _NESTED_QUANT misses
+# them. Kept conservative: a single `(...)` (no inner parens) with `|`, then a quant.
+_ALT_OVERLAP = re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]")
 
 
 def static_redos_flag(pat: str) -> str | None:
@@ -211,31 +215,37 @@ def static_redos_flag(pat: str) -> str | None:
         return "over-length"
     if _NESTED_QUANT.search(inner):
         return "nested-quantifier"
+    if _ALT_OVERLAP.search(inner):
+        return "alternation-overlap"
     return None
 
 
 def _adversarial_input(inner: str) -> str:
     """Craft the worst <=253-char input for a pattern (best-effort, DNS-scale).
 
-    A run of 'a' that fails the final anchor maximises backtracking for the
-    classic shapes ((a+)+$, ([a-z]+)*\\.example$, (.*a){20}$, ...). Capped at the
-    DNS name limit -- that is the ONLY input a query-time regex ever sees.
+    A run of 'a' ending in a NON-matching sentinel fails the final anchor, which
+    maximises backtracking for the classic shapes ((a+)+$, ([a-z]+)*\\.example$,
+    (.*a){20}$, ...) -- an all-'a' string would instead *match* those and so
+    under-report the worst case. Capped at the DNS name limit -- that is the ONLY
+    input a query-time regex ever sees.
     """
-    return "a" * DNS_MAX_LEN
+    return "a" * (DNS_MAX_LEN - 1) + "!"
 
 
 # A standalone child program: compile + time ONE match, print the seconds. Run via
 # subprocess so a catastrophic match can be HARD-KILLED on timeout (the spike is
 # dev tooling -- the no-subprocess rule is for the shipped resolver, not here; in
 # the resolver, fact 2 means this exact match CANNOT be killed, which is the point).
+# Pattern + probe are passed as JSON so the per-pattern adversarial probe (not a
+# fixed all-'a' string) is what gets timed.
 _CHILD = (
-    "import re,sys,time;"
-    "p=sys.stdin.read();"
-    "rx=re.compile(p);"
-    "s='a'*%d;"
+    "import json,re,sys,time;"
+    "d=json.loads(sys.stdin.read());"
+    "rx=re.compile(d['p']);"
+    "s=d['s'];"
     "t=time.perf_counter();"
     "rx.search(s);"
-    "sys.stdout.write(repr(time.perf_counter()-t))" % DNS_MAX_LEN
+    "sys.stdout.write(repr(time.perf_counter()-t))"
 )
 
 
@@ -247,6 +257,7 @@ def worst_first_hit(pat: str, timeout_s: float = 2.0) -> tuple[float, bool]:
     runs at least ``timeout_s`` (a genuinely pathological pattern; the runtime
     evict ceiling is exactly for this case).
     """
+    import json
     import subprocess
 
     inner, _ = _strip_slashes(pat)
@@ -254,10 +265,11 @@ def worst_first_hit(pat: str, timeout_s: float = 2.0) -> tuple[float, bool]:
         re.compile(inner)
     except re.error:
         return 0.0, False
+    probe = _adversarial_input(inner)
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _CHILD],
-            input=inner,
+            input=json.dumps({"p": inner, "s": probe}),
             capture_output=True,
             text=True,
             timeout=timeout_s,
