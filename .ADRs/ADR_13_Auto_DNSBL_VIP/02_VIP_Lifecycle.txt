@@ -1,0 +1,87 @@
+================================================================================
+PHASE 2 PROMPT — VIP lifecycle manager wired into pfb_create_dnsbl($mode)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md   (read §2 table "Lifecycle" rows + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/13` branch performing Phase 2 of ADR-13. This phase ADDS the
+create/delete behaviour but stays ADDITIVE: with the new `pfb_dnsvip_auto` flag off
+(its default), the runtime is byte-identical to today. Work inline on `adr/13`, one
+commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The auto VIP is just another managed artifact. pfBlockerNG already creates/destroys its
+DNSBL NAT inside pfb_create_dnsbl($mode) — and the call-site comment already reads
+"Modify DNSBL NAT AND VIP and lighttpd web server conf" (inc:8697). This phase makes that
+true: create the marked VIP on 'enabled'+auto, delete only marker+IP-matched VIPs on
+'disabled'. This rides the existing enable/disable/uninstall paths and HA sync for free.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/01_Results.txt — it must confirm the marker strings,
+  pfb_pick_free_dnsbl_vip()/pfb_dnsbl_vip_candidates()/pfb_unbound_listens_v6() signatures,
+  and that they are unwired. If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md (§2 Lifecycle rows, contract, §1 facts 5 + teardown).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  * pfb_create_dnsbl($mode) :1921 — the body guard :1926, NAT create :1950-1976, NAT remove
+    on disabled :1986-1992, the write_config :2014-2017. This is the function you extend.
+  * The call site :8684-8698 — how $mode resolves (enabled/disabled) and the "…and VIP…" hook.
+  * pfblockerng_install.inc:46-67 — the canonical VIP entry shape (mode/interface/type/subnet/
+    subnet_bits/descr/uniqid) and the "_vip{uniqid}" id convention. Mirror it.
+  * pfb_global() :826-836 — pfb_dnsvip4/6 resolve to IPs; keep this working after create.
+- stubs/pfsense/interfaces.php: interface_ipalias_configure (:192) apply, interface_vip_bring_down
+  (:147) remove. VERIFY the real create+apply sequence against upstream firewall_virtual_ip_edit.php
+  (CLAUDE.md upstream-source rule) — get the apply order right (config first, then configure).
+- CLAUDE.md (PHP tabs/8.3, no die()/exit(); write_config discipline; investigate-live-system).
+
+ACTION PLAN (ordered)
+1. CONFIG KEY: add `pfb_dnsvip_auto` (on/off) under the DNSBL settings config
+   (installedpackages/pfblockerngdnsblsettings/config/0). Default OFF. Read it in pfb_global()
+   alongside the other dnsbl flags (do NOT yet add UI — that is Phase 4).
+2. MANAGER `pfb_manage_dnsbl_vip(string $mode): void`:
+   - mode 'enabled' AND pfb_dnsvip_auto on:
+     * For v4 (always) and v6 (when required — see Phase 3; for now: when a v6 VIP is already
+       requested/needed): ensure a VIP with descr == the marker exists on $pfb['dnsbl_iface'].
+       IDEMPOTENT: if a marked VIP already exists, reuse it (do not duplicate); else create one
+       at pfb_pick_free_dnsbl_vip(...) with a fresh uniqid, subnet_bits 32 (v4) / 128 (v6),
+       mode 'ipalias', type 'single', and apply via interface_ipalias_configure().
+     * Set pfb_dnsvip4 / pfb_dnsvip6 to the "_vip{uniqid}" id(s); write_config once if changed.
+     * If the picker returns null (no free address), do NOT create; leave config as-is and log.
+   - mode 'disabled' (DNSBL or pfBlockerNG disabled), OR auto turned off, OR a family no longer
+     managed: DELETE only VIPs where descr == marker AND subnet == the IP currently resolved from
+     the stored pfb_dnsvip4/6 config — interface_vip_bring_down() + remove from virtualip/vip +
+     clear the corresponding pfb_dnsvip4/6 id; write_config once if changed.
+   - NEVER touch a VIP lacking the marker. NEVER delete on marker-only without the IP match.
+3. WIRE: call pfb_manage_dnsbl_vip($mode) from pfb_create_dnsbl($mode) — place create in the
+   enabled path (before/with the NAT create so NAT sees the VIP) and delete in the disabled path.
+   Keep the boot/install call site (:6686) correct (it passes 'enabled').
+4. GUARD ADDITIVITY: with pfb_dnsvip_auto off, pfb_manage_dnsbl_vip returns immediately →
+   pfb_create_dnsbl is byte-identical to today.
+
+CONSTRAINTS
+- ADDITIVE: auto off ⇒ no-op ⇒ byte-identical update pass + smoke + "no VIP" scenario unaffected.
+- Only delete marker+IP-matched VIPs. No die()/exit() in lib. PHP tabs/8.3. New fns → stubs.
+- Do NOT touch Python/tests, the UI (Phase 4), or pfb_validate_vips v6 rules (Phase 3).
+- write_config sparingly (only when config actually changed), consistent with pfb_create_dnsbl.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green/unchanged.
+- php -l + PHPStan + ShellCheck -> clean.
+- diff-read: confirm auto-off path is unchanged; confirm delete is gated by marker AND IP.
+- Reason through: enable→create, disable→delete-ours-only, manual VIP untouched, re-enable→recreate.
+
+EXPECTED RESULT
+With pfb_dnsvip_auto on, enabling DNSBL creates a marked lo0 (or dnsbl_interface) IP-Alias VIP
+at a free .53 address and points pfb_dnsvip4 at it; disabling removes only that marked+matched
+VIP. With it off, nothing changes.
+
+COMMIT (single)
+    pfblockerng: auto-create/remove marked DNSBL sinkhole VIP on enable/disable (ADR-13 P2)
+Push directly to `adr/13`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/02_Results.txt` (plain .txt)
+State: the config key name + default; pfb_manage_dnsbl_vip signature + exact create/delete
+predicates (especially the marker+IP delete guard); where it is called from pfb_create_dnsbl;
+the VIP entry fields used + apply sequence; confirmation auto-off is byte-identical; any stubs
+added; open questions for Phase 3 (v6 provisioning hook); the go-ahead for Phase 3.
