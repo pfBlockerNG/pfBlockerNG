@@ -169,11 +169,10 @@ def test_parse_plist_unresolved_token_raises():
         bpp.parse_plist("%%NOPE%%/x\n", {}, "/usr/local")
 
 
-def test_parse_plist_unknown_keyword_warns(capsys):
-    files, dirs = bpp.parse_plist("@sample foo.conf.sample\nbin/x\n", {}, "/usr/local")
-    assert files == ["/usr/local/bin/x"]
-    assert dirs == []
-    assert "@sample" in capsys.readouterr().err
+def test_parse_plist_unknown_keyword_raises():
+    # Fail closed on an unhandled @keyword (don't silently emit a wrong package).
+    with pytest.raises(bpp.BuildError, match="@sample"):
+        bpp.parse_plist("@sample foo.conf.sample\nbin/x\n", {}, "/usr/local")
 
 
 @pytest.mark.parametrize(
@@ -243,6 +242,20 @@ def test_recipe_bare_mv_and_unknown_command(tmp_path):
     bad = make_mk(tmp_path, "do-install:\n\t${FROBNICATE} a b\n")
     with pytest.raises(bpp.BuildError, match="unsupported recipe command"):
         bpp.Recipe(bad).run("do-install")
+
+
+def test_safe_extract_rejects_traversal(tmp_path):
+    # A path-traversal member must be rejected (the stdlib 'data' filter).
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name in ("ok.txt", "../escape.txt"):
+            data = b"x"
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf) as tf2, pytest.raises(bpp.BuildError):
+        bpp._safe_extract(tf2, tmp_path / "dest")
 
 
 # --------------------------------------------------------------------------- #

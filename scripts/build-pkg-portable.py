@@ -527,8 +527,10 @@ def parse_plist(text: str, plist_sub: dict[str, str], prefix: str) -> tuple[list
     """Return (file install paths absolute, directory paths absolute) from a plist.
 
     Entries are PREFIX-relative unless they start with '/'. %%TOKEN%% are PLIST_SUB
-    substitutions; @dir gives an explicit owned directory; other @keywords we skip
-    with a warning (none are used by the pfSense pkg ports today).
+    substitutions; @dir gives an explicit owned directory. An unknown @keyword
+    (@mode, @sample, @owner, …) aborts the build — like an unknown recipe command,
+    silently dropping it would emit a subtly wrong package instead of forcing the
+    tool to be taught the keyword.
     """
     files: list[str] = []
     dirs: list[str] = []
@@ -544,10 +546,10 @@ def parse_plist(text: str, plist_sub: dict[str, str], prefix: str) -> tuple[list
             arg = arg.strip()
             if kw == "dir":
                 dirs.append(_abspath(arg, prefix))
-            elif kw in ("comment",):
+            elif kw == "comment":
                 continue
             else:
-                sys.stderr.write(f"warning: ignoring unhandled plist keyword @{kw} {arg}\n")
+                raise BuildError(f"unsupported pkg-plist keyword @{kw} (teach the tool to handle it): {raw!r}")
             continue
         files.append(_abspath(line, prefix))
     return files, dirs
@@ -855,12 +857,14 @@ def _urlopen(url: str):
 
 
 def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
-    base = dest.resolve()
-    for m in tf.getmembers():
-        target = (dest / m.name).resolve()
-        if not str(target).startswith(str(base)):
-            raise BuildError(f"unsafe path in tarball: {m.name}")
-    tf.extractall(dest)
+    # Use the stdlib 'data' filter (PEP 706, Python 3.11.4+): it rejects absolute
+    # paths, parent-dir traversal, AND symlinks/hardlinks that escape dest — the
+    # link-based escapes a manual path-prefix check (str.startswith) silently lets
+    # through.
+    try:
+        tf.extractall(dest, filter="data")
+    except tarfile.FilterError as e:
+        raise BuildError(f"unsafe member in fetched tarball: {e}") from None
 
 
 # --------------------------------------------------------------------------- #
