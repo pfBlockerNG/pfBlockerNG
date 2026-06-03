@@ -704,7 +704,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_control',
-	gettext('Python Control') . '(py)',
+	gettext('Python Control'),
 	'Enable',
 	$pconfig['pfb_control'] === 'on' ? true:false,
 	'on'
@@ -736,7 +736,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',
-	gettext('DNS Reply Logging') . '(py)',
+	gettext('DNS Reply Logging'),
 	'Enable',
 	$pconfig['pfb_py_reply'] === 'on' ? true:false,
 	'on'
@@ -744,7 +744,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
-	gettext('HSTS mode') . '(py)',
+	gettext('HSTS mode'),
 	'Enable',
 	$pconfig['pfb_hsts'] === 'on' ? true:false,
 	'on'
@@ -2334,7 +2334,7 @@ $tld_info['bgTLD']	= 'List of Branded Generic Top-Level-Domains (bgTLD)';
 
 $section->addInput(new Form_Checkbox(
 	'pfb_pytld',
-	gettext('TLD Allow') . '(py)',
+	gettext('TLD Allow'),
 	'Enable',
 	$pconfig['pfb_pytld'] === 'on' ? true:false,
 	'on'
@@ -2357,10 +2357,10 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Enable to sort TLDs alphabetically');
 
-$group = new Form_Group('TLD Group 1 (py)');
+$group = new Form_Group('TLD Group 1');
 foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 	if ($key == 2) {
-		$group = new Form_Group('TLD Group 2 (py)');
+		$group = new Form_Group('TLD Group 2');
 	}
 	$count = count($tld_list[$tld_type]);
 
@@ -2386,7 +2386,7 @@ foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 
 $section->addInput(new Form_Checkbox(
 	'pfb_idn',
-	gettext('IDN Blocking') . '(py)',
+	gettext('IDN Blocking'),
 	'Enable',
 	$pconfig['pfb_idn'] === 'on' ? true:false,
 	'on'
@@ -2394,7 +2394,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_regex',
-	gettext('Regex Blocking') . '(py)',
+	gettext('Regex Blocking'),
 	'Enable',
 	$pconfig['pfb_regex'] === 'on' ? true:false,
 	'on'
@@ -2402,7 +2402,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_cname',
-	gettext('CNAME Validation') . '(py)',
+	gettext('CNAME Validation'),
 	'Enable',
 	$pconfig['pfb_cname'] === 'on' ? true:false,
 	'on'
@@ -2411,7 +2411,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_noaaaa',
-	gettext('no AAAA') . '(py)',
+	gettext('no AAAA'),
 	'Enable',
 	$pconfig['pfb_noaaaa'] === 'on' ? true:false,
 	'on'
@@ -2419,7 +2419,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_gp',
-	gettext('Python Group Policy') . '(py)',
+	gettext('Python Group Policy'),
 	'Enable',
 	$pconfig['pfb_gp'] === 'on' ? true:false,
 	'on'
@@ -2546,7 +2546,7 @@ $section->addInput(new Form_Input(
 // Add option to disable DNSBL logging in python and utilize the DNSBL Webserver (excluding nullblocking events)
 $section->addInput(new Form_Checkbox(
 	'pfb_py_nolog',
-	gettext('DNSBL Event Logging') . '(py)',
+	gettext('DNSBL Event Logging'),
 	'Enable',
 	$pconfig['pfb_py_nolog'] === 'on' ? true:false,
 	'on'
@@ -3033,13 +3033,6 @@ events.push(function(){
 		enable_dnsblip();
 	});
 	enable_dnsblip();
-
-	$('label[class="col-sm-2 control-label"]').each(function() {
-		var found = $(this).text();
-		if (found.indexOf('(py)') >= 0) {
-			$(this).html(found.replace('(py)', '&emsp;<i class="fa-solid fa-bolt" title="DNSBL Python"></i>'));
-		}
-	});
 });
 
 //]]>
