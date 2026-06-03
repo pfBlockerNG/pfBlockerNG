@@ -42,11 +42,12 @@ import socket
 import subprocess
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -613,9 +614,14 @@ def expected_control_answer(env: Mapping[str, str] = os.environ) -> tuple[str, s
     Both are PARAMETERS (env overridable) so the probe is not pinned to one
     baked image: defaults match what RESULTS/02 records as baked.
     """
-    name = env.get("SMOKE_CONTROL_NAME", "smoke-control.pfb.test")
-    ip = env.get("SMOKE_CONTROL_IP", "192.0.2.123")
-    return name, ip
+    # Empty/absent SMOKE_CONTROL_NAME => no baked control => callers skip. Use
+    # `or` (not get's default): smoke.yml SETS the var to "" when the secret/var
+    # is unset, AND a truly-absent var must also skip — a hardcoded default name
+    # would make the optional probe FAIL (instead of skip) on a local run with no
+    # baked control. ip defaults only matter when a name IS configured.
+    name = env.get("SMOKE_CONTROL_NAME") or ""
+    ip = (env.get("SMOKE_CONTROL_IP") or "") if name else ""
+    return name, (ip or None)
 
 
 # --------------------------------------------------------------------------- #
@@ -625,7 +631,7 @@ def expected_control_answer(env: Mapping[str, str] = os.environ) -> tuple[str, s
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):  # type: ignore[no-untyped-def]
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Generator[None, None, None]:
     """Stash each phase's report on the item so fixtures can read pass/fail."""
     outcome = yield
     rep = outcome.get_result()
