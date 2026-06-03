@@ -6,6 +6,104 @@
 
 ---
 
+## Investigating the live system (be thorough — read sources, not proxies)
+
+When debugging real pfSense/FreeBSD behaviour, **verify against the source of truth
+and the effective live state — never infer presence/absence from a single generated
+artifact.** A clean grep of one file is not proof. Specifically:
+
+- **Follow file inclusions.** *NIX config is routinely split across `include:`
+  directives and `*.d/` drop-in directories. Grep the whole tree, then follow the
+  chain — don't grep one top-level file and conclude. Example that bit us: Unbound's
+  DNS-Resolver ACLs are **not** in `/var/unbound/unbound.conf`; they're in the
+  included `/var/unbound/access_lists.conf` (alongside `host_entries.conf`,
+  `domainoverrides.conf`, `remotecontrol.conf`). `grep -rn … /var/unbound/` +
+  `grep include /var/unbound/unbound.conf` finds them; grepping `unbound.conf` alone
+  silently misses them.
+- **Some pfSense services run CHROOTED — account for it when they read files.** A
+  chrooted process resolves absolute paths against its chroot root, not `/`.
+  **Unbound** is chrooted at **`/var/unbound`** (e.g. `pfb_unbound.py` runs there:
+  a host-absolute `/var/unbound/pfb_py_raw/x` becomes `/var/unbound/var/unbound/pfb_py_raw/x`
+  inside and 404s — reference such files by their in-chroot path, or relative to the
+  chroot root; files outside the chroot like `/usr/local/pkg/...` are simply
+  unreachable unless mounted/copied in). **HAProxy** is chrooted at **`/tmp/haproxy`**.
+  A file that plainly exists on the host can be unreadable by the service purely
+  because of the chroot — this caused a real DNSBL feed-loading bug (manifest stored
+  host-absolute paths the chrooted module couldn't open).
+- **Ask the tool for its effective state via its own CLI.** It resolves includes and
+  shows what's actually loaded, not what a file says:
+  - **pf** → `pfctl` (`-sr` rules, `-sn` NAT, `-sTables`/`-t <t> -T show` tables,
+    `-ss` states).
+  - **Unbound** → `unbound-control` (`get_option <opt>` e.g. `access-control`,
+    `list_local_zones`, `status`); `unbound-checkconf` to validate.
+  - pfSense services in general: prefer the CLI/`pfSsh.php` over reading generated files.
+- **Turn on a tool's debug/verbose mode when unsure what it's actually doing** —
+  which URLs/hosts it hits, which files it reads/writes, cache/304 behaviour —
+  instead of guessing. E.g. `pkg -d update` traces the underlying `curl` (repo
+  catalogue `meta.conf`/`data.pkg`, the `If-Modified-Since` → "Simulate an HTTP
+  304" → "repository is up to date" path; local catalogue DB under
+  `/var/db/pkg/repos/<repo>/db`); `curl -v` for raw HTTP. Non-obvious gotcha this
+  revealed: pfSense's pkg uses the **`pkg+https`** scheme — a *mirror indirection*,
+  so `pkg.pfsense.org` does not resolve directly (a plain `dig` looks "broken")
+  while pkg resolves it to a Netgate mirror host (e.g. `pkg00-atx.netgate.com`)
+  and fetches fine. This is why the smoke harness keeps egress OPEN during
+  `deploy()`/reload — `pkg add` pulls RUN_DEPENDS from that mirror.
+- **Confirm what's actually installed with `pkg` — don't assume a tool is present
+  or absent.** Installed: `pkg info` (all), `pkg info <pkg>` (one), `pkg info -l
+  <pkg>` (its files), `pkg which <path>` (owning package). Available to install (repo
+  catalogue, not yet installed): `pkg search <name>` / `pkg rquery` — the answer to
+  "is dependency X available?". The smoke image ships `ldns` (→ `drill`),
+  `bind-tools` (→ `dig`/`host`/`nslookup`), `python311`, `unbound`, `php83`, and
+  `qemu-guest-agent` — so check before installing a dependency or coding a runtime
+  fallback. (`pkg help` / `pkg <cmd> -h` for the full command surface.)
+- **`/conf/config.xml` is the source of truth** for pfSense settings; the files under
+  `/var/…` are *generated* from it. To check whether something is configured, read the
+  relevant `config.xml` section (e.g. `<unbound><acls>`), not just the generated output.
+  If you cite config.xml in your reasoning, actually open that section — don't assume.
+- **"Everything is files" cuts both ways:** read the actual files (and diff
+  before/after a change), and when a value is set/empty, confirm it on the box rather
+  than trusting recollection.
+
+---
+
+## Resolving pfSense-provided PHP functions (read the real upstream source)
+
+When a pfSense-provided PHP function is missing, undocumented, ambiguous, or you
+can't tell whether it's implicated in a bug — and it isn't stubbed yet — **do NOT
+assume it can be worked around or guess its behaviour.** We depend on open-source
+software; the real implementation is available, so read it. Source of truth:
+<https://github.com/pfsense/pfSense>.
+
+A function's existence, signature, or behaviour can differ across releases, so
+treat the **full source trees at these refs** as the authority — check the
+function in each that's relevant:
+
+1. **Minimum supported CE** — youngest commit at or before the launch date of our
+   minimum pfSense CE version (currently **2.8.0**).
+2. **Every CE release since the oldest supported** — youngest commit at or before
+   each CE version's launch date.
+3. **Every pfSense Plus release since our oldest supported CE** — youngest commit
+   at or before each Plus version's launch date.
+4. **`master`** — current upstream tip.
+
+Resolve each ref at investigation time, don't hardcode hashes: find the version's
+release date, then take the youngest commit at/before it
+(`git log --before="<release-date>" -1 <branch>`, or the GitHub commits view
+filtered by date). The public mirror may lack release branches/tags (e.g. no
+`RELENG_2_8_0`), so dated commits on the available history are the reliable handle.
+Checking across this set shows whether behaviour is stable across our support
+matrix or version-specific.
+
+**Always prefer stubbing the real function — based on its actual upstream source
+— over making an exception** (a `phpstan-baseline.neon` suppression, an
+`undefinedFunctions` entry, or a code workaround). Stubs encode reality and keep
+PHPStan/Intelephense honest; exceptions hide it. This is the same principle as the
+stub guidance under "Updating documentation" — that section covers the bulk
+generator (`scripts/update-pfsense-stubs.py`); this covers investigating and
+stubbing a single function from upstream by hand.
+
+---
+
 ## Repository structure
 
 ```text
@@ -24,9 +122,11 @@ pfBlockerNG/
 │       ├── share/             # Package metadata (info.xml)
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
 ├── tests/                 # Python test suite (pytest)
+├── docs/misc/             # Dev-only reference notes (e.g. pfSense_versions.md — per-version base facts + pfBlockerNG deps)
 ├── scripts/               # Developer tooling (deploy, stub generation)
 │   ├── deploy.sh          # Push files to live pfSense over SSH
 │   ├── setup-hooks.sh     # One-time: point git at .githooks (core.hooksPath)
+│   ├── misc/              # Per-pfSense-version helpers (e.g. install_deps_CE_2.8.sh — bake RUN_DEPENDS on the image)
 │   └── update-pfsense-stubs.py  # Regenerate stubs from pfSense source
 ├── stubs/pfsense/         # PHP stubs for Intelephense (IDE only, not shipped)
 ├── stubs/python/          # unboundmodule.py stub for Pylance/mypy + tests (not shipped)
@@ -90,6 +190,44 @@ download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned 
 `tests/test_adr06_*` (golden oracle, build module, init-from-raw, PHP boundary);
 the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py`. See
 `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
+
+---
+
+## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`
+
+`tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI
+(`smoke.yml`, workflow_dispatch) and asserts pfBlockerNG end-to-end. These
+truths are non-obvious and each cost real debugging — internalise them first:
+
+- **Probe ON-BOX** (`drill @127.0.0.1` over SSH), NOT the runner-side SLIRP
+  hostfwd — the WAN-hostfwd DNS path is not answered in CI. Python-mode DNSBL has
+  **no localhost exemption**: a blocked name returns its block shape even from
+  `127.0.0.1`. After `reload()` → `wait_unbound_ready`, the **first** DNS response
+  is authoritative — assert it, never loop waiting for the expected value.
+- **Test domains MUST be `helpers.unique_domain()`** (`uuid-*.com`): never RFC 6761
+  TLDs (`.test`/`.example`/`.invalid`/…) — Unbound's built-in `local-zone`s shadow
+  them (NXDOMAIN/NODATA) before DNSBL — and never HSTS-preload names — HSTS
+  (`pfb_hsts`, default ON) forces a would-be VIP block to NULL.
+- **Block shapes (python mode):** NOERROR + VIP (`dnsbl_ipv4`) or NULL
+  (`0.0.0.0` / `::`); NEVER NXDOMAIN for a feed match (NXDOMAIN is SafeSearch-only).
+  Per-list `logging` selects VIP vs NULL and is a **LIST-level** field
+  (`$list['logging']`), not per-row. Compare IPs **by value** (`::` == `::0`).
+- **Unbound is chrooted at `/var/unbound`** — files its python module reads must be
+  chroot-relative (see the chroot note under "Investigating the live system"); a
+  host-absolute path silently fails to load.
+- **Enable chain:** DNSBL `mode=='enabled'` needs `enable_cb=on` + `pfb_dnsbl=on` +
+  the DNS Resolver enabled (`unbound_state`). On `next`, `dnsbl_mode`/`pfb_py_block`
+  are dead keys (python is the only mode); on `main` they're still required.
+- **The image bakes only the deps + qemu-guest-agent** — the harness injects the
+  DNSBL VIP (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline.
+  Image caches are content-keyed (smoke qcow2 by GHCR digest; FreeBSD base by
+  published SHA256, verified) so a same-tag re-push invalidates automatically.
+- **Every run uploads a full guest snapshot** (`smoke-diagnostics` artifact: all
+  `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state, `/var/db/pfblockerng`
+  + `/var/db/aliastables`, scrubbed `config.xml`). On any failure, read it first.
+
+Full journey, verified response model, and per-step instrument (`SMOKE_STATE_DIFF`):
+`.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/`.
 
 ---
 

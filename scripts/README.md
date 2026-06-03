@@ -73,7 +73,8 @@ set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
 
 - `pkg` gates installs on the **OS major**. A `FreeBSD:15` package on a `FreeBSD:16`
   system is **refused by default**; `pkg add -f` forces it — functionally safe here
-  (no binaries of ours; the `libmaxminddb` dep resolves from the target's own repo).
+  (no binaries of ours; the smoke image bakes pfBlockerNG's run-deps incl.
+  `libmaxminddb`, so `pkg add` resolves them locally/offline).
 - So **build one `.pkg` per distinct FreeBSD major**, on a FreeBSD VM pinned to that
   major. One build covers every pfSense version on that major. Rebuild only on a
   **FreeBSD-major jump** (rare; coincides with raising the minimum supported version).
