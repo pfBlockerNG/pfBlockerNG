@@ -1,6 +1,6 @@
 # ADR-07: Full ABP-style DNSBL list support (DNS-only, in the Python build)
 
-- **Status:** **Implemented — pending live smoke** (2026-06-02; flips to **Accepted** only after the §7 manual smoke passes on a live pfSense box)
+- **Status:** **Implemented — pending live smoke** (2026-06-02; flips to **Accepted** only after the live-smoke matrix below passes on a live pfSense box. The ADR-04 VM harness now automates most of it — `tests/smoke/test_smoke_abp.py`, run via the smoke workflow — leaving only a few items for a hand-run live box.)
 - **Date:** 2026-06-02
 - **Branch:** `adr/07` (off **`next`** — depends on ADR-06 "DNSBL preprocessing → Python" having landed) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the build layer + the query-time matcher), `pfblockerng.inc` (`$easylist` lite parser, the manifest writer `pfb_unbound_python_sources`, the DNSBL-IP firewall pass, the user-regex feature), `src/usr/local/www/pfblockerng/*` (the new "Limit long/complex regex" opt-in setting).
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (no subprocess, no out-of-stdlib regex engine; note 3.11+ gives atomic groups + possessive quantifiers in `re`); PHP 8.3; POSIX `sh`.
@@ -180,11 +180,11 @@ Prompt: `08_Slim_PHP_Boundary.txt`
 
 - PHP **header-sniffs** ABP feeds → `format_hint='abp'`, passes **raw** lines; **delete** the `$easylist` lite pass (`$e_replace`). Teach the **DNSBL-IP** pass ABP-anchored IP syntax (`||1.2.3.4^`, hosts IP) → `DNSBLIP_v4`/`_v6`; Python skips IPs (0 leak). UI reads the new counts. Decision-preserving for observable DNS output (Phase-2 + ADR-06 oracles; `php -l`/ShellCheck).
 
-### Phase 9 — Validation, perf/ReDoS benchmark, manual smoke, DoD
+### Phase 9 — Validation, perf/ReDoS benchmark, live smoke, DoD
 
 Prompt: `09_Validation_Smoke_DoD.txt`
 
-- Full ABP golden equivalence + no-regression; re-run the Phase-1 latency/ReDoS benchmark on `adr/07` vs threshold; finalise the setting UI text, README/CLAUDE.md. **Manual smoke (live box):** `@@` un-blocks; `$important`/`$badfilter` precedence; user sovereignty (whitelist both entry points; user block beats feed `@@$important`); a ReDoS feed regex is dropped + logged (resolver stays responsive); DNSBL-IP intact; counts; reload.
+- Full ABP golden equivalence + no-regression; re-run the Phase-1 latency/ReDoS benchmark on `adr/07` vs threshold; finalise the setting UI text, README/CLAUDE.md. **Live smoke:** the ADR-04 VM harness was extended for ABP (`tests/smoke/test_smoke_abp.py`) and automates `@@` un-block (same + cross-feed), `$important`/`$badfilter` precedence, regex block/`@@`-allow + the admitted-count shrink under the cap, whitelist sovereignty, user-regex block, and plain-feed no-regression; the runtime regex evict timing, ABP×DNSBL-TLD live mode, and async DNSBL-IP populate remain hand-run on a live box. Full mapping in the live-smoke matrix below.
 
 ---
 
@@ -195,7 +195,7 @@ Prompt: `09_Validation_Smoke_DoD.txt`
 - Per-query regex cost meets the Phase-1 kill-threshold at feed scale (or the documented pivot was taken); the opt-in static cap + runtime warn/evict are in place (feed + user); a tripped pattern is evicted, not re-run.
 - PHP `$easylist` lite pass deleted; ABP parse is one Python parser; DNSBL-IP (incl. ABP-anchored) intact; user `pfb_regex_list` now behind the same runtime safeguard.
 - The opt-in "Limit long/complex regex" setting works; runtime warn/evict is active by default.
-- Status → **Accepted** only after the manual smoke (below) passes on a live pfSense box.
+- Status → **Accepted** only after the live-smoke matrix (below) passes on a live pfSense box — the automated ABP smoke green on a VM run **plus** the hand-run items (runtime regex evict, ABP×DNSBL-TLD, DNSBL-IP populate).
 
 ### Build evidence (recorded Phase 9, on `adr/07`)
 
@@ -305,16 +305,31 @@ parallel). Out of scope here.
 - **Runtime eviction proves insufficient / too risky:** if Phase 1 finds real feeds carry patterns that hang long enough to matter even with warn/evict (and the opt-in cap can't catch them cheaply) → fall back to translate-only (fold reducible regex into dicts, drop irreducible) rather than ship a resolver that can stall.
 - **Sovereignty/precedence cannot be matched:** if the model can't preserve user sovereignty or reproduce ABP precedence on the Phase-2 spec → STOP and reconcile before deleting the PHP lite pass.
 
-### Manual smoke (owner: maintainer) — required before Accept
+### Live smoke (ADR-04 VM harness + a few hand-run items) — required before Accept
 
-> **Gate: Status flips to Accepted ONLY after every box below passes on a live pfSense CE box.** CI cannot reach Unbound's Python loader or pf. Run after a full DNSBL update (so the manifest + regex set + counts are freshly written) and a resolver reload.
+> **Gate: Status flips to Accepted ONLY after every box below passes on a live pfSense CE box.** CI's pure suite cannot reach Unbound's Python loader or pf — only the live VM proves the manifest build + matcher agree with the ADR-07 decision model end-to-end. Run after a full DNSBL update (so the manifest + regex set + counts are freshly written) and a resolver reload.
 
-- [ ] **`@@` exception un-blocks.** A feed that blocks `||example.com^` *and* exempts `@@||sub.example.com^` resolves the exempted name while the rest of the zone stays blocked.
-- [ ] **Regex.** A reducible feed regex blocks exactly its domain/wildcard equivalent; an irreducible regex blocks as written; an `@@/re/` allow un-blocks. The `DNSBL_Regex` alias count reflects admitted regex.
-- [ ] **`$important` / `$badfilter`.** A feed `||x^$important` beats a feed `@@x^`; a feed `||y^$badfilter` removes a feed `||y^` (y resolves). Neither touches a user rule.
-- [ ] **User sovereignty.** A whitelisted domain (settings textarea *and* alerts "add to whitelist" button) resolves regardless of any feed rule incl. `$important`; a user-blocked domain stays blocked even against a feed `@@…$important`; no feed `$badfilter` removes a user rule. TOP1M (enabled) behaves as a user allow.
-- [ ] **Regex safety.** With the opt-in "Limit long/complex regex" cap ON, an over-long feed/user regex is dropped at load. A deliberately slow regex trips the runtime ceiling: a warning then an error is logged and the pattern is **evicted** (subsequent queries fast); the resolver recovers. Same behaviour for the user `pfb_regex_list`.
-- [ ] **DNSBL-IP.** A feed with embedded IPs (incl. `||1.2.3.4^`) still populates `DNSBLIP_v4`/`_v6` with the configured action; no IP leaks into DNS blocking.
-- [ ] **No regression.** A non-ABP feed set (plain/hosts) blocks/resolves exactly as before; `pfb_py_count` renders.
-- [ ] **ABP × DNSBL-TLD mode.** Enable DNSBL TLD mode with at least one ABP feed and one plain feed: confirm the ABP feed's domains build via Python (not CSV-mangled — no garbage/empty entries from raw `||x^`/`@@`/`/re/`/`0.0.0.0 host` lines) and that plain feeds still TLD-analyse (data/zone classification) as before.
-- [ ] **Reload** picks up feed, whitelist, regex-list, and setting changes correctly.
+Most of this is now **automated** by the ADR-04 live-VM harness, extended for ABP:
+
+- **`tests/smoke/test_smoke_abp.py`** — the ABP decision matrix. ABP feeds are delivered with `helpers.abp_feed()` (a body the PHP header-sniff tags `format_hint='abp'`); cross-feed cases use `DnsblCase.extra_rows`; the user regex list / static cap use `DnsblCase.user_regex` / `regex_cap`. Every "resolves" expectation pins an exact control IP (the per-case probe is hermetic — a non-blocked name only answers locally). Each expected shape is cited to `pfb_unbound.py`.
+- **`tests/smoke/test_smoke_helpers.py`** — pure (no-VM) self-tests for the ABP harness wiring (the feed builder + the inject snippet), so a regression in the ABP plumbing goes red in plain `pytest`-of-smoke without a booted VM.
+- Run on a VM via the smoke workflow (gated `workflow_dispatch`):
+
+  ```sh
+  python -m pip install -r tests/smoke/requirements.txt
+  python -m pytest tests/smoke -m smoke --override-ini="addopts="
+  ```
+
+Checklist → coverage (✅ automated in `test_smoke_abp.py` unless noted; ☐ hand-run on a live box):
+
+- [ ] **`@@` exception un-blocks.** ✅ `test_abp_exception_unblocks` (same feed: `||base^` + `@@||good.base^` → `good.base` resolves, `base`/`bad.base` stay VIP) **and** `test_abp_cross_feed_exception` (an `@@` in feed B un-blocks feed A's block — intended cross-feed ABP semantics).
+- [ ] **Regex.** ✅ `test_abp_regex_block_and_allow` (irreducible `/badword/` block VIPs a matching name; `@@/goodword/` un-blocks an also-matching name) + `test_abp_regex_admitted_count` (the `DNSBL_Regex` count == admitted total, and **shrinks** under the cap). Reducible-regex *folding* to a dict is pinned by the unit reconcile tests (`test_adr07_reconcile`); the live matrix asserts the irreducible path.
+- [ ] **`$important` / `$badfilter`.** ✅ `test_abp_important_block_beats_feed_allow` (`||x^$important` band 3 beats feed `@@||x^` band 2 → x VIP) + `test_abp_badfilter_prunes_feed_block` (`||y^$badfilter` prunes the matching feed `||y^` → y resolves). The "neither touches a user rule" half is the whitelist-sovereignty case below; user-rule `$badfilter`-immunity is pinned by `test_adr07_reconcile`/`decision_spec`.
+- [ ] **User sovereignty.** ✅ `test_abp_whitelist_sovereign_over_important` (settings-textarea whitelist → user-allow band 6 resolves over a feed `||w^$important` band 3) + `test_user_regex_blocks` (a `pfb_regex_list` pattern blocks, VIP). **Note — user-regex band:** the matcher loads a user regex as a *bare* compiled pattern, which `_block_entry_band` scores at **feed band 1**, not the oracle's user band 5 (`test_adr07_decision_spec`). So a user regex is `$badfilter`-immune (it is never in the reconcile rule list) but is **not** band-sovereign — a feed `@@…$important` (band 4) would override it. The smoke therefore asserts user-regex *blocking*, not user-regex band-sovereignty; **the alerts "add to whitelist" button** path and the user-regex-vs-feed-`@@$important` case are ☐ hand-run / a flagged follow-up.
+- [ ] **Regex safety.** ✅ load-time drop is covered by `test_abp_regex_admitted_count` (cap ON drops the nested-quantifier pattern at load → admitted count falls). ☐ **runtime warn→evict is hand-run**: no config key writes the warn/evict ceilings (they default in Python, 10 ms / 100 ms) and the trip is thread-CPU-bound, so a deterministic CI trip would need an ini patch + a CPU-burn pattern — flaky. Run by hand: feed a deliberately slow cap-passing pattern, confirm the `[pfBlockerNG]: slow … regex` warn then the `EVICTING … regex` error in the resolver log and that subsequent queries are fast. Record the log excerpt.
+- [ ] **DNSBL-IP.** ☐ **hand-run** (async populate). The IP-extraction from ABP anchors (`pfb_dnsbl_abp_extract_ip`) is unit-tested and the firewall path itself is proven by the ADR-04 matrix `test_ip_alias_table_and_rule`; the *DNSBL-IP table populate* is deferred for the same reason the ADR-04 matrix skips `test_dnsblip_dual_stack_partition` (`pfB_DNSBLIP_{v4,v6}` are filled asynchronously by `filter_configure` after the reload exits — needs a poll-based assertion). Confirm on a live box that a feed with `||1.2.3.4^` + a `0.0.0.0 host` line populates `DNSBLIP_v4`/`_v6` and that no IP leaks into DNS blocking.
+- [ ] **No regression.** ✅ `test_abp_no_regression_plain_feed` (a plain non-ABP feed VIP-blocks and `pfb_py_count` renders ≥ 1) — plus the entire ADR-04 `test_smoke_matrix.py` is unchanged and still green.
+- [ ] **ABP × DNSBL-TLD mode.** ☐ **hand-run**. The coexistence fix — `tld_analysis()` skips ABP feeds via the `.abp` marker glob — is unit-pinned; a live TLD-mode setup (enabling `pfb_pytld` + a TLD set with one ABP and one plain feed) is not yet wired into the harness. Confirm the ABP feed's domains build via Python (no CSV-mangled garbage from raw `||x^`/`@@`/`/re/`/`0.0.0.0 host` lines) and plain feeds still TLD-analyse.
+- [ ] **Reload.** ✅ implicitly — every `CaseContext` does inject → reload (`updatednsbl`/forced `update`) → probe, so feed/whitelist/regex-list/cap changes taking effect across a reload is exercised by every passing case above (the cap case proves a *settings* change is re-read; the count case proves the regex list is).
+
+> **Record results** in `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/` (ADR-04 style: the VM image ref/digest, the commands run, per-item PASS/FAIL, and the runtime-evict log excerpt). Do **not** flip Status to Accepted on a failure — file the defect and report which decision diverged from the unit oracle (the signal of a build/matcher integration bug the pure tests missed; the user-regex band note above is one such candidate already surfaced).
