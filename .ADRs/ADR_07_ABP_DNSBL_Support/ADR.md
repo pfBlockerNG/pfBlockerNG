@@ -283,6 +283,22 @@ A dedicated safety revision should weigh: defaulting the cap ON, a real ReDoS
 linter (or `re2`/atomic-group rewrite) over the cheap heuristic, and/or a
 process-isolated matcher so an in-flight match IS killable. Out of scope here.
 
+**ABP × DNSBL-TLD-mode coexistence (initial behaviour).** Phase 8 routes ABP feeds
+as RAW lines to the Python parser (`parse('abp', …)`) via the per-feed manifest,
+which is written unconditionally and does its own TLD classification. The legacy
+PHP `tld_analysis()` pass, however, is **not** ABP-aware: in DNSBL TLD mode it
+re-ingests the combined feed dump and parses every line as the legacy
+`,domain,,log,feed,group` CSV — an ABP feed's raw lines (`||x^`, `@@||x^`, `/re/`,
+`0.0.0.0 host`) are not that shape and would yield garbage/empty domains. Since
+ABP-feed + TLD-mode is a config this work newly enables, Phase 8 makes
+`tld_analysis()` **skip** any feed carrying the persisted `.abp` marker: those
+feeds are never CSV-mangled and still build their domains/regex through the Python
+manifest path (the same `parse_abp` route used outside TLD mode), while plain feeds
+keep the legacy TLD behaviour unchanged. **Follow-up:** a later pass should review
+the full ABP × DNSBL-TLD integration end-to-end (ideally folding the PHP TLD pass
+into the Python build for all feeds so the two paths are not maintained in
+parallel). Out of scope here.
+
 ### Reject criteria (decide cheaply, Phase 1, before building)
 
 - **Regex latency blows the budget:** if, at the measured irreducible-regex count, added per-query latency exceeds the agreed threshold and the reduction ratio can't bound it → do **not** ship a slow resolver path; pivot to translate-only (drop irreducible) or force the opt-in cap on by default. Recorded in the ADR.
@@ -300,4 +316,5 @@ process-isolated matcher so an in-flight match IS killable. Out of scope here.
 - [ ] **Regex safety.** With the opt-in "Limit long/complex regex" cap ON, an over-long feed/user regex is dropped at load. A deliberately slow regex trips the runtime ceiling: a warning then an error is logged and the pattern is **evicted** (subsequent queries fast); the resolver recovers. Same behaviour for the user `pfb_regex_list`.
 - [ ] **DNSBL-IP.** A feed with embedded IPs (incl. `||1.2.3.4^`) still populates `DNSBLIP_v4`/`_v6` with the configured action; no IP leaks into DNS blocking.
 - [ ] **No regression.** A non-ABP feed set (plain/hosts) blocks/resolves exactly as before; `pfb_py_count` renders.
+- [ ] **ABP × DNSBL-TLD mode.** Enable DNSBL TLD mode with at least one ABP feed and one plain feed: confirm the ABP feed's domains build via Python (not CSV-mangled — no garbage/empty entries from raw `||x^`/`@@`/`/re/`/`0.0.0.0 host` lines) and that plain feeds still TLD-analyse (data/zone classification) as before.
 - [ ] **Reload** picks up feed, whitelist, regex-list, and setting changes correctly.
