@@ -1,0 +1,136 @@
+ADR-04 — Phase 7 handoff: live-smoke hardening + verified DNSBL model + next-only plan
+======================================================================================
+
+Branch: adr/04   Date: 2026-06-03
+Audience: the MAINTAINER + the future `next`-branch agent (phase 07).
+
+-------------------------------------------------------------------
+WHY THIS EXISTS
+-------------------------------------------------------------------
+Phase 6 left ADR-04 "code complete" but the smoke matrix had never been run
+green against a real VM in CI. Actually dispatching smoke.yml surfaced a long
+chain of harness bugs + a-priori-wrong assertions. This phase drove the matrix
+to GREEN on a real pfSense CE VM (minus the python-mode shapes, which the VM
+topology can't exercise — deferred to `next`, see phase 07 prompt). src/ UNTOUCHED;
+default `python -m pytest` still 169 passed.
+
+-------------------------------------------------------------------
+HARNESS BUGS FOUND + FIXED (all in tests/smoke/, dev-only)
+-------------------------------------------------------------------
+1. Feeds didn't ingest: the feed must be a LOCAL FILE written directly under
+   /var/db/pfblockerng/<name> with the SOURCE URL set to that path (helpers.
+   write_local_feed). HTTP mock feeds via SLIRP were not the path used.
+2. DNSBL group action: must be 'unbound' (the only value pfb_determine_list_detail
+   maps to the dnsbl folder). "Enabled" passes the !='Disabled' gate but yields an
+   empty $pfbarr -> 0 domains ("DNSBL update [ 0 | PASSED ]").
+3. DNSBL ports: pfb_dnsport/pfb_dnsport_ssl (8081/8443) MUST be set or DNSBL
+   aborts the whole feed-processing block ($dnsbl_error, inc:7558).
+4. DNSBL VIP: pfBlockerNG does NOT auto-create it (install only ASSOCIATES an
+   existing 'pfB DNSBL' VIP). ensure_dnsbl_vip injects an lo0 IP-Alias virtualip
+   + pfb_dnsvip4="_vip<uniqid>" + the ports. Config-derived validation
+   (pfb_validate_vips) passes without the alias being plumbed.
+   - set-but-empty env trap: SMOKE_DNSBL_VIP4 is set to "" by smoke.yml, and
+     os.environ.get(k, default) returns "" (not the default) -> the VIP subnet was
+     blank -> "invalid IPv4 VIP". Use `or`. (Same for SMOKE_IP_IFACE.)
+5. IP rule: needs pfblockerngipsettings inbound_interface/outbound_interface set
+   (inc:10132 "Inbound interface option not configured") AND the targeted
+   `updateip` reload after `update` (filter_configure lands the table+rule a beat
+   later -> rule_references polls).
+6. Control records: switched from unbound/custom_options (a pfBlockerNG reload
+   never re-applies them) to DNS-Resolver Host Overrides (unbound/hosts) +
+   services_unbound_configure (set_control_records).
+7. THE BIG ONE — probe ON-BOX, not via the WAN hostfwd: pfSense Unbound with
+   DNSBL active does not answer the WAN-sourced query the runner hostfwd produces
+   (the single-NIC VM's only NIC is WAN). dns_probe now runs `drill @127.0.0.1`
+   over SSH. This is the faithful path (real clients query on-box/LAN) and the one
+   DNSBL services. (Egress is NOT the cause — verified with SMOKE_HERMETIC_PROBE=0:
+   the probe timed out with egress open too.)
+
+-------------------------------------------------------------------
+VERIFIED DNSBL RESPONSE MODEL (from the live box + pfb_unbound.py, NOT inferred)
+-------------------------------------------------------------------
+* A block is `NOERROR` + an A record of the sinkhole IP. NEVER NXDOMAIN for a
+  normal feed match (the only NXDOMAIN path is SafeSearch, pfb_unbound.py:1855).
+* null (0.0.0.0 / ::) vs the VIP is the `null_blocking` flag: a normal feed match
+  sets log_type "1" -> null_blocking=False -> block answers `dnsbl_ipv4` (the VIP,
+  e.g. 10.10.10.1). null only when null_blocking stays true.
+* UNBOUND mode writes EXACT `local-data: "<d> 60 IN A <vip>"` — NOT a
+  `local-zone redirect` wildcard (the ADR's original reading was wrong). Blocks
+  the exact domain to the VIP; subdomains untouched.
+* PYTHON mode (dnsbl_python + pfb_py_block) did NOT block the firewall's own
+  (localhost) query, while UNBOUND mode did. Fully configured + healthy (module
+  loaded: module-config "python iterator" + python-script pfb_unbound.py;
+  python_blocking=on in pfb_unbound.ini; domain in pfb_py_data.txt log_type 1;
+  py_error.log empty). It is a query-SOURCE/topology limitation: the single-NIC VM
+  has only localhost + WAN, no LAN client. -> deferred to `next`.
+
+NON-bug ruled out (verified, not taken on faith): pfBlockerNG's DNSBL reload does
+NOT drop custom Unbound access-control. Per-step `unbound.conf` diffs show it only
+adds the python module-config / include / VIP interface lines (inc:2186-2309). The
+maintainer's prod config has no <acls> at all; WAN reachability is just
+active_interface=all.
+
+UNBOUND vs PYTHON mode — differences found (verified on the live CE VM):
+  Mechanism:
+    - Unbound mode: exact `local-data: "<d> IN A <vip>"` in pfb_dnsbl.conf
+      (loaded by Unbound itself). Exact-match only; no subdomain coverage.
+    - Python mode: pfb_unbound.py operate() looks the name up in dataDB (exact)
+      + zoneDB (wildcard) + regexDB, as a `module-config: "python iterator"`
+      pre-validator module reading pfb_py_data.txt / pfb_unbound.ini.
+  Response shape:
+    - Unbound mode: ALWAYS the VIP (dnsbl_ipv4). No null path (null_blocking is a
+      python-only decision); no NXDOMAIN.
+    - Python mode: NOERROR + VIP, OR null (0.0.0.0/::) when null_blocking stays
+      true (per-feed `logging`); NXDOMAIN only for SafeSearch, never a feed match.
+  Query SOURCE handling (the blocker):
+    - Unbound mode: blocks ALL sources incl. the firewall's own localhost query
+      (it's just resolver local-data) -> testable on-box.
+    - Python mode: did NOT block the firewall's own (localhost) query in the
+      smoke VM. operate() derives a client IP (get_q_ip / get_q_ip_comm) for
+      logging/GeoIP/group-policy; on-box/firewall-sourced queries appear not to
+      get the DNSBL block applied. Works for LAN clients in production
+      (dns_reply.log shows LAN client IPs being served). NOT a config error:
+      module loaded, python_blocking=on, domain in pfb_py_data (log_type 1),
+      py_error.log empty.
+  => THIS LOCALHOST BEHAVIOUR MUST BE ADDRESSED IN THE `next` PHASE: determine
+     whether python mode intentionally exempts the firewall's own queries or it's
+     a genuine bug, and make python-mode DNSBL verifiable (LAN-source query, or
+     the appropriate fix). On `next` Unbound mode is GONE, so python-mode-blocks-
+     localhost (or a documented, deliberate exemption) is REQUIRED, not optional.
+
+-------------------------------------------------------------------
+MATRIX STATE ON `devel` (what's asserted / skipped)
+-------------------------------------------------------------------
+GREEN: IP alias table+members+rule; DNSBL unbound-mode exact block (NOERROR+VIP,
+subdomain not blocked); DNSBL whitelist passthrough; all helper self-tests; strict
+false-green guard (xfail).
+SKIPPED -> next (see _PY_MODE_SKIP + phase 07):
+  * test_dnsbl_exact_nxdomain  (python NXDOMAIN shape)
+  * test_dnsbl_exact_null      (null 0.0.0.0 is a python-mode shape)
+  * test_dnsblip_dual_stack    (DNSBL-IP IP-extraction not populated from a raw-IP
+                                DNSBL feed — investigate on next)
+
+-------------------------------------------------------------------
+DEBUG INSTRUMENT LEFT IN PLACE (gated, OFF by default)
+-------------------------------------------------------------------
+SMOKE_STATE_DIFF=1 -> snap_state() captures, at each step (deployed, vip, per-case
+pre/injected/reloaded), a per-tag dir with: config.xml, unbound.conf,
+pfb_unbound.ini, pfb_dnsbl.conf, pfb_py_data.txt, ALL /var/log/pfblockerng/* logs,
+and live pfctl -sr/-sn/-sTables + ifconfig + :53 sockets. dump_state_diffs() does a
+recursive `diff -ruN` between consecutive steps on failure. This is THE tool for
+the `next` python-mode work — use it. (Also SMOKE_HERMETIC_PROBE=0 leaves egress
+open for the probe, an isolation lever.)
+
+-------------------------------------------------------------------
+NEXT-BRANCH FOLLOW-UP
+-------------------------------------------------------------------
+See 07_Unbound_Removal_adaptations_(next_only).txt — run ONLY on `next` after
+devel merges and `next` is rebased. It re-enables the python-mode cases, removes
+the unbound-mode case (Unbound mode is gone on `next`), and REQUIRES solving the
+python-mode-doesn't-block-the-firewall's-own-query problem (preferably by giving
+the guest a LAN interface and querying from a LAN source) so python mode is
+covered as in production.
+
+-------------------------------------------------------------------
+MAINTAINER DoD (unchanged from §7) — still your call to flip Status -> Accepted.
+-------------------------------------------------------------------
