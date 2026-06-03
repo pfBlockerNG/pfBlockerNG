@@ -110,24 +110,19 @@ jobs:
             echo "::error::no image ref (set the image_ref input, or the SMOKE_IMAGE_REF secret/variable)"
             exit 1
           fi
-          {
-            echo "ref=${REF}"
-            echo "k=$(printf '%s' "$REF" | sha256sum | cut -c1-32)"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached pfSense image
-        id: pfcache
-        uses: actions/cache/restore@v5
-        with:
-          path: image
-          key: pfsense-img-${{ steps.ref.outputs.k }}
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
       - name: Install oras
-        if: steps.pfcache.outputs.cache-hit != 'true'
         uses: oras-project/setup-oras@v2
 
-      - name: Pull pfSense image from private GHCR
-        if: steps.pfcache.outputs.cache-hit != 'true'
+      # Key the image cache on the RESOLVED MANIFEST DIGEST, not the ref string.
+      # SMOKE_IMAGE_REF is typically a MOVING tag (e.g. :2.8.1); a re-push to the
+      # same tag changes the content (digest) but not the ref string. Keying on
+      # the digest makes a new image invalidate the cache automatically — a fresh
+      # pull, no manual cache bust. Needs a GHCR login (private repo) first; the
+      # login persists to the pull step below (same job).
+      - name: Resolve image digest (cache key)
+        id: digest
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
@@ -136,18 +131,49 @@ jobs:
           set -eu
           echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
             --username "$SMOKE_GHCR_USER" --password-stdin
+          DIGEST="$(oras resolve "$IMAGE_REF" 2>/dev/null || true)"
+          if [ -z "$DIGEST" ]; then
+            # Fallback for oras builds without `resolve`: read the descriptor.
+            DIGEST="$(oras manifest fetch "$IMAGE_REF" --descriptor | jq -r '.digest')"
+          fi
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve a sha256 digest for ${IMAGE_REF} (got '${DIGEST}')"; exit 1 ;;
+          esac
+          {
+            echo "digest=${DIGEST}"
+            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved ${IMAGE_REF} -> ${DIGEST}"
+
+      - name: Restore cached pfSense image
+        id: pfcache
+        uses: actions/cache/restore@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      - name: Pull pfSense image from private GHCR (by digest)
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -eu
           mkdir -p image
-          oras pull "$IMAGE_REF" --output image
+          # Pull by digest (the login from the resolve step persists in-job) so
+          # the content matches the cache key exactly — no tag-race window.
+          oras pull "${IMAGE_REF%@*}@${DIGEST}" --output image
           ls -l image
 
-      # Save right after the pull (before the run) so the image is cached even
-      # if a later step fails. Pulled by immutable digest -> the key is stable.
+      # Save right after the pull (before the run) so the image is cached even if
+      # a later step fails. Key = the resolved digest, so it never serves stale.
       - name: Save pfSense image to cache
         if: steps.pfcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: image
-          key: pfsense-img-${{ steps.ref.outputs.k }}
+          key: pfsense-img-${{ steps.digest.outputs.k }}
 
       - name: Write private SSH key (mode 600)
         env:
@@ -193,13 +219,15 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r tests/smoke/requirements.txt pytest
 
-      # HERMETICITY (ADR §2/§4): the egress block must happen AFTER pfBlockerNG
-      # is installed on the guest — `pkg add` pulls RUN_DEPENDS from the pfSense
-      # repo, and the guest reaches the internet THROUGH this runner's SLIRP NAT,
-      # so a pre-pytest block would hang the install. So the block is done INSIDE
-      # pytest, by the matrix's `deployed_vm` fixture, right after deploy() and
-      # before the per-case assertions (helpers.block_egress, gated by
-      # SMOKE_BLOCK_EGRESS=1 below; unblocked on teardown). The matrix then
+      # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
+      # matrix's `deployed_vm` fixture, after deploy() and before the per-case
+      # assertions (helpers.block_egress, gated by SMOKE_BLOCK_EGRESS=1 below;
+      # unblocked on teardown). deploy() no longer needs egress for dependencies:
+      # the pre-baked image ships pfBlockerNG's RUN_DEPENDS, so `pkg add` of the
+      # branch .pkg resolves them from the local pkg db offline (convention — a
+      # missing dep means a bad image). The block is kept in-fixture (not pre-
+      # pytest) because the per-case pfBlockerNG reload still wants a working
+      # resolver, and it's unblocked only for the hermetic probe. The matrix then
       # resolves every answer from the in-runner mock-feed server (guest ->
       # SLIRP 10.0.2.2 -> runner loopback) + injected Unbound local-data, so it
       # still passes with real egress dark.
@@ -235,5 +263,6 @@ jobs:
             **/vm*.log
             **/screen-*.png
             **/screen-*.ppm
+            smoke-diag/**
           if-no-files-found: ignore
           retention-days: 7

@@ -8,10 +8,27 @@ name: build-pkg (FreeBSD)
 #   pfSense CE 2.8.1 -> FreeBSD 15  (releases/VM-IMAGES/15.0-RELEASE/...)
 #   pfSense Plus     -> FreeBSD 16  (snapshots/VM-IMAGES/16.0-CURRENT/...)
 #
-# We boot the BASIC-CLOUDINIT image under QEMU/KVM (cloud-init injects our SSH
-# key via a NoCloud seed) and drive it over SSH, running scripts/build-pkg.sh
-# inside it. This replaces the rsync-overlay install: less hacky, reproducible,
-# version-parameterised, and it tests the real packaged artifact.
+# Two-tier image cache to minimise per-run setup:
+#
+#   Tier 1  freebsd-img-{image_sha256}
+#           The raw BASIC-CLOUDINIT qcow2, unchanged from what FreeBSD publishes.
+#
+#   Tier 2  freebsd-prepared-v2-{image_sha256}  (qcow2 + matching SSH key)
+#           The same image after a one-time setup boot (R/W, no snapshot):
+#           disk resized +20 GB, ZFS expanded, pkg bootstrapped + git installed,
+#           and a persistent SSH key BAKED into root's authorized_keys (via a
+#           one-shot cloud-init), after which cloud-init is DISABLED. The build
+#           boot then needs no cloud-init and no seed — it boots the prepared
+#           image with snapshot=on (throwaway overlay; base never mutated) and
+#           SSHes straight in with the baked key. The private key is cached
+#           alongside the qcow2 under the same tier-2 key so they stay in
+#           lockstep; it grants root only to a throwaway localhost VM and rotates
+#           whenever the base image (cache key) changes.
+#
+#   Cache key for both tiers: the PUBLISHED image SHA-256 (from the FreeBSD
+#   CHECKSUM.SHA256 next to the image), not the URL string — so a re-spun image
+#   at the same URL (refreshed snapshot, new release) invalidates the cache
+#   automatically. The download is also verified against that checksum before use.
 #
 # workflow_dispatch-only; never runs on push/PR.
 
@@ -94,52 +111,105 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils xz-utils openssh-client
 
-      - name: Resolve the FreeBSD image URL (programmatic, from the version)
+      - name: Resolve the FreeBSD image URL + published checksum
         id: img
         run: |
           set -eu
           URL="$(sh scripts/freebsd-image-url.sh '${{ inputs.freebsd_version }}')"
-          echo "url=${URL}" >> "$GITHUB_OUTPUT"
-          echo "key=$(printf '%s' "$URL" | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
+          FILE="$(basename "$URL")"
+          # FreeBSD publishes CHECKSUM.SHA256 next to the images. Read the hash
+          # for OUR file: it is the source of truth for the content, so we use it
+          # as the cache KEY (content, not the URL string) and to VERIFY the
+          # download. Keying on the content hash means a re-spun image at the same
+          # URL (e.g. a refreshed snapshot) invalidates the cache automatically.
+          CK_URL="${URL%/*}/CHECKSUM.SHA256"
+          SHA="$(curl -fsSL "$CK_URL" | grep -F "($FILE)" | awk '{print $NF}')"
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::no sha256 for ${FILE} in ${CK_URL} (got '${SHA}')"
+            exit 1
+          fi
+          {
+            echo "url=${URL}"
+            echo "sha=${SHA}"
+            echo "key=${SHA}"
+          } >> "$GITHUB_OUTPUT"
           echo "Resolved ${{ inputs.freebsd_version }} -> ${URL}"
+          echo "Published sha256: ${SHA}"
 
-      - name: Restore cached FreeBSD image
+      # ── Tier 2: prepared image (base + ZFS expanded + git installed) ─────────
+      # Try this first — on a hit we skip the base download entirely.
+      # The cache holds the qcow2 AND the matching private SSH key: the key is
+      # BAKED into the image (root authorized_keys) during preparation, so the
+      # build boot needs no cloud-init. Image + key are cached together under the
+      # same key so they always stay in lockstep.
+
+      - name: Restore prepared FreeBSD image + key (tier-2 cache)
+        id: prepared
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            fbsd-prepared.qcow2
+            build_key
+          key: freebsd-prepared-v2-${{ steps.img.outputs.key }}
+
+      # ── Tier 1: raw base image (only needed when tier-2 is a miss) ───────────
+
+      - name: Restore cached FreeBSD base image (tier-1 cache)
         id: imgcache
+        if: steps.prepared.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v5
         with:
           path: fbsd.qcow2
           key: freebsd-img-${{ steps.img.outputs.key }}
 
-      - name: Fetch + decompress the FreeBSD image
-        if: steps.imgcache.outputs.cache-hit != 'true'
+      - name: Fetch + verify + decompress the FreeBSD base image
+        if: steps.prepared.outputs.cache-hit != 'true' && steps.imgcache.outputs.cache-hit != 'true'
+        env:
+          IMG_URL: ${{ steps.img.outputs.url }}
+          IMG_SHA: ${{ steps.img.outputs.sha }}
         run: |
           set -eu
-          echo "Image: ${{ steps.img.outputs.url }}"
-          curl -fSL "${{ steps.img.outputs.url }}" -o fbsd.qcow2.xz
+          echo "Image: ${IMG_URL}"
+          curl -fSL "${IMG_URL}" -o fbsd.qcow2.xz
+          # Verify the download against the published checksum BEFORE decompressing
+          # — never assume the bytes are correct/complete.
+          echo "${IMG_SHA}  fbsd.qcow2.xz" | sha256sum -c -
           unxz fbsd.qcow2.xz
           ls -l fbsd.qcow2
 
-      # Save immediately after download — BEFORE the (possibly failing) build —
-      # so the image is cached even when a later step fails. A single
-      # actions/cache only saves in its post-step, which we observed not
-      # persisting on a failed job.
-      - name: Save FreeBSD image to cache
-        if: steps.imgcache.outputs.cache-hit != 'true'
+      # Save right after download so the base is cached even if the preparation
+      # step later fails.
+      - name: Save FreeBSD base image to cache (tier-1)
+        if: steps.prepared.outputs.cache-hit != 'true' && steps.imgcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: fbsd.qcow2
           key: freebsd-img-${{ steps.img.outputs.key }}
 
-      - name: Build the cloud-init seed (inject SSH key, enable root login)
+      # ── One-time preparation: resize + ZFS expand + install git + BAKE KEY ───
+      # Runs only on a tier-2 cache miss. Boots the base image R/W (no
+      # snapshot=on) so changes persist to disk, installs the invariant build
+      # deps, and BAKES a persistent SSH key into root's authorized_keys (via a
+      # one-shot cloud-init), then DISABLES cloud-init so it never runs again.
+      # The build boot then needs no cloud-init and no seed — it just SSHes in
+      # with the baked key. The qcow2 AND the key are cached together (tier-2).
+
+      - name: Prepare the FreeBSD image (one-time setup boot)
+        if: steps.prepared.outputs.cache-hit != 'true'
         run: |
           set -eu
+
+          # Work from a copy so the tier-1 base stays untouched.
+          cp fbsd.qcow2 fbsd-prepared.qcow2
+          qemu-img resize fbsd-prepared.qcow2 +20G
+
+          # PERSISTENT key — baked into the image and cached alongside it (tier-2).
+          # Reused by every build boot off this prepared image; rotates only when
+          # the base image (and thus the cache key) changes.
           ssh-keygen -t ed25519 -N '' -f build_key -C pfb-build
           PUB="$(cat build_key.pub)"
-          # The official FreeBSD image has no sudo/doas in base, so we log in as
-          # root and run the build as root. cloud-init installs the key for the
-          # default user (freebsd); runcmd copies it to root and permits root key
-          # login. printf (not heredoc) keeps #cloud-config at byte 0 and the
-          # YAML indentation exact.
+
+          # One-shot cloud-init seed: inject the key + enable root login, ONCE.
           {
             printf '#cloud-config\n'
             printf 'disable_root: false\n'
@@ -151,60 +221,40 @@ jobs:
             printf '  - chmod 600 /root/.ssh/authorized_keys\n'
             printf "  - sed -i '' -E 's/^#?[[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config\n"
             printf '  - service sshd restart\n'
-          } > user-data
-          printf 'instance-id: pfb-build\nlocal-hostname: pfb-build\n' > meta-data
-          echo "---- user-data ----"; cat user-data
-          cloud-localds seed.img user-data meta-data
-          ls -l seed.img
+          } > setup-user-data
+          printf 'instance-id: pfb-setup\nlocal-hostname: pfb-setup\n' > setup-meta-data
+          cloud-localds setup-seed.img setup-user-data setup-meta-data
 
-      - name: Boot the FreeBSD VM (headless, KVM)
-        run: |
-          set -eu
-          # The cloud image's disk is ~5 GB — too small for the ports checkout.
-          # Grow the virtual disk; the guest pool is expanded after boot. (Safe
-          # with snapshot=on: writes go to a throwaway overlay, base untouched.)
-          qemu-img resize fbsd.qcow2 +20G
-          # snapshot=on: never mutate the downloaded base. seed.img is the
-          # NoCloud datasource cloud-init reads to install our key. Serial to a
-          # file for diagnosis if it wedges.
+          # Boot R/W — writes must persist to fbsd-prepared.qcow2.
           qemu-system-x86_64 \
             -enable-kvm -machine pc -cpu host -smp 2 -m 4096 \
-            -drive file=fbsd.qcow2,if=virtio,snapshot=on \
-            -drive file=seed.img,if=virtio,format=raw \
+            -drive file=fbsd-prepared.qcow2,if=virtio \
+            -drive file=setup-seed.img,if=virtio,format=raw \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -device virtio-net-pci,netdev=net0 \
-            -display none -serial file:fbsd-console.log &
-          echo $! > vm.pid
-          echo "qemu pid $(cat vm.pid)"
+            -display none -serial file:fbsd-setup-console.log &
+          echo $! > setup-vm.pid
 
-      - name: Wait for root SSH (cloud-init runcmd done)
-        run: |
-          set -eu
-          # Poll root@ — it only answers AFTER cloud-init's runcmd has copied the
-          # key to root and permitted root login, so this also waits out
-          # cloud-init. (The freebsd user comes up earlier, but has no sudo.)
           SSH_OPTS="-i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
           for i in $(seq 1 96); do
             # shellcheck disable=SC2086
             if ssh $SSH_OPTS root@127.0.0.1 true 2>/dev/null; then
-              echo "root SSH up after ${i} attempt(s)"; exit 0
+              echo "setup VM root SSH up after ${i} attempt(s)"; break
             fi
-            if ! kill -0 "$(cat vm.pid)" 2>/dev/null; then
-              echo "::error::QEMU exited before SSH came up"; tail -n 80 fbsd-console.log || true; exit 1
+            if ! kill -0 "$(cat setup-vm.pid)" 2>/dev/null; then
+              echo "::error::QEMU exited before SSH came up (setup)"
+              tail -n 80 fbsd-setup-console.log || true
+              exit 1
             fi
+            [ "$i" -eq 96 ] && { echo "::error::Setup VM SSH never came up"; tail -n 120 fbsd-setup-console.log || true; exit 1; }
             sleep 5
           done
-          echo "::error::FreeBSD VM root SSH never came up"; tail -n 120 fbsd-console.log || true; exit 1
 
-      - name: Expand the root ZFS pool to fill the grown disk
-        run: |
-          set -eu
-          SSH="ssh -i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1"
-          # Standard FreeBSD ZFS VM-IMAGE layout: single virtio disk (vtbd0) with
-          # a trailing freebsd-zfs partition backing pool 'zroot'. Recover the GPT
-          # to see the larger disk, grow the last partition, expand the pool.
-          # Best-effort: if the image already auto-grew, these are no-ops.
-          $SSH "set -e
+          # shellcheck disable=SC2086
+          SSSH="ssh $SSH_OPTS root@127.0.0.1"
+
+          # Expand ZFS to fill the grown disk.
+          $SSSH "set -e
             DISK=vtbd0
             gpart recover \$DISK || true
             PART=\$(gpart show \$DISK | awk '\$4==\"freebsd-zfs\"{print \$3; exit}')
@@ -214,19 +264,91 @@ jobs:
             zpool online -e \"\$POOL\" \"\${DISK}p\${PART}\" || true
             df -h /"
 
+          # Install the invariant build dependency.
+          $SSSH "env ASSUME_ALWAYS_YES=yes pkg install -y git"
+
+          # DISABLE cloud-init on all future boots (boot-speed only — the baked
+          # key + sshd config already make the build boot self-sufficient). The
+          # .disabled flag dir differs by platform: base layout uses /etc/cloud,
+          # the FreeBSD port uses /usr/local/etc/cloud. Drop the flag in both,
+          # best-effort — never fail the prep over a boot-speed optimisation.
+          $SSSH "mkdir -p /etc/cloud /usr/local/etc/cloud 2>/dev/null; \
+                 touch /etc/cloud/cloud-init.disabled /usr/local/etc/cloud/cloud-init.disabled 2>/dev/null; \
+                 true"
+
+          # Graceful shutdown — let the guest commit writes to the qcow2.
+          $SSSH "shutdown -p now" || true
+          for i in $(seq 1 30); do
+            kill -0 "$(cat setup-vm.pid)" 2>/dev/null || { echo "Setup VM powered off cleanly"; break; }
+            [ "$i" -eq 30 ] && { echo "::warning::Setup VM did not power off within 60s; killing"; kill "$(cat setup-vm.pid)" 2>/dev/null || true; }
+            sleep 2
+          done
+
+      - name: Save prepared FreeBSD image + key to cache (tier-2)
+        if: steps.prepared.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            fbsd-prepared.qcow2
+            build_key
+          key: freebsd-prepared-v2-${{ steps.img.outputs.key }}
+
+      # ── Build boot ───────────────────────────────────────────────────────────
+      # Always uses the prepared image with snapshot=on (writes go to a throwaway
+      # overlay; fbsd-prepared.qcow2 is never mutated). No cloud-init, no seed:
+      # the SSH key is already baked into root's authorized_keys and cloud-init
+      # is disabled, so the boot is fast and SSH is up as soon as sshd starts.
+
+      - name: Normalise the baked key permissions
+        run: |
+          set -eu
+          # actions/cache restore (tier-2 hit) does not guarantee 0600; ssh
+          # refuses a group/world-readable private key. Idempotent after setup.
+          chmod 600 build_key
+          ls -l build_key
+
+      - name: Boot the FreeBSD VM (snapshot=on, prepared image)
+        run: |
+          set -eu
+          # snapshot=on: all writes go to a throwaway in-memory overlay;
+          # fbsd-prepared.qcow2 is never written to during the build boot.
+          # No seed drive — the baked key + disabled cloud-init make it unneeded.
+          qemu-system-x86_64 \
+            -enable-kvm -machine pc -cpu host -smp 2 -m 4096 \
+            -drive file=fbsd-prepared.qcow2,if=virtio,snapshot=on \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            -display none -serial file:fbsd-build-console.log &
+          echo $! > vm.pid
+          echo "qemu pid $(cat vm.pid)"
+
+      - name: Wait for root SSH (baked key)
+        run: |
+          set -eu
+          SSH_OPTS="-i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
+          for i in $(seq 1 96); do
+            # shellcheck disable=SC2086
+            if ssh $SSH_OPTS root@127.0.0.1 true 2>/dev/null; then
+              echo "root SSH up after ${i} attempt(s)"; exit 0
+            fi
+            if ! kill -0 "$(cat vm.pid)" 2>/dev/null; then
+              echo "::error::QEMU exited before SSH came up"; tail -n 80 fbsd-build-console.log || true; exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::FreeBSD VM root SSH never came up"; tail -n 120 fbsd-build-console.log || true; exit 1
+
       - name: Build the package inside the VM
         run: |
           set -eu
           SSH="ssh -i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1"
           REF="${{ github.ref_name }}"
           SHA="${{ github.sha }}"
-          # Running as root (no sudo on the base image). pkg may need bootstrap on
-          # a fresh image; ASSUME_ALWAYS_YES handles it. Clone the ports tree
-          # (port + Mk) for the build, and the branch (just to get build-pkg.sh).
-          # The build pins the port's USE_GITHUB fetch to $SHA (the branch HEAD
-          # commit), so `make package` packages that exact commit — not the tag.
+          # git is pre-installed in the prepared image; pkg bootstrap already done.
+          # Clone the ports tree (port + Mk) and the branch (for build-pkg.sh).
+          # The build pins the port's USE_GITHUB fetch to $SHA so `make package`
+          # packages that exact commit — not the tag.
           $SSH "set -e
-            env ASSUME_ALWAYS_YES=yes pkg install -y git
             git clone --depth 1 -b '${{ inputs.ports_ref }}' https://github.com/${{ inputs.ports_repo }} /root/ports
             git clone --depth 1 -b \"$REF\" https://github.com/${{ github.repository }} /root/src
             sh /root/src/scripts/build-pkg.sh --ports /root/ports --gh-tagname \"$SHA\" --channel '${{ inputs.channel }}' --php '${{ inputs.php_version }}' --out /tmp/out
@@ -240,7 +362,7 @@ jobs:
             'root@127.0.0.1:/tmp/out/*' out/
           ls -l out
 
-      - name: Upload package + console log
+      - name: Upload package + console logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -248,10 +370,13 @@ jobs:
           path: |
             out/*.pkg
             out/*.txz
-            fbsd-console.log
+            fbsd-build-console.log
+            fbsd-setup-console.log
           if-no-files-found: warn
           retention-days: 7
 
       - name: Teardown
         if: always()
-        run: kill "$(cat vm.pid)" 2>/dev/null || true
+        run: |
+          kill "$(cat vm.pid)" 2>/dev/null || true
+          kill "$(cat setup-vm.pid)" 2>/dev/null || true
