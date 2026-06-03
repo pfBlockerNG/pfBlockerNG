@@ -214,6 +214,20 @@ fired. Because the per-run wall-time is still unmeasured, the trigger is **gated
 every-PR — move it to `pull_request` once a dispatched run confirms it fits the
 ~20 min/job budget.
 
+### Post-acceptance — Linux portable build (2026-06-03)
+
+The smoke gate's `.pkg` build was moved off the FreeBSD VM onto a plain Linux
+runner: `build-pkg-linux.yml` runs `scripts/build-pkg-portable.py`, which
+reproduces `make package` from the port's Makefile + `pkg-plist` (pfBlockerNG is a
+`NO_BUILD` port — nothing compiles). `pkg add` checks a dependency is *present*,
+not its version, so the portable `.pkg` installs on the baked-deps image
+identically to a `make package` one. This removes the KVM / two-tier-image-cache /
+SSH-key-baking build tier from the smoke path — faster and simpler. The real
+FreeBSD `make package` workflow (`build-pkg.yml`) is retained as a dispatch-only
+**fidelity oracle** the portable builder is validated against (output diffed
+field-by-field; only file mtime + a few dep versions differ). See
+`docs/build-pkg-portable.md`.
+
 ### Reject criteria (what kills this ADR — decide cheaply, in Phase 1, before Packer)
 
 - **Packer can't build the image (install and/or provisioning):** this is **NOT a reject** — it is the accepted fallback. If Packer can't headlessly install CE, the maintainer hand-installs the base once per CE version; if Packer can't drive provisioning either, the maintainer **provides a ready-made qcow2 wholesale** (built by hand per a documented runbook). Either way `oras push` + the verification round-trip proceed unchanged — the published qcow2 is the **build-method-agnostic seam** (§2 "Image build"). It becomes a reject **only** if *no bootable, round-trip-passing qcow2 can be produced at all* — which the Phase-1 spike (which boots a hand-built image) already disproves before any Packer work.

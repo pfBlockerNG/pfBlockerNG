@@ -58,13 +58,19 @@ permissions:
   packages: read
 
 jobs:
-  # Build the branch's .pkg on a FreeBSD VM (matching the pfSense base ABI) and
-  # publish it as the `pfBlockerNG-pkg` artifact the smoke job installs.
+  # Build the branch's .pkg on a PLAIN Linux runner via the portable builder
+  # (scripts/build-pkg-portable.py) and publish it as the `pfBlockerNG-pkg`
+  # artifact the smoke job installs. This replaces the old FreeBSD-VM build for
+  # the smoke gate — same artifact, but no KVM/image-cache/SSH setup, so it's far
+  # faster. `pkg add` on the baked-deps image checks deps are PRESENT (not their
+  # version), so the portable .pkg installs identically to a `make package` one.
+  # The FreeBSD build (build-pkg.yml) is retained as a dispatch-only fidelity
+  # oracle; switch back here with a one-line `uses:` change if ever needed.
   build-pkg:
-    uses: ./.github/workflows/build-pkg.yml
+    uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-    # freebsd_version defaults to 15.0-RELEASE (matches pfSense CE 2.8.1).
+    # abi/py_flavor/php_version default to CE 2.8.1 (FreeBSD:15:amd64 / py311 / 8.3).
 
   smoke:
     name: pytest -m smoke (live pfSense VM)

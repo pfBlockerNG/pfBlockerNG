@@ -220,8 +220,15 @@ truths are non-obvious and each cost real debugging — internalise them first:
   are dead keys (python is the only mode); on `main` they're still required.
 - **The image bakes only the deps + qemu-guest-agent** — the harness injects the
   DNSBL VIP (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline.
-  Image caches are content-keyed (smoke qcow2 by GHCR digest; FreeBSD base by
-  published SHA256, verified) so a same-tag re-push invalidates automatically.
+  The smoke qcow2 cache is content-keyed by GHCR digest, so a same-tag re-push
+  invalidates automatically.
+- **The branch `.pkg` is built on a plain Linux runner** (`build-pkg-linux.yml` →
+  `scripts/build-pkg-portable.py`), NOT on a FreeBSD VM: pfBlockerNG is a `NO_BUILD`
+  port, so the portable builder reproduces `make package` from the port's
+  Makefile + pkg-plist. `pkg add` checks a dep is PRESENT, not its version, so the
+  portable `.pkg` installs identically on the baked-deps image. The real FreeBSD
+  `make package` path (`build-pkg.yml`, image cache content-keyed by published
+  SHA256) is RETAINED as a dispatch-only fidelity oracle — not in the smoke gate.
 - **Every run uploads a full guest snapshot** (`smoke-diagnostics` artifact: all
   `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state,
   `/var/db/pfblockerng` and `/var/db/aliastables`, scrubbed `config.xml`). On any

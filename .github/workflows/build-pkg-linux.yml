@@ -1,0 +1,136 @@
+name: build-pkg (Linux, portable)
+
+# Build the pfBlockerNG FreeBSD .pkg for the branch under test on a PLAIN Linux
+# runner — NO FreeBSD VM, NO KVM, NO image cache. pfBlockerNG is a NO_BUILD port
+# (nothing compiles), so `scripts/build-pkg-portable.py` reproduces `make
+# package` byte-for-byte from the port's own Makefile + pkg-plist: it lays the
+# production files at their install paths, runs the port's textual
+# substitutions, and emits a real libpkg (zstd-tar) archive with the correct
+# manifest. The output was diffed field-by-field against a FreeBSD `make
+# package` build for the same commit and matches it (only file mtime and a few
+# dependency *versions* differ — manifest fidelity only; `pkg add` checks a
+# dependency is PRESENT, not its version, so installability is identical). See
+# docs/build-pkg-portable.md.
+#
+# This is the FAST build path the ADR-04 smoke workflow consumes (drop-in for the
+# FreeBSD build-pkg.yml: same `pfBlockerNG-pkg` artifact, same out/*.pkg layout,
+# same `channel` input). The FreeBSD build-pkg.yml is RETAINED as the ground-truth
+# `make package` fidelity oracle (dispatch-only) — not deleted.
+#
+# TARGET facts (ABI, py-flavor, PHP) are INPUTS, never read from this fork's tree:
+# they describe the pfSense the .pkg installs onto (CE 2.8.1 = FreeBSD 15 / py311 /
+# php 8.3).
+#
+# workflow_dispatch (iterate on the build) + workflow_call (smoke consumes it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "pfBlockerNG channel/port (devel|stable)"
+        required: false
+        default: "devel"
+      abi:
+        description: "Target ABI — match the pfSense base (CE 2.8.1 = FreeBSD:15:amd64; Plus = FreeBSD:16:amd64)"
+        required: false
+        default: "FreeBSD:15:amd64"
+      py_flavor:
+        description: "Python flavor for dep names (CE 2.8.1 = py311)"
+        required: false
+        default: "py311"
+      php_version:
+        description: "PHP version for dep names (CE 2.8.1 = 8.3)"
+        required: false
+        default: "8.3"
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework"
+        required: false
+        default: "andrebrait/FreeBSD-ports"
+      ports_ref:
+        description: "FreeBSD-ports branch"
+        required: false
+        default: "pfblockerng/use-github"
+  workflow_call:
+    inputs:
+      channel:
+        required: false
+        type: string
+        default: "devel"
+      abi:
+        required: false
+        type: string
+        default: "FreeBSD:15:amd64"
+      py_flavor:
+        required: false
+        type: string
+        default: "py311"
+      php_version:
+        required: false
+        type: string
+        default: "8.3"
+      ports_repo:
+        required: false
+        type: string
+        default: "andrebrait/FreeBSD-ports"
+      ports_ref:
+        required: false
+        type: string
+        default: "pfblockerng/use-github"
+    outputs:
+      artifact:
+        description: "Name of the uploaded package artifact"
+        value: "pfBlockerNG-pkg"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build pfBlockerNG .pkg (portable, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout the branch under test
+        # This checkout IS --local-src: the builder packages this exact tree
+        # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
+        uses: actions/checkout@v6
+
+      - name: Set up Python (match the target runtime, py 3.11+)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure a zstd encoder is present
+        # ubuntu-latest ships zstd; guard so a slimmer image still works. The
+        # builder also accepts the `zstandard` module, or --compression xz (stdlib).
+        run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
+
+      - name: Clone the FreeBSD-ports tree (port + Mk framework)
+        run: |
+          set -eu
+          git clone --depth 1 -b '${{ inputs.ports_ref }}' \
+            "https://github.com/${{ inputs.ports_repo }}" "${{ runner.temp }}/ports"
+
+      - name: Build the .pkg (portable, from the local tree)
+        run: |
+          set -eu
+          mkdir -p out
+          python3 scripts/build-pkg-portable.py \
+            --ports "${{ runner.temp }}/ports" \
+            --channel '${{ inputs.channel }}' \
+            --local-src . \
+            --abi '${{ inputs.abi }}' \
+            --py-flavor '${{ inputs.py_flavor }}' \
+            --php '${{ inputs.php_version }}' \
+            --out out
+          ls -l out
+
+      - name: Upload package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pfBlockerNG-pkg
+          path: out/*.pkg
+          if-no-files-found: error
+          retention-days: 7

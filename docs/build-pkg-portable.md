@@ -309,10 +309,33 @@ python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \
   zstd-compressed; install the `zstd` binary or the Python `zstandard` module, or
   point `--repo-catalogue` at a plain `packagesite.yaml`.
 
+## Use in CI
+
+The ADR-04 smoke gate builds the branch `.pkg` with this tool on a plain Linux
+runner — `.github/workflows/build-pkg-linux.yml` clones the FreeBSD-ports tree and
+runs:
+
+```sh
+python3 scripts/build-pkg-portable.py \
+  --ports "$PORTS" --channel devel --local-src . \
+  --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out
+```
+
+It publishes the same `pfBlockerNG-pkg` artifact (`out/*.pkg`) that `smoke.yml`
+installs, with no FreeBSD VM / KVM / image cache — so it is far faster than the
+FreeBSD build it replaced. Because `pkg add` checks a dependency is *present* (not
+its version), the portable `.pkg` installs on the baked-deps smoke image
+identically to a `make package` one. The FreeBSD path (`build-pkg.yml`, real
+`make package`) is retained as a **dispatch-only fidelity oracle** — dispatch it to
+cross-check this tool's output, or repoint `smoke.yml`'s `build-pkg` job to it if
+the portable path ever diverges.
+
 ## See also
 
+- [`.github/workflows/build-pkg-linux.yml`](../.github/workflows/build-pkg-linux.yml)
+  — the Linux smoke build that drives this tool.
 - [`scripts/build-pkg.sh`](../scripts/build-pkg.sh) — the on-FreeBSD builder
-  (real `make package`), used by CI.
+  (real `make package`), the fidelity oracle (`build-pkg.yml`, dispatch-only).
 - [`scripts/README.md`](../scripts/README.md) — overview of the dev scripts and
   the two install paths (rsync overlay vs `.pkg`).
 - [`misc/pfSense_versions.md`](misc/pfSense_versions.md) — per-version base facts

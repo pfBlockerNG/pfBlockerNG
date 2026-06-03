@@ -1,5 +1,12 @@
 name: build-pkg (FreeBSD)
 
+# GROUND-TRUTH FIDELITY ORACLE (dispatch-only). The ADR-04 smoke gate builds the
+# .pkg on a plain Linux runner via build-pkg-linux.yml (the portable builder) for
+# speed; this workflow runs the REAL `make package` on an ABI-matched FreeBSD VM
+# and is kept as the byte-for-byte reference the portable builder is validated
+# against. Dispatch it to cross-check the portable output, or point smoke.yml's
+# `build-pkg` job back here if the portable path ever diverges.
+#
 # Build the pfBlockerNG FreeBSD package for the branch under test on an OFFICIAL
 # FreeBSD VM-IMAGE whose major version matches the target pfSense base — so the
 # pkg ABI matches and the artifact installs on pfSense with `pkg add` (properly
