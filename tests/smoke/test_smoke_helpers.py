@@ -159,3 +159,68 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
         assert h.member_present(members, fed_ip), f"{fed_ip} not in {spec.alias}: {members}"
         assert not h.member_present(members, non_fed), f"{non_fed} unexpectedly in {spec.alias}"
         assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"
+
+
+# --------------------------------------------------------------------------- #
+# 6) ABP harness extensions (ADR-07) — PURE, no VM
+#    Pin the feed-body builder + the config-injection snippet so a regression in
+#    the ABP wiring (wrong settings key, a dropped extra row) goes RED without a
+#    booted VM, exactly like the pure DNS-assert guards above.
+# --------------------------------------------------------------------------- #
+
+
+def test_abp_feed_body_has_header_and_lines() -> None:
+    """``abp_feed`` prepends the sniffed ABP header so pfBlockerNG tags it ABP."""
+    body = h.abp_feed("||evil.example^", "@@||good.example^")
+    # The FIRST line must be the marker pfBlockerNG header-sniffs (inc:7934); a
+    # body that does not start with it is parsed as a plain feed, not ABP.
+    assert body.splitlines()[0] == h.ABP_HEADER
+    assert "||evil.example^" in body
+    assert "@@||good.example^" in body
+
+
+def test_abp_inject_snippet_emits_user_regex_and_cap() -> None:
+    """A DnsblCase carrying user_regex + regex_cap renders the matching config keys."""
+    spec = h.DnsblCase(
+        aliasname="smokeabp",
+        feed_url="/var/db/pfblockerng/smokeabp.txt",
+        header="smokeabp",
+        user_regex=[r"ad[0-9]+\.example\.net", r"(a+)+\.evil\.example"],
+        regex_cap=True,
+    )
+    snippet = h._dnsbl_inject_snippet(spec)
+    assert "'pfb_regex' => 'on'" in snippet
+    assert "'pfb_regex_cap' => 'on'" in snippet
+    assert "'pfb_regex_list' =>" in snippet
+    # Both user patterns ride along in the newline-joined list value.
+    assert r"ad[0-9]+\\.example\\.net" in snippet or r"ad[0-9]+\.example\.net" in snippet
+
+
+def test_abp_inject_snippet_emits_extra_rows() -> None:
+    """extra_rows append additional headers/urls to the SAME DNSBL group's row[].
+
+    Two ABP-bodied rows == two ABP feeds whose rules the Python build merges — the
+    cross-feed ``@@``/``$badfilter`` vehicle. Both headers + urls must appear, and
+    the group's logging/aliasname stay single (one group, many rows).
+    """
+    spec = h.DnsblCase(
+        aliasname="smokexfeed",
+        feed_url="/var/db/pfblockerng/feedA.txt",
+        header="feedA",
+        extra_rows=[("feedB", "/var/db/pfblockerng/feedB.txt")],
+    )
+    snippet = h._dnsbl_inject_snippet(spec)
+    assert "'header' => 'feedA'" in snippet
+    assert "'header' => 'feedB'" in snippet
+    assert "/var/db/pfblockerng/feedA.txt" in snippet
+    assert "/var/db/pfblockerng/feedB.txt" in snippet
+
+
+def test_abp_inject_snippet_default_is_unchanged() -> None:
+    """A plain DnsblCase (no ABP fields) emits NO regex keys and exactly one row —
+    proving the ADR-07 fields are additive and the ADR-04 matrix is byte-stable."""
+    spec = h.DnsblCase(aliasname="plain", feed_url="/var/db/pfblockerng/plain.txt", header="plain")
+    snippet = h._dnsbl_inject_snippet(spec)
+    assert "pfb_regex" not in snippet
+    assert "regex_cap" not in snippet
+    assert snippet.count("'header' =>") == 1
