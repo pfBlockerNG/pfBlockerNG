@@ -374,6 +374,51 @@ def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock
 
 
 # --------------------------------------------------------------------------- #
+# 8) CNAME validation — A CNAMEs to a blocked B: blocked iff python_cname is ON
+# --------------------------------------------------------------------------- #
+
+
+def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A→CNAME→B with B blocklisted: A blocks IFF CNAME validation is ON; B always blocks.
+
+    DEFERRED (documented). The decision logic is fully covered by the runnable unit
+    tests (`tests/test_pfb_unbound.py::TestOperateDnsbl::test_cname_*` — enabled blocks
+    A, disabled does not, B blocks when queried directly). What this live test would
+    add is proof that a REAL Unbound populates ``qstate.return_msg.rep`` with the CNAME
+    chain the module walks. It is deferred because the harness cannot yet put a
+    CONTROLLED CNAME chain on the box hermetically:
+
+      * The CNAME chain must come from the resolver's answer. A pfSense Host Override
+        (the harness's `set_control_records`) only expresses A/AAAA, never a CNAME.
+      * Pointing Unbound at the runner stub (`configure_upstream`) + extending
+        `_StubDnsServer` to answer ``A → CNAME B`` + ``B → sentinel`` is the natural
+        path — but the matrix records that `configure_upstream`'s extra
+        ``forward-zone "."`` *broke Unbound* on the baked image, and a raw `local-data`
+        CNAME in Custom Options is *not re-applied* across the pfBlockerNG reload. Both
+        need harness work to make a controlled CNAME chain survive a DNSBL reload.
+
+    INTENDED matrix once a controlled CNAME chain exists (B = `unique_domain('cnametgt')`
+    on the DNSBL list; A = `unique_domain('cnamesrc')` resolving CNAME→B via the stub):
+
+      * ``cname_validation=False`` (default): probe A → RESOLVES (sentinel) — the chain
+        is not walked; probe B → VIP (B is listed).
+      * ``cname_validation=True``: probe A → VIP (blocked via its CNAME target, b_type
+        '_CNAME'); probe B → VIP. The ONLY delta between the two runs is A's fate — B
+        is listed in both (the invariant).
+
+    The `DnsblCase.cname_validation` toggle (-> `pfb_cname`/ini `python_cname`) is wired
+    and unit-pinned (`test_smoke_helpers.py`); only the stub-CNAME + upstream plumbing
+    remains.
+    """
+    pytest.skip(
+        "needs a controlled CNAME chain on the box (stub-CNAME + upstream); "
+        "configure_upstream conflicts on the baked image, custom-options local-data is "
+        "not re-applied across the DNSBL reload — decision logic covered by the unit "
+        "tests test_pfb_unbound.py::TestOperateDnsbl::test_cname_*"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # 7) No regression — a plain (non-ABP) feed still blocks; pfb_py_count renders
 # --------------------------------------------------------------------------- #
 

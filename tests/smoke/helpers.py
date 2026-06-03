@@ -234,6 +234,13 @@ class DnsblCase:
     user_regex: list[str] = field(default_factory=list)
     regex_cap: bool = False
     custom_domains: list[str] = field(default_factory=list)
+    # cname_validation -> the "CNAME Validation" toggle (CFG_DNSBL_SETTINGS/pfb_cname
+    # 'on', inc:852 -> ini python_cname). When on, pfb_unbound.py walks a resolved
+    # answer's CNAME chain (operate(), gated on python_cname + an_numrrsets>1) and
+    # blocks the ORIGINAL name if any CNAME target is on the blocklist (re-attributed
+    # to the queried name, b_type '_CNAME'). Off (default): only the queried name is
+    # checked, so a name whose CNAME target is blocked still resolves.
+    cname_validation: bool = False
 
     @property
     def alias(self) -> str:
@@ -663,6 +670,10 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # Opt-in static cap (inc:2685 -> ini regex_cap=on). Drops over-cap feed AND
         # user regex at load (pfb_unbound.py:_regex_exceeds_static_cap).
         settings["pfb_regex_cap"] = "on"
+    if spec.cname_validation:
+        # "CNAME Validation" (inc:852 -> ini python_cname). Walk a resolved answer's
+        # CNAME chain and block the original name if a target is blocklisted.
+        settings["pfb_cname"] = "on"
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
     # per row yields one ABP feed per row whose rules the Python build merges.

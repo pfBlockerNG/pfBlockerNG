@@ -781,18 +781,12 @@ class TestOperateDnsbl:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
-    def test_cname_target_blocks_and_marks_original(self, monkeypatch):
-        # When a CNAME target (not the original query) is on the blocklist, the
-        # block is recorded against the ORIGINAL name, the b_type gains the
-        # _CNAME suffix, and the reply answer is built for the original name
-        # (operate() reassigns q_name = q_name_original on a CNAME hit).
-        self._enable(monkeypatch)
-        pfb_unbound.pfb["python_cname"] = True
-        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
-        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
-        add_data("evil-cname.com", log="1", index=0)
-        set_feed_group(0, "F", "G")
-
+    @staticmethod
+    def _cname_reply(orig_qname="orig.com."):
+        # A resolved answer carrying a CNAME chain: a CNAME rrset + an A rrset
+        # (an_numrrsets > 1) -- the exact shape operate()'s CNAME walk reads. The
+        # CNAME target string comes from convert_other(rr_data) (monkeypatched in the
+        # tests to the blocked target). Mirrors a real "orig -> CNAME -> target -> A".
         cname_rrset = types.SimpleNamespace(
             rk=types.SimpleNamespace(type_str="CNAME"),
             entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
@@ -801,11 +795,25 @@ class TestOperateDnsbl:
             rk=types.SimpleNamespace(type_str="A"),
             entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
         )
-        return_msg = types.SimpleNamespace(
+        return types.SimpleNamespace(
             rep=types.SimpleNamespace(security=0, an_numrrsets=2, rrsets=[a_rrset, cname_rrset]),
-            qinfo=types.SimpleNamespace(qname_str="orig.com.", qname_list=["orig", "com"]),
+            qinfo=types.SimpleNamespace(qname_str=orig_qname, qname_list=orig_qname.rstrip(".").split(".")),
         )
-        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=return_msg)
+
+    def test_cname_target_blocks_and_marks_original(self, monkeypatch):
+        # CNAME validation ON: domain A (orig.com) CNAMEs to a BLOCKED target B
+        # (evil-cname.com, on the blocklist) -> A is blocked. The block is recorded
+        # against the ORIGINAL name, the b_type gains the _CNAME suffix, and the reply
+        # answer is built for the original name (operate() reassigns q_name =
+        # q_name_original on a CNAME hit).
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
@@ -818,6 +826,39 @@ class TestOperateDnsbl:
         assert "evil-cname.com" not in pfb_unbound.dnsblDB
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("orig.com. ") for a in answers)
+
+    def test_cname_disabled_original_not_blocked(self, monkeypatch):
+        # CNAME validation OFF (the default): the SAME setup -- A (orig.com) CNAMEs to
+        # the BLOCKED target B (evil-cname.com, still on the blocklist) -- but the
+        # chain is NOT walked, so only A itself is validated, and A is not listed ->
+        # A is NOT blocked. convert_other is monkeypatched to the blocked target, so
+        # the ONLY reason A survives is python_cname=False (if the walk ran it WOULD
+        # block). This is the with/without pair for test_cname_target_blocks_*.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = False
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        add_data("evil-cname.com", log="1", index=0)  # B is on the blocklist
+        set_feed_group(0, "F", "G")
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        # Not blocked -> passes through to the resolver (no block return_msg set).
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert "orig.com" not in pfb_unbound.dnsblDB
+
+    def test_cname_target_blocked_when_queried_directly(self, monkeypatch):
+        # The ERRATA invariant: B (the CNAME target) is genuinely on the blocklist in
+        # BOTH scenarios. A DIRECT query for B is blocked regardless of python_cname --
+        # the with/without difference is ONLY whether A (which CNAMEs to B) is blocked.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = False  # irrelevant for a direct (non-CNAME) query
+        add_data("evil-cname.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+        qstate = make_qstate("evil-cname.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
+        assert "evil-cname.com" in pfb_unbound.dnsblDB
 
     def test_block_sets_return_msg_exactly_once(self, monkeypatch):
         # The DNSBL block path previously called msg.set_return_msg(qstate)
