@@ -118,6 +118,19 @@ class TestStaticCapHeuristic:
         for pat in (r"(a+)+$", r"(a*)*", r"(\w+\.)+\w+$", r"([a-z]+)*\.example$", r"(.*a){20}$"):
             assert _regex_exceeds_static_cap(pat) is True, pat
 
+    def test_alternation_overlap_flagged(self) -> None:
+        # A quantified group whose body contains `|` backtracks catastrophically yet
+        # has no INNER quantifier, so the nested-quantifier heuristic misses it. These
+        # PASSED the old static cap (the gap the corrected ReDoS probe exposed).
+        for pat in (r"^(a|a)+$", r"(a|ab)*", r"(foo|foobar)+", r"(x|y|x){10}"):
+            assert _regex_exceeds_static_cap(pat) is True, pat
+
+    def test_benign_alternation_not_flagged(self) -> None:
+        # An UNquantified alternation group is fine -- it is the quantifier on an
+        # overlapping alternation that is dangerous, not `|` alone.
+        assert _regex_exceeds_static_cap(r"^(www\.)?ad-?serv(er|ice)\.example$") is False
+        assert _regex_exceeds_static_cap(r"^(foo|bar)\.example$") is False
+
 
 # --------------------------------------------------------------------------- #
 # (1) STATIC CAP -- applied at LOAD (feed regex via _dnsbl_compile_regex_rules)
@@ -320,3 +333,15 @@ class TestRealCatastrophicCapped:
         db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=True)
         assert admitted == 0
         assert db == {}
+
+    def test_static_cap_drops_alternation_overlap_pattern(self) -> None:
+        # ^(a|a)+$ PASSES the old cap but backtracks catastrophically; the broadened
+        # cap drops it at load WITHOUT executing it (cap ON).
+        rule = _block_rule(r"^(a|a)+$")
+        db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=True)
+        assert admitted == 0
+        assert db == {}
+        # With the cap OFF the un-vetted pattern is still admitted (opt-in only).
+        db_off, admitted_off = _dnsbl_compile_regex_rules([rule], static_cap=False)
+        assert admitted_off == 1
+        assert len(db_off) == 1

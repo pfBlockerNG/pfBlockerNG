@@ -2651,6 +2651,13 @@ REGEX_STATIC_LEN_CAP = 200
 # the corpus with no false-negatives and no false-positives on the cap-passing set.
 _REGEX_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
 
+# Alternation-overlap: a quantified group whose body contains an alternation `|`,
+# e.g. (a|a)+, (a|ab)*, (foo|foobar)+. Overlapping/ambiguous alternatives under a
+# quantifier backtrack catastrophically just like a nested quantifier, yet the
+# nested-quantifier shape above does not catch them (no inner quantifier). Kept
+# conservative: a single `(...)` (no inner parens) with a `|`, then a quantifier.
+_REGEX_ALTERNATION_OVERLAP = re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]")
+
 # Runtime warn/evict ceilings (milliseconds of per-match thread CPU; Phase-1
 # defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
 # (regex_warn_ms / regex_evict_ms) -> cfg, so they are not hardcoded magic.
@@ -2675,12 +2682,15 @@ _regex_perf_strikes: dict[str, int] = {}
 
 def _regex_exceeds_static_cap(pattern: str) -> bool:
     """Pure static-cap check (NO execution): True if ``pattern`` is over the length
-    ceiling OR matches the nested-quantifier heuristic. Used at LOAD time, gated by
-    the opt-in "Limit long/complex regex" setting -- when the setting is OFF nothing
-    is dropped. Catches the catastrophic shapes cheaply without running the regex."""
+    ceiling OR matches the nested-quantifier heuristic OR the alternation-overlap
+    heuristic. Used at LOAD time, gated by the opt-in "Limit long/complex regex"
+    setting -- when the setting is OFF nothing is dropped. Catches the catastrophic
+    shapes cheaply without running the regex."""
     if len(pattern) > REGEX_STATIC_LEN_CAP:
         return True
-    return _REGEX_NESTED_QUANTIFIER.search(pattern) is not None
+    if _REGEX_NESTED_QUANTIFIER.search(pattern) is not None:
+        return True
+    return _REGEX_ALTERNATION_OVERLAP.search(pattern) is not None
 
 
 def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:

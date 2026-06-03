@@ -225,18 +225,28 @@ reproduced on-branch in Phase 9 — they match the Phase-1 spike (no drift).
 | metric | measured (on-branch) | kill-threshold | result |
 | --- | --- | --- | --- |
 | regex reduction ratio (`/re/` → dict, zero per-query cost) | 46% (18 of 39 fold) | ≥ 30% | PASS |
-| per-irreducible-pattern added latency (negative query, worst case) | 0.1647 µs/pattern (linear) | "a few µs" / 50 µs hard ceiling | PASS |
-| budget-bounded irreducible count at 50 µs | ~303 patterns | feed-scale ≫ realistic count | PASS |
-| ReDoS: pathological (≥2 s) caught by static cap / MISSED | 1 caught / 0 missed (all nested-quantifier) | static cap catches catastrophic shapes | PASS |
-| worst cap-passing first-hit on a ≤253-char input | 0.109 ms | ≤ 500 ms (evict ceiling 100 ms) | PASS |
-| GIL demo: thread/asyncio timeout cancels a runaway `re` match? | NO — waiter forced to 216× its 1 ms deadline; match uncancellable | (confirms accept-first-hit-then-evict is the only stdlib option) | — |
+| per-irreducible-pattern added latency (negative query, worst case) | 0.1256 µs/pattern (linear) | "a few µs" / 50 µs hard ceiling | PASS |
+| budget-bounded irreducible count at 50 µs | ~398 patterns | feed-scale ≫ realistic count | PASS |
+| ReDoS: pathological (≥2 s) caught by static cap / MISSED | 4 caught / 0 missed (nested-quantifier + alternation-overlap) | static cap catches catastrophic shapes | PASS |
+| worst cap-passing first-hit on a ≤253-char input | 0.087 ms | ≤ 500 ms (evict ceiling 100 ms) | PASS |
+| GIL demo: thread/asyncio timeout cancels a runaway `re` match? | NO — waiter forced to 186× its 1 ms deadline; match uncancellable | (confirms accept-first-hit-then-evict is the only stdlib option) | — |
 
-**Decision:** GO — no reject-criterion tripped. Irreducible regex is ~0.16 µs/
-pattern (budget bounds to ~300; reduction + the `important_rules` fast path keep
+The benchmark probe was corrected to feed each pattern a genuinely FAILING
+adversarial input (`"a"*(DNS_MAX_LEN-1)+"!"`, which fails the final anchor and so
+maximises backtracking) rather than a masking all-`a` string that the classic
+shapes simply match. That correction surfaced an alternation-overlap hole: `^(a|a)+$`
+(and shapes generally where a quantified group's body contains `|`) PASSED the old
+static cap yet backtracked catastrophically (2 s timeout). The static cap now also
+flags a quantified group whose body contains `|` (`_REGEX_ALTERNATION_OVERLAP`), so
+all four catastrophic corpus shapes are caught at load.
+
+**Decision:** GO — no reject-criterion tripped. Irreducible regex is ~0.13 µs/
+pattern (budget bounds to ~400; reduction + the `important_rules` fast path keep
 typical deployments far under that); the only genuinely catastrophic shapes are
-nested-quantifier patterns the cheap opt-in static cap drops with no execution and
-no corpus false-negatives; the residual one-slow-first-hit is irreducible without a
-subprocess/re2 (both out of scope) and is bounded by always-on runtime warn/evict.
+nested-quantifier AND alternation-overlap patterns the cheap opt-in static cap drops
+with no execution and no corpus false-negatives; the residual one-slow-first-hit is
+irreducible without a subprocess/re2 (both out of scope) and is bounded by always-on
+runtime warn/evict.
 
 **Runtime safety ceilings (shipped defaults):** warn 10 ms / evict 100 ms thread-CPU
 per match (`time.thread_time`, jitter-robust); opt-in static cap drops length-/
@@ -249,6 +259,29 @@ section + the `spike_adr07_regex.py` benchmark note; the "Limit long/complex reg
 setting help text (`pfblockerng_dnsbl.php`) states what it drops, the always-on
 runtime warn/evict, and the accepted residual risk. CLAUDE.md's `pfb_unbound.py`
 note updated to mention the ABP parser.
+
+### Follow-up / known limitation (future ADR revision — NON-BLOCKING)
+
+The corrected ReDoS probe (above) is a reminder that the regex-safety posture rests
+on two soft guarantees, NOT a hard one. This is recorded as a future safety revision,
+not a blocker for ADR-07:
+
+- **The static cap is opt-in (OFF by default).** A deployment that never enables
+  "Limit long/complex regex" gets only the runtime warn/evict timer.
+- **The runtime evict CANNOT cancel an in-flight match (fact 2 — uninterruptible
+  `re`).** It only measures AFTER a match returns, then evicts the pattern so it
+  never runs again. The FIRST catastrophic hit still runs to completion (could be
+  seconds) and stalls the resolver for that one query. So with the cap OFF, the only
+  protection against a never-before-seen catastrophic pattern is "eat one slow hit,
+  then evict."
+- **Heuristic completeness is unprovable.** The static cap is a cheap denylist of
+  KNOWN catastrophic shapes (length, nested-quantifier, alternation-overlap). The
+  `(a|a)+` miss shows the denylist trails the threat: a new overlap shape can slip
+  through until the heuristic is broadened.
+
+A dedicated safety revision should weigh: defaulting the cap ON, a real ReDoS
+linter (or `re2`/atomic-group rewrite) over the cheap heuristic, and/or a
+process-isolated matcher so an in-flight match IS killable. Out of scope here.
 
 ### Reject criteria (decide cheaply, Phase 1, before building)
 
