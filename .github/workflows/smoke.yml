@@ -70,7 +70,7 @@ jobs:
     name: pytest -m smoke (live pfSense VM)
     needs: build-pkg
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -124,7 +124,7 @@ jobs:
 
       - name: Install oras
         if: steps.pfcache.outputs.cache-hit != 'true'
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Pull pfSense image from private GHCR
         if: steps.pfcache.outputs.cache-hit != 'true'
@@ -163,7 +163,7 @@ jobs:
           chmod 600 smoke_key
 
       - name: Download the built pfBlockerNG package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-pkg.outputs.artifact }}
           path: pkg
@@ -192,33 +192,29 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r tests/smoke/requirements.txt pytest
 
-      # HERMETICITY (ADR §2): block the runner's outbound AFTER the GHCR pull +
-      # artifact download, BEFORE pytest. The GHCR image + the .pkg are already
-      # on disk; the matrix resolves every answer from the in-runner mock-feed
-      # server (reached by the guest over the SLIRP host alias 10.0.2.2, on
-      # loopback) + baked/injected Unbound local-data, so it must still pass
-      # with real egress dark. Loopback + established conns stay up; new
-      # outbound (DNS, HTTP, the SLIRP upstream 10.0.2.3) is dropped. Sequence:
-      # pull -> block -> run.
-      - name: Block runner egress (hermetic gate)
-        run: |
-          set -eu
-          # Keep loopback (mock feeds via hostfwd/SLIRP map onto 127.0.0.1) and
-          # already-established flows; drop everything else outbound.
-          sudo iptables -P OUTPUT DROP
-          sudo iptables -A OUTPUT -o lo -j ACCEPT
-          sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-          echo "runner egress blocked (loopback + established only)"
-
+      # HERMETICITY (ADR §2/§4): the egress block must happen AFTER pfBlockerNG
+      # is installed on the guest — `pkg add` pulls RUN_DEPENDS from the pfSense
+      # repo, and the guest reaches the internet THROUGH this runner's SLIRP NAT,
+      # so a pre-pytest block would hang the install. So the block is done INSIDE
+      # pytest, by the matrix's `deployed_vm` fixture, right after deploy() and
+      # before the per-case assertions (helpers.block_egress, gated by
+      # SMOKE_BLOCK_EGRESS=1 below; unblocked on teardown). The matrix then
+      # resolves every answer from the in-runner mock-feed server (guest ->
+      # SLIRP 10.0.2.2 -> runner loopback) + injected Unbound local-data, so it
+      # still passes with real egress dark.
       - name: Run the smoke matrix (pytest -m smoke)
         env:
-          # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so it
-          # needs no network — this is what lets egress be blocked BEFORE pytest
-          # (pull -> block -> run). SMOKE_IMAGE_REF is kept for provenance/logs.
+          # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
+          # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # Turn on the in-test hermetic egress block (after deploy, see fixture).
+          SMOKE_BLOCK_EGRESS: "1"
+          # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
+          # pfctl) are available for debugging by setting SMOKE_STATE_DIFF=1; kept
+          # OFF here so normal runs stay lean.
           # Match the baked image (RESULTS/02); harmless if unset.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
           SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
@@ -227,11 +223,11 @@ jobs:
           set -eu
           # The smoke package is --ignore'd by the default addopts; re-enable it
           # with --override-ini and select the marker (see tests/smoke/conftest).
-          python3 -m pytest tests/smoke -m smoke --override-ini="addopts=" -v
+          python3 -m pytest tests/smoke -m smoke --override-ini="addopts=" --timeout=300 --timeout-method=signal -v
 
       - name: Upload smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-diagnostics
           path: |

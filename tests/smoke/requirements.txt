@@ -18,3 +18,6 @@
 # a default run on a host WITHOUT these installed still collects cleanly.
 
 dnspython==2.7.0
+# Per-test wall-clock ceiling so a wedged VM op (SSH/pkg/dig) fails that test
+# fast instead of hanging the job to its timeout-minutes cap.
+pytest-timeout==2.3.1

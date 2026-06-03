@@ -33,8 +33,15 @@ def test_pfctl_ruleset_nonempty(smoke_vm: SmokeVM) -> None:
 
 
 def test_control_name_resolves(smoke_vm: SmokeVM) -> None:
-    """The baked local-data control name resolves to its known answer."""
+    """A baked local-data control name resolves to its known answer.
+
+    Optional: only the maintainer's image *may* bake a control name. The matrix
+    injects its own control records per-case, so when none is configured
+    (SMOKE_CONTROL_NAME unset) this scaffolding probe simply skips.
+    """
     name, expected_ip = expected_control_answer()
+    if not name:
+        pytest.skip("no baked control name (SMOKE_CONTROL_NAME unset); matrix injects per-case")
     answers = resolve_a(name, smoke_vm.host, smoke_vm.dns_port)
     assert answers, f"control name {name!r} returned no A record"
     if expected_ip is not None:
