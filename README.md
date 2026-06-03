@@ -58,6 +58,12 @@ The default version is the minimum pfSense CE release supported by this package
 relevant pfSense source files from GitHub and rewrites all stub files except
 `stubs/pfsense/globals.php`, which is manually maintained.
 
+A CE version bump also means **rebuilding and republishing the pfSense CE smoke
+image** (ADR-04): upgrade-in-place for a patch/minor bump, a fresh seed on a
+major, via `.github/workflows/build-image.yml`. See
+[Smoke tests](#smoke-tests-live-pfsense-vm) below and
+[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md).
+
 ### Git hooks
 
 The repository ships hooks in `.githooks/` — a tracked directory, so they are
@@ -203,6 +209,87 @@ Pass `--channel stable` when deploying from the `main` branch.
 See [`scripts/deploy.sh`](scripts/deploy.sh) for full options.
 
 ---
+
+## Smoke tests (live pfSense VM)
+
+The smoke suite (ADR-04, `tests/smoke/`) boots a **real pfSense CE VM** under
+QEMU/KVM, installs the branch's freshly-built `.pkg`, and asserts pfBlockerNG's
+real behaviour end-to-end — the DNS path (Unbound + `pfb_unbound.py`, probed
+with `dig`/`dnspython`) and the IP path (`pfctl` alias tables + rules, over
+SSH). It is **dev-only**, marked `@pytest.mark.smoke`, and **deselected from the
+default `python -m pytest`** (`pyproject.toml` `addopts: --ignore=tests/smoke`),
+so the normal unit run is unaffected.
+
+### Running it in CI
+
+`.github/workflows/smoke.yml` runs the matrix on GitHub-hosted KVM. It is
+**gated** — `workflow_dispatch` + `workflow_call` only (a nightly `schedule` is
+provided, commented) — **not** every-PR yet, because the per-run wall-time has
+not been measured against §7's ~20 min/job budget. Once a dispatched run
+confirms it fits, add a `pull_request` trigger to move it to every-PR. Trigger a
+run with:
+
+```sh
+gh workflow run smoke.yml                        # uses the SMOKE_IMAGE_REF secret/variable
+gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+```
+
+The workflow builds the `.pkg` (`build-pkg.yml`, FreeBSD VM), pulls the pfSense
+image from private GHCR, **blocks the runner's egress** (pull → block → run, so
+the run is hermetic — feeds come from an in-runner mock server reached over the
+SLIRP host alias `10.0.2.2`), then runs `pytest -m smoke`. Required Actions
+config (see `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt`):
+`SMOKE_IMAGE_REF`, `SMOKE_GHCR_USER`, `SMOKE_GHCR_TOKEN`, `SMOKE_SSH_PRIV_KEY`
+(and, to match the baked image, `SMOKE_DNSBL_VIP4` / `SMOKE_CONTROL_NAME` /
+`SMOKE_CONTROL_IP`).
+
+### Running it locally
+
+Needs `/dev/kvm`, `qemu-system-x86_64` + `qemu-img`, `oras`, `ssh`, and a built
+`.pkg`. Then:
+
+```sh
+python -m pip install -r tests/smoke/requirements.txt
+export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>   # private GHCR
+export SMOKE_SSH_KEY=/path/to/guest_priv_key                      # mode 600
+export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg                       # from build-pkg
+oras login ghcr.io                                                # for the pull
+python -m pytest tests/smoke -m smoke --override-ini="addopts="
+```
+
+The fixture pulls the image by `SMOKE_IMAGE_REF` and boots an ephemeral overlay
+(the base qcow2 is never mutated). Missing KVM/secrets/deps → the suite **skips**
+cleanly, never errors. (CI sets `SMOKE_IMAGE_DIR` instead, pointing at the
+pre-pulled image, so it can block egress before pytest.)
+
+### Rebuilding the image on a CE bump
+
+The pfSense CE image is **seeded once** (one clean manual install, archived) and
+**upgraded in place** for every subsequent release — `build-image.yml` runs
+`pfSense-upgrade` on the prior tag for patch/minor (and major), gated by the
+smoke round-trip (publish-on-pass, fail-closed). A **fresh manual re-seed** is
+the fallback only when that gate fails. **CE only** (Plus is out of scope). The
+seed and every version snapshot are retained as immutable GHCR tags (never
+overwritten); the GHCR package is **private**. Full strategy + what is baked:
+`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md` and `RESULTS/02_Results.txt`.
+
+### Adding a matrix case
+
+Cases live in `tests/smoke/test_smoke_matrix.py` and compose the Phase-4 helpers
+(`tests/smoke/helpers.py`). The recipe (full version in
+`RESULTS/05_Results.txt`):
+
+1. Register the feed body in memory (hermetic, no fixture file):
+   `feed_url = mock_feeds.register("smoke_<name>.txt", "<body lines>\n")`.
+2. Build a spec — `h.DnsblCase(...)` (DNS path) or `h.IpCase(...)` (IP path) —
+   choosing the response mode from the map: **NXDOMAIN** = `dnsbl_python` (exact
+   match only, no subdomain block), **NULL** = `dnsbl_unbound` +
+   `logging='disabled'`, **VIP** = `dnsbl_unbound` + `logging='enabled'`.
+3. Drive it through `with h.CaseContext(deployed_vm, spec):` (it picks the
+   reload verb; pass `scope="update"` for DNSBL-IP), then assert with
+   `h.dns_probe` / `h.is_nxdomain` / `h.is_null_ip` / `h.is_vip` /
+   `h.resolves_to`, and `h.pfctl_table_members` / `h.member_present` /
+   `h.rule_references` for the IP side. `__exit__` resets to baseline.
 
 ## Image pipeline (smoke-test base)
 

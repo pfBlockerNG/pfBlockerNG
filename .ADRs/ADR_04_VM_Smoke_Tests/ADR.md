@@ -1,6 +1,6 @@
 # ADR-04: End-to-end smoke tests against a real pfSense VM in CI
 
-- **Status:** **Proposed** (2026-05-31)
+- **Status:** **Implemented — pending maintainer live-smoke** (2026-06-02; proposed 2026-05-31). All six phases are built and merged on `adr/04`; the automated harness is code-complete. Flips to **Accepted** only after (a) the `smoke.yml` matrix is green on a `gh`-dispatched CI run and (b) the maintainer confirms the §7 manual checklist on a live box.
 - **Date:** 2026-05-31
 - **Branch:** `adr/04` (off `devel`) / **Component(s):** new dev-only tooling — `packer/`, `tests/smoke/`, `.github/workflows/` (a build workflow + a smoke workflow); reuses `scripts/deploy.sh`. **No shipped (`src/`) code changes.**
 - **Target runtime:** the harness runs on a GitHub-hosted `ubuntu-latest` runner (Python 3.11+, **dev-only third-party deps allowed** — see §5). The system under test is **pfSense CE (latest stable, CE only)** in a QEMU/KVM VM, driving the real `pfb_unbound.py` (Python in Unbound's `pythonmod`) and the real PHP/`pfctl` IP path.
@@ -186,6 +186,34 @@ Prompt: `06_Workflow_Docs_DoD.txt`
 - `ruff` clean; ShellCheck clean on any new `sh`; workflows lint-clean.
 - README documents run/rebuild/extend.
 - Status → **Accepted** only after the smoke workflow is green on `adr/04`'s CI **and** the maintainer confirms the manual items below on a live box.
+
+### DoD outcome (Phase 6 — code-complete)
+
+The harness is built and the workflow is wired. Status of each DoD item:
+
+- **Default suite unaffected** — **MET (verified locally).** `python -m pytest`
+  collects/passes exactly **169**, byte-for-byte unchanged; `smoke` is
+  `--ignore`'d, no new deps pulled.
+- **`pytest -m smoke` green, hermetic, false-green guarded** — **WIRED, pending
+  CI.** `smoke.yml` runs `pytest -m smoke` over the build-pkg → artifact →
+  `pkg add` → boot-fixture flow with the egress block (pull → block → run) and
+  the strict-xfail false-green guard (`test_false_green_guard_vm`). The actual
+  green/red + wall-time come from the orchestrator's `gh workflow run smoke.yml`
+  dispatch — **NOT** run or measured in this environment (no `/dev/kvm`, image,
+  or secrets); not fabricated.
+- **Image builds reproducibly + published private GHCR, rebuild-on-bump
+  documented** — **MET** (Phase 2: `build-image.yml` + `IMAGE_RUNBOOK.md`); the
+  CE-bump checklist now carries the image-rebuild step (CLAUDE.md + README).
+- **`ruff` / ShellCheck / workflow lint clean** — **MET (verified locally).**
+- **README documents run/rebuild/extend** — **MET** ("Smoke tests" section).
+- **Status → Accepted** — **NOT yet**: gated on the CI dispatch above **and** the
+  maintainer's live-box checklist below (deliberately left to the maintainer).
+
+The Phase-1 spike measured GH-hosted KVM as viable (GO); no reject criterion
+fired. Because the per-run wall-time is still unmeasured, the trigger is **gated**
+(`workflow_dispatch` + `workflow_call`, nightly `schedule` commented) rather than
+every-PR — move it to `pull_request` once a dispatched run confirms it fits the
+~20 min/job budget.
 
 ### Reject criteria (what kills this ADR — decide cheaply, in Phase 1, before Packer)
 
