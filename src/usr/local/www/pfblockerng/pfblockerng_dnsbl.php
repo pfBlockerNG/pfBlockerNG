@@ -2404,7 +2404,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_regex_cap',
-	gettext('Limit long/complex regex') . '(py)',
+	gettext('Limit long/complex regex'),
 	'Enable',
 	$pconfig['pfb_regex_cap'] === 'on' ? true:false,
 	'on'
