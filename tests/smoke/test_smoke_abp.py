@@ -408,13 +408,13 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 
     The `DnsblCase.cname_validation` toggle (-> `pfb_cname`/ini `python_cname`) is wired
     and unit-pinned (`test_smoke_helpers.py`); only the stub-CNAME + upstream plumbing
-    remains.
+    remains. Tracked: https://github.com/andrebrait/pfBlockerNG/issues/41
     """
     pytest.skip(
         "needs a controlled CNAME chain on the box (stub-CNAME + upstream); "
         "configure_upstream conflicts on the baked image, custom-options local-data is "
         "not re-applied across the DNSBL reload — decision logic covered by the unit "
-        "tests test_pfb_unbound.py::TestOperateDnsbl::test_cname_*"
+        "tests test_pfb_unbound.py::TestOperateDnsbl::test_cname_* (un-skip: #41)"
     )
 
 
