@@ -528,7 +528,20 @@ def init_standard(id: int, env: module_env) -> bool:
                             r_count += 1
                             continue
                         try:
-                            regexDB[name] = re.compile(pattern)
+                            # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block),
+                            # so it beats ANY feed allow (@@ band 2 / @@$important band 4),
+                            # matching the decision oracle's Provenance.USER block. Stored
+                            # as the {"re","important","band"} payload the matcher scores
+                            # via _block_entry_band; a bare compiled pattern would score the
+                            # feed-block band 1 and be overridden by a feed @@. ($badfilter-
+                            # immunity is inherent: user regex never enter the feed reconcile
+                            # rule list.) A user regex never loses to a feed allow, only to
+                            # the user whitelist (band 6) -- preserved by the fast path.
+                            regexDB[name] = {
+                                "re": re.compile(pattern),
+                                "important": False,
+                                "band": PRIO_USER_BLOCK,
+                            }
                             pfb["regexDB"] = True
                             pfb["python_blacklist"] = True
                         except Exception as e:

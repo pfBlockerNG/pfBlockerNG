@@ -29,6 +29,7 @@ Automated (tests/smoke/test_smoke_abp.py) — paste the pytest summary
 [ ] test_abp_regex_admitted_count          (DNSBL_Regex count == admitted; shrinks under cap)
 [ ] test_abp_whitelist_sovereign_over_important  (whitelist band 6 beats feed $important)
 [ ] test_user_regex_blocks                 (pfb_regex_list pattern blocks, VIP)
+[ ] test_user_regex_beats_feed_important_allow   (user regex band 5 beats feed @@$important band 4)
 [ ] test_abp_no_regression_plain_feed      (plain feed VIP-blocks; pfb_py_count >= 1)
 [ ] test_smoke_matrix.py (ADR-04)          (unchanged, still green)
 
@@ -46,10 +47,12 @@ Hand-run on a live box (not automated — see ADR.md "Live smoke")
 [ ] Alerts "add to whitelist" button: whitelisting via the alerts UI resolves the
     name (the non-textarea sovereignty entry point).
 
-Flagged follow-up surfaced while wiring the smoke (record verdict)
------------------------------------------------------------------
-- User-regex band: a user regex loads as a bare compiled pattern scored at feed
-  band 1 (_block_entry_band), NOT the oracle's user band 5. It is $badfilter-immune
-  but NOT band-sovereign, so a feed @@...$important (band 4) would override it.
-  Decide: intended (prose overreach in ADR §"User sovereignty") or a band-tagging
-  bug to fix (tag user-regex provenance=USER -> band 5)?
+Findings surfaced while wiring the smoke
+----------------------------------------
+- User-regex band (FIXED): a user regex was loaded as a bare compiled pattern
+  scored at feed band 1 (_block_entry_band), NOT the oracle's user band 5 -- so a
+  feed @@...$important (band 4) would have overridden it. Fixed: the init REGEX load
+  now stores the {"re","important","band": PRIO_USER_BLOCK} payload, so a user regex
+  is sovereign over any ABP feed allow (only the band-6 whitelist un-blocks it).
+  Regression-pinned by tests/test_adr07_matcher_strata.py::TestUserRegexSovereign
+  (unit) and test_user_regex_beats_feed_important_allow (live).
