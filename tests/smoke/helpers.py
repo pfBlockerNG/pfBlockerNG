@@ -1083,4 +1083,14 @@ class CaseContext:
     def __exit__(self, *exc: object) -> None:
         # Restore egress before reset() — its forced update reloads pfBlockerNG.
         unblock_egress()
-        reset(self.vm)
+        # Don't let a reset() failure during teardown MASK a failure the case body
+        # already raised — pytest would report the teardown error and bury the real
+        # one. If an exception is in flight, log the reset failure and let the
+        # original propagate; otherwise reset errors surface normally.
+        try:
+            reset(self.vm)
+        except Exception as reset_exc:  # noqa: BLE001
+            if exc and exc[0] is not None:
+                print(f"[smoke] reset() failed during teardown (suppressed; original error stands): {reset_exc!r}")
+            else:
+                raise

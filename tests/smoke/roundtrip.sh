@@ -90,7 +90,9 @@ else
 fi
 
 echo "==> [3/4] inject local-data + resolve via the guest's Unbound"
-[ -n "$LOCAL_DATA_IP" ] || { echo "    FAIL: a local-data IP is required (got empty)" >&2; FAILED=1; }
+# Fail fast: without an IP the steps below would call unbound-control with an
+# empty A record and produce avoidable follow-on errors (no trap to skip).
+[ -n "$LOCAL_DATA_IP" ] || { echo "    FAIL: a local-data IP is required (got empty)" >&2; exit 1; }
 
 # [2/4]'s `pfblockerng.php update` reconfigures + restarts Unbound; the restart
 # is async, so wait for the resolver to answer again before injecting/querying.
