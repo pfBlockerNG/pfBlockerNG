@@ -5,9 +5,14 @@ description: >
   its nitpick and outside-diff-range findings (and human reviewer comments) —
   validate each against the CURRENT code, apply the ones that genuinely hold
   (skip the rest with a reason, defer pre-existing ones to their own PR), then
-  reply on every thread. Args: [PR number] (defaults to the PR for the current
-  branch). Use when the user says "address the PR comments", "fix the CodeRabbit
-  comments", "handle the review feedback on PR N", or invokes /pr-comments.
+  reply on every thread. With --wait-for=<handle> it first blocks until that
+  reviewer (usually CodeRabbit) has FINISHED reviewing — polling the PR, not a
+  one-shot read — and, if CodeRabbit declines because the base isn't the default
+  branch, comments to trigger a full review and keeps waiting. Args: [PR number]
+  [--wait-for=<handle>] (PR defaults to the current branch's). Use when the user
+  says "address the PR comments", "fix the CodeRabbit comments", "handle the
+  review feedback on PR N", "wait for CodeRabbit then handle the comments", or
+  invokes /pr-comments.
 ---
 
 You resolve review feedback on a PR. The non-negotiable principle: **validate
@@ -24,15 +29,92 @@ reply to every thread.
   stop and ask.
 - Resolve `OWNER/REPO` with `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - Be on the PR's **head** branch (checkout if needed) so fixes land on it.
+- Parse flags: `--wait-for=<handle>` (also accept `--wait-for <handle>`) turns on
+  the wait in Step 2. Without it, skip Step 2 entirely and go to Step 3.
 
-## Step 2 — Reconcile the branch first
+## Step 2 — (optional) Wait for the reviewer to finish — `--wait-for=<handle>`
+
+**Only when `--wait-for=<handle>` was given** (e.g. `/pr-comments --wait-for=coderabbitai`,
+typically run the instant you push the PR). Block here until `<handle>` has
+**finished reviewing**, then fall through to the rest of the flow.
+
+- **"Finished" = the reviewer has posted its findings in the PR** — inline review
+  comments and/or a final summary message. It does **not** mean any code/commit
+  landed; never wait on commits. CodeRabbit reviews incrementally and shows a
+  transient "review in progress" state, so a one-shot read is wrong — you must
+  **poll** until the findings are actually up.
+- **Resolve the login case-insensitively.** `coderabbit`, `Coderabbit`,
+  `coderabbitai` all map to the bot's login `coderabbitai`; only append `[bot]` if
+  that is the real login (check `.user.login` on an existing comment).
+
+**Mechanism — one self-exiting background poll per wait, then act on the result.**
+Set the env, run the script below as a **Bash command with `run_in_background: true`**
+(per the harness, a background `until`-style loop that exits when the condition is
+true gives you a single wake — do not use a foreground `sleep`), then read
+`$RESULT` when it wakes you:
+
+```sh
+# Set first: OWNER_REPO  PR  HANDLE(lowercased)  MODE(full|finished)  SINCE(ISO8601)  RESULT(tmpfile)
+# First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`
+#             (anchors on the current code, so a stale prior review doesn't satisfy the wait).
+i=0
+while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
+  inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
+  review=$(gh api "repos/$OWNER_REPO/pulls/$PR/reviews" --paginate \
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.submitted_at > \"$SINCE\") | (.body // \"x\")" 2>/dev/null)
+  issuec=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.updated_at > \"$SINCE\") | (.body // \"\")" 2>/dev/null)
+  # FINISHED = posted findings: an inline comment, a submitted review, or the summary header
+  if [ -n "$inline" ] || [ -n "$review" ] || printf '%s' "$issuec" | grep -qi 'actionable comments posted'; then
+    { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
+  fi
+  # DECLINE (only when MODE=full) = "Review skipped" because the base isn't the default branch
+  if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -qi 'review skipped' \
+       && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
+    { echo DECLINE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
+  fi
+  i=$((i + 1)); sleep 30
+done
+echo TIMEOUT > "$RESULT"
+```
+
+CodeRabbit's exact wording drifts — if the markers above don't fire when you can
+see (in the diagnostics) that it clearly did finish or decline, read the actual
+comment body and adjust the `grep` patterns rather than waiting out the timeout.
+
+**When it wakes you, read `$RESULT` and branch:**
+
+- **`FINISHED`** → the reviewer has posted its findings. Fall through to Step 3.
+- **`DECLINE`** → CodeRabbit refused because the PR's base isn't the default branch.
+  Post **one** top-level comment to trigger a full review, then **re-arm the poll in
+  finished-only mode** (`MODE=finished`, `SINCE=now` = `date -u +%Y-%m-%dT%H:%M:%SZ`)
+  and wait again. Comment body (use `gh pr comment "$PR" --body-file <file>`, with
+  the attribution footer from Step 7):
+
+  ```text
+  @coderabbitai trigger full review and tell me when you are finished
+  ```
+
+  Address the **real** handle (`@coderabbitai`); CodeRabbit acts on the natural
+  language, and `@coderabbitai full review` is its canonical command if the phrase
+  doesn't bite. Finished-only mode is deliberate: it won't re-trigger on a repeat
+  decline (that would loop forever) — it waits for the fresh review, or times out.
+- **`TIMEOUT`** → `<handle>` didn't finish within the window. Report it and ask
+  whether to keep waiting or to proceed with whatever is there.
+
+For a **human** (non-bot) handle there is no in-progress/decline state — the first
+new review or comment since you started waiting is "finished," which the `FINISHED`
+branch already covers; you never reach `DECLINE`.
+
+## Step 3 — Reconcile the branch first
 
 Reviewers/bots may have pushed to the PR branch (e.g. a "CodeRabbit Generated Unit
 Tests" commit). `git fetch origin <head>` and **fast-forward** the local head to
 `origin/<head>` before editing, so you don't diverge. If tests/files were added,
 run the suite once to see the baseline.
 
-## Step 3 — Fetch ALL comment sources (the inline list is NOT the whole set)
+## Step 4 — Fetch ALL comment sources (the inline list is NOT the whole set)
 
 CodeRabbit spreads findings across three places — pull all three:
 
@@ -52,7 +134,7 @@ diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
 enumerate every finding (inline + nitpick + outside-diff-range) and its location.
 Build the full list before fixing anything.
 
-## Step 4 — Validate each finding against the CURRENT code (the crux)
+## Step 5 — Validate each finding against the CURRENT code (the crux)
 
 For every finding, decide a verdict — do **not** auto-apply:
 
@@ -72,7 +154,7 @@ For every finding, decide a verdict — do **not** auto-apply:
   wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
   pre-existing/orthogonal → its own branch+PR).
 
-## Step 5 — Apply the valid fixes
+## Step 6 — Apply the valid fixes
 
 - Minimal changes, matching repo conventions (see `CLAUDE.md`).
 - Re-run the gates: `python -m pytest`, `ruff check .` / `ruff format .`, `php -l`
@@ -80,7 +162,7 @@ For every finding, decide a verdict — do **not** auto-apply:
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch (direct
   push; the PR updates itself).
 
-## Step 6 — Reply to every finding
+## Step 7 — Reply to every finding
 
 Use `--body-file` / `-F body=@<file>` for **all** replies — never inline `--body`
 (the shell mangles backticks and `${...}` in CodeRabbit-style text).
@@ -88,7 +170,7 @@ Use `--body-file` / `-F body=@<file>` for **all** replies — never inline `--bo
 **Attribution footer (required).** Everything you post here goes through the
 user's `gh` account, so it shows up under *their* name. To avoid any confusion
 about who is actually writing, append a footer to **every** body you send — inline
-replies, top-level comments, and the bodies of any PR you open (Step 7) —
+replies, top-level comments, and the bodies of any PR you open (Step 8) —
 separated by a `---` line:
 
 ```text
@@ -107,13 +189,13 @@ body file before posting.
 - Each reply states the verdict plainly: **applied** (cite the commit),
   **skipped** (the validated reason), or **deferred** (link the new PR).
 
-## Step 7 — Deferred findings → their own PR (optional)
+## Step 8 — Deferred findings → their own PR (optional)
 
 For a valid-but-pre-existing finding, branch off the base, fix it there, and open
 a separate PR (`--body-file` for the body; push the branch first, PR only if
 direct push is blocked). Link that PR in the reply on the original thread.
 
-## Step 8 — Report back
+## Step 9 — Report back
 
 Summarize: findings by source (inline / nitpick / outside-diff-range), how many
 **applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ PR
