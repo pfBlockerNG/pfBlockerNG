@@ -32,10 +32,19 @@ smoke image **bakes** them so the harness `pkg add` of the branch `.pkg` resolve
 them from the local pkg db **offline** (see `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`
 §3). A missing dep → `pkg add` "Missing dependency" → bad image, re-bake.
 
-Exactly the port's `RUN_DEPENDS` (9 packages), verified against
+These are the port's explicit `RUN_DEPENDS` (9 packages), verified against
 `net/pfSense-pkg-pfBlockerNG-devel/Makefile`. To bake them onto an image, run
 [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh)
 on the box (as root):
+
+> **The built `.pkg` records 12 dependencies, not 9.** Besides these 9,
+> `make package` records the three that `USES=php` (`USE_PHP=intl`) and
+> `USES=python` inject: `php83` (`lang/php83`), `php83-intl` (`devel/php83-intl`)
+> and `python311` (`lang/python311`) on 2.8.x. They are *not* literal
+> `RUN_DEPENDS`, but they are real package dependencies (confirmed by diffing a
+> real `make package` artifact). pfSense already ships PHP/Python, so they need no
+> extra baking — but the table below is the **explicit run-deps**, not the package's
+> full dependency set.
 
 | Package (origin) | Binary probed | Purpose |
 | --- | --- | --- |
@@ -57,5 +66,7 @@ Notes:
 - **`rsync` IS a hard run-dep** (not merely a deploy transport): the port declares
   `net/rsync` and pfBlockerNG shells out to it for rsync-format feeds. It must be
   baked like the rest.
-- Base components pfBlockerNG also uses (PHP, Unbound, the Python interpreter)
-  ship with pfSense itself and are not in `RUN_DEPENDS`.
+- **PHP and the Python interpreter ship with pfSense and are not in `RUN_DEPENDS`**,
+  but the built `.pkg` still depends on `php83` + `php83-intl` + `python311`
+  because `USES=php`/`USES=python` inject them (see the note above). Unbound is a
+  base component and is not a package dependency at all.
