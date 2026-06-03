@@ -118,6 +118,33 @@ def unique_domain(label: str = "pfbsmoke") -> str:
 
 
 # --------------------------------------------------------------------------- #
+# ABP feed construction (ADR-07)
+# --------------------------------------------------------------------------- #
+# A feed is parsed as Adblock-Plus syntax ONLY when pfBlockerNG header-sniffs an
+# ABP marker on the first non-'!' line of the downloaded body (inc:7934-7938:
+# '[Adblock Plus ' / '[Adblock Plus]' / '[uBlock Origin' / '! Title: AdGuard').
+# That sets $easylist -> the feed is tagged format_hint='abp' in the manifest
+# (inc:8414) and its RAW lines flow to the Python ABP parser (parse_abp); the old
+# PHP lite parser is gone. So an ABP smoke feed is just a plain local feed whose
+# body STARTS with this header line — no per-row 'format' override is needed (the
+# row stays 'auto'; detection is content-based, not config-based).
+
+ABP_HEADER = "[Adblock Plus 2.0]"
+
+
+def abp_feed(*lines: str) -> str:
+    """Build an ABP-tagged feed body: the ``[Adblock Plus 2.0]`` header sniffed by
+    pfBlockerNG (inc:7934) followed by raw ABP ``lines`` (``||d^`` / ``@@||d^`` /
+    ``/re/`` / ``||d^$important`` / ``0.0.0.0 host`` ...), one per line.
+
+    Deliver via :func:`write_local_feed` and pass the path as a feed/extra-row URL;
+    the body's header makes pfBlockerNG tag the feed ABP so the lines reach
+    ``parse_abp`` intact.
+    """
+    return ABP_HEADER + "\n" + "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # Case specification (declarative input the matrix fills in)
 # --------------------------------------------------------------------------- #
 
@@ -165,6 +192,26 @@ class DnsblCase:
                        Resolver Host Overrides (unbound/hosts) BEFORE update
       control_local_zone -> unused by the matrix; host overrides can't express a
                        local-zone (DNSBL builds its own blocking zones)
+
+    ADR-07 ABP extensions (all default-empty -> the existing matrix is byte-for-
+    byte unchanged; only an ABP case populates them):
+
+      extra_rows    -> additional (header, feed_url) ROWS appended to the SAME
+                       DNSBL list group. Each row is downloaded + header-sniffed
+                       INDEPENDENTLY, so two ABP-bodied rows == two ABP feeds whose
+                       rules the Python build MERGES — this is how a cross-feed
+                       ``@@``/``$badfilter`` (an exception/prune in feed B acting on
+                       a block in feed A) is exercised end-to-end.
+      user_regex    -> the user "Python Regex List" (CFG_DNSBL_SETTINGS/pfb_regex
+                       'on' + pfb_regex_list, newline list, inc:849-850,2711). User
+                       regex are sovereign block patterns; they load into regexDB
+                       and count toward pfb_py_regex_count.
+      regex_cap     -> the opt-in "Limit long/complex regex" static cap
+                       (CFG_DNSBL_SETTINGS/pfb_regex_cap 'on', inc:2685 -> ini
+                       regex_cap=on). When on, an over-length (>200) / nested-
+                       quantifier / alternation-overlap pattern is DROPPED at load
+                       for FEED and USER regex (pfb_unbound.py:_regex_exceeds_
+                       static_cap), so it never enters regexDB or the admitted count.
     """
 
     aliasname: str
@@ -176,6 +223,9 @@ class DnsblCase:
     dnsbl_ip_action: str = ""
     control_local_data: dict[str, dict[str, str]] = field(default_factory=dict)
     control_local_zone: dict[str, str] = field(default_factory=dict)
+    extra_rows: list[tuple[str, str]] = field(default_factory=list)
+    user_regex: list[str] = field(default_factory=list)
+    regex_cap: bool = False
 
     @property
     def alias(self) -> str:
@@ -594,12 +644,23 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # feed into the pfB_DNSBLIP_{v4,v6} alias tables (inc:7022 reads this
         # from CFG_DNSBL_SETTINGS/action; != 'Disabled' enables it).
         settings["action"] = spec.dnsbl_ip_action
-    row = {
-        "header": spec.header,
-        "url": spec.feed_url,
-        "state": "Enabled",
-        "format": "auto",
-    }
+    if spec.user_regex:
+        # The user "Python Regex List" (inc:849-850,2711). pfb_regex must be 'on'
+        # AND pfb_regex_list non-empty for the [REGEX] ini section to be written;
+        # a plain newline list mirrors the suppression textarea the matrix already
+        # uses. User regex are sovereign block patterns (band 5).
+        settings["pfb_regex"] = "on"
+        settings["pfb_regex_list"] = "\n".join(spec.user_regex)
+    if spec.regex_cap:
+        # Opt-in static cap (inc:2685 -> ini regex_cap=on). Drops over-cap feed AND
+        # user regex at load (pfb_unbound.py:_regex_exceeds_static_cap).
+        settings["pfb_regex_cap"] = "on"
+    # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
+    # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
+    # per row yields one ABP feed per row whose rules the Python build merges.
+    rows = [{"header": spec.header, "url": spec.feed_url, "state": "Enabled", "format": "auto"}]
+    rows += [{"header": hdr, "url": url, "state": "Enabled", "format": "auto"} for (hdr, url) in spec.extra_rows]
+    rows_php = "array(" + ", ".join(_php_kv_array(r) for r in rows) + ")"
     listcfg = {
         "aliasname": spec.aliasname,
         # A DNSBL group's action MUST be 'unbound' — that's the only value
@@ -620,7 +681,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         f"$s = array_merge($s, {_php_kv_array(settings)});\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
         f"$list = {_php_kv_array(listcfg)};\n"
-        f"$list['row'] = array({_php_kv_array(row)});\n"
+        f"$list['row'] = {rows_php};\n"
         # 'logging' is a per-LIST field — pfBlockerNG reads $list['logging']
         # (inc: 'if ($list[\\'logging\\'] == \\'disabled\\')'), NOT a per-row value.
         # 'disabled' -> logging_type 2 -> null 0.0.0.0; else -> VIP.
@@ -1016,6 +1077,46 @@ def resolves_to(answer: DnsAnswer, addr: str) -> bool:
 def resolve_control(vm: SmokeVM, name: str) -> list[str]:
     """A control/whitelist passthrough A lookup (reuses conftest.resolve_a)."""
     return resolve_a(name, vm.host, vm.dns_port)
+
+
+# --------------------------------------------------------------------------- #
+# Python-emitted counts (ADR-06/07) — the values the DNSBL UI aliases read.
+# pfb_unbound.py writes these as BARE relative names ("pfb_py_count",
+# "pfb_py_regex_count"), which resolve against Unbound's chroot CWD (/var/unbound),
+# so on the HOST they live at /var/unbound/<name> — exactly what PHP reads
+# (inc:113-114 unbound_py_count / unbound_py_regex_count). Read them over SSH.
+# --------------------------------------------------------------------------- #
+
+PY_COUNT_FILE = "/var/unbound/pfb_py_count"
+PY_REGEX_COUNT_FILE = "/var/unbound/pfb_py_regex_count"
+
+
+def read_py_int(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> int | None:
+    """Read an integer count file on the guest; ``None`` if absent/empty/non-int."""
+    result = vm.ssh("cat", path, timeout=timeout)
+    if result.returncode != 0:
+        return None
+    text = result.stdout.strip()
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def regex_admitted_count(vm: SmokeVM, *, timeout: float = 30.0) -> int | None:
+    """The ADMITTED feed+user regex total the DNSBL_Regex alias renders.
+
+    pfb_unbound.py emits ``len(regexDB) + len(allowRegexDB)`` AFTER the user
+    REGEX-ini load and the feed-regex merge AND after the opt-in static cap drops
+    over-cap patterns — so this is the *admitted* count, which legitimately shrinks
+    when ``regex_cap`` is on (pfb_unbound.py:755; ADR-07 "Counts change by design").
+    """
+    return read_py_int(vm, PY_REGEX_COUNT_FILE, timeout=timeout)
+
+
+def py_loaded_count(vm: SmokeVM, *, timeout: float = 30.0) -> int | None:
+    """The LOADED DNSBL entry total pfb_py_count renders (ADR-06; pfb_unbound.py:635)."""
+    return read_py_int(vm, PY_COUNT_FILE, timeout=timeout)
 
 
 # --------------------------------------------------------------------------- #
