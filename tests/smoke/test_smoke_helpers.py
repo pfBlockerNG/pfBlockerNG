@@ -227,6 +227,18 @@ def test_abp_inject_snippet_default_is_unchanged() -> None:
     assert snippet.count("'header' =>") == 1
 
 
+def test_abp_inject_snippet_emits_cname_validation() -> None:
+    """cname_validation -> the pfb_cname setting (ini python_cname)."""
+    spec = h.DnsblCase(
+        aliasname="smokecname",
+        feed_url="/var/db/pfblockerng/smokecname.txt",
+        header="smokecname",
+        cname_validation=True,
+    )
+    snippet = h._dnsbl_inject_snippet(spec)
+    assert "'pfb_cname' => 'on'" in snippet
+
+
 def test_abp_inject_snippet_emits_custom_list() -> None:
     """custom_domains -> a base64 'custom' field (the sovereign Custom_List vehicle)."""
     spec = h.DnsblCase(
