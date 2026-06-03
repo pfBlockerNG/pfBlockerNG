@@ -11,7 +11,10 @@ workflow, which runs e.g.::
 What this module provides:
 
 * ``smoke_vm`` — a SESSION-scoped fixture that pulls the pfSense CE qcow2 from
-  private GHCR (by the immutable ref in ``SMOKE_IMAGE_REF``), boots it headless
+  private GHCR (by the immutable ref in ``SMOKE_IMAGE_REF``), or reuses an
+  already-pulled image dir (``SMOKE_IMAGE_DIR``, one ``.qcow2``) so the workflow
+  can pull -> block egress -> run hermetically without a second network pull,
+  boots it headless
   under QEMU/KVM, waits until it is actually usable, yields a small connection
   object, and tears the VM down on session teardown. It REUSES the existing
   POSIX-sh helpers (``boot_vm.sh`` makes the read-only-base copy-on-write
@@ -302,9 +305,16 @@ def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     accidentally runs ``pytest tests/smoke`` without KVM/secrets gets a clean
     skip rather than an error.
     """
+    # SMOKE_IMAGE_DIR lets the caller supply an ALREADY-PULLED image dir (one
+    # .qcow2) so the in-fixture `oras pull` is skipped. This is what makes the
+    # ADR §2 hermetic sequence work: the workflow pulls the image from GHCR
+    # FIRST, then BLOCKS the runner's egress, THEN runs pytest — so the fixture
+    # must not need the network. Without it, fall back to pulling by
+    # SMOKE_IMAGE_REF (the local-dev path, before any egress block).
+    image_dir = os.environ.get("SMOKE_IMAGE_DIR")
     image_ref = os.environ.get("SMOKE_IMAGE_REF")
-    if not image_ref:
-        pytest.skip("SMOKE_IMAGE_REF not set — no GHCR pfSense image to pull")
+    if not image_dir and not image_ref:
+        pytest.skip("neither SMOKE_IMAGE_DIR nor SMOKE_IMAGE_REF set — no pfSense image")
 
     ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
     if not ssh_key_path or not Path(ssh_key_path).is_file():
@@ -313,12 +323,23 @@ def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     if not Path("/dev/kvm").exists():
         pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
 
-    for binary in ("oras", "qemu-system-x86_64", "qemu-img", "ssh"):
+    # `oras` is only needed when we have to pull; a pre-pulled SMOKE_IMAGE_DIR
+    # run (egress blocked) does not require it.
+    required = ("qemu-system-x86_64", "qemu-img", "ssh")
+    if not image_dir:
+        required = ("oras", *required)
+    for binary in required:
         if shutil.which(binary) is None:
             pytest.skip(f"required binary `{binary}` not on PATH")
 
     work = tmp_path_factory.mktemp("smoke-vm")
-    base_image = oras_pull_image(image_ref, work / "image")
+    if image_dir:
+        qcows = sorted(Path(image_dir).glob("*.qcow2"))
+        if len(qcows) != 1:
+            raise RuntimeError(f"SMOKE_IMAGE_DIR must hold exactly one .qcow2, found {len(qcows)}: {qcows}")
+        base_image = qcows[0]
+    else:
+        base_image = oras_pull_image(image_ref, work / "image")
 
     handle = boot_and_probe(
         base_image,

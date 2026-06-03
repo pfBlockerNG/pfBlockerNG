@@ -1,0 +1,242 @@
+name: Smoke (pfSense VM, ADR-04)
+
+# End-to-end smoke harness (ADR-04): boot a real pfSense CE VM under KVM,
+# install the branch-under-test .pkg, and run the `pytest -m smoke` matrix
+# (tests/smoke/) against the live box — the real Unbound + pfb_unbound.py DNS
+# path and the real pfctl IP path, asserted over SSH/dig, hermetic (egress
+# blocked). This REPLACES the Phase-1 shell round-trip spike (smoke-spike.yml,
+# retired): same scaffolding (build-pkg job, GHCR image pull+cache, KVM-perms
+# fix, SSH-key/secret handling, build->smoke .pkg passing, egress block), but
+# the assertions now live in pytest, not an inline loop.
+#
+# TRIGGER (gated, NOT every-PR): the per-run wall-time is not yet measured
+# (RESULTS/05 leaves it PENDING the first CI dispatch), so this runs on
+# workflow_dispatch + workflow_call only. A nightly `schedule` is provided,
+# commented, ready to enable. Once a dispatched run confirms the wall-time is
+# within §7's ~20 min/job budget, this can move to `pull_request` (every-PR)
+# by adding that trigger — see README "Smoke tests".
+#
+# FORWARD-COMPAT (ADR-09): the pfSense image ref is an INPUT (image_ref),
+# defaulting to the single supported CE version's GHCR ref/secret. ADR-09 owns
+# the version fan-out / matrix / scheduled refresh — this workflow stays a
+# single-version, parameterised callee.
+#
+# Required config (Actions secrets/variables — see RESULTS/02_Results.txt):
+#   SMOKE_IMAGE_REF      private GHCR OCI ref of the qcow2, ideally by digest,
+#                        e.g. ghcr.io/<org>/pfsense-ce@sha256:<digest>. Accepted
+#                        as a repo/org *variable* OR *secret* (not sensitive; a
+#                        secret wins if both are set). Overridable per-run via
+#                        the image_ref input.
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (secret)
+#   SMOKE_GHCR_TOKEN     PAT/token with read:packages for the GHCR pull (secret)
+#   SMOKE_SSH_PRIV_KEY   private SSH key; matching public key is baked into the
+#                        image's root authorized_keys (secret)
+# Optional (match the baked image; defaults track RESULTS/02):
+#   SMOKE_DNSBL_VIP4     var/secret  baked pfb_dnsvip4 (VIP cases); default 10.10.10.1
+#   SMOKE_CONTROL_NAME / SMOKE_CONTROL_IP  baked Unbound control local-data
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable)."
+        required: false
+        type: string
+        default: ""
+  # Nightly gated run — enable once the wall-time is confirmed within budget.
+  # schedule:
+  #   - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Build the branch's .pkg on a FreeBSD VM (matching the pfSense base ABI) and
+  # publish it as the `pfBlockerNG-pkg` artifact the smoke job installs.
+  build-pkg:
+    uses: ./.github/workflows/build-pkg.yml
+    with:
+      channel: devel
+    # freebsd_version defaults to 15.0-RELEASE (matches pfSense CE 2.8.1).
+
+  smoke:
+    name: pytest -m smoke (live pfSense VM)
+    needs: build-pkg
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
+        # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
+        # rule making /dev/kvm world-RW fixes it in the same login session (no
+        # group-membership re-login needed). Same fix as build-pkg.yml.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install host tools (qemu, oras, dnsutils, python)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv
+
+      - name: Resolve the pfSense image ref (input overrides secret/variable)
+        id: ref
+        env:
+          # The image ref is not sensitive: accept it as a variable, falling
+          # back-compatibly to a secret if one is set (secret wins). The
+          # workflow input wins over both, for ADR-09's per-version callers.
+          INPUT_REF: ${{ inputs.image_ref }}
+          SMOKE_IMAGE_REF: ${{ secrets.SMOKE_IMAGE_REF || vars.SMOKE_IMAGE_REF }}
+        run: |
+          set -eu
+          REF="${INPUT_REF:-${SMOKE_IMAGE_REF:-}}"
+          if [ -z "$REF" ]; then
+            echo "::error::no image ref (set the image_ref input, or the SMOKE_IMAGE_REF secret/variable)"
+            exit 1
+          fi
+          {
+            echo "ref=${REF}"
+            echo "k=$(printf '%s' "$REF" | sha256sum | cut -c1-32)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached pfSense image
+        id: pfcache
+        uses: actions/cache/restore@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.ref.outputs.k }}
+
+      - name: Install oras
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        uses: oras-project/setup-oras@v1
+
+      - name: Pull pfSense image from private GHCR
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+        run: |
+          set -eu
+          echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          mkdir -p image
+          oras pull "$IMAGE_REF" --output image
+          ls -l image
+
+      # Save right after the pull (before the run) so the image is cached even
+      # if a later step fails. Pulled by immutable digest -> the key is stable.
+      - name: Save pfSense image to cache
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.ref.outputs.k }}
+
+      - name: Write private SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-pkg.outputs.artifact }}
+          path: pkg
+
+      - name: Locate the .pkg + the pulled .qcow2
+        id: paths
+        run: |
+          set -eu
+          # The build artifact preserves the out/ subdir (multi-path upload), so
+          # search recursively rather than assuming pkg/*.pkg.
+          PKGFILE="$(find pkg -type f -name '*.pkg' 2>/dev/null | head -1)"
+          [ -n "$PKGFILE" ] || { echo "::error::no .pkg in the build artifact"; ls -lR pkg || true; exit 1; }
+          # The pulled artifact carries exactly one disk image.
+          N_IMG="$(find image -type f -name '*.qcow2' | wc -l | tr -d ' ')"
+          [ "$N_IMG" -eq 1 ] || { echo "::error::expected exactly one .qcow2 in the pulled artifact, found ${N_IMG}"; ls -lR image || true; exit 1; }
+          IMG="$(find image -type f -name '*.qcow2')"
+          {
+            echo "pkg=$(cd "$(dirname "$PKGFILE")" && pwd)/$(basename "$PKGFILE")"
+            echo "img=$(cd "$(dirname "$IMG")" && pwd)/$(basename "$IMG")"
+          } >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKGFILE}  img=${IMG}"
+
+      - name: Install the smoke harness Python deps
+        run: |
+          set -eu
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r tests/smoke/requirements.txt pytest
+
+      # HERMETICITY (ADR §2): block the runner's outbound AFTER the GHCR pull +
+      # artifact download, BEFORE pytest. The GHCR image + the .pkg are already
+      # on disk; the matrix resolves every answer from the in-runner mock-feed
+      # server (reached by the guest over the SLIRP host alias 10.0.2.2, on
+      # loopback) + baked/injected Unbound local-data, so it must still pass
+      # with real egress dark. Loopback + established conns stay up; new
+      # outbound (DNS, HTTP, the SLIRP upstream 10.0.2.3) is dropped. Sequence:
+      # pull -> block -> run.
+      - name: Block runner egress (hermetic gate)
+        run: |
+          set -eu
+          # Keep loopback (mock feeds via hostfwd/SLIRP map onto 127.0.0.1) and
+          # already-established flows; drop everything else outbound.
+          sudo iptables -P OUTPUT DROP
+          sudo iptables -A OUTPUT -o lo -j ACCEPT
+          sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+          echo "runner egress blocked (loopback + established only)"
+
+      - name: Run the smoke matrix (pytest -m smoke)
+        env:
+          # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so it
+          # needs no network — this is what lets egress be blocked BEFORE pytest
+          # (pull -> block -> run). SMOKE_IMAGE_REF is kept for provenance/logs.
+          SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
+          SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_SSH_KEY: smoke_key
+          SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # Match the baked image (RESULTS/02); harmless if unset.
+          SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+          SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
+          SMOKE_CONTROL_IP: ${{ secrets.SMOKE_CONTROL_IP || vars.SMOKE_CONTROL_IP }}
+        run: |
+          set -eu
+          # The smoke package is --ignore'd by the default addopts; re-enable it
+          # with --override-ini and select the marker (see tests/smoke/conftest).
+          python3 -m pytest tests/smoke -m smoke --override-ini="addopts=" -v
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-diagnostics
+          path: |
+            **/vm*.log
+            **/screen-*.png
+            **/screen-*.ppm
+          if-no-files-found: ignore
+          retention-days: 7
