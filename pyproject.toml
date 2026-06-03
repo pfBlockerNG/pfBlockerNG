@@ -1,7 +1,17 @@
 [tool.pytest.ini_options]
 # Run pytest from the repo root; no 'cd' needed in CI or locally.
 testpaths = ["tests"]
-addopts   = "-v"
+# --ignore=tests/smoke keeps the default `python -m pytest` byte-for-byte as it
+# was before ADR-04 Phase 3: the smoke package (VM fixture, mock feed server,
+# its third-party deps) is NEVER imported during default collection, so a
+# checkout without tests/smoke/requirements.txt installed still collects
+# cleanly and runs the exact same unit set. The smoke workflow re-enables it
+# with `pytest -m smoke --override-ini="addopts=" tests/smoke` (or
+# `-p no:cacheprovider tests/smoke -m smoke`); see tests/smoke/conftest.py.
+addopts   = "-v --ignore=tests/smoke"
+markers = [
+    "smoke: live-VM end-to-end smoke test (ADR-04); needs KVM + the GHCR pfSense image; deselected from the default run",
+]
 
 [tool.ruff]
 # Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).

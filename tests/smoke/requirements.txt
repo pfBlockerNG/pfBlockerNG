@@ -1,0 +1,20 @@
+# ADR-04 smoke-harness dev dependencies — DEV ONLY, never shipped.
+#
+# The release archive contains only src/; this file (like
+# benchmarks/requirements.txt, ADR-01) is part of the dev tooling and is not
+# packaged. Install on the smoke runner with:
+#   python -m pip install -r tests/smoke/requirements.txt
+#
+# Kept deliberately small: the VM lifecycle (boot/overlay/teardown) and the SSH
+# round-trip reuse the existing POSIX-sh helpers (tests/smoke/boot_vm.sh,
+# wait_ready.sh) over subprocess + the system `ssh`/`qemu` binaries, so no
+# Python QEMU/SSH library is needed. The mock feed server is stdlib http.server
+# only. The one third-party dep is dnspython, for asserting DNS rcode+record
+# against the guest's real Unbound from Python (richer + more precise than
+# shelling out to `dig`).
+#
+# These modules are imported ONLY by tests/smoke/* , which the default
+# `python -m pytest` ignores (pyproject.toml addopts: --ignore=tests/smoke), so
+# a default run on a host WITHOUT these installed still collects cleanly.
+
+dnspython==2.7.0
