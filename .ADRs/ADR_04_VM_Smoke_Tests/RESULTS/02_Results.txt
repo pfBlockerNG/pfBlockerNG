@@ -1,0 +1,231 @@
+ADR-04 — Phase 2: pfSense CE image -> publish to PRIVATE GHCR + build runbook
+============================================================================
+
+Branch: adr/04   Phase: 2 of 6   Date: 2026-06-02
+
+-------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------
+Authored the version-tagged pfSense CE image publish pipeline behind the
+single output contract (the published qcow2 in PRIVATE GHCR), a maintainer
+RUNBOOK of exactly what is baked, and the verification wiring that round-trips
+the freshly published image with the Phase-1 chain. Built ON the pre-existing
+scripts/image-publish.sh + scripts/image-upgrade.sh (did NOT reinvent them).
+
+NO Packer (accepted per ADR §7 — pfBlockerNG compiles nothing; pfSense ships
+only installer media). Build mode = hand-baked/wholesale qcow2; PUBLISH and
+VERIFY are automated, the one clean install is manual.
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase)
+-------------------------------------------------------------------
+  .github/workflows/build-image.yml
+      workflow_dispatch (+ a commented schedule hook for ADR-09).
+      3 jobs:
+        publish-image — KVM-perms fix (99-kvm4all.rules, same as
+            build-pkg.yml/smoke-spike.yml) -> install qemu + oras -> write the
+            guest key from SMOKE_SSH_PRIV_KEY -> run scripts/image-upgrade.sh
+            LOCALLY (no --proxmox; the runner IS the KVM host) to upgrade a
+            prior tag in place and push the new tag. permissions: packages:write.
+        build-pkg    — reuses .github/workflows/build-pkg.yml (FreeBSD 15) to
+            build the branch .pkg for the verify round-trip.
+        verify-image — pulls the freshly published :version tag, installs the
+            branch .pkg (scripts/install-pkg.sh), runs the Phase-1 round-trip
+            (tests/smoke/{boot_vm,wait_ready,roundtrip}.sh). This IS the
+            post-upgrade sanity gate (fail closed).
+  .ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md
+      maintainer runbook: output contract, seed-once/upgrade-in-place strategy,
+      EXACTLY what is baked, the source-VM hardware profile, the workflow, the
+      Actions secrets, and the CE-version-bump checklist.
+
+NO new .sh (reused existing scripts). src/ untouched. Default `python -m pytest`
+byte-for-byte unchanged (169 passed). No pytest smoke test added (that's Phase 3).
+
+-------------------------------------------------------------------
+BUILD MODE
+-------------------------------------------------------------------
+Hand-baked / maintainer-provided wholesale qcow2 (NO Packer). The published
+qcow2 is the build-method-agnostic seam: everything downstream consumes only
+`oras pull`. ADR §7 explicitly accepts this — a non-automatable installer is
+NOT a reject; PUBLISH + VERIFY are automated, write the runbook.
+
+RUNBOOK PATH: .ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md
+
+-------------------------------------------------------------------
+BASE-OS STRATEGY (seed once, upgrade in place)
+-------------------------------------------------------------------
+SEED (once, archived, maintainer-driven OFF-RUNNER):
+  - One clean manual pfSense CE install on Proxmox, hardware = the §4 profile,
+    provisioned per §3, pfBlockerNG NOT baked, powered off.
+  - Published with scripts/image-publish.sh <version> --proxmox root@pve.lan:
+    qm config -> pvesm path -> qemu-img convert -c (zstd, zlib fallback) on the
+    Proxmox host over SSH -> stream the compressed qcow2 back -> oras push.
+    Reads a host disk over SSH, so it CANNOT run on a GH runner (no Proxmox/LAN).
+  - build-image.yml `seed` mode therefore does NOT create a seed: it asserts the
+    requested seed tag already exists (oras manifest fetch) and lets verify-image
+    round-trip it. Creation stays the runbook step.
+
+UPGRADE IN PLACE (every subsequent CE release, incl. major):
+  - scripts/image-upgrade.sh: pull the prior tag (local oras) -> boot a writable
+    copy under KVM -> run the upgrade over SSH -> wait for the new version ->
+    power off cleanly -> compress -> push the new tag. Source tag UNTOUCHED.
+  - In CI it runs LOCALLY on the runner (the runner is the KVM host: no
+    --proxmox); the maintainer runs it from a workstation against Proxmox.
+  - UPGRADE COMMAND / FLAGS:  yes | /usr/local/sbin/pfSense-upgrade -d
+      -d = non-interactive/batch; `yes |` hedges any residual prompt.
+      EXACT flags should be re-confirmed per CE release (ADR §6 flags this);
+      completion is detected independently of the flags (see readiness).
+  - READINESS / COMPLETION: poll /etc/version over SSH (NOT a fixed sleep) —
+      record the pre-upgrade version, wait out the reboot, treat "version
+      changed" as done. Hard timeout --upgrade-timeout (default 1800s). Target
+      tag defaults to the upgraded box's reported version (-RELEASE stripped)
+      unless --to is given.
+
+SANITY GATE (publish-on-pass, fail closed):
+  - The smoke round-trip itself. build-image.yml's verify-image job pulls the
+    freshly published tag, installs the branch .pkg, runs
+    tests/smoke/{boot_vm,wait_ready,roundtrip}.sh. Red round-trip -> workflow
+    fails -> the bad image is not trusted. Manual re-seed is the fallback only
+    when the gate fails. (ADR-09 automates the scheduled refresh + this gate
+    across the version matrix.)
+
+-------------------------------------------------------------------
+WHERE SEED + SNAPSHOTS ARE ARCHIVED (GHCR)
+-------------------------------------------------------------------
+  Every CE version is its own immutable tag under the same GHCR repo; the seed
+  and EVERY upgrade snapshot are retained (never overwritten — image-publish.sh
+  and image-upgrade.sh both refuse to clobber an existing tag without --force).
+  This keeps the upgrade chain recoverable (rebuild from the last clean base)
+  and auditable. Package is PRIVATE to the org (ADR §3 redistribution risk).
+
+-------------------------------------------------------------------
+GHCR REF / TAG SCHEME + EXACT oras pull
+-------------------------------------------------------------------
+  Ref (no tag):  ghcr.io/<org>/pfsense-ce       (env SMOKE_IMAGE; default
+                 ghcr.io/<owner>/pfsense-ce, owner from GITHUB_REPOSITORY_OWNER)
+  Tag scheme:    :<PFSENSE_CE_VERSION>           e.g. :2.8.1
+  Artifact-type: application/vnd.netgate.pfsense-ce.disk.v1
+  Layer type:    application/vnd.qemu.qcow2
+  Pull:          oras pull ghcr.io/<org>/pfsense-ce:2.8.1 -o ./image
+  Pin by digest: oras manifest fetch --descriptor ghcr.io/<org>/pfsense-ce:2.8.1
+
+  PFSENSE_CE_VERSION (validated slice): 2.8.1 (FreeBSD 15 base ABI).
+
+-------------------------------------------------------------------
+WHAT IS BAKED (provisioning) — pfBlockerNG NOT baked
+-------------------------------------------------------------------
+  - Root SSH pubkey  : SMOKE_SSH_PUB_KEY -> root authorized_keys; root SSH on.
+                       Private half = SMOKE_SSH_PRIV_KEY (the workflow secret).
+  - Admin password   : SMOKE_ADMIN_PASSWORD (bcrypt) in config.xml. Not
+                       exercised by the round-trip (SSH=key, WebUI=reachability).
+  - WAN pass rules   : host -> 22 (SSH), 80 (WebUI HTTP), 53 (DNS). Mandatory —
+                       single-NIC WAN is default-deny, no anti-lockout.
+  - Unbound ACL      : access-control: 10.0.2.0/24 allow (SLIRP subnet; Unbound
+                       REFUSEs WAN-side recursion by default).
+  - Block-private/bogons: DISABLED if present (10.0.2.2 is RFC1918; not
+                       auto-added on a single-interface install).
+  - Unbound local-data control name(s)+answer:
+                       default smoke-control.pfb.test -> 192.0.2.123
+                       (workflow inputs local_data_name / local_data_ip).
+                       Per-case control records are SSH-injected in Phase 4, not
+                       baked.
+  - DNS/SSH listen   : DNS Resolver in forwarding mode -> Cloudflare
+                       1.1.1.1 / 1.0.0.1, DNSSEC off (fail-closed under egress
+                       block). SSH = root key on :22. Do NOT forward to the
+                       SLIRP 10.0.2.3.
+  - WAN addressing   : DHCP (SLIRP lease 10.0.2.15, gw 10.0.2.2). NEVER a static
+                       WAN IP (breaks SLIRP).
+  - Serial console   : retained (post-mortem; readiness gauged by SSH).
+
+-------------------------------------------------------------------
+SOURCE-VM HARDWARE PROFILE (do NOT change without re-baking)
+-------------------------------------------------------------------
+  machine : pc (i440fx; Proxmox pc+pve0)
+  cpu     : host (re-probed by FreeBSD; keeps AES-NI; not a fingerprint axis)
+  smp/mem : 2 vCPU (sockets=1,cores=2) / 4096 MB
+  disk    : VirtIO-SCSI (virtio-scsi-pci + scsi-hd); guest sees da0
+  NIC     : single virtio-net-pci, MAC pinned BC:24:11:37:9C:AC (source VM's
+            MAC; not sensitive, hardcoded in boot_vm.sh + image-upgrade.sh)
+  smbios  : type=1,uuid=58fd7964-c40c-4f47-bf02-3fdad18f8b00
+  DISK EXPORT: source VM disk exported wholesale —
+    qemu-img convert -O qcow2 -c -o compression_type=zstd <zvol> out.qcow2
+    (zstd, zlib fallback) on the Proxmox host (image-publish.sh). Published base
+    is read-only + never booted directly; boot_vm.sh boots an ephemeral
+    copy-on-write overlay (qemu-img create -b base -F qcow2).
+  pfSense keys interface assignment to NIC type/MAC/count — change any and a
+  clean boot drops to the console reassignment prompt. boot_vm.sh mirrors this
+  exactly; image-upgrade.sh boots with the same MAC.
+
+  Host<->guest exposure (SLIRP):
+    127.0.0.1:2222/tcp -> 22 SSH ; 8080/tcp -> 80 WebUI ;
+    5353/tcp+udp -> 53 DNS ; guest -> runner via 10.0.2.2.
+
+-------------------------------------------------------------------
+RECONCILIATION WITH THE EVOLVED HARNESS
+-------------------------------------------------------------------
+  The harness already (Phase 1):
+    - PULLS a clean pfSense CE qcow2 from PRIVATE GHCR by IMMUTABLE DIGEST
+      (SMOKE_IMAGE_REF), cached in CI (actions/cache keyed on the ref).
+    - Builds the branch-under-test into a real .pkg SEPARATELY on a FreeBSD 15
+      VM-IMAGE (build-pkg.yml / scripts/build-pkg.sh), installed via pkg add
+      (scripts/install-pkg.sh). pfBlockerNG is NOT baked into the image.
+  Phase 2 fits this cleanly:
+    - build-image.yml PRODUCES the version-tagged qcow2 that Phase 1 consumes;
+      the seam is the same (oras + GHCR + the §4 hardware profile boot_vm.sh
+      mirrors).
+    - The verify-image job reuses the EXACT Phase-1 chain (build-pkg.yml +
+      boot_vm.sh + wait_ready.sh + roundtrip.sh) — same .pkg-built-separately,
+      pkg-add-install model — so the published image is proven the way it will
+      actually be used.
+    - smoke-spike.yml pins SMOKE_IMAGE_REF by DIGEST; build-image.yml publishes
+      a :version TAG. After publishing, take the descriptor digest
+      (oras manifest fetch --descriptor :<version>) and set SMOKE_IMAGE_REF to
+      ...@sha256:<digest> for the per-PR smoke workflow — tag for humans,
+      digest for the pinned pull.
+
+-------------------------------------------------------------------
+GITHUB CONFIG (Actions secrets/vars — NONE committed)
+-------------------------------------------------------------------
+  SMOKE_GHCR_USER     secret    oras login ghcr.io
+  SMOKE_GHCR_TOKEN    secret    write:packages (publish) / read:packages (verify)
+  SMOKE_SSH_PRIV_KEY  secret    guest SSH private key (public half baked)
+  SMOKE_IMAGE         var/secret GHCR ref WITHOUT tag (default ghcr.io/<owner>/pfsense-ce)
+  SMOKE_IMAGE_REF     var/secret optional base ref by digest (verify-only)
+  (SMOKE_SSH_PUB_KEY / SMOKE_ADMIN_PASSWORD are baked at image-build time, not
+   consumed by the workflow.)
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest -q        : 169 passed (unchanged baseline)
+  ruff check .               : All checks passed
+  ruff format --check .      : 15 files already formatted
+  YAML parse build-image.yml : valid
+  markdownlint IMAGE_RUNBOOK : 0 error(s)
+  no new/changed .sh         : reused existing scripts (sh -n/shellcheck n/a)
+  src/ untouched             : confirmed (git status clean for src/)
+  YAML indent                : 2-space, consistent with existing workflows
+                               (GitHub Actions convention; the .editorconfig
+                               4-space *.yml rule is followed by no shipped
+                               workflow — matched the established pattern).
+
+-------------------------------------------------------------------
+PENDING — orchestrator/maintainer `gh` dispatch (NOT fabricated)
+-------------------------------------------------------------------
+  The CI verification — publish to GHCR (oras push) + round-trip on the
+  PUBLISHED image — is NOT run here: no /dev/kvm, no secrets, no Proxmox seed in
+  this environment. It is driven by the ORCHESTRATOR/maintainer AFTER this phase
+  via:
+    gh workflow run build-image.yml \
+       -f pfsense_ce_version=<new> -f base_source=upgrade -f from_version=<prior>
+  (or base_source=seed once a seed tag exists). No publish/boot numbers are
+  fabricated. The publish-image + verify-image jobs are wired to fail closed.
+
+-------------------------------------------------------------------
+NEXT (Phase 3)
+-------------------------------------------------------------------
+  tests/smoke/ pytest scaffolding: requirements.txt (dnspython/paramiko/oras),
+  register marker `smoke` + deselect by default, session-scoped VM fixture
+  (oras pull -> boot -> wait-ready -> yield -> teardown), stdlib mock HTTP feed
+  fixture, a trivial `pytest -m smoke` proof. Pull the image build-image.yml
+  publishes (pin SMOKE_IMAGE_REF by digest). Keep default pytest unchanged.
