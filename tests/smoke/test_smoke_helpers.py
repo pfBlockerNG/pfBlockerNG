@@ -71,7 +71,7 @@ def test_inject_value_roundtrips(deployed_vm: SmokeVM) -> None:
 
 def test_inject_control_record_resolves(deployed_vm: SmokeVM) -> None:
     """A control local-data injected in CONFIG resolves after a reload."""
-    name = "selftest-control.pfb.test"
+    name = h.unique_domain("selftest-control")
     ip = "192.0.2.250"
     h.set_control_records(deployed_vm, {name: {"A": ip}}, {})
     # The reload regenerates unbound.conf; the config-baked record must survive.
@@ -137,7 +137,7 @@ def test_dns_probe_nxdomain_shape(deployed_vm: SmokeVM) -> None:
     (would indicate a leaking upstream / wrong probe), proving the probe reads
     the real resolver state.
     """
-    answer = h.dns_probe(deployed_vm, "definitely-absent.pfb.test", "A")
+    answer = h.dns_probe(deployed_vm, h.unique_domain("definitely-absent"), "A")
     assert not answer.records or answer.rcode != "NOERROR", (
         f"absent name returned records {answer.records} rcode {answer.rcode}"
     )
