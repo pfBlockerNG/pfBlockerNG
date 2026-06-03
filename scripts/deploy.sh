@@ -59,11 +59,14 @@ fi
 
 echo "==> Deploying pfBlockerNG ($CHANNEL) to $SSH_TARGET"
 
-# Sync all source files, preserving permissions
+# Sync all source files, preserving permissions. src/ mirrors the filesystem
+# root, so src/usr/local/ maps to /usr/local/ — syncing src/usr/ -> /usr/local/
+# would land everything under /usr/local/local/ (silently a no-op on a running
+# box). Matches the port's WRKSRC${PREFIX} -> ${PREFIX} install.
 rsync -az --rsync-path="rsync" \
     --exclude="*.pyc" \
     --exclude="__pycache__/" \
-    "${REPO_ROOT}/src/usr/" \
+    "${REPO_ROOT}/src/usr/local/" \
     "${SSH_TARGET}:${PKG_PREFIX}/"
 
 rsync -az --rsync-path="rsync" \

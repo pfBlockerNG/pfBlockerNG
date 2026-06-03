@@ -67,20 +67,48 @@ ssh_t() {
 
 echo "==> Installing pfBlockerNG ($PKG_NAME) onto $SSH_TARGET from repo"
 
-# 1) Sync the package files (mirrors deploy.sh).
+# 0a) rsync is REQUIRED for the transport below; a fresh pfSense ships none.
+#     Check-then-install (pfSense's pkg repo carries it). Needs egress (open
+#     during the smoke spike / image build; the test job blocks egress only
+#     AFTER install). Fatal if it can't be installed — without it nothing syncs.
+if ! ssh_t 'command -v rsync >/dev/null 2>&1'; then
+    echo "==> rsync missing on target — installing via pkg"
+    ssh_t 'env ASSUME_ALWAYS_YES=yes pkg install -y rsync' \
+        || { echo "Error: failed to install rsync on $SSH_TARGET" >&2; exit 1; }
+fi
+
+# 0b) Install the package's other RUN_DEPENDS — what `pkg install
+#     pfSense-pkg-pfBlockerNG[-devel]` pulls per the port Makefile — so the
+#     installed package is actually functional (jq/grepcidr/iprange for the IP
+#     path, libmaxminddb/py-maxminddb for GeoIP, py-sqlite3 for the DNSBL DB,
+#     etc.). Best-effort: a renamed/absent dep shouldn't block the smoke
+#     install, so warn rather than abort.
+echo "==> Installing pfBlockerNG runtime dependencies (mirrors port RUN_DEPENDS)"
+ssh_t 'env ASSUME_ALWAYS_YES=yes pkg install -y libmaxminddb gnugrep grepcidr iprange jq lighttpd py311-sqlite3 py311-maxminddb' \
+    || echo "WARN: some pfBlockerNG runtime deps failed to install (continuing)" >&2
+
+# 1) Sync the package files. src/ mirrors the filesystem root, so src/usr/local/
+#    maps to /usr/local/ (NOT src/usr/ -> /usr/local/, which would land under
+#    /usr/local/local/). Matches the port's WRKSRC${PREFIX} -> ${PREFIX} install.
 rsync -az -e "$RSH" \
     --exclude="*.pyc" --exclude="__pycache__/" \
-    "${REPO_ROOT}/src/usr/" "${SSH_TARGET}:/usr/local/"
+    "${REPO_ROOT}/src/usr/local/" "${SSH_TARGET}:/usr/local/"
 rsync -az -e "$RSH" \
     "${REPO_ROOT}/src/etc/" "${SSH_TARGET}:/etc/"
 
-# info.xml with the channel package name substituted.
-sed "s|%%PKGNAME%%|${PKG_NAME}|g" \
+# info.xml with the package name AND version substituted (the port does both:
+# %%PKGNAME%% in post-extract, %%PKGVERSION%% in do-install). %%PKGNAME%% is the
+# FULL port name (pfSense-pkg-pfBlockerNG[-devel]) — the port substitutes
+# ${PORTNAME}, not the short channel name. Derive the version from git (tags may
+# be absent in a shallow CI checkout -> short hash; fall back to a dev marker).
+PORTNAME="pfSense-pkg-${PKG_NAME}"
+PKGVERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo '0.0.0-dev')"
+sed -e "s|%%PKGNAME%%|${PORTNAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${REPO_ROOT}/.info.xml.tmp"
-ssh_t mkdir -p "/usr/local/share/pfSense-pkg-${PKG_NAME}"
+ssh_t mkdir -p "/usr/local/share/${PORTNAME}"
 rsync -az -e "$RSH" "${REPO_ROOT}/.info.xml.tmp" \
-    "${SSH_TARGET}:/usr/local/share/pfSense-pkg-${PKG_NAME}/info.xml"
+    "${SSH_TARGET}:/usr/local/share/${PORTNAME}/info.xml"
 rm -f "${REPO_ROOT}/.info.xml.tmp"
 
 # 2) Run pfSense's package POST-INSTALL — the EXACT step `pkg` runs after
@@ -90,12 +118,24 @@ rm -f "${REPO_ROOT}/.info.xml.tmp"
 #    menu/services, and runs the package's custom_php_install_command, which
 #    includes pfblockerng_install.inc. PORTNAME = pfSense-pkg-pfBlockerNG[-devel].
 echo "==> Running package POST-INSTALL (registration + install hooks)"
-ssh_t "/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-${PKG_NAME} POST-INSTALL"
+ssh_t "/usr/local/bin/php -f /etc/rc.packages ${PORTNAME} POST-INSTALL"
 
 # 3) Restart the services that load the new files (svc restart is a real
 #    pfSense built-in; pfBlockerNG itself is driven via the php CLI, not pfSsh).
+#    The restarts are async, so WAIT for Unbound to answer again before the
+#    caller queries it — otherwise an unbound-control / dig races the reload.
 echo "==> Restarting unbound + nginx"
 ssh_t "pfSsh.php playback svc restart unbound"
+echo "==> Waiting for Unbound to come back up"
+i=0
+until ssh_t '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status >/dev/null 2>&1'; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+        echo "Error: Unbound did not come back up after restart" >&2
+        exit 1
+    fi
+    sleep 2
+done
 ssh_t "pfSsh.php playback svc restart nginx"
 
 echo "==> Done. pfBlockerNG ($PKG_NAME) installed on $SSH_TARGET"
