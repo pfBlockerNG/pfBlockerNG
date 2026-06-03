@@ -44,7 +44,7 @@ def make_mk(tmp_path: Path, text: str, seed: dict | None = None) -> "bpp.Makefil
 # --------------------------------------------------------------------------- #
 
 
-def test_makefile_assignment_ops(tmp_path):
+def test_makefile_assignment_ops(tmp_path: Path) -> None:
     mk = make_mk(
         tmp_path,
         "A=\t1\n"
@@ -60,13 +60,13 @@ def test_makefile_assignment_ops(tmp_path):
     assert mk.get("D") == "z"
 
 
-def test_makefile_seed_default_and_override(tmp_path):
+def test_makefile_seed_default_and_override(tmp_path: Path) -> None:
     mk = make_mk(tmp_path, "PREFIX=\t/somewhere\n", seed={"PREFIX": "/usr/local", "LOCALBASE": "/usr/local"})
     assert mk.get("PREFIX") == "/somewhere"  # Makefile overrides seed
     assert mk.get("LOCALBASE") == "/usr/local"  # seed default survives
 
 
-def test_makefile_expansion_and_modifiers(tmp_path):
+def test_makefile_expansion_and_modifiers(tmp_path: Path) -> None:
     mk = make_mk(
         tmp_path,
         "PORTNAME=\tfoo\nPORTVERSION=\t1.2\nDISTNAME=\t${PORTNAME}-${PORTVERSION}\nWRKSRC=\t/w/${DISTNAME}/src\n",
@@ -79,13 +79,13 @@ def test_makefile_expansion_and_modifiers(tmp_path):
     assert mk2.get("T") == "c"
 
 
-def test_makefile_comment_stripping(tmp_path):
+def test_makefile_comment_stripping(tmp_path: Path) -> None:
     mk = make_mk(tmp_path, "DISTFILES=\t# empty\nX=\tvalue # trailing\n")
     assert mk.get("DISTFILES") == ""
     assert mk.get("X") == "value"
 
 
-def test_makefile_line_continuation_and_recipe_capture(tmp_path):
+def test_makefile_line_continuation_and_recipe_capture(tmp_path: Path) -> None:
     mk = make_mk(
         tmp_path,
         "RUN_DEPENDS=\ta:cat/a \\\n\t\tb:cat/b\n"
@@ -109,7 +109,7 @@ def test_makefile_line_continuation_and_recipe_capture(tmp_path):
     "ver,rev,epoch,expected",
     [("1.0", "", "", "1.0"), ("1.0", "2", "", "1.0_2"), ("1.0", "0", "", "1.0"), ("1.0", "2", "3", "1.0_2,3")],
 )
-def test_compute_pkgversion(tmp_path, ver, rev, epoch, expected):
+def test_compute_pkgversion(tmp_path: Path, ver: str, rev: str, epoch: str, expected: str) -> None:
     text = f"PORTVERSION=\t{ver}\n"
     if rev:
         text += f"PORTREVISION=\t{rev}\n"
@@ -128,16 +128,16 @@ def test_compute_pkgversion(tmp_path, ver, rev, epoch, expected):
         ("FreeBSD:13:i386", "freebsd:13:x86:32"),
     ],
 )
-def test_abi_to_arch(abi, arch):
+def test_abi_to_arch(abi: str, arch: str) -> None:
     assert bpp.abi_to_arch(abi) == arch
 
 
-def test_abi_to_arch_malformed():
+def test_abi_to_arch_malformed() -> None:
     with pytest.raises(bpp.BuildError):
         bpp.abi_to_arch("nonsense")
 
 
-def test_parse_descr_keeps_www_line_verbatim():
+def test_parse_descr_keeps_www_line_verbatim() -> None:
     descr = "Line one.\nLine two.\n\nWWW: https://example.org/p\n"
     desc, www = bpp.parse_descr(descr)
     assert www == "https://example.org/p"
@@ -145,7 +145,7 @@ def test_parse_descr_keeps_www_line_verbatim():
     assert desc == "Line one.\nLine two.\n\nWWW: https://example.org/p"
 
 
-def test_resolve_www_precedence(tmp_path):
+def test_resolve_www_precedence(tmp_path: Path) -> None:
     explicit = make_mk(tmp_path, "WWW=\thttps://explicit/\n")
     assert bpp.resolve_www(explicit, "https://descr/") == "https://explicit/"
 
@@ -156,7 +156,7 @@ def test_resolve_www_precedence(tmp_path):
     assert bpp.resolve_www(plain, "https://descr/") == "https://descr/"
 
 
-def test_parse_plist_files_dirs_and_datadir():
+def test_parse_plist_files_dirs_and_datadir() -> None:
     plist = "/etc/inc/priv/x.inc\nbin/y.sh\n%%DATADIR%%/info.xml\n@dir /etc/inc/priv\n@dir /etc/inc\n"
     sub = {"DATADIR": "share/portx"}
     files, dirs = bpp.parse_plist(plist, sub, "/usr/local")
@@ -164,12 +164,12 @@ def test_parse_plist_files_dirs_and_datadir():
     assert dirs == ["/etc/inc/priv", "/etc/inc"]
 
 
-def test_parse_plist_unresolved_token_raises():
+def test_parse_plist_unresolved_token_raises() -> None:
     with pytest.raises(bpp.BuildError):
         bpp.parse_plist("%%NOPE%%/x\n", {}, "/usr/local")
 
 
-def test_parse_plist_unknown_keyword_raises():
+def test_parse_plist_unknown_keyword_raises() -> None:
     # Fail closed on an unhandled @keyword (don't silently emit a wrong package).
     with pytest.raises(bpp.BuildError, match="@sample"):
         bpp.parse_plist("@sample foo.conf.sample\nbin/x\n", {}, "/usr/local")
@@ -183,12 +183,12 @@ def test_parse_plist_unknown_keyword_raises():
         ("s/x/y/", "x", "y"),  # slash delimiter
     ],
 )
-def test_sed_s(expr, text, expected):
+def test_sed_s(expr: str, text: str, expected: str) -> None:
     r = bpp.Recipe.__new__(bpp.Recipe)
     assert r._sed_s(text, expr) == expected
 
 
-def test_sed_s_unsupported():
+def test_sed_s_unsupported() -> None:
     r = bpp.Recipe.__new__(bpp.Recipe)
     with pytest.raises(bpp.BuildError):
         r._sed_s("text", "y|a|b|")  # only the s command is supported
@@ -199,7 +199,7 @@ def test_sed_s_unsupported():
 # --------------------------------------------------------------------------- #
 
 
-def test_recipe_install_modes_mv_sed(tmp_path):
+def test_recipe_install_modes_mv_sed(tmp_path: Path) -> None:
     src = tmp_path / "src"
     (src).mkdir()
     (src / "data.txt").write_text("data")
@@ -228,7 +228,7 @@ def test_recipe_install_modes_mv_sed(tmp_path):
     assert (stage / "usr/local/etc/tpl.xml").read_text() == "v=9.9\n"  # reinplace applied to staged file
 
 
-def test_recipe_bare_mv_and_unknown_command(tmp_path):
+def test_recipe_bare_mv_and_unknown_command(tmp_path: Path) -> None:
     src = tmp_path / "w"
     (src / "a").mkdir(parents=True)
     (src / "a" / "f").write_text("x")
@@ -244,7 +244,7 @@ def test_recipe_bare_mv_and_unknown_command(tmp_path):
         bpp.Recipe(bad).run("do-install")
 
 
-def test_safe_extract_rejects_traversal(tmp_path):
+def test_safe_extract_rejects_traversal(tmp_path: Path) -> None:
     # A path-traversal member must be rejected (the stdlib 'data' filter).
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tf:
@@ -269,7 +269,7 @@ def write_port(ports: Path, origin: str, body: str) -> None:
     (d / "Makefile").write_text(body)
 
 
-def test_read_dep_port_flavor(tmp_path):
+def test_read_dep_port_flavor(tmp_path: Path) -> None:
     ports = tmp_path / "ports"
     write_port(
         ports,
@@ -284,7 +284,7 @@ def test_read_dep_port_flavor(tmp_path):
     assert bpp._read_dep_port(mkf, "default", seed) == ("rsync", "3.4.1_6")
 
 
-def test_resolve_deps_name_and_file_forms(tmp_path):
+def test_resolve_deps_name_and_file_forms(tmp_path: Path) -> None:
     ports = tmp_path / "ports"
     write_port(ports, "textproc/gnugrep", "PORTNAME=\tgrep\nPKGNAMEPREFIX=\tgnu\nPORTVERSION=\t3.12\n")
     write_port(ports, "databases/py-sqlite3", "PORTNAME=\tsqlite3\nPKGNAMEPREFIX=\t${PYTHON_PKGNAMEPREFIX}\n")
@@ -308,7 +308,7 @@ def test_resolve_deps_name_and_file_forms(tmp_path):
     assert deps["py311-sqlite3"].origin == "databases/py-sqlite3"
 
 
-def test_synthesize_uses_deps(tmp_path):
+def test_synthesize_uses_deps(tmp_path: Path) -> None:
     ports = tmp_path / "ports"
     write_port(ports, "lang/php83", "PORTNAME=\tphp83\nPORTVERSION=\t8.3.30\n")
     write_port(ports, "devel/php83-intl", "PORTNAME=\tphp83-intl\n")  # version inherited; falls back to php base
@@ -334,14 +334,14 @@ _CATALOGUE = (
 )
 
 
-def test_load_catalogue_plain_yaml(tmp_path):
+def test_load_catalogue_plain_yaml(tmp_path: Path) -> None:
     f = tmp_path / "packagesite.yaml"
     f.write_text(_CATALOGUE)
     cat = bpp.load_catalogue(str(f), "FreeBSD:15:amd64", {"rsync", "jq"})
     assert cat == {"rsync": ("net/rsync", "3.4.3"), "jq": ("textproc/jq", "1.8.1")}
 
 
-def test_load_catalogue_gzipped_tar(tmp_path):
+def test_load_catalogue_gzipped_tar(tmp_path: Path) -> None:
     # A packagesite.pkg-like archive: a gzip-compressed tar holding packagesite.yaml
     # (gzip via stdlib, so no zstd needed in the test environment).
     buf = io.BytesIO()
@@ -356,7 +356,7 @@ def test_load_catalogue_gzipped_tar(tmp_path):
     assert cat["rsync"] == ("net/rsync", "3.4.3")
 
 
-def test_apply_repo_catalogue_overrides_versions(tmp_path, capsys):
+def test_apply_repo_catalogue_overrides_versions(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "packagesite.yaml"
     f.write_text(_CATALOGUE)
     deps = [bpp.Dep("rsync", "net/rsync", "0"), bpp.Dep("missing", "x/missing", "1.0")]
@@ -432,7 +432,7 @@ def _read_pkg(path: Path) -> tuple[dict, dict, tarfile.TarFile]:
     return full, compact, tf
 
 
-def test_end_to_end_classic_build(tmp_path):
+def test_end_to_end_classic_build(tmp_path: Path) -> None:
     ports, portdir = _make_classic_port(tmp_path)
     out = tmp_path / "out"
     rc = bpp.main(
@@ -493,7 +493,7 @@ def test_end_to_end_classic_build(tmp_path):
     assert info == "<version>1.0_2</version>\n"
 
 
-def test_end_to_end_plist_drift_aborts(tmp_path):
+def test_end_to_end_plist_drift_aborts(tmp_path: Path) -> None:
     ports, portdir = _make_classic_port(tmp_path)
     # Add a plist entry with no corresponding staged file -> must abort.
     plist = portdir / "pkg-plist"

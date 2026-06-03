@@ -3,8 +3,7 @@ import random
 import re
 import types
 from collections import defaultdict
-
-import pytest
+from typing import Any
 
 import pfb_unbound
 
@@ -72,75 +71,75 @@ def set_feed_group(index: int, feed: str, group: str) -> None:
 
 
 class TestIsUnknown:
-    def test_none_returns_unknown(self):
+    def test_none_returns_unknown(self) -> None:
         assert is_unknown(None) == "Unknown"
 
-    def test_empty_string_returns_unknown(self):
+    def test_empty_string_returns_unknown(self) -> None:
         assert is_unknown("") == "Unknown"
 
-    def test_zero_returns_unknown(self):
+    def test_zero_returns_unknown(self) -> None:
         assert is_unknown(0) == "Unknown"
 
-    def test_false_returns_unknown(self):
+    def test_false_returns_unknown(self) -> None:
         assert is_unknown(False) == "Unknown"
 
-    def test_nonempty_string_returned_as_is(self):
+    def test_nonempty_string_returned_as_is(self) -> None:
         assert is_unknown("example.com") == "example.com"
 
-    def test_ip_string_returned_as_is(self):
+    def test_ip_string_returned_as_is(self) -> None:
         assert is_unknown("192.168.1.1") == "192.168.1.1"
 
-    def test_string_zero_returned_as_is(self):
+    def test_string_zero_returned_as_is(self) -> None:
         # '0' is a non-empty string, so it is not unknown
         assert is_unknown("0") == "0"
 
-    def test_nonzero_int_returned_as_is(self):
+    def test_nonzero_int_returned_as_is(self) -> None:
         assert is_unknown(42) == 42
 
 
 class TestConvertIPv4:
     # x[2], x[3], x[4], x[5] are the four octets; x[0] and x[1] are ignored
 
-    def test_standard_address(self):
+    def test_standard_address(self) -> None:
         assert convert_ipv4(bytes([0, 0, 192, 168, 1, 1])) == "192.168.1.1"
 
-    def test_loopback(self):
+    def test_loopback(self) -> None:
         assert convert_ipv4(bytes([0, 0, 127, 0, 0, 1])) == "127.0.0.1"
 
-    def test_broadcast(self):
+    def test_broadcast(self) -> None:
         assert convert_ipv4(bytes([0, 0, 255, 255, 255, 255])) == "255.255.255.255"
 
-    def test_all_zeros(self):
+    def test_all_zeros(self) -> None:
         assert convert_ipv4(bytes([0, 0, 0, 0, 0, 0])) == "0.0.0.0"
 
-    def test_empty_bytes_returns_unknown(self):
+    def test_empty_bytes_returns_unknown(self) -> None:
         assert convert_ipv4(b"") == "Unknown"
 
-    def test_none_returns_unknown(self):
+    def test_none_returns_unknown(self) -> None:
         assert convert_ipv4(None) == "Unknown"
 
 
 class TestConvertIPv6:
     # x[2] through x[17] are the 16 address bytes; x[0] and x[1] are ignored
 
-    def test_loopback(self):
+    def test_loopback(self) -> None:
         x = bytes([0, 0] + [0] * 15 + [1])
         assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0001"
 
-    def test_known_prefix(self):
+    def test_known_prefix(self) -> None:
         # 2001:0db8::1
         x = bytes([0, 0, 0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
         assert convert_ipv6(x) == "2001:0db8:0000:0000:0000:0000:0000:0001"
 
-    def test_all_zeros_not_unknown(self):
+    def test_all_zeros_not_unknown(self) -> None:
         # All-zeros IPv6 address is a valid (if unusual) value
         x = bytes([0, 0] + [0] * 16)
         assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0000"
 
-    def test_empty_bytes_returns_unknown(self):
+    def test_empty_bytes_returns_unknown(self) -> None:
         assert convert_ipv6(b"") == "Unknown"
 
-    def test_none_returns_unknown(self):
+    def test_none_returns_unknown(self) -> None:
         assert convert_ipv6(None) == "Unknown"
 
 
@@ -156,124 +155,124 @@ class TestConvertOther:
     #   else              → chr(val)
     # Leading/trailing '.' and '|' are stripped from the result.
 
-    def test_printable_ascii(self):
+    def test_printable_ascii(self) -> None:
         x = bytes([0, 0, 0, ord("A"), ord("B"), ord("C")])
         assert convert_other(x) == "ABC"
 
-    def test_null_becomes_pipe(self):
+    def test_null_becomes_pipe(self) -> None:
         x = bytes([0, 0, 0, ord("A"), 0, ord("B")])
         assert convert_other(x) == "A|B"
 
-    def test_low_byte_becomes_dot(self):
+    def test_low_byte_becomes_dot(self) -> None:
         x = bytes([0, 0, 0, ord("A"), 1, ord("B")])
         assert convert_other(x) == "A.B"
 
-    def test_carriage_return_stops_processing(self):
+    def test_carriage_return_stops_processing(self) -> None:
         x = bytes([0, 0, 0, ord("A"), 13, ord("B")])
         assert convert_other(x) == "A"
 
-    def test_space_preserved(self):
+    def test_space_preserved(self) -> None:
         x = bytes([0, 0, 0, ord("A"), 32, ord("B")])
         assert convert_other(x) == "A B"
 
-    def test_colon_preserved(self):
+    def test_colon_preserved(self) -> None:
         x = bytes([0, 0, 0, ord("h"), 58, ord("1")])
         assert convert_other(x) == "h:1"
 
-    def test_control_chars_skipped(self):
+    def test_control_chars_skipped(self) -> None:
         # val 14..31 (excluding 13) and 33 are skipped
         x = bytes([0, 0, 0, ord("A"), 14, ord("B")])
         assert convert_other(x) == "AB"
 
-    def test_high_bytes_skipped(self):
+    def test_high_bytes_skipped(self) -> None:
         x = bytes([0, 0, 0, ord("A"), 200, ord("B")])
         assert convert_other(x) == "AB"
 
-    def test_leading_trailing_stripped(self):
+    def test_leading_trailing_stripped(self) -> None:
         # Result '.A.' → strip('.|') → 'A'
         x = bytes([0, 0, 0, ord("."), ord("A"), ord(".")])
         assert convert_other(x) == "A"
 
-    def test_empty_payload_returns_unknown(self):
+    def test_empty_payload_returns_unknown(self) -> None:
         # x[3:] is empty
         x = bytes([0, 0, 0])
         assert convert_other(x) == "Unknown"
 
-    def test_empty_bytes_returns_unknown(self):
+    def test_empty_bytes_returns_unknown(self) -> None:
         assert convert_other(b"") == "Unknown"
 
-    def test_none_returns_unknown(self):
+    def test_none_returns_unknown(self) -> None:
         assert convert_other(None) == "Unknown"
 
 
 class TestPythonControlDuration:
-    def test_valid_duration(self):
+    def test_valid_duration(self) -> None:
         assert python_control_duration("60") == 60
 
-    def test_minimum_valid(self):
+    def test_minimum_valid(self) -> None:
         assert python_control_duration("1") == 1
 
-    def test_maximum_valid(self):
+    def test_maximum_valid(self) -> None:
         assert python_control_duration("3600") == 3600
 
-    def test_zero_rejected(self):
+    def test_zero_rejected(self) -> None:
         assert python_control_duration("0") is False
 
-    def test_above_maximum_rejected(self):
+    def test_above_maximum_rejected(self) -> None:
         assert python_control_duration("3601") is False
 
-    def test_non_numeric_rejected(self):
+    def test_non_numeric_rejected(self) -> None:
         assert python_control_duration("abc") is False
 
-    def test_negative_rejected(self):
+    def test_negative_rejected(self) -> None:
         # isnumeric() returns False for strings with a leading '-'
         assert python_control_duration("-1") is False
 
-    def test_empty_string_rejected(self):
+    def test_empty_string_rejected(self) -> None:
         assert python_control_duration("") is False
 
-    def test_none_rejected(self):
+    def test_none_rejected(self) -> None:
         # AttributeError on None.isnumeric() is caught internally
         assert python_control_duration(None) is False
 
 
 class TestGetQIpComm:
-    def test_pfb_addr_key_present(self):
+    def test_pfb_addr_key_present(self) -> None:
         kwargs = {"pfb_addr": "1.2.3.4"}
         assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4"
 
-    def test_fallback_to_repinfo_addr(self):
+    def test_fallback_to_repinfo_addr(self) -> None:
         kwargs = {"repinfo": types.SimpleNamespace(addr="5.6.7.8")}
         assert pfb_unbound.get_q_ip_comm(kwargs) == "5.6.7.8"
 
-    def test_pfb_addr_takes_precedence(self):
+    def test_pfb_addr_takes_precedence(self) -> None:
         kwargs = {"pfb_addr": "1.2.3.4", "repinfo": types.SimpleNamespace(addr="5.6.7.8")}
         assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4"
 
-    def test_empty_kwargs_returns_unknown(self):
+    def test_empty_kwargs_returns_unknown(self) -> None:
         assert pfb_unbound.get_q_ip_comm({}) == "Unknown"
 
-    def test_none_kwargs_returns_unknown(self):
+    def test_none_kwargs_returns_unknown(self) -> None:
         assert pfb_unbound.get_q_ip_comm(None) == "Unknown"
 
-    def test_repinfo_empty_addr_returns_unknown(self):
+    def test_repinfo_empty_addr_returns_unknown(self) -> None:
         kwargs = {"repinfo": types.SimpleNamespace(addr="")}
         assert pfb_unbound.get_q_ip_comm(kwargs) == "Unknown"
 
 
 class TestLogEntry:
-    def test_normal_write(self, tmp_path):
+    def test_normal_write(self, tmp_path: Any) -> None:
         log = tmp_path / "dnsbl.log"
         pfb_unbound._log_entry_direct("a,b,c", str(log))
         assert log.read_text() == "a,b,c\n"
 
-    def test_multiple_calls_accumulate(self, tmp_path):
+    def test_multiple_calls_accumulate(self, tmp_path: Any) -> None:
         log = tmp_path / "dnsbl.log"
         pfb_unbound._log_entry_direct("line1", str(log))
         pfb_unbound._log_entry_direct("line2", str(log))
         assert log.read_text() == "line1\nline2\n"
 
-    def test_file_created_when_missing(self, tmp_path):
+    def test_file_created_when_missing(self, tmp_path: Any) -> None:
         log = tmp_path / "sub" / "unified.log"
         log.parent.mkdir()
         assert not log.exists()
@@ -291,7 +290,7 @@ class TestDbSubsystem:
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         return db
 
-    def test_validate_creates_table_and_seed_row(self, tmp_path):
+    def test_validate_creates_table_and_seed_row(self, tmp_path: Any) -> None:
         db = self._resolver(tmp_path)
         assert pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER) is True
         import sqlite3
@@ -302,14 +301,14 @@ class TestDbSubsystem:
         finally:
             con.close()
 
-    def test_resolver_counter_accumulates(self, tmp_path):
+    def test_resolver_counter_accumulates(self, tmp_path: Any) -> None:
         self._resolver(tmp_path)
         for _ in range(5):
             pfb_unbound.pfb_db_enqueue(("resolver",))
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 5
 
-    def test_resolver_counting_gated_by_flag(self, tmp_path):
+    def test_resolver_counting_gated_by_flag(self, tmp_path: Any) -> None:
         db = str(tmp_path / "resolver.sqlite")
         pfb_unbound.pfb["pfb_py_resolver"] = db
         pfb_unbound.pfb["sqlite3_resolver_con"] = False
@@ -317,7 +316,7 @@ class TestDbSubsystem:
         # Gated off -> no connection opened, nothing written.
         assert pfb_unbound.DB_RESOLVER not in pfb_unbound._db_conns
 
-    def test_relative_increment_survives_concurrent_reset(self, tmp_path):
+    def test_relative_increment_survives_concurrent_reset(self, tmp_path: Any) -> None:
         db = self._resolver(tmp_path)
         pfb_unbound.pfb_db_enqueue(("resolver",))
         pfb_unbound.pfb_db_enqueue(("resolver",))
@@ -334,7 +333,7 @@ class TestDbSubsystem:
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
 
-    def test_dnsbl_counter_per_group(self, tmp_path):
+    def test_dnsbl_counter_per_group(self, tmp_path: Any) -> None:
         db = str(tmp_path / "dnsbl.sqlite")
         pfb_unbound.pfb["pfb_py_dnsbl"] = db
         pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
@@ -349,7 +348,7 @@ class TestDbSubsystem:
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0] == 1
 
-    def test_cache_inserts_preserve_order(self, tmp_path):
+    def test_cache_inserts_preserve_order(self, tmp_path: Any) -> None:
         db = str(tmp_path / "cache.sqlite")
         pfb_unbound.pfb["pfb_py_cache"] = db
         for d in ["a.com", "b.com", "a.com"]:
@@ -358,7 +357,7 @@ class TestDbSubsystem:
         rows = [r[0] for r in con.execute("SELECT domain FROM dnsblcache").fetchall()]
         assert rows == ["a.com", "b.com", "a.com"]
 
-    def test_reconnect_after_db_removed(self, tmp_path):
+    def test_reconnect_after_db_removed(self, tmp_path: Any) -> None:
         # pfb removes a DB file underneath us (init / write-error path); the next
         # write must transparently reconnect, re-create the table, and not lose
         # the subsequent op.
@@ -373,7 +372,7 @@ class TestDbSubsystem:
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
 
-    def test_worker_batches_and_flushes(self, tmp_path):
+    def test_worker_batches_and_flushes(self, tmp_path: Any) -> None:
         import queue as _queue
         import threading as _threading
 
@@ -398,7 +397,7 @@ class TestDbConcurrencyAndPerf:
     """ADR-03 P3: validate WAL coexistence with a concurrent (PHP-style) writer and
     that the persistent connection actually eliminates per-call connects."""
 
-    def test_wal_concurrent_writers_no_lock(self, tmp_path):
+    def test_wal_concurrent_writers_no_lock(self, tmp_path: Any) -> None:
         import sqlite3
         import threading
 
@@ -442,7 +441,7 @@ class TestDbConcurrencyAndPerf:
         # Every increment from both writers was applied (relative += 1, no clobber).
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 2 * n
 
-    def test_persistent_connection_single_connect(self, tmp_path, monkeypatch):
+    def test_persistent_connection_single_connect(self, tmp_path: Any, monkeypatch: Any) -> None:
         import sqlite3
 
         db = str(tmp_path / "resolver.sqlite")
@@ -479,7 +478,7 @@ class TestLogging:
         pfb_unbound.pfb_setup_logging()
         return paths
 
-    def test_pipeline_writes_exact_lines_to_correct_files(self, tmp_path, monkeypatch):
+    def test_pipeline_writes_exact_lines_to_correct_files(self, tmp_path: Any, monkeypatch: Any) -> None:
         dnsbl, dns_reply, unified = self._setup(tmp_path, monkeypatch)
         pfb_unbound.pfb_log(dnsbl, "a.com,blocked")
         pfb_unbound.pfb_log(dnsbl, "b.com,100%match")  # literal % must not be formatted
@@ -494,14 +493,14 @@ class TestLogging:
         with open(dns_reply) as f:
             assert f.read() == "r-1\n"
 
-    def test_fallback_direct_append_when_no_pipeline(self, tmp_path):
+    def test_fallback_direct_append_when_no_pipeline(self, tmp_path: Any) -> None:
         log = str(tmp_path / "x.log")
         pfb_unbound.pfb_log(log, "direct-1")
         pfb_unbound.pfb_log(log, "direct-2")
         with open(log) as f:
             assert f.read() == "direct-1\ndirect-2\n"
 
-    def test_watched_handler_reopens_after_external_rotation(self, tmp_path, monkeypatch):
+    def test_watched_handler_reopens_after_external_rotation(self, tmp_path: Any, monkeypatch: Any) -> None:
         import os
 
         dnsbl = self._setup(tmp_path, monkeypatch)[0]
@@ -519,20 +518,20 @@ class TestLogging:
 
 
 class TestGetRepTtl:
-    def test_ttl_present(self):
+    def test_ttl_present(self) -> None:
         rep = types.SimpleNamespace(ttl=300)
         assert pfb_unbound.get_rep_ttl(rep) == "300"
 
-    def test_none_rep_returns_unk(self):
+    def test_none_rep_returns_unk(self) -> None:
         assert pfb_unbound.get_rep_ttl(None) == "Unk"
 
-    def test_falsy_ttl_returns_unk(self):
+    def test_falsy_ttl_returns_unk(self) -> None:
         rep = types.SimpleNamespace(ttl=0)
         assert pfb_unbound.get_rep_ttl(rep) == "Unk"
 
 
 class TestPythonControlThread:
-    def test_active_thread_found(self):
+    def test_active_thread_found(self) -> None:
         import threading
 
         stop = threading.Event()
@@ -544,52 +543,52 @@ class TestPythonControlThread:
             stop.set()
             t.join()
 
-    def test_unknown_thread_returns_false(self):
+    def test_unknown_thread_returns_false(self) -> None:
         assert pfb_unbound.python_control_thread("nonexistent-thread-xyz") is False
 
 
 class TestGetQNameQstate:
-    def test_primary_strips_trailing_dot(self):
+    def test_primary_strips_trailing_dot(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str="example.com."), return_msg=None)
         assert pfb_unbound.get_q_name_qstate(qstate) == "example.com"
 
-    def test_fallback_to_return_msg(self):
+    def test_fallback_to_return_msg(self) -> None:
         qstate = types.SimpleNamespace(
             qinfo=types.SimpleNamespace(qname_str="   "),
             return_msg=types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str="fallback.com.")),
         )
         assert pfb_unbound.get_q_name_qstate(qstate) == "fallback.com"
 
-    def test_both_empty_returns_unknown(self):
+    def test_both_empty_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str=""), return_msg=None)
         assert pfb_unbound.get_q_name_qstate(qstate) == "Unknown"
 
 
 class TestGetQNameQinfo:
-    def test_present_stripped(self):
+    def test_present_stripped(self) -> None:
         qinfo = types.SimpleNamespace(qname_str="example.com.")
         assert pfb_unbound.get_q_name_qinfo(qinfo) == "example.com"
 
-    def test_whitespace_returns_unknown(self):
+    def test_whitespace_returns_unknown(self) -> None:
         qinfo = types.SimpleNamespace(qname_str="   ")
         assert pfb_unbound.get_q_name_qinfo(qinfo) == "Unknown"
 
-    def test_none_returns_unknown(self):
+    def test_none_returns_unknown(self) -> None:
         assert pfb_unbound.get_q_name_qinfo(None) == "Unknown"
 
 
 class TestGetQType:
-    def test_prefers_qstate(self):
+    def test_prefers_qstate(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str="A"))
         qinfo = types.SimpleNamespace(qtype_str="AAAA")
         assert pfb_unbound.get_q_type(qstate, qinfo) == "A"
 
-    def test_falls_back_to_qinfo(self):
+    def test_falls_back_to_qinfo(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str=""))
         qinfo = types.SimpleNamespace(qtype_str="AAAA")
         assert pfb_unbound.get_q_type(qstate, qinfo) == "AAAA"
 
-    def test_both_none_returns_unknown(self):
+    def test_both_none_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str=""))
         qinfo = types.SimpleNamespace(qtype_str="")
         assert pfb_unbound.get_q_type(qstate, qinfo) == "Unknown"
@@ -619,7 +618,7 @@ class TestGetDetailsDnsblQtype:
             return_msg=None,
         )
 
-    def _prep(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    def _prep(self, monkeypatch: Any) -> list[tuple[str, str]]:
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
@@ -636,14 +635,14 @@ class TestGetDetailsDnsblQtype:
         # get_details_dnsbl writes the same csv_line to dnsbl.log and unified.log.
         return [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
 
-    def test_qtype_is_trailing_log_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_qtype_is_trailing_log_field(self, monkeypatch: Any) -> None:
         lines = self._prep(monkeypatch)
         self._block("AAAA")
         (fields,) = self._dnsbl_fields(lines)
         assert fields[0] == "DNSBL-python"
         assert fields[10] == "AAAA"  # query type appended after dupEntry
 
-    def test_dual_stack_pair_both_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_dual_stack_pair_both_count(self, monkeypatch: Any) -> None:
         # A then AAAA for the SAME name: the old qtype-blind dedup collapsed the
         # AAAA into a duplicate of the A. Now both are non-duplicate ("+").
         lines = self._prep(monkeypatch)
@@ -653,7 +652,7 @@ class TestGetDetailsDnsblQtype:
         assert (a_fields[9], a_fields[10]) == ("+", "A")
         assert (aaaa_fields[9], aaaa_fields[10]) == ("+", "AAAA")
 
-    def test_same_qtype_repeat_is_duplicate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_same_qtype_repeat_is_duplicate(self, monkeypatch: Any) -> None:
         # A true consecutive repeat (same name AND same record type) still dedups.
         lines = self._prep(monkeypatch)
         self._block("AAAA")
@@ -664,7 +663,7 @@ class TestGetDetailsDnsblQtype:
 
 
 class TestGetOType:
-    def test_return_msg_rrset_branch(self):
+    def test_return_msg_rrset_branch(self) -> None:
         rk = types.SimpleNamespace(type_str="A")
         rrset = types.SimpleNamespace(rk=rk)
         qstate = types.SimpleNamespace(
@@ -673,41 +672,41 @@ class TestGetOType:
         )
         assert pfb_unbound.get_o_type(qstate, None) == "A"
 
-    def test_qinfo_qtype_branch(self):
+    def test_qinfo_qtype_branch(self) -> None:
         qstate = types.SimpleNamespace(return_msg=None, qinfo=types.SimpleNamespace(qtype_str="AAAA"))
         assert pfb_unbound.get_o_type(qstate, None) == "AAAA"
 
-    def test_rep_branch(self):
+    def test_rep_branch(self) -> None:
         rk = types.SimpleNamespace(type_str="TXT")
         rep = types.SimpleNamespace(rrsets=[types.SimpleNamespace(rk=rk)])
         qstate = types.SimpleNamespace(return_msg=None, qinfo=types.SimpleNamespace(qtype_str=""))
         assert pfb_unbound.get_o_type(qstate, rep) == "TXT"
 
-    def test_no_qstate_returns_unknown(self):
+    def test_no_qstate_returns_unknown(self) -> None:
         assert pfb_unbound.get_o_type(None, None) == "Unknown"
 
 
 class TestGetTld:
-    def test_multilabel(self):
+    def test_multilabel(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "example", "com"]))
         assert pfb_unbound.get_tld(qstate) == "example"
 
-    def test_single_label_returns_empty(self):
+    def test_single_label_returns_empty(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["com"]))
         assert pfb_unbound.get_tld(qstate) == ""
 
-    def test_none_qstate_returns_empty(self):
+    def test_none_qstate_returns_empty(self) -> None:
         assert pfb_unbound.get_tld(None) == ""
 
 
 class TestGetQIp:
-    def test_first_node_with_addr_wins(self):
+    def test_first_node_with_addr_wins(self) -> None:
         node2 = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr="2.2.2.2"), next=None)
         node1 = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr="1.1.1.1"), next=node2)
         qstate = types.SimpleNamespace(mesh_info=types.SimpleNamespace(reply_list=node1))
         assert pfb_unbound.get_q_ip(qstate) == "1.1.1.1"
 
-    def test_no_reply_list_returns_unknown(self):
+    def test_no_reply_list_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(mesh_info=types.SimpleNamespace(reply_list=None))
         assert pfb_unbound.get_q_ip(qstate) == "Unknown"
 
@@ -738,7 +737,7 @@ RR_TXT = 16
 
 
 class TestOperateNoAAAA:
-    def test_exact_match_blocks(self, monkeypatch):
+    def test_exact_match_blocks(self, monkeypatch: Any) -> None:
         add_noaaaa("example.com", wildcard=False)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -746,7 +745,7 @@ class TestOperateNoAAAA:
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert qstate.return_rcode == RCODE_NOERROR
 
-    def test_wildcard_blocks_subdomain_and_caches(self):
+    def test_wildcard_blocks_subdomain_and_caches(self) -> None:
         add_noaaaa("example.com", wildcard=True)
         qstate = make_qstate("sub.example.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -762,20 +761,20 @@ class TestOperateNoAAAA:
         assert rcd2 is True
         assert qstate2.ext_state[0] == MODULE_FINISHED
 
-    def test_excluded_domain_not_blocked(self):
+    def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
         pfb_unbound.excludeAAAADB.append("example.com")
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
-    def test_non_aaaa_skips_logic(self):
+    def test_non_aaaa_skips_logic(self) -> None:
         add_noaaaa("example.com", wildcard=False)
         qstate = make_qstate("example.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
-    def test_no_match_adds_to_exclude(self):
+    def test_no_match_adds_to_exclude(self) -> None:
         add_noaaaa("other.com", wildcard=True)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -790,7 +789,7 @@ class TestOperateDnsbl:
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
 
-    def test_data_lookup_blocks_with_dnsbl_ipv4(self, monkeypatch):
+    def test_data_lookup_blocks_with_dnsbl_ipv4(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -802,7 +801,7 @@ class TestOperateDnsbl:
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
 
-    def test_zone_lookup_matches_subdomain(self, monkeypatch):
+    def test_zone_lookup_matches_subdomain(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_zone("example.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -811,7 +810,7 @@ class TestOperateDnsbl:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
 
-    def test_whitelist_override_not_blocked(self, monkeypatch):
+    def test_whitelist_override_not_blocked(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -821,7 +820,7 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
         assert "evil.com" in pfb_unbound.excludeDB
 
-    def test_regex_block(self, monkeypatch):
+    def test_regex_block(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         pfb_unbound.pfb["regexDB"] = True
         pfb_unbound.regexDB["bad-pattern"] = re.compile(r"evil")
@@ -832,7 +831,7 @@ class TestOperateDnsbl:
         entry = pfb_unbound.dnsblDB.get("evil-domain.com")
         assert entry["group"] == "DNSBL_Regex"
 
-    def test_excludedb_short_circuit(self, monkeypatch):
+    def test_excludedb_short_circuit(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -841,7 +840,7 @@ class TestOperateDnsbl:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
-    def test_group_policy_bypass(self, monkeypatch):
+    def test_group_policy_bypass(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -870,7 +869,7 @@ class TestOperateDnsbl:
             qinfo=types.SimpleNamespace(qname_str=orig_qname, qname_list=orig_qname.rstrip(".").split(".")),
         )
 
-    def test_cname_target_blocks_and_marks_original(self, monkeypatch):
+    def test_cname_target_blocks_and_marks_original(self, monkeypatch: Any) -> None:
         # CNAME validation ON: domain A (orig.com) CNAMEs to a BLOCKED target B
         # (evil-cname.com, on the blocklist) -> A is blocked. The block is recorded
         # against the ORIGINAL name, the b_type gains the _CNAME suffix, and the reply
@@ -897,7 +896,7 @@ class TestOperateDnsbl:
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("orig.com. ") for a in answers)
 
-    def test_cname_disabled_original_not_blocked(self, monkeypatch):
+    def test_cname_disabled_original_not_blocked(self, monkeypatch: Any) -> None:
         # CNAME validation OFF (the default): the SAME setup -- A (orig.com) CNAMEs to
         # the BLOCKED target B (evil-cname.com, still on the blocklist) -- but the
         # chain is NOT walked, so only A itself is validated, and A is not listed ->
@@ -916,7 +915,7 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
         assert "orig.com" not in pfb_unbound.dnsblDB
 
-    def test_cname_target_blocked_when_queried_directly(self, monkeypatch):
+    def test_cname_target_blocked_when_queried_directly(self, monkeypatch: Any) -> None:
         # The ERRATA invariant: B (the CNAME target) is genuinely on the blocklist in
         # BOTH scenarios. A DIRECT query for B is blocked regardless of python_cname --
         # the with/without difference is ONLY whether A (which CNAMEs to B) is blocked.
@@ -930,7 +929,7 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
         assert "evil-cname.com" in pfb_unbound.dnsblDB
 
-    def test_block_sets_return_msg_exactly_once(self, monkeypatch):
+    def test_block_sets_return_msg_exactly_once(self, monkeypatch: Any) -> None:
         # The DNSBL block path previously called msg.set_return_msg(qstate)
         # twice (standalone + inside the guard); it must run exactly once.
         self._enable(monkeypatch)
@@ -952,13 +951,13 @@ class TestOperateDnsbl:
 
 
 class TestOperateEvents:
-    def test_moddone_logs_and_finishes(self):
+    def test_moddone_logs_and_finishes(self) -> None:
         qstate = make_qstate("example.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
 
-    def test_unknown_event_returns_error(self):
+    def test_unknown_event_returns_error(self) -> None:
         qstate = make_qstate("example.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, 99, qstate, None)
         assert rcd is True
@@ -975,7 +974,7 @@ class TestGetDetailsReplyNoaaaa:
         qstate.return_msg = None
         return qstate
 
-    def test_reply_x_aaaa_exact_noaaaa_proceeds(self, monkeypatch):
+    def test_reply_x_aaaa_exact_noaaaa_proceeds(self, monkeypatch: Any) -> None:
         calls = []
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
@@ -986,7 +985,7 @@ class TestGetDetailsReplyNoaaaa:
         # Gate passed -> proceeds past the reply-x gate to the resolver counter.
         assert len(calls) == 1
 
-    def test_reply_x_aaaa_without_noaaaa_short_circuits(self, monkeypatch):
+    def test_reply_x_aaaa_without_noaaaa_short_circuits(self, monkeypatch: Any) -> None:
         calls = []
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
@@ -1003,45 +1002,45 @@ class TestGetDetailsReplyNoaaaa:
 
 
 class TestIterDomainSuffixes:
-    def test_single_label(self):
+    def test_single_label(self) -> None:
         assert list(iter_domain_suffixes("com")) == ["com"]
 
-    def test_two_labels(self):
+    def test_two_labels(self) -> None:
         assert list(iter_domain_suffixes("example.com")) == ["example.com", "com"]
 
-    def test_three_labels(self):
+    def test_three_labels(self) -> None:
         assert list(iter_domain_suffixes("sub.example.com")) == ["sub.example.com", "example.com", "com"]
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         # Empty string has no dots; yields one item (the empty string itself)
         assert list(iter_domain_suffixes("")) == [""]
 
 
 class TestFindZoneMatch:
-    def test_exact_self_match(self):
+    def test_exact_self_match(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("example.com", zone_db)
         assert matched == "example.com"
         assert entry == {"log": "1", "index": 0}
 
-    def test_subdomain_matches_parent_zone(self):
+    def test_subdomain_matches_parent_zone(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("sub.example.com", zone_db)
         assert matched == "example.com"
         assert entry is not None
 
-    def test_deep_subdomain_matches(self):
+    def test_deep_subdomain_matches(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("a.b.example.com", zone_db)
         assert matched == "example.com"
 
-    def test_no_match_returns_none_none(self):
+    def test_no_match_returns_none_none(self) -> None:
         zone_db = {"evil.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("good.com", zone_db)
         assert matched is None
         assert entry is None
 
-    def test_data_exact_not_wildcard(self):
+    def test_data_exact_not_wildcard(self) -> None:
         # dataDB uses exact only; simulate: zone_db contains 'evil.com'
         # but query is 'x.evil.com' — zone DOES match (wildcard incl. self),
         # while a separate exact-only check would not.
@@ -1050,13 +1049,13 @@ class TestFindZoneMatch:
         matched, _ = find_zone_match("x.evil.com", zone_db)
         assert matched == "evil.com"
 
-    def test_matched_parent_string_correct(self):
+    def test_matched_parent_string_correct(self) -> None:
         # b_eval = matched parent string; must be the zone key, not the query name
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, _ = find_zone_match("deep.sub.example.com", zone_db)
         assert matched == "example.com"
 
-    def test_most_specific_match_wins(self):
+    def test_most_specific_match_wins(self) -> None:
         # iter_domain_suffixes walks q_name → ... TLD, so first hit is most specific
         zone_db = {
             "sub.example.com": {"log": "1", "index": 1},
@@ -1068,34 +1067,34 @@ class TestFindZoneMatch:
 
 
 class TestWhitelistCheckDomain:
-    def test_exact_match(self):
+    def test_exact_match(self) -> None:
         white_db: dict = {"allowed.com": False}
         assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is True
 
-    def test_no_match(self):
+    def test_no_match(self) -> None:
         white_db: dict = {"other.com": False}
         assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is False
 
-    def test_www_strip(self):
+    def test_www_strip(self) -> None:
         # "www.allowed.com" → strips "www." → checks "allowed.com"
         white_db: dict = {"allowed.com": False}
         assert whitelist_check_domain("www.allowed.com", white_db, tld_seg=2) is True
 
-    def test_www_strip_not_triggered_for_non_www(self):
+    def test_www_strip_not_triggered_for_non_www(self) -> None:
         white_db: dict = {"allowed.com": False}
         assert whitelist_check_domain("sub.allowed.com", white_db, tld_seg=2) is False
 
-    def test_suffix_walk_at_tld_seg_boundary_matches(self):
+    def test_suffix_walk_at_tld_seg_boundary_matches(self) -> None:
         # "sub.evil.com": suffix walk starts at "evil.com" (x=2, tld_seg=2) → match
         white_db: dict = {"evil.com": True}
         assert whitelist_check_domain("sub.evil.com", white_db, tld_seg=2) is True
 
-    def test_suffix_walk_below_tld_seg_does_not_match(self):
+    def test_suffix_walk_below_tld_seg_does_not_match(self) -> None:
         # "evil.com": suffix walk starts at "com" (x=1, tld_seg=2) → 1 < 2 → no match
         white_db: dict = {"com": True}
         assert whitelist_check_domain("evil.com", white_db, tld_seg=2) is False
 
-    def test_suffix_walk_with_high_tld_seg_blocks_intermediate(self):
+    def test_suffix_walk_with_high_tld_seg_blocks_intermediate(self) -> None:
         # "a.b.example.com" with tld_seg=3:
         #   suffix walk q starts at "b.example.com", x counts down from 3:
         #   x=3 >= 3 → check "b.example.com" (not in db)
@@ -1103,41 +1102,41 @@ class TestWhitelistCheckDomain:
         white_db: dict = {"example.com": True}
         assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is False
 
-    def test_suffix_walk_respects_tld_seg_allows_higher(self):
+    def test_suffix_walk_respects_tld_seg_allows_higher(self) -> None:
         # Same domain but entry is at "b.example.com" (x=3 >= 3) → match
         white_db: dict = {"b.example.com": True}
         assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is True
 
 
 class TestFindNoaaaaWildcardParent:
-    def test_exact_name_not_matched_by_wildcard_fn(self):
+    def test_exact_name_not_matched_by_wildcard_fn(self) -> None:
         # find_noaaaa_wildcard_parent starts from PARENT, so self is never checked
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("example.com", noaaaa_db)
         assert result is None
 
-    def test_direct_parent_matched(self):
+    def test_direct_parent_matched(self) -> None:
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
         assert result == "example.com"
 
-    def test_grandparent_matched(self):
+    def test_grandparent_matched(self) -> None:
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("a.b.example.com", noaaaa_db)
         assert result == "example.com"
 
-    def test_no_match_returns_none(self):
+    def test_no_match_returns_none(self) -> None:
         noaaaa_db: dict = {"other.com": True}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
         assert result is None
 
-    def test_wildcard_false_value_not_matched(self):
+    def test_wildcard_false_value_not_matched(self) -> None:
         # noaaaa_db.get(q) is truthy check; wildcard=False means value is False → not matched
         noaaaa_db: dict = {"example.com": False}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
         assert result is None
 
-    def test_single_label_parent_not_checked(self):
+    def test_single_label_parent_not_checked(self) -> None:
         # "sub.com": parent = "com", but loop range(0, 0, -1) is empty → no check
         noaaaa_db: dict = {"com": True}
         result = find_noaaaa_wildcard_parent("sub.com", noaaaa_db)
@@ -1150,50 +1149,50 @@ def _noaaaa_db(entries: dict[str, bool]) -> dict[str, bool]:
 
 
 class TestEvaluateNoaaaa:
-    def test_exact_match_no_wildcard_flag(self):
+    def test_exact_match_no_wildcard_flag(self) -> None:
         # wildcard=False → exact branch fires on presence (get(name) is not None)
         db = _noaaaa_db({"example.com": False})
         assert evaluate_noaaaa("example.com", db) is True
 
-    def test_exact_match_wildcard_flag(self):
+    def test_exact_match_wildcard_flag(self) -> None:
         db = _noaaaa_db({"example.com": True})
         assert evaluate_noaaaa("example.com", db) is True
 
-    def test_wildcard_parent_matches_subdomain(self):
+    def test_wildcard_parent_matches_subdomain(self) -> None:
         db = _noaaaa_db({"example.com": True})
         assert evaluate_noaaaa("sub.example.com", db) is True
 
-    def test_wildcard_false_does_not_match_subdomain(self):
+    def test_wildcard_false_does_not_match_subdomain(self) -> None:
         # wildcard=False → wildcard-parent branch skips it (truthy check)
         db = _noaaaa_db({"example.com": False})
         assert evaluate_noaaaa("sub.example.com", db) is False
 
-    def test_no_match(self):
+    def test_no_match(self) -> None:
         db = _noaaaa_db({"other.com": True})
         assert evaluate_noaaaa("example.com", db) is False
 
-    def test_self_not_matched_by_wildcard_branch(self):
+    def test_self_not_matched_by_wildcard_branch(self) -> None:
         # wildcard branch is parent-only; exact branch handles self
         db = _noaaaa_db({"example.com": True})
         assert evaluate_noaaaa("example.com", db) is True
 
 
 class TestHstsCheckDomain:
-    def test_tld_in_hsts_tlds_returns_hsts_tld(self):
+    def test_tld_in_hsts_tlds_returns_hsts_tld(self) -> None:
         hsts_db: dict = {}
         assert hsts_check_domain("example.app", hsts_db, ("app",), "app") == (True, "HSTS_TLD")
 
-    def test_tld_not_in_hsts_tlds_falls_through(self):
+    def test_tld_not_in_hsts_tlds_falls_through(self) -> None:
         hsts_db: dict = {}
         result = hsts_check_domain("example.com", hsts_db, ("app",), "com")
         assert result == (False, "Python")
 
-    def test_exact_domain_in_hsts_db(self):
+    def test_exact_domain_in_hsts_db(self) -> None:
         hsts_db: dict = {"example.com": 0}
         result = hsts_check_domain("example.com", hsts_db, (), "com")
         assert result == (True, "HSTS")
 
-    def test_suffix_walk_hits_parent(self):
+    def test_suffix_walk_hits_parent(self) -> None:
         # "sub.example.com" (2 dots): range(3,0,-2) → [3, 1]
         # iter 0: check "sub.example.com" (miss), step → "example.com"
         # iter 1: check "example.com" (hit)
@@ -1201,7 +1200,7 @@ class TestHstsCheckDomain:
         result = hsts_check_domain("sub.example.com", hsts_db, (), "com")
         assert result == (True, "HSTS")
 
-    def test_stride_2_skips_alternate_label(self):
+    def test_stride_2_skips_alternate_label(self) -> None:
         # "a.b.c.d" (3 dots): range(4,0,-2) → 2 iterations
         # The loop runs twice: q starts at "a.b.c.d", then steps to "b.c.d".
         # Positions checked: "a.b.c.d" (iter 0), "b.c.d" (iter 1).
@@ -1211,29 +1210,29 @@ class TestHstsCheckDomain:
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
         assert result == (False, "Python")
 
-    def test_stride_2_hits_second_position(self):
+    def test_stride_2_hits_second_position(self) -> None:
         # The second position checked is "b.c.d" (after one step from "a.b.c.d").
         # A stride-1 walk would also check "c.d" and "d"; stride-2 stops after "b.c.d".
         hsts_db: dict = {"b.c.d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
         assert result == (True, "HSTS")
 
-    def test_no_match_returns_python(self):
+    def test_no_match_returns_python(self) -> None:
         hsts_db: dict = {"other.com": 0}
         result = hsts_check_domain("example.com", hsts_db, (), "com")
         assert result == (False, "Python")
 
 
 class TestResolveFeedGroup:
-    def test_hit_returns_feed_and_group(self):
+    def test_hit_returns_feed_and_group(self) -> None:
         fgidb = {0: {"feed": "MyFeed", "group": "MyGroup"}}
         assert resolve_feed_group(0, fgidb) == ("MyFeed", "MyGroup")
 
-    def test_miss_returns_unknown_unknown(self):
+    def test_miss_returns_unknown_unknown(self) -> None:
         fgidb: dict = {}
         assert resolve_feed_group(99, fgidb) == ("Unknown", "Unknown")
 
-    def test_none_index_returns_unknown(self):
+    def test_none_index_returns_unknown(self) -> None:
         fgidb = {0: {"feed": "F", "group": "G"}}
         assert resolve_feed_group(None, fgidb) == ("Unknown", "Unknown")
 
@@ -1258,7 +1257,7 @@ class TestPureMatcherProperties:
         parts = [rng.choice(self.LABELS) for _ in range(n - 1)] + [rng.choice(self.TLDS)]
         return ".".join(parts)
 
-    def test_find_zone_match_vs_brute_force(self):
+    def test_find_zone_match_vs_brute_force(self) -> None:
         rng = random.Random(self.SEED)
         zone_db: dict = {}
         entries = [self._rand_domain(rng) for _ in range(self.N_ENTRIES)]
@@ -1280,7 +1279,7 @@ class TestPureMatcherProperties:
             matched, _ = find_zone_match(q, zone_db)
             assert matched == expected, f"find_zone_match({q!r}) -> {matched!r}, expected {expected!r}"
 
-    def test_whitelist_check_domain_vs_brute_force(self):
+    def test_whitelist_check_domain_vs_brute_force(self) -> None:
         rng = random.Random(self.SEED + 1)
         white_db: dict = {}
         entries = [self._rand_domain(rng) for _ in range(self.N_ENTRIES)]
@@ -1308,7 +1307,7 @@ class TestPureMatcherProperties:
             result = whitelist_check_domain(q, white_db, tld_seg)
             assert result == expected, f"whitelist_check_domain({q!r}) -> {result}, expected {expected}"
 
-    def test_evaluate_noaaaa_vs_brute_force(self):
+    def test_evaluate_noaaaa_vs_brute_force(self) -> None:
         rng = random.Random(self.SEED + 2)
         noaaaa_db: dict = {}
         entries = [self._rand_domain(rng) for _ in range(self.N_ENTRIES)]
@@ -1381,7 +1380,7 @@ def _make_containers(**overrides):
 
 
 class TestEvaluateDomainGolden:
-    def test_data_hit(self):
+    def test_data_hit(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         fgi_db: dict = {0: {"feed": "BadFeed", "group": "BadGroup"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
@@ -1396,14 +1395,14 @@ class TestEvaluateDomainGolden:
         assert dec.log_type == "1"
         assert dec.null_blocking is False  # log_type="1" and not in_hsts -> null_blocking=False
 
-    def test_data_exact_does_not_match_subdomain(self):
+    def test_data_exact_does_not_match_subdomain(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("sub.evil.com", "sub.evil.com", "com", False, cfg, containers)
         assert dec.is_found is False
 
-    def test_zone_hit_wildcard_incl_self(self):
+    def test_zone_hit_wildcard_incl_self(self) -> None:
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
         fgi_db: dict = {0: {"feed": "ZoneFeed", "group": "ZoneGroup"}}
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
@@ -1419,14 +1418,14 @@ class TestEvaluateDomainGolden:
         assert dec_sub.b_type == "TLD"
         assert dec_sub.b_eval == "example.com"  # matched parent, not query name
 
-    def test_zone_b_eval_is_parent_not_query(self):
+    def test_zone_b_eval_is_parent_not_query(self) -> None:
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
         containers = _make_containers(zoneDB=zone_db)
         cfg = _make_cfg(zoneDB=True)
         dec = evaluate_domain("deep.sub.example.com", "deep.sub.example.com", "com", False, cfg, containers)
         assert dec.b_eval == "example.com"
 
-    def test_tld_allow(self):
+    def test_tld_allow(self) -> None:
         cfg = _make_cfg(python_tld=True, python_tlds=["com", "net"])
         containers = _make_containers()
         # "com" NOT in allowed list → block
@@ -1435,13 +1434,13 @@ class TestEvaluateDomainGolden:
         assert dec.feed == "TLD_Allow"
         assert dec.group == "DNSBL_TLD_Allow"
 
-    def test_tld_allow_passthrough_when_tld_allowed(self):
+    def test_tld_allow_passthrough_when_tld_allowed(self) -> None:
         cfg = _make_cfg(python_tld=True, python_tlds=["com"])
         containers = _make_containers()
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
         assert dec.is_found is False
 
-    def test_idn_block(self):
+    def test_idn_block(self) -> None:
         cfg = _make_cfg(python_idn=True)
         containers = _make_containers()
         dec = evaluate_domain("xn--evil.com", "xn--evil.com", "com", False, cfg, containers)
@@ -1449,7 +1448,7 @@ class TestEvaluateDomainGolden:
         assert dec.feed == "IDN"
         assert dec.group == "DNSBL_IDN"
 
-    def test_regex_block(self):
+    def test_regex_block(self) -> None:
         regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
@@ -1458,7 +1457,7 @@ class TestEvaluateDomainGolden:
         assert dec.group == "DNSBL_Regex"
         assert dec.feed == "bad-pattern"
 
-    def test_regex_not_evaluated_for_empty_qname(self):
+    def test_regex_not_evaluated_for_empty_qname(self) -> None:
         # An empty q_name must not be run against the regex set. This preserves
         # the pre-ADR `pfb_regex_match` guard (`if q_name:`); an empty-matching
         # pattern (e.g. r"") would otherwise spuriously flag an empty query.
@@ -1468,7 +1467,7 @@ class TestEvaluateDomainGolden:
         dec = evaluate_domain("", "", "", False, cfg, containers)
         assert dec.is_found is False
 
-    def test_regex_first_matching_pattern_wins(self):
+    def test_regex_first_matching_pattern_wins(self) -> None:
         # Linear scan over regex_db.items() in insertion order; first hit wins.
         regex_db: dict = {"first": re.compile(r"foo"), "second": re.compile(r"bar")}
         cfg = _make_cfg(regexDB=True)
@@ -1477,7 +1476,7 @@ class TestEvaluateDomainGolden:
         assert dec.is_found is True
         assert dec.feed == "first"
 
-    def test_whitelist_override(self):
+    def test_whitelist_override(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         white_db: dict = {"evil.com": False}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
@@ -1489,7 +1488,7 @@ class TestEvaluateDomainGolden:
         # Whitelisted → null_blocking stays True (default), b_type stays "DNSBL"
         assert dec.null_blocking is True
 
-    def test_hsts_null_blocking(self):
+    def test_hsts_null_blocking(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         hsts_db: dict = {"evil.com": 0}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
@@ -1502,7 +1501,7 @@ class TestEvaluateDomainGolden:
         # in_hsts → null_blocking stays True even though log_type="1"
         assert dec.null_blocking is True
 
-    def test_hsts_tld_null_blocking(self):
+    def test_hsts_tld_null_blocking(self) -> None:
         data_db: dict = {"evil.app": {"log": "1", "index": 0}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
@@ -1512,7 +1511,7 @@ class TestEvaluateDomainGolden:
         assert dec.p_type == "HSTS_TLD"
         assert dec.null_blocking is True
 
-    def test_cname_b_type_suffix(self):
+    def test_cname_b_type_suffix(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
@@ -1521,7 +1520,7 @@ class TestEvaluateDomainGolden:
         assert dec.is_found is True
         assert dec.b_type == "DNSBL_CNAME"
 
-    def test_not_found_returns_default_decision(self):
+    def test_not_found_returns_default_decision(self) -> None:
         containers = _make_containers()
         cfg = _make_cfg()
         dec = evaluate_domain("notblocked.com", "notblocked.com", "com", False, cfg, containers)
@@ -1536,14 +1535,14 @@ class TestEvaluateDomainGolden:
         # null_blocking stays True when not found (no DNSBL response sent)
         assert dec.null_blocking is True
 
-    def test_python_blocking_false_skips_data_zone(self):
+    def test_python_blocking_false_skips_data_zone(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True, python_blocking=False)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
         assert dec.is_found is False
 
-    def test_log_type_2_does_not_change_null_blocking(self):
+    def test_log_type_2_does_not_change_null_blocking(self) -> None:
         # log_type != "1" → null_blocking stays True (default)
         data_db: dict = {"evil.com": {"log": "2", "index": 0}}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
@@ -1555,27 +1554,27 @@ class TestEvaluateDomainGolden:
 
 
 class TestEvaluateNoaaaGolden:
-    def test_exact_match(self):
+    def test_exact_match(self) -> None:
         db = _noaaaa_db({"example.com": False})
         assert evaluate_noaaaa("example.com", db) is True
 
-    def test_exact_match_wildcard_true(self):
+    def test_exact_match_wildcard_true(self) -> None:
         db = _noaaaa_db({"example.com": True})
         assert evaluate_noaaaa("example.com", db) is True
 
-    def test_wildcard_parent_matches_child(self):
+    def test_wildcard_parent_matches_child(self) -> None:
         db = _noaaaa_db({"example.com": True})
         assert evaluate_noaaaa("sub.example.com", db) is True
 
-    def test_wildcard_false_parent_does_not_match_child(self):
+    def test_wildcard_false_parent_does_not_match_child(self) -> None:
         db = _noaaaa_db({"example.com": False})
         assert evaluate_noaaaa("sub.example.com", db) is False
 
-    def test_no_entry(self):
+    def test_no_entry(self) -> None:
         db = _noaaaa_db({})
         assert evaluate_noaaaa("example.com", db) is False
 
-    def test_parent_only_semantics_self_requires_exact_key(self):
+    def test_parent_only_semantics_self_requires_exact_key(self) -> None:
         # Wildcard on "example.com" does NOT match self via wildcard branch;
         # exact branch handles self. Both give True but via different paths.
         db = _noaaaa_db({"example.com": True})
@@ -1612,7 +1611,7 @@ class TestADR02PythonOnlyBlocking:
     # Positive-path: python_blocking=True (the post-ADR-02 only state)
     # ------------------------------------------------------------------
 
-    def test_python_blocking_true_enables_data_lookup(self):
+    def test_python_blocking_true_enables_data_lookup(self) -> None:
         # With python_blocking=True (the ADR-02 invariant), an exact domain in
         # dataDB is found and returned as a DNSBL block.
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -1625,7 +1624,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.b_eval == "evil.com"
         assert dec.feed == "TestFeed"
 
-    def test_python_blocking_true_enables_zone_lookup(self):
+    def test_python_blocking_true_enables_zone_lookup(self) -> None:
         # Zone/wildcard lookup is also inside the python_blocking gate.
         # Subdomain of a zone entry → found via zone path.
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
@@ -1638,7 +1637,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.b_eval == "example.com"
         assert dec.feed == "ZoneFeed"
 
-    def test_data_lookup_takes_priority_over_zone_when_both_match(self):
+    def test_data_lookup_takes_priority_over_zone_when_both_match(self) -> None:
         # When a domain appears in BOTH dataDB (exact) and zoneDB (wildcard),
         # data is checked first (evaluate_domain lines 1471 before 1481).
         # After ADR-02 this ordering is always active because python_blocking=True.
@@ -1656,7 +1655,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.feed == "DataFeed"
         assert dec.group == "DataGroup"
 
-    def test_zone_lookup_fires_only_when_data_misses(self):
+    def test_zone_lookup_fires_only_when_data_misses(self) -> None:
         # If a domain is absent from dataDB (even when the flag is enabled) but
         # present in zoneDB, the zone path fires as a fallback.
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
@@ -1669,7 +1668,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.b_type == "TLD"
         assert dec.b_eval == "example.com"
 
-    def test_empty_dbs_with_python_blocking_true_returns_not_found(self):
+    def test_empty_dbs_with_python_blocking_true_returns_not_found(self) -> None:
         # python_blocking=True does not block anything by itself; it only enables
         # the lookup paths.  With no entries in any DB, the result is not_found.
         containers = _make_containers()
@@ -1682,7 +1681,7 @@ class TestADR02PythonOnlyBlocking:
     # Whitelist overrides: both data and zone matches are overridable
     # ------------------------------------------------------------------
 
-    def test_whitelist_overrides_data_match(self):
+    def test_whitelist_overrides_data_match(self) -> None:
         # An exact whitelist entry suppresses a data-path block.
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         white_db: dict = {"evil.com": False}
@@ -1694,7 +1693,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.in_whitelist is True
         assert dec.null_blocking is True  # whitelisted → no DNSBL response
 
-    def test_whitelist_overrides_zone_match(self):
+    def test_whitelist_overrides_zone_match(self) -> None:
         # A whitelisted subdomain is not blocked even when its parent zone entry
         # would otherwise match.  Confirms the whitelist check runs after is_found
         # regardless of which lookup path (data or zone) set is_found.
@@ -1708,7 +1707,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.in_whitelist is True
         assert dec.null_blocking is True
 
-    def test_wildcard_whitelist_overrides_zone_match_for_subdomain(self):
+    def test_wildcard_whitelist_overrides_zone_match_for_subdomain(self) -> None:
         # A wildcard whitelist entry (wildcard=True) covers the domain and its
         # children.  A zone match on the parent should still be suppressed for a
         # whitelisted subdomain.
@@ -1726,7 +1725,7 @@ class TestADR02PythonOnlyBlocking:
     # They run regardless of python_blocking value.
     # ------------------------------------------------------------------
 
-    def test_regex_still_evaluates_when_python_blocking_is_false(self):
+    def test_regex_still_evaluates_when_python_blocking_is_false(self) -> None:
         # Regex matching sits after the `if cfg["python_blocking"]:` block, so it
         # fires even when python_blocking=False.  (In practice, python_blocking is
         # now always True after ADR-02; this test pins that the gate boundary is
@@ -1739,7 +1738,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.group == "DNSBL_Regex"
         assert dec.feed == "bad-pattern"
 
-    def test_idn_still_evaluates_when_python_blocking_is_false(self):
+    def test_idn_still_evaluates_when_python_blocking_is_false(self) -> None:
         # IDN detection is likewise outside the gate.
         containers = _make_containers()
         cfg = _make_cfg(python_idn=True, python_blocking=False)
@@ -1748,7 +1747,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.group == "DNSBL_IDN"
         assert dec.feed == "IDN"
 
-    def test_tld_allow_still_evaluates_when_python_blocking_is_false(self):
+    def test_tld_allow_still_evaluates_when_python_blocking_is_false(self) -> None:
         # TLD-Allow also lives outside the python_blocking gate.
         containers = _make_containers()
         cfg = _make_cfg(python_tld=True, python_tlds=["com", "net"], python_blocking=False)
@@ -1758,7 +1757,7 @@ class TestADR02PythonOnlyBlocking:
         assert dec.group == "DNSBL_TLD_Allow"
         assert dec.feed == "TLD_Allow"
 
-    def test_data_skipped_but_regex_fires_when_python_blocking_false(self):
+    def test_data_skipped_but_regex_fires_when_python_blocking_false(self) -> None:
         # Compound case: python_blocking=False disables data/zone lookups but regex
         # still runs, producing a block via a different code path.
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -1774,7 +1773,7 @@ class TestADR02PythonOnlyBlocking:
     # operate() integration: pfb["python_blocking"] is passed into cfg
     # ------------------------------------------------------------------
 
-    def test_operate_blocks_when_python_blocking_true(self, monkeypatch):
+    def test_operate_blocks_when_python_blocking_true(self, monkeypatch: Any) -> None:
         # ADR-02 guarantee: pfb["python_blocking"] is always True at runtime.
         # operate() copies pfb["python_blocking"] into the cfg dict forwarded to
         # evaluate_domain.  Verify that the end-to-end operate() call blocks a
@@ -1793,7 +1792,7 @@ class TestADR02PythonOnlyBlocking:
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
 
-    def test_operate_does_not_block_when_python_blocking_false(self, monkeypatch):
+    def test_operate_does_not_block_when_python_blocking_false(self, monkeypatch: Any) -> None:
         # Boundary check: with python_blocking=False in the pfb global (the old
         # native-Unbound state, no longer reachable after ADR-02), operate() must
         # not block an exact-data entry — confirming the gate in evaluate_domain is
@@ -1810,7 +1809,7 @@ class TestADR02PythonOnlyBlocking:
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
         assert "adr02-not-blocked.com" in pfb_unbound.excludeDB
 
-    def test_operate_zone_block_with_python_blocking_true(self, monkeypatch):
+    def test_operate_zone_block_with_python_blocking_true(self, monkeypatch: Any) -> None:
         # Wildcard/zone blocking via operate() with the ADR-02 invariant state.
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
