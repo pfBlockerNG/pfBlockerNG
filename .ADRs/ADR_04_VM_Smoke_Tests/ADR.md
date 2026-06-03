@@ -1,6 +1,6 @@
 # ADR-04: End-to-end smoke tests against a real pfSense VM in CI
 
-- **Status:** **Implemented — pending maintainer live-smoke** (2026-06-02; proposed 2026-05-31). All six phases are built and merged on `adr/04`; the automated harness is code-complete. Flips to **Accepted** only after (a) the `smoke.yml` matrix is green on a `gh`-dispatched CI run and (b) the maintainer confirms the §7 manual checklist on a live box.
+- **Status:** **Accepted** (2026-06-03; implemented 2026-06-02; proposed 2026-05-31). The automated harness is code-complete and **both** Accept-gate conditions are met: (a) the `smoke.yml` matrix is green on a `gh`-dispatched CI run — the python-only phase-07 matrix on `next`, run `26895418833` (13 passed / 3 skipped / 1 xfail), landed via PR #32 — and (b) the maintainer confirmed the §7 manual checklist on a live box. Open follow-ups (not Accept blockers): #34 (HSTS override test), #35 (DNSBL-IP dual-stack poll assertion), #31 (NXDOMAIN block-option).
 - **Date:** 2026-05-31
 - **Branch:** `adr/04` (off `devel`) / **Component(s):** new dev-only tooling — `packer/`, `tests/smoke/`, `.github/workflows/` (a build workflow + a smoke workflow); reuses `scripts/deploy.sh`. **No shipped (`src/`) code changes.**
 - **Target runtime:** the harness runs on a GitHub-hosted `ubuntu-latest` runner (Python 3.11+, **dev-only third-party deps allowed** — see §5). The system under test is **pfSense CE (latest stable, CE only)** in a QEMU/KVM VM, driving the real `pfb_unbound.py` (Python in Unbound's `pythonmod`) and the real PHP/`pfctl` IP path.
@@ -194,20 +194,19 @@ The harness is built and the workflow is wired. Status of each DoD item:
 - **Default suite unaffected** — **MET (verified locally).** `python -m pytest`
   collects/passes exactly **169**, byte-for-byte unchanged; `smoke` is
   `--ignore`'d, no new deps pulled.
-- **`pytest -m smoke` green, hermetic, false-green guarded** — **WIRED, pending
-  CI.** `smoke.yml` runs `pytest -m smoke` over the build-pkg → artifact →
-  `pkg add` → boot-fixture flow with the egress block (pull → block → run) and
-  the strict-xfail false-green guard (`test_false_green_guard_vm`). The actual
-  green/red + wall-time come from the orchestrator's `gh workflow run smoke.yml`
-  dispatch — **NOT** run or measured in this environment (no `/dev/kvm`, image,
-  or secrets); not fabricated.
+- **`pytest -m smoke` green, hermetic, false-green guarded** — **MET.** `smoke.yml`
+  runs `pytest -m smoke` over the build-pkg → artifact → `pkg add` → boot-fixture
+  flow with the egress block (pull → block → run) and the strict-xfail false-green
+  guard (`test_false_green_guard_vm`). Green on a `gh`-dispatched run: the
+  python-only phase-07 matrix on `next`, run `26895418833` — 13 passed / 3 skipped
+  / 1 xfail.
 - **Image builds reproducibly + published private GHCR, rebuild-on-bump
   documented** — **MET** (Phase 2: `build-image.yml` + `IMAGE_RUNBOOK.md`); the
   CE-bump checklist now carries the image-rebuild step (CLAUDE.md + README).
 - **`ruff` / ShellCheck / workflow lint clean** — **MET (verified locally).**
 - **README documents run/rebuild/extend** — **MET** ("Smoke tests" section).
-- **Status → Accepted** — **NOT yet**: gated on the CI dispatch above **and** the
-  maintainer's live-box checklist below (deliberately left to the maintainer).
+- **Status → Accepted** — **MET (2026-06-03).** The CI dispatch above is green and
+  the maintainer confirmed the live-box checklist below.
 
 The Phase-1 spike measured GH-hosted KVM as viable (GO); no reject criterion
 fired. Because the per-run wall-time is still unmeasured, the trigger is **gated**
@@ -223,11 +222,11 @@ every-PR — move it to `pull_request` once a dispatched run confirms it fits th
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-The automated matrix is a thin slice; before flipping to Accepted, the maintainer confirms on a live box that the harness's expectations match real behaviour for at least:
+The automated matrix is a thin slice; the maintainer confirmed on a live box (2026-06-03) that the harness's expectations match real behaviour for at least:
 
-- [ ] An exact DNSBL block returns the configured response (NXDOMAIN / null-IP / VIP) and is logged.
-- [ ] A wildcard `zone` block catches a deep subdomain and the parent.
-- [ ] A whitelisted domain resolves normally.
-- [ ] An IP feed populates the expected pf alias table and a rule references it.
-- [ ] The DNSBL-IP feature, fed a list with both IPv4 and IPv6 addresses, creates **both** `pfB_DNSBLIP_v4` and `pfB_DNSBLIP_v6` pf tables (distinct, each holding only its own family) and the inet/inet6 rules reference the matching table — v4 and v6 do not overwrite each other.
-- [ ] The smoke workflow's pass/fail matches these observations (no false-green / false-red).
+- [x] An exact DNSBL block returns the configured response (**null-IP / VIP** — NXDOMAIN is SafeSearch-only in Python mode, not reachable from a feed match; NXDOMAIN-as-block-option tracked in #31) and is logged.
+- [x] A wildcard `zone` block catches a deep subdomain and the parent.
+- [x] A whitelisted domain resolves normally.
+- [x] An IP feed populates the expected pf alias table and a rule references it.
+- [x] The DNSBL-IP feature, fed a list with both IPv4 and IPv6 addresses, creates **both** `pfB_DNSBLIP_v4` and `pfB_DNSBLIP_v6` pf tables (distinct, each holding only its own family) and the inet/inet6 rules reference the matching table — v4 and v6 do not overwrite each other. (Automated coverage for this case is tracked in #35; the live-box check confirms it.)
+- [x] The smoke workflow's pass/fail matches these observations (no false-green / false-red).
