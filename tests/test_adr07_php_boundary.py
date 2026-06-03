@@ -34,7 +34,7 @@ over it, and asserts:
 
 from __future__ import annotations
 
-import re
+import ipaddress
 from typing import Any, Iterable
 
 import pfb_unbound as P
@@ -45,20 +45,22 @@ import tests.test_adr07_decision_spec as spec
 # subdomains there).
 _TLD_MASTER = ["com", "net", "org"]
 
+
 # ABP-anchored / hosts IP detection -- the Python mirror of the PHP
 # pfb_dnsbl_abp_extract_ip() the download loop uses for DNSBL-IP coexistence.
-_IPV4 = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
-
-
-def _is_ipv4(token: str) -> bool:
-    if not _IPV4.match(token):
+# PHP uses is_ipaddrv4()/is_ipaddrv6(), so both families divert to the firewall.
+def _is_ip(token: str) -> bool:
+    try:
+        ipaddress.ip_address(token)
+    except ValueError:
         return False
-    return all(0 <= int(p) <= 255 for p in token.split("."))
+    return True
 
 
 def _php_abp_extract_ip(line: str) -> str | None:
     """Reproduce PHP ``pfb_dnsbl_abp_extract_ip()``: return the IP a raw ABP line
-    carries for the firewall pass (``||1.2.3.4^`` or hosts ``<ip> <ip>``), else None.
+    carries for the firewall pass (``||<ip>^`` or hosts ``<ip> <ip>``, IPv4 OR
+    IPv6), else None. Mirrors the PHP whitespace gate (space OR tab).
     """
     s = line.strip()
     if not s:
@@ -67,11 +69,10 @@ def _php_abp_extract_ip(line: str) -> str | None:
         rest = s[2:]
         rest = rest.split("$", 1)[0]
         host = rest.split("^", 1)[0].strip()
-        return host if _is_ipv4(host) else None
-    if " " in s:
-        parts = s.split()
-        if len(parts) >= 2 and _is_ipv4(parts[0]) and _is_ipv4(parts[1]):
-            return parts[1]
+        return host if _is_ip(host) else None
+    parts = s.split()
+    if len(parts) >= 2 and _is_ip(parts[0]) and _is_ip(parts[1]):
+        return parts[1]
     return None
 
 
@@ -266,14 +267,24 @@ class TestDnsblIpCoexistence:
     FEED = [
         "||ads.example.com^",  # domain -> Python
         "||203.0.113.7^",  # ABP-anchored IPv4 -> firewall
+        "||2001:db8::7^",  # ABP-anchored IPv6 -> firewall
         "||198.51.100.42^$important",  # IP anchor w/ options -> firewall (options ignored)
-        "0.0.0.0 203.0.113.99",  # hosts IP -> firewall
+        "0.0.0.0 203.0.113.99",  # hosts IPv4 -> firewall
+        ":: 2001:db8::99",  # hosts IPv6 -> firewall
+        "0.0.0.0\t198.51.100.50",  # TAB-delimited hosts IPv4 -> firewall (whitespace gate)
         "0.0.0.0 blocked.example.net",  # hosts domain -> Python
     ]
 
     def test_ip_anchors_routed_to_firewall(self) -> None:
         result, firewall_ips = _build_abp({"f": self.FEED})
-        assert firewall_ips == {"203.0.113.7", "198.51.100.42", "203.0.113.99"}
+        assert firewall_ips == {
+            "203.0.113.7",
+            "2001:db8::7",
+            "198.51.100.42",
+            "203.0.113.99",
+            "2001:db8::99",
+            "198.51.100.50",
+        }
 
     def test_no_ip_leaks_into_domain_or_regex_build(self) -> None:
         result, firewall_ips = _build_abp({"f": self.FEED})

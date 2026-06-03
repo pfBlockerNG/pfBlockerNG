@@ -2924,11 +2924,25 @@ def build(
 
         # Domain allows (@@||domain^ and reduced @@/re/) -> whiteDB. A user whitelist
         # entry (band 6) must never be downgraded by a feed allow on the SAME key, so
-        # only write when the key is absent or the existing band is lower.
+        # only widen when the key is absent or the existing band is lower.
         for a in result.allow_domains:
             existing = white_db.get(a.domain)
-            if existing is None or _white_entry_band(existing) < a.band:
+            if existing is None:
                 white_db[a.domain] = {"wildcard": a.wildcard, "important": a.important, "band": a.band}
+                continue
+            if _white_entry_band(existing) < a.band:
+                white_db[a.domain] = {"wildcard": a.wildcard, "important": a.important, "band": a.band}
+                continue
+            # Same key, SAME band: a key can carry both an exact (reduced @@/^d$/)
+            # and a wildcard (@@||d^) allow. The suffix-walk only honours wildcard
+            # entries, so first-writer-wins would silently drop subdomain coverage.
+            # Merge monotonically (widen) -- keep the strongest of each field.
+            if _white_entry_band(existing) == a.band:
+                white_db[a.domain] = {
+                    "wildcard": _white_entry_wildcard(existing) or a.wildcard,
+                    "important": _white_entry_important(existing) or a.important,
+                    "band": a.band,
+                }
 
         # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here
         # (Phase 6); a broken pattern is logged + skipped, mirroring the init regex
