@@ -1,0 +1,224 @@
+ADR-04 — Phase 3: pytest smoke scaffolding (VM fixture, marker, mock feeds)
+===========================================================================
+
+Branch: adr/04   Phase: 3 of 6   Date: 2026-06-02
+
+-------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------
+Stood up the pytest smoke scaffolding the Phase-5 matrix will run on, WITHOUT
+matrix/config-injection (that is Phase 4-5):
+  - `smoke` marker registered + DESELECTED from the default run.
+  - A session-scoped VM fixture (oras pull -> boot -> wait-ready -> yield ->
+    teardown) that WRAPS the existing POSIX-sh helpers over subprocess (no QEMU
+    or SSH reimplemented in Python).
+  - A stdlib-only mock HTTP feed server fixture.
+  - ONE trivial smoke test proving the chain end-to-end (pfctl + dig control).
+
+Default `python -m pytest` is byte-for-byte unaffected: 169 collected/passed,
+same set, no new imports, no VM. Verified WITH the smoke dep (dnspython) NOT
+installed.
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase) — all dev-only, src/ untouched
+-------------------------------------------------------------------
+  pyproject.toml                       marker `smoke` + default deselection
+  tests/smoke/__init__.py              make tests/smoke a package (relative
+                                       import in the test module)
+  tests/smoke/requirements.txt         dev deps (dnspython only; pinned)
+  tests/smoke/conftest.py              VM fixture + mock feed server + probes
+  tests/smoke/test_smoke_boot.py       the trivial @pytest.mark.smoke test
+  tests/smoke/fixtures/sample_ip_feed.txt   placeholder served feed (tracks dir)
+
+-------------------------------------------------------------------
+EXACT DEFAULT-RUN DESELECTION MECHANISM (NON-NEGOTIABLE — verified)
+-------------------------------------------------------------------
+  pyproject.toml [tool.pytest.ini_options]:
+    addopts = "-v --ignore=tests/smoke"
+    markers = ["smoke: ... deselected from the default run"]
+
+  --ignore=tests/smoke is the load-bearing line: it stops pytest even
+  IMPORTING tests/smoke/* during default collection, so:
+    - the third-party dep (dnspython) is never needed for a default run
+      (proved: dnspython is NOT installed here, default run is green);
+    - the VM fixture / mock server modules are never imported by default;
+    - collection is identical to pre-Phase-3 (169, same set).
+  The `smoke` marker is also registered (so `-m smoke` is meaningful and no
+  PytestUnknownMarkWarning fires) and is a belt-and-suspenders second gate.
+
+  TO RUN SMOKE (overrides the ignore in addopts):
+    python -m pip install -r tests/smoke/requirements.txt
+    python -m pytest tests/smoke -m smoke --override-ini="addopts="
+  (Phase 6 wires this into .github/workflows/smoke.yml. `--override-ini` drops
+  the `-v --ignore=tests/smoke` default so tests/smoke is collected.)
+
+-------------------------------------------------------------------
+VM FIXTURE API  (the stable contract Phase 4 builds on)
+-------------------------------------------------------------------
+  Fixture `smoke_vm` (scope=session) yields a `SmokeVM` dataclass:
+
+    FIELDS:
+      ssh_key_path : str            path to the mode-600 guest private key
+      host         : str  = 127.0.0.1
+      ssh_port     : int  = 2222    host -> guest 22
+      web_port     : int  = 8080    host -> guest 80
+      dns_port     : int  = 5353    host -> guest 53 (tcp+udp)
+      feed_base_url: str | None     set by the mock_feeds fixture while up
+                                    (http://10.0.2.2:<port>/); None otherwise
+      vm_pid       : int | None     qemu PID (teardown bookkeeping)
+      log_path     : str | None     boot log path (post-mortem)
+
+    PROPERTIES / METHODS:
+      .ssh_target            -> "root@<host>"
+      .ssh_argv(*remote)     -> list[str] ssh argv (throwaway-VM SSH opts,
+                                key stays private; mirrors wait_ready.sh)
+      .ssh(*remote, timeout) -> subprocess.CompletedProcess[str] (run on guest)
+
+  REUSABLE HEALTH GATE (forward-compat for ADR-09):
+    boot_and_probe(base_image, ssh_key_path, *, log_path, host, ssh_port,
+                   web_port, dns_port, boot_timeout) -> BootHandle
+    is a standalone fn (NOT pytest-only): pull is `oras_pull_image(ref, dest)`.
+    Same boot+probe (SSH up + WebUI up + dig control) can double as a CE-image
+    sanity gate. The image ref/digest is ALWAYS a PARAMETER (env
+    SMOKE_IMAGE_REF), never hardcoded — ADR-09 fans out N tags by varying it.
+
+  PROBE HELPERS in conftest.py (used by the trivial test, available to Phase 5):
+    resolve_a(name, host, port)          dnspython A-record lookup vs the guest
+                                         Unbound (rcode+record precision; the
+                                         `import dns...` is DEFERRED into the fn
+                                         so default collection never needs it)
+    wait_for_tcp(host, port, timeout)    best-effort TCP reachability
+    expected_control_answer(env)         -> (name, ip|None); defaults
+                                         smoke-control.pfb.test / 192.0.2.123
+                                         (RESULTS/02), env-overridable
+                                         (SMOKE_CONTROL_NAME / SMOKE_CONTROL_IP)
+
+  FIXTURE PREREQUISITE SKIPS (clean skip, not error, if run without them):
+    SMOKE_IMAGE_REF (GHCR ref, ideally @sha256 digest), SMOKE_SSH_KEY (path to
+    the private key file), /dev/kvm present, and the binaries oras /
+    qemu-system-x86_64 / qemu-img / ssh on PATH. NOTE: the fixture reads
+    SMOKE_SSH_KEY as a FILE PATH — the Phase-1/2 workflows materialise the key
+    from secret SMOKE_SSH_PRIV_KEY to a mode-600 temp file `smoke_key`; the
+    Phase-6 smoke workflow must export SMOKE_SSH_KEY=<that path>.
+
+-------------------------------------------------------------------
+PER-CASE ISOLATION STRATEGY (chosen + why)
+-------------------------------------------------------------------
+  CHOSEN: ONE session-scoped boot; cases reset state between themselves with
+  pfBlockerNG's clearip / cleardnsbl + a FORCED update (ADR §2 "Reset between
+  cases"). Phase 4 provides those reset/inject/reload helpers.
+
+  WHY (not fresh-boot-per-case): boot-to-ready measured ~55-59 s (RESULTS/01);
+  a fresh boot per case would dominate wall time and blow the §7 ~20-min budget
+  as the matrix grows. clear+forced-update returns the box to a known state
+  cheaply, and a forced update is REQUIRED anyway (pfBlockerNG caches feeds, so
+  an edited mock fixture is re-fetched only on a force).
+
+  ALTERNATIVE available without rework: fresh boot per case by calling
+  boot_and_probe() from a function-scoped fixture (slower); snapshot-revert was
+  not adopted (the CoW overlay already gives run-level immutability and the
+  clear+reload reset is finer-grained and faster than a full revert).
+
+-------------------------------------------------------------------
+RUN-LEVEL IMMUTABILITY + CONCURRENCY ISOLATION
+-------------------------------------------------------------------
+  IMMUTABILITY: base qcow2 is pulled by digest (SMOKE_IMAGE_REF) and is
+  read-only + never booted directly. boot_vm.sh creates an ephemeral
+  copy-on-write overlay (qemu-img create -b base -F qcow2) and boots THAT; the
+  overlay is mktemp'd inside boot_vm.sh and removed on its clean exit (trap on
+  EXIT/INT/TERM), which firing when the fixture terminates qemu. The base is
+  never written, so repeat/concurrent runs are safe.
+
+  CONCURRENCY: each user-net (SLIRP) VM has its own isolated NAT, no shared L2,
+  so the hardcoded source MAC (BC:24:11:37:9C:AC) never collides across
+  instances. The ONLY contention is the fixed hostfwd host ports
+  (2222/8080/5353) — safe because each GH job is its own runner. If several
+  VMs ever share one runner, the ports must be allocated per-instance (host/
+  ssh_port/web_port/dns_port are already SmokeVM fields, so this is a wiring
+  change, not a redesign). Not needed for the per-job model.
+
+-------------------------------------------------------------------
+MOCK-FEED SERVER API (stdlib http.server ONLY — no third-party)
+-------------------------------------------------------------------
+  Fixture `mock_feeds` (function-scoped; depends on smoke_vm) yields a server:
+
+    server.feed_url(name)        -> "http://10.0.2.2:<port>/<name>" (guest URL)
+    server.register(name, body)  -> registers an in-memory feed body, returns
+                                    its guest URL (for per-case ad-hoc lists)
+    server.port                  -> the OS-chosen free port (binds 0.0.0.0:0)
+
+  Files dropped in tests/smoke/fixtures/ are served by name automatically;
+  registered in-memory names take precedence. While the fixture is up it also
+  sets smoke_vm.feed_base_url = "http://10.0.2.2:<port>/". The guest reaches
+  the runner at the SLIRP host alias 10.0.2.2. Plain HTTP + IP-literal URL: no
+  TLS, no DNS lookup on the feed host.
+
+  HERMETICITY (ADR §2): sequence is pull -> block -> run; the egress block is
+  Phase 6 (workflow blocks the runner's outbound AFTER the GHCR pull).
+  SLIRP-internal 10.0.2.2 feeds + loopback hostfwd survive the block. The
+  scaffolding does NOT assume real egress.
+
+-------------------------------------------------------------------
+TRIVIAL SMOKE TEST (proves the scaffolding)
+-------------------------------------------------------------------
+  tests/smoke/test_smoke_boot.py (module-level pytestmark = smoke):
+    test_pfctl_ruleset_nonempty : ssh `/sbin/pfctl -sr` -> rc 0 + non-empty
+                                  ruleset (IP path observable; sshd + WAN pass
+                                  rule + pf loaded).
+    test_control_name_resolves  : resolve_a(control name) vs guest Unbound on
+                                  :5353 -> baked answer (DNS path live).
+  Both assert; a missing inject/reload would go RED (no false-green).
+
+-------------------------------------------------------------------
+DEPENDENCIES
+-------------------------------------------------------------------
+  tests/smoke/requirements.txt: dnspython==2.7.0 (ONLY). The VM lifecycle and
+  SSH round-trip reuse the sh helpers + system ssh/qemu via subprocess, so no
+  paramiko/python-qemu. oras + qemu are SYSTEM binaries (installed by the
+  workflow), not pip deps. Dev-only; never shipped (release archive = src/
+  only). Default run never imports them (--ignore=tests/smoke), proved here
+  with dnspython absent.
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest -q                               : 169 passed (UNCHANGED)
+  python -m pytest --collect-only -q | grep tests/smoke : 0 matches (smoke
+                                                      ignored by default)
+  default run with dnspython NOT installed          : green (confirmed absent)
+  python -m pytest tests/smoke -m smoke
+    --override-ini="addopts=" --collect-only        : 2 tests collected
+    (WITHOUT dnspython installed — deferred import keeps collection clean)
+  ruff check .                                       : All checks passed
+  ruff format --check .                              : all files formatted
+  no new .sh                                         : reused boot_vm.sh /
+                                                      wait_ready.sh (no
+                                                      shellcheck delta)
+  src/ untouched                                     : confirmed (git status)
+  no bare except                                     : contextlib.suppress /
+                                                      except subprocess.* /
+                                                      except Exception only
+  type hints on new fns                              : yes (from __future__
+                                                      import annotations)
+
+-------------------------------------------------------------------
+PENDING — orchestrator `gh` CI dispatch (NOT fabricated)
+-------------------------------------------------------------------
+  `pytest -m smoke` EXECUTION is NOT run here: no /dev/kvm, no GHCR image/
+  secrets in this environment. It is verified in CI by the orchestrator via
+  `gh` AFTER this phase. No smoke-run pass/fail or boot numbers are fabricated.
+  The smoke marker COLLECTS the trivial test locally (2 collected); running it
+  needs the VM.
+
+-------------------------------------------------------------------
+NEXT (Phase 4)
+-------------------------------------------------------------------
+  Config-injection + deploy + reload helpers on top of the SmokeVM fixture:
+    - deploy.sh the working tree onto smoke_vm.ssh_target;
+    - php -r config-injection (feed URL(s) from mock_feeds.feed_url(...),
+      DNSBL mode, whitelist, wildcard/exact, per-case local-data control
+      records) via the pfSense config API;
+    - reload via pfblockerng.php updatednsbl/updateip/update; reset via
+      clearip/cleardnsbl (the session-isolation reset this phase chose);
+    - DNS-probe (resolve_a — extend to rcode/NXDOMAIN/null shapes) + pfctl
+      table/rule probes, self-tested so a wrong expectation goes red.
