@@ -2378,8 +2378,15 @@ function pfb_unbound_python_sources($feeds) {
 			@fclose($raw_h);
 		}
 
+		// Store the raw path RELATIVE to the manifest's directory. pfb_unbound.py
+		// runs inside Unbound's chroot (/var/unbound), so an absolute HOST path
+		// like /var/unbound/pfb_py_raw/<f>.raw resolves to
+		// /var/unbound/var/unbound/pfb_py_raw/<f>.raw inside the chroot and is not
+		// found (feeds silently fail to load -> nothing blocked). The Python build
+		// joins a relative path against the manifest's dir (the chroot root), which
+		// resolves correctly both chrooted and not.
 		$manifest_feeds[] = array(
-			'raw'		=> $rawpath,
+			'raw'		=> basename($pfb['unbound_py_rawdir']) . "/{$header}.raw",
 			'feed'		=> $header,
 			'group'		=> $group,
 			'format_hint'	=> 'plain',
@@ -2404,10 +2411,22 @@ function pfb_unbound_python_sources($feeds) {
 	$tld_blacklist	= pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
 	$tld_exclusion	= pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
 
+	// Embed the public-suffix master list as LINES, not a path: pfb_unbound.py runs
+	// chrooted in /var/unbound and cannot read /usr/local/pkg/... (outside the
+	// chroot). _dnsbl_config_from_manifest() accepts tld_master as a list. Empty
+	// when the file is absent (the TLD feature then simply has no suffixes).
+	$tld_master_lines = array();
+	if (file_exists($pfb['dnsbl_tld_data'])) {
+		$tld_master_file = @file($pfb['dnsbl_tld_data'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		if (is_array($tld_master_file)) {
+			$tld_master_lines = $tld_master_file;
+		}
+	}
+
 	$manifest = array(
 		'version'	=> 1,
 		'config'	=> array(
-			'tld_master'	=> $pfb['dnsbl_tld_data'],
+			'tld_master'	=> array_values($tld_master_lines),
 			'tld_blacklist'	=> array_values($tld_blacklist),
 			'tld_exclusion'	=> array_values($tld_exclusion),
 			'user_whitelist'=> pfb_dnsbl_whitelist_lines(),
