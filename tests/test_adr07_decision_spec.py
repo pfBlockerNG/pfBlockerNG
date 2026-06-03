@@ -255,6 +255,28 @@ def _classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool] | Non
     return tuple(sorted(kept)), important, badfilter
 
 
+def _parse_regex_rule(s: str) -> tuple[Kind, str, str] | None:
+    """Recognise ``/re/`` (block) / ``@@/re/`` (allow) with an OPTIONAL ``$options``
+    suffix after the closing slash. Return ``(kind, inner, opts_str)`` else None.
+    Mirrors prod ``pfb_unbound._dnsbl_parse_abp_regex``."""
+    if s.startswith("@@/"):
+        kind, body = Kind.ALLOW, s[2:]
+    elif s.startswith("/"):
+        kind, body = Kind.BLOCK, s
+    else:
+        return None
+    if body.endswith("/"):
+        inner, opts_str = body[1:-1], ""
+    else:
+        marker = body.rfind("/$")
+        if marker <= 0:
+            return None
+        inner, opts_str = body[1:marker], body[marker + 2 :]
+    if not inner:
+        return None
+    return kind, inner, opts_str
+
+
 def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
     s = line.strip()
     if not s or s.startswith("!") or s.startswith("["):
@@ -266,33 +288,46 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
     if "##" in s or "#@#" in s or "#?#" in s:
         return None
 
-    # ---- regex rules: /re/ (block) or @@/re/ (allow) --------------------- #
-    is_allow_regex = s.startswith("@@/") and s.endswith("/")
-    is_block_regex = s.startswith("/") and s.endswith("/") and len(s) > 2 and not s.startswith("@@")
-    if is_allow_regex or is_block_regex:
-        inner = s[3:-1] if is_allow_regex else s[1:-1]
-        kind = Kind.ALLOW if is_allow_regex else Kind.BLOCK
+    # ---- regex rules: /re/ (block) or @@/re/ (allow), optional $options ---- #
+    regex_hit = _parse_regex_rule(s)
+    if regex_hit is not None:
+        kind, inner, opts_str = regex_hit
+        if opts_str:
+            classified = _classify_options(opts_str)
+            if classified is None:
+                return None  # page-context / non-DNS / unrecognised -> skip rule
+            dns_opts, important, badfilter = classified
+        else:
+            dns_opts, important, badfilter = (), False, False
         reduced = reduce_regex(inner)
         if reduced is not None:
             wildcard, dom = reduced
+            sig_opts = tuple(o for o in dns_opts) + (("important",) if important else ())
             return Rule(
                 kind=kind,
                 target=Target.DOMAIN,
                 key=dom,
                 provenance=provenance,
                 wildcard=wildcard,
-                signature=(dom, ()),
+                important=important,
+                badfilter=badfilter,
+                options=dns_opts,
+                signature=(dom, tuple(sorted(sig_opts))),
             )
         try:
             re.compile(inner)
         except re.error:
             return None
+        sig_opts = tuple(o for o in dns_opts) + (("important",) if important else ())
         return Rule(
             kind=kind,
             target=Target.REGEX,
             key=inner,
             provenance=provenance,
-            signature=(inner, ()),
+            important=important,
+            badfilter=badfilter,
+            options=dns_opts,
+            signature=(inner, tuple(sorted(sig_opts))),
         )
 
     # ---- network rules: @@||domain^ (allow) / ||domain^ (block) ---------- #
@@ -584,6 +619,24 @@ def test_regex_irreducible_allow_matches_as_written() -> None:
     rs2 = rules_from([r"/[a-z0-9]+\.example$/", r"@@/whitelist-[a-z]+\.example$/"])
     assert decide(rs2, "ads.example").outcome == "block"
     assert decide(rs2, "whitelist-foo.example").outcome == "resolve"
+
+
+def test_regex_important_block_beats_allow_regex() -> None:
+    # $options now apply to regex too: a block /re/$important (band 3) beats a plain
+    # allow @@/re/ (band 2). Without $important the allow would win.
+    rs = rules_from([r"/x[0-9]\.example$/$important", r"@@/x[0-9]\.example$/"])
+    d = decide(rs, "x7.example")
+    assert d.outcome == "block"
+    assert d.block_prio == 3 and d.allow_prio == 2
+    # sanity: drop $important and the allow wins
+    rs_plain = rules_from([r"/x[0-9]\.example$/", r"@@/x[0-9]\.example$/"])
+    assert decide(rs_plain, "x7.example").outcome == "resolve"
+
+
+def test_regex_badfilter_prunes_matching_feed_regex() -> None:
+    # A feed /re/$badfilter removes the matching feed /re/ (same signature) -> resolve.
+    rs = rules_from([r"/x[0-9]\.example$/", r"/x[0-9]\.example$/$badfilter"])
+    assert decide(rs, "x7.example").outcome == "pass"
 
 
 # --- 5. $options KEEP vs SKIP ---------------------------------------------- #

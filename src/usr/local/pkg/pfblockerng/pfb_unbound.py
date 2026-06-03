@@ -2025,15 +2025,34 @@ def _dnsbl_classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool]
     return tuple(sorted(kept)), important, badfilter
 
 
-def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str] | None:
-    """Recognise a regex rule. Return ``(kind, inner)`` for ``/re/`` (block) or
-    ``@@/re/`` (allow), else ``None``. ``inner`` is the raw pattern between the
-    slashes (NOT compiled here -- reduction is Phase 5, compile/load is Phase 6)."""
-    if stripped.startswith("@@/") and stripped.endswith("/") and len(stripped) > 4:
-        return DNSBL_KIND_ALLOW, stripped[3:-1]
-    if stripped.startswith("/") and stripped.endswith("/") and len(stripped) > 2:
-        return DNSBL_KIND_BLOCK, stripped[1:-1]
-    return None
+def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
+    """Recognise a regex rule. Return ``(kind, inner, opts_str)`` for ``/re/`` (block)
+    or ``@@/re/`` (allow), with an OPTIONAL ``$options`` suffix after the closing
+    slash (``/re/$important``, ``@@/re/$badfilter``); else ``None``. ``inner`` is the
+    raw pattern between the slashes (NOT compiled here -- reduction is Phase 5,
+    compile/load is Phase 6); ``opts_str`` is the ``$``-suffix (without the ``$``) or
+    "" when absent. The closing slash is the last ``/`` of the rule (no options) or
+    the ``/`` immediately preceding ``$`` (options) -- so a ``/`` inside the pattern
+    body does not end it."""
+    if stripped.startswith("@@/"):
+        kind, body = DNSBL_KIND_ALLOW, stripped[2:]
+    elif stripped.startswith("/"):
+        kind, body = DNSBL_KIND_BLOCK, stripped
+    else:
+        return None
+    # body now starts with the opening "/". A regex rule is "/<inner>/" optionally
+    # followed by "$<options>". Find the closing slash + options tail.
+    if body.endswith("/"):
+        inner, opts_str = body[1:-1], ""
+    else:
+        # options present: the closing slash is the one directly before "/$".
+        marker = body.rfind("/$")
+        if marker <= 0:
+            return None
+        inner, opts_str = body[1:marker], body[marker + 2 :]
+    if not inner:
+        return None
+    return kind, inner, opts_str
 
 
 def parse_abp(
@@ -2083,18 +2102,25 @@ def parse_abp(
     # ---- regex rules: /re/ (block) or @@/re/ (allow) --------------------- #
     regex_hit = _dnsbl_parse_abp_regex(s)
     if regex_hit is not None:
-        kind, inner = regex_hit
+        kind, inner, opts_str = regex_hit
+        if opts_str:
+            classified = _dnsbl_classify_options(opts_str)
+            if classified is None:
+                return None  # page-context / non-DNS / unrecognised -> skip whole rule
+            dns_opts, important, badfilter = classified
+        else:
+            dns_opts, important, badfilter = (), False, False
         return Rule(
             kind=kind,
             target=RULE_TARGET_REGEX,
             key_or_pattern=inner,
-            important=False,
-            badfilter=False,
+            important=important,
+            badfilter=badfilter,
             provenance=provenance,
             feed=feed,
             group=group,
             log=log,
-            signature=(inner, ()),
+            signature=(inner, dns_opts),
             wildcard=False,
         )
 
