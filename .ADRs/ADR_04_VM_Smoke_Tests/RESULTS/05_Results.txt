@@ -1,0 +1,191 @@
+ADR-04 — Phase 5: the first landed smoke matrix (thin vertical slice)
+=====================================================================
+
+Branch: adr/04   Phase: 5 of 6   Date: 2026-06-02
+
+-------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------
+Composed the Phase-4 primitives into the FIRST landed matrix — a thin vertical
+slice proving the harness asserts REAL pfBlockerNG behaviour end-to-end on BOTH
+the IP path (pfctl alias table + rule) and the DNS path (dig rcode/record shape),
+hermetic + false-green-guarded. NOT the broad knob space (SafeSearch/regex/HSTS/
+TLD/GeoIP/full-AAAA stay out of scope per ADR §2).
+
+All new VM-touching code is under tests/smoke/, marked @pytest.mark.smoke,
+--ignore'd at default collection. Default `python -m pytest` is byte-for-byte
+unchanged: 169 collected/passed. src/ UNTOUCHED.
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase) — all dev-only, src/ untouched
+-------------------------------------------------------------------
+  tests/smoke/test_smoke_matrix.py    the matrix (7 cases, below)
+  tests/smoke/helpers.py              +3 small, contract-relevant additions:
+      - CFG_GLOBAL constant (installedpackages/pfblockerng/config/0)
+      - DnsblCase.dnsbl_ip_action field -> CFG_DNSBL_SETTINGS/action (the
+        "DNSBL IP" firewall feature toggle; "" = Disabled)
+      - both inject snippets now force enable_cb='on' (the IP + DNSBL-IP paths
+        gate on $pfb['enable'], inc:793/3389/9307; the baked image likely has it
+        on already, but inject is now self-sufficient)
+No new deps, no new .sh, no fixture files (per-case bodies use
+mock_feeds.register). pyproject.toml unchanged.
+
+-------------------------------------------------------------------
+CASES NOW COVERED (test_smoke_matrix.py)
+-------------------------------------------------------------------
+  test_ip_alias_table_and_rule            IP path: fed 198.51.100.5 IN pfB_<a>,
+                                          never-fed 198.51.100.99 NOT in it, a
+                                          loaded pf rule references the alias.
+  test_dnsbl_exact_nxdomain               EXACT+NXDOMAIN: <d> -> NXDOMAIN; the
+                                          subdomain x.<d> is NOT blocked (resolves
+                                          to its control local-data 198.51.100.40).
+  test_dnsbl_exact_null                   NULL: <d> A=0.0.0.0 ; AAAA=::0 (or none).
+  test_dnsbl_wildcard_zone                WILDCARD (Unbound redirect): apex <d>
+                                          AND deep a.b.<d> both -> DNSBL VIP.
+  test_dnsbl_whitelist_passthrough        WHITELIST: <d> on suppression AND in the
+                                          block feed RESOLVES to local-data
+                                          198.51.100.77 (not a block shape).
+  test_dnsblip_dual_stack_partition       DUAL-STACK DNSBLIP: feed w/ 203.0.113.7 +
+                                          2001:db8:5::7 -> BOTH pfB_DNSBLIP_v4 and
+                                          pfB_DNSBLIP_v6 exist, each holds ONLY its
+                                          family (no merge), inet/inet6 rules ref
+                                          the matching table.
+  test_false_green_guard_vm               @pytest.mark.xfail(strict=True): blocks
+                                          guard.pfb.test (NXDOMAIN) then asserts it
+                                          RESOLVES — false on a working harness, so
+                                          the test fails -> strict-xfail = green. A
+                                          lenient/broken harness that "passed" the
+                                          block would xpass -> strict flips RED.
+
+-------------------------------------------------------------------
+EXPECTED RESULTS — PINNED TO SOURCE (verified, not guessed)
+-------------------------------------------------------------------
+DNSBL python mode (dnsbl_python + pfb_py_block):
+  - The WHOLE feed is renamed raw -> pfb_py_data.txt as EXACT entries
+    (inc:8966-8970). Zone files are produced ONLY by the out-of-scope TLD feature
+    (tld_analysis(), inc:2684). So python mode = EXACT match only.
+  - evaluate_domain() (pfb_unbound.py:1707) looks the name up in dataDB EXACTLY
+    -> NXDOMAIN for a hit. find_zone_match()/iter_domain_suffixes (pfb_unbound.py
+    :1607/1614) is the WILDCARD path but it consults zoneDB, which is empty in
+    non-TLD python mode -> a subdomain of an exact entry is NOT blocked. (This is
+    why the exact case gives the subdomain a control local-data to prove the pass
+    hermetically.)
+DNSBL unbound mode (dnsbl_unbound):
+  - Each domain becomes `local-zone: "<d>" redirect local-data: "<d> 60 IN A
+    <sink>"` (feed path inc:8670; TLD/redirect path inc:3069). An Unbound redirect
+    zone is a WILDCARD: it answers for the apex AND every subdomain depth — hence
+    the wildcard case probes both apex and a.b.<d>.
+  - logging='disabled' -> sink 0.0.0.0 / ::0 (NULL; inc:3000/8668).
+    logging='enabled' (or '') -> sink pfb_dnsvip4 (VIP).
+WHITELIST: whitelist_check_domain (pfb_unbound.py:1631) short-circuits in
+  evaluate_domain BEFORE null_blocking/shape -> resolves via control local-data.
+DNSBL-IP dual-stack: IP literals in a DNSBL feed split by family into
+  <header>_v4.ip / _v6.ip (inc:8596-8617, 8688-8702), merged into DNSBLIP_v4.txt
+  / DNSBLIP_v6.txt (inc:8869-8931), loaded into alias tables suffixed per family
+  pfB_DNSBLIP{_v4,_v6} (inc:9306/9903). Enabled by CFG_DNSBL_SETTINGS/action !=
+  'Disabled' (inc:7022). Each table holds only its own family.
+
+-------------------------------------------------------------------
+HOW TO ADD A CASE (the case_spec recipe)
+-------------------------------------------------------------------
+1. Register the feed body in-memory (hermetic; no fixture file needed):
+       feed_url = mock_feeds.register("smoke_<name>.txt", "<body lines>\n")
+   (mock_feeds is a function-scoped fixture; the guest fetches it over SLIRP at
+   http://10.0.2.2:<port>/<name>.)
+2. Build a spec:
+   DNSBL:
+       spec = h.DnsblCase(
+           aliasname="<alias>", feed_url=feed_url, header="<hdr>",
+           mode=h.DnsblMode.{NXDOMAIN|NULL|VIP},   # response shape (see map)
+           whitelist=["<d>"],                      # optional suppression
+           dnsbl_ip_action="Deny_Both",            # optional: DNSBL-IP feature
+           control_local_data={"<name>": {"A": "<ip>", "AAAA": "<ip6>"}},
+       )
+   IP:
+       spec = h.IpCase(aliasname="<alias>", feed_url=feed_url, header="<hdr>",
+                       action="Deny_Both", family="v4"|"v6")
+3. Run it through the composed loop (auto reload verb: updatednsbl / updateip;
+   override scope= for cases that need the full `update`, e.g. DNSBL-IP):
+       with h.CaseContext(deployed_vm, spec[, scope="update"]):
+           ans = h.dns_probe(deployed_vm, "<name>", "A"|"AAAA")
+           assert h.is_nxdomain(ans) / h.is_null_ip(ans[, "::0"]) /
+                  h.is_vip(ans) / h.resolves_to(ans, "<ip>")
+           members = h.pfctl_table_members(deployed_vm, "<table>")
+           assert h.member_present(members, "<ip>")
+           assert h.rule_references(deployed_vm, "<table>")
+   __exit__ runs reset() (clearip+cleardnsbl + forced update) -> next case from
+   baseline.
+4. RESPONSE-MODE MAP (DnsblMode -> config):
+       NXDOMAIN : dnsbl_python + pfb_py_block (EXACT match; no subdomain block)
+       NULL     : dnsbl_unbound, logging='disabled' (redirect zone -> 0.0.0.0/::0)
+       VIP      : dnsbl_unbound, logging='enabled'  (redirect zone -> pfb_dnsvip4)
+   VIP cases need SMOKE_DNSBL_VIP4 to match the baked image's pfb_dnsvip4
+   (default 10.10.10.1).
+5. New module fixture deployed_vm exists in both test_smoke_helpers.py and
+   test_smoke_matrix.py (module-scoped: deploy the .pkg once per module).
+
+-------------------------------------------------------------------
+HERMETIC / EGRESS-BLOCKED STATUS
+-------------------------------------------------------------------
+INTENDED hermetic: every expected answer comes from a mock_feeds body + baked/
+injected Unbound local-data; no case depends on real internet egress.
+  - block shapes are synthesised locally by pfb_unbound.py (never recurses);
+  - control / whitelist passes resolve from injected local-data;
+  - feeds are served from the runner over the SLIRP host alias 10.0.2.2, which
+    survives the egress block.
+The egress block itself (pull -> block -> run) is wired by Phase 6 / the workflow
+(ADR §2; conftest mock_feeds docstring). NOT toggled in-test here; VERIFIED IN CI.
+
+-------------------------------------------------------------------
+SURPRISING pfBlockerNG BEHAVIOUR (candidate bugs — NOT fixed here)
+-------------------------------------------------------------------
+None found. One worth flagging as a SEMANTIC GOTCHA (NOT a bug):
+  - In DNSBL *python* mode WITHOUT the TLD feature, EVERY feed domain is an EXACT
+    (dataDB) entry — there is NO wildcard/subdomain blocking. Operators expecting
+    a plain blocklist domain to also block its subdomains in python mode would be
+    surprised; wildcard blocking requires either Unbound mode (redirect zone) or
+    the TLD feature. This is intended pfBlockerNG behaviour (matches pfb_unbound.py
+    + inc:8966-8970), pinned by test_dnsbl_exact_nxdomain. If a future ADR wants
+    python-mode wildcards, that's a src/ change for a separate PR — out of scope
+    here.
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest -q                                : 169 passed (UNCHANGED)
+  pytest tests/smoke -m smoke --override-ini=addopts=
+     --collect-only                                  : 17 collected
+     (7 new matrix cases + 10 helper self-tests; dnspython NOT installed —
+      deferred import keeps collection clean, no import error)
+  pure guard re-run (test_false_green_guard,
+     test_dns_assert_helpers_pure)                   : 2 passed
+  ruff check tests/smoke/                            : All checks passed
+  ruff format --check tests/smoke/                   : 7 files already formatted
+  no bare except                                     : confirmed (grep clean)
+  type hints on new fns                              : yes (from __future__ import
+                                                       annotations; all new fns
+                                                       annotated)
+  src/ untouched                                     : confirmed (git status)
+
+-------------------------------------------------------------------
+PENDING — orchestrator `gh` CI dispatch (NOT fabricated)
+-------------------------------------------------------------------
+`pytest -m smoke` EXECUTION of the matrix is NOT run here: no /dev/kvm, no GHCR
+image, no .pkg (SMOKE_PKG), no secrets in this environment. It is verified in CI
+by the orchestrator via `gh` AFTER this phase. NO smoke-run pass/fail and NO
+boot/reload/`pytest -m smoke` wall-time are fabricated — wall-time = PENDING the
+CI run.
+
+-------------------------------------------------------------------
+NEXT (Phase 6)
+-------------------------------------------------------------------
+Wire the workflow: pull image (by digest) -> block runner egress -> run
+`pytest tests/smoke -m smoke --override-ini=addopts=` with SMOKE_IMAGE_REF /
+SMOKE_SSH_KEY / SMOKE_PKG / SMOKE_DNSBL_VIP4 set. Confirm SMOKE_DNSBL_VIP4 matches
+the baked image's pfb_dnsvip4 (VIP case) and SMOKE_CONTROL_NAME/IP match the bake
+(RESULTS/02). The matrix + helpers are stable; Phase 6 is plumbing + the actual
+green/red CI run.
+
+GO-AHEAD: yes. Matrix landed, both paths asserted, dual-stack partition covered,
+strict-xfail false-green guard in place, hermetic by construction, default suite
+unaffected, src/ untouched. Ready for Phase 6 CI wiring.

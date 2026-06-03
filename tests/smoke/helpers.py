@@ -55,6 +55,7 @@ PFB_CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
 PFCTL = "/sbin/pfctl"
 
 # pfSense config API roots (see pfblockerng.inc).
+CFG_GLOBAL = "installedpackages/pfblockerng/config/0"
 CFG_DNSBL_SETTINGS = "installedpackages/pfblockerngdnsblsettings/config/0"
 CFG_DNSBL_LISTS = "installedpackages/pfblockerngdnsbl/config"
 CFG_IP_V4_LISTS = "installedpackages/pfblockernglistsv4/config"
@@ -102,6 +103,10 @@ class DnsblCase:
       wildcard      -> feed entry style; a wildcard feed line blocks subdomains
       whitelist     -> CFG_DNSBL_SETTINGS/suppression (newline list; a leading
                        '.' suppresses the whole subtree)
+      dnsbl_ip_action -> CFG_DNSBL_SETTINGS/action (the "DNSBL IP" firewall
+                       feature): "" (Disabled) or e.g. "Deny_Both". When set,
+                       IP literals embedded in the DNSBL feed populate the
+                       pfB_DNSBLIP_{v4,v6} alias tables (dual-stack contract).
       control_local_data -> {name: {"A": ip, "AAAA": ip6}} Unbound local-data
                        baked into CFG_UNBOUND_CUSTOM BEFORE update
       control_local_zone -> {zone: type} e.g. {"pass.test": "transparent"}
@@ -113,6 +118,7 @@ class DnsblCase:
     header: str = "smoketest"
     wildcard: bool = False
     whitelist: list[str] = field(default_factory=list)
+    dnsbl_ip_action: str = ""
     control_local_data: dict[str, dict[str, str]] = field(default_factory=dict)
     control_local_zone: dict[str, str] = field(default_factory=dict)
 
@@ -322,6 +328,11 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings["pfb_dnsbl"] = "on"
     if spec.whitelist:
         settings["suppression"] = "\n".join(spec.whitelist)
+    if spec.dnsbl_ip_action:
+        # The "DNSBL IP" firewall feature: collect IP literals from the DNSBL
+        # feed into the pfB_DNSBLIP_{v4,v6} alias tables (inc:7022 reads this
+        # from CFG_DNSBL_SETTINGS/action; != 'Disabled' enables it).
+        settings["action"] = spec.dnsbl_ip_action
     row = {
         "header": spec.header,
         "url": spec.feed_url,
@@ -335,6 +346,11 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         "order": "primary",
     }
     return (
+        # pfBlockerNG must be globally enabled for the DNSBL (and DNSBL-IP)
+        # paths to run (inc:793 reads enable_cb; inc:3389/9307 gate on it).
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$g['enable_cb'] = 'on';\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
         f"$s = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$s = array_merge($s, {_php_kv_array(settings)});\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
@@ -361,6 +377,11 @@ def _ip_inject_snippet(spec: IpCase) -> str:
         "cron": "EveryDay",
     }
     return (
+        # pfBlockerNG must be globally enabled for the IP path to build the
+        # alias table + rule (inc:793 enable_cb).
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$g['enable_cb'] = 'on';\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = array({_php_kv_array(row)});\n"
         f"config_set_path({_php_str(root)}, array($list));\n"
