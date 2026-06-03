@@ -174,8 +174,9 @@ jobs:
           set -eu
           # The build artifact preserves the out/ subdir (multi-path upload), so
           # search recursively rather than assuming pkg/*.pkg.
-          PKGFILE="$(find pkg -type f -name '*.pkg' 2>/dev/null | head -1)"
-          [ -n "$PKGFILE" ] || { echo "::error::no .pkg in the build artifact"; ls -lR pkg || true; exit 1; }
+          N_PKG="$(find pkg -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_PKG" -eq 1 ] || { echo "::error::expected exactly one .pkg in the build artifact, found ${N_PKG}"; ls -lR pkg || true; exit 1; }
+          PKGFILE="$(find pkg -type f -name '*.pkg')"
           # The pulled artifact carries exactly one disk image.
           N_IMG="$(find image -type f -name '*.qcow2' | wc -l | tr -d ' ')"
           [ "$N_IMG" -eq 1 ] || { echo "::error::expected exactly one .qcow2 in the pulled artifact, found ${N_IMG}"; ls -lR image || true; exit 1; }

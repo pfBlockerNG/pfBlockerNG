@@ -305,11 +305,16 @@ jobs:
             echo "$BOOT_OUT"
             # Clean pfSense (pfBlockerNG NOT baked) — install the branch .pkg,
             # then run the exact Phase-1 control round-trip.
-            scripts/install-pkg.sh root@127.0.0.1 \
-              --port 2222 --ssh-key smoke_key --pkg "$PKGFILE"
-            tests/smoke/roundtrip.sh smoke_key "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP" \
-              127.0.0.1 2222 5353 8080
-            RC=0
+            # Wrapped in if/else so set -eu does not exit before the screendump
+            # and VM cleanup below when either script returns non-zero.
+            if scripts/install-pkg.sh root@127.0.0.1 \
+                 --port 2222 --ssh-key smoke_key --pkg "$PKGFILE" \
+               && tests/smoke/roundtrip.sh smoke_key "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP" \
+                    127.0.0.1 2222 5353 8080; then
+              RC=0
+            else
+              RC=$?
+            fi
           else
             echo "::error::published image never became ready"
             tail -n 40 vm-verify.log || true

@@ -235,9 +235,10 @@ gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
 ```
 
 The workflow builds the `.pkg` (`build-pkg.yml`, FreeBSD VM), pulls the pfSense
-image from private GHCR, **blocks the runner's egress** (pull → block → run, so
-the run is hermetic — feeds come from an in-runner mock server reached over the
-SLIRP host alias `10.0.2.2`), then runs `pytest -m smoke`. Required Actions
+image from private GHCR, then runs `pytest -m smoke`. The test fixture **blocks
+the runner's egress after `deploy()`** so the run is hermetic — feeds come from
+an in-runner mock server reached over the SLIRP host alias `10.0.2.2`. Required
+Actions
 config (see `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt`):
 `SMOKE_IMAGE_REF`, `SMOKE_GHCR_USER`, `SMOKE_GHCR_TOKEN`, `SMOKE_SSH_PRIV_KEY`
 (and, to match the baked image, `SMOKE_DNSBL_VIP4` / `SMOKE_CONTROL_NAME` /
@@ -260,7 +261,8 @@ python -m pytest tests/smoke -m smoke --override-ini="addopts="
 The fixture pulls the image by `SMOKE_IMAGE_REF` and boots an ephemeral overlay
 (the base qcow2 is never mutated). Missing KVM/secrets/deps → the suite **skips**
 cleanly, never errors. (CI sets `SMOKE_IMAGE_DIR` instead, pointing at the
-pre-pulled image, so it can block egress before pytest.)
+pre-pulled image, so the fixture blocks egress after `deploy()` without
+needing another network pull.)
 
 ### Rebuilding the image on a CE bump
 
