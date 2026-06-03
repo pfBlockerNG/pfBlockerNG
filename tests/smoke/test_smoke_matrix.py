@@ -15,16 +15,31 @@ Every expected answer is pinned to the REAL matcher semantics in
 ``src/usr/local/pkg/pfblockerng/pfb_unbound.py`` + ``pfblockerng.inc`` (verified
 against source, not guessed):
 
-* DNSBL **python** mode (``dnsbl_python`` + ``pfb_py_block``): the whole feed is
-  written to ``pfb_py_data.txt`` as EXACT entries (``inc:8966-8970``; zone files
-  are only produced by the out-of-scope TLD feature). ``evaluate_domain``
-  (``pfb_unbound.py:1707``) looks the name up in ``dataDB`` EXACTLY — a matched
-  name yields NXDOMAIN; a SUBDOMAIN of it is NOT in ``dataDB`` and is NOT blocked.
-* DNSBL **unbound** mode (``dnsbl_unbound``): each domain becomes an Unbound
-  ``local-zone: "<d>" redirect`` (``inc:3069``/feed path ``inc:8670``), which is
-  a WILDCARD — it answers for ``<d>`` AND every subdomain. ``logging='disabled'``
-  sinkholes to ``0.0.0.0``/``::0`` (NULL); ``logging='enabled'`` sinkholes to the
-  DNSBL VIP (``pfb_dnsvip4``).
+* DNSBL **python** mode (the ONLY mode on ``next``): the feed is written to
+  ``pfb_py_data.txt`` as EXACT entries (``inc:8966-8970``; zone files are only
+  produced by the out-of-scope TLD feature). ``evaluate_domain``
+  (``pfb_unbound.py:evaluate_domain``) looks the name up in ``dataDB`` EXACTLY.
+  The response shape is:
+
+  - ``logging='enabled'`` → ``logging_type='1'`` → ``null_blocking=False``
+    → NOERROR + A = DNSBL VIP (``pfb_dnsvip4``). (**VIP** shape.)
+  - ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True``
+    → NOERROR + A = ``0.0.0.0`` / AAAA = ``::0``. (**NULL** shape.)
+
+  A matched subdomain is NOT in ``dataDB`` and is NOT blocked (exact match only).
+  NXDOMAIN is NEVER the response for a normal feed match (verified on the live
+  box); the only NXDOMAIN path is SafeSearch.
+
+  Probed ON-BOX (``drill @127.0.0.1`` over SSH): verified on a live box that
+  python-mode DNSBL has NO localhost exemption — a blocked name returns its block
+  shape even for a 127.0.0.1 query. (The QEMU SLIRP WAN-hostfwd path, unlike a real
+  LAN client, is not answered in CI — so we don't use it.)
+
+  Two domain constraints, both load-bearing (see ``helpers.unique_domain``):
+  test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — Unbound's
+  built-in ``local-zone``s shadow them (NXDOMAIN/NODATA) before DNSBL — and must
+  NOT be HSTS-preload — with HSTS on (the default ``pfb_hsts``), a preload domain's
+  VIP block is forced to NULL. A random ``uuid-*.com`` satisfies both.
 * WHITELIST (``suppression``): ``whitelist_check_domain`` short-circuits before
   any block shape, so a suppressed name resolves via its control ``local-data``.
 * DNSBL-IP dual-stack (``action != 'Disabled'``): IP literals in the DNSBL feed
@@ -49,16 +64,6 @@ from .conftest import SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
-# Python-mode DNSBL can't be exercised in this VM topology: verified on a live
-# box that the python block does NOT engage for the firewall's OWN (localhost)
-# query — and the single-NIC smoke VM has only localhost + WAN (no LAN client),
-# while the WAN path isn't served. (Module loaded, python_blocking=on, domain in
-# pfb_py_data, py_error empty — it's a source/topology limitation, not a bug.)
-# Unbound mode DOES block the on-box query, so the matrix asserts that here.
-# Deferred to the `next` branch, where Unbound mode is removed and ONLY python
-# mode remains — the matrix will be adapted to drive python mode there.
-_PY_MODE_SKIP = "python-mode DNSBL shape not testable on single-NIC VM (localhost-exempt, no LAN); covered in next"
-
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
@@ -67,11 +72,15 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 
     Egress stays OPEN during a pfBlockerNG reload (the DNSBL update path needs a
     working resolver/network) and ``CaseContext`` blocks it only for the per-case
-    DNS probe. The probe stays hermetic because Unbound's only upstream is the
-    runner-side stub (configure_upstream), reachable over SLIRP even with egress
-    blocked — so a query resolves (block shape locally, or the sentinel) instead
-    of hanging on dark-root recursion. deploy() needs egress (`pkg add` pulls
-    RUN_DEPENDS via SLIRP). unblock on teardown as a safety net.
+    DNS probe. The probe stays hermetic because every name the matrix asserts
+    resolves LOCALLY — a blocked name is intercepted by the python module before
+    the forwarder, and a control/whitelist name answers from its injected host
+    override — so the probe never needs upstream egress. (``configure_upstream``
+    is intentionally NOT called: the baked image already forwards on its own;
+    injecting a second ``forward-zone "."`` broke Unbound.) deploy() needs no
+    egress for dependencies either — the pre-baked image ships pfBlockerNG's
+    RUN_DEPENDS, so ``pkg add`` resolves them from the local pkg db offline.
+    unblock on teardown as a safety net.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
@@ -81,18 +90,19 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.snapshot_unbound_conf(smoke_vm)
     h.snap_state(smoke_vm, "deployed")
     # DNSBL force-disables itself without a VIP (pfb_validate_vips); pfBlockerNG
-    # never auto-creates one, so inject the lo0 sinkhole VIP once for the matrix.
+    # never auto-creates one and the image does NOT bake one, so inject the lo0
+    # sinkhole VIP once for the matrix. dns_probe queries on-box (drill
+    # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
     h.ensure_dnsbl_vip(smoke_vm)
     h.snap_state(smoke_vm, "vip")
-    # NOTE: configure_upstream() is intentionally NOT called — the image's Unbound
-    # already forwards (forward-zone . -> 10.0.2.3/1.1.1.1/1.0.0.1), so adding a
-    # second "." forward-zone broke Unbound outright. The DNSBL-active probe
-    # timeout is NOT an upstream problem; left for the config-XML analysis
-    # (suspected Unbound access-control for the WAN-sourced hostfwd query).
     try:
         yield smoke_vm
     finally:
         h.unblock_egress()
+        # ALWAYS collect a full guest snapshot (all /var/log, dmesg, pf, unbound,
+        # scrubbed config.xml) for the workflow to upload — for this debug and for
+        # after-the-fact analysis. Best-effort; never masks a test result.
+        h.collect_host_diagnostics(smoke_vm)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,10 +135,49 @@ def test_ip_alias_table_and_rule(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 # --------------------------------------------------------------------------- #
 
 
-def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """EXACT + NXDOMAIN (python mode) — DEFERRED to `next` (see _PY_MODE_SKIP)."""
-    pytest.skip(_PY_MODE_SKIP)
-    domain = "blocked-exact.pfb.test"
+def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """pfBlockerNG DNSBL reload only adds python-module config to unbound.conf.
+
+    When DNSBL is enabled, pfBlockerNG is allowed to make exactly ONE class of
+    change to Unbound's configuration: adding the python iterator module directives
+    (``module-config``, ``python-script``, and pfBlockerNG managed ``include``
+    lines, plus the DNSBL VIP ``interface:`` entry).  No other configuration —
+    access-control, forward-zones, server tuning — may be removed or altered.
+
+    This guards against pfBlockerNG silently clobbering custom Unbound config
+    (e.g. the DNS-Resolver ACLs in access_lists.conf) during a reload.
+    """
+    # Baseline the EFFECTIVE unbound config (unbound.conf + all *.conf includes,
+    # so access_lists.conf etc. are covered) AND the live ACLs, BEFORE DNSBL is
+    # applied. The case carries no control records, so the only legitimate delta
+    # is pfBlockerNG's python-module config.
+    h.snapshot_unbound_effective(deployed_vm)
+    acls_before = h.unbound_access_control(deployed_vm)
+    domain = h.unique_domain("cfgimmut")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_cfgimmut.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokecfgimmut", feed_url=feed_url, header="smokecfgimmut")
+    with h.CaseContext(deployed_vm, spec):
+        h.assert_unbound_adds_only_python_config(deployed_vm)
+        # Authoritative ACL check via the daemon itself (unbound-control), not a
+        # file grep: the DNSBL reload must not drop/alter the resolver ACLs.
+        acls_after = h.unbound_access_control(deployed_vm)
+        assert acls_after == acls_before, (
+            f"DNSBL reload changed Unbound ACLs: before={sorted(acls_before)} after={sorted(acls_after)}"
+        )
+
+
+def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Python-mode exact block: NOERROR + VIP for the listed domain; subdomain passes.
+
+    Verified on the live box: python mode writes the feed to ``pfb_py_data.txt``
+    as EXACT entries.  ``evaluate_domain`` looks the name up in ``dataDB`` EXACTLY
+    — ``logging='enabled'`` → ``null_blocking=False`` → NOERROR + A = DNSBL VIP.
+    A subdomain is NOT in ``dataDB`` and resolves normally (exact, not wildcard).
+    Probed on-box (``drill @127.0.0.1``); python-mode has no localhost exemption,
+    so the block shows there. Domain is a unique non-RFC-6761 ``.com`` so no
+    Unbound local-zone shadows it.
+    """
+    domain = h.unique_domain("blocked")
     sub = f"x.{domain}"
     sub_ip = "198.51.100.40"
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_exact.txt", f"{domain}\n")
@@ -136,27 +185,27 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         aliasname="smokeexact",
         feed_url=feed_url,
         header="smokeexact",
-        mode=h.DnsblMode.NXDOMAIN,
+        mode=h.DnsblMode.VIP,
         control_local_data={sub: {"A": sub_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
         blocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_nxdomain(blocked), f"{domain} expected NXDOMAIN, got {blocked}"
-        # EXACT does NOT block the subdomain: it resolves to its control answer.
+        assert h.is_vip(blocked), f"{domain} expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
+        # EXACT match: subdomain NOT in dataDB, resolves to its control answer.
         passed = h.dns_probe(deployed_vm, sub, "A")
         assert h.resolves_to(passed, sub_ip), f"{sub} should resolve to {sub_ip} (exact != wildcard), got {passed}"
-        assert not h.is_nxdomain(passed), f"{sub} wrongly blocked as NXDOMAIN: {passed}"
+        assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
 
 
 def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """NULL sinkhole (0.0.0.0/::0) — a python-mode shape; DEFERRED to `next`.
+    """Python-mode null sinkhole: NOERROR + 0.0.0.0/::0 for a logging='disabled' feed.
 
-    Verified on the live box: Unbound mode ALWAYS sinkholes to the VIP (the
-    redirect local-data uses dnsbl_vip4, inc:2897) — null 0.0.0.0 only happens in
-    python mode (null_blocking), which isn't testable here (see _PY_MODE_SKIP).
+    ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True`` →
+    pfb_unbound.py answers NOERROR + A 0.0.0.0 / AAAA ::0. The domain is a unique
+    non-HSTS-preload ``.com`` so HSTS (on by default) does not also force NULL —
+    NULL here is purely the per-list ``logging='disabled'`` path.
     """
-    pytest.skip(_PY_MODE_SKIP)
-    domain = "blocked-null.pfb.test"
+    domain = h.unique_domain("null")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_null.txt", f"{domain}\n")
     spec = h.DnsblCase(
         aliasname="smokenull",
@@ -173,56 +222,27 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
         )
 
 
-def test_dnsbl_unbound_exact_block(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Unbound-mode block: the EXACT domain -> NOERROR + the DNSBL VIP; a
-    subdomain is NOT blocked.
-
-    Verified against the live box: Unbound mode writes EXACT
-    ``local-data: "<d> 60 IN A <vip>"`` (NOT a ``local-zone redirect`` wildcard,
-    contrary to the ADR's original reading) — so it sinkholes the listed domain
-    to the VIP and leaves subdomains untouched. Probed on-box (drill @127.0.0.1);
-    a real LAN client sees the same. This is the automatable DNSBL-blocking proof
-    in this VM topology; the python-mode NXDOMAIN/null shapes are deferred to
-    `next` (see _PY_MODE_SKIP).
-    """
-    domain = "blocked-wild.pfb.test"
-    deep = f"a.b.{domain}"
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unbound.txt", f"{domain}\n")
-    spec = h.DnsblCase(
-        aliasname="smokeunb",
-        feed_url=feed_url,
-        header="smokeunb",
-        mode=h.DnsblMode.VIP,
-    )
-    with h.CaseContext(deployed_vm, spec):
-        apex = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(apex), f"{domain} (apex) expected VIP {h.DEFAULT_DNSBL_VIP4}, got {apex}"
-        # EXACT local-data, not a wildcard: the subdomain is NOT sinkholed to the VIP.
-        sub = h.dns_probe(deployed_vm, deep, "A")
-        assert not h.is_vip(sub), f"{deep} unexpectedly VIP-blocked (unbound mode is exact, not wildcard): {sub}"
-
-
 def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """WHITELIST: a domain on the whitelist AND in the block feed RESOLVES.
 
     ``suppression`` short-circuits before any block shape, so the name resolves
     via its control ``local-data`` (a true pass) — NOT NXDOMAIN/null/VIP.
     """
-    domain = "allowed.pfb.test"
+    domain = h.unique_domain("allowed")
     pass_ip = "198.51.100.77"
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_white.txt", f"{domain}\n")
     spec = h.DnsblCase(
         aliasname="smokewhite",
         feed_url=feed_url,
         header="smokewhite",
-        mode=h.DnsblMode.NXDOMAIN,
+        mode=h.DnsblMode.VIP,
         whitelist=[domain],
         control_local_data={domain: {"A": pass_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
         answer = h.dns_probe(deployed_vm, domain, "A")
         assert h.resolves_to(answer, pass_ip), f"whitelisted {domain} should resolve to {pass_ip}, got {answer}"
-        assert not h.is_nxdomain(answer), f"whitelisted {domain} wrongly NXDOMAIN: {answer}"
+        assert not h.is_vip(answer), f"whitelisted {domain} wrongly VIP-blocked: {answer}"
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
 
@@ -240,13 +260,16 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
     inc:9306) — each holding ONLY its own family, never merged onto one table.
     The inet/inet6 rules must reference the matching table.
 
-    DEFERRED: pfB_DNSBLIP_* was not created on the live box from a raw-IP DNSBL
-    feed — the DNSBL-IP IP-extraction path needs investigation (likely tied to the
-    python-mode DNSBL processing that's also deferred). Revisit alongside the
-    `next` adaptation; the IP-firewall path itself is already proven by
-    test_ip_alias_table_and_rule.
+    DEFERRED: ``pfB_DNSBLIP_v4`` / ``pfB_DNSBLIP_v6`` are not present when
+    ``pfctl_tables()`` runs — the tables appear in teardown diagnostics, showing
+    that ``filter_configure`` populates them asynchronously after
+    ``pfblockerng.php update`` exits.  The assertion needs a polling helper (like
+    ``rule_references``).  Re-deferred; the IP-firewall path itself is already
+    proven by ``test_ip_alias_table_and_rule``.
     """
-    pytest.skip("DNSBL-IP table not populated from a raw-IP DNSBL feed; deferred (see docstring / `next`)")
+    pytest.skip(
+        "pfB_DNSBLIP_v4/v6 populated async by filter_configure; needs poll-based assertion — deferred (see docstring)"
+    )
     v4 = "203.0.113.7"  # RFC 5737 documentation range
     v6 = "2001:db8:5::7"  # RFC 3849 documentation range
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsblip_dual.txt", f"{v4}\n{v6}\n")
@@ -291,11 +314,11 @@ def _is_v4_literal(member: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason="deliberately-wrong expectation: a real NXDOMAIN block is NOT a pass")
+@pytest.mark.xfail(strict=True, reason="deliberately-wrong expectation: a real VIP block is NOT a pass")
 def test_false_green_guard_vm(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """STRICT-xfail guard: assert a real block RESOLVES — it must NOT.
 
-    Blocks ``guard.pfb.test`` (NXDOMAIN) then asserts it resolves to a pass IP.
+    Blocks a unique domain (VIP) then asserts it resolves to a pass IP.
     That assertion is FALSE on a working harness, so the test fails -> the
     ``strict=True`` xfail turns the failure into the expected outcome (green
     overall). If a broken/lenient harness silently let the block "pass", this
@@ -303,15 +326,15 @@ def test_false_green_guard_vm(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
     catching a false-green at the VM level (on top of the pure-Python guard in
     test_smoke_helpers.py::test_false_green_guard).
     """
-    domain = "guard.pfb.test"
+    domain = h.unique_domain("guard")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_guard.txt", f"{domain}\n")
     spec = h.DnsblCase(
         aliasname="smokeguard",
         feed_url=feed_url,
         header="smokeguard",
-        mode=h.DnsblMode.NXDOMAIN,
+        mode=h.DnsblMode.VIP,
     )
     with h.CaseContext(deployed_vm, spec):
         answer = h.dns_probe(deployed_vm, domain, "A")
-        # WRONG on purpose: a NXDOMAIN block does not resolve to a pass IP.
+        # WRONG on purpose: a VIP block does not resolve to a pass IP.
         assert h.resolves_to(answer, "198.51.100.250"), "expected (wrongly) to resolve — must fail"
