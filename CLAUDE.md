@@ -223,8 +223,9 @@ truths are non-obvious and each cost real debugging — internalise them first:
   Image caches are content-keyed (smoke qcow2 by GHCR digest; FreeBSD base by
   published SHA256, verified) so a same-tag re-push invalidates automatically.
 - **Every run uploads a full guest snapshot** (`smoke-diagnostics` artifact: all
-  `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state, `/var/db/pfblockerng`
-  + `/var/db/aliastables`, scrubbed `config.xml`). On any failure, read it first.
+  `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state,
+  `/var/db/pfblockerng` and `/var/db/aliastables`, scrubbed `config.xml`). On any
+  failure, read it first.
 
 Full journey, verified response model, and per-step instrument (`SMOKE_STATE_DIFF`):
 `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/`.
