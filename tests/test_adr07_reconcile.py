@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from types import ModuleType
 
 import pytest
 
@@ -34,7 +35,7 @@ from tests import test_adr07_decision_spec as spec
 # --------------------------------------------------------------------------- #
 
 
-def _spike():
+def _spike() -> ModuleType:
     spike_path = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "spike_adr07_regex.py")
     s = importlib.util.spec_from_file_location("spike_adr07_regex", spike_path)
     assert s and s.loader
@@ -64,7 +65,7 @@ def _irreducible_lines() -> list[str]:
         return [ln.strip() for ln in fh if ln.strip() and not ln.startswith("!")]
 
 
-def _production_rules(lines, provenance=P.RULE_PROV_FEED):
+def _production_rules(lines: list[str], provenance: str = P.RULE_PROV_FEED) -> list[P.Rule]:
     """parse_abp each line (skip None) -> production Rule list."""
     out = []
     for ln in lines:
@@ -86,11 +87,11 @@ _TLDS: dict[str, dict[str, str]] = {
 _EXCLUSION: set[str] = set()
 
 
-def _reconcile(lines, provenance=P.RULE_PROV_FEED):
+def _reconcile(lines: list[str], provenance: str = P.RULE_PROV_FEED) -> P.ReconcileResult:
     return P.reconcile(_production_rules(lines, provenance), _TLDS, _EXCLUSION)
 
 
-def _resolve(result, query):
+def _resolve(result: P.ReconcileResult, query: str) -> str:
     """Reduce a ReconcileResult + a query to the spec's {block, resolve, pass}
     label, using the SAME 6-band rule decide() uses: blocked iff a block matches
     AND block_band > allow_band (no ties). This is the production-side mirror of
@@ -101,7 +102,7 @@ def _resolve(result, query):
     ap = 0
     matched = False
 
-    def dom_match(domain, wildcard):
+    def dom_match(domain: str, wildcard: bool) -> bool:
         if q == domain:
             return True
         return wildcard and q.endswith("." + domain)
@@ -358,7 +359,7 @@ class TestPrecedenceVsOracle:
             (["||a.example.com^", "||a.example.com^$badfilter"], "a.example.com"),
         ],
     )
-    def test_matches_oracle_decide(self, lines, query) -> None:
+    def test_matches_oracle_decide(self, lines: list[str], query: str) -> None:
         # production reconcile+resolve == oracle decide() on every feed-only case.
         res = _reconcile(lines)
         ora = spec.decide(spec.rules_from(lines), query)

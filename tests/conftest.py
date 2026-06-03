@@ -26,7 +26,7 @@ import pfb_unbound  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def reset_pfb_globals():
+def reset_pfb_globals() -> None:
     unboundmodule.DNSMessage.instances = []
 
     pfb_unbound.pfb = {

@@ -73,6 +73,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from types import ModuleType
 from typing import Iterable
 
 import pytest
@@ -818,7 +819,7 @@ def test_no_regression_no_important_rules_flag() -> None:
 
 
 # --- 10. corpus agreement: the spec parser agrees with the Phase-1 spike ---- #
-def _spike():
+def _spike() -> ModuleType:
     import importlib.util
     import os
 

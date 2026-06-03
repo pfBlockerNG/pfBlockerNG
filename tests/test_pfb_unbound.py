@@ -284,7 +284,7 @@ class TestDbSubsystem:
     """Persistent sqlite subsystem (ADR-03). With no DB worker running, pfb_db_enqueue
     falls back to synchronous execution, so these drive the same SQL the worker batches."""
 
-    def _resolver(self, tmp_path):
+    def _resolver(self, tmp_path: Any) -> str:
         db = str(tmp_path / "resolver.sqlite")
         pfb_unbound.pfb["pfb_py_resolver"] = db
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
@@ -409,14 +409,14 @@ class TestDbConcurrencyAndPerf:
         n = 100
         errors: list = []
 
-        def py_side():
+        def py_side() -> None:
             try:
                 for _ in range(n):
                     pfb_unbound.pfb_db_enqueue(("resolver",))  # sync -> persistent WAL conn
             except Exception as e:
                 errors.append(e)
 
-        def php_side():
+        def php_side() -> None:
             # Mimics pfBlockerNG_clearsqlite / widget: a separate connection writing
             # the same WAL db with a busy timeout, concurrently.
             try:
@@ -451,7 +451,7 @@ class TestDbConcurrencyAndPerf:
         real_connect = sqlite3.connect
         count = {"n": 0}
 
-        def counting_connect(*a, **k):
+        def counting_connect(*a: Any, **k: Any) -> Any:
             count["n"] += 1
             return real_connect(*a, **k)
 
@@ -468,7 +468,7 @@ class TestLogging:
     """Persistent-handle logging pipeline (ADR-03 P2): QueueHandler -> QueueListener
     -> WatchedFileHandler. Lines must be byte-identical to the old open/append."""
 
-    def _setup(self, tmp_path, monkeypatch):
+    def _setup(self, tmp_path: Any, monkeypatch: Any) -> tuple[str, str, str]:
         paths = (
             str(tmp_path / "dnsbl.log"),
             str(tmp_path / "dns_reply.log"),
@@ -711,7 +711,13 @@ class TestGetQIp:
         assert pfb_unbound.get_q_ip(qstate) == "Unknown"
 
 
-def make_qstate(qname="example.com.", qtype=1, q_ip=None, return_msg=None, return_rcode=0):
+def make_qstate(
+    qname: str = "example.com.",
+    qtype: int = 1,
+    q_ip: str | None = None,
+    return_msg: Any = None,
+    return_rcode: int = 0,
+) -> types.SimpleNamespace:
     reply_list = None
     if q_ip is not None:
         reply_list = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr=q_ip), next=None)
@@ -783,7 +789,7 @@ class TestOperateNoAAAA:
 
 
 class TestOperateDnsbl:
-    def _enable(self, monkeypatch):
+    def _enable(self, monkeypatch: Any) -> None:
         pfb_unbound.pfb["python_blacklist"] = True
         pfb_unbound.pfb["python_blocking"] = True
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
@@ -851,7 +857,7 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
     @staticmethod
-    def _cname_reply(orig_qname="orig.com."):
+    def _cname_reply(orig_qname: str = "orig.com.") -> types.SimpleNamespace:
         # A resolved answer carrying a CNAME chain: a CNAME rrset + an A rrset
         # (an_numrrsets > 1) -- the exact shape operate()'s CNAME walk reads. The
         # CNAME target string comes from convert_other(rr_data) (monkeypatched in the
@@ -936,7 +942,7 @@ class TestOperateDnsbl:
         calls = {"n": 0}
         orig = DNSMessage.set_return_msg
 
-        def counting(self, qstate):
+        def counting(self: Any, qstate: Any) -> bool:
             calls["n"] += 1
             return orig(self, qstate)
 
@@ -968,7 +974,7 @@ class TestGetDetailsReplyNoaaaa:
     """The reply-x gate in get_details_reply only proceeds for an AAAA reply
     whose name has an exact noAAAA entry (``noAAAADB.get(name) is not None``)."""
 
-    def _aaaa_qstate(self, qname):
+    def _aaaa_qstate(self, qname: str) -> types.SimpleNamespace:
         qstate = make_qstate(qname, qtype=RR_AAAA)
         qstate.qinfo.qtype_str = "AAAA"  # get_o_type falls back to this when return_msg is None
         qstate.return_msg = None
@@ -1342,7 +1348,7 @@ class TestPureMatcherProperties:
 # ---------------------------------------------------------------------------
 
 
-def _make_cfg(**overrides):
+def _make_cfg(**overrides: Any) -> dict:
     """Return a minimal cfg dict with safe defaults; caller overrides as needed."""
     base = {
         "python_blocking": True,
@@ -1363,7 +1369,7 @@ def _make_cfg(**overrides):
     return base
 
 
-def _make_containers(**overrides):
+def _make_containers(**overrides: Any) -> dict:
     """Return a containers dict of the flat matching structures; the caller
     overrides individual ones (dataDB/zoneDB/whiteDB/hstsDB/regexDB/
     feedGroupIndexDB), matching what evaluate_domain reads."""
