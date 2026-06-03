@@ -629,7 +629,8 @@ def init_standard(id: int, env: module_env) -> bool:
                 # ADR-07 P6: MERGE the ABP feed block-regex into regexDB (preserving the
                 # user-regex patterns compiled from the REGEX ini section above) and load
                 # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
-                # band + $important; user regex stay bare compiled (feed band 1).
+                # band + $important; user regex are the {re, band: PRIO_USER_BLOCK (5)}
+                # payload (sovereign over feed allows -- loaded above).
                 regexDB.update(build_result.regex_db)
                 allowRegexDB.update(build_result.allow_regex_db)
 
