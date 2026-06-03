@@ -278,10 +278,9 @@ def test_abp_whitelist_sovereign_over_important(deployed_vm: SmokeVM, mock_feeds
 
     The settings whitelist (``suppression``) loads into whiteDB as a user allow
     (``important=True`` → band 6, ``_white_entry_band``). vs feed block+``$important``
-    band 3: allow_band 6 ≥ block_band 3 → resolves (to its control IP). This is the
-    one UNAMBIGUOUS sovereign user lever in DNSBL python mode. (User *regex* load at
-    feed band 1, not the oracle's user band 5 — see ADR.md "Live smoke" note — so
-    user-regex band-sovereignty is intentionally NOT asserted here.)
+    band 3: allow_band 6 ≥ block_band 3 → resolves (to its control IP). The whitelist
+    is the ultimate override — it beats even a sovereign user regex (band 5), proven
+    by ``test_user_regex_beats_feed_important_allow`` below.
     """
     w = h.unique_domain("abpwl")
     body = h.abp_feed(f"||{w}^$important")
@@ -322,6 +321,31 @@ def test_user_regex_blocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) ->
     with h.CaseContext(deployed_vm, spec):
         ans = h.dns_probe(deployed_vm, blocked, "A")
         assert h.is_vip(ans), f"user-regex-matched {blocked} expected VIP block, got {ans}"
+
+
+def test_user_regex_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A user regex is SOVEREIGN over an ABP feed allow — even ``@@…$important``.
+
+    A user ``pfb_regex_list`` pattern matching the name (band 5, user block) vs a feed
+    ``@@||name^$important`` (band 4, feed allow+important): block_band 5 > allow_band 4
+    → the name stays VIP-blocked. The user regex loads as the band-5 payload
+    (``PRIO_USER_BLOCK``) so a feed ``@@`` can never un-block it; only the user
+    whitelist (band 6) can — see ``test_abp_whitelist_sovereign_over_important``.
+    """
+    uid = h.unique_domain("urxsov").split(".", 1)[0]
+    name = f"trackerx-{uid}.com"
+    body = h.abp_feed(f"@@||{name}^$important")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_user_regex_sov.txt", body)
+    spec = h.DnsblCase(
+        aliasname="smokeurxsov",
+        feed_url=feed_url,
+        header="smokeurxsov",
+        mode=h.DnsblMode.VIP,
+        user_regex=[r"trackerx-"],
+    )
+    with h.CaseContext(deployed_vm, spec):
+        ans = h.dns_probe(deployed_vm, name, "A")
+        assert h.is_vip(ans), f"user regex (band 5) must beat feed @@$important (band 4): {name} -> {ans}"
 
 
 # --------------------------------------------------------------------------- #

@@ -274,6 +274,56 @@ class TestNumericBandResolution:
         assert self._decide(False, {}, {"r": r"benign"}) is False
 
 
+class TestUserRegexSovereign:
+    """A USER regex is band 5 (user block): it beats ANY feed allow (@@ band 2 /
+    @@$important band 4) but still loses to the user whitelist (band 6).
+
+    Pins the ADR-07 fix where the init loads a user ``pfb_regex_list`` pattern as the
+    ``{"re","important","band": PRIO_USER_BLOCK}`` payload (not a bare compiled pattern,
+    which ``_block_entry_band`` would score at feed band 1 and a feed @@ would override).
+    """
+
+    def _decide(self, *, white_db: dict, allow_regex_db: dict) -> bool:
+        import re
+
+        cfg = _cfg(
+            regexDB=True,
+            whiteDB=bool(white_db),
+            allowRegexDB=bool(allow_regex_db),
+            important_rules=True,
+        )
+        compiled = {k: (re.compile(v) if isinstance(v, str) else v) for k, v in allow_regex_db.items()}
+        user_regex = {"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}}
+        containers = _containers(regexDB=user_regex, whiteDB=white_db, allowRegexDB=compiled)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        return dec.in_whitelist
+
+    def test_user_regex_blocks_with_no_allow(self) -> None:
+        assert self._decide(white_db={}, allow_regex_db={}) is False
+
+    def test_user_regex_beats_feed_allow_regex(self) -> None:
+        # band 5 user regex vs band 2 feed @@/re/ -> block stands (5 > 2).
+        assert self._decide(white_db={}, allow_regex_db={"r": r"evil"}) is False
+
+    def test_user_regex_beats_feed_important_allow(self) -> None:
+        # band 5 user regex vs band 4 feed @@...$important -> block stands (5 > 4).
+        import re
+
+        ar = {"r": {"re": re.compile(r"evil"), "important": True}}
+        assert self._decide(white_db={}, allow_regex_db=ar) is False
+
+    def test_user_regex_beats_feed_domain_allow(self) -> None:
+        # band 5 user regex vs band 2 feed @@||domain^ (whiteDB band 2) -> block stands.
+        assert (
+            self._decide(white_db={"evil.com": {"wildcard": False, "important": False, "band": 2}}, allow_regex_db={})
+            is False
+        )
+
+    def test_user_whitelist_still_beats_user_regex(self) -> None:
+        # band 6 user allow (settings whitelist) vs band 5 user regex -> allow wins.
+        assert self._decide(white_db={"evil.com": {"wildcard": False, "important": True}}, allow_regex_db={}) is True
+
+
 class TestNumericBranchUnreachableInProduction:
     """The numeric branch only fires when pfb['important_rules'] is True, which Phase 3
     never sets (no ABP rule parsed). Defaults stay False so production stays on the
