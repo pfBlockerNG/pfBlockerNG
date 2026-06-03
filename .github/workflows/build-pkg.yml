@@ -1,0 +1,257 @@
+name: build-pkg (FreeBSD)
+
+# Build the pfBlockerNG FreeBSD package for the branch under test on an OFFICIAL
+# FreeBSD VM-IMAGE whose major version matches the target pfSense base — so the
+# pkg ABI matches and the artifact installs on pfSense with `pkg add` (properly
+# registered, so rc.packages POST-INSTALL runs the package's hooks):
+#
+#   pfSense CE 2.8.1 -> FreeBSD 15  (releases/VM-IMAGES/15.0-RELEASE/...)
+#   pfSense Plus     -> FreeBSD 16  (snapshots/VM-IMAGES/16.0-CURRENT/...)
+#
+# We boot the BASIC-CLOUDINIT image under QEMU/KVM (cloud-init injects our SSH
+# key via a NoCloud seed) and drive it over SSH, running scripts/build-pkg.sh
+# inside it. This replaces the rsync-overlay install: less hacky, reproducible,
+# version-parameterised, and it tests the real packaged artifact.
+#
+# workflow_dispatch-only; never runs on push/PR.
+
+on:
+  # Standalone (dispatch) for iterating on the build, AND reusable so the smoke
+  # workflow can call it and consume the .pkg artifact (same inputs in both).
+  workflow_dispatch:
+    inputs:
+      freebsd_version:
+        description: "FreeBSD version for the build env — match the pfSense base (CE 2.8.1 = 15.0-RELEASE; Plus = 16.0-CURRENT)"
+        required: false
+        default: "15.0-RELEASE"
+      channel:
+        description: "pfBlockerNG channel/port (devel|stable)"
+        required: false
+        default: "devel"
+      php_version:
+        description: "PHP default to pin (match the target pfSense: CE 2.8.1 = 8.3)"
+        required: false
+        default: "8.3"
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework"
+        required: false
+        default: "andrebrait/FreeBSD-ports"
+      ports_ref:
+        description: "FreeBSD-ports branch"
+        required: false
+        default: "pfblockerng/use-github"
+  workflow_call:
+    inputs:
+      freebsd_version:
+        required: false
+        type: string
+        default: "15.0-RELEASE"
+      channel:
+        required: false
+        type: string
+        default: "devel"
+      php_version:
+        required: false
+        type: string
+        default: "8.3"
+      ports_repo:
+        required: false
+        type: string
+        default: "andrebrait/FreeBSD-ports"
+      ports_ref:
+        required: false
+        type: string
+        default: "pfblockerng/use-github"
+    outputs:
+      artifact:
+        description: "Name of the uploaded package artifact"
+        value: "pfBlockerNG-pkg"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build pfBlockerNG .pkg on FreeBSD
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout (for scripts/)
+        uses: actions/checkout@v6
+
+      - name: Enable KVM access for the runner user
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu, cloud-init seed builder)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils xz-utils openssh-client
+
+      - name: Resolve the FreeBSD image URL (programmatic, from the version)
+        id: img
+        run: |
+          set -eu
+          URL="$(sh scripts/freebsd-image-url.sh '${{ inputs.freebsd_version }}')"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "key=$(printf '%s' "$URL" | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${{ inputs.freebsd_version }} -> ${URL}"
+
+      - name: Restore cached FreeBSD image
+        id: imgcache
+        uses: actions/cache/restore@v5
+        with:
+          path: fbsd.qcow2
+          key: freebsd-img-${{ steps.img.outputs.key }}
+
+      - name: Fetch + decompress the FreeBSD image
+        if: steps.imgcache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          echo "Image: ${{ steps.img.outputs.url }}"
+          curl -fSL "${{ steps.img.outputs.url }}" -o fbsd.qcow2.xz
+          unxz fbsd.qcow2.xz
+          ls -l fbsd.qcow2
+
+      # Save immediately after download — BEFORE the (possibly failing) build —
+      # so the image is cached even when a later step fails. A single
+      # actions/cache only saves in its post-step, which we observed not
+      # persisting on a failed job.
+      - name: Save FreeBSD image to cache
+        if: steps.imgcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: fbsd.qcow2
+          key: freebsd-img-${{ steps.img.outputs.key }}
+
+      - name: Build the cloud-init seed (inject SSH key, enable root login)
+        run: |
+          set -eu
+          ssh-keygen -t ed25519 -N '' -f build_key -C pfb-build
+          PUB="$(cat build_key.pub)"
+          # The official FreeBSD image has no sudo/doas in base, so we log in as
+          # root and run the build as root. cloud-init installs the key for the
+          # default user (freebsd); runcmd copies it to root and permits root key
+          # login. printf (not heredoc) keeps #cloud-config at byte 0 and the
+          # YAML indentation exact.
+          {
+            printf '#cloud-config\n'
+            printf 'disable_root: false\n'
+            printf 'ssh_authorized_keys:\n'
+            printf '  - %s\n' "$PUB"
+            printf 'runcmd:\n'
+            printf '  - install -d -m 700 /root/.ssh\n'
+            printf '  - cp /home/freebsd/.ssh/authorized_keys /root/.ssh/authorized_keys\n'
+            printf '  - chmod 600 /root/.ssh/authorized_keys\n'
+            printf "  - sed -i '' -E 's/^#?[[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config\n"
+            printf '  - service sshd restart\n'
+          } > user-data
+          printf 'instance-id: pfb-build\nlocal-hostname: pfb-build\n' > meta-data
+          echo "---- user-data ----"; cat user-data
+          cloud-localds seed.img user-data meta-data
+          ls -l seed.img
+
+      - name: Boot the FreeBSD VM (headless, KVM)
+        run: |
+          set -eu
+          # The cloud image's disk is ~5 GB — too small for the ports checkout.
+          # Grow the virtual disk; the guest pool is expanded after boot. (Safe
+          # with snapshot=on: writes go to a throwaway overlay, base untouched.)
+          qemu-img resize fbsd.qcow2 +20G
+          # snapshot=on: never mutate the downloaded base. seed.img is the
+          # NoCloud datasource cloud-init reads to install our key. Serial to a
+          # file for diagnosis if it wedges.
+          qemu-system-x86_64 \
+            -enable-kvm -machine pc -cpu host -smp 2 -m 4096 \
+            -drive file=fbsd.qcow2,if=virtio,snapshot=on \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            -display none -serial file:fbsd-console.log &
+          echo $! > vm.pid
+          echo "qemu pid $(cat vm.pid)"
+
+      - name: Wait for root SSH (cloud-init runcmd done)
+        run: |
+          set -eu
+          # Poll root@ — it only answers AFTER cloud-init's runcmd has copied the
+          # key to root and permitted root login, so this also waits out
+          # cloud-init. (The freebsd user comes up earlier, but has no sudo.)
+          SSH_OPTS="-i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
+          for i in $(seq 1 96); do
+            # shellcheck disable=SC2086
+            if ssh $SSH_OPTS root@127.0.0.1 true 2>/dev/null; then
+              echo "root SSH up after ${i} attempt(s)"; exit 0
+            fi
+            if ! kill -0 "$(cat vm.pid)" 2>/dev/null; then
+              echo "::error::QEMU exited before SSH came up"; tail -n 80 fbsd-console.log || true; exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::FreeBSD VM root SSH never came up"; tail -n 120 fbsd-console.log || true; exit 1
+
+      - name: Expand the root ZFS pool to fill the grown disk
+        run: |
+          set -eu
+          SSH="ssh -i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1"
+          # Standard FreeBSD ZFS VM-IMAGE layout: single virtio disk (vtbd0) with
+          # a trailing freebsd-zfs partition backing pool 'zroot'. Recover the GPT
+          # to see the larger disk, grow the last partition, expand the pool.
+          # Best-effort: if the image already auto-grew, these are no-ops.
+          $SSH "set -e
+            DISK=vtbd0
+            gpart recover \$DISK || true
+            PART=\$(gpart show \$DISK | awk '\$4==\"freebsd-zfs\"{print \$3; exit}')
+            [ -n \"\$PART\" ] && gpart resize -i \"\$PART\" \$DISK || true
+            POOL=\$(zpool list -H -o name | head -1)
+            zpool set autoexpand=on \"\$POOL\" || true
+            zpool online -e \"\$POOL\" \"\${DISK}p\${PART}\" || true
+            df -h /"
+
+      - name: Build the package inside the VM
+        run: |
+          set -eu
+          SSH="ssh -i build_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1"
+          REF="${{ github.ref_name }}"
+          SHA="${{ github.sha }}"
+          # Running as root (no sudo on the base image). pkg may need bootstrap on
+          # a fresh image; ASSUME_ALWAYS_YES handles it. Clone the ports tree
+          # (port + Mk) for the build, and the branch (just to get build-pkg.sh).
+          # The build pins the port's USE_GITHUB fetch to $SHA (the branch HEAD
+          # commit), so `make package` packages that exact commit — not the tag.
+          $SSH "set -e
+            env ASSUME_ALWAYS_YES=yes pkg install -y git
+            git clone --depth 1 -b '${{ inputs.ports_ref }}' https://github.com/${{ inputs.ports_repo }} /root/ports
+            git clone --depth 1 -b \"$REF\" https://github.com/${{ github.repository }} /root/src
+            sh /root/src/scripts/build-pkg.sh --ports /root/ports --gh-tagname \"$SHA\" --channel '${{ inputs.channel }}' --php '${{ inputs.php_version }}' --out /tmp/out
+            ls -l /tmp/out"
+
+      - name: Retrieve the built package
+        run: |
+          set -eu
+          mkdir -p out
+          scp -i build_key -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            'root@127.0.0.1:/tmp/out/*' out/
+          ls -l out
+
+      - name: Upload package + console log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pfBlockerNG-pkg
+          path: |
+            out/*.pkg
+            out/*.txz
+            fbsd-console.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Teardown
+        if: always()
+        run: kill "$(cat vm.pid)" 2>/dev/null || true
