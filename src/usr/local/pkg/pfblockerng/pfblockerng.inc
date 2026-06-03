@@ -2351,8 +2351,10 @@ function pfb_dnsbl_abp_extract_ip($line) {
 		return '';
 	}
 
-	// hosts line: "<sink-ip> <target>" where the target is itself an IP.
-	if (strpos($s, ' ') !== FALSE) {
+	// hosts line: "<sink-ip> <target>" where the target is itself an IP. Gate on
+	// any whitespace (space OR tab) so tab-delimited hosts entries are not skipped;
+	// preg_split('/\s+/') already handles both.
+	if (preg_match('/\s/', $s)) {
 		$parts = preg_split('/\s+/', $s);
 		if (is_array($parts) && count($parts) >= 2 &&
 		    (is_ipaddrv4($parts[0]) || is_ipaddrv6($parts[0]))) {

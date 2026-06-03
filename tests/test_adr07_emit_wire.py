@@ -246,6 +246,19 @@ class TestLiveMatcherEqualsOracle:
         res = _build(feeds)
         assert _live_label(res, "x7.example.com") == "resolve"
 
+    def test_exact_then_wildcard_allow_keeps_subdomain_coverage(self) -> None:
+        # Same key, SAME band (both feed allow): an EXACT allow (reduced @@/^d$/)
+        # emitted BEFORE the wildcard allow (@@||d^) must not drop the wildcard's
+        # subdomain coverage -- the whiteDB suffix-walk only honours wildcard entries,
+        # so a first-writer-wins skip would leave sub.example.com blocked by the zone.
+        feeds = {"f": [r"@@/^example\.com$/", "@@||example.com^", "||example.com^"]}
+        res = _build(feeds)
+        assert res.white_db["example.com"]["wildcard"] is True
+        assert _live_label(res, "example.com") == "resolve"
+        assert _live_label(res, "sub.example.com") == "resolve"
+        for q in ("example.com", "sub.example.com"):
+            assert _live_label(res, q) == _oracle_label(feeds, [], q)
+
 
 # --------------------------------------------------------------------------- #
 # 4. User sovereignty (fact 7) is absolute -- user rules win over feeds + $important
