@@ -266,9 +266,11 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
     ``pfblockerng.php update`` exits.  The assertion needs a polling helper (like
     ``rule_references``).  Re-deferred; the IP-firewall path itself is already
     proven by ``test_ip_alias_table_and_rule``.
+    Tracked: https://github.com/andrebrait/pfBlockerNG/issues/35
     """
     pytest.skip(
-        "pfB_DNSBLIP_v4/v6 populated async by filter_configure; needs poll-based assertion — deferred (see docstring)"
+        "pfB_DNSBLIP_v4/v6 populated async by filter_configure; needs poll-based "
+        "assertion — deferred (see docstring; un-skip: #35)"
     )
     v4 = "203.0.113.7"  # RFC 5737 documentation range
     v6 = "2001:db8:5::7"  # RFC 3849 documentation range
