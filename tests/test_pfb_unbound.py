@@ -4,8 +4,6 @@ import re
 import types
 from collections import defaultdict
 
-import pytest
-
 import pfb_unbound
 
 # Unbound injects these as module-level globals at runtime; conftest stubs them
@@ -19,7 +17,6 @@ MODULE_WAIT_MODULE = builtins.MODULE_WAIT_MODULE
 MODULE_ERROR = builtins.MODULE_ERROR
 RCODE_NOERROR = builtins.RCODE_NOERROR
 from pfb_unbound import (
-    DnsblDecision,
     convert_ipv4,
     convert_ipv6,
     convert_other,

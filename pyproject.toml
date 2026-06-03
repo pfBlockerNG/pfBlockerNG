@@ -21,11 +21,12 @@ line-length    = 120
 [tool.ruff.lint]
 # E/W = pycodestyle  F = pyflakes  I = isort
 select = ["E", "F", "W", "I"]
-# pfb_unbound.py uses module-level `global` declarations and bare except
-# clauses for optional-dependency guards; suppress those specific rules.
+# pfb_unbound.py places a few imports inside try/except optional-dependency
+# guards (not at the top of the file); suppress only that. F401 (unused import)
+# IS enforced -- the TYPE_CHECKING / runtime-stub imports ruff already counts as
+# used, so nothing legitimate trips it.
 ignore = [
     "E402",  # module-level import not at top of file (intentional try/except guards)
-    "F401",  # imported but unused (some imports are conditional/side-effect)
 ]
 
 [tool.ruff.lint.isort]
