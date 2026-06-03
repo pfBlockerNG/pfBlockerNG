@@ -1,11 +1,16 @@
 #!/bin/sh
 # install-pkg.sh — install a locally-built pfBlockerNG .pkg onto a pfSense box
 # over SSH. Unlike the rsync overlay, `pkg add` registers the package in pkg's
-# database and runs its POST-INSTALL hooks (menus, services, Unbound wiring),
-# and resolves the RUN_DEPENDS from the configured repos. The .pkg is produced
-# by the FreeBSD build job (scripts/build-pkg.sh) for the exact branch commit.
+# database and runs its POST-INSTALL hooks (menus, services, Unbound wiring).
+# The .pkg is produced by the FreeBSD build job (scripts/build-pkg.sh) for the
+# exact branch commit.
 #
-# Needs egress on the target to fetch RUN_DEPENDS (open during the smoke spike).
+# RUN_DEPENDS: NOT fetched here. By convention the pre-baked smoke image ships
+# pfBlockerNG's runtime dependencies, so `pkg add` of the local .pkg resolves
+# them from the local pkg db and runs fully OFFLINE (no egress, no repo-catalogue
+# round-trip — a more stable deploy). If a dependency is missing, `pkg add` fails
+# loudly with "Missing dependency": that means the image is bad — fix the image
+# (re-bake with the deps), don't paper over it with a repo install here.
 #
 # Usage:
 #   install-pkg.sh <ssh-target> --pkg <local .pkg> [--port N] [--ssh-key PATH]
@@ -58,17 +63,11 @@ echo "==> Copying $(basename "$PKGFILE") to ${SSH_TARGET}:${REMOTE}"
 # shellcheck disable=SC2086
 scp ${SCP_OPTS} "$PKGFILE" "${SSH_TARGET}:${REMOTE}"
 
-# `pkg add` of a LOCAL file does not fetch the package's RUN_DEPENDS from the
-# repos (it just errors "Missing dependency"), so install them first — queried
-# straight from the package manifest (%dn) so the list always matches the .pkg —
-# then add the local file. `pkg add` then runs the package's POST-INSTALL hooks.
-echo "==> Installing the package's dependencies from the repos"
-DEPS="$(ssh_t "pkg query -F '${REMOTE}' '%dn'" 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
-echo "deps: ${DEPS}"
-if [ -n "${DEPS}" ]; then
-    ssh_t "env ASSUME_ALWAYS_YES=yes pkg install -y ${DEPS}"
-fi
-echo "==> pkg add ${REMOTE}"
+# `pkg add` of a LOCAL file resolves RUN_DEPENDS from the LOCAL pkg db — it does
+# not reach the repos when the deps are already installed. The smoke image bakes
+# pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then executes
+# the package's POST-INSTALL hooks. A "Missing dependency" error here = bad image.
+echo "==> pkg add ${REMOTE} (deps pre-baked; offline)"
 ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${REMOTE}'"
 
 # POST-INSTALL restarts Unbound asynchronously; wait for it before the caller

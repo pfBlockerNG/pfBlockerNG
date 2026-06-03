@@ -113,11 +113,14 @@ this gate across the version matrix.)*
 All of this MUST be baked at image-build time: a single-NIC WAN install is
 default-deny with no anti-lockout and Unbound refuses WAN-side recursion, so SSH
 / WebUI / DNS are unreachable until the config exists — it cannot be added later
-over SSH. `PFSENSE_CE_VERSION`-parameterised; pfBlockerNG is **NOT** baked.
+over SSH. `PFSENSE_CE_VERSION`-parameterised. The pfBlockerNG **package** is NOT
+baked (the harness `pkg add`s the branch `.pkg`), but its **dependencies ARE**
+(see below) so that install runs offline.
 
 | Baked item | Detail / source |
 | --- | --- |
 | Root SSH pubkey | `SMOKE_SSH_PUB_KEY` → root `authorized_keys`; root SSH enabled. Matching private half is the `SMOKE_SSH_PRIV_KEY` secret the workflows use. |
+| pfBlockerNG RUN_DEPENDS | **Convention (do not skip):** bake pfBlockerNG's runtime deps so the harness `pkg add` of the branch `.pkg` resolves them from the local pkg db **offline** (stable deploy; no repo round-trip). **Run [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh) on the box** when preparing the image (one per supported CE version). Full per-version list + purpose: [`docs/misc/pfSense_versions.md`](../../docs/misc/pfSense_versions.md). CE 2.8.x set (9, = the port `RUN_DEPENDS`): `libmaxminddb`, `py311-maxminddb`, `py311-sqlite3`, `lighttpd`, `jq`, `rsync`, `grepcidr`, `iprange`, `gnugrep` (`py311-*` track the base Python — `py312-*` on a 3.12 base; `rsync` is a real run-dep — rsync-format feeds). Authoritative = the port Makefile `RUN_DEPENDS` / `pkg info -d <pkg>`. A missing dep → `pkg add` "Missing dependency" → bad image, re-bake. |
 | Admin password | `SMOKE_ADMIN_PASSWORD` (bcrypt) in `config.xml`. Not exercised by the round-trip (SSH = key, WebUI = reachability) — available if scope grows. |
 | WAN pass rules | host → **22 (SSH), 80 (WebUI HTTP), 53 (DNS)**. Required — SSH unreachable otherwise. |
 | Unbound access-control | `access-control: 10.0.2.0/24 allow` (the SLIRP subnet) — Unbound refuses WAN-side recursion by default (`REFUSED`). |

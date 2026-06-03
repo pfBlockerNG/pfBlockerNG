@@ -67,10 +67,11 @@ ssh_t() {
 
 echo "==> Installing pfBlockerNG ($PKG_NAME) onto $SSH_TARGET from repo"
 
-# 0a) rsync is REQUIRED for the transport below; a fresh pfSense ships none.
-#     Check-then-install (pfSense's pkg repo carries it). Needs egress (open
-#     during the smoke spike / image build; the test job blocks egress only
-#     AFTER install). Fatal if it can't be installed — without it nothing syncs.
+# 0a) rsync — needed twice over: it is a pfBlockerNG RUN_DEPENDS (net/rsync, for
+#     rsync-format feed lists) AND the transport for the overlay sync below; a
+#     fresh pfSense ships none. Check-then-install (pfSense's pkg repo carries it).
+#     Needs egress (open during the smoke spike / image build; the test job blocks
+#     egress only AFTER install). Fatal if it can't be installed — nothing syncs.
 if ! ssh_t 'command -v rsync >/dev/null 2>&1'; then
     echo "==> rsync missing on target — installing via pkg"
     ssh_t 'env ASSUME_ALWAYS_YES=yes pkg install -y rsync' \
@@ -81,8 +82,8 @@ fi
 #     pfSense-pkg-pfBlockerNG[-devel]` pulls per the port Makefile — so the
 #     installed package is actually functional (jq/grepcidr/iprange for the IP
 #     path, libmaxminddb/py-maxminddb for GeoIP, py-sqlite3 for the DNSBL DB,
-#     etc.). Best-effort: a renamed/absent dep shouldn't block the smoke
-#     install, so warn rather than abort.
+#     lighttpd for the sinkhole webserver; rsync is handled in 0a). Best-effort:
+#     a renamed/absent dep shouldn't block the smoke install, so warn not abort.
 echo "==> Installing pfBlockerNG runtime dependencies (mirrors port RUN_DEPENDS)"
 ssh_t 'env ASSUME_ALWAYS_YES=yes pkg install -y libmaxminddb gnugrep grepcidr iprange jq lighttpd py311-sqlite3 py311-maxminddb' \
     || echo "WARN: some pfBlockerNG runtime deps failed to install (continuing)" >&2
