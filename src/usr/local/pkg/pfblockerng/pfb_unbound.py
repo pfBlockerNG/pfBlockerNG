@@ -2176,9 +2176,12 @@ def parse_abp(
         )
 
     # ---- hosts: "<ip> <domain>" ----------------------------------------- #
-    if " " in s:
-        first, _, target = s.partition(" ")
-        target = target.strip()
+    # Split on ANY whitespace (space OR tab): tab-delimited hosts lines are valid and
+    # must not fall through to the bare-domain path and get dropped. ABP network/regex
+    # rules are handled above, so a 2-token line here is a hosts line or junk.
+    parts = s.split(None, 1)
+    if len(parts) == 2:
+        first, target = parts[0], parts[1].strip()
         if not _dnsbl_is_ipv4(first):
             return None  # not a hosts line (a real ABP line never has a bare space)
         if _dnsbl_is_ipv4(target):
@@ -3569,11 +3572,12 @@ def evaluate_domain(
             b_eval = q_name
             log_type = "1"
 
-    # Resolution stratum. FAST PATH (important_rules False, today): the historical
-    # "a block is found, then an allow overrides it" -- whiteDB checked as a plain
-    # override, byte-for-byte the pre-P3 matcher. The numeric 6-band resolution is the
-    # important_rules==True branch; it is UNREACHABLE in production today (no $important
-    # rule is loaded) and is exercised only by synthetic-payload unit tests.
+    # Resolution stratum. FAST PATH (important_rules False): the historical "a block is
+    # found, then an allow overrides it" -- whiteDB checked as a plain override,
+    # byte-for-byte the pre-P3 matcher; this is the path when no ABP @@/regex/$important
+    # is loaded. The numeric 6-band resolution is the important_rules==True branch -- it
+    # IS reached in production once an ABP feed (or user regex / Custom_List) loads a
+    # feed @@ / $important / feed-regex (ADR-07 P6 wired it; not just synthetic tests).
     if is_found:
         if not cfg.get("important_rules", False):
             if cfg["whiteDB"]:
