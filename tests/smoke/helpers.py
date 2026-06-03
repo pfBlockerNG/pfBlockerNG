@@ -212,6 +212,13 @@ class DnsblCase:
                        quantifier / alternation-overlap pattern is DROPPED at load
                        for FEED and USER regex (pfb_unbound.py:_regex_exceeds_
                        static_cap), so it never enters regexDB or the admitted count.
+      custom_domains -> the DNSBL Group "Custom_List" (the list's base64 'custom'
+                       field). pfBlockerNG auto-generates a synthetic
+                       '{aliasname}_custom' row from it (inc:7752) which the manifest
+                       tags provenance='user' -> the Python build bands those domains
+                       as a SOVEREIGN user block (5), beating any feed allow (the user
+                       is the sovereign; lists are automated). This is the GUI
+                       Custom_List / the alerts "add to DNSBL customlist" button.
     """
 
     aliasname: str
@@ -226,6 +233,7 @@ class DnsblCase:
     extra_rows: list[tuple[str, str]] = field(default_factory=list)
     user_regex: list[str] = field(default_factory=list)
     regex_cap: bool = False
+    custom_domains: list[str] = field(default_factory=list)
 
     @property
     def alias(self) -> str:
@@ -671,6 +679,13 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         "cron": "EveryDay",
         "order": "primary",
     }
+    # The DNSBL Group Custom_List: a base64 'custom' field (CRLF-joined domains, the
+    # exact shape pfbng_text_area_decode expects, inc:1120). A non-empty 'custom'
+    # makes pfBlockerNG auto-generate the sovereign '{aliasname}_custom' row.
+    custom_line = ""
+    if spec.custom_domains:
+        crlf = "\r\n".join(spec.custom_domains)
+        custom_line = f"$list['custom'] = base64_encode({_php_str(crlf)});\n"
     return (
         # pfBlockerNG must be globally enabled for the DNSBL (and DNSBL-IP)
         # paths to run (inc:793 reads enable_cb; inc:3389/9307 gate on it).
@@ -686,6 +701,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # (inc: 'if ($list[\\'logging\\'] == \\'disabled\\')'), NOT a per-row value.
         # 'disabled' -> logging_type 2 -> null 0.0.0.0; else -> VIP.
         f"$list['logging'] = {_php_str(_dnsbl_list_logging(spec.mode))};\n"
+        f"{custom_line}"
         f"config_set_path({_php_str(CFG_DNSBL_LISTS)}, array($list));\n"
         "write_config('pfBlockerNG smoke: DNSBL case');\n"
         "echo 'OK';"

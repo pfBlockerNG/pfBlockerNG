@@ -348,8 +348,33 @@ def test_user_regex_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds:
         assert h.is_vip(ans), f"user regex (band 5) must beat feed @@$important (band 4): {name} -> {ans}"
 
 
+def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A DNSBL Group Custom_List entry is SOVEREIGN over a feed ``@@…$important``.
+
+    The user is the sovereign: an explicit Custom_List block (band 5, the
+    ``{alias}_custom`` row tagged provenance='user' through the manifest) must beat a
+    feed ``@@||name^$important`` (band 4) — block_band 5 > allow_band 4 → VIP. This is
+    the live proof of the PHP→Python provenance threading the build() unit tests
+    (``TestUserCustomListSovereign``) prove in pure Python. The feed alone would
+    un-block the name (the ADR-04 contrast); the user's Custom_List overrides it.
+    """
+    name = h.unique_domain("custsov")
+    body = h.abp_feed(f"@@||{name}^$important")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_custsov.txt", body)
+    spec = h.DnsblCase(
+        aliasname="smokecustsov",
+        feed_url=feed_url,
+        header="smokecustsov",
+        mode=h.DnsblMode.VIP,
+        custom_domains=[name],
+    )
+    with h.CaseContext(deployed_vm, spec):
+        ans = h.dns_probe(deployed_vm, name, "A")
+        assert h.is_vip(ans), f"Custom_List block (band 5) must beat feed @@$important (band 4): {name} -> {ans}"
+
+
 # --------------------------------------------------------------------------- #
-# 6) No regression — a plain (non-ABP) feed still blocks; pfb_py_count renders
+# 7) No regression — a plain (non-ABP) feed still blocks; pfb_py_count renders
 # --------------------------------------------------------------------------- #
 
 
