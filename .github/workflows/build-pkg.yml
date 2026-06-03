@@ -276,11 +276,17 @@ jobs:
                  touch /etc/cloud/cloud-init.disabled /usr/local/etc/cloud/cloud-init.disabled 2>/dev/null; \
                  true"
 
-          # Graceful shutdown — let the guest commit writes to the qcow2.
+          # Graceful shutdown — let the guest commit writes to the qcow2. On
+          # timeout, SIGKILL and REAP: the tier-2 cache save must not read
+          # fbsd-prepared.qcow2 while QEMU still holds it (partial/locked image).
           $SSSH "shutdown -p now" || true
           for i in $(seq 1 30); do
             kill -0 "$(cat setup-vm.pid)" 2>/dev/null || { echo "Setup VM powered off cleanly"; break; }
-            [ "$i" -eq 30 ] && { echo "::warning::Setup VM did not power off within 60s; killing"; kill "$(cat setup-vm.pid)" 2>/dev/null || true; }
+            if [ "$i" -eq 30 ]; then
+              echo "::warning::Setup VM did not power off within 60s; killing"
+              kill -9 "$(cat setup-vm.pid)" 2>/dev/null || true
+              wait "$(cat setup-vm.pid)" 2>/dev/null || true
+            fi
             sleep 2
           done
 

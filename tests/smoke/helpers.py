@@ -713,6 +713,10 @@ UNBOUND_SETUP = "/tmp/pfb_unbound_setup.conf"
 # fixed `*.conf` glob — so an include outside /var/unbound, a non-.conf name, a
 # glob include, or a nested include is still covered. Handles quoted/unquoted and
 # glob targets; `echo` between files guards a missing trailing newline.
+# `for inc in $pat` is UNQUOTED ON PURPOSE — word-splitting is what expands an
+# `include:` glob (e.g. `/var/unbound/*.conf`). pfSense/Unbound include paths
+# never contain whitespace, and this is read-only diagnostic code, so the
+# split-on-spaces tradeoff is safe here.
 UNBOUND_EFFECTIVE_CMD = (
     '_dump() { cat "$1" 2>/dev/null; '
     "awk '/^[[:space:]]*include:/{print $2}' \"$1\" 2>/dev/null | tr -d '\"' | "
@@ -844,7 +848,14 @@ def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0
     setup_result = vm.ssh("cat", UNBOUND_SETUP, timeout=timeout)
     current_result = vm.ssh("/bin/sh", "-c", UNBOUND_EFFECTIVE_CMD, timeout=timeout)
     if setup_result.returncode != 0 or not setup_result.stdout:
-        return  # baseline snapshot not available (snapshot_unbound_effective not called)
+        # No baseline => snapshot_unbound_effective() wasn't called before the
+        # DNSBL reload (a test-setup bug). Make it LOUD rather than silently
+        # "passing" — a missing baseline must never read as immutability proven.
+        print(
+            "[smoke] WARNING: assert_unbound_adds_only_python_config skipped — "
+            f"baseline {UNBOUND_SETUP} missing (snapshot_unbound_effective not called?)"
+        )
+        return
     setup_lines = {ln.strip() for ln in setup_result.stdout.splitlines() if ln.strip()}
     current_lines = {ln.strip() for ln in current_result.stdout.splitlines() if ln.strip()}
 
