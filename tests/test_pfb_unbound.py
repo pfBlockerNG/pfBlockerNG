@@ -4,6 +4,8 @@ import re
 import types
 from collections import defaultdict
 
+import pytest
+
 import pfb_unbound
 
 # Unbound injects these as module-level globals at runtime; conftest stubs them
@@ -611,37 +613,37 @@ class TestGetDetailsDnsblQtype:
         "b_eval": "blocked.com",
     }
 
-    def _qstate(self, qtype):
+    def _qstate(self, qtype: str) -> types.SimpleNamespace:
         return types.SimpleNamespace(
             qinfo=types.SimpleNamespace(qname_str="blocked.com.", qtype_str=qtype),
             return_msg=None,
         )
 
-    def _prep(self, monkeypatch):
+    def _prep(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
         monkeypatch.setattr(pfb_unbound, "dnsblDB", {"blocked.com": dict(self.DECISION)})
-        lines = []
+        lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         return lines
 
-    def _block(self, qtype):
+    def _block(self, qtype: str) -> None:
         pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(qtype), None, {"pfb_addr": "1.2.3.4"})
 
     @staticmethod
-    def _dnsbl_fields(lines):
+    def _dnsbl_fields(lines: list[tuple[str, str]]) -> list[list[str]]:
         # get_details_dnsbl writes the same csv_line to dnsbl.log and unified.log.
         return [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
 
-    def test_qtype_is_trailing_log_field(self, monkeypatch):
+    def test_qtype_is_trailing_log_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
         lines = self._prep(monkeypatch)
         self._block("AAAA")
         (fields,) = self._dnsbl_fields(lines)
         assert fields[0] == "DNSBL-python"
         assert fields[10] == "AAAA"  # query type appended after dupEntry
 
-    def test_dual_stack_pair_both_count(self, monkeypatch):
+    def test_dual_stack_pair_both_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A then AAAA for the SAME name: the old qtype-blind dedup collapsed the
         # AAAA into a duplicate of the A. Now both are non-duplicate ("+").
         lines = self._prep(monkeypatch)
@@ -651,7 +653,7 @@ class TestGetDetailsDnsblQtype:
         assert (a_fields[9], a_fields[10]) == ("+", "A")
         assert (aaaa_fields[9], aaaa_fields[10]) == ("+", "AAAA")
 
-    def test_same_qtype_repeat_is_duplicate(self, monkeypatch):
+    def test_same_qtype_repeat_is_duplicate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A true consecutive repeat (same name AND same record type) still dedups.
         lines = self._prep(monkeypatch)
         self._block("AAAA")
