@@ -24,8 +24,16 @@
 # The result is a real libpkg archive: zstd-compressed tar with +COMPACT_MANIFEST
 # and +MANIFEST first, then payload files at their absolute paths. `pkg add` on
 # pfSense registers it and runs the POST-INSTALL hook (rc.packages), same as a
-# port-built .pkg. Dependencies are recorded from RUN_DEPENDS/LIB_DEPENDS so
-# `pkg add` resolves them from the local pkg db (pre-baked on the smoke image).
+# port-built .pkg. Dependencies are RUN_DEPENDS/LIB_DEPENDS plus the ones USES
+# injects (USES=php + USE_PHP -> php<XY>[-ext]; USES=python -> python<XY>), which
+# `make package` also records; their exact versions can be pinned from a repo
+# catalogue (--repo-catalogue).
+#
+# Fidelity: the output was diffed field-by-field against a real `make package`
+# build for the same commit and matches it (metadata, files+checksums+perms,
+# directories, scripts, dep names/origins). The only values not derivable from
+# the port files are file mtime (the install clock) and a few dep versions that
+# make package reads from the build host's installed packages.
 #
 # Requires: python3 (stdlib only) + a zstd encoder (the `zstd` binary, or the
 # python `zstandard` module). `--compression xz` needs neither (stdlib lzma).
@@ -86,9 +94,10 @@ class Makefile:
             # Recipe line: starts with a literal TAB.
             is_recipe = raw.startswith("\t")
             text = raw
-            # Gather continuations.
+            # Gather continuations (backslash-newline collapses to a single space,
+            # like make: drop the trailing space before the backslash too).
             while text.rstrip().endswith("\\"):
-                text = text.rstrip()[:-1]
+                text = text.rstrip()[:-1].rstrip()
                 i += 1
                 if i < len(lines):
                     text += " " + lines[i].strip() if not is_recipe else " " + lines[i].lstrip("\t")
@@ -207,9 +216,6 @@ class Makefile:
     def get(self, name: str, default: str = "") -> str:
         v = self._lookup(name)
         return self.expand(v) if v is not None else default
-
-    def has(self, name: str) -> bool:
-        return self._lookup(name) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -357,28 +363,35 @@ class Recipe:
         # (installed scripts/binaries are not writable) — NOT 0755.
         self._install(args, "0555")
 
-    def _cmd_install_lib(self, args: list[str]) -> None:
-        self._install(args, "0644")
-
-    def _cmd_install_man(self, args: list[str]) -> None:
-        self._install(args, "0644")
+    def _cmd_install_program(self, args: list[str]) -> None:
+        # INSTALL_PROGRAM also uses ${BINMODE} = 0555.
+        self._install(args, "0555")
 
     def _cmd_mv(self, args: list[str]) -> None:
-        args = [a for a in args if not a.startswith("-")]
-        *srcs, dest = args
+        srcs, dest = self._copy_args(args)
         for s in srcs:
             shutil.move(s, dest)
 
     def _cmd_cp(self, args: list[str]) -> None:
-        args = [a for a in args if not a.startswith("-")]
-        *srcs, dest = args
+        srcs, dest = self._copy_args(args)
         dest_p = Path(dest)
+        multi = len(srcs) > 1 or dest_p.is_dir()
         for s in srcs:
-            if Path(s).is_dir():
-                shutil.copytree(s, dest_p / Path(s).name, dirs_exist_ok=True)
-            else:
-                (dest_p if dest_p.is_dir() else dest_p.parent).mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(s, dest_p / Path(s).name if dest_p.is_dir() else dest_p)
+            sp = Path(s)
+            if sp.is_dir():
+                shutil.copytree(sp, dest_p / sp.name, dirs_exist_ok=True)
+                continue
+            target = dest_p / sp.name if multi else dest_p
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(sp, target)
+
+    @staticmethod
+    def _copy_args(args: list[str]) -> tuple[list[str], str]:
+        # Drop flags (e.g. -R, -p), then split into (sources, dest).
+        paths = [a for a in args if not a.startswith("-")]
+        if len(paths) < 2:
+            raise BuildError(f"copy/move with too few paths: {args!r}")
+        return paths[:-1], paths[-1]
 
     def _cmd_ln(self, args: list[str]) -> None:
         args = [a for a in args if not a.startswith("-")]
@@ -717,10 +730,14 @@ def load_catalogue(source: str, abi: str, wanted: set[str]) -> dict[str, tuple[s
     if source == "auto":
         source = f"https://pkg.freebsd.org/{abi}/latest/packagesite.pkg"
     if source.startswith(("http://", "https://")):
-        req = urllib.request.Request(source, headers={"User-Agent": "build-pkg-portable"})
-        with urllib.request.urlopen(req) as r:
-            raw = r.read()
+        try:
+            with _urlopen(source) as r:
+                raw = r.read()
+        except OSError as e:
+            raise BuildError(f"failed to fetch repo catalogue {source}: {e}") from None
     else:
+        if not Path(source).is_file():
+            raise BuildError(f"--repo-catalogue file not found: {source}")
         raw = Path(source).read_bytes()
     text = _catalogue_text(raw, source)
     out: dict[str, tuple[str, str]] = {}
@@ -764,7 +781,7 @@ def _decompress(data: bytes) -> bytes:
         except ImportError:
             zstd = shutil.which("zstd")
             if not zstd:
-                raise BuildError("repo catalogue is zstd; install `zstd` or the python `zstandard` module")
+                raise BuildError("repo catalogue is zstd; install `zstd` or the python `zstandard` module") from None
             return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
     if data[:6] == b"\xfd7zXZ\x00":  # xz
         import lzma
@@ -825,9 +842,16 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
 
 
 def _download(url: str, dest: Path) -> None:
+    try:
+        with _urlopen(url) as r, open(dest, "wb") as f:
+            shutil.copyfileobj(r, f)
+    except OSError as e:
+        raise BuildError(f"failed to fetch {url}: {e}") from None
+
+
+def _urlopen(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "build-pkg-portable"})
-    with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
+    return urllib.request.urlopen(req)
 
 
 def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
@@ -1226,50 +1250,68 @@ def run_build(args: argparse.Namespace) -> Build:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         prog="build-pkg-portable.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Build a pfSense-installable pfBlockerNG .pkg off-FreeBSD, from the FreeBSD ports files.",
+        epilog=(
+            "examples:\n"
+            "  # build from a local working tree, targeting pfSense CE 2.8\n"
+            "  build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \\\n"
+            "      --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp\n\n"
+            "  # build a specific commit (with a src/ tree) and pin exact dep versions\n"
+            "  build-pkg-portable.py --ports ../FreeBSD-ports --gh-tagname <sha> \\\n"
+            "      --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --repo-catalogue auto\n\n"
+            "  # inspect the plan without writing a .pkg\n"
+            "  build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \\\n"
+            "      --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --dry-run\n\n"
+            "See docs/build-pkg-portable.md for the full reference."
+        ),
     )
     ap.add_argument(
         "--ports", required=True, help="FreeBSD-ports checkout (contains net/pfSense-pkg-pfBlockerNG[-devel])"
     )
-    ap.add_argument("--channel", choices=("devel", "stable"), default="devel", help="which port (default: devel)")
-    ap.add_argument("--port-dir", help="explicit port directory (overrides --channel)")
-    ap.add_argument("--out", default=".", help="output directory for the .pkg (default: cwd)")
-    ap.add_argument(
-        "--abi",
-        default="",
-        help="target ABI, e.g. FreeBSD:15:amd64 (CE 2.8) or FreeBSD:16:amd64 (Plus); asked if omitted",
+
+    g_port = ap.add_argument_group("port selection")
+    g_port.add_argument("--channel", choices=("devel", "stable"), default="devel", help="which port (default: devel)")
+    g_port.add_argument("--port-dir", help="explicit port directory (overrides --channel)")
+
+    g_target = ap.add_argument_group(
+        "target facts (version-dependent; asked if omitted — never read from the ports tree)"
     )
-    ap.add_argument("--arch", default="", help="manifest arch triplet (default: derived from --abi)")
-    ap.add_argument(
-        "--py-flavor",
-        default="",
-        help="py3xx- flavor for dep names, e.g. py311 (CE 2.8); asked if omitted (see docs/misc/pfSense_versions.md)",
+    g_target.add_argument(
+        "--abi", default="", help="target ABI, e.g. FreeBSD:15:amd64 (CE 2.8) or FreeBSD:16:amd64 (Plus)"
     )
-    ap.add_argument(
-        "--php",
-        default="",
-        help="target PHP version for the USES=php dep, e.g. 8.3 (CE 2.8); asked if the port USES php and omitted",
+    g_target.add_argument("--arch", default="", help="manifest arch triplet (default: derived from --abi)")
+    g_target.add_argument("--py-flavor", default="", help="py3xx- flavor for dep names, e.g. py311 (CE 2.8)")
+    g_target.add_argument(
+        "--php", default="", help="PHP version for the USES=php dep, e.g. 8.3 (asked only if USES php)"
     )
-    ap.add_argument(
-        "--freebsd-version",
-        default="",
-        help="build host __FreeBSD_version for the annotations block, e.g. 1500068 (optional; omitted if unset)",
+    g_target.add_argument(
+        "--freebsd-version", default="", help="build host __FreeBSD_version for annotations, e.g. 1500068 (optional)"
     )
-    ap.add_argument(
-        "--repo-catalogue",
-        default="",
-        help="pin exact dep versions from a repo packagesite (.yaml/.pkg path/URL, or 'auto'); see README",
+
+    g_src = ap.add_argument_group("source (USE_GITHUB ports)")
+    g_src.add_argument(
+        "--local-src", help="build from this local pfBlockerNG checkout instead of fetching the GitHub tag"
     )
-    ap.add_argument(
-        "--local-src",
-        help="USE_GITHUB ports only: build from this local pfBlockerNG checkout instead of fetching the GitHub tag",
-    )
-    ap.add_argument(
+    g_src.add_argument(
         "--gh-tagname", help="override GH_TAGNAME (commit/tag) when fetching (default: the Makefile's v${PORTVERSION})"
     )
-    ap.add_argument("--compression", choices=("zstd", "xz"), default="zstd", help="output compression (default: zstd)")
-    ap.add_argument("--keep-work", action="store_true", help="keep the temporary work/staging dir")
-    ap.add_argument("--dry-run", action="store_true", help="print the build plan; do not write a .pkg")
+
+    g_deps = ap.add_argument_group("dependency versions")
+    g_deps.add_argument(
+        "--repo-catalogue",
+        default="",
+        help="pin exact dep versions from a repo packagesite (.yaml/.pkg path/URL, or 'auto')",
+    )
+
+    g_out = ap.add_argument_group("output")
+    g_out.add_argument("--out", default=".", help="output directory for the .pkg (default: cwd)")
+    g_out.add_argument(
+        "--compression", choices=("zstd", "xz"), default="zstd", help="output compression (default: zstd)"
+    )
+    g_out.add_argument("--keep-work", action="store_true", help="keep the temporary work/staging dir")
+    g_out.add_argument("--dry-run", action="store_true", help="print the build plan; do not write a .pkg")
+
     args = ap.parse_args(argv)
 
     try:

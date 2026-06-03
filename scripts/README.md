@@ -74,6 +74,9 @@ Needs only python3 (stdlib) + a zstd encoder (`zstd` / `brew install zstd` /
 `apt install zstd`); `--compression xz` needs neither. `--dry-run` prints the
 plan (files, modes, deps) without writing the archive.
 
+Full reference (every option, the fidelity comparison, troubleshooting):
+[`../docs/build-pkg-portable.md`](../docs/build-pkg-portable.md).
+
 ## Image pipeline (ADR-04 smoke base)
 
 The CI smoke harness — see [`../.ADRs/ADR_04_VM_Smoke_Tests/`](../.ADRs/ADR_04_VM_Smoke_Tests/) —
