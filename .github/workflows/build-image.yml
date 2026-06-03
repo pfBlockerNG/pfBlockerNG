@@ -130,7 +130,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils openssh-client
 
       - name: Install oras
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Write guest SSH key (mode 600)
         env:
@@ -235,7 +235,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client
 
       - name: Install oras
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Resolve the GHCR image ref
         id: ref
@@ -273,7 +273,7 @@ jobs:
           chmod 600 smoke_key
 
       - name: Download the built pfBlockerNG package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-pkg.outputs.artifact }}
           path: pkg
@@ -327,7 +327,7 @@ jobs:
 
       - name: Upload diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-image-verify-diagnostics
           path: |

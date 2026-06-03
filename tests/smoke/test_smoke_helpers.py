@@ -90,6 +90,8 @@ def test_reset_returns_to_baseline(deployed_vm: SmokeVM) -> None:
     h.reset(deployed_vm)
     # The baked control name still resolves (reset didn't break the resolver).
     name, expected_ip = expected_control_answer()
+    if not name:
+        pytest.skip("no baked control name (SMOKE_CONTROL_NAME unset)")
     answer = h.dns_probe(deployed_vm, name, "A")
     assert answer.records, f"baked control {name!r} gone after reset"
     if expected_ip is not None:
@@ -150,7 +152,7 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
     """A fed IP is a table member, a non-fed IP isn't, and a rule references it."""
     fed_ip = "198.51.100.7"
     non_fed = "198.51.100.200"
-    feed_url = mock_feeds.register("smoke_ip_selftest.txt", f"{fed_ip}\n")  # type: ignore[attr-defined]
+    feed_url = h.write_local_feed(deployed_vm, "smoke_ip_selftest.txt", f"{fed_ip}\n")
     spec = h.IpCase(aliasname="smokeipself", feed_url=feed_url, header="smokeipself")
     with h.CaseContext(deployed_vm, spec):
         members = h.pfctl_table_members(deployed_vm, spec.alias)

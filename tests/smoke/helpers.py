@@ -15,11 +15,15 @@ Everything here drives the REAL production paths:
   package or run POST-INSTALL). The .pkg path comes from a parameter / the
   ``SMOKE_PKG`` env (Phase 6 provides it; the FreeBSD build job emits it).
 * inject() writes pfBlockerNG config AND the case's Unbound control records via
-  the pfSense config API over ``php -r`` (``parse_config`` /
-  ``config_set_path`` / ``write_config``). Control records go into the Unbound
-  Custom Options (``local-zone:`` / ``local-data:``) IN CONFIG, BEFORE the feed
-  update, so they survive the reload that regenerates ``unbound.conf`` (the
-  Phase-1 spike used live ``unbound-control``, which a reload wipes).
+  the pfSense config API over ``pfSsh.php`` (``config_set_path`` /
+  ``write_config``). Control records go in as DNS-Resolver Host Overrides
+  (``unbound/hosts``) IN CONFIG, BEFORE the feed update: host overrides are the
+  supported name->IP mechanism, they generate ``host_entries.conf`` (Unbound-
+  included), and they survive the pfBlockerNG reload — which manages its OWN
+  ``unbound.conf`` via ``pfb_stop_start_unbound`` and never calls
+  ``services_unbound_configure``, so set_control_records() runs that itself to
+  regenerate ``host_entries.conf`` before the reload re-adds the DNSBL python.
+  (Custom Options were tried first; a pfBlockerNG reload never re-applies them.)
 * reload() runs the PHP CLI cron verbs (``update`` / ``updateip`` /
   ``updatednsbl``) — the exact cron entry point, no wrapper. reset() runs
   ``clearip`` / ``cleardnsbl`` then a forced ``update`` (pfBlockerNG caches
@@ -36,6 +40,7 @@ so importing this module does not require the smoke deps.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -43,7 +48,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from .conftest import SMOKE_DIR, SmokeVM, resolve_a
+from .conftest import GUEST_TO_HOST_ALIAS, SMOKE_DIR, SmokeVM, resolve_a
 
 # --------------------------------------------------------------------------- #
 # Paths / constants
@@ -51,6 +56,9 @@ from .conftest import SMOKE_DIR, SmokeVM, resolve_a
 
 INSTALL_PKG_SH = SMOKE_DIR.parent.parent / "scripts" / "install-pkg.sh"
 PHP_BIN = "/usr/local/bin/php"
+# pfSense developer shell — runs PHP in the fully-bootstrapped env (config
+# loaded + locked), so config_set_path/write_config persist a valid config.xml.
+PFSSH_BIN = "/usr/local/sbin/pfSsh.php"
 PFB_CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
 PFCTL = "/sbin/pfctl"
 
@@ -60,13 +68,37 @@ CFG_DNSBL_SETTINGS = "installedpackages/pfblockerngdnsblsettings/config/0"
 CFG_DNSBL_LISTS = "installedpackages/pfblockerngdnsbl/config"
 CFG_IP_V4_LISTS = "installedpackages/pfblockernglistsv4/config"
 CFG_IP_V6_LISTS = "installedpackages/pfblockernglistsv6/config"
-CFG_UNBOUND_CUSTOM = "unbound/custom_options"
+CFG_IP_SETTINGS = "installedpackages/pfblockerngipsettings/config/0"
+# DNS-Resolver Host Overrides: control names go here (see set_control_records).
+CFG_UNBOUND_HOSTS = "unbound/hosts"
 
-# The configured DNSBL VIP a "vip" block answers with (must match the baked
-# image's pfb_dnsvip4 / the lighttpd sinkhole VIP). Env-overridable so the
-# probe is not pinned to one baked image.
-DEFAULT_DNSBL_VIP4 = os.environ.get("SMOKE_DNSBL_VIP4", "10.10.10.1")
+# The configured DNSBL VIP a "vip" block answers with == the IPv4 the harness-
+# injected lo0 IP-Alias VIP carries (ensure_dnsbl_vip). Env-overridable, but
+# `or` (not get's default): smoke.yml SETS this var to "" when the secret/var is
+# unset, and get(key, default) returns "" for a set-but-empty var — which left
+# the VIP subnet blank ("invalid IPv4 VIP"). Treat empty as unset.
+DEFAULT_DNSBL_VIP4 = os.environ.get("SMOKE_DNSBL_VIP4") or "10.10.10.1"
 NULL_IP4 = "0.0.0.0"
+
+# The pfSense Virtual IP the harness injects so DNSBL has the sinkhole VIP it
+# requires (pfb_validate_vips, inc:725). pfBlockerNG never auto-creates it
+# (pfblockerng_install.inc only associates an existing 'pfB DNSBL' VIP), so we
+# add an lo0 IP-Alias VIP and point pfb_dnsvip4 at it via the "_vip<uniqid>" id
+# convention get_configured_vip_list() uses. Kept OUT of the image so the
+# "no VIP configured" scenario stays testable (just skip ensure_dnsbl_vip).
+SMOKE_VIP_UNIQID = "pfbsmokevip"
+SMOKE_VIP_IFACE = "lo0"
+# DNSBL lighttpd sinkhole ports — DNSBL skips ALL feed processing if these are
+# empty (inc:7558). GUI defaults (pfblockerng_dnsbl.php:47).
+DNSBL_PORT = "8081"
+DNSBL_PORT_SSL = "8443"
+
+# pfBlockerNG only builds the IP deny rule when an inbound/outbound interface is
+# configured (inc:10132 "Inbound interface option not configured"); the alias
+# table builds regardless. The wizard sets these — the harness must too.
+# Env-overridable; "wan" is the one interface a default single-NIC pfSense has.
+# `or` (not get's default) so a set-but-empty env var still falls back.
+SMOKE_IP_IFACE = os.environ.get("SMOKE_IP_IFACE") or "wan"
 
 
 # --------------------------------------------------------------------------- #
@@ -107,9 +139,10 @@ class DnsblCase:
                        feature): "" (Disabled) or e.g. "Deny_Both". When set,
                        IP literals embedded in the DNSBL feed populate the
                        pfB_DNSBLIP_{v4,v6} alias tables (dual-stack contract).
-      control_local_data -> {name: {"A": ip, "AAAA": ip6}} Unbound local-data
-                       baked into CFG_UNBOUND_CUSTOM BEFORE update
-      control_local_zone -> {zone: type} e.g. {"pass.test": "transparent"}
+      control_local_data -> {name: {"A": ip, "AAAA": ip6}} injected as DNS-
+                       Resolver Host Overrides (unbound/hosts) BEFORE update
+      control_local_zone -> unused by the matrix; host overrides can't express a
+                       local-zone (DNSBL builds its own blocking zones)
     """
 
     aliasname: str
@@ -151,7 +184,10 @@ class IpCase:
 
     @property
     def alias(self) -> str:
-        return f"pfB_{self.aliasname}"
+        # pfBlockerNG suffixes IP alias tables by family: pfB_<aliasname>_<family>
+        # (confirmed). The thin-slice IP case is IPv4, so the table + rule
+        # reference pfB_<aliasname>_v4.
+        return f"pfB_{self.aliasname}_{self.family}"
 
 
 # --------------------------------------------------------------------------- #
@@ -159,7 +195,7 @@ class IpCase:
 # --------------------------------------------------------------------------- #
 
 
-def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 600.0) -> None:
+def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) -> None:
     """Install the branch's built .pkg onto the guest via install-pkg.sh.
 
     ``pkg add`` registers the package in pkg's DB, resolves RUN_DEPENDS from the
@@ -192,33 +228,115 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 600.0) 
 
 
 # --------------------------------------------------------------------------- #
+# Local feed file — write a list directly under /var/db/pfblockerng/<name> and
+# use its PATH as the source (pfBlockerNG accepts a local path in a source's URL
+# field, re-read each update). More reliable in CI than the HTTP mock fetch.
+# --------------------------------------------------------------------------- #
+
+
+def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 30.0) -> str:
+    """Write ``contents`` to /var/db/pfblockerng/<name> on the guest; return the path.
+
+    The file goes DIRECTLY under /var/db/pfblockerng (NOT the deny/permit/native
+    subdirs — those are pfBlockerNG's own reload output). The path is then used
+    as the feed source's URL field.
+    """
+    path = f"/var/db/pfblockerng/{name}"
+    result = subprocess.run(
+        vm.ssh_argv("tee", path),
+        input=contents,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"write_local_feed({path}) failed: rc={result.returncode} {result.stderr!r}")
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# Hermetic gate — block the runner's egress for the test phase (ADR §4 req 4)
+# --------------------------------------------------------------------------- #
+# MUST run only AFTER deploy(): `pkg add` pulls pfBlockerNG's RUN_DEPENDS from
+# the pfSense repo, and the guest reaches the internet THROUGH the runner's
+# SLIRP NAT — so blocking the runner's egress before the package is installed
+# hangs the install. Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local
+# `pytest -m smoke` never touches the dev machine's firewall. Loopback stays up
+# (the mock feed server is reached via SLIRP 10.0.2.2 -> runner 127.0.0.1) and
+# established flows (the live SSH session) are kept.
+
+
+def block_egress() -> None:
+    """Drop the runner's new outbound traffic (loopback + established kept)."""
+    if not os.environ.get("SMOKE_BLOCK_EGRESS"):
+        return
+    for argv in (
+        ["sudo", "iptables", "-P", "OUTPUT", "DROP"],
+        ["sudo", "iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
+        ["sudo", "iptables", "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+    ):
+        subprocess.run(argv, check=True, timeout=30)
+
+
+def unblock_egress() -> None:
+    """Restore egress (teardown counterpart of :func:`block_egress`)."""
+    if not os.environ.get("SMOKE_BLOCK_EGRESS"):
+        return
+    subprocess.run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], check=False, timeout=30)
+    subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], check=False, timeout=30)
+
+
+# --------------------------------------------------------------------------- #
 # PHP helpers — run a snippet through the pfSense config API over SSH
 # --------------------------------------------------------------------------- #
 
 
 def php_eval(vm: SmokeVM, snippet: str, *, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
-    """Run a PHP snippet on the guest with the config API pre-loaded.
+    """Run a PHP snippet in the FULLY-bootstrapped pfSense env via pfSsh.php.
 
-    ``parse_config(true)`` is called first so ``config_get_path`` /
-    ``config_set_path`` operate on the live config; the snippet that mutates is
-    responsible for ``write_config``. The snippet is passed as a single
-    ``php -r`` argument (shell-quoted on the runner; the guest receives it
-    verbatim).
+    pfSsh.php is the pfSense developer shell: it loads AND locks the config, so
+    config_set_path/write_config persist a complete, valid config.xml. A bare
+    ``php -r`` (even requiring globals/config) wrote a partial config that the
+    next read could not recover ("A valid config file could not be recovered").
+
+    The PHP is fed on stdin; pfSsh.php buffers typed lines, ``exec`` compiles +
+    runs the buffer, ``exit`` quits. pfSsh.php prints a startup banner on stdout,
+    so a snippet that READS a value must delimit it (see :func:`config_get`);
+    writers just emit an 'OK' sentinel the caller greps for.
     """
-    program = "require_once('config.inc'); require_once('util.inc'); parse_config(true);\n" + snippet
-    # `php -r` wants the program WITHOUT <?php tags. shlex.quote keeps it intact
-    # through the SSH client-side expansion install-pkg.sh's callers rely on.
-    remote = f"{PHP_BIN} -r {shlex.quote(program)}"
-    return vm.ssh(remote, timeout=timeout)
+    program = snippet + "\nexec\nexit\n"
+    return subprocess.run(
+        vm.ssh_argv(PFSSH_BIN),
+        input=program,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+_CFG_VAL_OPEN = "<<<CFGVAL>>>"
+_CFG_VAL_CLOSE = "<<<CFGEND>>>"
 
 
 def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
-    """Read a scalar config value back via the config API (for self-tests)."""
-    snippet = f"echo (string) config_get_path({_php_str(path)}, '');"
+    """Read a scalar config value back via the config API (for self-tests).
+
+    Delimited so pfSsh.php's startup banner doesn't pollute the value.
+    """
+    snippet = (
+        f"echo {_php_str(_CFG_VAL_OPEN)} . (string) config_get_path({_php_str(path)}, '') . {_php_str(_CFG_VAL_CLOSE)};"
+    )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"config_get({path!r}) failed: {result.stderr!r}")
-    return result.stdout
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"config_get({path!r}): no delimited value in pfSsh.php output: {out!r}")
+    return out[start + len(_CFG_VAL_OPEN) : end]
 
 
 def _php_str(value: str) -> str:
@@ -233,19 +351,34 @@ def _php_kv_array(data: dict[str, str]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Control records — Unbound local-zone/local-data, set IN CONFIG before update
+# Control records — DNS-Resolver Host Overrides, set IN CONFIG before update
 # --------------------------------------------------------------------------- #
 
 
-def _control_lines(local_data: dict[str, dict[str, str]], local_zone: dict[str, str]) -> list[str]:
-    """Build the Unbound Custom Options lines for a case's control records."""
-    lines: list[str] = []
-    for zone, kind in local_zone.items():
-        lines.append(f'local-zone: "{zone}" {kind}')
+def _host_override_rows(local_data: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+    """Build ``unbound/hosts`` rows from ``{name: {rtype: ip}}``.
+
+    One row per name: host = first label, domain = the rest, ip = a comma list
+    of every A/AAAA value (pfSense expands a multi-IP host override into one
+    ``local-data`` line per address). rtype is implicit in the address family,
+    so the keys ("A"/"AAAA") are advisory only.
+    """
+    rows: list[dict[str, str]] = []
     for name, records in local_data.items():
-        for rtype, value in records.items():
-            lines.append(f'local-data: "{name} IN {rtype} {value}"')
-    return lines
+        ips = [v for v in records.values() if v]
+        if not ips:
+            continue
+        label, _, domain = name.partition(".")
+        rows.append(
+            {
+                "host": label,
+                "domain": domain,
+                "ip": ",".join(ips),
+                "descr": "pfBlockerNG smoke control",
+                "aliases": "",
+            }
+        )
+    return rows
 
 
 def set_control_records(
@@ -253,33 +386,140 @@ def set_control_records(
     local_data: dict[str, dict[str, str]],
     local_zone: dict[str, str],
     *,
-    timeout: float = 60.0,
+    timeout: float = 120.0,
 ) -> None:
-    """Persist control local-zone/local-data into ``unbound/custom_options``.
+    """Persist control names as DNS-Resolver Host Overrides (``unbound/hosts``).
 
-    pfSense stores Custom Options base64-encoded; pfBlockerNG appends its own
-    include there too (see pfblockerng.inc:2092). We DECODE, append the control
-    lines (idempotent — skip lines already present), RE-ENCODE, and
-    ``write_config``. Doing this in CONFIG (not live ``unbound-control``) means
-    the records survive the reload that regenerates ``unbound.conf``.
+    Host overrides are the supported pfSense name->IP mechanism: they generate
+    ``host_entries.conf`` (Unbound-included) and survive the pfBlockerNG reload,
+    which manages its OWN ``unbound.conf`` (``pfb_reload_unbound`` ->
+    ``pfb_stop_start_unbound``) and never calls ``services_unbound_configure``.
+    So we add the rows to CONFIG (idempotent on host+domain) and run
+    ``services_unbound_configure()`` ourselves to regenerate
+    ``host_entries.conf``; the later pfBlockerNG ``update`` re-adds the DNSBL
+    python on top (inject() does control records first, reload second).
+
+    ``local_zone`` is unsupported here — a host override can't express a
+    local-zone, and no matrix case needs one (DNSBL builds its own blocking
+    zones). A non-empty one is rejected rather than silently dropped.
     """
-    lines = _control_lines(local_data, local_zone)
-    if not lines:
+    if local_zone:
+        raise ValueError(f"set_control_records: local_zone unsupported via host overrides: {local_zone!r}")
+    rows = _host_override_rows(local_data)
+    if not rows:
         return
-    php_lines = "array(" + ", ".join(_php_str(line) for line in lines) + ")"
+    php_rows = "array(" + ", ".join(_php_kv_array(r) for r in rows) + ")"
     snippet = (
-        f"$cur = (string) config_get_path({_php_str(CFG_UNBOUND_CUSTOM)}, '');\n"
-        "$decoded = $cur !== '' ? base64_decode($cur) : '';\n"
-        "$existing = $decoded === '' ? array() : explode(\"\\n\", $decoded);\n"
-        f"foreach ({php_lines} as $line) {{ if (!in_array($line, $existing, true)) {{ $existing[] = $line; }} }}\n"
-        "$joined = implode(\"\\n\", array_filter($existing, fn($l) => $l !== ''));\n"
-        f"config_set_path({_php_str(CFG_UNBOUND_CUSTOM)}, base64_encode($joined));\n"
-        "write_config('pfBlockerNG smoke: control records');\n"
+        f"$cur = config_get_path({_php_str(CFG_UNBOUND_HOSTS)}, array());\n"
+        f"foreach ({php_rows} as $row) {{\n"
+        "  $dup = FALSE;\n"
+        "  foreach ($cur as $e) {\n"
+        "    if (($e['host'] ?? '') === $row['host']\n"
+        "        && ($e['domain'] ?? '') === $row['domain']) { $dup = TRUE; break; }\n"
+        "  }\n"
+        "  if (!$dup) { $cur[] = $row; }\n"
+        "}\n"
+        f"config_set_path({_php_str(CFG_UNBOUND_HOSTS)}, $cur);\n"
+        "write_config('pfBlockerNG smoke: control host overrides');\n"
+        "services_unbound_configure();\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"set_control_records failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: float = 120.0) -> None:
+    """Inject the lo0 IP-Alias VIP DNSBL requires and point pfb_dnsvip4 at it.
+
+    pfBlockerNG force-disables DNSBL when ``pfb_validate_vips`` finds no VIP
+    (inc:725) and never auto-creates one (pfblockerng_install.inc only ASSOCIATES
+    an existing 'pfB DNSBL' VIP) — so the harness adds it exactly as a user would
+    in Firewall > Virtual IPs: a ``virtualip/vip`` entry on the DNSBL interface
+    (lo0), referenced by ``pfb_dnsvip4`` as ``_vip<uniqid>`` (the
+    ``get_configured_vip_list()`` id convention). Idempotent on the uniqid.
+
+    Then APPLY it (as the GUI's Firewall > Virtual IPs save does): the VIP must
+    be realized for ``pfb_get_vips`` (-> ``get_specialnet``) to list it —
+    config-only left it "invalid IPv4 VIP". ``interface_vip_configure`` lives in
+    ``interfaces.inc`` (not auto-loaded by pfSsh.php), so require_once it first
+    and guard the call so a missing symbol can't abort the eval.
+    """
+    vip = {
+        "mode": "ipalias",
+        "interface": SMOKE_VIP_IFACE,
+        "type": "single",
+        "subnet": ip4,
+        "subnet_bits": "32",
+        "descr": "pfBlockerNG DNSBL",
+        "uniqid": SMOKE_VIP_UNIQID,
+    }
+    vip_id = f"_vip{SMOKE_VIP_UNIQID}"
+    snippet = (
+        "$vips = config_get_path('virtualip/vip', array());\n"
+        "$found = FALSE;\n"
+        f"foreach ($vips as $v) {{\n"
+        f"  if (($v['uniqid'] ?? '') === {_php_str(SMOKE_VIP_UNIQID)}) {{ $found = TRUE; break; }}\n"
+        "}\n"
+        f"if (!$found) {{ $vips[] = {_php_kv_array(vip)}; config_set_path('virtualip/vip', $vips); }}\n"
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsvip4'] = {_php_str(vip_id)};\n"
+        # DNSBL aborts ("DNSBL Ports are not defined. Exiting", inc:7558 ->
+        # $dnsbl_error) and skips ALL feed processing when the lighttpd sinkhole
+        # ports are empty. The GUI defaults them; the harness must too.
+        f"$d['pfb_dnsport'] = {_php_str(DNSBL_PORT)};\n"
+        f"$d['pfb_dnsport_ssl'] = {_php_str(DNSBL_PORT_SSL)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: DNSBL VIP');\n"
+        "require_once('interfaces.inc');\n"
+        f"if (function_exists('interface_vip_configure')) {{ interface_vip_configure({_php_kv_array(vip)}); }}\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"ensure_dnsbl_vip failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def configure_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Put Unbound in forwarding mode pointed at the runner-side stub.
+
+    Maintainer's recipe: forwarding mode + a reachable upstream + DNSSEC off. If
+    Unbound cannot establish a working forward/recursion path it stalls/SERVFAILs
+    EVERY query (even a local DNSBL block or host override), which is what times
+    out the per-case probe. So force forwarding of EVERYTHING to the stub.
+
+    Implemented as a raw Unbound ``forward-zone: "."`` in Custom Options rather
+    than System>General DNS servers, because the stub listens on a custom port
+    and System DNS is :53-only; ``forward-tcp-upstream`` reuses the proven
+    guest->host SLIRP path (mock_feeds is TCP). DNSSEC is disabled (the stub's
+    answers are unsigned) and ``unbound/forwarding`` is enabled to match the
+    documented mode. Written to CONFIG so every ``services_unbound_configure``
+    regenerates it; pfBlockerNG's reload only appends its DNSBL python on top.
+    """
+    port = vm.upstream_dns_port
+    if not port:
+        raise RuntimeError("configure_upstream: vm.upstream_dns_port unset (stub_dns fixture not active)")
+    custom_options = (
+        "server:\n"
+        "forward-tcp-upstream: yes\n"
+        "do-not-query-localhost: no\n"
+        "forward-zone:\n"
+        'name: "."\n'
+        f"forward-addr: {GUEST_TO_HOST_ALIAS}@{port}\n"
+    )
+    snippet = (
+        "$u = config_get_path('unbound', array());\n"
+        f"$u['custom_options'] = base64_encode({_php_str(custom_options)});\n"
+        "$u['forwarding'] = 'on';\n"
+        "unset($u['dnssec']);\n"
+        "config_set_path('unbound', $u);\n"
+        "write_config('pfBlockerNG smoke: stub upstream');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"configure_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -341,7 +581,11 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     }
     listcfg = {
         "aliasname": spec.aliasname,
-        "action": "Enabled",
+        # A DNSBL group's action MUST be 'unbound' — that's the only value
+        # pfb_determine_list_detail maps to the DNSBL folder (dnsdir/dnsorigdir).
+        # "Enabled" passes the != 'Disabled' gate but yields an empty $pfbarr, so
+        # the feed silently writes nowhere -> 0 domains (empty blocklist).
+        "action": "unbound",
         "cron": "EveryDay",
         "order": "primary",
     }
@@ -376,12 +620,20 @@ def _ip_inject_snippet(spec: IpCase) -> str:
         "action": spec.action,
         "cron": "EveryDay",
     }
+    # The IP deny rule is built per inbound/outbound interface; with none
+    # configured pfBlockerNG logs "Inbound interface option not configured" and
+    # builds the alias table but NO rule (inc:10132). The wizard sets these — so
+    # the harness must too (a Deny_Both case needs both directions).
+    ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
     return (
         # pfBlockerNG must be globally enabled for the IP path to build the
         # alias table + rule (inc:793 enable_cb).
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = array({_php_kv_array(row)});\n"
         f"config_set_path({_php_str(root)}, array($list));\n"
@@ -424,6 +676,86 @@ def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
     reload(vm, "update", timeout=timeout)
 
 
+UNBOUND_CONF = "/var/unbound/unbound.conf"
+UNBOUND_BEFORE = "/tmp/pfb_unbound_before.conf"
+CONFIG_XML = "/conf/config.xml"
+# Per-step state snapshots: config.xml + unbound.conf are copied here at each
+# harness step so dump_diagnostics can diff consecutive states and show EXACTLY
+# what each step (deploy / VIP inject / case inject / each reload) changes — full
+# visibility instead of inference. Gated by SMOKE_STATE_DIFF to keep normal runs
+# lean. See snap_state / dump_state_diffs.
+SNAP_DIR = "/tmp/pfb_snap"
+_snap_seq = 0
+
+
+def snapshot_unbound_conf(vm: SmokeVM, *, timeout: float = 30.0) -> None:
+    """Snapshot the DNSBL-OFF unbound.conf so a later diff shows what DNSBL changed.
+
+    Captured right after deploy (before any DNSBL reload); dump_diagnostics diffs
+    it against the live unbound.conf to reveal EXACTLY what pfBlockerNG's DNSBL
+    reload adds/removes — including whether it drops custom access-control.
+    """
+    vm.ssh("cp", UNBOUND_CONF, UNBOUND_BEFORE, timeout=timeout)
+
+
+PFB_LOGDIR = "/var/log/pfblockerng"
+
+
+def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
+    """Snapshot full state into SNAP_DIR/<NN>_<tag>/ (best-effort).
+
+    Captures config.xml, unbound.conf AND every pfBlockerNG log file
+    (/var/log/pfblockerng/*) so dump_state_diffs can recursively diff consecutive
+    steps — showing config/unbound changes AND each log's appended lines (incl.
+    py_error.log for python-mode failures). No-op unless SMOKE_STATE_DIFF is set.
+    """
+    if not os.environ.get("SMOKE_STATE_DIFF"):
+        return
+    global _snap_seq
+    dest = f"{SNAP_DIR}/{_snap_seq:02d}_{tag}"
+    _snap_seq += 1
+    # Files + every pfBlockerNG log + live runtime state (firewall rules/NAT/
+    # tables, interface aliases incl. the DNSBL VIP, :53 listeners). All land in
+    # one per-step dir so the recursive diff shows every change at each step.
+    cmd = (
+        f"/bin/mkdir -p {dest} && "
+        f"cp {CONFIG_XML} {dest}/config.xml 2>/dev/null; "
+        f"cp {UNBOUND_CONF} {dest}/unbound.conf 2>/dev/null; "
+        # The DNSBL python ini (python_blocking flag the module reads) + the
+        # unbound-mode block file (local-zone/local-data) + the python blocklist.
+        f"cp /var/unbound/pfb_unbound.ini {dest}/ 2>/dev/null; "
+        f"cp /var/unbound/pfb_dnsbl.conf {dest}/ 2>/dev/null; "
+        f"cp /var/unbound/pfb_py_data.txt {dest}/ 2>/dev/null; "
+        f"cp -p {PFB_LOGDIR}/* {dest}/ 2>/dev/null; "
+        f"/sbin/pfctl -sr  > {dest}/pf_rules.txt   2>/dev/null; "
+        f"/sbin/pfctl -sn  > {dest}/pf_nat.txt     2>/dev/null; "
+        f"/sbin/pfctl -sTables > {dest}/pf_tables.txt 2>/dev/null; "
+        f"/sbin/ifconfig > {dest}/ifconfig.txt 2>/dev/null; "
+        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound|lighttpd' > {dest}/sockets.txt 2>/dev/null; "
+        "true"
+    )
+    vm.ssh(cmd, timeout=timeout)
+
+
+def dump_state_diffs(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Recursively diff consecutive per-step snapshot dirs (config + unbound + logs)."""
+    if not os.environ.get("SMOKE_STATE_DIFF"):
+        return
+    print("\n========== PER-STEP STATE DIFFS (config + unbound + logs) ==========")
+    cmd = (
+        f"cd {SNAP_DIR} 2>/dev/null || exit 0; prev=''; "
+        f"for d in $(ls -d */ 2>/dev/null | sort); do "
+        f'  if [ -n "$prev" ]; then echo "########## ${{prev%/}} -> ${{d%/}} ##########"; '
+        f'  diff -ruN "$prev" "$d" 2>/dev/null | head -150; fi; prev="$d"; done'
+    )
+    try:
+        result = vm.ssh(cmd, timeout=timeout)
+        print(result.stdout + result.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"state diffs failed: {exc}")
+    print("========== END PER-STEP STATE DIFFS ==========\n")
+
+
 def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -> None:
     """Poll ``unbound-control status`` until ready (mirrors install-pkg.sh)."""
     cmd = "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status"
@@ -448,26 +780,57 @@ class DnsAnswer:
     records: list[str]
 
 
-def dns_probe(vm: SmokeVM, name: str, rtype: str = "A", *, timeout: float = 5.0) -> DnsAnswer:
-    """Query the guest's real Unbound for (name, rtype) -> (rcode, records).
+DRILL_BIN = "/usr/local/bin/drill"
 
-    Uses dnspython (deferred import inside, via conftest.resolve_a for A; a
-    direct query for other types) so importing this module needs no smoke deps.
-    """
-    import dns.message
-    import dns.query
-    import dns.rcode
-    import dns.rdatatype
 
-    query = dns.message.make_query(name, dns.rdatatype.from_text(rtype))
-    response = dns.query.tcp(query, vm.host, port=vm.dns_port, timeout=timeout)
-    rcode = dns.rcode.to_text(response.rcode())
-    wanted = dns.rdatatype.from_text(rtype)
+def _parse_drill(output: str, rtype: str) -> DnsAnswer:
+    """Parse ``drill`` text output into an rcode + the records of ``rtype``."""
+    rcode = "UNKNOWN"
     records: list[str] = []
-    for rrset in response.answer:
-        if rrset.rdtype == wanted:
-            records.extend(str(item) for item in rrset)
+    in_answer = False
+    for line in output.splitlines():
+        if "rcode:" in line:
+            m = re.search(r"rcode:\s*([A-Z]+)", line)
+            if m:
+                rcode = m.group(1)
+        if line.startswith(";; ANSWER SECTION"):
+            in_answer = True
+            continue
+        if in_answer:
+            stripped = line.strip()
+            if not stripped or line.startswith(";;"):
+                in_answer = False
+                continue
+            # "<name>. <ttl> IN <type> <rdata>"
+            parts = stripped.split()
+            if len(parts) >= 5 and parts[3] == rtype:
+                records.append(parts[4])
     return DnsAnswer(rcode=rcode, records=records)
+
+
+def dns_probe(
+    vm: SmokeVM, name: str, rtype: str = "A", *, timeout: float = 30.0, attempts: int = 3, delay: float = 2.0
+) -> DnsAnswer:
+    """Resolve (name, rtype) against the guest's Unbound, ON THE GUEST itself.
+
+    Runs ``drill <name> <rtype> @127.0.0.1`` over SSH rather than querying the
+    runner-side hostfwd (``dns.query.tcp`` to vm.dns_port). pfSense Unbound with
+    DNSBL active does NOT answer a WAN-sourced query — and the runner hostfwd
+    arrives on the guest's only NIC (WAN); the single-NIC smoke VM has no LAN. A
+    real client queries from the LAN/on-box, so the on-box query is the faithful
+    path (and the only one DNSBL services). Retries: right after a DNSBL reload
+    the python-mode resolver can be briefly slow.
+    """
+    cmd = f"{DRILL_BIN} {shlex.quote(name)} {shlex.quote(rtype)} @127.0.0.1"
+    last = ""
+    for attempt in range(attempts):
+        result = vm.ssh(cmd, timeout=timeout)
+        if "rcode:" in result.stdout:
+            return _parse_drill(result.stdout, rtype)
+        last = f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    raise RuntimeError(f"dns_probe({name}, {rtype}) got no drill answer after {attempts} attempts: {last}")
 
 
 def is_nxdomain(answer: DnsAnswer) -> bool:
@@ -516,17 +879,147 @@ def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> bool:
-    """True iff a loaded pf rule references ``alias`` (``pfctl -sr`` | grep)."""
-    result = vm.ssh(PFCTL, "-sr", timeout=timeout)
-    if result.returncode != 0:
-        raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
-    return any(f"<{alias}>" in line or alias in line for line in result.stdout.splitlines())
+def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts: int = 10, delay: float = 2.0) -> bool:
+    """True iff a loaded pf rule references ``alias`` (``pfctl -sr`` | grep).
+
+    pfBlockerNG's ``filter_configure`` lands the auto-rule slightly AFTER the
+    update CLI returns, so poll rather than read once (the rule was observed
+    present in on-failure diagnostics dumped moments after a single-shot read
+    returned False — a pure timing race).
+    """
+    for attempt in range(attempts):
+        result = vm.ssh(PFCTL, "-sr", timeout=timeout)
+        if result.returncode != 0:
+            raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
+        if any(f"<{alias}>" in line or alias in line for line in result.stdout.splitlines()):
+            return True
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return False
 
 
 def member_present(members: list[str], ip: str) -> bool:
     """True iff ``ip`` appears in a table's members (CIDR-tolerant exact/prefix)."""
     return ip in members or any(m.split("/", 1)[0] == ip for m in members)
+
+
+# --------------------------------------------------------------------------- #
+# Diagnostics — dump live box state on a failed case (printed to the CI log)
+# --------------------------------------------------------------------------- #
+
+
+def dump_diagnostics(vm: SmokeVM) -> None:
+    """Print key pfSense/pfBlockerNG/Unbound state for post-mortem on failure.
+
+    The session VM is torn down at the end of pytest, so a failed case must
+    capture state here (within the run) — a workflow step after pytest can't
+    reach the guest. Best-effort; never raises.
+    """
+    # Each probe is ONE shell string run by the guest's login shell. Passing
+    # ("sh","-c",cmd) as separate args fails: ssh re-joins remote args with
+    # spaces and the remote shell re-parses, so a pipeline lands as sh's $0/$1.
+    probes: list[tuple[str, str]] = [
+        ("pfctl -sTables", "/sbin/pfctl -sTables"),
+        ("pf rules (pfB_/DNSBL refs)", "/sbin/pfctl -sr 2>/dev/null | grep -iE 'pfB_|DNSBL' || true"),
+        ("/var/db/pfblockerng listing", "ls -lR /var/db/pfblockerng 2>/dev/null | head -80 || true"),
+        (
+            # Target unbound.conf only — a recursive grep over /var/unbound is slow
+            # (large python data files) and timed out. Include the forward config.
+            "unbound.conf: forward/local-data/access",
+            "grep -nE 'forward-zone|forward-addr|forward-tcp|local-(zone|data):|access-control|do-not-query' "
+            "/var/unbound/unbound.conf 2>/dev/null | head -40 || true",
+        ),
+        ("unbound pfb includes", "ls -l /var/unbound/pfb_dnsbl* /var/unbound/pfb_py* 2>/dev/null || true"),
+        (
+            # Direct before/after: what pfBlockerNG's DNSBL reload changed in
+            # unbound.conf — crucially whether it dropped any access-control.
+            "unbound.conf DNSBL diff (before -> after)",
+            f"diff -u {UNBOUND_BEFORE} {UNBOUND_CONF} 2>/dev/null | head -80 || true",
+        ),
+        (
+            "access-control lines (before vs after)",
+            f"echo '== before =='; grep -nE 'access-control' {UNBOUND_BEFORE} 2>/dev/null | head; "
+            f"echo '== after =='; grep -nE 'access-control' {UNBOUND_CONF} 2>/dev/null | head",
+        ),
+        (
+            "DNSBL python data (pfb_py_data/zone) — what python mode blocks",
+            "wc -l /var/unbound/pfb_py_data.txt /var/unbound/pfb_py_zone.txt 2>/dev/null; "
+            "echo '--- data head ---'; head -8 /var/unbound/pfb_py_data.txt 2>/dev/null; "
+            "echo '--- blocked refs ---'; "
+            "grep -nE 'blocked-' /var/unbound/pfb_py_data.txt /var/unbound/pfb_py_zone.txt 2>/dev/null | head",
+        ),
+        (
+            "DNSBL unbound.conf blocks — what unbound mode builds (local-zone/data)",
+            "wc -l /var/unbound/pfb_dnsbl.conf 2>/dev/null; "
+            "grep -nE 'blocked-|local-zone|local-data' /var/unbound/pfb_dnsbl.conf 2>/dev/null | head -15",
+        ),
+        (
+            "guest-local DNS query (does the resolver answer NON-quiet?)",
+            "/usr/local/bin/drill blocked-exact.pfb.test A @127.0.0.1 2>&1 | "
+            "grep -iE 'rcode|ANSWER SECTION|^[a-z].*IN' | head -6 || true",
+        ),
+        (
+            "unbound process + :53 sockets",
+            "ps auxww 2>/dev/null | grep -i '[u]nbound'; sockstat 2>/dev/null | grep -E 'unbound|:53' | head",
+        ),
+        (
+            "DNSBL python chroot (mounts + interpreter present?)",
+            "mount 2>/dev/null | grep -i unbound; "
+            "ls -l /var/unbound/usr/local/bin/ /var/unbound/usr/local/lib/ 2>/dev/null | head -20 || true",
+        ),
+        (
+            "DNSBL db files (orig + parsed)",
+            "ls -lR /var/db/pfblockerng/dnsbl /var/db/pfblockerng/dnsblorig 2>/dev/null | head -60 || true",
+        ),
+        (
+            "DNSBL parsed/orig sample",
+            "for f in /var/db/pfblockerng/dnsbl/*.txt /var/db/pfblockerng/dnsblorig/*; do "
+            'echo "== $f =="; head -3 "$f" 2>/dev/null; done 2>/dev/null | head -40 || true',
+        ),
+        (
+            "DNSBL log summary (counts/skips)",
+            "grep -iE 'DNSBL|domain|unique|final|skip|TLD|invalid' "
+            "/var/log/pfblockerng/pfblockerng.log 2>/dev/null | tail -50 || true",
+        ),
+        (
+            "config.xml virtualip section",
+            "sed -n '/<virtualip>/,/<\\/virtualip>/p' /conf/config.xml 2>/dev/null | head -40 || true",
+        ),
+        ("config.xml pfb_dnsvip refs", "grep -nE 'pfb_dnsvip|ifconfig.*alias' /conf/config.xml 2>/dev/null || true"),
+        ("lo0 aliases (is the VIP plumbed?)", "/sbin/ifconfig lo0 2>/dev/null || true"),
+        (
+            "config.xml pfBlockerNG section",
+            "sed -n '/<pfblockerng>/,/<\\/pfblockerng>/p' /conf/config.xml 2>/dev/null | head -120 || true",
+        ),
+        ("pfBlockerNG log tail", "tail -n 120 /var/log/pfblockerng/pfblockerng.log 2>/dev/null || true"),
+        ("pfBlockerNG error log tail", "tail -n 40 /var/log/pfblockerng/error.log 2>/dev/null || true"),
+    ]
+    # Stub-upstream reachability: can the guest reach the runner-side stub, and
+    # does forwarding through it resolve a random (non-blocked, non-local) name
+    # to the sentinel? Proves the forward path end-to-end.
+    if vm.upstream_dns_port:
+        p = vm.upstream_dns_port
+        probes += [
+            (
+                f"guest -> stub directly (@{GUEST_TO_HOST_ALIAS} -p {p})",
+                f"/usr/local/bin/drill nonblocked-probe.example A @{GUEST_TO_HOST_ALIAS} -p {p} 2>&1 | "
+                "grep -iE 'rcode|ANSWER|IN.A' | head -5 || true",
+            ),
+            (
+                "forwarding resolves a non-blocked name to the sentinel?",
+                "/usr/local/bin/drill nonblocked-probe.example A @127.0.0.1 2>&1 | "
+                "grep -iE 'rcode|ANSWER|IN.A' | head -5 || true",
+            ),
+        ]
+    print("\n========== VM DIAGNOSTICS (case failed) ==========")
+    for label, cmd in probes:
+        try:
+            result = vm.ssh(cmd, timeout=30)
+            print(f"----- {label} -----\n{result.stdout}{result.stderr}")
+        except Exception as exc:  # noqa: BLE001 (diagnostics must never mask the real failure)
+            print(f"----- {label}: dump failed: {exc}")
+    print("========== END VM DIAGNOSTICS ==========\n")
+    dump_state_diffs(vm)
 
 
 # --------------------------------------------------------------------------- #
@@ -543,10 +1036,15 @@ class CaseContext:
             answer = dns_probe(vm, "blocked.test")
             assert is_nxdomain(answer)
 
-    On enter: inject(spec) then reload(scope). On exit: reset(vm) so the next
-    case starts from the baseline (Phase-3 session-isolation). ``scope`` is
-    auto-chosen (``updatednsbl`` for a DnsblCase, ``updateip`` for an IpCase)
-    for the faster targeted reload; override via ``scope=``.
+    On enter: inject(spec) then a Force Update (``update``) FOLLOWED BY the
+    targeted Force Reload (``updatednsbl``/``updateip``). The full ``update``
+    re-reads the source (incl. our local feed file) and drives
+    ``filter_configure`` — which is what loads the pf table AND creates the
+    Deny rule for an IP case; the targeted reload alone (``reuse='on'``) does
+    not settle those synchronously. On exit: reset(vm) so the next case starts
+    from the baseline (Phase-3 session-isolation). ``scope`` is auto-chosen
+    (``updatednsbl`` for a DnsblCase, ``updateip`` for an IpCase); override via
+    ``scope=``.
     """
 
     def __init__(self, vm: SmokeVM, spec: DnsblCase | IpCase, *, scope: str | None = None) -> None:
@@ -560,9 +1058,29 @@ class CaseContext:
             self.scope = "updateip"
 
     def __enter__(self) -> CaseContext:
+        # Egress stays OPEN across inject + reload: the DNSBL update path needs a
+        # working resolver/network and deadlocks the guest if egress is dark.
+        unblock_egress()
+        snap_state(self.vm, f"{self.spec.aliasname}_pre")
         inject(self.vm, self.spec)
+        snap_state(self.vm, f"{self.spec.aliasname}_injected")
+        # IP needs the full Force Update first (filter_configure loads the table +
+        # rule; a lone targeted reload left "Table does not exist"), THEN the
+        # targeted updateip. DNSBL only needs the single targeted updatednsbl —
+        # the extra full update was just doubling the heavy python-chroot reload.
+        if isinstance(self.spec, IpCase):
+            reload(self.vm, "update")
         reload(self.vm, self.scope)
+        snap_state(self.vm, f"{self.spec.aliasname}_reloaded")
+        # NOW block egress: the per-case probe must prove the block/pass with no
+        # upstream (a non-blocked name would hang, not silently resolve upstream).
+        # ISOLATION (temporary): SMOKE_HERMETIC_PROBE=0 leaves egress OPEN for the
+        # probe to separate "egress is the cause" from "DNSBL/hostfwd is the cause".
+        if os.environ.get("SMOKE_HERMETIC_PROBE", "1") != "0":
+            block_egress()
         return self
 
     def __exit__(self, *exc: object) -> None:
+        # Restore egress before reset() — its forced update reloads pfBlockerNG.
+        unblock_egress()
         reset(self.vm)

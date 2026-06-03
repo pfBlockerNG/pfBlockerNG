@@ -68,6 +68,13 @@ DEFAULT_DNS_PORT = 5353  # host -> guest 53 (tcp+udp)
 # The SLIRP host alias the guest uses to reach the runner (mock feed server).
 GUEST_TO_HOST_ALIAS = "10.0.2.2"
 
+# Sentinel answers the runner-side stub upstream returns for any forwarded query
+# (see _StubDnsServer / helpers.configure_upstream). Distinct from every DNSBL
+# block shape (NXDOMAIN / 0.0.0.0 / the VIP), so a name that should be blocked
+# but ISN'T resolves to the sentinel — a true pass, never a false-green block.
+STUB_DNS_A = "203.0.113.99"  # RFC 5737 documentation range
+STUB_DNS_AAAA = "2001:db8::99"  # RFC 3849 documentation range
+
 # Hard readiness ceiling; wait_ready.sh polls (no fixed sleep) up to this.
 DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
 
@@ -94,6 +101,10 @@ class SmokeVM:
     # The runner-side address the guest reaches via the SLIRP host alias. Set
     # once mock_feeds is up (it allocates the port); None until then.
     feed_base_url: str | None = None
+    # Runner-side port of the stub DNS upstream (reached by the guest at
+    # 10.0.2.2:<port> via SLIRP). Set once the stub_dns fixture is up; None
+    # otherwise. Unbound is pointed here so it never recurses into dark egress.
+    upstream_dns_port: int | None = None
     # qemu PID + overlay are bookkeeping for teardown.
     vm_pid: int | None = None
     log_path: str | None = None
@@ -423,6 +434,121 @@ class _MockFeedServer:
         return f"http://{GUEST_TO_HOST_ALIAS}:{self.port}/{name.lstrip('/')}"
 
 
+class _StubDnsServer:
+    """A minimal dnspython-backed DNS server: any A/AAAA -> a sentinel address.
+
+    Gives the guest's Unbound a REACHABLE, controlled upstream over SLIRP
+    (10.0.2.2:<port>) so it never recurses to the (egress-blocked) root and hangs
+    — pfSense Unbound cannot service a query, not even a local DNSBL block, while
+    its recursion path is dark. Nothing leaks to the real internet: the stub
+    answers everything itself. Listens UDP+TCP on one ephemeral port; non-A/AAAA
+    queries get an empty NOERROR.
+    """
+
+    def __init__(self) -> None:
+        self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._udp.bind(("0.0.0.0", 0))
+        self._port = self._udp.getsockname()[1]
+        self._tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._tcp.bind(("0.0.0.0", self._port))
+        self._tcp.listen(16)
+        self._stop = threading.Event()
+        self._threads = [
+            threading.Thread(target=self._serve_udp, daemon=True),
+            threading.Thread(target=self._serve_tcp, daemon=True),
+        ]
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @staticmethod
+    def _build_response(data: bytes) -> bytes | None:
+        import dns.message
+        import dns.rdatatype
+        import dns.rrset
+
+        try:
+            req = dns.message.from_wire(data)
+        except Exception:
+            return None
+        resp = dns.message.make_response(req)
+        if req.question:
+            q = req.question[0]
+            if q.rdtype == dns.rdatatype.A:
+                resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "A", STUB_DNS_A))
+            elif q.rdtype == dns.rdatatype.AAAA:
+                resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "AAAA", STUB_DNS_AAAA))
+        return resp.to_wire()
+
+    def _serve_udp(self) -> None:
+        self._udp.settimeout(0.5)
+        while not self._stop.is_set():
+            try:
+                data, addr = self._udp.recvfrom(65535)
+            except OSError:
+                continue
+            wire = self._build_response(data)
+            if wire is not None:
+                with contextlib.suppress(OSError):
+                    self._udp.sendto(wire, addr)
+
+    def _serve_tcp(self) -> None:
+        self._tcp.settimeout(0.5)
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._tcp.accept()
+            except OSError:
+                continue
+            with contextlib.suppress(Exception):
+                conn.settimeout(2.0)
+                header = conn.recv(2)
+                if len(header) == 2:
+                    n = int.from_bytes(header, "big")
+                    data = b""
+                    while len(data) < n:
+                        chunk = conn.recv(n - len(data))
+                        if not chunk:
+                            break
+                        data += chunk
+                    wire = self._build_response(data)
+                    if wire is not None:
+                        conn.sendall(len(wire).to_bytes(2, "big") + wire)
+            with contextlib.suppress(OSError):
+                conn.close()
+
+    def start(self) -> None:
+        for thread in self._threads:
+            thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        for thread in self._threads:
+            thread.join(timeout=5)
+        with contextlib.suppress(OSError):
+            self._udp.close()
+        with contextlib.suppress(OSError):
+            self._tcp.close()
+
+
+@pytest.fixture(scope="session")
+def stub_dns(smoke_vm: SmokeVM) -> Iterator[_StubDnsServer]:
+    """Run the stub DNS upstream and record its port on the VM object.
+
+    Reachable by the guest at 10.0.2.2:<port> via SLIRP (survives the egress
+    block, same as mock_feeds). helpers.configure_upstream() points Unbound here.
+    """
+    server = _StubDnsServer()
+    server.start()
+    smoke_vm.upstream_dns_port = server.port
+    try:
+        yield server
+    finally:
+        smoke_vm.upstream_dns_port = None
+        server.stop()
+
+
 @pytest.fixture
 def mock_feeds(smoke_vm: SmokeVM) -> Iterator[_MockFeedServer]:
     """Serve fixture feeds to the guest; record the base URL on the VM object.
@@ -490,3 +616,32 @@ def expected_control_answer(env: Mapping[str, str] = os.environ) -> tuple[str, s
     name = env.get("SMOKE_CONTROL_NAME", "smoke-control.pfb.test")
     ip = env.get("SMOKE_CONTROL_IP", "192.0.2.123")
     return name, ip
+
+
+# --------------------------------------------------------------------------- #
+# On-failure diagnostics — dump live VM state (the session VM is torn down at
+# end of run, so a failed case must capture it here, in-run)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):  # type: ignore[no-untyped-def]
+    """Stash each phase's report on the item so fixtures can read pass/fail."""
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"_rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
+    """If a VM-backed case failed, print pfSense/Unbound/pfBlockerNG state."""
+    yield
+    rep = getattr(request.node, "_rep_call", None)
+    if rep is None or not rep.failed:
+        return
+    vm = request.node.funcargs.get("deployed_vm") or request.node.funcargs.get("smoke_vm")
+    if vm is None:
+        return
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+
+    helpers.dump_diagnostics(vm)
