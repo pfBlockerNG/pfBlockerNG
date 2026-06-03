@@ -38,12 +38,29 @@ def _build(
     top1m_list: Iterable[str] = (),
     top1m_enabled: bool = False,
     format_hint: str = "abp",
+    user_feeds: Iterable[str] = (),
+    plain_feeds: Iterable[str] = (),
 ) -> P.BuildResult:
-    """Build from an in-memory abp manifest. ``feeds`` maps a feed name -> raw lines."""
+    """Build from an in-memory abp manifest. ``feeds`` maps a feed name -> raw lines.
+
+    ``user_feeds`` names the feeds tagged provenance='user' (a DNSBL Group Custom_List,
+    sovereign band 5); ``plain_feeds`` names those forced format_hint='plain' (the
+    non-ABP path), so a mixed user-plain + downloaded-ABP manifest can be built.
+    """
     raw_store = {name: lines for name, lines in feeds.items()}
+    user_set = set(user_feeds)
+    plain_set = set(plain_feeds)
     manifest = {
         "feeds": [
-            {"raw": name, "feed": name, "group": name, "format_hint": format_hint, "log_flag": "1"} for name in feeds
+            {
+                "raw": name,
+                "feed": name,
+                "group": name,
+                "format_hint": "plain" if name in plain_set else format_hint,
+                "log_flag": "1",
+                "provenance": "user" if name in user_set else "feed",
+            }
+            for name in feeds
         ],
     }
     config = {
@@ -327,3 +344,57 @@ class TestBranchCoverage:
         res = _build({"f": ["||c.example.com^"]})
         assert res.important_rules is False
         assert _live_label(res, "c.example.com") == "block"
+
+
+# --------------------------------------------------------------------------- #
+# 6. USER provenance -- a DNSBL Group Custom_List is sovereign over feeds
+# --------------------------------------------------------------------------- #
+class TestUserCustomListSovereign:
+    """A Custom_List row (manifest provenance='user') bands its blocks at the user
+    tier (5), so an explicit user block beats any FEED allow -- the user is the
+    sovereign. The CONTRAST tests prove the provenance tag is what flips the outcome:
+    the identical rules WITHOUT the user tag let the feed @@$important win.
+    """
+
+    def test_abp_custom_block_beats_feed_important_allow(self) -> None:
+        # cust (user, ABP) blocks ||x^; dl (feed) allows @@||x^$important.
+        res = _build(
+            {"cust": ["||x.example.com^"], "dl": ["@@||x.example.com^$important"]},
+            user_feeds=["cust"],
+        )
+        assert _live_label(res, "x.example.com") == "block"
+
+    def test_plain_custom_block_beats_feed_important_allow(self) -> None:
+        # The NON-ABP path: cust is a plain user Custom_List (bare domain), dl is an
+        # ABP feed @@$important. The plain user block must still band at 5 and win.
+        res = _build(
+            {"cust": ["x.example.com"], "dl": ["@@||x.example.com^$important"]},
+            user_feeds=["cust"],
+            plain_feeds=["cust"],
+        )
+        assert _live_label(res, "x.example.com") == "block"
+
+    def test_contrast_same_rules_without_user_tag_feed_allow_wins(self) -> None:
+        # IDENTICAL rules, but BOTH feeds downloaded (provenance='feed'): the feed
+        # block is band 1, the feed @@$important is band 4 -> the allow wins. This is
+        # what makes the provenance tag load-bearing (band 5 vs 1 flips block<->resolve).
+        res = _build({"dl1": ["||x.example.com^"], "dl2": ["@@||x.example.com^$important"]})
+        assert _live_label(res, "x.example.com") == "resolve"
+
+    def test_whitelist_still_beats_user_custom_block(self) -> None:
+        # The whitelist (band 6) is the ultimate override -- it beats even a user
+        # Custom_List block (band 5).
+        res = _build({"cust": ["||x.example.com^"]}, user_feeds=["cust"], user_whitelist=["x.example.com"])
+        assert _live_label(res, "x.example.com") == "resolve"
+
+    def test_user_custom_block_bands_at_5(self) -> None:
+        # Direct payload check: a plain user Custom_List entry carries band 5.
+        res = _build({"cust": ["x.example.com"]}, plain_feeds=["cust"], user_feeds=["cust"])
+        entry = res.zone_db.get("example.com") or res.data_db.get("x.example.com")
+        assert entry is not None and entry["band"] == P.PRIO_USER_BLOCK == 5
+
+    def test_feed_block_still_bands_at_1(self) -> None:
+        # Regression: a downloaded plain feed stays band 1 (provenance default 'feed').
+        res = _build({"dl": ["x.example.com"]}, plain_feeds=["dl"])
+        entry = res.zone_db.get("example.com") or res.data_db.get("x.example.com")
+        assert entry is not None and entry["band"] == P.PRIO_FEED_BLOCK == 1

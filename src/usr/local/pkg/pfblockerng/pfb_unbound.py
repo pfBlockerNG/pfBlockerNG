@@ -2928,9 +2928,19 @@ def build(
         group = feed_row["group"]
         fmt = feed_row["format_hint"]
         log_flag = feed_row["log_flag"]
+        # ADR-07: a DNSBL Group Custom_List (the {alias}_custom synthetic row, PHP
+        # provenance='user') is USER-curated -> SOVEREIGN over feeds: the user is the
+        # sovereign and a list (automated) can never override an explicit user choice.
+        # So its blocks carry the user-block band (5, == user regex), which beats any
+        # feed allow (@@ band 2 / @@$important band 4); only the band-6 whitelist wins.
+        # A downloaded feed stays band 1. The ABP path threads provenance into
+        # parse_abp -> reconcile (_dnsbl_rule_band scores USER at band 5); the non-ABP
+        # plain path bands the entry directly here.
+        provenance = RULE_PROV_USER if feed_row.get("provenance") == "user" else RULE_PROV_FEED
+        block_band = PRIO_USER_BLOCK if provenance == RULE_PROV_USER else PRIO_FEED_BLOCK
         if fmt == "abp":
             for raw_line in line_reader(feed_row["raw"]):
-                rule = parse_abp(raw_line, provenance=RULE_PROV_FEED, feed=feed, group=group, log=log_flag)
+                rule = parse_abp(raw_line, provenance=provenance, feed=feed, group=group, log=log_flag)
                 if rule is not None:
                     abp_rules.append(rule)
             continue
@@ -2946,8 +2956,9 @@ def build(
                 continue
             idx = index_for(feed, group)
             cls, key = classify(domain, tlds, exclusion)
-            # Non-ABP block: feed-block band 1, never $important (no $options grammar).
-            payload = {"log": log_flag, "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
+            # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
+            # $important (the plain path has no $options grammar).
+            payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
             if cls == DNSBL_CLASS_ZONE:
                 zone_db[key] = payload  # last-wins (dict; ADR-06 SS2 attribution change)
             else:

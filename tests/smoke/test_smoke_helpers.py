@@ -223,4 +223,19 @@ def test_abp_inject_snippet_default_is_unchanged() -> None:
     snippet = h._dnsbl_inject_snippet(spec)
     assert "pfb_regex" not in snippet
     assert "regex_cap" not in snippet
+    assert "custom" not in snippet
     assert snippet.count("'header' =>") == 1
+
+
+def test_abp_inject_snippet_emits_custom_list() -> None:
+    """custom_domains -> a base64 'custom' field (the sovereign Custom_List vehicle)."""
+    spec = h.DnsblCase(
+        aliasname="smokecust",
+        feed_url="/var/db/pfblockerng/smokecust.txt",
+        header="smokecust",
+        custom_domains=["evil.example.com", "ads.example.net"],
+    )
+    snippet = h._dnsbl_inject_snippet(spec)
+    assert "$list['custom'] = base64_encode(" in snippet
+    # The domains ride along CRLF-joined inside the base64-encoded literal.
+    assert "evil.example.com" in snippet

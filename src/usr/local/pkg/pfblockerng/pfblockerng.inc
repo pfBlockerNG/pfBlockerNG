@@ -2390,7 +2390,9 @@ function pfb_dnsbl_abp_extract_ip($line) {
 // sees them intact. Non-ABP feeds stay 'plain' exactly as ADR-06 left them.
 //
 // $feeds: array of rows [ 'header' => <feed>, 'group' => <alias>, 'log' => <flag>,
-//         'format' => 'abp'|'plain' ].
+//         'format' => 'abp'|'plain', 'provenance' => 'user'|'feed' ]. ADR-07: a
+//         Custom_List ({alias}_custom) row is 'user' -> the Python build bands it as a
+//         sovereign user block (5); a downloaded feed is 'feed' -> band 1.
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
@@ -2464,6 +2466,7 @@ function pfb_unbound_python_sources($feeds) {
 			'feed'		=> $header,
 			'group'		=> $group,
 			'format_hint'	=> $format,
+			'provenance'	=> (isset($feed['provenance']) && $feed['provenance'] === 'user') ? 'user' : 'feed',
 			'log_flag'	=> $logf
 		);
 	}
@@ -7854,7 +7857,8 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-07 P8: a reused feed isn't re-parsed, so read the
 								// persisted '.abp' marker to carry its format_hint forward.
 								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
-									'format' => file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain');
+									'format' => file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
+										'provenance' => $custom ? 'user' : 'feed');
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
 								$alias_cnt		= $alias_cnt + $list_cnt;
@@ -8411,7 +8415,8 @@ function sync_package_pfblockerng($cron='') {
 								// their RAW lines through to the Python parser (parse_abp); all
 								// other feeds stay 'plain' (PHP-extracted bare domains).
 								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
-									'format' => $easylist ? 'abp' : 'plain');
+									'format' => $easylist ? 'abp' : 'plain',
+										'provenance' => $custom ? 'user' : 'feed');
 
 								// ADR-07 P8: persist the ABP marker so a future reuse build (which
 								// does not re-parse the feed) carries the format_hint forward.
