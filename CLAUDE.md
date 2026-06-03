@@ -403,6 +403,13 @@ New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitH
 Release → PR on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases;
 tags from `main` become stable releases.
 
+**Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and
+merge" button); never a merge commit, never squash. History across `main` ← `devel`
+is kept strictly linear (`main` is always an ancestor of `devel`, no merge commits),
+so promotion up the chain — and landing any PR — is a rebase/replay, not a merge. If
+a PR branch is behind its base, rebase it onto the base first so the merge is a clean
+fast-forward.
+
 ---
 
 ## Commit style
