@@ -232,7 +232,7 @@ truths are non-obvious and each cost real debugging — internalise them first:
   chroot-relative (see the chroot note under "Investigating the live system"); a
   host-absolute path silently fails to load.
 - **Enable chain:** DNSBL `mode=='enabled'` needs `enable_cb=on` + `pfb_dnsbl=on` +
-  the DNS Resolver enabled (`unbound_state`). On `next`, `dnsbl_mode`/`pfb_py_block`
+  the DNS Resolver enabled (`unbound_state`). On `devel`, `dnsbl_mode`/`pfb_py_block`
   are dead keys (python is the only mode); on `main` they're still required.
 - **The image bakes only the deps + qemu-guest-agent** — the harness injects the
   DNSBL VIP (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline.
