@@ -2119,6 +2119,7 @@ function convert_dnsbl_log($mode, $fields) {
 		[7]	= Evaluated Domain/TLD
 		[8]	= Feed Name
 		[9]	= Duplicate ID indicator / Count
+		[10]	= Query Type - Python mode only: 'A', 'AAAA', 'ANY', ... (absent on older/Unbound-mode lines, where A/AAAA is carried in the b_type suffix [5])
 
 	pfbalertdnsbl fields array reference (Used for filter functionality)
 
@@ -2301,14 +2302,24 @@ function convert_dnsbl_log($mode, $fields) {
 	$pfbalertdnsbl[13]	= "{$p_group}{$fields[6]}";
 	$pfbalertdnsbl[15]	= "{$p_feed}{$fields[8]}";
 
+	// Query type suffix (Python mode logs the record type as field [10]; older
+	// Unbound-mode lines carry it in the b_type suffix [5] and lack field [10]).
+	$qtype_sfx = '';
+	if (isset($fields[10])) {
+		$qtype = trim($fields[10]);
+		if ($qtype != '' && $qtype != 'Unknown') {
+			$qtype_sfx = " | {$qtype}";
+		}
+	}
+
 	if (!empty($fields[4])) {
 		if (strlen($fields[4]) >= 25) {
 			$f4 = substr($fields[4], 0, 24) . "<small>...</small>";
 			$fields[4] = "<span title=\"{$fields[4]}\">{$f4}</span>";
 		}
-		$pfbalertdnsbl[19] = "{$fields[0]} | {$fields[4]}";
+		$pfbalertdnsbl[19] = "{$fields[0]} | {$fields[4]}{$qtype_sfx}";
 	} else {
-		$pfbalertdnsbl[19] = "{$fields[0]}";
+		$pfbalertdnsbl[19] = "{$fields[0]}{$qtype_sfx}";
 	}
 
 	if (!empty($p_mode)) {

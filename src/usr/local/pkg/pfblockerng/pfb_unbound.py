@@ -1250,15 +1250,24 @@ def get_details_dnsbl(
         if pfb["sqlite3_dnsbl_con"] and isDNSBL["group"] != "":
             pfb_db_enqueue(("dnsbl", isDNSBL["group"]))
 
+        # Query type (A/AAAA/ANY/...). The cached decision in isDNSBL is
+        # qtype-independent, so fold q_type into both the consecutive-dedup
+        # signature and the log line. Without it a client's back-to-back A+AAAA
+        # blocks of the same name compare equal -> the second is marked a
+        # duplicate (dual-stack under-count) and Reports cannot break down by
+        # record type. The decision path stays qtype-correct and untouched.
+        q_type = get_q_type(qstate, qinfo)
+
         dupEntry = "+"
+        event_sig = (q_type, isDNSBL)
         lastEvent = dnsblDB.get("last-event")
         if lastEvent is not None:
-            if str(lastEvent) == str(isDNSBL):
+            if str(lastEvent) == str(event_sig):
                 dupEntry = "-"
             else:
-                dnsblDB["last-event"] = isDNSBL
+                dnsblDB["last-event"] = event_sig
         else:
-            dnsblDB["last-event"] = isDNSBL
+            dnsblDB["last-event"] = event_sig
 
         # Skip logging
         if isDNSBL["log"] == "2":
@@ -1283,6 +1292,7 @@ def get_details_dnsbl(
                 isDNSBL["b_eval"],
                 isDNSBL["feed"],
                 dupEntry,
+                q_type,
             )
         )
         pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
