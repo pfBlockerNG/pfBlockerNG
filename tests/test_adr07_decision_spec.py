@@ -312,7 +312,11 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
                 important=important,
                 badfilter=badfilter,
                 options=dns_opts,
-                signature=(dom, tuple(sorted(sig_opts))),
+                # A reducible regex folds to a DOMAIN rule for MATCHING, but its
+                # $badfilter signature must stay the original regex body (inner): a
+                # literal ||domain^$badfilter must NOT prune a reducible regex, and
+                # vice-versa. Mirrors production parse_abp (signature=(inner, ...)).
+                signature=(inner, tuple(sorted(sig_opts))),
             )
         try:
             re.compile(inner)

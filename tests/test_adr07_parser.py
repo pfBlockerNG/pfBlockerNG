@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from types import ModuleType
 
 import pytest
 
@@ -30,7 +31,7 @@ from tests import test_adr07_decision_spec as spec
 # --------------------------------------------------------------------------- #
 
 
-def _spike():
+def _spike() -> ModuleType:
     spike_path = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "spike_adr07_regex.py")
     s = importlib.util.spec_from_file_location("spike_adr07_regex", spike_path)
     assert s and s.loader
@@ -109,6 +110,16 @@ class TestBlockDomain:
     def test_hosts_loopback_sink(self) -> None:
         r = P.parse_abp("127.0.0.1 metrics.host.example")
         assert r is not None and r.key_or_pattern == "metrics.host.example"
+
+    def test_hosts_tab_delimited(self) -> None:
+        # A TAB-separated hosts line must parse like a space-separated one (it must not
+        # fall through to the bare-domain path and get dropped). CodeRabbit PR #20.
+        r = P.parse_abp("0.0.0.0\ttab.host.example")
+        assert r is not None
+        assert r.kind == P.DNSBL_KIND_BLOCK and r.target == P.RULE_TARGET_DOMAIN
+        assert r.key_or_pattern == "tab.host.example" and r.wildcard is True
+        # "<ip>\t<ip>" still routes to the firewall path (Python skips it).
+        assert P.parse_abp("0.0.0.0\t203.0.113.9") is None
 
     def test_plain_bare_domain(self) -> None:
         r = P.parse_abp("plain.bad.example")
