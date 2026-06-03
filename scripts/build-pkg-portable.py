@@ -394,8 +394,8 @@ class Recipe:
         return paths[:-1], paths[-1]
 
     def _cmd_ln(self, args: list[str]) -> None:
-        args = [a for a in args if not a.startswith("-")]
-        target, link = args[-2], args[-1]
+        srcs, link = self._copy_args(args)  # validates: raises on too few paths
+        target = srcs[-1]
         Path(link).parent.mkdir(parents=True, exist_ok=True)
         if Path(link).exists() or Path(link).is_symlink():
             Path(link).unlink()
@@ -766,11 +766,21 @@ def _catalogue_text(raw: bytes, source: str) -> str:
         return raw.decode("utf-8", "replace")
     tar_bytes = _decompress(raw)
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-        member = "packagesite.yaml"
+        # extractfile() returns None for a non-regular member (dir/symlink) and
+        # raises KeyError for a missing name — fall back to the first regular file.
         try:
-            data = tf.extractfile(member).read()
+            fobj = tf.extractfile("packagesite.yaml")
         except KeyError:
-            data = tf.extractfile(tf.getmembers()[0]).read()
+            fobj = None
+        if fobj is None:
+            for m in tf.getmembers():
+                if m.isfile():
+                    fobj = tf.extractfile(m)
+                    if fobj is not None:
+                        break
+        if fobj is None:
+            raise BuildError("no readable packagesite file in the repo catalogue archive")
+        data = fobj.read()
     return data.decode("utf-8", "replace")
 
 
