@@ -1,0 +1,337 @@
+name: Build pfSense CE image (ADR-04 P2)
+
+# Publish a version-tagged pfSense CE qcow2 to PRIVATE GHCR via oras, then
+# VERIFY the published image passes the Phase-1 round-trip. One output contract:
+# the published qcow2 at ghcr.io/<org>/pfsense-ce:<PFSENSE_CE_VERSION>.
+#
+# Build mode is "seed once, upgrade in place" (ADR-04 §2):
+#   * SEED  — a maintainer's ONE clean manual CE install, exported wholesale to
+#             a qcow2 and pushed with scripts/image-publish.sh. That export reads
+#             a powered-off Proxmox VM disk, so it CANNOT run on a GH runner
+#             (no Proxmox, no LAN — see RESULTS/02_Results.txt + scripts/README.md).
+#             This workflow's `seed` mode therefore only RE-VERIFIES an already
+#             published seed tag (it does not create one); creation is the
+#             maintainer runbook step.
+#   * UPGRADE — pull a prior published tag, boot it under the runner's own KVM,
+#             run pfSense-upgrade in place, re-snapshot, publish the new tag.
+#             This IS automatable on the runner and is the canonical CI path.
+#             It reuses scripts/image-upgrade.sh run LOCALLY (the runner is the
+#             KVM host: no --proxmox), so the upgrade logic is not duplicated.
+#
+# RETENTION: every tag is its own immutable snapshot; older tags are never
+# overwritten (both scripts refuse to clobber without --force). The seed tag and
+# every upgrade snapshot stay in GHCR — the upgrade chain is recoverable and
+# auditable (ADR-04 §2 "Retain the archived seed AND every snapshot").
+#
+# This builds CE ONLY (no Plus) and a single latest-stable version per run; the
+# per-minor matrix + automated refresh are ADR-09. The GHCR package is PRIVATE.
+#
+# Required config (Actions secrets/vars — NEVER commit secrets):
+#   SMOKE_GHCR_USER     username for `oras login ghcr.io`            (secret)
+#   SMOKE_GHCR_TOKEN    token with write:packages (publish) /        (secret)
+#                       read:packages (verify pull)
+#   SMOKE_SSH_PRIV_KEY  guest SSH private key; its public half is     (secret)
+#                       baked into the image's root authorized_keys
+#   SMOKE_IMAGE         GHCR image ref WITHOUT tag (var or secret;    (var/secret)
+#                       default ghcr.io/<owner>/pfsense-ce)
+#   SMOKE_IMAGE_REF     verify-only fallback: the seed/base OCI ref   (var/secret)
+#                       by digest, used when verifying without a freshly
+#                       published :version tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pfsense_ce_version:
+        description: "Target pfSense CE version tag to publish (e.g. 2.8.1)"
+        required: true
+        default: "2.8.1"
+      base_source:
+        description: "Base source: 'upgrade' (boot a prior tag + pfSense-upgrade in place) or 'seed' (re-verify an existing maintainer seed; seeds are created off-runner via image-publish.sh)"
+        required: true
+        default: "upgrade"
+        type: choice
+        options:
+          - upgrade
+          - seed
+      from_version:
+        description: "UPGRADE mode: the prior published CE tag to boot and upgrade from (e.g. 2.8.0)"
+        required: false
+        default: ""
+      compression:
+        description: "qcow2 compression for the published image (zstd|zlib|off)"
+        required: false
+        default: "zstd"
+      upgrade_timeout:
+        description: "UPGRADE mode: seconds to wait for pfSense-upgrade + reboot"
+        required: false
+        default: "1800"
+      verify_boot_timeout:
+        description: "Verify: hard boot-to-ready timeout, seconds"
+        required: false
+        default: "120"
+      local_data_name:
+        description: "Verify: Unbound local-data name the round-trip injects + digs"
+        required: false
+        default: "smoke-control.pfb.test"
+      local_data_ip:
+        description: "Verify: A-record the round-trip asserts for local_data_name"
+        required: false
+        default: "192.0.2.123"
+  # ADR-09 hook: a scheduled refresh reads the supported-version matrix and
+  # dispatches this workflow per version. Left commented so ADR-04 does not
+  # silently start auto-publishing; ADR-09 enables + drives it.
+  # schedule:
+  #   - cron: "0 5 * * 1"   # weekly, Monday 05:00 UTC
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
+  publish-image:
+    name: Publish pfSense CE ${{ inputs.pfsense_ce_version }} to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ inputs.pfsense_ce_version }}
+    steps:
+      - name: Checkout (for scripts/)
+        uses: actions/checkout@v6
+
+      - name: Validate inputs
+        env:
+          BASE_SOURCE: ${{ inputs.base_source }}
+          FROM_VERSION: ${{ inputs.from_version }}
+        run: |
+          set -eu
+          if [ "$BASE_SOURCE" = "upgrade" ] && [ -z "${FROM_VERSION:-}" ]; then
+            echo "::error::base_source=upgrade requires from_version (the prior published tag to upgrade)"
+            exit 1
+          fi
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
+        # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. The
+        # canonical fix (same as build-pkg.yml / smoke-spike.yml): a udev rule
+        # making /dev/kvm world-RW, applied in-job.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install host tools (qemu)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils openssh-client
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Write guest SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Resolve the GHCR image ref
+        id: ref
+        env:
+          SMOKE_IMAGE: ${{ secrets.SMOKE_IMAGE || vars.SMOKE_IMAGE }}
+        run: |
+          set -eu
+          # Default to ghcr.io/<owner>/pfsense-ce when SMOKE_IMAGE is unset.
+          IMAGE="${SMOKE_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/pfsense-ce}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "publishing target: ${IMAGE}:${{ inputs.pfsense_ce_version }}"
+
+      - name: Upgrade in place and publish (canonical path)
+        if: inputs.base_source == 'upgrade'
+        # Reuse scripts/image-upgrade.sh LOCALLY: the runner IS the KVM host, so
+        # no --proxmox. It pulls FROM_VERSION (local oras), boots a writable copy
+        # under the runner's KVM, runs `pfSense-upgrade` over SSH (guest key from
+        # the secret), waits for the new version, powers off, compresses, and
+        # pushes the new tag. The source tag is left untouched (snapshot kept).
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+        run: |
+          set -eu
+          sh scripts/image-upgrade.sh \
+            --from "${{ inputs.from_version }}" \
+            --to "${{ inputs.pfsense_ce_version }}" \
+            --compression "${{ inputs.compression }}" \
+            --upgrade-timeout "${{ inputs.upgrade_timeout }}"
+
+      - name: Seed mode — re-verify only (creation is off-runner)
+        if: inputs.base_source == 'seed'
+        # A SEED is one clean manual CE install exported wholesale via
+        # scripts/image-publish.sh from a powered-off Proxmox VM. That export
+        # reads a host disk and cannot run on a GH runner. So `seed` mode here
+        # does NOT create a tag: it asserts the requested seed tag already
+        # exists in GHCR (published by the maintainer per the runbook) and lets
+        # the verify job round-trip it.
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          if ! oras manifest fetch "${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }}" >/dev/null 2>&1; then
+            echo "::error::seed tag ${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }} not found. Create it off-runner with scripts/image-publish.sh (see RESULTS/02_Results.txt)."
+            exit 1
+          fi
+          echo "seed tag ${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }} present — verify job will round-trip it"
+
+  # ── 2. Build the branch .pkg (for the verify round-trip) ─────────────────
+  # Verification installs the branch-under-test onto the freshly published image
+  # exactly as the smoke spike does, so it needs the .pkg.
+  build-pkg:
+    name: Build branch .pkg (FreeBSD)
+    needs: publish-image
+    uses: ./.github/workflows/build-pkg.yml
+    with:
+      channel: devel
+    # freebsd_version defaults to 15.0-RELEASE (matches pfSense CE 2.8.1)
+
+  # ── 3. Verify the published image passes the Phase-1 round-trip ──────────
+  verify-image:
+    name: Round-trip the freshly published image
+    needs: [publish-image, build-pkg]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Enable KVM access for the runner user
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install host tools (qemu, dig, curl)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Resolve the GHCR image ref
+        id: ref
+        env:
+          SMOKE_IMAGE: ${{ secrets.SMOKE_IMAGE || vars.SMOKE_IMAGE }}
+        run: |
+          set -eu
+          IMAGE="${SMOKE_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/pfsense-ce}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull the freshly published image from private GHCR
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          mkdir -p image
+          oras pull "${SMOKE_IMAGE}:${{ needs.publish-image.outputs.version }}" --output image
+          ls -l image
+
+      - name: Write guest SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-pkg.outputs.artifact }}
+          path: pkg
+
+      - name: Locate the .pkg
+        run: |
+          set -eu
+          PKGFILE="$(find pkg -type f -name '*.pkg' 2>/dev/null | head -1)"
+          [ -n "$PKGFILE" ] || { echo "::error::no .pkg in the build artifact"; ls -lR pkg || true; exit 1; }
+          echo "PKGFILE=${PKGFILE}" >> "$GITHUB_ENV"
+          echo "using package: ${PKGFILE}"
+
+      - name: Boot + round-trip the published image
+        env:
+          LOCAL_DATA_NAME: ${{ inputs.local_data_name }}
+          LOCAL_DATA_IP: ${{ inputs.local_data_ip }}
+          BOOT_TIMEOUT: ${{ inputs.verify_boot_timeout }}
+        run: |
+          set -eu
+          BASE_IMG="$(find image -type f -name '*.qcow2' | head -1)"
+          [ -n "$BASE_IMG" ] || { echo "::error::no .qcow2 in the pulled artifact"; ls -lR image || true; exit 1; }
+          echo "round-tripping image: $BASE_IMG"
+
+          QMP_SOCK="${RUNNER_TEMP:-/tmp}/pfb-qmp-verify.sock"
+          QMP_SOCK="$QMP_SOCK" tests/smoke/boot_vm.sh "$BASE_IMG" > vm-verify.log 2>&1 &
+          VM_PID=$!
+
+          if BOOT_OUT="$(tests/smoke/wait_ready.sh smoke_key 127.0.0.1 2222 "$BOOT_TIMEOUT" "$VM_PID" 8080)"; then
+            echo "$BOOT_OUT"
+            # Clean pfSense (pfBlockerNG NOT baked) — install the branch .pkg,
+            # then run the exact Phase-1 control round-trip.
+            scripts/install-pkg.sh root@127.0.0.1 \
+              --port 2222 --ssh-key smoke_key --pkg "$PKGFILE"
+            tests/smoke/roundtrip.sh smoke_key "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP" \
+              127.0.0.1 2222 5353 8080
+            RC=0
+          else
+            echo "::error::published image never became ready"
+            tail -n 40 vm-verify.log || true
+            RC=1
+          fi
+
+          if [ "$RC" -ne 0 ] && kill -0 "$VM_PID" 2>/dev/null; then
+            python3 tests/smoke/screendump.py "$QMP_SOCK" "${PWD}/screen-verify.png" \
+              || echo "screendump failed"
+          fi
+          kill "$VM_PID" 2>/dev/null || true
+          wait "$VM_PID" 2>/dev/null || true
+          rm -f "$QMP_SOCK"
+          exit "$RC"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-image-verify-diagnostics
+          path: |
+            vm-verify.log
+            screen-verify.png
+          if-no-files-found: ignore
+          retention-days: 7
