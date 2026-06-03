@@ -175,6 +175,53 @@ class TestRegex:
         r = P.parse_abp(r"/ad(unbalanced/")
         assert r is not None and r.target == P.RULE_TARGET_REGEX
 
+    def test_block_regex_important(self) -> None:
+        r = P.parse_abp(r"/ad[0-9]\.example\.com$/$important")
+        assert r is not None
+        assert r.kind == P.DNSBL_KIND_BLOCK
+        assert r.target == P.RULE_TARGET_REGEX
+        assert r.key_or_pattern == r"ad[0-9]\.example\.com$"  # raw, options stripped
+        assert r.important is True and r.badfilter is False
+        # $important participates in the signature; the pattern stays the key.
+        assert r.signature == (r"ad[0-9]\.example\.com$", ("important",))
+
+    def test_block_regex_badfilter(self) -> None:
+        r = P.parse_abp(r"/ad[0-9]\.example\.com$/$badfilter")
+        assert r is not None
+        assert r.target == P.RULE_TARGET_REGEX
+        assert r.badfilter is True and r.important is False
+        # signature MINUS $badfilter -> the bare pattern, no opts (prunes the plain /re/).
+        assert r.signature == (r"ad[0-9]\.example\.com$", ())
+
+    def test_allow_regex_with_options(self) -> None:
+        r = P.parse_abp(r"@@/whitelist-[a-z]+\.example$/$important")
+        assert r is not None
+        assert r.kind == P.DNSBL_KIND_ALLOW
+        assert r.target == P.RULE_TARGET_REGEX
+        assert r.key_or_pattern == r"whitelist-[a-z]+\.example$"
+        assert r.important is True
+
+    def test_block_regex_important_and_badfilter(self) -> None:
+        r = P.parse_abp(r"/ad[0-9]\.example$/$important,badfilter")
+        assert r is not None
+        assert r.important is True and r.badfilter is True
+        assert r.signature == (r"ad[0-9]\.example$", ("important",))
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            r"/track[0-9]\.example$/$third-party",
+            r"/track[0-9]\.example$/$dnsrewrite=0.0.0.0",
+            r"@@/safe[0-9]\.example$/$domain=foo.com",
+            r"/track[0-9]\.example$/$some-future-option",
+            r"/track[0-9]\.example$/$important,third-party",  # one bad opt poisons it
+        ],
+    )
+    def test_regex_skip_non_dns_options(self, line: str) -> None:
+        # A page-context / non-DNS / unrecognised option skips the WHOLE regex rule,
+        # exactly like a domain rule.
+        assert P.parse_abp(line) is None, line
+
     @pytest.mark.parametrize("line", _reducible_lines())
     def test_corpus_reducible_tagged_regex(self, line: str) -> None:
         # The reducible-vs-irreducible TAG: both corpora parse to REGEX targets in

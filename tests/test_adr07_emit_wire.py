@@ -239,12 +239,29 @@ class TestLiveMatcherEqualsOracle:
         assert _live_label(res, "safe7.example.com") == "resolve"
         assert _live_label(res, "evil.example.com") == "block"
 
-    def test_block_regex_vs_allow_regex_important(self) -> None:
-        # block regex (band 1) vs an $important... regex has no $options grammar, so
-        # both are plain bands -> allow regex (band 2) wins over block regex (band 1).
+    def test_block_regex_vs_allow_regex_plain(self) -> None:
+        # Plain block regex (band 1) vs plain allow regex (band 2): the allow wins.
         feeds = {"f": [r"/x[0-9]\.example\.com$/", r"@@/x[0-9]\.example\.com$/"]}
         res = _build(feeds)
         assert _live_label(res, "x7.example.com") == "resolve"
+        assert _live_label(res, "x7.example.com") == _oracle_label(feeds, [], "x7.example.com")
+
+    def test_important_block_regex_beats_allow_regex(self) -> None:
+        # Regex now honours $options: a block regex $important (band 3) beats a plain
+        # allow regex (band 2). Without $important the allow would win (test above).
+        feeds = {"f": [r"/x[0-9]\.example\.com$/$important", r"@@/x[0-9]\.example\.com$/"]}
+        res = _build(feeds)
+        assert res.important_rules is True
+        assert _live_label(res, "x7.example.com") == "block"
+        assert _live_label(res, "x7.example.com") == _oracle_label(feeds, [], "x7.example.com")
+
+    def test_badfilter_regex_prunes_feed_block_regex(self) -> None:
+        # A feed /re/$badfilter removes the matching feed /re/ (same signature) -> the
+        # name no longer matches the block regex and resolves.
+        feeds = {"f": [r"/x[0-9]\.example\.com$/", r"/x[0-9]\.example\.com$/$badfilter"]}
+        res = _build(feeds)
+        assert _live_label(res, "x7.example.com") != "block"
+        assert _live_label(res, "x7.example.com") == _oracle_label(feeds, [], "x7.example.com")
 
     def test_exact_then_wildcard_allow_keeps_subdomain_coverage(self) -> None:
         # Same key, SAME band (both feed allow): an EXACT allow (reduced @@/^d$/)
