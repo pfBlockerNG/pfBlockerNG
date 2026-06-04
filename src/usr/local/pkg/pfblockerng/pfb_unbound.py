@@ -4096,6 +4096,18 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
 
                     qstate.return_rcode = RCODE_NOERROR
                     qstate.return_msg.rep.security = 2
+                    # Do not store the synthetic block reply in Unbound's C message
+                    # cache (#43). A cached block is served ahead of this module, so
+                    # repeat queries skip operate() -> the feed-attributed logger
+                    # (get_details_dnsbl: dnsbl.log + per-group counter) never runs and
+                    # per-feed block stats under-count; the cache-hit path logs only an
+                    # unattributed DNS-reply. It also keeps a cached 0.0.0.0/VIP serving
+                    # for up to the TTL after a name is removed from a list (block->allow
+                    # staleness). The reply is synthetic, so not caching it costs only the
+                    # ~1us in-process matcher re-run (the dnsblDB/excludeDB memos still
+                    # short-circuit re-evaluation), never an upstream round-trip. Mirrors
+                    # the SafeSearch CNAME path, the module's only other no_cache_store.
+                    qstate.no_cache_store = 1
                     qstate.ext_state[id] = MODULE_FINISHED
                     return True
 

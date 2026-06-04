@@ -736,6 +736,7 @@ def make_qstate(
         return_msg=return_msg,
         return_rcode=return_rcode,
         ext_state={},
+        no_cache_store=0,
     )
 
 
@@ -809,6 +810,38 @@ class TestOperateDnsbl:
         assert qstate.return_rcode == RCODE_NOERROR
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
+
+    def test_block_sets_no_cache_store(self, monkeypatch: Any) -> None:
+        # #43: the synthetic block reply must NOT be stored in Unbound's C message
+        # cache. A cached block is served ahead of this module, so repeat queries
+        # skip operate() -> the feed-attributed logger never runs (per-feed
+        # under-count) and a removed name keeps serving the stale block until TTL.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.no_cache_store == 1
+
+        # The memoized re-block path (name already in dnsblDB) must set it too --
+        # that is the whole point: every blocked query, miss or memo, re-runs here.
+        assert pfb_unbound.dnsblDB.get("evil.com") is not None
+        qstate2 = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
+        assert qstate2.ext_state[0] == MODULE_FINISHED
+        assert qstate2.no_cache_store == 1
+
+    def test_pass_through_leaves_cache_store_enabled(self, monkeypatch: Any) -> None:
+        # A non-blocked name falls through to the resolver and MUST stay cacheable
+        # -- no_cache_store is the block path's alone.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("good.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.no_cache_store == 0
 
     def test_zone_lookup_matches_subdomain(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
