@@ -1,0 +1,154 @@
+ADR-13 — Phase 1 Results (PREP: marker + candidate/pick + v6-listen helpers, UNWIRED)
+=====================================================================================
+
+Status: DONE. Behaviour-preserving. All gates green. Go-ahead for Phase 2.
+
+What landed (one commit on adr/13)
+----------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - Two marker constants (single source of truth), beside the PFB_FILTER_* block.
+  - Three pure/isolated helper functions, beside the existing VIP helpers
+    (pfb_get_vips / pfb_validate_vips), AFTER pfb_validate_vips().
+  - NOTHING calls any of them yet (proved below). No observable runtime change.
+File: tests/php/DnsblVipCandidatesTest.php (additive PHPUnit test, +73 lines)
+  - Focused unit test for the one Phase-1 helper with no pfSense coupling
+    (pfb_dnsbl_vip_candidates). 5 tests / 26 assertions, green.
+
+NOTE: the worktree's .venv symlink is intentionally NOT committed (untracked).
+
+Marker constants (EXACT strings)
+--------------------------------
+  define('PFB_AUTO_VIP_DESCR_V4', 'pfB_AUTO_VIP_v4');
+  define('PFB_AUTO_VIP_DESCR_V6', 'pfB_AUTO_VIP_v6');
+
+  The VIP 'descr' value the package stamps on the DNSBL sinkhole VIP(s) it
+  auto-creates and therefore owns. ONLY VIPs carrying one of these markers are ever
+  managed/deleted by the package. The literal strings appear in src/ ONLY at these
+  two define() lines (single source of truth) — Phase 2/4 must reference the
+  CONSTANTS, never re-type the literals.
+
+Helper signatures + return contracts
+------------------------------------
+1) function pfb_dnsbl_vip_candidates(int $family): array
+   Pure (no side effects). Ordered, preferred-first candidate addresses:
+     - AF_INET  -> ['10.10.10.53', '10.10.0.53', '10.10.1.53', ... '10.10.15.53']
+                   (16 unique; preferred 10.10.10.53 first, then the 0..15 sweep
+                   skipping the preferred octet; all keep the '.53' DNS homage)
+     - AF_INET6 -> ['fd00::53', 'fd00:1::53', 'fd00:2::53', ... 'fd00:15::53']
+                   (16 unique; ULA fc00::/7; preferred fd00::53 first; all '::53')
+     - any other family -> [] (empty)
+   Sweep bound chosen: third octet / first non-zero hextet X = 0..15 (16 candidates
+   per family). Bounded + predictable per ADR §2 ("X = 0..15"); ample for the
+   conflict-avoidance use case, never an unbounded search.
+
+2) function pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string
+   Pure (enumerates state; creates/changes nothing). Walks
+   pfb_dnsbl_vip_candidates($family) and returns the FIRST address that is:
+     (a) not an existing IP-Alias VIP address (pfb_get_vips()['v4'|'v6'] values), AND
+     (b) overlaps no configured subnet:
+         count(where_is_ipaddr_configured($candidate, '', true, true, '')) === 0
+         — the SAME call shape pfb_validate_vips() uses (inc:746/:753).
+   Returns null if every candidate conflicts (or family is neither v4 nor v6).
+   $interface is accepted for parity with the create path / future per-interface
+   scoping; the conflict checks here are interface-independent (a VIP/subnet
+   conflict anywhere disqualifies a candidate). Phase 4 can surface "null => disable
+   the checkbox + warning".
+
+3) function pfb_unbound_listens_v6(): bool
+   True iff the DNS Resolver (Unbound) is configured to listen on >=1 IPv6 address.
+   Predicate (see "v6 predicate justification" below). Returns false when the
+   resolver is disabled. Used by Phase 3 (v6-mandatory rule) — UNWIRED in Phase 1.
+
+v6-listen predicate (justified from real upstream source)
+---------------------------------------------------------
+Source of truth read: pfSense src/etc/inc/unbound.inc, function
+unbound_generate_config_text() — the code that actually builds Unbound's listen set.
+Verified VERBATIM at two dated refs (per CLAUDE.md):
+  * RELENG_2_7_2 (the frozen public-mirror ref; signatures stable across 2.7->2.8,
+    which is what min CE 2.8.0 needs) — function then named unbound_generate_config().
+  * master (current tip).
+Both refs use the IDENTICAL active_interface resolution:
+
+    $active_interfaces = array_filter(explode(",", $unboundcfg['active_interface']));
+    if (empty($unboundcfg['active_interface']) || in_array("all", $active_interfaces, true)) {
+        $bindintcfg .= "interface-automatic: yes" . PHP_EOL;   // bind ALL addrs, v4+v6
+    } else {
+        foreach ($active_interfaces as $ubif) {
+            $ifinfo = get_interface_info($ubif);
+            if ($ifinfo && (($ifinfo['status'] != 'up') || !$ifinfo['enable'])) continue; // redmine #11087
+            if (is_ipaddr($ubif)) { $bindints[] = $ubif; }
+            else {
+                $intip = get_interface_ip($ubif);    if (is_ipaddrv4($intip)) $bindints[] = $intip;
+                $intip = get_interface_ipv6($ubif);  if (is_ipaddrv6($intip)) $bindints[] = $intip;
+            }
+        }
+    }
+
+So pfb_unbound_listens_v6() mirrors it exactly:
+  - Resolver disabled (config_path_enabled('unbound') false) -> listens on nothing -> false.
+  - active_interface empty OR contains 'all' -> Unbound emits 'interface-automatic:
+    yes' and binds EVERY address (v4+v6) on its enabled interfaces. We return true
+    iff ANY configured interface (get_configured_interface_list) currently resolves
+    to a v6 address (is_ipaddrv6(get_interface_ipv6($if))).
+  - otherwise -> the explicit per-interface list: true iff ANY listed token is a v6
+    literal (is_ipaddrv6($ubif)) OR an interface that resolves to a v6 address
+    (is_ipaddrv6(get_interface_ipv6($ubif))), applying the same up/enabled status
+    guard (redmine #11087) upstream applies.
+Conservative/correct over clever: a disabled resolver is false; the automatic case
+is treated as v6 iff the box actually has a v6 interface (not assumed).
+
+STILL NEEDS ON-BOX CONFIRMATION (no PHP/Unbound runtime in CI):
+  - That get_interface_ipv6() returns a routable/global v6 (not merely link-local)
+    for the interfaces in the automatic-bind case — i.e. that "has a v6 address"
+    genuinely means "Unbound answers v6 there". If link-local-only must be excluded,
+    tighten with is_linklocal()/a global-scope check in Phase 3.
+  - That 'interface-automatic: yes' does accept AAAA/v6 queries on the box config
+    (expected: yes — interface-automatic binds all families).
+This matches ADR §2 ("Detection via pfb_unbound_listens_v6() ... the exact predicate
+verified against upstream pfSense source per CLAUDE.md and on-box") and the ADR §7
+reject lever ("No reliable v6-listen predicate -> scope IPv6 to opt-in only").
+
+Stubs added
+-----------
+NONE required. Every pfSense function the new helpers call was already declared in
+stubs/pfsense/ (PHPStan level 0, symbol existence): config_path_enabled,
+config_get_path (config.php); get_configured_interface_list, is_ipaddrv6,
+where_is_ipaddr_configured (util.php); get_interface_ipv6, get_interface_info
+(interfaces.php). pfb_get_vips is local to pfblockerng.inc. AF_INET/AF_INET6 are
+PHP core constants. PHPStan: clean.
+
+Nothing calls them yet (verified)
+---------------------------------
+grep over src/ for each symbol (excluding its own definition/comments):
+  - pfb_dnsbl_vip_candidates : called ONLY by pfb_pick_free_dnsbl_vip (itself an
+    unwired helper) — no production call site.
+  - pfb_pick_free_dnsbl_vip  : ZERO call sites.
+  - pfb_unbound_listens_v6   : ZERO call sites.
+  - PFB_AUTO_VIP_DESCR_V4/_V6: referenced ONLY at their two define() lines.
+=> Byte-identical runtime; pfb_create_dnsbl / pfb_global / the UI are untouched.
+
+Gate results
+------------
+  - php -l (pfblockerng.inc): No syntax errors detected. (The "Deprecated:
+    Optional parameter ... before required" notices are PRE-EXISTING in unrelated
+    functions and only surface under PHP 8.5 CLI; target is 8.3. Not from this change.)
+  - PHPStan (level 0, --memory-limit=1G): [OK] No errors.
+  - PHPUnit (full suite): OK (88 tests, 132 assertions) — incl. the new 5-test file.
+  - pytest (worktree .venv): 989 passed (green/unchanged; no Python touched).
+  - ruff check .: All checks passed (no Python changed; run for completeness).
+  - ShellCheck: no shell files touched -> N/A.
+
+Scope confirmation
+------------------
+Only pfblockerng.inc (constants + 3 helpers) and an additive tests/php PHPUnit test.
+No Python, no Unbound plugin, no UI, no lifecycle (pfb_create_dnsbl), no validation
+change (pfb_validate_vips / pfb_global), no other tests modified.
+
+Go-ahead for Phase 2
+--------------------
+GO. Phase 2 (VIP lifecycle in pfb_create_dnsbl($mode)) can now build on:
+  - the marker CONSTANTS PFB_AUTO_VIP_DESCR_V4 / _V6 (use the constants, not literals),
+  - pfb_pick_free_dnsbl_vip(family, interface) to choose the create address,
+  - pfb_unbound_listens_v6() to decide whether a v6 VIP is required.
+Carry the on-box v6 caveat (link-local vs global; interface-automatic v6 accept)
+into Phase 3, where the reject lever lives.

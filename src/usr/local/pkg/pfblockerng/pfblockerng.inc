@@ -298,6 +298,13 @@ define('PFB_FILTER_ATYPE', 19);
 define('PFB_FILTER_HEX_COLOR', 20);
 define('PFB_FILTER_ON_OFF', 21);
 
+// Machine-detectable markers (the VIP 'descr') stamped on DNSBL sinkhole VIPs that
+// pfBlockerNG auto-creates and therefore owns (ADR-13). ONLY VIPs carrying one of
+// these markers are ever managed/deleted by the package; a manually-created VIP is
+// never touched. Single source of truth for the ownership marker.
+define('PFB_AUTO_VIP_DESCR_V4', 'pfB_AUTO_VIP_v4');
+define('PFB_AUTO_VIP_DESCR_V6', 'pfB_AUTO_VIP_v6');
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -756,6 +763,155 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	}
 
 	return [true, null];
+}
+
+// [ ADR-13 ] Ordered, preferred-first list of DNS-themed candidate sinkhole VIP
+// addresses for a family. Pure (no side effects). The bounded third group/hextet
+// sweep keeps the '.53' (DNS port) homage:
+//   AF_INET  -> 10.10.0.53 .. 10.10.15.53  (preferred 10.10.10.53 listed first)
+//   AF_INET6 -> fd00::53, fd00:1::53 .. fd00:15::53  (ULA fc00::/7; preferred first)
+// Returns [] for any other family. The picker (pfb_pick_free_dnsbl_vip) walks this
+// list and returns the first address that does not conflict.
+function pfb_dnsbl_vip_candidates(int $family): array {
+
+	// Bounded sweep range for the variable group/hextet (16 candidates).
+	$sweep_max = 15;
+
+	// The preferred third octet/hextet (the '10' in 10.10.10.53 / no-op for v6).
+	$preferred_v4_octet = 10;
+
+	$candidates = [];
+
+	if ($family === AF_INET) {
+		// Preferred address first, then the rest of the 10.10.X.53 sweep in order,
+		// skipping the preferred octet so it is never duplicated.
+		$candidates[] = "10.10.{$preferred_v4_octet}.53";
+		for ($x = 0; $x <= $sweep_max; $x++) {
+			if ($x === $preferred_v4_octet) {
+				continue;
+			}
+			$candidates[] = "10.10.{$x}.53";
+		}
+	} elseif ($family === AF_INET6) {
+		// Preferred fd00::53 first, then fd00:1::53 .. fd00:15::53 in order.
+		$candidates[] = 'fd00::53';
+		for ($x = 1; $x <= $sweep_max; $x++) {
+			$candidates[] = "fd00:{$x}::53";
+		}
+	}
+
+	return $candidates;
+}
+
+// [ ADR-13 ] Return the first candidate sinkhole address (pfb_dnsbl_vip_candidates)
+// for the given family that is free to use as an auto-created DNSBL VIP, or null if
+// every candidate conflicts. A candidate is free iff it is (a) not already an
+// existing IP-Alias VIP (pfb_get_vips) and (b) overlaps no configured subnet
+// (where_is_ipaddr_configured) — the SAME overlap semantics pfb_validate_vips uses
+// (inc:746/:753). Pure: enumerates state, creates/changes nothing. $interface is
+// accepted for parity with the create path and future per-interface scoping; the
+// conflict checks here are interface-independent (a VIP/subnet conflict anywhere is
+// disqualifying).
+function pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string {
+
+	$candidates = pfb_dnsbl_vip_candidates($family);
+	if (empty($candidates)) {
+		return null;
+	}
+
+	// Existing IP-Alias VIP addresses for this family (values are the addresses).
+	$vips = pfb_get_vips();
+	if ($family === AF_INET) {
+		$existing = $vips['v4'];
+	} elseif ($family === AF_INET6) {
+		$existing = $vips['v6'];
+	} else {
+		return null;
+	}
+	$existing_addresses = array_values($existing);
+
+	foreach ($candidates as $candidate) {
+		// (a) Not an address already used by an existing VIP.
+		if (in_array($candidate, $existing_addresses, true)) {
+			continue;
+		}
+		// (b) Does not overlap any configured subnet (interface IPs, other VIPs,
+		// etc.) — same call shape as pfb_validate_vips.
+		if (count(where_is_ipaddr_configured($candidate, '', true, true, ''))) {
+			continue;
+		}
+		return $candidate;
+	}
+
+	return null;
+}
+
+// [ ADR-13 ] True iff the DNS Resolver (Unbound) is configured to listen on at least
+// one IPv6 address. Mirrors how pfSense builds Unbound's listen set in
+// unbound_generate_config_text() (src/etc/inc/unbound.inc) — verified verbatim
+// against upstream at RELENG_2_7_2 (frozen public-mirror ref, signatures stable
+// 2.7->2.8) and master; the active_interface key, the empty/'all' => automatic
+// branch, and the per-interface get_interface_ip()/get_interface_ipv6() resolution
+// are identical across both refs:
+//
+//   $active = array_filter(explode(',', $unboundcfg['active_interface']));
+//   if (empty($active) || in_array('all', $active, true)) { interface-automatic: yes }
+//   else foreach ($active as $ubif) { ... get_interface_ipv6($ubif) -> bind v6 ... }
+//
+// Predicate (conservative/correct over clever):
+//   * Resolver disabled (config_path_enabled('unbound') false) -> listens on nothing
+//     -> false.
+//   * active_interface empty or contains 'all' -> Unbound emits 'interface-automatic:
+//     yes' and binds EVERY address on its enabled interfaces, v6 included -> true iff
+//     ANY configured interface currently resolves to an IPv6 address (get_interface_ipv6).
+//   * otherwise -> the explicit per-interface list: true iff ANY listed token is a v6
+//     literal (is_ipaddrv6) or an interface that resolves to a v6 address
+//     (get_interface_ipv6), mirroring upstream's bind loop (incl. the up/enabled
+//     status guard from redmine #11087).
+//
+// MUST still be confirmed on-box (no PHP/Unbound runtime in CI): that
+// get_interface_ipv6() returns a routable v6 (not just link-local) for an automatic
+// bind, and that 'interface-automatic: yes' does in fact accept v6 queries on the
+// box's configuration. Used by Phase 3 (v6-mandatory rule) — UNWIRED in Phase 1.
+function pfb_unbound_listens_v6(): bool {
+
+	// A disabled resolver listens on nothing.
+	if (!config_path_enabled('unbound')) {
+		return false;
+	}
+
+	$active_interface = config_get_path('unbound/active_interface', '');
+	$active_interfaces = array_filter(explode(',', (string) $active_interface));
+
+	// Empty or 'all' => 'interface-automatic: yes' => bind every address on the
+	// enabled interfaces. v6 is listened-on iff any configured interface has a v6.
+	if (empty($active_interfaces) || in_array('all', $active_interfaces, true)) {
+		foreach (array_keys(get_configured_interface_list()) as $ubif) {
+			if (is_ipaddrv6(get_interface_ipv6($ubif))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Explicit interface list: mirror unbound_generate_config_text()'s bind loop.
+	foreach ($active_interfaces as $ubif) {
+		// Skip interfaces that are down/disabled (redmine #11087), same as upstream.
+		$ifinfo = get_interface_info($ubif);
+		if ($ifinfo && (($ifinfo['status'] != 'up') || !$ifinfo['enable'])) {
+			continue;
+		}
+		// A literal IPv6 address binds directly.
+		if (is_ipaddrv6($ubif)) {
+			return true;
+		}
+		// An interface name resolves to its v6 address (if any).
+		if (is_ipaddrv6(get_interface_ipv6($ubif))) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 // Validate length of labels (Max of 63 chars)
