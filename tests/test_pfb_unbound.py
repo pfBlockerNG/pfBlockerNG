@@ -727,6 +727,23 @@ class TestGetDetailsDnsblQtype:
         assert a_fields[9] == "+"
         assert b_fields[9] == "+"
 
+    def test_mixed_case_query_is_attributed(self, monkeypatch: Any) -> None:
+        # operate() stores decisionDB keys lowercased; a mixed-case query must still
+        # be attributed here (lookup normalized), or the block is silently dropped from
+        # dnsbl.log / the per-group counter (per-feed under-count).
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": self._decision()})
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        qstate = types.SimpleNamespace(
+            qinfo=types.SimpleNamespace(qname_str="Blocked.COM.", qtype_str="A"),
+            return_msg=None,
+        )
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        assert len(self._dnsbl_fields(lines)) == 1  # attributed despite mixed-case query
+
 
 class TestGetOType:
     def test_return_msg_rrset_branch(self) -> None:
@@ -763,6 +780,20 @@ class TestGetTld:
 
     def test_none_qstate_returns_empty(self) -> None:
         assert pfb_unbound.get_tld(None) == ""
+
+
+class TestGetTldFromName:
+    def test_multilabel(self) -> None:
+        # Same second-level label get_tld() yields, but from a name string.
+        assert pfb_unbound.get_tld_from_name("sub.example.com") == "example"
+        assert pfb_unbound.get_tld_from_name("evil.net") == "evil"
+
+    def test_trailing_dot_ignored(self) -> None:
+        assert pfb_unbound.get_tld_from_name("evil.net.") == "evil"
+
+    def test_single_label_returns_empty(self) -> None:
+        assert pfb_unbound.get_tld_from_name("com") == ""
+        assert pfb_unbound.get_tld_from_name("") == ""
 
 
 class TestGetQIp:
@@ -1062,6 +1093,25 @@ class TestOperateDnsbl:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
         assert _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
+
+    def test_cname_target_uses_target_tld_not_original(self, monkeypatch: Any) -> None:
+        # operate() must derive the TLD-Allow tld from the CNAME TARGET being evaluated,
+        # not the original query. python_tld allows the SLD "orig"; the original
+        # (orig.com) passes, but its CNAME target (evil.net, SLD "evil") is NOT allowed
+        # -> the chain must block. With the bug (tld taken from the original query) the
+        # target was checked against "orig" and slipped through.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        pfb_unbound.pfb["python_tld"] = True
+        pfb_unbound.pfb["python_tlds"] = ["orig"]
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil.net")
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED  # blocked via the TARGET's TLD
+        entry = pfb_unbound.decisionDB.get("orig.com")
+        assert entry is not None
+        assert entry.group == "DNSBL_TLD_Allow"
 
     def test_cname_repeat_short_circuits_without_chain(self, monkeypatch: Any) -> None:
         # The unified-cache CNAME fix: a CNAME-blocked name is keyed on the ORIGINAL in
