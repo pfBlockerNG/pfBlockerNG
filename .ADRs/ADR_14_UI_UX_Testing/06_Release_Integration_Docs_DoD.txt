@@ -1,0 +1,71 @@
+================================================================================
+PHASE 6 PROMPT — Release integration (D1) + docs + manual smoke + DoD
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §2 "Release gate" + §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 6 (final) of ADR-14. This wires the UI
+suite into the release pipeline (full suite before publishing, each leg re-runnable in
+isolation), updates the docs, and finalises §7 (manual smoke + reject criteria). NO src/
+change; default pytest unchanged. Work in this ADR's `adr/14` worktree; one commit for this phase.
+
+WHY THIS PHASE EXISTS
+A release must run the full UI suite first (maintainer requirement), but a not-our-fault
+flake must NOT force a full pipeline re-run — it must re-run as one isolated leg (D1).
+And the harness only earns Accept after a human reviews the screenshots + confirms reality
+on a live box (§7).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_14_UI_UX_Testing/RESULTS/05_Results.txt — it must confirm `ui-tests.yml` is
+  reusable (workflow_call) + the job matrix + whether Tier B can gate. If missing, Phase 5
+  is not complete; STOP and report.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§2 Release gate row, §6 Phase 6, §7 in full).
+- .github/workflows/release.yml — the chain: verify-checks (reads the "All tests passed"
+  check-run for the tagged commit) -> release (publish) -> ports-pr (FreeBSD-ports PR).
+  Tag trigger `v[0-9]*.[0-9]*.[0-9]*`.
+- .github/workflows/ui-tests.yml (Phase 5) — the reusable workflow to call.
+- README.md + CLAUDE.md — where the test/CI docs live.
+
+ACTION PLAN (ordered)
+1. RELEASE WIRING (D1): make `release.yml` run the UI suite BEFORE `release`/`ports-pr`.
+   Either add a job that `uses: ./.github/workflows/ui-tests.yml` (workflow_call) with
+   `release` (and/or verify) `needs:`-depending on it, OR have verify-checks require the
+   UI legs — pick the option that keeps EACH (tier x version) leg a SEPARATE, in-isolation
+   re-runnable job and does NOT redo `release`/`ports-pr` when only a UI leg is re-run.
+   Document the exact behaviour.
+2. DOCS: update README.md + CLAUDE.md — the tiers (A render / B functional / B browser),
+   the markers (ui_render / ui_e2e / ui_browser), how to run each locally against a smoke
+   VM, the version-matrix axis (B1: parametric, single CE image today) + an IMAGE_RUNBOOK
+   pointer for adding images, and the screenshot artifact. Keep CLAUDE.md's smoke section
+   in sync (UI tests live under tests/smoke/ui/, reuse smoke_vm).
+3. FINALISE §7 in ADR.md: lock the manual smoke checklist + the reject/pivot criteria;
+   fold in the Phase-4 browser-tier decision + numbers. Set Status appropriately (leave
+   the final Accept to the maintainer after the live-box smoke + screenshot review).
+4. Markdown must be markdownlint-clean (npx markdownlint-cli2) for README/CLAUDE.md/ADR.md.
+
+CONSTRAINTS
+- NO src/ change. YAML valid; mirror release.yml + smoke.yml conventions. POSIX sh inline.
+  Markdown markdownlint-clean. Do NOT weaken the existing release gate — ADD to it.
+
+VERIFICATION (must all pass before the phase is done)
+- YAML parses; release.yml depends on the UI suite before publish; a single UI leg is
+  re-runnable WITHOUT redoing release/ports-pr (documented; dry-run if feasible).
+- npx markdownlint-cli2 -> clean on the docs touched.
+- python -m pytest -> default count UNCHANGED; ruff/shellcheck clean on touched files.
+- ADR.md §7 finalised; README/CLAUDE.md updated.
+
+EXPECTED RESULT
+The release pipeline runs the full UI suite first with per-leg re-run isolation; the docs
+describe the harness; §7 is final, awaiting only the maintainer's live-box smoke + the
+screenshot review to flip Status to Accepted.
+
+COMMIT (single)
+    ci: gate releases on the UI suite + document the UI test harness (ADR-14 P6)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/06_Results.txt`
+State: how release.yml now depends on the UI suite + the proven per-leg re-run isolation;
+the docs updated; the final §7 status; the complete manual-smoke checklist handed to the
+maintainer; the overall ADR-14 completion summary + the Accept criteria still outstanding.

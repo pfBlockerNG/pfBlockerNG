@@ -1,0 +1,77 @@
+================================================================================
+PHASE 4 PROMPT — Tier B (browser): headless Playwright layer + screenshots (GATED by §7)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §2 "Tier B browser" + §3 risks + §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 4 of ADR-14. This adds the FLAKY/HEAVY
+tier: headless Chromium driving the JS-only UX + capturing per-page screenshots as
+artifacts. This is the ADR-01-analog risk tier — you MUST measure the §7 reliability/
+budget numbers and apply the demote/drop decision if it fails. NO src/ change; default
+pytest unchanged. Work in this ADR's `adr/14` worktree; one commit for this phase.
+
+WHY THIS PHASE EXISTS
+pfBlockerNG.js carries UX that HTTP cannot exercise: field enable/disable toggles
+(enable_change_in/out, enable_change_port_in/out, pfBlockerNG.js:213-230), autocomplete
+(pfb_autocomplete*, :36/:102), label removal (:115), row-move handlers ([name^=Lmove]/
+[name^=Xmove], :145-149), and the background AJAX state change pfb_chg_state_bkgd (:124),
+plus the dashboard widget JS. Screenshots (browser-only, decision A1) give a human a fast
+visual diff. Browser E2E over SLIRP-QEMU is the classic flaky/slow trap (§3) — hence the
+gate.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_14_UI_UX_Testing/RESULTS/03_Results.txt — it must confirm the functional tier
+  + the effective-state oracle. If missing, Phase 3 is not complete; STOP and report.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§2 Tier B browser row, §3 negative/risks, §7 reject
+  criteria + thresholds).
+- src/usr/local/www/pfblockerng/pfBlockerNG.js + widgets/javascript/pfblockerng.js — the
+  exact element IDs/behaviours to drive.
+- tests/smoke/ui/ (the Phase-1 session — inject its cookie into the browser context to
+  skip a second login flake) + tests/smoke/conftest.py (smoke_vm).
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. Add Playwright (+ the Chromium download) to tests/smoke/requirements.txt (dev-only,
+   cached). Headless Chromium against http://127.0.0.1:8080.
+2. SESSION REUSE: inject the Phase-1 authenticated session cookie into the browser
+   context (do NOT re-implement login in the browser — that is a second flake source).
+3. Drive the JS-only behaviours on the relevant pages: assert a toggle disables/enables
+   its target field; autocomplete populates; pfb_chg_state_bkgd updates state; the widget
+   renders. Keep assertions on OBSERVABLE DOM/state, no fixed sleeps — wait on selectors/
+   network-idle (poll the right readiness signal, CLAUDE.md).
+4. SCREENSHOTS: capture a full-page screenshot per page into an artifact dir
+   (e.g. test-results/ui-screenshots/<version>/<page>.png). These are artifacts for human
+   review — NOT asserted pixel baselines (visual/a11y diff is out of scope, §2).
+5. Mark `ui_browser`. MEASURE the §7 numbers: run the browser leg repeatedly and record
+   pass-rate (target >= 4/5 clean) and per-leg wall time (target <= ~25 min). If it FAILS,
+   record the numbers and apply the demote (dispatch-only, non-blocking) or drop decision
+   in the handoff — the cheap tiers (P2/P3) already shipped and stand alone.
+
+CONSTRAINTS
+- NO src/ change. Reuse `smoke_vm` + the Phase-1 cookie. No fixed sleeps; wait on real
+  signals. Python 4-space/3.11+, type hints, no bare except. Screenshots are artifacts,
+  not pixel assertions.
+- Do NOT wire workflows (Phase 5) or release (Phase 6) here.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest        -> green, default count UNCHANGED.
+- pytest -m ui_browser (against the smoke VM) -> JS behaviours assert; screenshots written
+  for every page.
+- The §7 reliability/budget numbers MEASURED and recorded (pass-rate + wall time).
+- ruff check . / ruff format .   -> clean.
+
+EXPECTED RESULT
+A headless-browser tier exercising the JS-only UX and producing per-page screenshots,
+WITH the §7 reliability evidence and the demote/drop decision made on that evidence.
+
+COMMIT (single)
+    tests: add Tier-B headless-browser UX checks + screenshots (ADR-14 P4)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/04_Results.txt`
+State: the JS behaviours driven + their selectors; the screenshot output path/layout;
+the MEASURED pass-rate + per-leg wall time vs the §7 thresholds; the BLOCKING-vs-demote-
+vs-drop decision for the browser tier (with the numbers that justify it); the go-ahead
+for Phase 5.
