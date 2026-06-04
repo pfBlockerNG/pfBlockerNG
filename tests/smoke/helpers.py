@@ -1144,6 +1144,12 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         )
     # pfb_reload_unbound restarts Unbound — wait for readiness before any probe.
     wait_unbound_ready(vm)
+    # Parity with the production dnsbl_remove handler, which flushes the resolver cache
+    # on an Unlock. The restart above already clears the whole cache, so this is
+    # belt-and-suspenders (defensive against a future non-restart reload) — matching the
+    # handler's unlock-only flush so the helper mirrors production behaviour.
+    if action == "unlock":
+        flush_unbound_cache(vm)
 
 
 def flush_unbound_cache(vm: SmokeVM, *, timeout: float = 30.0) -> None:
