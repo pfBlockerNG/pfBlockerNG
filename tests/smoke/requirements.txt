@@ -21,3 +21,8 @@ dnspython==2.7.0
 # Per-test wall-clock ceiling so a wedged VM op (SSH/pkg/dig) fails that test
 # fast instead of hanging the job to its timeout-minutes cap.
 pytest-timeout==2.3.1
+# ADR-14 Web-UI tier: the authenticated webConfigurator session client
+# (tests/smoke/ui/webui.py) drives the CSRF form login + page GETs over HTTP.
+# Imported lazily (inside WebUI), so default collection -- which --ignore's
+# tests/smoke -- never needs it.
+requests==2.32.3
