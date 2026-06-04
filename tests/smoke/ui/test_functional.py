@@ -189,3 +189,91 @@ def test_toggle_flow_changes_effective_config(
         if helpers.config_get(smoke_vm, flow.config_path) != original:
             overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.off}
             webui.post(flow.page, overrides, timeout=flow.post_timeout)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-13 "Create VIPs automatically" (pfb_dnsvip_auto) -- driven via the DNSBL FORM
+#
+# The auto-VIP LIFECYCLE (config toggle -> VIP created/removed -> DNS sinks) is
+# already covered by the smoke matrix (test_smoke_matrix.py) via the config helper
+# `set_dnsvip_auto`. The UI tier's DISTINCT value is proving the DNSBL settings
+# PAGE persists pfb_dnsvip_auto through a real CSRF form POST, with the same
+# package machinery (pfb_create_dnsbl -> pfb_manage_dnsbl_vip) then provisioning
+# the marked VIP end-to-end. Auto picks 10.10.10.53, free alongside the manual VIP
+# at 10.10.10.1 (dnsbl_vip_ready), so the two coexist on one VM.
+#
+# TODO(ADR-12): add update-hooks UI coverage (add/toggle/remove a hook row + its
+# config persistence) once ADR-12 lands on devel -- it is not merged there yet.
+# --------------------------------------------------------------------------- #
+
+DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+AUTO_VIP_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto"
+
+
+def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """Ticking 'Create VIPs automatically' in the DNSBL FORM provisions the marked VIP.
+
+    UI-faithful end-to-end with the CLAUDE.md transition rule (assert before-state,
+    then prove the form POST caused the change):
+
+    * BEFORE: pfb_dnsvip_auto is off in config and no package-owned pfB_AUTO_VIP_v4
+      exists.
+    * ENABLE via the form: the CSRF POST must PERSIST pfb_dnsvip_auto=on (the
+      UI-specific assertion -- config.xml, not the HTTP body); the next Force
+      Update runs pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip, which
+      creates the marked VIP at 10.10.10.53 and brings it up live on lo0.
+    * DISABLE via the form: the POST persists it off; a Force Update removes the
+      marked VIP from config AND lo0.
+
+    Oracle = effective box state (marked_vip_subnet / ifconfig), never the HTTP
+    response. The manual VIP at 10.10.10.1 (dnsbl_vip_ready) is untouched. Left
+    clean (auto off, marked VIP gone) for the sibling flows in `finally`.
+    """
+    vm = smoke_vm
+    # DNSBL must be enabled so the Force Update runs pfb_create_dnsbl in 'enabled'
+    # mode; start from a known baseline (auto off, no marked VIP).
+    helpers.set_dnsbl_enabled(vm, True)
+    helpers.set_dnsvip_auto(vm, False)
+    helpers.reload(vm, "update")
+    try:
+        # BEFORE.
+        assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "pfb_dnsvip_auto already on before the form POST"
+        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == "", (
+            "pfB_AUTO_VIP_v4 present before auto-create was enabled via the form"
+        )
+
+        # ENABLE through the real DNSBL form; the PAGE must persist the setting.
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsvip_auto": "on"}, timeout=300.0)
+        assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+        assert helpers.config_get(vm, AUTO_VIP_CFG) == "on", (
+            "the DNSBL form POST did not persist pfb_dnsvip_auto=on to config.xml"
+        )
+        # The next Force Update provisions the marked VIP (same path as the matrix).
+        helpers.reload(vm, "update")
+        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == helpers.AUTO_VIP_IP4, (
+            f"auto VIP not created at {helpers.AUTO_VIP_IP4} after the form enabled it: "
+            f"got {helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4)!r}"
+        )
+        assert helpers.vip_alias_live(vm, helpers.AUTO_VIP_IP4), (
+            f"auto VIP {helpers.AUTO_VIP_IP4} not live on lo0 (ifconfig) after the form enabled it"
+        )
+
+        # DISABLE through the form; persisted off, then the VIP is removed.
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsvip_auto": ""}, timeout=300.0)
+        assert not looks_like_login_page(resp.text), "DNSBL un-POST returned the login form"
+        assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "the DNSBL form POST did not clear pfb_dnsvip_auto"
+        helpers.reload(vm, "update")
+        assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == "", (
+            "auto VIP not removed from config after unticking the form setting"
+        )
+        assert not helpers.vip_alias_live(vm, helpers.AUTO_VIP_IP4), (
+            f"auto VIP {helpers.AUTO_VIP_IP4} still live on lo0 after the form disabled it"
+        )
+    finally:
+        # Leave the box clean for the sibling flows: auto off, marked VIP gone.
+        helpers.set_dnsvip_auto(vm, False)
+        helpers.reload(vm, "update")

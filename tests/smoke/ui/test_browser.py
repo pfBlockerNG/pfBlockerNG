@@ -75,6 +75,10 @@ ADVANCED_IP_EDITOR = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
 # The dashboard widget renders standalone (auth-gated, $nocsrf) with its hidden
 # ack input + status icons + table body.
 WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
+# The DNSBL settings page hosts the ADR-13 "Create VIPs automatically" checkbox
+# (#pfb_dnsvip_auto) whose click handler (enable_dnsvip_auto) disables the manual
+# VIP dropdowns (#pfb_dnsvip4/#pfb_dnsvip6).
+DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 
 # A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
 # fire synchronously on load/click, so this is a flake ceiling, not a wait knob.
@@ -257,3 +261,51 @@ def test_dashboard_widget_renders(
     expect(page.locator("#pfBNG-table")).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(page.locator(".PFBSTATUS").first).to_be_attached(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dashboard_widget")
+
+
+def test_dnsvip_auto_checkbox_disables_manual_dropdowns(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """ADR-13: ticking 'Create VIPs automatically' disables the manual VIP dropdowns.
+
+    `#pfb_dnsvip_auto`'s click handler (enable_dnsvip_auto, pfblockerng_dnsbl.php)
+    disables `#pfb_dnsvip4`/`#pfb_dnsvip6` when checked and re-enables them when
+    unchecked. Branch coverage with the before-state asserted (CLAUDE.md): start
+    unchecked -> dropdowns ENABLED, check -> DISABLED, uncheck -> ENABLED again.
+    Drive the native el.click() (it fires the bound jQuery handler regardless of
+    the checkbox's panel visibility -- see the enable_change toggle test).
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    auto = page.locator("#pfb_dnsvip_auto")
+    v4 = page.locator("#pfb_dnsvip4")
+    v6 = page.locator("#pfb_dnsvip6")
+    expect(auto).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(v4).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # Normalize to a known start (unchecked) so the before-state is deterministic
+    # regardless of the saved pfb_dnsvip_auto config the page rendered with.
+    if auto.is_checked():
+        auto.evaluate("el => el.click()")
+        expect(auto).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: auto off -> the manual dropdowns are enabled.
+    expect(v4).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    expect(v6).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsvip_auto_before_off")
+
+    # CHECK -> the handler disables both manual dropdowns.
+    auto.evaluate("el => el.click()")
+    expect(auto).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(v4).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    expect(v6).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsvip_auto_after_on")
+
+    # UNCHECK -> re-enabled (proves it is a real two-way branch).
+    auto.evaluate("el => el.click()")
+    expect(auto).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(v4).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    expect(v6).to_be_enabled(timeout=JS_TIMEOUT_MS)
