@@ -16,6 +16,21 @@ set -u
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
+# Put Homebrew bin/sbin on PATH so node/npx (markdownlint-cli2), php, etc. resolve even
+# when this hook runs from a NON-login shell (sub-agent / worktree), where ~/.zprofile
+# (which runs `brew shellenv`) is not sourced. PATH-only and subprocess-free; deduped;
+# a no-op unless Homebrew is actually installed (Apple Silicon or Intel prefix).
+for _brew_pre in /opt/homebrew /usr/local; do
+	if [ -x "$_brew_pre/bin/brew" ]; then
+		case ":$PATH:" in
+			*":$_brew_pre/bin:"*) ;;
+			*) PATH="$_brew_pre/bin:$_brew_pre/sbin:$PATH"; export PATH ;;
+		esac
+		break
+	fi
+done
+unset _brew_pre
+
 fail=0
 skipped=''
 
@@ -80,12 +95,29 @@ else
 	skip markdownlint
 fi
 
-# --- Shell: sh -n parse gate + shellcheck ---
+# --- Shell: forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense
+#     target has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL
+#     tracked files, so it also covers tests/ (not lint-globbed below). ---
+step 'shebang policy (no #!bash)'
+git ls-files | while IFS= read -r f; do
+	case $(head -n1 "$f" 2>/dev/null) in
+	'#!'*bash*)
+		printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2
+		exit 1
+		;;
+	esac
+done || failed 'shebang policy'
+
+# --- Shell: sh -n parse gate (src + scripts + tests; cheap, tool-free) ---
+step 'shell (sh -n)'
+find src scripts tests -name '*.sh' | sort | while IFS= read -r f; do
+	sh -n "$f" || exit 1
+done || failed 'sh -n'
+
+# --- Shell: shellcheck (src + scripts only; tests/ shellspec specs trip SC2034
+#     false-positives — tracked as a separate cleanup) ---
 if have shellcheck; then
-	step 'shell (sh -n + shellcheck)'
-	find src scripts -name '*.sh' | sort | while IFS= read -r f; do
-		sh -n "$f" || exit 1
-	done || failed 'sh -n'
+	step 'shellcheck'
 	find src scripts -name '*.sh' | sort \
 		| xargs shellcheck --severity=warning || failed 'shellcheck'
 else

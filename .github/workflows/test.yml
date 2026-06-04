@@ -105,13 +105,26 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
 
+      - name: Forbid bash shebangs
+        # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
+        # the ancient 3.2). Scans ALL tracked files, so it also covers tests/.
+        run: |
+          bad=$(git ls-files | while IFS= read -r f; do
+            case $(head -n1 "$f" 2>/dev/null) in '#!'*bash*) echo "$f" ;; esac
+          done)
+          if [ -n "$bad" ]; then
+            echo "bash shebang not allowed (use #!/bin/sh):"; echo "$bad"; exit 1
+          fi
+
       - name: Parse-check all shell scripts (sh -n)
-        # Cheap syntax gate (shell analogue of php -l). Catches unterminated
-        # quotes and other parse errors even if ShellCheck is ever disabled.
-        run: find src scripts -name '*.sh' | sort | xargs -n1 sh -n
+        # Cheap syntax gate (shell analogue of php -l). Catches unterminated quotes and
+        # other parse errors even if ShellCheck is ever disabled. Covers tests/ too
+        # (ShellCheck below cannot — shellspec specs trip SC2034 false-positives).
+        run: find src scripts tests -name '*.sh' | sort | xargs -n1 sh -n
 
       - name: Run ShellCheck
-        # .shellcheckrc in the repo root configures suppressions.
+        # .shellcheckrc in the repo root configures suppressions. Scoped to src+scripts;
+        # tests/ shellspec specs trip SC2034 false-positives (separate cleanup).
         run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=warning
 
   shell-tests:
