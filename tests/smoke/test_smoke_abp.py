@@ -77,13 +77,16 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the ABP matrix (mirrors the ADR-04 matrix).
 
     Egress is managed per-case by ``CaseContext``; the DNSBL VIP is injected once
-    (DNSBL force-disables itself without one). A full guest snapshot is collected on
-    teardown for the workflow to upload.
+    (DNSBL force-disables itself without one). The runner-side stub DNS is wired as
+    Unbound's sole upstream (``use_stub_upstream``) so a not-blocked name resolves to
+    a known sentinel AND is recorded on the stub. A full guest snapshot is collected
+    on teardown for the workflow to upload.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
+    h.use_stub_upstream(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -378,44 +381,94 @@ def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock
 # --------------------------------------------------------------------------- #
 
 
-def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, stub_dns: _StubDnsServer) -> None:
     """A→CNAME→B with B blocklisted: A blocks IFF CNAME validation is ON; B always blocks.
 
-    DEFERRED (documented). The decision logic is fully covered by the runnable unit
-    tests (`tests/test_pfb_unbound.py::TestOperateDnsbl::test_cname_*` — enabled blocks
-    A, disabled does not, B blocks when queried directly). What this live test would
-    add is proof that a REAL Unbound populates ``qstate.return_msg.rep`` with the CNAME
-    chain the module walks. It is deferred because the harness cannot yet put a
-    CONTROLLED CNAME chain on the box hermetically:
+    Proves a REAL Unbound populates ``qstate.return_msg.rep`` with the CNAME chain
+    ``pfb_unbound.py``'s validation walk reads (``an_numrrsets > 1``, the CNAME rrset
+    carrying the blocked target) — the one thing the pure unit oracle
+    (`tests/test_pfb_unbound.py::TestOperateDnsbl::test_cname_*`) cannot, since it
+    hand-builds that ``return_msg``.
 
-      * The CNAME chain must come from the resolver's answer. A pfSense Host Override
-        (the harness's `set_control_records`) only expresses A/AAAA, never a CNAME.
-      * Pointing Unbound at the runner stub (`configure_upstream`) + extending
-        `_StubDnsServer` to answer ``A → CNAME B`` + ``B → sentinel`` is the natural
-        path — but the matrix records that `configure_upstream`'s extra
-        ``forward-zone "."`` *broke Unbound* on the baked image, and a raw `local-data`
-        CNAME in Custom Options is *not re-applied* across the pfBlockerNG reload. Both
-        need harness work to make a controlled CNAME chain survive a DNSBL reload.
+    Controlled-chain delivery (issue #41). The chain MUST come from the resolver's
+    answer, and a pfSense Host Override only expresses A/AAAA — never a CNAME. A raw
+    Unbound ``local-data`` CNAME does NOT work either: Unbound returns the bare CNAME
+    without chasing it (a single rrset, so ``an_numrrsets`` stays 1 and the walk never
+    runs). So the stub — already Unbound's sole upstream (``use_stub_upstream``) —
+    crafts the 2-rrset chain: ``stub_dns.register_cname(A, B)`` answers a forwarded
+    query for A with ``A CNAME B`` + ``B A <sentinel>``, which Unbound forwards whole.
 
-    INTENDED matrix once a controlled CNAME chain exists (B = `unique_domain('cnametgt')`
-    on the DNSBL list; A = `unique_domain('cnamesrc')` resolving CNAME→B via the stub):
+    Only A's fate differs between the runs; B (= `unique_domain('cnametgt')`, a plain
+    exact-match feed entry) is listed in both — the invariant:
 
-      * ``cname_validation=False`` (default): probe A → RESOLVES (sentinel) — the chain
-        is not walked; probe B → VIP (B is listed).
-      * ``cname_validation=True``: probe A → VIP (blocked via its CNAME target, b_type
-        '_CNAME'); probe B → VIP. The ONLY delta between the two runs is A's fate — B
-        is listed in both (the invariant).
+      * ``cname_validation=False`` (default): probe A → RESOLVES to the stub sentinel
+        (the chain is not walked, so A is forwarded — and recorded on the stub);
+        probe B → VIP (and B never reaches the stub).
+      * ``cname_validation=True``: probe A → VIP (blocked via its CNAME target,
+        re-attributed to A with b_type ``DNSBL_CNAME``); probe B → VIP.
 
-    The `DnsblCase.cname_validation` toggle (-> `pfb_cname`/ini `python_cname`) is wired
-    and unit-pinned (`test_smoke_helpers.py`); only the stub-CNAME + upstream plumbing
-    remains. Tracked: https://github.com/andrebrait/pfBlockerNG/issues/41
+    The chase of B during A's resolution does NOT independently block A — pfBlockerNG's
+    module only inspects the resolved chain at MODDONE, and only when CNAME validation
+    is on; that opt-in is the whole point of the feature (else OFF could never resolve A).
     """
-    pytest.skip(
-        "needs a controlled CNAME chain on the box (stub-CNAME + upstream); "
-        "configure_upstream conflicts on the baked image, custom-options local-data is "
-        "not re-applied across the DNSBL reload — decision logic covered by the unit "
-        "tests test_pfb_unbound.py::TestOperateDnsbl::test_cname_* (un-skip: #41)"
-    )
+    src = h.unique_domain("cnamesrc")  # A — resolves CNAME→B via the stub
+    tgt = h.unique_domain("cnametgt")  # B — the blocklisted CNAME target
+    tgt_ip = "198.51.100.42"  # B's OWN address (distinct from VIP / control / sentinel)
+    # The stub (Unbound's upstream) gives B its own A, and answers A with the chain
+    # A→CNAME→B (+ B's A). So A resolves to B's exact address — known, not a generic
+    # sentinel. B is blocked by the DNSBL python before any forward, so a DIRECT query
+    # for B never reaches the stub.
+    stub_dns.register_a(tgt, tgt_ip)
+    stub_dns.register_cname(src, tgt)
+    feed_url = h.write_local_feed(deployed_vm, "smoke_cname.txt", f"{tgt}\n")
+    try:
+        # --- CNAME validation OFF (default): chain not walked → A resolves. ---
+        spec_off = h.DnsblCase(
+            aliasname="smokecnameoff",
+            feed_url=feed_url,
+            header="smokecnameoff",
+            mode=h.DnsblMode.VIP,
+            cname_validation=False,
+        )
+        with h.CaseContext(deployed_vm, spec_off):
+            stub_dns.reset_queries()
+            ans_src = h.dns_probe(deployed_vm, src, "A")
+            assert h.resolves_to(ans_src, tgt_ip), (
+                f"CNAME validation OFF: {src} should resolve to its CNAME target's address {tgt_ip}, got {ans_src}"
+            )
+            assert not h.is_vip(ans_src), f"CNAME validation OFF: {src} wrongly VIP-blocked: {ans_src}"
+            # Upstream-side proof (no inference): A WAS forwarded (not blocked locally).
+            assert stub_dns.received(src), f"{src} should have been forwarded to the stub upstream"
+            # The DIRECT B query is blocked BEFORE any forward. FLUSH first: resolving A
+            # above cached B's chained A record, and Unbound serves a cache hit ahead of
+            # the python module — without the flush B is served the cached sentinel.
+            # Reset the stub log too, so received(B) reflects only this direct query.
+            h.flush_unbound_cache(deployed_vm)
+            stub_dns.reset_queries()
+            ans_tgt = h.dns_probe(deployed_vm, tgt, "A")
+            assert h.is_vip(ans_tgt), f"listed target {tgt} expected VIP block (validation OFF), got {ans_tgt}"
+            assert not stub_dns.received(tgt), f"blocked {tgt} must NOT reach the upstream: {stub_dns.received(tgt)}"
+
+        # --- CNAME validation ON: chain walked → A blocked via its target. ---
+        spec_on = h.DnsblCase(
+            aliasname="smokecnameon",
+            feed_url=feed_url,
+            header="smokecnameon",
+            mode=h.DnsblMode.VIP,
+            cname_validation=True,
+        )
+        with h.CaseContext(deployed_vm, spec_on):
+            h.flush_unbound_cache(deployed_vm)
+            ans_src = h.dns_probe(deployed_vm, src, "A")
+            assert h.is_vip(ans_src), (
+                f"CNAME validation ON: {src} must be VIP-blocked via its CNAME target {tgt}, got {ans_src}"
+            )
+            # Flush so the direct B probe is evaluated fresh (not served A's cached chain).
+            h.flush_unbound_cache(deployed_vm)
+            ans_tgt = h.dns_probe(deployed_vm, tgt, "A")
+            assert h.is_vip(ans_tgt), f"listed target {tgt} expected VIP block (validation ON), got {ans_tgt}"
+    finally:
+        stub_dns.clear_cname()
 
 
 # --------------------------------------------------------------------------- #
