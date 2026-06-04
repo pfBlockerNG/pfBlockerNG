@@ -1,0 +1,43 @@
+# Plan 02 — Unified DNSBL decision cache (Stage 1) (#67)
+
+- **Status:** Implemented — PR #67 merged (`devel` `7e16619` + review fix `87a96e1`, 2026-06-04)
+- **Component:** `src/usr/local/pkg/pfblockerng/pfb_unbound.py`, `tests/`
+
+## Context / problem
+
+`operate()` memoised the DNSBL outcome across **two contradictory** structures:
+`excludeDB` (a list of not-blocked names, O(n) scan) and `dnsblDB` (a dict of blocked
+names + a `"last-event"` dedup key). A CNAME-blocked name landed in **both** — `orig.com`
+in `excludeDB` (iter-1, not a direct match) and `dnsblDB` (iter-2, blocked via the
+resolved chain). That caused: an incoherent verdict; dead code (a second store block
+whose guard could never be true after the `q_name = q_name_original` reassignment); and
+CNAME re-evaluation on every query (the original sat in `excludeDB`, so the block only
+re-derived by re-resolving + re-running the full matcher on the chain target).
+
+## Decision
+
+One `decisionDB[name] = DnsblDecision`. The **Decision is the working structure** — stored
+directly, holding *every* outcome including **allow** ("let Unbound resolve it" /
+whitelisted), which replaces the `excludeDB` list with an O(1) dict lookup. A repeat
+query (incl. a CNAME-blocked name, keyed on the original) short-circuits on the memo at
+`MODULE_EVENT_NEW`. `evaluate_domain` untouched → decision byte-identical (ADR-06/07
+oracles green).
+
+## Findings
+
+- **Dedup-signature regression (caught in CodeRabbit review):** the old `dnsblDB` dict
+  carried a `"qname"` field that `str(event_sig)` folded into the consecutive-dedup
+  signature; `DnsblDecision` has no `qname`, so two distinct **same-zone** blocks
+  (identical payload, `b_eval` = zone) collapsed → the second wrongly marked duplicate
+  (zone under-count). Fixed with `event_sig = (q_name.lower(), q_type, decision)`; pinned
+  by `test_distinct_names_not_deduped`. Lesson: `str()`-folded dict fields are
+  load-bearing.
+- An "overlap-equality" key (two sets equal if they share any item) **cannot** be a dict
+  key — not transitive, no equivalence classes; the right tools are alias-many-keys,
+  union-find, or an inverted index.
+
+## Result
+
+PR #67 merged. Overlapped #64's block-reply path; resolved by rebasing #67 on top and
+folding `no_cache_store` into the rewritten block. Two pre-existing bugs surfaced in
+review → plan 03. noAAAA + SafeSearch deferred → plan 04.
