@@ -44,6 +44,7 @@ $pconfig['pfb_tld']		= $pfb['dconfig']['pfb_tld']				?: '';
 $pconfig['pfb_control']		= $pfb['dconfig']['pfb_control']			?: '';
 $pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
 $pconfig['pfb_dnsvip6'] = $pfb['dconfig']['pfb_dnsvip6'] ?: 'none';
+$pconfig['pfb_dnsvip_auto']	= $pfb['dconfig']['pfb_dnsvip_auto']			?: '';
 $pconfig['pfb_dnsport']		= $pfb['dconfig']['pfb_dnsport']			?: '8081';
 $pconfig['pfb_dnsport_ssl']	= $pfb['dconfig']['pfb_dnsport_ssl']			?: '8443';
 $pconfig['dnsbl_interface']	= $pfb['dconfig']['dnsbl_interface']			?: 'lo0';
@@ -464,20 +465,26 @@ if ($_POST) {
 		}
 
 		// Validate DNSBL VIP address
-		if ($_POST['pfb_dnsvip4'] == 'none') {
-			$_POST['pfb_dnsvip4'] = '';
-		}
-		if ($_POST['pfb_dnsvip6'] == 'none') {
-			$_POST['pfb_dnsvip6'] = '';
-		}
-		// [ ADR-13 ] When auto-create is on the package provisions the (v6) VIP server
-		// side, so do NOT require a v6 VIP at save time (require_v6=false); in manual
-		// mode pass null so the validator enforces the v6-mandatory rule — a resolver
-		// listening on IPv6 makes a v6 VIP required and errors the save here.
-		$require_v6 = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on') ? false : null;
-		list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6'], $require_v6);
-		if (!$vips_valid) {
-			$input_errors[] = "DNSBL: {$error}";
+		// [ ADR-13 ] Auto-create mode: pfBlockerNG owns the DNSBL sinkhole VIP(s) and
+		// provisions them server side on the next pfb_create_dnsbl('enabled') pass
+		// (pfb_manage_dnsbl_vip). The manual dropdowns are disabled in the UI (a disabled
+		// control is not submitted), so the manual VIP validation (existence / interface /
+		// overlap, and the v6-mandatory rule) does NOT apply — the package picks a
+		// conflict-free address and provisions the required v6 VIP itself. In manual mode
+		// (box off) the validator runs exactly as before, so a v6-listening resolver still
+		// requires a v6 VIP (require_v6 defaults to null => computed live).
+		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+		if (!$pfb_auto) {
+			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
+				$_POST['pfb_dnsvip4'] = '';
+			}
+			if (($_POST['pfb_dnsvip6'] ?? '') == 'none') {
+				$_POST['pfb_dnsvip6'] = '';
+			}
+			list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'] ?? '', $_POST['pfb_dnsvip6'] ?? '');
+			if (!$vips_valid) {
+				$input_errors[] = "DNSBL: {$error}";
+			}
 		}
 
 		// Validate Adv. firewall rule 'Protocol' setting
@@ -497,7 +504,16 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_tld']		= pfb_filter($_POST['pfb_tld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_dnsvip6'] = $_POST['pfb_dnsvip6'] ?: '';
+
+			// [ ADR-13 ] Persist the auto-create decision. When ON, leave the stored
+			// pfb_dnsvip4/6 ids untouched here (the manual dropdowns are disabled): the
+			// next pfb_create_dnsbl('enabled') pass (pfb_manage_dnsbl_vip) provisions the
+			// marked VIP(s) and repoints pfb_dnsvip4/6 to the new _vip{uniqid} ids. When
+			// OFF, the manual dropdown selections are saved below exactly as before.
+			$pfb['dconfig']['pfb_dnsvip_auto']	= $pfb_auto ? 'on' : '';
+			if (!$pfb_auto) {
+				$pfb['dconfig']['pfb_dnsvip6'] = $_POST['pfb_dnsvip6'] ?: '';
+			}
 
 			$pfb['dconfig']['pfb_dnsport']		= $_POST['pfb_dnsport']							?: '8081';
 			$pfb['dconfig']['pfb_dnsport_ssl']	= $_POST['pfb_dnsport_ssl']						?: '8443';
@@ -576,7 +592,9 @@ if ($_POST) {
 			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
 
 
-			$pfb['dconfig']['pfb_dnsvip4']		= $_POST['pfb_dnsvip4']							?: '';
+			if (!$pfb_auto) {
+				$pfb['dconfig']['pfb_dnsvip4']	= $_POST['pfb_dnsvip4']							?: '';
+			}
 			$pfb['dconfig']['dnsbl_interface']	= $_POST['dnsbl_interface']						?: 'lo0';
 
 			// Replace DNSBL active blocked webpage with user selection
@@ -2519,8 +2537,52 @@ $section->addInput(new Form_Select(
 ))->setHelp('Select the interface which DNSBL Web Server will Listen on.<br />'
 	. 'Default: <strong>Localhost (ports 80/443)</strong> - Selected Interface should be a Local Interface only.');
 
+// [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
+// selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
+// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free 10.10.X.53 / fd00:X::53
+// candidate (null when every candidate conflicts). A v6 VIP is only relevant when the
+// DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
+$pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
+$pfb_auto_v6_needed	= pfb_unbound_listens_v6();
+$pfb_auto_vip4		= pfb_pick_free_dnsbl_vip(AF_INET, $pfb_auto_iface);
+$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_auto_iface) : null;
+
+// Conflict exhaustion: v4 is always required; v6 only when the resolver listens on it.
+// When no free candidate exists for a required family the checkbox is rendered disabled
+// with a warning, so auto-create can never be enabled into a known-conflicting state.
+$pfb_auto_exhausted	= ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
+
 $group = new Form_Group('DNSBL Virtual IP');
 $vips = pfb_get_vips();
+
+$pfb_auto_help = 'Automatically create and manage the DNSBL sinkhole Virtual IP(s) instead of selecting them manually.<br />'
+	. 'pfBlockerNG creates an IP-Alias VIP on the selected Web Server Interface at a free DNS-themed address '
+	. '(<strong>10.10.10.53</strong> for IPv4, <strong>fd00::53</strong> for IPv6, sweeping to the next free '
+	. '<strong>.53</strong> address on conflict), marked <strong>pfB_AUTO_VIP_v4</strong> / <strong>pfB_AUTO_VIP_v6</strong>. '
+	. 'The VIP is created when DNSBL is enabled and removed when it is disabled; only VIPs carrying that marker are ever managed. '
+	. 'A separate IPv6 VIP is added automatically when the DNS Resolver listens on IPv6.';
+if ($pfb_auto_exhausted) {
+	// No free candidate for a required family: disable the control and explain why, using
+	// the stock Font-Awesome warning icon + Bootstrap tooltip pfSense ships.
+	$pfb_auto_help .= '<br /><i class="fa fa-exclamation-triangle text-warning" data-toggle="tooltip" '
+		. 'title="No free address is available in the 10.10.X.53 / fd00:X::53 range. Free an address there, '
+		. 'or create a DNSBL VIP manually at Firewall &gt; Virtual IPs."></i> '
+		. '<span class="text-warning">No free auto-create address is available; free one in the '
+		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
+}
+$pfb_auto_chk = new Form_Checkbox(
+	'pfb_dnsvip_auto',
+	gettext('Auto VIP'),
+	gettext('Create VIPs automatically'),
+	(!$pfb_auto_exhausted && $pconfig['pfb_dnsvip_auto'] === 'on'),
+	'on'
+);
+$pfb_auto_chk->setHelp($pfb_auto_help);
+if ($pfb_auto_exhausted) {
+	$pfb_auto_chk->setAttribute('disabled', 'disabled');
+}
+$group->add($pfb_auto_chk);
+
 $group->add(new Form_Select(
 	'pfb_dnsvip4',
 	gettext('IPv4 VIP'),
@@ -2536,7 +2598,8 @@ $group->add(new Form_Select(
 $group->setHelp('Select the DNSBL VIP address.%1$s'
 		. 'This address should be in an Isolated Range that is not already used in the Network.%1$s'
 		. 'Rejected DNS requests will be forwarded to this VIP.%1$s'
-		. 'VIPs %2$smust be configured first%3$s at %4$sFirewall > Virtual IPs%5$s.',
+		. 'VIPs %2$smust be configured first%3$s at %4$sFirewall > Virtual IPs%5$s, '
+		. 'unless %2$sCreate VIPs automatically%3$s is enabled (then pfBlockerNG provisions them).',
 	'<br />', '<strong>', '</strong>', '<a target="_blank" href="/firewall_virtual_ip.php">', '</a>'
 );
 $section->add($group);
@@ -2948,6 +3011,43 @@ var networksarray = nlist.split(',');
 // Disable GeoIP/ASN Autocomplete as not required for the DNSBL page
 var geoiparray = 'disabled';
 
+// [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so
+// the "Create VIPs automatically" checkbox can pre-fill the (display-only) VIP fields.
+// Empty string => no candidate / family not required.
+var pfb_auto_vip4 = "<?=htmlspecialchars($pfb_auto_vip4 ?? '', ENT_QUOTES)?>";
+var pfb_auto_vip6 = "<?=htmlspecialchars($pfb_auto_vip6 ?? '', ENT_QUOTES)?>";
+
+// [ ADR-13 ] On check: pre-fill the VIP dropdown(s) with the address pfBlockerNG would
+// create (a synthetic, selected option for display) and disable the manual dropdowns; on
+// uncheck: remove the synthetic option, restore the prior manual selection, and re-enable.
+function enable_dnsvip_auto() {
+	var on = $('#pfb_dnsvip_auto').prop('checked');
+	var fields = [['pfb_dnsvip4', pfb_auto_vip4], ['pfb_dnsvip6', pfb_auto_vip6]];
+	$.each(fields, function(i, f) {
+		var id = f[0], addr = f[1];
+		var $sel = $('#' + id);
+		if (on) {
+			// Remember the manual selection once, then show the auto address.
+			if (typeof $sel.data('pfbManualVal') === 'undefined') {
+				$sel.data('pfbManualVal', $sel.val());
+			}
+			$sel.find('option.pfb-auto-opt').remove();
+			if (addr !== '') {
+				$sel.append($('<option>', { 'class': 'pfb-auto-opt', value: '_pfb_auto', text: addr }));
+				$sel.val('_pfb_auto');
+			}
+			disableInput(id, true);
+		} else {
+			disableInput(id, false);
+			$sel.find('option.pfb-auto-opt').remove();
+			if (typeof $sel.data('pfbManualVal') !== 'undefined') {
+				$sel.val($sel.data('pfbManualVal'));
+				$sel.removeData('pfbManualVal');
+			}
+		}
+	});
+}
+
 function enable_tld() {
 	if ($('#pfb_tld').prop('checked')) {
 		$('#TLD_Exclusion').show();
@@ -3051,6 +3151,11 @@ events.push(function(){
 		enable_dnsblip();
 	});
 	enable_dnsblip();
+
+	$('#pfb_dnsvip_auto').click(function() {
+		enable_dnsvip_auto();
+	});
+	enable_dnsvip_auto();
 });
 
 //]]>
