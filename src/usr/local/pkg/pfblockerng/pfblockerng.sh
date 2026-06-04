@@ -14,95 +14,108 @@
 # GNU General Public License for more details.
 
 
-now=$(/bin/date +%m/%d/%y' '%T)
+# Create a private per-run temp directory and define the temp file paths beneath
+# it. Using mktemp(1) instead of a low-entropy PRNG (jot) closes the predictable
+# /tmp-path TOCTOU/symlink hole for this root-run script (issue #30). exitnow()
+# removes the whole directory on exit.
+pfb_make_tmpdir() {
+	tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX")" || exit 1
+	tempfile="${tmpdir}/pfbtemp1"
+	tempfile2="${tmpdir}/pfbtemp2"
+	dupfile="${tmpdir}/pfbtemp3"
+	dedupfile="${tmpdir}/pfbtemp4"
+	addfile="${tmpdir}/pfbtemp5"
+	matchfile="${tmpdir}/pfbtemp7"
+	tempmatchfile="${tmpdir}/pfbtemp8"
+}
 
-# Application Locations
-pathgrepcidr="/usr/local/bin/grepcidr"
-pathaggregate="/usr/local/bin/iprange"
-pathgeoip="/usr/local/bin/mmdblookup"
-pathhost=/usr/bin/host
-pathtar=/usr/bin/tar
-pathpfctl=/sbin/pfctl
+# Top-level initialisation. Guarded so the script can be sourced for unit tests
+# (PFB_SOURCED=1) to exercise the functions below in isolation without running
+# any of this; the executable path runs it because PFB_SOURCED is unset. The
+# function definitions further down are always defined on source.
+if [ -z "${PFB_SOURCED:-}" ]; then
+	now=$(/bin/date +%m/%d/%y' '%T)
 
-# Script Arguments
-alias="${2}"
-max="${3}"
-dedup="${4}"
-cc="$(echo "${5}" | sed 's/,/, /g')"
-ccwhite="$(echo "${6}" | tr '[:upper:]' '[:lower:]')"
-ccblack="$(echo "${7}" | tr '[:upper:]' '[:lower:]')"
-etblock="$(echo "${8}" | sed 's/,/, /g')"
-etmatch="$(echo "${9}" | sed 's/,/, /g')"
+	# Application Locations
+	pathgrepcidr="/usr/local/bin/grepcidr"
+	pathaggregate="/usr/local/bin/iprange"
+	pathgeoip="/usr/local/bin/mmdblookup"
+	pathhost=/usr/bin/host
+	pathtar=/usr/bin/tar
+	pathpfctl=/sbin/pfctl
 
-# File Locations
-aliasarchive="/usr/local/etc/aliastables.tar.bz2"
-pathgeoipdat="/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
-pathasndat="/usr/local/share/GeoIP/asn.mmdb"
-pathasncsv="/usr/local/share/GeoIP/asn.csv"
-pathasntable="/usr/local/www/pfblockerng/pfblockerng_asn.txt"
-pfbsuppression=/var/db/pfblockerng/pfbsuppression.txt
-# ADR-06: pfbdnsblsuppression / pfbalexa removed (only used by the dropped
-# dnsbl_scrub build-time whitelist/TOP1M removal; now applied at query time).
-masterfile=/var/db/pfblockerng/masterfile
-mastercat=/var/db/pfblockerng/mastercat
-geoiplog=/var/log/pfblockerng/geoip.log
-errorlog=/var/log/pfblockerng/error.log
-extraslog=/var/log/pfblockerng/extras.log
+	# Script Arguments
+	alias="${2}"
+	max="${3}"
+	dedup="${4}"
+	cc="$(echo "${5}" | sed 's/,/, /g')"
+	ccwhite="$(echo "${6}" | tr '[:upper:]' '[:lower:]')"
+	ccblack="$(echo "${7}" | tr '[:upper:]' '[:lower:]')"
+	etblock="$(echo "${8}" | sed 's/,/, /g')"
+	etmatch="$(echo "${9}" | sed 's/,/, /g')"
 
-# Folder Locations
-etdir=/var/db/pfblockerng/ET
-tmpxlsx=/tmp/xlsx/
-pfbdb=/var/db/pfblockerng/
-pfbdeny=/var/db/pfblockerng/deny/
-pfborig=/var/db/pfblockerng/original/
-pfbmatch=/var/db/pfblockerng/match/
-pfbpermit=/var/db/pfblockerng/permit/
-pfbnative=/var/db/pfblockerng/native/
-pfsensealias=/var/db/aliastables/
-pfbdomain=/var/db/pfblockerng/dnsbl/
-pfbdomainorig=/var/db/pfblockerng/dnsblorig/
+	# File Locations
+	aliasarchive="/usr/local/etc/aliastables.tar.bz2"
+	pathgeoipdat="/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
+	pathasndat="/usr/local/share/GeoIP/asn.mmdb"
+	pathasncsv="/usr/local/share/GeoIP/asn.csv"
+	pathasntable="/usr/local/www/pfblockerng/pfblockerng_asn.txt"
+	pfbsuppression=/var/db/pfblockerng/pfbsuppression.txt
+	# ADR-06: pfbdnsblsuppression / pfbalexa removed (only used by the dropped
+	# dnsbl_scrub build-time whitelist/TOP1M removal; now applied at query time).
+	masterfile=/var/db/pfblockerng/masterfile
+	mastercat=/var/db/pfblockerng/mastercat
+	geoiplog=/var/log/pfblockerng/geoip.log
+	errorlog=/var/log/pfblockerng/error.log
+	extraslog=/var/log/pfblockerng/extras.log
 
-# Store 'Match' d-dedups in matchdedup.txt file
-matchdedup=matchdedup_v4.txt
+	# Folder Locations
+	etdir=/var/db/pfblockerng/ET
+	tmpxlsx=/tmp/xlsx/
+	pfbdb=/var/db/pfblockerng/
+	pfbdeny=/var/db/pfblockerng/deny/
+	pfborig=/var/db/pfblockerng/original/
+	pfbmatch=/var/db/pfblockerng/match/
+	pfbpermit=/var/db/pfblockerng/permit/
+	pfbnative=/var/db/pfblockerng/native/
+	pfsensealias=/var/db/aliastables/
+	pfbdomain=/var/db/pfblockerng/dnsbl/
+	pfbdomainorig=/var/db/pfblockerng/dnsblorig/
 
-# Randomize temporary variables
-rvar="$(/usr/bin/jot -r 1 1000 100000)"
+	# Store 'Match' d-dedups in matchdedup.txt file
+	matchdedup=matchdedup_v4.txt
 
-tempfile=/tmp/pfbtemp1_$rvar
-tempfile2=/tmp/pfbtemp2_$rvar
-dupfile=/tmp/pfbtemp3_$rvar
-dedupfile=/tmp/pfbtemp4_$rvar
-addfile=/tmp/pfbtemp5_$rvar
-matchfile=/tmp/pfbtemp7_$rvar
-tempmatchfile=/tmp/pfbtemp8_$rvar
+	# Create a private per-run temp directory (sets tempfile, tempfile2, ...).
+	pfb_make_tmpdir
 
-# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
-# along with dnsbl_scrub + domaintldpy (the dropped build-time DNSBL passes).
+	# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
+	# along with dnsbl_scrub + domaintldpy (the dropped build-time DNSBL passes).
 
-ip_placeholder="$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngipsettings/config/ip_placeholder)"
-if [ -z "${ip_placeholder}" ]; then
-	ip_placeholder=127.1.7.7
+	ip_placeholder="$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngipsettings/config/ip_placeholder)"
+	if [ -z "${ip_placeholder}" ]; then
+		ip_placeholder=127.1.7.7
+	fi
+	ip_placeholder2="$(echo "${ip_placeholder}" | sed 's/\./\\\./g')"
+	ip_placeholder3="$(echo "${ip_placeholder}" | cut -d '.' -f 1-3)"
+
+	USE_MFS_TMPVAR="$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)"
+	DISK_NAME="$(/bin/df /var/db/rrd | /usr/bin/tail -1 | /usr/bin/awk '{print $1;}')"
+	DISK_TYPE="$(/usr/bin/basename "${DISK_NAME}" | /usr/bin/cut -c1-2)"
+
+	if [ ! -d "${pfbdb}" ]; then mkdir "${pfbdb}"; fi
+	if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
+	if [ ! -d "${pfbmatch}" ]; then mkdir "${pfbmatch}"; fi
+	if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
+	if [ ! -d "${tmpxlsx}" ]; then mkdir "${tmpxlsx}"; fi
+
+	if [ ! -f "${masterfile}" ]; then touch "${masterfile}"; fi
+	if [ ! -f "${mastercat}" ]; then touch "${mastercat}"; fi
 fi
-ip_placeholder2="$(echo "${ip_placeholder}" | sed 's/\./\\\./g')"
-ip_placeholder3="$(echo "${ip_placeholder}" | cut -d '.' -f 1-3)"
-
-USE_MFS_TMPVAR="$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)"
-DISK_NAME="$(/bin/df /var/db/rrd | /usr/bin/tail -1 | /usr/bin/awk '{print $1;}')"
-DISK_TYPE="$(/usr/bin/basename "${DISK_NAME}" | /usr/bin/cut -c1-2)"
-
-if [ ! -d "${pfbdb}" ]; then mkdir "${pfbdb}"; fi
-if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
-if [ ! -d "${pfbmatch}" ]; then mkdir "${pfbmatch}"; fi
-if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
-if [ ! -d "${tmpxlsx}" ]; then mkdir "${tmpxlsx}"; fi
-
-if [ ! -f "${masterfile}" ]; then touch "${masterfile}"; fi
-if [ ! -f "${mastercat}" ]; then touch "${mastercat}"; fi
 
 
-# Remove temp files before exiting.
+# Remove the private per-run temp directory before exiting (issue #30).
 exitnow() {
-	rm -f /tmp/pfbtemp*_"${rvar}"
+	rm -rf "${tmpdir}"
 	exit
 }
 
@@ -470,7 +483,9 @@ iptoasn() {
 	ip="${alias}"
 	asn="$(${pathgeoip} -f ${pathasndat} -i "${ip}" 2>&1 | tr -d '"{},' | grep -v '^[[:space:]]*$' | cut -d '<' -f1 | tr -s ' ' | tr '\n' '|' | sed -e 's/: |/: /g' -e 's/asn:/ ASN:/g')"
 
-	if [ ! -s "${asn}" ]; then
+	# $asn is the lookup result string, not a filename: test its contents with
+	# -n, not the file-exists test -s (issue #28).
+	if [ -n "${asn}" ]; then
 		echo "${asn}"
 	else
 		echo ""
@@ -554,8 +569,12 @@ reputation_max() {
 	fi
 
 	# If no matches found remove previous matchoutfile if exists.
+	# Derive header from $alias (in scope), matching reputation_dmax/pmax; do not
+	# rely on a stale $header global, and operate on the absolute ${pfbmatch}
+	# path rather than a relative one (issue #27).
+	header="$(echo "${alias##*/}" | cut -d '.' -f1)"
 	matchoutfile="match${header}.txt"
-	if [ ! -s "${tempmatchfile}" ] && [ -f "${matchoutfile}" ]; then rm -r "${matchoutfile}"; fi
+	if [ ! -s "${tempmatchfile}" ] && [ -f "${pfbmatch}${matchoutfile}" ]; then rm -f "${pfbmatch}${matchoutfile}"; fi
 	# Move match file to the match folder by individual blocklist name
 	if [ -s "${tempmatchfile}" ]; then mv -f "${tempmatchfile}" "${pfbmatch}${matchoutfile}"; fi
 
@@ -941,6 +960,12 @@ closingprocess() {
 	pfctlcount="$(${pathpfctl} -vvsTables | awk '/Addresses/ {s+=$2}; END {print s}')"
 	echo "Table Usage Count         ${pfctlcount}"
 }
+
+# When sourced for unit testing (PFB_SOURCED=1) stop here: only the function
+# definitions above are wanted, not the init/dispatch below. `return` is valid at
+# the top level of a sourced script and is never reached on direct execution
+# (PFB_SOURCED is unset, so the && short-circuits).
+[ -n "${PFB_SOURCED:-}" ] && return 0 2>/dev/null
 
 # Call appropriate processes using script argument $1.
 case "${1}" in

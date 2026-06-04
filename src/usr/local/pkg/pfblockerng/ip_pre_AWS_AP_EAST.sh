@@ -15,10 +15,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-# Randomize temporary variables
-rvar="$(/usr/bin/jot -r 1 1000 100000)"
-
-tempfile=/tmp/pfbtemp1_$rvar
+tempfile="$(mktemp "${TMPDIR:-/tmp}/pfbtemp1.XXXXXXXX")" || exit 1
 alias="${1}"
 prefix="${2}"
 
