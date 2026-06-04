@@ -56,6 +56,12 @@ CSRF_FIELD = "__csrf_magic"
 # Login form field names (src/etc/inc/authgui.inc display_login_form()).
 USERNAME_FIELD = "usernamefld"
 PASSWORD_FIELD = "passwordfld"
+# The submit button. pfSense GATES the credential check on this field's presence
+# -- `if (isset($_POST['login']))` in authgui.inc -- so a POST of only the
+# username/password/CSRF is NEVER authenticated; the form just re-renders at 200.
+# The value is immaterial (isset, not a value compare); send the button's label.
+LOGIN_FIELD = "login"
+LOGIN_VALUE = "Sign In"
 
 # PHP session cookie. pfSense uses PHP's default session name; the cookie the
 # webConfigurator sets on a successful login is PHPSESSID.
@@ -305,6 +311,10 @@ class WebUI:
                 CSRF_FIELD: token,
                 USERNAME_FIELD: self._username,
                 PASSWORD_FIELD: self._password,
+                # Without the submit field pfSense's `isset($_POST['login'])` gate
+                # is false -> it skips auth and re-renders the form (a silent
+                # "bad credentials" that is really "auth never attempted").
+                LOGIN_FIELD: LOGIN_VALUE,
             },
             verify=self._verify,
             timeout=self._timeout,
