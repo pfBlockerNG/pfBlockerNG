@@ -1682,6 +1682,156 @@ function pfb_logger($log, $logtype) {
 }
 
 
+/*
+ * ADR-12: Pre/Post update command hooks (unwired in Phase 1).
+ *
+ * Admin-configurable commands run as root at the start ('pre') and end ('post')
+ * of the pfBlockerNG update pass. Same root-command trust class as pfSense
+ * 'shellcmd'. Each hook entry lives in the pfBlockerNG config under
+ * installedpackages/pfblockerng/config/0/hooks and has the shape:
+ *
+ *   array(
+ *     'command'     => '<sh command line>',     // run via /bin/sh -c
+ *     'when'        => 'pre' | 'post',          // fire point
+ *     'enabled'     => 'on' | '' ,              // pfSense checkbox convention
+ *     'description' => '<free text>',           // optional, for logs/UI
+ *     'timeout'     => '<seconds>',             // optional, per-hook override
+ *   )
+ *
+ * Failure semantics (the ADR-12 contract): a hook's non-zero exit OR timeout is
+ * logged and the update CONTINUES. A hook can never throw, abort, or stall the
+ * update pass. No die()/exit() here (library code).
+ */
+
+// Default per-hook timeout (seconds) when a hook does not set its own.
+if (!defined('PFB_HOOK_TIMEOUT_DEFAULT')) {
+	define('PFB_HOOK_TIMEOUT_DEFAULT', 60);
+}
+
+// Grace period (seconds) after SIGTERM before timeout(1) sends SIGKILL.
+if (!defined('PFB_HOOK_KILL_GRACE')) {
+	define('PFB_HOOK_KILL_GRACE', 5);
+}
+
+/*
+ * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
+ *
+ * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
+ * tested without a live config. pfb_run_hooks() reads the live config and feeds
+ * it here. Malformed entries (missing command/when, disabled) are skipped.
+ */
+function pfb_get_hooks($pfbconfig, $when) {
+
+	if ($when !== 'pre' && $when !== 'post') {
+		return array();
+	}
+
+	$hooks = array();
+	if (!is_array($pfbconfig) || !isset($pfbconfig['hooks']) || !is_array($pfbconfig['hooks'])) {
+		return $hooks;
+	}
+
+	foreach ($pfbconfig['hooks'] as $hook) {
+		if (!is_array($hook)) {
+			continue;
+		}
+		// pfSense checkbox convention: enabled === 'on'.
+		if (($hook['enabled'] ?? '') !== 'on') {
+			continue;
+		}
+		if (($hook['when'] ?? '') !== $when) {
+			continue;
+		}
+		if (trim((string) ($hook['command'] ?? '')) === '') {
+			continue;
+		}
+		$hooks[] = $hook;
+	}
+
+	return $hooks;
+}
+
+/*
+ * Resolve a hook's timeout (seconds) to a sane positive integer, falling back to
+ * PFB_HOOK_TIMEOUT_DEFAULT when unset/invalid.
+ */
+function pfb_hook_timeout($hook) {
+	$timeout = (int) ($hook['timeout'] ?? 0);
+	if ($timeout <= 0) {
+		$timeout = PFB_HOOK_TIMEOUT_DEFAULT;
+	}
+	return $timeout;
+}
+
+/*
+ * Run every enabled hook matching $when, in list order, as root.
+ *
+ * $ctx is a flat name => value map exported to each hook as PFB_* environment
+ * variables (e.g. ['TRIGGER' => 'cron'] => PFB_TRIGGER=cron). PFB_WHEN is always
+ * set to $when. Each command runs under /usr/bin/timeout so a hung child is
+ * killed (SIGTERM, then SIGKILL after PFB_HOOK_KILL_GRACE seconds); stdout+stderr
+ * are captured and written to the pfBlockerNG log under a per-hook header.
+ *
+ * A non-zero exit (incl. timeout(1)'s 124) or any failure is logged and the next
+ * hook runs. This function never throws and never aborts the caller.
+ */
+function pfb_run_hooks($when, $ctx = array()) {
+	global $pfb;
+
+	$pfbconfig = config_get_path('installedpackages/pfblockerng/config/0', []);
+	$hooks = pfb_get_hooks($pfbconfig, $when);
+	if (empty($hooks)) {
+		return;	// No enabled hooks for this fire point: byte-identical no-op.
+	}
+
+	// Build the PFB_* env-var prefix shared by every hook of this run.
+	if (!is_array($ctx)) {
+		$ctx = array();
+	}
+	$ctx['WHEN'] = $when;
+	$env = array();
+	foreach ($ctx as $name => $value) {
+		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...);
+		// values are escaped. A shell var-assignment prefix (VAR=val cmd ...) is
+		// inherited by timeout(1) and exported to the hook's /bin/sh child only.
+		$env[] = 'PFB_' . strtoupper((string) $name) . '=' . escapeshellarg((string) $value);
+	}
+	$envprefix = implode(' ', $env);
+
+	foreach ($hooks as $idx => $hook) {
+		$desc    = trim((string) ($hook['description'] ?? ''));
+		$command = (string) $hook['command'];
+		$timeout = pfb_hook_timeout($hook);
+		$label   = ($desc !== '') ? $desc : "#{$idx}";
+
+		$header = "\n[ pfB Hook ] {$when} {$label} (timeout {$timeout}s): {$command}\n";
+		pfb_logger($header, 1);
+
+		// Run as root under timeout(1): SIGTERM at $timeout, SIGKILL after the
+		// grace period. /bin/sh -c runs the user command line; 2>&1 folds stderr
+		// into the captured stdout for the log.
+		$cmd = "{$envprefix} /usr/bin/timeout -s TERM -k " . PFB_HOOK_KILL_GRACE .
+			" {$timeout} /bin/sh -c " . escapeshellarg($command) . " 2>&1";
+
+		$output = array();
+		$retval = 0;
+		exec($cmd, $output, $retval);
+
+		if (!empty($output)) {
+			pfb_logger(implode("\n", $output) . "\n", 1);
+		}
+
+		if ($retval === 124) {
+			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
+		} elseif ($retval !== 0) {
+			pfb_logger("[ pfB Hook ] {$when} {$label} exited non-zero [ {$retval} ]; continuing\n", 2);
+		} else {
+			pfb_logger("[ pfB Hook ] {$when} {$label} completed\n", 1);
+		}
+	}
+}
+
+
 // Record failed IP/DNSBL Feed parse errors
 function pfb_parsed_fail($header, $line='', $oline, $logfile) {
 
