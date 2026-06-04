@@ -232,13 +232,26 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
     Oracle = effective box state (marked_vip_subnet / ifconfig), never the HTTP
     response. The manual VIP at 10.10.10.1 (dnsbl_vip_ready) is untouched. Left
     clean (auto off, marked VIP gone) for the sibling flows in `finally`.
+
+    A DNSBL alias must be configured (write_local_feed + inject) for the Force
+    Update to actually run pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip: a
+    bare `update` with no DNSBL list does NOT reach the VIP-provisioning pass (the
+    same setup the smoke matrix uses via CaseContext). The feed is a LOCAL file
+    under /var/db/pfblockerng, so the update needs no egress. reload uses the full
+    `update` scope (not the targeted `updatednsbl`, which skips the VIP pass), with
+    egress open -- so this drives inject()+reload() directly rather than via
+    CaseContext (whose body runs with egress BLOCKED).
     """
     vm = smoke_vm
+    # A DNSBL list so the Force Update has work and runs the VIP-provisioning pass.
+    domain = helpers.unique_domain("uiautovip")
+    feed_path = helpers.write_local_feed(vm, "ui_autovip.txt", f"{domain}\n")
+    spec = helpers.DnsblCase(aliasname="uiautovip", feed_url=feed_path, header="uiautovip", mode=helpers.DnsblMode.VIP)
     # DNSBL must be enabled so the Force Update runs pfb_create_dnsbl in 'enabled'
-    # mode; start from a known baseline (auto off, no marked VIP).
+    # mode; configure the alias; start from a known baseline (auto off).
     helpers.set_dnsbl_enabled(vm, True)
     helpers.set_dnsvip_auto(vm, False)
-    helpers.reload(vm, "update")
+    helpers.inject(vm, spec)
     try:
         # BEFORE.
         assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "pfb_dnsvip_auto already on before the form POST"
@@ -252,7 +265,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
         assert helpers.config_get(vm, AUTO_VIP_CFG) == "on", (
             "the DNSBL form POST did not persist pfb_dnsvip_auto=on to config.xml"
         )
-        # The next Force Update provisions the marked VIP (same path as the matrix).
+        # The next full Force Update provisions the marked VIP (same path as the matrix).
         helpers.reload(vm, "update")
         assert helpers.marked_vip_subnet(vm, helpers.AUTO_VIP_DESCR_V4) == helpers.AUTO_VIP_IP4, (
             f"auto VIP not created at {helpers.AUTO_VIP_IP4} after the form enabled it: "
@@ -262,7 +275,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
             f"auto VIP {helpers.AUTO_VIP_IP4} not live on lo0 (ifconfig) after the form enabled it"
         )
 
-        # DISABLE through the form; persisted off, then the VIP is removed.
+        # DISABLE through the form; persisted off, then the Force Update removes it.
         resp = webui.post(DNSBL_PAGE, {"pfb_dnsvip_auto": ""}, timeout=300.0)
         assert not looks_like_login_page(resp.text), "DNSBL un-POST returned the login form"
         assert helpers.config_get(vm, AUTO_VIP_CFG) != "on", "the DNSBL form POST did not clear pfb_dnsvip_auto"
@@ -274,6 +287,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
             f"auto VIP {helpers.AUTO_VIP_IP4} still live on lo0 after the form disabled it"
         )
     finally:
-        # Leave the box clean for the sibling flows: auto off, marked VIP gone.
+        # Leave the box clean for the sibling flows: auto off + drop the test alias
+        # and rebuild from baseline (reset = clearip/cleardnsbl + a forced update).
         helpers.set_dnsvip_auto(vm, False)
-        helpers.reload(vm, "update")
+        helpers.reset(vm)
