@@ -2561,27 +2561,12 @@ $pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_a
 // with a warning, so auto-create can never be enabled into a known-conflicting state.
 $pfb_auto_exhausted	= ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
 
-$group = new Form_Group('DNSBL Virtual IP');
 $vips = pfb_get_vips();
 
-$pfb_auto_help = 'Automatically create and manage the DNSBL sinkhole Virtual IP(s) instead of selecting them manually.<br />'
-	. 'pfBlockerNG creates an IP-Alias VIP on the selected Web Server Interface at a free DNS-themed address '
-	. '(<strong>10.10.10.53</strong> for IPv4, <strong>fd00::53</strong> for IPv6, sweeping to the next free '
-	. '<strong>.53</strong> address on conflict), marked <strong>pfB_AUTO_VIP_v4</strong> / <strong>pfB_AUTO_VIP_v6</strong>. '
-	. 'The VIP is created when DNSBL is enabled and removed when it is disabled (including on uninstall); '
-	. 'this setting and the address choice persist across enable/disable cycles. '
-	. 'Only VIPs carrying that marker are ever managed; manually-created VIPs are never touched. '
-	. 'On a CARP/HA pair each node manages its own node-local VIP. '
-	. 'A separate IPv6 VIP is added automatically when the DNS Resolver listens on IPv6.';
-if ($pfb_auto_exhausted) {
-	// No free candidate for a required family: disable the control and explain why, using
-	// the stock Font-Awesome warning icon + Bootstrap tooltip pfSense ships.
-	$pfb_auto_help .= '<br /><i class="fa fa-exclamation-triangle text-warning" data-toggle="tooltip" '
-		. 'title="No free address is available in the 10.10.X.53 / fd00:X::53 range. Free an address there, '
-		. 'or create a DNSBL VIP manually at Firewall &gt; Virtual IPs."></i> '
-		. '<span class="text-warning">No free auto-create address is available; free one in the '
-		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
-}
+// [ ADR-13 ] The "Create VIPs automatically" toggle on its OWN row, above the
+// manual VIP selects. Its explanation lives in the group help UNDER the fields,
+// not on the checkbox: a long inline checkbox help renders as a very tall, narrow
+// column that towers over the rest of the section.
 $pfb_auto_chk = new Form_Checkbox(
 	'pfb_dnsvip_auto',
 	gettext('Auto VIP'),
@@ -2589,12 +2574,12 @@ $pfb_auto_chk = new Form_Checkbox(
 	(!$pfb_auto_exhausted && $pconfig['pfb_dnsvip_auto'] === 'on'),
 	'on'
 );
-$pfb_auto_chk->setHelp($pfb_auto_help);
 if ($pfb_auto_exhausted) {
 	$pfb_auto_chk->setAttribute('disabled', 'disabled');
 }
-$group->add($pfb_auto_chk);
+$section->addInput($pfb_auto_chk);
 
+$group = new Form_Group('DNSBL Virtual IP');
 $group->add(new Form_Select(
 	'pfb_dnsvip4',
 	gettext('IPv4 VIP'),
@@ -2606,14 +2591,25 @@ $group->add(new Form_Select(
 	gettext('IPv6 VIP'),
 	(!empty($pconfig['pfb_dnsvip6']) ? $pconfig['pfb_dnsvip6'] : 'none'),
 	pfb_get_vip_options(AF_INET6)
-))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');;
-$group->setHelp('Select the DNSBL VIP address.%1$s'
-		. 'This address should be in an Isolated Range that is not already used in the Network.%1$s'
-		. 'Rejected DNS requests will be forwarded to this VIP.%1$s'
-		. 'VIPs %2$smust be configured first%3$s at %4$sFirewall > Virtual IPs%5$s, '
-		. 'unless %2$sCreate VIPs automatically%3$s is enabled (then pfBlockerNG provisions them).',
-	'<br />', '<strong>', '</strong>', '<a target="_blank" href="/firewall_virtual_ip.php">', '</a>'
-);
+))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
+
+// One concise explanation under the side-by-side VIP fields, covering both modes
+// (matches the surrounding DNSBL help voice). The verbose marker/CARP/persistence
+// detail is intentionally dropped — it belongs in the docs, not the form.
+$pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
+	. 'It should be in an isolated range not already used on the network.<br />'
+	. 'VIPs <strong>must be configured first</strong> at '
+	. '<a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, unless '
+	. '<strong>Create VIPs automatically</strong> is enabled — pfBlockerNG then creates and manages an '
+	. 'IP-Alias VIP at a free <strong>.53</strong> address (<strong>10.10.10.53</strong> / '
+	. '<strong>fd00::53</strong>), added when DNSBL is enabled and removed when disabled '
+	. '(only its own auto-created VIPs are ever touched).';
+if ($pfb_auto_exhausted) {
+	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
+		. '<span class="text-warning">No free auto-create address is available — free one in the '
+		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
+}
+$group->setHelp($pfb_vip_help);
 $section->add($group);
 
 $section->addInput(new Form_Input(
