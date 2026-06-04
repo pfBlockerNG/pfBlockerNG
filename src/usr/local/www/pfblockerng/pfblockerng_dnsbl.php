@@ -338,7 +338,6 @@ if ($_POST) {
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'alexa_type'		=> 'tranco',
 						'alexa_count'		=> '1000',
-						'pfb_py_cache_max'	=> '10000',
 						'action'		=> 'Disabled',
 						'aliaslog'		=> 'enabled',
 						'aliasports_in'		=> '',

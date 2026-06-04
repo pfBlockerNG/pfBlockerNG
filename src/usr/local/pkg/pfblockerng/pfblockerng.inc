@@ -3180,7 +3180,8 @@ function pfb_unbound_python($mode) {
 		}
 
 		// DNSBL Python decision-cache cap (LRU); WebUI-configurable, 0 = unlimited.
-		$decisiondb_max = (string) max(0, intval($pfb['dnsbl_decisiondb_max']));
+		// Already validated + clamped (digits-only) in pfb_global().
+		$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
 
 		$now = date('m/j/y H:i:s', time());
 
@@ -7279,8 +7280,11 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['dnsbl_ip']	= $pfb['dnsblconfig']['action']		?:  'Disabled';		// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_alexa_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
-	// 0 (unlimited) is meaningful, so avoid the ?: idiom (0 is falsy -> would reset to default).
-	$pfb['dnsbl_decisiondb_max'] = (isset($pfb['dnsblconfig']['pfb_py_cache_max']) && $pfb['dnsblconfig']['pfb_py_cache_max'] !== '') ? $pfb['dnsblconfig']['pfb_py_cache_max'] : '10000';	// DNSBL Python decision-cache cap (LRU); 0 = unlimited
+	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
+	// ?: idiom (0 is falsy), and reject non-numeric input -- else the intval() at the ini
+	// emit would coerce a malformed value to 0 = silently unlimited. Clamp to the WebUI range.
+	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
+	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_alexa_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
