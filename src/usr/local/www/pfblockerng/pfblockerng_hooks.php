@@ -30,8 +30,13 @@ pfb_global();
 // ADR-12: pre/post Update Hooks. Admin-configurable commands run as root at the
 // start ('pre') and end ('post') of the pfBlockerNG update pass. The runner
 // (pfb_run_hooks/pfb_get_hooks) reads these entries from:
-//   installedpackages/pfblockerng/config/0/hooks   (a list)
+//   installedpackages/pfblockerng/config/0/hooks/row   (a list)
 // with the per-entry shape { command, when, enabled, description, timeout }.
+// Entries are nested under the 'row' listtag (not directly under <hooks>): a list
+// stored straight under the non-listtag <hooks> serializes to invalid numeric
+// child tags (<hooks><0>...) that never round-trip; 'row' is a pfSense listtag, so
+// <hooks><row>...</row>...</hooks> parses back as a list for 1..N rows. See
+// pfb_get_hooks() for the full xmlparse.inc rationale.
 $pfb['gconfig'] = config_get_path('installedpackages/pfblockerng/config/0', []);
 
 // Select field options
@@ -125,7 +130,10 @@ if ($_POST) {
 			if (empty($hooks)) {
 				config_del_path('installedpackages/pfblockerng/config/0/hooks');
 			} else {
-				config_set_path('installedpackages/pfblockerng/config/0/hooks', $hooks);
+				// Store under the 'row' listtag so the list round-trips through
+				// config.xml for any count (a bare list under the non-listtag
+				// <hooks> serializes to invalid <0> tags). See pfb_get_hooks().
+				config_set_path('installedpackages/pfblockerng/config/0/hooks/row', $hooks);
 			}
 
 			write_config('[pfBlockerNG] save Update Hooks settings');
@@ -218,7 +226,9 @@ $form->add($section);
 
 $section = new Form_Section('Hook Entries');
 
-$rowdata = $pfb['gconfig']['hooks'] ?? array();
+// Entries live under the 'row' listtag (config/0/hooks/row); fall back to a bare
+// list under 'hooks' for tolerance. See the save block / pfb_get_hooks().
+$rowdata = $pfb['gconfig']['hooks']['row'] ?? ($pfb['gconfig']['hooks'] ?? array());
 
 // Add an empty row placeholder if no hooks are defined.
 if (!is_array($rowdata) || empty($rowdata)) {

@@ -835,10 +835,12 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 # --------------------------------------------------------------------------- #
 # pfBlockerNG runs admin-configured pre/post commands once per update pass from
 # sync_package_pfblockerng (inc:7388 pre, inc:11227 post). The hooks live as a
-# PLAIN NUMERIC array under CFG_GLOBAL/hooks; pfb_get_hooks() iterates
-# ``foreach ($pfbconfig['hooks'] as $hook)`` and runs ONLY entries with
-# enabled==='on' whose ``when`` matches the fire point and whose ``command`` is
-# non-empty (inc:1734-1748). Each hook runs AS ROOT in the HOST context (NOT
+# PLAIN NUMERIC array under the 'row' listtag at CFG_GLOBAL/hooks/row (NOT a bare
+# list under <hooks>: 'hooks' is not a pfSense listtag, so a bare list serializes
+# to invalid <0> XML and never reloads — see pfb_get_hooks()). pfb_get_hooks()
+# reads ``$pfbconfig['hooks']['row']`` and runs ONLY entries with enabled==='on'
+# whose ``when`` matches the fire point and whose ``command`` is non-empty. Each
+# hook runs AS ROOT in the HOST context (NOT
 # chrooted) via ``PFB_<K>=<v> … /usr/bin/timeout … /bin/sh -c <command>`` — so a
 # hook that writes /tmp/<file> on the guest is plainly readable back over SSH,
 # which is exactly how these smoke tests observe a hook's environment and that it
@@ -881,21 +883,42 @@ def env_dump_hook(
     }
 
 
-def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float = 60.0) -> None:
-    """Persist ``hooks`` as the pfBlockerNG update-hook list (CFG_GLOBAL/hooks).
+# Hook entries are stored under the 'row' listtag: config/0/hooks/row. A list
+# stored DIRECTLY under the non-listtag <hooks> serializes to invalid <0> child
+# tags that never round-trip through config.xml (see pfb_get_hooks()); 'row' is a
+# pfSense listtag, so <hooks><row>...</row>...</hooks> parses back as a list for
+# any count. clear deletes the parent <hooks> node entirely (UI's empty case).
+CFG_HOOKS = CFG_GLOBAL + "/hooks"
+CFG_HOOKS_ROW = CFG_HOOKS + "/row"
 
-    MERGES into the existing ``config/0`` (reads it, sets only ``hooks``) so
-    ``enable_cb`` and the rest of the global settings are untouched — clobbering the
-    whole node would disable pfBlockerNG. Each dict is emitted as a PHP assoc array
-    via _php_kv_array and the list as a PLAIN NUMERIC array, exactly the shape
-    pfb_get_hooks() iterates. Only enabled==='on' + matching ``when`` + non-empty
-    ``command`` entries actually run (the runner's own gate, inc:1734-1748).
+
+def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float = 60.0) -> None:
+    """Persist ``hooks`` as the pfBlockerNG update-hook list (CFG_GLOBAL/hooks/row).
+
+    Writes the ``hooks/row`` SUBPATH directly (``config_set_path(.../hooks/row, …)``),
+    matching the canonical UI save path (pfblockerng_hooks.php) byte-for-byte. Storing
+    under the ``row`` listtag is what makes the list survive a config.xml round-trip:
+    a list set straight under the non-listtag ``<hooks>`` dumps to numeric child tags
+    (``<hooks><0>...</0></hooks>``) which are INVALID XML (a name can't start with a
+    digit) and silently fail to reload — that was the live-smoke failure. ``row`` is a
+    listtag, so ``<hooks><row>...</row>...</hooks>`` round-trips for 1..N rows. Each
+    dict is emitted as a PHP assoc via _php_kv_array and the rows as a PLAIN NUMERIC
+    array; only enabled==='on' + matching ``when`` + non-empty ``command`` entries
+    actually run (inc gate).
+
+    READ-BACK GUARD: after writing, reads ``hooks/row`` back and computes the effective
+    hook count the SAME way pfb_get_hooks() does (a lone <row> stays a 1-element list
+    because 'row' is a listtag; a flat single-hook collapse is wrapped). Raises with
+    the raw persisted value if that count != len(hooks) — turning a silent non-persist
+    into an early, precise failure. An empty list routes to clear_update_hooks()
+    (config_del_path), so this guard runs only for >=1 hook.
     """
+    if not hooks:
+        clear_update_hooks(vm, timeout=timeout)
+        return
     hooks_php = "array(" + ", ".join(_php_kv_array(h) for h in hooks) + ")"
     snippet = (
-        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
-        f"$g['hooks'] = {hooks_php};\n"
-        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"config_set_path({_php_str(CFG_HOOKS_ROW)}, {hooks_php});\n"
         "write_config('pfBlockerNG smoke: set update hooks');\n"
         "echo 'OK';"
     )
@@ -903,16 +926,38 @@ def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"set_update_hooks failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
+    # Read back and count the way pfb_get_hooks() sees it (row listtag, with the same
+    # single-assoc-collapse tolerance the inc applies defensively).
+    pre = (
+        f"$r = config_get_path({_php_str(CFG_HOOKS_ROW)}, array());\n"
+        "if (isset($r['command']) || isset($r['when']) || isset($r['enabled'])) { $r = array($r); }\n"
+        "$n = is_array($r) ? count($r) : -1;"
+    )
+    count = _php_read_scalar(vm, pre, "$n", timeout=timeout)
+    if count != str(len(hooks)):
+        raw = config_get(vm, CFG_HOOKS_ROW, timeout=timeout)
+        raise RuntimeError(
+            f"set_update_hooks: persisted hook count {count!r} != {len(hooks)} written; raw persisted value: {raw!r}"
+        )
+
 
 def clear_update_hooks(vm: SmokeVM, *, timeout: float = 60.0) -> None:
-    """Set CFG_GLOBAL/hooks to an empty list so NO hook fires.
+    """Delete CFG_GLOBAL/hooks so NO hook fires (no hooks node remains).
 
-    Call at the start of each hook test (so a stale hook from a prior test can't
-    false-green this one) and on teardown (so a leftover hook can't fire during
-    another module's reloads). An empty list ⇒ pfb_get_hooks() returns empty ⇒ a
-    byte-identical no-op pass (inc:1783).
+    Mirrors the UI's empty-list case (pfblockerng_hooks.php,
+    ``config_del_path('installedpackages/pfblockerng/config/0/hooks')``) — deletes the
+    whole <hooks> node (including its <row> children) so an "absent" assertion is
+    clean. Call at the start of each hook test (so a stale hook can't false-green this
+    one) and on teardown (so a leftover hook can't fire during another module's
+    reloads). No hooks node ⇒ pfb_get_hooks() returns empty ⇒ a byte-identical no-op
+    pass (inc:1783).
     """
-    set_update_hooks(vm, [], timeout=timeout)
+    snippet = (
+        f"config_del_path({_php_str(CFG_HOOKS)});\nwrite_config('pfBlockerNG smoke: clear update hooks');\necho 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"clear_update_hooks failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def clear_hook_markers(vm: SmokeVM, token: str, *, timeout: float = 30.0) -> None:
