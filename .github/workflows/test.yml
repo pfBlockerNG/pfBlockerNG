@@ -383,7 +383,7 @@ jobs:
     # NOTE: `benchmarks` is intentionally absent while it is informational-only
     # (issue #42). Add it here + a result check below to make the kill-gates
     # required once their on-runner baseline is stable.
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint, ui-render]
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint, ui-changes, ui-render]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -422,6 +422,13 @@ jobs:
           fi
           if [ "${{ needs.markdownlint.result }}" != "success" ]; then
             echo "markdownlint failed or was cancelled."
+            exit 1
+          fi
+          # The PHP/JS change detector itself must succeed — if it fails or is
+          # cancelled, ui-render goes 'skipped' and would otherwise be treated as
+          # a pass below, silently disarming the Tier-A gate.
+          if [ "${{ needs.ui-changes.result }}" != "success" ]; then
+            echo "UI change detector (ui-changes) failed or was cancelled."
             exit 1
           fi
           # Tier-A UI render-smoke (ADR-14): paths-gated, so 'skipped' (no PHP/JS

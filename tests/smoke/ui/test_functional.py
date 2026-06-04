@@ -133,11 +133,13 @@ def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target
     current value, so only this flag changes. The oracle then re-reads the
     config node over SSH (effective state), never the POST response body.
     """
-    # ON: send the checkbox value 'on'. OFF: send the field empty -- the form had
-    # it checked (currently ON), so scrape_form_fields would otherwise re-submit
-    # it as 'on'; overriding to '' makes pfBlockerNG's PFB_FILTER_ON_OFF store ''
-    # (any value != 'on' -> off), which is the cleared checkbox's stored value.
-    overrides = {flow.field: flow.on} if target == flow.on else {flow.field: ""}
+    # ON: send the checkbox value flow.on ('on'). OFF: send flow.off -- the form
+    # had it checked (currently ON), so scrape_form_fields would otherwise re-submit
+    # it as 'on'; overriding to flow.off ('' by default) makes pfBlockerNG's
+    # PFB_FILTER_ON_OFF store the cleared value (any value != 'on' -> off). Use the
+    # dataclass's off value, not a hardcoded '', so a flow with a different OFF
+    # token stays correct.
+    overrides = {flow.field: flow.on} if target == flow.on else {flow.field: flow.off}
     resp = webui.post(flow.page, overrides, timeout=flow.post_timeout)
     # Sanity only: the POST must not bounce to the login form (a dropped session
     # would otherwise read as "no change" against config). NOT the pass oracle.
@@ -185,5 +187,5 @@ def test_toggle_flow_changes_effective_config(
         # box back to its original value so a failure here can't poison Tier A or
         # the next flow on the session-scoped VM.
         if helpers.config_get(smoke_vm, flow.config_path) != original:
-            overrides = {flow.field: flow.on} if original == flow.on else {flow.field: ""}
+            overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.off}
             webui.post(flow.page, overrides, timeout=flow.post_timeout)

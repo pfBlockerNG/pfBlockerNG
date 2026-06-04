@@ -151,15 +151,26 @@ class PhpErrorLogGuard:
         """Current byte size of each candidate log (missing -> 0)."""
         sizes: dict[str, int] = {}
         for path in self._candidates:
-            # BSD stat: -f %z = size in bytes. `|| echo 0` makes a missing file 0.
+            # BSD stat: -f %z = size in bytes. `|| echo 0` makes a MISSING file 0
+            # while keeping the command's exit status 0, so a non-zero returncode
+            # here means the SSH transport itself failed -- fail fast rather than
+            # silently reading size 0 (which would mask oracle condition (d): a
+            # failed read before AND after a real error would show no growth).
             result = self._vm.ssh("/bin/sh", "-c", f"/usr/bin/stat -f %z {path} 2>/dev/null || echo 0")
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"failed to read php_error.log size for {path} "
+                    f"(ssh rc={result.returncode}): {(result.stderr or result.stdout).strip()!r}"
+                )
             text = result.stdout.strip().splitlines()
             try:
-                sizes[path] = int(text[-1]) if text else 0
-            except ValueError:
-                # Unparseable output (stat error leaking) -> treat as 0; the diff
-                # then keys on real growth, never on a transient parse blip.
-                sizes[path] = 0
+                if not text:
+                    raise ValueError("empty stat output")
+                sizes[path] = int(text[-1])
+            except ValueError as exc:
+                # Unparseable output is a real fault (a stat error leaking past the
+                # `|| echo 0`), not a transient blip -- fail rather than coerce to 0.
+                raise AssertionError(f"unparseable php_error.log size for {path}: {result.stdout!r}") from exc
         return sizes
 
     def snapshot(self) -> None:

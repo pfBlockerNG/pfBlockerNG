@@ -69,6 +69,12 @@ def test_unauthenticated_get_shows_login_form(webui: WebUI) -> None:
     is reachable unauthenticated.
     """
     resp = webui.get_unauthenticated(PFB_PAGE)
+    # pfSense renders the login form in place at HTTP 200 (no 302) -- assert the
+    # status too, symmetric with the authenticated case, so a future redirect or
+    # error status is caught rather than silently passing on body shape alone.
+    assert resp.status_code == 200, (
+        f"unauthenticated GET {PFB_PAGE} -> HTTP {resp.status_code} (expected 200; pfSense renders login in place)"
+    )
     body = resp.text
     assert looks_like_login_page(body), (
         f"unauthenticated GET {PFB_PAGE} (status {resp.status_code}) did not return the "

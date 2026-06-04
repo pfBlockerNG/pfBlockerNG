@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 
 if TYPE_CHECKING:
@@ -87,7 +88,9 @@ PAGE_TABLE: tuple[Page, ...] = (
     # threats.php REQUIRES a host/domain/port param -- with none it print_info_box()es and exit()s
     # before rendering $pgtitle. A syntactically-valid domain renders the lookup page chrome; the
     # threat links it draws are <a href> only (no server-side network call), so it stays hermetic.
-    Page("threats", "/pfblockerng/pfblockerng_threats.php?domain=example.com", ("Threat Domain", "Source IP")),
+    # The {domain} placeholder is filled per run with helpers.unique_domain() (uuid-*.com) -- the
+    # smoke-domain rule (never a fixed/RFC-6761 name, avoids environment coupling).
+    Page("threats", "/pfblockerng/pfblockerng_threats.php?domain={domain}", ("Threat Domain", "Source IP")),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
     # query param, so the plain GET exercises the full-render branch.
@@ -173,9 +176,12 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
     and asserts no growth after the last, so a page that logs (but does not echo)
     a PHP diagnostic still fails the sweep.
     """
-    resp = webui.get(page.path)
-    result = evaluate_render(page.path, resp.status_code, resp.text, page.markers)
-    assert result.ok, f"render oracle failed for {page.name} ({page.path}): {result.detail}"
+    # Fill the {domain} placeholder (threats page) with a unique uuid-*.com per
+    # run; other paths carry no placeholder and pass through unchanged.
+    path = page.path.format(domain=helpers.unique_domain()) if "{domain}" in page.path else page.path
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, page.markers)
+    assert result.ok, f"render oracle failed for {page.name} ({path}): {result.detail}"
 
 
 def test_page_table_covers_every_pfblockerng_page() -> None:
