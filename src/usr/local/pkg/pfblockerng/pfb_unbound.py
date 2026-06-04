@@ -239,7 +239,9 @@ def pfb_async(func: Callable[..., Any], *args: Any) -> None:
 # RAM gate (mandatory -- RESULTS/01 SS2): the in-process build holds the OLD + NEW
 # matcher sets simultaneously (~2x, ~786 MiB at ABP scale), which busts a ~358 MiB
 # transient budget on a 1 GB box. Before building, the watcher PROJECTS the transient
-# (~RELOAD_BYTES_PER_ENTRY x current entry count) and checks available RAM; if it would
+# (~RELOAD_BYTES_PER_ENTRY x current entry count) and checks TOTAL RAM (a coarse
+# impossibility backstop, consistent with PHP's hw.usermem gate -- NOT free pages, which
+# spuriously declined on cache-heavy boxes); if it would
 # not fit, it DECLINES the swap fail-closed -- the OLD snapshot stays live and a clear
 # log line says the box is RAM-constrained and the update needs the restart fallback.
 # The PRIMARY gate is PHP (Phase 5, before flipping the sentinel); this is the Python
@@ -258,19 +260,25 @@ RELOAD_RAM_HEADROOM_BYTES = 64 * 1024 * 1024
 RELOAD_POLL_INTERVAL = 2.0
 
 
-def _reload_available_ram_bytes() -> int | None:
-    """Best-effort available physical RAM in bytes, stdlib only.
+def _reload_total_ram_bytes() -> int | None:
+    """Best-effort TOTAL physical RAM in bytes, stdlib only.
 
-    Prefers ``os.sysconf('SC_AVPHYS_PAGES')`` x ``SC_PAGE_SIZE`` (free pages -- present
-    on FreeBSD and Linux). Returns ``None`` when the platform cannot report it (the
-    caller then conservatively DECLINES the in-process build -- fail-closed)."""
+    ``os.sysconf('SC_PHYS_PAGES')`` x ``SC_PAGE_SIZE`` (present on FreeBSD and Linux).
+    This is the watcher's COARSE OOM-impossibility backstop: it asks only "could the ~2x
+    transient build ever fit in this box's RAM at all?", consistent with PHP's primary
+    ``hw.usermem`` gate (also total). PHP's gate is the authoritative pre-flip decision;
+    the watcher deliberately does NOT second-guess it on free-page tightness -- a healthy
+    cache-heavy box runs with little FREE but ample reclaimable RAM, so a free-page gate
+    here (the old ``SC_AVPHYS_PAGES``) spuriously DECLINED a PHP-approved swap and forced
+    a needless restart. Returns ``None`` when the platform cannot report it (the caller
+    then DECLINES -- fail-closed)."""
     try:
         names = os.sysconf_names  # type: ignore[attr-defined]
-        if "SC_AVPHYS_PAGES" in names and "SC_PAGE_SIZE" in names:
-            avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+        if "SC_PHYS_PAGES" in names and "SC_PAGE_SIZE" in names:
+            total_pages = os.sysconf("SC_PHYS_PAGES")
             page_size = os.sysconf("SC_PAGE_SIZE")
-            if avail_pages >= 0 and page_size > 0:
-                return avail_pages * page_size
+            if total_pages >= 0 and page_size > 0:
+                return total_pages * page_size
     except (ValueError, OSError, AttributeError):
         pass
     return None
@@ -279,21 +287,24 @@ def _reload_available_ram_bytes() -> int | None:
 def _reload_ram_gate_ok(
     entry_count: int,
     *,
-    available_ram: Callable[[], int | None] | None = None,
+    total_ram: Callable[[], int | None] | None = None,
 ) -> bool:
-    """True iff an in-process rebuild for ``entry_count`` entries is projected to fit.
+    """True iff an in-process rebuild for ``entry_count`` entries could fit in RAM.
 
-    Projects the both-resident transient (~2x: OLD + NEW set) as
-    ``2 x entry_count x RELOAD_BYTES_PER_ENTRY`` and requires available RAM to cover it
-    plus ``RELOAD_RAM_HEADROOM_BYTES``. ``available_ram`` is injectable for testing;
-    when omitted it resolves the module probe at CALL time (so it is monkeypatchable).
-    Fail-closed: if available RAM is unknown, the gate DECLINES (returns False)."""
-    probe = available_ram if available_ram is not None else _reload_available_ram_bytes
-    avail = probe()
-    if avail is None:
+    Coarse OOM-impossibility backstop (PHP's gate is the authoritative pre-flip check):
+    projects the both-resident transient (~2x: OLD + NEW set) as
+    ``2 x entry_count x RELOAD_BYTES_PER_ENTRY`` and requires TOTAL physical RAM to cover
+    it plus ``RELOAD_RAM_HEADROOM_BYTES``. Gating on total (not free) keeps it consistent
+    with PHP and avoids spuriously declining a PHP-approved swap on a cache-heavy box
+    (which would stall PHP to its wait-for-apply timeout and force a needless restart).
+    ``total_ram`` is injectable for testing; when omitted it resolves the module probe at
+    CALL time. Fail-closed: if total RAM is unknown, the gate DECLINES (returns False)."""
+    probe = total_ram if total_ram is not None else _reload_total_ram_bytes
+    total = probe()
+    if total is None:
         return False
     projected = 2 * max(entry_count, 0) * RELOAD_BYTES_PER_ENTRY
-    return avail >= projected + RELOAD_RAM_HEADROOM_BYTES
+    return total >= projected + RELOAD_RAM_HEADROOM_BYTES
 
 
 def _reload_read_generation(sentinel_path: str) -> int | None:
@@ -442,7 +453,7 @@ def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> bool:
     if not _reload_ram_gate_ok(entry_count):
         log_info(
             "[pfBlockerNG]: DNSBL reload DECLINED -- RAM-constrained box (projected ~{} MiB "
-            "for {} entries would not fit available RAM); keeping current lists, the update "
+            "for {} entries would not fit total RAM); keeping current lists, the update "
             "needs the restart fallback".format(
                 (2 * entry_count * RELOAD_BYTES_PER_ENTRY) // (1024 * 1024), entry_count
             )

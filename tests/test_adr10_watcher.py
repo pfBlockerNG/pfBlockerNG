@@ -77,26 +77,26 @@ def _no_emit(monkeypatch: Any) -> None:
 class TestRamGate:
     def test_gate_ok_when_ram_fits(self) -> None:
         # 1000 entries -> projected 2 * 1000 * 276 + 64 MiB headroom. Plenty of RAM.
-        assert P._reload_ram_gate_ok(1000, available_ram=lambda: 4 * 1024 * 1024 * 1024) is True
+        assert P._reload_ram_gate_ok(1000, total_ram=lambda: 4 * 1024 * 1024 * 1024) is True
 
     def test_gate_declines_when_ram_insufficient(self) -> None:
         # ABP-scale list on a tiny box: 1.5M entries needs ~786 MiB transient; offer 200 MiB.
-        assert P._reload_ram_gate_ok(1_500_000, available_ram=lambda: 200 * 1024 * 1024) is False
+        assert P._reload_ram_gate_ok(1_500_000, total_ram=lambda: 200 * 1024 * 1024) is False
 
     def test_gate_declines_when_ram_unknown(self) -> None:
-        # Fail-closed: a platform that cannot report available RAM must NOT build.
-        assert P._reload_ram_gate_ok(1000, available_ram=lambda: None) is False
+        # Fail-closed: a platform that cannot report total RAM must NOT build.
+        assert P._reload_ram_gate_ok(1000, total_ram=lambda: None) is False
 
     def test_gate_boundary(self) -> None:
         # Exactly projected + headroom fits; one byte short declines.
         entries = 10
         projected = 2 * entries * P.RELOAD_BYTES_PER_ENTRY + P.RELOAD_RAM_HEADROOM_BYTES
-        assert P._reload_ram_gate_ok(entries, available_ram=lambda: projected) is True
-        assert P._reload_ram_gate_ok(entries, available_ram=lambda: projected - 1) is False
+        assert P._reload_ram_gate_ok(entries, total_ram=lambda: projected) is True
+        assert P._reload_ram_gate_ok(entries, total_ram=lambda: projected - 1) is False
 
-    def test_available_ram_probe_returns_int_or_none(self) -> None:
-        # The real stdlib probe must return a non-negative int or None (never raise).
-        val = P._reload_available_ram_bytes()
+    def test_total_ram_probe_returns_int_or_none(self) -> None:
+        # The real stdlib probe (SC_PHYS_PAGES) must return a non-negative int or None.
+        val = P._reload_total_ram_bytes()
         assert val is None or (isinstance(val, int) and val >= 0)
 
 
@@ -138,7 +138,7 @@ class TestGenerationReader:
 class TestRunSwap:
     def test_gate_ok_swaps_old_to_new(self, monkeypatch: Any) -> None:
         _no_emit(monkeypatch)
-        monkeypatch.setattr(P, "_reload_available_ram_bytes", lambda: 8 * 1024 * 1024 * 1024)
+        monkeypatch.setattr(P, "_reload_total_ram_bytes", lambda: 8 * 1024 * 1024 * 1024)
         old = _snapshot(tag="old.example.com", counts=1)
         new = _snapshot(tag="new.example.com", counts=2)
         P._snapshot = old
@@ -152,7 +152,7 @@ class TestRunSwap:
         # RAM-constrained box: the swap is DECLINED fail-closed; the old snapshot stays
         # live and the builder is NEVER called (no transient build attempted at all).
         _no_emit(monkeypatch)
-        monkeypatch.setattr(P, "_reload_available_ram_bytes", lambda: 1 * 1024 * 1024)  # 1 MiB
+        monkeypatch.setattr(P, "_reload_total_ram_bytes", lambda: 1 * 1024 * 1024)  # 1 MiB
         old = _snapshot(tag="old.example.com", counts=1_000_000)
         P._snapshot = old
         built = {"n": 0}
@@ -170,7 +170,7 @@ class TestRunSwap:
         # Gate OK but the builder returns None (bad manifest): rebuild_and_swap is
         # fail-closed, so the old snapshot is retained.
         _no_emit(monkeypatch)
-        monkeypatch.setattr(P, "_reload_available_ram_bytes", lambda: 8 * 1024 * 1024 * 1024)
+        monkeypatch.setattr(P, "_reload_total_ram_bytes", lambda: 8 * 1024 * 1024 * 1024)
         old = _snapshot(tag="old.example.com", counts=1)
         P._snapshot = old
 
@@ -203,7 +203,7 @@ class _Harness:
         _no_emit(monkeypatch)
         monkeypatch.setattr(
             P,
-            "_reload_available_ram_bytes",
+            "_reload_total_ram_bytes",
             (lambda: 8 * 1024 * 1024 * 1024) if ram_ok else (lambda: 1),
         )
         self.builds: list[int] = []

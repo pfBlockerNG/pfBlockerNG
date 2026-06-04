@@ -3158,9 +3158,10 @@ function pfb_unbound_py_swap_fits_ram() {
 	}
 	$entries = (int) $loaded;
 
-	// hw.usermem = physical memory minus the kernel's wired pages (bytes). A close-enough
-	// upper bound on what a userspace build can claim; the Python watcher's free-page
-	// probe is the finer-grained net behind this.
+	// hw.usermem = physical memory minus the kernel's wired pages (bytes). This is the
+	// AUTHORITATIVE pre-flip gate; the Python watcher re-checks the same TOTAL-RAM basis
+	// (SC_PHYS_PAGES) as a coarse backstop, so a swap PHP approves here is not then
+	// second-guessed away on free-page tightness (which would force a needless restart).
 	$usermem = get_single_sysctl('hw.usermem');
 	if (!is_numeric($usermem) || (int) $usermem <= 0) {
 		return FALSE;
