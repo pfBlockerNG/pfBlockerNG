@@ -382,17 +382,24 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
 
 
 def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """#51: a temporary Unlock is dropped by a full update — the documented
-    "re-locked on Cron/Force" semantic.
+    """#51: a temporary Unlock is dropped by a full update that REBUILDS the DNSBL —
+    the documented "re-locked on Cron/Force ... with an Unbound Reload" semantic.
 
-    A full ``update`` deletes the ``pfb_unlock`` store (``pfb_update_unbound``) and
-    the rebuilt manifest emits an EMPTY ``config.user_unlock``, so every temporary
-    unlock is re-locked. This pins the full-build-clears-user_unlock half of the fix
-    (the full build must NOT bake the live store in, or unlocks would survive the
-    Force/Cron reload).
+    A DNSBL-rebuilding ``update`` writes a fresh manifest with an EMPTY
+    ``config.user_unlock`` (the full build never bakes the live store in) and reloads
+    Unbound, so the python ``init_standard`` re-reads the cleared manifest and the
+    domain is re-blocked. This pins the full-build-clears-user_unlock half of the fix.
+
+    The reload is load-bearing and conditional: a no-change ``update`` detects the feed
+    as unchanged (``[ feed ] exists.``), does NOT reload Unbound, and therefore does
+    NOT re-lock — store, manifest and running state all stay "unlocked" together
+    (consistent; this is legacy behaviour the tooltip documents). So we EDIT the feed
+    first to force a genuine DNSBL change, making the full update actually rebuild +
+    reload — the common Cron case.
     """
     domain = h.unique_domain("unlocktmp")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
+    feed_name = "smoke_dnsbl_unlocktmp.txt"
+    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain}\n")
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
     spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp", mode=h.DnsblMode.VIP)
@@ -409,10 +416,12 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         unlocked = h.dns_probe(deployed_vm, domain, "A")
         assert h.resolves_to(unlocked, STUB_DNS_A), f"unlocked {domain} should resolve via stub, got {unlocked}"
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
-        # A full Force Update re-locks it (store deleted, manifest user_unlock empty).
+        # Edit the feed (add a domain) so the full update sees a REAL DNSBL change and
+        # rebuilds + reloads — a no-change update would not reload, so would not re-lock.
+        h.write_local_feed(deployed_vm, feed_name, f"{domain}\n{h.unique_domain('forcechange')}\n")
         h.reload(deployed_vm, "update")
         relocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(relocked), f"force update should re-lock {domain} -> VIP, got {relocked}"
+        assert h.is_vip(relocked), f"force update (with rebuild) should re-lock {domain} -> VIP, got {relocked}"
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
 
