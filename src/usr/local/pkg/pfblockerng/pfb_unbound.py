@@ -3763,8 +3763,8 @@ def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
 
 
 def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
-    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, decisionDB, excludeAAAADB
-    global excludeSS, noAAAADB, gpListDB, safeSearchDB
+    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, decisionDB
+    global noAAAADB, gpListDB, safeSearchDB
 
     qstate_valid = False
     q_type: Any = None
