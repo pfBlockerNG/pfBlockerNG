@@ -43,9 +43,12 @@ typically run the instant you push the PR). Block here until `<handle>` has
   landed; never wait on commits. CodeRabbit reviews incrementally and shows a
   transient "review in progress" state, so a one-shot read is wrong — you must
   **poll** until the findings are actually up.
-- **Resolve the login case-insensitively.** `coderabbit`, `Coderabbit`,
-  `coderabbitai` all map to the bot's login `coderabbitai`; only append `[bot]` if
-  that is the real login (check `.user.login` on an existing comment).
+- **Resolve the login case-insensitively, and pass the BARE handle.** `coderabbit`,
+  `Coderabbit`, `coderabbitai` all map to the bot — set `HANDLE=coderabbitai`. The
+  poll matches both the bare login AND the `[bot]`-suffixed form (the real login is
+  `coderabbitai[bot]`), so do NOT append `[bot]` yourself; an exact-equality match
+  against the bare handle silently misses the real `…[bot]` login and the wait times
+  out with the review actually done (this bit us).
 
 **Mechanism — one self-exiting background poll per wait, then act on the result.**
 Set the env, run the script below as a **Bash command with `run_in_background: true`**
@@ -60,13 +63,18 @@ true gives you a single wake — do not use a foreground `sleep`), then read
 i=0
 while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
   inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
   review=$(gh api "repos/$OWNER_REPO/pulls/$PR/reviews" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.submitted_at > \"$SINCE\") | (.body // \"x\")" 2>/dev/null)
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.submitted_at > \"$SINCE\") | (.body // \"x\")" 2>/dev/null)
   issuec=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\") | select(.updated_at > \"$SINCE\") | (.body // \"\")" 2>/dev/null)
-  # FINISHED = posted findings: an inline comment, a submitted review, or the summary header
-  if [ -n "$inline" ] || [ -n "$review" ] || printf '%s' "$issuec" | grep -qi 'actionable comments posted'; then
+    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.updated_at > \"$SINCE\") | (.body // \"\")" 2>/dev/null)
+  # FINISHED = a TERMINAL review result: an inline comment, a submitted review, the
+  # "Actionable comments posted: N" header, OR a clean pass ("No actionable comments
+  # were generated"). A clean pass IS a success — nothing to apply. An ERROR message
+  # (rate limit / service failure) matches none of these, so it falls through and the
+  # poll keeps waiting → TIMEOUT (surfaced to the user) — never reported as success.
+  if [ -n "$inline" ] || [ -n "$review" ] \
+       || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
     { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
   # DECLINE (only when MODE=full) = "Review skipped" because the base isn't the default branch
@@ -85,7 +93,11 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
 
 **When it wakes you, read `$RESULT` and branch:**
 
-- **`FINISHED`** → the reviewer has posted its findings. Fall through to Step 3.
+- **`FINISHED`** → the reviewer has posted a terminal result. Fall through to Step 3.
+  This includes a **clean pass** ("No actionable comments were generated") — a
+  success with nothing to apply; Steps 4–5 will simply find no actionable items and
+  Step 9 reports it clean. (An error/rate-limit message is deliberately NOT treated
+  as finished — it falls through to `TIMEOUT`, which is surfaced to the user.)
 - **`DECLINE`** → CodeRabbit refused because the PR's base isn't the default branch.
   Post **one** top-level comment to trigger a full review, then **re-arm the poll in
   finished-only mode** (`MODE=finished`, `SINCE=now` = `date -u +%Y-%m-%dT%H:%M:%SZ`)
