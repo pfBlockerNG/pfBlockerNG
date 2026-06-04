@@ -506,7 +506,16 @@ follow-up commit you push onto an open PR.
 
 ---
 
-## GitHub issue labels (lifecycle)
+## GitHub issues
+
+**Read the whole issue before working it.** Whenever you are told to fix or pick up
+a GitHub issue, read its **title and description AND every comment/update** on it
+(`gh issue view <N> --comments`) before starting. Later comments routinely revise,
+narrow, downgrade, or invalidate the original report — issue #25 is a live example: a
+follow-up comment downgraded a claimed crash to a defensive-consistency cleanup and
+corrected the fix. Never act on the opening text alone.
+
+### Labels (lifecycle)
 
 Keep an issue's labels in sync with its stage in the workflow (the labels already
 exist in the repo — see `gh label list`). Apply them with
