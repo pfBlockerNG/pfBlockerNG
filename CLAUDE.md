@@ -335,6 +335,26 @@ kill-gate is `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO
 (dispatch Tests with `run_benchmarks`, default off — see issue #76). See
 `.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
+Update Hooks (ADR-12, PHP/shell — **no Python**): admin-configurable `pre`/`post`
+commands run once per update pass from `sync_package_pfblockerng` in
+`pfblockerng.inc` — `pfb_run_hooks($when, $ctx)` reads enabled hooks from
+`installedpackages/pfblockerng/config/0/hooks` (`{command, when, enabled,
+description, timeout}`), runs each **as root** via `/usr/bin/timeout … /bin/sh -c
+<escapeshellarg>` in list order, captures output to the pfBlockerNG log, and
+**non-zero/timeout → log + continue** (a hook can never abort/stall an update; no
+enabled hooks ⇒ byte-identical pass). Admin-only **Update Hooks** settings tab
+(`www/pfblockerng/pfblockerng_hooks.php`, same WebCfg priv as the other settings).
+Exported env (only these are promised): `PFB_WHEN` (`pre`|`post`), `PFB_TRIGGER`
+(`cron`|`update`|`force-reload` — the ADR's `force-update` collapses to `cron`),
+and post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on
+these) plus `PFB_STATUS`/`PFB_CHANGED_ALIASES` (stable reserved placeholders:
+`ok` / empty — do not branch on their value). Hooks live in config ⇒ replicate to
+a CARP/HA secondary and run on whichever node updates. The shipped **HAProxy
+recipe** (README) is a `post` hook guarded on `[ "$PFB_IP_CHANGED" = "1" ]` whose
+command pipes `haproxy_check_run(1)` (graceful reload) through
+`/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck + a maintainer
+manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
+
 ---
 
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`

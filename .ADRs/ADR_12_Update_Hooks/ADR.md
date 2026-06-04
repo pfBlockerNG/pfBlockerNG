@@ -144,22 +144,44 @@ Prompt: `04_Recipe_Docs_Smoke_DoD.txt`
 
 ## 7. Definition of done
 
-- No enabled hooks ⇒ byte-identical update pass; with hooks, `pre`/`post` fire on all triggers with correct context; a failing/hanging hook is logged + timed out and the update continues.
-- `php -l` + PHPStan + ShellCheck clean; `python -m pytest` untouched/green.
-- The admin-only hooks UI works; help documents the env vars + run-as-root caveat; the HAProxy recipe is documented.
-- Status → **Accepted** only after the maintainer confirms the manual smoke below on a live pfSense box.
+**Implementation status (2026-06-04): code + docs complete (Phases 1-4 landed on
+`adr/12`); Status stays Proposed pending the maintainer live smoke below.**
 
-### Reject / pivot criteria (decide cheaply)
+- No enabled hooks ⇒ byte-identical update pass; with hooks, `pre`/`post` fire on all triggers with correct context; a failing/hanging hook is logged + timed out and the update continues. **(Done — `pfb_run_hooks` early-returns with no enabled hooks; `/usr/bin/timeout -s TERM -k 5 <to> /bin/sh -c …` kills a hung hook as a process group, non-zero/timeout log-and-continue. Phase 1.)**
+- `php -l` + PHPStan + ShellCheck clean; `python -m pytest` untouched/green. **(Done — green every phase; ShellCheck N/A, no shell file shipped.)**
+- The admin-only hooks UI works; help documents the env vars + run-as-root caveat; the HAProxy recipe is documented. **(Done — `pfblockerng_hooks.php` "Update Hooks" tab, Phase 3; env vars + recipe in `README.md`/`CLAUDE.md`, Phase 4.)**
+- Status → **Accepted** only after the maintainer confirms the manual smoke below on a live pfSense box (including the HAProxy recipe end-to-end).
 
-- **Can't run hooks safely from the pass:** if a synchronous timed hook can still hang or destabilise the update (e.g. `mwexec` timeout doesn't reliably kill a child, or output handling corrupts the log) → pivot to **detached** execution (fire-and-forget with output to a side log) or reconsider the post fire point. Settle in Phase 1/2 before the UI.
-- **HAProxy recipe can't be made hack-free:** if, given ADR-11's never-empty file, the documented recipe still needs the `/../../` + dummy-IP hacks to validate/reload → record the residual and (optionally) revisit the upstream HAProxy-package contribution; the generic hook still ships.
+**Shipped context contract (what the code actually emits — the docs match this, not the §2 nominal):**
+
+- `PFB_WHEN` = `pre` | `post` (always). `PFB_TRIGGER` ∈ **`cron` | `update` | `force-reload`** — the §2-nominal `force-update` **collapses to `cron`** (GUI Force Update and scheduled cron arrive with an identical `$cron` and are indistinguishable). `update` = a settings save; `force-reload` = a GUI IP-only / DNSBL-only Force Reload.
+- post adds `PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` (`0`|`1`, **accurate** — derived from `$pfb['filter_configure']` and `$pfbupdate`/`$pfbpython`; these are the flags a recipe guards on).
+- `PFB_STATUS` = `ok` and `PFB_CHANGED_ALIASES` = `''` are **stable reserved placeholders** today: no pass-wide error/partial accumulator or changed-alias list exists, and the ADR forbids inventing tracking machinery. The env-var **names** are stable and always present; **do not branch a recipe on their value**. A future phase may add real accumulation without changing the names.
+
+### Reject / pivot criteria (decided)
+
+- **Can't run hooks safely from the pass → NOT triggered.** The synchronous timed hook is safe: FreeBSD `/usr/bin/timeout` (no `--foreground`) signals the command **as a process group** and SIGKILLs after the `-k` grace, so a hung grandchild (e.g. `sleep 30`) is reaped at the deadline, the stdout pipe closes, `exec()` returns rc 124, and the runner logs "timed out … continuing". Output is captured via the file's established `exec("… 2>&1", …)` idiom (no log corruption). **No detached-exec pivot needed** (Phase 1 verdict). The `pre`/`post` points are unchanged.
+- **HAProxy recipe can't be made hack-free → NOT triggered.** With ADR-11's never-empty `pfB_Aggregate_*` consumer file, the documented recipe validates and reloads with **no `/../../` path trick and no dummy-IP hack**: a `source_ip` ACL referencing the `pfB_Aggregate_v4` alias makes the HAProxy package emit/maintain `ipalias_pfB_Aggregate_v4.lst` (`haproxy.inc:1084-1092`), and `haproxy_check_run(1)` re-emits it on every reload even when the aggregate is empty. No residual to revisit. *(To be confirmed by the live smoke.)*
+
+### Documented HAProxy reload command (the recipe's `post` hook)
+
+```sh
+[ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+```
+
+- **Graceful, not a hard restart.** `haproxy_check_run(1)` (`haproxy.inc:2491`; wrapped by `haproxy_configure()` `:1347-1350`) re-writes the config — re-emitting the `-f` ACL files including `ipalias_pfB_Aggregate_v4.lst` — and restarts with `-sf` (finish existing connections; hitless). The runtime socket is stats + hitless-reload only and cannot inject ACL data (`haproxy.inc:1562`), so a reload is the only way to refresh the list.
+- **Why `pfSsh.php`, not `php -r`.** `haproxy.inc` opens with bare `require_once("functions.inc")` etc. that resolve via pfSense's PHP `include_path`; a plain `php -r` lacks that path. `/usr/local/sbin/pfSsh.php` bootstraps the pfSense env (`globals.inc`/`functions.inc`/`config.inc`/`util.inc`) and `eval`s PHP piped on stdin, so `require_once("haproxy/haproxy.inc")` and its dependency chain load. POSIX-sh-safe (single-quoted PHP, no shell metacharacter expansion). Runs on the node performing the update.
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-> CI cannot run the update pass against pf/HAProxy. Run on a live pfSense CE box.
+> CI cannot run the update pass against pf/HAProxy. Run on a live pfSense CE box
+> (the package's own validation is `php -l`/PHPStan/ShellCheck — there is no pytest
+> oracle for this PHP/shell feature). Inspect results in the pfBlockerNG log
+> (Status > System Logs, or `/var/log/pfblockerng`).
 
-- [ ] **No-op.** With no enabled hooks, an update behaves exactly as before.
-- [ ] **Pre/post fire + context.** A `pre` hook logging its env shows `PFB_TRIGGER`; a `post` hook shows correct `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED`/`PFB_STATUS`/`PFB_CHANGED_ALIASES` across cron, manual Update, and Force Reload.
-- [ ] **Safety.** A hook that exits non-zero is logged and the update completes; a hook that sleeps past its timeout is killed and the update completes — pre and post.
-- [ ] **HA sync.** On a CARP pair, the hooks replicate and run on whichever node performs the update.
-- [ ] **HAProxy recipe end-to-end.** With ADR-11's `pfB_Aggregate_v4` and the recipe config, an IP update fires the `post` hook → graceful HAProxy reload → fresh `ipalias_pfB_Aggregate_v4.lst`; a request whose CF-forwarded client IP is in the aggregate is denied at HAProxy; an empty aggregate still validates (never-empty file). No `/../../`/dummy-IP hack needed.
+- [ ] **No-op.** With no enabled hooks, an update behaves exactly as before (no hook-runner log lines; pass output unchanged).
+- [ ] **Pre/post fire + context.** Add a `pre` hook `command='env | grep ^PFB_'` and a `post` hook the same; run an update. `pre` logs `PFB_WHEN=pre` + `PFB_TRIGGER`; `post` logs `PFB_WHEN=post` + `PFB_TRIGGER` + `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (0|1) + `PFB_STATUS=ok` + `PFB_CHANGED_ALIASES=` (empty). Repeat across **scheduled cron** (`PFB_TRIGGER=cron`), **a settings save** (`update`), **GUI Force Update / Force Reload All** (also `cron`), and **GUI Force Reload of IP-only or DNSBL-only** (`force-reload`); confirm `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` track what actually changed (e.g. an IP-only Force Reload that changes a table ⇒ `PFB_IP_CHANGED=1`).
+- [ ] **Safety — non-zero.** A `post` hook `command='exit 7'` is logged with its non-zero exit and the update **completes** (test the same as a `pre` hook).
+- [ ] **Safety — timeout.** A hook `command='sleep 30'` with `timeout=2` is killed (logged "timed out … continuing") and the update **completes** — verify both `pre` and `post`.
+- [ ] **HA sync.** On a CARP pair, the hooks replicate to the secondary's config and run on whichever node performs the update (a hook with an external side effect runs once per updating node — expected).
+- [ ] **HAProxy recipe end-to-end.** With ADR-11's `pfB_Aggregate_v4`, the recipe HAProxy config (a `source_ip` ACL on `pfB_Aggregate_v4` + a `req.hdr_ip(CF-Connecting-IP) -f …/ipalias_pfB_Aggregate_v4.lst` deny ACL, gated on a Cloudflare-range source ACL), and the documented `post` hook above: an IP update with `PFB_IP_CHANGED=1` fires the hook → graceful HAProxy reload → fresh `ipalias_pfB_Aggregate_v4.lst`; a request whose `CF-Connecting-IP` is in the aggregate is **denied** at HAProxy (and one not in it is **allowed** — assert both, before and after listing). An **empty** aggregate still validates and reloads (never-empty file). Confirm **no `/../../` path trick and no dummy-IP hack** is needed.
