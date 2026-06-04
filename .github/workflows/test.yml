@@ -215,14 +215,13 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Run PHPUnit
+      - name: Run PHPUnit (with coverage)
         # Config in phpunit.xml. tests/php/bootstrap.php loads the real
         # pfblockerng.inc via include shims + pfSense doubles — no live box.
-        run: vendor/bin/phpunit
-
-      - name: Coverage (informational)
-        # No enforced floor yet (see issue #39 / #38); text summary only.
-        run: vendor/bin/phpunit --coverage-text || true
+        # Single run: still gates on test failure AND prints the informational
+        # coverage text (no enforced floor yet — see issue #39 / #38; pcov drives
+        # it). NOT suffixed with `|| true` — that would mask a failing suite.
+        run: vendor/bin/phpunit --coverage-text
 
   markdownlint:
     name: markdownlint

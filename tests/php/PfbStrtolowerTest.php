@@ -13,13 +13,13 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_strtolower')]
 final class PfbStrtolowerTest extends TestCase
 {
-    public function testLowercasesAndTrimsPlainLine(): void
-    {
-        $this->assertSame('example.com', pfb_strtolower('  EXAMPLE.COM  '));
-    }
+	public function testLowercasesAndTrimsPlainLine(): void
+	{
+		$this->assertSame('example.com', pfb_strtolower('  EXAMPLE.COM  '));
+	}
 
-    public function testPreservesCaseWhenHashPresent(): void
-    {
-        $this->assertSame('Foo.COM # Note', pfb_strtolower('  Foo.COM # Note  '));
-    }
+	public function testPreservesCaseWhenHashPresent(): void
+	{
+		$this->assertSame('Foo.COM # Note', pfb_strtolower('  Foo.COM # Note  '));
+	}
 }
