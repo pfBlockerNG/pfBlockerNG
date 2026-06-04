@@ -73,6 +73,22 @@ if (isset($argv[1])) {
 		pfBlockerNG_clearsqlite('cleardnsbl');
 		exit;
 	}
+	// ADR-12 Phase 1: manual hook-runner test path (unwired from the update
+	// pass). Usage: pfblockerng.php runhooks <pre|post> [trigger]
+	// Runs the configured 'pre'/'post' hooks with a synthetic context so the
+	// runner can be exercised live without performing an update.
+	elseif ($argv[1] == 'runhooks') {
+		$when = ($argv[2] ?? '') === 'post' ? 'post' : 'pre';
+		$ctx  = array('TRIGGER' => ($argv[3] ?? 'manual-test'));
+		if ($when == 'post') {
+			$ctx['IP_CHANGED']      = '0';
+			$ctx['DNSBL_CHANGED']   = '0';
+			$ctx['STATUS']          = 'ok';
+			$ctx['CHANGED_ALIASES'] = '';
+		}
+		pfb_run_hooks($when, $ctx);
+		exit;
+	}
 }
 
 // Extras - MaxMind/TOP1M Download URLs/filenames/settings
