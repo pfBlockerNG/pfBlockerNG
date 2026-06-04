@@ -2899,7 +2899,8 @@ def build(
     ``manifest`` is the per-feed boundary (RESULTS/01_Results.txt SS1i): one row per
     raw feed file mapping it to ``{raw, feed, group, format_hint, log_flag}``.
     ``config`` carries the classification + whitelist inputs (``tld_master`` suffix
-    lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``top1m_list``).
+    lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``user_unlock``,
+    ``top1m_list``).
     ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
     this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
     init wiring in Phase 4 supplies a file-backed reader).
@@ -2948,8 +2949,15 @@ def build(
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
         zone_db[tld] = {"log": "1", "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
 
+    # ADR-06 (#51): the temporary per-alert Unlock store (config.user_unlock, fed from
+    # the pfb_unlock state by the alerts dnsbl_remove handler) merges into whiteDB
+    # exactly like the permanent user whitelist -- both are band-6 sovereign user allows
+    # (_dnsbl_normalise_whitelist marks every entry important=True / PRIO_USER_ALLOW), so
+    # an unlocked domain resolves (its feed / Custom_List block is overridden). A FULL
+    # build emits an empty user_unlock (Force/Cron re-lock); only the incremental
+    # dnsbl_remove handler populates it.
     white_db = _dnsbl_normalise_whitelist(
-        config.get("user_whitelist", []),
+        list(config.get("user_whitelist", [])) + list(config.get("user_unlock", [])),
         config.get("top1m_list", []),
         top1m_enabled,
     )
@@ -3097,8 +3105,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     The on-box manifest carries ``tld_master`` as a FILE PATH (the public-suffix
     oracle); the build takes the suffix LINES directly (pure, filesystem-decoupled),
     so read the file here. ``tld_blacklist`` / ``tld_exclusion`` / ``user_whitelist``
-    / ``top1m_list`` are passed through as lists. Missing keys default empty so a
-    partial manifest still builds.
+    / ``user_unlock`` / ``top1m_list`` are passed through as lists. Missing keys default
+    empty so a partial manifest still builds.
     """
     config = manifest.get("config", {})
 
@@ -3125,6 +3133,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         "tld_blacklist": list(config.get("tld_blacklist", [])),
         "tld_exclusion": list(config.get("tld_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),
+        # ADR-06 (#51): the temporary per-alert unlock set -> band-6 whiteDB allows.
+        "user_unlock": list(config.get("user_unlock", [])),
         "top1m_list": list(config.get("top1m_list", [])),
         "regex_cap": regex_cap,
     }
