@@ -132,21 +132,23 @@ def test_enable_change_toggle_disables_then_enables_target(
     expect(invert).to_be_disabled(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "toggle_before_disabled")
 
-    # FLIP ON: a real (trusted) click flips .checked AND fires the jQuery click
-    # handler bound at pfBlockerNG.js:240-242 -> enable_change_in() enables the
-    # targets. `enable_change_in` is a closure-local (inside events.push), NOT a
-    # global, so it can only be reached through the real click binding -- drive
-    # the actual control. `force=True`: the checkbox sits in a COLLAPSIBLE panel
-    # that may be collapsed, so it is not "visible" to a normal actionability
-    # check, but the click + handler still fire.
-    toggle.click(force=True)
+    # FLIP ON: drive the element's native click(). This flips .checked AND fires
+    # the jQuery click handler bound at pfBlockerNG.js:240-242 -> enable_change_in()
+    # enables the targets (`enable_change_in` is a closure-local, reachable only
+    # through the real click binding -- so we must click the actual control, not
+    # set .checked). The checkbox sits in a Bootstrap panel that is collapsed
+    # (display:none -> zero-size), which defeats even Playwright `click(force=True)`
+    # ("Element is not visible" -- force can't click a zero-size box). The DOM
+    # `el.click()` needs no geometry/visibility, toggles the box, and fires the
+    # bound handler, so it is the robust driver here.
+    toggle.evaluate("el => el.click()")
     expect(toggle).to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(addr).to_be_enabled(timeout=JS_TIMEOUT_MS)
     expect(invert).to_be_enabled(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "toggle_after_enabled")
 
     # FLIP BACK OFF: re-click -> re-disabled -- proves it is a real two-way branch.
-    toggle.click(force=True)
+    toggle.evaluate("el => el.click()")
     expect(toggle).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(addr).to_be_disabled(timeout=JS_TIMEOUT_MS)
     expect(invert).to_be_disabled(timeout=JS_TIMEOUT_MS)

@@ -5,10 +5,12 @@ rendered PHP ``Warning``/``Notice``, a fatal-error trace, or a blank/redirected
 body. So a page PASSES Tier A only when ALL of:
 
 * **(a)** the response is **HTTP 200**;
-* **(b)** the body contains **none** of the PHP error/warning signatures
-  (:data:`FORBIDDEN_SUBSTRINGS` -- ``Fatal error``/``Parse error``/``Warning``/
-  ``Notice``/``Uncaught``/``Stack trace``), so a page that rendered a PHP
-  diagnostic into its body fails;
+* **(b)** the body contains no rendered PHP diagnostic in its recognizable SHAPE
+  (:data:`_PHP_DIAGNOSTIC_RE` over :data:`PHP_ERROR_LEVELS` -- the ``PHP <Level>``
+  prefix, the ``<b><Level></b>`` HTML wrapper, a ``<Level>: ... on line N`` line,
+  an ``Uncaught …Error/Exception``, or a ``Stack trace:``), so a page that
+  rendered a PHP diagnostic fails -- WITHOUT false-positiving on the level words
+  in legitimate page copy;
 * **(c)** a **page-specific content marker** is present (so a blank body, a
   redirect to the dashboard, or the login form cannot false-pass a 200);
 * **(d)** the on-box ``php_error.log`` gained **no new bytes** across the sweep
@@ -18,7 +20,7 @@ body. So a page PASSES Tier A only when ALL of:
 This module is the reusable pure-logic core: :func:`evaluate_render` decides
 (a)-(c) for one fetched page and returns a structured :class:`RenderResult`;
 :class:`PhpErrorLogGuard` owns the (d) sweep-level ``php_error.log`` diff over
-SSH. Phases 3/4 reuse :data:`FORBIDDEN_SUBSTRINGS` / :func:`body_has_php_error`.
+SSH. Phases 3/4 reuse :func:`body_has_php_error` / :data:`PHP_ERROR_LEVELS`.
 
 It imports nothing third-party and does not touch the VM at module import time
 (the SSH calls live inside :class:`PhpErrorLogGuard`'s methods), so it is import-
@@ -28,6 +30,7 @@ pure-logic half is unit-testable off-box (``test_render_oracle.py``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -36,31 +39,53 @@ from .webui import looks_like_login_page
 if TYPE_CHECKING:
     from ..conftest import SmokeVM
 
-# PHP diagnostic signatures that must NEVER appear in a healthy page body. pfSense
-# renders display_errors on for the webConfigurator, so a Warning/Notice/Fatal
-# bleeds into the HTML -- exactly the regression class Tier A exists to catch.
-# Each is matched as a plain substring (case-sensitive: PHP emits these with this
-# exact casing -- "PHP Warning", "Fatal error", "Parse error", "Uncaught", ...).
-FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
+# PHP diagnostic LEVELS (exact casing PHP emits). These are matched only in a
+# real diagnostic SHAPE (see _PHP_DIAGNOSTIC_RE) -- never as a bare word: pages
+# carry the level words in legitimate copy ("a pfSense Notice message", the
+# "Warning: ..." input-error strings on pfblockerng_ip.php), so a bare-substring
+# match false-positives. pfSense renders display_errors into the HTML, so a real
+# Warning/Notice/Fatal still bleeds into the body in one of the shapes below --
+# exactly the regression class Tier A exists to catch.
+PHP_ERROR_LEVELS: tuple[str, ...] = (
     "Fatal error",
     "Parse error",
+    "Recoverable fatal error",
     "Warning",
     "Notice",
-    "Uncaught",
-    "Stack trace",
+    "Deprecated",
+    "Strict Standards",
+)
+
+_LEVELS_ALT = "|".join(re.escape(level) for level in PHP_ERROR_LEVELS)
+
+# A rendered PHP diagnostic has an UNAMBIGUOUS shape; match that, not the bare
+# level word. Any one of:
+#   * error_log / CLI prefix      "PHP <Level>"          (prose never says this)
+#   * HTML display_errors wrapper "<b><Level></b>"       (prose never has this)
+#   * plain display form          "<Level>: ... on line <N>"  (the file/line trailer
+#                                  disambiguates from "Warning: When using ..." copy)
+#   * an uncaught throwable        "Uncaught <X>Error/Exception"
+#   * an exception stack trace     "Stack trace:\n#0"
+_PHP_DIAGNOSTIC_RE = re.compile(
+    rf"PHP\s+(?:{_LEVELS_ALT})\b"
+    rf"|<b>\s*(?:{_LEVELS_ALT})\s*</b>"
+    rf"|(?:{_LEVELS_ALT}):[^\n]*?\bon line\b\s*(?:<b>\s*)?\d+"
+    r"|\bUncaught\s+\w*(?:Error|Exception)\b"
+    r"|\bStack trace:\s*#0"
 )
 
 
 def body_has_php_error(body: str) -> str | None:
-    """Return the first :data:`FORBIDDEN_SUBSTRINGS` token present in ``body``, else ``None``.
+    """Return the matched PHP-diagnostic text in ``body`` (its shape), else ``None``.
 
-    A non-``None`` return is the proof a PHP diagnostic was rendered into the page
-    (oracle condition (b) fails). Reusable by later tiers that also fetch a body.
+    Matches the SHAPE of a rendered PHP diagnostic (:data:`_PHP_DIAGNOSTIC_RE`),
+    NOT the bare level word -- the level words appear in legitimate page copy, so
+    a substring match false-positives (this bit ``pfblockerng_ip.php``: "a pfSense
+    Notice message"). A non-``None`` return is the proof a PHP diagnostic was
+    rendered into the page (oracle condition (b) fails). Reusable by later tiers.
     """
-    for token in FORBIDDEN_SUBSTRINGS:
-        if token in body:
-            return token
-    return None
+    match = _PHP_DIAGNOSTIC_RE.search(body)
+    return match.group(0) if match else None
 
 
 @dataclass(frozen=True)
@@ -86,7 +111,7 @@ def evaluate_render(path: str, status_code: int, body: str, markers: tuple[str, 
     """Apply oracle conditions (a)-(c) to one fetched page; return a :class:`RenderResult`.
 
     * (a) ``status_code == 200``;
-    * (b) ``body`` contains no :data:`FORBIDDEN_SUBSTRINGS` token;
+    * (b) ``body`` contains no rendered PHP diagnostic shape (:func:`body_has_php_error`);
     * (c) at least one of ``markers`` is present AND the body is not the login
       form (a logged-out 200 renders the login page, which must never pass).
 

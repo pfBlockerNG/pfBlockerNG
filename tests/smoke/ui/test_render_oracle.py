@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from .render_oracle import FORBIDDEN_SUBSTRINGS, body_has_php_error, evaluate_render
+from .render_oracle import PHP_ERROR_LEVELS, body_has_php_error, evaluate_render
 
 pytestmark = pytest.mark.ui_render
 
@@ -44,22 +44,64 @@ def test_good_body_passes() -> None:
     assert result.reasons == ()
 
 
-@pytest.mark.parametrize("token", FORBIDDEN_SUBSTRINGS)
-def test_php_diagnostic_in_body_is_rejected(token: str) -> None:
-    """(b): a body carrying any PHP diagnostic token fails, though it is HTTP 200 + has the marker.
+@pytest.mark.parametrize("level", PHP_ERROR_LEVELS)
+def test_php_diagnostic_in_body_is_rejected(level: str) -> None:
+    """(b): a body carrying any PHP diagnostic LEVEL (in shape) fails, though 200 + marker.
 
-    The SAME marker-bearing 200 body passes without the token (asserted here as
-    the before-state) and fails once the token is injected -- so the rejection is
-    caused by the diagnostic, not by anything else.
+    The SAME marker-bearing 200 body passes without the diagnostic (asserted here
+    as the before-state) and fails once a real ``PHP <Level>: ... on line N`` line
+    is injected -- so the rejection is caused by the diagnostic, not anything else.
     """
     # Before: identical body minus the diagnostic passes.
     assert evaluate_render("/p", 200, GOOD_BODY, (GOOD_MARKER,)).ok
     # After: inject a realistic PHP diagnostic line into the otherwise-good body.
-    broken = GOOD_BODY.replace("<body>", f"<body>PHP {token}: oops in pfblockerng.inc on line 1<br />")
+    broken = GOOD_BODY.replace("<body>", f"<body>PHP {level}: oops in pfblockerng.inc on line 1<br />")
     result = evaluate_render("/p", 200, broken, (GOOD_MARKER,))
-    assert not result.ok, f"oracle passed a body containing {token!r}"
+    assert not result.ok, f"oracle passed a body containing a PHP {level!r} diagnostic"
     assert body_has_php_error(broken) is not None
-    assert any(token in r for r in result.reasons)
+    assert any(level in r for r in result.reasons)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "<br />\n<b>Notice</b>:  Undefined variable $x in <b>/usr/local/www/x.php</b> on line <b>42</b><br />",
+        "Warning: Invalid argument supplied for foreach() in /usr/local/www/x.php on line 99",
+        "Fatal error: Uncaught TypeError: bad in /x.php:7",
+        "Stack trace:\n#0 /usr/local/www/x.php(7): foo()",
+    ],
+    ids=["html-bold", "plain-on-line", "uncaught", "stack-trace"],
+)
+def test_real_diagnostic_shapes_are_rejected(shape: str) -> None:
+    """(b): each real rendered-diagnostic SHAPE (HTML wrap, plain on-line, uncaught, trace) fails."""
+    assert evaluate_render("/p", 200, GOOD_BODY, (GOOD_MARKER,)).ok  # before: clean body passes
+    broken = GOOD_BODY.replace("<body>", f"<body>{shape}")
+    result = evaluate_render("/p", 200, broken, (GOOD_MARKER,))
+    assert not result.ok, f"oracle passed a real diagnostic shape: {shape!r}"
+    assert any("PHP diagnostic" in r for r in result.reasons)
+
+
+@pytest.mark.parametrize(
+    "copy",
+    [
+        # Real legit copy from pfblockerng_ip.php -- level words in prose, NOT diagnostics.
+        "A pfSense Notice message will be submitted on completion.",
+        "Upon completion, a pfSense Notice will be generated.",
+        "Warning: When using an Action setting of 'Permit Inbound or Permit Both', ...",
+        "Warning: With DoH/DoT Blocking enabled, you must select at least one List",
+    ],
+)
+def test_level_words_in_legit_copy_are_not_rejected(copy: str) -> None:
+    """(b) false-positive guard: a level WORD in page copy (no diagnostic shape) PASSES.
+
+    This is the bug the shape-based oracle fixes: a bare-substring match flagged
+    "a pfSense Notice message" / the "Warning: ..." input-error strings as PHP
+    diagnostics. None of these carry the diagnostic shape, so the oracle must NOT
+    reject them.
+    """
+    body = GOOD_BODY.replace("<body>", f"<body><p>{copy}</p>")
+    assert body_has_php_error(body) is None, f"legit copy wrongly flagged as a PHP diagnostic: {copy!r}"
+    assert evaluate_render("/p", 200, body, (GOOD_MARKER,)).ok, f"oracle wrongly rejected legit copy: {copy!r}"
 
 
 def test_non_200_is_rejected() -> None:
