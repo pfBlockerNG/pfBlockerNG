@@ -1290,6 +1290,70 @@ class TestStage2UnifiedDecision:
         answers = DNSMessage.instances[-1].answer
         assert any("1.2.3.4" in a for a in answers)
 
+    def test_operate_respects_decisiondb_cap(self, monkeypatch: Any) -> None:
+        # decisionDB is the LRU; with cap 1, querying a second blocked name evicts the
+        # first, so the cache never exceeds the configured cap.
+        self._enable(monkeypatch)
+        monkeypatch.setattr(pfb_unbound, "decisionDB", pfb_unbound._LruCache(1))
+        add_data("one.com", log="1", index=0)
+        set_feed_group(0, "F1", "G1")
+        add_data("two.com", log="1", index=1)
+        set_feed_group(1, "F2", "G2")
+        assert len(pfb_unbound.decisionDB) == 0  # before-state
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("one.com.", qtype=RR_A), None)
+        assert len(pfb_unbound.decisionDB) == 1
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("two.com.", qtype=RR_A), None)
+        assert len(pfb_unbound.decisionDB) == 1  # capped; one.com (LRU) evicted
+        assert "two.com" in pfb_unbound.decisionDB
+        assert "one.com" not in pfb_unbound.decisionDB
+
+
+class TestLruCache:
+    def test_get_set_contains_len(self) -> None:
+        c = pfb_unbound._LruCache(0)
+        assert "a" not in c
+        assert c.get("a") is None
+        c["a"] = 1
+        assert "a" in c and c["a"] == 1 and c.get("a") == 1 and len(c) == 1
+
+    def test_unbounded_when_maxsize_zero(self) -> None:
+        c = pfb_unbound._LruCache(0)
+        for i in range(1000):
+            c[str(i)] = i
+        assert len(c) == 1000  # 0 = no eviction (pre-LRU behaviour)
+
+    def test_evicts_lru_at_cap(self) -> None:
+        c = pfb_unbound._LruCache(2)
+        c["a"] = 1
+        c["b"] = 2
+        c["c"] = 3  # over cap -> evict the LRU ("a")
+        assert "a" not in c and "b" in c and "c" in c and len(c) == 2
+
+    def test_get_bumps_recency_keeps_hot(self) -> None:
+        c = pfb_unbound._LruCache(2)
+        c["a"] = 1
+        c["b"] = 2
+        assert c.get("a") == 1  # bump "a" -> MRU, so "b" becomes LRU
+        c["c"] = 3
+        assert "a" in c and "b" not in c and "c" in c
+
+    def test_setitem_existing_bumps_recency(self) -> None:
+        c = pfb_unbound._LruCache(2)
+        c["a"] = 1
+        c["b"] = 2
+        c["a"] = 10  # update bumps "a" -> MRU
+        c["c"] = 3
+        assert c["a"] == 10 and "b" not in c and "c" in c
+
+    def test_clear_and_delitem(self) -> None:
+        c = pfb_unbound._LruCache(0)
+        c["a"] = 1
+        c["b"] = 2
+        del c["a"]
+        assert "a" not in c
+        c.clear()
+        assert len(c) == 0 and "b" not in c
+
 
 # ---------------------------------------------------------------------------
 # Oracle / property tests for pure domain-match helpers

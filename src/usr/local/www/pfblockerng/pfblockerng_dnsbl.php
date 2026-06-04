@@ -98,6 +98,8 @@ $pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'])		?: '';
 $pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
 $pconfig['alexa_type']		= $pfb['dconfig']['alexa_type']				?: 'tranco';
 $pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';
+// 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
+$pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
 $pconfig['alexa_inclusion']	= explode(',', $pfb['dconfig']['alexa_inclusion'])	?: array('com','net','org','ca','co','io');
 
 $pconfig['tldexclusion']	= base64_decode($pfb['dconfig']['tldexclusion'])	?: '';
@@ -336,6 +338,7 @@ if ($_POST) {
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'alexa_type'		=> 'tranco',
 						'alexa_count'		=> '1000',
+						'pfb_py_cache_max'	=> '10000',
 						'action'		=> 'Disabled',
 						'aliaslog'		=> 'enabled',
 						'aliasports_in'		=> '',
@@ -405,6 +408,10 @@ if ($_POST) {
 		}
 		if (!is_port($_POST['pfb_dnsport_ssl'])) {
 			$input_errors[] = 'DNSBL SSL Port is invalid!';
+		}
+		if (isset($_POST['pfb_py_cache_max']) && $_POST['pfb_py_cache_max'] !== '' &&
+			(!ctype_digit((string) $_POST['pfb_py_cache_max']) || (int) $_POST['pfb_py_cache_max'] > 5000000)) {
+			$input_errors[] = 'DNSBL Decision cache max entries must be a whole number between 0 and 5000000.';
 		}
 
 		// Non-ascii characters are not allowed for DNSBL Regex
@@ -590,6 +597,8 @@ if ($_POST) {
 				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
 			}
 			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
+			// 0 (unlimited) is meaningful; ctype_digit keeps "0", else fall back to the default.
+			$pfb['dconfig']['pfb_py_cache_max']	= ctype_digit((string) $_POST['pfb_py_cache_max']) ? (string) ((int) $_POST['pfb_py_cache_max']) : '10000';
 
 
 			if (!$pfb_auto) {
@@ -2690,6 +2699,17 @@ $section->addInput(new Form_Checkbox(
 	$pconfig['pfb_cache'] === 'on' ? true:false,
 	'on'
 ))->setHelp('Default: <strong>Enabled</strong><br />Enable the backup and restore of the DNS Resolver Cache on DNSBL Update|Reload|Cron events');
+
+$section->addInput(new Form_Input(
+	'pfb_py_cache_max',
+	gettext('Decision cache max entries'),
+	'number',
+	$pconfig['pfb_py_cache_max'],
+	['min' => 0, 'max' => 5000000, 'placeholder' => '10000']
+))->setHelp('Default: <strong>10000</strong><br />Maximum number of domains kept in the DNSBL Python per-domain decision cache. '
+	. 'It is an <strong>LRU</strong> cache: frequently-queried domains stay resident and the least-recently-used entries are evicted at the cap. '
+	. 'Roughly under 1 KB of RAM per entry. Set to <strong>0</strong> for unlimited (no eviction). '
+	. 'Takes effect on the next DNSBL Reload.');
 
 // Create page anchor for DNSBL Whitelist
 $section->addInput(new Form_StaticText(

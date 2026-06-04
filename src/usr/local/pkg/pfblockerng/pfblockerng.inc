@@ -3179,6 +3179,9 @@ function pfb_unbound_python($mode) {
 			$regex_cap = 'on';
 		}
 
+		// DNSBL Python decision-cache cap (LRU); WebUI-configurable, 0 = unlimited.
+		$decisiondb_max = (string) max(0, intval($pfb['dnsbl_decisiondb_max']));
+
 		$now = date('m/j/y H:i:s', time());
 
 		$pfb_py_conf = <<<EOF
@@ -3193,6 +3196,7 @@ python_blocking	= {$python_blocking}
 python_hsts	= {$python_hsts}
 python_idn	= {$python_idn}
 python_tld_seg	= {$tld_segments}
+decisiondb_max	= {$decisiondb_max}
 python_tld	= {$python_tld}
 python_tlds	= {$python_tlds}
 python_nolog	= {$python_nolog}
@@ -7275,6 +7279,8 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['dnsbl_ip']	= $pfb['dnsblconfig']['action']		?:  'Disabled';		// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_alexa_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
+	// 0 (unlimited) is meaningful, so avoid the ?: idiom (0 is falsy -> would reset to default).
+	$pfb['dnsbl_decisiondb_max'] = (isset($pfb['dnsblconfig']['pfb_py_cache_max']) && $pfb['dnsblconfig']['pfb_py_cache_max'] !== '') ? $pfb['dnsblconfig']['pfb_py_cache_max'] : '10000';	// DNSBL Python decision-cache cap (LRU); 0 = unlimited
 	$pfb['dnsbl_alexa_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration

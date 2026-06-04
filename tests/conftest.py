@@ -90,7 +90,7 @@ def reset_pfb_globals() -> None:
     }
     pfb_unbound.dataDB = defaultdict(list)
     pfb_unbound.zoneDB = defaultdict(list)
-    pfb_unbound.decisionDB = {}
+    pfb_unbound.decisionDB = pfb_unbound._LruCache(0)  # real type, unbounded -> logic tests never evict
     pfb_unbound._dnsbl_last_event = None
     pfb_unbound.safeSearchDB = defaultdict(list)
     pfb_unbound.feedGroupIndexDB = defaultdict(list)
