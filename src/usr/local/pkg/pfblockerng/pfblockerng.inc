@@ -732,42 +732,27 @@ function pfb_get_vip_options(int $family, bool $pkg_xml_format = false) {
 	return $options;
 }
 
-// [ ADR-13 ] Pure decision: is a v6 sinkhole VIP REQUIRED for this DNSBL config?
+// [ ADR-13 ] Pure decision: is a v6 sinkhole VIP WANTED for this DNSBL config?
 // True iff the DNS Resolver listens on IPv6 AND the package is NOT auto-provisioning
 // the VIP (manual mode). When auto-create is on, pfb_manage_dnsbl_vip() provisions the
-// v6 VIP with no user friction, so the validator must NOT raise the requirement — the
-// VIP is created on the same pass before the NAT/validate consumers run. When auto is
-// off, a v6-listening resolver makes a v6 VIP mandatory (manual-mode input error /
-// pfb_global force-disable). Pure: takes the two booleans, decides; no global/config
-// access, so the rule has a single, directly-testable source of truth.
+// v6 VIP with no user friction. When auto is off, a v6-listening resolver SHOULD have a
+// v6 sinkhole VIP so AAAA blocks are sinkholed too — but this is a NON-BLOCKING
+// recommendation (ADR-13 §7 pivot): pfb_global logs a warning and DNSBL keeps running
+// on IPv4. It is NOT a hard requirement — an earlier revision force-disabled DNSBL here,
+// which broke every existing manual setup whose resolver listens on IPv6 without a v6
+// VIP (the common case). Pure: takes the two booleans, decides; no global/config access,
+// so the recommendation has a single, directly-testable source of truth.
 function pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool {
 	return $listens_v6 && !$auto;
 }
 
-// $require_v6: tri-state. null (default) => the validator computes the requirement
-// itself from pfb_unbound_listens_v6() (manual-mode semantics — a v6-listening resolver
-// requires a v6 VIP). Pass an explicit bool to override: callers that know the package
-// is auto-provisioning the v6 VIP pass FALSE so the (transient) absence of a v6 id at
-// validate time is not flagged. Behaviour when the resolver does NOT listen on v6 is
-// unchanged from before Phase 3 (v6 stays OPTIONAL): the new branch only fires when a
-// v6 VIP is genuinely required and missing.
-function pfb_validate_vips(string $interface, string|null $vip4 = '', string|null $vip6 = '', ?bool $require_v6 = null): array {
+// v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
+// the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
+// force-disable. The validator only checks the VIPs that ARE configured (existence,
+// interface, overlap). Behaviour is identical to before the (reverted) Phase-3 hard rule.
+function pfb_validate_vips(string $interface, string|null $vip4 = '', string|null $vip6 = ''): array {
 	$enabled4 = !empty($vip4);
 	$enabled6 = !empty($vip6);
-
-	// Resolve the v6 requirement. null => compute the manual-mode rule live; an
-	// explicit bool (auto-mode caller) overrides. pfb_unbound_listens_v6() is only
-	// consulted when the caller did not decide, so the common (non-v6) path is unchanged.
-	if ($require_v6 === null) {
-		$require_v6 = pfb_unbound_listens_v6();
-	}
-
-	// v6-mandatory rule (Phase 3): a v6-listening resolver in manual mode requires a v6
-	// VIP. Checked BEFORE the generic "no VIP configured" so the message is specific and
-	// actionable even when v4 is also absent. Only ever fires when v6 is required.
-	if ($require_v6 && !$enabled6) {
-		return [false, gettext('IPv6 VIP required: the DNS Resolver is listening on IPv6')];
-	}
 
 	if (!$enabled4 && !$enabled6) {
 		return [false, gettext('no VIP configured')];
@@ -1206,18 +1191,19 @@ function pfb_global() {
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= isset($pfb['dnsblconfig']['dnsbl_interface']) ? $pfb['dnsblconfig']['dnsbl_interface'] : 'lo0';	// VIP Local Interface setting
 	if (!empty($pfb['dnsbl'])) {
-		// [ ADR-13 ] In auto-create mode the package provisions the v6 VIP itself
-		// (pfb_manage_dnsbl_vip runs earlier on the same pass), so do NOT raise the
-		// v6-mandatory requirement here — pass require_v6=false. In manual mode pass
-		// null so the validator enforces it (v6-listening resolver => v6 VIP required
-		// => force-disable). This is the ONLY new force-disable trigger; every other
-		// validation outcome is unchanged.
-		$require_v6 = ($pfb['dnsbl_vip_auto'] === 'on') ? false : null;
-		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6'], $require_v6);
+		// VIP validation is unchanged from before ADR-13: force-disable DNSBL only on a
+		// genuinely invalid/missing/overlapping VIP. A missing IPv6 VIP is NOT such a case.
+		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6']);
 		if (!$vips_valid_result[0]) {
 			// Force DNSBL to be disabled if VIPs are invalid.
 			$pfb['dnsbl'] = '';
 			pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
+			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
+			// sinkhole VIP is configured (manual mode). DNSBL stays enabled on IPv4;
+			// AAAA blocks simply are not sinkholed. Recommend auto-create or a v6 VIP.
+			// (In auto mode pfb_manage_dnsbl_vip provisions the v6 VIP, so this never fires.)
+			pfb_logger("\nDNSBL: the DNS Resolver listens on IPv6 but no IPv6 sinkhole VIP is configured; AAAA blocks will not be sinkholed. Enable 'Create VIPs automatically' or add an IPv6 VIP.", 1);
 		}
 	}
 
