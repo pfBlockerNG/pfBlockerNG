@@ -907,6 +907,23 @@ def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
     reload(vm, "update", timeout=timeout)
 
 
+def force_dnsbl_rebuild(vm: SmokeVM, *, timeout: float = 600.0) -> None:
+    """Force a full DNSBL re-fetch + manifest rebuild + Unbound reload (Force-Reload).
+
+    A plain ``reload('update')`` honours the feed cache: an unchanged, still-cached
+    feed logs ``[ feed ] exists.`` and pfBlockerNG does NOT reprocess it or reload
+    Unbound (verified on the live box). So an ``update`` alone never regenerates the
+    manifest and never clears a temporary unlock. Clearing the DNSBL cache first
+    (``cleardnsbl``) forces the re-fetch -> ``pfb_unbound_python_sources`` rewrites the
+    manifest (``config.user_unlock`` emptied) -> Unbound reloads -> ``init_standard``
+    re-reads it. This is exactly what ``reset()`` relies on to rebuild deterministically.
+    """
+    result = vm.ssh(PHP_BIN, PFB_CLI, "cleardnsbl", timeout=120.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"force_dnsbl_rebuild cleardnsbl failed: rc={result.returncode} stderr={result.stderr!r}")
+    reload(vm, "update", timeout=timeout)
+
+
 UNBOUND_CONF = "/var/unbound/unbound.conf"
 UNBOUND_BEFORE = "/tmp/pfb_unbound_before.conf"
 # Snapshot of the EFFECTIVE unbound config (unbound.conf + every file it pulls in
