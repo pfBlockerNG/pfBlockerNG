@@ -74,28 +74,43 @@ def set_feed_group(index: int, feed: str, group: str) -> None:
 
 
 def _is_block(dec: Any) -> bool:
-    # A decisionDB entry is a block iff it was found and not whitelisted -- the same
-    # predicate operate()/get_details_dnsbl use. decisionDB now also stores allow
-    # ("let it resolve"/whitelisted) verdicts, so membership alone no longer means
-    # "blocked".
-    return dec is not None and dec.is_found and not dec.in_whitelist
+    # A decisionDB entry's DNSBL axis is a block iff found and not whitelisted -- the
+    # same predicate operate()/get_details_dnsbl use. dec is a composed Decision (or
+    # None); the DNSBL verdict lives on dec.dnsbl (UNSET until the DNSBL stratum ran).
+    if dec is None or dec.dnsbl is pfb_unbound.UNSET:
+        return False
+    return dec.dnsbl.is_found and not dec.dnsbl.in_whitelist
+
+
+def _dnsbl_decision(**kw: Any) -> Any:
+    # A bare DnsblDecision; kw overrides defaults (a not-found/allow verdict by default).
+    fields: dict[str, Any] = {
+        "is_found": False,
+        "in_whitelist": False,
+        "in_hsts": False,
+        "null_blocking": True,
+        "log_type": "",
+        "b_type": "",
+        "p_type": "",
+        "feed": "",
+        "group": "",
+        "b_eval": "",
+    }
+    fields.update(kw)
+    return pfb_unbound.DnsblDecision(**fields)
 
 
 def allow_decision() -> Any:
-    # A minimal not-found (allow) verdict, for seeding decisionDB to exercise the
+    # A composed Decision whose DNSBL axis is a not-found (allow) verdict -- seeds the
     # allow short-circuit path (the old excludeDB membership).
-    return pfb_unbound.DnsblDecision(
-        is_found=False,
-        in_whitelist=False,
-        in_hsts=False,
-        null_blocking=True,
-        log_type="",
-        b_type="",
-        p_type="",
-        feed="",
-        group="",
-        b_eval="",
-    )
+    return pfb_unbound.Decision(dnsbl=_dnsbl_decision())
+
+
+def block_decision(**kw: Any) -> Any:
+    # A composed Decision whose DNSBL axis is a block; kw overrides DnsblDecision fields.
+    base = {"is_found": True, "log_type": "1", "b_type": "DNSBL", "p_type": "Python", "feed": "F", "group": "G"}
+    base.update(kw)
+    return pfb_unbound.Decision(dnsbl=_dnsbl_decision(**base))
 
 
 class TestIsUnknown:
@@ -631,17 +646,21 @@ class TestGetDetailsDnsblQtype:
 
     @staticmethod
     def _decision() -> Any:
-        return pfb_unbound.DnsblDecision(
-            is_found=True,
-            in_whitelist=False,
-            in_hsts=False,
-            null_blocking=False,
-            log_type="1",
-            b_type="DNSBL_Python",
-            p_type="Python",
-            feed="feedX",
-            group="groupY",
-            b_eval="blocked.com",
+        # A composed Decision whose DNSBL axis is a block (decisionDB values are
+        # Decision, the DNSBL verdict lives on .dnsbl).
+        return pfb_unbound.Decision(
+            dnsbl=pfb_unbound.DnsblDecision(
+                is_found=True,
+                in_whitelist=False,
+                in_hsts=False,
+                null_blocking=False,
+                log_type="1",
+                b_type="DNSBL_Python",
+                p_type="Python",
+                feed="feedX",
+                group="groupY",
+                b_eval="blocked.com",
+            )
         )
 
     def _qstate(self, qtype: str) -> types.SimpleNamespace:
@@ -714,7 +733,11 @@ class TestGetDetailsDnsblQtype:
             group="groupY",
             b_eval="evil.com",
         )
-        monkeypatch.setattr(pfb_unbound, "decisionDB", {"a.evil.com": dec, "b.evil.com": dec})
+        monkeypatch.setattr(
+            pfb_unbound,
+            "decisionDB",
+            {"a.evil.com": pfb_unbound.Decision(dnsbl=dec), "b.evil.com": pfb_unbound.Decision(dnsbl=dec)},
+        )
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         for name in ("a.evil.com.", "b.evil.com."):
@@ -855,9 +878,9 @@ class TestOperateNoAAAA:
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
-        # The wildcard-parent hit memoizes an exact noAAAADB entry for the child,
-        # so a subsequent identical query short-circuits on the exact branch.
-        assert pfb_unbound.noAAAADB.get("sub.example.com") is True
+        # The wildcard-parent hit is memoized as the child's noaaaa verdict on its
+        # Decision, so a subsequent identical query short-circuits on the cache.
+        assert pfb_unbound.decisionDB["sub.example.com"].noaaaa is True
         assert evaluate_noaaaa("sub.example.com", pfb_unbound.noAAAADB) is True
         # Fast-path is unchanged: a subsequent identical query still blocks.
         qstate2 = make_qstate("sub.example.com.", qtype=RR_AAAA)
@@ -867,7 +890,8 @@ class TestOperateNoAAAA:
 
     def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
-        pfb_unbound.excludeAAAADB.append("example.com")
+        # A cached allow verdict (noaaaa False) short-circuits -- the old excludeAAAADB.
+        pfb_unbound.decisionDB["example.com"] = pfb_unbound.Decision(noaaaa=False)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
@@ -878,11 +902,11 @@ class TestOperateNoAAAA:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
-    def test_no_match_adds_to_exclude(self) -> None:
+    def test_no_match_caches_allow(self) -> None:
         add_noaaaa("other.com", wildcard=True)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert "example.com" in pfb_unbound.excludeAAAADB
+        assert pfb_unbound.decisionDB["example.com"].noaaaa is False
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
 
@@ -968,7 +992,7 @@ class TestOperateDnsbl:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
         entry = pfb_unbound.decisionDB.get("evil-domain.com")
-        assert entry.group == "DNSBL_Regex"
+        assert entry.dnsbl.group == "DNSBL_Regex"
 
     def test_allow_decision_short_circuit(self, monkeypatch: Any) -> None:
         # A cached allow verdict ("let it resolve") short-circuits the matcher -- the
@@ -986,18 +1010,7 @@ class TestOperateDnsbl:
         # from decisionDB without dataDB/evaluate_domain. The name is NOT on any list,
         # so if it blocks, the memo -- not re-evaluation -- did it.
         self._enable(monkeypatch)
-        pfb_unbound.decisionDB["cached-block.com"] = pfb_unbound.DnsblDecision(
-            is_found=True,
-            in_whitelist=False,
-            in_hsts=False,
-            null_blocking=True,
-            log_type="1",
-            b_type="DNSBL",
-            p_type="Python",
-            feed="F",
-            group="G",
-            b_eval="cached-block.com",
-        )
+        pfb_unbound.decisionDB["cached-block.com"] = block_decision(b_eval="cached-block.com")
         qstate = make_qstate("cached-block.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
@@ -1054,7 +1067,7 @@ class TestOperateDnsbl:
 
         entry = pfb_unbound.decisionDB.get("orig.com")
         assert entry is not None
-        assert entry.b_type == "DNSBL_CNAME"
+        assert entry.dnsbl.b_type == "DNSBL_CNAME"
         # Block is keyed on the original name after the q_name reassignment,
         # not on the CNAME target itself.
         assert not _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
@@ -1111,7 +1124,7 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED  # blocked via the TARGET's TLD
         entry = pfb_unbound.decisionDB.get("orig.com")
         assert entry is not None
-        assert entry.group == "DNSBL_TLD_Allow"
+        assert entry.dnsbl.group == "DNSBL_TLD_Allow"
 
     def test_cname_repeat_short_circuits_without_chain(self, monkeypatch: Any) -> None:
         # The unified-cache CNAME fix: a CNAME-blocked name is keyed on the ORIGINAL in
@@ -1174,8 +1187,10 @@ class TestOperateEvents:
 
 
 class TestGetDetailsReplyNoaaaa:
-    """The reply-x gate in get_details_reply only proceeds for an AAAA reply
-    whose name has an exact noAAAA entry (``noAAAADB.get(name) is not None``)."""
+    """The reply-x gate in get_details_reply proceeds for an AAAA reply whose name is
+    noAAAA-blocked -- exact OR via a wildcard parent. Stage 2 removed the noAAAADB
+    query-time memo, so this gate uses ``evaluate_noaaaa`` (exact + wildcard) rather
+    than a bare ``noAAAADB.get(name)``, which only saw exact (or memoized) names."""
 
     def _aaaa_qstate(self, qname: str) -> types.SimpleNamespace:
         qstate = make_qstate(qname, qtype=RR_AAAA)
@@ -1203,6 +1218,72 @@ class TestGetDetailsReplyNoaaaa:
         assert rcd is True
         # Gate failed -> early return before the resolver counter fires.
         assert calls == []
+
+    def test_reply_x_aaaa_wildcard_child_proceeds(self, monkeypatch: Any) -> None:
+        # Stage 2: a wildcard-parent noAAAA child (not an exact entry) now passes the
+        # gate via evaluate_noaaaa. Pre-Stage-2 the gate read noAAAADB.get(child), which
+        # only saw the child once the (now-removed) query-time memo wrote it.
+        calls = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
+        pfb_unbound.pfb["sqlite3_resolver_con"] = True
+        add_noaaaa("example.com", wildcard=True)
+        qstate = self._aaaa_qstate("sub.example.com.")
+        rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        assert rcd is True
+        assert len(calls) == 1
+
+
+class TestStage2UnifiedDecision:
+    """Stage 2: one decisionDB[name] = Decision carries every axis (dnsbl / noaaaa /
+    safesearch), each filled lazily and cached -- replacing excludeAAAADB / excludeSS
+    and the noAAAADB query-time memo."""
+
+    def _enable(self, monkeypatch: Any) -> None:
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+
+    def test_one_decision_accumulates_axes(self, monkeypatch: Any) -> None:
+        # An AAAA query for a DNSBL-listed name that is noAAAA-allow + SafeSearch-no-match
+        # leaves ONE decisionDB entry with all three axes filled -- the unification end
+        # state (noaaaa False, safesearch None, dnsbl block).
+        self._enable(monkeypatch)
+        add_data("multi.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+        add_noaaaa("unrelated.com", wildcard=False)  # enables the noAAAA path; multi.com unlisted
+        pfb_unbound.pfb["safeSearchDB"] = True  # enables the SafeSearch path; multi.com unlisted
+        qstate = make_qstate("multi.com.", qtype=RR_AAAA)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED  # DNSBL blocked
+        dec = pfb_unbound.decisionDB["multi.com"]
+        assert dec.noaaaa is False  # noAAAA allow, evaluated + cached
+        assert dec.safesearch is None  # SafeSearch no-match, evaluated + cached
+        assert _is_block(dec)  # DNSBL block
+
+    def test_noaaaa_verdict_reused_without_reeval(self, monkeypatch: Any) -> None:
+        # A cached noaaaa=True blocks an AAAA query straight from the Decision, with the
+        # name NOT in the noAAAADB source -> the memo, not re-evaluation, did it.
+        self._enable(monkeypatch)
+        add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True)
+        qstate = make_qstate("x.com.", qtype=RR_AAAA)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED
+
+    def test_safesearch_verdict_reused_without_reeval(self, monkeypatch: Any) -> None:
+        # A cached safesearch entry rewrites straight from the Decision, with the name
+        # NOT in the safeSearchDB source -> the memo did it.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["safeSearchDB"] = True
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(safesearch={"A": "1.2.3.4", "AAAA": ""})
+        qstate = make_qstate("x.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        answers = DNSMessage.instances[-1].answer
+        assert any("1.2.3.4" in a for a in answers)
 
 
 # ---------------------------------------------------------------------------
@@ -2033,5 +2114,5 @@ class TestADR02PythonOnlyBlocking:
         assert qstate.ext_state[0] == MODULE_FINISHED
         entry = pfb_unbound.decisionDB.get("any.subdomain.blocked-zone.net")
         assert entry is not None
-        assert entry.b_type == "TLD"
-        assert entry.feed == "ZoneFeed"
+        assert entry.dnsbl.b_type == "TLD"
+        assert entry.dnsbl.feed == "ZoneFeed"
