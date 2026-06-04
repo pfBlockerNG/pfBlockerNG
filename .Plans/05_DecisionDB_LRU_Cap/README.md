@@ -1,6 +1,6 @@
 # Plan 05 — Bound decisionDB with a configurable LRU cache (#72)
 
-- **Status:** PR #72 **open** (results to be finalised after it lands)
+- **Status:** Implemented — PR #72 merged (`devel` `52f966c` + review fix `557a07a`, 2026-06-04)
 - **Component:** `pfb_unbound.py`, `pfblockerng.inc`, `pfblockerng_dnsbl.php`, `stubs/pfsense/`, `tests/`
 
 ## Context / problem
@@ -39,8 +39,14 @@ not FIFO), **configurable via the WebUI**, default **10000**, `0` = unlimited.
 
 ## Result
 
-PR #72 open. 1019 pytest, PHPStan green, 102 PHPUnit, all linters clean.
-`_LruCache` units (recency-on-get keeps hot, evict-LRU-at-cap, `0`=unbounded, clear, del)
-plus an `operate()`-level cap test; `conftest` resets `decisionDB` to a real `_LruCache(0)`.
+PR #72 merged (`devel` `52f966c` + `557a07a`). 1019 pytest, PHPStan green, 115 PHPUnit,
+all linters clean. `_LruCache` units (recency-on-get keeps hot, evict-LRU-at-cap,
+`0`=unbounded, clear, del) plus an `operate()`-level cap test; `conftest` resets
+`decisionDB` to a real `_LruCache(0)`.
 
-<!-- Update on merge: final commit hash(es), CodeRabbit verdict, merge result. -->
+CodeRabbit review caught two real issues, both fixed (`557a07a`): (a) `pfb_global` could
+pass a **non-numeric** config value through to `intval()` = `0` = silently unlimited —
+now digits-only-validated + clamped; (b) `pfb_py_cache_max` was wrongly added to
+`$select_options`, whose generic validator would dereference an undefined
+`$options_pfb_py_cache_max` (`null`) → PHP 8 TypeError on save — removed (it's a numeric
+input with its own validation).

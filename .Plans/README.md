@@ -18,4 +18,4 @@ making the per-domain *decision* the single cached structure, then bounding it.
 | 02 | [Unified DNSBL decision cache (Stage 1)](02_Unified_DNSBL_Decision_Cache/README.md) | #67 | Merged |
 | 03 | [DNSBL attribution bug fixes (casing + CNAME TLD)](03_DNSBL_Attribution_Bugfixes/README.md) | #68 | Merged |
 | 04 | [Unify all query-time caches (Stage 2)](04_Unify_All_Query_Caches/README.md) | #70 | Merged |
-| 05 | [Bound decisionDB with an LRU cache](05_DecisionDB_LRU_Cap/README.md) | #72 | PR open |
+| 05 | [Bound decisionDB with an LRU cache](05_DecisionDB_LRU_Cap/README.md) | #72 | Merged |
