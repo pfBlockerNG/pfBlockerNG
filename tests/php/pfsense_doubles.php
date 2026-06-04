@@ -56,22 +56,12 @@ if (!function_exists('is_ipaddr')) {
 }
 
 if (!function_exists('is_hostname')) {
-	// Faithful-enough RFC-1123 hostname check (labels 1-63 of [a-z0-9-], not
-	// starting/ending '-', total <= 255). The seed suite does not assert
-	// PFB_FILTER_HOSTNAME edge cases; this only needs to be plausible.
+	// Reached only by PFB_FILTER_HOSTNAME, which the seed suite does not exercise.
+	// Fail fast rather than guess pfSense's semantics (a guessed double could let a
+	// future test pass against behaviour pfSense never had). Port the real
+	// util.inc is_hostname() here when a HOSTNAME path is first tested.
 	function is_hostname($hostname, $allow_wildcard = false) {
-		if (!is_string($hostname) || $hostname === '' || strlen($hostname) > 255) {
-			return false;
-		}
-		if ($allow_wildcard && strpos($hostname, '*') === 0) {
-			$hostname = substr($hostname, 2);
-		}
-		foreach (explode('.', $hostname) as $label) {
-			if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i', $label)) {
-				return false;
-			}
-		}
-		return true;
+		throw new LogicException(__FUNCTION__ . '() double not implemented — port the real pfSense is_hostname() before testing this path');
 	}
 }
 
@@ -127,15 +117,17 @@ if (!function_exists('unlink_if_exists')) {
 }
 
 if (!function_exists('resolve_host_addresses')) {
-	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise.
+	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise. Fail
+	// fast rather than return a guessed [] that could hide a missing real double.
 	function resolve_host_addresses($host, $records = [], $dnscache = false) {
-		return [];
+		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path');
 	}
 }
 
 if (!function_exists('is_ipaddr_configured')) {
-	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise.
+	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise. Fail
+	// fast rather than return a guessed false that could hide a missing real double.
 	function is_ipaddr_configured($ipaddr, $ignore_if = '', $check_localip = false, $check_subnets = false, $cidrprefix = '') {
-		return false;
+		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path');
 	}
 }

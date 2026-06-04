@@ -14,28 +14,29 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_abp_extract_ip')]
 final class AbpExtractIpTest extends TestCase
 {
-    public static function provider(): array
-    {
-        return [
-            'abp anchor v4'            => ['||192.0.2.4^', '192.0.2.4'],
-            'abp anchor v4 + options'  => ['||192.0.2.4^$third-party', '192.0.2.4'],
-            'abp anchor v4 no caret'   => ['||192.0.2.4', '192.0.2.4'],
-            'abp anchor v6'            => ['||2001:db8::1^', '2001:db8::1'],
-            'abp anchor domain -> none' => ['||example.com^', ''],
-            'hosts sink + ip target'   => ['0.0.0.0 192.0.2.9', '192.0.2.9'],
-            'hosts tab-delimited'      => ["127.0.0.1\t192.0.2.9", '192.0.2.9'],
-            'hosts domain target -> none' => ['127.0.0.1 example.com', ''],
-            'hosts single ip -> none'  => ['192.0.2.9', ''],
-            'plain domain -> none'     => ['example.com', ''],
-            'empty -> none'            => ['', ''],
-            'whitespace only -> none'  => ['   ', ''],
-            'leading/trailing trim'    => ['  ||192.0.2.4^  ', '192.0.2.4'],
-        ];
-    }
+	public static function provider(): array
+	{
+		return [
+			'abp anchor v4'            => ['||192.0.2.4^', '192.0.2.4'],
+			'abp anchor v4 + options'  => ['||192.0.2.4^$third-party', '192.0.2.4'],
+			'abp anchor v4 no caret'   => ['||192.0.2.4', '192.0.2.4'],
+			'abp anchor v6'            => ['||2001:db8::1^', '2001:db8::1'],
+			'abp anchor domain -> none' => ['||example.com^', ''],
+			'hosts sink + ip target'   => ['0.0.0.0 192.0.2.9', '192.0.2.9'],
+			'hosts v6 sink + ip target' => ['::1 2001:db8::1', '2001:db8::1'],
+			'hosts tab-delimited'      => ["127.0.0.1\t192.0.2.9", '192.0.2.9'],
+			'hosts domain target -> none' => ['127.0.0.1 example.com', ''],
+			'hosts single ip -> none'  => ['192.0.2.9', ''],
+			'plain domain -> none'     => ['example.com', ''],
+			'empty -> none'            => ['', ''],
+			'whitespace only -> none'  => ['   ', ''],
+			'leading/trailing trim'    => ['  ||192.0.2.4^  ', '192.0.2.4'],
+		];
+	}
 
-    #[DataProvider('provider')]
-    public function testExtract(string $line, string $expected): void
-    {
-        $this->assertSame($expected, pfb_dnsbl_abp_extract_ip($line));
-    }
+	#[DataProvider('provider')]
+	public function testExtract(string $line, string $expected): void
+	{
+		$this->assertSame($expected, pfb_dnsbl_abp_extract_ip($line));
+	}
 }
