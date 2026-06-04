@@ -914,6 +914,194 @@ function pfb_unbound_listens_v6(): bool {
 	return false;
 }
 
+// [ ADR-13 ] Locate the index of the auto-managed DNSBL VIP this package owns inside a
+// virtualip/vip array. Pure (no side effects). Ownership is decided by TWO predicates,
+// both required, mirroring the lifecycle contract:
+//   (1) MARKER  : $vip['descr'] === $marker (PFB_AUTO_VIP_DESCR_V4/_V6) — the package
+//                 only ever touches VIPs it stamped, never a manually-created one.
+//   (2) IP MATCH: when $match_ip is a non-empty string, $vip['subnet'] must equal it.
+//                 Used on delete to bind removal to the address currently resolved from
+//                 the stored pfb_dnsvip4/6 config, so we never delete a marked VIP whose
+//                 address no longer corresponds to our config. Pass null to match on the
+//                 marker alone (idempotent reuse on create, before any id is stored).
+// Returns the integer key of the first matching entry, or null if none matches.
+function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
+	foreach ($vips_config as $idx => $vip) {
+		if (($vip['descr'] ?? '') !== $marker) {
+			continue;
+		}
+		if ($match_ip !== null && $match_ip !== '' && ($vip['subnet'] ?? '') !== $match_ip) {
+			continue;
+		}
+		if (is_int($idx)) {
+			return $idx;
+		}
+	}
+	return null;
+}
+
+// [ ADR-13 ] VIP lifecycle manager. Creates the marked DNSBL sinkhole VIP(s) on enable
+// (when 'Create VIPs automatically' is on) and removes ONLY the marked + IP-matched
+// VIP(s) on disable / when no longer managed. Wired into pfb_create_dnsbl($mode).
+//
+// ADDITIVE: with pfb_dnsvip_auto off the function returns immediately on the enabled
+// path (and, on the disabled path, simply finds no marker+IP-matched VIP to remove
+// unless a previously auto-created one is still present), so with the feature never
+// enabled the runtime is byte-identical to today.
+//
+// Marker/IP delete guard: a VIP is removed iff BOTH (a) its descr equals
+// PFB_AUTO_VIP_DESCR_V4/_V6 AND (b) its subnet equals the IP currently resolved from the
+// stored pfb_dnsvip4/6 config (pfb_find_marked_vip(..., $match_ip)). A manually-created
+// VIP (no marker) is NEVER touched; a marked VIP whose address no longer matches stored
+// config is NEVER deleted on the basis of the marker alone.
+//
+// Create apply sequence matches upstream firewall_virtual_ip.inc (config first, then
+// apply): the vip entry is written into virtualip/vip and the dnsvip id into the DNSBL
+// settings, write_config fires ONCE iff anything changed, then interface_ipalias_configure()
+// brings the alias up live.
+function pfb_manage_dnsbl_vip(string $mode): void {
+	global $pfb;
+
+	// Only the two lifecycle modes drive VIP management; anything else is a no-op.
+	if ($mode !== 'enabled' && $mode !== 'disabled') {
+		return;
+	}
+
+	$auto      = ($pfb['dnsbl_vip_auto'] ?? '') == 'on';
+	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
+	$dnsblcfg_path = 'installedpackages/pfblockerngdnsblsettings/config/0';
+
+	// On the enabled path with auto OFF there is nothing to do -> immediate no-op,
+	// keeping pfb_create_dnsbl byte-identical to today.
+	if ($mode === 'enabled' && !$auto) {
+		return;
+	}
+
+	// Families to provision when creating. v4 is always managed. v6 is managed when a
+	// v6 VIP is already requested (an id stored) or the resolver listens on IPv6
+	// (Phase 3 makes v6 mandatory in that case; here we simply provision it).
+	$want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6();
+
+	// Per-family descriptor table: marker, AF, subnet_bits, the stored-id config key.
+	$families = [
+		[
+			'marker'   => PFB_AUTO_VIP_DESCR_V4,
+			'family'   => AF_INET,
+			'bits'     => 32,
+			'idkey'    => 'pfb_dnsvip4',
+			'managed'  => ($mode === 'enabled' && $auto),	// v4 always managed on create
+		],
+		[
+			'marker'   => PFB_AUTO_VIP_DESCR_V6,
+			'family'   => AF_INET6,
+			'bits'     => 128,
+			'idkey'    => 'pfb_dnsvip6',
+			'managed'  => ($mode === 'enabled' && $auto && $want_v6),
+		],
+	];
+
+	$vips_config = config_get_path('virtualip/vip', []);
+	$dnsblconfig = config_get_path($dnsblcfg_path, []);
+	$changed     = FALSE;
+
+	foreach ($families as $fam) {
+		if ($fam['managed']) {
+			// CREATE / ENSURE (idempotent). Reuse an existing marked VIP if present
+			// (match on marker alone — its address is whatever we created earlier),
+			// else pick a free candidate and create one.
+			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], null);
+			if ($idx !== null) {
+				$vip    = $vips_config[$idx];
+				$uniqid = $vip['uniqid'] ?? uniqid();
+				if (!isset($vip['uniqid'])) {
+					$vips_config[$idx]['uniqid'] = $uniqid;
+					$changed = TRUE;
+				}
+			} else {
+				$address = pfb_pick_free_dnsbl_vip($fam['family'], $interface);
+				if ($address === null) {
+					// No free candidate -> do not create; leave config as-is and log.
+					pfb_logger("\nDNSBL auto-VIP: no free {$fam['marker']} address available; not created", 1);
+					continue;
+				}
+				$uniqid = uniqid();
+				$vips_config[] = [
+					'mode'        => 'ipalias',
+					'interface'   => $interface,
+					'type'        => 'single',
+					'subnet'      => $address,
+					'subnet_bits' => (string) $fam['bits'],
+					'descr'       => $fam['marker'],
+					'uniqid'      => $uniqid,
+				];
+				$changed = TRUE;
+				pfb_logger("\nDNSBL auto-VIP: created {$fam['marker']} at {$address}/{$fam['bits']} on {$interface}", 1);
+			}
+
+			// Point the stored DNSBL settings id at this VIP.
+			$vip_id = "_vip{$uniqid}";
+			if (($dnsblconfig[$fam['idkey']] ?? '') !== $vip_id) {
+				$dnsblconfig[$fam['idkey']] = $vip_id;
+				$changed = TRUE;
+			}
+		} else {
+			// DELETE (marker + IP-match only). The address must match what the stored
+			// config currently resolves to, so we never delete a marked VIP that is no
+			// longer the one our config points at, and never an unmarked VIP.
+			$match_ip = ($fam['family'] === AF_INET)
+				? (string) (get_configured_vip_ipv4($dnsblconfig[$fam['idkey']] ?? '') ?? '')
+				: (string) (get_configured_vip_ipv6($dnsblconfig[$fam['idkey']] ?? '') ?? '');
+
+			if ($match_ip === '') {
+				continue;
+			}
+
+			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], $match_ip);
+			if ($idx === null) {
+				continue;
+			}
+
+			// Bring the alias down live, then drop it from config.
+			interface_vip_bring_down($vips_config[$idx]);
+			pfb_logger("\nDNSBL auto-VIP: removed {$fam['marker']} at {$match_ip}", 1);
+			unset($vips_config[$idx]);
+			$vips_config = array_values($vips_config);
+
+			if (!empty($dnsblconfig[$fam['idkey']])) {
+				unset($dnsblconfig[$fam['idkey']]);
+			}
+			$changed = TRUE;
+		}
+	}
+
+	if (!$changed) {
+		return;
+	}
+
+	// Apply order mirrors upstream firewall_virtual_ip.inc: persist config first,
+	// then bring the alias(es) up.
+	config_set_path('virtualip/vip', $vips_config);
+	config_set_path($dnsblcfg_path, $dnsblconfig);
+	write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
+
+	// Apply any created/ensured marked VIP live (config-first, then configure).
+	if ($mode === 'enabled' && $auto) {
+		foreach ($families as $fam) {
+			if (!$fam['managed']) {
+				continue;
+			}
+			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], null);
+			if ($idx !== null) {
+				$vip = $vips_config[$idx];
+				interface_ipalias_configure($vip);
+			}
+		}
+	}
+
+	// Refresh $pfb so callers (NAT create) see the resolved VIP addresses.
+	pfb_global();
+}
+
 // Validate length of labels (Max of 63 chars)
 function pfb_validate_domain_labels($input) {
 
@@ -980,6 +1168,7 @@ function pfb_global() {
 	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'pfb_global')		?: '';		// Maxmind License Key
 
 	$pfb['dnsbl']		= $pfb['dnsblconfig']['pfb_dnsbl'];									// Enabled state of DNSBL
+	$pfb['dnsbl_vip_auto']	= ($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '') == 'on' ? 'on' : '';				// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= isset($pfb['dnsblconfig']['dnsbl_interface']) ? $pfb['dnsblconfig']['dnsbl_interface'] : 'lo0';	// VIP Local Interface setting
@@ -2079,6 +2268,11 @@ function pfb_create_dnsbl_cert() {
 function pfb_create_dnsbl($mode) {
 	global $pfb;
 	pfb_global();
+
+	// [ ADR-13 ] Create/remove the marked DNSBL sinkhole VIP(s) before the NAT pass so
+	// the NAT generation below sees the resolved VIP address(es). No-op (byte-identical)
+	// when 'Create VIPs automatically' (pfb_dnsvip_auto) is off. Refreshes $pfb.
+	pfb_manage_dnsbl_vip($mode);
 
 	$new_nat = $pfb_ex_nat = $dnsbl_ex_nat = array();
 	$pfbupdate = FALSE;
