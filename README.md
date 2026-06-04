@@ -237,6 +237,64 @@ python -m pytest tests/test_adr06_golden_oracle.py \
                  tests/test_adr07_php_boundary.py
 ```
 
+### DNSBL sinkhole VIP
+
+A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the
+DNSBL web server (lighttpd) listens on. That VIP must exist before DNSBL can be
+enabled; `pfb_validate_vips` force-disables DNSBL if it is missing or invalid.
+
+#### "Create VIPs automatically" (ADR-13)
+
+The **DNSBL Virtual IP** group on the DNSBL settings page now includes a
+**"Create VIPs automatically"** checkbox (`pfb_dnsvip_auto`, default **off**).
+When checked, pfBlockerNG owns the sinkhole VIP(s) end-to-end — no manual VIP
+creation at Firewall > Virtual IPs is needed.
+
+**Address scheme.** The preferred addresses are:
+
+- IPv4: `10.10.10.53/32` (a `.53` DNS homage)
+- IPv6: `fd00::53/128` (ULA range)
+
+On conflict, the package sweeps `10.10.X.53` / `fd00:X::53` (X = 0..15) and
+picks the first address that overlaps no existing VIP or configured subnet.
+
+**Ownership marker.** Auto-created VIPs carry the description
+`pfB_AUTO_VIP_v4` / `pfB_AUTO_VIP_v6`. Only VIPs bearing that exact marker
+are ever managed or removed by the package — a manually-created VIP is never
+touched.
+
+**Lifecycle.** The VIP is created when DNSBL is enabled
+(`pfb_create_dnsbl('enabled')`) and removed when DNSBL or pfBlockerNG is
+disabled — including on uninstall. The `pfb_dnsvip_auto` setting and the
+stored address survive disable/re-enable; the VIP is re-created on the next
+enable pass. Settings persist independently of VIP state.
+
+**Edge: range fills up.** If the auto flag is on and the candidate range later
+fills up (all `10.10.X.53` / `fd00:X::53` addresses conflict), the checkbox
+renders disabled and unchecked with a warning on the settings page, while the
+stored `pfb_dnsvip_auto` stays `on` until the next save. The lifecycle manager
+no-ops safely when no free address is available — it logs and leaves the
+existing config untouched.
+
+**IPv6 — when is it mandatory?** When the DNS Resolver listens on IPv6, a v6
+sinkhole VIP becomes **mandatory**:
+
+- **Auto mode** — pfBlockerNG provisions `fd00::53` automatically, no friction.
+- **Manual mode** — saving the DNSBL settings without a v6 VIP raises an input
+  error; `pfb_global` force-disables DNSBL until one is provided.
+
+**HA / CARP.** The `pfb_dnsvip_auto` flag and the address choice live in
+`config.xml` and replicate to CARP secondaries. Each node creates and removes
+its own node-local `lo0` IP-Alias VIP when it runs its own enable/disable pass
+— this is correct; `lo0` aliases are node-local.
+
+**If "Create VIPs automatically" is off** (the default), the existing manual
+workflow is unchanged: pre-create an IP-Alias VIP at Firewall > Virtual IPs
+(in an isolated range, e.g. `10.10.10.1/32` on `lo0`), then select it from
+the IPv4 VIP / IPv6 VIP dropdowns on the DNSBL settings page.
+
+See [ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md) for the full design.
+
 ### Benchmarks
 
 `benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the

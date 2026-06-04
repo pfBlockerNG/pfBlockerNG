@@ -2559,7 +2559,10 @@ $pfb_auto_help = 'Automatically create and manage the DNSBL sinkhole Virtual IP(
 	. 'pfBlockerNG creates an IP-Alias VIP on the selected Web Server Interface at a free DNS-themed address '
 	. '(<strong>10.10.10.53</strong> for IPv4, <strong>fd00::53</strong> for IPv6, sweeping to the next free '
 	. '<strong>.53</strong> address on conflict), marked <strong>pfB_AUTO_VIP_v4</strong> / <strong>pfB_AUTO_VIP_v6</strong>. '
-	. 'The VIP is created when DNSBL is enabled and removed when it is disabled; only VIPs carrying that marker are ever managed. '
+	. 'The VIP is created when DNSBL is enabled and removed when it is disabled (including on uninstall); '
+	. 'this setting and the address choice persist across enable/disable cycles. '
+	. 'Only VIPs carrying that marker are ever managed; manually-created VIPs are never touched. '
+	. 'On a CARP/HA pair each node manages its own node-local VIP. '
 	. 'A separate IPv6 VIP is added automatically when the DNS Resolver listens on IPv6.';
 if ($pfb_auto_exhausted) {
 	// No free candidate for a required family: disable the control and explain why, using
