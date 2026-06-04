@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_unbound_py_atomic_write')]
 #[CoversFunction('pfb_unbound_py_flip_sentinel')]
+#[CoversFunction('pfb_unbound_py_wait_applied')]
 final class UnboundPyPublishTest extends TestCase
 {
 	private string $tmp;
@@ -115,7 +116,7 @@ final class UnboundPyPublishTest extends TestCase
 	{
 		$this->assertFileDoesNotExist($this->sentinel());
 
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(1, pfb_unbound_py_flip_sentinel());	// returns the published gen.
 		$this->assertFileExists($this->sentinel());
 		$this->assertSame('1', trim(file_get_contents($this->sentinel())));
 	}
@@ -126,12 +127,12 @@ final class UnboundPyPublishTest extends TestCase
 		file_put_contents($this->sentinel(), "7\n");
 		$this->assertSame('7', trim(file_get_contents($this->sentinel())));
 
-		// After: strictly advanced to 8 (current+1).
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		// After: strictly advanced to 8 (current+1); the return value IS that gen.
+		$this->assertSame(8, pfb_unbound_py_flip_sentinel());
 		$this->assertSame('8', trim(file_get_contents($this->sentinel())));
 
 		// And again -> 9: proves the advance reads the CURRENT value each time.
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(9, pfb_unbound_py_flip_sentinel());
 		$this->assertSame('9', trim(file_get_contents($this->sentinel())));
 	}
 
@@ -139,7 +140,7 @@ final class UnboundPyPublishTest extends TestCase
 	{
 		// Any lines after the first are ignored (Phase-4 reader contract).
 		file_put_contents($this->sentinel(), "41\nignored junk\nmore\n");
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(42, pfb_unbound_py_flip_sentinel());
 		$this->assertSame('42', trim(file_get_contents($this->sentinel())));
 	}
 
@@ -147,22 +148,50 @@ final class UnboundPyPublishTest extends TestCase
 	{
 		// Empty file -> treated as gen 0 -> writes 1.
 		file_put_contents($this->sentinel(), '');
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(1, pfb_unbound_py_flip_sentinel());
 		$this->assertSame('1', trim(file_get_contents($this->sentinel())));
 
 		// Non-integer first line -> treated as gen 0 -> writes 1.
 		file_put_contents($this->sentinel(), "garbage\n9\n");
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(1, pfb_unbound_py_flip_sentinel());
 		$this->assertSame('1', trim(file_get_contents($this->sentinel())));
 	}
 
 	public function testFlipWritesFirstLineAsBareIntegerPlusNewline(): void
 	{
 		// The exact on-disk shape: "<int>\n" (first line is a clean base-10 integer).
-		$this->assertTrue(pfb_unbound_py_flip_sentinel());
+		$this->assertSame(1, pfb_unbound_py_flip_sentinel());
 		$raw = file_get_contents($this->sentinel());
 		$this->assertSame("1\n", $raw);
 		$first = strtok($raw, "\n");
 		$this->assertTrue(ctype_digit($first));
+	}
+
+	// --- wait-for-apply (the ADR-10 readiness handshake) --------------------
+
+	private function applied(): string
+	{
+		return "{$this->tmp}/pfb_py_reload.applied";
+	}
+
+	public function testWaitAppliedReturnsTrueWhenMarkerReachesGen(): void
+	{
+		// The watcher has published the applied generation -> the swap is LIVE.
+		file_put_contents($this->applied(), "5\n");
+		$this->assertTrue(pfb_unbound_py_wait_applied(5, 2));
+		// A marker AHEAD of the target also counts as applied (>=, a later swap landed).
+		$this->assertTrue(pfb_unbound_py_wait_applied(4, 2));
+	}
+
+	public function testWaitAppliedTimesOutWhenMarkerAbsentOrBehind(): void
+	{
+		// BEFORE: no marker -> the swap never confirms -> times out FALSE (caller then
+		// falls back to the restart so the lists still load).
+		$this->assertFileDoesNotExist($this->applied());
+		$this->assertFalse(pfb_unbound_py_wait_applied(1, 1));
+
+		// A marker BEHIND the target also times out (watcher has not caught up yet).
+		file_put_contents($this->applied(), "3\n");
+		$this->assertFalse(pfb_unbound_py_wait_applied(4, 1));
 	}
 }

@@ -144,7 +144,7 @@ class TestRunSwap:
         P._snapshot = old
 
         assert P._snapshot is old  # BEFORE: old snapshot live.
-        P._reload_run_swap(lambda: new)
+        assert P._reload_run_swap(lambda: new) is True  # reports the swap happened.
         assert P._snapshot is new  # AFTER: new snapshot installed.
         assert P._snapshot is not old
 
@@ -162,7 +162,7 @@ class TestRunSwap:
             return _snapshot(tag="new.example.com")
 
         assert P._snapshot is old  # BEFORE.
-        P._reload_run_swap(_builder)
+        assert P._reload_run_swap(_builder) is False  # declined -> no swap reported.
         assert P._snapshot is old  # AFTER: declined -> old kept.
         assert built["n"] == 0  # builder never ran (RAM gate is BEFORE the build).
 
@@ -175,7 +175,7 @@ class TestRunSwap:
         P._snapshot = old
 
         assert P._snapshot is old  # BEFORE.
-        P._reload_run_swap(lambda: None)
+        assert P._reload_run_swap(lambda: None) is False  # build failed -> no swap reported.
         assert P._snapshot is old  # AFTER: build failed -> old kept.
 
 
@@ -193,6 +193,9 @@ class _Harness:
 
         self.sentinel = str(tmp_path / "pfb_py_reload")
         P.pfb["pfb_py_reload"] = self.sentinel
+        # ADR-10: the watcher publishes the applied generation here after each swap.
+        self.applied = str(tmp_path / "pfb_py_reload.applied")
+        P.pfb["pfb_py_reload_applied"] = self.applied
         # Short wait cadence so the kqueue/poll timeout (hence stop observation + the
         # blocking-build release) is prompt and the suite stays fast. Best-effort by
         # design; the generation compare -- not the cadence -- is what drives the swap.
@@ -231,6 +234,10 @@ class _Harness:
 
     def publish(self, gen: int) -> None:
         _write_generation(self.sentinel, gen)
+
+    def read_applied(self) -> int | None:
+        # The applied marker uses the same int-on-first-line format as the sentinel.
+        return P._reload_read_generation(self.applied)
 
     def wait_builds(self, n: int, timeout: float = 3.0) -> None:
         deadline = time.monotonic() + timeout
@@ -391,5 +398,88 @@ class TestWatcherLoop:
             # AFTER: deinit set the stop Event, woke + joined the watcher.
             assert not h.thread.is_alive()
             assert P.pfb.get("reload_watcher") is False
+        finally:
+            h.stop_join()
+
+
+# --------------------------------------------------------------------------- #
+# ADR-10 readiness handshake: the applied-generation marker the watcher publishes
+# after each swap (PHP's data fast path waits on it, so the ADR-12 post hook / the
+# #51 alert page / the smoke suite observe LIVE lists, not a pending async swap).
+# --------------------------------------------------------------------------- #
+
+
+class TestAppliedMarker:
+    def test_write_applied_roundtrips_and_overwrites(self, tmp_path: Any) -> None:
+        # The marker is an int on the first line, atomically (re)written in place.
+        path = str(tmp_path / "pfb_py_reload.applied")
+        P.pfb["pfb_py_reload_applied"] = path
+        P._reload_write_applied(5)
+        assert P._reload_read_generation(path) == 5
+        P._reload_write_applied(9)  # a later swap overwrites.
+        assert P._reload_read_generation(path) == 9
+        assert not (tmp_path / "pfb_py_reload.applied.tmp").exists()  # no stale temp.
+
+    def test_write_applied_is_noop_when_path_unset(self, monkeypatch: Any) -> None:
+        # No marker path configured -> silent no-op, never raises.
+        monkeypatch.setitem(P.pfb, "pfb_py_reload_applied", "")
+        P._reload_write_applied(3)
+
+    def test_baseline_published_at_startup(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # A sentinel already at gen 5 at startup: the watcher adopts it as baseline
+        # WITHOUT a rebuild AND publishes 5 as the applied generation, so PHP's first
+        # wait-for-apply has a floor (does not block on an absent marker).
+        h = _Harness(tmp_path, monkeypatch)
+        h.publish(5)
+        assert h.read_applied() is None  # BEFORE: no marker yet.
+        h.start()
+        try:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and h.read_applied() != 5:
+                time.sleep(0.01)
+            assert h.read_applied() == 5  # AFTER: baseline published.
+            assert h.builds == []  # baseline adoption did NOT rebuild.
+        finally:
+            h.stop_join()
+
+    def test_marker_advances_only_on_successful_swap(self, tmp_path: Any, monkeypatch: Any) -> None:
+        h = _Harness(tmp_path, monkeypatch)
+        P._snapshot = _snapshot(tag="old.example.com", counts=0)
+        h.start()
+        try:
+            assert h.read_applied() is None  # BEFORE: nothing applied (no sentinel yet).
+            h.publish(1)
+            h.wait_builds(1)
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and h.read_applied() != 1:
+                time.sleep(0.01)
+            assert h.read_applied() == 1  # AFTER: marker advanced to the swapped gen.
+        finally:
+            h.stop_join()
+
+    def test_marker_not_advanced_on_ram_decline(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # RAM-constrained box: the swap is DECLINED, so the marker is NOT advanced --
+        # PHP's wait then times out and falls back to the restart (fail-safe).
+        h = _Harness(tmp_path, monkeypatch, ram_ok=False)
+        P._snapshot = _snapshot(tag="old.example.com", counts=1_000_000)
+        h.start()
+        try:
+            h.publish(7)
+            time.sleep(0.4)  # several poll cycles.
+            assert h.read_applied() is None  # declined -> never written.
+        finally:
+            h.stop_join()
+
+    def test_marker_not_advanced_on_build_fail(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # Gate OK but the build returns None (bad manifest): fail-closed, marker stays.
+        h = _Harness(tmp_path, monkeypatch)
+        h.fail = True
+        P._snapshot = _snapshot(tag="old.example.com", counts=0)
+        h.start()
+        try:
+            h.publish(3)
+            h.wait_builds(1)  # the builder ran (returned None).
+            time.sleep(0.2)
+            assert h.read_applied() is None  # build failed -> marker not advanced.
         finally:
             h.stop_join()

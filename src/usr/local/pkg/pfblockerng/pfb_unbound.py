@@ -315,6 +315,32 @@ def _reload_read_generation(sentinel_path: str) -> int | None:
         return None
 
 
+def _reload_write_applied(gen: int) -> None:
+    """Publish ``gen`` as the APPLIED-generation marker (atomic temp + ``os.replace``).
+
+    Written by the watcher after a successful swap (and once at startup with the
+    baseline). PHP polls it to learn the live generation -- the readiness handshake that
+    replaces "wait for the Unbound restart" for a no-restart data update. Best-effort: a
+    write failure is logged (to py_error.log via the redirected stderr) and the swap
+    still stands; PHP's wait then times out and falls back to the restart (fail-safe)."""
+    path = pfb.get("pfb_py_reload_applied")
+    if not path:
+        return
+    tmp = "{}.tmp".format(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("{}\n".format(int(gen)))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: failed to write applied-generation marker [ {} ]: {}\n".format(path, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _build_swap_snapshot() -> Snapshot | None:
     """The background reload builder: re-read the manifest, rebuild every matcher
     stratum into FRESH dicts (mutating NO live dict), and return a new Snapshot -- or
@@ -399,14 +425,18 @@ def _build_swap_snapshot() -> Snapshot | None:
     )
 
 
-def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> None:
+def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> bool:
     """Run ONE RAM-gated rebuild_and_swap() for the watcher (off the query threads).
 
     Projects the build's transient from the LIVE snapshot's entry count and consults the
     RAM gate FIRST; if the box cannot fit the ~2x transient, DECLINE fail-closed -- the
     old snapshot stays live, log that the update needs the restart fallback. Otherwise
     delegate to the Phase-3 fail-closed rebuild_and_swap (default emit_counts=True so the
-    UI counts refresh without a restart)."""
+    UI counts refresh without a restart).
+
+    Returns ``True`` iff the snapshot was actually swapped in (the caller then advances
+    the applied-generation marker); ``False`` on a RAM decline OR a failed/empty build
+    (the marker is NOT advanced, so PHP's wait times out and falls back to the restart)."""
     snap = _snapshot
     entry_count = snap.counts + snap.regex_count if snap is not None else 0
     if not _reload_ram_gate_ok(entry_count):
@@ -417,9 +447,11 @@ def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> None:
                 (2 * entry_count * RELOAD_BYTES_PER_ENTRY) // (1024 * 1024), entry_count
             )
         )
-        return
+        return False
     if rebuild_and_swap(builder):
         log_info("[pfBlockerNG]: DNSBL lists reloaded with no restart (zero-downtime swap)")
+        return True
+    return False
 
 
 def pfb_reload_watcher(builder: Callable[[], Snapshot | None] = _build_swap_snapshot) -> None:
@@ -436,8 +468,12 @@ def pfb_reload_watcher(builder: Callable[[], Snapshot | None] = _build_swap_snap
     watch_dir = os.path.dirname(os.path.abspath(sentinel)) or "."
 
     # Baseline: adopt the CURRENT generation WITHOUT building (init already loaded the
-    # lists synchronously -- the watcher only acts on a FUTURE advance).
+    # lists synchronously -- the watcher only acts on a FUTURE advance). Publish that
+    # baseline as the applied generation so PHP's first wait-for-apply (after a flip)
+    # has a floor to compare against and never blocks on a stale/absent marker.
     last_gen = _reload_read_generation(sentinel)
+    if last_gen is not None:
+        _reload_write_applied(last_gen)
 
     def drain_and_swap() -> None:
         # Single-flight: build for the latest generation, then re-check; if it advanced
@@ -448,7 +484,11 @@ def pfb_reload_watcher(builder: Callable[[], Snapshot | None] = _build_swap_snap
             if cur is None or (last_gen is not None and cur <= last_gen):
                 return
             last_gen = cur
-            _reload_run_swap(builder)
+            # Advance the applied marker ONLY on a real swap -- a RAM decline / failed
+            # build returns False, leaving the marker behind so PHP times out and
+            # restarts (the new lists still load, just via the fail-safe path).
+            if _reload_run_swap(builder):
+                _reload_write_applied(cur)
 
     waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
     try:
@@ -698,6 +738,14 @@ def init_standard(id: int, env: module_env) -> bool:
     # rebuild_and_swap() off the query threads. Correctness rides on the atomic publish
     # + the generation compare, NOT on notify latency (a missed event only delays).
     pfb["pfb_py_reload"] = "pfb_py_reload"
+    # ADR-10: the APPLIED-generation marker. After the watcher successfully swaps in the
+    # snapshot for generation N it writes N here (atomic temp+rename, first line). PHP's
+    # data fast path waits (bounded) for this to reach the generation it just flipped
+    # before returning, so the reload call returns only once the new lists are LIVE --
+    # restoring the "lists live on return" invariant the restart had (the ADR-12 post
+    # hook + the #51 alert page + the smoke suite then observe the new state, not a
+    # pending swap). Host path /var/unbound/pfb_py_reload.applied; chroot-relative here.
+    pfb["pfb_py_reload_applied"] = "pfb_py_reload.applied"
     pfb["pfb_py_count"] = "pfb_py_count"
     # ADR-07 P8: the ADMITTED (cap-filtered) feed+user regex total -- the count the
     # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
