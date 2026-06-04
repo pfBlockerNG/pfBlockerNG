@@ -2,7 +2,7 @@
 
 - **Status:** **Proposed** (2026-06-03)
 - **Date:** 2026-06-03
-- **Branch:** `adr/13` (off **`devel`** — the refactored VIP model (`pfb_get_vips`/`pfb_validate_vips`/`_vip<uniqid>`) exists on `devel`; the feature is DNSBL-mode-agnostic PHP/UI, no Python/Unbound-matcher coupling. Independent of the ADR-07/10 chain; promote `devel → next` by rebase) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (VIP candidate/pick helpers, `pfb_manage_dnsbl_vip()`, the `pfb_create_dnsbl($mode)` fire point, `pfb_validate_vips`/`pfb_global` v6-mandatory rule, `pfb_unbound_listens_v6()`), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` + its inline JS (the "Create VIPs automatically" checkbox, prefill/disable, warning tooltip, save-time create), `stubs/pfsense/` (interface/vip apply fns), `README.md`/`CLAUDE.md` + the settings help.
+- **Branch:** `adr/13` (off **`devel`** — the refactored VIP model (`pfb_get_vips`/`pfb_validate_vips`/`_vip<uniqid>`) exists on `devel`; the feature is DNSBL-mode-agnostic PHP/UI, no Python/Unbound-matcher coupling. Independent of the ADR-07/10 chain; promote `devel → next` by rebase) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (VIP candidate/pick helpers, `pfb_manage_dnsbl_vip()`, the `pfb_create_dnsbl($mode)` fire point, the `pfb_validate_vips`/`pfb_global` v6 recommendation (non-blocking warning), `pfb_unbound_listens_v6()`), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` + its inline JS (the "Create VIPs automatically" checkbox, prefill/disable, warning tooltip, save-time create), `stubs/pfsense/` (interface/vip apply fns), `README.md`/`CLAUDE.md` + the settings help.
 - **Target runtime:** PHP 8.3 + jQuery (the DNSBL settings page) on pfSense CE 2.8. **No Python** — the Unbound plugin and `pytest` suite are untouched. No new shell.
 - **Test suite:** PHP unit coverage via the in-repo PHPUnit harness (`tests/php/Dnsbl*Test.php`) for the pure helpers, plus a **live-VM smoke case** (`tests/smoke/test_smoke_matrix.py::test_dnsbl_autovip_lifecycle`, ADR-04) that exercises auto-create → block → teardown on a real pfSense box. Static gate = `php -l` + PHPStan + ShellCheck. Manual on-box checklist (§7) still covers conflict-exhaustion + HA. The `pytest` suite must stay **green/unchanged**.
 
@@ -134,11 +134,11 @@ Prompt: `02_VIP_Lifecycle.txt`
 
 - Add the `pfb_dnsvip_auto` config key (default off). Implement `pfb_manage_dnsbl_vip(string $mode): void`: on `enabled`+auto → ensure the marked VIP(s) exist (create via the picker + `interface_ipalias_configure`, idempotent reuse), set `pfb_dnsvip4`/`6` to the `_vip{uniqid}` ids, `write_config`; on `disabled` (or auto-off / no-longer-managed) → delete **only** VIPs matching marker + stored-config IP (`interface_vip_bring_down` + drop from config). Call it from `pfb_create_dnsbl($mode)` (`inc:8698`, the existing "…and VIP…" hook). **Additive:** auto off ⇒ no-op ⇒ byte-identical.
 
-### Phase 3 — IPv6-mandatory validation when the resolver listens on IPv6
+### Phase 3 — IPv6 validation when the resolver listens on IPv6 (softened — §7 pivot)
 
 Prompt: `03_IPv6_Mandatory.txt`
 
-- Extend `pfb_validate_vips()` and the `pfb_global()` force-disable path so that when `pfb_unbound_listens_v6()` is true a v6 sinkhole VIP is required: auto mode provisions it (Phase 2), manual mode raises the input error on save / force-disables in `pfb_global`. Keep the existing v4 + manual semantics intact when v6 is not listened-on.
+- **As shipped (post-pivot):** when `pfb_unbound_listens_v6()` is true a v6 sinkhole VIP is **recommended, not required** — auto mode provisions it (Phase 2); manual mode logs a **non-blocking warning** in `pfb_global()` and DNSBL keeps running on IPv4. `pfb_validate_vips()` does **not** force-disable on a missing v6 VIP. *(The phase originally implemented a hard mandatory rule — input error on save / `pfb_global` force-disable — which the live smoke proved force-disabled DNSBL on existing manual IPv6 setups; the §7 reject lever softened it to a warning.)* The existing v4 + manual semantics are intact when v6 is not listened-on.
 
 ### Phase 4 — Settings UI: the checkbox, prefill/disable, warning tooltip, save-time create
 
@@ -150,7 +150,7 @@ Prompt: `04_Settings_UI.txt`
 
 Prompt: `05_Docs_Smoke_DoD.txt`
 
-- Document the feature (README/CLAUDE.md + settings help): the checkbox, the `pfB_AUTO_VIP_v*` marker, the address scheme, the enable/disable lifecycle, the v6-mandatory rule, and the HA behaviour. Note the smoke interplay (default-off keeps `ensure_dnsbl_vip` valid; optionally add an auto-create smoke case). Finalise §7 manual smoke + reject criteria.
+- Document the feature (README/CLAUDE.md + settings help): the checkbox, the `pfB_AUTO_VIP_v*` marker, the address scheme, the enable/disable lifecycle, the IPv6 recommendation / non-blocking-warning behaviour (post-§7-pivot), and the HA behaviour. Note the smoke interplay (default-off keeps `ensure_dnsbl_vip` valid; optionally add an auto-create smoke case). Finalise §7 manual smoke + reject criteria.
 
 ---
 
@@ -158,7 +158,7 @@ Prompt: `05_Docs_Smoke_DoD.txt`
 
 - `pfb_dnsvip_auto` off ⇒ byte-identical DNSBL settings/save/update pass; smoke + "no VIP" scenario unaffected.
 - With the box on: enable creates a marked, conflict-free VIP (v4 always, v6 when required) on `dnsbl_interface`, applied live; disable/uninstall removes **only** marker+IP-matched VIPs; manual VIPs never touched.
-- v6 is mandatory when the resolver listens on IPv6 (auto-provisioned or required in manual mode); conflict-exhaustion disables the checkbox with a warning.
+- When the resolver listens on IPv6: auto mode provisions a v6 VIP; manual mode is **non-blocking** (a missing v6 VIP logs a warning, never force-disables — §7 pivot). Conflict-exhaustion disables the checkbox with a warning.
 - `php -l` + PHPStan + ShellCheck clean; `python -m pytest` green/unchanged.
 - Status → **Accepted** only after the maintainer confirms the manual smoke below on a live pfSense box.
 

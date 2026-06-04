@@ -55,7 +55,7 @@ final class DnsblV6RequiredTest extends TestCase
 		// proceeds PAST any v6 consideration into the normal v4 interface check, and the
 		// error is never the (removed) v6-required message. This is the exact case the
 		// Phase-3 hard rule used to force-disable DNSBL on — proven non-blocking now.
-		[$ok2, $err2] = pfb_validate_vips('lo0', '_vip_test_v4', '');
+		[, $err2] = pfb_validate_vips('lo0', '_vip_test_v4', '');
 		$this->assertNotSame('IPv6 VIP required: the DNS Resolver is listening on IPv6', $err2);
 	}
 
