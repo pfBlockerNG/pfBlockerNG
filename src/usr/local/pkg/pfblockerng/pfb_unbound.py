@@ -92,12 +92,10 @@ hstsDB: defaultdict[str, Any]
 whiteDB: defaultdict[str, Any]
 gpListDB: defaultdict[str, Any]
 noAAAADB: defaultdict[str, Any]
-decisionDB: dict[str, DnsblDecision]
+decisionDB: dict[str, Decision]
 _dnsbl_last_event: Any = None
 safeSearchDB: defaultdict[str, Any]
 feedGroupIndexDB: defaultdict[int, Any]
-excludeAAAADB: list[str]
-excludeSS: list[str]
 maxmindReader: Any
 
 # Background I/O worker (file + sqlite writes off the DNS response path)
@@ -209,8 +207,6 @@ def init_standard(id: int, env: module_env) -> bool:
         allowRegexDB, \
         hstsDB, \
         whiteDB, \
-        excludeAAAADB, \
-        excludeSS, \
         decisionDB, \
         _dnsbl_last_event, \
         noAAAADB, \
@@ -425,8 +421,6 @@ def init_standard(id: int, env: module_env) -> bool:
     gpListDB = defaultdict(str)
     noAAAADB = defaultdict(str)
     feedGroupDB: defaultdict[str, Any] = defaultdict(str)
-    excludeAAAADB = []
-    excludeSS = []
 
     # Read pfb_unbound.ini settings
     if os.path.isfile(pfb["pfb_unbound.ini"]):
@@ -1262,16 +1256,17 @@ def get_details_dnsbl(
     # a mixed-case query is blocked but its block is not attributed here (the log/counter
     # path silently misses it -> per-feed under-count).
     q_name_key = q_name.lower()
-    isDNSBL = decisionDB.get(q_name_key)
-    if isDNSBL is not None and isDNSBL.is_found and not isDNSBL.in_whitelist:
+    cached = decisionDB.get(q_name_key)
+    dnsbl = cached.dnsbl if cached is not None else UNSET
+    if dnsbl is not UNSET and dnsbl.is_found and not dnsbl.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
         # except for Python nullblock events
-        if pfb["python_nolog"] and not isDNSBL.null_blocking:
+        if pfb["python_nolog"] and not dnsbl.null_blocking:
             return True
 
         # Increment dnsblgroup counter
-        if pfb["sqlite3_dnsbl_con"] and isDNSBL.group != "":
-            pfb_db_enqueue(("dnsbl", isDNSBL.group))
+        if pfb["sqlite3_dnsbl_con"] and dnsbl.group != "":
+            pfb_db_enqueue(("dnsbl", dnsbl.group))
 
         # The cached DnsblDecision is both name- and qtype-independent for some block
         # kinds -- two subdomains of one blocked zone share an identical payload (same
@@ -1285,7 +1280,7 @@ def get_details_dnsbl(
         q_type = get_q_type(qstate, qinfo)
 
         dupEntry = "+"
-        event_sig = (q_name_key, q_type, isDNSBL)
+        event_sig = (q_name_key, q_type, dnsbl)
         if _dnsbl_last_event is not None:
             if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
@@ -1295,7 +1290,7 @@ def get_details_dnsbl(
             _dnsbl_last_event = event_sig
 
         # Skip logging
-        if isDNSBL.log_type == "2":
+        if dnsbl.log_type == "2":
             return True
 
         q_ip = get_q_ip_comm(kwargs)
@@ -1311,11 +1306,11 @@ def get_details_dnsbl(
                 timestamp,
                 q_name,
                 q_ip,
-                isDNSBL.p_type,
-                isDNSBL.b_type,
-                isDNSBL.group,
-                isDNSBL.b_eval,
-                isDNSBL.feed,
+                dnsbl.p_type,
+                dnsbl.b_type,
+                dnsbl.group,
+                dnsbl.b_eval,
+                dnsbl.feed,
                 dupEntry,
                 q_type,
             )
@@ -1452,7 +1447,7 @@ def get_details_reply(
         is_reply = False
         if q_name.startswith("python_control."):
             is_reply = True
-        if not is_reply and q_type == "AAAA" and noAAAADB.get(q_name) is not None:
+        if not is_reply and q_type == "AAAA" and evaluate_noaaaa(q_name, noAAAADB):
             is_reply = True
 
         if not is_reply:
@@ -1529,7 +1524,7 @@ def get_details_reply(
         q_name = "NS"
 
     # Determine if domain was noAAAA blocked
-    if r_addr == "NXDOMAIN" and q_type == "AAAA" and noAAAADB.get(q_name) is not None:
+    if r_addr == "NXDOMAIN" and q_type == "AAAA" and evaluate_noaaaa(q_name, noAAAADB):
         r_addr = "noAAAA"
 
     if pfb["python_maxmind"] and r_addr not in ("", "Unknown", "NXDOMAIN", "NODATA", "DNSSEC", "SOA", "NS"):
@@ -3341,6 +3336,37 @@ class DnsblDecision:
     b_eval: str
 
 
+class _Unset:
+    # Sentinel: a Decision axis has not been evaluated yet for this name -- distinct
+    # from an evaluated allow/no-match (dnsbl.is_found False / noaaaa False /
+    # safesearch None). One shared immutable instance, UNSET, below.
+    __slots__ = ()
+
+
+UNSET: Any = _Unset()
+
+
+@dataclass
+class Decision:
+    # The single per-domain verdict across every axis operate() decides. Each axis is
+    # filled lazily (its check runs at a different point in operate(): noAAAA + SafeSearch
+    # pre-resolution on q_name_original, DNSBL post-resolution on the chain) and cached
+    # in decisionDB, so repeat queries skip re-evaluation. This replaces the separate
+    # dnsblDB/excludeDB (Stage 1) AND excludeAAAADB/excludeSS/noAAAADB-memo (Stage 2).
+    dnsbl: Any = UNSET  # DnsblDecision once the DNSBL stratum evaluated the name
+    noaaaa: Any = UNSET  # bool (AAAA-only): True = block, False = allow
+    safesearch: Any = UNSET  # matched safeSearchDB {A,AAAA} entry, or None = no match
+
+
+def _decision_for(name: str) -> Decision:
+    # Get-or-create the one Decision entry for a name; axes are filled in by the caller.
+    dec = decisionDB.get(name)
+    if dec is None:
+        dec = Decision()
+        decisionDB[name] = dec
+    return dec
+
+
 # ADR-07 P3: the 6-band precedence scale (ADR.md SS2 / RESULTS-P2 SS2). Highest wins;
 # a block wins iff block_prio > allow_prio (no ties: block in {1,3,5}, allow in {2,4,6}).
 #   6 user allow   5 user block   4 feed allow+important
@@ -3757,15 +3783,16 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         pass
 
     if (event == MODULE_EVENT_NEW) or (event == MODULE_EVENT_PASS):
-        # no AAAA validation
-        if qstate_valid and q_type == RR_TYPE_AAAA and pfb["noAAAADB"] and q_name_original not in excludeAAAADB:
-            isin_noAAAA = evaluate_noaaaa(q_name_original, noAAAADB)
+        # no AAAA validation. The verdict is memoized on the name's Decision (noaaaa
+        # axis): UNSET = not yet evaluated, True = block, False = allow (the old
+        # excludeAAAADB negative memo). No separate excludeAAAADB / noAAAADB-memo.
+        if qstate_valid and q_type == RR_TYPE_AAAA and pfb["noAAAADB"]:
+            dec = _decision_for(q_name_original)
+            if dec.noaaaa is UNSET:
+                dec.noaaaa = evaluate_noaaaa(q_name_original, noAAAADB)
 
             # Create FQDN Reply Message (AAAA -> A)
-            if isin_noAAAA:
-                if noAAAADB.get(q_name_original) is None:
-                    noAAAADB[q_name_original] = True
-
+            if dec.noaaaa:
                 msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
                 if msg is None or not msg.set_return_msg(qstate):
                     qstate.ext_state[id] = MODULE_ERROR
@@ -3776,14 +3803,13 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 qstate.ext_state[id] = MODULE_FINISHED
                 return True
 
-            # Add domain to excludeAAAADB to skip subsequent no AAAA validation
-            else:
-                excludeAAAADB.append(q_name_original)
-
         # SafeSearch Redirection validation
         if qstate_valid and pfb["safeSearchDB"]:
-            # Determine if domain has been previously validated
-            if q_name_original not in excludeSS:
+            # SafeSearch verdict memoized on the name's Decision (safesearch axis):
+            # UNSET = not yet evaluated, the matched {A,AAAA} entry = rewrite, None = no
+            # match (the old excludeSS negative memo). No separate excludeSS structure.
+            dec = _decision_for(q_name_original)
+            if dec.safesearch is UNSET:
                 isSafeSearch = safeSearchDB.get(q_name_original)
 
                 # Validate 'www.' Domains
@@ -3798,72 +3824,71 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 #        and q_name_original.endswith('pixabay.com'):
                 #    isSafeSearch = safeSearchDB.get('pixabay.com')
 
-                if isSafeSearch is not None:
-                    ss_found = False
-                    msg = None
-                    cname_msg = None
-                    if isSafeSearch["A"] == "nxdomain":
-                        qstate.return_rcode = RCODE_NXDOMAIN
-                        qstate.ext_state[id] = MODULE_FINISHED
-                        return True
+                dec.safesearch = isSafeSearch
+            isSafeSearch = dec.safesearch
 
-                    # TODO: Wait for Unbound code changes to allow for this functionality,
-                    # using local-zone/local-data entries for CNAMES for now
-                    elif isSafeSearch["A"] == "cname":
-                        if isSafeSearch["AAAA"] is not None and isSafeSearch["AAAA"] != "":
-                            if q_type == RR_TYPE_A:
-                                cname_msg = DNSMessage(
-                                    qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
-                                )
-                                cname_msg.answer.append(
-                                    "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
-                                )
-                                ss_found = True
-                            elif q_type == RR_TYPE_AAAA:
-                                cname_msg = DNSMessage(
-                                    qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
-                                )
-                                cname_msg.answer.append(
-                                    "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
-                                )
-                                ss_found = True
+            if isSafeSearch is not None:
+                ss_found = False
+                msg = None
+                cname_msg = None
+                if isSafeSearch["A"] == "nxdomain":
+                    qstate.return_rcode = RCODE_NXDOMAIN
+                    qstate.ext_state[id] = MODULE_FINISHED
+                    return True
 
-                            if ss_found:
-                                if cname_msg is None or not cname_msg.set_return_msg(qstate):
-                                    qstate.ext_state[id] = MODULE_ERROR
-                                    return True
-
-                                MODULE_RESTART_NEXT = 3
-                                qstate.no_cache_store = 1
-                                qstate.ext_state[id] = MODULE_RESTART_NEXT
-                                return True
-                    else:
-                        if (q_type == RR_TYPE_A and isSafeSearch["A"] != "") or (
-                            q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] == ""
-                        ):
-                            msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
-                            msg.answer.append("{} 300 IN {} {}".format(qstate.qinfo.qname_str, "A", isSafeSearch["A"]))
+                # TODO: Wait for Unbound code changes to allow for this functionality,
+                # using local-zone/local-data entries for CNAMES for now
+                elif isSafeSearch["A"] == "cname":
+                    if isSafeSearch["AAAA"] is not None and isSafeSearch["AAAA"] != "":
+                        if q_type == RR_TYPE_A:
+                            cname_msg = DNSMessage(
+                                qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
+                            )
+                            cname_msg.answer.append(
+                                "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
+                            )
                             ss_found = True
-                        elif q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] != "":
-                            msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RA)
-                            msg.answer.append(
-                                "{} 300 IN {} {}".format(qstate.qinfo.qname_str, "AAAA", isSafeSearch["AAAA"])
+                        elif q_type == RR_TYPE_AAAA:
+                            cname_msg = DNSMessage(
+                                qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
+                            )
+                            cname_msg.answer.append(
+                                "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
                             )
                             ss_found = True
 
-                    if ss_found:
-                        if msg is None or not msg.set_return_msg(qstate):
-                            qstate.ext_state[id] = MODULE_ERROR
-                            return True
+                        if ss_found:
+                            if cname_msg is None or not cname_msg.set_return_msg(qstate):
+                                qstate.ext_state[id] = MODULE_ERROR
+                                return True
 
-                        qstate.return_rcode = RCODE_NOERROR
-                        qstate.return_msg.rep.security = 2
-                        qstate.ext_state[id] = MODULE_FINISHED
+                            MODULE_RESTART_NEXT = 3
+                            qstate.no_cache_store = 1
+                            qstate.ext_state[id] = MODULE_RESTART_NEXT
+                            return True
+                else:
+                    if (q_type == RR_TYPE_A and isSafeSearch["A"] != "") or (
+                        q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] == ""
+                    ):
+                        msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
+                        msg.answer.append("{} 300 IN {} {}".format(qstate.qinfo.qname_str, "A", isSafeSearch["A"]))
+                        ss_found = True
+                    elif q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] != "":
+                        msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RA)
+                        msg.answer.append(
+                            "{} 300 IN {} {}".format(qstate.qinfo.qname_str, "AAAA", isSafeSearch["AAAA"])
+                        )
+                        ss_found = True
+
+                if ss_found:
+                    if msg is None or not msg.set_return_msg(qstate):
+                        qstate.ext_state[id] = MODULE_ERROR
                         return True
 
-            # Add domain to excludeSS to skip subsequent SafeSearch validation
-            else:
-                excludeSS.append(q_name_original)
+                    qstate.return_rcode = RCODE_NOERROR
+                    qstate.return_msg.rep.security = 2
+                    qstate.ext_state[id] = MODULE_FINISHED
+                    return True
 
         # Python_control - Receive TXT commands from pfSense local IP
         if qstate_valid and q_type == RR_TYPE_TXT and q_name_original.startswith("python_control."):
@@ -4024,8 +4049,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # ("let Unbound resolve it" / whitelisted) -- both are decisions, both
             # are memoized. A repeat query (including a CNAME-blocked name, keyed on
             # the original) short-circuits here without re-resolving or re-evaluating.
-            decision = decisionDB.get(q_name)
-            if decision is None:
+            dec = decisionDB.get(q_name)
+            dnsbl = dec.dnsbl if dec is not None else UNSET
+            if dnsbl is UNSET:
                 # The original query's TLD comes from qstate; a CNAME target (isCNAME)
                 # has its own TLD, so derive it from the target name being evaluated --
                 # else the TLD-Allow / HSTS checks use the wrong TLD for the target.
@@ -4058,33 +4084,34 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     "feedGroupIndexDB": feedGroupIndexDB,
                     "hstsDB": hstsDB,
                 }
-                decision = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
+                dnsbl = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
 
                 # A block found via a CNAME chain is recorded against the ORIGINAL
                 # queried name, so a later query for it short-circuits on this entry.
-                if decision.is_found and not decision.in_whitelist and isCNAME:
+                if dnsbl.is_found and not dnsbl.in_whitelist and isCNAME:
                     q_name = q_name_original
 
-                # Memoize the verdict (block OR allow) so this name is decided once.
-                decisionDB[q_name] = decision
+                # Memoize the DNSBL verdict on the name's Decision (block OR allow), so
+                # this name is decided once; the other axes share the same entry.
+                _decision_for(q_name).dnsbl = dnsbl
 
                 # Add domain data to DNSBL cache for Reports tab (fresh block only)
-                if decision.is_found and not decision.in_whitelist:
-                    pfb_db_enqueue(("cache", (decision.b_type, q_name, decision.group, decision.b_eval, decision.feed)))
+                if dnsbl.is_found and not dnsbl.in_whitelist:
+                    pfb_db_enqueue(("cache", (dnsbl.b_type, q_name, dnsbl.group, dnsbl.b_eval, dnsbl.feed)))
 
             # Block iff found and not whitelisted; an allow decision falls through to
             # the resolver (the WAIT_MODULE below).
-            if decision.is_found and not decision.in_whitelist:
+            if dnsbl.is_found and not dnsbl.in_whitelist:
                 # Create FQDN Reply Message
                 msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
 
                 if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
                     msg.answer.append(
-                        "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if decision.null_blocking else pfb["dnsbl_ipv4"])
+                        "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if dnsbl.null_blocking else pfb["dnsbl_ipv4"])
                     )
                 if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
                     msg.answer.append(
-                        "{}. 3600 IN AAAA {}".format(q_name, "::" if decision.null_blocking else pfb["dnsbl_ipv6"])
+                        "{}. 3600 IN AAAA {}".format(q_name, "::" if dnsbl.null_blocking else pfb["dnsbl_ipv6"])
                     )
 
                 if msg is None or not msg.set_return_msg(qstate):

@@ -104,8 +104,6 @@ def reset_pfb_globals() -> None:
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)
     pfb_unbound.noAAAADB = defaultdict(str)
-    pfb_unbound.excludeAAAADB = []
-    pfb_unbound.excludeSS = []
     pfb_unbound.threads = []
 
     # Reset the persistent sqlite connection cache between tests (the :memory:
