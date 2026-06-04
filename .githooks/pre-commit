@@ -80,13 +80,13 @@ else
 	skip markdownlint
 fi
 
-# --- Shell: sh -n parse gate + shellcheck (generated ip_pre_AWS_*.sh excluded) ---
+# --- Shell: sh -n parse gate + shellcheck ---
 if have shellcheck; then
 	step 'shell (sh -n + shellcheck)'
-	find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | while IFS= read -r f; do
+	find src scripts -name '*.sh' | sort | while IFS= read -r f; do
 		sh -n "$f" || exit 1
 	done || failed 'sh -n'
-	find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort \
+	find src scripts -name '*.sh' | sort \
 		| xargs shellcheck --severity=warning || failed 'shellcheck'
 else
 	skip shellcheck

@@ -102,13 +102,11 @@ jobs:
       - name: Parse-check all shell scripts (sh -n)
         # Cheap syntax gate (shell analogue of php -l). Catches unterminated
         # quotes and other parse errors even if ShellCheck is ever disabled.
-        # ip_pre_AWS_*.sh files are auto-generated — excluded.
-        run: find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | xargs -n1 sh -n
+        run: find src scripts -name '*.sh' | sort | xargs -n1 sh -n
 
       - name: Run ShellCheck
-        # ip_pre_AWS_*.sh files are auto-generated — excluded from analysis.
         # .shellcheckrc in the repo root configures suppressions.
-        run: find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | xargs shellcheck --severity=warning
+        run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=warning
 
   shell-tests:
     name: shellspec (POSIX sh)
