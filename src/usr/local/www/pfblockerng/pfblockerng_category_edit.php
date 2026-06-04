@@ -1508,7 +1508,7 @@ if ($gtype == 'dnsbl') {
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br /><br />'
-			. 'Blocked domains will be reported to the Alert/Python Block Table.<br />'
+			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
 			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
 			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
 
