@@ -236,7 +236,10 @@ pfBlockerNG/
 
 `tests/` holds the Python suite (pytest) plus `tests/php/` — the PHPUnit suite
 for the pure/extractable PHP helpers (bootstrap loads the real `pfblockerng.inc`
-off-appliance via include shims + pfSense doubles; see `tests/php/README.md`).
+off-appliance via include shims + pfSense doubles; see `tests/php/README.md`) —
+and `tests/smoke/` — the dispatch-only live-VM suite (ADR-04), which now also
+holds `tests/smoke/ui/`: the ADR-14 Web-UI tiers (`ui_render`/`ui_e2e`/
+`ui_browser`) reusing the `smoke_vm` fixture + `helpers.py`.
 
 Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI, pyproject.toml, `.githooks/`) is dev-only.
 
@@ -377,6 +380,49 @@ truths are non-obvious and each cost real debugging — internalise them first:
 
 Full journey, verified response model, and per-step instrument (`SMOKE_STATE_DIFF`):
 `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/`.
+
+### Web UI tiers (ADR-14) — live under `tests/smoke/ui/`, reuse `smoke_vm`
+
+The Web-UI suite (ADR-14) lives under `tests/smoke/ui/` and **reuses** the smoke
+`smoke_vm` fixture + `helpers.py` (no separate harness) to drive the live
+webConfigurator. It is off the default `pytest` like the rest of `tests/smoke/`.
+Three tiers, each its own pytest marker:
+
+- **Tier A — `ui_render`** (cheap/hermetic, the **PR gate**): authenticated-HTTP
+  GET of every pfBlockerNG page → 200, body free of `Fatal error`/`Parse error`/
+  `Warning`/`Notice`/`Uncaught`, a page-specific marker present, **and** no new
+  on-box `php_error.log` line. **Never HTTP 200 alone** — body + marker +
+  `php_error.log` is the oracle.
+- **Tier B — `ui_e2e`** (daily/on-demand): CSRF-POST flows asserting the
+  **effective** `config.xml`/`pfctl`/unbound state via `helpers.config_get`, not
+  the HTTP response.
+- **Tier B — `ui_browser`** (daily/on-demand): headless Playwright/Chromium
+  reusing the auth session (injected `PHPSESSID` cookie — **no second login**),
+  exercising the JS-only UX and capturing per-page screenshots. Needs the
+  separately-downloaded Chromium binary (`python -m playwright install chromium`);
+  module-level `importorskip` SKIPs cleanly without it.
+
+Run a tier against a smoke VM exactly like the smoke suite — re-enable the package
+and select the marker (`SMOKE_ADMIN_PASSWORD` must be set, else the UI fixtures
+SKIP, never fail):
+
+```sh
+python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+```
+
+The reusable `ui-tests.yml` (`workflow_call` + `workflow_dispatch` + daily
+`schedule`) is matrix-parametric on image-ref/version and tier-selectable, **one
+GH job per (tier × version)** (`fail-fast: false` → "Re-run failed jobs" re-runs
+only a flaky leg). Tier A gates PHP/JS PRs (folded into "All tests passed"); Tier
+B is schedule/dispatch only (non-PR-blocking); `release.yml` `needs:` the full
+suite (`tier: all`, the `ui-suite` job) before publishing, each leg re-runnable in
+isolation. The version axis is parametric but runs the **single CE image** today
+(B1) — adding one is a one-line `DEFAULT_VERSIONS` append + image-ref wire
+(IMAGE_RUNBOOK). Diagnostics (screenshots + VM logs + smoke snapshot) upload
+`if: always()` as `ui-diagnostics-<tier>-<version>`. The §7 browser reliability
+numbers are **CI-pending**; the browser leg has a one-line demote/drop switch
+(drop `browser` from `DEFAULT_SCHEDULE_TIERS` + run release `ui-suite` as
+`tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
 
 ---
 

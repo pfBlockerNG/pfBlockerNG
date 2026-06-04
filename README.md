@@ -517,6 +517,86 @@ Cases live in `tests/smoke/test_smoke_matrix.py` and compose the Phase-4 helpers
    `h.resolves_to`, and `h.pfctl_table_members` / `h.member_present` /
    `h.rule_references` for the IP side. `__exit__` resets to baseline.
 
+## Web UI tests (live pfSense VM)
+
+The UI suite (ADR-14, `tests/smoke/ui/`) drives the **webConfigurator** on the
+same ADR-04 smoke VM — reusing the `smoke_vm` fixture and `helpers.py` — to catch
+WebUI regressions that `php -l`/PHPStan structurally cannot (pages that 500,
+render a PHP `Warning`/`Notice`, or break form persistence). It is **dev-only**,
+deselected from the default `python -m pytest` exactly like the smoke suite
+(`--ignore=tests/smoke`), so the normal unit run is unaffected. Three tiers, by
+cost/frequency:
+
+| Tier | Marker | What it does | When |
+|------|--------|--------------|------|
+| **A — render-smoke** | `ui_render` | Authenticated-HTTP GET of every pfBlockerNG page (the 14 main paths + the dashboard widget + the two DNSBL-VIP sinkhole pages) → 200, body free of `Fatal error`/`Parse error`/`Warning`/`Notice`/`Uncaught`, a page-specific marker present, **and** no new `php_error.log` line during the sweep. Cheap/hermetic. | **Per-PR** when PHP/JS files change (blocking); release |
+| **B — functional** | `ui_e2e` | CSRF-POST flows (save General; add/save an IP feed/alias; toggle a DNSBL setting) → assert the **effective** `config.xml`/`pfctl`/unbound state via `helpers.config_get`, never the HTTP response alone. | Daily/on-demand; release |
+| **B — browser** | `ui_browser` | Headless Playwright/Chromium reusing the auth session (injected `PHPSESSID` cookie — no second login) to exercise the JS-only UX (`enable_change_*`, `pfb_autocomplete*`, `pfb_chg_state_bkgd`, the dashboard widget) and capture **per-page screenshots** as artifacts. | Daily/on-demand; release |
+
+The pass/fail oracle is **never HTTP 200 alone** (a 200 can carry a rendered PHP
+warning or a blank body) — Tier A reads the body + the page marker + the on-box
+`php_error.log`; Tier B asserts the effective state.
+
+### Running it in CI
+
+`.github/workflows/ui-tests.yml` is a **reusable** workflow
+(`workflow_call` + `workflow_dispatch` + a daily `schedule`), matrix-parametric
+on **image-ref/version** and tier-selectable, building the branch `.pkg` via
+`build-pkg-linux.yml` and booting the GHCR image. **One GH job per
+(tier × version)** with `fail-fast: false`, so GitHub's "Re-run failed jobs"
+re-runs only the flaky leg (no auto-retry on assertions; bounded readiness retry
+only on boot/login). Diagnostics (screenshots + VM/boot logs + the smoke state
+snapshot) upload `if: always()` as `ui-diagnostics-<tier>-<version>`. Wiring:
+
+- **Tier A** runs per-PR (`test.yml`) on PRs touching `src/**/*.php`, `**/*.inc`,
+  `src/**/*.js`, folded into the **"All tests passed"** aggregate (blocking).
+- **Tier B** (functional + browser) runs on the daily `schedule` (skipped when no
+  commit landed in 24 h) and on `workflow_dispatch` — **never** gating a PR.
+- **Release** (`release.yml`) `needs:` the full suite (`tier: all`) via the
+  `ui-suite` job before `release`/`ports-pr` — each leg re-runnable in isolation
+  (a flaky browser leg costs one re-run, not a republish).
+
+Dispatch a run with:
+
+```sh
+gh workflow run ui-tests.yml -f tier=render        # one tier
+gh workflow run ui-tests.yml -f tier=all           # render + functional + browser
+gh workflow run ui-tests.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+```
+
+### Running it locally
+
+Same prerequisites as the smoke suite (`/dev/kvm`, `qemu`, `oras`, `ssh`, a built
+`.pkg`) plus the UI deps. The browser tier also needs the Chromium binary
+(a separate download from the `playwright` wheel) and skips cleanly without it:
+
+```sh
+python -m pip install -r tests/smoke/requirements.txt
+python -m playwright install chromium                 # browser tier only
+export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+export SMOKE_SSH_KEY=/path/to/guest_priv_key          # mode 600
+export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg           # from build-pkg
+export SMOKE_ADMIN_PASSWORD=<baked admin password>    # else the UI fixtures SKIP
+python -m pytest tests/smoke/ui -m ui_render   --override-ini="addopts="   # Tier A
+python -m pytest tests/smoke/ui -m ui_e2e      --override-ini="addopts="   # Tier B functional
+python -m pytest tests/smoke/ui -m ui_browser  --override-ini="addopts="   # Tier B browser
+```
+
+Without `SMOKE_ADMIN_PASSWORD` the UI fixtures **skip** cleanly (never fail), so a
+run that lacks the baked credential degrades gracefully. Screenshots land under
+`$SMOKE_UI_SCREENSHOT_DIR/<version>/` (default `test-results/ui-screenshots/`, a
+git-ignored build output).
+
+### Version matrix (B1) and adding an image
+
+The `version` axis is built **parametric** but runs the **single existing CE
+image** today. Adding a second pfSense image (Plus / another CE) is a one-line
+change — append a label to `DEFAULT_VERSIONS` in the `prepare` job of
+`ui-tests.yml` and wire its image ref — then the matrix expands to one leg per
+(tier × version) with no harness change. Building/publishing that image follows
+[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)
+(see [Rebuilding the image on a CE bump](#rebuilding-the-image-on-a-ce-bump) above).
+
 ## Image pipeline (smoke-test base)
 
 The CI smoke harness (ADR-04) boots a real pfSense CE VM. Three dev-only scripts
