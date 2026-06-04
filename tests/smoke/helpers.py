@@ -749,9 +749,21 @@ def dnsvip4_address(vm: SmokeVM, *, timeout: float = 60.0) -> str:
 
 
 def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:
-    """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP)."""
+    """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP).
+
+    Matches the address as a whole ``inet``/``inet6`` token, NOT a bare substring:
+    ``ip in stdout`` would prefix-false-positive (e.g. ``10.10.10.53`` reported live
+    because the iface carries ``10.10.10.530`` or ``110.10.10.53``). ``ifconfig``
+    prints ``inet <ip> netmask ...`` / ``inet6 <ip> prefixlen ...``, so an exact
+    token right after ``inet``/``inet6`` is the address itself.
+    """
     result = vm.ssh("/sbin/ifconfig", iface, timeout=timeout)
-    return ip in result.stdout
+    for line in result.stdout.splitlines():
+        toks = line.split()
+        for i, tok in enumerate(toks[:-1]):
+            if tok in ("inet", "inet6") and toks[i + 1] == ip:
+                return True
+    return False
 
 
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
