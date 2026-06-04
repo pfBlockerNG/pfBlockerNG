@@ -26,7 +26,9 @@ on:
       - '*.md'
       - 'docs/**'
   pull_request:
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled so adding or removing the `ui-tests` label re-evaluates the
+    # (label-gated) UI suite gate; synchronize re-runs it on new pushes while labeled.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths-ignore:
       - '**/*.md'
       - '*.md'
@@ -325,66 +327,26 @@ jobs:
         # 1M-entry un-pruned corpus.
         run: python benchmarks/spike_adr06_build.py
 
-  # ── ADR-14 Tier-A UI render-smoke (PR gate, paths-conditional) ───────────
-  # Detect whether this PR/push touches PHP/JS, so the (heavy) Tier-A UI gate
-  # boots a pfSense VM ONLY when a WebUI-affecting file changed. No third-party
-  # action — a plain `git diff` against the base, matching the repo's
-  # minimal-dependency style. Output `php_js` drives the ui-render job's `if:`.
-  ui-changes:
-    name: Detect PHP/JS changes (Tier-A gate trigger)
-    runs-on: ubuntu-latest
-    outputs:
-      php_js: ${{ steps.filter.outputs.php_js }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          # Need the base commit to diff against; PR runs get a shallow merge ref
-          # otherwise. fetch-depth: 0 keeps the diff robust for both events.
-          fetch-depth: 0
-
-      - name: Diff PHP/JS paths against the base
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          # PR: the merge target. Push: the commit before this push.
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -eu
-          BASE="${BASE_SHA:-}"
-          # An all-zero SHA (first push to a new branch) or an unreachable base
-          # means "no usable base" — fall back to running the gate (conservative).
-          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ] \
-             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            echo "No usable base ref (${BASE:-empty}); running the Tier-A gate conservatively."
-            echo "php_js=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Tier A gates PRs touching src/**/*.php, **/*.inc, src/**/*.js (ADR §2 3a).
-          CHANGED="$(git diff --name-only "${BASE}" "${HEAD_SHA}" \
-            -- 'src/**/*.php' '**/*.inc' 'src/**/*.js' | tr -d ' ')"
-          if [ -n "${CHANGED}" ]; then
-            echo "PHP/JS changes detected — Tier A will run:"
-            echo "${CHANGED}"
-            echo "php_js=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No PHP/JS changes — Tier A skipped."
-            echo "php_js=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Tier A render-smoke (ADR-14 §2): authenticated HTTP render sweep of every
-  # pfBlockerNG page on the live VM. Cheap/hermetic, so it is the per-PR gate.
-  # Runs ONLY when ui-changes found a PHP/JS file (else `if:` skips it -> result
-  # 'skipped', which the aggregate treats as a pass). Folded into the "All tests
-  # passed" aggregate below so release.yml's verify-checks already covers it.
-  ui-render:
-    name: Tier-A UI render-smoke (PHP/JS PRs)
-    needs: ui-changes
-    if: needs.ui-changes.outputs.php_js == 'true'
+  # ── ADR-14 UI suite (opt-in PR gate, label-gated) ────────────────────────
+  # PURE-LABEL model: the live-VM UI suite (render + functional + browser) runs,
+  # and BLOCKS the PR, ONLY when the PR carries the `ui-tests` label — there is no
+  # automatic per-PR run. Add the label to a WebUI-affecting PR to get the full UI
+  # check before merge; remove it to drop the gate. (Devel also gets a daily
+  # backstop run via ui-tests.yml's own schedule, so a forgotten label is caught
+  # within a day.) `tier: all` -> one re-runnable job per (tier × version).
+  #
+  # Blocking is via the "All tests passed" aggregate fold below (skipped == pass
+  # when unlabeled; a labeled failure blocks) — GitHub branch protection can't
+  # require a check conditionally-by-label, so this is how a label gates a merge.
+  #
+  # FUTURE: auto-run + block Tier A (render) on PHP/JS PRs without a label, once
+  # its reliability/speed warrant it — tracked as a follow-up issue.
+  ui-suite:
+    name: UI suite (live pfSense VM)
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ui-tests')
     uses: ./.github/workflows/ui-tests.yml
     with:
-      tier: render
+      tier: all
     secrets: inherit
 
   # Single stable job name for branch-protection required-status-checks.
@@ -395,12 +357,10 @@ jobs:
     # NOTE: `benchmarks` is intentionally absent while it is informational-only
     # (issue #42). Add it here + a result check below to make the kill-gates
     # required once their on-runner baseline is stable.
-    # NOTE: the ADR-14 Tier-A UI render-smoke (`ui-changes`/`ui-render`) is also
-    # intentionally absent for now — the live-VM harness is still being stabilized
-    # (login fixed in #81; page-serving 404 + php_error.log size read outstanding),
-    # so it RUNS on PHP/JS PRs for signal but must NOT block. Re-add `ui-changes`
-    # and `ui-render` here + the result checks below once the harness is green.
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint]
+    # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
+    # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
+    # blocks here — that is how the opt-in label gates a merge.
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint, ui-suite]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -441,8 +401,10 @@ jobs:
             echo "markdownlint failed or was cancelled."
             exit 1
           fi
-          # NOTE: the ADR-14 Tier-A UI render-smoke (ui-changes/ui-render) is
-          # intentionally NOT checked here while the live-VM harness is being
-          # stabilized — it runs on PHP/JS PRs for signal but does not block.
-          # Re-add the ui-changes success check + the ui-render success|skipped
-          # case here (and both jobs to `needs:` above) once the harness is green.
+          # ADR-14 UI suite (label-gated): 'skipped' (unlabeled PR / push) is a
+          # PASS; only a `ui-tests`-labeled PR whose live-VM UI suite actually
+          # FAILED (or was cancelled) blocks the merge.
+          case "${{ needs.ui-suite.result }}" in
+            success|skipped) ;;
+            *) echo "Labeled UI suite (ui-tests) failed or was cancelled."; exit 1 ;;
+          esac
