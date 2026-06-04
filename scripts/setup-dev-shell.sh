@@ -57,6 +57,19 @@ for _bp in /opt/homebrew /usr/local; do
 			*":$_bp/bin:"*) ;;
 			*) PATH="$_bp/bin:$_bp/sbin:$PATH"; export PATH ;;
 		esac
+		# Interactive convenience: wrap `brew` so the shell re-reads PATH after any brew
+		# command — newly installed tools are runnable & tab-completable right away, and
+		# stale entries from `uninstall`/`cleanup` are dropped. Only defined here (brew
+		# exists) and only for interactive shells; brew's own exit status is preserved.
+		case $- in
+			*i*)
+				brew() {
+					command brew "$@"
+					local _rc=$?
+					if [ -n "${ZSH_VERSION:-}" ]; then rehash; else hash -r; fi
+					return $_rc
+				} ;;
+		esac
 		break
 	fi
 done
