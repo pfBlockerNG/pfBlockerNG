@@ -1103,6 +1103,44 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -
     raise RuntimeError("Unbound did not become ready after reload")
 
 
+def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: float = 300.0) -> None:
+    """Drive the alerts-page temporary Lock/Unlock for a DNSBL ``domain`` (#51).
+
+    The per-alert temporary Unlock/Lock has NO CLI verb — it is the
+    ``pfblockerng_alerts.php`` ``dnsbl_remove`` web handler. On ``next`` (python
+    mode) that handler toggles the ``pfb_unlock`` state store
+    (``$pfb['dnsbl_unlock']``), regenerates the manifest's ``config.user_unlock``
+    (a band-6 whiteDB allow), then reloads Unbound. We replay that EXACT production
+    sequence over ``pfSsh.php`` (the fully-bootstrapped pfSense shell) with
+    ``pfblockerng.inc`` loaded — driving the SAME functions the handler calls, so
+    the smoke test exercises the real #51 path end-to-end rather than a stand-in.
+
+    ``action`` is ``'unlock'`` (temporarily allow — ADDS to the store) or ``'lock'``
+    (re-block — REMOVES from the store). On return Unbound is ready to probe.
+    """
+    if action not in ("unlock", "lock"):
+        raise ValueError(f"action must be 'unlock' or 'lock', got {action!r}")
+    # Mirror the handler: read the store, toggle it, regenerate user_unlock, reload.
+    # pfb_global() populates $pfb (paths + config) exactly as the page/CLI bootstrap.
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
+        f"pfb_unlock({_php_str(action)}, 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
+        "pfb_unbound_python_sources_unlock();\n"
+        "pfb_reload_unbound('enabled', FALSE);\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"dnsbl_alert_lock_toggle({domain}, {action}) failed: "
+            f"rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+    # pfb_reload_unbound restarts Unbound — wait for readiness before any probe.
+    wait_unbound_ready(vm)
+
+
 def flush_unbound_cache(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     """Flush Unbound's whole cache so the NEXT probe is evaluated FRESH by the module.
 
