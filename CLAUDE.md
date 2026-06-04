@@ -6,6 +6,36 @@
 
 ---
 
+## Worktrees (mandatory for AI agents)
+
+**Every AI agent (Claude included) MUST do all repository work in its own
+dedicated git worktree — never directly in the primary checkout, and never
+sharing a worktree with another agent.** This applies even when only one agent is
+active. Reason: multiple agents operating on the same checkout race on the
+filesystem, the index, `HEAD`, and branch/ref state; isolated worktrees prevent
+those conflicts.
+
+- Create one at the start of a task and remove it when done:
+
+  ```sh
+  git worktree add -b <branch> <path> origin/devel   # branch off the latest base
+  # … work, commit, push, open the PR from inside <path> …
+  git worktree remove <path>                          # run from the PRIMARY checkout
+  ```
+
+- Branch off the **current** base (`git fetch` first); a worktree created off a
+  stale tip needs a rebase onto the base before it can land (PRs are
+  rebase-only — see "Branches and releases").
+- The primary checkout stays free for the human; each agent gets its own tree.
+- Gotchas (both hit in practice): `git worktree remove` fails when run from
+  *inside* the tree being removed — run it from the primary checkout. And
+  `gh pr merge --delete-branch` can't check out a base branch that another
+  worktree already holds (it errors on the local post-merge step even though the
+  remote merge succeeded) — verify the merge landed, then delete the remote
+  branch separately (`git push origin --delete <branch>`).
+
+---
+
 ## Investigating the live system (be thorough — read sources, not proxies)
 
 When debugging real pfSense/FreeBSD behaviour, **verify against the source of truth
