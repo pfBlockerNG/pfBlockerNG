@@ -684,7 +684,7 @@ function pfb_get_vips(): array {
 				$vips6[$vip_id] = $vips[$vip_address];
 				break;
 			default:
-				continue;
+				break;
 		}
 	}
 
