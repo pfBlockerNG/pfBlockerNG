@@ -77,7 +77,7 @@ if TYPE_CHECKING:
 global pfb
 pfb: dict[str, Any] = {}
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from configparser import ConfigParser
 
 # Module-level globals populated by init_standard() at runtime. Declared here
@@ -92,7 +92,7 @@ hstsDB: defaultdict[str, Any]
 whiteDB: defaultdict[str, Any]
 gpListDB: defaultdict[str, Any]
 noAAAADB: defaultdict[str, Any]
-decisionDB: dict[str, Decision]
+decisionDB: _LruCache
 _dnsbl_last_event: Any = None
 safeSearchDB: defaultdict[str, Any]
 feedGroupIndexDB: defaultdict[int, Any]
@@ -321,6 +321,8 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_tld"] = False
     pfb["python_tlds"] = []
     pfb["python_tld_seg"] = 0
+    # Max entries in the per-domain decision cache (LRU); 0 = unbounded. WebUI-configurable.
+    pfb["decisiondb_max"] = 10000
     pfb["python_hsts"] = False
     pfb["python_reply"] = False
     pfb["python_cname"] = False
@@ -405,7 +407,9 @@ def init_standard(id: int, env: module_env) -> bool:
     # Initialize dicts/lists
     dataDB = defaultdict(list)
     zoneDB = defaultdict(list)
-    decisionDB = {}
+    # Built with the preset cap; the configured value (read from the ini below) is
+    # applied to .maxsize while the cache is still empty.
+    decisionDB = _LruCache(pfb["decisiondb_max"])
     _dnsbl_last_event = None
     safeSearchDB = defaultdict(list)
     feedGroupIndexDB = defaultdict(list)
@@ -444,6 +448,9 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
             if config.has_option("MAIN", "python_tld_seg"):
                 pfb["python_tld_seg"] = config.getint("MAIN", "python_tld_seg")
+            if config.has_option("MAIN", "decisiondb_max"):
+                pfb["decisiondb_max"] = config.getint("MAIN", "decisiondb_max")
+                decisionDB.maxsize = pfb["decisiondb_max"]
             if config.has_option("MAIN", "python_tld"):
                 pfb["python_tld"] = config.getboolean("MAIN", "python_tld")
             if config.has_option("MAIN", "python_tlds"):
@@ -3322,7 +3329,7 @@ def hsts_check_domain(
     return False, "Python"
 
 
-@dataclass
+@dataclass(slots=True)
 class DnsblDecision:
     is_found: bool
     in_whitelist: bool
@@ -3346,7 +3353,7 @@ class _Unset:
 UNSET: Any = _Unset()
 
 
-@dataclass
+@dataclass(slots=True)
 class Decision:
     # The single per-domain verdict across every axis operate() decides. Each axis is
     # filled lazily (its check runs at a different point in operate(): noAAAA + SafeSearch
@@ -3365,6 +3372,56 @@ def _decision_for(name: str) -> Decision:
         dec = Decision()
         decisionDB[name] = dec
     return dec
+
+
+class _LruCache:
+    # Bounded, LRU-evicting, dict-compatible store for decisionDB. Recency is bumped on
+    # both get and set, so frequently-queried names stay resident while the
+    # least-recently-used entry is evicted once maxsize is exceeded (maxsize <= 0 ->
+    # unbounded, the pre-LRU behaviour). Mutating and recency operations are serialized
+    # by a per-instance lock: operate() runs on several Unbound worker threads and a
+    # get()+move_to_end() is compound (a lock-free version races -> KeyError / over-evict).
+    # The lock is uncontended (the GIL already serializes Python), so the cost is a few
+    # brief acquires per query.
+    def __init__(self, maxsize: int = 0) -> None:
+        self.maxsize = maxsize
+        self._d: OrderedDict[str, Any] = OrderedDict()
+        self._lock: Any = threading.Lock() if pfb.get("mod_threading") else _NullLock()
+
+    def get(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            if key in self._d:
+                self._d.move_to_end(key)
+                return self._d[key]
+            return default
+
+    def __getitem__(self, key: str) -> Any:
+        with self._lock:
+            self._d.move_to_end(key)
+            return self._d[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._d[key] = value
+            self._d.move_to_end(key)
+            if 0 < self.maxsize < len(self._d):
+                self._d.popitem(last=False)
+
+    def __contains__(self, key: str) -> bool:
+        with self._lock:
+            return key in self._d
+
+    def __delitem__(self, key: str) -> None:
+        with self._lock:
+            del self._d[key]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._d)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._d.clear()
 
 
 # ADR-07 P3: the 6-band precedence scale (ADR.md SS2 / RESULTS-P2 SS2). Highest wins;
