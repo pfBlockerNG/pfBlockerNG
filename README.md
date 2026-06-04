@@ -299,6 +299,106 @@ the IPv4 VIP / IPv6 VIP dropdowns on the DNSBL settings page.
 
 See [ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md) for the full design.
 
+### Update Hooks (pre/post update commands, ADR-12)
+
+The **Update Hooks** settings tab (after **Update**) lets an admin run their own
+shell commands at the **start** (`pre`) and **end** (`post`) of every pfBlockerNG
+update pass — to nudge a downstream consumer (the worked HAProxy recipe below),
+restart a service, push to an API, sync, or notify. It is a thin, safe command
+runner, not an event system. These are distinct from the per-feed `ip_pre_*.sh`
+list pre-scripts: an Update Hook runs **once per update pass**, not once per feed.
+
+**Model.** A list of hook entries in the pfBlockerNG config
+(`installedpackages/pfblockerng/config/0/hooks`), each
+`{ command, when: pre|post, enabled, description, timeout? }`, run in **list
+order** (all `pre` before any processing, all `post` after everything).
+
+**Trust + execution.** Each enabled hook's `command` runs **as root** via
+`/bin/sh -c` — the **same trust class as pfSense `shellcmd`/cron**, and the tab
+sits behind the existing admin-only pfBlockerNG WebCfg privilege. Each hook is
+run under `/usr/bin/timeout` (SIGTERM at the per-hook timeout, then SIGKILL after
+a grace period; per-hook seconds, blank = the 60 s default). stdout+stderr are
+captured to the pfBlockerNG log under a per-hook header. A hook's **non-zero exit
+or timeout is logged and the update CONTINUES** — `pre` and `post` alike: a
+bad/hung/typo'd hook can never abort or stall an update. With **no enabled
+hooks** the update pass is byte-identical to before.
+
+**Environment variables** (exported to the hook command; document only these —
+no other value is promised):
+
+| Var | When | Value |
+| --- | --- | --- |
+| `PFB_WHEN` | pre, post | `pre` or `post` |
+| `PFB_TRIGGER` | pre, post | `cron` \| `update` \| `force-reload` |
+| `PFB_IP_CHANGED` | post | `0` \| `1` — IP-side (firewall) data changed this pass |
+| `PFB_DNSBL_CHANGED` | post | `0` \| `1` — DNSBL data changed this pass |
+| `PFB_STATUS` | post | reserved placeholder — currently always `ok` |
+| `PFB_CHANGED_ALIASES` | post | reserved placeholder — currently always empty |
+
+`PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` are **accurate** and are the flags a hook
+should guard on. `PFB_TRIGGER` emits exactly `cron | update | force-reload`:
+`update` is a settings save, `force-reload` is a GUI IP-only / DNSBL-only Force
+Reload, and `cron` covers scheduled cron **and** GUI Force Update / Force
+Reload (All) — the ADR's nominal `force-update` collapses to `cron` because both
+arrive identically. `PFB_STATUS` / `PFB_CHANGED_ALIASES` are stable reserved
+placeholders today (no pass-wide error or changed-alias accumulator exists);
+their **names** are stable, but do not branch a recipe on their value.
+Hooks live in `config.xml`, so they **replicate to a CARP/HA secondary and run on
+whichever node performs the update** — correct for the HAProxy recipe (the
+secondary's HAProxy needs its own reload), but be aware a hook with an external
+side effect runs once per updating node.
+
+#### HAProxy recipe (reload to refresh CF-fronted real-client IP blocking)
+
+The motivating use case (ADR-11 + ADR-12): block requests whose **real client IP**
+(carried by Cloudflare in the `CF-Connecting-IP` header) is in pfBlockerNG's
+aggregate alias. HAProxy only re-reads its `-f` ACL files **at reload** — the
+pfSense runtime socket is stats + hitless-reload only and cannot inject ACL data
+(`haproxy.inc:1562`) — so freshness requires a **graceful reload** after each
+pfBlockerNG IP update.
+
+**1. HAProxy config (frontend ACLs).** Add, on the frontend:
+
+- a **`source_ip`** ACL (type *"Source IP matches IP or Alias"*) whose value is the
+  alias **`pfB_Aggregate_v4`** (ADR-11). The HAProxy package emits the alias members
+  to `ipalias_pfB_Aggregate_v4.lst` **only for a `source_ip`-type ACL referencing a
+  pfSense alias** (`haproxy.inc:1084-1092`, written as `src -f …/ipalias_<alias>.lst`).
+  This ACL exists purely to make the package emit and maintain that `.lst` file.
+- a **custom header ACL** matching the CF real-client IP against that same file, e.g.
+  `acl cf_blocked req.hdr_ip(CF-Connecting-IP) -f /var/etc/haproxy/ipalias_pfB_Aggregate_v4.lst`
+  (use `req.hdr_ip(X-Forwarded-For)` if you front with XFF instead), and an action to
+  `http-request deny if cf_blocked`.
+
+> **Security — only trust the CF header from Cloudflare ranges.** `CF-Connecting-IP`
+> (or XFF) is attacker-spoofable unless the connection actually came from Cloudflare.
+> Gate the deny on the TCP source being a Cloudflare edge range (e.g. an additional
+> `src -f` ACL of Cloudflare's published IP ranges) before honouring the header.
+
+Because ADR-11 ships a **never-empty** `pfB_Aggregate_*` consumer file, an empty
+aggregate still validates and reloads — **no `/../../` path trick or dummy-IP hack**
+is needed (the old workarounds are gone).
+
+**2. The post hook.** On the **Update Hooks** tab add one entry — `when=post`,
+enabled — with this command (POSIX-sh-safe; guards on the accurate flag so it only
+reloads when IP data actually changed):
+
+```sh
+[ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+```
+
+`haproxy_check_run(1)` (wrapped by `haproxy_configure()`, `haproxy.inc:1347-1350`;
+the reload core is `haproxy.inc:2491`) is the package's **graceful** reload: it
+re-writes the config — re-emitting `ipalias_pfB_Aggregate_v4.lst` from the current
+alias — and restarts with `-sf` (finish existing connections; hitless), **not** a
+hard restart. `pfSsh.php` (`/usr/local/sbin/pfSsh.php`) is used rather than a bare
+`php -r` because it bootstraps the pfSense environment (`globals.inc`/`functions.inc`/
+`config.inc`/`util.inc`) so the `include_path` resolves `haproxy/haproxy.inc` and its
+own `require_once` chain; it `eval`s the PHP piped on stdin. The hook runs on the
+node that performs the update — on a CARP pair each node reloads its own HAProxy.
+
+See [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) for the full design and the
+maintainer smoke checklist.
+
 ### Benchmarks
 
 `benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the
