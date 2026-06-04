@@ -47,6 +47,7 @@ import shlex
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -1160,19 +1161,39 @@ def _ip_inject_snippet(spec: IpCase) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def reload(vm: SmokeVM, scope: str = "update", *, timeout: float = 600.0) -> None:
+def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeout: float = 600.0) -> None:
     """Run a pfBlockerNG reload via the PHP CLI cron verb.
 
     ``scope`` is the verb: ``updatednsbl`` / ``updateip`` (targeted, faster per
-    case) or ``update`` (full force, IP+DNSBL). The reload restarts Unbound; we
-    wait on its readiness afterwards (no fixed sleep).
+    case) or ``update`` (full force, IP+DNSBL).
+
+    READINESS depends on whether a restart is expected (ADR-10):
+
+    * ``data_path=False`` (default — keeps every existing caller byte-identical): treat
+      this as a RESTART-class reload and wait on ``wait_unbound_ready`` (poll
+      ``unbound-control status``). This is correct for IP-only updates, config-changing
+      updates, and the conservative default; a python-mode data update that happens to
+      take the no-restart swap still leaves Unbound up, so the status poll is satisfied
+      either way (it just doesn't PROVE no-restart).
+    * ``data_path=True``: this is a pure DNSBL-DATA update in python mode that the package
+      routes through the ADR-10 zero-downtime fast path — ``pfb_update_unbound`` calls
+      ``pfb_reload_unbound($mode, TRUE, $pfbpython, !$pfbpython)`` (inc:4151), so a
+      config-clean feed/cron update flips the sentinel and swaps with NO restart. We
+      capture the fast-path log baseline BEFORE the verb runs and afterwards wait on
+      :func:`wait_zero_downtime_swap` (the swap-applied signal). The caller is asserting
+      the no-restart invariant (pid unchanged), so use this only when a config-clean
+      python-mode DNSBL data update is expected; it RAISES if the swap line never appears.
     """
     if scope not in ("update", "updateip", "updatednsbl"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl, got {scope!r}")
+    swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"reload({scope}) failed: rc={result.returncode} stderr={result.stderr!r}")
-    wait_unbound_ready(vm)
+    if data_path:
+        wait_zero_downtime_swap(vm, since=swap_before)
+    else:
+        wait_unbound_ready(vm)
 
 
 def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
@@ -1385,29 +1406,165 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -
     raise RuntimeError("Unbound did not become ready after reload")
 
 
+# --------------------------------------------------------------------------- #
+# ADR-10 zero-downtime swap — no-restart readiness + invariants
+# --------------------------------------------------------------------------- #
+# The ADR-04 readiness model ("first response is authoritative, never loop") rests
+# on the RESTART era: after a reload Unbound went down and back up, so the first
+# answer post-readiness was the new decision. The ADR-10 swap is ASYNC and never
+# restarts — PHP flips a generation sentinel (/var/unbound/pfb_py_reload), the
+# in-module watcher rebuilds + atomically swaps the snapshot a moment later, "briefly
+# stale by design" (ADR.md SS2). So a no-restart data update needs two different
+# primitives: (1) wait for the swap to APPLY (the fast-path log line appears), and
+# (2) poll the decision until it flips within a bounded window. The Unbound pid is the
+# hard no-restart proof: UNCHANGED across a data update, CHANGED across a config one.
+
+UNBOUND_PID_FILE = "/var/run/unbound.pid"
+# The pfBlockerNG main log; PHP's pfb_reload_unbound writes the fast-path markers here
+# (inc:3956 "[ zero-downtime swap ]" then inc:3962 " completed [ NOW ]"). Their
+# appearance proves the no-restart data path was TAKEN (vs the restart fallback).
+PFB_LOG = f"{PFB_LOGDIR}/pfblockerng.log"
+# The Python module's stderr is redirected here (pfb_unbound.py:590); a FAILED build
+# (bad/partial manifest) writes "Failed to load DNSBL manifest" / "DNSBL rebuild
+# failed, keeping current snapshot" here — the fail-closed signal.
+PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
+# The fast-path swap marker PHP logs when the no-restart path is TAKEN: inc:3956 writes
+# "Reloading Unbound Resolver (DNSBL python) [ zero-downtime swap ]". Match the BRACKETED
+# form specifically — the RAM-decline RESTART-fallback line (inc:3974) also contains the
+# bare phrase "the zero-downtime swap", so matching the unbracketed substring would
+# false-positive on a fallback (restart) as if the swap had been taken.
+SWAP_LOG_MARKER = "[ zero-downtime swap ]"
+
+
+def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
+    """Return Unbound's current pid from /var/run/unbound.pid (raises if absent/bad).
+
+    The hard no-restart proof for ADR-10: capture it before a data update and assert
+    it is UNCHANGED after (the swap reuses the running process); across a CONFIG
+    change it CHANGES (pfb_stop_start_unbound restarts the daemon). Reading the pid
+    file is exactly what the ADR §7 smoke checklist tracks (``cat /var/run/unbound.pid``).
+    """
+    result = vm.ssh("cat", UNBOUND_PID_FILE, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"unbound_pid: cannot read {UNBOUND_PID_FILE}: rc={result.returncode} {result.stderr!r}")
+    text = result.stdout.strip()
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise RuntimeError(f"unbound_pid: {UNBOUND_PID_FILE} not an integer: {text!r}") from exc
+
+
+def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30.0) -> int:
+    """Count lines in the file ``path`` on the guest that CONTAIN ``marker``.
+
+    Capture this BEFORE a no-restart data update and pass the value as ``since`` to
+    :func:`wait_zero_downtime_swap`: a NEW matching line (count strictly greater than
+    the captured baseline) proves the swap log line was appended AFTER the trigger,
+    not left over from an earlier reload. ``grep -Fc`` does a fixed-string (non-regex)
+    count; a missing file / no match yields 0 (grep exits non-zero) — never raises.
+    """
+    # Count OCCURRENCES, not matching lines: the Python module writes its failure strings
+    # to py_error.log via sys.stderr.write WITHOUT a trailing newline (pfb_unbound.py:3679),
+    # so two failures can share a physical line — `grep -c` (line count) would under-count
+    # them. `grep -Fo` prints one line per match; `wc -l` counts those. Run as ONE shell
+    # string (the guest login shell handles the pipe); a missing file / no match -> 0.
+    quoted_marker = shlex.quote(marker)
+    quoted_path = shlex.quote(path)
+    cmd = f"/usr/bin/grep -Fo {quoted_marker} {quoted_path} 2>/dev/null | /usr/bin/wc -l"
+    result = vm.ssh(cmd, timeout=timeout)
+    text = result.stdout.strip()
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
+def wait_zero_downtime_swap(vm: SmokeVM, *, since: int, timeout: float = 60.0, interval: float = 2.0) -> None:
+    """Block until a NEW fast-path swap line appears in the pfBlockerNG log (no restart).
+
+    ``since`` is the :func:`count_log_marker` count of ``SWAP_LOG_MARKER`` captured
+    BEFORE the trigger. This proves the ZERO-DOWNTIME DATA FAST PATH ran: PHP's
+    ``pfb_reload_unbound`` logs ``"...[ zero-downtime swap ]"`` (inc:3956) only when it
+    publishes the manifest + flips the sentinel WITHOUT ``pfb_stop_start_unbound`` —
+    i.e. no Unbound restart. If instead it took the restart fallback (config change,
+    RAM-gate decline, sentinel-flip failure) this line is NOT written and the wait
+    raises on timeout — surfacing "the swap did not apply", never masking it.
+
+    NOTE: this confirms the PHP fast path was TAKEN (the all-or-nothing publish + flip);
+    the watcher's own ``log_info("...reloaded with no restart (zero-downtime swap)")``
+    (pfb_unbound.py:422) goes to Unbound's resolver log and proves the snapshot was
+    APPLIED, but its path is not hard-depended on here — the decision-flip is asserted
+    separately via :func:`dns_probe_until`.
+    """
+    deadline = time.time() + timeout
+    last = since
+    while time.time() < deadline:
+        last = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER)
+        if last > since:
+            return
+        time.sleep(interval)
+    raise RuntimeError(
+        f"wait_zero_downtime_swap timed out after {timeout}s: no new '{SWAP_LOG_MARKER}' line in {PFB_LOG} "
+        f"(baseline count {since}, last seen {last}) — the no-restart data fast path did not run "
+        f"(restart fallback taken, or the trigger never reached pfb_reload_unbound's data path?)"
+    )
+
+
+def flush_unbound_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
+    """Flush a SINGLE name from Unbound's C message cache (``unbound-control flush <name>``).
+
+    The targeted analog of :func:`flush_unbound_cache`. ADR-10 only flushes the
+    allow->block delta where it is cheaply known (the #51 alerts paths — one domain);
+    a feed/cron allow->block is TTL-bounded by design (the prior resolved answer serves
+    until its TTL — RESULTS/05 SS3, explicitly NOT a regression vs today's restart,
+    which preserves the resolved cache too). A test that pre-resolved such a name (to
+    assert the before-state) then lists it must clear that one cached real answer to
+    OBSERVE the swapped block within the test window — mirroring exactly what a #51
+    Lock's targeted delta-flush does on the box.
+    """
+    result = vm.ssh("/usr/local/sbin/unbound-control", "-c", UNBOUND_CONF, "flush", name, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"flush_unbound_name({name}) failed: rc={result.returncode} {result.stderr!r}")
+
+
 def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: float = 300.0) -> None:
     """Drive the alerts-page temporary Lock/Unlock for a DNSBL ``domain`` (#51).
 
     The per-alert temporary Unlock/Lock has NO CLI verb — it is the
-    ``pfblockerng_alerts.php`` ``dnsbl_remove`` web handler. On ``next`` (python
-    mode) that handler toggles the ``pfb_unlock`` state store
-    (``$pfb['dnsbl_unlock']``), regenerates the manifest's ``config.user_unlock``
-    (a band-6 whiteDB allow), then reloads Unbound. We replay that EXACT production
-    sequence over ``pfSsh.php`` (the fully-bootstrapped pfSense shell) with
-    ``pfblockerng.inc`` loaded — driving the SAME functions the handler calls, so
-    the smoke test exercises the real #51 path end-to-end rather than a stand-in.
+    ``pfblockerng_alerts.php`` ``dnsbl_remove`` web handler. In python mode that handler
+    toggles the ``pfb_unlock`` state store (``$pfb['dnsbl_unlock']``), regenerates the
+    manifest's ``config.user_unlock`` (a band-6 whiteDB allow), then reloads Unbound. We
+    replay that EXACT production sequence over ``pfSsh.php`` (the fully-bootstrapped
+    pfSense shell) with ``pfblockerng.inc`` loaded — driving the SAME functions the
+    handler calls, so the smoke test exercises the real #51 path end-to-end.
+
+    ZERO-DOWNTIME (ADR-10, #51): the handler reloads via the data fast path — it computes
+    the allow->block delta exactly as the page does (``$newly_blocked = ($ua['mode'] ===
+    'lock') ? array($domain) : array()``) and calls ``pfb_reload_unbound('enabled', FALSE,
+    FALSE, TRUE, $newly_blocked)`` (alerts.php:1410-1411). ``$datapath=TRUE`` routes a #51
+    custom-list edit through the no-restart swap: PHP publishes the patched manifest, flips
+    the generation sentinel, and (for a Lock) targeted-flushes that one name from the
+    C-cache — Unbound's pid is UNCHANGED. So the helper waits on the SWAP-APPLIED signal
+    (the fast-path log line), NOT on a restart. The old unlock-only cache flush is gone:
+    block->allow (Unlock) is immediate since #43 stopped C-caching blocks, and a Lock's
+    prior resolved answer is cleared by the production targeted delta-flush inside
+    ``pfb_reload_unbound`` itself — no belt-and-suspenders flush is needed here.
 
     ``action`` is one of the four icon labels: ``'unlock'`` / ``'relock'`` (temporarily
-    allow — ADD to the store) or ``'lock'`` / ``'reunlock'`` (re-block — REMOVE). The
-    action -> store-mode mapping is resolved on-box by the SAME production helper the
-    handler uses (``pfb_dnsbl_unlock_action``), so this exercises the real dispatch, not
-    a copy of it. On return Unbound is ready to probe.
+    allow — ADD to the store, block->allow) or ``'lock'`` / ``'reunlock'`` (re-block —
+    REMOVE, allow->block). The action -> store-mode mapping is resolved on-box by the SAME
+    production helper the handler uses (``pfb_dnsbl_unlock_action``), so this exercises the
+    real dispatch, not a copy. On return the no-restart swap has been applied.
     """
     if action not in ("unlock", "lock", "relock", "reunlock"):
         raise ValueError(f"action must be one of unlock/lock/relock/reunlock, got {action!r}")
+    # Capture the fast-path log baseline BEFORE the toggle so wait_zero_downtime_swap can
+    # detect the NEW swap line (proving the no-restart path ran, not a stale prior line).
+    swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER)
     # Mirror the handler exactly: resolve the action -> store-mode via the production
-    # pfb_dnsbl_unlock_action(), read the store, toggle it, regenerate user_unlock,
-    # reload. pfb_global() populates $pfb (paths + config) as the page/CLI bootstrap.
+    # pfb_dnsbl_unlock_action(), read the store, toggle it, regenerate user_unlock, then
+    # reload through the ADR-10 data fast path with the allow->block delta. pfb_global()
+    # populates $pfb (paths + config) as the page/CLI bootstrap.
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "pfb_global();\n"
@@ -1415,7 +1572,8 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
         f"pfb_unlock($ua['mode'], 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
         "pfb_unbound_python_sources_unlock();\n"
-        "pfb_reload_unbound('enabled', FALSE);\n"
+        f"$newly_blocked = ($ua['mode'] === 'lock') ? array({_php_str(domain)}) : array();\n"
+        "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
@@ -1424,14 +1582,9 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
             f"dnsbl_alert_lock_toggle({domain}, {action}) failed: "
             f"rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
-    # pfb_reload_unbound restarts Unbound — wait for readiness before any probe.
-    wait_unbound_ready(vm)
-    # Parity with the production dnsbl_remove handler, which flushes the resolver cache
-    # on an Unlock. The restart above already clears the whole cache, so this is
-    # belt-and-suspenders (defensive against a future non-restart reload) — matching the
-    # handler's unlock-only flush so the helper mirrors production behaviour.
-    if action == "unlock":
-        flush_unbound_cache(vm)
+    # No restart — wait on the SWAP-APPLIED signal (fast-path log line), not unbound
+    # readiness. Unbound never goes down, so the swap lands a moment after the flip.
+    wait_zero_downtime_swap(vm, since=swap_before)
 
 
 def flush_unbound_cache(vm: SmokeVM, *, timeout: float = 30.0) -> None:
@@ -1528,6 +1681,45 @@ def dns_probe(
         if attempt < attempts - 1:
             time.sleep(delay)
     raise RuntimeError(f"dns_probe({name}, {rtype}) got no drill answer after {attempts} attempts: {last}")
+
+
+def dns_probe_until(
+    vm: SmokeVM,
+    name: str,
+    predicate: Callable[[DnsAnswer], bool],
+    rtype: str = "A",
+    *,
+    timeout: float = 60.0,
+    interval: float = 3.0,
+) -> DnsAnswer:
+    """Poll ``drill <name> <rtype> @127.0.0.1`` until ``predicate(answer)`` holds; raise on timeout.
+
+    The ZERO-DOWNTIME analog of :func:`dns_probe`'s authoritative single-shot. ADR-10's
+    swap is ASYNC: after a data update Unbound never restarts and the new decision lands a
+    moment later (the watcher rebuilds + atomically swaps the snapshot once the sentinel
+    advances — "briefly stale by design", ADR.md SS2). So the restart-era "first response
+    is authoritative, never loop" rule does NOT apply to the swap transition: there is no
+    down/up edge to make the first post-readiness answer the new one. The guarantee under
+    test is "the new decision applies within a BOUNDED window WITHOUT a restart" — so we
+    poll until it does, and RAISE on timeout (a real failure: the swap did not apply in
+    budget — never a mask that loops forever).
+
+    Use ONLY for the swap transition (a data update / #51 toggle whose decision must flip).
+    Keep :func:`dns_probe` for steady-state and restart-class reads where the first answer
+    is authoritative. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see
+    :func:`unique_domain`).
+    """
+    deadline = time.time() + timeout
+    last: DnsAnswer | None = None
+    while time.time() < deadline:
+        last = dns_probe(vm, name, rtype, timeout=15.0, attempts=2, delay=2.0)
+        if predicate(last):
+            return last
+        time.sleep(interval)
+    raise RuntimeError(
+        f"dns_probe_until({name}, {rtype}) predicate never held within {timeout}s "
+        f"(last answer: {last}) — the zero-downtime swap decision did not apply in budget"
+    )
 
 
 def is_nxdomain(answer: DnsAnswer) -> bool:

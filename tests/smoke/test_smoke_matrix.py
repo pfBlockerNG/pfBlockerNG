@@ -338,10 +338,19 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
     Proving the domain resolves in (a) and again in (c) rules out a false-green: the
     VIP in (b)/(d) genuinely comes from the feed block, and the pass in (c) genuinely
     comes from the Unlock. The Unlock/Lock drives the real python-mode
-    pfblockerng_alerts.php ``dnsbl_remove`` sequence (toggle the ``pfb_unlock`` store ->
-    regenerate ``config.user_unlock`` -> RESTART Unbound, whose python ``init_standard``
-    re-reads the manifest). Before the #51 fix step (c) was a NO-OP (it wrote files the
-    manifest build no longer reads), so the domain stayed VIP-blocked.
+    ``pfblockerng_alerts.php`` ``dnsbl_remove`` sequence (toggle the ``pfb_unlock`` store
+    -> regenerate ``config.user_unlock`` -> reload Unbound).
+
+    ZERO-DOWNTIME (ADR-10, #51): the reload takes the no-restart DATA FAST PATH — PHP
+    patches the manifest, flips the generation sentinel, and the in-module watcher rebuilds
+    + atomically swaps the snapshot (a Lock additionally targeted-flushes that one name from
+    the C-cache; an Unlock needs none since #43 stopped C-caching blocks). Unbound is NOT
+    restarted, so its **pid is captured before and asserted UNCHANGED after** the whole
+    Unlock/Lock sequence — proving the #51 flips apply with no restart. (Before the #51 fix
+    step (c) was a NO-OP — it wrote files the manifest build no longer reads — so the domain
+    stayed VIP-blocked; here it must resolve again.) The unlock/lock transitions use
+    ``dns_probe_until`` (the async-swap analog of the authoritative probe): the swapped
+    decision lands within a bounded window without a restart.
 
     NOTE: NO ``control_local_data`` host override on the name. A host override is served
     by Unbound as ``local-data`` BEFORE the python module runs, so it would shadow the
@@ -368,18 +377,31 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
         assert h.is_vip(blocked), f"{domain} expected VIP block once listed, got {blocked}"
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
 
+        # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
+        # Each flip takes the ADR-10 zero-downtime fast path, so the pid must NOT change.
+        pid_before = h.unbound_pid(deployed_vm)
+
         # (c) Temporary Unlock -> resolves again (forwarded to the stub sentinel).
         #     A VIP here would be the #51 no-op (unlock never reaching the build).
+        #     The swap is async, so poll until the decision flips (bounded; raises on
+        #     timeout) — the block->allow direction is immediate (blocks not cached, #43).
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.resolves_to(unlocked, STUB_DNS_A), f"unlocked {domain} should resolve via stub, got {unlocked}"
+        unlocked = h.dns_probe_until(deployed_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
 
-        # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP).
+        # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
+        #     here clears the prior resolved answer via the production targeted C-cache
+        #     delta-flush inside pfb_reload_unbound, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
-        relocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(relocked), f"re-locked {domain} expected VIP block again, got {relocked}"
+        relocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
+
+        # The whole Unlock/Lock sequence applied with NO restart: pid unchanged.
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after == pid_before, (
+            f"#51 Unlock/Lock must apply via the no-restart zero-downtime swap, but Unbound "
+            f"restarted: pid {pid_before} -> {pid_after}"
+        )
 
 
 def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -389,11 +411,20 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
     A pending temporary-unlock store forces the reload path regardless of feed changes
     (``inc:8806`` ``|| file_exists($pfb['dnsbl_unlock'])``); that path drops the store
     and clears the manifest's ``config.user_unlock`` (``inc:3451`` ->
-    ``pfb_unbound_python_sources_unlock``), so Unbound's ``init_standard`` re-reads a
-    cleared whiteDB and the domain is re-blocked. On ``main`` the equivalent re-lock is
-    the ungated whitelist regeneration; before this fix devel only cleared ``user_unlock``
-    on a feed-change rebuild, so a no-change Force left the unlock live (the regression
-    this run caught). A plain ``update`` over the UNCHANGED feed is therefore enough.
+    ``pfb_unbound_python_sources_unlock``), so the re-read whiteDB no longer allows the
+    domain and it is re-blocked. On ``main`` the equivalent re-lock is the ungated
+    whitelist regeneration; before this fix devel only cleared ``user_unlock`` on a
+    feed-change rebuild, so a no-change Force left the unlock live (the regression this
+    run caught). A plain ``update`` over the UNCHANGED feed is therefore enough.
+
+    ZERO-DOWNTIME (ADR-10): both the #51 Unlock AND the config-clean Force ``update`` are
+    pure DNSBL-DATA updates in python mode, so each takes the no-restart fast path (flip
+    the sentinel -> the watcher rebuilds + atomically swaps). Unbound's **pid is captured
+    before and asserted UNCHANGED after** both operations — proving the re-lock applies with
+    no restart. The Force update is driven with ``data_path=True`` so the helper waits on
+    the swap-applied log line (not restart readiness), and the re-lock decision is observed
+    via ``dns_probe_until`` (the Force update's allow->block re-lock clears the prior
+    resolved answer because the pending-unlock-store reload path re-applies the feed block).
     """
     domain = h.unique_domain("unlocktmp")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
@@ -408,17 +439,246 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         # Blocked by the feed -> VIP (the "before" of the Unlock operation).
         blocked = h.dns_probe(deployed_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
-        # Unlock -> resolves again (forwarded to the stub sentinel).
+
+        # NO-RESTART invariant: capture pid before the Unlock + Force-update re-lock.
+        pid_before = h.unbound_pid(deployed_vm)
+
+        # Unlock -> resolves again (forwarded to the stub sentinel). Async swap: poll until
+        # the block->allow flip lands (immediate direction since blocks aren't C-cached, #43).
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.resolves_to(unlocked, STUB_DNS_A), f"unlocked {domain} should resolve via stub, got {unlocked}"
+        unlocked = h.dns_probe_until(deployed_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
-        # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock
-        # store forces the reload + clears the manifest's user_unlock.
-        h.reload(deployed_vm, "update")
-        relocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(relocked), f"Cron/Force update should re-lock {domain} -> VIP, got {relocked}"
+
+        # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock store
+        # forces the reload + clears the manifest's user_unlock. It is a config-clean
+        # DNSBL-data update -> the no-restart fast path (data_path=True waits on the swap).
+        h.reload(deployed_vm, "update", data_path=True)
+        relocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
+
+        # Both the Unlock and the Force-update re-lock applied with NO restart: pid unchanged.
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after == pid_before, (
+            f"#51 Unlock + Cron/Force re-lock must apply via the no-restart swap, but Unbound "
+            f"restarted: pid {pid_before} -> {pid_after}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 2b) ADR-10 zero-downtime DNSBL — no-restart data path, config-restart fork,
+#     fail-closed. Automates the §7 maintainer smoke checklist. The hard proof is
+#     Unbound's pid: UNCHANGED across a DATA update (the swap reuses the running
+#     process), CHANGED across a CONFIG update (the restart fork). Each case asserts
+#     the BEFORE-state and the pid invariant (CLAUDE.md test-coverage rules).
+# --------------------------------------------------------------------------- #
+
+
+def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A feed-content DNSBL update applies WITHOUT restarting Unbound (ADR-10 zero-downtime).
+
+    Branch-coverage partner of ``test_dnsbl_config_change_restarts`` (data fork vs config
+    fork). Full before/after with the pid invariant:
+
+    * BEFORE: a name NOT in the feed RESOLVES (forwarded to the stub sentinel) — the
+      list is live but does not yet contain it. (Asserted, so the later block is proven
+      to come from the feed edit, not a pre-existing state.)
+    * APPLY: add the name to the SAME local feed file and force a full ``update``. Feeds
+      are cached and re-fetched only on a force (the ``reset``/force-update precedent —
+      see ``test_dnsbl_temp_unlock_cleared_by_force_update``). A config-clean feed/cron
+      update in python mode routes through the no-restart data fast path
+      (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, TRUE, $pfbpython, !$pfbpython)``,
+      inc:4151), so PHP flips the sentinel and the watcher swaps the snapshot.
+    * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the
+      pfBlockerNG log gained a ``zero-downtime swap`` fast-path line.
+
+    NO-FALLBACK NOTE: a config-clean feed-content re-fetch IS reliably the no-restart path
+    (the brief's primary route), so this exercises a genuine feed update — not the #51 lock
+    substitute. The feed/cron allow->block direction passes no targeted C-cache flush (it is
+    TTL-bounded by design, RESULTS/05 SS3), so the name's prior resolved answer is explicitly
+    flushed (``flush_unbound_name`` — the same targeted clear a #51 Lock does on the box)
+    before observing the swapped block within the test window; ``dns_probe_until`` then polls
+    until the VIP decision lands (the swap is async — "briefly stale by design").
+    """
+    domain = h.unique_domain("feedupd")
+    other = h.unique_domain("feedupd-filler")
+    # Start with a feed that does NOT contain the target (only an unrelated filler line),
+    # so the list is live but the target is not yet blocked.
+    feed_name = "smoke_dnsbl_feedupd.txt"
+    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{other}\n")
+    spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd", mode=h.DnsblMode.VIP)
+    with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
+
+        # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.
+        before = h.dns_probe(deployed_vm, domain, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE the feed edit, got {before}"
+        assert not h.is_vip(before), f"{domain} unexpectedly VIP-blocked before being listed: {before}"
+
+        # NO-RESTART invariant + fast-path-log proof: capture pid and the swap-log baseline.
+        pid_before = h.unbound_pid(deployed_vm)
+        swap_before = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
+
+        # APPLY: add the target to the feed and force a full update (re-fetches the edited
+        # local feed). data_path=True -> the no-restart fast path; the helper waits on the
+        # swap-applied log line and RAISES if the restart fallback was taken instead.
+        h.write_local_feed(deployed_vm, feed_name, f"{other}\n{domain}\n")
+        h.reload(deployed_vm, "update", data_path=True)
+
+        # Clear the target's TTL-bounded prior resolved answer (feed/cron allow->block is
+        # not targeted-flushed by PHP — RESULTS/05 SS3), then observe the swapped block.
+        h.flush_unbound_name(deployed_vm, domain)
+        blocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
+        assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
+
+        # AFTER: pid unchanged (no restart) AND a fresh fast-path swap line was logged.
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after == pid_before, (
+            f"a feed DNSBL update must take the no-restart zero-downtime swap, but Unbound "
+            f"restarted: pid {pid_before} -> {pid_after}"
+        )
+        swap_after = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
+        assert swap_after > swap_before, (
+            f"no new '{h.SWAP_LOG_MARKER}' fast-path line logged for the feed update "
+            f"(before={swap_before}, after={swap_after}) — the data fast path did not run"
+        )
+
+
+def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A CONFIG change DOES restart Unbound — the other fork of the data/config split.
+
+    Branch-coverage partner of ``test_dnsbl_feed_update_no_restart``: ADR-10 keeps the
+    restart for a config change (unbound.conf/ini/mode regenerated), only DNSBL DATA is
+    zero-downtime. Disabling then re-enabling the DNSBL component toggles
+    ``pfb_dnsbl``/the python integration, which regenerates Unbound's config and forces a
+    restart (``$pfbpython`` TRUE -> ``$datapath`` FALSE -> ``pfb_stop_start_unbound``).
+    The proof is the pid CHANGING.
+
+    Before/after with the pid invariant:
+
+    * BEFORE: DNSBL is live with the name blocked (VIP) — capture Unbound's pid.
+    * CONFIG CHANGE: disable DNSBL (``pfb_dnsbl`` off) + ``updatednsbl`` (regenerates
+      unbound.conf without the python module -> restart), then re-enable + ``updatednsbl``
+      (regenerates WITH it -> restart). Both are config changes, so each restarts.
+    * AFTER: Unbound's pid has CHANGED at least once (a genuine restart happened), proving
+      the config fork does NOT take the no-restart data path. The name blocks again (the
+      list is restored).
+
+    Teardown (``CaseContext.__exit__`` -> ``reset``) restores ``pfb_dnsbl`` on via the
+    normal config, so the rest of the matrix runs against its baseline.
+    """
+    domain = h.unique_domain("cfgrestart")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_cfgrestart.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokecfgrestart", feed_url=feed_url, header="smokecfgrestart", mode=h.DnsblMode.VIP)
+    with h.CaseContext(deployed_vm, spec):
+        # BEFORE: the name is blocked (VIP) and DNSBL is live. Capture the running pid.
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block before the config change, got {blocked}"
+        pid_before = h.unbound_pid(deployed_vm)
+
+        # CONFIG CHANGE: disable DNSBL -> regenerates unbound.conf (drops the python
+        # module) -> restart. These reloads are NOT data_path: a config change keeps the
+        # restart, so wait on restart readiness (the default reload() path).
+        h.set_dnsbl_enabled(deployed_vm, False)
+        h.reload(deployed_vm, "updatednsbl")
+        pid_mid = h.unbound_pid(deployed_vm)
+        assert pid_mid != pid_before, (
+            f"disabling DNSBL is a config change and MUST restart Unbound, but pid was "
+            f"unchanged ({pid_before}) — the config fork wrongly took the no-restart path"
+        )
+
+        # Re-enable DNSBL -> regenerates unbound.conf WITH the python module -> restart.
+        h.set_dnsbl_enabled(deployed_vm, True)
+        h.reload(deployed_vm, "updatednsbl")
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after != pid_mid, (
+            f"re-enabling DNSBL is a config change and MUST restart Unbound, but pid was unchanged ({pid_mid})"
+        )
+        # The list is restored: the name blocks again after the config round-trip.
+        reblocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(reblocked), f"{domain} expected VIP block after re-enabling DNSBL, got {reblocked}"
+
+
+def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A broken manifest does NOT swap — the last-good lists keep serving (ADR-10 fail-closed).
+
+    The ADR-10 safety contract: if a rebuild fails (bad/partial manifest), the watcher keeps
+    the OLD snapshot live and never swaps to an empty/partial set ("never fail open to no
+    blocking"). Before/after with the pid invariant:
+
+    * BEFORE: the name is BLOCKED (VIP) — the last-good snapshot. Capture Unbound's pid and
+      the py_error.log baseline.
+    * CORRUPT + TRIGGER: overwrite ``/var/unbound/pfb_py_sources.json`` with invalid JSON
+      (preserving unbound:unbound ownership so the chrooted module can still OPEN it — the
+      failure must be a PARSE failure, not a permission one), then bump the generation
+      sentinel (``/var/unbound/pfb_py_reload`` -> current+1) to trigger the watcher. The
+      build fails (``dnsbl_build_from_manifest`` logs "Failed to load DNSBL manifest" and
+      returns None -> ``rebuild_and_swap`` keeps the old snapshot).
+    * AFTER: the name STILL BLOCKS (old snapshot kept), Unbound is still UP (``unbound-control
+      status`` ok) with its pid UNCHANGED (no restart, no crash), and py_error.log gained a
+      ``Failed to load DNSBL manifest`` (or ``keeping current snapshot``) line.
+
+    Teardown restores a clean state: a real ``reset`` (clear* + forced ``update``) rewrites a
+    valid manifest, so the next case starts from the baseline.
+    """
+    domain = h.unique_domain("failclosed")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_failclosed.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokefailclosed", feed_url=feed_url, header="smokefailclosed", mode=h.DnsblMode.VIP)
+    with h.CaseContext(deployed_vm, spec):
+        # BEFORE: the name is blocked (VIP) by the last-good snapshot.
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block before corrupting the manifest, got {blocked}"
+        pid_before = h.unbound_pid(deployed_vm)
+        pyerr_before = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
+
+        # CORRUPT the manifest + bump the sentinel via PHP (pfSsh.php) — NOT a raw SSH shell
+        # string: pfSense's root login shell is tcsh, which lacks POSIX ``$(...)``/``case``/
+        # ``$((…))``; PHP gives deterministic file ops and ownership. Write invalid JSON
+        # (a PARSE error, not a permission one), keep unbound:unbound ownership so the
+        # chrooted module can still OPEN it, then write generation current+1 into the
+        # sentinel (the watcher swaps only on a STRICT advance) to trigger the failing build.
+        snippet = (
+            "$m = '/var/unbound/pfb_py_sources.json';\n"
+            "file_put_contents($m, '{ this is not valid json');\n"
+            "@chown($m, 'unbound'); @chgrp($m, 'unbound');\n"
+            "$s = '/var/unbound/pfb_py_reload';\n"
+            "$raw = @file_get_contents($s);\n"
+            '$cur = ($raw !== FALSE) ? (int) strtok($raw, "\\n") : 0;\n'
+            'file_put_contents($s, ($cur + 1) . "\\n");\n'
+            "@chown($s, 'unbound'); @chgrp($s, 'unbound');\n"
+            "echo 'OK';"
+        )
+        res = h.php_eval(deployed_vm, snippet, timeout=60)
+        assert "OK" in res.stdout, f"failed to corrupt manifest / bump sentinel: rc={res.returncode} {res.stderr!r}"
+
+        # Give the watcher a bounded window to wake, fail the build, and log it — then assert
+        # the fail-closed outcome. py_error.log gaining the manifest-load failure line proves
+        # the build was attempted AND failed (not silently skipped).
+        def _pyerr_logged(_a: h.DnsAnswer) -> bool:
+            now = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
+            return now > pyerr_before
+
+        # dns_probe_until polls the (still-blocked) name; the predicate also confirms the
+        # py_error line appeared — both must hold within the window (raises otherwise).
+        still = h.dns_probe_until(
+            deployed_vm,
+            domain,
+            lambda a: h.is_vip(a) and _pyerr_logged(a),
+            timeout=45.0,
+        )
+        assert h.is_vip(still), f"fail-closed: {domain} must STILL block on the old snapshot, got {still}"
+
+        # Unbound is still UP and was NOT restarted by the failed build.
+        h.wait_unbound_ready(deployed_vm)
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after == pid_before, (
+            f"a failed (fail-closed) build must keep the running resolver: Unbound pid changed "
+            f"{pid_before} -> {pid_after}"
+        )
+        pyerr_after = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
+        assert pyerr_after > pyerr_before, (
+            f"expected a 'Failed to load DNSBL manifest' line in {h.PY_ERROR_LOG} "
+            f"(before={pyerr_before}, after={pyerr_after}) — the broken-manifest build was not logged"
+        )
 
 
 # --------------------------------------------------------------------------- #
