@@ -693,6 +693,40 @@ class TestGetDetailsDnsblQtype:
         assert first[9] == "+"
         assert second[9] == "-"
 
+    def test_distinct_names_not_deduped(self, monkeypatch: Any) -> None:
+        # Two different names blocked by the SAME list entry share an identical
+        # DnsblDecision payload (e.g. two subdomains of one blocked zone -> same
+        # b_eval). The consecutive-dedup signature must still tell them apart by
+        # name, or the second is wrongly marked a duplicate (zone under-count). The
+        # decision is the same object for both, so name is the only differentiator.
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        dec = pfb_unbound.DnsblDecision(
+            is_found=True,
+            in_whitelist=False,
+            in_hsts=False,
+            null_blocking=False,
+            log_type="1",
+            b_type="TLD",
+            p_type="Python",
+            feed="feedX",
+            group="groupY",
+            b_eval="evil.com",
+        )
+        monkeypatch.setattr(pfb_unbound, "decisionDB", {"a.evil.com": dec, "b.evil.com": dec})
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        for name in ("a.evil.com.", "b.evil.com."):
+            qstate = types.SimpleNamespace(
+                qinfo=types.SimpleNamespace(qname_str=name, qtype_str="A"),
+                return_msg=None,
+            )
+            pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        a_fields, b_fields = self._dnsbl_fields(lines)
+        assert a_fields[9] == "+"
+        assert b_fields[9] == "+"
+
 
 class TestGetOType:
     def test_return_msg_rrset_branch(self) -> None:
@@ -849,6 +883,7 @@ class TestOperateDnsbl:
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
+        assert qstate.no_cache_store == 0  # before-state: default is cacheable
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert qstate.no_cache_store == 1
@@ -857,6 +892,7 @@ class TestOperateDnsbl:
         # that is the whole point: every blocked query, miss or memo, re-runs here.
         assert _is_block(pfb_unbound.decisionDB.get("evil.com"))
         qstate2 = make_qstate("evil.com.", qtype=RR_A)
+        assert qstate2.no_cache_store == 0  # before-state
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
         assert qstate2.ext_state[0] == MODULE_FINISHED
         assert qstate2.no_cache_store == 1

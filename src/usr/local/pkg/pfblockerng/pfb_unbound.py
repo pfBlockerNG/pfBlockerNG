@@ -1260,16 +1260,19 @@ def get_details_dnsbl(
         if pfb["sqlite3_dnsbl_con"] and isDNSBL.group != "":
             pfb_db_enqueue(("dnsbl", isDNSBL.group))
 
-        # Query type (A/AAAA/ANY/...). The cached decision in isDNSBL is
-        # qtype-independent, so fold q_type into both the consecutive-dedup
-        # signature and the log line. Without it a client's back-to-back A+AAAA
-        # blocks of the same name compare equal -> the second is marked a
-        # duplicate (dual-stack under-count) and Reports cannot break down by
-        # record type. The decision path stays qtype-correct and untouched.
+        # The cached DnsblDecision is both name- and qtype-independent for some block
+        # kinds -- two subdomains of one blocked zone share an identical payload (same
+        # b_eval=zone) -- so fold BOTH the queried name and q_type into the
+        # consecutive-dedup signature and the log line. Without the name, two distinct
+        # same-zone blocks compare equal -> the second is wrongly marked a duplicate
+        # (zone under-count); the old dnsblDB dict carried a "qname" field that str()
+        # folded in implicitly, which DnsblDecision does not. Without q_type, a client's
+        # back-to-back A+AAAA of one name collapses (dual-stack under-count) and Reports
+        # cannot break down by record type. The decision path stays correct and untouched.
         q_type = get_q_type(qstate, qinfo)
 
         dupEntry = "+"
-        event_sig = (q_type, isDNSBL)
+        event_sig = (q_name.lower(), q_type, isDNSBL)
         if _dnsbl_last_event is not None:
             if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
