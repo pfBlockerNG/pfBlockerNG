@@ -316,6 +316,15 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["gpListDB"] = False
     pfb["noAAAADB"] = False
     pfb["python_idn"] = False
+    # TLD-Allow defaults. The PHP ini writer always emits these three MAIN keys, so
+    # the config.has_option() loads below normally populate them -- but default them
+    # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
+    # the unconditional reads (TLD-Allow check + manifest cfg). ``python_tlds`` is a
+    # list (line stores it via ``.split(",")``); the consumer ``tld not in
+    # cfg["python_tlds"]`` treats the empty list correctly.
+    pfb["python_tld"] = False
+    pfb["python_tlds"] = []
+    pfb["python_tld_seg"] = 0
     pfb["python_hsts"] = False
     pfb["python_reply"] = False
     pfb["python_cname"] = False
