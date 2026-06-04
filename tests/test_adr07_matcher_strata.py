@@ -380,13 +380,14 @@ class TestWinningEntryAttribution:
     def test_tie_keeps_first_discovered_attribution(self) -> None:
         import re
 
-        # A higher-or-equal discovered band must NOT be re-attributed: a band-5 data block
-        # (user Custom_List, log='1') discovered first, plus a band-1 feed regex. The regex
-        # does NOT win (1 < 5), so the data entry's feed/group/b_type stand.
+        # A genuine TIE must NOT re-attribute. A band-5 data block (user Custom_List,
+        # log='1') is discovered first AND a band-5 user regex also matches: the scan band
+        # EQUALS the discovered band, so the strict ``>`` guard keeps the first-discovered
+        # (data) attribution -- the co-equal regex does not steal feed/group/b_type.
         cfg = _cfg(dataDB=True, regexDB=True, important_rules=True)
         containers = _containers(
             dataDB={"evil.com": {"log": "1", "index": 3, "important": False, "band": PRIO_USER_BLOCK}},
-            regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_FEED_BLOCK}},
+            regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}},
             feedGroupIndexDB={3: {"feed": "UserFeed", "group": "Custom_List"}},
         )
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
