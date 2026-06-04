@@ -237,6 +237,53 @@ python -m pytest tests/test_adr06_golden_oracle.py \
                  tests/test_adr07_php_boundary.py
 ```
 
+#### Zero-downtime DNSBL updates (ADR-10)
+
+A DNSBL **data** update no longer restarts Unbound. The running Python module
+rebuilds the matcher structures **on a background watcher thread** off the live
+ones, then atomically swaps in a single immutable `Snapshot` reference — GIL-atomic,
+so every query thread sees either the whole old snapshot or the whole new one, never
+a torn mix. Queries keep flowing throughout the build (briefly stale by design);
+there is **no stop/start window and no dropped queries**. PHP/shell drive it by
+**atomically publishing** the manifest (stage → `fsync` → `rename`) and **flipping a
+single generation sentinel** (`/var/unbound/pfb_py_reload`); the watcher wakes on it
+(`kqueue` `EVFILT_VNODE`, mtime-poll fallback) and runs the rebuild + swap. A failed
+or partial build is **fail-closed** — the last-good snapshot keeps serving.
+
+**Data vs config — what swaps, what restarts:**
+
+- **DATA = zero-downtime swap (no restart).** Scheduled/forced **feed/cron**
+  updates, **and** the user custom-list edits — alerts **Lock/Unlock** and
+  "add to whitelist", plus customlist add/delete (#51) — all take the no-restart
+  fast path: publish + flip, the watcher swaps. Unbound's pid is unchanged.
+- **CONFIG = restart (unchanged).** A change to `unbound.conf` / the DNS Resolver /
+  mode toggles still stops/starts Unbound — only DNSBL data is zero-downtime.
+- **Fallback = restart (fail-safe).** The swap falls back to today's restart when it
+  cannot run safely: a **RAM-constrained box** (the ~2× transient build/swap footprint
+  would not fit — a PHP RAM gate is the primary check, the Python watcher's free-page
+  probe the secondary net), the **feature/python mode off**, Unbound not running, a
+  staged config change present, or a **prior swap/sentinel error**. The restart never
+  doubles RAM (the old set dies before the rebuild), so it is the safe floor.
+
+**Cache behaviour on a swap:**
+
+- **Reports** (the `dnsblcache` sqlite) is reset — parity with the restart.
+- The unified query-time decision cache **`decisionDB` is cleared** on every swap, so
+  no stale block/allow *decision* survives.
+- **block→allow is immediate.** DNSBL blocks are not stored in Unbound's C message
+  cache (`no_cache_store=1`, #43), so once `decisionDB` clears, a newly-**removed**
+  name resolves its real answer at once — no flush needed.
+- **allow→block** flushes the prior **resolved** answer from the C-cache: a **targeted
+  delta flush** of the newly-blocked name(s) where the delta is known and small (the
+  #51 single-domain Lock / "strip from whitelist" case), and a **TTL-bounded** wait
+  for the feed/cron case (the allow→block delta is not cheaply diffable over
+  multi-million-entry sets — and this is **not** a regression: today's restart
+  preserves the resolved cache too, so its allow→block is equally TTL-stale).
+
+See [ADR-10](.ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md) for the full contract; the
+swap RAM kill-gate is `benchmarks/spike_adr10_swap.py`, and the snapshot-equivalence
+/ fail-closed-swap / watcher guards are the `tests/test_adr10_*` suite.
+
 ### DNSBL sinkhole VIP
 
 A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the

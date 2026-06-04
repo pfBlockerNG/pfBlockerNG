@@ -335,6 +335,33 @@ kill-gate is `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO
 (dispatch Tests with `run_benchmarks`, default off — see issue #76). See
 `.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
+A DNSBL **DATA** update is a **zero-downtime background swap — no Unbound restart**
+(ADR-10). The module holds the matcher strata as one frozen `Snapshot` behind a single
+module ref; a reload-watcher daemon thread (`kqueue` `EVFILT_VNODE`, mtime-poll
+fallback) wakes on a generation **sentinel** (`/var/unbound/pfb_py_reload`), rebuilds
+off the live snapshot, and **atomically swaps** the single ref (GIL-atomic → visible to
+every query thread, no torn read, no dropped queries). PHP/shell **atomically publish**
+the manifest (stage → `fsync` → `rename`) then **flip the sentinel** (next integer) —
+the all-or-nothing commit. After flipping, PHP **waits (bounded) for the watcher's
+applied-generation marker** to catch up, so the reload call returns only once the new
+lists are LIVE (queries keep flowing on the old snapshot during the wait — still
+zero-downtime; this restores the "lists live on return" invariant the restart had, so
+the ADR-12 `post` hook sees the new state). **Data = swap; config = restart:** feed/cron
+updates AND the user custom-list edits (alerts Lock/Unlock + "add to whitelist" +
+customlist add/delete, #51) take the no-restart fast path; an
+`unbound.conf`/mode/Resolver change still restarts. **Fallback to restart (fail-safe)**
+when the swap can't run: a RAM-constrained box (PHP RAM gate primary, Python free-page
+probe secondary — the ~2× transient build/swap footprint is
+`benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound
+down, a staged config change, or a prior swap/sentinel error. **Cache on swap:** Reports
+reset; `decisionDB` cleared (no stale decision); **block→allow immediate** (blocks not
+C-cached since #43); **allow→block** flushes the prior resolved answer — a targeted
+delta flush for the #51 single-domain case, TTL-bounded for feed/cron (not a regression
+— the restart is TTL-stale there too). Fail-closed: a bad/partial build keeps the
+last-good snapshot serving. Pinned by `tests/test_adr10_*` (snapshot equivalence,
+fail-closed swap, watcher); idle decision-identity stays guarded by
+`tests/test_adr06_*`/`tests/test_adr07_*`. See `.ADRs/ADR_10_Zero_Downtime_DNSBL/`.
+
 Update Hooks (ADR-12, PHP/shell — **no Python**): admin-configurable `pre`/`post`
 commands run once per update pass from `sync_package_pfblockerng` in
 `pfblockerng.inc` — `pfb_run_hooks($when, $ctx)` reads enabled hooks from
@@ -348,12 +375,13 @@ Exported env (only these are promised): `PFB_WHEN` (`pre`|`post`), `PFB_TRIGGER`
 (`cron`|`update`|`force-reload` — the ADR's `force-update` collapses to `cron`),
 and post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on
 these) plus `PFB_STATUS`/`PFB_CHANGED_ALIASES` (stable reserved placeholders:
-`ok` / empty — do not branch on their value). Hooks live in config ⇒ replicate to
-a CARP/HA secondary and run on whichever node updates. The shipped **HAProxy
-recipe** (README) is a `post` hook guarded on `[ "$PFB_IP_CHANGED" = "1" ]` whose
-command pipes `haproxy_check_run(1)` (graceful reload) through
-`/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck + a maintainer
-manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
+`ok` / empty — do not branch on their value). The `post` hook sees the new DNSBL
+state live (ADR-10's bounded wait-for-apply above runs before the pass returns). Hooks
+live in config ⇒ replicate to a CARP/HA secondary and run on whichever node updates.
+The shipped **HAProxy recipe** (README) is a `post` hook guarded on
+`[ "$PFB_IP_CHANGED" = "1" ]` whose command pipes `haproxy_check_run(1)` (graceful
+reload) through `/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck +
+a maintainer manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
 
 ---
 
