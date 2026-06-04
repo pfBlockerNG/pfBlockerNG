@@ -1354,14 +1354,7 @@ if (isset($_POST) && !empty($_POST)) {
 		$dnsbl_type	= pfb_filter($_POST['dnsbl_type'], PFB_FILTER_WORD, 'alerts dnsbl_remove');
 
 		$domain_esc	= escapeshellarg($domain);
-
-		if (!empty($dnsbl_type)) {
-			if (strpos($dnsbl_type, 'TLD') !== FALSE) {
-				$dnsbl_type = 'TLD';
-			} elseif (strpos($dnsbl_type, 'DNSBL') !== FALSE) {
-				$dnsbl_type = 'DNSBL';
-			}
-		}
+		$action		= $_POST['dnsbl_remove'];
 
 		// If Domain or DNSBL type field is empty, exit.
 		if (empty($domain) || empty($dnsbl_type)) {
@@ -1370,42 +1363,33 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		// For DNSBL python - Lock/unlock - Collect missing Feed/Group Name
-		if ($_POST['dnsbl_remove'] != 'unlock' && $dnsbl_type != 'python') {
-			$log_type = '1';
-			$pfb_feed = $pfb_group = 'Unknown';
-			if (file_exists("{$pfb['dnsbl_unlock']}.data")) {
-				$find_unlock_data = pfb_unlock('dnsbl_data', 'dnsbl_data', ",{$domain},,", '', '');
-				if (!empty($find_unlock_data)) {
-					$log_type	= $find_unlock_data[3] ?: 'Unknown';
-					$pfb_feed	= $find_unlock_data[4] ?: 'Unknown';
-					$pfb_group	= $find_unlock_data[5] ?: 'Unknown';
-				}
-			}
+		// ADR-06 (#51): DNSBL is built by the Unbound python plugin from the per-feed
+		// manifest (pfb_py_sources.json); the legacy pfb_py_whitelist.txt / pfb_py_data
+		// / pfb_py_zone files this handler once wrote are no longer read by the build,
+		// so writing them was a no-op. The TEMPORARY per-alert Lock/Unlock now toggles
+		// ONLY the pfb_unlock state store ($pfb['dnsbl_unlock']); the resolver effect
+		// comes from regenerating the manifest's config.user_unlock (band-6 user allows,
+		// merged into whiteDB) from that store and reloading Unbound.
+		//
+		// Store toggle: unlock/relock ADD the domain, lock/reunlock REMOVE it --
+		// preserving the four icon states rendered from $dnsbl_unlock (red lock /
+		// primary unlock / warning relock / warning reunlock). user_unlock is recomputed
+		// as the store's domains, so an unlocked (in-store, non-whitelisted) domain
+		// resolves and a re-locked one returns to its feed-blocked state on reload.
+		if ($action == 'unlock' || $action == 'relock') {
+			pfb_unlock('unlock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
+		} else {	// 'lock' | 'reunlock'
+			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
 		}
 
-		// Unlock Domain
-		if ($_POST['dnsbl_remove'] == 'unlock') {
-			$cmd = 'local_data_remove';
-			$py_file = $pfb['unbound_py_data'];
-			if ($dnsbl_type == 'TLD') {
-				$cmd = 'local_zone_remove';
-				$py_file = $pfb['unbound_py_zone'];
-			}
+		// Patch the manifest's config.user_unlock from the updated store, then reload
+		// Unbound so the query-time whiteDB picks up the change.
+		pfb_unbound_python_sources_unlock();
+		pfb_reload_unbound('enabled', FALSE);
 
-			if ($dnsbl_type == 'python') {
-				@file_put_contents($pfb['unbound_py_wh'], "{$domain},0\n", FILE_APPEND | LOCK_EX);
-			}
-			else {
-				$tmp = tempnam('/tmp', 'dnsbl_alert_');
-				@file_put_contents("{$tmp}.adup", ",{$domain},,\n", LOCK_EX);
-				exec("{$pfb['ggrep']} -F -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} >> {$pfb['dnsbl_unlock']}.data"); // Store DNSBL Feed/Group Data
-				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$py_file} > " . escapeshellarg("{$tmp}.tmp") . "; mv -f "
-					. escapeshellarg("{$tmp}.tmp") . " {$py_file}");
-				unlink_if_exists("{$tmp}*");
-			}
-			pfb_reload_unbound('enabled', FALSE);
-
+		// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
+		// resolver cache so a previously-cached block is not served.
+		if ($action == 'unlock') {
 			exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
 
 			// Query for CNAME(s)
@@ -1422,70 +1406,25 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 			}
-
-			// Add Domain to unlock file
-			pfb_unlock('unlock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-			$savemsg = "The Domain [ {$domain} ] has been temporarily Unlocked from DNSBL!";
 		}
 
-		// Lock Domain
-		elseif ($_POST['dnsbl_remove'] == 'lock') {
-			if ($dnsbl_type == 'python') {
-				pfb_unbound_python_whitelist('alerts');
-			}
-			else {
-				if ($dnsbl_type == 'TLD') {
-					$py_file = $pfb['unbound_py_zone'];
-				} else {
-					$py_file = $pfb['unbound_py_data'];
-				}
-
-				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-			}
-			pfb_reload_unbound('enabled', FALSE);
-
-			// Remove Domain from unlock file
-			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-			$savemsg = "The Domain [ {$domain} ] has been Locked into DNSBL!";
+		switch ($action) {
+			case 'unlock':
+				$savemsg = "The Domain [ {$domain} ] has been temporarily Unlocked from DNSBL!";
+				break;
+			case 'lock':
+				$savemsg = "The Domain [ {$domain} ] has been Locked into DNSBL!";
+				break;
+			case 'relock':
+				$savemsg = "The Domain [ {$domain} ] has been temporarily Re-Locked into DNSBL!";
+				break;
+			case 'reunlock':
+				$savemsg = "The Domain [ {$domain} ] has been Unlocked from DNSBL!";
+				break;
+			default:
+				$savemsg = '';
 		}
-		elseif ($_POST['dnsbl_remove'] == 'relock') {
 
-			if ($dnsbl_type == 'python') {
-				pfb_unbound_python_whitelist('alerts');
-			}
-			else {
-				if ($dnsbl_type == 'TLD') {
-					$py_file = $pfb['unbound_py_zone'];
-				} else {
-					$py_file = $pfb['unbound_py_data'];
-				}
-				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-			}
-			pfb_reload_unbound('enabled', FALSE);
-
-			// Add Domain to unlock file
-			pfb_unlock('unlock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-			$savemsg = "The Domain [ {$domain} ] has been temporarily Re-Locked into DNSBL!";
-		}
-		elseif ($_POST['dnsbl_remove'] == 'reunlock') {
-
-			if ($dnsbl_type == 'python') {
-				pfb_unbound_python_whitelist('alerts');
-			}
-			else {
-				if ($dnsbl_type == 'TLD') {
-					$py_file = $pfb['unbound_py_zone'];
-				} else {
-					$py_file = $pfb['unbound_py_data'];
-				}
-				@file_put_contents($py_file, ",{$domain},,{$log_type},{$pfb_feed},{$pfb_group}\n", FILE_APPEND);
-			}
-			pfb_reload_unbound('enabled', FALSE);
-
-			// Remove Domain from unlock file
-			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-			$savemsg = "The Domain [ {$domain} ] has been Unlocked from DNSBL!";
-		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
 	}

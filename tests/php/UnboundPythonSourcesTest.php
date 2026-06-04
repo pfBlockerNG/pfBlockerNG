@@ -11,8 +11,14 @@ use PHPUnit\Framework\TestCase;
  * pfb_unbound.py. This pins the parts the issue calls out: format/provenance
  * tagging, the chroot-relative (basename) raw path, and plain-vs-ABP raw
  * extraction. It runs against a temp $pfb sandbox (no live box).
+ *
+ * Also covers the #51 temporary-unlock plumbing: the full build clears
+ * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock()
+ * recomputes it in place from the live pfb_unlock store (pfb_dnsbl_unlock_lines()).
  */
 #[CoversFunction('pfb_unbound_python_sources')]
+#[CoversFunction('pfb_unbound_python_sources_unlock')]
+#[CoversFunction('pfb_dnsbl_unlock_lines')]
 final class UnboundPythonSourcesTest extends TestCase
 {
 	private string $tmp;
@@ -37,6 +43,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_alexa'        => 'off',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
+			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsblconfig'        => [
 				'tldblacklist' => '',
 				'tldexclusion' => '',
@@ -126,6 +133,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame([], $m['config']['tld_master']);
 		$this->assertSame([], $m['config']['tld_blacklist']);
 		$this->assertSame([], $m['config']['user_whitelist']);
+		$this->assertSame([], $m['config']['user_unlock']);
 		$this->assertFalse($m['config']['top1m_enabled']);
 	}
 
@@ -134,5 +142,65 @@ final class UnboundPythonSourcesTest extends TestCase
 		$m = pfb_unbound_python_sources($this->feeds());
 		$json = file_get_contents("{$this->tmp}/pfb_py_sources.json");
 		$this->assertSame($m, json_decode($json, true));
+	}
+
+	// #51: a FULL build CLEARS the temporary unlock set even when the live store has
+	// entries -- a Force/Cron deletes the store right after, so baking it in would let
+	// unlocks survive the re-lock. The full build must emit user_unlock => [].
+	public function testFullBuildClearsUserUnlockEvenWithStore(): void
+	{
+		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
+		$m = pfb_unbound_python_sources($this->feeds());
+		$this->assertSame([], $m['config']['user_unlock']);
+	}
+
+	// #51: pfb_dnsbl_unlock_lines() reads the pfb_unlock store and returns its domains.
+	public function testDnsblUnlockLinesReadsStoreDomains(): void
+	{
+		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
+		$this->assertSame(['evil.com', 'foo.org'], pfb_dnsbl_unlock_lines());
+	}
+
+	public function testDnsblUnlockLinesEmptyWhenStoreAbsent(): void
+	{
+		$this->assertSame([], pfb_dnsbl_unlock_lines());
+	}
+
+	// #51: the incremental path patches ONLY config.user_unlock from the live store,
+	// leaving the rest of the manifest intact.
+	public function testSourcesUnlockRecomputesFromStore(): void
+	{
+		$m = pfb_unbound_python_sources($this->feeds());            // full build: user_unlock => []
+		$this->assertSame([], $m['config']['user_unlock']);
+
+		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
+		$this->assertTrue(pfb_unbound_python_sources_unlock());
+
+		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), true);
+		$this->assertSame(['evil.com', 'foo.org'], $patched['config']['user_unlock']);
+		// The feeds and the rest of config are untouched by the in-place patch.
+		$this->assertSame($m['feeds'], $patched['feeds']);
+		$this->assertSame($m['config']['user_whitelist'], $patched['config']['user_whitelist']);
+	}
+
+	// A 'lock'/'reunlock' that empties the store re-locks every domain: pfb_unlock
+	// removes the file when empty, so the recompute yields [].
+	public function testSourcesUnlockEmptiesWhenStoreCleared(): void
+	{
+		pfb_unbound_python_sources($this->feeds());
+		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\n");
+		pfb_unbound_python_sources_unlock();
+
+		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (last lock removed it)
+		$this->assertTrue(pfb_unbound_python_sources_unlock());
+		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), true);
+		$this->assertSame([], $patched['config']['user_unlock']);
+	}
+
+	public function testSourcesUnlockReturnsFalseWithoutManifest(): void
+	{
+		// No full build ran -> no manifest to patch.
+		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_sources.json");
+		$this->assertFalse(pfb_unbound_python_sources_unlock());
 	}
 }

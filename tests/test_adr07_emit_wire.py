@@ -35,6 +35,7 @@ def _build(
     feeds: dict[str, list[str]],
     *,
     user_whitelist: Iterable[str] = (),
+    user_unlock: Iterable[str] = (),
     top1m_list: Iterable[str] = (),
     top1m_enabled: bool = False,
     format_hint: str = "abp",
@@ -46,6 +47,8 @@ def _build(
     ``user_feeds`` names the feeds tagged provenance='user' (a DNSBL Group Custom_List,
     sovereign band 5); ``plain_feeds`` names those forced format_hint='plain' (the
     non-ABP path), so a mixed user-plain + downloaded-ABP manifest can be built.
+    ``user_unlock`` is the temporary per-alert unlock set (#51), merged into whiteDB
+    as band-6 user allows exactly like ``user_whitelist``.
     """
     raw_store = {name: lines for name, lines in feeds.items()}
     user_set = set(user_feeds)
@@ -68,6 +71,7 @@ def _build(
         "tld_blacklist": [],
         "tld_exclusion": [],
         "user_whitelist": list(user_whitelist),
+        "user_unlock": list(user_unlock),
         "top1m_list": list(top1m_list),
     }
 
@@ -213,6 +217,46 @@ class TestFastPathOff:
         feeds = {"f": ["||evil.com^", "good.com"]}
         for q in ("evil.com", "sub.evil.com", "good.com", "unrelated.org"):
             assert _live_label(_build(feeds), q) == _oracle_label(feeds, [], q)
+
+
+# --------------------------------------------------------------------------- #
+# 2b. #51 -- the temporary per-alert unlock set (config.user_unlock) merges into
+#     whiteDB as a band-6 user allow, exactly like the permanent user whitelist.
+# --------------------------------------------------------------------------- #
+class TestUserUnlock:
+    def test_unlock_overrides_feed_block_on_fast_path(self) -> None:
+        # A temporary unlock alone (no abp feature) stays on the fast path and
+        # un-blocks the domain, just like a permanent user whitelist entry.
+        res = _build({"f": ["||evil.com^"]}, user_unlock=["evil.com"])
+        assert res.important_rules is False
+        assert _live_label(res, "evil.com") == "resolve"
+
+    def test_unlock_is_band6_important_allow(self) -> None:
+        # Same whiteDB shape as the user whitelist: sovereign user allow (band 6).
+        res = _build({"f": ["||evil.com^"]}, user_unlock=["evil.com"])
+        assert res.white_db["evil.com"] == {
+            "wildcard": False,
+            "important": True,
+            "band": P.PRIO_USER_ALLOW,
+        }
+
+    def test_unlock_beats_user_custom_list_block(self) -> None:
+        # A DNSBL Group Custom_List block is sovereign (band 5) over feeds, but a
+        # temporary unlock (band 6) still wins -- the user can unlock their own block.
+        res = _build({"cust": ["||x.example.com^"]}, user_feeds=["cust"], user_unlock=["x.example.com"])
+        assert _live_label(res, "x.example.com") == "resolve"
+
+    def test_unlock_leading_dot_is_wildcard(self) -> None:
+        # Normalised exactly like the whitelist: a leading dot -> wildcard allow
+        # covering subdomains.
+        res = _build({"f": ["||evil.com^"]}, user_unlock=[".evil.com"])
+        assert res.white_db["evil.com"]["wildcard"] is True
+        assert _live_label(res, "sub.evil.com") == "resolve"
+
+    def test_empty_unlock_keeps_block(self) -> None:
+        # The full-build default (empty user_unlock) leaves the feed block intact.
+        res = _build({"f": ["||evil.com^"]}, user_unlock=[])
+        assert _live_label(res, "evil.com") == "block"
 
 
 # --------------------------------------------------------------------------- #

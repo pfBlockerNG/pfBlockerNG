@@ -421,3 +421,56 @@ class TestTldMasterPath:
         # Reach into the helper that shapes config so the list path is exercised.
         config = pfb_unbound._dnsbl_config_from_manifest(manifest, FIXTURES)
         assert config["tld_master"] == _read_lines("tld_master.txt")
+
+
+class TestUserUnlockManifest:
+    """#51: config.user_unlock (the temporary per-alert unlock set) is passed through
+    _dnsbl_config_from_manifest and merged into whiteDB by the on-box build path."""
+
+    def test_user_unlock_passes_through_config_shaper(self) -> None:
+        manifest = {
+            "version": 1,
+            "config": {
+                "tld_master": [],
+                "user_unlock": ["evil.com", ".wild.net"],
+            },
+            "feeds": [],
+        }
+        config = pfb_unbound._dnsbl_config_from_manifest(manifest, FIXTURES)
+        assert config["user_unlock"] == ["evil.com", ".wild.net"]
+
+    def test_user_unlock_defaults_empty_when_absent(self) -> None:
+        config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, FIXTURES)
+        assert config["user_unlock"] == []
+
+    def test_user_unlock_merges_into_white_db(self, tmp_path: Any) -> None:
+        # End-to-end through dnsbl_build_from_manifest: a feed blocks evil.com; the
+        # temporary unlock makes it resolve (band-6 user allow in whiteDB).
+        feed = os.path.join(str(tmp_path), "feed.raw")
+        with open(feed, "w", encoding="utf-8") as fh:
+            fh.write("evil.com\n")
+        manifest = {
+            "version": 1,
+            "config": {
+                "tld_master": _read_lines("tld_master.txt"),
+                "user_unlock": ["evil.com"],
+            },
+            "feeds": [{"raw": "feed.raw", "feed": "F", "group": "G", "format_hint": "plain", "log_flag": "1"}],
+        }
+        path = os.path.join(str(tmp_path), "pfb_py_sources.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh)
+
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        assert result.white_db["evil.com"] == {
+            "wildcard": False,
+            "important": True,
+            "band": pfb_unbound.PRIO_USER_ALLOW,
+        }
+        # The feed still records the block (evil.com is a registrable zone); the
+        # allow overrides it at query time.
+        assert "evil.com" in result.zone_db
+        config = pfb_unbound._dnsbl_config_from_manifest(manifest, str(tmp_path))
+        got = _evaluate_result(result, {**config, "hsts_domains": []}, "evil.com")
+        assert got["decision"] == "whitelist"

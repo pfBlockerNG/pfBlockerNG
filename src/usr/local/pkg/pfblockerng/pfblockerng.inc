@@ -2319,6 +2319,32 @@ function pfb_dnsbl_whitelist_lines() {
 	return $out;
 }
 
+// ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store
+// ($pfb['dnsbl_unlock'], a CSV of "domain,type" rows toggled by the alerts
+// Lock/Unlock icon) as a normalised list of domains for the Python build manifest
+// (config.user_unlock). The Python build merges these into whiteDB as band-6 user
+// allows (same shape as config.user_whitelist) so an unlocked domain resolves. This
+// store is deliberately temporary: it lives in /tmp and a full update / Force / Cron
+// deletes it (pfb_update_unbound), so a FULL build emits an EMPTY user_unlock and the
+// rebuilt manifest re-locks every unlock (the "re-locked on Cron/Force" behaviour
+// documented in the alerts icon tooltip). Only pfb_unbound_python_sources_unlock()
+// (the incremental alerts path) feeds the live store into the manifest.
+function pfb_dnsbl_unlock_lines() {
+	global $pfb;
+
+	$out = array();
+	$store = pfb_unlock('read', 'dnsbl', '', '', '');
+	if (is_array($store)) {
+		foreach (array_keys($store) as $domain) {
+			$domain = trim((string) $domain);
+			if ($domain !== '') {
+				$out[] = $domain;
+			}
+		}
+	}
+	return $out;
+}
+
 // ADR-07 P8: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
 // firewall pass (coexistence). The raw ABP line itself still flows to Python, which
 // SKIPS IP-valued anchors (parse_abp returns None) -- so IP -> firewall only,
@@ -2509,6 +2535,14 @@ function pfb_unbound_python_sources($feeds) {
 			'tld_blacklist'	=> array_values($tld_blacklist),
 			'tld_exclusion'	=> array_values($tld_exclusion),
 			'user_whitelist'=> pfb_dnsbl_whitelist_lines(),
+			// ADR-06 (#51): a FULL build CLEARS the temporary unlock set. A Force/Cron
+			// update deletes the pfb_unlock store (pfb_update_unbound) right after this
+			// manifest is written, so reading the live store here would bake unlocks
+			// into the rebuilt manifest and they would survive the Force/Cron reload
+			// (the manifest is not rewritten post-delete) -- breaking the documented
+			// "re-locked on Cron/Force" semantic. Only pfb_unbound_python_sources_unlock()
+			// (the incremental alerts dnsbl_remove path) repopulates user_unlock.
+			'user_unlock'	=> array(),
 			'top1m_list'	=> array_values($top1m_list),
 			'top1m_enabled'	=> $top1m_enabled
 		),
@@ -2550,6 +2584,47 @@ function pfb_unbound_python_sources_whitelist() {
 		$manifest['config'] = array();
 	}
 	$manifest['config']['user_whitelist'] = pfb_dnsbl_whitelist_lines();
+
+	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	if ($json !== FALSE) {
+		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
+		@chown($pfb['unbound_py_sources'], 'unbound');
+		@chgrp($pfb['unbound_py_sources'], 'unbound');
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+// ADR-06 (#51): update ONLY the manifest's config.user_unlock in place, recomputed
+// from the live temporary-unlock store (pfb_dnsbl_unlock_lines). Mirrors
+// pfb_unbound_python_sources_whitelist(): the alerts Lock/Unlock icon toggles the
+// pfb_unlock state without a full feed re-enumeration, so patch the manifest and let
+// the query-time whiteDB rebuild from it on the next reload. The alerts handler's
+// reload (pfb_reload_unbound) does NOT delete the store, so store and manifest stay in
+// step; a full update/Force/Cron is the only thing that clears both.
+function pfb_unbound_python_sources_unlock() {
+	global $pfb;
+
+	if (!file_exists($pfb['unbound_py_sources'])) {
+		return FALSE;
+	}
+
+	$json = @file_get_contents($pfb['unbound_py_sources']);
+	if ($json === FALSE) {
+		return FALSE;
+	}
+
+	$manifest = json_decode($json, TRUE);
+	if (!is_array($manifest)) {
+		return FALSE;
+	}
+
+	if (!isset($manifest['config']) || !is_array($manifest['config'])) {
+		$manifest['config'] = array();
+	}
+	$manifest['config']['user_unlock'] = pfb_dnsbl_unlock_lines();
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
