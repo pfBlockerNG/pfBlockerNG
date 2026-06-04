@@ -1115,6 +1115,8 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 
 	if ($mode) {
 		$custom = array();
+	} else {
+		$custom = '';	// string accumulator; '' (not undef) when no lines match
 	}
 
 	$customlist = explode("\r\n", base64_decode($text));
@@ -1248,7 +1250,7 @@ function pfb_logger($log, $logtype) {
 	// Only log timestamp if new
 	if (strpos($log, 'NOW') !== FALSE) {
 		$elog = str_replace('NOW', $now, "{$log}");	// Always report timestamp to errorlog
-		if ($now == $pfb['pnow']) {
+		if ($now == ($pfb['pnow'] ?? '')) {
 			$log = str_replace(' [ NOW ]', '', "{$log}");
 		} else {
 			$log = str_replace('NOW', $now, "{$log}");
@@ -3496,7 +3498,9 @@ function pfblockerng_top1m() {
 function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	global $pfb;
 
-	list ($subnet, $mask) = explode('/', $ipaddr);
+	$parts	= explode('/', $ipaddr);
+	$subnet	= $parts[0];
+	$mask	= $parts[1] ?? '';	// '' (not undef) when no CIDR -> avoids str_replace(null) below
 	$iparr = explode('.', $subnet);
 
 	foreach ($iparr as $key => $octet) {

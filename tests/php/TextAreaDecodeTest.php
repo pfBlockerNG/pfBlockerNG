@@ -72,10 +72,10 @@ final class TextAreaDecodeTest extends TestCase
         }
     }
 
-    public function testEmptyInputReturnsNull(): void
+    public function testEmptyInputReturnsEmptyString(): void
     {
-        // base64('') => '' => explode gives [''] => nothing appended => $custom
-        // never initialised in string mode => implicit null return.
-        $this->assertNull(pfbng_text_area_decode(''));
+        // base64('') => '' => explode gives [''] => nothing appended. String mode
+        // initialises $custom to '' up front, so empty input yields '' (not null).
+        $this->assertSame('', pfbng_text_area_decode(''));
     }
 }
