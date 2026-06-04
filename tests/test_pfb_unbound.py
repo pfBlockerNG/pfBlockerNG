@@ -73,6 +73,31 @@ def set_feed_group(index: int, feed: str, group: str) -> None:
     pfb_unbound.feedGroupIndexDB[index] = {"feed": feed, "group": group}
 
 
+def _is_block(dec: Any) -> bool:
+    # A decisionDB entry is a block iff it was found and not whitelisted -- the same
+    # predicate operate()/get_details_dnsbl use. decisionDB now also stores allow
+    # ("let it resolve"/whitelisted) verdicts, so membership alone no longer means
+    # "blocked".
+    return dec is not None and dec.is_found and not dec.in_whitelist
+
+
+def allow_decision() -> Any:
+    # A minimal not-found (allow) verdict, for seeding decisionDB to exercise the
+    # allow short-circuit path (the old excludeDB membership).
+    return pfb_unbound.DnsblDecision(
+        is_found=False,
+        in_whitelist=False,
+        in_hsts=False,
+        null_blocking=True,
+        log_type="",
+        b_type="",
+        p_type="",
+        feed="",
+        group="",
+        b_eval="",
+    )
+
+
 class TestIsUnknown:
     def test_none_returns_unknown(self) -> None:
         assert is_unknown(None) == "Unknown"
@@ -599,21 +624,25 @@ class TestGetQType:
 
 class TestGetDetailsDnsblQtype:
     """Issue #44: DNSBL reporting must account for query type. The cached decision
-    in dnsblDB is qtype-independent, so q_type is folded into the consecutive-dedup
+    in decisionDB is qtype-independent, so q_type is folded into the consecutive-dedup
     signature and appended as the trailing dnsbl.log field. Two same-name blocks
     that differ only by record type (a client's A+AAAA pair) must each count, and
     the log must record which record type was blocked."""
 
-    DECISION = {
-        "qname": "blocked.com",
-        "b_type": "DNSBL_Python",
-        "p_type": "Python",
-        "null": False,
-        "log": "1",
-        "feed": "feedX",
-        "group": "groupY",
-        "b_eval": "blocked.com",
-    }
+    @staticmethod
+    def _decision() -> Any:
+        return pfb_unbound.DnsblDecision(
+            is_found=True,
+            in_whitelist=False,
+            in_hsts=False,
+            null_blocking=False,
+            log_type="1",
+            b_type="DNSBL_Python",
+            p_type="Python",
+            feed="feedX",
+            group="groupY",
+            b_eval="blocked.com",
+        )
 
     def _qstate(self, qtype: str) -> types.SimpleNamespace:
         return types.SimpleNamespace(
@@ -625,7 +654,7 @@ class TestGetDetailsDnsblQtype:
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
-        monkeypatch.setattr(pfb_unbound, "dnsblDB", {"blocked.com": dict(self.DECISION)})
+        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": self._decision()})
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         return lines
@@ -824,9 +853,9 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert qstate.no_cache_store == 1
 
-        # The memoized re-block path (name already in dnsblDB) must set it too --
+        # The memoized re-block path (name already in decisionDB) must set it too --
         # that is the whole point: every blocked query, miss or memo, re-runs here.
-        assert pfb_unbound.dnsblDB.get("evil.com") is not None
+        assert _is_block(pfb_unbound.decisionDB.get("evil.com"))
         qstate2 = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
         assert qstate2.ext_state[0] == MODULE_FINISHED
@@ -860,7 +889,8 @@ class TestOperateDnsbl:
         qstate = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert "evil.com" in pfb_unbound.excludeDB
+        dec = pfb_unbound.decisionDB.get("evil.com")
+        assert dec is not None and not _is_block(dec)  # whitelisted -> memoized as an allow
 
     def test_regex_block(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -870,17 +900,43 @@ class TestOperateDnsbl:
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
-        entry = pfb_unbound.dnsblDB.get("evil-domain.com")
-        assert entry["group"] == "DNSBL_Regex"
+        entry = pfb_unbound.decisionDB.get("evil-domain.com")
+        assert entry.group == "DNSBL_Regex"
 
-    def test_excludedb_short_circuit(self, monkeypatch: Any) -> None:
+    def test_allow_decision_short_circuit(self, monkeypatch: Any) -> None:
+        # A cached allow verdict ("let it resolve") short-circuits the matcher -- the
+        # unified-cache equivalent of the old excludeDB membership skip.
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
-        pfb_unbound.excludeDB.append("evil.com")
+        pfb_unbound.decisionDB["evil.com"] = allow_decision()
         qstate = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+
+    def test_block_decision_reuse_without_reeval(self, monkeypatch: Any) -> None:
+        # A cached BLOCK verdict short-circuits the matcher: operate() blocks straight
+        # from decisionDB without dataDB/evaluate_domain. The name is NOT on any list,
+        # so if it blocks, the memo -- not re-evaluation -- did it.
+        self._enable(monkeypatch)
+        pfb_unbound.decisionDB["cached-block.com"] = pfb_unbound.DnsblDecision(
+            is_found=True,
+            in_whitelist=False,
+            in_hsts=False,
+            null_blocking=True,
+            log_type="1",
+            b_type="DNSBL",
+            p_type="Python",
+            feed="F",
+            group="G",
+            b_eval="cached-block.com",
+        )
+        qstate = make_qstate("cached-block.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        answers = DNSMessage.instances[-1].answer
+        assert any(a.startswith("cached-block.com. ") for a in answers)
 
     def test_group_policy_bypass(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -929,12 +985,12 @@ class TestOperateDnsbl:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
 
-        entry = pfb_unbound.dnsblDB.get("orig.com")
+        entry = pfb_unbound.decisionDB.get("orig.com")
         assert entry is not None
-        assert entry["b_type"] == "DNSBL_CNAME"
+        assert entry.b_type == "DNSBL_CNAME"
         # Block is keyed on the original name after the q_name reassignment,
         # not on the CNAME target itself.
-        assert "evil-cname.com" not in pfb_unbound.dnsblDB
+        assert not _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("orig.com. ") for a in answers)
 
@@ -955,7 +1011,7 @@ class TestOperateDnsbl:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         # Not blocked -> passes through to the resolver (no block return_msg set).
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert "orig.com" not in pfb_unbound.dnsblDB
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
 
     def test_cname_target_blocked_when_queried_directly(self, monkeypatch: Any) -> None:
         # The ERRATA invariant: B (the CNAME target) is genuinely on the blocklist in
@@ -969,7 +1025,32 @@ class TestOperateDnsbl:
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
-        assert "evil-cname.com" in pfb_unbound.dnsblDB
+        assert _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
+
+    def test_cname_repeat_short_circuits_without_chain(self, monkeypatch: Any) -> None:
+        # The unified-cache CNAME fix: a CNAME-blocked name is keyed on the ORIGINAL in
+        # decisionDB, so a later query short-circuits to a block WITHOUT a resolved chain
+        # -- no re-resolution, no re-evaluation of the target. Pre-refactor the original
+        # sat in excludeDB and could only re-block by re-resolving and re-walking.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        add_data("evil-cname.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+
+        # First query carries the resolved CNAME chain -> blocks and memoizes orig.
+        q1 = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, q1, None)
+        assert q1.ext_state[0] == MODULE_FINISHED
+        assert _is_block(pfb_unbound.decisionDB.get("orig.com"))
+
+        # Second query has NO resolved chain -- it still blocks, purely from
+        # decisionDB[orig], with the answer built for the original name.
+        q2 = make_qstate("orig.com.", qtype=RR_A, return_msg=None)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, q2, None)
+        assert q2.ext_state[0] == MODULE_FINISHED
+        answers = DNSMessage.instances[-1].answer
+        assert any(a.startswith("orig.com. ") for a in answers)
 
     def test_block_sets_return_msg_exactly_once(self, monkeypatch: Any) -> None:
         # The DNSBL block path previously called msg.set_return_msg(qstate)
@@ -1847,9 +1928,10 @@ class TestADR02PythonOnlyBlocking:
         set_feed_group(0, "ADR02Feed", "ADR02Group")
         qstate = make_qstate("adr02-not-blocked.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        # Without python_blocking, the domain is added to excludeDB and passed through
+        # Without python_blocking, the domain is memoized as an allow and passed through
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert "adr02-not-blocked.com" in pfb_unbound.excludeDB
+        dec = pfb_unbound.decisionDB.get("adr02-not-blocked.com")
+        assert dec is not None and not _is_block(dec)
 
     def test_operate_zone_block_with_python_blocking_true(self, monkeypatch: Any) -> None:
         # Wildcard/zone blocking via operate() with the ADR-02 invariant state.
@@ -1863,7 +1945,7 @@ class TestADR02PythonOnlyBlocking:
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
-        entry = pfb_unbound.dnsblDB.get("any.subdomain.blocked-zone.net")
+        entry = pfb_unbound.decisionDB.get("any.subdomain.blocked-zone.net")
         assert entry is not None
-        assert entry["b_type"] == "TLD"
-        assert entry["feed"] == "ZoneFeed"
+        assert entry.b_type == "TLD"
+        assert entry.feed == "ZoneFeed"
