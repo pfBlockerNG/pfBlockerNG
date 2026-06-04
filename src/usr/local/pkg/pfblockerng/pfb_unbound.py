@@ -502,6 +502,11 @@ def pfb_reload_watcher(builder: Callable[[], Snapshot | None] = _build_swap_snap
                 _reload_write_applied(cur)
 
     waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
+    if waiter is not None and not waiter.is_active():
+        # kqueue setup failed -> its wait() returns immediately, which would hot-spin
+        # this loop. Drop to the mtime-poll fallback (the stop-Event wait) instead.
+        waiter.close()
+        waiter = None
     try:
         while not pfb_reload_stop.is_set():
             # Act on any advance already pending (covers the gap between baseline and the
@@ -558,6 +563,10 @@ class _ReloadKqueueWaiter:
         except OSError as e:
             sys.stderr.write("[pfBlockerNG]: reload watcher kqueue setup failed, polling instead: {}".format(e))
             self.close()
+
+    def is_active(self) -> bool:
+        """True iff kqueue set up successfully; False ⇒ caller should mtime-poll instead."""
+        return self._kq is not None
 
     def wait(self, timeout: float) -> None:
         if self._kq is None:

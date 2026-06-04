@@ -4222,6 +4222,12 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					pfb_unbound_py_ccache_flush($newly_blocked);
 
 					pfb_logger(" completed [ NOW ]", 1);
+					// Clear the daemon-suppression marker before this early return: the
+					// alert/#51 path (pfb_reload_unbound called from pfblockerng_alerts.php)
+					// has no later clear_work_files, so '.sync' would otherwise leak and keep
+					// the DNSBL Queries daemon suppressed. The restart-fallback paths below
+					// reach the normal clear, so this is the only fast-path exit that needs it.
+					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 					return;
 				}
 
