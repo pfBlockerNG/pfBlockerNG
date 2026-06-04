@@ -2656,8 +2656,8 @@ function pfb_unbound_python($mode) {
 		}
 
 		$python_tld = 'off';
+		$python_tlds = '';
 		if ($pfb['dnsbl_pytld'] == 'on') {
-			$python_tlds = '';
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_gtld'])) {
 				$python_tld = 'on';
 				$python_tlds = $pfb['dnsblconfig']['pfb_pytlds_gtld'];
