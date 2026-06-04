@@ -27,6 +27,11 @@ those conflicts.
   stale tip needs a rebase onto the base before it can land (PRs are
   rebase-only — see "Branches and releases").
 - The primary checkout stays free for the human; each agent gets its own tree.
+- **Reuse, don't recreate.** A worktree is keyed to its branch/task: if you are already
+  in the worktree for this branch — e.g. an ADR's `adr/NN` worktree mid-implementation —
+  work there, don't spin up a second one. `/adr-all` and `/adr-phase` **reuse the per-ADR
+  `adr/NN` worktree across all phases**; create it (off the latest `devel`) only when it
+  doesn't already exist.
 - Gotchas (both hit in practice): `git worktree remove` fails when run from
   *inside* the tree being removed — run it from the primary checkout. And
   `gh pr merge --delete-branch` can't check out a base branch that another
