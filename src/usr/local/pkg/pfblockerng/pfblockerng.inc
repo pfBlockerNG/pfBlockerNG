@@ -1687,8 +1687,9 @@ function pfb_logger($log, $logtype) {
  *
  * Admin-configurable commands run as root at the start ('pre') and end ('post')
  * of the pfBlockerNG update pass. Same root-command trust class as pfSense
- * 'shellcmd'. Each hook entry lives in the pfBlockerNG config under
- * installedpackages/pfblockerng/config/0/hooks and has the shape:
+ * 'shellcmd'. Each hook entry lives in the pfBlockerNG config under the 'row'
+ * listtag at installedpackages/pfblockerng/config/0/hooks/row (see pfb_get_hooks()
+ * for why 'row' and not a bare list under <hooks>) and has the shape:
  *
  *   array(
  *     'command'     => '<sh command line>',     // run via /bin/sh -c
@@ -1731,7 +1732,34 @@ function pfb_get_hooks($pfbconfig, $when) {
 		return $hooks;
 	}
 
-	foreach ($pfbconfig['hooks'] as $hook) {
+	// Hook entries are stored under the 'row' listtag: config/0/hooks/row. This
+	// matters because 'hooks' is NOT a pfSense listtag (verified in
+	// xmlparse.inc::listtags() on RELENG_2_7_2 -- == min-CE-2.8 behaviour, the
+	// frozen stub source -- and master: the array carries 'row'/'hosts'/'rule'/
+	// 'item' but no 'hooks'). A list stored DIRECTLY under <hooks> serializes via
+	// dump_xml_config_sub() to numeric child tags -- <hooks><0>...</0></hooks> --
+	// which is INVALID XML (a name cannot start with a digit, XML_ERR_NAME_REQUIRED
+	// on read), so it never round-trips for ANY count, one hook or many. Nesting
+	// the rows under the 'row' listtag instead emits a proper repeated element --
+	// <hooks><row>...</row><row>...</row></hooks> -- that parses back as a list for
+	// 1..N rows (a lone <row> stays a 1-element list because 'row' is a listtag),
+	// matching how every other pfBlockerNG rowhelper list (IP/DNSBL) is stored.
+	//
+	// Be tolerant of the shape: prefer hooks/row; fall back to a bare list under
+	// 'hooks'; and wrap a lone assoc (a flat single-hook collapse) back into a list.
+	if (isset($pfbconfig['hooks']['row']) && is_array($pfbconfig['hooks']['row'])) {
+		$list = $pfbconfig['hooks']['row'];
+	} else {
+		$list = $pfbconfig['hooks'];
+	}
+	if (isset($list['command']) || isset($list['when']) || isset($list['enabled'])) {
+		$list = array($list);
+	}
+	if (!is_array($list)) {
+		return $hooks;
+	}
+
+	foreach ($list as $hook) {
 		if (!is_array($hook)) {
 			continue;
 		}

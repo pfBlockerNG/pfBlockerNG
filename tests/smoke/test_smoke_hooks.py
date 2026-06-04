@@ -278,14 +278,21 @@ def test_hooks_ip_changed_reflects_pass(deployed_vm: SmokeVM, mock_feeds: _MockF
 
     * An ``IpCase`` feed + a full ``update`` lands a new pf rule/table ⇒
       ``filter_configure`` TRUE ⇒ ``PFB_IP_CHANGED='1'``.
-    * A subsequent DNSBL-only reload (``updatednsbl``) over the SAME, now-settled IP
-      ruleset re-uses the IP side (``$pfb['reuse']='on'``, ``inc:7407``) and finds NO
-      rule change, so ``filter_configure`` stays FALSE ⇒ ``PFB_IP_CHANGED='0'`` — with
-      a real DNSBL feed in play, ``PFB_DNSBL_CHANGED='1'``. Verified from source that
-      ``updatednsbl`` cannot flip ``filter_configure`` absent an IP-rule change
-      (``inc:7407``/``:10840``), so the 0 side is reliable in CI: we run an extra
-      ``update`` first to settle the IP rules, making the following ``updatednsbl`` a
-      genuine no-IP-change pass.
+    * A subsequent full ``update`` over a CHANGED DNSBL feed but the SAME IP feed:
+      the IP alias content is identical ⇒ no rule change ⇒ ``filter_configure`` stays
+      FALSE ⇒ ``PFB_IP_CHANGED='0'``; the DNSBL feed content changed ⇒ the DNSBL
+      builders report a change ⇒ ``PFB_DNSBL_CHANGED='1'``.
+
+    ``PFB_DNSBL_CHANGED`` is ``$pfbupdate || $pfbpython`` — the DNSBL builders'
+    return values (``inc:11258``), i.e. whether the DNSBL DATA actually changed this
+    pass, NOT merely whether a feed is configured. Two source facts drive the second
+    pass: (a) the targeted ``updatednsbl`` verb sets ``$pfb['reuse_dnsbl']='on'``
+    (``inc:7437``) and RELOADS DNSBL from cache WITHOUT re-downloading, so an edited
+    local feed is ignored on ``updatednsbl`` — it must be a full ``update`` to re-read
+    the feed; (b) a full ``update`` re-downloads both feeds, so the changed DNSBL feed
+    rebuilds (DNSBL_CHANGED=1) while the unchanged IP feed yields no rule change
+    (IP_CHANGED=0). We therefore REWRITE the DNSBL feed with a new domain and run a
+    full ``update`` for the second pass.
     """
     token = "ipchg"
     marker = h.hook_marker_path(token, "post")
@@ -311,11 +318,15 @@ def test_hooks_ip_changed_reflects_pass(deployed_vm: SmokeVM, mock_feeds: _MockF
     assert env_ip is not None, "post hook did not run for the IP update"
     assert env_ip.get("PFB_IP_CHANGED") == "1", f"IP update should set PFB_IP_CHANGED=1, got {env_ip}"
 
-    # (2) DNSBL-only reload over the settled IP ruleset ⇒ PFB_IP_CHANGED='0', and a
-    #     real DNSBL feed ⇒ PFB_DNSBL_CHANGED='1'. The full update above settled the
-    #     IP rules, so updatednsbl finds no IP change.
+    # (2) Full update over a CHANGED DNSBL feed + the SAME IP feed ⇒ PFB_IP_CHANGED='0'
+    #     (IP alias content identical, no rule change) and PFB_DNSBL_CHANGED='1' (DNSBL
+    #     feed content changed, builders report a change). A targeted updatednsbl would
+    #     reload DNSBL from cache (reuse_dnsbl, inc:7437) and NOT re-read the edited
+    #     local feed, so a full 'update' is required to pick up the feed change.
+    domain2 = h.unique_domain("hookipchg2")
+    h.write_local_feed(deployed_vm, "smoke_hook_ipchg_dnsbl.txt", f"{domain}\n{domain2}\n")
     h.clear_hook_markers(deployed_vm, token)
-    h.reload(deployed_vm, "updatednsbl")
+    h.reload(deployed_vm, "update")
     env_dnsbl = h.read_hook_env(deployed_vm, marker)
     assert env_dnsbl is not None, "post hook did not run for the DNSBL-only reload"
     assert env_dnsbl.get("PFB_IP_CHANGED") == "0", (
@@ -346,7 +357,7 @@ def test_hooks_failing_hook_does_not_abort_update(deployed_vm: SmokeVM) -> None:
     pre_marker = h.hook_marker_path(token, "pre")
     post_marker = h.hook_marker_path(token, "post")
     pre_hook = {
-        "command": f"/usr/bin/echo RAN > {pre_marker}; exit 7",
+        "command": f"/bin/echo RAN > {pre_marker}; exit 7",
         "when": "pre",
         "enabled": "on",
         "description": f"smoke {token} pre non-zero",
@@ -360,6 +371,8 @@ def test_hooks_failing_hook_does_not_abort_update(deployed_vm: SmokeVM) -> None:
     h.reload(deployed_vm, "update")
 
     assert h.hook_marker_exists(deployed_vm, pre_marker), "the non-zero pre hook did not run (no marker)"
+    pre_body = deployed_vm.ssh("cat", pre_marker).stdout
+    assert "RAN" in pre_body, f"the non-zero pre hook's command did not actually execute: {pre_body!r}"
     assert h.hook_marker_exists(deployed_vm, post_marker), (
         "post hook did not run — the non-zero pre hook ABORTED the update (contract violated)"
     )
@@ -388,7 +401,7 @@ def test_hooks_timeout_killed_update_continues(deployed_vm: SmokeVM) -> None:
     post_marker = h.hook_marker_path(token, "post")
     pre_hook = {
         # START, then a sleep that overruns the 2s timeout, then DONE (never reached).
-        "command": f"/usr/bin/echo START > {pre_marker}; /bin/sleep 30; /usr/bin/echo DONE >> {pre_marker}",
+        "command": f"/bin/echo START > {pre_marker}; /bin/sleep 30; /bin/echo DONE >> {pre_marker}",
         "when": "pre",
         "enabled": "on",
         "description": f"smoke {token} pre timeout",
