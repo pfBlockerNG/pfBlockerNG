@@ -1375,56 +1375,44 @@ if (isset($_POST) && !empty($_POST)) {
 		// preserving the four icon states rendered from $dnsbl_unlock (red lock /
 		// primary unlock / warning relock / warning reunlock). user_unlock is recomputed
 		// as the store's domains, so an unlocked (in-store, non-whitelisted) domain
-		// resolves and a re-locked one returns to its feed-blocked state on reload.
-		if ($action == 'unlock' || $action == 'relock') {
-			pfb_unlock('unlock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-		} else {	// 'lock' | 'reunlock'
-			pfb_unlock('lock', 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
-		}
+		// resolves and a re-locked one returns to its feed-blocked state on reload. The
+		// four-way action -> (store-mode, message) dispatch lives in
+		// pfb_dnsbl_unlock_action() (unit-tested); an unknown action has an empty mode
+		// and is a no-op here.
+		$ua = pfb_dnsbl_unlock_action($action);
+		if ($ua['mode'] !== '') {
+			pfb_unlock($ua['mode'], 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
 
-		// Patch the manifest's config.user_unlock from the updated store, then reload
-		// Unbound so the query-time whiteDB picks up the change.
-		pfb_unbound_python_sources_unlock();
-		pfb_reload_unbound('enabled', FALSE);
+			// Patch the manifest's config.user_unlock from the updated store, then
+			// reload Unbound so the query-time whiteDB picks up the change.
+			pfb_unbound_python_sources_unlock();
+			pfb_reload_unbound('enabled', FALSE);
 
-		// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
-		// resolver cache so a previously-cached block is not served.
-		if ($action == 'unlock') {
-			exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
+			// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
+			// resolver cache so a previously-cached block is not served.
+			if ($action == 'unlock') {
+				exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
 
-			// Query for CNAME(s)
-			if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts dnsbl_remove'))) {
-				$ext_dns = escapeshellarg("@{$pfb['extdns']}");
-				exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
-				if (!empty($cname_list)) {
-					foreach ($cname_list as $cname) {
-						$cname = pfb_filter($cname, PFB_FILTER_DOMAIN, 'alerts dnsbl_remove', '', TRUE);
-						if (empty($cname)) {
-							continue;
+				// Query for CNAME(s)
+				if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts dnsbl_remove'))) {
+					$ext_dns = escapeshellarg("@{$pfb['extdns']}");
+					exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
+					if (!empty($cname_list)) {
+						foreach ($cname_list as $cname) {
+							$cname = pfb_filter($cname, PFB_FILTER_DOMAIN, 'alerts dnsbl_remove', '', TRUE);
+							if (empty($cname)) {
+								continue;
+							}
+							exec("{$pfb['chroot_cmd']} flush {$cname} 2>&1");
 						}
-						exec("{$pfb['chroot_cmd']} flush {$cname} 2>&1");
 					}
 				}
 			}
 		}
 
-		switch ($action) {
-			case 'unlock':
-				$savemsg = "The Domain [ {$domain} ] has been temporarily Unlocked from DNSBL!";
-				break;
-			case 'lock':
-				$savemsg = "The Domain [ {$domain} ] has been Locked into DNSBL!";
-				break;
-			case 'relock':
-				$savemsg = "The Domain [ {$domain} ] has been temporarily Re-Locked into DNSBL!";
-				break;
-			case 'reunlock':
-				$savemsg = "The Domain [ {$domain} ] has been Unlocked from DNSBL!";
-				break;
-			default:
-				$savemsg = '';
-		}
-
+		// sprintf with the (domain-filtered, so '%'-free) name; an unknown action's
+		// empty 'msg' yields an empty savemsg.
+		$savemsg = sprintf($ua['msg'], $domain);
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
 	}
