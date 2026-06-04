@@ -609,7 +609,6 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	$unbound_validate = FALSE;
-	$py_mode = '(Python mode)';
 	if (file_exists("{$pfb['dnsbldir']}/unbound.conf")) {
 		if (strpos(file_get_contents("{$pfb['dnsbldir']}/unbound.conf"), 'pfb_unbound.py') !== FALSE) {
 			$unbound_validate = TRUE;
@@ -623,25 +622,25 @@ function pfBlockerNG_get_header($mode='') {
 		$db_sanity = exec("{$pfb['grep']} 'DNSBL update' {$pfb['logdir']}/pfblockerng.log | tail -1 | {$pfb['grep']} -o 'OUT OF SYNC'");
 		if ($db_sanity == 'OUT OF SYNC') {
 			$dnsbl_status	= 'fa-solid fa-exclamation-circle text-warning';
-			$dnsbl_msg	= "DNSBL {$py_mode} is out of sync. Perform a Force Reload to correct.";
+			$dnsbl_msg	= "DNSBL is out of sync. Perform a Force Reload to correct.";
 		} else {
 			$dnsbl_status	= 'fa-solid fa-check-circle text-success';
-			$dnsbl_msg	= "DNSBL {$py_mode} is Active on vip: {$pfb['dnsbl_vip4']} ports: {$pfb['dnsbl_port']} & {$pfb['dnsbl_port_ssl']}";
+			$dnsbl_msg	= "DNSBL is Active on vip: {$pfb['dnsbl_vip4']} ports: {$pfb['dnsbl_port']} & {$pfb['dnsbl_port_ssl']}";
 		}
 
-		// Check for any Python Integration errors
+		// Check for any DNSBL errors
 		if ((int)@filesize($pfb['pyerrlog']) > 0) {
 			$dnsbl_status	= 'fa-solid fa-exclamation-circle text-warning';
-			$dnsbl_msg	= "DNSBL {$py_mode} errors Found! Review py_error.log";
+			$dnsbl_msg	= "DNSBL errors Found! Review py_error.log";
 		}
 	} else {
 		$dnsbl_status		= 'fa-solid fa-times-circle text-danger';
 
-		// Check for any Python Integration errors
+		// Check for any DNSBL errors
 		if ((int)@filesize($pfb['pyerrlog']) > 0) {
-			$dnsbl_msg = "DNSBL {$py_mode} is Disabled with errors! Review py_error.log";
+			$dnsbl_msg = "DNSBL is Disabled with errors! Review py_error.log";
 		} else {
-			$dnsbl_msg = "DNSBL {$py_mode} is Disabled.";
+			$dnsbl_msg = "DNSBL is Disabled.";
 		}
 	}
 

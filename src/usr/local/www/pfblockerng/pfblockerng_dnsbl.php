@@ -118,7 +118,7 @@ $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-			. 'Blocked domains will be reported to the Alert/Python Block Table.<br /><br />'
+			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
 			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
 
 $options_global_log	= [	''		=> 'No Global mode',
@@ -738,11 +738,11 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_control',
-	gettext('Python Control'),
+	gettext('DNSBL Control'),
 	'Enable',
 	$pconfig['pfb_control'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enabling this option will allow sending python_control commands (via DNS TXT) to the Python integration.'
+))->setHelp('Enabling this option will allow sending python_control commands (via DNS TXT) to DNSBL.'
 	. '<div class="infoblock" style="width: 90%;">'
 	. 'The python_control feature is limited to DNS TXT records sent from pfSense localhost (127.0.0.1) only!<br />'
 	. 'This is a temporary intervention, and will be reset on a restart of the Resolver<br />'
@@ -782,7 +782,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_hsts'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the DNSBL python <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Block mode</strong> for HSTS domains.<br />'
+))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Block mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
 	. ' <a target=_"blank" href="https://raw.githubusercontent.com/chromium/chromium/master/net/http/transport_security_state_static.json">list</a>'
 	. ' will use the Null Block Mode which *may* prevent Browser Certificate Errors.<br />'
@@ -2372,7 +2372,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_pytld'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python TLD Allow feature (1,546 TLDs available). This will block all TLDs that are not specifically selected.'
+))->setHelp('Enable the TLD Allow feature (1,546 TLDs available). This will block all TLDs that are not specifically selected.'
 		. '<div id="dnsbl_python_tld_allow_text">'
 		. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
 		. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
@@ -2424,7 +2424,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_idn'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python IDN blocking feature (not Regex based). This will block all IDN\'s and domains that include \'xn--\'.');
+))->setHelp('Enable the IDN blocking feature (not Regex based). This will block all IDN\'s and domains that include \'xn--\'.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_regex',
@@ -2432,7 +2432,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_regex'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python Regex blocking feature. Regex list below: [Python Regex List]');
+))->setHelp('Enable the Regex blocking feature. Regex list below: [Regex List]');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_regex_cap',
@@ -2440,10 +2440,8 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_regex_cap'] === 'on' ? true:false,
 	'on'
-))->setHelp('Best-effort ReDoS safeguard (opt-in). When enabled, over-long or nested-quantifier (catastrophic-backtracking) regex patterns are dropped at load, '
-		. 'before they ever run, for both feed (ABP) and the Python Regex List above; each dropped pattern is logged. '
-		. 'Independently, an always-on runtime guard times every regex match and, regardless of this setting, logs a warning over the warn ceiling and EVICTS the pattern from the live database over the evict ceiling (so it cannot hang the resolver twice). '
-		. 'Accepted residual risk: the first match of a pathological pattern can still slow that one query until it returns (Python re cannot be interrupted mid-match); enabling this cap removes the worst offenders before that can happen.');
+))->setHelp('Best-effort ReDoS safeguard (opt-in): over-long or catastrophic-backtracking regex patterns are dropped at load, before they run, from both feeds (ABP) and the Regex List above (each drop is logged). '
+		. 'An always-on runtime guard additionally warns on, then evicts, any pattern whose match runs too slow.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_cname',
@@ -2451,7 +2449,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_cname'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
+))->setHelp('Enable the CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
 		. 'Events are logged with a "_CNAME" suffix in the DNSBL Log.');
 
 $section->addInput(new Form_Checkbox(
@@ -2460,19 +2458,19 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_noaaaa'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no AAAA List below.');
+))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no AAAA List below.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_gp',
-	gettext('Python Group Policy'),
+	gettext('DNSBL Group Policy'),
 	'Enable',
 	$pconfig['pfb_gp'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the Python Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL');
+))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL');
 
 $form->add($section);
 
-$section = new Form_Section('Python Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
+$section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
 	'This is a preliminary DNSBL Group Policy configuration that will bypass DNSBL for the defined LAN IPs. (No Subnets allowed)'));
@@ -2487,12 +2485,12 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'background:#fafafa; width: 100%')
-  ->setHelp('Enter the Local LAN IPs (one per line) that will bypass Python DNSBL Blocking.<br />'
+  ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
 		. 'Changes to this option will require a Force Update to take effect.');
 
 $form->add($section);
 
-$regex_text = 'List of Python Regex\'s to block via DNSBL<br /><br />
+$regex_text = 'List of Regex\'s to block via DNSBL<br /><br />
 		Enter a single regex per line.<br /><br />
 		You may use "<strong>#</strong>" after each line for a Regex Description. IE:&emsp;regex (Regular Expression) # Regex Description<br /><br />
 		Ensure a space is entered before the # character. Keep the Regex description less than 15 characters as it will be used in<br />
@@ -2500,10 +2498,10 @@ $regex_text = 'List of Python Regex\'s to block via DNSBL<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes to this option will require a Force Update to take effect.';
 
-$section = new Form_Section('Python Regex List', 'Python_regex_list', COLLAPSIBLE|SEC_CLOSED);
+$section = new Form_Section('Regex List', 'Python_regex_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
 	'pfb_regex_list',
-	'Python Regex List',
+	'Regex List',
 	$pconfig['pfb_regex_list']
 ))->removeClass('form-control')
   ->addClass('row-fluid col-sm-12')
@@ -2518,14 +2516,14 @@ $form->add($section);
 $noaaaa_text = 'List of no AAAA domains to block the (IPv6) AAAA DNS Resolution.<br /><br />
 		Enter a single domain per line.<br />
 		Prefix domain with a "." to apply wildcard no AAAA to all Sub-Domains. &emsp;IE: (.example.com)<br /><br />
-		Any domain added to the no AAAA list, will never be filtered by any DNSBL python blocking.<br /><br />
+		Any domain added to the no AAAA list, will never be filtered by any DNSBL blocking.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes to this option will require a Force Update to take effect.';
 
-$section = new Form_Section('Python no AAAA  List', 'Python_noaaaa_list', COLLAPSIBLE|SEC_CLOSED);
+$section = new Form_Section('no-AAAA List', 'Python_noaaaa_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
 	'pfb_noaaaa_list',
-	'Python no AAAA List',
+	'no-AAAA List',
 	$pconfig['pfb_noaaaa_list']
 ))->removeClass('form-control')
   ->addClass('row-fluid col-sm-12')
@@ -2632,15 +2630,15 @@ $section->addInput(new Form_Input(
 		. 'This Port must not be in use by any other process.'
 );
 
-// Add option to disable DNSBL logging in python and utilize the DNSBL Webserver (excluding nullblocking events)
+// Add option to disable DNSBL logging and utilize the DNSBL Webserver (excluding nullblocking events)
 $section->addInput(new Form_Checkbox(
 	'pfb_py_nolog',
 	gettext('DNSBL Event Logging'),
 	'Enable',
 	$pconfig['pfb_py_nolog'] === 'on' ? true:false,
 	'on'
-))->setHelp('Disable event logging in Unbound python mode and utilize the DNSBL Webserver. Typically used when an upstream LAN DNS server is utilized.<br />'
-	. 'Null blocked events will still be logged via python.');
+))->setHelp('Disable event logging in the DNS Resolver and utilize the DNSBL Webserver. Typically used when an upstream LAN DNS server is utilized.<br />'
+	. 'Null blocked events will still be logged.');
 
 $form->add($section);
 
@@ -2702,7 +2700,7 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['pfb_py_cache_max'],
 	['min' => 0, 'max' => 5000000, 'placeholder' => '10000']
-))->setHelp('Default: <strong>10000</strong><br />Maximum number of domains kept in the DNSBL Python per-domain decision cache. '
+))->setHelp('Default: <strong>10000</strong><br />Maximum number of domains kept in the DNSBL per-domain decision cache. '
 	. 'It is an <strong>LRU</strong> cache: frequently-queried domains stay resident and the least-recently-used entries are evicted at the cap. '
 	. 'Roughly under 1 KB of RAM per entry. Set to <strong>0</strong> for unlimited (no eviction). '
 	. 'Takes effect on the next DNSBL Reload.');

@@ -159,7 +159,7 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'download'	=> TRUE,
 						'clear'		=> FALSE
 						),
-			'python'	=> array('name'		=> 'DNSBL Python mode',
+			'python'	=> array('name'		=> 'DNSBL mode',
 						'ext'		=> array('pfb_py*.txt'),
 						'logdir'	=> "{$pfb['dnsbldir']}/",
 						'download'	=> TRUE,
