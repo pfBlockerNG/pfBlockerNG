@@ -472,6 +472,16 @@ so promotion up the chain — and landing any PR — is a rebase/replay, not a m
 a PR branch is behind its base, rebase it onto the base first so the merge is a clean
 fast-forward.
 
+**`devel` advances out of band — rebase onto the latest remote before every push.**
+Multiple agents work in parallel and their commits are rebased on top of `devel`, so the
+remote tip moves under you between operations. Before **any** commit or push — to `devel`
+*or* to a PR branch — `git fetch origin` and rebase your local branch onto the latest
+remote tip (`git rebase origin/devel`, or `origin/<pr-base>` for a PR), resolve, then push
+(`--force-with-lease` if the branch was rewritten). New work always replays **after** what
+is already on the remote; never reconcile with a merge commit. This keeps the chain
+strictly linear (above) and every PR a clean fast-forward — the same rule applies to each
+follow-up commit you push onto an open PR.
+
 ---
 
 ## Commit style
