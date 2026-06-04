@@ -22,7 +22,7 @@ name: UI tests (pfSense VM, ADR-14)
 #     marker being off the default collection, keep it non-blocking by
 #     construction (RESULTS/04 §6). The browser leg's §7 demote/drop is a
 #     ONE-LINE switch: drop `browser` from DEFAULT_SCHEDULE_TIERS below to stop
-#     the nightly browser leg without touching anything else.
+#     the scheduled browser leg without touching anything else.
 #
 # RE-RUN GRANULARITY (ADR §2 C1): the matrix produces ONE GH job per
 # (tier × version), so GitHub's "Re-run failed jobs" re-runs ONLY the flaky leg.
@@ -86,11 +86,12 @@ on:
           - functional
           - browser
           - all
-  # Daily Tier-B run (functional + browser). Non-PR-blocking by construction.
-  # The `prepare` job guards it to SKIP when there were no commits in the last
-  # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
+  # Hourly Tier-B run (functional + browser). Non-PR-blocking by construction.
+  # The `prepare` job guards it to SKIP unless devel got NEW commits in the last
+  # ~hour, so it runs only when there is something new to check (an idle repo
+  # never boots a VM).
   schedule:
-    - cron: "0 5 * * *"
+    - cron: "0 * * * *"
 
 permissions:
   contents: read
@@ -100,9 +101,9 @@ jobs:
   # Build the branch's .pkg on a plain Linux runner (same builder + artifact the
   # smoke gate consumes). One build feeds every matrix leg.
   #
-  # Gated on the nightly guard too: when `prepare` sets run=false (an idle
-  # scheduled night, no commits in 24h) the `ui` legs are skipped, so building
-  # the .pkg would just burn CI minutes for nothing — skip it as well. On a
+  # Gated on the schedule guard too: when `prepare` sets run=false (a scheduled
+  # hour with no new devel commits) the `ui` legs are skipped, so building the
+  # .pkg would just burn CI minutes for nothing — skip it as well. On a
   # dispatch/call run `prepare` always emits run=true, so the build runs.
   build-pkg:
     needs: prepare
@@ -112,8 +113,8 @@ jobs:
       channel: devel
     # abi/py_flavor/php_version default to CE 2.8.1 (FreeBSD:15:amd64 / py311 / 8.3).
 
-  # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
-  # JSON `include` list so each leg is a distinct, independently-re-runnable job.
+  # Compute the (tier × version) matrix and the hourly no-new-commit guard. Emits
+  # a JSON `include` list so each leg is a distinct, independently-re-runnable job.
   prepare:
     name: Resolve the (tier x version) matrix
     runs-on: ubuntu-latest
@@ -124,9 +125,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0   # need history to detect "commits in the last day" for the schedule guard
+          fetch-depth: 0   # need history to detect "new commits in the last ~hour" for the schedule guard
 
-      - name: Build the matrix include + the nightly guard
+      - name: Build the matrix include + the hourly guard
         id: gen
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -140,8 +141,8 @@ jobs:
           # The version axis (B1): single CE image today. To add an image, append
           # one label here and wire its ref in the smoke job's image resolution.
           DEFAULT_VERSIONS="ce"
-          # Tier set the daily schedule runs (Tier B). DROP `browser` here to
-          # disable the nightly browser leg (§7 demote/drop one-liner).
+          # Tier set the hourly schedule runs (Tier B). DROP `browser` here to
+          # disable the scheduled browser leg (§7 demote/drop one-liner).
           DEFAULT_SCHEDULE_TIERS="functional browser"
 
           # Decide the version label(s).
@@ -164,14 +165,18 @@ jobs:
             esac
           fi
 
-          # Nightly no-commit guard: skip the whole run when nothing landed in
-          # the last 24h (an idle repo should not boot a VM every night).
+          # Hourly no-new-commit guard: the schedule fires every hour but only
+          # RUNS when devel got a new commit in the last ~hour. The 70-minute
+          # window is intentionally a bit wider than the 60-minute interval so
+          # GitHub cron jitter can't drop an on-time commit into a gap; a commit
+          # landing in the small overlap is at worst checked twice (harmless),
+          # never missed. (`prepare` checks out devel at fetch-depth: 0.)
           RUN=true
           if [ "${EVENT_NAME}" = "schedule" ]; then
-            COMMITS="$(git log --since='24 hours ago' --oneline | wc -l | tr -d ' ')"
+            COMMITS="$(git log --since='70 minutes ago' --oneline | wc -l | tr -d ' ')"
             if [ "${COMMITS}" = "0" ]; then
               RUN=false
-              echo "No commits in the last 24h — skipping the nightly UI run."
+              echo "No new devel commits in the last ~hour — skipping this hourly UI run."
             fi
           fi
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
@@ -195,7 +200,7 @@ jobs:
   ui:
     name: ${{ matrix.tier }} / ${{ matrix.version }} (live pfSense VM)
     needs: [build-pkg, prepare]
-    # Skip the whole leg set when the nightly guard says there's nothing to run.
+    # Skip the whole leg set when the schedule guard says there's nothing to run.
     if: needs.prepare.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
