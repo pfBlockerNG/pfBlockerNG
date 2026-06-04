@@ -470,7 +470,12 @@ if ($_POST) {
 		if ($_POST['pfb_dnsvip6'] == 'none') {
 			$_POST['pfb_dnsvip6'] = '';
 		}
-		list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
+		// [ ADR-13 ] When auto-create is on the package provisions the (v6) VIP server
+		// side, so do NOT require a v6 VIP at save time (require_v6=false); in manual
+		// mode pass null so the validator enforces the v6-mandatory rule — a resolver
+		// listening on IPv6 makes a v6 VIP required and errors the save here.
+		$require_v6 = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on') ? false : null;
+		list($vips_valid, $error) = pfb_validate_vips($_POST['dnsbl_interface'], $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6'], $require_v6);
 		if (!$vips_valid) {
 			$input_errors[] = "DNSBL: {$error}";
 		}

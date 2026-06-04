@@ -131,3 +131,30 @@ if (!function_exists('is_ipaddr_configured')) {
 		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path');
 	}
 }
+
+// --- VIP doubles for the pfb_validate_vips() v6-mandatory branch (ADR-13 Phase 3) ---
+//
+// The v6-required tests (DnsblV6RequiredTest) drive pfb_validate_vips() with an EXPLICIT
+// $require_v6, so the v6-mandatory branch and the early "no VIP configured" branch are
+// reached with NO pfSense call. The few assertions that pass a non-empty VIP id continue
+// past those early returns into the per-VIP checks; these conservative doubles make that
+// continuation deterministic without coupling to real pfSense state. They are reached
+// ONLY by tests that supply a '_vip_test_*' sentinel id.
+
+if (!function_exists('get_configured_vip_interface')) {
+	// pfSense util.inc: the friendly interface a VIP id lives on. The test sentinels are
+	// not real VIPs, so report a non-'lo0' interface -> the validator's "VIP not on
+	// interface" check fails for them. That is fine: those tests only assert the error is
+	// NOT the v6-required message, never that validation passes.
+	function get_configured_vip_interface($vipif) {
+		return 'opt-double';
+	}
+}
+
+if (!function_exists('convert_friendly_interface_to_friendly_descr')) {
+	// pfSense interfaces.inc: friendly name -> human description. Identity is enough for
+	// the "VIP not on interface %s" message the doubled-interface path produces.
+	function convert_friendly_interface_to_friendly_descr($interface) {
+		return $interface;
+	}
+}
