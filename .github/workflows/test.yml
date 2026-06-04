@@ -7,13 +7,30 @@ name: Tests
 # (Settings → Actions → "Require approval for all outside collaborators")
 # gates the run: any repository collaborator can approve via the
 # "Approve and run" button on the PR page.
+#
+# paths-ignore: documentation-only changes skip CI entirely (nothing here builds
+# or tests docs). A run is skipped only when EVERY changed file matches a pattern
+# below, so any commit that also touches code still runs the full suite.
+# Caveat: `devel` is not branch-protected today; if the "All tests passed" check is
+# ever made a *required* status check, paths-ignore would leave docs-only PRs with a
+# never-reported required check (GitHub treats a skipped workflow's check as missing,
+# not passing) — at that point pair this with a companion workflow that reports the
+# same check name as a success for the ignored paths.
 on:
   push:
     branches:
       - main
       - devel
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
   pull_request:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
 
 # Least-privilege GITHUB_TOKEN: every job only reads the repo (checkout, tests,
 # lint) — upload-artifact uses the Actions runtime token, not GITHUB_TOKEN — so
