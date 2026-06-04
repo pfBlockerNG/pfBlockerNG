@@ -393,20 +393,19 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
     The reload is load-bearing and conditional: a no-change ``update`` detects the feed
     as unchanged (``[ feed ] exists.``), does NOT reload Unbound, and therefore does
     NOT re-lock — store, manifest and running state all stay "unlocked" together
-    (consistent; this is legacy behaviour the tooltip documents). So we EDIT the feed
-    first to force a genuine DNSBL change, making the full update actually rebuild +
-    reload — the common Cron case.
+    (consistent; this is legacy behaviour the tooltip documents, verified on the live
+    box). ``force_dnsbl_rebuild`` (``cleardnsbl`` + ``update``) clears the feed cache so
+    the rebuild + reload actually happens — the Force-Reload path.
     """
     domain = h.unique_domain("unlocktmp")
-    feed_name = "smoke_dnsbl_unlocktmp.txt"
-    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain}\n")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
     spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
-        # Egress OPEN: the full update path deadlocks under a dark egress, and the
-        # allowed (unlock) probe must reach the controlled stub. The block probes
-        # return the VIP locally, so there is no false-green from leaving egress open.
+        # Egress OPEN: the rebuild path deadlocks under a dark egress, and the allowed
+        # (unlock) probe must reach the controlled stub. The block probes return the VIP
+        # locally, so there is no false-green from leaving egress open.
         h.unblock_egress()
         # Blocked by the feed -> VIP (the "before" of the Unlock operation).
         blocked = h.dns_probe(deployed_vm, domain, "A")
@@ -416,12 +415,11 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         unlocked = h.dns_probe(deployed_vm, domain, "A")
         assert h.resolves_to(unlocked, STUB_DNS_A), f"unlocked {domain} should resolve via stub, got {unlocked}"
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
-        # Edit the feed (add a domain) so the full update sees a REAL DNSBL change and
-        # rebuilds + reloads — a no-change update would not reload, so would not re-lock.
-        h.write_local_feed(deployed_vm, feed_name, f"{domain}\n{h.unique_domain('forcechange')}\n")
-        h.reload(deployed_vm, "update")
+        # Force a full DNSBL rebuild (clear cache + update) so the manifest is
+        # regenerated (user_unlock emptied) and Unbound reloads -> the domain re-locks.
+        h.force_dnsbl_rebuild(deployed_vm)
         relocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(relocked), f"force update (with rebuild) should re-lock {domain} -> VIP, got {relocked}"
+        assert h.is_vip(relocked), f"force rebuild should re-lock {domain} -> VIP, got {relocked}"
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
 
