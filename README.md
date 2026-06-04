@@ -70,10 +70,11 @@ The repository ships hooks in `.githooks/` — a tracked directory, so they are
 shared and reviewed (the default `.git/hooks` is local-only and cannot be
 committed):
 
-- **`pre-commit`** runs the fast linters and the unit suite (Ruff, pytest,
-  markdownlint, ShellCheck + `sh -n`, shellspec, `php -l`; PHPStan only when
-  `vendor/` is present) and blocks the commit on any failure. A check whose tool is
-  not installed is skipped (CI is the hard gate); bypass with `git commit --no-verify`.
+- **`pre-commit`** runs the fast linters and the unit suites (Ruff, pytest,
+  markdownlint, ShellCheck + `sh -n`, shellspec, `php -l`; PHPStan and PHPUnit
+  only when `vendor/` is present) and blocks the commit on any failure. A check
+  whose tool is not installed is skipped (CI is the hard gate); bypass with
+  `git commit --no-verify`.
 - **`pre-push`** enforces the tag naming convention before anything is pushed:
 
 | Commit reachable from | Required tag form  |
@@ -95,11 +96,28 @@ Actions.
 
 ### Running the test suite locally
 
+Python (the bulk of the suite):
+
 ```sh
 python3 -m pytest
 ```
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
+
+PHP unit tests (PHPUnit) cover the pure/extractable PHP helpers
+(input filtering, IDN/textarea decode, ABP-IP extraction, IPv4 normalisation,
+the Python manifest writer). Install the dev dependencies once, then run:
+
+```sh
+composer install      # pulls phpunit/phpunit into vendor/
+vendor/bin/phpunit     # config in phpunit.xml; no live pfSense needed
+```
+
+The suite loads the **real** `pfblockerng.inc` off-appliance via
+`tests/php/bootstrap.php` (empty shims for the pfSense `require_once` includes
+plus behavioural doubles for the pfSense runtime functions) — see
+[`tests/php/README.md`](tests/php/README.md). Deep pfSense-runtime integration
+stays the live-VM smoke's job (ADR-04).
 
 ### Shell tests (shellspec)
 
@@ -263,6 +281,12 @@ Then run the analysis:
 ```sh
 vendor/bin/phpstan analyse
 ```
+
+The same `composer install` provides [PHPUnit](https://phpunit.de/) for the PHP
+unit suite (`vendor/bin/phpunit`, config in `phpunit.xml`) — the fast functional
+layer beneath the live-VM smoke. See
+[Running the test suite locally](#running-the-test-suite-locally) and
+[`tests/php/README.md`](tests/php/README.md).
 
 #### Shell
 

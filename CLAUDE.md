@@ -136,8 +136,14 @@ pfBlockerNG/
 ├── .markdownlint.jsonc    # markdownlint rule set (VS Code extension + markdownlint-cli2)
 ├── .markdownlint-cli2.jsonc  # markdownlint-cli2 globs + ignores
 ├── pyproject.toml         # pytest + ruff + mypy config
+├── phpunit.xml            # PHPUnit config (PHP unit suite; tests/php/)
+├── composer.json          # PHP dev deps: phpstan + phpunit
 └── README.md
 ```
+
+`tests/` holds the Python suite (pytest) plus `tests/php/` — the PHPUnit suite
+for the pure/extractable PHP helpers (bootstrap loads the real `pfblockerng.inc`
+off-appliance via include shims + pfSense doubles; see `tests/php/README.md`).
 
 Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI, pyproject.toml, `.githooks/`) is dev-only.
 
@@ -159,13 +165,14 @@ first.** Have the workflow run `sh scripts/setup-hooks.sh` before its commit/pus
 steps (after checkout) so automated commits go through the same `pre-commit` /
 `pre-push` checks — subject to which tools the runner has installed.
 
-- **`.githooks/pre-commit`** runs the fast linters (and the unit suite) and blocks
+- **`.githooks/pre-commit`** runs the fast linters (and the unit suites) and blocks
   the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
   `mypy tests/` (the test suite is fully typed — `tests.*` is `disallow_untyped_defs`
   in pyproject.toml; `tests/smoke` is excluded), `markdownlint-cli2`, `sh -n` +
   `shellcheck`, and `php -l`. Each check runs only when its tool is installed (a
-  missing tool is reported and skipped — CI is the hard gate); PHPStan runs only
-  when `vendor/bin/phpstan` exists. Bypass in an emergency with `git commit --no-verify`.
+  missing tool is reported and skipped — CI is the hard gate); PHPStan and PHPUnit
+  run only when `vendor/bin/phpstan` / `vendor/bin/phpunit` exist. Bypass in an
+  emergency with `git commit --no-verify`.
 - **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---
@@ -182,6 +189,24 @@ Run after **any** change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or
 `tests/` — in-loop, for fast feedback; don't wait for the commit to find breakage.
 The pre-commit hook re-runs the suite at commit time and CI is the final authority,
 so a separate manual pre-commit run is not needed.
+
+PHP side — the fast PHPUnit suite for the pure/extractable helpers of
+`pfblockerng.inc` (issue #39):
+
+```sh
+composer install      # once — installs phpunit/phpunit into vendor/
+vendor/bin/phpunit     # config in phpunit.xml
+```
+
+It loads the **real** `pfblockerng.inc` off-appliance — `tests/php/bootstrap.php`
+satisfies the file's pfSense `require_once` with empty shims (`tests/php/shims/`)
+and provides behavioural doubles (`tests/php/pfsense_doubles.php`) for the pfSense
+runtime functions; **no production code is moved or modified**. The PHPStan stubs
+in `stubs/pfsense/` are empty-bodied (symbol existence only) so they cannot serve
+as runtime doubles — add a faithful/no-op `function_exists()`-guarded double to
+`pfsense_doubles.php` (and an empty shim if it's a required include) when a tested
+path reaches a new pfSense function. Deep pfSense-runtime integration stays the
+live-VM smoke's job (ADR-04). See `tests/php/README.md`.
 
 DNSBL list preprocessing (parse → normalise → classify data/zone → build dicts +
 feed/group index + `whiteDB`, then emit `pfb_py_count`) lives in `pfb_unbound.py`'s
@@ -285,6 +310,12 @@ Intelephense in VS Code. `.inc` files are PHP — `files.associations` handles t
 Stubs in `stubs/pfsense/` resolve pfSense-provided functions. If Intelephense flags
 a pfSense function as undefined, add it to the appropriate stub file rather than
 expanding the `undefinedFunctions` suppression in `.vscode/settings.json`.
+
+PHPStan (static analysis, `vendor/bin/phpstan`) and PHPUnit (functional unit
+tests, `vendor/bin/phpunit`) are the PHP gates — both pulled by `composer install`
+and enforced in CI (`test.yml`) and the pre-commit hook. See "Running tests" for
+the PHPUnit suite; the `stubs/pfsense/` empty-bodied stubs are for PHPStan, NOT
+runtime test doubles (those live in `tests/php/pfsense_doubles.php`).
 
 ### Shell
 

@@ -23,6 +23,8 @@ venv/
 
 # ── PHP ───────────────────────────────────────────────────────────────────────
 vendor/
+.phpunit.cache/
+.phpunit.result.cache
 
 # ── Shell tests (shellspec / kcov) ────────────────────────────────────────────
 coverage/
