@@ -504,6 +504,25 @@ follow-up commit you push onto an open PR.
 
 ---
 
+## GitHub issue labels (lifecycle)
+
+Keep an issue's labels in sync with its stage in the workflow (the labels already
+exist in the repo — see `gh label list`). Apply them with
+`gh issue edit <N> --add-label <l>` / `--remove-label <l>`:
+
+- **Creating an issue** — apply the appropriate descriptive label(s) for what it is
+  (`bug`, `enhancement`, `documentation`, …).
+- **Picking it up** (starting work) — add `WIP`.
+- **It reaches the PR stage** (a PR that fixes it is open) — remove `WIP`, add
+  `Waiting PR`.
+- **That PR is merged** — remove `Waiting PR`.
+- **Resolved/closed without a PR** (e.g. fixed by a direct push, or closed as
+  invalid) — remove `WIP`.
+- **Dropped / can't fix** (won't-fix, not reproducible, …) — remove `WIP`/`Waiting
+  PR` and leave a status-update comment explaining why.
+
+---
+
 ## Commit style
 
 Follow existing log: `<scope>: <imperative summary>`.
