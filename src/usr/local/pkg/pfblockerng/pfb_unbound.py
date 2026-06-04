@@ -98,6 +98,15 @@ safeSearchDB: defaultdict[str, Any]
 feedGroupIndexDB: defaultdict[int, Any]
 maxmindReader: Any
 
+# ADR-10 P2: the single module-level reference to the current immutable matcher
+# snapshot. init_standard builds it from the loaded strata and assigns it ONCE
+# (replacing the per-global query-time read); operate() captures this ONE ref per
+# query and reads every matcher field off it. A future zero-downtime reload rebinds
+# this ref atomically (GIL-atomic STORE), so a query sees the whole old or the whole
+# new snapshot, never a torn mix. Declared without assignment (PEP 526); the runtime
+# object is created in init_standard.
+_snapshot: Snapshot
+
 # Background I/O worker (file + sqlite writes off the DNS response path)
 pfb_task_queue: queue.Queue
 pfb_worker_thread: Any
@@ -214,6 +223,7 @@ def init_standard(id: int, env: module_env) -> bool:
         safeSearchDB, \
         feedGroupIndexDB, \
         maxmindReader, \
+        _snapshot, \
         pfb_task_queue, \
         pfb_worker_thread, \
         pfb_db_queue, \
@@ -823,6 +833,29 @@ def init_standard(id: int, env: module_env) -> bool:
                     pass
     else:
         log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
+
+    # ADR-10 P2: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
+    # assign the single module ref. Up to here init populated the scratch globals
+    # (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/feedGroupIndexDB/hstsDB) exactly as
+    # before -- from the manifest build() OR the legacy CSV fallback, plus the user
+    # REGEX ini and the HSTS file; the ``important_rules`` fast-path gate sits in
+    # pfb["important_rules"]. This is the future zero-downtime swap point (one
+    # GIL-atomic rebind). It runs on BOTH the python_enable and the else (empty
+    # defaultdicts) paths, so a snapshot is always present for operate(). Decision-
+    # identical to the old per-global read -- the same dict objects, just bundled
+    # (pinned by the retained ADR-06/07 oracles).
+    _snapshot = Snapshot(
+        data_db=dataDB,
+        zone_db=zoneDB,
+        white_db=whiteDB,
+        regex_db=regexDB,
+        allow_regex_db=allowRegexDB,
+        feed_group_index_db=feedGroupIndexDB,
+        hsts_db=hstsDB,
+        important_rules=bool(pfb["important_rules"]),
+        counts=len(dataDB) + len(zoneDB),
+        regex_count=len(regexDB) + len(allowRegexDB),
+    )
 
     # Start background DB-write worker (persistent sqlite connection, batched)
     if pfb["mod_threading"] and not pfb.get("db_worker"):
@@ -1965,6 +1998,71 @@ class BuildResult:
     allow_regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
     important_rules: bool = False
     regex_count: int = 0
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """ADR-10 P2: the immutable bundle of every matcher stratum a DNS query reads.
+
+    Today the matcher reads several independent module globals per query
+    (``dataDB``/``zoneDB``/``whiteDB``/``regexDB`` + ADR-07's ``allowRegexDB`` and the
+    ``important_rules`` flag, plus ``hstsDB`` and ``feedGroupIndexDB``), each assigned
+    one-by-one at init. A background swap that reassigns them individually would let a
+    mid-swap query read e.g. new ``dataDB`` + old ``whiteDB`` -- a torn, inconsistent
+    decision. Bundling them here behind ONE module reference makes the future
+    zero-downtime swap (ADR.md SS2 "Atomic swap shape") consistent-by-construction: a
+    query captures the single ref once and reads every field off it, so it resolves
+    entirely against one snapshot even if a swap lands mid-query. The swap itself is a
+    single ``STORE_NAME`` (GIL-atomic); no lock is taken on the per-query hot path.
+
+    Scope (deliberate): exactly the strata the per-query ``containers`` assembly feeds
+    ``evaluate_domain`` (``operate()``), plus the ``important_rules`` fast-path gate and
+    the build counts. The ``operate()``-level axes ``noAAAADB``/``safeSearchDB``/
+    ``gpListDB`` are NOT here -- they are not read by ``evaluate_domain``/``containers``,
+    are not produced by ``build()``/``dnsbl_build_from_manifest`` (loaded from static
+    files), and ``gpListDB`` is MUTATED in place per query (a group-policy bypass cache),
+    so it is not an immutable swap target. ``rcodeDB``/``maxmindReader`` shape the reply,
+    not the block decision, and are likewise out.
+
+    Immutability note (Phase 3/4 watch-out): the tuple of fields is frozen, but the
+    contained dicts are ordinary dicts. ADR-07's runtime regex eviction still mutates
+    ``regex_db`` in place (``_regex_evict_names`` in ``evaluate_domain``); a swap replaces
+    the whole snapshot with a freshly-compiled set, so any evicted-pattern state is
+    rebuilt from the manifest + the static cap (reconciled + documented in ADR.md SS2).
+
+    The fields mirror the legacy ``containers`` keys + the ``cfg`` fast-path flag so the
+    refactor is byte-for-byte decision-identical (pinned by the retained ADR-06/07
+    oracles): ``data_db``->dataDB, ``zone_db``->zoneDB, ``white_db``->whiteDB,
+    ``regex_db``->regexDB, ``allow_regex_db``->allowRegexDB,
+    ``feed_group_index_db``->feedGroupIndexDB, ``hsts_db``->hstsDB.
+    """
+
+    data_db: dict[str, Any]
+    zone_db: dict[str, Any]
+    white_db: dict[str, Any]
+    regex_db: dict[str, Any]
+    allow_regex_db: dict[str, Any]
+    feed_group_index_db: dict[int, Any]
+    hsts_db: dict[str, Any]
+    important_rules: bool = False
+    counts: int = 0
+    regex_count: int = 0
+
+    def containers(self) -> dict[str, Any]:
+        """The per-query ``containers`` dict ``evaluate_domain`` reads (legacy keys).
+
+        ``operate()`` captures the single live ``Snapshot`` once per query and calls
+        this to feed ``evaluate_domain`` -- replacing the old per-query re-assembly from
+        separate module globals (the torn-read hazard ADR-10 removes)."""
+        return {
+            "dataDB": self.data_db,
+            "zoneDB": self.zone_db,
+            "whiteDB": self.white_db,
+            "regexDB": self.regex_db,
+            "allowRegexDB": self.allow_regex_db,
+            "feedGroupIndexDB": self.feed_group_index_db,
+            "hstsDB": self.hsts_db,
+        }
 
 
 def _dnsbl_is_ipv4(token: str) -> bool:
@@ -4080,6 +4178,12 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 if isgpBypass is not None:
                     bypass_dnsbl = True
 
+        # ADR-10 P2: capture the ONE live matcher snapshot ref for this query. Every
+        # name in this query (the original + any CNAME-chain targets) is evaluated
+        # against this single immutable snapshot, so a swap that rebinds ``_snapshot``
+        # mid-query never tears a decision across names (ADR.md SS2 atomic-swap shape).
+        snap = _snapshot
+
         # Create list of Domain/CNAMES to be evaluated
         validate = []
 
@@ -4137,15 +4241,12 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     "hstsDB": pfb["hstsDB"],
                     "hsts_tlds": pfb["hsts_tlds"],
                 }
-                containers = {
-                    "dataDB": dataDB,
-                    "zoneDB": zoneDB,
-                    "whiteDB": whiteDB,
-                    "regexDB": regexDB,
-                    "allowRegexDB": allowRegexDB,
-                    "feedGroupIndexDB": feedGroupIndexDB,
-                    "hstsDB": hstsDB,
-                }
+                # ADR-10 P2: read every matcher stratum off the ONE captured snapshot
+                # ref (``snap``, taken once at the top of this per-name loop) instead of
+                # re-assembling ``containers`` from separate module globals. ``snap`` is
+                # immutable for this query, so a swap that rebinds ``_snapshot`` mid-query
+                # cannot tear this decision (consistent-by-construction, ADR.md SS2).
+                containers = snap.containers()
                 dnsbl = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
 
                 # A block found via a CNAME chain is recorded against the ORIGINAL
