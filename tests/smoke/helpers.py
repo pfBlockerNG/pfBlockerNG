@@ -831,6 +831,132 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Update hooks (ADR-12) — pre/post command hooks fired from the update pass
+# --------------------------------------------------------------------------- #
+# pfBlockerNG runs admin-configured pre/post commands once per update pass from
+# sync_package_pfblockerng (inc:7388 pre, inc:11227 post). The hooks live as a
+# PLAIN NUMERIC array under CFG_GLOBAL/hooks; pfb_get_hooks() iterates
+# ``foreach ($pfbconfig['hooks'] as $hook)`` and runs ONLY entries with
+# enabled==='on' whose ``when`` matches the fire point and whose ``command`` is
+# non-empty (inc:1734-1748). Each hook runs AS ROOT in the HOST context (NOT
+# chrooted) via ``PFB_<K>=<v> … /usr/bin/timeout … /bin/sh -c <command>`` — so a
+# hook that writes /tmp/<file> on the guest is plainly readable back over SSH,
+# which is exactly how these smoke tests observe a hook's environment and that it
+# ran. The env carries PFB_WHEN plus one PFB_<UPPER(key)> per ctx entry
+# (inc:1797): pre ⇒ {WHEN, TRIGGER}; post ⇒ {WHEN, TRIGGER, IP_CHANGED,
+# DNSBL_CHANGED, STATUS, CHANGED_ALIASES}. reload(vm, scope) fires the hooks
+# because it runs the same ``pfblockerng.php <scope>`` CLI the GUI/cron use.
+
+HOOK_MARKER_DIR = "/tmp"
+
+
+def hook_marker_path(token: str, when: str) -> str:
+    """Path of a hook's marker file on the guest, e.g. ``/tmp/pfb_hook_<token>_<when>``.
+
+    The marker lives under ``/tmp`` on the HOST (not a chroot): a hook runs as root
+    in host context, so an env-dump hook writing here is read straight back over
+    SSH. ``token`` is per-test (unique) so concurrent/leftover markers can't collide;
+    ``when`` ('pre'/'post' or any label) lets one test use distinct pre/post markers.
+    """
+    return f"{HOOK_MARKER_DIR}/pfb_hook_{token}_{when}"
+
+
+def env_dump_hook(
+    token: str, when: str, *, enabled: str = "on", timeout: str = "60", description: str = ""
+) -> dict[str, str]:
+    """A hook entry whose command dumps the env to this test's ``when`` marker.
+
+    The command is ``/usr/bin/env > <marker>`` (absolute ``env``; the redirect runs
+    inside the hook's ``/bin/sh -c``). read_hook_env() then parses the PFB_* lines
+    back. Matches the exact config shape pfb_get_hooks() reads — a flat
+    ``{command, when, enabled, description, timeout}`` assoc array — so the entry
+    runs (or is skipped) by the real production gate.
+    """
+    return {
+        "command": f"/usr/bin/env > {hook_marker_path(token, when)}",
+        "when": when,
+        "enabled": enabled,
+        "description": description or f"smoke {token} {when}",
+        "timeout": timeout,
+    }
+
+
+def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float = 60.0) -> None:
+    """Persist ``hooks`` as the pfBlockerNG update-hook list (CFG_GLOBAL/hooks).
+
+    MERGES into the existing ``config/0`` (reads it, sets only ``hooks``) so
+    ``enable_cb`` and the rest of the global settings are untouched — clobbering the
+    whole node would disable pfBlockerNG. Each dict is emitted as a PHP assoc array
+    via _php_kv_array and the list as a PLAIN NUMERIC array, exactly the shape
+    pfb_get_hooks() iterates. Only enabled==='on' + matching ``when`` + non-empty
+    ``command`` entries actually run (the runner's own gate, inc:1734-1748).
+    """
+    hooks_php = "array(" + ", ".join(_php_kv_array(h) for h in hooks) + ")"
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        f"$g['hooks'] = {hooks_php};\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: set update hooks');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_update_hooks failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def clear_update_hooks(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Set CFG_GLOBAL/hooks to an empty list so NO hook fires.
+
+    Call at the start of each hook test (so a stale hook from a prior test can't
+    false-green this one) and on teardown (so a leftover hook can't fire during
+    another module's reloads). An empty list ⇒ pfb_get_hooks() returns empty ⇒ a
+    byte-identical no-op pass (inc:1783).
+    """
+    set_update_hooks(vm, [], timeout=timeout)
+
+
+def clear_hook_markers(vm: SmokeVM, token: str, *, timeout: float = 30.0) -> None:
+    """``rm -f`` every marker for ``token`` so an "absent" assertion is meaningful.
+
+    Removes both the ``pre`` and ``post`` markers (and is harmless if neither
+    exists). Run BEFORE the reload under test: asserting a marker is ABSENT only
+    proves "the hook did not run" if the file was cleared first.
+    """
+    vm.ssh("/bin/rm", "-f", hook_marker_path(token, "pre"), hook_marker_path(token, "post"), timeout=timeout)
+
+
+def hook_marker_exists(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> bool:
+    """True iff ``path`` exists on the guest (``test -f`` rc==0).
+
+    The proof a hook ran (marker present) or did not (absent) — read off the host
+    filesystem, since the hook writes there as root in host context.
+    """
+    return vm.ssh("test", "-f", path, timeout=timeout).returncode == 0
+
+
+def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str, str] | None:
+    """Parse a hook's env-dump marker into its ``PFB_*`` vars, or None if absent.
+
+    ``cat`` the marker; a non-zero rc (file missing ⇒ the hook never ran) returns
+    None so callers can distinguish "did not fire" from "fired with empty PFB_*".
+    Only ``PFB_*`` lines are kept (the rest of root's env is noise); each is split
+    on the FIRST ``=`` so an empty value (``PFB_CHANGED_ALIASES=``) parses to ''
+    and a value containing ``=`` is preserved.
+    """
+    result = vm.ssh("cat", path, timeout=timeout)
+    if result.returncode != 0:
+        return None
+    env: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith("PFB_"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            env[key] = value
+    return env
+
+
+# --------------------------------------------------------------------------- #
 # Config injection — emit exactly the fields a case sets
 # --------------------------------------------------------------------------- #
 
