@@ -3355,22 +3355,42 @@ def _scan_block_band(
     data_db: dict[str, Any],
     zone_db: dict[str, Any],
     regex_db: dict[str, Any],
-) -> int:
+) -> tuple[int, dict[str, Any] | None]:
     """Highest block band that matches ``q_name`` across dataDB (exact), zoneDB (the
-    suffix walk) and the block-regex DB; 0 if none match. Used by the numeric 6-band
-    resolution to take the max block band (decide() semantics) -- the fast-path
-    discovery short-circuits on the first hit, which is wrong for the max. Snapshot-
-    iterates the regex DB (Phase-7 eviction safety)."""
+    suffix walk) and the block-regex DB, AND the winning entry that carries it.
+
+    Returns ``(best_band, best_meta)``: ``best_band`` is the max matching band (0 if
+    none match), and ``best_meta`` describes the entry whose band IS that max so the
+    caller can RE-ATTRIBUTE feed/group/log_type/b_type/b_eval to the rule that
+    actually won (issue #47). Returning only the band lost that identity, so a
+    higher-band rule decided correctly but the response was shaped/reported from the
+    first-discovered entry. ``best_meta`` is one of:
+
+    * ``{"kind": "data", "entry": <payload>}`` -> b_type "DNSBL", b_eval q_name
+    * ``{"kind": "zone", "entry": <payload>, "matched": <suffix>}`` -> b_type "TLD"
+    * ``{"kind": "regex", "key": <name>}`` -> feed=key, group "DNSBL_Regex"
+
+    ``None`` when nothing matched. The numeric 6-band resolution takes the max block
+    band (decide() semantics) -- the fast-path discovery short-circuits on the first
+    hit, which is wrong for the max. Snapshot-iterates the regex DB (Phase-7 eviction
+    safety). On a tie the first scanned kind (data -> zone -> regex) holds best_meta,
+    but the caller only re-attributes when this band strictly exceeds the discovered
+    one, so a tie never disturbs the discovered attribution."""
     best = 0
+    best_meta: dict[str, Any] | None = None
     if cfg.get("dataDB"):
         entry = data_db.get(q_name)
         if entry is not None:
-            best = max(best, _block_entry_band(entry))
+            band = _block_entry_band(entry)
+            if band > best:
+                best, best_meta = band, {"kind": "data", "entry": entry}
     if cfg.get("zoneDB"):
         for q in iter_domain_suffixes(q_name):
             entry = zone_db.get(q)
             if entry is not None:
-                best = max(best, _block_entry_band(entry))
+                band = _block_entry_band(entry)
+                if band > best:
+                    best, best_meta = band, {"kind": "zone", "entry": entry, "matched": q}
     if cfg.get("regexDB") and q_name:
         # Snapshot-iterate + time each match (ADR-07 P7), same warn/evict policy as the
         # fast-path discovery scan; collect evicted names and pop AFTER the loop.
@@ -3384,10 +3404,12 @@ def _scan_block_band(
                 to_evict.append(_k)
                 continue
             if match:
-                best = max(best, _block_entry_band(r))
+                band = _block_entry_band(r)
+                if band > best:
+                    best, best_meta = band, {"kind": "regex", "key": _k}
         if to_evict:
             _regex_evict_names(regex_db, to_evict)
-    return best
+    return best, best_meta
 
 
 def _scan_allow_regex_band(
@@ -3608,11 +3630,31 @@ def evaluate_domain(
             # matching allow band, so augment the first-discovered block's band with a
             # full scan over every matching block (data/zone-suffix/block-regex) -- the
             # discovery above short-circuits on the first hit (right for metadata, but
-            # the resolution needs the max band).
-            block_band = max(
-                block_band,
-                _scan_block_band(q_name, cfg, data_db, zone_db, regex_db),
-            )
+            # the resolution needs the max band). When a STRICTLY higher band wins,
+            # re-attribute feed/group/log_type/b_type/b_eval to that entry (issue #47):
+            # the band decides priority, but reporting AND the response shape (log_type
+            # -> null_blocking below) must follow the rule that actually won, not the
+            # first discovered. A tie keeps the discovered attribution (block bands are
+            # distinct odds, so a tie is the same entry / same priority).
+            scan_band, scan_meta = _scan_block_band(q_name, cfg, data_db, zone_db, regex_db)
+            if scan_meta is not None and scan_band > block_band:
+                block_band = scan_band
+                if scan_meta["kind"] == "regex":
+                    feed = scan_meta["key"]
+                    group = "DNSBL_Regex"
+                    log_type = "1"
+                    b_type = "Python"
+                    b_eval = q_name
+                else:
+                    entry = scan_meta["entry"]
+                    log_type = entry["log"]
+                    feed, group = resolve_feed_group(entry["index"], feed_group_index_db)
+                    if scan_meta["kind"] == "zone":
+                        b_type = "TLD"
+                        b_eval = scan_meta["matched"]
+                    else:  # data
+                        b_type = "DNSBL"
+                        b_eval = q_name
             in_whitelist = _resolve_numeric_allow(
                 q_name,
                 q_name_original,

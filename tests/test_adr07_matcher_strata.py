@@ -324,6 +324,94 @@ class TestUserRegexSovereign:
         assert self._decide(white_db={"evil.com": {"wildcard": False, "important": True}}, allow_regex_db={}) is True
 
 
+class TestWinningEntryAttribution:
+    """Issue #47: when blocks match the same name at DIFFERENT bands, the numeric branch
+    must carry the WINNING (max-band) entry's feed/group/log_type/b_type/b_eval -- not
+    just its band. The band decides priority; reporting AND the response shape
+    (``log_type`` -> ``null_blocking``) must follow the rule that actually won.
+
+    The bug: discovery short-circuits (data -> zone -> regex) and binds the metadata to
+    the FIRST block; ``_scan_block_band`` returned only an int, so a higher-band rule
+    decided correctly but the name was shaped/attributed from the first-discovered one
+    (e.g. a band-1 feed NULL block shadowing a band-5 user-regex VIP block)."""
+
+    def test_user_regex_band5_wins_over_feed_data_band1_vip_and_attribution(self) -> None:
+        import re
+
+        # The exact issue scenario: name in a band-1 feed block (log='2' -> NULL) AND a
+        # band-5 user regex (log='1' -> VIP). The regex wins (5 > 1): VIP, attributed to
+        # DNSBL_Regex -- NOT sinkholed NULL and blamed on the feed.
+        cfg = _cfg(dataDB=True, regexDB=True, important_rules=True)
+        containers = _containers(
+            dataDB={"evil.com": {"log": "2", "index": 7, "important": False, "band": PRIO_FEED_BLOCK}},
+            regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}},
+            feedGroupIndexDB={7: {"feed": "FeedA", "group": "GroupA"}},
+        )
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.is_found is True and dec.in_whitelist is False
+        assert dec.null_blocking is False  # VIP (log_type '1'), the user-regex shape -- not NULL
+        assert dec.log_type == "1"
+        assert dec.group == "DNSBL_Regex"
+        assert dec.feed == "Regex_1"
+        assert dec.b_type == "Python"  # a regex block reports b_type "Python" (as discovery would)
+        assert dec.b_eval == "evil.com"
+
+    def test_important_zone_band3_wins_over_feed_data_band1_reattributes_to_zone(self) -> None:
+        # data exact (band 1, log='2' NULL) is discovered first; an $important zone block
+        # (band 3, log='1' VIP) on a parent suffix wins. Re-attribute to the zone: b_type
+        # 'TLD', b_eval the matched suffix, feed/group from the zone entry's index, VIP.
+        cfg = _cfg(dataDB=True, zoneDB=True, important_rules=True)
+        containers = _containers(
+            dataDB={"sub.evil.com": {"log": "2", "index": 1, "important": False, "band": PRIO_FEED_BLOCK}},
+            zoneDB={"evil.com": {"log": "1", "index": 2, "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}},
+            feedGroupIndexDB={
+                1: {"feed": "DataFeed", "group": "DataGroup"},
+                2: {"feed": "ZoneFeed", "group": "ZoneGroup"},
+            },
+        )
+        dec = evaluate_domain("sub.evil.com", "sub.evil.com", "com", False, cfg, containers)
+        assert dec.is_found is True and dec.in_whitelist is False
+        assert dec.null_blocking is False  # zone log='1' -> VIP, not the data's NULL
+        assert dec.log_type == "1"
+        assert dec.b_type == "TLD"
+        assert dec.b_eval == "evil.com"  # the matched suffix, not the queried name
+        assert dec.feed == "ZoneFeed" and dec.group == "ZoneGroup"
+
+    def test_tie_keeps_first_discovered_attribution(self) -> None:
+        import re
+
+        # A higher-or-equal discovered band must NOT be re-attributed: a band-5 data block
+        # (user Custom_List, log='1') discovered first, plus a band-1 feed regex. The regex
+        # does NOT win (1 < 5), so the data entry's feed/group/b_type stand.
+        cfg = _cfg(dataDB=True, regexDB=True, important_rules=True)
+        containers = _containers(
+            dataDB={"evil.com": {"log": "1", "index": 3, "important": False, "band": PRIO_USER_BLOCK}},
+            regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_FEED_BLOCK}},
+            feedGroupIndexDB={3: {"feed": "UserFeed", "group": "Custom_List"}},
+        )
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.is_found is True and dec.in_whitelist is False
+        assert dec.null_blocking is False
+        assert dec.b_type == "DNSBL"  # data attribution retained, NOT re-attributed to the regex
+        assert dec.feed == "UserFeed" and dec.group == "Custom_List"
+
+    def test_winning_regex_still_loses_to_user_whitelist_band6(self) -> None:
+        import re
+
+        # The winning-entry carry must not change the DECISION: a band-5 regex wins the
+        # block scan and re-attributes, but a band-6 user whitelist still overrides ->
+        # the name resolves (in_whitelist True), regardless of attribution.
+        cfg = _cfg(dataDB=True, regexDB=True, whiteDB=True, important_rules=True)
+        containers = _containers(
+            dataDB={"evil.com": {"log": "2", "index": 7, "important": False, "band": PRIO_FEED_BLOCK}},
+            regexDB={"Regex_1": {"re": re.compile(r"evil"), "important": False, "band": PRIO_USER_BLOCK}},
+            whiteDB={"evil.com": {"wildcard": False, "important": True}},
+            feedGroupIndexDB={7: {"feed": "FeedA", "group": "GroupA"}},
+        )
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.in_whitelist is True  # band 6 user allow > band 5 user block
+
+
 class TestNumericBranchUnreachableInProduction:
     """The numeric branch only fires when pfb['important_rules'] is True, which Phase 3
     never sets (no ABP rule parsed). Defaults stay False so production stays on the
