@@ -147,7 +147,13 @@ if (!function_exists('get_configured_vip_interface')) {
 	// interface" check fails for them. That is fine: those tests only assert the error is
 	// NOT the v6-required message, never that validation passes.
 	function get_configured_vip_interface($vipif) {
-		return 'opt-double';
+		// Constrain to the '_vip_test_*' sentinels the tests supply, so this
+		// test-specific behaviour can't leak into unrelated tests sharing this file.
+		if (is_string($vipif) && str_starts_with($vipif, '_vip_test_')) {
+			return 'opt-double';
+		}
+
+		throw new LogicException(__FUNCTION__ . '() double not implemented for VIP id: ' . (string) $vipif);
 	}
 }
 

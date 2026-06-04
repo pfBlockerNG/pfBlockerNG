@@ -978,10 +978,9 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // (when 'Create VIPs automatically' is on) and removes ONLY the marked + IP-matched
 // VIP(s) on disable / when no longer managed. Wired into pfb_create_dnsbl($mode).
 //
-// ADDITIVE: with pfb_dnsvip_auto off the function returns immediately on the enabled
-// path (and, on the disabled path, simply finds no marker+IP-matched VIP to remove
-// unless a previously auto-created one is still present), so with the feature never
-// enabled the runtime is byte-identical to today.
+// ADDITIVE: with pfb_dnsvip_auto off (and never previously on) there is no marked VIP,
+// so neither the enabled nor the disabled path finds a marker+IP-matched VIP to remove
+// -> $changed stays FALSE -> no write_config -> the runtime is byte-identical to today.
 //
 // Marker/IP delete guard: a VIP is removed iff BOTH (a) its descr equals
 // PFB_AUTO_VIP_DESCR_V4/_V6 AND (b) its subnet equals the IP currently resolved from the
@@ -1005,11 +1004,11 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
 	$dnsblcfg_path = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
-	// On the enabled path with auto OFF there is nothing to do -> immediate no-op,
-	// keeping pfb_create_dnsbl byte-identical to today.
-	if ($mode === 'enabled' && !$auto) {
-		return;
-	}
+	// NOTE: the enabled+auto-OFF case deliberately does NOT early-return. It falls through
+	// so the delete branch below can clean up a previously auto-created VIP when the admin
+	// switches auto-create back to manual (ADR-13 §2: "whenever a VIP is no longer managed
+	// (auto turned off ...) delete the VIP(s)"). For a setup that never used auto-create
+	// there is no marker+IP-matched VIP, so nothing changes -> byte-identical to today.
 
 	// Families to provision when creating. v4 is always managed. v6 is managed when a
 	// v6 VIP is already requested (an id stored) or the resolver listens on IPv6
