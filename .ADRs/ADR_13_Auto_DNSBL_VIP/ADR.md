@@ -171,11 +171,14 @@ Prompt: `05_Docs_Smoke_DoD.txt`
 ### Manual smoke (owner: maintainer) — required before Accept
 
 > CI has no live pf/Unbound to apply a VIP. Run on a live pfSense CE box.
+>
+> Items verified in CI / by code inspection are noted; the rest require on-box confirmation.
 
-- [ ] **No-op (default off).** Fresh/upgraded install with the box off behaves exactly as today; manual dropdowns + validation unchanged.
+- [ ] **No-op (default off).** Fresh/upgraded install with the box off behaves exactly as today; manual dropdowns + validation unchanged. *(verified: save + render byte-identical when `pfb_dnsvip_auto` is absent/off — Phase 4 trace)*
 - [ ] **Auto create.** Check the box, save, enable DNSBL → a `pfB_AUTO_VIP_v4` IP-Alias VIP at `10.10.10.53/32` appears on `lo0`, is live (`ifconfig lo0`), and `pfb_dnsvip4` points at it; a blocked name sinks to it.
 - [ ] **Conflict.** With `10.10.10.53` already used (a manual VIP / interface subnet), the sweep picks the next free `.53`; with the whole sweep exhausted the checkbox is disabled + warning tooltip shown.
+- [ ] **Range fills up post-enable.** Enable auto-create (VIP provisioned), then consume all `10.10.X.53` / `fd00:X::53` candidates with other VIPs — on the next settings page load the checkbox renders disabled+unchecked with the warning; `pfb_dnsvip_auto` stays `on` in stored config until the next save; the lifecycle manager no-ops safely (logs, leaves config untouched).
 - [ ] **Teardown.** Disable DNSBL → the marked VIP is removed (config + `ifconfig`); disable pfBlockerNG → same; the `pfb_dnsvip_auto` setting + address choice persist; re-enable recreates it. A manually-created VIP present throughout is never touched.
-- [ ] **IPv6 mandatory.** With the resolver listening on IPv6: auto mode provisions `pfB_AUTO_VIP_v6` `fd00::53/128`; manual mode without a v6 VIP errors on save / force-disables.
+- [ ] **IPv6 mandatory.** With the resolver listening on IPv6: auto mode provisions `pfB_AUTO_VIP_v6` `fd00::53/128`; manual mode without a v6 VIP errors on save / force-disables. *(on-box needed: confirm `pfb_unbound_listens_v6()` returns true when the resolver uses `interface-automatic` and the box has a real v6 address — link-local vs global caveat from Phase 1)*
 - [ ] **HA sync.** On a CARP pair, the flag + VIP replicate and each node creates/removes its own lo0 VIP on its own enable/disable.
 - [ ] **Uninstall.** Removing the package deletes the marked VIP(s); no orphan alias on lo0.

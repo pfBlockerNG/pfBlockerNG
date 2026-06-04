@@ -93,9 +93,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     # DNSBL reload changes (incl. whether it drops custom access-control).
     h.snapshot_unbound_conf(smoke_vm)
     h.snap_state(smoke_vm, "deployed")
-    # DNSBL force-disables itself without a VIP (pfb_validate_vips); pfBlockerNG
-    # never auto-creates one and the image does NOT bake one, so inject the lo0
-    # sinkhole VIP once for the matrix. dns_probe queries on-box (drill
+    # DNSBL force-disables itself without a VIP (pfb_validate_vips); by default
+    # pfBlockerNG does NOT auto-create one (pfb_dnsvip_auto OFF; pfb_manage_dnsbl_vip
+    # auto-creates it when ON — ADR-13). The image does NOT bake one, so inject the
+    # lo0 sinkhole VIP once for the matrix. dns_probe queries on-box (drill
     # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
     h.ensure_dnsbl_vip(smoke_vm)
     # Point Unbound's sole upstream at the controlled stub BEFORE any per-test

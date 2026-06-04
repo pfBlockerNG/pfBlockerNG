@@ -355,6 +355,9 @@ truths are non-obvious and each cost real debugging — internalise them first:
   are dead keys (python is the only mode); on `main` they're still required.
 - **The image bakes only the deps + qemu-guest-agent** — the harness injects the
   DNSBL VIP (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline.
+  The package CAN now auto-create the sinkhole VIP (`pfb_dnsvip_auto` ON,
+  ADR-13), but the default is **OFF**, so `ensure_dnsbl_vip` remains accurate
+  for the matrix (default-off ⇒ the harness still must inject the VIP).
   The smoke qcow2 cache is content-keyed by GHCR digest, so a same-tag re-push
   invalidates automatically.
 - **The branch `.pkg` is built on a plain Linux runner** (`build-pkg-linux.yml` →

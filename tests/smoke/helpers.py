@@ -84,11 +84,11 @@ DEFAULT_DNSBL_VIP4 = os.environ.get("SMOKE_DNSBL_VIP4") or "10.10.10.1"
 NULL_IP4 = "0.0.0.0"
 
 # The pfSense Virtual IP the harness injects so DNSBL has the sinkhole VIP it
-# requires (pfb_validate_vips, inc:725). pfBlockerNG never auto-creates it
-# (pfblockerng_install.inc only associates an existing 'pfB DNSBL' VIP), so we
-# add an lo0 IP-Alias VIP and point pfb_dnsvip4 at it via the "_vip<uniqid>" id
-# convention get_configured_vip_list() uses. Kept OUT of the image so the
-# "no VIP configured" scenario stays testable (just skip ensure_dnsbl_vip).
+# requires (pfb_validate_vips, inc:725). By default pfBlockerNG does NOT
+# auto-create one (pfb_dnsvip_auto is OFF by default; when ON, pfb_manage_dnsbl_vip
+# auto-creates it), so we add an lo0 IP-Alias VIP and point pfb_dnsvip4 at it via
+# the "_vip<uniqid>" id convention get_configured_vip_list() uses. Kept OUT of the
+# image so the "no VIP configured" scenario stays testable (just skip ensure_dnsbl_vip).
 SMOKE_VIP_UNIQID = "pfbsmokevip"
 SMOKE_VIP_IFACE = "lo0"
 # DNSBL lighttpd sinkhole ports — DNSBL skips ALL feed processing if these are
@@ -613,11 +613,12 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
     """Inject the lo0 IP-Alias VIP DNSBL requires and point pfb_dnsvip4 at it.
 
     pfBlockerNG force-disables DNSBL when ``pfb_validate_vips`` finds no VIP
-    (inc:725) and never auto-creates one (pfblockerng_install.inc only ASSOCIATES
-    an existing 'pfB DNSBL' VIP) — so the harness adds it exactly as a user would
-    in Firewall > Virtual IPs: a ``virtualip/vip`` entry on the DNSBL interface
-    (lo0), referenced by ``pfb_dnsvip4`` as ``_vip<uniqid>`` (the
-    ``get_configured_vip_list()`` id convention). Idempotent on the uniqid.
+    (inc:725). By default (``pfb_dnsvip_auto`` OFF) it does not auto-create one;
+    the harness adds it exactly as a user would in Firewall > Virtual IPs: a
+    ``virtualip/vip`` entry on the DNSBL interface (lo0), referenced by
+    ``pfb_dnsvip4`` as ``_vip<uniqid>`` (the ``get_configured_vip_list()`` id
+    convention). When ``pfb_dnsvip_auto`` is ON, ``pfb_manage_dnsbl_vip`` creates
+    a marked VIP automatically (ADR-13). Idempotent on the uniqid.
 
     Then APPLY it (as the GUI's Firewall > Virtual IPs save does): the VIP must
     be realized for ``pfb_get_vips`` (-> ``get_specialnet``) to list it —
