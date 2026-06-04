@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/php/bootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         colors="true"
+         failOnRisky="true"
+         displayDetailsOnTestsThatTriggerWarnings="true"
+         displayDetailsOnTestsThatTriggerErrors="true">
+    <testsuites>
+        <testsuite name="pfBlockerNG PHP unit suite">
+            <directory>tests/php</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <!-- The behavioural target: the core package include. Coverage is
+                 informational for now (no enforced floor — see issue #39 / #38). -->
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+        </include>
+    </source>
+</phpunit>

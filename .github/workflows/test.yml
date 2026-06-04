@@ -195,6 +195,35 @@ jobs:
         # suppressed; new errors introduced by future changes will fail CI.
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
+  php-unit:
+    name: PHPUnit unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          # Target CE 2.8 (PHP 8.3). pcov drives informational coverage.
+          php-version: '8.3'
+          extensions: curl, intl, mbstring, ctype, filter
+          coverage: pcov
+          tools: composer
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPUnit
+        # Config in phpunit.xml. tests/php/bootstrap.php loads the real
+        # pfblockerng.inc via include shims + pfSense doubles — no live box.
+        run: vendor/bin/phpunit
+
+      - name: Coverage (informational)
+        # No enforced floor yet (see issue #39 / #38); text summary only.
+        run: vendor/bin/phpunit --coverage-text || true
+
   markdownlint:
     name: markdownlint
     runs-on: ubuntu-latest
@@ -217,7 +246,7 @@ jobs:
   all-tests-passed:
     name: All tests passed
     if: always()
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, markdownlint]
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -248,6 +277,10 @@ jobs:
           fi
           if [ "${{ needs.php-static-analysis.result }}" != "success" ]; then
             echo "PHPStan static analysis failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-unit.result }}" != "success" ]; then
+            echo "PHPUnit unit tests failed or were cancelled."
             exit 1
           fi
           if [ "${{ needs.markdownlint.result }}" != "success" ]; then

@@ -116,6 +116,12 @@ if [ -x vendor/bin/phpstan ]; then
 	vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
 fi
 
+# --- PHP: PHPUnit (only when the Composer vendor tree is installed) ---
+if [ -x vendor/bin/phpunit ]; then
+	step 'phpunit'
+	vendor/bin/phpunit || failed 'phpunit'
+fi
+
 [ -n "$skipped" ] && printf '[pre-commit] skipped (tool not found):%s\n' "$skipped" >&2
 
 if [ "$fail" != 0 ]; then
