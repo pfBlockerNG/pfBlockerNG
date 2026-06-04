@@ -302,12 +302,12 @@ def parse_abp_line(line: str, provenance: Provenance) -> Rule | None:
             dns_opts, important, badfilter = (), False, False
         reduced = reduce_regex(inner)
         if reduced is not None:
-            wildcard, dom = reduced
+            wildcard, rdom = reduced
             sig_opts = tuple(o for o in dns_opts) + (("important",) if important else ())
             return Rule(
                 kind=kind,
                 target=Target.DOMAIN,
-                key=dom,
+                key=rdom,
                 provenance=provenance,
                 wildcard=wildcard,
                 important=important,

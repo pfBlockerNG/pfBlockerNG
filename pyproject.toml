@@ -40,14 +40,20 @@ ignore_missing_imports = true
 # in stubs/python/ so the TYPE_CHECKING import in pfb_unbound.py type-checks.
 mypy_path            = "stubs/python"
 # pfb_unbound.py predates type annotations; add hints incrementally rather
-# than requiring full coverage up-front.
+# than requiring full coverage up-front. follow_imports = silent so that running
+# `mypy tests/` (the gate below) loads production modules the tests import (e.g.
+# pfb_unbound.py) for their types but does NOT fail on their own incremental-typing
+# errors -- the gate judges the test suite, not production.
+follow_imports       = "silent"
+# tests/smoke is the dispatch-only live-VM suite (ADR-04): it needs third-party
+# deps that are not installed in the lint/CI type-check env, and is excluded from
+# the default pytest run too (--ignore=tests/smoke). Keep it out of the gate.
+exclude              = ['^tests/smoke/']
 
-# The test suite, by contrast, IS fully type-annotated — keep it that way. This
-# stricter rule is scoped to tests only (production stays incremental, above).
-# The CI/pre-commit gate is scripts/check_test_typing.py (a standalone AST check):
-# mypy is not wired into CI here, and running it over the suite surfaces unrelated
-# errors (runtime-injected Unbound globals, Optional narrowings) that are not about
-# annotation coverage. This override enforces the same invariant for local/IDE mypy.
+# The test suite, by contrast, IS fully type-annotated, and `mypy tests/` is a CI
+# + pre-commit gate (see .github/workflows/test.yml, .githooks/pre-commit) that
+# keeps it that way. This override makes that requirement explicit/strict for the
+# test modules only; production stays incremental (above).
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = true

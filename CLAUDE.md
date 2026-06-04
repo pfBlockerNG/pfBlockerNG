@@ -161,10 +161,11 @@ steps (after checkout) so automated commits go through the same `pre-commit` /
 
 - **`.githooks/pre-commit`** runs the fast linters (and the unit suite) and blocks
   the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
-  `markdownlint-cli2`, `sh -n` + `shellcheck`, and `php -l`. Each check runs only
-  when its tool is installed (a missing tool is reported and skipped — CI is the
-  hard gate); PHPStan runs only when `vendor/bin/phpstan` exists. Bypass in an
-  emergency with `git commit --no-verify`.
+  `mypy tests/` (the test suite is fully typed — `tests.*` is `disallow_untyped_defs`
+  in pyproject.toml; `tests/smoke` is excluded), `markdownlint-cli2`, `sh -n` +
+  `shellcheck`, and `php -l`. Each check runs only when its tool is installed (a
+  missing tool is reported and skipped — CI is the hard gate); PHPStan runs only
+  when `vendor/bin/phpstan` exists. Bypass in an emergency with `git commit --no-verify`.
 - **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---

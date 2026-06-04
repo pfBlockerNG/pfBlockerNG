@@ -44,7 +44,7 @@ jobs:
         run: python -m pytest
 
   test-typing:
-    name: Test type annotations
+    name: Test type checking (mypy)
     runs-on: ubuntu-latest
 
     steps:
@@ -56,10 +56,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Every def in tests/ is type-annotated
-        # Standalone AST check (no deps). Mirrors the tests.* disallow_untyped_defs
-        # mypy override in pyproject.toml; see scripts/check_test_typing.py.
-        run: python scripts/check_test_typing.py
+      - name: Install mypy
+        run: pip install mypy
+
+      - name: mypy tests/
+        # Config in pyproject.toml: the tests.* override requires
+        # disallow_untyped_defs/disallow_incomplete_defs, tests/smoke is excluded,
+        # and follow_imports=silent keeps production (incremental) typing out of scope.
+        run: mypy tests/
 
   ruff:
     name: Ruff (lint + format)
@@ -178,7 +182,7 @@ jobs:
             exit 1
           fi
           if [ "${{ needs.test-typing.result }}" != "success" ]; then
-            echo "Test type-annotation check failed or was cancelled."
+            echo "Test type checking (mypy) failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.ruff.result }}" != "success" ]; then

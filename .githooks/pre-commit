@@ -56,10 +56,20 @@ else
 	skip pytest
 fi
 
-# --- Python: test-suite type-annotation gate (every def in tests/ is typed) ---
-if [ -n "$py_bin" ]; then
-	step 'test typing (annotations)'
-	"$py_bin" scripts/check_test_typing.py || failed 'scripts/check_test_typing.py'
+# --- Python: type-check the test suite (mypy; config + tests.* strictness in
+#     pyproject.toml). Heavy-ish and not always installed locally -> run only when
+#     present (CI is the hard gate). ---
+mypy_bin=''
+if [ -x .venv/bin/mypy ]; then
+	mypy_bin=.venv/bin/mypy
+elif have mypy; then
+	mypy_bin=mypy
+fi
+if [ -n "$mypy_bin" ]; then
+	step 'mypy tests/'
+	"$mypy_bin" tests/ || failed 'mypy tests/'
+else
+	skip mypy
 fi
 
 # --- Markdown: markdownlint-cli2 (reads .markdownlint*.jsonc) ---

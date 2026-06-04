@@ -19,6 +19,7 @@ import lzma
 import sys
 import tarfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,12 +29,15 @@ import pytest
 
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "build-pkg-portable.py"
 _spec = importlib.util.spec_from_file_location("build_pkg_portable", _TOOL)
+assert _spec is not None and _spec.loader is not None
 bpp = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = bpp
 _spec.loader.exec_module(bpp)
 
 
-def make_mk(tmp_path: Path, text: str, seed: dict | None = None) -> "bpp.Makefile":
+def make_mk(
+    tmp_path: Path, text: str, seed: dict | None = None
+) -> Any:  # -> bpp.Makefile (runtime-loaded; not statically importable)
     p = tmp_path / "Makefile"
     p.write_text(text)
     return bpp.Makefile(p, seed or {})
@@ -424,11 +428,17 @@ def _make_classic_port(tmp_path: Path) -> tuple[Path, Path]:
     return ports, portdir
 
 
+def _extract(tf: tarfile.TarFile, name: str) -> bytes:
+    member = tf.extractfile(name)
+    assert member is not None, name
+    return member.read()
+
+
 def _read_pkg(path: Path) -> tuple[dict, dict, tarfile.TarFile]:
     raw = lzma.decompress(path.read_bytes())  # built with --compression xz (stdlib)
     tf = tarfile.open(fileobj=io.BytesIO(raw))
-    full = json.loads(tf.extractfile("+MANIFEST").read())
-    compact = json.loads(tf.extractfile("+COMPACT_MANIFEST").read())
+    full = json.loads(_extract(tf, "+MANIFEST"))
+    compact = json.loads(_extract(tf, "+COMPACT_MANIFEST"))
     return full, compact, tf
 
 
@@ -489,7 +499,7 @@ def test_end_to_end_classic_build(tmp_path: Path) -> None:
     # dep resolved + PKGVERSION-with-revision from the ports tree
     assert full["deps"] == {"foo": {"origin": "misc/foo", "version": "1.2_3"}}
     # info.xml %%PKGVERSION%% substituted in the staged payload
-    info = tf.extractfile("/usr/local/share/testpkg/info.xml").read().decode()
+    info = _extract(tf, "/usr/local/share/testpkg/info.xml").decode()
     assert info == "<version>1.0_2</version>\n"
 
 

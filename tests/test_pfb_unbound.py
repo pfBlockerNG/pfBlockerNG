@@ -1,22 +1,25 @@
-import builtins
 import random
 import re
 import types
 from collections import defaultdict
 from typing import Any
 
-import pfb_unbound
+# Unbound injects these as module-level globals at runtime; conftest copies them
+# from the unboundmodule stub onto builtins so pfb_unbound (which references them
+# as bare globals) imports cleanly. Bind the same stub objects locally for the
+# tests -- importing them from the stub (rather than builtins) also keeps them
+# resolvable for the static type checkers.
+from unboundmodule import (
+    MODULE_ERROR,
+    MODULE_EVENT_MODDONE,
+    MODULE_EVENT_NEW,
+    MODULE_FINISHED,
+    MODULE_WAIT_MODULE,
+    RCODE_NOERROR,
+    DNSMessage,
+)
 
-# Unbound injects these as module-level globals at runtime; conftest stubs them
-# onto builtins so pfb_unbound can be imported. Bind local names for the tests
-# (and so static analysis sees them defined).
-DNSMessage = builtins.DNSMessage
-MODULE_EVENT_NEW = builtins.MODULE_EVENT_NEW
-MODULE_EVENT_MODDONE = builtins.MODULE_EVENT_MODDONE
-MODULE_FINISHED = builtins.MODULE_FINISHED
-MODULE_WAIT_MODULE = builtins.MODULE_WAIT_MODULE
-MODULE_ERROR = builtins.MODULE_ERROR
-RCODE_NOERROR = builtins.RCODE_NOERROR
+import pfb_unbound
 from pfb_unbound import (
     convert_ipv4,
     convert_ipv6,
