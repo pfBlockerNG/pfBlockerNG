@@ -919,8 +919,11 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
+		// ADR-10 P5: this is a #51 user custom-list DATA edit -- take the zero-downtime
+		// fast path (no restart). It is an allow->block transition (the domain becomes
+		// blocked), so pass it as the newly-blocked delta for the targeted C-cache flush.
 		if ($cl_added || $wl_removed) {
-			pfb_reload_unbound('enabled', FALSE, TRUE);
+			pfb_reload_unbound('enabled', FALSE, TRUE, TRUE, array($domain));
 		}
 
 		$return_page = pfb_filter($_POST['alert_view'], PFB_FILTER_HTML, 'alerts dnsbl_add');
@@ -1089,9 +1092,15 @@ if (isset($_POST) && !empty($_POST)) {
 			// config.user_whitelist so the next build's whiteDB un-blocks this domain.
 			pfb_unbound_python_whitelist('alerts');
 			pfb_unbound_python_sources_whitelist();
-			pfb_reload_unbound('enabled', FALSE);
+			// ADR-10 P5: #51 whitelist add is a block->allow DATA edit -> zero-downtime
+			// fast path (no restart). block->allow is immediate (blocks were never
+			// C-cached since #43), so no newly-blocked delta is passed.
+			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 
-			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache
+			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache.
+			// (Largely redundant post-#43: the block reply was never cached, so the
+			// now-allowed name resolves immediately once decisionDB is cleared by the
+			// swap. Kept for the resolved-CNAME edge and parity with prior behaviour.)
 			$domain_esc	= escapeshellarg($domain);
 			$domain_esc2	= escapeshellarg("www.{$domain}");
 
@@ -1340,7 +1349,10 @@ if (isset($_POST) && !empty($_POST)) {
 			if ($dnsbl_py_changes) {
 				pfb_unbound_python_whitelist('alerts');
 				pfb_unbound_python_sources_whitelist();
-				pfb_reload_unbound('enabled', FALSE);
+				// ADR-10 P5: #51 customlist delete is a DATA edit -> zero-downtime fast
+				// path (no restart). Removing a block is block->allow (immediate, no
+				// C-cache flush needed since blocks are not cached, #43).
+				pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 			}
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -1386,10 +1398,22 @@ if (isset($_POST) && !empty($_POST)) {
 			// Patch the manifest's config.user_unlock from the updated store, then
 			// reload Unbound so the query-time whiteDB picks up the change.
 			pfb_unbound_python_sources_unlock();
-			pfb_reload_unbound('enabled', FALSE);
+
+			// ADR-10 P5: #51 Lock/Unlock is a user custom-list DATA edit -> zero-downtime
+			// fast path (no restart). pfb_dnsbl_unlock_action() collapses the four icons
+			// onto two store modes: 'lock' (lock/reunlock) REMOVES the domain from the
+			// unlock store -> it returns to feed-blocked = allow->block -> targeted C-cache
+			// flush of the now-blocked name; 'unlock' (unlock/relock) ADDS it -> allowed =
+			// block->allow -> immediate, no flush (blocks were never C-cached since #43).
+			// The store toggle (re-lock on Force/Cron) is unchanged -- only the apply
+			// mechanism (swap, not restart) changed.
+			$newly_blocked = ($ua['mode'] === 'lock') ? array($domain) : array();
+			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);
 
 			// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
-			// resolver cache so a previously-cached block is not served.
+			// resolver cache so a previously-cached block is not served. (Largely
+			// redundant post-#43 -- blocks were never cached -- but kept for the
+			// resolved-CNAME edge and parity with prior behaviour.)
 			if ($action == 'unlock') {
 				exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
 
