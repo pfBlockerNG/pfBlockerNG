@@ -1115,18 +1115,23 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
     ``pfblockerng.inc`` loaded — driving the SAME functions the handler calls, so
     the smoke test exercises the real #51 path end-to-end rather than a stand-in.
 
-    ``action`` is ``'unlock'`` (temporarily allow — ADDS to the store) or ``'lock'``
-    (re-block — REMOVES from the store). On return Unbound is ready to probe.
+    ``action`` is one of the four icon labels: ``'unlock'`` / ``'relock'`` (temporarily
+    allow — ADD to the store) or ``'lock'`` / ``'reunlock'`` (re-block — REMOVE). The
+    action -> store-mode mapping is resolved on-box by the SAME production helper the
+    handler uses (``pfb_dnsbl_unlock_action``), so this exercises the real dispatch, not
+    a copy of it. On return Unbound is ready to probe.
     """
-    if action not in ("unlock", "lock"):
-        raise ValueError(f"action must be 'unlock' or 'lock', got {action!r}")
-    # Mirror the handler: read the store, toggle it, regenerate user_unlock, reload.
-    # pfb_global() populates $pfb (paths + config) exactly as the page/CLI bootstrap.
+    if action not in ("unlock", "lock", "relock", "reunlock"):
+        raise ValueError(f"action must be one of unlock/lock/relock/reunlock, got {action!r}")
+    # Mirror the handler exactly: resolve the action -> store-mode via the production
+    # pfb_dnsbl_unlock_action(), read the store, toggle it, regenerate user_unlock,
+    # reload. pfb_global() populates $pfb (paths + config) as the page/CLI bootstrap.
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "pfb_global();\n"
+        f"$ua = pfb_dnsbl_unlock_action({_php_str(action)});\n"
         "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
-        f"pfb_unlock({_php_str(action)}, 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
+        f"pfb_unlock($ua['mode'], 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
         "pfb_unbound_python_sources_unlock();\n"
         "pfb_reload_unbound('enabled', FALSE);\n"
         "echo 'OK';"

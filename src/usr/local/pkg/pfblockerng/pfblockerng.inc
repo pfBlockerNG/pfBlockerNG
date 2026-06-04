@@ -2638,6 +2638,32 @@ function pfb_unbound_python_sources_unlock() {
 }
 
 
+// ADR-06 (#51): map a per-alert DNSBL Lock/Unlock action (the dnsbl_remove POST
+// value) to its temporary-unlock STORE operation + status message. Extracted from
+// the pfblockerng_alerts.php handler so the four-way dispatch is unit-testable (every
+// branch covered, not just the unlock/lock paths the smoke matrix observes). The four
+// icon actions collapse onto two pfb_unlock modes: unlock/relock ADD the domain to
+// the store ('unlock'), lock/reunlock REMOVE it ('lock'). An UNKNOWN action returns an
+// empty mode so the handler does NOTHING -- a crafted POST cannot mutate the store
+// (the old inline `else` treated any non-unlock/relock value as a REMOVE). 'msg'
+// carries a single %s for the domain (sprintf in the handler); empty for an unknown
+// action so the redirect shows no status.
+function pfb_dnsbl_unlock_action($action) {
+	switch ($action) {
+		case 'unlock':
+			return array('mode' => 'unlock', 'msg' => 'The Domain [ %s ] has been temporarily Unlocked from DNSBL!');
+		case 'lock':
+			return array('mode' => 'lock',   'msg' => 'The Domain [ %s ] has been Locked into DNSBL!');
+		case 'relock':
+			return array('mode' => 'unlock', 'msg' => 'The Domain [ %s ] has been temporarily Re-Locked into DNSBL!');
+		case 'reunlock':
+			return array('mode' => 'lock',   'msg' => 'The Domain [ %s ] has been Unlocked from DNSBL!');
+		default:
+			return array('mode' => '', 'msg' => '');
+	}
+}
+
+
 // Unbound python configuration file
 function pfb_unbound_python($mode) {
 	global $pfb;
