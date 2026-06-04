@@ -438,15 +438,18 @@ class _MockFeedServer:
 class _StubDnsServer:
     """A controlled, OBSERVABLE DNS upstream for the guest's Unbound (over SLIRP).
 
-    This is the smoke matrix's upstream: Unbound forwards every non-local query here
-    (``helpers.use_stub_upstream`` points its sole ``forward-zone "."`` at
-    10.0.2.2:<port>), so what reaches this server is EXACTLY what Unbound did not
-    answer locally. That makes blocking VERIFIABLE from the upstream side rather than
-    inferred from a bare SERVFAIL: every query is recorded (:meth:`received`), so a
-    DNSBL-blocked name must NEVER appear here, while a not-blocked name DOES — and
-    resolves to a known sentinel, distinct from every block shape. Nothing leaks to
-    the real internet; the server answers everything itself. Listens UDP+TCP on one
-    ephemeral port.
+    This is the smoke matrix's upstream: pfSense forwards every non-local query to its
+    System DNS server ``10.0.2.2`` (QEMU/libslirp's host alias — see
+    ``helpers.use_system_dns_upstream``), and libslirp NATs guest->10.0.2.2:53 straight
+    to this server on the RUNNER's loopback (``127.0.0.1:53``), port-preserving — the
+    same host-alias path the mock-feed HTTP server already rides, and the runner's own
+    ``/etc/resolv.conf`` is never touched. So what reaches this server is EXACTLY what
+    Unbound did not answer locally. That makes
+    blocking VERIFIABLE from the upstream side rather than inferred from a bare
+    SERVFAIL: every query is recorded (:meth:`received`), so a DNSBL-blocked name must
+    NEVER appear here, while a not-blocked name DOES — and resolves to a known answer,
+    distinct from every block shape. Nothing leaks to the real internet; the server
+    answers everything itself. Listens UDP+TCP on one (configurable) port.
 
     Per-domain answers are explicit and observable. Default (unregistered name): the
     sentinel A/AAAA (``STUB_DNS_A`` / ``STUB_DNS_AAAA``). Overrides:
@@ -467,13 +470,25 @@ class _StubDnsServer:
     :meth:`queries` are the query log.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, port: int | None = None) -> None:
+        # Bind address/port are env-overridable so the smoke workflow can put the session
+        # mock on the runner's loopback :53 — the System-DNS host-alias path: pfSense
+        # forwards to 10.0.2.2 (libslirp's host alias), which NATs guest->10.0.2.2:53 to
+        # the runner's 127.0.0.1:53 (this mock), port-preserving. The runner's own
+        # /etc/resolv.conf is NEVER touched. ``net.ipv4.ip_unprivileged_port_start`` is
+        # lowered by the workflow so this non-root process can bind :53; binding
+        # 127.0.0.1 (not 0.0.0.0) avoids clashing with systemd-resolved on 127.0.0.53:53.
+        # ``port`` overrides the env (the pure unit tests pass ``port=0`` to force an
+        # ephemeral port, so they never collide with the session mock holding :53).
+        addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or "127.0.0.1"
+        if port is None:
+            port = int(os.environ.get("SMOKE_STUB_DNS_PORT") or "0")
         self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._udp.bind(("0.0.0.0", 0))
+        self._udp.bind((addr, port))
         self._port = self._udp.getsockname()[1]
         self._tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._tcp.bind(("0.0.0.0", self._port))
+        self._tcp.bind((addr, self._port))
         self._tcp.listen(16)
         self._stop = threading.Event()
         self._lock = threading.Lock()

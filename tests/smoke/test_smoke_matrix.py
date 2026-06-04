@@ -79,12 +79,12 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     resolves LOCALLY — a blocked name is intercepted by the python module before
     the forwarder, and a control/whitelist name answers from its injected host
     override — so the probe never needs the real internet. A not-blocked,
-    no-control name resolves via the runner-side stub (``use_stub_upstream``), the
-    sole controlled upstream — a known sentinel, AND recorded, so "was it blocked?"
-    is read off the upstream, not inferred from a SERVFAIL. deploy() needs no
-    egress for dependencies either — the pre-baked image ships pfBlockerNG's
-    RUN_DEPENDS, so ``pkg add`` resolves them from the local pkg db offline.
-    unblock on teardown as a safety net.
+    no-control name resolves via the runner-side mock (``use_system_dns_upstream``:
+    pfSense forwards to the SLIRP host alias 10.0.2.2, which libslirp NATs to the mock) — a known
+    answer, AND recorded, so "was it blocked?" is read off the upstream, not inferred
+    from a SERVFAIL. deploy() needs no egress for dependencies either — the pre-baked
+    image ships pfBlockerNG's RUN_DEPENDS, so ``pkg add`` resolves them from the local
+    pkg db offline. unblock on teardown as a safety net.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
@@ -99,10 +99,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     # lo0 sinkhole VIP once for the matrix. dns_probe queries on-box (drill
     # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
     h.ensure_dnsbl_vip(smoke_vm)
-    # Point Unbound's sole upstream at the controlled stub BEFORE any per-test
-    # unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the stub
-    # forward-zone is part of the baseline and the DNSBL reload still adds only python.
-    h.use_stub_upstream(smoke_vm)
+    # Point pfSense at the controlled mock via its System-DNS path BEFORE any per-test
+    # unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the forwarding
+    # config is part of the baseline and the DNSBL reload still adds only python.
+    h.use_system_dns_upstream(smoke_vm)
     h.snap_state(smoke_vm, "vip")
     try:
         yield smoke_vm

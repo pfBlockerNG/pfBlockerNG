@@ -254,11 +254,29 @@ jobs:
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
           SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
           SMOKE_CONTROL_IP: ${{ secrets.SMOKE_CONTROL_IP || vars.SMOKE_CONTROL_IP }}
+          # System-DNS upstream wiring: the mock binds the runner loopback :53, and
+          # pfSense forwards to the SLIRP host alias 10.0.2.2 which libslirp NATs
+          # (port-preserving) straight to that mock — no /etc/resolv.conf involvement.
+          SMOKE_STUB_DNS_ADDR: "127.0.0.1"
+          SMOKE_STUB_DNS_PORT: "53"
         run: |
           set -eu
+          # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
+          # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias
+          # path the mock-feed HTTP server already rides. So the ONLY runner-side prep is
+          # lowering the privileged-port floor so the non-root mock (in pytest) can bind
+          # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
+          # throughout; nothing to restore, and immune to how the runner does resolution).
+          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
           # The smoke package is --ignore'd by the default addopts; re-enable it
           # with --override-ini and select the marker (see tests/smoke/conftest).
-          python3 -m pytest tests/smoke -m smoke --override-ini="addopts=" --timeout=300 --timeout-method=signal -v
+          # --timeout=30 + timeout_func_only=true: 30s applies to the TEST BODY only
+          # (inject->reload->probe; slowest observed ~6s), NOT the slow module fixtures
+          # (deploy ~1-2 min) — so a per-case stall fails fast (vs the old 300s -> job-
+          # timeout wipe) while leaving comfortable margin over the real per-case time.
+          python3 -m pytest tests/smoke -m smoke \
+            --override-ini="addopts=" --override-ini="timeout_func_only=true" \
+            --timeout=30 --timeout-method=signal -v
 
       - name: Upload smoke diagnostics
         if: always()
