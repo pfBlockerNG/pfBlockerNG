@@ -3836,8 +3836,13 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     qstate.ext_state[id] = MODULE_FINISHED
                     return True
 
-                # TODO: Wait for Unbound code changes to allow for this functionality,
-                # using local-zone/local-data entries for CNAMES for now
+                # TODO: Unbound will not chase a CNAME we hand it (module-injected here,
+                # or via local-zone/local-data) to its target's A/AAAA -- it returns the
+                # bare CNAME. So we restart the module chain (module_restart_next, below)
+                # to get the target resolved, and the config side also wires SafeSearch
+                # CNAMEs as local-data. Revisit if Unbound gains native chasing of a
+                # supplied CNAME. Upstream defect (open, unfixed as of Unbound 1.25.x):
+                # https://github.com/NLnetLabs/unbound/issues/976
                 elif isSafeSearch["A"] == "cname":
                     if isSafeSearch["AAAA"] is not None and isSafeSearch["AAAA"] != "":
                         if q_type == RR_TYPE_A:
