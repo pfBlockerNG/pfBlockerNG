@@ -2591,17 +2591,15 @@ $group->add(new Form_Select(
 	pfb_get_vip_options(AF_INET6)
 ))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
 
-// One concise explanation under the side-by-side VIP fields, covering both modes
-// (matches the surrounding DNSBL help voice). The verbose marker/CARP/persistence
-// detail is intentionally dropped — it belongs in the docs, not the form.
+// Help under the side-by-side VIP fields: the original intro, a line break at the
+// SENTENCE boundary (never mid-sentence), then one concise line covering both
+// modes. "VIP"/"Virtual IP" used consistently (no "IP-Alias VIP" jargon); the
+// address/lifecycle detail belongs in the docs.
 $pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
 	. 'It should be in an isolated range not already used on the network.<br />'
-	. 'VIPs <strong>must be configured first</strong> at '
-	. '<a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, unless '
-	. '<strong>Create VIPs automatically</strong> is enabled — pfBlockerNG then creates and manages an '
-	. 'IP-Alias VIP at a free <strong>.53</strong> address (<strong>10.10.10.53</strong> / '
-	. '<strong>fd00::53</strong>), added when DNSBL is enabled and removed when disabled '
-	. '(only its own auto-created VIPs are ever touched).';
+	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
+	. 'manually — create it first at '
+	. '<a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
 if ($pfb_auto_exhausted) {
 	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
 		. '<span class="text-warning">No free auto-create address is available — free one in the '
