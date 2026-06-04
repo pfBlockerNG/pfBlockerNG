@@ -377,8 +377,14 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
     spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
-        blocked = h.dns_probe(deployed_vm, domain, "A")
-        assert h.is_vip(blocked), f"{domain} expected VIP block once listed, got {blocked}"
+        # Listing the name is the feed/swap allow->block direction: the module already
+        # mounted (a prior case), so first-enable applies via the no-restart swap, which
+        # by design does NOT flush the C-cache for a feed/cron delta (TTL-bounded,
+        # RESULTS/05 SS3). Step (a) above pre-resolved the name (stub TTL 60s), so that
+        # cached real answer would serve past the swap; clear that one name (mirroring a
+        # #51 Lock's targeted delta-flush) then poll until the swapped VIP block lands.
+        h.flush_unbound_name(deployed_vm, domain)
+        blocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
 
         # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
@@ -533,6 +539,10 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFee
         # local feed). data_path=True -> the no-restart fast path; the helper waits on the
         # swap-applied log line and RAISES if the restart fallback was taken instead.
         h.write_local_feed(deployed_vm, feed_name, f"{other}\n{domain}\n")
+        # Invalidate the per-feed cache so the full update RE-READS the edited local feed
+        # (pfBlockerNG reuses the cached '.txt' otherwise -> the edit never reaches the
+        # manifest and no swap fires). This is the config-clean data update the swap targets.
+        h.force_dnsbl_refetch(deployed_vm, spec.header)
         h.reload(deployed_vm, "update", data_path=True)
 
         # Clear the target's TTL-bounded prior resolved answer (feed/cron allow->block is

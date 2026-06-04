@@ -9673,7 +9673,13 @@ function sync_package_pfblockerng($cron='') {
 			if (!$pfb['dnsbl_tld']) {
 				unlink_if_exists($pfb['unbound_py_data']);
 				unlink_if_exists($pfb['unbound_py_zone']);
-				unlink_if_exists($pfb['unbound_py_count']);
+				// ADR-10: keep pfb_py_count across a feed/cron rebuild. The zero-downtime
+				// fast path's RAM gate (pfb_unbound_py_swap_fits_ram) reads this LIVE count
+				// to project the build's ~2x transient; removing it mid-update fail-closed the
+				// gate to a RESTART on EVERY feed/cron update, so the swap could never engage
+				// for the most common case. The Python build overwrites it with the new count
+				// on swap, so the stale value lives only for the brief publish->swap window.
+				// The clear-all-feeds path (DNSBL going empty -> restart) still clears it.
 				rename("{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data']);
 			}
 
