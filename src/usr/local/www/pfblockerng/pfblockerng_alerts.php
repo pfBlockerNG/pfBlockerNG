@@ -847,23 +847,50 @@ if (isset($_POST) && !empty($_POST)) {
 		if (isset($_POST['descr']) && !empty($_POST['descr'])) {
 			$descr = pfb_filter($_POST['descr'], PFB_FILTER_HTML, 'alerts dnsbl_add');
 		}
-		$group = preg_replace('/DNSBL_/', '', $list, 1) . '_custom';
+		// Issue #37: adding a domain to a Custom_List is the user's "block this"
+		// intent. If the same domain sits in the DNSBL Whitelist, the two user stores
+		// would silently disagree -- the band-6 whitelist would keep it resolving
+		// despite the new band-5 Custom_List block. Newest action wins: strip it from
+		// the whitelist so the block takes effect. (The dead file_put_contents into
+		// pfb_py_data/pfb_py_zone was removed: under ADR-06 the resolver builds the
+		// DNSBL structures from the manifest raws, never those legacy CSVs -- see
+		// pfb_unbound.py's 'if not dnsbl_built' guard.)
+		$wl_base = $domain;
+		if (substr($wl_base, 0, 4) == 'www.') {
+			$wl_base = substr($wl_base, 4);
+		}
+		$wl_variants = array($wl_base, "www.{$wl_base}");
+		if ($_POST['dnsbl_wildcard'] == 'true') {
+			$wl_variants[] = ".{$wl_base}";
+		}
+		$wl_removed = FALSE;
+		foreach ($wl_variants as $variant) {
+			if (isset($clists['dnsblwhitelist']['data'][$variant])) {
+				unset($clists['dnsblwhitelist']['data'][$variant]);
+				$wl_removed = TRUE;
+			}
+		}
+		if ($wl_removed) {
+			$data = '';
+			foreach ($clists['dnsblwhitelist']['data'] as $line) {
+				// Drop CNAME entries that had been whitelisted for this domain
+				if (strpos($line, "({$wl_base})") === FALSE) {
+					$data .= "{$line}";
+				}
+			}
+			$clists['dnsblwhitelist']['base64'] = base64_encode($data);
+			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression', $clists['dnsblwhitelist']['base64']);
+			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", false);
 
-		// Collect Global DNSBL Logging type, or Group logging setting
-		$dnsbl_add_log_type = $clists['dnsbl'][$list]['log'];
-		if (!in_array($dnsbl_add_log_type, array('0', '1', '2'))) {
-			$dnsbl_add_log_type = '1';
+			// Refresh the query-time whiteDB so the domain is no longer allowed.
+			pfb_unbound_python_whitelist('alerts');
+			pfb_unbound_python_sources_whitelist();
 		}
 	
-		if ($_POST['dnsbl_wildcard'] == 'true') {
-			@file_put_contents($pfb['unbound_py_zone'], ",{$domain},,{$dnsbl_add_log_type},{$group},{$list}\n", FILE_APPEND);
-		} else {
-			@file_put_contents($pfb['unbound_py_data'], ",{$domain},,{$dnsbl_add_log_type},{$group},{$list}\n", FILE_APPEND);
-		}
-
 		$savemsg = gettext(" Added domain [ {$domain} ] to the DNSBL Group [ $list ] customlist. You may need to flush your OS/Browser DNS Cache!");
 
 		// Save changes
+		$cl_added = FALSE;
 		if (!isset($clists['dnsbl'][$list]['data'][$domain])) {
 			$data = '';
 			if (isset($clists['dnsbl'][$list]) && is_array($clists['dnsbl'][$list]['data'])) {
@@ -880,10 +907,20 @@ if (isset($_POST) && !empty($_POST)) {
 			$clists['dnsbl'][$list]['base64'] = base64_encode($data);
 			config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$list]['base64_idx']}/custom", $clists['dnsbl'][$list]['base64']);
 			write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Group [ {$list} ] customlist", false);
-			pfb_reload_unbound('enabled', FALSE, TRUE);
+			$cl_added = TRUE;
 		}
 		else {
 			$savemsg = gettext("Domain [ {$domain} ] already exists in DNSBL Group [ $list ] customlist");
+		}
+
+		// Issue #37: note the reverse-direction reconciliation in the UI message.
+		if ($wl_removed) {
+			$savemsg .= gettext(' Removed [ ') . "{$wl_base}" . gettext(' ] from the DNSBL Whitelist.');
+		}
+
+		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
+		if ($cl_added || $wl_removed) {
+			pfb_reload_unbound('enabled', FALSE, TRUE);
 		}
 
 		$return_page = pfb_filter($_POST['alert_view'], PFB_FILTER_HTML, 'alerts dnsbl_add');
@@ -939,12 +976,10 @@ if (isset($_POST) && !empty($_POST)) {
 		// Whitelist Domain/CNAME(s)
 		if (!$dnsbl_exclude) {
 
-			// Collect Domains/Sub-Domains to Whitelist (used by grep -vF -f cmd to remove Domain/Sub-Domains)
-			if ($wildcard) {
-				$dnsbl_remove = ".{$domain},,\n,{$domain},,\n";
-			} else {
-				$dnsbl_remove = ",{$domain},,\n,www.{$domain},,\n";
-			}
+			// Issue #37: collect the canonical domains being whitelisted so the same
+			// set can be stripped from any user DNSBL Group Custom_List below --
+			// reconcile the two user stores instead of only out-ranking at query time.
+			$wl_domains = array($domain);
 
 			if (!empty($descr)) {
 				if ($wildcard) {
@@ -977,12 +1012,10 @@ if (isset($_POST) && !empty($_POST)) {
 
 					$removed .= "{$cname} | ";
 
-					$dnsbl_remove .= ",{$cname},,\n";
+					$wl_domains[] = $cname;
 
 					if ($wildcard) {
 						$whitelist .= '.';
-
-						$dnsbl_remove .= ".{$cname},,\n";
 					}
 					$whitelist .= "{$cname} # CNAME for ({$domain})";
 
@@ -1011,29 +1044,52 @@ if (isset($_POST) && !empty($_POST)) {
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", false);
 			}
 
-			// Create tempfile for DNSBL Whitelisting
-			$tmp = tempnam('/tmp', 'dnsbl_alert_');
-
-			// Save DNSBL Whitelist file of Domain/CNAME(s)
-			@file_put_contents("{$tmp}.adup", $dnsbl_remove, LOCK_EX);
-
-			if (file_exists("{$tmp}.adup") && filesize("{$tmp}.adup") > 0) {
-				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_data']} > "
-					. escapeshellarg("{$tmp}.tmp") . "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_data']}");
-				exec("{$pfb['ggrep']} -vF -f " . escapeshellarg("{$tmp}.adup") . " {$pfb['unbound_py_zone']} > " . escapeshellarg("{$tmp}.tmp")
-					. "; mv -f " . escapeshellarg("{$tmp}.tmp") . " {$pfb['unbound_py_zone']}");
-
-				// ADR-06: the user whitelist is now applied at QUERY TIME via the
-				// Python whiteDB. Refresh the legacy whitelist input AND the manifest's
-				// config.user_whitelist so the next build's whiteDB un-blocks this domain.
-				pfb_unbound_python_whitelist('alerts');
-				pfb_unbound_python_sources_whitelist();
-				pfb_reload_unbound('enabled', FALSE);
+			// Issue #37: reconcile the two user stores. Whitelisting a domain is the
+			// user's "stop blocking this" intent, so also strip it (its www. and, when
+			// wildcarded, leading-dot forms) from every user DNSBL Group Custom_List --
+			// the stores then agree at rest, not merely via query-time band precedence
+			// (whitelist band 6 > Custom_List band 5). The dead 'grep -vF' of
+			// pfb_py_data/pfb_py_zone was removed: under ADR-06 the resolver builds the
+			// DNSBL structures from the manifest raws, never those legacy CSVs.
+			$cl_changed = array();
+			if (isset($clists['dnsbl']) && is_array($clists['dnsbl'])) {
+				foreach ($wl_domains as $wl_dom) {
+					$variants = array($wl_dom, "www.{$wl_dom}");
+					if ($wildcard) {
+						$variants[] = ".{$wl_dom}";
+					}
+					foreach ($clists['dnsbl'] as $lname => $linfo) {
+						if (!is_array($linfo) || !isset($linfo['data']) || !is_array($linfo['data'])) {
+							continue;	// skip the 'options' helper key
+						}
+						foreach ($variants as $variant) {
+							if (isset($clists['dnsbl'][$lname]['data'][$variant])) {
+								unset($clists['dnsbl'][$lname]['data'][$variant]);
+								$cl_changed[$lname] = TRUE;
+							}
+						}
+					}
+				}
+			}
+			foreach (array_keys($cl_changed) as $lname) {
+				$data = '';
+				foreach ($clists['dnsbl'][$lname]['data'] as $line) {
+					$data .= "{$line}";
+				}
+				$clists['dnsbl'][$lname]['base64'] = base64_encode($data);
+				config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$lname]['base64_idx']}/custom", $clists['dnsbl'][$lname]['base64']);
+				write_config("pfBlockerNG: Removed [ {$domain} ] from DNSBL Group [ {$lname} ] customlist (whitelisted)", false);
+			}
+			if (!empty($cl_changed)) {
+				$savemsg .= gettext(' Also removed from DNSBL Group customlist(s): ') . implode(', ', array_keys($cl_changed)) . '.';
 			}
 
-			// Remove all Whitelisted Domain/CNAME(s) from Unbound using unbound-control
-
-			unlink_if_exists("{$tmp}*");
+			// ADR-06: the user whitelist is applied at QUERY TIME via the Python
+			// whiteDB. Refresh the whitelist input AND the manifest's
+			// config.user_whitelist so the next build's whiteDB un-blocks this domain.
+			pfb_unbound_python_whitelist('alerts');
+			pfb_unbound_python_sources_whitelist();
+			pfb_reload_unbound('enabled', FALSE);
 
 			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache
 			$domain_esc	= escapeshellarg($domain);
@@ -1143,7 +1199,9 @@ if (isset($_POST) && !empty($_POST)) {
 						unset($clists['dnsblwhitelist']['data']['www' . $entry]);
 					}
 
-					@file_put_contents($pfb['unbound_py_data'], ",{$entry},,1,,\n", FILE_APPEND);
+					// ADR-06: re-blocking is driven by the whiteDB refresh below
+					// (gated on $dnsbl_py_changes); the legacy pfb_py_data write was
+					// dead (the resolver builds from the manifest, not that CSV).
 					$dnsbl_py_changes = TRUE;
 				}
 			case 'delete_domainwildcard':
@@ -1161,7 +1219,9 @@ if (isset($_POST) && !empty($_POST)) {
 							unset($clists['dnsblwhitelist']['data'][$entry]);
 						}
 
-						@file_put_contents($pfb['unbound_py_zone'], ",{$entry},,1,,\n", FILE_APPEND);
+						// ADR-06: re-blocking is driven by the whiteDB refresh below
+						// (gated on $dnsbl_py_changes); the legacy pfb_py_zone write
+						// was dead (the resolver builds from the manifest, not that CSV).
 						$dnsbl_py_changes = TRUE;
 					}
 				}
