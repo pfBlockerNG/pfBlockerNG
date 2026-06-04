@@ -15,6 +15,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Least-privilege GITHUB_TOKEN: every job only reads the repo (checkout, tests,
+# lint) — upload-artifact uses the Actions runtime token, not GITHUB_TOKEN — so
+# read-only is sufficient. Matches the other workflows (build-*/smoke).
+permissions:
+  contents: read
+
 jobs:
   test:
     name: pytest / Python ${{ matrix.python-version }}
