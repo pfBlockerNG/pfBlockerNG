@@ -30,7 +30,8 @@ pytestmark = pytest.mark.smoke
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
-    """Deploy the branch .pkg once for the helper self-tests; wire the stub upstream."""
+    """Deploy the branch .pkg once for the helper self-tests; configure the System-DNS
+    upstream (``use_system_dns_upstream`` -> the mock via the 10.0.2.2 host alias)."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)

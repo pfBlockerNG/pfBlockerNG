@@ -754,9 +754,6 @@ def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float =
     return ip in result.stdout
 
 
-SLIRP_HOST_ALIAS = "10.0.2.2"  # QEMU/libslirp's host alias — NATs guest->10.0.2.2:P to the runner's 127.0.0.1:P
-
-
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
@@ -786,7 +783,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """
     snippet = (
         "$s = config_get_path('system', array());\n"
-        f"$s['dnsserver'] = array({_php_str(SLIRP_HOST_ALIAS)});\n"
+        f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
         # Disable 'Allow DNS server list to be overridden by DHCP' so only 10.0.2.2 is used.
         "unset($s['dnsallowoverride']);\n"
         "config_set_path('system', $s);\n"
