@@ -1,0 +1,216 @@
+ADR-14 — Phase 3 RESULTS: Tier-B functional WebUI flows (effective-state oracle)
+================================================================================
+
+Status: Implemented (pending smoke test). The Tier-B functional flows + the
+``post()`` form-driver are landed and lint/type/collection-clean LOCALLY; the
+form-scraper's pure logic is verified off-box. The LIVE POST-then-read-config
+flows run only inside CI on the ADR-04 smoke VM (this dev machine cannot
+boot/reach it). Every field name / config node / save-handler fact below is
+CONFIRMED from the page source on disk; the live POST -> config.xml round-trip
+is CI-PENDING (the ui_e2e flows are the confirmation; they execute in CI).
+
+Builds on Phase 1/2: reuses the authenticated ``webui`` fixture (CSRF login +
+get()), ``looks_like_login_page``, and ``helpers.config_get`` (reads config.xml
+on-box over SSH). NO second login / VM boot. NO src/ change.
+
+--------------------------------------------------------------------------------
+1) THE FUNCTIONAL ORACLE (ADR §1 fact 3 — EFFECTIVE state, NEVER the HTTP body)
+--------------------------------------------------------------------------------
+
+Each Tier-B flow drives a real webConfigurator form over CSRF POST and asserts
+the result by RE-READING the box's effective state: the config.xml node the save
+handler writes, via ``helpers.config_get(vm, path)`` (a pfSsh.php
+``config_get_path`` read over SSH). The POST response body is NEVER the oracle —
+a 200 / clean post-redirect page does not prove the save took; config.xml does.
+
+Two CLAUDE.md rules are load-bearing here and BOTH are honoured per flow:
+
+  * TRANSITION (before-state): the flow reads + asserts the ORIGINAL config value
+    FIRST, flips it via the form and asserts the NEW value, then flips it BACK via
+    the form and asserts the ORIGINAL again. The green therefore proves each POST
+    *caused* its change, not that the expected end-state happened to hold already.
+  * BRANCH coverage: because the restore is a real form POST in the opposite
+    direction (asserted, not a silent teardown), BOTH branches of the on/off
+    toggle are exercised (off->on AND on->off), regardless of the box's starting
+    value (a flow starting ON flips to OFF then back; starting OFF flips to ON then
+    back — ``flipped`` is always the opposite of ``original``).
+
+State is left CLEAN for Tier A / sibling flows on the session-scoped VM: the
+asserted restore returns each node to its original value, and a ``finally`` block
+force-restores if an assertion aborted mid-flip (so a failure can't poison the
+next flow).
+
+--------------------------------------------------------------------------------
+2) THE THREE FLOWS — page, POST field, config node, effective-state assertion
+--------------------------------------------------------------------------------
+
+tests/smoke/ui/test_functional.py FLOWS (parametrized, marker ``ui_e2e``). Each
+is a pure-persistence on/off flag (``PFB_FILTER_ON_OFF`` checkbox: stored 'on'
+when set, '' when clear) whose save handler has NO heavy reload and NO egress
+side effect — so the flow is fast, observable, reversible, and hermetic under the
+egress block.
+
+  flow name                 page                            POST field        config.xml node (config_get path)
+  ------------------------- ------------------------------- ----------------- --------------------------------------------------------
+  general_keep_settings     pfblockerng_general.php         pfb_keep          installedpackages/pfblockerng/config/0/pfb_keep
+  ip_global_logging         pfblockerng_ip.php              enable_log        installedpackages/pfblockerngipsettings/config/0/enable_log
+  dnsbl_floating_pass_rule  pfblockerng_dnsbl.php           pfb_dnsbl_rule    installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_rule
+
+Per-flow detail (each verified against the on-disk save handler):
+
+  general / pfb_keep ("Keep Settings"):
+    - save gate: `if (isset($_POST['save']))`; on success
+      `config_set_path('installedpackages/pfblockerng/config/0', $gconfig)` +
+      `write_config(...)` (general.php:151-152), THEN
+      `sync_package_pfblockerng()` (a full config-rebuild pass) + a redirect.
+    - Effective assertion: config node pfb_keep == 'on' (flipped) / '' (restored).
+    - WHY this field: enable_cb gates the WHOLE package (DNSBL/IP paths key on it),
+      so toggling it has runtime side effects and risks the rest of the harness;
+      pfb_keep is pure install/upgrade-retention persistence — safe to toggle.
+
+  ip / enable_log ("Enable Global Logging"):
+    - save: `config_set_path('installedpackages/pfblockerngipsettings/config/0', ...)`
+      + write_config (ip.php:205-206) + redirect. NO sync/reload.
+    - Effective assertion: config node enable_log == 'on' / ''.
+    - QUIRK avoided: the IP save validates ip_placeholder (is_ipaddrv4 +
+      where_is_ipaddr_configured) and maxmind_locale, and fires a MaxMind GeoIP
+      conversion (mwexec_bg pfblockerng.php ugc — an EGRESS download) ONLY on a
+      locale CHANGE. The flow re-posts the page's OWN (unchanged) locale +
+      placeholder via the scraper, so neither the validation nor the MaxMind exec
+      trips — the toggle stays hermetic.
+
+  dnsbl / pfb_dnsbl_rule ("Create Floating Pass rule"):
+    - save: `config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', ...)`
+      + write_config (dnsbl.php:613-614) + redirect. NO reload (the DNSBL settings
+      save only persists; the apply is a separate Force Reload).
+    - Effective assertion: config node pfb_dnsbl_rule == 'on' / ''.
+    - QUIRK / PRECONDITION: the DNSBL save ALWAYS runs `pfb_validate_vips` in
+      manual mode (dnsbl.php:490) and `is_port` on the lighttpd ports (405-409).
+      Without a valid sinkhole VIP + ports the save fails with an input error and
+      config.xml is NEVER written — the flow would false-fail. The module-scoped
+      ``dnsbl_vip_ready`` fixture calls ``helpers.ensure_dnsbl_vip(vm)`` first,
+      which injects the lo0 IP-Alias VIP + default ports exactly as the matrix does
+      (default ``pfb_dnsvip_auto`` is OFF, so the manual VIP is required). The
+      scraper re-posts the page's current dnsbl_interface / pfb_dnsvip4, so VIP
+      validation passes.
+
+None of the three flows changes a setting that drives runtime in its OWN save
+path (the DNSBL/IP runtime applies are separate Force Reloads), so the oracle is
+config.xml alone — no pfctl/unbound assertion is needed or made here. Where a
+future Tier-B flow DOES drive runtime (e.g. a setting that the save handler
+reloads), reuse the smoke suite's effective-state probes — pfctl_table_members /
+rule_references / unbound_access_control / dns_probe + wait_unbound_ready — and
+poll config.xml (never a fixed sleep) for the write to land. (The three chosen
+flows are synchronous: requests blocks until the post-redirect, by which point
+write_config has already run, so config.xml holds the new value on return.)
+
+--------------------------------------------------------------------------------
+3) THE CSRF-PER-POST PATTERN (RESULTS/01: token injected per render)
+--------------------------------------------------------------------------------
+
+New ``WebUI.post(path, overrides, *, submit=('save','save'), **kwargs)`` in
+tests/smoke/ui/webui.py does the full browser-faithful round-trip in ONE call:
+
+  1. GET ``path`` on the logged-in session (re-fetch the form page).
+  2. Re-scrape its current submittable fields AND the freshly-injected
+     ``__csrf_magic`` token from THAT render (``scrape_form_fields``). The
+     csrf-magic output filter rewrites the token per render, so it is re-extracted
+     every POST, never cached (RESULTS/01).
+  3. Apply ``overrides`` (the single field being changed) and add the submit
+     button pair (pfBlockerNG saves gate on ``isset($_POST['save'])``).
+  4. POST back to the SAME ``path``.
+
+scrape_form_fields(html) reconstructs the page's CURRENT field set so the POST
+mirrors a real browser submit — every field NOT being changed is re-sent at its
+present value, so the save handler's field-omission ``?:`` defaults can't silently
+reset an untouched setting (this is what keeps the box clean). It handles:
+  * <input> text/hidden/etc -> name=value; checkbox/radio -> ONLY when `checked`
+    (an unchecked box sends nothing, like a browser — so OFF is absent; toggling
+    on is `overrides={field: 'on'}`, toggling off overrides to '' so the currently-
+    checked box is sent as a non-'on' value -> PFB_FILTER_ON_OFF stores '').
+  * <select> -> the `selected` option value (or the first option — browser default).
+  * <textarea> -> inner text (HTML-unescaped).
+  * `disabled` controls SKIPPED (a disabled control isn't submitted — e.g. the
+    ADR-13 auto-VIP dropdowns drop out when auto is on).
+  * submit/button/image/reset/file inputs NOT harvested (the caller adds the one
+    clicked save button), nameless controls skipped.
+
+VERIFIED OFF-BOX (no VM): scrape_form_fields was run against representative
+pfSense Bootstrap form HTML — checked vs unchecked checkbox, bare `checked`,
+selected vs first-option <select>, disabled input AND disabled select skipped,
+textarea &amp; unescape, submit not harvested, __csrf_magic harvested. All correct.
+
+NOTE/RISK for the FIRST CI run: scrape_form_fields scans the WHOLE page, not a
+single <form>. The three settings pages have one dominant settings form; any stray
+field from another form (e.g. a header search box) would be added as an extra POST
+key, which the save handler ignores (unknown keys are not read). If a page turns
+out to render a second form whose field name COLLIDES with a settings field,
+scope the scrape to the settings <form> block — record the offending field here
+before changing it.
+
+--------------------------------------------------------------------------------
+4) DEFAULT SUITE — byte-identical (verified locally)
+--------------------------------------------------------------------------------
+- `python -m pytest` => 1019 passed (UNCHANGED vs baseline 1019).
+- `python -m pytest --collect-only` => 1019 collected (== baseline).
+- All new code lives under tests/smoke/ui/, which pyproject's
+  addopts="-v --ignore=tests/smoke" excludes from default collection — so the
+  default count is BYTE-IDENTICAL. The ui_e2e flows collect only under the smoke
+  override: `pytest tests/smoke/ui/test_functional.py -m ui_e2e
+  --override-ini="addopts="` => 3 collected.
+- Marker ``ui_e2e`` was already registered in pyproject (Phase 1), so no
+  unknown-marker warning. Tier B is OFF the default collection AND the PR gate
+  (daily/on-demand) by virtue of the --ignore + the marker.
+
+--------------------------------------------------------------------------------
+5) GATES (local)
+--------------------------------------------------------------------------------
+- python -m pytest                 => 1019 passed (== baseline).        [VERIFIED]
+- python -m pytest --collect-only  => 1019 collected.                   [VERIFIED]
+- ui_e2e collection (smoke override) => 3 flows collected.              [VERIFIED]
+- ruff check .                     => All checks passed!                [VERIFIED]
+- ruff format --check .            => 46 files already formatted.       [VERIFIED]
+- mypy (new/changed files)         => Success: no issues found.         [VERIFIED, informational]
+- scrape_form_fields off-box proof => all field-shape assertions pass.  [VERIFIED, no VM]
+- NO src/ change (git diff origin/devel..HEAD --name-only -- src/ empty;
+  git status --porcelain src/ empty).                                   [VERIFIED]
+
+--------------------------------------------------------------------------------
+6) FILES
+--------------------------------------------------------------------------------
+- tests/smoke/ui/webui.py            — ADD: scrape_form_fields() + the _attrs/
+  _has_flag helpers + WebUI.post() (the GET-form -> re-extract-CSRF -> override ->
+  POST driver). Renamed the param of looks_like_login_page/extract_csrf_token off
+  `html` only where needed; test-helper code (tests/smoke/), NOT src/.
+- tests/smoke/ui/test_functional.py  — NEW: the ToggleFlow dataclass, FLOWS table
+  (3 flows), the dnsbl_vip_ready fixture (ensure_dnsbl_vip precondition), and the
+  parametrized transition test (before -> flip -> after -> restore, config.xml
+  oracle). marker ui_e2e.
+No src/ change; default pytest unchanged at 1019.
+
+--------------------------------------------------------------------------------
+7) CI-PENDING / NOTES for later phases
+--------------------------------------------------------------------------------
+- LIVE-CI PENDING: the actual POST -> config.xml round-trip per flow runs only on
+  the ADR-04 VM in CI. Keep Status at "Implemented (pending smoke test)" until that
+  green lands. Phase 5 must export SMOKE_ADMIN_PASSWORD (+ optional
+  SMOKE_ADMIN_USER) to the UI workflow's pytest env (RESULTS/01 §1) so the webui
+  fixture authenticates instead of skipping.
+- The General save's sync_package_pfblockerng() pass can run long; the post()
+  timeout for that flow is 300s (per-flow `post_timeout`), and pytest-timeout caps
+  the test, so a wedged save fails fast rather than hanging the job.
+- Browser tier (Phase 4) reuses the SAME session via webui.session_cookie()
+  (PHPSESSID) injected into Playwright — and can reuse post()/scrape_form_fields
+  if it needs a non-JS form submit. Do NOT add browser code or workflows here.
+
+--------------------------------------------------------------------------------
+8) GO-AHEAD FOR PHASE 4
+--------------------------------------------------------------------------------
+Proceed. Tier B (functional, HTTP-POST) is in place: a small, robust set of CSRF-
+POST flows whose oracle is the box's effective config.xml — independent of any
+browser tooling — each a true before->after->restore transition that leaves the
+box clean, with the per-POST CSRF re-extraction + browser-faithful form re-post
+factored into WebUI.post()/scrape_form_fields() for Phase 4 to reuse. Phase 4
+(browser/Playwright) injects the Phase-1 session cookie and drives the JS-only
+interactions (the per-row controls, dynamic show/hide, client-side validation)
+that an HTTP POST cannot exercise.

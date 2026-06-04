@@ -41,6 +41,7 @@ suite defers ``dnspython`` -- so importing this module during default collection
 
 from __future__ import annotations
 
+import html
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -95,9 +96,126 @@ def extract_csrf_token(html: str) -> str:
     return match.group(1)
 
 
-def looks_like_login_page(html: str) -> bool:
-    """True iff ``html`` shows the webConfigurator login form (logged-out)."""
-    return any(marker in html for marker in LOGIN_MARKERS)
+def looks_like_login_page(page_html: str) -> bool:
+    """True iff ``page_html`` shows the webConfigurator login form (logged-out)."""
+    return any(marker in page_html for marker in LOGIN_MARKERS)
+
+
+# --------------------------------------------------------------------------- #
+# Form scraping — reconstruct a page's CURRENT field values from its rendered
+# HTML so a functional POST mirrors a browser submit: every field is sent at its
+# present value and only the target field is overridden. Re-posting the page's
+# own state is what keeps the box clean (no field is silently reset to a `?:`
+# default by the save handler because an input was omitted). The csrf-magic
+# output filter rewrites the form on each render, so the token AND the field set
+# must both be re-scraped per POST (CSRF rotates per session; see RESULTS/01).
+# --------------------------------------------------------------------------- #
+
+# A self-closing/void <input ...>; attributes are pulled out by _attrs().
+_INPUT_RE = re.compile(r"<input\b([^>]*)>", re.IGNORECASE)
+# A <select ...>...</select> block (its options parsed separately).
+_SELECT_RE = re.compile(r"<select\b([^>]*)>(.*?)</select>", re.IGNORECASE | re.DOTALL)
+# A <textarea ...>...</textarea> block (inner text is the value).
+_TEXTAREA_RE = re.compile(r"<textarea\b([^>]*)>(.*?)</textarea>", re.IGNORECASE | re.DOTALL)
+# One <option ...>...</option> inside a <select>.
+_OPTION_RE = re.compile(r"<option\b([^>]*)>(.*?)</option>", re.IGNORECASE | re.DOTALL)
+# name="x" / name='x' / name=x — tolerant of quote style.
+_ATTR_RE = re.compile(r"""([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+
+
+def _attrs(tag_body: str) -> dict[str, str]:
+    """Parse an HTML tag's attribute string into a ``{name: value}`` dict.
+
+    Boolean attributes (``disabled`` / ``checked`` / ``selected`` / ``multiple``
+    with no ``=value``) are NOT captured by the value regex; presence is tested
+    separately with :func:`_has_flag`. Values are HTML-unescaped so a stored
+    ``&amp;`` round-trips back to ``&``.
+    """
+    out: dict[str, str] = {}
+    for match in _ATTR_RE.finditer(tag_body):
+        name = match.group(1).lower()
+        value = match.group(2) or match.group(3) or match.group(4) or ""
+        out[name] = html.unescape(value)
+    return out
+
+
+def _has_flag(tag_body: str, flag: str) -> bool:
+    """True iff a boolean attribute ``flag`` (``checked``/``disabled``/...) is present.
+
+    Matches both the bare form (``disabled``) and the valued form
+    (``disabled="disabled"``), as a whole word so ``checked`` is not seen inside
+    another attribute's value.
+    """
+    return re.search(rf"\b{flag}\b", tag_body, re.IGNORECASE) is not None
+
+
+def scrape_form_fields(page_html: str) -> dict[str, str]:
+    """Reconstruct the submittable ``{field: value}`` set from a rendered form.
+
+    Mirrors what a browser would send on submit, so a functional POST that
+    overrides ONE field leaves every other field at its current value:
+
+    * ``<input>`` — text/hidden/etc. contribute ``name -> value``; a
+      checkbox/radio contributes ONLY when ``checked`` (an unchecked box sends
+      nothing, exactly like a browser — so an off checkbox is absent from the
+      dict, and toggling it on is `overrides={name: value}`);
+    * ``<select>`` — the ``selected`` option's value (or the first option's, the
+      browser default when none is marked);
+    * ``<textarea>`` — its inner text (HTML-unescaped).
+
+    ``disabled`` controls are skipped (a disabled control is not submitted — this
+    is why the ADR-13 auto-VIP dropdowns drop out of the POST when auto is on).
+    Nameless controls and the submit buttons are left for the caller to add.
+    Includes the ``__csrf_magic`` hidden input, so the returned dict already
+    carries the per-render token.
+    """
+    fields: dict[str, str] = {}
+
+    for body in _INPUT_RE.findall(page_html):
+        attrs = _attrs(body)
+        name = attrs.get("name")
+        if not name or _has_flag(body, "disabled"):
+            continue
+        itype = attrs.get("type", "text").lower()
+        if itype in ("checkbox", "radio"):
+            if _has_flag(body, "checked"):
+                fields[name] = attrs.get("value", "on")
+        elif itype in ("submit", "button", "image", "reset", "file"):
+            # Submit/button values are added explicitly by the caller (the save
+            # action), not harvested — a browser sends only the clicked button.
+            continue
+        else:
+            fields[name] = attrs.get("value", "")
+
+    for body, inner in _SELECT_RE.findall(page_html):
+        attrs = _attrs(body)
+        name = attrs.get("name")
+        if not name or _has_flag(body, "disabled"):
+            continue
+        # A multi-select can submit several values; the smoke flows target only
+        # single-value selects, so take the first selected (or first option).
+        selected: str | None = None
+        first: str | None = None
+        for opt_body, _label in _OPTION_RE.findall(inner):
+            opt = _attrs(opt_body)
+            value = opt.get("value", "")
+            if first is None:
+                first = value
+            if _has_flag(opt_body, "selected"):
+                selected = value
+                break
+        chosen = selected if selected is not None else first
+        if chosen is not None:
+            fields[name] = chosen
+
+    for body, inner in _TEXTAREA_RE.findall(page_html):
+        attrs = _attrs(body)
+        name = attrs.get("name")
+        if not name or _has_flag(body, "disabled"):
+            continue
+        fields[name] = html.unescape(inner)
+
+    return fields
 
 
 class WebUI:
@@ -203,6 +321,49 @@ class WebUI:
         kwargs.setdefault("verify", self._verify)
         kwargs.setdefault("timeout", self._timeout)
         return self._session.get(self.url(path), **kwargs)
+
+    def post(
+        self,
+        path: str,
+        overrides: dict[str, str],
+        *,
+        submit: tuple[str, str] = ("save", "save"),
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Drive a webConfigurator form: GET ``path`` -> re-scrape its current
+        fields + the ``__csrf_magic`` token -> apply ``overrides`` -> POST back.
+
+        One call performs the full browser-faithful round-trip the CSRF design
+        requires (RESULTS/01: the token is injected by the output filter per
+        render, so it must be re-extracted on the freshly-GET'd form, never
+        cached). The POSTed payload is the page's OWN current field set
+        (:func:`scrape_form_fields`) with ``overrides`` applied, so every field
+        not being changed is sent at its present value -- the save handler then
+        rewrites config with only the intended delta and the box is left clean
+        apart from the override.
+
+        ``submit`` is the save button's ``(name, value)`` pair (pfBlockerNG save
+        handlers gate on ``isset($_POST['save'])``); it is added to the payload
+        so the handler's save branch runs. Returns the POST response (typically
+        the post-redirect page); callers assert EFFECTIVE state (config.xml /
+        pfctl / unbound), NOT this body (ADR §1 fact 3).
+        """
+        if not self._logged_in:
+            raise WebUILoginError("post() called before login()")
+        kwargs.setdefault("verify", self._verify)
+        kwargs.setdefault("timeout", self._timeout)
+        form_page = self._session.get(self.url(path), verify=self._verify, timeout=self._timeout)
+        if looks_like_login_page(form_page.text):
+            raise WebUILoginError(f"GET {self.url(path)} returned the login form -- session not authenticated")
+        payload = scrape_form_fields(form_page.text)
+        # The token comes from scrape_form_fields (it harvests the hidden input),
+        # but assert it explicitly so a form that rendered without csrf-magic
+        # fails loudly here rather than as an opaque "CSRF check failed" page.
+        if CSRF_FIELD not in payload:
+            payload[CSRF_FIELD] = extract_csrf_token(form_page.text)
+        payload.update(overrides)
+        payload[submit[0]] = submit[1]
+        return self._session.post(self.url(path), data=payload, **kwargs)
 
     def get_unauthenticated(self, path: str, **kwargs: Any) -> requests.Response:
         """GET ``path`` on a FRESH cookie-less session (no login).
