@@ -1527,6 +1527,24 @@ def flush_unbound_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
         raise RuntimeError(f"flush_unbound_name({name}) failed: rc={result.returncode} {result.stderr!r}")
 
 
+def force_dnsbl_refetch(vm: SmokeVM, header: str, *, timeout: float = 30.0) -> None:
+    """Force pfBlockerNG to RE-INGEST a feed whose local source file was edited mid-case.
+
+    pfBlockerNG caches each feed's parsed output at ``{dnsdir}/{header}.txt`` and, on an
+    ``update``, REUSES that cache (skips the re-fetch) when the ``.txt`` exists and no
+    per-feed ``.update`` marker is present (inc:8884). A test that rewrites the local feed
+    fixture in place (``write_local_feed``) therefore would NOT see the edit applied by a
+    plain ``update`` — the manifest is never rewritten, so no zero-downtime swap fires.
+    Touching the ``{dnsdir}/{header}.update`` marker makes the next ``update`` re-read the
+    edited source into the manifest (a pure DATA change -> the no-restart swap fork), which
+    is what a live box does when the cron download detects the feed changed.
+    """
+    marker = f"{PFB_DBDIR}/dnsbl/{header}.update"
+    result = vm.ssh("/usr/bin/touch", marker, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"force_dnsbl_refetch({header}) failed: rc={result.returncode} {result.stderr!r}")
+
+
 def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: float = 300.0) -> None:
     """Drive the alerts-page temporary Lock/Unlock for a DNSBL ``domain`` (#51).
 

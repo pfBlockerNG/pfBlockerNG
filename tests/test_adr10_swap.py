@@ -20,6 +20,7 @@ shape -- None and raising builder).
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from typing import Any
@@ -149,6 +150,44 @@ class TestRebuildAndSwapSuccess:
         # (d) the UI counts were re-emitted from the NEW snapshot.
         assert emitted[P.pfb["pfb_py_count"]] == 42
         assert emitted[P.pfb["pfb_py_regex_count"]] == 7
+
+    def test_swap_enables_master_dnsbl_gate_when_new_lists_load(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # ADR-10: operate() gates ALL DNSBL evaluation on pfb["python_blacklist"], which
+        # is otherwise written only at init. A swap that loads lists into a previously-
+        # empty/disabled module (e.g. a regex-ONLY feed when the last init had no lists)
+        # MUST flip it True, or the newly-swapped lists never block (the live abp_regex
+        # smoke failure: snap_regex=1 but pyblacklist=False -> the regex was skipped).
+        # Cover BOTH branches (CLAUDE.md): a list-bearing swap enables it; an EMPTY swap
+        # leaves it untouched (no spurious enable).
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+
+        # ---- regex-only NEW snapshot (no data/zone) over an empty live one.
+        P._snapshot = _snapshot(counts=0)
+        P.pfb["python_blacklist"] = False  # BEFORE: master gate OFF (last init had no lists)
+        regex_only = P.Snapshot(
+            data_db={},
+            zone_db={},
+            white_db={},
+            regex_db={"feed#0": {"re": re.compile("badword"), "important": False, "band": 1}},
+            allow_regex_db={},
+            feed_group_index_db={},
+            hsts_db={},
+            important_rules=True,
+            counts=0,
+            regex_count=1,
+        )
+        assert P.pfb["python_blacklist"] is False
+        assert P.rebuild_and_swap(lambda: regex_only) is True
+        assert P.pfb["python_blacklist"] is True, "a regex-only swap must enable the master DNSBL gate"
+
+        # ---- an EMPTY swap must NOT spuriously enable the gate (other-branch coverage).
+        P._snapshot = regex_only
+        P.pfb["python_blacklist"] = False
+        empty = _snapshot(counts=0)
+        assert P.pfb["python_blacklist"] is False
+        assert P.rebuild_and_swap(lambda: empty) is True
+        assert P.pfb["python_blacklist"] is False, "an empty swap must leave the master gate untouched"
 
     def test_reports_reset_serializes_through_db_lock(self, tmp_path: Any, monkeypatch: Any) -> None:
         # Prove the Reports-cache reset goes through _db_lock (no race with the worker /
@@ -312,6 +351,54 @@ class TestSingleRebindPoint:
             ln.strip() for ln in src.splitlines() if ln.strip().startswith("_snapshot =") and "==" not in ln
         ]
         assert rebind_lines == ["_snapshot = new_snapshot"], rebind_lines
+
+
+# --------------------------------------------------------------------------- #
+# ADR-10 swap-visibility guard: operate()'s per-stratum presence gates + the
+# important_rules fast-path flag MUST be derived from the captured snapshot (which
+# a background swap replaces), NOT from the pfb[...] booleans (written only at
+# init_standard and never refreshed by a swap). Reading them from pfb froze the
+# gate at the last restart's state, so a zero-downtime swap that introduced a NEW
+# stratum (feed/user regex, or data/zone when the prior init had none) left its gate
+# False and evaluate_domain skipped it -- the newly-swapped block never applied (the
+# live regex/important/custom-list smoke failures). Pinned at source level because
+# operate() needs a full live qstate to exercise end-to-end (covered by the live smoke).
+# --------------------------------------------------------------------------- #
+
+
+class TestSwapGatesFromSnapshot:
+    def test_operate_cfg_gates_read_snapshot_not_pfb(self) -> None:
+        import inspect
+
+        src = inspect.getsource(P.operate)
+        # The cfg dict each query builds must source the list-presence gates + the
+        # important_rules flag from ``snap`` (the swapped snapshot), not ``pfb``.
+        for key, field in (
+            ("dataDB", "snap.data_db"),
+            ("zoneDB", "snap.zone_db"),
+            ("regexDB", "snap.regex_db"),
+            ("whiteDB", "snap.white_db"),
+            ("allowRegexDB", "snap.allow_regex_db"),
+            ("important_rules", "snap.important_rules"),
+            ("hstsDB", "snap.hsts_db"),
+        ):
+            assert f'"{key}": bool({field})' in src, (
+                f'operate() cfg["{key}"] must be derived from {field} (the swapped snapshot), '
+                f"not from the stale pfb[...] flag"
+            )
+        # And must NOT regress to reading these gates back off pfb[...]. Strip comment
+        # lines first (the rationale comment legitimately names the pfb[...] keys).
+        code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+        for stale in (
+            'pfb["dataDB"]',
+            'pfb["zoneDB"]',
+            'pfb["regexDB"]',
+            'pfb["whiteDB"]',
+            'pfb["allowRegexDB"]',
+            'pfb["important_rules"]',
+            'pfb["hstsDB"]',
+        ):
+            assert stale not in code, f"operate() must not read the stale {stale} gate (swap-invisible)"
 
 
 # --------------------------------------------------------------------------- #

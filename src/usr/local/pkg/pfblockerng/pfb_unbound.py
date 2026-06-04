@@ -3829,6 +3829,16 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     _snapshot = new_snapshot
     decisionDB.clear()
     _db_reset_cache()
+    # ADR-10: refresh the MASTER DNSBL gate from the new snapshot, parity with init
+    # (init sets pfb["python_blacklist"] True when any blocking stratum loaded -- line
+    # ~1061). operate() gates ALL DNSBL evaluation on this flag; it is otherwise written
+    # only at init, so a swap that loads lists into a previously-empty module (e.g. a
+    # regex-ONLY feed when the last init had no lists) would leave the gate False and the
+    # newly-swapped lists would never block. Mirror init: enable when the new snapshot has
+    # any block/allow stratum. (A python_control runtime disable re-clears it afterwards;
+    # a reload that brings lists legitimately re-enables blocking, exactly as init does.)
+    if new_snapshot.data_db or new_snapshot.zone_db or new_snapshot.regex_db or new_snapshot.allow_regex_db:
+        pfb["python_blacklist"] = True
     if emit_counts:
         dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
         dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)
@@ -4743,23 +4753,36 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # has its own TLD, so derive it from the target name being evaluated --
                 # else the TLD-Allow / HSTS checks use the wrong TLD for the target.
                 tld = get_tld_from_name(q_name) if isCNAME else get_tld(qstate)
+                # ADR-10: the per-stratum presence gates + the ``important_rules``
+                # fast-path flag MUST come from the captured snapshot ``snap`` -- NOT from
+                # the ``pfb[...]`` booleans, which are written ONLY in init_standard and are
+                # NOT refreshed by a background swap. Reading them from ``pfb`` froze the
+                # gate at the last restart's state: a zero-downtime swap that introduced a
+                # NEW stratum (e.g. feed/user regex, or data/zone when the prior init had
+                # none) left its gate False, so evaluate_domain skipped that stratum and the
+                # newly-swapped block never applied (the regex/important/custom-list smoke
+                # failures). Deriving them from ``snap`` (the same object the dicts come
+                # from) keeps the gate consistent with the live lists on every swap, and is
+                # decision-identical at idle (init sets snapshot + pfb flags together, so
+                # bool(snap.data_db) == pfb["dataDB"], etc.). The remaining keys are genuine
+                # config (not list-presence) and correctly stay sourced from ``pfb``.
                 cfg = {
                     "python_blocking": pfb["python_blocking"],
-                    "dataDB": pfb["dataDB"],
-                    "zoneDB": pfb["zoneDB"],
+                    "dataDB": bool(snap.data_db),
+                    "zoneDB": bool(snap.zone_db),
                     "python_tld": pfb["python_tld"],
                     "python_tlds": pfb["python_tlds"],
                     "dnsbl_ipv4": pfb["dnsbl_ipv4"],
                     "dnsbl_ipv6": pfb["dnsbl_ipv6"],
                     "python_idn": pfb["python_idn"],
-                    "regexDB": pfb["regexDB"],
-                    "whiteDB": pfb["whiteDB"],
-                    "allowRegexDB": pfb["allowRegexDB"],
-                    "important_rules": pfb["important_rules"],
+                    "regexDB": bool(snap.regex_db),
+                    "whiteDB": bool(snap.white_db),
+                    "allowRegexDB": bool(snap.allow_regex_db),
+                    "important_rules": bool(snap.important_rules),
                     "regex_warn_ms": pfb["regex_warn_ms"],
                     "regex_evict_ms": pfb["regex_evict_ms"],
                     "python_tld_seg": pfb["python_tld_seg"],
-                    "hstsDB": pfb["hstsDB"],
+                    "hstsDB": bool(snap.hsts_db),
                     "hsts_tlds": pfb["hsts_tlds"],
                 }
                 # ADR-10 P2: read every matcher stratum off the ONE captured snapshot
