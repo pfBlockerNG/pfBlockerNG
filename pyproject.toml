@@ -11,6 +11,9 @@ testpaths = ["tests"]
 addopts   = "-v --ignore=tests/smoke"
 markers = [
     "smoke: live-VM end-to-end smoke test (ADR-04); needs KVM + the GHCR pfSense image; deselected from the default run",
+    "ui_render: live-VM Web-UI render-smoke (ADR-14 Tier A); authenticated HTTP; deselected from the default run",
+    "ui_e2e: live-VM Web-UI functional flow (ADR-14 Tier B, HTTP POST); deselected from the default run",
+    "ui_browser: live-VM Web-UI browser/JS test (ADR-14 Tier B, Playwright); deselected from the default run",
 ]
 
 [tool.ruff]
