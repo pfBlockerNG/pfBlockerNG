@@ -21,11 +21,13 @@
 from __future__ import annotations
 
 import csv
+import errno
 import json
 import logging
 import logging.handlers
 import os
 import re
+import select
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -115,6 +117,13 @@ pfb_db_worker_thread: Any
 pfb_log_queue: queue.Queue
 pfb_log_listener: Any
 pfb_loggers: dict[str, Any] = {}
+
+# ADR-10 P4: the reload-watcher daemon thread + its stop handle (a threading.Event).
+# The watcher waits on the reload sentinel's DIRECTORY and runs rebuild_and_swap() off
+# the query threads on a generation-id advance. Declared here; created in init_standard
+# (gated on pfb["mod_threading"]) and joined in deinit.
+pfb_reload_watcher_thread: Any
+pfb_reload_stop: Any
 
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
@@ -206,6 +215,323 @@ def pfb_async(func: Callable[..., Any], *args: Any) -> None:
     func(*args)
 
 
+# --------------------------------------------------------------------------- #
+# ADR-10 P4 -- the zero-downtime reload-watcher (daemon thread + background swap).
+#
+# A daemon thread (started next to pfb_db_worker/pfb_async_worker, gated on
+# pfb["mod_threading"]) waits on the reload SENTINEL. PHP/shell (Phase 5) atomically
+# publishes the new manifest + per-feed raw and then writes a monotonically-advancing
+# GENERATION ID into the sentinel; the watcher wakes, reads the generation, and on an
+# ADVANCE runs rebuild_and_swap() OFF the query threads -- queries keep serving the OLD
+# snapshot through the (seconds-long) ABP build, then a single GIL-atomic ref rebind
+# swaps the new one in (zero downtime, briefly stale by design).
+#
+# Correctness rides on the atomic publish + the generation COMPARE, NOT on notify
+# latency: a missed/coalesced event only DELAYS, never corrupts (the watcher always
+# reads the current generation before building). Single-flight: at most one build runs
+# at a time; a trigger arriving mid-build is coalesced and re-checked after the build.
+#
+# Watch mechanism: select.kqueue EVFILT_VNODE on the sentinel's DIRECTORY where
+# available (FreeBSD) -- watching the dir survives an atomic rename/replace of the
+# sentinel file (a file fd would go stale). A low-frequency mtime-POLL fallback is used
+# where kqueue is unavailable (inotify is Linux-only and NOT on pfSense -- never used).
+#
+# RAM gate (mandatory -- RESULTS/01 SS2): the in-process build holds the OLD + NEW
+# matcher sets simultaneously (~2x, ~786 MiB at ABP scale), which busts a ~358 MiB
+# transient budget on a 1 GB box. Before building, the watcher PROJECTS the transient
+# (~RELOAD_BYTES_PER_ENTRY x current entry count) and checks available RAM; if it would
+# not fit, it DECLINES the swap fail-closed -- the OLD snapshot stays live and a clear
+# log line says the box is RAM-constrained and the update needs the restart fallback.
+# The PRIMARY gate is PHP (Phase 5, before flipping the sentinel); this is the Python
+# safety net so a constrained box never OOMs even if PHP flips the sentinel anyway.
+# stdlib-only + injectable so it is unit-testable without a live box.
+# --------------------------------------------------------------------------- #
+
+# Steady-state retained bytes per matcher entry (ADR-05 SS3a / ADR-10 P1 spike:
+# 274-276 B/entry). Used to PROJECT the both-resident transient of an in-process build.
+RELOAD_BYTES_PER_ENTRY = 276
+# Headroom kept free above the projected transient so the build does not drive the box
+# to the OOM edge (Unbound's own C message cache, the OS, PHP/cron also need RAM).
+RELOAD_RAM_HEADROOM_BYTES = 64 * 1024 * 1024
+# Low-frequency poll cadence for the mtime fallback (and the kqueue wait timeout, so the
+# stop Event is observed promptly). Best-effort -- a small delay is acceptable by design.
+RELOAD_POLL_INTERVAL = 2.0
+
+
+def _reload_available_ram_bytes() -> int | None:
+    """Best-effort available physical RAM in bytes, stdlib only.
+
+    Prefers ``os.sysconf('SC_AVPHYS_PAGES')`` x ``SC_PAGE_SIZE`` (free pages -- present
+    on FreeBSD and Linux). Returns ``None`` when the platform cannot report it (the
+    caller then conservatively DECLINES the in-process build -- fail-closed)."""
+    try:
+        names = os.sysconf_names  # type: ignore[attr-defined]
+        if "SC_AVPHYS_PAGES" in names and "SC_PAGE_SIZE" in names:
+            avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            if avail_pages >= 0 and page_size > 0:
+                return avail_pages * page_size
+    except (ValueError, OSError, AttributeError):
+        pass
+    return None
+
+
+def _reload_ram_gate_ok(
+    entry_count: int,
+    *,
+    available_ram: Callable[[], int | None] | None = None,
+) -> bool:
+    """True iff an in-process rebuild for ``entry_count`` entries is projected to fit.
+
+    Projects the both-resident transient (~2x: OLD + NEW set) as
+    ``2 x entry_count x RELOAD_BYTES_PER_ENTRY`` and requires available RAM to cover it
+    plus ``RELOAD_RAM_HEADROOM_BYTES``. ``available_ram`` is injectable for testing;
+    when omitted it resolves the module probe at CALL time (so it is monkeypatchable).
+    Fail-closed: if available RAM is unknown, the gate DECLINES (returns False)."""
+    probe = available_ram if available_ram is not None else _reload_available_ram_bytes
+    avail = probe()
+    if avail is None:
+        return False
+    projected = 2 * max(entry_count, 0) * RELOAD_BYTES_PER_ENTRY
+    return avail >= projected + RELOAD_RAM_HEADROOM_BYTES
+
+
+def _reload_read_generation(sentinel_path: str) -> int | None:
+    """Read the generation id from the sentinel, or ``None`` if absent/unreadable.
+
+    The generation is a monotonically-advancing base-10 integer on the FIRST line of
+    the sentinel file (PHP/shell write it after the atomic manifest publish). A missing
+    or unparseable sentinel yields ``None`` (treated as "no advance" -- best-effort)."""
+    try:
+        with open(sentinel_path, encoding="utf-8") as fh:
+            line = fh.readline().strip()
+    except OSError:
+        return None
+    if not line:
+        return None
+    try:
+        return int(line)
+    except ValueError:
+        return None
+
+
+def _build_swap_snapshot() -> Snapshot | None:
+    """The background reload builder: re-read the manifest, rebuild every matcher
+    stratum into FRESH dicts (mutating NO live dict), and return a new Snapshot -- or
+    ``None`` to fail-closed (rebuild_and_swap then keeps the live snapshot).
+
+    Reproduces init's DNSBL load off fresh local dicts so the swapped snapshot is the
+    exact set the manifest + ini + static cap define (decision-identical to a fresh init
+    load):
+      * dnsbl_build_from_manifest() -> data/zone/feedGroupIndex/white + FEED block-regex
+        + @@/re/ allow-regex + the important_rules fast-path flag + the loaded count.
+        ``None`` (absent/unparseable manifest, build error) -> the whole swap is a no-op.
+      * USER REGEX-ini patterns merged on top (band PRIO_USER_BLOCK, sovereign over feed
+        allows), honouring the opt-in static cap -- so a swap NEVER drops user regex
+        (RESULTS/02 / ADR-07).
+      * hstsDB reloaded from pfb_py_hsts.txt (watch-out (b): hstsDB is NOT in the
+        manifest; omitting it would ship an empty hsts_db and silently flip HSTS NULL-vs-
+        VIP behaviour)."""
+    build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
+    if build_result is None:
+        return None
+
+    data_db = build_result.data_db
+    zone_db = build_result.zone_db
+    feed_group_index_db = build_result.feed_group_index_db
+    white_db = build_result.white_db
+    regex_db: dict[str, Any] = dict(build_result.regex_db)
+    allow_regex_db: dict[str, Any] = dict(build_result.allow_regex_db)
+
+    # USER REGEX-ini patterns (sovereign band) merged on top of the feed block-regex,
+    # mirroring init's REGEX-section load (incl. the opt-in static cap).
+    if os.path.isfile(pfb["pfb_unbound.ini"]):
+        config = ConfigParser()
+        try:
+            config.read(pfb["pfb_unbound.ini"])
+            if config.has_section("REGEX"):
+                r_count = 1
+                for name, pattern in config.items("REGEX"):
+                    if pfb["regex_cap"] and _regex_exceeds_static_cap(pattern):
+                        sys.stderr.write(
+                            "[pfBlockerNG]: dropping long/complex user regex [ {} ] pattern [ {} ] "
+                            "on line #{} (static cap)".format(name, pattern, r_count)
+                        )
+                        r_count += 1
+                        continue
+                    try:
+                        regex_db[name] = {
+                            "re": re.compile(pattern),
+                            "important": False,
+                            "band": PRIO_USER_BLOCK,
+                        }
+                    except Exception as e:
+                        sys.stderr.write(
+                            "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
+                                name, pattern, r_count, e
+                            )
+                        )
+                    r_count += 1
+        except Exception as e:
+            sys.stderr.write("[pfBlockerNG]: reload: failed to load user REGEX ini: {}".format(e))
+
+    # HSTS reloaded from the static file (watch-out b -- not in the manifest).
+    hsts_db: dict[str, Any] = {}
+    if pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"]):
+        try:
+            with open(pfb["pfb_py_hsts"]) as hsts:
+                for line in hsts:
+                    hsts_db[line.rstrip("\r\n")] = 0
+        except Exception as e:
+            sys.stderr.write("[pfBlockerNG]: reload: failed to load {}: {}".format(pfb["pfb_py_hsts"], e))
+
+    return Snapshot(
+        data_db=data_db,
+        zone_db=zone_db,
+        white_db=white_db,
+        regex_db=regex_db,
+        allow_regex_db=allow_regex_db,
+        feed_group_index_db=feed_group_index_db,
+        hsts_db=hsts_db,
+        important_rules=bool(build_result.important_rules),
+        counts=len(data_db) + len(zone_db),
+        regex_count=len(regex_db) + len(allow_regex_db),
+    )
+
+
+def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> None:
+    """Run ONE RAM-gated rebuild_and_swap() for the watcher (off the query threads).
+
+    Projects the build's transient from the LIVE snapshot's entry count and consults the
+    RAM gate FIRST; if the box cannot fit the ~2x transient, DECLINE fail-closed -- the
+    old snapshot stays live, log that the update needs the restart fallback. Otherwise
+    delegate to the Phase-3 fail-closed rebuild_and_swap (default emit_counts=True so the
+    UI counts refresh without a restart)."""
+    snap = _snapshot
+    entry_count = snap.counts + snap.regex_count if snap is not None else 0
+    if not _reload_ram_gate_ok(entry_count):
+        log_info(
+            "[pfBlockerNG]: DNSBL reload DECLINED -- RAM-constrained box (projected ~{} MiB "
+            "for {} entries would not fit available RAM); keeping current lists, the update "
+            "needs the restart fallback".format(
+                (2 * entry_count * RELOAD_BYTES_PER_ENTRY) // (1024 * 1024), entry_count
+            )
+        )
+        return
+    if rebuild_and_swap(builder):
+        log_info("[pfBlockerNG]: DNSBL lists reloaded with no restart (zero-downtime swap)")
+
+
+def pfb_reload_watcher(builder: Callable[[], Snapshot | None] = _build_swap_snapshot) -> None:
+    """Daemon body: wait on the reload sentinel and run a single-flight, RAM-gated swap
+    on every generation ADVANCE, until the stop Event is set.
+
+    ``builder`` is injectable (the production default rebuilds from the manifest; tests
+    pass a stub). The function reads the sentinel's generation, swaps on an advance, then
+    waits for the next change via kqueue EVFILT_VNODE on the sentinel's DIRECTORY (or the
+    mtime-poll fallback), re-checking the generation after each wake AND after each build
+    (single-flight coalescing: a trigger during a build is folded into one more build iff
+    the generation advanced)."""
+    sentinel = pfb["pfb_py_reload"]
+    watch_dir = os.path.dirname(os.path.abspath(sentinel)) or "."
+
+    # Baseline: adopt the CURRENT generation WITHOUT building (init already loaded the
+    # lists synchronously -- the watcher only acts on a FUTURE advance).
+    last_gen = _reload_read_generation(sentinel)
+
+    def drain_and_swap() -> None:
+        # Single-flight: build for the latest generation, then re-check; if it advanced
+        # again during the build, build once more. Loops until stable or stop is set.
+        nonlocal last_gen
+        while not pfb_reload_stop.is_set():
+            cur = _reload_read_generation(sentinel)
+            if cur is None or (last_gen is not None and cur <= last_gen):
+                return
+            last_gen = cur
+            _reload_run_swap(builder)
+
+    waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
+    try:
+        while not pfb_reload_stop.is_set():
+            # Act on any advance already pending (covers the gap between baseline and the
+            # first wait, and the poll-fallback path).
+            drain_and_swap()
+            if pfb_reload_stop.is_set():
+                break
+            if waiter is not None:
+                waiter.wait(RELOAD_POLL_INTERVAL)
+            else:
+                # mtime-poll fallback (kqueue unavailable, e.g. Linux/CI): sleep on the
+                # stop Event so deinit wakes us immediately; the generation re-check on
+                # the next loop is what actually drives the swap.
+                pfb_reload_stop.wait(RELOAD_POLL_INTERVAL)
+    except Exception as e:
+        err = sys.__stderr__
+        if err is not None:
+            try:
+                err.write("[pfBlockerNG]: reload watcher error: {}\n".format(e))
+            except Exception:
+                pass
+    finally:
+        if waiter is not None:
+            waiter.close()
+
+
+class _ReloadKqueueWaiter:
+    """A select.kqueue EVFILT_VNODE waiter on a DIRECTORY fd (FreeBSD).
+
+    Watching the directory -- not the sentinel file fd -- survives an atomic rename/
+    replace of the sentinel (the file inode changes; the dir is notified WRITE/RENAME).
+    ``wait(timeout)`` blocks until a vnode event OR the timeout (so the stop Event is
+    seen promptly). Best-effort: any kqueue error degrades to a timed wait."""
+
+    def __init__(self, watch_dir: str) -> None:
+        self._kq: Any = None
+        self._fd: int = -1
+        try:
+            self._fd = os.open(watch_dir, os.O_RDONLY)
+            self._kq = select.kqueue()
+            ev = select.kevent(
+                self._fd,
+                filter=select.KQ_FILTER_VNODE,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=(
+                    select.KQ_NOTE_WRITE
+                    | select.KQ_NOTE_EXTEND
+                    | select.KQ_NOTE_RENAME
+                    | select.KQ_NOTE_DELETE
+                    | select.KQ_NOTE_ATTRIB
+                ),
+            )
+            self._kq.control([ev], 0, 0)
+        except OSError as e:
+            sys.stderr.write("[pfBlockerNG]: reload watcher kqueue setup failed, polling instead: {}".format(e))
+            self.close()
+
+    def wait(self, timeout: float) -> None:
+        if self._kq is None:
+            return
+        try:
+            self._kq.control(None, 1, timeout)
+        except OSError as e:
+            if e.errno != errno.EINTR:
+                sys.stderr.write("[pfBlockerNG]: reload watcher kqueue wait error: {}".format(e))
+
+    def close(self) -> None:
+        if self._kq is not None:
+            try:
+                self._kq.close()
+            except OSError:
+                pass
+            self._kq = None
+        if self._fd >= 0:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = -1
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -226,7 +552,9 @@ def init_standard(id: int, env: module_env) -> bool:
         pfb_task_queue, \
         pfb_worker_thread, \
         pfb_db_queue, \
-        pfb_db_worker_thread
+        pfb_db_worker_thread, \
+        pfb_reload_watcher_thread, \
+        pfb_reload_stop
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
@@ -346,6 +674,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["sqlite3_dnsbl_con"] = False
     pfb["sqlite3_resolver_con"] = False
     pfb["async_worker"] = False
+    pfb["reload_watcher"] = False
 
     # DNSBL Python files
     pfb["pfb_unbound.ini"] = "pfb_unbound.ini"
@@ -360,6 +689,15 @@ def init_standard(id: int, env: module_env) -> bool:
     # otherwise it falls back to the legacy data/zone CSV load (shell/PHP still
     # produce those files until Phase 5 removes the duplication).
     pfb["pfb_py_sources"] = "pfb_py_sources.json"
+    # ADR-10 P4: the zero-downtime RELOAD SENTINEL. Path is chroot-relative (Unbound
+    # is chrooted at /var/unbound, the module's CWD) -- so the in-chroot absolute path
+    # PHP/shell must write is /var/unbound/pfb_py_reload. PHP atomically publishes the
+    # new manifest + per-feed raw, then writes a monotonically-advancing GENERATION ID
+    # (a base-10 integer, first line) into this file; the reload-watcher thread wakes on
+    # the directory change, reads the generation, and on an ADVANCE runs
+    # rebuild_and_swap() off the query threads. Correctness rides on the atomic publish
+    # + the generation compare, NOT on notify latency (a missed event only delays).
+    pfb["pfb_py_reload"] = "pfb_py_reload"
     pfb["pfb_py_count"] = "pfb_py_count"
     # ADR-07 P8: the ADMITTED (cap-filtered) feed+user regex total -- the count the
     # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
@@ -890,6 +1228,21 @@ def init_standard(id: int, env: module_env) -> bool:
         except Exception as e:
             pfb["async_worker"] = False
             sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}".format(e))
+
+    # ADR-10 P4: start the zero-downtime reload-watcher (daemon). It waits on the reload
+    # sentinel and runs a single-flight, RAM-gated rebuild_and_swap() off the query
+    # threads on a generation advance -- no Unbound restart for a DNSBL-data update.
+    if pfb["mod_threading"] and not pfb.get("reload_watcher"):
+        try:
+            pfb_reload_stop = threading.Event()
+            pfb_reload_watcher_thread = threading.Thread(
+                name="pfb_reload_watcher", target=pfb_reload_watcher, daemon=True
+            )
+            pfb_reload_watcher_thread.start()
+            pfb["reload_watcher"] = True
+        except Exception as e:
+            pfb["reload_watcher"] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start reload watcher: {}".format(e))
 
     pfb_setup_logging()
 
@@ -1787,10 +2140,30 @@ def inplace_cb_reply_servfail(
 
 
 def deinit(id: int) -> bool:
-    global pfb, maxmindReader, pfb_task_queue, pfb_worker_thread, pfb_db_queue, pfb_db_worker_thread
+    global \
+        pfb, \
+        maxmindReader, \
+        pfb_task_queue, \
+        pfb_worker_thread, \
+        pfb_db_queue, \
+        pfb_db_worker_thread, \
+        pfb_reload_watcher_thread, \
+        pfb_reload_stop
 
     if pfb["python_maxmind"]:
         maxmindReader.close()
+
+    # ADR-10 P4: stop the reload-watcher cleanly -- set the stop Event (which also wakes
+    # the kqueue/poll wait via its timeout), then join with a timeout so deinit never
+    # hangs on a stuck watcher. The thread is a daemon, so a missed join cannot block
+    # interpreter shutdown either.
+    if pfb.get("reload_watcher"):
+        try:
+            pfb_reload_stop.set()
+            pfb_reload_watcher_thread.join(timeout=5)
+        except Exception:
+            pass
+        pfb["reload_watcher"] = False
 
     # Drain and stop the background DB-write worker, then close connections
     if pfb.get("db_worker"):
