@@ -35,3 +35,6 @@ report/
 *.tar.gz
 *.tar.bz2
 *.zip
+
+# ── ADR-14 Tier-B browser screenshots (build output, human-review artifacts) ──
+test-results/

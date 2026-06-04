@@ -26,3 +26,11 @@ pytest-timeout==2.3.1
 # Imported lazily (inside WebUI), so default collection -- which --ignore's
 # tests/smoke -- never needs it.
 requests==2.32.3
+# ADR-14 Tier-B (browser): headless Chromium drives the JS-only UX
+# (tests/smoke/ui/test_browser.py) + captures per-page screenshot artifacts.
+# Imported lazily via pytest.importorskip (conftest + the test module), so a host
+# without it still collects tests/smoke/ui cleanly (the browser tests SKIP).
+# NOTE: the pip install gives the Python bindings only -- the Chromium BROWSER
+# BINARY is a separate download (`python -m playwright install chromium`), wired
+# as a CI setup step in Phase 5; do NOT assume it is present from this line alone.
+playwright==1.49.1
