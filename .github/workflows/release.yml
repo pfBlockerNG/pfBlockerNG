@@ -9,11 +9,20 @@ on:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
 
+# Least-privilege default; jobs that need more elevate explicitly below
+# (release: contents:write to publish; verify-checks: checks:read to read the
+# tagged commit's check runs). ports-pr operates on the FreeBSD-ports fork via
+# PORTS_TOKEN, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   # ── 1. Verify ────────────────────────────────────────────────────────────
   verify-checks:
     name: Verify commit checks passed
     runs-on: ubuntu-latest
+    permissions:
+      checks: read   # read the tagged commit's check-runs via gh api
     steps:
       - name: Check 'All tests passed' status for tagged commit
         env:
