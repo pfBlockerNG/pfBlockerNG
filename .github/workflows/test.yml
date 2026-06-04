@@ -31,6 +31,17 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
+  # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
+  # the automated push/PR flow: a synthetic corpus on a generic runner is not the
+  # number that matters — the production-faithful build-time/RAM measurement belongs
+  # on the live smoke VM, timing `updatednsbl` start→finish + unbound RSS. Dispatch
+  # Tests with this box ticked to run the offline spikes on demand.
+  workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: 'Run the ReDoS + build/RAM benchmark kill-gates (offline spike scripts)'
+        type: boolean
+        default: false
 
 # Least-privilege GITHUB_TOKEN: every job only reads the repo (checkout, tests,
 # lint) — upload-artifact uses the Actions runtime token, not GITHUB_TOKEN — so
@@ -275,17 +286,18 @@ jobs:
 
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
+    # MANUAL-ONLY (issue #76). The spikes carry their GO/NO-GO verdict in their EXIT
+    # CODE (issue #42), but the build-time/RAM number is a synthetic `build()` on a
+    # generic runner — NOT what a user experiences. So this job is OFF in the
+    # automated push/PR flow and runs only when Tests is dispatched with the
+    # `run_benchmarks` input ticked. The production-faithful build-time/RAM
+    # regression gate is being moved to the live smoke VM (timing `updatednsbl`
+    # start→finish + unbound RSS, baked synthetic fixture) — tracked in #76. The
+    # ReDoS gate stays a useful offline check here. Never in `all-tests-passed.needs`.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
     runs-on: ubuntu-latest
-    # The spikes carry their GO/NO-GO verdict in their EXIT CODE (issue #42), so a
-    # regression past the regex-latency / build-time / peak-RAM thresholds fails
-    # THIS job. INFORMATIONAL phase: deliberately NOT yet in the required
-    # `all-tests-passed.needs` list — it runs and reports red/green on every PR to
-    # establish a stable on-runner baseline (shared CI runners are slower/noisier
-    # than dev boxes, and the build-seconds gate has the least headroom), without
-    # blocking merges. Flip to ENFORCING by adding `benchmarks` to that `needs`
-    # list + a result check below, once the baseline is shown stable.
-    # Job-specific timeout (issue #42 follow-up): the 1M-entry build spike is the
-    # slow step; bound it here rather than touching any shared/default timeout.
+    # Job-specific timeout: the 1M-entry build spike is the slow step; bound it here
+    # rather than touching any shared/default timeout.
     timeout-minutes: 15
 
     steps:
