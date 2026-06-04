@@ -5,6 +5,32 @@ for DNSBL/noAAAA matching: latency on positive *and* negative (bypass-to-Unbound
 queries, plus memory footprint. Dev-only — not shipped (release archives contain
 only `src/`), and not collected by the default `pytest` run (`testpaths=["tests"]`).
 
+## Kill-gates (enforced via exit code — issue #42)
+
+Two spikes are **enforced gates**, not advisory prints: each prints its full report
+**and** carries its GO/NO-GO verdict in the **process exit code** (`0` = GO, non-zero
+= NO-GO). A regression past a threshold fails the run. Pass `--report-only` for a
+human-readable local run that always exits `0`.
+
+| Spike | Guards | Pinned thresholds (the enforced values) |
+| ----- | ------ | --------------------------------------- |
+| `spike_adr07_regex.py` | ABP regex latency / ReDoS (ADR-07) | reduction ratio `>= 30%` (`REDUCTION_FLOOR`); per-pattern scan `<= LATENCY_BUDGET_US/50` (i.e. `>=50` irreducible patterns fit the `50 us` `LATENCY_BUDGET_US`); worst cap-passing first-hit `<= 0.5 s` (`WORST_FIRSTHIT_CEIL_S`) |
+| `spike_adr06_build.py` | DNSBL build init-time + peak RAM (ADR-06) | build `<= 8.0 s` at 1M un-pruned entries (`THRESH_BUILD_SECONDS`); retained `<= 410 B/entry` (`THRESH_BYTES_PER_ENTRY`, vs the 274 B/entry ADR-05 baseline). RAM gate needs `pympler`; absent → skipped (treated as PASS) |
+
+```sh
+python benchmarks/spike_adr07_regex.py        # exit 1 on NO-GO
+python benchmarks/spike_adr06_build.py        # exit 1 on NO-GO (needs pympler for the RAM gate)
+python benchmarks/spike_adr06_build.py --report-only   # always exit 0 (local inspection)
+```
+
+**CI.** Both run in the `benchmarks` job (`.github/workflows/test.yml`). It is
+**informational** at first — it reports red/green on every PR but is deliberately
+**not** in the required `all-tests-passed` check, so a flaky on-runner timing reading
+can't block merges while the baseline is established. Flip to **enforcing** by adding
+`benchmarks` to that job's `needs` list once the baseline is shown stable. The job
+sets its own `timeout-minutes` (the 1M-entry build is the slow step) rather than
+relying on any shared/default timeout.
+
 ## Install
 
 ```sh

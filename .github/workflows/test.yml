@@ -270,11 +270,54 @@ jobs:
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
         run: npx --yes markdownlint-cli2
 
+  benchmarks:
+    name: Benchmark kill-gates (ReDoS + build RAM)
+    runs-on: ubuntu-latest
+    # The spikes carry their GO/NO-GO verdict in their EXIT CODE (issue #42), so a
+    # regression past the regex-latency / build-time / peak-RAM thresholds fails
+    # THIS job. INFORMATIONAL phase: deliberately NOT yet in the required
+    # `all-tests-passed.needs` list — it runs and reports red/green on every PR to
+    # establish a stable on-runner baseline (shared CI runners are slower/noisier
+    # than dev boxes, and the build-seconds gate has the least headroom), without
+    # blocking merges. Flip to ENFORCING by adding `benchmarks` to that `needs`
+    # list + a result check below, once the baseline is shown stable.
+    # Job-specific timeout (issue #42 follow-up): the 1M-entry build spike is the
+    # slow step; bound it here rather than touching any shared/default timeout.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install benchmark dependencies
+        # pympler drives the retained-bytes/entry RAM gate in spike_adr06_build.py;
+        # without it that gate is skipped (treated as PASS), so install it to keep
+        # the RAM kill-gate live in CI.
+        run: pip install pympler
+
+      - name: ReDoS / regex-latency kill-gate (ADR-07)
+        # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
+        # first-hit). No `|| true` — the exit code IS the gate.
+        run: python benchmarks/spike_adr07_regex.py
+
+      - name: Build init-time / peak-RAM kill-gate (ADR-06)
+        # Non-zero exit on NO-GO (build seconds / retained B/entry) at the default
+        # 1M-entry un-pruned corpus.
+        run: python benchmarks/spike_adr06_build.py
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
     name: All tests passed
     if: always()
+    # NOTE: `benchmarks` is intentionally absent while it is informational-only
+    # (issue #42). Add it here + a result check below to make the kill-gates
+    # required once their on-runner baseline is stable.
     needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint]
     runs-on: ubuntu-latest
     steps:

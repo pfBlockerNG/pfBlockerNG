@@ -28,6 +28,7 @@ Run from the repo root (dev-only; not shipped, not in the default pytest run)::
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import statistics
@@ -353,6 +354,20 @@ def demo_thread_timeout_cannot_interrupt() -> tuple[float, float, float]:
 # Driver.
 # --------------------------------------------------------------------------- #
 def main() -> int:
+    """Run the ReDoS/regex spike; exit non-zero on NO-GO so CI can enforce it.
+
+    This is a KILL-GATE: the verdict is carried by the process exit code (0 = GO,
+    1 = NO-GO). Pass --report-only to print the full report but always exit 0 (a
+    human-readable local run that never fails).
+    """
+    parser = argparse.ArgumentParser(description="ADR-07 regex/ReDoS latency + reduction kill-gate.")
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="print the report but always exit 0 (do not propagate NO-GO to the exit code)",
+    )
+    args = parser.parse_args()
+
     print("=" * 78)
     print("ADR-07 Phase-1 spike: ABP corpus inventory + regex/ReDoS measurement")
     print("=" * 78)
@@ -488,7 +503,10 @@ def main() -> int:
     verdict = "GO (with mitigations)" if gates_ok else "NO-GO -> PIVOT"
     print(f"  VERDICT: {verdict}")
     print(f"  budget-bounded irreducible count: ~{budget_count} patterns at {LATENCY_BUDGET_US:.0f} us")
-    return 0
+    if not gates_ok and args.report_only:
+        print("NOTE: --report-only set -> NO-GO not propagated to the exit code.")
+        return 0
+    return 0 if gates_ok else 1
 
 
 def _safe_compile(pat: str) -> bool:

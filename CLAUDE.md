@@ -307,7 +307,9 @@ pure `dnsbl_build_from_manifest()` / `build()`, fed by the PHP/shell-written
 manifest (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only
 download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned by
 `tests/test_adr06_*` (golden oracle, build module, init-from-raw, PHP boundary);
-the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py`. See
+the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py` — a real gate: it
+exits non-zero on NO-GO and runs in CI (the `benchmarks` job, informational until its
+on-runner baseline is stable; `--report-only` forces exit 0 locally). See
 `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
 
 ABP/EasyList feeds are parsed **entirely in Python** (ADR-07): PHP header-sniffs an
@@ -323,8 +325,9 @@ cap (drops over-long/nested-quantifier patterns at load) plus an always-on runti
 warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
 evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser,
 reconcile, matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS
-kill-gate is `benchmarks/spike_adr07_regex.py`. See
-`.ADRs/ADR_07_ABP_DNSBL_Support/`.
+kill-gate is `benchmarks/spike_adr07_regex.py` — a real gate: it exits non-zero on
+NO-GO and runs in CI (the `benchmarks` job; `--report-only` forces exit 0 locally).
+See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
 ---
 

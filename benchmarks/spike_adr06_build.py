@@ -25,16 +25,20 @@ Measures (N>=3 runs at >=1M entries):
 * retained dict bytes/entry (``pympler.asizeof``, same method as ADR-05 §3a) vs
   the ~274 B/entry baseline.
 
-Then prints an explicit GO / NO-GO against the proposed kill-threshold.
+Then prints an explicit GO / NO-GO against the kill-threshold AND propagates it to
+the process exit code (0 = GO, non-zero = NO-GO) so CI / the hooks can enforce it.
+Pass ``--report-only`` for a human-readable local run that always exits 0.
 
 Run from the repo root (dev-only; not shipped, not in the default pytest run)::
 
     python -m pip install pympler          # dev-only, ADR-05 §3a baseline tool
     SPIKE_N=5 SPIKE_SIZES=1000000 python benchmarks/spike_adr06_build.py
+    python benchmarks/spike_adr06_build.py --report-only   # never fails (local)
 """
 
 from __future__ import annotations
 
+import argparse
 import gc
 import os
 import re
@@ -239,7 +243,8 @@ def _retained_bytes(structures: dict[str, Any]) -> int | None:
     return asizeof.asizeof(structures["dataDB"], structures["zoneDB"], structures["feedGroupIndexDB"])
 
 
-def run(n_domain_lines: int, n_runs: int) -> None:
+def run(n_domain_lines: int, n_runs: int) -> bool:
+    """One full spike at ``n_domain_lines``. Returns True on GO, False on NO-GO."""
     if n_runs < 1:
         raise ValueError(f"n_runs must be >= 1, got {n_runs}")
     print("=" * 78)
@@ -332,7 +337,8 @@ def run(n_domain_lines: int, n_runs: int) -> None:
         print("  bytes/entry : {:.1f}            -> {}".format(bpe, "PASS" if mem_ok else "FAIL"))
     else:
         print("  bytes/entry : (skipped, pympler absent) -> treated as PASS")
-    verdict = "GO" if (time_ok and mem_ok) else "NO-GO"
+    go = time_ok and mem_ok
+    verdict = "GO" if go else "NO-GO"
     print("=" * 78)
     print(
         "VERDICT: {}  (build {:.1f}s threshold, {:.0f} B/entry threshold)".format(
@@ -340,14 +346,34 @@ def run(n_domain_lines: int, n_runs: int) -> None:
         )
     )
     print("=" * 78)
+    return go
 
 
-def main() -> None:
+def main() -> int:
+    """Run the spike at every requested size; exit non-zero if any size is NO-GO.
+
+    This is a KILL-GATE: the process exit code carries the verdict (0 = GO,
+    1 = NO-GO) so CI / the hooks can enforce it. Pass --report-only to print the
+    full report but always exit 0 (a human-readable local run that never fails).
+    """
+    parser = argparse.ArgumentParser(description="ADR-06 Python DNSBL build init-time / peak-RAM kill-gate.")
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="print the report but always exit 0 (do not propagate NO-GO to the exit code)",
+    )
+    args = parser.parse_args()
+
     n_runs = int(os.environ.get("SPIKE_N", "3"))
     sizes = [int(s) for s in os.environ.get("SPIKE_SIZES", "1000000").split(",") if s.strip()]
+    ok = True
     for n in sizes:
-        run(n, n_runs)
+        ok = run(n, n_runs) and ok
+    if not ok and args.report_only:
+        print("NOTE: --report-only set -> NO-GO not propagated to the exit code.")
+        return 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
