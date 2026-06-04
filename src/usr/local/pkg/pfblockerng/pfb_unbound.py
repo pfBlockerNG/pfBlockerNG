@@ -223,7 +223,6 @@ def init_standard(id: int, env: module_env) -> bool:
         safeSearchDB, \
         feedGroupIndexDB, \
         maxmindReader, \
-        _snapshot, \
         pfb_task_queue, \
         pfb_worker_thread, \
         pfb_db_queue, \
@@ -834,28 +833,41 @@ def init_standard(id: int, env: module_env) -> bool:
     else:
         log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
 
-    # ADR-10 P2: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
-    # assign the single module ref. Up to here init populated the scratch globals
-    # (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/feedGroupIndexDB/hstsDB) exactly as
-    # before -- from the manifest build() OR the legacy CSV fallback, plus the user
-    # REGEX ini and the HSTS file; the ``important_rules`` fast-path gate sits in
-    # pfb["important_rules"]. This is the future zero-downtime swap point (one
-    # GIL-atomic rebind). It runs on BOTH the python_enable and the else (empty
-    # defaultdicts) paths, so a snapshot is always present for operate(). Decision-
-    # identical to the old per-global read -- the same dict objects, just bundled
-    # (pinned by the retained ADR-06/07 oracles).
-    _snapshot = Snapshot(
-        data_db=dataDB,
-        zone_db=zoneDB,
-        white_db=whiteDB,
-        regex_db=regexDB,
-        allow_regex_db=allowRegexDB,
-        feed_group_index_db=feedGroupIndexDB,
-        hsts_db=hstsDB,
-        important_rules=bool(pfb["important_rules"]),
-        counts=len(dataDB) + len(zoneDB),
-        regex_count=len(regexDB) + len(allowRegexDB),
-    )
+    # ADR-10 P3: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
+    # install it through the shared fail-closed rebuild_and_swap(). Up to here init
+    # populated the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/
+    # feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build() OR the
+    # legacy CSV fallback, plus the user REGEX ini and the HSTS file; the
+    # ``important_rules`` fast-path gate sits in pfb["important_rules"]. The builder
+    # closure wraps those SAME dict objects into a fresh Snapshot (no copy, no shape
+    # change), and rebuild_and_swap is the SINGLE place the ``_snapshot`` ref is bound
+    # (one GIL-atomic store; the future zero-downtime swap point Phase 4 reuses). It
+    # runs on BOTH the python_enable and the else (empty defaultdicts) paths, so a
+    # snapshot is always present for operate(). Decision-identical to the old per-global
+    # read -- the same dict objects, just bundled (pinned by the retained ADR-06/07
+    # oracles). Net init behaviour is UNCHANGED: this builder never returns None (so the
+    # swap always succeeds at init), the decisionDB.clear() is a no-op on the cache init
+    # just re-created empty, the Reports-cache reset matches init's earlier os.remove of
+    # pfb_py_cache.sqlite (the file was just removed and the table is empty), and
+    # ``emit_counts=False`` keeps init's existing path-specific inline count emits (the
+    # manifest-path pfb_py_count + the always-on pfb_py_regex_count above) -- the swap
+    # must NOT re-emit here or the CSV-fallback/else paths would gain count writes they
+    # do not make today. Phase 4's background caller uses the default emit_counts=True.
+    def _init_build_snapshot() -> Snapshot:
+        return Snapshot(
+            data_db=dataDB,
+            zone_db=zoneDB,
+            white_db=whiteDB,
+            regex_db=regexDB,
+            allow_regex_db=allowRegexDB,
+            feed_group_index_db=feedGroupIndexDB,
+            hsts_db=hstsDB,
+            important_rules=bool(pfb["important_rules"]),
+            counts=len(dataDB) + len(zoneDB),
+            regex_count=len(regexDB) + len(allowRegexDB),
+        )
+
+    rebuild_and_swap(_init_build_snapshot, emit_counts=False)
 
     # Start background DB-write worker (persistent sqlite connection, batched)
     if pfb["mod_threading"] and not pfb.get("db_worker"):
@@ -1173,6 +1185,21 @@ def _db_flush_cache(rows: list[Any]) -> bool:
             "INSERT INTO dnsblcache (type, domain, groupname, final, feed) VALUES (?,?,?,?,?)", rows
         ),
     )
+
+
+def _db_reset_cache() -> bool:
+    # ADR-10 P3: reset the DNSBL Reports cache (the dnsblcache table the Reports tab
+    # reads) on a zero-downtime DNSBL swap, in parity with the init-time os.remove of
+    # pfb_py_cache.sqlite. Goes through _db_run -> _db_lock, so it serializes with the
+    # off-thread pfb_db_worker (and the synchronous fallback) on the SAME persistent
+    # connection -- it never touches the sqlite file directly off-thread (a delete/
+    # reconnect would race the worker mid-flush). DELETE FROM (vs DROP/os.remove) keeps
+    # the schema + WAL connection live so the very next enqueued block row inserts
+    # cleanly post-swap; _db_run re-creates the table on a faulted reconnect. The
+    # current PHP Reports reader reads ALL rows (no generation column), so a destructive
+    # clear is the correct no-restart equivalent of today's wipe-on-restart; see the
+    # Phase-3 handoff for the generation-key alternative deferred to Phase 5/PHP.
+    return _db_run(DB_CACHE, lambda con: con.execute("DELETE FROM dnsblcache"))
 
 
 def pfb_db_validate(db: int) -> bool:
@@ -3312,6 +3339,68 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
     except OSError as e:
         sys.stderr.write("[pfBlockerNG]: Failed to write DNSBL count '{}': {}".format(count_path, e))
         return False
+
+
+def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_counts: bool = True) -> bool:
+    """ADR-10 P3: the single fail-closed build -> atomic-swap + cache-reset step.
+
+    ``build_snapshot`` is a zero-arg builder that produces a BRAND-NEW ``Snapshot`` off
+    the live one (the pure ``build()``/``dnsbl_build_from_manifest()`` layer plus the
+    HSTS file load -- it must mutate NO live dict; build-new-then-rebind, never mutate
+    the live snapshot's dicts as a swap mechanism). It returns ``None`` (or raises) to
+    signal a failed/empty build.
+
+    On SUCCESS (a non-None Snapshot):
+      1. atomically rebind the single module ``_snapshot`` ref (one GIL-atomic STORE --
+         RESULTS/01 SS1: shared __main__ dict + GIL, so the new snapshot is visible to
+         every query worker without a lock on the hot path);
+      2. ``decisionDB.clear()`` -- the unified per-name LRU query memo (#67/#70/#72).
+         It is otherwise reset only by ``init`` re-creating it, so a no-restart swap
+         MUST clear it or ``operate()`` re-serves a STALE block/allow verdict on a cache
+         miss (a newly-added name would stay unblocked, a newly-removed name blocked);
+      3. reset the DNSBL Reports cache through ``_db_reset_cache`` (``_db_lock``-
+         serialized, parity with the init-time wipe -- never an off-thread file touch);
+      4. re-emit ``pfb_py_count`` / ``pfb_py_regex_count`` (the ``DNSBL_Regex`` UI alias)
+         from the NEW snapshot so the UI reflects the live lists without a restart --
+         skipped when ``emit_counts=False`` (init opts out: it keeps its own existing
+         path-specific inline emits to stay byte-identical -- see the call site).
+
+    On FAILURE (builder returns ``None`` or raises): keep the OLD ``_snapshot``, touch
+    NEITHER cache (decisionDB AND the Reports sqlite stay intact), log, and return
+    ``False`` -- fail-closed, mirroring init's ``build_result is not None`` guard. The
+    swap NEVER installs an empty/partial set on a build error; the resolver keeps
+    serving the last good snapshot (Phase 4's background watcher relies on exactly this
+    so a failed reload is a no-op, not an outage).
+
+    This phase calls it SYNCHRONOUSLY from ``init_standard`` (net init behaviour
+    unchanged: the same snapshot, a no-op decisionDB clear on the fresh empty cache, a
+    Reports reset in parity with the init os.remove, and -- with ``emit_counts=False``
+    -- init's own unchanged inline count emits). Phase 4 adds only the background
+    thread + trigger that calls this same function with the default ``emit_counts=True``.
+    """
+    global _snapshot
+
+    try:
+        new_snapshot = build_snapshot()
+    except Exception as e:
+        # Fail-closed: a raising build leaves the live snapshot + both caches intact.
+        sys.stderr.write("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: {}".format(e))
+        return False
+
+    if new_snapshot is None:
+        # Fail-closed: a None build (absent/unparseable manifest, build error) is a
+        # no-op -- the old snapshot keeps serving, no cache is reset.
+        return False
+
+    # SUCCESS: install the new snapshot with one GIL-atomic store, then reset the
+    # query memo + Reports cache and re-emit the UI counts off the NEW snapshot.
+    _snapshot = new_snapshot
+    decisionDB.clear()
+    _db_reset_cache()
+    if emit_counts:
+        dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
+        dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)
+    return True
 
 
 def iter_domain_suffixes(name: str) -> Iterator[str]:
