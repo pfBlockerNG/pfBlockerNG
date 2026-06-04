@@ -1354,7 +1354,7 @@ if (isset($_POST) && !empty($_POST)) {
 		$dnsbl_type	= pfb_filter($_POST['dnsbl_type'], PFB_FILTER_WORD, 'alerts dnsbl_remove');
 
 		$domain_esc	= escapeshellarg($domain);
-		$action		= $_POST['dnsbl_remove'];
+		$action		= pfb_filter($_POST['dnsbl_remove'], PFB_FILTER_WORD, 'alerts dnsbl_remove');
 
 		// If Domain or DNSBL type field is empty, exit.
 		if (empty($domain) || empty($dnsbl_type)) {

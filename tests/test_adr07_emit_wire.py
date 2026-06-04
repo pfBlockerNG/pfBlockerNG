@@ -258,6 +258,20 @@ class TestUserUnlock:
         res = _build({"f": ["||evil.com^"]}, user_unlock=[])
         assert _live_label(res, "evil.com") == "block"
 
+    def test_unlock_does_not_narrow_wildcard_whitelist(self) -> None:
+        # CodeRabbit #65: a permanent WILDCARD whitelist (".evil.com" -> covers
+        # subdomains) must NOT be downgraded to exact when the same registrable domain
+        # is temporarily unlocked (exact). The merge widens on collision, so both the
+        # apex and a subdomain still resolve.
+        res = _build(
+            {"f": ["||evil.com^", "||sub.evil.com^"]},
+            user_whitelist=[".evil.com"],
+            user_unlock=["evil.com"],
+        )
+        assert res.white_db["evil.com"]["wildcard"] is True
+        assert _live_label(res, "evil.com") == "resolve"
+        assert _live_label(res, "sub.evil.com") == "resolve"
+
 
 # --------------------------------------------------------------------------- #
 # 3. ON -- the live 6-band matcher == the Phase-2 oracle decide()

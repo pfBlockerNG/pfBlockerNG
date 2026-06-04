@@ -2950,17 +2950,32 @@ def build(
         zone_db[tld] = {"log": "1", "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
 
     # ADR-06 (#51): the temporary per-alert Unlock store (config.user_unlock, fed from
-    # the pfb_unlock state by the alerts dnsbl_remove handler) merges into whiteDB
+    # the pfb_unlock state by the alerts dnsbl_remove handler) loads into whiteDB
     # exactly like the permanent user whitelist -- both are band-6 sovereign user allows
     # (_dnsbl_normalise_whitelist marks every entry important=True / PRIO_USER_ALLOW), so
     # an unlocked domain resolves (its feed / Custom_List block is overridden). A FULL
     # build emits an empty user_unlock (Force/Cron re-lock); only the incremental
     # dnsbl_remove handler populates it.
     white_db = _dnsbl_normalise_whitelist(
-        list(config.get("user_whitelist", [])) + list(config.get("user_unlock", [])),
+        config.get("user_whitelist", []),
         config.get("top1m_list", []),
         top1m_enabled,
     )
+    # Merge the unlock set WITHOUT narrowing an existing permanent allow: a domain may be
+    # a wildcard in user_whitelist (".x" -> covers subdomains) yet exact in user_unlock,
+    # and a plain last-wins concat would downgrade the wildcard to exact. Widen on
+    # collision instead -- the same monotonic merge the feed @@ allows use below (keep
+    # the broadest wildcard/important, highest band; both sides are band-6 user allows).
+    for domain, unlock_entry in _dnsbl_normalise_whitelist(config.get("user_unlock", []), (), False).items():
+        existing = white_db.get(domain)
+        if existing is None:
+            white_db[domain] = unlock_entry
+            continue
+        white_db[domain] = {
+            "wildcard": _white_entry_wildcard(existing) or _white_entry_wildcard(unlock_entry),
+            "important": _white_entry_important(existing) or _white_entry_important(unlock_entry),
+            "band": max(_white_entry_band(existing), _white_entry_band(unlock_entry)),
+        }
 
     # ADR-07 P6: ABP feeds (format_hint='abp') are parsed into the typed Rule stream
     # (Stage A, parse_abp) and reconciled (Stage B) into the banded pre-emit rule
