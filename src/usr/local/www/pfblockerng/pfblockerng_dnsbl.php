@@ -324,13 +324,14 @@ $options_aliasaddr_in		= $options_aliasaddr_out	= explode(',', $networks_list);
 $options_autoproto_in		= $options_autoproto_out	= get_ipprotocols();
 $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
 
+// $input_errors and $savemsg are read unconditionally in the render section below,
+// so they must be defined on every request path. Initialise them once.
+$input_errors = array();
+$savemsg = '';
+
 // Validate input fields and save
 if ($_POST) {
 	if (isset($_POST['save'])) {
-
-		if (isset($input_errors)) {
-			unset($input_errors);
-		}
 
 		// Validate Select field options
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',

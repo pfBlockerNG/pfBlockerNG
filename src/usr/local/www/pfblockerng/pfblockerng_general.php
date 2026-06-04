@@ -83,6 +83,10 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 				'nolimit' => 'No Limit - Not recommended' ];
 
 
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path (incl. a POST without 'save'). Initialise it once.
+$input_errors = array();
+
 // Validate input fields and save
 if ($_POST) {
 	if (isset($_POST['save'])) {

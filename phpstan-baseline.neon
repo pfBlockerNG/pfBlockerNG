@@ -913,18 +913,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
 
 		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
-			message: '#^Variable \$savemsg might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-
-		-
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$a_key follows optional parameter \$alt_register\.$#'
 			identifier: parameter.requiredAfterOptional
 			count: 1
@@ -953,12 +941,6 @@ parameters:
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
 			message: '#^Variable \$options_log_max_dnsbl_parse_err might not be defined\.$#'
