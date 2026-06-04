@@ -1831,6 +1831,38 @@ function pfb_run_hooks($when, $ctx = array()) {
 	}
 }
 
+/*
+ * Map sync_package_pfblockerng()'s $cron argument to a stable PFB_TRIGGER value
+ * for the hook context. The ADR's nominal set is cron|update|force-update|force-reload;
+ * in practice this emits cron|update|force-reload (see below -- force-update collapses
+ * to cron because the GUI Force Update dispatches the same 'pfblockerng.php update' that
+ * calls sync_package_pfblockerng('cron'), indistinguishable from the scheduled cron).
+ *
+ * What each $cron value means at the fire points (verified against the callers):
+ *   'updateip' / 'updatednsbl' -> a GUI "Force Reload" of just IP or just DNSBL
+ *       (pfblockerng_update.php -> pfblockerng.php updateip|updatednsbl) => force-reload.
+ *   'cron'  -> the scheduled cron job (pfblockerng.php cron -> pfblockerng_sync_cron),
+ *       AND the GUI "Force Update" / "Force Reload (All)" actions, which dispatch
+ *       'pfblockerng.php update' and likewise call sync_package_pfblockerng('cron').
+ *       These are INDISTINGUISHABLE inside the pass (same $cron), so 'cron' is the
+ *       honest label; a hook that needs to know it ran from the GUI cannot tell here.
+ *   'noupdates' -> the cron path's "nothing to update" branch => cron.
+ *   '' (default) -> a settings save (pfblockerng_general.php) or the de-install path
+ *       => update.
+ */
+function pfb_hook_trigger($cron) {
+	switch ((string) $cron) {
+		case 'updateip':
+		case 'updatednsbl':
+			return 'force-reload';
+		case 'cron':
+		case 'noupdates':
+			return 'cron';
+		default:
+			return 'update';
+	}
+}
+
 
 // Record failed IP/DNSBL Feed parse errors
 function pfb_parsed_fail($header, $line='', $oline, $logfile) {
@@ -7349,6 +7381,12 @@ function sync_package_pfblockerng($cron='') {
 		return;
 	}
 
+	// ADR-12: pre-update hooks. Fire at the TOP of the pass (after the boot/install
+	// early-return above, before any feed processing). 'pre' cannot know what changed
+	// yet -- nothing is downloaded -- so its context is just the trigger. No enabled
+	// 'pre' hook => pfb_run_hooks() returns immediately (byte-identical pass).
+	pfb_run_hooks('pre', array('TRIGGER' => pfb_hook_trigger($cron)));
+
 	// Reloads existing lists without downloading new lists when defined 'on'
 	$pfb['reuse'] = $pfb['config']['pfb_reuse'];
 	$pfb['reuse_dnsbl'] = '';
@@ -11171,6 +11209,28 @@ function sync_package_pfblockerng($cron='') {
 		$log = "\n UPDATE PROCESS ENDED [ NOW ]\n";
 		pfb_logger("{$log}", 1);
 	}
+
+	// ADR-12: post-update hooks. Fire at the closing tail -- AFTER the IP/DNSBL
+	// reloads, filter_configure(), and the FINAL REPORTING 'closing' step above --
+	// so the change flags are final. Context is derived ONLY from existing flags
+	// (no new tracking):
+	//   PFB_IP_CHANGED    = $pfb['filter_configure'] -- set TRUE when firewall rule/
+	//       aliastable changes were found and a filter reload was applied (the IP side).
+	//   PFB_DNSBL_CHANGED = $pfbupdate || $pfbpython -- the DNSBL builders' return
+	//       values (pfb_unbound_dnsbl / pfb_unbound_python); both are DNSBL-side, so a
+	//       change in EITHER means DNSBL data changed. (These are local to the DNSBL
+	//       block; !empty() reads as 0 if that block did not run -- no warning.)
+	//   PFB_TRIGGER       = pfb_hook_trigger($cron).
+	// PFB_STATUS and PFB_CHANGED_ALIASES have no clean pass-wide signal today, so they
+	// are reported as 'ok' / '' (the ADR forbids inventing tracking machinery). No
+	// enabled 'post' hook => pfb_run_hooks() returns immediately (byte-identical pass).
+	pfb_run_hooks('post', array(
+		'TRIGGER'		=> pfb_hook_trigger($cron),
+		'IP_CHANGED'		=> !empty($pfb['filter_configure'])	? '1' : '0',
+		'DNSBL_CHANGED'		=> (!empty($pfbupdate) || !empty($pfbpython)) ? '1' : '0',
+		'STATUS'		=> 'ok',
+		'CHANGED_ALIASES'	=> '',
+	));
 }
 
 
