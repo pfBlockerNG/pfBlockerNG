@@ -42,7 +42,9 @@ typically run the instant you push the PR). Block here until `<handle>` has
   comments and/or a final summary message. It does **not** mean any code/commit
   landed; never wait on commits. CodeRabbit reviews incrementally and shows a
   transient "review in progress" state, so a one-shot read is wrong — you must
-  **poll** until the findings are actually up.
+  **poll** until the findings are actually up. It can also **pause reviews when the
+  branch is too active** (many rapid pushes) — handled by the `PAUSE`/`TIMEOUT`
+  branches below (ask `@coderabbitai resume`).
 - **Resolve the login case-insensitively, and pass the BARE handle.** `coderabbit`,
   `Coderabbit`, `coderabbitai` all map to the bot — set `HANDLE=coderabbitai`. The
   poll matches both the bare login AND the `[bot]`-suffixed form (the real login is
@@ -82,6 +84,13 @@ while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
        && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
     { echo DECLINE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
+  # PAUSE (only when MODE=full) = CodeRabbit PAUSED reviews because the branch is too
+  # active (many pushes in a short window). It posts a "Reviews paused" notice and will
+  # NOT review again until resumed — so without this branch the poll would TIMEOUT with
+  # the review never coming. Resolve like DECLINE: ask it to resume, then re-arm.
+  if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused|⏸'; then
+    { echo PAUSE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
+  fi
   i=$((i + 1)); sleep 30
 done
 echo TIMEOUT > "$RESULT"
@@ -112,8 +121,29 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
   language, and `@coderabbitai full review` is its canonical command if the phrase
   doesn't bite. Finished-only mode is deliberate: it won't re-trigger on a repeat
   decline (that would loop forever) — it waits for the fresh review, or times out.
-- **`TIMEOUT`** → `<handle>` didn't finish within the window. Report it and ask
-  whether to keep waiting or to proceed with whatever is there.
+- **`PAUSE`** → CodeRabbit **paused reviews because the branch is too active** (many
+  rapid pushes in a short window — e.g. an automated fix-and-re-run loop). It will not
+  review again until resumed. Resolve exactly like `DECLINE`: post **one** comment
+  asking it to resume, then **re-arm the poll in finished-only mode** (`MODE=finished`,
+  `SINCE=now`) and wait. Comment body (`gh pr comment "$PR" --body-file <file>`, with
+  the Step 7 footer):
+
+  ```text
+  @coderabbitai resume
+  ```
+
+  `@coderabbitai resume` is the canonical resume command; if a pause persists, escalate
+  to `@coderabbitai full review` (forces a fresh complete review of the current head).
+  To avoid tripping the pause in the first place, batch your fixes into ONE push rather
+  than many rapid commits while a review is pending.
+- **`TIMEOUT`** → `<handle>` didn't finish within the window. **First check whether it
+  silently paused**: a too-active branch can leave CodeRabbit stuck showing
+  "review in progress" / "Currently processing new changes" with no terminal result
+  AND no explicit "paused" string (so neither `FINISHED` nor `PAUSE` fired). If the
+  walkthrough/summary comment is stuck like that, treat it as a pause — post
+  `@coderabbitai resume` (or `@coderabbitai full review`), re-arm in finished-only mode,
+  and wait. Otherwise report the timeout and ask whether to keep waiting or proceed with
+  whatever is there.
 
 For a **human** (non-bot) handle there is no in-progress/decline state — the first
 new review or comment since you started waiting is "finished," which the `FINISHED`
