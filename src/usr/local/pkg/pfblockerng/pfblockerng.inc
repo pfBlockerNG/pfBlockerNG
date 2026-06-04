@@ -2295,9 +2295,11 @@ function pfb_create_dnsbl($mode) {
 	global $pfb;
 	pfb_global();
 
-	// [ ADR-13 ] Create/remove the marked DNSBL sinkhole VIP(s) before the NAT pass so
-	// the NAT generation below sees the resolved VIP address(es). No-op (byte-identical)
-	// when 'Create VIPs automatically' (pfb_dnsvip_auto) is off. Refreshes $pfb.
+	// [ ADR-13 ] Create/remove the marked DNSBL sinkhole VIP(s) before the NAT pass so the
+	// NAT generation below sees the resolved VIP address(es). In the main update pass this
+	// is idempotent — sync_package_pfblockerng() already provisioned it before
+	// pfb_unbound_python() (so the module ini bakes the right sinkhole IP); here it covers
+	// the boot/install call path. No-op (byte-identical) when auto-create is off. Refreshes $pfb.
 	pfb_manage_dnsbl_vip($mode);
 
 	$new_nat = $pfb_ex_nat = $dnsbl_ex_nat = array();
@@ -9179,6 +9181,15 @@ function sync_package_pfblockerng($cron='') {
 	elseif (($pfb['enable'] == '' || $pfb['dnsbl'] == '') && !$pfb['install']) {
 		$mode = 'disabled';
 	}
+
+	// [ ADR-13 ] Provision (or remove) the auto-created DNSBL sinkhole VIP(s) BEFORE the
+	// DNSBL config consumers below. pfb_unbound_python() bakes the sinkhole IP
+	// ($pfb['dnsbl_vip4']/[vip6]) into the module ini, so the marked VIP must already exist
+	// and pfb_dnsvip4/6 must be repointed FIRST — otherwise the module answers blocks with
+	// the stale VIP (a one-pass lag). pfb_manage_dnsbl_vip() refreshes $pfb (via pfb_global)
+	// so every consumer below sees the provisioned address. No-op when auto-create is off.
+	// pfb_create_dnsbl($mode) calls it again idempotently (covers the boot/install path).
+	pfb_manage_dnsbl_vip($mode);
 
 	// Modify Unbound python configuration and mount lib/bin folders, as required
 	$pfbpython = pfb_unbound_python($mode);
