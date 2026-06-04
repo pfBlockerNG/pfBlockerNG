@@ -90,7 +90,8 @@ def reset_pfb_globals() -> None:
     }
     pfb_unbound.dataDB = defaultdict(list)
     pfb_unbound.zoneDB = defaultdict(list)
-    pfb_unbound.dnsblDB = defaultdict(list)
+    pfb_unbound.decisionDB = {}
+    pfb_unbound._dnsbl_last_event = None
     pfb_unbound.safeSearchDB = defaultdict(list)
     pfb_unbound.feedGroupIndexDB = defaultdict(list)
     pfb_unbound.regexDB = defaultdict(str)
@@ -103,7 +104,6 @@ def reset_pfb_globals() -> None:
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)
     pfb_unbound.noAAAADB = defaultdict(str)
-    pfb_unbound.excludeDB = []
     pfb_unbound.excludeAAAADB = []
     pfb_unbound.excludeSS = []
     pfb_unbound.threads = []

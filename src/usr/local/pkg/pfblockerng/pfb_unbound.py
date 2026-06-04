@@ -92,10 +92,10 @@ hstsDB: defaultdict[str, Any]
 whiteDB: defaultdict[str, Any]
 gpListDB: defaultdict[str, Any]
 noAAAADB: defaultdict[str, Any]
-dnsblDB: defaultdict[str, Any]
+decisionDB: dict[str, DnsblDecision]
+_dnsbl_last_event: Any = None
 safeSearchDB: defaultdict[str, Any]
 feedGroupIndexDB: defaultdict[int, Any]
-excludeDB: list[str]
 excludeAAAADB: list[str]
 excludeSS: list[str]
 maxmindReader: Any
@@ -209,10 +209,10 @@ def init_standard(id: int, env: module_env) -> bool:
         allowRegexDB, \
         hstsDB, \
         whiteDB, \
-        excludeDB, \
         excludeAAAADB, \
         excludeSS, \
-        dnsblDB, \
+        decisionDB, \
+        _dnsbl_last_event, \
         noAAAADB, \
         gpListDB, \
         safeSearchDB, \
@@ -409,7 +409,8 @@ def init_standard(id: int, env: module_env) -> bool:
     # Initialize dicts/lists
     dataDB = defaultdict(list)
     zoneDB = defaultdict(list)
-    dnsblDB = defaultdict(list)
+    decisionDB = {}
+    _dnsbl_last_event = None
     safeSearchDB = defaultdict(list)
     feedGroupIndexDB = defaultdict(list)
 
@@ -424,7 +425,6 @@ def init_standard(id: int, env: module_env) -> bool:
     gpListDB = defaultdict(str)
     noAAAADB = defaultdict(str)
     feedGroupDB: defaultdict[str, Any] = defaultdict(str)
-    excludeDB = []
     excludeAAAADB = []
     excludeSS = []
 
@@ -1234,7 +1234,7 @@ def get_details_dnsbl(
     rep: reply_info | None,
     kwargs: dict[str, Any] | None,
 ) -> bool:
-    global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
+    global pfb, rcodeDB, decisionDB, noAAAADB, maxmindReader, _dnsbl_last_event
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
@@ -1247,17 +1247,18 @@ def get_details_dnsbl(
     if pfb["sqlite3_resolver_con"]:
         pfb_db_enqueue(("resolver",))
 
-    # Determine if event is a 'reply' or DNSBL block
-    isDNSBL = dnsblDB.get(q_name)
-    if isDNSBL is not None:
+    # Determine if event is a 'reply' or DNSBL block. decisionDB now also holds allow
+    # ("let it resolve"/whitelisted) verdicts, so attribute only an actual block.
+    isDNSBL = decisionDB.get(q_name)
+    if isDNSBL is not None and isDNSBL.is_found and not isDNSBL.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
         # except for Python nullblock events
-        if pfb["python_nolog"] and not isDNSBL["null"]:
+        if pfb["python_nolog"] and not isDNSBL.null_blocking:
             return True
 
         # Increment dnsblgroup counter
-        if pfb["sqlite3_dnsbl_con"] and isDNSBL["group"] != "":
-            pfb_db_enqueue(("dnsbl", isDNSBL["group"]))
+        if pfb["sqlite3_dnsbl_con"] and isDNSBL.group != "":
+            pfb_db_enqueue(("dnsbl", isDNSBL.group))
 
         # Query type (A/AAAA/ANY/...). The cached decision in isDNSBL is
         # qtype-independent, so fold q_type into both the consecutive-dedup
@@ -1269,17 +1270,16 @@ def get_details_dnsbl(
 
         dupEntry = "+"
         event_sig = (q_type, isDNSBL)
-        lastEvent = dnsblDB.get("last-event")
-        if lastEvent is not None:
-            if str(lastEvent) == str(event_sig):
+        if _dnsbl_last_event is not None:
+            if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
             else:
-                dnsblDB["last-event"] = event_sig
+                _dnsbl_last_event = event_sig
         else:
-            dnsblDB["last-event"] = event_sig
+            _dnsbl_last_event = event_sig
 
         # Skip logging
-        if isDNSBL["log"] == "2":
+        if isDNSBL.log_type == "2":
             return True
 
         q_ip = get_q_ip_comm(kwargs)
@@ -1295,11 +1295,11 @@ def get_details_dnsbl(
                 timestamp,
                 q_name,
                 q_ip,
-                isDNSBL["p_type"],
-                isDNSBL["b_type"],
-                isDNSBL["group"],
-                isDNSBL["b_eval"],
-                isDNSBL["feed"],
+                isDNSBL.p_type,
+                isDNSBL.b_type,
+                isDNSBL.group,
+                isDNSBL.b_eval,
+                isDNSBL.feed,
                 dupEntry,
                 q_type,
             )
@@ -1411,7 +1411,7 @@ def get_details_reply(
     rep: reply_info | None,
     kwargs: dict[str, Any] | None,
 ) -> bool:
-    global pfb, rcodeDB, dnsblDB, noAAAADB, maxmindReader
+    global pfb, rcodeDB, decisionDB, noAAAADB, maxmindReader
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
@@ -3696,8 +3696,8 @@ def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
 
 
 def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
-    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, excludeDB, excludeAAAADB
-    global excludeSS, dnsblDB, noAAAADB, gpListDB, safeSearchDB
+    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, decisionDB, excludeAAAADB
+    global excludeSS, noAAAADB, gpListDB, safeSearchDB
 
     qstate_valid = False
     q_type: Any = None
@@ -3979,137 +3979,97 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             if val_counter > 1:
                 isCNAME = True
 
-            # Determine if domain has been previously validated
-            if q_name not in excludeDB:
-                isFound = False
-                isInWhitelist = False
-                nullBlocking = True
+            # One coherent verdict per name in decisionDB: a block, OR an allow
+            # ("let Unbound resolve it" / whitelisted) -- both are decisions, both
+            # are memoized. A repeat query (including a CNAME-blocked name, keyed on
+            # the original) short-circuits here without re-resolving or re-evaluating.
+            decision = decisionDB.get(q_name)
+            if decision is None:
+                tld = get_tld(qstate)
+                cfg = {
+                    "python_blocking": pfb["python_blocking"],
+                    "dataDB": pfb["dataDB"],
+                    "zoneDB": pfb["zoneDB"],
+                    "python_tld": pfb["python_tld"],
+                    "python_tlds": pfb["python_tlds"],
+                    "dnsbl_ipv4": pfb["dnsbl_ipv4"],
+                    "dnsbl_ipv6": pfb["dnsbl_ipv6"],
+                    "python_idn": pfb["python_idn"],
+                    "regexDB": pfb["regexDB"],
+                    "whiteDB": pfb["whiteDB"],
+                    "allowRegexDB": pfb["allowRegexDB"],
+                    "important_rules": pfb["important_rules"],
+                    "regex_warn_ms": pfb["regex_warn_ms"],
+                    "regex_evict_ms": pfb["regex_evict_ms"],
+                    "python_tld_seg": pfb["python_tld_seg"],
+                    "hstsDB": pfb["hstsDB"],
+                    "hsts_tlds": pfb["hsts_tlds"],
+                }
+                containers = {
+                    "dataDB": dataDB,
+                    "zoneDB": zoneDB,
+                    "whiteDB": whiteDB,
+                    "regexDB": regexDB,
+                    "allowRegexDB": allowRegexDB,
+                    "feedGroupIndexDB": feedGroupIndexDB,
+                    "hstsDB": hstsDB,
+                }
+                decision = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
 
-                # Determine if domain was previously DNSBL blocked
-                isDomainInDNSBL = dnsblDB.get(q_name)
-                if isDomainInDNSBL is None:
-                    tld = get_tld(qstate)
-                    cfg = {
-                        "python_blocking": pfb["python_blocking"],
-                        "dataDB": pfb["dataDB"],
-                        "zoneDB": pfb["zoneDB"],
-                        "python_tld": pfb["python_tld"],
-                        "python_tlds": pfb["python_tlds"],
-                        "dnsbl_ipv4": pfb["dnsbl_ipv4"],
-                        "dnsbl_ipv6": pfb["dnsbl_ipv6"],
-                        "python_idn": pfb["python_idn"],
-                        "regexDB": pfb["regexDB"],
-                        "whiteDB": pfb["whiteDB"],
-                        "allowRegexDB": pfb["allowRegexDB"],
-                        "important_rules": pfb["important_rules"],
-                        "regex_warn_ms": pfb["regex_warn_ms"],
-                        "regex_evict_ms": pfb["regex_evict_ms"],
-                        "python_tld_seg": pfb["python_tld_seg"],
-                        "hstsDB": pfb["hstsDB"],
-                        "hsts_tlds": pfb["hsts_tlds"],
-                    }
-                    containers = {
-                        "dataDB": dataDB,
-                        "zoneDB": zoneDB,
-                        "whiteDB": whiteDB,
-                        "regexDB": regexDB,
-                        "allowRegexDB": allowRegexDB,
-                        "feedGroupIndexDB": feedGroupIndexDB,
-                        "hstsDB": hstsDB,
-                    }
-                    dec = evaluate_domain(q_name, q_name_original, tld, isCNAME, cfg, containers)
-                    isFound = dec.is_found
-                    isInWhitelist = dec.in_whitelist
-                    nullBlocking = dec.null_blocking
-                    b_type = dec.b_type
-                    p_type = dec.p_type
-                    log_type = dec.log_type
-                    feed = dec.feed
-                    group = dec.group
-                    b_eval = dec.b_eval
+                # A block found via a CNAME chain is recorded against the ORIGINAL
+                # queried name, so a later query for it short-circuits on this entry.
+                if decision.is_found and not decision.in_whitelist and isCNAME:
+                    q_name = q_name_original
 
-                    # Add domain to excludeDB to skip subsequent blacklist validation
-                    if not isFound or isInWhitelist:
-                        excludeDB.append(q_name)
+                # Memoize the verdict (block OR allow) so this name is decided once.
+                decisionDB[q_name] = decision
 
-                    # Domain to be blocked and is not whitelisted
-                    if isFound and not isInWhitelist:
-                        if isCNAME:
-                            q_name = q_name_original
+                # Add domain data to DNSBL cache for Reports tab (fresh block only)
+                if decision.is_found and not decision.in_whitelist:
+                    pfb_db_enqueue(("cache", (decision.b_type, q_name, decision.group, decision.b_eval, decision.feed)))
 
-                        # Skip subsequent DNSBL validation for domain, add to dict for get_details_dnsbl
-                        dnsblDB[q_name] = {
-                            "qname": q_name,
-                            "b_type": b_type,
-                            "p_type": p_type,
-                            "null": nullBlocking,
-                            "log": log_type,
-                            "feed": feed,
-                            "group": group,
-                            "b_eval": b_eval,
-                        }
-                        # Skip subsequent DNSBL validation for original domain (CNAME validation),
-                        # add to dict for get_details_dnsbl
-                        if isCNAME and dnsblDB.get(q_name_original) is None:
-                            dnsblDB[q_name_original] = {
-                                "qname": q_name_original,
-                                "b_type": b_type,
-                                "p_type": p_type,
-                                "null": nullBlocking,
-                                "log": log_type,
-                                "feed": feed,
-                                "group": group,
-                                "b_eval": b_eval,
-                            }
+            # Block iff found and not whitelisted; an allow decision falls through to
+            # the resolver (the WAIT_MODULE below).
+            if decision.is_found and not decision.in_whitelist:
+                # Create FQDN Reply Message
+                msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
 
-                        # Add domain data to DNSBL cache for Reports tab
-                        pfb_db_enqueue(("cache", (b_type, q_name, group, b_eval, feed)))
+                if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
+                    msg.answer.append(
+                        "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if decision.null_blocking else pfb["dnsbl_ipv4"])
+                    )
+                if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
+                    msg.answer.append(
+                        "{}. 3600 IN AAAA {}".format(q_name, "::" if decision.null_blocking else pfb["dnsbl_ipv6"])
+                    )
 
-                # Use previously blocked domain details
-                else:
-                    nullBlocking = isDomainInDNSBL["null"]
-                    isFound = True
-
-                if isFound and not isInWhitelist:
-                    # Create FQDN Reply Message
-                    msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
-
-                    if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
-                        msg.answer.append(
-                            "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if nullBlocking else pfb["dnsbl_ipv4"])
-                        )
-                    if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
-                        msg.answer.append(
-                            "{}. 3600 IN AAAA {}".format(q_name, "::" if nullBlocking else pfb["dnsbl_ipv6"])
-                        )
-
-                    if msg is None or not msg.set_return_msg(qstate):
-                        qstate.ext_state[id] = MODULE_ERROR
-                        return True
-
-                    # Log entry
-                    kwargs = {"pfb_addr": q_ip}
-                    if qstate.return_msg:
-                        get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs)
-                    else:
-                        get_details_dnsbl("dnsbl", None, qstate, None, kwargs)
-
-                    qstate.return_rcode = RCODE_NOERROR
-                    qstate.return_msg.rep.security = 2
-                    # Do not store the synthetic block reply in Unbound's C message
-                    # cache (#43). A cached block is served ahead of this module, so
-                    # repeat queries skip operate() -> the feed-attributed logger
-                    # (get_details_dnsbl: dnsbl.log + per-group counter) never runs and
-                    # per-feed block stats under-count; the cache-hit path logs only an
-                    # unattributed DNS-reply. It also keeps a cached 0.0.0.0/VIP serving
-                    # for up to the TTL after a name is removed from a list (block->allow
-                    # staleness). The reply is synthetic, so not caching it costs only the
-                    # ~1us in-process matcher re-run (the dnsblDB/excludeDB memos still
-                    # short-circuit re-evaluation), never an upstream round-trip. Mirrors
-                    # the SafeSearch CNAME path, the module's only other no_cache_store.
-                    qstate.no_cache_store = 1
-                    qstate.ext_state[id] = MODULE_FINISHED
+                if msg is None or not msg.set_return_msg(qstate):
+                    qstate.ext_state[id] = MODULE_ERROR
                     return True
+
+                # Log entry
+                kwargs = {"pfb_addr": q_ip}
+                if qstate.return_msg:
+                    get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs)
+                else:
+                    get_details_dnsbl("dnsbl", None, qstate, None, kwargs)
+
+                qstate.return_rcode = RCODE_NOERROR
+                qstate.return_msg.rep.security = 2
+                # Do not store the synthetic block reply in Unbound's C message cache
+                # (#43). A cached block is served ahead of this module, so repeat queries
+                # skip operate() -> the feed-attributed logger (get_details_dnsbl:
+                # dnsbl.log + per-group counter) never runs and per-feed block stats
+                # under-count; the cache-hit path logs only an unattributed DNS-reply. It
+                # also keeps a cached 0.0.0.0/VIP serving for up to the TTL after a name is
+                # removed from a list (block->allow staleness). The reply is synthetic, so
+                # not caching it costs only the ~1us in-process matcher re-run (the
+                # decisionDB memo still short-circuits re-evaluation), never an upstream
+                # round-trip. Mirrors the SafeSearch CNAME path, the module's only other
+                # no_cache_store.
+                qstate.no_cache_store = 1
+                qstate.ext_state[id] = MODULE_FINISHED
+                return True
 
     if (event == MODULE_EVENT_NEW) or (event == MODULE_EVENT_PASS):
         qstate.ext_state[id] = MODULE_WAIT_MODULE
