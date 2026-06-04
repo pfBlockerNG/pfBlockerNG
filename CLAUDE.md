@@ -26,9 +26,11 @@ Format (one space after the emoji):
   no PR exists.
 - **Emphasis:** the id(s) and the title are ***bold + italic*** (`***…***`); the
   separators `(`, `)`, `:` stay plain.
-- **Title** is trimmed with a trailing `…` to ~28 characters for the whole line (the `…`
-  is not counted; ~1 char of slack for a 2-cell emoji). Issue/PR titles run long — trim
-  freely.
+- **Budget:** the whole marker — `<emoji> ID(#PR): Title` — fits in ~28 characters,
+  **counting the `(#PR)` group** (the trailing `…` is not counted; allow ~1 char of slack
+  for a 2-cell emoji). Trim the **title** with a trailing `…` to make the line fit. Because
+  `(#PR)` counts, a marker that carries a PR has a correspondingly shorter title than the
+  same item without one.
 
 Emoji = current state:
 
