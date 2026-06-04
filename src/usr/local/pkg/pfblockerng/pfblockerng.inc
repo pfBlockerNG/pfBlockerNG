@@ -3084,7 +3084,47 @@ function pfb_unbound_py_flip_sentinel() {
 		return FALSE;
 	}
 
-	return TRUE;
+	// Return the generation just published (>= 1) so the caller can wait for the
+	// watcher's applied-generation marker to reach it -- the readiness handshake that
+	// replaces "wait for the Unbound restart" for a no-restart data update (ADR-10).
+	return $next;
+}
+
+
+// ADR-10: wait (bounded) for the reload-watcher to APPLY a published generation.
+// After flipping the sentinel to $gen, PHP blocks here until the watcher writes a value
+// >= $gen to the applied marker (/var/unbound/pfb_py_reload.applied), so the data fast
+// path returns only once the new lists are LIVE -- restoring the "lists live on return"
+// invariant the restart had (the ADR-12 post hook + the #51 alert page then observe the
+// new state, not a pending swap). Queries NEVER stop: the old snapshot keeps serving
+// during the wait, so this stays zero-downtime/zero-dropped. Returns TRUE once applied;
+// FALSE on timeout -- the caller then falls back to the restart so the lists still load
+// (fail-safe). The watcher's poll cadence (RELOAD_POLL_INTERVAL ~2s) + the rebuild time
+// bound the latency; the default budget covers a large ABP rebuild.
+function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
+	global $pfb;
+
+	$gen = (int) $gen;
+	$applied = "{$pfb['dnsbldir']}/pfb_py_reload.applied";
+	$deadline = microtime(TRUE) + (float) $timeout_s;
+
+	do {
+		if (file_exists($applied)) {
+			$raw = @file_get_contents($applied);
+			if ($raw !== FALSE) {
+				$first = strtok($raw, "\n");
+				if ($first !== FALSE) {
+					$first = trim($first);
+					if ($first !== '' && ctype_digit($first) && (int) $first >= $gen) {
+						return TRUE;
+					}
+				}
+			}
+		}
+		usleep(200000);	// 200 ms between polls
+	} while (microtime(TRUE) < $deadline);
+
+	return FALSE;
 }
 
 
@@ -4167,20 +4207,33 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 			// flush (parity with pfb_update_unbound, which also touches this marker).
 			touch("{$pfb['dnsbl_file']}.sync");
 
-			if (pfb_unbound_py_flip_sentinel()) {
+			$gen = pfb_unbound_py_flip_sentinel();
+			if ($gen !== FALSE) {
 				pfb_logger("\nReloading Unbound Resolver{$type} [ zero-downtime swap ]", 1);
 
-				// allow->block C-cache flush (block->allow needs none, #43). Coalesced,
-				// gated behind the '.sync' marker set just above.
-				pfb_unbound_py_ccache_flush($newly_blocked);
+				// Readiness handshake: block (bounded) until the watcher APPLIES this
+				// generation, so the new lists are LIVE before we return -- the ADR-12
+				// post hook + the #51 alert page then see the new state, not a pending
+				// async swap. Queries keep flowing on the old snapshot during the wait.
+				if (pfb_unbound_py_wait_applied($gen)) {
+					// allow->block C-cache flush (block->allow needs none, #43), now that
+					// the block is LIVE. Coalesced, gated behind the '.sync' marker above.
+					pfb_unbound_py_ccache_flush($newly_blocked);
 
-				pfb_logger(" completed [ NOW ]", 1);
-				return;
+					pfb_logger(" completed [ NOW ]", 1);
+					return;
+				}
+
+				// The swap did not confirm within the budget (watcher stuck / declined
+				// its own RAM re-check / very slow box) -> fall back to the restart so
+				// the new lists definitely load. NOT an error: fail-safe by design.
+				pfb_logger(" not confirmed in time -- falling back to Unbound restart", 2);
 			}
-
-			// Sentinel flip failed (could not stage/rename) -> fall back to the restart
-			// so the new lists still load (don't leave a flipped-but-no-op state).
-			pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
+			else {
+				// Sentinel flip failed (could not stage/rename) -> fall back to the restart
+				// so the new lists still load (don't leave a flipped-but-no-op state).
+				pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
+			}
 		}
 		else {
 			// PRIMARY RAM gate declined: the box cannot fit the ~2x transient build.
