@@ -15,6 +15,13 @@ active. Reason: multiple agents operating on the same checkout race on the
 filesystem, the index, `HEAD`, and branch/ref state; isolated worktrees prevent
 those conflicts.
 
+**Exception — pure ADR docs need no PR.** ADR text (the `ADR.md` plus the `/adr-phase`
+prompt `.txt` files under `.ADRs/`) still goes through a **worktree** (the worktree rule
+always holds), but needs **no PR** — commit it there and push **directly to `devel`**
+(fetch + rebase first, as always). The carve-out is the PR only, and only for ADR *docs*;
+ADR *implementation* that touches `src/`, `tests/`, or CI still uses the full worktree +
+rebase-only-PR flow.
+
 - Create one at the start of a task and remove it when done:
 
   ```sh
