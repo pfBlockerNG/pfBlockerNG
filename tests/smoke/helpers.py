@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from .conftest import GUEST_TO_HOST_ALIAS, SMOKE_DIR, SmokeVM, resolve_a
+from .conftest import GUEST_TO_HOST_ALIAS, SMOKE_DIR, STUB_DNS_A, SmokeVM, resolve_a
 
 # --------------------------------------------------------------------------- #
 # Paths / constants
@@ -754,63 +754,71 @@ def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float =
     return ip in result.stdout
 
 
-def use_stub_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Make the runner-side stub DNS (``_StubDnsServer``) Unbound's SOLE upstream.
+SLIRP_HOST_ALIAS = "10.0.2.2"  # QEMU/libslirp's host alias — NATs guest->10.0.2.2:P to the runner's 127.0.0.1:P
 
-    The whole matrix forwards through one CONTROLLED, observable server: every query
-    Unbound does not answer locally (block shape / host override) lands on the stub,
-    which records it (``stub.received(...)``) and answers a known sentinel. That turns
-    "was this blocked?" into a fact read off the upstream — a blocked name must never
-    reach the stub — instead of an inference from a bare SERVFAIL against a dark relay
-    (QEMU's SLIRP DNS at 10.0.2.3, which egress-block makes unreachable).
 
-    Wiring (once per deploy; the stub is reachable over SLIRP and survives the per-case
-    egress block):
+def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
-      * A custom ``forward-zone: "."`` -> ``10.0.2.2:<stub port>`` in Unbound Custom
-        Options. To make it the SOLE ``"."`` zone, pfSense forwarding mode is turned
-        OFF (``unset unbound/forwarding``) so pfSense does not ALSO emit its own
-        ``forward-zone "."`` (from the System DNS servers) — Unbound rejects a duplicate
-        (``error: duplicate forward zone . ignored``) and would keep the wrong one (the
-        breakage the ADR-04 matrix recorded). In resolver mode our custom zone is the
-        only one, and it still forwards everything.
-      * ``unset unbound/dnssec`` — the stub's answers are unsigned, so a validator would
+    The realistic wiring: pfSense forwards (forwarding mode) to its System DNS server
+    ``10.0.2.2`` — QEMU/libslirp's host alias — which NATs ``guest->10.0.2.2:53`` straight
+    to the mock on the runner's loopback (``127.0.0.1:53``), port-preserving. This is the
+    SAME host-alias path the in-runner mock-feed HTTP server already rides
+    (``http://10.0.2.2:<port>/...``), so the chain is:
+
+        guest Unbound --(forward)--> 10.0.2.2:53 (SLIRP host alias) --(NAT)--> 127.0.0.1:53 (mock)
+
+    Crucially this needs NO ``/etc/resolv.conf`` override on the runner (the SLIRP virtual
+    DNS at 10.0.2.3 would read resolv.conf; the 10.0.2.2 host alias does not) — the runner's
+    own resolver is left fully intact, so nothing on the host loses DNS during the run and
+    there is no teardown to restore. No custom ``forward-zone`` and no guestfwd either. The
+    mock records every query (``stub.received(...)``), so blocking is read off the upstream.
+    Loopback survives the per-case egress block (``-o lo ACCEPT``), so it stays hermetic.
+
+    Config set (idempotent; written + ``services_unbound_configure``):
+      * ``system/dnsserver = [10.0.2.2]`` and DHCP-override OFF — so ``10.0.2.2`` is the
+        SOLE forwarder (drops the baked image's dead 1.1.1.1/1.0.0.1, which egress-block
+        makes unreachable and would only add forward timeouts).
+      * ``unbound/forwarding = on`` — forward to the System DNS server.
+      * ``unset unbound/dnssec`` — the mock's answers are unsigned; a validator would
         mark them bogus (SERVFAIL).
-      * ``log-queries: yes`` — the resolver logs each client query too, so guest-side
-        diagnostics corroborate the stub's record.
-
-    Written to CONFIG so ``services_unbound_configure`` bakes it into unbound.conf;
-    pfBlockerNG's reload read-modifies that file in place (only the wizard regenerates
-    it), so the upstream survives every DNSBL reload.
+      * ``unset unbound/custom_options`` — drop any prior custom forward-zone.
     """
-    port = vm.upstream_dns_port
-    if not port:
-        raise RuntimeError("use_stub_upstream: vm.upstream_dns_port unset (stub_dns fixture not active)")
-    custom_options = (
-        "server:\n"
-        "do-not-query-localhost: no\n"
-        "log-queries: yes\n"
-        "forward-zone:\n"
-        'name: "."\n'
-        f"forward-addr: {GUEST_TO_HOST_ALIAS}@{port}\n"
-        "forward-tcp-upstream: yes\n"
-    )
     snippet = (
+        "$s = config_get_path('system', array());\n"
+        f"$s['dnsserver'] = array({_php_str(SLIRP_HOST_ALIAS)});\n"
+        # Disable 'Allow DNS server list to be overridden by DHCP' so only 10.0.2.2 is used.
+        "unset($s['dnsallowoverride']);\n"
+        "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
-        f"$u['custom_options'] = base64_encode({_php_str(custom_options)});\n"
-        # Resolver mode (forwarding OFF) so our custom zone is the only 'forward-zone: \".\"'.
-        "unset($u['forwarding']);\n"
+        "$u['forwarding'] = 'on';\n"
         "unset($u['dnssec']);\n"
+        "unset($u['custom_options']);\n"
         "config_set_path('unbound', $u);\n"
-        "write_config('pfBlockerNG smoke: stub upstream');\n"
+        "write_config('pfBlockerNG smoke: system-DNS upstream (SLIRP host alias -> mock)');\n"
         "services_unbound_configure();\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"use_stub_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+        raise RuntimeError(
+            f"use_system_dns_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
     # services_unbound_configure restarts Unbound — wait for it before any probe.
     wait_unbound_ready(vm)
+    # READINESS + RELAY SELF-CHECK (fail fast, don't let the matrix hang): resolve one
+    # throwaway name on-box. With the mock as upstream it MUST come back as the sentinel
+    # (pfSense -> 10.0.2.2 SLIRP host alias -> runner 127.0.0.1:53 mock). The FIRST response
+    # is authoritative; if it isn't the sentinel, the relay isn't wired — raise NOW with
+    # the answer, rather than letting every per-case forward time out (~300s each).
+    probe = unique_domain("sysdnsselfcheck")
+    ans = dns_probe(vm, probe, "A", timeout=10.0, attempts=3, delay=3.0)
+    if not resolves_to(ans, STUB_DNS_A):
+        raise RuntimeError(
+            f"System-DNS relay self-check FAILED: {probe} -> {ans} (expected the mock sentinel "
+            f"{STUB_DNS_A}). pfSense's 10.0.2.2 host alias -> runner 127.0.0.1:53 mock path is not "
+            f"working (libslirp not NATing the host alias to the mock, or unbound not forwarding)."
+        )
 
 
 # --------------------------------------------------------------------------- #

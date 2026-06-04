@@ -77,16 +77,17 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the ABP matrix (mirrors the ADR-04 matrix).
 
     Egress is managed per-case by ``CaseContext``; the DNSBL VIP is injected once
-    (DNSBL force-disables itself without one). The runner-side stub DNS is wired as
-    Unbound's sole upstream (``use_stub_upstream``) so a not-blocked name resolves to
-    a known sentinel AND is recorded on the stub. A full guest snapshot is collected
-    on teardown for the workflow to upload.
+    (DNSBL force-disables itself without one). pfSense forwards to the runner-side mock
+    via its real System-DNS path (``use_system_dns_upstream``: System DNS = the SLIRP
+    host alias 10.0.2.2, which libslirp NATs to the runner-loopback mock) so a not-blocked name resolves to
+    a known answer AND is recorded on the mock. A full guest snapshot is collected on
+    teardown for the workflow to upload.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
-    h.use_stub_upstream(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -394,9 +395,10 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
     answer, and a pfSense Host Override only expresses A/AAAA — never a CNAME. A raw
     Unbound ``local-data`` CNAME does NOT work either: Unbound returns the bare CNAME
     without chasing it (a single rrset, so ``an_numrrsets`` stays 1 and the walk never
-    runs). So the stub — already Unbound's sole upstream (``use_stub_upstream``) —
-    crafts the 2-rrset chain: ``stub_dns.register_cname(A, B)`` answers a forwarded
-    query for A with ``A CNAME B`` + ``B A <sentinel>``, which Unbound forwards whole.
+    runs). So the mock — pfSense's upstream via its System-DNS path
+    (``use_system_dns_upstream``: forward to 10.0.2.2 → libslirp host-alias NAT → mock) — crafts
+    the 2-rrset chain: ``stub_dns.register_cname(A, B)`` answers a forwarded query for A
+    with ``A CNAME B`` + ``B A <addr>``, which Unbound forwards whole.
 
     Only A's fate differs between the runs; B (= `unique_domain('cnametgt')`, a plain
     exact-match feed entry) is listed in both — the invariant:

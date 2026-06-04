@@ -34,7 +34,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.use_stub_upstream(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
     return smoke_vm
 
 
@@ -295,7 +295,7 @@ def test_stub_cname_chain_is_two_rrsets_and_consistent() -> None:
     import dns.rdatatype
 
     src, tgt = h.unique_domain("stubsrc"), h.unique_domain("stubtgt")
-    server = _StubDnsServer()
+    server = _StubDnsServer(port=0)
     try:
         server.set_records(tgt, a=("198.51.100.5",), aaaa=("2001:db8::5",))
         server.register_cname(src, tgt)
@@ -319,7 +319,7 @@ def test_stub_unregistered_name_is_plain_sentinel() -> None:
     import dns.rdatatype
 
     src, tgt = h.unique_domain("stubsrc"), h.unique_domain("stubtgt")
-    server = _StubDnsServer()
+    server = _StubDnsServer(port=0)
     try:
         server.register_cname(src, tgt)
         server.clear_cname()
@@ -337,7 +337,7 @@ def test_stub_records_queries() -> None:
     locally); a name the stub never saw returns an empty list. ``reset_queries`` clears it.
     """
     seen, never = h.unique_domain("stubseen"), h.unique_domain("stubnever")
-    server = _StubDnsServer()
+    server = _StubDnsServer(port=0)
     try:
         _stub_answer(server, seen, "A")
         assert server.received(seen), "answered query must be recorded"
@@ -354,7 +354,7 @@ def test_stub_register_a_and_nxdomain() -> None:
     import dns.rcode
 
     pinned, gone = h.unique_domain("stubpinned"), h.unique_domain("stubgone")
-    server = _StubDnsServer()
+    server = _StubDnsServer(port=0)
     try:
         server.register_a(pinned, "192.0.2.7")
         reply = _stub_answer(server, pinned, "A")
@@ -373,7 +373,7 @@ def test_stub_set_records_families_multi_and_nodata() -> None:
     import dns.rcode
 
     multi, v4only, bad = h.unique_domain("stubmulti"), h.unique_domain("stubv4"), h.unique_domain("stubbad")
-    server = _StubDnsServer()
+    server = _StubDnsServer(port=0)
     try:
         # Multiple A, one AAAA.
         server.set_records(multi, a=("203.0.113.1", "203.0.113.2"), aaaa=("2001:db8::1",))
