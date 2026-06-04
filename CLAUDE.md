@@ -430,6 +430,14 @@ pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
 
 ## Updating documentation
 
+**Documentation-only changes skip CI.** A commit/PR that touches *only* Markdown
+(`**/*.md` — includes `CLAUDE.md` and `README.md`) or `docs/` is excluded from the
+`test.yml` workflow via `paths-ignore` — there is nothing in the suite to exercise
+for docs. The moment a change also touches code (anything outside those paths), the
+full suite runs again. The local pre-commit hook still lints Markdown regardless, so
+docs stay clean. This is a CI carve-out only: such changes still go through a
+worktree and the normal PR/landing flow ("Worktrees", "Branches and releases").
+
 Update `README.md` when:
 
 - Workflow steps change (test command, deploy command, release steps)
