@@ -1,7 +1,10 @@
 """ADR-04 Phase 5 — the first landed smoke matrix (a THIN vertical slice).
 
-This is NOT the broad knob space (SafeSearch/regex/HSTS/TLD/GeoIP/full-AAAA are
-out of scope, ADR §2). It is the minimum that proves the Phase-4 harness asserts
+This is NOT the broad knob space (SafeSearch/TLD/GeoIP/full-AAAA are out of scope,
+ADR §2). The one knob added beyond the original thin slice is the **HSTS VIP→null
+override** (``test_dnsbl_hsts_*``): an HSTS-preload name on a VIP-mode list blocks
+NULL, not the VIP — a load-bearing default branch (``pfb_hsts``) the rest of the
+matrix deliberately avoids. It is the minimum that proves the Phase-4 harness asserts
 REAL pfBlockerNG behaviour end-to-end on BOTH paths — the IP path (``pfctl``
 alias table + rule) and the DNS path (``dig`` rcode/record shape) — hermetically
 (mock feeds + baked Unbound ``local-data`` only) and guarded against false-green.
@@ -220,6 +223,78 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
         assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
             f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
         )
+
+
+def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """HSTS override: a VIP-mode block on an HSTS-preload name is forced to NULL.
+
+    The load-bearing branch the rest of the matrix deliberately avoids. For a
+    ``logging='enabled'`` (VIP, ``log_type == '1'``) list, ``evaluate_domain``
+    sets ``null_blocking=False`` (→ VIP) ONLY when the name is NOT in HSTS; an
+    HSTS-preload name keeps ``null_blocking=True`` → NULL (``0.0.0.0`` / ``::0``).
+    HSTS is on by default (``pfb_hsts`` → ini ``python_hsts``); we set it
+    explicitly. Rationale: a browser refuses the plaintext VIP sinkhole for an
+    HSTS host, so NULL is the correct block.
+
+    Self-contained: we pin a unique ``.com`` into the in-chroot HSTS set
+    (``add_hsts_name``) rather than depend on the shipped preload list. The case's
+    first reload (in ``CaseContext``) recreates ``pfb_py_hsts.txt`` from the shipped
+    list; we then append our name and reload again — copy-if-missing leaves the now-
+    existing file alone, so the module reloads hstsDB WITH our name. Paired with
+    ``test_dnsbl_hsts_disabled_keeps_vip`` (same name, same VIP list, HSTS off →
+    VIP) to prove this is the override, not an always-null path.
+    """
+    domain = h.unique_domain("hstsnull")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_hsts.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokehsts",
+        feed_url=feed_url,
+        header="smokehsts",
+        mode=h.DnsblMode.VIP,  # logging='enabled' → would be VIP UNLESS HSTS forces NULL
+        hsts=True,  # pfb_hsts on — the override under test
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # hstsDB after enter = shipped list (no our name). Pin it, reload so the
+        # module re-reads, and confirm it is in the effective set before probing.
+        h.add_hsts_name(deployed_vm, domain)
+        h.reload(deployed_vm, "updatednsbl")
+        h.assert_hsts_loaded(deployed_vm, domain)
+        a = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_null_ip(a), f"HSTS override should force A=0.0.0.0, got {a} (VIP leak?)"
+        assert not h.is_vip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.DEFAULT_DNSBL_VIP4}: {a}"
+        aaaa = h.dns_probe(deployed_vm, domain, "AAAA")
+        assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
+            f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
+        )
+
+
+def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Non-tautology guard: the SAME VIP-list HSTS-listed name, HSTS OFF → VIP.
+
+    With ``pfb_hsts`` off → ini ``python_hsts=off``, pfb_unbound.py never loads
+    hstsDB (``cfg["hstsDB"]`` False), so ``in_hsts`` stays False and the
+    ``logging='enabled'`` (VIP) list yields the VIP even for a name we pinned into
+    ``pfb_py_hsts.txt``. The name IS added to the HSTS file (then ignored) so the
+    ONLY difference from ``test_dnsbl_hsts_override_forces_null`` is the toggle —
+    proving that test exercises the HSTS branch, not an always-null path.
+    """
+    domain = h.unique_domain("hstsvip")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_hstsoff.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokehstsoff",
+        feed_url=feed_url,
+        header="smokehstsoff",
+        mode=h.DnsblMode.VIP,
+        hsts=False,  # pfb_hsts off → HSTS branch disabled
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # Pin the name into the HSTS file too — with HSTS off it is IGNORED, so the
+        # only delta vs the positive case is pfb_hsts.
+        h.add_hsts_name(deployed_vm, domain)
+        h.reload(deployed_vm, "updatednsbl")
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"HSTS off: VIP-list block should be the VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
+        assert not h.is_null_ip(blocked), f"HSTS off must NOT force NULL: {blocked}"
 
 
 def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:

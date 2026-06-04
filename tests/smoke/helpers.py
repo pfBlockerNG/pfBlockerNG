@@ -241,6 +241,13 @@ class DnsblCase:
     # to the queried name, b_type '_CNAME'). Off (default): only the queried name is
     # checked, so a name whose CNAME target is blocked still resolves.
     cname_validation: bool = False
+    # hsts -> the "HSTS via Null Block mode" toggle (CFG_DNSBL_SETTINGS/pfb_hsts,
+    # inc:847 -> ini python_hsts). When on, pfb_unbound.py loads pfb_py_hsts.txt into
+    # hstsDB; a VIP-mode (logging='enabled', log_type '1') block on an HSTS-preload
+    # name keeps null_blocking=True -> NULL instead of the VIP (evaluate_domain:
+    # ``log_type == '1' and not in_hsts``). ``None`` (default) emits nothing -> the
+    # existing matrix is byte-for-byte unchanged; True/False forces pfb_hsts on/off.
+    hsts: bool | None = None
 
     @property
     def alias(self) -> str:
@@ -340,6 +347,56 @@ def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 
     if result.returncode != 0:
         raise RuntimeError(f"write_local_feed({path}) failed: rc={result.returncode} {result.stderr!r}")
     return path
+
+
+# --------------------------------------------------------------------------- #
+# HSTS preload set — pin a name into the in-chroot list pfb_unbound.py reads
+# --------------------------------------------------------------------------- #
+# pfb_unbound.py loads /var/unbound/pfb_py_hsts.txt (chroot-relative
+# ``pfb_py_hsts.txt``, init line ~752) into hstsDB on every reload. pfBlockerNG
+# copies the shipped list into the chroot ONLY when it is missing
+# (inc:2238 ``if (!file_exists(...))``), so a name appended here SURVIVES a DNSBL
+# reload — letting a test put an arbitrary domain into the EFFECTIVE HSTS set
+# instead of coupling to whatever the shipped preload list happens to contain.
+
+UNBOUND_HSTS_FILE = "/var/unbound/pfb_py_hsts.txt"
+UNBOUND_PFB_INI = "/var/unbound/pfb_unbound.ini"
+
+
+def add_hsts_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
+    """Append ``name`` (one line) to the in-chroot HSTS preload list.
+
+    Use AFTER the case's first reload has (re)created ``pfb_py_hsts.txt`` from the
+    shipped list, then reload again so the module re-reads hstsDB with ``name``
+    included (copy-if-missing won't clobber the now-existing file). ``tee -a``
+    appends and creates the file if absent (mirrors :func:`write_local_feed`).
+    """
+    result = subprocess.run(
+        vm.ssh_argv("tee", "-a", UNBOUND_HSTS_FILE),
+        input=f"{name}\n",
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"add_hsts_name({name}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
+    """Precondition guard: ``name`` is in the effective HSTS set the module loads.
+
+    Confirms BOTH halves of the load path so a failed end-to-end assertion can be
+    attributed to the HSTS branch and not to a load miss: ``name`` is an exact line
+    in ``pfb_py_hsts.txt`` (the file the chrooted module reads), AND ``python_hsts``
+    is ``on`` in the generated ini (else pfb_unbound.py never opens the file).
+    """
+    in_file = vm.ssh("grep", "-Fxq", name, UNBOUND_HSTS_FILE, timeout=timeout)
+    if in_file.returncode != 0:
+        raise AssertionError(f"{name} not a line in {UNBOUND_HSTS_FILE} (rc={in_file.returncode})")
+    ini = vm.ssh("cat", UNBOUND_PFB_INI, timeout=timeout)
+    if not re.search(r"(?im)^\s*python_hsts\s*=\s*on\b", ini.stdout):
+        raise AssertionError(f"python_hsts not 'on' in {UNBOUND_PFB_INI}:\n{ini.stdout}")
 
 
 # --------------------------------------------------------------------------- #
@@ -674,6 +731,12 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # "CNAME Validation" (inc:852 -> ini python_cname). Walk a resolved answer's
         # CNAME chain and block the original name if a target is blocklisted.
         settings["pfb_cname"] = "on"
+    if spec.hsts is not None:
+        # "HSTS via Null Block mode" (inc:847 -> ini python_hsts). On: a VIP-mode
+        # block on an HSTS-preload name is forced to NULL (pfb_unbound.py loads
+        # pfb_py_hsts.txt -> hstsDB). Only emitted when the case sets it explicitly,
+        # so the default matrix stays byte-for-byte unchanged. See add_hsts_name.
+        settings["pfb_hsts"] = "on" if spec.hsts else "off"
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
     # per row yields one ABP feed per row whose rules the Python build merges.
