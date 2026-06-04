@@ -68,6 +68,14 @@ if ($_POST) {
 				continue;
 			}
 
+			// A crafted POST (e.g. hook_command-0[]=x) makes $value an array; the
+			// scalar validators below (array_key_exists/preg_match) would throw a
+			// PHP 8 TypeError and break the save. Reject non-scalars up front.
+			if (!is_scalar($value)) {
+				$input_errors[] = gettext('Invalid hook field value.');
+				continue;
+			}
+
 			// Collect all rowhelper keys (so empty checkboxes still register a row).
 			$rowhelper_exist[$rowid] = '';
 
