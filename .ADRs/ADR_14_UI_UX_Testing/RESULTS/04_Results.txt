@@ -1,0 +1,258 @@
+ADR-14 — Phase 4 RESULTS: Tier-B browser (headless Playwright) + screenshots
+============================================================================
+
+Status: Implemented (pending smoke test). The headless-Chromium tier + the
+per-page screenshot artifacts are landed and lint/collection-clean LOCALLY. The
+browser leg runs only inside CI on the ADR-04 smoke VM (this dev machine cannot
+boot/reach it, and Playwright + its Chromium binary are not installed here). The
+JS behaviours, their selectors, and the screenshot layout are CONFIRMED from the
+read-only JS/PHP source on disk; the live browser run is CI-PENDING (the
+ui_browser tier is the confirmation; it executes in CI).
+
+The §7 reliability/budget numbers (pass-rate, per-leg wall time) are NOT measured
+here and are NOT fabricated -- see §6 for the CI-pending measurement procedure,
+the default posture, and the one-line demote/drop switch.
+
+Builds on Phase 1 (the authenticated `webui` fixture + session_cookie()) and the
+Phase-3 page facts. NO second login (cookie injected into the browser). NO src/
+change (the JS is a read-only reference).
+
+--------------------------------------------------------------------------------
+1) SESSION REUSE — the Phase-1 cookie injected into the browser (no 2nd login)
+--------------------------------------------------------------------------------
+
+tests/smoke/ui/conftest.py `browser_context` (session-scoped):
+  * pytest.importorskip("playwright.sync_api") -> a clean SKIP (never an error)
+    when Playwright is absent, so collecting tests/smoke/ui without the dep does
+    not break (verified: `pytest tests/smoke/ui/ --collect-only` collects the
+    render+e2e set and the browser module skips, no error).
+  * Launches ONE headless Chromium for the session.
+  * Reads PHPSESSID from the authenticated WebUI session via
+    `webui.session_cookie()` (the Phase-1 API, exposed exactly for this) and
+    `context.add_cookies([{name: 'PHPSESSID', value, domain: smoke_vm.host,
+    path: '/'}])` -> the browser is already logged in. NO browser-side login (a
+    2nd login is a 2nd flake source -- ADR §2). HTTPS image: `ignore_https_errors`
+    mirrors the HTTP client's verify=False for the self-signed cert.
+  * `browser_page` (function-scoped) yields a fresh Page per test on that context.
+
+`_open(page, webui, path)` navigates, waits `domcontentloaded` THEN `networkidle`
+(so pfSense's `events`-queue handlers have run before any assertion), and asserts
+`#usernamefld` is ABSENT -> proves the injected cookie authenticated the browser
+(if the cookie were stale/missing the page would bounce to the login form).
+
+--------------------------------------------------------------------------------
+2) THE JS-ONLY BEHAVIOURS DRIVEN — selectors + before->after transitions
+--------------------------------------------------------------------------------
+
+tests/smoke/ui/test_browser.py, marker `ui_browser` (pytestmark). All selectors
+are READ-ONLY refs from src/.../pfBlockerNG.js and widgets/javascript/pfblockerng.js
+(no src/ change). Auto-waiting only (expect(...).to_be_*, wait_for_load_state) --
+NO time.sleep anywhere.
+
+Page under test for the field/autocomplete/state checks:
+  /pfblockerng/pfblockerng_category_edit.php?type=ipv4  ("Advanced Tuneables")
+  -> sets `var pagetype = 'advanced'` (category_edit.php:1662) so pfBlockerNG.js
+     runs the advanced block. gtype=ipv4 renders the "Advanced In/Out Firewall
+     Rule Settings" sections UNCONDITIONALLY (a foreach, COLLAPSIBLE|SEC_CLOSED)
+     and a placeholder Source row -- so the toggles, autocomplete fields, and a
+     `state-0` select are all present on a FRESH box, no saved config needed.
+
+  (a) test_enable_change_toggle_disables_then_enables_target  [HEADLINE JS UX]
+      - JS: enable_change_in() (pfBlockerNG.js:222-231), called on load AND on the
+        `#autoaddr_in` click (`:240-242`): when #autoaddr_in is UNCHECKED its
+        targets #aliasaddr_in and #autonot_in are .disabled; checked -> enabled.
+      - Selectors: #autoaddr_in (checkbox), #aliasaddr_in (input), #autonot_in
+        (checkbox). All `to_be_attached` (they live in a collapsed panel -> a
+        disabled property is observable while not "visible").
+      - TRANSITION (CLAUDE.md before/after, BOTH branches):
+          BEFORE: #autoaddr_in unchecked  -> #aliasaddr_in & #autonot_in DISABLED.
+          FLIP ON: toggle.click(force=True) (real trusted click flips .checked AND
+                   fires the jQuery click handler -> enable_change_in()) -> ENABLED.
+          FLIP OFF: click again -> DISABLED -- proves a real two-way branch.
+        (enable_change_in is a CLOSURE-LOCAL inside events.push, NOT a global, so
+        it is reachable ONLY through the real click binding -- the test drives the
+        actual control, never page.evaluate('enable_change_in()').)
+      - Screenshots: toggle_before_disabled.png, toggle_after_enabled.png.
+
+  (b) test_ports_autocomplete_bound_and_menu_opens
+      - JS: $('#aliasports_in').autocomplete({source: portsarray}) (pfBlockerNG.js
+        :253-255).
+      - PRIMARY (deterministic) assertion: the widget INSTANCE exists --
+        jQuery('#aliasports_in').data('ui-autocomplete') is truthy -> the binding
+        ran. This is box-independent.
+      - MENU render: a FRESH box has no port aliases, so `portsarray` (built from
+        config `aliases/alias` type=port, category_edit.php:401-413) can be empty
+        and a real-source search yields nothing. To still SHOW a populated menu,
+        the test sets a deterministic source on the bound widget
+        (autocomplete('option','source',[...])) + searches -> the .ui-autocomplete
+        <li> menu materialises (before: no menu visible; after: menu visible).
+      - Screenshot: autocomplete_ports_menu.png.
+      - FOLLOW-UP for the first CI run: if a port alias is injected as a
+        precondition (like Phase-3's ensure_dnsbl_vip), the REAL `portsarray`
+        search can be asserted instead of the injected source; recorded as an
+        option, not done here (keeps the tier hermetic on a bare box).
+
+  (c) test_state_select_greyed_when_disabled
+      - JS: pfb_chg_state_bkgd() (pfBlockerNG.js:124-138): a select[id^='state-']
+        with value 'Disabled' gets inline `background-color: lightgrey` on load;
+        the bound click handler clears it when the value is not 'Disabled'.
+      - Selector: #state-0 (the placeholder row's State select; options
+        Enabled/Disabled/Hold/Flex, default 'Disabled' -- category_edit.php:376,
+        :1097, :1024-1027).
+      - TRANSITION (both branches of the greying condition):
+          BEFORE: #state-0 == 'Disabled' -> computed bg == rgb(211,211,211)
+                  (lightgrey) AND inline style backgroundColor contains 'grey'.
+          AFTER: select_option('Enabled') + dispatch_event('click') (fires the
+                 bound handler, which reads the new val 'Enabled') -> bg cleared
+                 (inline backgroundColor '' / rgba(0,0,0,0)).
+      - Screenshot: state_disabled_grey.png.
+
+Page under test for the widget check:
+  /widgets/widgets/pfblockerng.widget.php  (auth-gated, $nocsrf; renders standalone)
+
+  (d) test_dashboard_widget_renders
+      - JS targets (widgets/javascript/pfblockerng.js): the widget renders
+        #pfblockerngack (hidden ack input, widget.php:983), #formicons (the icon
+        form, :982), #pfBNG-table (the AJAX-refreshed tbody, :1031) and a
+        .PFBSTATUS status icon (:862). The test asserts all four are attached --
+        the DOM the widget JS (fetch_new_pfBlockerNG_widget / the ack/clear click
+        bindings) drives.
+      - NOTE: the standalone widget page does NOT load the dashboard's
+        widgets/javascript/pfblockerng.js (that loads on /index.php with the
+        widget added), so this asserts the RENDER of the JS-target DOM, not a live
+        AJAX refresh. A full AJAX-refresh assertion would need the dashboard with
+        the widget enabled -- recorded as a Phase-5 option, not done here.
+      - Screenshot: dashboard_widget.png.
+
+--------------------------------------------------------------------------------
+3) SCREENSHOTS — artifact layout (human-review, NOT pixel baselines)
+--------------------------------------------------------------------------------
+
+`screenshot_dir` fixture (session-scoped, conftest.py): creates and returns
+  <root>/<version>/   where
+    root    = env SMOKE_UI_SCREENSHOT_DIR  (default "test-results/ui-screenshots")
+    version = env SMOKE_UI_VERSION         (default "unknown" -- the matrix leg
+              sets it to the pfSense image ref/version)
+Each test writes page.screenshot(path=<dir>/<name>.png, full_page=True). Files:
+  toggle_before_disabled.png, toggle_after_enabled.png, autocomplete_ports_menu.png,
+  state_disabled_grey.png, dashboard_widget.png.
+
+The dir is a BUILD OUTPUT: `test-results/` is added to .gitignore -- screenshots
+are NEVER committed; Phase 5 uploads them as an `if: always()` artifact (extend
+the smoke-diagnostics pattern). Per ADR §2 "Screenshots (A1)" they are artifacts
+for human review (the §7 manual-smoke "screenshot review"), NOT asserted pixels.
+
+--------------------------------------------------------------------------------
+4) DEFAULT SUITE — byte-identical (verified locally)
+--------------------------------------------------------------------------------
+- `python -m pytest --collect-only` => 1019 collected (UNCHANGED vs baseline).
+- The browser module + the new fixtures live under tests/smoke/ui/, which
+  pyproject's addopts="-v --ignore=tests/smoke" excludes from default collection
+  -> default count BYTE-IDENTICAL at 1019.
+- Marker `ui_browser` was already registered in pyproject (Phase 1) -> no
+  unknown-marker warning. The tier is OFF the default collection AND OFF the PR
+  gate (daily/on-demand) by the --ignore + the marker.
+- Playwright ABSENT in this venv: `pytest tests/smoke/ui/test_browser.py
+  --override-ini="addopts="` => 1 skipped (module-level importorskip), exit 0 --
+  collection degrades gracefully, no hard error.
+
+--------------------------------------------------------------------------------
+5) GATES (local)
+--------------------------------------------------------------------------------
+- python -m pytest --collect-only       => 1019 collected (== baseline).   [VERIFIED]
+- tests/smoke/ui collection (override)  => 34 collected + browser SKIPs.    [VERIFIED]
+- test_browser without Playwright       => 1 skipped, exit 0 (graceful).    [VERIFIED]
+- ruff check .                          => All checks passed!               [VERIFIED]
+- ruff format --check .                 => 47 files already formatted.      [VERIFIED]
+- mypy (new/changed test files)         => Success: no issues found.        [VERIFIED, informational]
+- NO src/ change (git diff --name-only -- src/ empty;
+  git status --porcelain src/ empty).                                       [VERIFIED]
+
+--------------------------------------------------------------------------------
+6) §7 RELIABILITY / BUDGET — CI-PENDING (measured in CI, NOT fabricated here)
+--------------------------------------------------------------------------------
+
+WHY NOT MEASURED HERE: the §7 numbers (>= 4/5 clean runs at <= ~25 min per matrix
+leg) require REPEATED browser legs against the LIVE pfSense VM, which exists only
+in GitHub Actions CI. This dev box cannot boot/reach the VM and has neither
+Playwright nor its Chromium binary. Inventing pass-rate/wall-time numbers would
+violate CLAUDE.md's "verify against the source of truth / be scrupulously honest"
+-- so NO numbers are claimed.
+
+MEASUREMENT PROCEDURE (maintainer/CI, once Phase 5 wires the workflow):
+  1. Run the ui_browser leg via the Phase-5 ui-tests.yml dispatch (one job per
+     tier x version) at least 5 times against the CE image.
+  2. Record per run: CLEAN (all ui_browser tests passed, no infra abort) vs
+     total, and the leg's wall time (job duration of the browser leg).
+  3. Compare to the §7 thresholds: pass-rate >= 4/5 clean AND wall time <= ~25
+     min. Also follow the §7 manual-smoke "Flake reality" checklist item (re-run
+     the browser leg several times; confirm the threshold holds).
+  4. Record the measured pass-rate + wall time and the decision back into this
+     file (replace this CI-PENDING block with the evidence).
+
+DEFAULT POSTURE PENDING EVIDENCE (already non-PR-blocking BY CONSTRUCTION):
+  Per the ADR the browser tier is daily/on-demand (schedule + dispatch) and NEVER
+  a PR gate -- marker `ui_browser`, off default collection -- so it CANNOT block
+  fast iteration regardless of the §7 outcome. Recommendation: ship it
+  non-PR-blocking, include it in the release gate as a SEPARATE re-runnable leg
+  (Phase 6 wires that, each leg isolated), and let the maintainer demote/drop it
+  on the FIRST CI evidence if it misses the threshold.
+
+DEMOTE / DROP SWITCH (a one-line change, not a rewrite):
+  - DEMOTE to dispatch-only (non-blocking, no schedule, no release gate): in the
+    Phase-5 ui-tests.yml, remove the browser tier from the `schedule`/release
+    `needs:` wiring and keep only `workflow_dispatch` -- the test code is
+    untouched; the marker `ui_browser` already keeps it off PRs.
+  - DROP entirely: deselect the marker (do not run `-m ui_browser` in any
+    workflow leg) OR delete the browser leg from ui-tests.yml. Tiers A
+    (ui_render) and B-HTTP (ui_e2e) already shipped (Phases 2/3) and stand alone
+    with full standalone value -- dropping the browser layer loses nothing they
+    cover.
+  Either way the screenshots/JS coverage are the only loss; the render + form
+  oracles remain.
+
+--------------------------------------------------------------------------------
+7) FILES
+--------------------------------------------------------------------------------
+- tests/smoke/ui/test_browser.py   — NEW: the 4 ui_browser tests (toggle,
+  autocomplete, state-greying, widget render), `_open`/`_shot` helpers,
+  module-level pytest.importorskip("playwright.sync_api").
+- tests/smoke/ui/conftest.py       — ADD: `screenshot_dir`, `browser_context`
+  (importorskip + cookie injection), `browser_page` fixtures + the SCREENSHOT_*
+  env constants. Imports SESSION_COOKIE from .webui to scope the cookie.
+- tests/smoke/requirements.txt     — ADD: `playwright==1.49.1` (dev-only) with the
+  note that the Chromium binary download (`python -m playwright install chromium`)
+  is a Phase-5 CI setup step, NOT installed by the pip line.
+- .gitignore                       — ADD: `test-results/` (screenshot build output,
+  never committed).
+No src/ change; default pytest unchanged at 1019.
+
+--------------------------------------------------------------------------------
+8) NOTES / FOLLOW-UPS for Phase 5
+--------------------------------------------------------------------------------
+- Phase 5 MUST: (a) `pip install -r tests/smoke/requirements.txt` THEN
+  `python -m playwright install --with-deps chromium` on the runner before the
+  ui_browser leg; (b) export SMOKE_ADMIN_PASSWORD (+ optional SMOKE_ADMIN_USER)
+  to the pytest env (Phase 1/3 dependency -- the webui fixture skips without it);
+  (c) set SMOKE_UI_VERSION (the image ref) + optionally SMOKE_UI_SCREENSHOT_DIR
+  to the job's artifact path; (d) upload <screenshot_dir> `if: always()`.
+- Run the leg as `pytest -m ui_browser --override-ini="addopts=" tests/smoke`
+  (mirrors the smoke invocation). ONE job per (tier x version) (C1); NO auto-retry
+  on assertions; bounded retry only on boot/login infra.
+- See §6 for the measurement procedure + the demote/drop switch the maintainer
+  applies on the first CI evidence.
+
+--------------------------------------------------------------------------------
+9) GO-AHEAD FOR PHASE 5
+--------------------------------------------------------------------------------
+Proceed. Tier B (browser) is in place: a headless-Chromium layer that reuses the
+Phase-1 session via the injected PHPSESSID cookie (no second login), drives the
+four JS-only behaviours on observable DOM with auto-waiting + before->after
+transitions, and writes per-page screenshots to a git-ignored artifact dir. The
+tier degrades gracefully without Playwright (module-level importorskip), default
+pytest stays 1019, and the §7 numbers are honestly marked CI-pending with a
+measurement procedure, a non-PR-blocking default posture, and a one-line
+demote/drop switch. Phase 5 wires the reusable matrix workflow (build the .pkg,
+boot the image, install Playwright+Chromium, run the selected tier, upload
+screenshots+logs `if: always()`), Tier A on the PR path, Tier B on
+schedule/dispatch.

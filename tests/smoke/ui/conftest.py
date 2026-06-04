@@ -19,17 +19,32 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ..conftest import SmokeVM
-from .webui import WebUI
+from .webui import SESSION_COOKIE, WebUI
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext, Page
 
 # Env var carrying the baked admin password (ADR-04 SMOKE_ADMIN_PASSWORD).
 ADMIN_PASSWORD_ENV = "SMOKE_ADMIN_PASSWORD"
 # Optional override of the admin username; pfSense's default is "admin".
 ADMIN_USER_ENV = "SMOKE_ADMIN_USER"
 DEFAULT_ADMIN_USER = "admin"
+
+# Where the Tier-B browser screenshots are written. Overridable so CI can point
+# it at the job's artifact dir; defaults to a repo-relative build-output tree
+# (git-ignored, never committed). Laid out <root>/<version>/<page>.png by the
+# browser tests; the <version> sub-dir is set from SMOKE_UI_VERSION (the pfSense
+# image ref/version the matrix leg runs), defaulting to "unknown".
+SCREENSHOT_DIR_ENV = "SMOKE_UI_SCREENSHOT_DIR"
+SCREENSHOT_VERSION_ENV = "SMOKE_UI_VERSION"
+DEFAULT_SCREENSHOT_ROOT = "test-results/ui-screenshots"
+DEFAULT_SCREENSHOT_VERSION = "unknown"
 
 
 @pytest.fixture(scope="session")
@@ -84,3 +99,82 @@ def webui(smoke_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_protocol
     )
     client.login()
     yield client
+
+
+# --------------------------------------------------------------------------- #
+# Tier B — browser (ADR-14 Phase 4). Headless Chromium reusing the Phase-1
+# authenticated session: the `webui` PHPSESSID cookie is injected into the
+# browser context so the browser never logs in a second time (a second login is
+# a second flake source — ADR §2 "inject the session cookie to avoid a second
+# login"). Playwright is imported lazily/guarded so collecting this package
+# without it installed does NOT hard-error (it is a dev-only smoke dep added to
+# tests/smoke/requirements.txt; the Chromium binary download is a Phase-5 CI
+# setup step). All fixtures here run only under the smoke/ui override.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session")
+def screenshot_dir() -> Path:
+    """The per-version screenshot output dir (created); artifacts, not committed.
+
+    Layout ``<root>/<version>/`` — root from ``SMOKE_UI_SCREENSHOT_DIR`` (default
+    ``test-results/ui-screenshots``, git-ignored), version from
+    ``SMOKE_UI_VERSION`` (the image ref the matrix leg runs; default
+    ``unknown``). The browser tests write ``<page>.png`` into it.
+    """
+    root = os.environ.get(SCREENSHOT_DIR_ENV) or DEFAULT_SCREENSHOT_ROOT
+    version = os.environ.get(SCREENSHOT_VERSION_ENV) or DEFAULT_SCREENSHOT_VERSION
+    out = Path(root) / version
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+@pytest.fixture(scope="session")
+def browser_context(webui: WebUI, smoke_vm: SmokeVM) -> Iterator[BrowserContext]:
+    """A headless-Chromium context carrying the Phase-1 session cookie.
+
+    Skips cleanly (never errors) when Playwright is not installed, so collecting
+    this package on a host without the browser tier's dep does not break — the
+    import is deferred here, behind ``importorskip``. Launches one headless
+    Chromium for the session and injects the ``PHPSESSID`` cookie harvested from
+    the authenticated :class:`WebUI` session so the browser is already logged in
+    (no second login). HTTPS on the throwaway image uses ``ignore_https_errors``
+    to match the ``verify=False`` the HTTP client uses for the self-signed cert.
+    """
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
+
+    cookie = webui.session_cookie()
+    if cookie is None:
+        pytest.skip("no PHPSESSID on the webui session -- cannot inject the browser cookie")
+
+    https = webui.base_url.startswith("https://")
+    with sync_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(ignore_https_errors=https)
+        # Inject the authenticated session cookie so the browser reuses the
+        # Phase-1 login. Scope it to the VM host so it rides every request.
+        context.add_cookies(
+            [
+                {
+                    "name": SESSION_COOKIE,
+                    "value": cookie,
+                    "domain": smoke_vm.host,
+                    "path": "/",
+                }
+            ]
+        )
+        try:
+            yield context
+        finally:
+            context.close()
+            browser.close()
+
+
+@pytest.fixture
+def browser_page(browser_context: BrowserContext) -> Iterator[Page]:
+    """A fresh page on the session-scoped authenticated context (per test)."""
+    page = browser_context.new_page()
+    try:
+        yield page
+    finally:
+        page.close()
