@@ -3454,8 +3454,19 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 
 		$pfbupdate = TRUE;
 		unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+
+		// ADR-06 (#51): re-lock the temporary unlocks on this reload (Cron/Force
+		// parity with main, which drops them from the regenerated whitelist). Under
+		// ADR-06 the resolver is driven by the manifest's config.user_unlock, so
+		// deleting the store alone leaves a STALE allow -- the domain keeps resolving
+		// while the UI shows it locked. Drop the store, then recompute user_unlock
+		// from it (now empty) so the reload below re-reads a cleared whiteDB.
+		$pfb_had_unlock = file_exists("{$pfb['dnsbl_unlock']}");
 		unlink_if_exists("{$pfb['dnsbl_unlock']}");
 		unlink_if_exists("{$pfb['dnsbl_unlock']}.data");
+		if ($pfb_had_unlock) {
+			pfb_unbound_python_sources_unlock();
+		}
 	}
 
 	// Backup existing unbound.conf and rename new unbound.conf file
@@ -8802,8 +8813,14 @@ function sync_package_pfblockerng($cron='') {
 	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required.
 	pfb_create_dnsbl($mode);
 
-	// Load new DNSBL updates to Unbound Resolver, as required
-	if ($pfb['domain_update'] || $pfbupdate || $pfbpython ||$pfb['domain_clear'] || $safesearch_update) {
+	// Load new DNSBL updates to Unbound Resolver, as required. ADR-06 (#51): a pending
+	// temporary-unlock store ($pfb['dnsbl_unlock']) also forces the reload so a Cron/
+	// Force re-locks it even when no feed changed -- parity with main, where the
+	// ungated whitelist regeneration sets $pfbpython for the same effect. The reload
+	// path (pfb_update_unbound) then drops the store and clears the manifest's
+	// user_unlock.
+	if ($pfb['domain_update'] || $pfbupdate || $pfbpython ||$pfb['domain_clear'] || $safesearch_update ||
+	    file_exists($pfb['dnsbl_unlock'])) {
 
 		// Create backup of existing DNSBL Unbound database
 

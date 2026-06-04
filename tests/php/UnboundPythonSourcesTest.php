@@ -183,15 +183,18 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame($m['config']['user_whitelist'], $patched['config']['user_whitelist']);
 	}
 
-	// A 'lock'/'reunlock' that empties the store re-locks every domain: pfb_unlock
-	// removes the file when empty, so the recompute yields [].
+	// Store deleted => manifest user_unlock cleared. This is BOTH the handler
+	// 'lock'/'reunlock' that empties the store AND the Cron/Force re-lock step the fix
+	// added at inc:3451 (pfb_update_unbound unlinks the store, then calls
+	// pfb_unbound_python_sources_unlock so the reload re-reads a cleared whiteDB). With
+	// the file gone pfb_dnsbl_unlock_lines() yields [] and the recompute empties the key.
 	public function testSourcesUnlockEmptiesWhenStoreCleared(): void
 	{
 		pfb_unbound_python_sources($this->feeds());
 		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\n");
 		pfb_unbound_python_sources_unlock();
 
-		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (last lock removed it)
+		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (lock / Cron / Force)
 		$this->assertTrue(pfb_unbound_python_sources_unlock());
 		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), true);
 		$this->assertSame([], $patched['config']['user_unlock']);
