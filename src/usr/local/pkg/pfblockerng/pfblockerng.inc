@@ -1832,7 +1832,12 @@ function pfb_run_hooks($when, $ctx = array()) {
 		$timeout = pfb_hook_timeout($hook);
 		$label   = ($desc !== '') ? $desc : "#{$idx}";
 
-		$header = "\n[ pfB Hook ] {$when} {$label} (timeout {$timeout}s): {$command}\n";
+		// Do NOT log the raw $command: an admin hook command line can carry
+		// inline credentials/tokens, and the pfBlockerNG log is persistent (and
+		// collected wholesale by the smoke diagnostics), so logging it would be an
+		// avoidable secret leak even on success. The label (description, else
+		// "#idx") identifies the hook; the command itself lives in config.xml.
+		$header = "\n[ pfB Hook ] {$when} {$label} (timeout {$timeout}s)\n";
 		pfb_logger($header, 1);
 
 		// Run as root under timeout(1): SIGTERM at $timeout, SIGKILL after the
@@ -11244,10 +11249,13 @@ function sync_package_pfblockerng($cron='') {
 	// (no new tracking):
 	//   PFB_IP_CHANGED    = $pfb['filter_configure'] -- set TRUE when firewall rule/
 	//       aliastable changes were found and a filter reload was applied (the IP side).
-	//   PFB_DNSBL_CHANGED = $pfbupdate || $pfbpython -- the DNSBL builders' return
-	//       values (pfb_unbound_dnsbl / pfb_unbound_python); both are DNSBL-side, so a
-	//       change in EITHER means DNSBL data changed. (These are local to the DNSBL
-	//       block; !empty() reads as 0 if that block did not run -- no warning.)
+	//   PFB_DNSBL_CHANGED = the SAME signal set that gates the DNSBL rebuild above
+	//       ($pfbupdate || $pfbpython || $pfb['domain_update'] || $pfb['domain_clear']
+	//       || $safesearch_update -- see the rebuild condition earlier in this pass):
+	//       the builder return values catch feed/data changes, while domain_update/
+	//       domain_clear/safesearch_update catch data-only rebuilds (alert add/remove,
+	//       clear, SafeSearch) that leave the builders untouched. !empty() reads as 0
+	//       for any flag whose block did not run -- no undefined-variable warning.
 	//   PFB_TRIGGER       = pfb_hook_trigger($cron).
 	// PFB_STATUS and PFB_CHANGED_ALIASES have no clean pass-wide signal today, so they
 	// are reported as 'ok' / '' (the ADR forbids inventing tracking machinery). No
@@ -11255,7 +11263,8 @@ function sync_package_pfblockerng($cron='') {
 	pfb_run_hooks('post', array(
 		'TRIGGER'		=> pfb_hook_trigger($cron),
 		'IP_CHANGED'		=> !empty($pfb['filter_configure'])	? '1' : '0',
-		'DNSBL_CHANGED'		=> (!empty($pfbupdate) || !empty($pfbpython)) ? '1' : '0',
+		'DNSBL_CHANGED'		=> (!empty($pfbupdate) || !empty($pfbpython) || !empty($pfb['domain_update']) ||
+						!empty($pfb['domain_clear']) || !empty($safesearch_update)) ? '1' : '0',
 		'STATUS'		=> 'ok',
 		'CHANGED_ALIASES'	=> '',
 	));
