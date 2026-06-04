@@ -1,0 +1,331 @@
+================================================================================
+ADR-10 — PHASE 1 RESULTS — Spike & kill-gate
+  pythonmod shared-globals visibility | ~2x build RAM | restart-downtime baseline
+  | Reports-sqlite write overhead | C-cache delta-flush
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Harness: benchmarks/spike_adr10_swap.py (stdlib + optional pympler; ruff-clean;
+         reuses benchmarks/spike_adr06_build.py build() + benchmarks/_corpus_raw.py)
+================================================================================
+
+OVERALL VERDICT FOR PHASE 2:  ** GO (CONDITIONAL) **
+  - Threading premise (the load-bearing gate): GO on the CI/source-provable half
+    (one process interpreter + one shared __main__ module dict + GIL-serialised
+    callbacks -> module globals are shared across all worker threads). The live-box
+    probe (num-threads>1) is the maintainer's final confirmation; procedure + slot
+    below. NO contradicting evidence found in the Unbound source.
+  - RAM premise: GO **only as a RAM-GATED feature** — the ~2x transient bust the
+    1 GB-box budget at ABP scale (785.9 MiB both-resident at 1.49M entries). The
+    mitigation (RAM-gate the swap; restart fallback on a constrained box) is
+    mandatory, NOT optional. Default-on for unconstrained boxes; fall back to today's
+    restart below a RAM watermark. This is the designed fail-safe, not a new risk.
+  => Proceed to Phase 2 (single-Snapshot refactor — behaviour-preserving prep, has
+     standalone value even if the swap is later gated off). Re-confirm both premises
+     on a live box before Phase 4 ships the active swap.
+
+--------------------------------------------------------------------------------
+1. VISIBILITY PREMISE — pythonmod shared interpreter + shared module globals
+   (THE GATE. NO-GO here => the whole ADR is rejected / re-scoped to per-thread.)
+--------------------------------------------------------------------------------
+
+1a. CI / SOURCE-PROVABLE  ->  GO (no live Unbound needed; read the C glue).
+
+Source of truth: NLnetLabs/unbound  pythonmod/pythonmod.c, pythonmod/pythonmod.h
+(read at master, 2026-06-04; the threading shape has been stable across releases —
+single-interpreter + GIL since the module's introduction).
+
+Findings (quoted/located against pythonmod.c):
+
+(i) ONE process-wide CPython interpreter. Py_Initialize() runs exactly once,
+    guarded by `if (py_mod_count==1 && !Py_IsInitialized())`; the main thread state
+    is saved once: `mainthr = PyEval_SaveThread()`. There is NO Py_NewInterpreter()
+    anywhere in pythonmod — i.e. NO per-thread sub-interpreters, NO per-worker
+    isolated interpreter state. One `PyThreadState* mainthr` spans the process.
+
+(ii) ONE shared module namespace. The script is bound to `__main__`:
+        pe->module = PyImport_AddModule("__main__");
+        pe->dict   = PyModule_GetDict(pe->module);
+     and the script body is executed via `PyRun_SimpleFile(script_py, pe->fname)`.
+     init_standard/init are looked up IN THAT SAME dict:
+        pe->func_init = PyDict_GetItemString(pe->dict, "init_standard")  // or "init"
+     => every callback resolves names against the ONE shared `__main__` dict. A
+     module-level global (pfb_unbound.py's dataDB/zoneDB/whiteDB/regexDB/
+     allowRegexDB/feedGroupIndexDB/decisionDB, the future Snapshot ref) lives once,
+     in that shared dict, for the whole process.
+
+(iii) Callbacks are GIL-serialised. pythonmod_init, pythonmod_operate and
+     pythonmod_inform_super each wrap their body in
+        gil = PyGILState_Ensure(); ... PyGILState_Release(gil);
+     so a global REBIND on one thread (a single STORE_NAME) is atomic w.r.t. every
+     other worker's read under the GIL — exactly the property the atomic snapshot
+     swap relies on (Decision row "Atomic swap shape").
+
+CONCLUSION (1a): A reassignment of a module global on the watcher thread IS visible
+to every Unbound query worker thread, because they share one interpreter and one
+`__main__` dict and never run Python bytecode concurrently (GIL). The ADR-10
+single-build + single-atomic-swap premise is SOUND on the source. NO per-interpreter
+isolation exists in pythonmod -> the NO-GO branch is NOT triggered by the source.
+
+Note on init-per-thread (does not change the verdict): pythonmod_init runs per
+module-config-entry and execs the script body there; whether the Python init_standard
+function is then invoked once or once-per-worker, it writes the SAME shared `__main__`
+globals either way, so visibility holds regardless. The live probe (1b) settles the
+per-worker invocation detail empirically.
+
+Citations:
+  - pythonmod/pythonmod.c  (Py_Initialize/PyEval_SaveThread once under py_mod_count==1;
+    PyImport_AddModule("__main__") + PyModule_GetDict; PyRun_SimpleFile;
+    PyDict_GetItemString "init_standard"/"init"; PyGILState_Ensure in
+    pythonmod_init/operate/inform_super) — NLnetLabs/unbound @ master.
+  - pythonmod/pythonmod.h — declares the SWIG-wrapped callback surface; no
+    per-thread interpreter state.
+  - Unbound developer docs "Python Modules" + the init_standard(id, env)/
+    operate(id, event, qstate, qdata) signatures (id = module id; cfg/env from the
+    shared interpreter): https://unbound.docs.nlnetlabs.nl/en/latest/developer/python-modules.html
+  - General GIL semantics (one thread executes Python bytecode at a time; shared
+    objects are coherent under the GIL): https://docs.python.org/3/c-api/init.html ,
+    PEP 703. (CPython free-threading/no-GIL is NOT in play: pfSense ships a
+    standard GIL CPython, and Unbound uses PyGILState_Ensure throughout.)
+
+1b. LIVE-BOX PROBE  ->  OWNER: MAINTAINER (CI cannot reach Unbound's Py loader).
+    [ RESULT SLOT — fill on a live pfSense CE box ]
+
+Goal: empirically confirm a global set from one worker/init is observed by ANOTHER
+worker, under num-threads>1, so a single swap serves all workers.
+
+Procedure (no production change; a throwaway probe in the live module file):
+  1. On the box, set the resolver to num-threads >= 2 (Unbound conf:
+       server: num-threads: 4
+     and serve enough concurrent traffic to spread queries across workers).
+  2. In a COPY of pfb_unbound.py (or a tiny sibling test module), add at module top:
+       import os, threading
+       _probe_owner = None          # module global — the shared sentinel
+       _probe_lock  = threading.Lock()
+     In init_standard(id, env): record `globals()['_probe_init_ids'] = ...` appending
+     `id` so you can see how many workers ran init. In operate(...), on the FIRST
+     query each worker handles, under _probe_lock:
+       me = (os.getpid(), threading.get_ident())
+       if _probe_owner is None:
+           _probe_owner = me
+           log_info("[probe] _probe_owner SET by %r" % (me,))
+       else:
+           log_info("[probe] worker %r SEES _probe_owner=%r  same_set=%s"
+                    % (me, _probe_owner, _probe_owner != me))
+  3. Drive queries from >= num-threads distinct clients/loops so multiple workers
+     each hit operate() at least once.
+  EXPECT (GO): exactly ONE "SET" line; every other worker logs "SEES _probe_owner"
+     equal to that first owner (i.e. the global written by worker A is visible to
+     workers B, C, ...). thread-idents differ but the observed sentinel is identical.
+  NO-GO signal: each worker logs its OWN ident as _probe_owner (every worker SET it),
+     i.e. the global is per-thread/isolated -> a single swap is invisible to others
+     -> REJECT the single-swap design (or re-scope to a per-thread rebuild). RECORD
+     it here and STOP the chain.
+
+  RESULT (maintainer):  [ shared / isolated ]  __________________________________
+  num-threads used: ____   distinct workers observed: ____   one owner seen by all? ___
+  Verdict: [ GO / NO-GO ]  notes: ________________________________________________
+
+--------------------------------------------------------------------------------
+2. ~2x TRANSIENT RAM — build-while-old-live + swap  (AGENT-RUNNABLE — real number)
+--------------------------------------------------------------------------------
+
+Harness: benchmarks/spike_adr10_swap.py  run_ram()  (reuses ADR-06 build()).
+Run:     SPIKE_N=3 SPIKE_SIZES=2000000 python benchmarks/spike_adr10_swap.py
+Box:     dev laptop, CPython 3.14 darwin, pympler 1.1 (deep retained sizing).
+Corpus:  2,000,000 un-pruned raw domain lines + 40,000 bare-IP -> 1,493,123 unique
+         entries loaded (data=1,311,583, zone=181,540) — ABP-feed scale.
+
+MEASURED (N=3, deterministic):
+  one set, steady-state retained (pympler): 392.9 MiB  =  276.0 B/entry
+        (matches the ADR-05 SS3a 274 B/entry baseline; the model is sound)
+  new-set build peak (tracemalloc, one set + transients): 388.4 MiB
+  ** BOTH-RESIDENT (the 2x — old + new live simultaneously, pympler): 785.9 MiB **
+  process peak RSS (ru_maxrss): ~2.6 GiB  (whole interpreter incl. pympler's own
+        walk + arenas + fragmentation; an upper bound, NOT the shipped footprint —
+        the shipped module has no pympler and the matcher dicts are the 785.9 MiB.)
+
+KILL-THRESHOLD (proposed; tune with maintainer):
+  Min-spec box: 1024 MiB (1 GB appliance — the smallest realistic pfBlockerNG target).
+  Budget for the DNSBL transient: 35% of box RAM = 358 MiB. (The rest is claimed by
+  Unbound's own C message cache, the OS, PHP/cron.)
+  GATE: both-resident <= 358 MiB.
+
+RESULT:  785.9 MiB  >  358 MiB  ->  ** OVER-BUDGET on a 1 GB box at ABP scale. **
+  Even one steady-state set (393 MiB) already exceeds the 358 MiB transient budget —
+  a 1.5M-entry ABP list is heavy for a 1 GB box regardless of the swap. The swap's
+  ADDITIONAL cost is the second resident set during the build window.
+
+MITIGATION (mandatory — ship the swap RAM-GATED, restart as fail-safe):
+  (a) RAM-GATE the zero-downtime swap. At swap time read available RAM
+      (sysctl hw.physmem / vm stats); if the projected both-resident peak
+      (≈ 2 x current snapshot retained bytes, known from the live counts) would
+      not fit a safe watermark, DO NOT swap — fall back to today's restart path
+      (which never doubles: it frees the old structures by dying before rebuilding).
+      The restart fallback already exists (pfb_reload_unbound -> pfb_stop_start_unbound)
+      and is the designed fail-safe. Default the swap ON for boxes with headroom.
+  (b) (optional, later) LOWER-PEAK build to widen the GO envelope: free each per-feed
+      raw buffer as it is consumed; avoid holding the whole manifest + both dict sets
+      at once. Does not remove the fundamental 2x of the dicts themselves, but trims
+      the transient working memory (the gap between 388 MiB build-peak and 393 MiB
+      steady is already small, so the lever is mostly the raw input, not the dicts).
+  => Phase 4 MUST implement the RAM gate (a). (b) is a Phase-4/6 optimisation.
+
+  [ MAINTAINER SLOT — real peak RSS on the smallest supported box ]
+  On a live <box model> with <N> GB RAM, num-threads=<n>, an ABP-scale rebuild+swap
+  reached peak RSS = ______ MiB  (vs idle Unbound RSS ______ MiB). Did it OOM? ___
+  Did the RAM gate engage as designed (fall back to restart)? ___
+
+--------------------------------------------------------------------------------
+3. RESTART-DOWNTIME BASELINE — the number the swap must beat (target: ZERO dropped)
+   OWNER: MAINTAINER (live box; no live Unbound in CI).   [ RESULT SLOT ]
+--------------------------------------------------------------------------------
+
+What to measure: during TODAY's Python-mode DNSBL update (which always restarts
+Unbound — pfb_reload_unbound -> pfb_stop_start_unbound TERMs the pid and re-execs
+`unbound -c`, then init_standard re-runs the FULL ABP-heavy build before answering),
+how long is the resolver DOWN and how many client queries are dropped/refused/stalled.
+
+Procedure (live pfSense CE box, under continuous traffic):
+  1. Load an ABP-scale DNSBL (>= ~1M entries) so init build time is realistic.
+  2. Start a steady on-box query generator at a known rate, e.g.:
+       while true; do drill @127.0.0.1 uuid-<rand>.com >/dev/null 2>&1; done &
+     (use helpers.unique_domain()-style names; record total sent + per-query
+      success/failure + latency). A loop of `dig +tries=1 +timeout=1` logging
+      SERVFAIL/timeout vs NOERROR also works; capture send-time and recv-time.
+  3. Trigger a DNSBL update (Force Update, or a cron feed update, or an alerts
+     Lock — all call pfb_reload_unbound today). Note the unbound pid BEFORE and AFTER
+     (it CHANGES today — restart). Record:
+       - downtime window = (unbound TERMed) .. (unbound answering again). Cross-check
+         against the pfBlockerNG log lines "Stopping Unbound Resolver" ..
+         "Unbound stopped in N sec" .. "Starting Unbound Resolver" .. "completed [NOW]".
+       - dropped/refused/timed-out queries during that window (count + %).
+       - p50/p99 latency spike around the window vs steady-state.
+  4. Repeat 3x; report median + worst.
+
+  RESULT (maintainer):
+    list size (entries): ______   init/build time on restart: ______ s
+    resolver downtime window: ______ s   (TERM -> answering)
+    queries dropped/refused/timed-out: ______ ( ______ % of sent)
+    p99 latency during window: ______ ms  (steady-state p99: ______ ms)
+    unbound pid changed across update? [ yes — restart ]
+  This is the baseline. ADR-10 success = zero dropped, pid UNCHANGED across a
+  DNSBL-data update (Requirement 3 / the §7 manual-smoke "Zero dropped queries").
+
+--------------------------------------------------------------------------------
+4. CACHE BENCHMARKS — drive Phases 3 & 5
+--------------------------------------------------------------------------------
+
+4a. PER-BLOCK REPORTS-SQLITE WRITE OVERHEAD (Bonus 2)  — AGENT-RUNNABLE — real number
+    Harness: benchmarks/spike_adr10_swap.py  run_sqlite()  (real sqlite3, the exact
+    `dnsblcache` schema + WAL/synchronous=NORMAL/busy_timeout PRAGMAs from
+    pfb_unbound.py, and the real queue.put_nowait the DNS thread pays).
+    Run:  SPIKE_SQLITE_ROWS=20000 python benchmarks/spike_adr10_swap.py
+
+    MEASURED (20,000 rows, dev box):
+      (a) per-row INSERT+commit (worst case, NOT shipped):  ~9.1  us/row
+      (b) batched executemany+commit (what pfb_db_worker does OFF-THREAD): ~0.77 us/row
+      (c) queue.put_nowait — the ONLY cost on the DNS response path:       ~1.1  us/row
+
+    READING vs the ~1 us matcher (ADR-05 SS3a):
+      - On the hot path a block pays ONLY the enqueue (c) ≈ 1.1 us — i.e. it roughly
+        DOUBLES the per-block response cost (matcher ~1 us + enqueue ~1.1 us). The
+        actual disk INSERT (b) is amortised off-thread by pfb_db_worker and never
+        stalls the response.
+      - Crucial interaction with #43: blocks set qstate.no_cache_store=1, so EVERY
+        block query (not just the first/unique name) traverses operate() and enqueues
+        a row. The Reports-write RATE = the block-query rate, not the unique-blocked-
+        name rate -> on a busy box this is a steady stream of ~1.1 us enqueues + a
+        continuous off-thread INSERT stream. Non-trivial, though bounded by the
+        5000-deep queue's drop-on-full guard (pfb_db_enqueue) which already protects
+        the response path.
+
+    RECOMMENDED PHASE-3 REPORTS-LOG STRATEGY:  GENERATION-KEY (do NOT destructively
+    clear on every swap; do NOT drop the log).
+      - The async write path EARNS ITS KEEP for the Reports tab and is already
+        response-path-safe (enqueue + drop-on-full); dropping it would lose the
+        Reports feature. So Bonus-2's "droppable?" answer is NO — keep it.
+      - On a swap, prefer (b) GENERATION-KEY over (a) destructive clear: add a
+        `generation` column (or a small generation marker table) to `dnsblcache`;
+        the swap bumps the current generation (a cheap metadata write through
+        _db_lock/the db-queue — NO os.remove, NO race with pfb_db_worker), and the
+        Reports UI reads rows at the current generation. History survives a swap;
+        the wipe-on-restart behaviour (os.remove at init, pfb_unbound.py) is matched
+        in spirit without a destructive delete on the no-restart path.
+      - If the Reports UI cannot be taught the generation column cheaply, FALL BACK
+        to (a): clear the table through _db_lock/the db-queue (parity with the
+        restart's os.remove, simplest, no race). Phase 3 picks whichever the UI reads
+        cleaner — generation-key preferred.
+
+4b. C-CACHE DELTA-FLUSH vs TTL-BOUNDED STALENESS  — METHOD + MAINTAINER MEASUREMENT
+    Reaffirmed fact (ADR Errata / Context 7): since #43 DNSBL blocks set
+    qstate.no_cache_store=1, so block replies are NOT in Unbound's C message cache.
+    => staleness is ONE-DIRECTIONAL:
+        block->allow (unlock / name removed): IMMEDIATE. The block was never cached;
+          once decisionDB is cleared on the swap, the next query resolves the real
+          name. NO C-cache flush needed.
+        allow->block (lock / name added): TTL-STALE. The previously-RESOLVED real
+          answer is still in the C-cache and serves until its TTL. This is the ONLY
+          direction needing handling — and it is NO WORSE than today: today's restart
+          dump_cache/load_cache PRESERVES resolved answers, so today's allow->block
+          is TTL-stale too.
+
+    Method to size the allow->block flush decision (maintainer, live box):
+      - typical newly-blocked delta size per update: count names that move allow->block
+        on a real cron feed update (diff successive manifests / new-block count). Most
+        feed updates add/remove a SMALL delta vs the multi-million resident set.
+      - real feed TTLs: sample the resolved-answer TTLs of names that get newly blocked
+        (dig the names BEFORE blocking; record the cached TTL). If TTLs are short
+        (minutes), "accept TTL-bounded staleness" is cheap and correct.
+      - flush cost: time `unbound-control flush <name>` over a representative delta
+        (and `flush_zone` for a wildcard zone), coalesced into one control session,
+        coordinated with the DNSBL-queries-daemon marker (the `.sync` touch that
+        pfb_reload_unbound already drops to suppress the daemon's unbound-control use)
+        so the flush does not collide on the control socket.
+
+      RESULT (maintainer):
+        typical allow->block delta per update: ______ names
+        sampled resolved TTLs of newly-blocked names: median ______ s  max ______ s
+        unbound-control flush cost for that delta: ______ ms (one session)
+        control-socket collision with DNSBL-queries daemon under the `.sync` marker? __
+
+    RECOMMENDED PHASE-5 C-CACHE STRATEGY:  TARGETED DELTA-FLUSH of the allow->block
+    names (block->allow needs NO flush).
+      - Compute the newly-blocked delta (names moving allow->block) at publish time;
+        after the swap, `unbound-control flush <name>` / `flush_zone <zone>` ONLY
+        those names, in one coalesced control session, gated behind the existing
+        `.sync` daemon-suppression marker to avoid socket collision. One round-trip,
+        correct, bounded by the (small) delta size — strictly BETTER than today's
+        restart, whose preserved cache leaves allow->block stale for the full TTL.
+      - FALL BACK to "accept TTL-bounded staleness" (do nothing for allow->block) if
+        the maintainer's TTL sampling shows short TTLs AND the delta is large enough
+        that flushing is costlier than the residual staleness — this is explicitly
+        NOT a regression (today is stale too). Decide per the 4b numbers.
+      - decisionDB is cleared on EVERY swap (cheap GIL-atomic decisionDB.clear()),
+        which is what makes block->allow immediate and is REQUIRED in both directions
+        (else operate() re-serves the memoised verdict on a cache miss).
+
+--------------------------------------------------------------------------------
+5. GATES (this phase adds no shipped behaviour)
+--------------------------------------------------------------------------------
+  python -m pytest -q          -> 1019 passed (green/unchanged; no src/ touched).
+  ruff check . / format --check -> clean (new harness benchmarks/spike_adr10_swap.py).
+  No PHP/shell touched.
+  No src/ change (verified via git diff): benchmark harness + this handoff only.
+
+--------------------------------------------------------------------------------
+6. GO / NO-GO FOR PHASE 2
+--------------------------------------------------------------------------------
+  GO (conditional, as stated at top):
+    - Threading premise GO on the source (no per-interpreter isolation in pythonmod;
+      shared __main__ dict + single interpreter + GIL); maintainer live-probe (1b)
+      to confirm before the active swap ships (Phase 4).
+    - RAM premise GO **only RAM-gated**: ~2x = 785.9 MiB both-resident at ABP scale
+      busts a 1 GB box's 358 MiB budget -> the swap MUST RAM-gate and fall back to
+      the restart on a constrained box (mandatory mitigation, Phase 4).
+  Phase 2 (single-immutable-Snapshot refactor) is behaviour-preserving prep and is
+  worth landing regardless (atomic-swap-ready even if the active swap is later gated
+  off on small boxes). Proceed.
+
+  STOP/NO-GO would be triggered ONLY if the maintainer live probe (1b) shows
+  per-thread isolated globals — it does not, per the source. If 1b ever contradicts
+  the source, STOP the chain and re-scope to a per-thread rebuild or reject.
+================================================================================
