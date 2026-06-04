@@ -77,13 +77,14 @@ $options_pass_order		= [	'order_0' => '| pfB_Pass/Match/Block/Reject | All other
 
 $options_autorule_suffix = [ 'autorule' => 'auto rule', 'standard' => 'Null (no suffix)', 'ar' => 'AR' ];
 
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path (incl. a POST without 'save'). Initialise it once.
+$input_errors = array();
+
 // Validate input fields and save
 if ($_POST) {
 	if (isset($_POST['save'])) {
 
-		if (isset($input_errors)) {
-			unset($input_errors);
-		}
 		if (isset($savemsg)) {
 			unset($savemsg);
 		}
@@ -215,9 +216,6 @@ if ($_POST) {
 			$pconfig = $_POST;
 		}
 	}
-}
-else {
-	$input_errors = '';
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('IP'));

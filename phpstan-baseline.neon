@@ -1027,12 +1027,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
 
 		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
-
-		-
 			message: '#^Variable \$v4suppression in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
