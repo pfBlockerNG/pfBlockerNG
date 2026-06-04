@@ -965,7 +965,7 @@ if (isset($_POST) && !empty($_POST)) {
 		if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts addwhitelistdom'))) {
 			$domain_esc	= escapeshellarg($domain);
 			$ext_dns 	= escapeshellarg("@{$pfb['extdns']}");
-			exec("/usr/bin/drill {$domain_esc} {$extdns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
+			exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
 		}
 
 		// Remove 'www.' prefix
@@ -1411,7 +1411,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// Query for CNAME(s)
 			if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts dnsbl_remove'))) {
 				$ext_dns = escapeshellarg("@{$pfb['extdns']}");
-				exec("/usr/bin/drill {$domain_esc} {$extdns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
+				exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
 				if (!empty($cname_list)) {
 					foreach ($cname_list as $cname) {
 						$cname = pfb_filter($cname, PFB_FILTER_DOMAIN, 'alerts dnsbl_remove', '', TRUE);
