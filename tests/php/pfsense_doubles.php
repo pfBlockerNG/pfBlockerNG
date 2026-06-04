@@ -132,14 +132,13 @@ if (!function_exists('is_ipaddr_configured')) {
 	}
 }
 
-// --- VIP doubles for the pfb_validate_vips() v6-mandatory branch (ADR-13 Phase 3) ---
+// --- VIP doubles for pfb_validate_vips() (ADR-13) ---
 //
-// The v6-required tests (DnsblV6RequiredTest) drive pfb_validate_vips() with an EXPLICIT
-// $require_v6, so the v6-mandatory branch and the early "no VIP configured" branch are
-// reached with NO pfSense call. The few assertions that pass a non-empty VIP id continue
-// past those early returns into the per-VIP checks; these conservative doubles make that
-// continuation deterministic without coupling to real pfSense state. They are reached
-// ONLY by tests that supply a '_vip_test_*' sentinel id.
+// The v6-recommendation tests (DnsblV6RequiredTest) drive pfb_validate_vips() and the
+// early "no VIP configured" branch with NO pfSense call. The few assertions that pass a
+// non-empty VIP id continue past those early returns into the per-VIP checks; these
+// conservative doubles make that continuation deterministic without coupling to real
+// pfSense state. They are reached ONLY by tests that supply a '_vip_test_*' sentinel id.
 
 if (!function_exists('get_configured_vip_interface')) {
 	// pfSense util.inc: the friendly interface a VIP id lives on. The test sentinels are

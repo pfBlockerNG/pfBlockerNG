@@ -276,12 +276,16 @@ stored `pfb_dnsvip_auto` stays `on` until the next save. The lifecycle manager
 no-ops safely when no free address is available — it logs and leaves the
 existing config untouched.
 
-**IPv6 — when is it mandatory?** When the DNS Resolver listens on IPv6, a v6
-sinkhole VIP becomes **mandatory**:
+**IPv6 — when do you want a v6 sinkhole VIP?** When the DNS Resolver listens on
+IPv6, AAAA blocks should sink to a v6 sinkhole VIP too:
 
 - **Auto mode** — pfBlockerNG provisions `fd00::53` automatically, no friction.
-- **Manual mode** — saving the DNSBL settings without a v6 VIP raises an input
-  error; `pfb_global` force-disables DNSBL until one is provided.
+- **Manual mode** — a v6 VIP is **recommended but not required**. If the resolver
+  listens on IPv6 and no v6 VIP is configured, pfBlockerNG logs a **non-blocking
+  warning** and DNSBL keeps running on IPv4 (AAAA blocks simply are not
+  sinkholed). It does **not** force-disable DNSBL — an earlier revision did, which
+  broke existing manual setups that listen on IPv6 without a v6 VIP; enabling
+  "Create VIPs automatically" provisions the v6 VIP for you.
 
 **HA / CARP.** The `pfb_dnsvip_auto` flag and the address choice live in
 `config.xml` and replicate to CARP secondaries. Each node creates and removes

@@ -469,10 +469,10 @@ if ($_POST) {
 		// provisions them server side on the next pfb_create_dnsbl('enabled') pass
 		// (pfb_manage_dnsbl_vip). The manual dropdowns are disabled in the UI (a disabled
 		// control is not submitted), so the manual VIP validation (existence / interface /
-		// overlap, and the v6-mandatory rule) does NOT apply — the package picks a
-		// conflict-free address and provisions the required v6 VIP itself. In manual mode
-		// (box off) the validator runs exactly as before, so a v6-listening resolver still
-		// requires a v6 VIP (require_v6 defaults to null => computed live).
+		// overlap) does NOT apply — the package picks a conflict-free address and
+		// provisions the v6 VIP itself when the resolver listens on IPv6. In manual mode
+		// (box off) the validator runs exactly as before; a missing IPv6 VIP is NOT a save
+		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
 		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
 		if (!$pfb_auto) {
 			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
