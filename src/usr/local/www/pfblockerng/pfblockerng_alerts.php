@@ -3111,6 +3111,7 @@ $tab_array[] = array(gettext('General'),	false,	'/pfblockerng/pfblockerng_genera
 $tab_array[] = array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
 $tab_array[] = array(gettext('DNSBL'),		false,	'/pfblockerng/pfblockerng_dnsbl.php');
 $tab_array[] = array(gettext('Update'),		false,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[] = array(gettext('Update Hooks'),		false,	'/pfblockerng/pfblockerng_hooks.php');
 $tab_array[] = array(gettext('Reports'),	true,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[] = array(gettext('Feeds'),		false,	'/pfblockerng/pfblockerng_feeds.php');
 $tab_array[] = array(gettext('Logs'),		false,	'/pfblockerng/pfblockerng_log.php');

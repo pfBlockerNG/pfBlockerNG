@@ -30,6 +30,7 @@ $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_ge
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_ip.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_dnsbl.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_update.php";
+$priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_hooks.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_alerts.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_feeds.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_log.php";
