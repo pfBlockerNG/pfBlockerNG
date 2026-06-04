@@ -1,0 +1,139 @@
+ADR-12 PHASE 2 RESULTS — Wire pre + post fire points + context builder
+======================================================================
+
+STATUS: DONE. Both fire points wired, context built from existing flags only.
+Additive no-op preserved. Phase 3 (UI) GO.
+
+Files changed (single commit):
+  - src/usr/local/pkg/pfblockerng/pfblockerng.inc   (+60 lines, 3 hunks; ONLY file touched)
+
+No Python/pytest change. No update logic altered — pure additions (helper + 2 calls).
+
+
+1. CALL-SITE LOCATIONS (file:line — pfblockerng.inc, AFTER rebase onto devel efaa38d)
+-------------------------------------------------------------------------------------
+  pre  : ~:7381  TOP of sync_package_pfblockerng(), immediately AFTER the boot/install
+                 early-return guard (so a boot/install pass does NOT fire hooks, matching
+                 the existing return) and BEFORE the reuse setup + switch($cron) + any feed
+                 processing.
+                     pfb_run_hooks('pre', array('TRIGGER' => pfb_hook_trigger($cron)));
+
+  post : ~:11209 CLOSING TAIL of sync_package_pfblockerng(), the last statement before the
+                 function's closing brace — AFTER the IP/DNSBL reloads, the
+                 '#  Call filter_configure once  #' block (filter_configure() at ~:11001),
+                 the CRON (re)install block, the '# FINAL REPORTING #' closing exec
+                 ("{$pfb['script']} closing ..."), and the "UPDATE PROCESS ENDED" log. So
+                 every change flag is final when post fires.
+                     pfb_run_hooks('post', array( TRIGGER, IP_CHANGED, DNSBL_CHANGED,
+                                                  STATUS, CHANGED_ALIASES ));
+
+  Exactly TWO new pfb_run_hooks() call sites. No reload / filter_configure call was moved
+  or duplicated — the post call sits strictly after them.
+
+  NEW HELPER (not a fire point): pfb_hook_trigger($cron) at ~:1834, immediately after
+  pfb_run_hooks(). Pure $cron -> trigger string map; reads nothing else.
+
+
+2. CONTEXT-BUILDER MAPPING (flag -> PFB_* env var)
+--------------------------------------------------
+The runner (Phase 1) exports PFB_WHEN always, and PFB_<KEY> per ctx entry. Phase 2 supplies:
+
+  pre  ctx:
+    TRIGGER -> PFB_TRIGGER   = pfb_hook_trigger($cron)
+    (PFB_WHEN=pre added by the runner)
+
+  post ctx:
+    TRIGGER         -> PFB_TRIGGER         = pfb_hook_trigger($cron)
+    IP_CHANGED      -> PFB_IP_CHANGED       = $pfb['filter_configure'] ? '1' : '0'
+    DNSBL_CHANGED   -> PFB_DNSBL_CHANGED    = ($pfbupdate || $pfbpython) ? '1' : '0'
+    STATUS          -> PFB_STATUS           = 'ok'   (see limitation below)
+    CHANGED_ALIASES -> PFB_CHANGED_ALIASES  = ''     (see limitation below)
+    (PFB_WHEN=post added by the runner)
+
+  Source-of-truth for each (existing flags only — NO new tracking machinery):
+    - $pfb['filter_configure'] (init FALSE at fn top; flipped TRUE at ~:10872 when autorules
+      rule/aliastable changes are found and a filter reload is applied) = the pass-wide
+      IP-side "data changed" signal. It is FINAL past filter_configure() at the post site.
+    - $pfbupdate = pfb_unbound_dnsbl($mode) return (unbound.conf changed); $pfbpython =
+      pfb_unbound_python($mode) return (python module/whitelist changed). BOTH are DNSBL-side
+      (set in the DNSBL block ~:9393-9396), so a change in EITHER => PFB_DNSBL_CHANGED=1.
+      NOTE: ADR §1 calls $pfbupdate the "IP" flag — that is imprecise; both are DNSBL. The
+      accurate IP signal is $pfb['filter_configure'], used above.
+      These are locals to the DNSBL block; if that block did not run they are unset, and
+      !empty($unset) reads as 0 with NO PHP warning — safe at the tail.
+
+  PFB_TRIGGER VALUES (pfb_hook_trigger($cron), verified against the callers):
+    $cron 'updateip' / 'updatednsbl'  -> 'force-reload'
+        (GUI Force Reload of IP-only / DNSBL-only: pfblockerng_update.php pfb_cron_update()
+         -> pfblockerng.php updateip|updatednsbl -> sync_package_pfblockerng('updateip'|...))
+    $cron 'cron'                       -> 'cron'
+        (scheduled cron: pfblockerng.php cron -> pfblockerng_sync_cron -> ('cron');
+         AND GUI Force Update + Force Reload(All): both dispatch 'pfblockerng.php update'
+         which calls sync_package_pfblockerng('cron') — INDISTINGUISHABLE here)
+    $cron 'noupdates'                  -> 'cron'   (cron path's "nothing to update" branch)
+    $cron '' (default)                 -> 'update'
+        (settings save: pfblockerng_general.php -> sync_package_pfblockerng(); also the
+         de-install path -> sync_package_pfblockerng())
+
+  => emitted set is cron|update|force-reload. The ADR's nominal 'force-update' COLLAPSES to
+     'cron' because the GUI Force Update and the scheduled cron arrive with identical $cron.
+     Documented in the helper's doc comment; honest label, no guessing.
+
+
+3. PFB_STATUS / PFB_CHANGED_ALIASES LIMITATION (no new tracking — per ADR)
+--------------------------------------------------------------------------
+There is NO clean pass-wide signal for either today:
+  - Errors: $parse_error is local to a per-feed download loop; .fail markers are per-feed
+    files; no pass-level error/partial accumulator exists. So PFB_STATUS is hardcoded 'ok'.
+  - Changed aliases: $pfb['aliasupdate'] is a per-list flag reset to FALSE each iteration
+    (~:8500), not an accumulated list; no pass-wide changed-alias list exists. So
+    PFB_CHANGED_ALIASES is hardcoded ''.
+The ADR (§ "Load-bearing facts" / "no new tracking machinery") forbids inventing tracking,
+so both ship as documented stable placeholders. A future phase MAY add real accumulation if
+needed; the env-var names are already stable and present, so hooks can rely on their presence.
+
+
+4. ADDITIVE NO-OP CONFIRMATION
+------------------------------
+With no enabled hooks for a fire point, pfb_run_hooks() returns at its `if (empty($hooks))`
+guard (Phase 1) BEFORE building env or running anything => the pre/post calls are pure no-ops
+=> the update pass is byte-identical to today. Verified: the only added executable statements
+are the two pfb_run_hooks() calls + the pure pfb_hook_trigger() map (called only to build the
+ctx passed in). No existing branch, reload, or filter_configure logic was changed, moved, or
+duplicated (diff = 60 insertions, 0 deletions, 0 modifications).
+
+
+5. GATE RESULTS
+---------------
+  python -m pytest          PASS  (1019 passed — unchanged baseline; no Python touched)
+  ruff check .              PASS  (All checks passed)
+  php -l (pfblockerng.inc)  PASS  ("No syntax errors detected"; only the pre-existing
+                                   E_DEPRECATED optional-before-required notices, unrelated)
+  PHPStan                   PASS  (No errors; --memory-limit=1G, 24 files)
+  PHPUnit (full)            PASS  (125 tests / 207 assertions)
+  ShellCheck                N/A   (no shell files changed this phase)
+
+
+6. CONTRACT SELF-REVIEW (ADR §2 + Phase-2 plan)
+-----------------------------------------------
+  [x] Exactly two new call sites: pre at the top, post at the closing tail (after reloads +
+      filter_configure + closing exec).
+  [x] Context builder derives values ONLY from existing flags ($cron / $pfb['filter_configure']
+      / $pfbupdate / $pfbpython); no new tracking added.
+  [x] No update logic altered; no reload/filter_configure call moved or duplicated.
+  [x] Additive no-op holds (no enabled hooks => runner early-returns => byte-identical pass).
+  [x] Fires on every trigger: cron, manual Update, Force Update, Force Reload (IP/DNSBL/All);
+      PFB_TRIGGER distinguishes them within the limits documented in §2.
+  [x] No Python / pytest change.
+
+
+7. GO-AHEAD FOR PHASE 3 (Settings UI)
+-------------------------------------
+GO. The runner (P1) is wired and fires correctly with accurate, flag-derived context; the
+pass is byte-identical with no enabled hooks. Phase 3 builds the admin-only hooks table
+(add/edit/enable/reorder/delete: command, when=pre|post, description, timeout) writing to
+installedpackages/pfblockerng/config/0/hooks (the schema P1 defined), with help text for the
+PFB_* env vars (names + values per §2 above) and the run-as-root caveat, disambiguated from
+the per-list ip_pre_*.sh pre-scripts. UI changes only — the runner + fire points need no
+further change. If Phase 3 (or 4's smoke) needs a richer PFB_STATUS / PFB_CHANGED_ALIASES,
+that is a separate, optional tracking addition (see §3); the env-var slots already exist.
