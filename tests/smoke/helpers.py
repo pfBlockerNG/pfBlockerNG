@@ -661,6 +661,99 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
         raise RuntimeError(f"ensure_dnsbl_vip failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+# --------------------------------------------------------------------------- #
+# ADR-13 auto-VIP ("Create VIPs automatically") — live introspection helpers
+# --------------------------------------------------------------------------- #
+
+# The descr marker the package stamps on an auto-created v4 sinkhole VIP and the
+# first candidate address pfb_pick_free_dnsbl_vip() returns. Mirror the PHP
+# constants (PFB_AUTO_VIP_DESCR_V4) / candidate sweep in pfblockerng.inc. The
+# matrix's MANUAL VIP sits at 10.10.10.1 (DEFAULT_DNSBL_VIP4), so the first auto
+# candidate 10.10.10.53 is free and is the one auto-create picks — the two
+# coexist, which is exactly what lets the auto-VIP case run on the same VM
+# without disturbing the manual-VIP matrix.
+AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
+AUTO_VIP_IP4 = "10.10.10.53"
+
+
+def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0) -> str:
+    """Run PHP statements ``pre`` then echo the DELIMITED string value of ``expr``.
+
+    Same delimiter trick as :func:`config_get` (pfSsh.php prints a banner, so a
+    read must be fenced). Returns the inner string; raises if the fence is absent.
+    """
+    snippet = pre + f"\necho {_php_str(_CFG_VAL_OPEN)} . (string) ({expr}) . {_php_str(_CFG_VAL_CLOSE)};"
+    result = php_eval(vm, snippet, timeout=timeout)
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(
+            f"_php_read_scalar: no delimited value: rc={result.returncode} out={out!r} err={result.stderr!r}"
+        )
+    return out[start + len(_CFG_VAL_OPEN) : end]
+
+
+def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle the ADR-13 'Create VIPs automatically' setting (``pfb_dnsvip_auto``)."""
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsvip_auto'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: toggle pfb_dnsvip_auto');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_dnsvip_auto({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle the DNSBL component (``pfb_dnsbl``) so the next reload runs
+    pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on')."""
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsbl'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: toggle pfb_dnsbl');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_enabled({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: float = 60.0) -> str:
+    """Subnet (IP) of the first ``virtualip/vip`` entry whose ``descr`` == ``descr``, or '' if none.
+
+    The marker is package-owned, so a non-empty return is the live proof an auto
+    VIP exists; '' proves it was never created / already removed.
+    """
+    pre = (
+        "$out = '';\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        f"  if (($v['descr'] ?? '') === {_php_str(descr)}) {{ $out = (string) ($v['subnet'] ?? ''); break; }}\n"
+        "}"
+    )
+    return _php_read_scalar(vm, pre, "$out", timeout=timeout)
+
+
+def dnsvip4_address(vm: SmokeVM, *, timeout: float = 60.0) -> str:
+    """The IPv4 the stored ``pfb_dnsvip4`` id currently resolves to (or '')."""
+    pre = f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());"
+    return _php_read_scalar(vm, pre, "get_configured_vip_ipv4($d['pfb_dnsvip4'] ?? '') ?? ''", timeout=timeout)
+
+
+def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:
+    """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP)."""
+    result = vm.ssh("/sbin/ifconfig", iface, timeout=timeout)
+    return ip in result.stdout
+
+
 def use_stub_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Make the runner-side stub DNS (``_StubDnsServer``) Unbound's SOLE upstream.
 

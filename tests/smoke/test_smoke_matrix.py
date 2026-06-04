@@ -487,6 +487,79 @@ def _is_v4_literal(member: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# 3b) DNSBL auto-VIP (ADR-13) — create on enable, remove on disable
+# --------------------------------------------------------------------------- #
+
+
+def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-13 'Create VIPs automatically': provision a marked sinkhole VIP on
+    enable, sink a block to it, remove ONLY it on disable.
+
+    Full before/after lifecycle (CLAUDE.md test-coverage rules — assert the
+    before-state, then prove the transition caused the change):
+
+    * BEFORE: no package-owned ``pfB_AUTO_VIP_v4`` exists, and the listed name is
+      NOT blocked (it forwards to the stub upstream, so it resolves to a non-VIP
+      address).
+    * ENABLE (``pfb_dnsvip_auto`` on + DNSBL on): the package creates an IP-Alias
+      VIP at ``10.10.10.53/32`` on ``lo0`` (live in ``ifconfig``), points
+      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``10.10.10.53`` —
+      the AUTO address, NOT the harness's manual ``10.10.10.1`` VIP.
+    * DISABLE: the marked VIP is removed from config AND ``lo0``.
+
+    The matrix's manual VIP at ``10.10.10.1`` is present throughout and is never
+    touched (only marker-owned VIPs are managed). Teardown restores the manual
+    VIP + auto-off so the rest of the matrix runs against its own baseline.
+
+    Auto-create picks ``10.10.10.53`` precisely because the manual VIP holds
+    ``10.10.10.1`` — the first free ``.53`` candidate — so the two coexist and
+    this case needs no second VM. Uses ``scope='update'`` (a full Force Update)
+    so ``pfb_create_dnsbl`` -> ``pfb_manage_dnsbl_vip`` actually runs.
+    """
+    vm = deployed_vm
+    domain = h.unique_domain("autovip")
+    feed_url = h.write_local_feed(vm, "smoke_autovip.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokeautovip", feed_url=feed_url, header="smokeautovip", mode=h.DnsblMode.VIP)
+    try:
+        # BEFORE: no auto VIP yet, and the name is not blocked to the auto address.
+        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
+            "pfB_AUTO_VIP_v4 present before auto-create was ever enabled"
+        )
+        pre = h.dns_probe(vm, domain, "A")
+        assert pre.records, f"{domain} did not resolve before listing: {pre}"
+        assert not h.is_vip(pre, vip=h.AUTO_VIP_IP4), f"{domain} already sinks to the auto VIP before enable: {pre}"
+
+        # ENABLE auto-create; the CaseContext's Force Update lists the name and
+        # runs pfb_create_dnsbl('enabled') -> the VIP is created + applied.
+        h.set_dnsvip_auto(vm, True)
+        with h.CaseContext(vm, spec, scope="update"):
+            assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == h.AUTO_VIP_IP4, (
+                f"auto VIP not created at {h.AUTO_VIP_IP4}: got {h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)!r}"
+            )
+            assert h.vip_alias_live(vm, h.AUTO_VIP_IP4), f"auto VIP {h.AUTO_VIP_IP4} not live on lo0 (ifconfig)"
+            assert h.dnsvip4_address(vm) == h.AUTO_VIP_IP4, (
+                f"pfb_dnsvip4 does not point at the auto VIP: {h.dnsvip4_address(vm)!r}"
+            )
+            blocked = h.dns_probe(vm, domain, "A")
+            assert h.is_vip(blocked, vip=h.AUTO_VIP_IP4), f"{domain} expected auto VIP {h.AUTO_VIP_IP4}, got {blocked}"
+            assert not h.is_vip(blocked, vip=h.DEFAULT_DNSBL_VIP4), (
+                f"block leaked to the manual VIP {h.DEFAULT_DNSBL_VIP4} instead of the auto VIP: {blocked}"
+            )
+
+        # DISABLE DNSBL -> mode 'disabled' -> remove ONLY the marked + IP-matched VIP.
+        h.set_dnsbl_enabled(vm, False)
+        h.reload(vm, "update")
+        assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", "auto VIP not removed from config on disable"
+        assert not h.vip_alias_live(vm, h.AUTO_VIP_IP4), f"auto VIP {h.AUTO_VIP_IP4} still live on lo0 after disable"
+    finally:
+        # Restore the matrix baseline: auto off, DNSBL on, manual VIP repointed.
+        h.set_dnsvip_auto(vm, False)
+        h.set_dnsbl_enabled(vm, True)
+        h.ensure_dnsbl_vip(vm)
+        h.reset(vm)
+
+
+# --------------------------------------------------------------------------- #
 # 4) FALSE-GREEN GUARD — a deliberately-wrong expectation MUST go red
 # --------------------------------------------------------------------------- #
 
