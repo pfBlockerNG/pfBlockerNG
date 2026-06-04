@@ -79,7 +79,25 @@ def webgui_protocol(smoke_vm: SmokeVM) -> str:
 
 
 @pytest.fixture(scope="session")
-def webui(smoke_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_protocol: str) -> Iterator[WebUI]:
+def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
+    """The smoke VM with the branch pfBlockerNG ``.pkg`` installed (once/session).
+
+    ``smoke_vm`` only pulls/boots the base pfSense image; the ADR-04 smoke matrix
+    tests each call :func:`tests.smoke.helpers.deploy` themselves. The UI tiers
+    need pfBlockerNG's webConfigurator pages PRESENT, so deploy here -- otherwise
+    every pfBlockerNG page 404s (pfSense core, e.g. the login page, still serves),
+    which reads as a UI failure but is really "the package was never installed".
+    ``pkg add`` resolves RUN_DEPENDS from the baked image offline (ADR-04), so no
+    egress is required.
+    """
+    from .. import helpers
+
+    helpers.deploy(smoke_vm)
+    return smoke_vm
+
+
+@pytest.fixture(scope="session")
+def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_protocol: str) -> Iterator[WebUI]:
     """A logged-in :class:`WebUI` against the smoke VM's webConfigurator.
 
     Honours the RECON'd protocol: HTTPS on the throwaway image is driven with
@@ -90,8 +108,8 @@ def webui(smoke_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_protocol
     username, password = admin_credentials
     https = webgui_protocol == "https"
     client = WebUI(
-        host=smoke_vm.host,
-        port=smoke_vm.web_port,
+        host=deployed_vm.host,
+        port=deployed_vm.web_port,
         username=username,
         password=password,
         scheme="https" if https else "http",

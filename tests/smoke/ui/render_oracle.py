@@ -151,26 +151,30 @@ class PhpErrorLogGuard:
         """Current byte size of each candidate log (missing -> 0)."""
         sizes: dict[str, int] = {}
         for path in self._candidates:
-            # BSD stat: -f %z = size in bytes. `|| echo 0` makes a MISSING file 0
-            # while keeping the command's exit status 0, so a non-zero returncode
-            # here means the SSH transport itself failed -- fail fast rather than
-            # silently reading size 0 (which would mask oracle condition (d): a
-            # failed read before AND after a real error would show no growth).
-            result = self._vm.ssh("/bin/sh", "-c", f"/usr/bin/stat -f %z {path} 2>/dev/null || echo 0")
-            if result.returncode != 0:
+            # Pass a DIRECT argv (no `/bin/sh -c "..."` wrapper): ssh space-joins
+            # its remote args into ONE string the guest login shell re-parses, so
+            # `/bin/sh -c "stat -f %z P 2>/dev/null || echo 0"` would have `-c`
+            # consume only `stat` and stat would then read stdin (the classic
+            # double-parse -> "(stdin)" output). `stat -f %z <path>` (BSD stat:
+            # %z = size in bytes) runs cleanly as a direct argv, no shell needed.
+            result = self._vm.ssh("/usr/bin/stat", "-f", "%z", path)
+            if result.returncode == 0:
+                text = result.stdout.strip()
+                try:
+                    sizes[path] = int(text)
+                except ValueError as exc:
+                    raise AssertionError(f"unparseable php_error.log size for {path}: {result.stdout!r}") from exc
+            elif result.returncode == 255:
+                # 255 is ssh's OWN failure code (transport/auth) -- a real read
+                # fault, not a missing file; fail fast rather than masking oracle
+                # condition (d) (a failed read before AND after shows no growth).
                 raise AssertionError(
-                    f"failed to read php_error.log size for {path} "
-                    f"(ssh rc={result.returncode}): {(result.stderr or result.stdout).strip()!r}"
+                    f"ssh failed reading php_error.log size for {path}: {(result.stderr or result.stdout).strip()!r}"
                 )
-            text = result.stdout.strip().splitlines()
-            try:
-                if not text:
-                    raise ValueError("empty stat output")
-                sizes[path] = int(text[-1])
-            except ValueError as exc:
-                # Unparseable output is a real fault (a stat error leaking past the
-                # `|| echo 0`), not a transient blip -- fail rather than coerce to 0.
-                raise AssertionError(f"unparseable php_error.log size for {path}: {result.stdout!r}") from exc
+            else:
+                # stat exited non-zero (the log does not exist yet) -> size 0, so a
+                # file created mid-sweep still registers as growth (0 -> N).
+                sizes[path] = 0
         return sizes
 
     def snapshot(self) -> None:
