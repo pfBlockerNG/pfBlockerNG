@@ -1,0 +1,408 @@
+name: UI tests (pfSense VM, ADR-14)
+
+# Reusable, matrix-parametric Web-UI test harness (ADR-14). Boots the SAME
+# ADR-04 smoke pfSense CE VM under KVM, installs the branch-under-test .pkg, and
+# runs a SELECTED Web-UI tier against the live webConfigurator:
+#
+#   tier=render      -> pytest -m ui_render   (Tier A: authenticated HTTP render-smoke; hermetic, cheap)
+#   tier=functional  -> pytest -m ui_e2e      (Tier B: CSRF-POST flows, effective-state oracle)
+#   tier=browser     -> pytest -m ui_browser  (Tier B: headless Playwright/Chromium + screenshots)
+#   tier=all         -> render + functional + browser (one job per tier)
+#
+# This MIRRORS smoke.yml's scaffolding exactly — the same build-pkg-linux.yml
+# build, the GHCR image pull + content-keyed (digest) cache, the KVM-perms udev
+# fix, the SSH-key/secret handling, and the diagnostics upload `if: always()`.
+# It is the ADR-14 sibling of smoke.yml; the assertions live in tests/smoke/ui/.
+#
+# TIERING (ADR §2):
+#   * Tier A (render) is the cheap/hermetic PR gate — test.yml runs it per-PR on
+#     PHP/JS changes and folds it into the "All tests passed" aggregate.
+#   * Tier B (functional + browser) is daily/on-demand and NEVER gates a PR:
+#     the `schedule` (daily) + `workflow_dispatch` triggers here, plus the
+#     marker being off the default collection, keep it non-blocking by
+#     construction (RESULTS/04 §6). The browser leg's §7 demote/drop is a
+#     ONE-LINE switch: drop `browser` from DEFAULT_SCHEDULE_TIERS below to stop
+#     the nightly browser leg without touching anything else.
+#
+# RE-RUN GRANULARITY (ADR §2 C1): the matrix produces ONE GH job per
+# (tier × version), so GitHub's "Re-run failed jobs" re-runs ONLY the flaky leg.
+# There is NO auto-retry on assertions; the only bounded retry is on the infra
+# boot/readiness, which the smoke conftest already polls (wait_ready.sh), never
+# a fixed sleep.
+#
+# MATRIX AXIS (B1): `version` is built parametric but runs the single existing CE
+# image now. Adding a second image later is a ONE-LINE change — append to the
+# DEFAULT_VERSIONS list in the `prepare` job (and wire its image ref).
+#
+# Required config (Actions secrets/variables) — same set as smoke.yml, plus the
+# baked admin password the UI tier needs to log in:
+#   SMOKE_IMAGE_REF      GHCR OCI ref of the qcow2 (variable OR secret; secret wins;
+#                        input overrides both). Pin by @sha256:<digest>.
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (secret)
+#   SMOKE_GHCR_TOKEN     PAT/token with read:packages for the GHCR pull (secret)
+#   SMOKE_SSH_PRIV_KEY   private SSH key matching the image's baked authorized_keys (secret)
+#   SMOKE_ADMIN_PASSWORD baked webConfigurator admin password (secret) — REQUIRED here:
+#                        the UI tier logs in over the CSRF form; without it the ui
+#                        fixtures SKIP cleanly (never fail).
+# Optional:
+#   SMOKE_ADMIN_USER     webConfigurator user (var; default "admin")
+#   SMOKE_DNSBL_VIP4     baked pfb_dnsvip4 (the functional DNSBL flow injects the VIP); default 10.10.10.1
+
+on:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable)."
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "Version label for the matrix leg / screenshot dir (blank = the default CE version)."
+        required: false
+        type: string
+        default: ""
+      tier:
+        description: "Which tier(s) to run: render | functional | browser | all."
+        required: false
+        type: string
+        default: "all"
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
+        required: false
+        default: ""
+      version:
+        description: "Version label for the matrix leg / screenshot dir (blank = the default CE version)."
+        required: false
+        default: ""
+      tier:
+        description: "Which tier(s) to run."
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - render
+          - functional
+          - browser
+          - all
+  # Daily Tier-B run (functional + browser). Non-PR-blocking by construction.
+  # The `prepare` job guards it to SKIP when there were no commits in the last
+  # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
+  schedule:
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Build the branch's .pkg on a plain Linux runner (same builder + artifact the
+  # smoke gate consumes). One build feeds every matrix leg.
+  build-pkg:
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: devel
+    # abi/py_flavor/php_version default to CE 2.8.1 (FreeBSD:15:amd64 / py311 / 8.3).
+
+  # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
+  # JSON `include` list so each leg is a distinct, independently-re-runnable job.
+  prepare:
+    name: Resolve the (tier x version) matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      run: ${{ steps.gen.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need history to detect "commits in the last day" for the schedule guard
+
+      - name: Build the matrix include + the nightly guard
+        id: gen
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # For a dispatch/call the tier input narrows the matrix; the schedule
+          # ignores it and always runs the daily Tier-B set.
+          TIER_INPUT: ${{ inputs.tier }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -eu
+
+          # The version axis (B1): single CE image today. To add an image, append
+          # one label here and wire its ref in the smoke job's image resolution.
+          DEFAULT_VERSIONS="ce"
+          # Tier set the daily schedule runs (Tier B). DROP `browser` here to
+          # disable the nightly browser leg (§7 demote/drop one-liner).
+          DEFAULT_SCHEDULE_TIERS="functional browser"
+
+          # Decide the version label(s).
+          if [ -n "${VERSION_INPUT:-}" ]; then
+            VERSIONS="${VERSION_INPUT}"
+          else
+            VERSIONS="${DEFAULT_VERSIONS}"
+          fi
+
+          # Decide the tier set.
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            TIERS="${DEFAULT_SCHEDULE_TIERS}"
+          else
+            case "${TIER_INPUT:-all}" in
+              render)     TIERS="render" ;;
+              functional) TIERS="functional" ;;
+              browser)    TIERS="browser" ;;
+              all|"")     TIERS="render functional browser" ;;
+              *) echo "::error::unknown tier '${TIER_INPUT}' (render|functional|browser|all)"; exit 1 ;;
+            esac
+          fi
+
+          # Nightly no-commit guard: skip the whole run when nothing landed in
+          # the last 24h (an idle repo should not boot a VM every night).
+          RUN=true
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            COMMITS="$(git log --since='24 hours ago' --oneline | wc -l | tr -d ' ')"
+            if [ "${COMMITS}" = "0" ]; then
+              RUN=false
+              echo "No commits in the last 24h — skipping the nightly UI run."
+            fi
+          fi
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
+
+          # Map a tier name to its pytest marker (kept here for documentation; the
+          # smoke job re-derives it so the matrix stays a plain {tier,version}).
+          INCLUDES=""
+          for v in ${VERSIONS}; do
+            for t in ${TIERS}; do
+              ITEM="{\"tier\":\"${t}\",\"version\":\"${v}\"}"
+              if [ -z "${INCLUDES}" ]; then
+                INCLUDES="${ITEM}"
+              else
+                INCLUDES="${INCLUDES},${ITEM}"
+              fi
+            done
+          done
+          echo "matrix={\"include\":[${INCLUDES}]}" >> "$GITHUB_OUTPUT"
+          echo "tiers=[${TIERS}] versions=[${VERSIONS}] run=${RUN}"
+
+  ui:
+    name: ${{ matrix.tier }} / ${{ matrix.version }} (live pfSense VM)
+    needs: [build-pkg, prepare]
+    # Skip the whole leg set when the nightly guard says there's nothing to run.
+    if: needs.prepare.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      # One leg's failure must NOT cancel the others — each (tier x version) is
+      # an independent, separately-re-runnable job (C1).
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Map the tier to its pytest marker
+        id: tier
+        env:
+          TIER: ${{ matrix.tier }}
+        run: |
+          set -eu
+          case "${TIER}" in
+            render)     MARKER="ui_render" ;;
+            functional) MARKER="ui_e2e" ;;
+            browser)    MARKER="ui_browser" ;;
+            *) echo "::error::unknown tier '${TIER}'"; exit 1 ;;
+          esac
+          echo "marker=${MARKER}" >> "$GITHUB_OUTPUT"
+          echo "tier ${TIER} -> marker ${MARKER}"
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
+        # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
+        # rule making /dev/kvm world-RW fixes it in the same login session.
+        # Identical fix to smoke.yml.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install host tools (qemu, oras, dnsutils, python)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv
+
+      - name: Resolve the pfSense image ref (input overrides secret/variable)
+        id: ref
+        env:
+          # The image ref is not sensitive: accept it as a variable, falling
+          # back to a secret if one is set (secret wins). The workflow input
+          # wins over both. Same resolution order as smoke.yml.
+          INPUT_REF: ${{ inputs.image_ref }}
+          SMOKE_IMAGE_REF: ${{ secrets.SMOKE_IMAGE_REF || vars.SMOKE_IMAGE_REF }}
+        run: |
+          set -eu
+          REF="${INPUT_REF:-${SMOKE_IMAGE_REF:-}}"
+          if [ -z "$REF" ]; then
+            echo "::error::no image ref (set the image_ref input, or the SMOKE_IMAGE_REF secret/variable)"
+            exit 1
+          fi
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Install oras
+        uses: oras-project/setup-oras@v2
+
+      # Key the image cache on the RESOLVED MANIFEST DIGEST (not the ref string),
+      # so a re-push to a moving tag invalidates the cache automatically. Needs a
+      # GHCR login first; it persists to the pull step (same job). Same as smoke.yml.
+      - name: Resolve image digest (cache key)
+        id: digest
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+        run: |
+          set -eu
+          echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          DIGEST="$(oras resolve "$IMAGE_REF" 2>/dev/null || true)"
+          if [ -z "$DIGEST" ]; then
+            DIGEST="$(oras manifest fetch "$IMAGE_REF" --descriptor | jq -r '.digest')"
+          fi
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve a sha256 digest for ${IMAGE_REF} (got '${DIGEST}')"; exit 1 ;;
+          esac
+          {
+            echo "digest=${DIGEST}"
+            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved ${IMAGE_REF} -> ${DIGEST}"
+
+      - name: Restore cached pfSense image
+        id: pfcache
+        uses: actions/cache/restore@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      - name: Pull pfSense image from private GHCR (by digest)
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -eu
+          mkdir -p image
+          oras pull "${IMAGE_REF%@*}@${DIGEST}" --output image
+          ls -l image
+
+      - name: Save pfSense image to cache
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      - name: Write private SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-pkg.outputs.artifact }}
+          path: pkg
+
+      - name: Locate the .pkg + the pulled .qcow2
+        id: paths
+        run: |
+          set -eu
+          N_PKG="$(find pkg -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_PKG" -eq 1 ] || { echo "::error::expected exactly one .pkg in the build artifact, found ${N_PKG}"; ls -lR pkg || true; exit 1; }
+          PKGFILE="$(find pkg -type f -name '*.pkg')"
+          N_IMG="$(find image -type f -name '*.qcow2' | wc -l | tr -d ' ')"
+          [ "$N_IMG" -eq 1 ] || { echo "::error::expected exactly one .qcow2 in the pulled artifact, found ${N_IMG}"; ls -lR image || true; exit 1; }
+          IMG="$(find image -type f -name '*.qcow2')"
+          {
+            echo "pkg=$(cd "$(dirname "$PKGFILE")" && pwd)/$(basename "$PKGFILE")"
+            echo "img=$(cd "$(dirname "$IMG")" && pwd)/$(basename "$IMG")"
+          } >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKGFILE}  img=${IMG}"
+
+      - name: Install the smoke + UI harness Python deps
+        run: |
+          set -eu
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r tests/smoke/requirements.txt pytest
+
+      - name: Install the headless Chromium browser (browser tier only)
+        # The pip `playwright` wheel ships the Python bindings only; the Chromium
+        # BINARY is a separate download. Only the browser tier needs it — gate the
+        # ~150 MB pull so the render/functional legs stay lean.
+        if: matrix.tier == 'browser'
+        run: |
+          set -eu
+          python3 -m playwright install --with-deps chromium
+
+      # NOTE: unlike the smoke matrix, the UI tier does NOT set SMOKE_BLOCK_EGRESS:
+      # the render/functional/browser tiers are hermetic from the box's own config
+      # (no feed download to render chrome) but want a working resolver + the
+      # Playwright browser, so egress is left OPEN here.
+      - name: Run the UI tier (pytest -m ${{ steps.tier.outputs.marker }})
+        env:
+          # Point the fixture at the ALREADY-PULLED qcow2 so the boot needs no network.
+          SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
+          SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_SSH_KEY: smoke_key
+          SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # The Phase-1 gap closed: the UI tier logs into the webConfigurator over
+          # the CSRF form, so the baked admin password MUST reach pytest. Without
+          # it the ui fixtures SKIP (never fail).
+          SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
+          # Screenshot artifact layout: <root>/<version>/<name>.png (browser tier).
+          SMOKE_UI_SCREENSHOT_DIR: ${{ github.workspace }}/test-results/ui-screenshots
+          SMOKE_UI_VERSION: ${{ matrix.version }}
+          # The functional DNSBL flow injects the sinkhole VIP; match the baked image.
+          SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+        run: |
+          set -eu
+          # The smoke package is --ignore'd by the default addopts; re-enable it
+          # with --override-ini and select the tier's marker (tests/smoke/conftest).
+          # timeout_func_only=true scopes the per-test ceiling to the TEST BODY
+          # (not the slow module fixtures: deploy ~1-2 min, the General save's
+          # sync pass up to 300s) — so a wedged check fails fast without aborting
+          # a legitimately slow fixture. No assertion auto-retry (C1).
+          python3 -m pytest tests/smoke/ui -m "${{ steps.tier.outputs.marker }}" \
+            --override-ini="addopts=" --override-ini="timeout_func_only=true" \
+            --timeout=300 --timeout-method=signal -v
+
+      - name: Upload UI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          # One artifact per leg so a re-run of a single leg overwrites only its own.
+          name: ui-diagnostics-${{ matrix.tier }}-${{ matrix.version }}
+          path: |
+            test-results/ui-screenshots/**
+            **/vm*.log
+            **/screen-*.png
+            **/screen-*.ppm
+            smoke-diag/**
+          if-no-files-found: ignore
+          retention-days: 7
