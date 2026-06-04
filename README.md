@@ -94,6 +94,24 @@ These are local client-side guards. CI enforces the same checks (and the tag
 rules) server-side, so anything that bypasses a hook is still caught by GitHub
 Actions.
 
+### Shell setup (macOS, optional)
+
+On macOS, Homebrew's `bin` is on `PATH` only for **login** shells (`brew shellenv`
+lives in `~/.zprofile`), so the pre-commit hook's tools (`node`/`npx` for
+markdownlint, `php`, `shellcheck`) can go missing in the non-login shells that
+editors and agents spawn. The hook self-bootstraps Homebrew's `PATH` regardless,
+but to make the same tools resolve in your own interactive/manual shells — and to
+upgrade Apple's ancient `/bin/bash` 3.2 to Homebrew's bash — run once:
+
+```sh
+sh scripts/setup-dev-shell.sh
+```
+
+It writes a small idempotent managed block into `~/.brew_path.sh`, `~/.zshenv`,
+`~/.bashrc`, `~/.bash_profile`, and `~/.profile` (macOS-only; a no-op without
+Homebrew). It does not change your login shell or `/etc/shells` — it only prints
+the optional `sudo` commands for those.
+
 ### Running the test suite locally
 
 Python (the bulk of the suite):
