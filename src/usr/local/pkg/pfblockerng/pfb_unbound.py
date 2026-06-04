@@ -951,6 +951,15 @@ def get_tld(qstate: module_qstate) -> str:
     return tld
 
 
+def get_tld_from_name(q_name: str) -> str:
+    # The same second-level label get_tld() reads from qstate.qinfo.qname_list, but
+    # derived from a name STRING -- for a CNAME target evaluated mid-chain, whose TLD
+    # differs from the original query's. evaluate_domain() uses it for the TLD-Allow
+    # and HSTS checks, so each evaluated name must be checked against its own TLD.
+    parts = q_name.rstrip(".").split(".")
+    return parts[-2] if len(parts) > 1 else ""
+
+
 def convert_ipv4(x: Any) -> str:
     ipv4 = ""
     if x:
@@ -1249,7 +1258,11 @@ def get_details_dnsbl(
 
     # Determine if event is a 'reply' or DNSBL block. decisionDB now also holds allow
     # ("let it resolve"/whitelisted) verdicts, so attribute only an actual block.
-    isDNSBL = decisionDB.get(q_name)
+    # operate() stores decisionDB keys lowercased, so normalize the lookup -- otherwise
+    # a mixed-case query is blocked but its block is not attributed here (the log/counter
+    # path silently misses it -> per-feed under-count).
+    q_name_key = q_name.lower()
+    isDNSBL = decisionDB.get(q_name_key)
     if isDNSBL is not None and isDNSBL.is_found and not isDNSBL.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
         # except for Python nullblock events
@@ -1272,7 +1285,7 @@ def get_details_dnsbl(
         q_type = get_q_type(qstate, qinfo)
 
         dupEntry = "+"
-        event_sig = (q_name.lower(), q_type, isDNSBL)
+        event_sig = (q_name_key, q_type, isDNSBL)
         if _dnsbl_last_event is not None:
             if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
@@ -3988,7 +4001,10 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # the original) short-circuits here without re-resolving or re-evaluating.
             decision = decisionDB.get(q_name)
             if decision is None:
-                tld = get_tld(qstate)
+                # The original query's TLD comes from qstate; a CNAME target (isCNAME)
+                # has its own TLD, so derive it from the target name being evaluated --
+                # else the TLD-Allow / HSTS checks use the wrong TLD for the target.
+                tld = get_tld_from_name(q_name) if isCNAME else get_tld(qstate)
                 cfg = {
                     "python_blocking": pfb["python_blocking"],
                     "dataDB": pfb["dataDB"],
