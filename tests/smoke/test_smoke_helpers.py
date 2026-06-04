@@ -23,17 +23,18 @@ import os
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, expected_control_answer
+from .conftest import STUB_DNS_A, SmokeVM, _StubDnsServer, expected_control_answer
 
 pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
-    """Deploy the branch .pkg once for the helper self-tests."""
+def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
+    """Deploy the branch .pkg once for the helper self-tests; wire the stub upstream."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
+    h.use_stub_upstream(smoke_vm)
     return smoke_vm
 
 
@@ -130,17 +131,19 @@ def test_false_green_guard() -> None:
     assert not h.is_nxdomain(real_pass)
 
 
-def test_dns_probe_nxdomain_shape(deployed_vm: SmokeVM) -> None:
-    """A name with no local-data and egress blocked is NOT a false A answer.
+def test_dns_probe_absent_resolves_via_stub(deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    """An otherwise-unknown name resolves to the STUB SENTINEL and is recorded upstream.
 
-    Probes a guaranteed-absent name: it must NOT return a spurious A record
-    (would indicate a leaking upstream / wrong probe), proving the probe reads
-    the real resolver state.
+    With the stub as Unbound's sole upstream, a name with no local-data / block is
+    forwarded and answered by a server WE control — it returns the sentinel (never a
+    leaked real-internet A) and logs the query. This pins the upstream wiring: the
+    probe reads real resolver state, and "forwarded vs answered locally" is observable.
     """
-    answer = h.dns_probe(deployed_vm, h.unique_domain("definitely-absent"), "A")
-    assert not answer.records or answer.rcode != "NOERROR", (
-        f"absent name returned records {answer.records} rcode {answer.rcode}"
-    )
+    name = h.unique_domain("definitely-absent")
+    stub_dns.reset_queries()
+    answer = h.dns_probe(deployed_vm, name, "A")
+    assert h.resolves_to(answer, STUB_DNS_A), f"absent name should resolve to the stub sentinel, got {answer}"
+    assert stub_dns.received(name), f"{name} should have been forwarded to the stub upstream"
 
 
 # --------------------------------------------------------------------------- #
@@ -180,20 +183,27 @@ def test_abp_feed_body_has_header_and_lines() -> None:
 
 
 def test_abp_inject_snippet_emits_user_regex_and_cap() -> None:
-    """A DnsblCase carrying user_regex + regex_cap renders the matching config keys."""
+    """A DnsblCase carrying user_regex + regex_cap renders the matching config keys.
+
+    pfb_regex_list is a base64 TEXTAREA field (CRLF-joined) — a PLAIN value would be
+    base64_decoded into garbage that crashes the python INI load — so the snippet must
+    carry the base64 of the CRLF-joined patterns, NOT the raw regex text.
+    """
+    patterns = [r"ad[0-9]+\.example\.net", r"(a+)+\.evil\.example"]
     spec = h.DnsblCase(
         aliasname="smokeabp",
         feed_url="/var/db/pfblockerng/smokeabp.txt",
         header="smokeabp",
-        user_regex=[r"ad[0-9]+\.example\.net", r"(a+)+\.evil\.example"],
+        user_regex=patterns,
         regex_cap=True,
     )
     snippet = h._dnsbl_inject_snippet(spec)
     assert "'pfb_regex' => 'on'" in snippet
     assert "'pfb_regex_cap' => 'on'" in snippet
-    assert "'pfb_regex_list' =>" in snippet
-    # Both user patterns ride along in the newline-joined list value.
-    assert r"ad[0-9]+\\.example\\.net" in snippet or r"ad[0-9]+\.example\.net" in snippet
+    expected_b64 = h._b64_textarea(patterns)
+    assert f"'pfb_regex_list' => '{expected_b64}'" in snippet
+    # Raw regex text must NOT appear (it is base64-encoded, not plain).
+    assert "ad[0-9]+" not in snippet
 
 
 def test_abp_inject_snippet_emits_extra_rows() -> None:
@@ -251,3 +261,145 @@ def test_abp_inject_snippet_emits_custom_list() -> None:
     assert "$list['custom'] = base64_encode(" in snippet
     # The domains ride along CRLF-joined inside the base64-encoded literal.
     assert "evil.example.com" in snippet
+
+
+# --------------------------------------------------------------------------- #
+# 7) Stub CNAME chain (issue #41) — PURE, no VM
+#    Pin the stub's CNAME-chain answer so a regression goes RED without a booted
+#    VM: a registered name must answer with a 2-rrset chain (CNAME + the target's
+#    sentinel) so a forwarding Unbound surfaces an_numrrsets > 1; an UNregistered
+#    name still gets the plain single-rrset sentinel.
+# --------------------------------------------------------------------------- #
+
+
+def _stub_answer(server: _StubDnsServer, name: str, rtype: str) -> object:
+    """Build a wire query for (name, rtype), feed it to the stub, parse the reply."""
+    import dns.message
+    import dns.rdatatype
+
+    query = dns.message.make_query(name, dns.rdatatype.from_text(rtype))
+    wire = server._build_response(query.to_wire())
+    assert wire is not None
+    return dns.message.from_wire(wire)
+
+
+def test_stub_cname_chain_is_two_rrsets_and_consistent() -> None:
+    """A CNAME chain answers ``src CNAME tgt`` + the TARGET's own A/AAAA (2 rrsets).
+
+    That 2-rrset answer is what makes a forwarding Unbound expose ``an_numrrsets > 1``
+    to pfb_unbound.py's CNAME walk (a raw Unbound ``local-data`` CNAME would yield a
+    single rrset — Unbound does not chase it). And it must be CONSISTENT: the A query
+    chains to the target's IPv4, the AAAA query to the target's IPv6 — the target's
+    OWN registered addresses, not a generic sentinel.
+    """
+    import dns.rdatatype
+
+    src, tgt = h.unique_domain("stubsrc"), h.unique_domain("stubtgt")
+    server = _StubDnsServer()
+    try:
+        server.set_records(tgt, a=("198.51.100.5",), aaaa=("2001:db8::5",))
+        server.register_cname(src, tgt)
+
+        reply = _stub_answer(server, src, "A")
+        assert [rr.rdtype for rr in reply.answer] == [dns.rdatatype.CNAME, dns.rdatatype.A]  # type: ignore[attr-defined]
+        cname_rr, a_rr = reply.answer  # type: ignore[attr-defined]
+        assert cname_rr[0].target.to_text().lower() == f"{tgt}."
+        assert a_rr.name.to_text().lower() == f"{tgt}."
+        assert a_rr[0].address == "198.51.100.5"
+
+        reply6 = _stub_answer(server, src, "AAAA")
+        assert [rr.rdtype for rr in reply6.answer] == [dns.rdatatype.CNAME, dns.rdatatype.AAAA]  # type: ignore[attr-defined]
+        assert reply6.answer[1][0].address == "2001:db8::5"  # type: ignore[attr-defined]
+    finally:
+        server.stop()
+
+
+def test_stub_unregistered_name_is_plain_sentinel() -> None:
+    """An UNregistered name (and a cleared registration) gets the single-rrset sentinel."""
+    import dns.rdatatype
+
+    src, tgt = h.unique_domain("stubsrc"), h.unique_domain("stubtgt")
+    server = _StubDnsServer()
+    try:
+        server.register_cname(src, tgt)
+        server.clear_cname()
+        reply = _stub_answer(server, src, "A")
+        assert [rr.rdtype for rr in reply.answer] == [dns.rdatatype.A]  # type: ignore[attr-defined]
+        assert reply.answer[0][0].address == STUB_DNS_A  # type: ignore[attr-defined]
+    finally:
+        server.stop()
+
+
+def test_stub_records_queries() -> None:
+    """The stub records every query it answers — the observability the matrix asserts on.
+
+    ``received(name)`` is the upstream-side signal that a name was FORWARDED (not blocked
+    locally); a name the stub never saw returns an empty list. ``reset_queries`` clears it.
+    """
+    seen, never = h.unique_domain("stubseen"), h.unique_domain("stubnever")
+    server = _StubDnsServer()
+    try:
+        _stub_answer(server, seen, "A")
+        assert server.received(seen), "answered query must be recorded"
+        assert server.received(seen, "A")
+        assert not server.received(never), "a name the stub never saw must be absent"
+        server.reset_queries()
+        assert not server.received(seen), "reset_queries clears the log"
+    finally:
+        server.stop()
+
+
+def test_stub_register_a_and_nxdomain() -> None:
+    """register_a overrides the sentinel; register_nxdomain denies the name."""
+    import dns.rcode
+
+    pinned, gone = h.unique_domain("stubpinned"), h.unique_domain("stubgone")
+    server = _StubDnsServer()
+    try:
+        server.register_a(pinned, "192.0.2.7")
+        reply = _stub_answer(server, pinned, "A")
+        assert reply.answer[0][0].address == "192.0.2.7"  # type: ignore[attr-defined]
+        server.register_nxdomain(gone)
+        reply = _stub_answer(server, gone, "A")
+        assert reply.rcode() == dns.rcode.NXDOMAIN  # type: ignore[attr-defined]
+        assert not reply.answer  # type: ignore[attr-defined]
+    finally:
+        server.stop()
+
+
+def test_stub_set_records_families_multi_and_nodata() -> None:
+    """set_records gives a name its own A/AAAA: multiple IPs, missing family -> NODATA,
+    and wrong-family addresses are rejected."""
+    import dns.rcode
+
+    multi, v4only, bad = h.unique_domain("stubmulti"), h.unique_domain("stubv4"), h.unique_domain("stubbad")
+    server = _StubDnsServer()
+    try:
+        # Multiple A, one AAAA.
+        server.set_records(multi, a=("203.0.113.1", "203.0.113.2"), aaaa=("2001:db8::1",))
+        a_reply = _stub_answer(server, multi, "A")
+        assert {r.address for r in a_reply.answer[0]} == {"203.0.113.1", "203.0.113.2"}  # type: ignore[attr-defined]
+        aaaa_reply = _stub_answer(server, multi, "AAAA")
+        assert aaaa_reply.answer[0][0].address == "2001:db8::1"  # type: ignore[attr-defined]
+
+        # A only -> AAAA is NODATA (empty NOERROR), not the sentinel.
+        server.set_records(v4only, a=("203.0.113.9",))
+        no6 = _stub_answer(server, v4only, "AAAA")
+        assert no6.rcode() == dns.rcode.NOERROR and not no6.answer  # type: ignore[attr-defined]
+
+        # Family is validated.
+        with pytest.raises(ValueError):
+            server.set_records(bad, a=("2001:db8::bad",))  # IPv6 in an A
+    finally:
+        server.stop()
+
+
+def test_b64_textarea_matches_pfblockerng_decode() -> None:
+    """``_b64_textarea`` produces what ``pfbng_text_area_decode`` expects: base64 of a
+    CRLF-joined list (so base64_decode + explode("\\r\\n") returns the lines back)."""
+    import base64
+
+    lines = [r"trackerx-", r"ad[0-9]+\.example\.net"]
+    encoded = h._b64_textarea(lines)
+    assert base64.b64decode(encoded).decode().split("\r\n") == lines
+    assert h._b64_textarea([]) == "", "empty list -> empty value (no entries)"

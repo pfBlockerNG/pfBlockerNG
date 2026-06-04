@@ -436,14 +436,35 @@ class _MockFeedServer:
 
 
 class _StubDnsServer:
-    """A minimal dnspython-backed DNS server: any A/AAAA -> a sentinel address.
+    """A controlled, OBSERVABLE DNS upstream for the guest's Unbound (over SLIRP).
 
-    Gives the guest's Unbound a REACHABLE, controlled upstream over SLIRP
-    (10.0.2.2:<port>) so it never recurses to the (egress-blocked) root and hangs
-    — pfSense Unbound cannot service a query, not even a local DNSBL block, while
-    its recursion path is dark. Nothing leaks to the real internet: the stub
-    answers everything itself. Listens UDP+TCP on one ephemeral port; non-A/AAAA
-    queries get an empty NOERROR.
+    This is the smoke matrix's upstream: Unbound forwards every non-local query here
+    (``helpers.use_stub_upstream`` points its sole ``forward-zone "."`` at
+    10.0.2.2:<port>), so what reaches this server is EXACTLY what Unbound did not
+    answer locally. That makes blocking VERIFIABLE from the upstream side rather than
+    inferred from a bare SERVFAIL: every query is recorded (:meth:`received`), so a
+    DNSBL-blocked name must NEVER appear here, while a not-blocked name DOES — and
+    resolves to a known sentinel, distinct from every block shape. Nothing leaks to
+    the real internet; the server answers everything itself. Listens UDP+TCP on one
+    ephemeral port.
+
+    Per-domain answers are explicit and observable. Default (unregistered name): the
+    sentinel A/AAAA (``STUB_DNS_A`` / ``STUB_DNS_AAAA``). Overrides:
+
+      * :meth:`set_records` — give a name its OWN ``A`` (IPv4) and/or ``AAAA`` (IPv6)
+        addresses, one or many each; omit a family to serve NODATA for it (to test a
+        missing record). Families are validated (A must be IPv4, AAAA IPv6).
+      * :meth:`register_cname` — ``src -> target``; an ``A``/``AAAA`` query returns
+        ``CNAME + the TARGET's A/AAAA`` in one response, so the chain resolves
+        CONSISTENTLY to the target's own addresses (sentinel if the target is
+        unregistered). That 2-rrset shape (``an_numrrsets > 1``) is what
+        ``pfb_unbound.py``'s CNAME walk reads — a raw Unbound ``local-data`` CNAME
+        can't stand in (Unbound returns the bare CNAME, a single rrset).
+      * :meth:`register_nxdomain` — deny the name exists.
+
+    Because every domain has its OWN addresses, a probe can assert the EXACT IPs and
+    know which name was forwarded at each stage (no inference); :meth:`received` /
+    :meth:`queries` are the query log.
     """
 
     def __init__(self) -> None:
@@ -455,6 +476,15 @@ class _StubDnsServer:
         self._tcp.bind(("0.0.0.0", self._port))
         self._tcp.listen(16)
         self._stop = threading.Event()
+        self._lock = threading.Lock()
+        # fqdn (lowercased, trailing dot) -> a record dict, one of:
+        #   {"cname": target_fqdn}
+        #   {"a": [ipv4,...], "aaaa": [ipv6,...]}   (either key optional => NODATA)
+        #   {"nxdomain": True}
+        # Absent => the sentinel default (STUB_DNS_A / STUB_DNS_AAAA).
+        self._records: dict[str, dict[str, object]] = {}
+        # Every received query, in order: {"name", "type", "client"}.
+        self._queries: list[dict[str, str]] = []
         self._threads = [
             threading.Thread(target=self._serve_udp, daemon=True),
             threading.Thread(target=self._serve_tcp, daemon=True),
@@ -465,8 +495,94 @@ class _StubDnsServer:
         return self._port
 
     @staticmethod
-    def _build_response(data: bytes) -> bytes | None:
+    def _fqdn(name: str) -> str:
+        return name.rstrip(".").lower() + "."
+
+    @staticmethod
+    def _check_family(ips: tuple[str, ...], want_v6: bool) -> list[str]:
+        import ipaddress
+
+        out = []
+        for ip in ips:
+            addr = ipaddress.ip_address(ip)  # raises on a non-IP
+            if (addr.version == 6) != want_v6:
+                raise ValueError(f"{'AAAA' if want_v6 else 'A'} record needs an IPv{6 if want_v6 else 4} address: {ip}")
+            out.append(ip)
+        return out
+
+    def set_records(self, name: str, *, a: tuple[str, ...] = (), aaaa: tuple[str, ...] = ()) -> None:
+        """Give ``name`` its own A (IPv4) and/or AAAA (IPv6) addresses (one or many each).
+
+        Omit a family to serve NODATA (empty NOERROR) for it — e.g. ``a=(...)`` only
+        makes the name AAAA-less. Replaces any prior record for the name.
+        """
+        rec: dict[str, object] = {}
+        if a:
+            rec["a"] = self._check_family(a, want_v6=False)
+        if aaaa:
+            rec["aaaa"] = self._check_family(aaaa, want_v6=True)
+        with self._lock:  # _records is read by the server threads — guard every write
+            self._records[self._fqdn(name)] = rec
+
+    def register_a(self, name: str, *ips: str) -> None:
+        """Answer A for ``name`` with the given IPv4(s) (convenience for set_records)."""
+        self.set_records(name, a=ips)
+
+    def register_cname(self, src: str, target: str) -> None:
+        """Answer ``src`` with a CNAME to ``target``; the chain resolves to the target's
+        own A/AAAA (or the sentinel if the target is unregistered)."""
+        with self._lock:
+            self._records[self._fqdn(src)] = {"cname": self._fqdn(target)}
+
+    def register_nxdomain(self, name: str) -> None:
+        """Answer NXDOMAIN for ``name`` (an upstream that denies the name exists)."""
+        with self._lock:
+            self._records[self._fqdn(name)] = {"nxdomain": True}
+
+    def clear_cname(self) -> None:
+        """Drop ALL per-name records (back to the sentinel default for everything)."""
+        with self._lock:
+            self._records.clear()
+
+    def received(self, name: str | None = None, rtype: str | None = None) -> list[dict[str, str]]:
+        """Queries this upstream got, optionally filtered by name and/or rtype.
+
+        A blocked name must return an EMPTY list (it never reached the upstream); a
+        forwarded name returns its hits. The authoritative, log-free signal for
+        "was this name answered locally or forwarded?".
+        """
+        target = self._fqdn(name) if name else None
+        with self._lock:
+            return [
+                dict(q)
+                for q in self._queries
+                if (target is None or q["name"] == target) and (rtype is None or q["type"] == rtype)
+            ]
+
+    def queries(self) -> list[dict[str, str]]:
+        """A snapshot of the whole received-query log (for failure diagnostics)."""
+        with self._lock:
+            return [dict(q) for q in self._queries]
+
+    def reset_queries(self) -> None:
+        """Clear the received-query log (call between cases for clean assertions)."""
+        with self._lock:
+            self._queries.clear()
+
+    @staticmethod
+    def _addrs(rec: dict[str, object] | None, want_v6: bool) -> list[str] | None:
+        """Addresses to emit for a record of this family, or None for NODATA.
+
+        rec None (unregistered) -> the sentinel (a single default address). Registered
+        with the family -> its list. Registered WITHOUT the family -> None (NODATA).
+        """
+        if rec is None:
+            return [STUB_DNS_AAAA if want_v6 else STUB_DNS_A]
+        return rec.get("aaaa" if want_v6 else "a")  # type: ignore[return-value]
+
+    def _build_response(self, data: bytes, client: str = "") -> bytes | None:
         import dns.message
+        import dns.rcode
         import dns.rdatatype
         import dns.rrset
 
@@ -475,12 +591,34 @@ class _StubDnsServer:
         except Exception:
             return None
         resp = dns.message.make_response(req)
-        if req.question:
-            q = req.question[0]
-            if q.rdtype == dns.rdatatype.A:
-                resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "A", STUB_DNS_A))
-            elif q.rdtype == dns.rdatatype.AAAA:
-                resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "AAAA", STUB_DNS_AAAA))
+        if not req.question:
+            return resp.to_wire()
+        q = req.question[0]
+        name = q.name.to_text().lower()
+        # Snapshot the query log AND the record(s) this answer needs atomically, so a
+        # concurrent register_*/clear_cname on the test thread can't change the override
+        # map mid-request (which would make the smoke assertions nondeterministic).
+        with self._lock:
+            self._queries.append({"name": name, "type": dns.rdatatype.to_text(q.rdtype), "client": client})
+            rec = self._records.get(name)
+            target_rec = self._records.get(str(rec["cname"])) if (rec is not None and "cname" in rec) else None
+        if rec is not None and rec.get("nxdomain"):
+            resp.set_rcode(dns.rcode.NXDOMAIN)
+            return resp.to_wire()
+        if q.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
+            return resp.to_wire()  # other qtypes: empty NOERROR
+        want_v6 = q.rdtype == dns.rdatatype.AAAA
+        rtype = "AAAA" if want_v6 else "A"
+        if rec is not None and "cname" in rec:
+            target = str(rec["cname"])
+            resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "CNAME", target))
+            ips = self._addrs(target_rec, want_v6)
+            if ips:
+                resp.answer.append(dns.rrset.from_text(target, 60, "IN", rtype, *ips))
+            return resp.to_wire()
+        ips = self._addrs(rec, want_v6)
+        if ips:
+            resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", rtype, *ips))
         return resp.to_wire()
 
     def _serve_udp(self) -> None:
@@ -490,7 +628,7 @@ class _StubDnsServer:
                 data, addr = self._udp.recvfrom(65535)
             except OSError:
                 continue
-            wire = self._build_response(data)
+            wire = self._build_response(data, addr[0])
             if wire is not None:
                 with contextlib.suppress(OSError):
                     self._udp.sendto(wire, addr)
@@ -499,7 +637,7 @@ class _StubDnsServer:
         self._tcp.settimeout(0.5)
         while not self._stop.is_set():
             try:
-                conn, _ = self._tcp.accept()
+                conn, peer = self._tcp.accept()
             except OSError:
                 continue
             with contextlib.suppress(Exception):
@@ -513,7 +651,7 @@ class _StubDnsServer:
                         if not chunk:
                             break
                         data += chunk
-                    wire = self._build_response(data)
+                    wire = self._build_response(data, peer[0])
                     if wire is not None:
                         conn.sendall(len(wire).to_bytes(2, "big") + wire)
             with contextlib.suppress(OSError):
@@ -526,7 +664,8 @@ class _StubDnsServer:
     def stop(self) -> None:
         self._stop.set()
         for thread in self._threads:
-            thread.join(timeout=5)
+            if thread.ident is not None:  # joinable only once started — stop() is idempotent
+                thread.join(timeout=5)
         with contextlib.suppress(OSError):
             self._udp.close()
         with contextlib.suppress(OSError):
@@ -645,6 +784,13 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
     rep = getattr(request.node, "_rep_call", None)
     if rep is None or not rep.failed:
         return
+    # The mock DNS query log — what reached the upstream, READ not inferred.
+    stub = request.node.funcargs.get("stub_dns")
+    if isinstance(stub, _StubDnsServer):
+        print("\n========== STUB DNS UPSTREAM — received queries ==========")
+        for entry in stub.queries():
+            print(f"  {entry['client']:>15}  {entry['type']:<5} {entry['name']}")
+        print("========== END STUB DNS UPSTREAM ==========")
     vm = request.node.funcargs.get("deployed_vm") or request.node.funcargs.get("smoke_vm")
     if vm is None:
         return

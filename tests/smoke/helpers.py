@@ -39,6 +39,7 @@ so importing this module does not require the smoke deps.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import os
 import re
@@ -328,14 +329,36 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
 # --------------------------------------------------------------------------- #
 
 
+PFB_DBDIR = "/var/db/pfblockerng"
+
+
 def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 30.0) -> str:
     """Write ``contents`` to /var/db/pfblockerng/<name> on the guest; return the path.
 
     The file goes DIRECTLY under /var/db/pfblockerng (NOT the deny/permit/native
     subdirs — those are pfBlockerNG's own reload output). The path is then used
     as the feed source's URL field.
+
+    ``mkdir -p`` the data dir first: pfBlockerNG's POST-INSTALL does NOT create it
+    (only a reload/update does), so a case that writes its feed BEFORE its first
+    reload — e.g. the whole ABP matrix's first test — would otherwise hit
+    ``tee: …: No such file or directory``.
     """
-    path = f"/var/db/pfblockerng/{name}"
+    path = f"{PFB_DBDIR}/{name}"
+    # Ensure the data dir exists FIRST, as its own simple round-trip. Do NOT fold it
+    # into the tee with `sh -c "mkdir … && tee …"`: ssh space-joins the remote argv
+    # and the remote LOGIN shell (tcsh for pfSense root) re-parses it, so `sh -c`
+    # would capture only the first token (and tcsh chokes on the POSIX `'\''` idiom).
+    # A bare `mkdir -p <dir>` argv (no &&/redirect/nested quotes) is shell-agnostic.
+    mk = subprocess.run(
+        vm.ssh_argv("/bin/mkdir", "-p", PFB_DBDIR),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if mk.returncode != 0:
+        raise RuntimeError(f"write_local_feed({path}): mkdir {PFB_DBDIR} failed: rc={mk.returncode} {mk.stderr!r}")
     result = subprocess.run(
         vm.ssh_argv("tee", path),
         input=contents,
@@ -494,6 +517,19 @@ def _php_kv_array(data: dict[str, str]) -> str:
     return f"array({items})"
 
 
+def _b64_textarea(lines: list[str]) -> str:
+    """Base64-encode a CRLF-joined textarea value — the shape pfBlockerNG stores.
+
+    pfBlockerNG TEXTAREA settings (``suppression``, ``pfb_regex_list``, ``custom``, …)
+    are kept base64-encoded in config (the GUI base64_encodes on save) and decoded by
+    ``pfbng_text_area_decode()`` (``base64_decode`` then ``explode("\\r\\n", …)``). A
+    PLAIN value injected here would be base64_decoded into GARBAGE — invalid bytes that
+    crash the python module's INI load (``Failed to load ini configuration: 'utf-8'
+    codec can't decode byte``) and silently disable DNSBL. Encode with CRLF separators
+    so the decode splits into the right lines. Empty list -> '' (no entries)."""
+    return base64.b64encode("\r\n".join(lines).encode()).decode()
+
+
 # --------------------------------------------------------------------------- #
 # Control records — DNS-Resolver Host Overrides, set IN CONFIG before update
 # --------------------------------------------------------------------------- #
@@ -624,37 +660,52 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
         raise RuntimeError(f"ensure_dnsbl_vip failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def configure_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Put Unbound in forwarding mode pointed at the runner-side stub.
+def use_stub_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Make the runner-side stub DNS (``_StubDnsServer``) Unbound's SOLE upstream.
 
-    Maintainer's recipe: forwarding mode + a reachable upstream + DNSSEC off. If
-    Unbound cannot establish a working forward/recursion path it stalls/SERVFAILs
-    EVERY query (even a local DNSBL block or host override), which is what times
-    out the per-case probe. So force forwarding of EVERYTHING to the stub.
+    The whole matrix forwards through one CONTROLLED, observable server: every query
+    Unbound does not answer locally (block shape / host override) lands on the stub,
+    which records it (``stub.received(...)``) and answers a known sentinel. That turns
+    "was this blocked?" into a fact read off the upstream — a blocked name must never
+    reach the stub — instead of an inference from a bare SERVFAIL against a dark relay
+    (QEMU's SLIRP DNS at 10.0.2.3, which egress-block makes unreachable).
 
-    Implemented as a raw Unbound ``forward-zone: "."`` in Custom Options rather
-    than System>General DNS servers, because the stub listens on a custom port
-    and System DNS is :53-only; ``forward-tcp-upstream`` reuses the proven
-    guest->host SLIRP path (mock_feeds is TCP). DNSSEC is disabled (the stub's
-    answers are unsigned) and ``unbound/forwarding`` is enabled to match the
-    documented mode. Written to CONFIG so every ``services_unbound_configure``
-    regenerates it; pfBlockerNG's reload only appends its DNSBL python on top.
+    Wiring (once per deploy; the stub is reachable over SLIRP and survives the per-case
+    egress block):
+
+      * A custom ``forward-zone: "."`` -> ``10.0.2.2:<stub port>`` in Unbound Custom
+        Options. To make it the SOLE ``"."`` zone, pfSense forwarding mode is turned
+        OFF (``unset unbound/forwarding``) so pfSense does not ALSO emit its own
+        ``forward-zone "."`` (from the System DNS servers) — Unbound rejects a duplicate
+        (``error: duplicate forward zone . ignored``) and would keep the wrong one (the
+        breakage the ADR-04 matrix recorded). In resolver mode our custom zone is the
+        only one, and it still forwards everything.
+      * ``unset unbound/dnssec`` — the stub's answers are unsigned, so a validator would
+        mark them bogus (SERVFAIL).
+      * ``log-queries: yes`` — the resolver logs each client query too, so guest-side
+        diagnostics corroborate the stub's record.
+
+    Written to CONFIG so ``services_unbound_configure`` bakes it into unbound.conf;
+    pfBlockerNG's reload read-modifies that file in place (only the wizard regenerates
+    it), so the upstream survives every DNSBL reload.
     """
     port = vm.upstream_dns_port
     if not port:
-        raise RuntimeError("configure_upstream: vm.upstream_dns_port unset (stub_dns fixture not active)")
+        raise RuntimeError("use_stub_upstream: vm.upstream_dns_port unset (stub_dns fixture not active)")
     custom_options = (
         "server:\n"
-        "forward-tcp-upstream: yes\n"
         "do-not-query-localhost: no\n"
+        "log-queries: yes\n"
         "forward-zone:\n"
         'name: "."\n'
         f"forward-addr: {GUEST_TO_HOST_ALIAS}@{port}\n"
+        "forward-tcp-upstream: yes\n"
     )
     snippet = (
         "$u = config_get_path('unbound', array());\n"
         f"$u['custom_options'] = base64_encode({_php_str(custom_options)});\n"
-        "$u['forwarding'] = 'on';\n"
+        # Resolver mode (forwarding OFF) so our custom zone is the only 'forward-zone: \".\"'.
+        "unset($u['forwarding']);\n"
         "unset($u['dnssec']);\n"
         "config_set_path('unbound', $u);\n"
         "write_config('pfBlockerNG smoke: stub upstream');\n"
@@ -663,7 +714,9 @@ def configure_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"configure_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+        raise RuntimeError(f"use_stub_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # services_unbound_configure restarts Unbound — wait for it before any probe.
+    wait_unbound_ready(vm)
 
 
 # --------------------------------------------------------------------------- #
@@ -710,19 +763,22 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings = _dnsbl_mode_settings(spec.mode)
     settings["pfb_dnsbl"] = "on"
     if spec.whitelist:
-        settings["suppression"] = "\n".join(spec.whitelist)
+        # suppression is a pfBlockerNG TEXTAREA field: config stores it base64-encoded
+        # (GUI pfblockerng_dnsbl.php:555) and pfbng_text_area_decode() base64_decodes +
+        # splits on CRLF. A PLAIN value here decodes to GARBAGE — so encode it.
+        settings["suppression"] = _b64_textarea(spec.whitelist)
     if spec.dnsbl_ip_action:
         # The "DNSBL IP" firewall feature: collect IP literals from the DNSBL
         # feed into the pfB_DNSBLIP_{v4,v6} alias tables (inc:7022 reads this
         # from CFG_DNSBL_SETTINGS/action; != 'Disabled' enables it).
         settings["action"] = spec.dnsbl_ip_action
     if spec.user_regex:
-        # The user "Python Regex List" (inc:849-850,2711). pfb_regex must be 'on'
-        # AND pfb_regex_list non-empty for the [REGEX] ini section to be written;
-        # a plain newline list mirrors the suppression textarea the matrix already
-        # uses. User regex are sovereign block patterns (band 5).
+        # The user "Python Regex List" (inc:849-850,2711). pfb_regex must be 'on' AND
+        # pfb_regex_list non-empty for the [REGEX] ini section to be written. Like
+        # suppression it is a base64 TEXTAREA field — a PLAIN value decodes to garbage
+        # and crashes the ini load. User regex are sovereign block patterns (band 5).
         settings["pfb_regex"] = "on"
-        settings["pfb_regex_list"] = "\n".join(spec.user_regex)
+        settings["pfb_regex_list"] = _b64_textarea(spec.user_regex)
     if spec.regex_cap:
         # Opt-in static cap (inc:2685 -> ini regex_cap=on). Drops over-cap feed AND
         # user regex at load (pfb_unbound.py:_regex_exceeds_static_cap).
@@ -1045,6 +1101,21 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -
             return
         time.sleep(delay)
     raise RuntimeError("Unbound did not become ready after reload")
+
+
+def flush_unbound_cache(vm: SmokeVM, *, timeout: float = 30.0) -> None:
+    """Flush Unbound's whole cache so the NEXT probe is evaluated FRESH by the module.
+
+    Unbound answers a message-cache HIT directly, AHEAD of the pfBlockerNG python
+    module — so a name cached as a side effect of an earlier query is served from
+    cache and skips the DNSBL block check. This bites the CNAME case: resolving the
+    SOURCE (A→CNAME→B) caches B's chained A record, so a later DIRECT query for B is
+    served that cached value instead of being blocked. Flush between such probes to
+    keep each one independent. (``flush_zone .`` drops every cached name.)
+    """
+    result = vm.ssh("/usr/local/sbin/unbound-control", "-c", UNBOUND_CONF, "flush_zone", ".", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"flush_unbound_cache failed: rc={result.returncode} {result.stderr!r}")
 
 
 # --------------------------------------------------------------------------- #
