@@ -1223,10 +1223,12 @@ class TestGetDetailsReplyNoaaaa:
         # Stage 2: a wildcard-parent noAAAA child (not an exact entry) now passes the
         # gate via evaluate_noaaaa. Pre-Stage-2 the gate read noAAAADB.get(child), which
         # only saw the child once the (now-removed) query-time memo wrote it.
-        calls = []
+        calls: list[Any] = []
+        assert calls == []  # before-state: no side effect yet
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         add_noaaaa("example.com", wildcard=True)
+        assert "sub.example.com" not in pfb_unbound.noAAAADB  # not exact -> gate must pass via wildcard
         qstate = self._aaaa_qstate("sub.example.com.")
         rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})
         assert rcd is True
@@ -1253,6 +1255,7 @@ class TestStage2UnifiedDecision:
         set_feed_group(0, "F", "G")
         add_noaaaa("unrelated.com", wildcard=False)  # enables the noAAAA path; multi.com unlisted
         pfb_unbound.pfb["safeSearchDB"] = True  # enables the SafeSearch path; multi.com unlisted
+        assert "multi.com" not in pfb_unbound.decisionDB  # before-state: no Decision yet
         qstate = make_qstate("multi.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
@@ -1267,6 +1270,7 @@ class TestStage2UnifiedDecision:
         # name NOT in the noAAAADB source -> the memo, not re-evaluation, did it.
         self._enable(monkeypatch)
         add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
+        assert "x.com" not in pfb_unbound.noAAAADB  # absent from source -> only the cache can block
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True)
         qstate = make_qstate("x.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -1277,6 +1281,7 @@ class TestStage2UnifiedDecision:
         # NOT in the safeSearchDB source -> the memo did it.
         self._enable(monkeypatch)
         pfb_unbound.pfb["safeSearchDB"] = True
+        assert "x.com" not in pfb_unbound.safeSearchDB  # absent from source -> only the cache rewrites
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(safesearch={"A": "1.2.3.4", "AAAA": ""})
         qstate = make_qstate("x.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
