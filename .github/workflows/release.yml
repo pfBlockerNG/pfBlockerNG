@@ -11,10 +11,12 @@ on:
 
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; verify-checks: checks:read to read the
-# tagged commit's check runs). ports-pr operates on the FreeBSD-ports fork via
-# PORTS_TOKEN, not GITHUB_TOKEN.
+# tagged commit's check runs; ui-suite: packages:read to pull the pfSense image
+# from private GHCR). ports-pr operates on the FreeBSD-ports fork via PORTS_TOKEN,
+# not GITHUB_TOKEN.
 permissions:
   contents: read
+  packages: read
 
 jobs:
   # ── 1. Verify ────────────────────────────────────────────────────────────
@@ -42,11 +44,43 @@ jobs:
             exit 1
           fi
 
+  # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
+  # Run the FULL tiered Web-UI suite on the live pfSense VM BEFORE publishing.
+  # `tier: all` expands the reusable workflow's matrix to one GH job per
+  # (tier × version) leg — render / functional / browser × each image — and
+  # `fail-fast: false` keeps every leg independent. Because each leg is its own
+  # job, GitHub's "Re-run failed jobs" re-runs ONLY a flaky leg; `release` and
+  # `ports-pr` do NOT re-run until all legs are green again (they only run once
+  # their `needs:` are all `success`), so a not-our-fault browser flake costs a
+  # single-leg re-run, never a republish.
+  #
+  # This is a SEPARATE gate ALONGSIDE verify-checks (which still asserts the "All
+  # tests passed" PR-time check, covering the Tier-A PR fold). It does not weaken
+  # that gate — the release `needs:` BOTH.
+  #
+  # §7 browser DEMOTE/DROP — one-line switch: the browser leg is included here as
+  # a separate re-runnable leg (the cheap tiers gate firmly; browser adds the
+  # JS/screenshot coverage). Per ADR §7, if the first CI evidence misses the
+  # reliability threshold (≥ 4/5 clean at ≤ ~25 min/leg), demote it out of the
+  # release gate by dropping `browser` from DEFAULT_SCHEDULE_TIERS in ui-tests.yml
+  # AND running this with `tier: functional` instead of `tier: all` here — the
+  # render + functional legs keep gating the release, the browser leg goes
+  # dispatch-only. Tier A + B-HTTP retain full standalone value.
+  ui-suite:
+    name: UI suite (live pfSense VM)
+    uses: ./.github/workflows/ui-tests.yml
+    with:
+      tier: all
+    secrets: inherit
+
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: verify-checks
+    # Gate the publish on BOTH the PR-time aggregate (verify-checks) AND the full
+    # live-VM UI suite (ui-suite). Each UI leg is a distinct job, so a single
+    # flaky leg is re-runnable in isolation without redoing release/ports-pr.
+    needs: [verify-checks, ui-suite]
     permissions:
       contents: write
 

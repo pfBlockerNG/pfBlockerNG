@@ -1,7 +1,13 @@
 # ADR-14: Web UI/UX testing on the live pfSense VM (tiered render + functional + browser)
 
-- **Status:** **Proposed** (2026-06-03)
-- **Date:** 2026-06-03
+- **Status:** **Implemented (pending smoke test)** (2026-06-04) — all six phases
+  landed on `adr/14`; the harness, the three tiers, the reusable matrix workflow,
+  the PR gate, and the release gate are in place and statically validated. The
+  flip to **Accepted** is the **maintainer's** call after the live-box manual
+  smoke + screenshot review in §7 (the live VM exists only in CI; this dev box
+  cannot boot/reach it, so the live-run + the §7 reliability numbers are
+  CI-pending — see the outstanding Accept criteria in §7).
+- **Date:** 2026-06-03 (proposed) / 2026-06-04 (implemented)
 - **Branch:** `adr/14` (off **`devel`** — this is **dev-only test/CI infra** that builds on the ADR-04 smoke harness (`tests/smoke/conftest.py` `smoke_vm`, `helpers.py` diagnostics), the portable Linux `.pkg` builder (`build-pkg-linux.yml`), and `smoke.yml`, all of which live on `devel`. (`next` was retired 2026-06-04 into a two-tier `main←devel` model; devel is the default/integration branch.) Nothing here ships in the release archive — `src/` is untouched.) / **Component(s):** `tests/smoke/` (new `ui/` subpackage reusing the `smoke_vm` fixture), `tests/smoke/requirements.txt` (add `requests` + Playwright), `.github/workflows/` (new reusable `ui-tests.yml`; wiring into `test.yml`, `smoke.yml`-style triggers, and `release.yml`), `README.md`/`CLAUDE.md` (docs).
 - **Target runtime:** **dev/CI only.** Python 3.11+ (pytest) on a GitHub `ubuntu-latest` runner, driving a live **pfSense CE** WebUI inside QEMU/KVM (the ADR-04 image). Non-stdlib test deps (`requests`, `playwright`) live in `tests/smoke/requirements.txt` — **not** shipped, same discipline as the existing smoke deps. **No `src/` change**; the Unbound plugin, PHP package, and shipped JS are untouched.
 - **Test suite:** new `tests/smoke/ui/` (markers `ui_render`, `ui_e2e`, `ui_browser`), reusing `tests/smoke/conftest.py`. **Default `python -m pytest` stays byte-identical** — UI tests are excluded from default collection by the same mechanism as the smoke suite. No `pytest` *oracle* for the PHP itself (it only runs inside pfSense); validation = the live-VM assertions below + a manual screenshot review.
@@ -165,25 +171,61 @@ Prompt: `06_Release_Integration_Docs_DoD.txt`
 
 ## 7. Definition of done
 
-- `python -m pytest` byte-identical; `pytest -m smoke` green; new Python ruff-clean; new shell ShellCheck-clean; YAML valid.
-- Tier A render-smoke passes on the live VM with the **real oracle** (body + marker + `php_error.log`), and the deliberately-broken probe is caught.
-- Tier B functional flows change the asserted **effective** state; Tier B browser produces per-page screenshots as artifacts.
-- The reusable `ui-tests.yml` runs matrix-parametric with one job per (tier × version) and uploads diagnostics on failure; Tier A gates PRs; the release pipeline runs the suite first, each leg re-runnable in isolation.
-- Status → **Accepted** only after the maintainer confirms the manual smoke below and reviews the screenshot artifacts on a live pfSense box.
+**Done in-repo (all six phases landed on `adr/14`; statically verified on the dev box):**
+
+- `python -m pytest` **byte-identical at 1019** (UI excluded from default collection like smoke); new Python ruff-clean; new shell ShellCheck-clean; all touched YAML parses.
+- The harness + the three tiers are implemented under `tests/smoke/ui/` (markers `ui_render`/`ui_e2e`/`ui_browser`), reusing `smoke_vm` + `helpers.py`. The render oracle is **body + page-marker + on-box `php_error.log`** (never 200 alone), pinned by a unit `render_oracle` suite that proves a known-broken page is caught. The browser tier injects the Phase-1 `PHPSESSID` cookie (no second login) and writes per-page screenshots to a git-ignored artifact dir.
+- The reusable `ui-tests.yml` (`workflow_call` + `workflow_dispatch` + daily `schedule`) is matrix-parametric (image-ref/version) and tier-selectable, **one GH job per (tier × version)** with `fail-fast: false`, diagnostics uploaded `if: always()`. **Tier A** gates PHP/JS PRs (folded into the **"All tests passed"** aggregate, blocking). **Tier B** is schedule/dispatch only (non-PR-blocking by construction).
+- **Release gate (D1):** `release.yml` `needs:` the full UI suite (`tier: all`, the `ui-suite` job) **before** `release`/`ports-pr`, **alongside** the existing `verify-checks` (which is unchanged — the PR-time aggregate gate is not weakened). Because each (tier × version) leg is a distinct job, a single flaky leg is re-runnable in isolation and **does not redo** `release`/`ports-pr` (those run only once all `needs:` are `success`).
+
+**Outstanding — the maintainer's Accept criteria (live box / CI; cannot run on the dev box):**
+
+- Tier A render-smoke passes **on the live VM** with the real oracle, and the deliberately-broken probe is caught there.
+- Tier B functional flows change the asserted **effective** state on the live VM; Tier B browser produces per-page screenshots as artifacts (`ui-diagnostics-<tier>-<version>`).
+- The **§7 browser reliability numbers** are measured in CI (procedure below) and meet the threshold — **or** the one-line demote/drop switch is applied. These numbers are **CI-pending** (Phase 4 did not fabricate them; the live VM exists only in CI).
+- The maintainer completes the **manual smoke** below and reviews the screenshot artifacts.
+
+Status flips **Proposed → Implemented (pending smoke test)** with this phase (2026-06-04); it flips to **Accepted** only after the maintainer confirms the manual smoke + screenshot review on a live pfSense box.
 
 ### Reject / pivot criteria (the ADR-01-analog kill gate — decide on evidence)
 
-- **Browser tier too flaky/slow:** if Phase 4 can't reach **≥ 4/5 clean** runs at **≤ ~25 min** per matrix leg (mirroring ADR-04's "≤ ~20 min AND ≥ 4/5"), it is **demoted to non-blocking dispatch-only** and never gates PRs or releases. If even on-demand it can't be made reliable, **drop the browser layer entirely** — Tiers A + B-HTTP retain standalone value and ship.
+The browser tier is **already non-PR-blocking by construction** (marker `ui_browser`,
+off default collection, schedule/dispatch only — Phase 4 §6) — so it can never block
+fast iteration regardless of the outcome below. Its §7 reliability numbers are
+**CI-pending** (the live VM exists only in CI; Phase 4 deliberately fabricated no
+numbers). The shipped posture: gate the release on **Tier A + Tier B-functional
+firmly** and **include the browser leg** in the release `ui-suite` as a separate,
+isolated, re-runnable leg; apply the demote/drop on the **first CI evidence** if it
+misses the bar.
+
+- **Browser tier too flaky/slow:** if the first CI runs can't reach **≥ 4/5 clean**
+  at **≤ ~25 min** per matrix leg (mirroring ADR-04's "≤ ~20 min AND ≥ 4/5"),
+  **demote** it out of the gates with the **one-line switch** (Phase-5/6 wiring):
+  drop `browser` from `DEFAULT_SCHEDULE_TIERS` in `ui-tests.yml` (kills the nightly
+  browser leg) **and** run the release `ui-suite` as `tier: functional` instead of
+  `tier: all` (drops it from the release gate). It stays **dispatch-only** — the test
+  code is untouched. If even on-demand it can't be made reliable, **drop** the browser
+  layer (deselect `-m ui_browser` everywhere, or delete the leg). Either way only the
+  screenshots/JS coverage are lost; **Tiers A + B-HTTP retain standalone value and
+  ship** (the render + form oracles remain).
+
+  **Measurement procedure (maintainer/CI):** dispatch the `ui_browser` leg via
+  `ui-tests.yml` (one job per tier × version) **≥ 5 times** against the CE image;
+  record per run CLEAN (all `ui_browser` tests passed, no infra abort) vs total and
+  the leg's wall time; compare to the **≥ 4/5 clean AND ≤ ~25 min** bar; record the
+  result + the decision back into `RESULTS/04_Results.txt` (replacing its CI-pending
+  block) and apply the switch above if it misses.
 - **Oracle can't be made meaningful:** if rendered PHP warnings can't be reliably detected (body + `php_error.log` both miss them) such that Tier A passes a known-broken page → the render tier is not trustworthy; pivot to a narrower, log-only oracle or reconsider the tier.
-- **Tier A too heavy for PRs:** if the per-PR VM boot + render sweep can't fit a sane budget (≤ ~15 min) reliably, demote Tier A to daily/on-demand (drop the PR gate); the cheaper checks still run pre-release.
+- **Tier A too heavy for PRs:** if the per-PR VM boot + render sweep can't fit a sane budget (≤ ~15 min) reliably, demote Tier A to daily/on-demand (drop the PR gate by removing `ui-render` from `test.yml`'s aggregate `needs:` + its result case); the cheaper checks still run pre-release.
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
 > CI can assert rendering/state but not *visual* correctness or true cross-version UX. Confirm on a live pfSense box / via the artifacts.
 
-- [ ] **Screenshot review.** Pull the Tier-B `ui-diagnostics` artifact; every pfBlockerNG page renders correctly (no broken layout, missing fields, or stray PHP output) — eyeball across the produced set.
-- [ ] **Functional reality.** A settings change made through the real GUI persists and takes effect (matches what Tier B asserts) — spot-check General + one IP feed + one DNSBL toggle.
+- [ ] **Tier A green on the live VM.** Dispatch `ui-tests.yml` `tier=render` (or push a PHP/JS PR) → the `ui_render` sweep passes on the CE image with the real oracle (body + marker + `php_error.log`), and the `ui-diagnostics-render-<version>` artifact is present.
+- [ ] **Screenshot review.** Dispatch `ui-tests.yml` `tier=browser`, pull the `ui-diagnostics-browser-<version>` artifact; every pfBlockerNG page renders correctly (no broken layout, missing fields, or stray PHP output) — eyeball across `<version>/<page>.png`.
+- [ ] **Functional reality.** A settings change made through the real GUI persists and takes effect (matches what `ui_e2e` asserts) — spot-check General + one IP feed + one DNSBL toggle.
 - [ ] **JS UX.** The field enable/disable toggles, autocomplete, and the dashboard widget behave in a real browser as the `ui_browser` tier drives them.
-- [ ] **Flake reality.** Re-run the browser leg several times; confirm the §7 threshold holds (or apply the demote/drop decision).
-- [ ] **Release dry-run.** A tag/release dry-run runs the UI suite first; a forced single-leg failure is re-runnable in isolation without redoing `release`/`ports-pr`.
-- [ ] **Multi-version (when a 2nd image exists).** The matrix runs green against an added pfSense image with no harness change beyond the image ref.
+- [ ] **Flake reality / §7 numbers.** Run the browser leg **≥ 5×** (the §7 measurement procedure); confirm **≥ 4/5 clean AND ≤ ~25 min/leg**, OR apply the one-line demote/drop switch. Record the measured numbers into `RESULTS/04_Results.txt`.
+- [ ] **Release dry-run.** A tag/release dry-run runs the full UI suite first (the `ui-suite` job → one leg per tier × version); confirm `release`/`ports-pr` wait on every leg, and a **forced single-leg failure is re-runnable in isolation** ("Re-run failed jobs") **without** redoing `release`/`ports-pr`.
+- [ ] **Multi-version (when a 2nd image exists).** Append the label to `DEFAULT_VERSIONS` + wire its ref; the matrix runs green against the added pfSense image with no harness change beyond the image ref.
