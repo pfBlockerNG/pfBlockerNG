@@ -110,6 +110,47 @@ jobs:
         # .shellcheckrc in the repo root configures suppressions.
         run: find src scripts -name '*.sh' ! -name 'ip_pre_AWS_*.sh' | sort | xargs shellcheck --severity=warning
 
+  shell-tests:
+    name: shellspec (POSIX sh)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install jq
+        # jq drives the ip_pre_AWS_*.sh region filters (required).
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install shellspec
+        # Pinned release tarball; the executable runs from its extracted tree.
+        run: |
+          curl -fsSL https://github.com/shellspec/shellspec/archive/refs/tags/0.28.1.tar.gz | tar -xz
+          echo "$PWD/shellspec-0.28.1" >> "$GITHUB_PATH"
+
+      - name: Run shellspec
+        # Config in .shellspec (--shell sh). Functional gate for the shell scripts.
+        run: shellspec
+
+      - name: Install kcov (coverage; best-effort)
+        # Coverage is informational; if kcov is unavailable on the runner, skip it
+        # rather than fail the gating job.
+        continue-on-error: true
+        run: sudo apt-get install -y kcov
+
+      - name: Coverage (kcov) — informational
+        # Informational only (no floor yet, mirroring #38); never gates CI.
+        continue-on-error: true
+        run: shellspec --kcov
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shell-coverage
+          path: coverage/
+          if-no-files-found: ignore
+
   php-syntax:
     name: PHP syntax check (php -l)
     runs-on: ubuntu-latest
@@ -172,7 +213,7 @@ jobs:
   all-tests-passed:
     name: All tests passed
     if: always()
-    needs: [test, test-typing, ruff, shellcheck, php-syntax, php-static-analysis, markdownlint]
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, markdownlint]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -191,6 +232,10 @@ jobs:
           fi
           if [ "${{ needs.shellcheck.result }}" != "success" ]; then
             echo "ShellCheck failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.shell-tests.result }}" != "success" ]; then
+            echo "shellspec shell tests failed or were cancelled."
             exit 1
           fi
           if [ "${{ needs.php-syntax.result }}" != "success" ]; then

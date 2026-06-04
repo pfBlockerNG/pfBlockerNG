@@ -71,9 +71,9 @@ shared and reviewed (the default `.git/hooks` is local-only and cannot be
 committed):
 
 - **`pre-commit`** runs the fast linters and the unit suite (Ruff, pytest,
-  markdownlint, ShellCheck + `sh -n`, `php -l`; PHPStan only when `vendor/` is
-  present) and blocks the commit on any failure. A check whose tool is not
-  installed is skipped (CI is the hard gate); bypass with `git commit --no-verify`.
+  markdownlint, ShellCheck + `sh -n`, shellspec, `php -l`; PHPStan only when
+  `vendor/` is present) and blocks the commit on any failure. A check whose tool is
+  not installed is skipped (CI is the hard gate); bypass with `git commit --no-verify`.
 - **`pre-push`** enforces the tag naming convention before anything is pushed:
 
 | Commit reachable from | Required tag form  |
@@ -100,6 +100,24 @@ python3 -m pytest
 ```
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
+
+### Shell tests (shellspec)
+
+The POSIX `sh` — the `ip_pre_AWS_*.sh` region pre-scripts and the testable
+functions in `pfblockerng.sh` — has a functional suite under `tests/shell/`, run
+with [shellspec](https://shellspec.info/) (pure POSIX, native kcov coverage):
+
+```sh
+shellspec            # from the repo root; reads ./.shellspec
+shellspec --kcov     # with coverage (informational; needs kcov)
+```
+
+Install with `brew install shellspec` (macOS) or the official installer
+(`curl -fsSL https://git.io/shellspec | sh`). The pre-commit hook and CI run it
+automatically when `shellspec` is present (coverage is informational, no floor).
+See [`tests/shell/README.md`](tests/shell/README.md) for the harness contracts
+(the `iprange` PATH shim, the AWS fixture, and the `PFB_SOURCED` source-for-test
+pattern).
 
 ### DNSBL list build (Python)
 
@@ -250,7 +268,8 @@ vendor/bin/phpstan analyse
 
 [ShellCheck](https://www.shellcheck.net/) is available as a VS Code extension
 (see IDE setup above) and is also enforced in CI at `--severity=warning`.
-Configuration is in `.shellcheckrc`.
+Configuration is in `.shellcheckrc`. Functional shell tests (shellspec) live in
+`tests/shell/` — see [Shell tests (shellspec)](#shell-tests-shellspec) above.
 
 #### Markdown
 

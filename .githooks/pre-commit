@@ -92,6 +92,14 @@ else
 	skip shellcheck
 fi
 
+# --- Shell: shellspec functional suite (gated on the tool, like shellcheck) ---
+if have shellspec; then
+	step 'shellspec'
+	shellspec || failed 'shellspec'
+else
+	skip shellspec
+fi
+
 # --- PHP: php -l syntax check (output shown only for files that fail) ---
 if have php; then
 	step 'php -l'

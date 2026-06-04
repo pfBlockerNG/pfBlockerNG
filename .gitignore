@@ -24,6 +24,11 @@ venv/
 # ── PHP ───────────────────────────────────────────────────────────────────────
 vendor/
 
+# ── Shell tests (shellspec / kcov) ────────────────────────────────────────────
+coverage/
+.shellspec-quick.log
+report/
+
 # ── Build / release artefacts ─────────────────────────────────────────────────
 *.tar.gz
 *.tar.bz2

@@ -1,0 +1,6 @@
+--shell sh
+--default-path tests/shell
+--load-path tests/shell
+--require spec_helper
+# Coverage (shellspec --kcov): only the shipped pfBlockerNG shell scripts.
+--kcov-options "--include-path=src/usr/local/pkg/pfblockerng"
