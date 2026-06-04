@@ -1035,6 +1035,15 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 					$vips_config[$idx]['uniqid'] = $uniqid;
 					$changed = TRUE;
 				}
+				// Reconcile the interface: if dnsbl_interface changed while auto stayed on, a
+				// reused VIP would otherwise keep its old interface and pfb_validate_vips()
+				// would force-disable DNSBL on the mismatch. Bring the stale alias down and
+				// repoint it (the apply block below re-adds it live on the configured interface).
+				if (($vip['interface'] ?? '') !== $interface) {
+					interface_vip_bring_down($vips_config[$idx]);
+					$vips_config[$idx]['interface'] = $interface;
+					$changed = TRUE;
+				}
 			} else {
 				$address = pfb_pick_free_dnsbl_vip($fam['family'], $interface);
 				if ($address === null) {
