@@ -142,11 +142,20 @@ def _attrs(tag_body: str) -> dict[str, str]:
 def _has_flag(tag_body: str, flag: str) -> bool:
     """True iff a boolean attribute ``flag`` (``checked``/``disabled``/...) is present.
 
-    Matches both the bare form (``disabled``) and the valued form
-    (``disabled="disabled"``), as a whole word so ``checked`` is not seen inside
-    another attribute's value.
+    Matches both the valued form (``disabled="disabled"``) and the bare form
+    (``disabled``), but ONLY as an attribute NAME -- never the same token sitting
+    inside another attribute's value (e.g. ``value="checked"`` or
+    ``data-x="disabled-state"``), which a naive ``\\bflag\\b`` over the raw tag
+    would wrongly match and misclassify the field during form reconstruction.
     """
-    return re.search(rf"\b{flag}\b", tag_body, re.IGNORECASE) is not None
+    # Valued form: _attrs() already parses name="value" pairs, keyed lower-case.
+    if flag.lower() in _attrs(tag_body):
+        return True
+    # Bare form: strip quoted values first so a token inside a value can't match,
+    # then require the flag to stand as its own attribute name (start/space before,
+    # space/=/end after).
+    without_values = re.sub(r"\"[^\"]*\"|'[^']*'", "", tag_body)
+    return re.search(rf"(?:^|\s){re.escape(flag)}(?=\s|=|/|>|$)", without_values, re.IGNORECASE) is not None
 
 
 def scrape_form_fields(page_html: str) -> dict[str, str]:

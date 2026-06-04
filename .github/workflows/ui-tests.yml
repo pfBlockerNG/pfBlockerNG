@@ -99,7 +99,14 @@ permissions:
 jobs:
   # Build the branch's .pkg on a plain Linux runner (same builder + artifact the
   # smoke gate consumes). One build feeds every matrix leg.
+  #
+  # Gated on the nightly guard too: when `prepare` sets run=false (an idle
+  # scheduled night, no commits in 24h) the `ui` legs are skipped, so building
+  # the .pkg would just burn CI minutes for nothing — skip it as well. On a
+  # dispatch/call run `prepare` always emits run=true, so the build runs.
   build-pkg:
+    needs: prepare
+    if: needs.prepare.outputs.run == 'true'
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel

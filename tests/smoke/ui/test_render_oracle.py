@@ -98,6 +98,9 @@ def test_multiple_failures_are_all_reported() -> None:
     body = "<html><body>PHP Warning: bad in x on line 1</body></html>"
     result = evaluate_render("/p", 404, body, ("AbsentMarker",))
     assert not result.ok
-    assert len(result.reasons) >= 2
+    # All THREE conditions fail, so all three must surface -- a >= 2 check would
+    # let the missing-marker reason silently drop.
+    assert len(result.reasons) >= 3
     assert any("404" in r for r in result.reasons)
     assert any("Warning" in r for r in result.reasons)
+    assert any("no page marker" in r for r in result.reasons)
