@@ -4,7 +4,14 @@ includes:
 parameters:
     paths:
         - src
-    level: 0
+    # Climbing incrementally above level 0 (issue #88): each level statically
+    # catches more of the class the live Tier-A/UI run catches at runtime
+    # (undefined variables/constants, bad arg counts, return shapes). The
+    # phpstan-baseline.neon entries are the pre-existing legacy debt at the
+    # current level — an acknowledged blind-spot list to BURN DOWN, not grow.
+    # Next steps: stub the remaining function/class.notFound baseline entries,
+    # burn down variable.undefined in the www page controllers, then level 2.
+    level: 1
     fileExtensions:
         - php
         - inc

@@ -49,3 +49,20 @@ $config = [];
  */
 global $priv_list;
 $priv_list = [];
+
+/*
+ * pfSense-provided constants used by our WebUI pages. Values resolved from
+ * upstream pfSense source (faithful, so higher PHPStan levels infer the right
+ * types). Symbol existence is what PHPStan needs; the values match upstream.
+ */
+
+// Collapsible Form_Section flags (etc/inc/globals.inc).
+define('COLLAPSIBLE', 0x08);
+define('SEC_CLOSED', 0x04);
+define('SEC_OPEN', 0x00);
+
+// Placeholder shown in the WebUI for an already-saved password (etc/inc/globals.inc).
+define('DMYPWD', '********');
+
+// "special network" token for Virtual IPs in address-selector logic (etc/inc/util.inc).
+define('SPECIALNET_VIPS', 12);
