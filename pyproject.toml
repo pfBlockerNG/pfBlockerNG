@@ -41,3 +41,14 @@ ignore_missing_imports = true
 mypy_path            = "stubs/python"
 # pfb_unbound.py predates type annotations; add hints incrementally rather
 # than requiring full coverage up-front.
+
+# The test suite, by contrast, IS fully type-annotated — keep it that way. This
+# stricter rule is scoped to tests only (production stays incremental, above).
+# The CI/pre-commit gate is scripts/check_test_typing.py (a standalone AST check):
+# mypy is not wired into CI here, and running it over the suite surfaces unrelated
+# errors (runtime-injected Unbound globals, Optional narrowings) that are not about
+# annotation coverage. This override enforces the same invariant for local/IDE mypy.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

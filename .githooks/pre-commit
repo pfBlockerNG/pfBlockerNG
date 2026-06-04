@@ -56,6 +56,12 @@ else
 	skip pytest
 fi
 
+# --- Python: test-suite type-annotation gate (every def in tests/ is typed) ---
+if [ -n "$py_bin" ]; then
+	step 'test typing (annotations)'
+	"$py_bin" scripts/check_test_typing.py || failed 'scripts/check_test_typing.py'
+fi
+
 # --- Markdown: markdownlint-cli2 (reads .markdownlint*.jsonc) ---
 if have npx; then
 	step 'markdownlint'

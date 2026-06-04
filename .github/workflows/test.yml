@@ -43,6 +43,24 @@ jobs:
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
 
+  test-typing:
+    name: Test type annotations
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Every def in tests/ is type-annotated
+        # Standalone AST check (no deps). Mirrors the tests.* disallow_untyped_defs
+        # mypy override in pyproject.toml; see scripts/check_test_typing.py.
+        run: python scripts/check_test_typing.py
+
   ruff:
     name: Ruff (lint + format)
     runs-on: ubuntu-latest
@@ -150,13 +168,17 @@ jobs:
   all-tests-passed:
     name: All tests passed
     if: always()
-    needs: [test, ruff, shellcheck, php-syntax, php-static-analysis, markdownlint]
+    needs: [test, test-typing, ruff, shellcheck, php-syntax, php-static-analysis, markdownlint]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "One or more Python test jobs failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.test-typing.result }}" != "success" ]; then
+            echo "Test type-annotation check failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.ruff.result }}" != "success" ]; then
