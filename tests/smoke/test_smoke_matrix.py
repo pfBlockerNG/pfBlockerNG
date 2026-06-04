@@ -458,6 +458,11 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         # forces the reload + clears the manifest's user_unlock. It is a config-clean
         # DNSBL-data update -> the no-restart fast path (data_path=True waits on the swap).
         h.reload(deployed_vm, "update", data_path=True)
+        # The Force-update re-lock is the feed/cron allow->block direction: PHP passes no
+        # targeted C-cache flush (TTL-bounded by design, RESULTS/05 SS3), so the domain's
+        # prior resolved answer (cached by the unlock probe above) would serve until TTL.
+        # Clear it, then observe the swapped re-block (mirrors test_dnsbl_feed_update).
+        h.flush_unbound_name(deployed_vm, domain)
         relocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
