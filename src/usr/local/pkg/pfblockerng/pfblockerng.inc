@@ -2999,6 +2999,138 @@ function pfb_dnsbl_abp_extract_ip($line) {
 }
 
 
+// ADR-10 P5: atomically publish a file to the chroot (/var/unbound). Stage into a
+// temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
+// fix ownership -> atomic rename() over the final path. The plugin only ever reads
+// a fully-written, immutable file: a half-written manifest is never visible because
+// the rename is the all-or-nothing commit (POSIX rename(2) is atomic within a dir).
+// Returns TRUE on success. No die()/exit(): a failure is logged + returned FALSE so
+// the caller can fall back to the restart path.
+function pfb_unbound_py_atomic_write($path, $content) {
+	$dir = dirname($path);
+	$tmp = @tempnam($dir, '.pfbpub_');
+	if ($tmp === FALSE) {
+		pfb_logger("\nADR-10: failed to stage atomic write for [ {$path} ]", 2);
+		return FALSE;
+	}
+
+	$fh = @fopen($tmp, 'wb');
+	if ($fh === FALSE) {
+		@unlink($tmp);
+		pfb_logger("\nADR-10: failed to open staging file [ {$tmp} ]", 2);
+		return FALSE;
+	}
+
+	$ok = (@fwrite($fh, $content) !== FALSE);
+	if ($ok) {
+		@fflush($fh);
+		// Durably persist the staged bytes before the rename so a crash between
+		// rename and the OS flush cannot expose a zero-length manifest.
+		@fsync($fh);
+	}
+	@fclose($fh);
+
+	if (!$ok) {
+		@unlink($tmp);
+		pfb_logger("\nADR-10: failed to write staging file [ {$tmp} ]", 2);
+		return FALSE;
+	}
+
+	// Ownership must match the consuming (chrooted) unbound user; set it on the
+	// staging file so the rename publishes a correctly-owned inode atomically.
+	@chown($tmp, 'unbound');
+	@chgrp($tmp, 'unbound');
+
+	if (!@rename($tmp, $path)) {
+		@unlink($tmp);
+		pfb_logger("\nADR-10: failed to publish [ {$path} ]", 2);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// ADR-10 P5: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
+// wakes the Python reload-watcher). The sentinel host path is /var/unbound/pfb_py_reload
+// (Unbound is chrooted at /var/unbound; the module opens it as the chroot-relative
+// "pfb_py_reload" -- RESULTS/04 SS1). Its content is a monotonically NON-DECREASING
+// base-10 integer GENERATION on the FIRST LINE. The watcher swaps IFF the freshly-read
+// generation is a STRICT ADVANCE over its last-seen value, so we write current+1 (or 1
+// when the sentinel is absent/empty/non-integer). The write is atomic (stage -> fsync ->
+// rename via pfb_unbound_py_atomic_write) so the watcher's directory watch sees a clean
+// RENAME and never reads a half-written integer. Returns TRUE when the sentinel advanced.
+function pfb_unbound_py_flip_sentinel() {
+	global $pfb;
+
+	$sentinel = "{$pfb['dnsbldir']}/pfb_py_reload";
+
+	$cur = 0;
+	if (file_exists($sentinel)) {
+		$raw = @file_get_contents($sentinel);
+		if ($raw !== FALSE) {
+			$first = strtok($raw, "\n");
+			if ($first !== FALSE) {
+				$first = trim($first);
+				if ($first !== '' && ctype_digit($first)) {
+					$cur = (int) $first;
+				}
+			}
+		}
+	}
+
+	$next = $cur + 1;
+	if (!pfb_unbound_py_atomic_write($sentinel, "{$next}\n")) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// ADR-10 P5: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks
+// it as a safety net -- RESULTS/04 SS3). The background rebuild holds the OLD and NEW
+// matcher structures resident at once (~2x transient); on a constrained box that bust
+// would OOM mid-swap (RESULTS/01 SS2: 785.9 MiB both-resident at ABP scale busts a 1 GB
+// box). Mirror the Python projection: 2 * loaded_entries * 276 B + a 64 MiB headroom,
+// measured against hw.usermem (physical RAM the OS can hand out). Returns TRUE when the
+// projected build FITS (zero-downtime allowed); FALSE -> the caller must take the restart
+// fallback so the new lists actually load. Unknown RAM / unknown count -> FALSE
+// (fail-closed: when in doubt, restart -- which never doubles, it frees the old set by
+// dying before rebuilding).
+function pfb_unbound_py_swap_fits_ram() {
+	global $pfb;
+
+	// Bytes-per-entry + headroom mirror pfb_unbound.py RELOAD_BYTES_PER_ENTRY (276) and
+	// RELOAD_RAM_HEADROOM_BYTES (64 MiB). Keep the two ends of this contract in step.
+	$bytes_per_entry = 276;
+	$headroom	 = 64 * 1024 * 1024;
+
+	// Loaded entry count = the live snapshot size the Python build emits (data+zone).
+	$loaded = @file_get_contents($pfb['unbound_py_count']);
+	if ($loaded === FALSE) {
+		return FALSE;
+	}
+	$loaded = trim((string) $loaded);
+	if ($loaded === '' || !ctype_digit($loaded)) {
+		// No emitted count yet (first build) -> cannot project -> fail-closed to restart.
+		return FALSE;
+	}
+	$entries = (int) $loaded;
+
+	// hw.usermem = physical memory minus the kernel's wired pages (bytes). A close-enough
+	// upper bound on what a userspace build can claim; the Python watcher's free-page
+	// probe is the finer-grained net behind this.
+	$usermem = get_single_sysctl('hw.usermem');
+	if (!is_numeric($usermem) || (int) $usermem <= 0) {
+		return FALSE;
+	}
+
+	$projected = 2 * $entries * $bytes_per_entry;
+	return ((int) $usermem >= $projected + $headroom);
+}
+
+
 // ADR-06: Build the shell->Python contract. Writes the per-feed manifest
 // ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
 // lower-cased domain per line) referenced by the manifest. The Python plugin's
@@ -3153,9 +3285,13 @@ function pfb_unbound_python_sources($feeds) {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
-		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
-		@chown($pfb['unbound_py_sources'], 'unbound');
-		@chgrp($pfb['unbound_py_sources'], 'unbound');
+		// ADR-10 P5: atomic publish (stage -> fsync -> rename). The per-feed raw
+		// files were already (re)written into unbound_py_rawdir above; the manifest
+		// rename is the point at which the new immutable set becomes readable. The
+		// sentinel flip that ACTS on it is driven by pfb_reload_unbound's data
+		// fast path (so a full feed update advances the generation exactly once,
+		// after every manifest+raw file is in place), not here.
+		pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
 	}
 
 	return $manifest;
@@ -3189,10 +3325,8 @@ function pfb_unbound_python_sources_whitelist() {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
-		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
-		@chown($pfb['unbound_py_sources'], 'unbound');
-		@chgrp($pfb['unbound_py_sources'], 'unbound');
-		return TRUE;
+		// ADR-10 P5: atomic publish (the sentinel flip is driven by the reload).
+		return pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
 	}
 
 	return FALSE;
@@ -3230,10 +3364,8 @@ function pfb_unbound_python_sources_unlock() {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
-		@file_put_contents($pfb['unbound_py_sources'], $json, LOCK_EX);
-		@chown($pfb['unbound_py_sources'], 'unbound');
-		@chgrp($pfb['unbound_py_sources'], 'unbound');
-		return TRUE;
+		// ADR-10 P5: atomic publish (the sentinel flip is driven by the reload).
+		return pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
 	}
 
 	return FALSE;
@@ -3934,14 +4066,128 @@ function pfb_stop_start_unbound($type) {
 }
 
 
+// ADR-10 P5: is the DNSBL Unbound python integration the LIVE resolver mode? The
+// zero-downtime swap only applies when the in-memory matcher (pfb_unbound.py) is the
+// active blocklist source -- i.e. the resolver config has the python module wired in.
+// Read from config.xml (the source of truth), not a generated file.
+function pfb_unbound_py_mode_active() {
+	return (config_path_enabled('unbound', 'python') &&
+		config_get_path('unbound/python_script') == 'pfb_unbound');
+}
+
+
+// ADR-10 P5: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL
+// (RESULTS/01 SS4b, Context 7): since #43 DNSBL blocks set qstate.no_cache_store=1 so a
+// block reply is NEVER in Unbound's message cache. So:
+//   block->allow (unlock / name removed): IMMEDIATE -- nothing to flush (the swap's
+//     decisionDB.clear() inside the module is all it needs).
+//   allow->block (lock / name added): the previously-RESOLVED real answer is still cached
+//     and serves until its TTL. ONLY this direction needs a flush, and ONLY for names
+//     whose new verdict is "blocked".
+// $names: the newly-blocked names (allow->block delta). For an alerts Lock this is the
+// single known domain (exact, cheap); a feed/cron update's delta is not cheaply
+// computable here, so the caller passes none and we accept TTL-bounded staleness -- NOT a
+// regression (today's restart preserves the resolved cache, so today is stale too).
+// Coalesced into ONE chroot unbound-control session and gated behind the DNSBL-queries
+// daemon's '.sync' suppression marker (touched by pfb_update_unbound / the fast path) so
+// the flush does not collide with the daemon on the control socket.
+function pfb_unbound_py_ccache_flush($names) {
+	global $pfb;
+
+	if (!is_array($names) || empty($names)) {
+		return;
+	}
+
+	// One control session: flush each name + its 'www.' sibling (the alerts unlock path
+	// flushes the same pair) so the prior resolved A/AAAA cannot keep serving.
+	$cmds = array();
+	$seen = array();
+	foreach ($names as $name) {
+		$name = trim((string) $name);
+		if ($name === '') {
+			continue;
+		}
+		foreach (array($name, "www.{$name}") as $variant) {
+			if (isset($seen[$variant])) {
+				continue;
+			}
+			$seen[$variant] = TRUE;
+			$cmds[] = "{$pfb['chroot_cmd']} flush " . escapeshellarg($variant) . ' 2>&1';
+		}
+	}
+
+	if (empty($cmds)) {
+		return;
+	}
+
+	// The '.sync' marker (touched at the start of the data fast path / pfb_update_unbound)
+	// tells the DNSBL Queries daemon to stand off the control socket; run the flushes
+	// while it is set, coalesced, then let the normal work-file cleanup clear it.
+	foreach ($cmds as $cmd) {
+		exec($cmd);
+	}
+}
+
+
 // Reload Resolver
-function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
+//
+// ADR-10 P5: $datapath signals a pure DNSBL-DATA update (feed/cron, or a #51 user
+// custom-list Lock/Unlock/whitelist edit) that has already been published atomically to
+// the manifest. When the python integration is the live mode, unbound is running, no
+// config change is pending, and the projected ~2x build fits RAM, such an update takes
+// the ZERO-DOWNTIME fast path: flip the reload sentinel (the module rebuilds + swaps off
+// the query threads) with NO unbound restart. $newly_blocked carries the allow->block
+// delta to flush from the C-cache after the swap (a #51 Lock passes the one locked name;
+// feed/cron pass none -> accepted TTL-bounded staleness). Any other case -- a config
+// change, the feature unavailable, or the RAM gate declining -- falls back to the restart
+// (the fail-safe; PHP is the PRIMARY gate so we never "flip and hope").
+function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, $newly_blocked=array()) {
 	global $g, $pfb;
 
 	$final = array();
 	$type = '';
 	if ($mode == 'enabled') {
 		$type = ' (DNSBL python)';
+	}
+
+	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
+	// in the live python mode, unbound is up, NO config change is staged (a pending
+	// unbound.tmp or an unmount-in-progress means the resolver config changed -> restart),
+	// and the primary RAM gate says the ~2x transient build fits. Otherwise fall through
+	// to the restart path below (also the fallback when the swap is unavailable).
+	if ($datapath &&
+	    $mode == 'enabled' &&
+	    pfb_unbound_py_mode_active() &&
+	    is_process_running('unbound') &&
+	    empty($pfb['dnsbl_python_unmount']) &&
+	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
+
+		if (pfb_unbound_py_swap_fits_ram()) {
+			// Suppress the DNSBL Queries daemon's control-socket use during the swap +
+			// flush (parity with pfb_update_unbound, which also touches this marker).
+			touch("{$pfb['dnsbl_file']}.sync");
+
+			if (pfb_unbound_py_flip_sentinel()) {
+				pfb_logger("\nReloading Unbound Resolver{$type} [ zero-downtime swap ]", 1);
+
+				// allow->block C-cache flush (block->allow needs none, #43). Coalesced,
+				// gated behind the '.sync' marker set just above.
+				pfb_unbound_py_ccache_flush($newly_blocked);
+
+				pfb_logger(" completed [ NOW ]", 1);
+				return;
+			}
+
+			// Sentinel flip failed (could not stage/rename) -> fall back to the restart
+			// so the new lists still load (don't leave a flipped-but-no-op state).
+			pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
+		}
+		else {
+			// PRIMARY RAM gate declined: the box cannot fit the ~2x transient build.
+			// Restart instead (it never doubles -- it frees the old set by dying before
+			// rebuilding) so the new lists actually load.
+			pfb_logger("\nADR-10: RAM-constrained box -- using Unbound restart instead of the zero-downtime swap", 1);
+		}
 	}
 
 
@@ -4109,12 +4355,21 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	// Load new DNSBL updates
 	if (is_service_running('unbound')) {
 
-		// 'Live sync' new DNSBL updates utilizing unbound-control
-		pfb_reload_unbound($mode, TRUE, $pfbpython);
+		// ADR-10 P5: a feed/cron DNSBL-DATA update takes the zero-downtime swap when the
+		// reload introduces NO config change ($pfbpython FALSE -> unbound.conf/ini/mounts
+		// unchanged). The manifest + per-feed raw were already published atomically by
+		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
+		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The feed delta
+		// (allow->block names) is not cheaply computable here, so no targeted C-cache
+		// flush is passed -> accepted TTL-bounded staleness (no worse than the restart,
+		// which preserves the resolved cache too -- RESULTS/01 SS4b).
+		$datapath = !$pfbpython;
+		pfb_reload_unbound($mode, TRUE, $pfbpython, $datapath);
 	}
 
 	// Start Unbound Service with new DNSBL Updates
 	else {
+		// Unbound is down -> there is nothing to swap into; always (re)start.
 		pfb_reload_unbound($mode, FALSE, $pfbpython);
 	}
 
