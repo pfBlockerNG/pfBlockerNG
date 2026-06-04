@@ -4,6 +4,53 @@
 
 **Always activate `/caveman` skill at session start.** Terse, no filler, full technical accuracy.
 
+### Work-context marker
+
+While you are actively working **an ADR, a GitHub issue, or a GitHub PR** (open / still
+in progress), begin every reply with a one-line status marker so the current work item
+stays on-screen. Plain markdown only — **no ANSI color escapes**: in assistant messages
+they render as literal `[..m` junk on every device (only Bash/tool output colorizes, and
+only on a terminal). The **emoji is the only cross-device signal of state**; identifiers
+and title carry no color.
+
+Format (one space after the emoji):
+
+```text
+<emoji> ***ID***(***#PR***): ***Title***
+```
+
+- **ID** names the work item: `ADR-NN` for an ADR, `#NN` (issue number) for a GitHub
+  issue, `#NN` (PR number) for a standalone PR that has no issue/ADR.
+- A **PR that belongs to an issue or ADR** keeps the issue/ADR id and appends the PR
+  number in parentheses right beside it — `#43(#56)` or `ADR-10(#56)`. Omit `(#PR)` while
+  no PR exists.
+- **Emphasis:** the id(s) and the title are ***bold + italic*** (`***…***`); the
+  separators `(`, `)`, `:` stay plain.
+- **Title** is trimmed with a trailing `…` to ~28 characters for the whole line (the `…`
+  is not counted; ~1 char of slack for a 2-cell emoji). Issue/PR titles run long — trim
+  freely.
+
+Emoji = current state:
+
+| Emoji | State |
+| ----- | ----- |
+| 📝 | creating/authoring an ADR |
+| 🏗️ | implementing an ADR |
+| 🤔 | investigating a GitHub issue |
+| 🛠️ | implementing/fixing a GitHub issue |
+| 👀 | a PR is awaiting review |
+| ⏳ | a PR is awaiting CI |
+| 🏁 | a PR is merged — cleaning up |
+
+Examples:
+
+- 🛠️ ***#43***(***#56***): ***TLD-Allow KeyError on…***
+- 👀 ***#61***: ***skip CI for documentation-only…***
+- 🏗️ ***ADR-10***(***#56***): ***ABP precedence rework***
+
+Omit the marker on plain conversational turns where you are not actively working one of
+these.
+
 ---
 
 ## Worktrees (mandatory for AI agents)
