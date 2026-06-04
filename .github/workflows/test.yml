@@ -395,7 +395,12 @@ jobs:
     # NOTE: `benchmarks` is intentionally absent while it is informational-only
     # (issue #42). Add it here + a result check below to make the kill-gates
     # required once their on-runner baseline is stable.
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint, ui-changes, ui-render]
+    # NOTE: the ADR-14 Tier-A UI render-smoke (`ui-changes`/`ui-render`) is also
+    # intentionally absent for now — the live-VM harness is still being stabilized
+    # (login fixed in #81; page-serving 404 + php_error.log size read outstanding),
+    # so it RUNS on PHP/JS PRs for signal but must NOT block. Re-add `ui-changes`
+    # and `ui-render` here + the result checks below once the harness is green.
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -436,18 +441,8 @@ jobs:
             echo "markdownlint failed or was cancelled."
             exit 1
           fi
-          # The PHP/JS change detector itself must succeed — if it fails or is
-          # cancelled, ui-render goes 'skipped' and would otherwise be treated as
-          # a pass below, silently disarming the Tier-A gate.
-          if [ "${{ needs.ui-changes.result }}" != "success" ]; then
-            echo "UI change detector (ui-changes) failed or was cancelled."
-            exit 1
-          fi
-          # Tier-A UI render-smoke (ADR-14): paths-gated, so 'skipped' (no PHP/JS
-          # change) is a PASS; only an actual 'failure'/'cancelled' must block.
-          # This keeps the gate in the SAME "All tests passed" check-run that
-          # release.yml's verify-checks reads — no new required check to wire.
-          case "${{ needs.ui-render.result }}" in
-            success|skipped) ;;
-            *) echo "Tier-A UI render-smoke failed or was cancelled."; exit 1 ;;
-          esac
+          # NOTE: the ADR-14 Tier-A UI render-smoke (ui-changes/ui-render) is
+          # intentionally NOT checked here while the live-VM harness is being
+          # stabilized — it runs on PHP/JS PRs for signal but does not block.
+          # Re-add the ui-changes success check + the ui-render success|skipped
+          # case here (and both jobs to `needs:` above) once the harness is green.
