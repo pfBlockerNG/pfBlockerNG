@@ -26,10 +26,12 @@ REQUIRED READING (inspect before measuring)
 - .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md — §1 (premise + Context 6/7 caches), §2
   (the three cache rows), §6 Phase 1, §7 reject criteria.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — init_standard (:201), the globals
-  (:87-96, init :383-390), the build+swap site (:552-562), build() (:1966) +
-  dnsbl_build_from_manifest() (:2118), the worker threads (:728-746) + _db_lock
-  (:917), no_cache_store (:2456), the Reports sqlite (path :336, removed-at-init
-  :340-342, written :2721, table :951).
+  (:87-96, init :405-420), the build+swap site, build() (:1966) +
+  dnsbl_build_from_manifest() (:2118), the worker threads + _db_lock, the single
+  decisionDB (:412, the unified _LruCache query-memo — formerly four caches, #67/#70,
+  capped #72), no_cache_store (SafeSearch :3928 AND the #43 block path :4203 -> blocks
+  are NOT C-cached, see ADR Context 7), the Reports sqlite (path :361, removed-at-init
+  :366-367, written via pfb_db_enqueue("cache",…) :4162, table :1060).
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_reload_unbound (:3095),
   pfb_stop_start_unbound (:3055-3061), dump_cache/load_cache (:3113/:3153), the
   DNSBL-queries-daemon control marker (:3211).
@@ -60,7 +62,7 @@ ACTION PLAN (ordered)
    update (the restart window). This is the number the swap must beat (target: zero
    dropped). Document the method; result slot in RESULTS/01.
 4. CACHE BENCHMARKS (drive Phases 3/5). (a) Per-block Reports-sqlite write overhead
-   (pfb_db_enqueue("cache",…) :2721) vs the ~1 us matcher — agent-measurable as a
+   (pfb_db_enqueue("cache",…) :4162) vs the ~1 us matcher — agent-measurable as a
    micro-bench → is the async log path overkill / droppable / generation-keyable?
    (b) Targeted C-cache delta-flush cost vs accepting TTL-bounded staleness — document
    the method (typical newly-blocked delta sizes + real feed TTLs); live parts =

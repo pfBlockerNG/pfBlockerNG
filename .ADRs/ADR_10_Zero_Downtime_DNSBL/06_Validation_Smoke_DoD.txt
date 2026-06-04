@@ -36,14 +36,17 @@ ACTION PLAN (ordered)
    unchanged; the test_adr10_* suite (snapshot equivalence, fail-closed swap, watcher)
    passes. No regression off the swap path.
 3. DOCS. Update README.md + CLAUDE.md with the new update/reload contract: a DNSBL
-   DATA update is a zero-downtime background swap (no restart); a CONFIG change still
-   restarts; the fallback conditions; the cache behaviour (Reports reset; allow->block
-   per the chosen C-cache strategy; block->allow immediate). markdownlint clean.
+   DATA update is a zero-downtime background swap (no restart) -- INCLUDING user
+   custom-list edits (alerts Lock/Unlock + add-to-whitelist, #51); a CONFIG change still
+   restarts; the fallback conditions; the cache behaviour (Reports reset; decisionDB
+   cleared; allow->block per the chosen C-cache strategy; block->allow immediate).
+   markdownlint clean.
 4. DoD + REJECT + SMOKE. Finalise §7: the reject criteria (visibility-isolated / 2x-RAM
    OOM / swap can't beat restart) and the live-box manual smoke checklist (zero dropped
-   queries under load; flip add/remove incl. C-cache; fail-closed on a broken manifest;
-   data-vs-config fork; RAM on the smallest box; shared-global visibility; no control
-   collision). Mark Status to flip to Accepted ONLY after the maintainer passes it.
+   queries under load; flip add/remove incl. allow->block C-cache, block->allow immediate;
+   user Lock/Unlock (#51) applies instantly with no restart; fail-closed on a broken
+   manifest; data-vs-config fork; RAM on the smallest box; shared-global visibility; no
+   control collision). Mark Status to flip to Accepted ONLY after the maintainer passes it.
 
 CONSTRAINTS
 - No new shipped behaviour this phase (validation + docs). If a doc-only or comment

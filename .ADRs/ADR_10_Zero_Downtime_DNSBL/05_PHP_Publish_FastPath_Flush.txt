@@ -32,6 +32,11 @@ REQUIRED READING (inspect before editing)
   "Live sync" call site (:3258-3264), the DNSBL-queries-daemon control marker (:3211),
   the chroot unbound-control cmd (:877), the manifest writer + paths (unbound_py_sources
   :114; the per-feed raw writer). The Python manifest path (pfb["pfb_py_sources"]).
+  ALSO the user custom-list apply path (#51): pfb_unbound_python_sources_unlock() /
+  pfb_unbound_python_sources_whitelist() (in-place manifest patch of config.user_unlock /
+  config.user_whitelist) + pfb_dnsbl_unlock_lines(); the alerts Lock/Unlock handler that
+  calls them (pfblockerng_alerts.php / dnsbl_alert_lock_toggle) and the unlock resolver-
+  cache flush added by #51 -- these reloads must take the new no-restart fast path.
 - src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc + the shell that writes the
   manifest/raw (where the atomic publish must live).
 - CLAUDE.md (PHP tabs/8.3, no die/exit in lib; POSIX sh, absolute paths, quoted).
@@ -47,6 +52,16 @@ ACTION PLAN (ordered)
    (:3118). The restart also remains the FALLBACK when zero-downtime is unavailable
    (Phase-1 RAM gate off / feature disabled / a prior swap errored). Update the
    "Live sync" call site (:3258) to the fast path for Python mode.
+   DNSBL-DATA ALSO COVERS USER CUSTOM-LIST EDITS (#51): the alerts Lock/Unlock buttons
+   and "add to whitelist" patch the manifest in place
+   (pfb_unbound_python_sources_unlock() / pfb_unbound_python_sources_whitelist()) then
+   call pfb_reload_unbound, which today RESTARTS. Route these reloads through the SAME
+   no-restart fast path so a Lock/Unlock applies instantly (lock = allow->block needs the
+   newly-blocked C-cache flush of step 3; unlock = block->allow is immediate once the
+   swap clears decisionDB -- the existing #51 resolver-cache flush on unlock is then
+   redundant, since blocks were never C-cached, #43). PRESERVE #51's "re-lock on
+   Cron/Force" semantics: only the APPLY mechanism changes (swap, not restart); the
+   pfb_unlock store / manifest split and the full-build store-clear are unchanged.
 3. C-CACHE FLIP. Per Phase 1: compute the newly-blocked delta (allow->block) and flush
    those names from Unbound's message cache (unbound-control flush / flush_zone via the
    chroot cmd :877), coalesced; OR, if Phase 1 chose TTL, do nothing and document it.
