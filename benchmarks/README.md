@@ -23,13 +23,18 @@ python benchmarks/spike_adr06_build.py        # exit 1 on NO-GO (needs pympler f
 python benchmarks/spike_adr06_build.py --report-only   # always exit 0 (local inspection)
 ```
 
-**CI.** Both run in the `benchmarks` job (`.github/workflows/test.yml`). It is
-**informational** at first — it reports red/green on every PR but is deliberately
-**not** in the required `all-tests-passed` check, so a flaky on-runner timing reading
-can't block merges while the baseline is established. Flip to **enforcing** by adding
-`benchmarks` to that job's `needs` list once the baseline is shown stable. The job
-sets its own `timeout-minutes` (the 1M-entry build is the slow step) rather than
-relying on any shared/default timeout.
+**CI — manual only (issue #76).** Both can run in the `benchmarks` job
+(`.github/workflows/test.yml`), but that job is **off in the automated push/PR flow**:
+dispatch the *Tests* workflow with the `run_benchmarks` input ticked to run them on
+demand. It is never in the required `all-tests-passed` check. Why not automatic: the
+build-time/RAM number here is a synthetic `build()` on a generic runner, which is *not*
+what a user experiences — measured on `ubuntu-latest` the 1M build lands ~9.1–10.4s
+(vs ~5.75s on a dev box), so an absolute-seconds gate there only tracks runner speed.
+The **production-faithful** build-time/RAM regression gate is moving to the live smoke
+VM (ADR-04): time `pfblockerng.php updatednsbl` start→finish and sample the chrooted
+`unbound` process RSS, with a baked synthetic feed fixture so it is repeatable. The
+ReDoS gate (`spike_adr07_regex.py`) stays a useful environment-independent offline
+check. The job sets its own `timeout-minutes` (the 1M-entry build is the slow step).
 
 ## Install
 

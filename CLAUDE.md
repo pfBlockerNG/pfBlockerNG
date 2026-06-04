@@ -310,10 +310,12 @@ pure `dnsbl_build_from_manifest()` / `build()`, fed by the PHP/shell-written
 manifest (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only
 download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned by
 `tests/test_adr06_*` (golden oracle, build module, init-from-raw, PHP boundary);
-the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py` — a real gate: it
-exits non-zero on NO-GO and runs in CI (the `benchmarks` job, informational until its
-on-runner baseline is stable; `--report-only` forces exit 0 locally). See
-`.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
+the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py` — it exits non-zero
+on NO-GO (`--report-only` forces exit 0). Its synthetic `build()` on a generic runner
+is NOT the production number, so the CI `benchmarks` job is **manual-only** (dispatch
+Tests with `run_benchmarks`, default off); the real build-time/RAM regression gate is
+moving to the live smoke VM (timing `updatednsbl` start→finish + unbound RSS) — see
+issue #76 and `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
 
 ABP/EasyList feeds are parsed **entirely in Python** (ADR-07): PHP header-sniffs an
 ABP feed, tags it `format_hint='abp'`, and passes its raw lines through verbatim
@@ -328,9 +330,10 @@ cap (drops over-long/nested-quantifier patterns at load) plus an always-on runti
 warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
 evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser,
 reconcile, matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS
-kill-gate is `benchmarks/spike_adr07_regex.py` — a real gate: it exits non-zero on
-NO-GO and runs in CI (the `benchmarks` job; `--report-only` forces exit 0 locally).
-See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
+kill-gate is `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO
+(`--report-only` forces exit 0), runnable via the manual-only CI `benchmarks` job
+(dispatch Tests with `run_benchmarks`, default off — see issue #76). See
+`.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
 ---
 
