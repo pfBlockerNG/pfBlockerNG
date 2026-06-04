@@ -327,6 +327,10 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeed
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
 
+# ADR-10: several bounded wait-for-apply round-trips per case (each swap blocks PHP
+# until the watcher confirms the applied generation -- seconds, not the old async poll)
+# plus per-case setup exceed the smoke harness's 30s per-test cap; override it.
+@pytest.mark.timeout(120)
 def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """#51 FULL lifecycle, asserting the ACTUAL resolution at every transition:
 
@@ -404,6 +408,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
         )
 
 
+@pytest.mark.timeout(120)  # ADR-10: multiple wait-for-apply round-trips > the 30s smoke cap.
 def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """#51: a temporary Unlock is re-locked by a Cron/Force update — even with NO feed
     change (parity with main).
@@ -473,6 +478,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(120)  # ADR-10: setup restart + a wait-for-apply swap > the 30s smoke cap.
 def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A feed-content DNSBL update applies WITHOUT restarting Unbound (ADR-10 zero-downtime).
 
@@ -543,6 +549,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFee
         )
 
 
+@pytest.mark.timeout(120)  # ADR-10: two full Unbound restarts (disable + enable) > the 30s cap.
 def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A CONFIG change DOES restart Unbound — the other fork of the data/config split.
 
@@ -598,6 +605,7 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFee
         assert h.is_vip(reblocked), f"{domain} expected VIP block after re-enabling DNSBL, got {reblocked}"
 
 
+@pytest.mark.timeout(120)  # ADR-10: setup + a watcher build-fail observation window > the 30s cap.
 def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A broken manifest does NOT swap — the last-good lists keep serving (ADR-10 fail-closed).
 
