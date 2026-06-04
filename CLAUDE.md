@@ -557,6 +557,9 @@ pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
 - Functions injected by pfSense at runtime (from `util.inc`, `config.lib.inc`, etc.)
   are declared in `stubs/pfsense/` — do not `require_once` pfSense files in tests
 - No `die()`/`exit()` in library code; return values or throw
+- **Web UI help text** (field/page descriptions, mostly in the `www/` PHP pages):
+  keep it **brief yet clear** — match the wording, length, and style of the existing
+  help texts on the surrounding page; don't write longer prose than the neighbours
 
 ### Python
 
