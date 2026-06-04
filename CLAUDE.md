@@ -374,6 +374,34 @@ Full journey, verified response model, and per-step instrument (`SMOKE_STATE_DIF
 
 ---
 
+## Test coverage (mandatory)
+
+When writing tests — **unit, integration, E2E, or smoke** — cover *every* branch of
+the behaviour under test, and assert the state *before* a change as well as after.
+Two rules, both required:
+
+- **Branch coverage — test every condition, not just one side.** When a result
+  depends on a toggle / flag / mode / input class, assert the outcome for **each**
+  value it can take, not only the interesting one. A boolean toggle gets a case with
+  it **off** *and* a case with it **on** (and any third state); every distinct branch
+  of an `if` / `switch` / match — and each documented input class — gets its own
+  assertion. A test that exercises only the "on" path silently lets the "off" path
+  rot. (Example already in the tree: `test_dnsbl_hsts_override_forces_null` is paired
+  with `test_dnsbl_hsts_disabled_keeps_vip` — same name, HSTS on vs off — so the
+  override is proven a real branch, not an always-null path.)
+
+- **Assert the before-state in transition tests — no false passes.** When a test
+  flips a toggle (or applies an operation) and asserts the *changed* result, it MUST
+  first assert the *original* result, so a green proves the flip **caused** the
+  change rather than the expected end-state happening to hold already. Concretely: if
+  `i=false ⇒ a→x` and `i=true ⇒ a→y`, the test asserts `a→x` while `i=false`, **then**
+  sets `i=true`, **then** asserts `a→y` — never just the final `a→y`. This extends to
+  any observable lifecycle: a test that a domain is *blocked* after listing must first
+  assert it *resolved* before listing (and, after an unblock, resolves again) — see
+  the `tests/smoke` DNSBL lock/unlock lifecycle cases.
+
+---
+
 ## Linting
 
 Run the linters below **while working**, for fast feedback. Enforcement is layered,
