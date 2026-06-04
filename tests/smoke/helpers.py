@@ -1187,11 +1187,14 @@ def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeo
     if scope not in ("update", "updateip", "updatednsbl"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
+    deadline = time.monotonic() + timeout
     result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"reload({scope}) failed: rc={result.returncode} stderr={result.stderr!r}")
     if data_path:
-        wait_zero_downtime_swap(vm, since=swap_before)
+        # Forward the caller's remaining budget so a slow box honours `timeout` instead
+        # of wait_zero_downtime_swap's shorter default.
+        wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
     else:
         wait_unbound_ready(vm)
 
@@ -1594,6 +1597,7 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);\n"
         "echo 'OK';"
     )
+    deadline = time.monotonic() + timeout
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(
@@ -1602,7 +1606,8 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         )
     # No restart — wait on the SWAP-APPLIED signal (fast-path log line), not unbound
     # readiness. Unbound never goes down, so the swap lands a moment after the flip.
-    wait_zero_downtime_swap(vm, since=swap_before)
+    # Forward the caller's remaining budget (not the helper's shorter default).
+    wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
 
 
 def flush_unbound_cache(vm: SmokeVM, *, timeout: float = 30.0) -> None:

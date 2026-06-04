@@ -243,8 +243,10 @@ A DNSBL **data** update no longer restarts Unbound. The running Python module
 rebuilds the matcher structures **on a background watcher thread** off the live
 ones, then atomically swaps in a single immutable `Snapshot` reference — GIL-atomic,
 so every query thread sees either the whole old snapshot or the whole new one, never
-a torn mix. Queries keep flowing throughout the build (briefly stale by design);
-there is **no stop/start window and no dropped queries**. PHP/shell drive it by
+a torn mix. Queries keep flowing throughout the build (briefly stale by design):
+there is **no stop/start window**, so the swap is **designed to avoid dropped queries**
+(validated functionally in the live-VM smoke; the zero-dropped-queries-under-load
+guarantee is pending the maintainer's §7 live-box smoke). PHP/shell drive it by
 **atomically publishing** the manifest (stage → `fsync` → `rename`) and **flipping a
 single generation sentinel** (`/var/unbound/pfb_py_reload`); the watcher wakes on it
 (`kqueue` `EVFILT_VNODE`, mtime-poll fallback) and runs the rebuild + swap. A failed

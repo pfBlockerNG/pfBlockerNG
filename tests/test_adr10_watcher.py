@@ -384,6 +384,26 @@ class TestWatcherLoop:
             h.stop_join()
         assert not h.thread.is_alive()  # clean join on the poll path too.
 
+    def test_failed_kqueue_setup_downgrades_to_poll(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # kqueue is PRESENT but its setup FAILED (_kq stayed None): the waiter's wait()
+        # returns immediately, which would hot-spin the loop. The loop must detect the
+        # inactive waiter (is_active() False) and drop to the mtime-poll fallback -- so a
+        # generation advance still swaps AND deinit still joins cleanly (no spin).
+        monkeypatch.setattr(P._ReloadKqueueWaiter, "is_active", lambda self: False)
+        monkeypatch.setattr(P, "RELOAD_POLL_INTERVAL", 0.05)
+        h = _Harness(tmp_path, monkeypatch)
+        old = _snapshot(tag="old.example.com", counts=0)
+        P._snapshot = old
+        h.start()
+        try:
+            assert P._snapshot is old  # BEFORE: failed-kqueue waiter, old snapshot live.
+            h.publish(1)
+            h.wait_builds(1)
+            assert "gen1.example.com" in P._snapshot.data_db  # AFTER: swapped via the poll downgrade.
+        finally:
+            h.stop_join()
+        assert not h.thread.is_alive()  # clean join proves no hot-spin (poll respects stop).
+
     def test_deinit_joins_watcher_cleanly(self, tmp_path: Any, monkeypatch: Any) -> None:
         # Wire the thread the way init does, then drive deinit's stop/join and assert the
         # thread is gone and the flag cleared (no leaked thread).
