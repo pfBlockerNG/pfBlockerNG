@@ -106,6 +106,24 @@ def reset_pfb_globals() -> None:
     pfb_unbound.noAAAADB = defaultdict(str)
     pfb_unbound.threads = []
 
+    # ADR-10 P2: init_standard bundles the matcher strata into ONE immutable Snapshot
+    # and operate() reads every stratum off it. Mirror that here: build the single
+    # ``_snapshot`` ref from the SAME dict objects assigned above, so a test helper that
+    # mutates a global dict IN PLACE (e.g. ``pfb_unbound.dataDB[name] = ...``) is visible
+    # through the snapshot -- exactly as the shared dict objects behave at runtime
+    # between reloads. (A reload rebuilds the whole Snapshot; tests that need a fresh
+    # snapshot rebind ``pfb_unbound._snapshot`` themselves.)
+    pfb_unbound._snapshot = pfb_unbound.Snapshot(
+        data_db=pfb_unbound.dataDB,
+        zone_db=pfb_unbound.zoneDB,
+        white_db=pfb_unbound.whiteDB,
+        regex_db=pfb_unbound.regexDB,
+        allow_regex_db=pfb_unbound.allowRegexDB,
+        feed_group_index_db=pfb_unbound.feedGroupIndexDB,
+        hsts_db=pfb_unbound.hstsDB,
+        important_rules=False,
+    )
+
     # Reset the persistent sqlite connection cache between tests (the :memory:
     # DBs above are per-connection, so a leaked connection would carry state).
     for _db in list(pfb_unbound._db_conns.keys()):
