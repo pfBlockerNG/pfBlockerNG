@@ -108,9 +108,10 @@ sh scripts/setup-dev-shell.sh
 ```
 
 It writes a small idempotent managed block into `~/.brew_path.sh`, `~/.zshenv`,
-`~/.bashrc`, `~/.bash_profile`, and `~/.profile` (macOS-only; a no-op without
-Homebrew). It does not change your login shell or `/etc/shells` — it only prints
-the optional `sudo` commands for those.
+`~/.bashrc`, `~/.bash_profile`, and `~/.profile`. It's macOS-only (it exits doing
+nothing on other systems); if Homebrew isn't installed it prints an install hint and
+exits **without changing any dotfiles**. It does not change your login shell or
+`/etc/shells` — it only prints the optional `sudo` commands for those.
 
 ### Running the test suite locally
 
