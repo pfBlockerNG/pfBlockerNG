@@ -326,6 +326,104 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeed
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
 
+def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """#51 FULL lifecycle, asserting the ACTUAL resolution at every transition:
+
+      (a) BEFORE any list  -> the domain RESOLVES (to its control answer);
+      (b) added to a feed  -> BLOCKED (VIP), no longer resolves;
+      (c) temporary Unlock -> RESOLVES again (to the control answer);
+      (d) re-Lock          -> BLOCKED again (VIP).
+
+    Proving the domain resolves in (a) and again in (c) rules out a false-green:
+    the VIP in (b)/(d) genuinely comes from the feed block, and the pass in (c)
+    genuinely comes from the Unlock — not from some unrelated state. The Unlock/Lock
+    drives the real python-mode pfblockerng_alerts.php ``dnsbl_remove`` sequence
+    (toggle the ``pfb_unlock`` store -> regenerate ``config.user_unlock`` -> reload).
+    Before the #51 fix step (c) was a NO-OP (it wrote files the manifest build no
+    longer reads), so the domain stayed VIP-blocked.
+
+    VIP-mode feed so the block shape is the VIP (distinct from a NULL); a control
+    host override gives the domain a real pass IP to resolve to in (a)/(c).
+    """
+    domain = h.unique_domain("unlock")
+    pass_ip = "198.51.100.88"
+
+    # (a) BEFORE any blocklist: register the host override and confirm the domain
+    #     resolves to it (a real, observable baseline — not yet on any feed).
+    h.set_control_records(deployed_vm, {domain: {"A": pass_ip}}, {})
+    h.wait_unbound_ready(deployed_vm)
+    before = h.dns_probe(deployed_vm, domain, "A")
+    assert h.resolves_to(before, pass_ip), f"{domain} should resolve to {pass_ip} BEFORE listing, got {before}"
+    assert not h.is_vip(before), f"{domain} unexpectedly VIP-blocked before any feed: {before}"
+
+    # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (VIP).
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlock.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokeunlock",
+        feed_url=feed_url,
+        header="smokeunlock",
+        mode=h.DnsblMode.VIP,
+        control_local_data={domain: {"A": pass_ip}},
+    )
+    with h.CaseContext(deployed_vm, spec):
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block once listed, got {blocked}"
+        assert not h.resolves_to(blocked, pass_ip), f"{domain} still resolving to {pass_ip} after block: {blocked}"
+
+        # (c) Temporary Unlock -> resolves to its control answer again (a real pass).
+        #     A VIP here would be the #51 no-op (unlock never reaching the build).
+        h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
+        unlocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.resolves_to(unlocked, pass_ip), f"unlocked {domain} should resolve to {pass_ip}, got {unlocked}"
+        assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
+
+        # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP).
+        h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
+        relocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(relocked), f"re-locked {domain} expected VIP block again, got {relocked}"
+        assert not h.resolves_to(relocked, pass_ip), f"re-locked {domain} still resolving to {pass_ip}: {relocked}"
+
+
+def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """#51: a temporary Unlock is dropped by a full update — the documented
+    "re-locked on Cron/Force" semantic.
+
+    A full ``update`` deletes the ``pfb_unlock`` store (``pfb_update_unbound``) and
+    the rebuilt manifest emits an EMPTY ``config.user_unlock``, so every temporary
+    unlock is re-locked. This pins the full-build-clears-user_unlock half of the fix
+    (the full build must NOT bake the live store in, or unlocks would survive the
+    Force/Cron reload).
+    """
+    domain = h.unique_domain("unlocktmp")
+    pass_ip = "198.51.100.89"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokeunlocktmp",
+        feed_url=feed_url,
+        header="smokeunlocktmp",
+        mode=h.DnsblMode.VIP,
+        control_local_data={domain: {"A": pass_ip}},
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # Blocked by the feed -> VIP (the "before" of the Unlock operation).
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
+        # Unlock -> resolves to the control answer.
+        h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
+        unlocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.resolves_to(unlocked, pass_ip), f"unlocked {domain} should resolve to {pass_ip}, got {unlocked}"
+        assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
+        # A full Force Update re-locks it (store deleted, manifest user_unlock empty).
+        # Egress must be OPEN for the full update path (it deadlocks under a dark
+        # egress); the re-locked probe resolves LOCALLY (the python block), so it
+        # stays hermetic regardless.
+        h.unblock_egress()
+        h.reload(deployed_vm, "update")
+        relocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(relocked), f"force update should re-lock {domain} -> VIP, got {relocked}"
+        assert not h.resolves_to(relocked, pass_ip), f"re-locked {domain} still resolving to {pass_ip}: {relocked}"
+
+
 # --------------------------------------------------------------------------- #
 # 3) DNSBL-IP dual-stack — two distinct pf tables, partitioned by family
 # --------------------------------------------------------------------------- #
