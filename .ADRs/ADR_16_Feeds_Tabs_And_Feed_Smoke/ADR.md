@@ -1,6 +1,6 @@
 # ADR-16: Feeds page IPv4/IPv6/DNSBL tabs + live mock-feed load smoke
 
-- **Status:** **Implemented (pending smoke test)** (2026-06-05)
+- **Status:** **Accepted** (2026-06-05)
 - **Date:** 2026-06-05
 - **Branch:** `adr/16` (off **`devel`**) / **Component(s):**
   `src/usr/local/www/pfblockerng/pfblockerng_feeds.php` (the split + the type-scoped
@@ -291,13 +291,13 @@ Prompt: `06_Docs_DoD.txt`
   ADR-14 UI tiers (retargeted to the typed URLs) green.
 - `pfblockerng_feeds.php` serves IPv4/IPv6/DNSBL sub-tabs; the save is type-scoped; the cross-type
   non-clobber test + the 3 `?type` render entries are authored on `adr/16`.
-- The HTTP-feed load smoke is authored for all 6 representative formats (Part C: OPTIMISTIC-GO,
-  PENDING-CI — see below and `RESULTS/05_Results.txt`).
-- **Status: Implemented (pending smoke test).** Part A (the split + save + functional/render
-  tests) and Part C (the HTTP-feed load smoke + the `ui_browser` tabs test) are all authored
-  in-repo on `adr/16`. Status flips to **Accepted** once the affected-flow UI tests below are
-  confirmed green on the live VM (the `ui-tests`-labeled CI suite) — **there is no human
-  manual-smoke gate; Accept rides on the automated tests.**
+- The HTTP-feed load smoke loads all 6 representative formats over HTTP (Part C: **GO** — 6/6
+  clean on the live `smoke.yml` dispatch; see below and `RESULTS/05_Results.txt`).
+- **Status: Accepted.** Part A merged on `devel` via **PR #125** (the split, the type-scoped
+  save, and the functional/render tests); the affected-flow UI tiers (`ui_render` / `ui_e2e` / `ui_browser`)
+  passed on #125's `ui-tests` live-VM CI. Part C — the HTTP-feed load smoke — is **GO**: all 6
+  cases pass on the live `smoke.yml` dispatch after the cache-flush fix (**PR #131**). **There is
+  no human manual-smoke gate; Accept rode entirely on the automated tests.**
 
 ### Reject / demote criteria (decide on evidence)
 
@@ -326,7 +326,7 @@ Prompt: `06_Docs_DoD.txt`
   `tests/smoke/ui/test_render_smoke.py` entries `feeds_ipv4` / `feeds_ipv6` /
   `feeds_dnsbl` (marker `ui_render`): authenticated GET of
   `pfblockerng_feeds.php?type=ipv4|ipv6|dnsbl` → 200, body free of PHP errors, the
-  type-specific marker present, no new `php_error.log` line. **PENDING live-VM green.**
+  type-specific marker present, no new `php_error.log` line. **Green on the live VM (PR #125 `ui-tests`).**
 
 - [x] **Tabs render (visual, incl. screenshots) — `ui_browser` tabs test.**
   `tests/smoke/ui/test_browser_feeds.py::test_feeds_subtab_row_active_and_type_scoped`
@@ -334,13 +334,13 @@ Prompt: `06_Docs_DoD.txt`
   Chromium opens `pfblockerng_feeds.php?type=<gtype>`, asserts the second sub-tab row
   `[IPv4 | IPv6 | DNSBL]` is present + the active tab is highlighted and the other two
   are not + the type's Feed Settings label is in the DOM while the other two are absent,
-  and writes `feeds_subtab_<gtype>.png` screenshots. **PENDING live-VM green.**
+  and writes `feeds_subtab_<gtype>.png` screenshots. **Green on the live VM (PR #125 `ui-tests`).**
 
 - [x] **Type-scoped save / no clobber.**
   `tests/smoke/ui/test_feeds.py::test_feed_rename_cross_type_save_does_not_clobber`
   (marker `ui_e2e`): saves the IPv4 tab → confirms DNSBL renames intact; then saves
   the DNSBL tab → confirms IPv4 renames intact. Transition test (asserts before AND
-  after each save). **PENDING live-VM green.**
+  after each save). **Green on the live VM (PR #125 `ui-tests`).**
 
 - [x] **HTTP-feed load smoke (Part C kill-gate + format matrix).**
   `tests/smoke/test_smoke_feeds.py` (marker `smoke`), 6 cases:
@@ -356,16 +356,18 @@ Prompt: `06_Docs_DoD.txt`
   after-state asserted (`pfctl_table_members` / `rule_references` for IP;
   `dns_probe` block-shape + non-member resolves for DNSBL).
 
-  **Part-C outcome: all 6 representative formats authored; none dropped. ZERO
-  formats silently omitted from the Phase-4 set. GO/DEMOTE is PENDING-CI
-  (OPTIMISTIC-GO — ≥ 4/5 bar; fast-follow demote switch documented). If < 4/5
-  clean on the live CI run, demote `test_smoke_feeds.py` to dispatch-only and
-  record here.** PENDING live-VM green.
+  **Part-C outcome: GO.** All 6 representative formats load over HTTP — **6/6 clean** on
+  the live `smoke.yml` dispatch (`61 passed, 0 failed`). None demoted, none dropped.
+  NOTE: the 3 DNSBL cases needed `flush_unbound_name(member)` + `dns_probe_until` before
+  the after-probe — a feed/cron `allow→block` swap is TTL-bounded BY DESIGN (ADR-10), so
+  the before-probe's cached stub answer would otherwise serve past the swap (**PR #131**;
+  mirrors the `test_smoke_matrix.py` unlock lifecycle). `test_smoke_feeds.py` stays
+  **dispatch-only** (marker `smoke`, not in the gated PR set) — validated by manual dispatch.
 
 - [x] **No regressions — per-type rename + alt-URL flows.**
   `tests/smoke/ui/test_feeds.py` (marker `ui_e2e`): per-type rename and alt-URL
   round-trip tests on the typed URLs (`?type=ipv4 / ipv6 / dnsbl`), retargeted from
-  the old single-page URL in Phase 2 + 3. **PENDING live-VM green.**
+  the old single-page URL in Phase 2 + 3. **Green on the live VM (PR #125 `ui-tests`).**
 
 All run in CI on the live VM under the `ui-tests` label; **Accept is when they pass**
 — there is no human manual-smoke gate.

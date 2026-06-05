@@ -219,3 +219,41 @@ four now in code), and set Status — Accept rides on those automated tests bein
 on the live VM. Carry forward the ONE open item: the Part-C HTTP-load kill-gate
 GO/DEMOTE is PENDING the live CI run (>= 4/5); if < 4/5, demote test_smoke_feeds.py to
 dispatch-only as a fast-follow and record the numbers here.
+
+================================================================================
+POST-MERGE LIVE OUTCOME (the Part-C kill-gate, decided on CI evidence)
+================================================================================
+DECISION: GO. All 6 representative HTTP-feed formats load on the live VM.
+
+First live smoke dispatch (default branch code): 4/6 — the 3 IP formats + DNSBL
+PLAIN passed; DNSBL HOSTS + ABP failed (the listed member kept resolving to the
+stub, 203.0.113.99). Investigation ruled OUT fetch / parse / format and the reload
+verb:
+  * The build LOADED the feeds — logs show "loaded entries: 1" (hosts) and
+    "loaded entries: 2" (abp) with the zero-downtime swap completing.
+  * The off-box build reproduces the block locally (hosts-strip + ABP-tag both
+    block) — not a parser/format bug.
+  * scope="update" (full Force Update) changed nothing — the feeds always loaded.
+
+ROOT CAUSE (a TEST bug, not a product bug): the per-case `before` probe pre-resolved
+the member via the stub (TTL 60s); a feed/cron allow->block swap is TTL-bounded BY
+DESIGN (ADR-10 — only the #51 single-domain user path flushes the C-cache
+immediately), so the cached real answer served past the swap. PLAIN passed only by
+luck (the FIRST DNSBL case restarts Unbound to enable DNSBL, flushing the cache;
+later cases are pure data swaps).
+
+FIX (PR #131, merged): the 3 DNSBL cases now flush_unbound_name(member) +
+dns_probe_until(member, is_vip) before the after-probe — the proven
+test_smoke_matrix.py unlock-lifecycle pattern. No product change.
+
+Re-dispatch after the fix: 6/6 clean (smoke suite: 61 passed, 0 failed). >= 4/5 bar
+met; NO demotion. test_smoke_feeds.py stays dispatch-only (marker `smoke`).
+
+GATING: validated by manual `smoke.yml` dispatch (the smoke tree is not a PR gate).
+Part A's affected-flow UI tiers (ui_render / ui_e2e / ui_browser) passed on PR #125's
+ui-tests live-VM CI. ADR Status -> Accepted.
+
+FOLLOW-UP (separate, not gating this ADR): add a cross-feed $badfilter unit test
+(tests/test_adr07_reconcile.py) — the reconcile prunes feed rules by signature
+GLOBALLY (cross-feed, user-immune), but only same-feed prune + feed-vs-user immunity
+are currently pinned. Surfaced during this investigation.
