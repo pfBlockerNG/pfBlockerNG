@@ -427,21 +427,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Variable \$country might not be defined\.$#'
-			identifier: variable.undefined
-			count: 8
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
 			message: '#^Variable \$et_options might not be defined\.$#'
 			identifier: variable.undefined
 			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$isocode might not be defined\.$#'
-			identifier: variable.undefined
-			count: 19
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
