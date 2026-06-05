@@ -106,6 +106,15 @@ def test_curl_substring_word_is_not_an_http_client() -> None:
     assert _find('curling "http://h/x?ip=$VAR"') == []
 
 
+def test_shell_comment_only_line_is_clean() -> None:
+    # A "don't do this" anti-pattern shown in a comment is not executed, so it must
+    # not be flagged. Paired with the uncommented form (flagged) to prove the leading
+    # `#` is the reason, not the absence of the pattern.
+    assert len(_find('curl "http://h/x?ip=$VAR"')) == 1
+    assert _find('# curl "http://h/x?ip=$VAR"') == []
+    assert _find('   # curl "http://h/x?ip=$VAR"') == []  # leading whitespace too
+
+
 # --------------------------------------------------------------------------- #
 # Continuation handling — bad vs good
 # --------------------------------------------------------------------------- #
@@ -158,6 +167,13 @@ def test_markdown_bash_fence_naked_var_is_flagged() -> None:
 def test_markdown_shell_fence_data_urlencode_is_clean() -> None:
     md = '```sh\ncurl --data-urlencode "ip=$VAR" http://h/cb\n```\n'
     assert _find_md(md) == []
+
+
+def test_markdown_shell_fence_comment_only_line_is_clean() -> None:
+    # A commented anti-pattern inside a shell fence (illustrating what NOT to do)
+    # must not be flagged; the uncommented form on its own would be.
+    assert len(_find_md('```sh\ncurl "http://h/cb?ip=$VAR"\n```\n')) == 1
+    assert _find_md('```sh\n# curl "http://h/cb?ip=$VAR"  # BAD\n```\n') == []
 
 
 def test_markdown_non_shell_fence_is_not_scanned() -> None:
