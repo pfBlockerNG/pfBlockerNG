@@ -202,6 +202,18 @@ for f in "$@"; do
     fi
 done
 
+# Reject an ABI that is not a single safe path segment — it becomes a directory
+# name (${OUT}/${abi}) that is `rm -rf`'d + rebuilt, so `..` / `/` / odd chars could
+# escape $OUT. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is allowed).
+validate_abi() {
+    case "$1" in
+        ""|*/*|*".."*|*[!A-Za-z0-9:._+-]*)
+            echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
+            exit 1
+            ;;
+    esac
+}
+
 # ── Lay out per-ABI buckets + run `pkg repo` ───────────────────────────────────
 mkdir -p "$OUT"
 # Track which ABI buckets we (re)built, so each is wiped exactly once for
@@ -209,6 +221,7 @@ mkdir -p "$OUT"
 built=""
 for f in "$@"; do
     abi="$(pkg_abi "$f")"
+    validate_abi "$abi"
     dir="${OUT}/${abi}"
     case " $built " in
         *" $abi "*) : ;;                 # already wiped this run

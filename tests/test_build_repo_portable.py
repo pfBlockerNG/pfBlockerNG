@@ -393,6 +393,22 @@ def test_same_flavor_duplicate_passes(tmp_path: Path) -> None:
     assert abis == ["FreeBSD:15:amd64"]
 
 
+def test_unsafe_abi_is_rejected(tmp_path: Path) -> None:
+    """A traversal/odd ABI in manifest data is rejected BEFORE it becomes a path
+    segment — `out_dir / abi` is rmtree'd + rebuilt, so an unsafe value could escape
+    out_dir. The valid form (`FreeBSD:15:amd64`, with colons) is accepted by every
+    other test, so this pins the reject side of the branch."""
+    # Non-empty but unsafe values (traversal / slash / space) — an empty ABI is
+    # already rejected upstream by the missing-name/version/abi guard.
+    out = tmp_path / "out"
+    for i, bad in enumerate(("../../evil", "FreeBSD/15/amd64", "a b")):
+        in_dir = tmp_path / f"in{i}"
+        in_dir.mkdir()
+        make_pkg(in_dir / "p.pkg", name="p", version="1.0", abi=bad)
+        with pytest.raises(brp.BuildRepoError, match="unsafe or invalid ABI"):
+            brp.build_repo(in_dir, out)
+
+
 def test_flavor_signature_classifies_dep_names() -> None:
     """The flavor signature picks ONLY php*/python*/py*- dep names, sorted."""
     assert brp._flavor_signature({"deps": {}}) == ""
