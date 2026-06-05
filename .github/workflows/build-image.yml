@@ -88,9 +88,52 @@ permissions:
   packages: write
 
 jobs:
+  # ── 0. Map the target CE version to its FreeBSD base + PHP runtime ────────
+  # The branch .pkg MUST be built against the FreeBSD ABI + PHP runtime of the
+  # target pfSense CE version (else `pkg add` ABI-mismatches / the wrong PHP is
+  # pinned). This job is the single source of truth for that mapping: it derives
+  # freebsd_version + php_version from inputs.pfsense_ce_version and HARD-FAILS on
+  # any unmapped version, so the build-pkg job can never silently inherit defaults
+  # that match only CE 2.8.1 (issue #22). It runs first and is cheap (no KVM), so
+  # an unknown version fails in seconds — before the 90-min publish job starts.
+  resolve-version:
+    name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      freebsd_version: ${{ steps.map.outputs.freebsd_version }}
+      php_version: ${{ steps.map.outputs.php_version }}
+    steps:
+      - name: Map pfsense_ce_version -> (freebsd_version, php_version)
+        id: map
+        env:
+          CE_VERSION: ${{ inputs.pfsense_ce_version }}
+        run: |
+          set -eu
+          # Adding a new supported CE version REQUIRES a new case arm here.
+          # Keep in sync with docs/misc/pfSense_versions.md (the per-version base
+          # facts: FreeBSD base + PHP). 2.8.0 and 2.8.1 share the same toolchain,
+          # so the whole 2.8.x line maps to one base.
+          case "$CE_VERSION" in
+            2.8.*)
+              FREEBSD_VERSION="15.0-RELEASE"
+              PHP_VERSION="8.3"
+              ;;
+            *)
+              echo "::error::no FreeBSD/PHP mapping for pfSense CE '${CE_VERSION}'. Add a case arm in build-image.yml (resolve-version job) and update docs/misc/pfSense_versions.md before publishing this version."
+              exit 1
+              ;;
+          esac
+          {
+            echo "freebsd_version=${FREEBSD_VERSION}"
+            echo "php_version=${PHP_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "CE ${CE_VERSION} -> FreeBSD ${FREEBSD_VERSION}, PHP ${PHP_VERSION}"
+
   # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
   publish-image:
     name: Publish pfSense CE ${{ inputs.pfsense_ce_version }} to GHCR
+    needs: resolve-version
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
@@ -203,11 +246,14 @@ jobs:
   # exactly as the smoke spike does, so it needs the .pkg.
   build-pkg:
     name: Build branch .pkg (FreeBSD)
-    needs: publish-image
+    needs: [resolve-version, publish-image]
     uses: ./.github/workflows/build-pkg.yml
     with:
       channel: devel
-    # freebsd_version defaults to 15.0-RELEASE (matches pfSense CE 2.8.1)
+      # Pass the CE-version-derived base EXPLICITLY (issue #22) — never rely on
+      # build-pkg.yml's defaults, which match CE 2.8.1 only.
+      freebsd_version: ${{ needs.resolve-version.outputs.freebsd_version }}
+      php_version: ${{ needs.resolve-version.outputs.php_version }}
 
   # ── 3. Verify the published image passes the Phase-1 round-trip ──────────
   verify-image:

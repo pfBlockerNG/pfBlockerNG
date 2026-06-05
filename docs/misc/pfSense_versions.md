@@ -25,6 +25,13 @@ Observed on a CE **2.8.1** box; 2.8.0 shares the same base toolchain.
 | pkg | 1.21.x |
 | Unbound | 1.24.x |
 
+> **The FreeBSD base + PHP row above is also encoded in CI.** The
+> `resolve-version` job in `.github/workflows/build-image.yml` maps
+> `pfsense_ce_version → (freebsd_version, php_version)` so the branch `.pkg` is
+> built against the right ABI/runtime, and hard-fails on any unmapped version.
+> When adding a new supported CE version, add a `case` arm there alongside the
+> table here (issue #22).
+
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
 These must be present for pfBlockerNG to function. By convention the ADR-04
