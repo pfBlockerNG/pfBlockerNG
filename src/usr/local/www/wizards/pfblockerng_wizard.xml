@@ -121,7 +121,7 @@
 			<type>submit</type>
 		</field>
 		<field>
-			<name>Do not show this again</name>
+			<name>pfb_wizard_suppress</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
 			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
@@ -169,7 +169,7 @@
 			<type>submit</type>
 		</field>
 		<field>
-			<name>Do not show this again</name>
+			<name>pfb_wizard_suppress</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
 			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
@@ -231,7 +231,7 @@
 			<type>submit</type>
 		</field>
 		<field>
-			<name>Do not show this again</name>
+			<name>pfb_wizard_suppress</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
 			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
@@ -310,7 +310,7 @@
 			<type>submit</type>
 		</field>
 		<field>
-			<name>Do not show this again</name>
+			<name>pfb_wizard_suppress</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
 			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
@@ -345,7 +345,7 @@
 			<type>submit</type>
 		</field>
 		<field>
-			<name>Do not show this again</name>
+			<name>pfb_wizard_suppress</name>
 			<displayname>Do not show this again</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
 			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>

@@ -1715,6 +1715,47 @@ if (!defined('PFB_HOOK_KILL_GRACE')) {
 }
 
 /*
+ * Setup-wizard decision helpers (pure; pinned by tests/php/WizardDecisionTest.php).
+ * The pfblockerng_wizard.inc / pfblockerng_general.php controllers do the impure work
+ * (read $_POST/$_GET/config, redirect, write_config, set $pfb_wizard); the branchy
+ * decisions live here so the fast PHPUnit tier covers them (issue #88).
+ */
+
+/*
+ * From a submitted Skip on the setup wizard, decide the exit action: 'disable' (also
+ * stop future auto-launch) when the suppress checkbox is ticked, 'skip' (this session
+ * only) otherwise, or NULL when Skip was not pressed.
+ */
+function pfb_wizard_skip_action(array $post): ?string {
+	if (!isset($post['skip'])) {
+		return null;
+	}
+	return !empty($post['pfb_wizard_suppress']) ? 'disable' : 'skip';
+}
+
+/*
+ * Normalise the ?wizard=<action> query parameter to the recognised set ('skip' |
+ * 'disable'); NULL for anything else. Drives the persist-on-'disable' write and the
+ * auto-launch suppression.
+ */
+function pfb_wizard_get_action(array $get): ?string {
+	$action = $get['wizard'] ?? '';
+	return in_array($action, array('skip', 'disable'), true) ? $action : null;
+}
+
+/*
+ * TRUE if the setup wizard must NOT auto-launch: an explicit ?wizard=skip this
+ * request, the persisted disable flag ($wizard_skip_flag === 'on'), or the package
+ * already configured ($config_zero non-empty). A fresh, unconfigured install with no
+ * skip/disable returns FALSE (the wizard does auto-launch).
+ */
+function pfb_wizard_suppress_autolaunch(?string $get_action, $wizard_skip_flag, $config_zero): bool {
+	return $get_action === 'skip'
+		|| $wizard_skip_flag === 'on'
+		|| !empty($config_zero);
+}
+
+/*
  * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
