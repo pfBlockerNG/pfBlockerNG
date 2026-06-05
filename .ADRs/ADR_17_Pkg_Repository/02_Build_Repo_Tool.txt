@@ -1,0 +1,85 @@
+================================================================================
+PHASE 2 PROMPT — Catalog generator + ${ABI} layout + repo-conf template
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §2 Decision "Layout + ${ABI}" /
+     "Catalog gen", §1 Context 4-5 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 2 of ADR-17. Build the reusable,
+deterministic tool that turns a directory of `.pkg` files into a per-ABI `pkg`
+repository tree plus the client repo-conf template. Work in this ADR's `adr/17`
+worktree, one commit.
+
+WHY THIS PHASE EXISTS
+Phase 1 hand-assembled a throwaway single-ABI catalog to prove the box honors it.
+Phase 3's CI must do this faithfully for ALL published ABIs, every deploy, on a Linux
+runner. This phase makes catalog generation a single proven, lint-clean script — and
+settles the build-side premise: is a libpkg-on-Linux catalog accepted by a real
+pfSense `pkg update`, or do we need the FreeBSD-VM fallback?
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_17_Pkg_Repository/RESULTS/01_Results.txt — it must say GO (the box honors a
+  third-party repo for install) and record the repo-conf fields that worked + how the
+  catalog was served. If it is missing or says REJECT, STOP and report.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§2 Layout/Catalog-gen, §1 Context 4-5).
+- scripts/build-pkg-portable.py — the libpkg-on-Linux precedent (how libpkg is obtained
+  on ubuntu-latest); the .pkg naming/ABI facts.
+- .github/actions/read-version-matrix/action.yml + origin/ci-metadata:
+  supported-versions.json — the matrix entry shape ({freebsd_major, php_version,
+  py_flavor, ...}) the collision guard reasons about.
+- CLAUDE.md — Shell standards (POSIX sh, quote expansions, absolute binary paths) +
+  the URL-encoding gate (static URLs only).
+
+ACTION PLAN (ordered)
+1. `scripts/build-repo.sh` (POSIX sh): inputs = a dir of `.pkg` + an output dir. Bucket
+   each `.pkg` by its ABI (read from the package, do not guess), lay out `…/<ABI>/` with
+   the `.pkg` under it, and run `pkg repo <…/<ABI>>` to emit `meta.conf`/`packagesite.pkg`/
+   `data.pkg` per ABI. Deterministic; re-runnable; no network.
+2. FLAVOR-COLLISION GUARD: if two inputs share package-name + version + ABI but differ in
+   php/py flavor (so they cannot coexist in one catalog), FAIL LOUD with a clear message
+   (never silently drop a build). Document the future split (`…/<ABI>-<php><py>/`) in a
+   comment; do NOT implement the split now (no colliding combo exists today — CE 2.8 +
+   Plus 25.03 are both FreeBSD15/php83/py311).
+3. Emit the client repo-conf TEMPLATE (a file under scripts/ or a heredoc the script can
+   print): `url:` using the `${ABI}` variable + a STATIC base (no query interpolation),
+   `mirror_type: none`, `signature_type: none`, `priority:` above the pfSense repo,
+   `enabled: yes`. This is the single source Phase 4's `add-repo.sh` and the README share.
+4. SETTLE THE BUILD-SIDE PREMISE: generate a catalog with the Linux libpkg and confirm a
+   real pfSense VM `pkg update` accepts it (reuse the Phase-1 VM path). If it is rejected,
+   wire the FreeBSD-VM fallback (the `build-pkg.yml` env already exists) and record which
+   path Phase 3 must use. Record the decision + evidence in the handoff.
+5. Local validation: a tiny fixture run (a couple of dummy `.pkg` or the Phase-1 `.pkg`)
+   that produces a valid tree; show the resulting layout in the handoff.
+
+CONSTRAINTS
+- POSIX sh, `#!/bin/sh`, quoted expansions, absolute binary paths; ShellCheck-clean
+  (justify any suppression). No bash-isms.
+- The conf URL is STATIC (the URL-encoding gate scans tracked shell + md fences).
+- Do NOT add the CI job (Phase 3), `add-repo.sh` (Phase 4), or touch `src/`.
+- Reuse the matrix shape; do NOT modify ADR-09's matrix or builders.
+
+VERIFICATION (must all pass before the phase is done)
+- shellcheck scripts/build-repo.sh + `sh -n` → clean; the URL-encoding gate
+  (scripts/check_url_encoding.py) → clean on the new shell.
+- A local run produces a valid `…/<ABI>/` tree with the three catalog files; a real VM
+  `pkg update` against it succeeds (or the FreeBSD-fallback decision is recorded).
+- python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+`scripts/build-repo.sh` deterministically generates a per-ABI `pkg` catalog with a
+loud collision guard, plus the shared `${ABI}`/`none` repo-conf template — and the
+libpkg-on-Linux vs FreeBSD-fallback question is answered with evidence.
+
+COMMIT (single)
+    scripts: add build-repo.sh — per-ABI pkg catalog generator + conf template (ADR-17 P2)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push `adr/17`. Touches scripts/ → lands on `devel` via a rebase-only PR. PR body
+via --body-file.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/02_Results.txt` (plain .txt)
+State: the script's interface (inputs/outputs), the emitted layout, the conf-template
+fields + the chosen `priority` value; the libpkg-on-Linux-vs-FreeBSD-fallback verdict
+with the `pkg update` evidence; the collision-guard behaviour; what Phase 3 must call
+and with what artifacts; the go-ahead for Phase 3.

@@ -1,0 +1,92 @@
+================================================================================
+PHASE 1 PROMPT — KILL-GATE: falsify "a pfSense box installs from a third-party repo"
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §1 Context 3-4 + the "Premise to
+     falsify" + §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 1 of ADR-17. This is the ADR-01-style
+CHEAP FALSIFICATION: before any publishing pipeline exists, prove on the live ADR-04
+pfSense CE VM that `pkg` will install pfBlockerNG from a hand-built, NONE-signed,
+third-party repo — no `pkg add -f`. If a real box refuses, the ADR is REJECTED here,
+before we build CI. Work in this ADR's `adr/17` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The whole ADR rests on two upstream-source facts (read + cited in §1 Context 3):
+`pkg_install()` runs `pkg install -y <name>` with NO `-r` (so it resolves across ALL
+enabled repos, highest version wins), while only `get_pkg_info()` discovery is
+`-r pfSense`-locked. That is reasoning, not a box result. This phase turns it into a
+GREEN/RED fact: a third-party repo conf is honored for install, and cross-repo
+precedence can be made to favor our build.
+
+REQUIRED READING (inspect before editing)
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§1 Context 3-4, Premise, §6 Phase 1, §7).
+- CLAUDE.md — the "Smoke tests (ADR-04)" section (probe ON-BOX over SSH; the image
+  bakes only deps + qemu-guest-agent; `pkg add` runs offline; block shapes), the
+  "Investigating the live system" section (assert effective state via the tool's own
+  CLI; chroot/path rules), and the Test-coverage rule (transition + branch coverage).
+- tests/smoke/conftest.py — the `smoke_vm` fixture, the mock HTTP server
+  (`_MockFeedServer` / `mock_feeds`) reused for serving a catalog over SLIRP to the
+  guest (10.0.2.2).
+- tests/smoke/helpers.py — SSH exec helpers, `unique_domain()`, `dns_probe`, the
+  install/readiness patterns.
+- scripts/install-pkg.sh — how the harness copies + `pkg add`s a local .pkg and waits
+  for Unbound readiness (the readiness-poll pattern to imitate, NOT a sleep).
+- scripts/build-pkg-portable.py + .github/workflows/build-pkg-linux.yml — how to
+  produce one portable .pkg for the VM's ABI (FreeBSD:15:amd64 / php83 / py311).
+
+ACTION PLAN (ordered — falsify, asserting the BEFORE state first)
+1. Produce ONE portable `.pkg` for the VM's combo (existing builder). Hand-assemble a
+   minimal single-ABI catalog with `pkg repo <dir>` (libpkg). This is a throwaway spike
+   helper — keep it small; the reusable generator is Phase 2.
+2. Serve the catalog to the guest: prefer the existing mock HTTP server (register the
+   `<ABI>/` tree, reachable at http://10.0.2.2:<port>/) so the test is hermetic; an
+   on-box dir + `file://` repo is an acceptable fallback if HTTP is flaky.
+3. On the VM: write `/usr/local/etc/pkg/repos/pfblockerng-devel.conf` (url → the served
+   tree, `signature_type: none`, `enabled: yes`, a `priority:` above the pfSense repo),
+   `pkg update`, then `pkg install -y pfSense-pkg-pfBlockerNG-devel` — NO `-f`.
+4. ASSERT (transition + branch coverage), via EFFECTIVE state, not exit code:
+   - BEFORE: the package is absent (`pkg info pfSense-pkg-pfBlockerNG-devel` fails).
+   - AFTER: installed, and its repo origin is OURS (`pkg query '%R'
+     pfSense-pkg-pfBlockerNG-devel` == our repo name); RUN_DEPENDS resolved (no
+     "Missing dependency"); POST-INSTALL ran (package registered, pfBlockerNG answers a
+     DNS probe of a listed name — reuse the smoke block-shape oracle).
+   - PRECEDENCE branch A: with OUR version higher than a lower-versioned "Netgate-like"
+     decoy entry, `pkg install`/`pkg upgrade` selects OURS.
+   - PRECEDENCE branch B: with OUR version LOWER, the decoy wins — proving precedence is
+     real, not "ours always wins".
+5. Land it as `tests/smoke/test_smoke_repo.py` (marker `smoke`), minimal but real
+   (Given/When/Then, intent-named). Leave the VM clean (restore in `finally`).
+
+CONSTRAINTS
+- Smoke tree only; marker `smoke`; OFF default `pytest` (do not touch default collection).
+- Python 4-space, 3.11+, type hints, no bare except; reuse `smoke_vm` + helpers — NO new
+  VM boot path, NO second HTTP server.
+- Do NOT build any CI/publish pipeline, `scripts/build-repo.sh`, or `add-repo.sh` yet
+  (Phases 2-4). This phase is the spike + its smoke only.
+- Probe ON-BOX; assert effective state (`pkg query`/`pkg info`), never HTTP/exit code alone.
+
+VERIFICATION (must all pass before the phase is done)
+- The new smoke runs GREEN on a dispatched smoke VM (install from our repo, both
+  precedence branches). Capture the `pkg query '%R'` + version evidence in the handoff.
+- python -m pytest (default) → unchanged (smoke tree ignored).
+- ruff check . / ruff format . → clean; shellcheck on any spike shell → clean.
+
+EXPECTED RESULT
+A real pfSense CE VM installs pfBlockerNG-devel from a NONE-signed third-party repo with
+no `-f`, deps resolved, package functional, and cross-repo precedence demonstrably picks
+the higher version — OR a recorded RED that rejects/reshapes the ADR.
+
+COMMIT (single)
+    tests/smoke: prove third-party pkg-repo install + precedence on the VM (ADR-17 P1)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push `adr/17`. Touches tests/ → lands on `devel` via a rebase-only PR (carry the
+`ui-tests`/smoke label so the live-VM suite validates it). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/01_Results.txt` (plain .txt)
+State the GO/REJECT verdict and the evidence: the exact `pkg query '%R'` repo origin +
+the installed version, the deps-resolved confirmation, both precedence-branch results;
+how the catalog was served (mock HTTP vs file://) and any reliability notes; the repo-conf
+fields that worked (priority value, signature_type none); anything Phase 2 must reproduce
+in the reusable generator; the go-ahead for Phase 2.
