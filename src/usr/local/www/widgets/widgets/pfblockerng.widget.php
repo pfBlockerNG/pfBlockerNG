@@ -759,6 +759,11 @@ function pfBlockerNG_get_header($mode='') {
 		unset($pfb_table['counts']);
 	}
 
+	// Default the last-clear timestamps so they are defined when the stats below print
+	// them even if the lookup finds no row (or the component is off). Behaviour-preserving.
+	$ip_last_clear		= '';
+	$dnsbl_last_clear	= '';
+
 	// Collect Last packet clear timestamps
 	if ($pfb['enable'] == 'on') {
 		$db_handle = pfb_open_sqlite(6, 'Last Clear Stats');
