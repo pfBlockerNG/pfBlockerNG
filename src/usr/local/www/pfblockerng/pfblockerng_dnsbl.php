@@ -2448,12 +2448,14 @@ $section->addInput(new Form_Select(
 	$pconfig['pfb_idn'],
 	array(
 		''		=> 'Off',
-		'all'		=> 'All-IDN',
+		'all'		=> 'Always',
 		'confusable'	=> 'Confusable',
 	)
-))->setHelp('IDN handling (not Regex based). <strong>Off</strong>: no IDN action. <strong>All-IDN</strong>: block every IDN/\'xn--\' domain (blunt). '
-		. '<strong>Confusable</strong>: block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, including Cyrillic+Greek). '
-		. 'Does not catch whole-script confusables or pure-ASCII typosquats.');
+))->setHelp('IDN handling (not Regex based).<ul>'
+		. '<li><strong>Off</strong> - no IDN action.</li>'
+		. '<li><strong>Always</strong> - block every IDN/\'xn--\' domain (blunt).</li>'
+		. '<li><strong>Confusable</strong> - block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, '
+		. 'including Cyrillic+Greek). Does not catch whole-script confusables or pure-ASCII typosquats.</li></ul>');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_idn_block_malicious',

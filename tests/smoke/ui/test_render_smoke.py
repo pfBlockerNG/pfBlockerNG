@@ -269,7 +269,8 @@ def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: Php
         'name="pfb_idn_block_malicious"',
         'name="pfb_idn_escalate_suspicious"',
         "IDN Blocking",
-        "Confusable",
+        ">Always<",  # the 'all' mode option label (renamed from "All-IDN")
+        ">Confusable<",
     ):
         assert needle in body, f"DNSBL page is missing the IDN-mode marker {needle!r}"
 
