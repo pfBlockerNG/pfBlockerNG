@@ -116,8 +116,8 @@ $options_dnsbl_allow_int	= $options_dnsbl_interface;
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
-			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
-			. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
+			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
+			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
 			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
 			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
@@ -125,8 +125,8 @@ $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 
 $options_global_log	= [	''		=> 'No Global mode',
 				'enabled'	=> 'DNSBL WebServer/VIP',
-				'disabled_log'	=> 'Null Block (logging)',
-				'disabled'	=> 'Null Block (no logging)',
+				'disabled_log'	=> 'Null Blocking (logging)',
+				'disabled'	=> 'Null Blocking (no logging)',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
 				'nxdomain'	=> 'NXDOMAIN (no logging)'];
 
@@ -787,10 +787,10 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_hsts'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Block mode</strong> for HSTS domains.<br />'
+))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
 	. ' <a target=_"blank" href="https://raw.githubusercontent.com/chromium/chromium/master/net/http/transport_security_state_static.json">list</a>'
-	. ' will use the Null Block Mode which *may* prevent Browser Certificate Errors.<br />'
+	. ' will use the Null Blocking Mode which *may* prevent Browser Certificate Errors.<br />'
 	. '<span class="text-danger">Note:</span> This option will not block HSTS domains, unless those Domains are added via the Feeds/Customlists.'
 );
 
