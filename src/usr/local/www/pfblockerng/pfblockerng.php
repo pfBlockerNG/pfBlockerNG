@@ -579,8 +579,12 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			$feed['username'] = $pfb['maxmind_account'];
 			$feed['password'] = $pfb['maxmind_key'];
 		}
-		elseif ($feed['type'] == 'asn') { 
-			$feed['url'] = "{$feed['url']}{$pfb['asn_token']}";
+		elseif ($feed['type'] == 'asn') {
+			// rawurlencode the token so URL correctness does not depend on the input
+			// validator's strictness. Today's tokens are word chars only (rawurlencode
+			// is a no-op on them), but encoding here keeps the query well-formed if the
+			// token format ever changes (e.g. base64/JWT with '=' '.' '/').
+			$feed['url'] = "{$feed['url']}" . rawurlencode($pfb['asn_token']);
 		}
 		else {
 			$feed['username'] = $feed['username'] ?: '';
