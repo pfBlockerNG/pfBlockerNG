@@ -319,3 +319,22 @@ class TestConfusableWhitelistWins:
         allowed = _evaluate(MALICIOUS_NAME, white=white)
         assert allowed.is_found is True  # the IDN block STILL fires (analyzer feeds is_found)
         assert allowed.in_whitelist is True  # ...but the whiteDB override un-blocks it
+
+
+class TestConfusableBlockBandUnderImportantRules:
+    """Regression (PR #136 review): a Confusable (and All-IDN) BLOCK must carry a
+    non-zero block_band so the ABP numeric resolution (``important_rules``) does not
+    read it as already overridden. ``_resolve_numeric_allow`` returns ``allow_band >=
+    block_band``; with ``block_band == 0`` a no-allow ``allow_band == 0`` makes ``0 >=
+    0`` true, silently resolving every IDN block the instant any ABP $important / feed
+    @@ / feed-regex forces the numeric path."""
+
+    def test_malicious_homograph_stays_blocked_under_important_rules(self) -> None:
+        # Given a malicious homograph that blocks on the fast path (before-state)...
+        before = _evaluate(MALICIOUS_NAME)
+        assert before.is_found is True and before.in_whitelist is False
+        # When important_rules forces the numeric 6-band resolution with NO allow match...
+        after = _evaluate(MALICIOUS_NAME, important_rules=True)
+        # Then the block is honoured (a real feed-band block, not auto-overridden).
+        assert after.is_found is True
+        assert after.in_whitelist is False

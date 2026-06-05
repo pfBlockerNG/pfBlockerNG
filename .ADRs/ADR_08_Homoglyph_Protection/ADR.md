@@ -2,8 +2,8 @@
 
 - **Status:** **Implemented — pending live smoke** (2026-06-05; authored 2026-06-02). All seven phases landed on `adr/08-homoglyph-protection`; the suite + FP/TP gate are green on-branch (§7 *Build evidence*). Status flips to **Accepted** only after the maintainer runs the live-box manual smoke below (CI cannot reach Unbound's Python loader).
 - **Date:** 2026-06-02
-- **Branch:** `adr/08-homoglyph-protection` (off `devel`; `next` retired) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help), a new **shipped Unicode data table** + its generator under `scripts/`.
-- **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (the `'punycode'` codec decodes; the TR39 Scripts/Script_Extensions tables ship as **data**, not a dependency); PHP 8.3; POSIX `sh`.
+- **Branch:** `adr/08-homoglyph-protection` (off `devel`; `next` retired) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help), the **IDN script analyzer** `pfb_idn_analyzer.py` (code-point script identity from the stdlib `unicodedata.name()` — **no shipped Unicode table**; see the §7 amendment).
+- **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (the `'punycode'` codec decodes; code-point script identity comes from `unicodedata.name()` — **no shipped Unicode table**, see §7 amendment); PHP 8.3; POSIX `sh`.
 - **Test suite:** `tests/test_pfb_unbound.py`, `tests/conftest.py`; new `tests/test_adr08_*` (the TR39 decision spec/oracle, the punycode+script analyzer, the matcher wiring, the FP/TP corpus).
 - **References (the rule this enforces):** ICANN *Guidelines for the Implementation of Internationalized Domain Names, **Version 4.1*** (2022-09-22) <https://www.icann.org/en/system/files/files/idn-guidelines-22sep22-en.pdf>; EURid IDN policy <https://eurid.eu/en/knowledge-centre/domain-names-with-special-characters-idns/>; Unicode **UTS#39** Security Mechanisms (Restriction-Level Detection) <https://www.unicode.org/reports/tr39/>; ICANN SSAC IDN Homographs <https://itp.cdn.icann.org/en/files/meetings/presentation-ssac-idn-homograph-22oct18-en.pdf>.
 
@@ -185,14 +185,37 @@ Prompt: `07_Validation_Smoke_DoD.txt`
 - The limitation (whole-script confusables + ASCII typosquats not covered) is documented in the help text + README.
 - Status → **Accepted** only after the manual smoke (below) passes on a live pfSense box.
 
-### Build evidence (recorded Phase 7, on `adr/08-homoglyph-protection`)
+### Amendment (during PR #136 review) — no shipped Unicode table
 
-CPython 3.11; pinned **Unicode 15.1.0** (`UNICODE_VERSION` in both
-`scripts/update-unicode-data.py` and the shipped data module
-`src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py`; matches the dev-box
-`unicodedata.unidata_version` and the corpus/oracle `ucd_version`, so tables, corpus
-and spec agree). All numbers reproduced on-branch in Phase 7 — they match the Phase-1
-de-risk (no drift after the analyzer + matcher wiring).
+The phase work (§ below) shipped the TR39 **Scripts/Script_Extensions** as a generated
+2820-line data module (`pfb_unicode_scripts.py`) + a `scripts/update-unicode-data.py`
+generator. **During review this was replaced** with deriving each code point's script
+from the **stdlib `unicodedata.name()`** leading token in `pfb_idn_analyzer.py` — the
+data module and generator are **deleted**. Rationale: it removes a 2820-line shipped
+file, a second module to copy into the Unbound chroot, and a FreeBSD-ports `pkg-plist`
+entry, with **no behaviour change** — the name()-derivation reproduces every corpus
+label's resolved-script set and severity (FP 0 / TP 6) and is stable across the runtime
+UCDs (validated Python 3.13/UCD 15.1.0 and 3.14/UCD 16.0.0; the in-scope script-name
+tokens are stable since UCD 1.x). Modifier-letter marks (`Lm`: ー U+30FC, 々, tatweel)
+and a couple of Common ideographic `Lo` marks are treated transparent so a legit
+Japanese name does not read as multi-script. The phase prompts/RESULTS below record the
+original table approach as history; the corpus/oracle GOLDEN stays pinned to UCD 15.1.0.
+
+Also fixed in review: an IDN block (All-IDN **and** Confusable) now sets a non-zero
+`block_band`, so the ABP numeric `important_rules` resolution no longer treats it as
+already overridden; `pfb_idn_analyzer.py` is copied into the Unbound chroot beside
+`pfb_unbound.py` (it is imported at load); and the decode-error / UCD-version tests are
+version-tolerant (Python 3.11 ships UCD 14.0.0; the raw `'punycode'` codec raises the
+base `UnicodeError` on 3.11/3.12).
+
+### Build evidence (recorded Phase 7, amended in review)
+
+CPython 3.11–3.14; the analyzer carries **no pinned Unicode table** — it reads the
+runtime stdlib UCD via `unicodedata.name()`. The corpus/oracle GOLDEN
+(`tests/fixtures/adr08_*`) is pinned to `ucd_version` **15.1.0**; the suite proves the
+analyzer agrees with it across the runtime UCDs. All numbers reproduced on-branch — they
+match the Phase-1 de-risk (no drift after the analyzer + matcher wiring + the review
+rework).
 
 **Test equivalence (`python -m pytest`): 1303 passed, 0 failed.** The ADR-08 suite is
 **179** of these:

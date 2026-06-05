@@ -317,19 +317,12 @@ caught. See [ADR-08](.ADRs/ADR_08_Homoglyph_Protection/ADR.md) for the full cont
 the decision oracle + analyzer + matcher-wiring + corpus guards are the
 `tests/test_adr08_*` suite.
 
-The TR39 **Scripts / Script_Extensions** tables ship as **data**
-(`src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py`, in the release archive — no
-runtime dependency, stdlib only), pinned to **Unicode 15.1.0**. Regenerate them from
-a pinned Unicode version with:
-
-```sh
-python scripts/update-unicode-data.py            # pinned 15.1.0
-python scripts/update-unicode-data.py --version X.Y.Z
-```
-
-The generator downloads that version's `Scripts.txt` / `ScriptExtensions.txt` from
-unicode.org and re-emits the compact range tables byte-for-byte (pattern mirrors
-`update-pfsense-stubs.py`).
+The analyzer (`src/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py`) resolves each code
+point's script from the **stdlib `unicodedata.name()`** leading token (`LATIN…`,
+`CYRILLIC…`, `GREEK…`, `CJK…`→Han, …) — no shipped Unicode table and no runtime
+dependency. The script names are stable across UCD versions for the established
+scripts in scope, so the FP/TP result holds across Python 3.11–3.14 (validated in the
+`tests/test_adr08_*` suite against the version-pinned corpus/oracle).
 
 ### DNSBL sinkhole VIP
 

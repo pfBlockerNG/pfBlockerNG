@@ -61,6 +61,8 @@ $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['
 $pconfig['pfb_idn']		= $pfb['dconfig']['pfb_idn']				?: '';
 if ($pconfig['pfb_idn'] === 'on') {
 	$pconfig['pfb_idn'] = 'all';
+} elseif ($pconfig['pfb_idn'] === 'off') {
+	$pconfig['pfb_idn'] = '';
 }
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
