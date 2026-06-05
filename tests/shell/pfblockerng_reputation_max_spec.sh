@@ -44,4 +44,28 @@ Describe 'reputation_max() match output (issue #27)'
     The contents of file "${pfbmatch}match${alias}.txt" should include "1.2.3.0/24"
     The stdout should include "Reputation -Max Stats"
   End
+
+  It 'blocks (does NOT match) a repeat offender when the GeoIP country lookup misses'
+    # Regression: a failed GeoIP lookup yields an empty ${ccheck}. The pre-fix
+    # code used an unquoted *${ccheck}* case pattern, which collapsed to '**' and
+    # matched every ${cc} — so an unknown-country repeat offender was wrongly
+    # routed to the match/whitelist path instead of being blocked. With the fix it
+    # must take the block path (mirroring the "country not in ${cc}" default).
+    #
+    # Paired with the country-match case above: same input, the only difference is
+    # whether GeoIP resolves a country — proving the classification is a real
+    # branch, not an always-match path.
+    alias="MYLIST"
+    max=1
+    # A mmdblookup miss prints "Could not find ..."; after the script's
+    # `grep -v 'Could\|Got\|^$'` filter, ${ccheck} is empty.
+    make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+    printf '1.2.3.4\n1.2.3.5\n1.2.3.6\n' > "${pfbdeny}${alias}.txt"
+    When call reputation_max
+    The status should be success
+    # Not matched/whitelisted: no match-output file is produced for this alias.
+    The path "${pfbmatch}match${alias}.txt" should not be exist
+    # Counted as a blocked repeat-offender range (the block branch ran).
+    The stdout should include "Reputation -Max Stats"
+  End
 End
