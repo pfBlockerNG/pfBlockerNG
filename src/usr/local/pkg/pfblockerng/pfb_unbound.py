@@ -82,6 +82,13 @@ pfb: dict[str, Any] = {}
 from collections import OrderedDict, defaultdict
 from configparser import ConfigParser
 
+# ADR-08 Phase 5: the pure TR39 cross-script IDN homoglyph analyzer (sibling module,
+# shipped alongside this file in the package dir -- so its own dir is on Unbound's
+# sys.path at runtime, and conftest adds it for the suite). stdlib-only, Unbound-
+# symbol-free; the matcher's Confusable arm calls classify_idn (decode-safe, NEVER
+# raises) so a malformed xn-- label can never crash the resolver.
+import pfb_idn_analyzer as idn_analyzer
+
 # Module-level globals populated by init_standard() at runtime. Declared here
 # without assignment (PEP 526) so type checkers can resolve them across the
 # functions that reference them via `global`; no runtime object is created.
@@ -712,6 +719,12 @@ def init_standard(id: int, env: module_env) -> bool:
     # ADR-08: the IDN-feature mode, derived from python_idn (see idn_mode_from_legacy).
     # Default OFF; the ini load below recomputes it from the loaded python_idn.
     pfb["idn_mode"] = IDN_MODE_OFF
+    # ADR-08 Phase 5: the two Confusable-mode sub-toggles. block_malicious is DEFAULT-ON
+    # (a cross-script confusable homograph blocks unless the operator disables it);
+    # escalate_suspicious is OPT-IN (a suspicious/flagged anomaly only alerts unless the
+    # operator escalates it to a block). Both only act in IDN_MODE_CONFUSABLE.
+    pfb["python_idn_block_malicious"] = True
+    pfb["python_idn_escalate_suspicious"] = False
     # TLD-Allow defaults. The PHP ini writer always emits these three MAIN keys, so
     # the config.has_option() loads below normally populate them -- but default them
     # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
@@ -866,8 +879,16 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
             # ADR-08: derive the IDN mode from the (just-loaded) legacy python_idn flag.
             # The PHP ini still writes only python_idn=on|off this phase, so 'on'->All-IDN,
-            # off->Off -- today's exact behaviour. The Confusable value plumbs in at Phase 6.
+            # off->Off -- today's exact behaviour. The Confusable value + the explicit
+            # idn_mode key plumb in via PHP at Phase 6; until then this is the sole source.
             pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
+            # ADR-08 Phase 5: the two Confusable sub-toggles. The PHP ini writer emits these
+            # MAIN keys from Phase 6 on; read them when present so the matcher honours the
+            # operator's choice, else keep the defaults (block_malicious ON, escalate OFF).
+            if config.has_option("MAIN", "python_idn_block_malicious"):
+                pfb["python_idn_block_malicious"] = config.getboolean("MAIN", "python_idn_block_malicious")
+            if config.has_option("MAIN", "python_idn_escalate_suspicious"):
+                pfb["python_idn_escalate_suspicious"] = config.getboolean("MAIN", "python_idn_escalate_suspicious")
             if config.has_option("MAIN", "python_tld_seg"):
                 pfb["python_tld_seg"] = config.getint("MAIN", "python_tld_seg")
             if config.has_option("MAIN", "decisiondb_max"):
@@ -1356,15 +1377,87 @@ def is_idn_domain(q_name: str) -> bool:
 
 
 def idn_mode_decision(q_name: str, idn_mode: str) -> bool:
-    """Pure IDN feed decision: should this query be blocked by the IDN feed?
+    """Pure IDN feed decision: should this query be blocked by the All-IDN feed?
 
     Extracted verbatim from the evaluate_domain IDN branch so the contract can be
     pinned (ADR-08 Phase 3). Returns True only in IDN_MODE_ALL on an xn-- query --
     the exact condition the inline ``cfg["python_idn"] and is_idn_domain(q_name)``
-    encoded. IDN_MODE_OFF and IDN_MODE_CONFUSABLE return False (Confusable is INERT
-    this phase; its analyzer arrives in Phase 5). No punycode decode, no script work.
+    encoded. IDN_MODE_OFF and IDN_MODE_CONFUSABLE return False here -- Off never
+    blocks, and the Confusable tier is decided by ``idn_confusable_action`` (Phase 5),
+    NOT this gate. No punycode decode, no script work. The Off/All arms it governs
+    stay byte-identical to today (the Phase-3 golden gate).
     """
     return idn_mode == IDN_MODE_ALL and is_idn_domain(q_name)
+
+
+# ADR-08 Phase 5: the Confusable tier. Distinct feed/group labels so a homoglyph block
+# is attributed apart from the blunt All-IDN feed ("IDN"/"DNSBL_IDN") and the alerts
+# page / Reports can break it out. Malicious -> the Homoglyph feed; the suspicious/
+# flagged (non-malicious anomaly) tier -> the Suspect feed.
+IDN_FEED_MALICIOUS = "Homoglyph"
+IDN_GROUP_MALICIOUS = "DNSBL_Homoglyph"
+IDN_FEED_SUSPECT = "Homoglyph_Suspect"
+IDN_GROUP_SUSPECT = "DNSBL_Homoglyph_Suspect"
+
+# The three matcher actions the analyzer's severity maps to (mirrors the Phase-2
+# oracle's ACT_NONE/ACT_ALERT/ACT_BLOCK under the two sub-toggles).
+IDN_ACT_NONE = "none"
+IDN_ACT_ALERT = "alert"
+IDN_ACT_BLOCK = "block"
+
+
+def _idn_dual_form(verdict: idn_analyzer.NameVerdict) -> str:
+    """Actionable dual-form description of the offending label, for the log line.
+
+    ``xn--pple-43d [аpple] Cyrillic`` -- the A-label, the decoded Unicode in brackets,
+    and the offending script(s) -- mirroring the alerts page's existing ``idn_to_utf8``
+    "domain [decoded]" display so a homoglyph block/alert is human-readable. The worst
+    label is the first whose severity equals the name verdict's (name severity = most
+    severe label); fall back to the whole name if none matches (defensive).
+    """
+    worst = next((lbl for lbl in verdict.labels if lbl.severity == verdict.severity), None)
+    if worst is None:
+        return verdict.a_name
+    a_label = worst.a_label
+    scripts = " ".join(sorted(verdict.offending)) if verdict.offending else ""
+    if worst.decoded is None:
+        # FLAGGED via a caught decode error -- no decoded form to show; name the failure.
+        detail = "decode-error:{}".format(worst.decode_error or "unknown")
+        return "{} [{}]".format(a_label, detail)
+    decoded = worst.decoded
+    if scripts:
+        return "{} [{}] {}".format(a_label, decoded, scripts)
+    return "{} [{}]".format(a_label, decoded)
+
+
+def idn_confusable_action(
+    q_name: str,
+    *,
+    block_malicious: bool,
+    escalate_suspicious: bool,
+) -> tuple[str, idn_analyzer.NameVerdict | None]:
+    """Confusable-mode action for one query name + the verdict that drove it.
+
+    Gated by ``is_idn_domain`` (a non-xn-- query pays NOTHING -- no decode, no script
+    work, returns ``(IDN_ACT_NONE, None)``). On an xn-- query it classifies the name
+    PER-LABEL via the pure analyzer (``classify_idn`` never raises -- a malformed label
+    is FLAGGED, the resolver never crashes) and maps severity -> action exactly like the
+    Phase-2 oracle's ``action(...)`` under the two sub-toggles:
+
+      * MALICIOUS  -> block  when ``block_malicious`` (default-ON); alert when disabled.
+      * SUSPICIOUS / FLAGGED -> alert by default; block when ``escalate_suspicious`` (opt-in).
+      * LEGIT      -> none (resolve untouched -- single-script, Latin+CJK, Common-mix).
+    """
+    if not is_idn_domain(q_name):
+        return IDN_ACT_NONE, None
+    verdict = idn_analyzer.classify_idn(q_name)
+    sev = verdict.severity
+    if sev == idn_analyzer.SEV_LEGIT:
+        return IDN_ACT_NONE, verdict
+    if sev == idn_analyzer.SEV_MALICIOUS:
+        return (IDN_ACT_BLOCK if block_malicious else IDN_ACT_ALERT), verdict
+    # SUSPICIOUS or FLAGGED: alert by default, escalatable to block via the opt-in.
+    return (IDN_ACT_BLOCK if escalate_suspicious else IDN_ACT_ALERT), verdict
 
 
 def get_q_name_qstate(qstate: module_qstate | None) -> str:
@@ -1854,6 +1947,38 @@ def get_details_dnsbl(
         pfb_log("/var/log/pfblockerng/unified.log", csv_line)
 
     return True
+
+
+def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_type: str) -> None:
+    """Log an ADR-08 Confusable-mode ALERT (the name still resolves) -- same shape as a block.
+
+    A suspicious/flagged homoglyph (or a malicious one with the block sub-toggle disabled)
+    is alerted, not blocked: it must be surfaced so an operator can review it, without
+    breaking resolution. The line mirrors ``get_details_dnsbl``'s CSV columns so the alerts
+    page renders it identically -- with ``b_type`` "Homoglyph_Alert" marking it a non-block
+    alert, and ``b_eval`` carrying the dual form (``xn-- [decoded] script``).
+    """
+    feed, group, b_eval = idn_alert
+    if q_ip == "Unknown":
+        q_ip = "127.0.0.1"
+    csv_line = ",".join(
+        "{}".format(v)
+        for v in (
+            "DNSBL-python",
+            make_timestamp(),
+            q_name,
+            q_ip,
+            "Python",  # p_type
+            "Homoglyph_Alert",  # b_type -- distinguishes an alert from a block
+            group,
+            b_eval,
+            feed,
+            "+",  # dupEntry
+            q_type,
+        )
+    )
+    pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
+    pfb_log("/var/log/pfblockerng/unified.log", csv_line)
 
 
 def make_timestamp() -> str:
@@ -4030,6 +4155,13 @@ class DnsblDecision:
     feed: Any
     group: Any
     b_eval: str
+    # ADR-08 Phase 5: a Confusable-mode ALERT (suspicious/flagged, or malicious with
+    # block disabled) does NOT block -- the name resolves (is_found stays False) -- but
+    # the anomaly must be surfaced. When an alert fired this carries its
+    # (feed, group, b_eval) so operate() emits a dnsbl.log line in the same shape as a
+    # block; None means no IDN alert. Default None so a block/allow verdict (and every
+    # pre-ADR construction site) is unchanged.
+    idn_alert: Any = None
 
 
 class _Unset:
@@ -4342,6 +4474,13 @@ def evaluate_domain(
     feed: Any = "Unknown"
     group: Any = "Unknown"
     b_eval = ""
+    # ADR-08 Phase 5: a Confusable-mode ALERT (non-blocking) records its attribution here
+    # so operate() can log it while the name still resolves; None on the common path.
+    idn_alert: Any = None
+    # The dual-form description of a Confusable BLOCK (xn-- [decoded] script), captured in
+    # the IDN branch and written into b_eval AFTER the generic "b_eval = q_name" below, so
+    # the log line is actionable instead of the bare A-label.
+    idn_block_b_eval: str | None = None
 
     # ``block_band`` carries the discovered block's numeric band (1-5) into the numeric
     # resolution below; it stays at the feed-block default on the fast path. The fast
@@ -4394,14 +4533,45 @@ def evaluate_domain(
         # ADR-08: the IDN feed. ``idn_mode`` is the three-valued selector (off/all/
         # confusable); derive it from the legacy cfg["python_idn"] when a cfg predates
         # the key (legacy callers/tests still pass only python_idn -- True->All-IDN).
-        # idn_mode_decision is byte-equivalent to the old inline test in All-IDN mode;
-        # Off and the INERT Confusable mode both return False this phase.
         if not is_found:
             idn_mode = cfg.get("idn_mode") or idn_mode_from_legacy(cfg.get("python_idn", False))
+            # All-IDN / Off arm -- BYTE-IDENTICAL to today (the Phase-3 golden gate):
+            # idn_mode_decision blocks IFF All-IDN on an xn-- query, as the old inline test.
             if idn_mode_decision(q_name, idn_mode):
                 is_found = True
                 feed = "IDN"
                 group = "DNSBL_IDN"
+            elif idn_mode == IDN_MODE_CONFUSABLE:
+                # Confusable arm (Phase 5): decode + TR39 mixed-script analysis, PER-LABEL,
+                # gated by is_idn_domain (a non-xn-- query pays nothing). classify_idn is
+                # decode-safe -- a malformed label is FLAGGED, never raised into the resolver.
+                action, verdict = idn_confusable_action(
+                    q_name,
+                    block_malicious=cfg.get("python_idn_block_malicious", True),
+                    escalate_suspicious=cfg.get("python_idn_escalate_suspicious", False),
+                )
+                if action == IDN_ACT_BLOCK and verdict is not None:
+                    # Malicious (or escalated suspicious/flagged) -> block. Distinct
+                    # feed/group so it is attributed apart from the blunt All-IDN feed.
+                    is_found = True
+                    if verdict.severity == idn_analyzer.SEV_MALICIOUS:
+                        feed = IDN_FEED_MALICIOUS
+                        group = IDN_GROUP_MALICIOUS
+                    else:
+                        feed = IDN_FEED_SUSPECT
+                        group = IDN_GROUP_SUSPECT
+                    idn_block_b_eval = _idn_dual_form(verdict)
+                elif action == IDN_ACT_ALERT and verdict is not None:
+                    # Suspicious/flagged (or malicious with block disabled) -> ALERT only:
+                    # the name still resolves (is_found stays False); record the attribution
+                    # so operate() emits a log line in the block-line shape (dual-form b_eval).
+                    is_malicious = verdict.severity == idn_analyzer.SEV_MALICIOUS
+                    idn_alert = (
+                        IDN_FEED_MALICIOUS if is_malicious else IDN_FEED_SUSPECT,
+                        IDN_GROUP_MALICIOUS if is_malicious else IDN_GROUP_SUSPECT,
+                        _idn_dual_form(verdict),
+                    )
+                # IDN_ACT_NONE (legit, or a non-xn-- name) -> no IDN action, resolves.
 
         if not is_found and cfg["regexDB"] and q_name:
             # Snapshot-iterate (list(...)) so the runtime eviction can mutate the live
@@ -4433,6 +4603,12 @@ def evaluate_domain(
         if is_found:
             b_eval = q_name
             log_type = "1"
+            # ADR-08 P5: a Confusable BLOCK reports the dual-form (xn-- [decoded] script)
+            # instead of the bare A-label, so the dnsbl.log line / alerts page are
+            # actionable. Only set on the homoglyph block path; the All-IDN feed and every
+            # other stratum keep b_eval = q_name untouched.
+            if idn_block_b_eval is not None:
+                b_eval = idn_block_b_eval
 
     # Resolution stratum. FAST PATH (important_rules False): the historical "a block is
     # found, then an allow overrides it" -- whiteDB checked as a plain override,
@@ -4519,6 +4695,7 @@ def evaluate_domain(
         feed=feed,
         group=group,
         b_eval=b_eval,
+        idn_alert=idn_alert,
     )
 
 
@@ -4859,6 +5036,10 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     # hand-edited ini, or a test seeding only python_idn) still resolves
                     # to today's mode rather than KeyError-ing.
                     "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
+                    # ADR-08 P5: the Confusable sub-toggles (only read in IDN_MODE_CONFUSABLE).
+                    # Default-ON malicious block, opt-in suspicious escalation.
+                    "python_idn_block_malicious": pfb.get("python_idn_block_malicious", True),
+                    "python_idn_escalate_suspicious": pfb.get("python_idn_escalate_suspicious", False),
                     "regexDB": bool(snap.regex_db),
                     "whiteDB": bool(snap.white_db),
                     "allowRegexDB": bool(snap.allow_regex_db),
@@ -4889,6 +5070,14 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # Add domain data to DNSBL cache for Reports tab (fresh block only)
                 if dnsbl.is_found and not dnsbl.in_whitelist:
                     pfb_db_enqueue(("cache", (dnsbl.b_type, q_name, dnsbl.group, dnsbl.b_eval, dnsbl.feed)))
+
+                # ADR-08 P5: a Confusable-mode ALERT (suspicious/flagged, or malicious with
+                # block disabled) does NOT block -- the name resolves -- but the anomaly is
+                # surfaced once, here on the fresh evaluation, in the same dnsbl.log shape as
+                # a block (dual-form b_eval so it is actionable). A repeat query reuses the
+                # cached decision and is not re-logged (the name resolves normally).
+                elif dnsbl.idn_alert is not None:
+                    _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
 
             # Block iff found and not whitelisted; an allow decision falls through to
             # the resolver (the WAIT_MODULE below).
