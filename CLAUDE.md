@@ -562,6 +562,41 @@ When the min CE version changes, also:
 New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub Release → PR
 on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases; from `main`, stable releases.
 
+### Self-hosted `pkg` repository (ADR-17)
+
+Beyond the Netgate ports channel we publish a **self-hosted FreeBSD `pkg` repository on
+GitHub Pages** — a **derived index** (no stateful store): each deploy enumerates **all**
+Releases, downloads their `.pkg`, buckets by ABI, regenerates the catalog per `<ABI>/`, and
+deploys the tree to `brait.dev/pfBlockerNG/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}`
+conf auto-follows an OS upgrade). Cross-repo selection is keyed on repo **`priority:`** (it
+**dominates version** — Phase-1 live finding), so our above-Netgate `priority: 100` makes
+`pkg install`/`upgrade` and the stock GUI **Install** pull our build. GUI discovery + the
+update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (would touch
+`src/`).
+
+- **Publish pipeline:** `.github/workflows/repo-publish.yml` (PRIMARY — pure-Python
+  `scripts/build-repo-portable.py` on a plain Linux runner, `apt-get install -y zstd`, no
+  libpkg/ABI env) + `.github/workflows/repo-publish-freebsd.yml` (FreeBSD-VM fallback /
+  fidelity oracle — `scripts/build-repo.sh` + real `pkg repo`). Wired into `release.yml` as
+  the `repo-publish` job — additive, `if: always()`, a **leaf** in the `needs:` graph
+  isolated exactly like `attach-pkgs` (its failure never breaks `release`/`ports-pr`).
+  Deploys via `upload-pages-artifact` + `deploy-pages` (`pages: write` + `id-token: write`
+  scoped to the deploy job only).
+- **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
+  `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
+  `scripts/add-repo.sh` (client bootstrap — `devel|stable` channel arg, `priority: 100`,
+  writes `/usr/local/etc/pkg/repos/pfblockerng-<channel>.conf`, `pkg update` + verify). The
+  emitted conf is byte-identical across all three (drift-pinned in
+  `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
+- **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`**
+  (a distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`),
+  cross-repo precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and
+  the catalog accepted from both generators. Dispatch:
+  `gh workflow run smoke.yml -f pytest_marker=repo` (or `repo-install.yml` once it lands on
+  `devel`). The gated `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the
+  real `brait.dev` URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable
+  from the default branch).
+
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and merge");
 never a merge commit, never squash. History across `main` ← `devel` stays strictly linear
 (`main` always an ancestor of `devel`, no merge commits), so promotion up the chain — and

@@ -1,0 +1,163 @@
+================================================================================
+ADR-17 — Phase 6 RESULTS (docs + §7 Definition-of-Done + precedence correction +
+                          Status)
+================================================================================
+
+VERDICT: DONE. Docs-only phase (README + CLAUDE.md + ADR.md text/§7/Status). No
+         src/, CI, scripts, or tests touched. The §1/§2 precedence model is
+         corrected to the Phase-1 live-VM finding (PRIORITY dominates version);
+         the §7 affected-flow checklist is ticked with the live run ids; Status
+         set Proposed -> Implemented (pending the post-merge live Pages deploy +
+         the gated live-URL leg). All gates green.
+
+--------------------------------------------------------------------------------
+THE §1/§2 PRECEDENCE CORRECTION (the technical-accuracy fix)
+--------------------------------------------------------------------------------
+The ADR shipped claiming pkg installs the HIGHEST VERSION with priority breaking
+ties. Phase 1 FALSIFIED that on a live VM: repository PRIORITY is the PRIMARY key
+and DOMINATES version — a higher-priority repo wins even at a LOWER version
+(observed: priority 200 / version _1 BEAT priority 99 / version _9). Corrected:
+
+  * §1 Context 3 "Install" bullet — rewritten: selection keyed first on repo
+    `priority:`, a higher-priority repo wins even at a lower version; version is
+    the SECONDARY key (only between equal-priority repos). Our repo wins the GUI
+    Install button purely because add-repo.sh sets `priority:` ABOVE the Netgate
+    `pfSense` repo, REGARDLESS of version. Cited as the Phase-1 live-VM finding
+    (the 200/_1 vs 99/_9 observation).
+  * §2 Decision table — the "Version precedence" row RENAMED to "Repo precedence
+    (priority)" and reframed: `priority:` is the primary key and dominates version;
+    add-repo.sh sets ours above Netgate so we win regardless of version; versioning
+    discipline is therefore SECONDARY (orders only equal-priority repos).
+  * §3 Negative "Cross-repo version races" -> "Cross-repo precedence races":
+    priority-primary; ours wins by priority but that also means we shadow a
+    same-name Netgate build by priority even when theirs is newer (blast radius =
+    our own package, the catalog carries only pfBlockerNG).
+  * Trust-anchor host corrected github.io -> the custom-domain Pages host
+    brait.dev (§2 Trust model + §3 Authenticity) — the real served host (P3b).
+  * Stale filename/marker fixed throughout: test_smoke_repo.py (marker `smoke`) ->
+    tests/smoke/test_repo_install.py (marker `repo`, deselected from -m smoke) in
+    the header block + the Phase-1/5 action-plan lines; the primary generator
+    build-repo-portable.py named alongside build-repo.sh in the Component(s) line.
+
+--------------------------------------------------------------------------------
+DOCS ADDED — WHERE
+--------------------------------------------------------------------------------
+README.md — new H3 "How the `pkg` repository is published (GitHub Pages)" at the
+  END of the existing "Install from our `pkg` repository" H2 (after add-repo.sh
+  see-link, before the section rule). Describes the PUBLISH side (the install
+  one-liner is NOT duplicated — the new subsection cross-references the section
+  above it): a DERIVED index REGENERATED over all Release `.pkg` each deploy,
+  per-`<ABI>/` tree, NONE-signed/TLS-anchored, served at
+  https://brait.dev/pfBlockerNG/${ABI}; the two generators (build-repo-portable.py
+  primary, build-repo.sh fallback + single --print-conf source); additive+isolated
+  repo-publish job. The honest GUI caveat + deferred GUI panel were ALREADY in the
+  install section above (Phase 4) — the new subsection points at them, not restates.
+
+CLAUDE.md — new H3 "Self-hosted `pkg` repository (ADR-17)" under "Branches and
+  releases" (after the tag-triggers-CI paragraph). Terse, established style. Adds
+  the three inventories the brief required:
+    * publish pipeline: repo-publish.yml (PRIMARY, pure-Python build-repo-portable.py
+      on Linux) + repo-publish-freebsd.yml (FreeBSD-VM fallback, build-repo.sh +
+      real pkg repo); the `repo-publish` job in release.yml (additive, if:always(),
+      leaf in needs:, isolated like attach-pkgs); Pages deploy at
+      brait.dev/pfBlockerNG/${ABI}; pages:write + id-token:write scoped to deploy.
+    * generators + bootstrap: build-repo-portable.py (primary), build-repo.sh
+      (fallback + --print-conf template), add-repo.sh (client bootstrap, channel
+      arg, priority 100); conf byte-identical, drift-pinned.
+    * repo smoke flow: tests/smoke/test_repo_install.py, marker `repo` (NOT smoke;
+      deselected from -m smoke); dispatch via
+      `gh workflow run smoke.yml -f pytest_marker=repo` (or repo-install.yml once on
+      devel); the gated test_install_from_live_pages_url (SMOKE_REPO_LIVE_URL) is
+      post-merge.
+  The precedence-dominates-version finding is stated inline (priority is the lever).
+
+ADR.md — Status line + §1 Context 3 + §2 table + §3 + §7 (DoD + checklist +
+  degrade criteria) + header Component(s)/Test-suite lines. No other ADRs touched.
+
+--------------------------------------------------------------------------------
+§7 AFFECTED-FLOW SMOKE — CHECKLIST OUTCOME (all 5 ticked, with run ids)
+--------------------------------------------------------------------------------
+GREEN on the live pfSense CE VM via tests/smoke/test_repo_install.py (marker repo):
+  [x] Install from our repo, no -f       -> test_install_from_our_repo_lands_all_files
+                                            run 27031334263 (P1). %R==pfblockerng-devel,
+                                            deps resolved, >50 files landed.
+  [x] Cross-repo precedence both branches -> ours-higher + decoy-higher (netgate-decoy),
+                                            run 27031334263 (P1). Both directions.
+  [x] pkg update accepts the catalog      -> build-repo.sh catalog run 27033922928 (P2)
+                                            + portable catalog run 27035602221 (P3a),
+                                            hermetic file://. The real brait.dev leg
+                                            (test_install_from_live_pages_url) is gated
+                                            + post-merge.
+  [x] Upgrade to our newer build          -> test_pkg_upgrade_moves_to_our_newer_build
+                                            + test_shipped_add_repo_sh_bootstrap_installs,
+                                            run 27040686824 (P5). %v _1 -> _9, both from
+                                            pfblockerng-devel; real before != after.
+  [x] Additive safety                     -> job-isolation review (P3, 03_Results.txt):
+                                            repo-publish is a leaf in release.yml needs:,
+                                            if:always(), copied from attach-pkgs; its
+                                            failure can't break release/ports-pr.
+
+--------------------------------------------------------------------------------
+OS-MAJOR VERDICT — DEGRADED-TO-CLI (documented in §7)
+--------------------------------------------------------------------------------
+A true OS-major jump (FreeBSD:15 -> FreeBSD:16, which changes ${ABI} and thus the
+served <ABI>/ subtree) is NOT reachable on a single CE smoke image — an in-place
+pfSense-upgrade across a major is image-refresh.yml's job (ADR-09), not this
+per-run flow. The single-image _1->_9 upgrade is the proven update path. The
+OS-major case degrades to the documented operator action: after a pfSense OS
+upgrade the box's ${ABI} follows it automatically (the conf url is the literal
+${ABI}, §2), so a plain CLI `pkg update -f && pkg upgrade` pulls our build for the
+NEW ABI once that ABI's catalog is published. No test attempts it (would fail-skip
+on one image) — a deliberate, documented non-goal. Recorded in the §7 degrade
+criteria.
+
+--------------------------------------------------------------------------------
+STATUS + THE POST-MERGE ACCEPT STEP
+--------------------------------------------------------------------------------
+Status set: Proposed -> **Implemented (pending the post-merge live Pages deploy +
+the gated live-URL verification)**. HONEST — the hermetic affected-flow smoke
+(install / precedence / upgrade) is GREEN on the live VM, but the public brait.dev
+Pages deploy has NOT physically run, so NOT Accepted.
+
+Flips to ACCEPTED post-merge (a GitHub constraint: a brand-new workflow_dispatch
+workflow is only dispatchable once it lands on the default branch `devel`):
+  1. gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true
+     -> deploys the catalog to Pages (capture run id + page_url).
+  2. Dispatch the `repo` smoke with SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG
+     set so test_install_from_live_pages_url runs (polls the served catalog, pins
+     the Pages anycast IPs, writes our production conf, `pkg install` no -f,
+     asserts %R == pfblockerng-devel). Green there confirms the live URL -> Accepted.
+Recorded in §7 "POST-MERGE step (flips Implemented -> Accepted)".
+
+--------------------------------------------------------------------------------
+GATES (all green)
+--------------------------------------------------------------------------------
+  * npx markdownlint-cli2 (repo root)        -> 0 error(s).
+  * scripts/check_url_encoding.py            -> clean (the new md fences use STATIC
+                                                URLs — pkg/cat blocks, ${ABI} is the
+                                                pkg(8) literal, no curl/wget/fetch
+                                                query interpolation).
+  * python -m pytest (DEFAULT)               -> unchanged/green (docs-only; tests
+                                                untouched, tests/smoke --ignore'd).
+  * pre-commit hook (ruff/pytest/mypy/markdownlint/sh/shellcheck/php) -> green on
+                                                the commit.
+
+--------------------------------------------------------------------------------
+FOLLOW-ONS FOR THE RECORD
+--------------------------------------------------------------------------------
+  * POST-MERGE: run the two-step Accept dispatch above (repo-publish.yml on devel,
+    then the gated live-URL `repo` smoke). Flip Status -> Accepted on green.
+  * DEFERRED: a pfBlockerNG GUI "Updates/Channel" panel (GUI-driven upgrade to our
+    latest, closing the Netgate-bound update-badge gap) — out of scope here (touches
+    src/www); a natural follow-on ADR/phase.
+  * FUTURE OPTION: offline-signed PUBKEY (key never in CI) to replace
+    signature_type: none — the conf gains a signature_type, layout unchanged
+    (§3 Negative / Trust model).
+
+--------------------------------------------------------------------------------
+GO-AHEAD
+--------------------------------------------------------------------------------
+Phase 6 = DONE. ADR-17 is fully implemented + documented; Status Implemented
+(pending the post-merge live Pages deploy + the gated live-URL leg, which flips it
+to Accepted). The orchestrator lands the whole ADR (single commit per phase, no
+per-phase PR).

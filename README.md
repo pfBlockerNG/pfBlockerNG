@@ -748,6 +748,35 @@ would close the badge gap is deferred (out of scope — it would touch `src/`).
 
 See [`scripts/add-repo.sh`](scripts/add-repo.sh) for full options.
 
+### How the `pkg` repository is published (GitHub Pages)
+
+The repository is a **derived index** — there is no stateful store to maintain. On each
+deploy the publish pipeline enumerates **all** GitHub Releases, downloads their `.pkg`
+assets, buckets them by ABI, **regenerates** a fresh `pkg` catalog
+(`meta.conf`/`packagesite.pkg`/`data.pkg`) per ABI, and deploys the whole `${ABI}/` tree
+to **GitHub Pages**. The site is replaced each run (no `gh-pages` history), so every
+published version/ABI is retained for free and a rollback is a re-deploy.
+
+- **Per-`${ABI}` tree.** One catalog under `…/<ABI>/` (today only `FreeBSD:15:amd64` — CE
+  2.8 and Plus 25.03 share it). The client conf's literal `${ABI}` lets one conf follow the
+  box across a pfSense OS upgrade.
+- **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
+  catalog is served at the custom-domain Pages URL
+  **`https://brait.dev/pfBlockerNG/${ABI}`** — the same base
+  [`add-repo.sh`](scripts/add-repo.sh) writes (above).
+- **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
+  `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
+  in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
+  bootstrap and the inline conf above reuse byte-for-byte.
+- **Additive + isolated.** Publishing rides each tag's `release.yml` as a separate
+  `repo-publish` job (`if: always()`, like `attach-pkgs`) plus the dispatchable
+  `repo-publish.yml`; its failure never breaks the Release or the ports PR.
+
+The honest GUI scope (Install pulls our build via cross-repo priority, but Available-Packages
+discovery + the GUI update badge stay Netgate-bound, and the GUI "Updates/Channel" panel is
+deferred) is covered above. See
+[ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
+
 ---
 
 ## Installing on a pfSense instance for testing
