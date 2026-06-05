@@ -38,3 +38,6 @@ report/
 
 # ── ADR-14 Tier-B browser screenshots (build output, human-review artifacts) ──
 test-results/
+
+# ── AI-agent worktrees (per-task, never committed) ───────────────────────────
+.claude/worktrees/
