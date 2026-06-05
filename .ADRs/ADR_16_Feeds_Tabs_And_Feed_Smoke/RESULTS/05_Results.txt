@@ -1,0 +1,221 @@
+ADR-16 — Phase 5 Results
+LIVE HTTP-FEED LOAD SMOKE (Part-C kill-gate) + the Feeds-tabs ui_browser test
+
+STATUS: DONE in code. Tests + fixture WIRING only — NO src/ change, NO new HTTP
+server, NO second VM path. Local gates green (pytest unchanged 1115 passed; ruff
+check + format clean; mypy tests/ clean; the 6 smoke cases + the parametrized
+ui_browser test collect under their markers). The kill-gate reliability and the live
+ui_browser pass are PENDING the live CI run (no VM on this machine — see KILL-GATE).
+
+================================================================================
+WHAT WAS ADDED (two new files, both OUT of default collection)
+================================================================================
+1) tests/smoke/test_smoke_feeds.py        (marker: smoke)
+   The live HTTP feed-fetch path: each case points an IpCase/DnsblCase at
+   mock_feeds.feed_url("<Phase-4 fixture>") (the _MockFeedServer serving
+   tests/smoke/fixtures/ at http://10.0.2.2:<port>/<name> over SLIRP), runs a real
+   Force Update via CaseContext, and asserts the feed loaded on the box. This is the
+   FIRST suite coverage of pfBlockerNG's curl path (gzip/redirects/no-304) — every
+   other smoke case feeds a LOCAL file (write_local_feed). Mirrors
+   test_smoke_matrix.py exactly: same asserts, feed_url = the mock URL instead of
+   write_local_feed.
+
+2) tests/smoke/ui/test_browser_feeds.py   (marker: ui_browser)
+   The visual replacement for the old manual smoke (ADR §7): a headless Chromium
+   opens pfblockerng_feeds.php?type=ipv4|ipv6|dnsbl (reusing the ADR-14 browser-tier
+   _open/_shot/browser_page + screenshot_dir), asserts the second sub-tab row + the
+   active highlight + per-type listing, and writes a per-tab screenshot.
+
+================================================================================
+KILL-GATE RESULT — PENDING THE LIVE CI RUN (NOT measured locally)
+================================================================================
+The Part-C premise ("a Force Update reliably FETCHES an HTTP feed from the mock over
+SLIRP and LOADS it, in CI") is the falsifiable kill-gate. It CANNOT be measured on
+this machine: there is NO pfSense VM here, so no live drill/pfctl/curl evidence
+exists. No reliability number is fabricated.
+
+  * The two proof cases (test_ip_http_feed_loads + test_dnsbl_http_feed_loads) are
+    authored FIRST (the kill-gate ordering, §7), the four format-expansion cases
+    after them.
+  * Reliability bar (ADR §7): >= 4/5 clean runs at a sane per-leg budget.
+  * DECISION: OPTIMISTIC-GO, PENDING-CI. All representative formats are authored
+    (no format silently dropped — see FORMATS below). The PR the orchestrator opens
+    carries the `ui-tests` label, so the live VM run is the actual kill-gate
+    evidence.
+  * IF CI shows < 4/5 clean ⇒ DEMOTE test_smoke_feeds.py to dispatch-only (drop it
+    from the gated smoke set) as a fast-follow — Part A still ships and the
+    local-file load coverage (test_smoke_matrix.py / test_smoke_abp.py) remains. The
+    numbers + the GO/DEMOTE flip go here when CI reports them.
+
+GO/DEMOTE STATUS: PENDING-CI (optimistic GO authored; demote switch documented).
+
+================================================================================
+FORMATS COVERED vs DROPPED
+================================================================================
+COVERED (all 6 representative Phase-4 fixtures, one case each):
+
+  IP (IpCase, pfctl_table_members(pfB_<alias>_<fam>) + rule_references):
+    test_ip_http_feed_loads        ip_plain_cidr.txt  family=v4  (KILL-GATE)
+      member 203.0.113.5 (host) + 198.51.100.7 (in /24); non-member 203.0.113.250
+    test_ip_http_range_feed_loads  ip_range.txt       family=v4
+      inside 198.51.100.15; NOT .21 (one past) / .200 (well outside)
+    test_ipv6_http_feed_loads      ip_ipv6.txt        family=v6
+      member 2001:db8::1 + 2001:db8:1::99 (in /48); non-member 2001:db8:dead::1
+
+  DNSBL (DnsblCase, dns_probe block-shape on the box; mode=VIP):
+    test_dnsbl_http_feed_loads     dnsbl_plain.txt    (KILL-GATE)
+      member uuid-a344db4286a4.com -> VIP; non-member uuid-06cf362c2890.com resolves
+    test_dnsbl_http_hosts_feed_loads dnsbl_hosts.txt
+      member uuid-947e69114606.com -> VIP; non-member uuid-55ca85f92f34.com resolves
+    test_dnsbl_http_abp_feed_loads dnsbl_abp.txt      (ABP / EasyList, header-sniffed)
+      ||uuid-22f166f56cca.com -> VIP; @@||uuid-f26156c6df69.com RESOLVES (@@ beats ||);
+      non-member uuid-8ed2df53e469.com resolves
+
+DROPPED: none from the Phase-4 representative set. (Phase 4 already scoped OUT
+CSV/iblocklist, regex, ABP IP-anchors, hosts '<ip> <ip>', and geoip/asn/whois/rsync —
+duplicate coverage or egress/binary, ADR §2 out-of-scope. Those remain out.)
+
+================================================================================
+TRANSITION / BRANCH COVERAGE (CLAUDE.md test-coverage rules)
+================================================================================
+* IP cases: BEFORE — the per-case alias table (unique name) is NOT in pfctl_tables()
+  (proven absent first). AFTER (in CaseContext) — listed member covered, non-member
+  NOT covered, rule references the alias. CaseContext resets the box on exit.
+* DNSBL cases: BEFORE (outside the with) — the member RESOLVES via the controlled
+  stub upstream (STUB_DNS_A), proving the later VIP comes from the feed, not a
+  pre-existing block. AFTER — member -> VIP and no longer resolves; non-member (and,
+  for ABP, the @@ allow-exception) still RESOLVES via the stub. Both sides of "member
+  blocks / non-member doesn't" asserted; ABP additionally proves the @@ allow branch.
+* CIDR/range/IPv6 membership is CIDR-AWARE by value via a small test-local helper
+  `_covered_by` (stdlib ipaddress). helpers.member_present is NOT containment-tolerant
+  (only exact host / member-network-address == ip) — the Phase-4 "CIDR-tolerant
+  member_present" note over-claimed — so a host INSIDE a listed network/range needs
+  the ipaddress containment test. _covered_by compares by value (:: == ::0). The plain
+  listed host still uses member_present (matches the matrix).
+
+RESOLVE-PROOF — why NO host override on DNSBL "resolves" names:
+  The DNSBL cases deliberately do NOT use control_local_data. Unbound serves a Host
+  Override as local-data BEFORE the python module, so an override would SHADOW the
+  matcher: it cannot prove a name is unblocked BY THE MATCHER (the ABP @@ especially
+  — it would resolve regardless of @@, a false-green), and on a blocked member it
+  masks the block. Instead the cases mirror the matrix #51 lifecycle: leave egress
+  OPEN in the probe body (unblock_egress) so a not-blocked name forwards to the
+  controlled SLIRP stub (use_system_dns_upstream) and resolves to STUB_DNS_A — a
+  KNOWN, observable pass. The member VIP block returns locally regardless of egress,
+  so leaving egress open is no false-green.
+
+================================================================================
+THE ui_browser FEEDS-TABS TEST — PENDING THE LIVE CI RUN
+================================================================================
+tests/smoke/ui/test_browser_feeds.py ::
+  test_feeds_subtab_row_active_and_type_scoped  (parametrized gtype = ipv4/ipv6/dnsbl)
+
+For each type it opens pfblockerng_feeds.php?type=<gtype> via the cookie-authed
+browser_page (no second login) and asserts:
+  * the SECOND sub-tab row is present — all three [IPv4|IPv6|DNSBL] anchors
+    (a[href*="pfblockerng_feeds.php?type=..."], to_have_count(1) each);
+  * the requested type's sub-tab is ACTIVE — its ancestor <li> carries the `active`
+    class display_top_tabs puts on the highlighted tab, and the OTHER two are NOT
+    active (a real ?type branch, not always-active);
+  * the body lists ONLY that type — its Feed Settings alias-name label
+    ("IPv4/IPv6/DNSBL Alias name(s):", rendered for the active type only by
+    pfb_feeds_render_aliasname_inputs($gtype), Phase 3) is in the DOM and the other
+    two types' labels are ABSENT;
+  * a per-tab screenshot is written to screenshot_dir (feeds_subtab_<gtype>.png).
+The parametrization exercises all three tabs => full branch coverage of the ?type
+switch. PENDING the live ui-tests CI leg for the actual pass (and the screenshots).
+
+DOM-fragility handled: the version-tolerant handles are the anchor href (carries
+?type) and the `active` class — not a brittle DOM path. The Feed Settings section is
+COLLAPSIBLE|SEC_CLOSED (collapsed on load), so the per-type label is asserted by DOM
+PRESENCE (count), not visibility.
+
+Playwright is imported lazily via pytest.importorskip, so this dev venv (no
+playwright) SKIPs the module cleanly at collection — it runs on the live ui-tests VM
+where Chromium is installed.
+
+================================================================================
+HOW EACH TEST IS GATED (markers)
+================================================================================
+* smoke      — the 6 feed-load cases in test_smoke_feeds.py (module pytestmark).
+* ui_browser — the parametrized tabs test in ui/test_browser_feeds.py (module
+               pytestmark).
+Both markers are OUT of default `python -m pytest` (tests/smoke is --ignore'd in
+pyproject.toml). The feed-load cases run via `pytest tests/smoke -m smoke
+--override-ini="addopts="`; the tabs test via `pytest tests/smoke/ui -m ui_browser
+--override-ini="addopts="` on a VM with SMOKE_ADMIN_PASSWORD + Chromium. The PR
+carries the `ui-tests` label so the live VM runs both.
+
+================================================================================
+HTTP-FETCH GOTCHAS ANTICIPATED (Part-C kill-gate risks)
+================================================================================
+* Egress timing — the mock (_MockFeedServer) is SLIRP-internal (10.0.2.2), so it
+  survives the egress block; CaseContext keeps egress OPEN across inject + the Force
+  Update (the curl fetch) and only blocks for the probe. The DNSBL "resolves" probes
+  additionally re-open egress in the body so they reach the SLIRP stub. If a future
+  egress sequencing change blocks 10.0.2.2 during the fetch, the curl would fail —
+  watch the smoke-diagnostics (pfblockerng.log fetch lines) on a red leg.
+* gzip — pfBlockerNG's curl requests gzip; the stdlib handler serves the fixture body
+  UNcompressed with Content-Length, no Content-Encoding. curl does not add
+  Accept-Encoding decompression expectations the server must honor, so a plain body is
+  fine (the curl contract ignores Content-Disposition/Type and sends no
+  If-Modified-Since). No gzip handling needed on the mock.
+* timeouts / re-fetch — reload() defaults to a 600s budget and waits on
+  wait_unbound_ready (DNSBL) or filter_configure (IP); rule_references polls
+  (filter_configure lands the rule slightly after the CLI returns). The first
+  post-reload DNS answer is authoritative (no looping). If the fetch is slow/flaky in
+  CI, that is exactly the >= 4/5 bar the kill-gate measures.
+* per-feed cache — these are FIRST-time injects of a unique alias each, so there is no
+  cached '.txt' to invalidate (unlike the matrix feed-update cases). No
+  force_dnsbl_refetch needed.
+
+================================================================================
+AFFECTED-FLOW UI TESTS (§7) — NOW ALL IN PLACE (in code)
+================================================================================
+[x] Tabs render (each type, incl. visual): Tier-A render oracle feeds_ipv4/ipv6/dnsbl
+    (Phase 3) + the new ui_browser test_browser_feeds.py (sub-tab row + active
+    highlight + per-type listing + screenshots).  <-- this phase
+[x] Type-scoped save / no clobber: the cross-type non-clobber ui_e2e test (Phase 3).
+[x] Custom feed loads: the HTTP-feed load smoke test_smoke_feeds.py (this phase).
+[x] No regressions: the retargeted per-type rename/alt-URL ui_e2e/ui_browser tests
+    (Phases 2-3) on the typed URLs.
+All four are authored; ACCEPT rides on them being green on the live VM (the
+ui-tests-labeled suite) — there is no human manual-smoke gate. The HTTP-feed-load
+leg's GO/DEMOTE is the one item PENDING the live evidence (>= 4/5).
+
+================================================================================
+LOCAL VERIFICATION GATES
+================================================================================
+* python -m pytest -q : 1115 passed (UNCHANGED — tests/smoke is --ignore'd; this
+  phase adds zero collectable-by-default Python).
+* ruff check . : All checks passed!   ruff format --check . : 71 files formatted.
+* mypy tests/ : Success (tests/smoke excluded from mypy per pyproject.toml).
+* pytest --collect-only tests/smoke/test_smoke_feeds.py -m smoke : 6 cases collected.
+* test_browser_feeds.py: py_compile OK; structure verified (marker ui_browser,
+  parametrized ipv4/ipv6/dnsbl, correct TYPE_LABELS). It is SKIPped at collection
+  here only because playwright is absent in this dev venv (smoke-only dep) — runs on
+  the live ui-tests VM.
+
+================================================================================
+SELF-REVIEW
+================================================================================
+* git status: 2 NEW untracked files ONLY (test_smoke_feeds.py, ui/test_browser_feeds.py).
+  NO src/ change, NO existing test modified, NO server/helper change.
+* Feed-load cases mirror test_smoke_matrix.py — same asserts, feed_url =
+  mock_feeds.feed_url(<fixture>) instead of write_local_feed.
+* Real transition tests: IP table absent-before / member+rule after; DNSBL
+  resolves-before / blocks-after; ABP @@ resolves. CaseContext/finally resets the box.
+* Correct markers (smoke / ui_browser), both out of default collection.
+* ui_browser test asserts the sub-tab row + active highlight + per-type listing and
+  writes per-tab screenshots; reuses the ADR-14 _open/_shot/browser_page/screenshot_dir.
+VERDICT: PASS.
+
+================================================================================
+GO-AHEAD FOR PHASE 6
+================================================================================
+Cleared. Phase 6 (docs + DoD): update README/CLAUDE.md (the Feeds-page tabs; the
+smoke feed-set + how to add a format), finalise §7's affected-flow UI-test list (all
+four now in code), and set Status — Accept rides on those automated tests being green
+on the live VM. Carry forward the ONE open item: the Part-C HTTP-load kill-gate
+GO/DEMOTE is PENDING the live CI run (>= 4/5); if < 4/5, demote test_smoke_feeds.py to
+dispatch-only as a fast-follow and record the numbers here.
