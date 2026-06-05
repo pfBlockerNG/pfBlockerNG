@@ -1,0 +1,152 @@
+ADR-16 — Phase 4 Results
+SAMPLE FEEDS: representative inert fixtures for the supported IP + DNSBL formats
+
+STATUS: DONE. Fixtures only — NO src/ change, NO test wiring, NO new server.
+Local gates green (pytest unchanged 1115 passed; ruff clean; markdownlint clean).
+Phase 5 (the live HTTP-feed load smoke that REGISTERS + asserts these) is CI-only.
+
+================================================================================
+WHERE THE FIXTURES LIVE (the served dir)
+================================================================================
+FIXTURES_DIR = tests/smoke/conftest.py :: SMOKE_DIR / "fixtures"
+             = tests/smoke/fixtures/        (SMOKE_DIR = the tests/smoke/ dir)
+
+_MockFeedServer (conftest.py:379) serves this directory by filename via
+SimpleHTTPRequestHandler (registered in-memory names intercept first, else the
+file is served). The `mock_feeds` fixture (conftest.py:817) stands the server up
+on an OS-picked port bound to 0.0.0.0, mkdir -p's FIXTURES_DIR, and sets
+SmokeVM.feed_base_url.
+
+GUEST URL SHAPE (what the pfSense guest fetches over SLIRP):
+    http://10.0.2.2:<port>/<filename>
+e.g. http://10.0.2.2:<port>/ip_plain_cidr.txt  (GUEST_TO_HOST_ALIAS = 10.0.2.2).
+Phase 5 gets a per-name URL from mock_feeds.feed_url("<filename>") and passes it as
+IpCase.feed_url / DnsblCase.feed_url. (.register(name, content) is the in-memory
+alternative; the files give reviewable, on-disk format coverage.)
+
+================================================================================
+THE 6 SAMPLE FEEDS + the EXACT member / non-member Phase 5 must assert
+================================================================================
+Each file = the raw body curl fetches. Line shapes verified against the real
+parsers: IP 'auto' in pfblockerng.inc (~:10410-10560); DNSBL plain/hosts/ABP in
+pfb_unbound.py (parse / parse_abp, ~:2675-2900). Every file has a '#' (IP / DNSBL
+plain+hosts) or '!'/'[' (ABP) comment line to exercise comment handling.
+
+IP feeds (format 'auto', IpCase; assert via pfctl_table_members(pfB_<alias>_<fam>),
+CIDR-tolerant helpers.member_present):
+
+1) tests/smoke/fixtures/ip_plain_cidr.txt   — plain IPv4 + CIDR, IpCase family="v4"
+   body: 203.0.113.5 / 198.51.100.0/24   (RFC 5737 TEST-NET-2/3)
+   MEMBER (in table):      203.0.113.5      (the plain host)
+   MEMBER (covered by /24): 198.51.100.7    (any host in 198.51.100.0/24)
+   NON-MEMBER (must NOT):    203.0.113.250   (in 203.0.113.x but NOT listed)
+
+2) tests/smoke/fixtures/ip_range.txt        — IPv4 range 'a-b', IpCase family="v4"
+   body: 198.51.100.10-198.51.100.20   (RFC 5737 TEST-NET-3)
+   ip_range_to_subnet_array() expands it to EXACTLY .10..20 inclusive
+   (CIDRs .10/31, .12/30, .16/30, .20/32 — verified with ipaddress).
+   MEMBER (inside):           198.51.100.15
+   NON-MEMBER (just past):    198.51.100.21    (deliberately one past the top)
+   NON-MEMBER (well outside):  198.51.100.200
+
+3) tests/smoke/fixtures/ip_ipv6.txt          — IPv6 single + CIDR, IpCase family="v6"
+   body: 2001:db8::1 / 2001:db8:1::/48   (RFC 3849 documentation prefix)
+   compare IPv6 BY VALUE (:: == ::0).
+   MEMBER (single host):       2001:db8::1
+   MEMBER (covered by /48):    2001:db8:1::99   (any host in 2001:db8:1::/48)
+   NON-MEMBER (must NOT):       2001:db8:dead::1 (outside the /48 AND != 2001:db8::1)
+
+DNSBL feeds (DnsblCase; assert via dns_probe block-shape on the box — NOERROR+VIP or
+NULL per list 'logging'; a non-member / allow-exception must RESOLVE, not block).
+All domains are uuid-<hex>.com (smoke-domain rule: never RFC-6761 .test/.example/
+.invalid — Unbound built-in local-zones shadow them; never HSTS-preload — HSTS
+forces a VIP block to NULL). All pass pfb_unbound normalise()'s label gate.
+
+4) tests/smoke/fixtures/dnsbl_plain.txt       — plain domain list
+   body: uuid-a344db4286a4.com
+   MEMBER (must BLOCK):      uuid-a344db4286a4.com
+   NON-MEMBER (must RESOLVE): uuid-06cf362c2890.com
+
+5) tests/smoke/fixtures/dnsbl_hosts.txt        — hosts '0.0.0.0 <domain>'
+   body: 0.0.0.0 uuid-947e69114606.com   (sink IP stripped -> domain blocks)
+   MEMBER (must BLOCK):      uuid-947e69114606.com
+   NON-MEMBER (must RESOLVE): uuid-55ca85f92f34.com
+
+6) tests/smoke/fixtures/dnsbl_abp.txt           — ABP / EasyList (format_hint='abp')
+   body: '[Adblock Plus 2.0]' header + '!' comment +
+         ||uuid-22f166f56cca.com^         (BLOCK)
+         ||uuid-f26156c6df69.com^         (BLOCK …)
+         @@||uuid-f26156c6df69.com^       (… then ALLOW exception on the SAME name)
+   The feed allow (@@, band 2) BEATS the feed block (||, band 1) — verified against
+   pfb_unbound.py's 6-band priority (PRIO_FEED_ALLOW=2 > PRIO_FEED_BLOCK=1) — so the
+   @@'d name resolves; the un-excepted name blocks.
+   MEMBER (|| only -> must BLOCK):              uuid-22f166f56cca.com
+   ALLOW-EXCEPTION (|| then @@ -> must RESOLVE): uuid-f26156c6df69.com
+   NON-MEMBER (not in feed -> must RESOLVE):     uuid-8ed2df53e469.com
+
+Each file's header comments document its format + the member/non-member; the dir
+README (tests/smoke/fixtures/README.md) tabulates all six.
+
+================================================================================
+PARSER LINE-SHAPE NOTES (so Phase 5 wires the right family/format/case)
+================================================================================
+- IP family split: pfBlockerNG separates v4 / v6 lists. ip_plain_cidr + ip_range are
+  IpCase family="v4" (table pfB_<alias>_v4); ip_ipv6 is family="v6" (pfB_<alias>_v6).
+  IpCase default format is 'auto' (helpers.py:1165 'format':'auto') — all three IP
+  fixtures are 'auto'; no per-case format override needed.
+- IP comment handling proven by the parser read: a full-line '#' (line[0]=='#') and
+  blank lines are skipped; an INLINE '#' truncates (chars after '#' dropped). The
+  fixtures use full-line '#' comments only.
+- DNSBL plain/hosts go through the DEFAULT build (format_hint plain/hosts); the ABP
+  file needs the feed header-sniffed as ABP (format_hint='abp') — pfBlockerNG sniffs
+  the '[Adblock Plus 2.0]' first line automatically, so no DnsblCase override is
+  required for that to trigger (confirm on the live box in Phase 5).
+- ABP '||domain^' and 'hosts'/'plain' are WILDCARD (block name + subdomains); the
+  fixtures assert on the bare name, but Phase 5 MAY also probe a subdomain of a
+  blocked name to exercise the wildcard.
+
+================================================================================
+FORMATS OMITTED (and why) — for Phase 5 scoping
+================================================================================
+- CSV / iblocklist, regex, ABP IP-anchors (||1.2.3.4^), hosts '<ip> <ip>': out of the
+  representative set — they either duplicate plain/hosts/range coverage or divert to
+  the PHP DNSBL-IP FIREWALL pass (not the domain build). Add later if a gap shows.
+- geoip / asn / whois / rsync: explicitly OUT of the hermetic smoke (ADR-16 §2 out-of
+  -scope) — they need MaxMind / egress / binaries. The smoke set is body-only HTTP
+  formats, which is exactly what these fixtures cover.
+- The pre-existing tests/smoke/fixtures/sample_ip_feed.txt is the ADR-04 scaffolding
+  placeholder; left untouched (not one of this phase's six).
+
+================================================================================
+VERIFICATION GATES (local)
+================================================================================
+- python -m pytest -q : 1115 passed (UNCHANGED — tests/smoke is --ignore'd in default
+  collection; this phase adds zero collectable Python).
+- ruff check . : All checks passed!   ruff format --check . : 69 files already formatted.
+  (No .py added — fixtures only — but run for completeness.)
+- npx markdownlint-cli2 tests/smoke/fixtures/README.md : 0 error(s).
+- Range/CIDR math verified with python ipaddress: range expands to exactly .10..20;
+  .21/.200 outside; 198.51.100.7 in /24; 2001:db8:1::99 in /48; 2001:db8:dead::1 out.
+- Domain shapes verified against pfb_unbound normalise() label rules: all 7 OK.
+
+================================================================================
+SELF-REVIEW
+================================================================================
+- git status: 7 NEW untracked files under tests/smoke/fixtures/ ONLY
+  (ip_plain_cidr.txt, ip_range.txt, ip_ipv6.txt, dnsbl_plain.txt, dnsbl_hosts.txt,
+  dnsbl_abp.txt, README.md). NO src/ change, NO test .py change, NO server change.
+- Data lines match the formats (plain IP+CIDR, IPv4 range, IPv6 single+CIDR; DNSBL
+  plain, hosts '0.0.0.0 d', ABP '[Adblock Plus 2.0]' + '||d^' + '@@||d^').
+- Inert only: RFC 5737 / RFC 3849 ranges; uuid-<hex>.com (no RFC-6761, no HSTS).
+- Each file documents format + member + non-member (header comments + README).
+VERDICT: PASS.
+
+================================================================================
+GO-AHEAD FOR PHASE 5
+================================================================================
+Cleared. Phase 5 (kill-gate first): register one IP + one DNSBL fixture via
+mock_feeds.feed_url("<name>") (or .register()), wire an IpCase/DnsblCase(feed_url=…),
+Force Update, assert load (pfctl_table_members / dns_probe block-shape) using the
+member / non-member listed above. Confirm HTTP-fetch reliability (§7 bar ≥4/5);
+only then extend to the remaining four formats. If the HTTP path can't hit the bar,
+demote Part C to dispatch-only and record the numbers in 05_Results.txt.
