@@ -29,10 +29,20 @@ pfb_global();
 
 // Add Wizard tab on new installations only
 $pfb_wizard = TRUE;
-if ($_GET && isset($_GET['wizard']) && $_GET['wizard'] == 'skip') {
-	$pfb_wizard = FALSE;
+
+// "Do not show this again": persist the choice so the setup wizard never auto-launches
+// again. Stored outside config/0 so a fresh, unconfigured install still reads as
+// unconfigured (config/0 == null) for the upgrade-migration paths in pfblockerng_install.inc.
+if ($_GET && isset($_GET['wizard']) && $_GET['wizard'] == 'disable') {
+	config_set_path('installedpackages/pfblockerng/pfb_wizard_skip', 'on');
+	write_config('[pfBlockerNG] Disable setup wizard auto-launch');
 }
-elseif (!empty(config_get_path('installedpackages/pfblockerng/config/0'))) {
+
+// Skip the auto-launch for this request ('skip'), permanently ('disable' persisted),
+// or once the package has been configured.
+if (($_GET && isset($_GET['wizard']) && $_GET['wizard'] == 'skip') ||
+    config_get_path('installedpackages/pfblockerng/pfb_wizard_skip') == 'on' ||
+    !empty(config_get_path('installedpackages/pfblockerng/config/0'))) {
 	$pfb_wizard = FALSE;
 }
 

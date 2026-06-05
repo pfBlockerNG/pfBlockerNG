@@ -116,8 +116,11 @@
 		</div>
 
 		<div style="width: 100%; float: left;">
-			<br /><p>Click&emsp;<a href="/pfblockerng/pfblockerng_general.php?wizard=skip">
-				<span style="color: red;">Here</span></a>&emsp;to exit this Wizard!</p>
+			<br />
+			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
+				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
+			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
+				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
 		</div>
 		]]>
 	</description>
@@ -155,8 +158,10 @@
 		</div>
 		<div class="col-sm-11">
 			<br />
-			<p>Click&emsp;<a href="/pfblockerng/pfblockerng_general.php?wizard=skip">
-				<span style="color: red;">Here</span></a>&emsp;to exit this Wizard!</p>
+			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
+				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
+			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
+				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
 		</div>
 		]]>
 	</description>
@@ -292,16 +297,18 @@
 		<name>Save pfBlockerNG wizard settings</name>
 		<type>listtopic</type>
 	</field>
-	<description>All configuration parameters have been successfully collected.
-			&lt;br/&gt;&lt;br/&gt;
+	<description><![CDATA[All configuration parameters have been successfully collected.
+			<br/><br/>
 			Upon completion of this Wizard, any previously configured settings in pfBlockerNG, including any downloaded feeds will be
-			&lt;span style=&quot;color: red;&quot;&gt; wiped!&lt;/span&gt;
-			&lt;br/&gt;&lt;br/&gt;
-			To save this default configuration and apply these changes, press the &lt;strong&gt;Finish&lt;/strong&gt; button!
-			&lt;br/&gt;&lt;br/&gt;
-			Click&#160;&#160;&#160;&lt;a href=&quot;/pfblockerng/pfblockerng_general.php?wizard=skip&quot;&gt;
-			&lt;span style=&quot;color: red;&quot;&gt;Here&lt;/span&gt;&lt;/a&gt;&#160;&#160;&#160;to exit this Wizard!
-	</description>
+			<span style="color: red;"> wiped!</span>
+			<br/><br/>
+			To save this default configuration and apply these changes, press the <strong>Finish</strong> button!
+			<br/><br/>
+			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
+				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
+			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
+				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
+	]]></description>
 	<fields>
 		<field>
 			<name>Finish</name>
