@@ -77,14 +77,24 @@ if (isset($argv[1])) {
 	// pass). Usage: pfblockerng.php runhooks <pre|post> [trigger]
 	// Runs the configured 'pre'/'post' hooks with a synthetic context so the
 	// runner can be exercised live without performing an update.
+	//
+	// This path does NOT run sync_package_pfblockerng, so NOTHING is updated --
+	// the LIVE post context (incl. the real PFB_CHANGED_IP_ALIASES /
+	// PFB_CHANGED_DNSBL_GROUPS populated from $pfb['changed_ip_aliases'] /
+	// $pfb['changed_dnsbl_groups'], ADR-12 Phase 6) is built only in
+	// pfblockerng.inc's closing tail. Here every post key is a fixed synthetic
+	// value, and both changed lists are '' BECAUSE no pass ran (no alias/group was
+	// updated) -- not a reserved placeholder. PFB_STATUS stays the reserved 'ok'
+	// placeholder there too.
 	elseif ($argv[1] == 'runhooks') {
 		$when = ($argv[2] ?? '') === 'post' ? 'post' : 'pre';
 		$ctx  = array('TRIGGER' => ($argv[3] ?? 'manual-test'));
 		if ($when == 'post') {
-			$ctx['IP_CHANGED']      = '0';
-			$ctx['DNSBL_CHANGED']   = '0';
-			$ctx['STATUS']          = 'ok';
-			$ctx['CHANGED_ALIASES'] = '';
+			$ctx['IP_CHANGED']           = '0';
+			$ctx['DNSBL_CHANGED']        = '0';
+			$ctx['STATUS']               = 'ok';
+			$ctx['CHANGED_IP_ALIASES']   = '';	// no update performed by this test path
+			$ctx['CHANGED_DNSBL_GROUPS'] = '';	// no update performed by this test path
 		}
 		pfb_run_hooks($when, $ctx);
 		exit;

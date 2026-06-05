@@ -45,7 +45,7 @@ Add **admin-configurable pre/post update command hooks**: a list of hook entries
 | --- | --- |
 | **Hook model** | A **list of hook entries** in the pfBlockerNG config: `{ command, when: pre\|post, enabled: bool, description, timeout? }`. Mirrors pfSense `shellcmd`'s `{cmd, cmdtype}` shape; supports multiple hooks, ordering (list order), and enable/disable. |
 | **Fire points (whole-cycle)** | **`pre`** runs at the **top** of `sync_package_pfblockerng` (before any feed processing); **`post`** runs at the **end** (after IP/DNSBL reloads + `filter_configure`, at the closing tail `:10293`). **Two points only** — granularity beyond this is out of scope (the context flags make per-type points unnecessary). Fire on **every** trigger (cron, manual Update, Force Update/Reload); `PFB_TRIGGER` distinguishes them. |
-| **Context (env vars)** | Hooks receive env vars. **pre:** `PFB_TRIGGER` (cron\|update\|force-update\|force-reload), `PFB_WHEN=pre`. **post:** the above plus `PFB_IP_CHANGED`, `PFB_DNSBL_CHANGED` (0\|1, from `$pfbupdate`/`$pfbpython`), `PFB_STATUS` (ok\|partial\|error), and `PFB_CHANGED_ALIASES` (space-separated). Documented + stable. (pre can't know what changed yet — nothing downloaded.) |
+| **Context (env vars)** | Hooks receive env vars. **pre:** `PFB_TRIGGER` (cron\|update\|force-update\|force-reload), `PFB_WHEN=pre`. **post:** the above plus `PFB_IP_CHANGED`, `PFB_DNSBL_CHANGED` (0\|1, from `$pfbupdate`/`$pfbpython`), `PFB_STATUS` (ok\|partial\|error), and the split changed lists `PFB_CHANGED_IP_ALIASES` (space-separated `pfB_*`) + `PFB_CHANGED_DNSBL_GROUPS` (space-separated `DNSBL_*` — DNSBL groups are not firewall aliases). Documented + stable. (pre can't know what changed yet — nothing downloaded.) |
 | **Execution** | Run as **root** via `mwexec` **synchronously with a per-hook timeout** (sane default, e.g. 60 s, overridable); stdout/stderr captured to the pfBlockerNG log with a clear header. Synchronous + timeout (not detached) so failures are logged in order and a quick reload completes before the pass returns. |
 | **Failure semantics** | A hook's **non-zero exit or timeout is logged and the update CONTINUES** — pre **and** post. A bad/hung/typo'd hook can **never** brick or stall updates. (No "abort on failure"; if a hook is a hard precondition, that's the user's script's problem to signal — we still don't abort.) |
 | **Security / UI** | An **admin-only** settings table (add/edit/enable/reorder/delete; command, when, description, timeout) with help text documenting the env vars. Same root-command trust class as pfSense `shellcmd`; the field is clearly labelled as running as root. |
@@ -94,7 +94,7 @@ Add **admin-configurable pre/post update command hooks**: a list of hook entries
 
 1. **Additive:** no enabled hooks ⇒ byte-identical update pass.
 2. **Fires correctly:** `pre` at the start, `post` at the end, on cron + manual + force triggers; correct `PFB_TRIGGER`.
-3. **Context:** `post` hooks receive accurate `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED`/`PFB_STATUS`/`PFB_CHANGED_ALIASES`; `pre` receives `PFB_TRIGGER`/`PFB_WHEN`.
+3. **Context:** `post` hooks receive accurate `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED`/`PFB_STATUS`/`PFB_CHANGED_IP_ALIASES`/`PFB_CHANGED_DNSBL_GROUPS`; `pre` receives `PFB_TRIGGER`/`PFB_WHEN`.
 4. **Safe:** a failing hook (non-zero) is logged and the update continues; a hanging hook is killed at its timeout and the update continues — pre and post.
 5. **Admin-only UI:** the hooks table adds/edits/enables/reorders/deletes entries; help documents the env vars + the run-as-root caveat.
 6. **HAProxy recipe works end-to-end** (manual smoke): an IP update → post hook → graceful HAProxy reload → fresh `ipalias_*.lst` → a header ACL blocks a listed IP.
@@ -126,7 +126,7 @@ Prompt: `01_Hook_Runner_Prep.txt`
 
 Prompt: `02_Wire_Fire_Points.txt`
 
-- In `sync_package_pfblockerng`: call `pfb_run_hooks('pre', $ctx)` at the **top** (ctx = trigger), and `pfb_run_hooks('post', $ctx)` at the **closing tail** (`:10293`) with ctx built from `$pfbupdate`/`$pfbpython`/`$pfb['filter_configure']`/`$cron` → `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED`/`PFB_STATUS`/`PFB_CHANGED_ALIASES`. **Additive:** no enabled hooks ⇒ no-op ⇒ byte-identical. Fires on cron + manual + force.
+- In `sync_package_pfblockerng`: call `pfb_run_hooks('pre', $ctx)` at the **top** (ctx = trigger), and `pfb_run_hooks('post', $ctx)` at the **closing tail** (`:10293`) with ctx built from `$pfbupdate`/`$pfbpython`/`$pfb['filter_configure']`/`$cron` → `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED`/`PFB_STATUS`/`PFB_CHANGED_IP_ALIASES`/`PFB_CHANGED_DNSBL_GROUPS`. **Additive:** no enabled hooks ⇒ no-op ⇒ byte-identical. Fires on cron + manual + force.
 
 ### Phase 3 — Settings UI (hooks table, admin-only)
 
@@ -144,11 +144,11 @@ Prompt: `04_Recipe_Docs_Smoke_DoD.txt`
 
 No prompt (`RESULTS/05_Results.txt` only). Added the automated live-VM smoke module `tests/smoke/test_smoke_hooks.py` + the "Update hooks" helpers, mapping §7's no-op / pre-post-context / trigger-value / IP-DNSBL-changed / safety items to assertions. No production code touched.
 
-### Phase 6 — Populate `PFB_CHANGED_ALIASES` (IP + DNSBL)
+### Phase 6 — Populate `PFB_CHANGED_IP_ALIASES` + `PFB_CHANGED_DNSBL_GROUPS`
 
 Prompt: `06_Populate_Changed_Aliases.txt`
 
-- Turn the reserved-placeholder `PFB_CHANGED_ALIASES` into the real space-separated list of aliases **updated this pass**, both `pfB_*` (IP) and `DNSBL_*`. **Decision:** semantic = "updated this pass" (the signal the pass already computes — IP `$pfb_alias_lists`, DNSBL the `dnsbl_alias_update('update', …)` per-group seam), **not** a byte-level membership diff and **not** the rep-mode-inflated reloaded set (`$final_alias`); so it is Reputation-mode-independent. **Additive** — a single accumulator collecting names the pass already decided were updated; no new tracking. `PFB_STATUS` stays the reserved `ok` placeholder. A literal member-level diff remains a possible future increment.
+- Turn the reserved placeholder into the real space-separated lists of what was **updated this pass**, **split by side**: `PFB_CHANGED_IP_ALIASES` carries the IP firewall aliases (`pfB_*`) and `PFB_CHANGED_DNSBL_GROUPS` carries the DNSBL groups (`DNSBL_*`), each on its own var because DNSBL groups are not firewall aliases. **Decision:** semantic = "updated this pass" (the signal the pass already computes — IP `$pfb_alias_lists`, DNSBL the `dnsbl_alias_update('update', …)` per-group seam), **not** a byte-level membership diff and **not** the rep-mode-inflated reloaded set (`$final_alias`); so both are Reputation-mode-independent. **Additive** — two accumulators (`$pfb['changed_ip_aliases']` / `$pfb['changed_dnsbl_groups']`) collecting names the pass already decided were updated; no new tracking. `PFB_STATUS` stays the reserved `ok` placeholder. A literal member-level diff remains a possible future increment.
 
 ---
 
@@ -156,7 +156,7 @@ Prompt: `06_Populate_Changed_Aliases.txt`
 
 **Implementation status (2026-06-04): code + docs complete (Phases 1-4 landed on
 `adr/12`, Phase 5 smoke add-on merged); Status stays Proposed pending the maintainer
-live smoke below. Phase 6 (populate `PFB_CHANGED_ALIASES`) is a later additive follow-up.**
+live smoke below. Phase 6 (populate `PFB_CHANGED_IP_ALIASES` + `PFB_CHANGED_DNSBL_GROUPS`) is a later additive follow-up.**
 
 - No enabled hooks ⇒ byte-identical update pass; with hooks, `pre`/`post` fire on all triggers with correct context; a failing/hanging hook is logged + timed out and the update continues. **(Done — `pfb_run_hooks` early-returns with no enabled hooks; `/usr/bin/timeout -s TERM -k 5 <to> /bin/sh -c …` kills a hung hook as a process group, non-zero/timeout log-and-continue. Phase 1.)**
 - `php -l` + PHPStan + ShellCheck clean; `python -m pytest` untouched/green. **(Done — green every phase; ShellCheck N/A, no shell file shipped.)**
@@ -167,7 +167,7 @@ live smoke below. Phase 6 (populate `PFB_CHANGED_ALIASES`) is a later additive f
 
 - `PFB_WHEN` = `pre` | `post` (always). `PFB_TRIGGER` ∈ **`cron` | `update` | `force-reload`** — the §2-nominal `force-update` **collapses to `cron`** (GUI Force Update and scheduled cron arrive with an identical `$cron` and are indistinguishable). `update` = a settings save; `force-reload` = a GUI IP-only / DNSBL-only Force Reload.
 - post adds `PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` (`0`|`1`, **accurate** — derived from `$pfb['filter_configure']` and `$pfbupdate`/`$pfbpython`; these are the flags a recipe guards on).
-- `PFB_CHANGED_ALIASES` — **Phase 1-5: `''` reserved placeholder. Phase 6: populated** with the space-separated list of aliases updated this pass (`pfB_*` IP + `DNSBL_*`), sourced from the signal the pass already computes (IP `$pfb_alias_lists`; DNSBL the `dnsbl_alias_update('update', …)` per-group seam) — semantic = "updated this pass", Reputation-mode-independent, **not** a byte-level membership diff. Empty on a no-op pass.
+- `PFB_CHANGED_IP_ALIASES` / `PFB_CHANGED_DNSBL_GROUPS` — **Phase 1-5: a single `''` reserved placeholder. Phase 6: split + populated** as two space-separated lists of what was updated this pass — `PFB_CHANGED_IP_ALIASES` = the IP firewall aliases (`pfB_*`, from `$pfb_alias_lists`), `PFB_CHANGED_DNSBL_GROUPS` = the DNSBL groups (`DNSBL_*`, from the `dnsbl_alias_update('update', …)` per-group seam). Split because DNSBL groups are not firewall aliases. Both: semantic = "updated this pass", Reputation-mode-independent, **not** a byte-level membership diff; empty on a no-op pass.
 - `PFB_STATUS` = `ok` remains a **stable reserved placeholder**: no pass-wide error/partial accumulator exists and the ADR forbids inventing one. Its **name** is stable and always present; **do not branch a recipe on its value**. A future phase may add real status accumulation without changing the name.
 
 ### Reject / pivot criteria (decided)
@@ -203,7 +203,7 @@ live smoke below. Phase 6 (populate `PFB_CHANGED_ALIASES`) is a later additive f
 > `cron`), so it remains a manual-only check.
 
 - [x] **No-op.** With no enabled hooks, an update behaves exactly as before (no hook-runner log lines; pass output unchanged). *(automated: `tests/smoke/test_smoke_hooks.py::test_hooks_noop_no_marker`; plus the enabled-flag branch in `test_hooks_disabled_entry_not_run_then_enabled_runs`.)*
-- [x] **Pre/post fire + context.** Add a `pre` hook `command='env | grep ^PFB_'` and a `post` hook the same; run an update. `pre` logs `PFB_WHEN=pre` + `PFB_TRIGGER`; `post` logs `PFB_WHEN=post` + `PFB_TRIGGER` + `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (0|1) + `PFB_STATUS=ok` + `PFB_CHANGED_ALIASES=` (empty). Repeat across **scheduled cron** (`PFB_TRIGGER=cron`), **a settings save** (`update`), **GUI Force Update / Force Reload All** (also `cron`), and **GUI Force Reload of IP-only or DNSBL-only** (`force-reload`); confirm `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` track what actually changed (e.g. an IP-only Force Reload that changes a table ⇒ `PFB_IP_CHANGED=1`). *(automated: `test_hooks_pre_and_post_fire_with_context` (pre-vs-post ctx + full env), `test_hooks_trigger_values` (`update`→`cron`, `updatednsbl`→`force-reload`), `test_hooks_ip_changed_reflects_pass` (IP pass ⇒ `PFB_IP_CHANGED=1`; DNSBL-only reload ⇒ `0` + `PFB_DNSBL_CHANGED=1`). Manual-only: the settings-save `PFB_TRIGGER=update` value, not reachable via a smoke verb.)*
+- [x] **Pre/post fire + context.** Add a `pre` hook `command='env | grep ^PFB_'` and a `post` hook the same; run an update. `pre` logs `PFB_WHEN=pre` + `PFB_TRIGGER`; `post` logs `PFB_WHEN=post` + `PFB_TRIGGER` + `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (0|1) + `PFB_STATUS=ok` + `PFB_CHANGED_IP_ALIASES`/`PFB_CHANGED_DNSBL_GROUPS` (empty on a no-op). Repeat across **scheduled cron** (`PFB_TRIGGER=cron`), **a settings save** (`update`), **GUI Force Update / Force Reload All** (also `cron`), and **GUI Force Reload of IP-only or DNSBL-only** (`force-reload`); confirm `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` track what actually changed (e.g. an IP-only Force Reload that changes a table ⇒ `PFB_IP_CHANGED=1`). *(automated: `test_hooks_pre_and_post_fire_with_context` (pre-vs-post ctx + full env), `test_hooks_trigger_values` (`update`→`cron`, `updatednsbl`→`force-reload`), `test_hooks_ip_changed_reflects_pass` (IP pass ⇒ `PFB_IP_CHANGED=1`; DNSBL-only reload ⇒ `0` + `PFB_DNSBL_CHANGED=1`). Manual-only: the settings-save `PFB_TRIGGER=update` value, not reachable via a smoke verb.)*
 - [x] **Safety — non-zero.** A `post` hook `command='exit 7'` is logged with its non-zero exit and the update **completes** (test the same as a `pre` hook). *(automated: `test_hooks_failing_hook_does_not_abort_update` — a non-zero `pre` hook runs but does not abort; the later `post` hook still fires.)*
 - [x] **Safety — timeout.** A hook `command='sleep 30'` with `timeout=2` is killed (logged "timed out … continuing") and the update **completes** — verify both `pre` and `post`. *(automated: `test_hooks_timeout_killed_update_continues` — a `pre` hook is killed mid-run (marker has `START`, not `DONE`) and the `post` hook still fires.)*
 - [ ] **HA sync** (maintainer-manual; no CARP pair on the smoke image). On a CARP pair, the hooks replicate to the secondary's config and run on whichever node performs the update (a hook with an external side effect runs once per updating node — expected).

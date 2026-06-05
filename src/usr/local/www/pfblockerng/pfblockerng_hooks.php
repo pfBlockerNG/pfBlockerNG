@@ -218,8 +218,10 @@ $section->addInput(new Form_StaticText(
 		. '<code>0</code>.') . '<br />'
 	. '<code>PFB_STATUS</code> &mdash; ' . gettext('overall pass status. Currently always <code>ok</code> (reserved '
 		. 'for future use).') . '<br />'
-	. '<code>PFB_CHANGED_ALIASES</code> &mdash; ' . gettext('space-separated list of changed aliases. Currently '
-		. 'always empty (reserved for future use).')
+	. '<code>PFB_CHANGED_IP_ALIASES</code> &mdash; ' . gettext('space-separated list of IP firewall aliases '
+		. '(<code>pfB_*</code>) updated this pass; empty when none.') . '<br />'
+	. '<code>PFB_CHANGED_DNSBL_GROUPS</code> &mdash; ' . gettext('space-separated list of DNSBL groups '
+		. '(<code>DNSBL_*</code>) updated this pass; empty when none.')
 	. '</small>'
 ));
 
