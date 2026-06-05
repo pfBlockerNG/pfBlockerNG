@@ -1,8 +1,8 @@
 # ADR-08: Cross-script IDN homoglyph protection for DNSBL (TR39 mixed-script)
 
-- **Status:** **Proposed** (2026-06-02)
+- **Status:** **Implemented — pending live smoke** (2026-06-05; authored 2026-06-02). All seven phases landed on `adr/08-homoglyph-protection`; the suite + FP/TP gate are green on-branch (§7 *Build evidence*). Status flips to **Accepted** only after the maintainer runs the live-box manual smoke below (CI cannot reach Unbound's Python loader).
 - **Date:** 2026-06-02
-- **Branch:** `adr/08` (off **`next`**) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help), a new **shipped Unicode data table** + its generator under `scripts/`.
+- **Branch:** `adr/08-homoglyph-protection` (off `devel`; `next` retired) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help), a new **shipped Unicode data table** + its generator under `scripts/`.
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (the `'punycode'` codec decodes; the TR39 Scripts/Script_Extensions tables ship as **data**, not a dependency); PHP 8.3; POSIX `sh`.
 - **Test suite:** `tests/test_pfb_unbound.py`, `tests/conftest.py`; new `tests/test_adr08_*` (the TR39 decision spec/oracle, the punycode+script analyzer, the matcher wiring, the FP/TP corpus).
 - **References (the rule this enforces):** ICANN *Guidelines for the Implementation of Internationalized Domain Names, **Version 4.1*** (2022-09-22) <https://www.icann.org/en/system/files/files/idn-guidelines-22sep22-en.pdf>; EURid IDN policy <https://eurid.eu/en/knowledge-centre/domain-names-with-special-characters-idns/>; Unicode **UTS#39** Security Mechanisms (Restriction-Level Detection) <https://www.unicode.org/reports/tr39/>; ICANN SSAC IDN Homographs <https://itp.cdn.icann.org/en/files/meetings/presentation-ssac-idn-homograph-22oct18-en.pdf>.
@@ -185,6 +185,63 @@ Prompt: `07_Validation_Smoke_DoD.txt`
 - The limitation (whole-script confusables + ASCII typosquats not covered) is documented in the help text + README.
 - Status → **Accepted** only after the manual smoke (below) passes on a live pfSense box.
 
+### Build evidence (recorded Phase 7, on `adr/08-homoglyph-protection`)
+
+CPython 3.11; pinned **Unicode 15.1.0** (`UNICODE_VERSION` in both
+`scripts/update-unicode-data.py` and the shipped data module
+`src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py`; matches the dev-box
+`unicodedata.unidata_version` and the corpus/oracle `ucd_version`, so tables, corpus
+and spec agree). All numbers reproduced on-branch in Phase 7 — they match the Phase-1
+de-risk (no drift after the analyzer + matcher wiring).
+
+**Test equivalence (`python -m pytest`): 1303 passed, 0 failed.** The ADR-08 suite is
+**179** of these:
+
+- **TR39 decision oracle (Phase 2): 49 passed** — `tests/test_adr08_decision_spec.py`
+  (pure oracle graded against the golden `decision_table.json` + cross-checked against
+  the Phase-1 `corpus.json`).
+- **No-regression Off/All-IDN golden (Phase 3): 11 passed** —
+  `tests/test_adr08_mode_baseline.py`. Off → no IDN action; All-IDN → every `xn--`
+  query blocked with `feed="IDN"`/`group="DNSBL_IDN"`, byte-identical to today; the
+  `'on'`→All-IDN migration changes nothing observable.
+- **Pure analyzer vs oracle (Phase 4): 75 passed** — `tests/test_adr08_analyzer.py`
+  (the shipped `pfb_idn_analyzer.classify_idn` decode / resolved-script-set / severity
+  graded row-by-row against the oracle + the whole corpus).
+- **Confusable matcher wiring (Phase 5): 44 passed** —
+  `tests/test_adr08_confusable_matcher.py` (production `evaluate_domain` +
+  `idn_confusable_action` across every severity tier × both sub-toggle states, with
+  before/after toggle transitions; whitelist-wins; decode-safe; non-IDN pays nothing).
+
+**FP/TP measurement (`python tests/fixtures/adr08_corpus/measure_fp_tp.py`, on-branch):
+GATE = GO.**
+
+| metric | measured (on-branch) | kill-threshold | result |
+| --- | --- | --- | --- |
+| malicious-tier FP on the legit set | 0 / 20 legit-tier labels | == 0 | PASS |
+| **CJK FP** (Japanese/Korean/Chinese) | 0 | **must be 0** | PASS |
+| **IDN-ccTLD per-label FP** (`example.рф` / `site.中国`) | 0 | **must be 0** | PASS |
+| TP (homographs caught) | 6 / 6 (incl. pure `Cyrillic+Greek` + the subdomain homograph) | all homographs | PASS |
+| punycode decode safe (no uncaught raise) | True | no propagated decode error | PASS |
+| analyzer cost per `xn--` label | ~0.70 µs | negligible (runs only on `xn--` queries) | PASS |
+
+The malicious rule (**≥2 of {Latin, Cyrillic, Greek} co-occurring in one label**, never
+unioned across the dot) catches all six homographs — including the pure `Cyrillic+Greek`
+`xn--mxa00ab` (proving the rule is not Latin-anchored) and the subdomain homograph
+`xn--ypal-43d9g.example.com` (per-label catches what registries can't) — while flagging
+no legitimate IDN: every CJK, single-script Cyrillic/Greek, Latin-accented, Arabic/Thai/
+Hebrew/Devanagari name resolves, and both IDN-ccTLD per-label cases resolve (a whole-name
+union of `example.рф` would read `{Cyrillic, Latin}` = malicious — the per-label rule
+eliminates that FP class by construction). Latin+Armenian/Cherokee/Coptic land in the
+**suspicious** (alert) tier, not malicious. The whole-script all-Cyrillic `xn--80ak6aa92e`
+(`аррӏе`) is single-script → **not caught** (the documented limitation). Malformed labels
+(`xn--zz`, `xn--0`) raise inside the decoder and are **caught + flagged**, never
+propagated to the resolver.
+
+**Decision:** GO — no reject-criterion tripped. FP is 0 on the legit set (CJK and
+IDN-ccTLD both 0), TP is 6/6, decode is safe and cheap. Status held at **Implemented —
+pending live smoke**; flips to **Accepted** only on the maintainer's live-box run below
+(CI cannot reach Unbound's Python loader).
+
 ### Reject criteria (decide cheaply, Phase 1, before building)
 
 - **False positives on legit IDNs can't be driven to ~0:** if the malicious tier blocks legitimate IDNs (especially CJK) and narrowing the malicious script-set can't fix it without gutting the true-positive catch → do **not** ship a resolver that breaks real international domains; reduce to alert-only, or reject.
@@ -192,13 +249,15 @@ Prompt: `07_Validation_Smoke_DoD.txt`
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-> **Gate: Status flips to Accepted ONLY after every box below passes on a live pfSense CE box.** CI cannot reach Unbound's Python loader. Run after a resolver reload with each mode selected.
+> **Gate: Status flips to Accepted ONLY after every box below passes on a live pfSense CE box.** CI cannot reach Unbound's Python loader. Probe **on-box** (`drill @127.0.0.1 <name>` over SSH) after a resolver reload with the mode selected; the **first** response after `wait_unbound_ready` is authoritative. A Confusable **block** is the DNSBL block shape (NOERROR + the DNSBL VIP, or NULL `0.0.0.0`/`::` per the list `logging` field) — **never** NXDOMAIN; a **resolve** is the upstream answer (or NXDOMAIN if the name simply doesn't exist — the point is *no DNSBL action*). The exact `xn--` labels below come from `tests/fixtures/adr08_corpus/corpus.json`.
+>
+> Set DNSBL **IDN Blocking = Confusable** (with **block-malicious ON**, **escalate-suspicious OFF** unless a box says otherwise), reload Unbound, then:
 
-- [ ] **Malicious blocked.** A `Latin+Cyrillic` homograph (e.g. `xn--pple-43d` = `аpple`) **and** a `Cyrillic+Greek` mix are blocked in Confusable mode with the malicious sub-toggle on; the alert shows the decoded Unicode + the offending char/script.
-- [ ] **Legit IDN resolves.** A legitimate **Japanese/Korean/Chinese** domain and a single-script Cyrillic/Greek domain **resolve** in Confusable mode (no false block).
-- [ ] **IDN ccTLD safe (per-label).** A legit ASCII/Latin SLD under an IDN ccTLD (e.g. `example.рф` / `site.中国`) **resolves** — not flagged as Latin+Cyrillic/Han across the dot.
-- [ ] **Suspicious alerts (not blocks) by default**, and escalates to block when the opt-in is enabled.
-- [ ] **All-IDN unchanged.** All-IDN mode blocks every `xn--` domain exactly as today (`DNSBL_IDN`); Off resolves all.
-- [ ] **Backward compat.** A config that had `pfb_idn='on'` comes up in **All-IDN** mode with identical behaviour.
-- [ ] **Robustness.** A malformed/abusive `xn--` label does not hang or crash the resolver; it is flagged/skipped.
-- [ ] **Whitelist wins.** A user-whitelisted homoglyph domain still resolves.
+- [ ] **Malicious blocked.** `xn--pple-43d` (`аpple`, Latin+Cyrillic) **and** `xn--mxa00ab` (`сαр`, **Cyrillic+Greek** — no Latin, proves the rule isn't Latin-anchored) both return the **block shape** in Confusable mode with block-malicious ON; the alert (Reports → DNSBL, or `/var/log/pfblockerng/dnsbl.log`) shows the decoded Unicode + the offending scripts (e.g. `xn--pple-43d [аpple] Cyrillic Latin`) under feed/group `Homoglyph`/`DNSBL_Homoglyph`.
+- [ ] **Legit IDN resolves.** A legitimate **Japanese** (`xn--zckzah` = `テスト`), **Korean** (`xn--3e0bk47br7k` = `한국어`), **Chinese** (`xn--fiq228c` = `中文`) domain **and** a single-script Cyrillic (`xn--h1alffa9f` = `россия`) / Greek (`xn--hxakic4aa` = `ελλάδα`) name **resolve** in Confusable mode (no DNSBL block).
+- [ ] **IDN ccTLD safe (per-label).** A legit ASCII/Latin SLD under an IDN ccTLD — `example.xn--p1ai` (`example.рф`) and `site.xn--fiqs8s` (`site.中国`) — **resolves** (no block): each label is single-script; the per-label rule never unions `{Latin, Cyrillic}`/`{Latin, Han}` across the dot.
+- [ ] **Suspicious alerts (not blocks) by default.** `xn--bnk-1ce` (`bանk`, Latin+Armenian) **resolves but alerts** (group `DNSBL_Homoglyph_Suspect`, b_type `Homoglyph_Alert`) with escalate-suspicious OFF; flip **escalate-suspicious ON**, reload, and confirm it now returns the **block shape** (before/after: the SAME name, the toggle flips resolve→block).
+- [ ] **All-IDN unchanged.** Switch the mode to **All-IDN**: every `xn--` domain (incl. the legit CJK ones above) returns the block shape with feed/group `IDN`/`DNSBL_IDN`, exactly as today. Switch to **Off**: all of them resolve.
+- [ ] **Backward compat.** A config that carried `pfb_idn='on'` comes up in **All-IDN** mode (the selector shows All-IDN) with identical behaviour to the All-IDN box above.
+- [ ] **Robustness.** A malformed/abusive `xn--` label (`xn--zz`, `xn--0` — these raise inside the punycode decoder) does **not** hang or crash the resolver: the query returns normally (the label is flagged/skipped; the resolver keeps answering subsequent queries). Check `py_error.log` shows no traceback.
+- [ ] **Whitelist wins.** Add `xn--pple-43d` (the malicious homograph) to the DNSBL custom **whitelist**, reload, and confirm it now **resolves** (the analyzer feeds `is_found`, but the whiteDB override applies after — unchanged).
