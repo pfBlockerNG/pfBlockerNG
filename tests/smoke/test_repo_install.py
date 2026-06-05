@@ -69,10 +69,14 @@ smoke deps; without them it skips cleanly.
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -97,6 +101,9 @@ REPO_CONF = "/usr/local/etc/pkg/repos/pfblockerng-devel.conf"
 GUEST_SPIKE_DIR = "/tmp/pfb_repo_spike"
 OURS_REPO_DIR = f"{GUEST_SPIKE_DIR}/ours"
 DECOY_REPO_DIR = f"{GUEST_SPIKE_DIR}/decoy"
+# The upgrade test rebuilds ONE repo dir in place (lower build -> higher build) so a
+# `pkg upgrade` moves the box across versions WITHIN our repo (not across repos).
+UPGRADE_REPO_DIR = f"{GUEST_SPIKE_DIR}/upgrade"
 OURS_REPO_NAME = "pfblockerng-devel"  # the %R origin a from-our-repo install reports
 DECOY_REPO_NAME = "netgate-decoy"  # a controlled file:// stand-in for a competing repo
 NETGATE_REPO_NAME = "pfSense"  # the real base-system Netgate repo (left enabled; loses on priority)
@@ -123,6 +130,15 @@ SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (p
 # the pure-Python catalog. This is the load-bearing fidelity gate for the generator.
 BUILD_REPO_PORTABLE = Path(__file__).resolve().parents[2] / "scripts" / "build-repo-portable.py"
 PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable <ABI>/ tree is shipped
+
+# Phase-4 (ADR-17) SHIPPED client bootstrap under test. ``add-repo.sh`` is the real
+# user-facing script: it writes the production repo conf, runs ``pkg update``, and
+# verifies the package is visible from OUR repo. Here it is staged to the guest and
+# driven against the LOCAL file:// catalog via its existing ``--base-url`` override
+# (hermetic; the brait.dev default + a live add-repo.sh run are a post-deploy note),
+# proving the SHIPPED bootstrap — not just a hand-written conf — installs our build.
+ADD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "add-repo.sh"
+GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
 # deploys the catalog to a Pages site served at the CUSTOM DOMAIN brait.dev (gh api
@@ -310,6 +326,120 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     return guest_abi_dir
 
 
+def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> subprocess.CompletedProcess[str]:
+    """Stage the SHIPPED ``scripts/add-repo.sh`` and run it (devel) against ``base_url``.
+
+    Drives the real client bootstrap on the box: it writes the production conf to
+    ``/usr/local/etc/pkg/repos/pfblockerng-devel.conf`` (here pointed at a local
+    ``file://`` catalog via the script's own ``--base-url`` override — the brait.dev
+    default and a live HTTPS add-repo.sh run are a post-deploy note), runs ``pkg
+    update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
+    verify step failing) raises with the captured output. ``base_url`` points at the
+    catalog ROOT; add-repo.sh appends the literal ``${ABI}`` (pkg expands it to the
+    box's ABI), so the catalog MUST live under ``<base_url>/<ABI>/``.
+    """
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
+    _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
+    result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, "devel", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"add-repo.sh --base-url {base_url} failed: rc={result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# .pkg re-versioning — forge a LOWER + a HIGHER build for the upgrade transition
+# --------------------------------------------------------------------------- #
+
+# The manifest members of a libpkg ``.pkg`` (a zstd-compressed tar; these two come
+# FIRST, then the payload at absolute paths — see scripts/build-pkg-portable.py).
+# Both carry the package ``version``; pkg reads ``+COMPACT_MANIFEST`` for the
+# catalog and ``+MANIFEST`` on install, so BOTH must be re-versioned in lockstep.
+_PKG_MANIFEST_MEMBERS = ("+COMPACT_MANIFEST", "+MANIFEST")
+
+
+def _zstd_decompress(data: bytes) -> bytes:
+    """zstd-decode the ``.pkg`` framing (the ``zstd`` binary; runner host-tool)."""
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise RuntimeError("re-versioning a .pkg needs the `zstd` binary on the runner (apt-get install -y zstd)")
+    return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
+
+
+def _zstd_compress(data: bytes) -> bytes:
+    """zstd-encode back to the ``tzst`` framing pkg(8) expects (``packing_format = tzst``)."""
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise RuntimeError("re-versioning a .pkg needs the `zstd` binary on the runner (apt-get install -y zstd)")
+    return subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
+
+
+def read_compact_version(src_pkg: Path) -> str:
+    """The ``version`` recorded in a ``.pkg``'s ``+COMPACT_MANIFEST`` (the base to re-version from)."""
+    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+        member = tf.extractfile("+COMPACT_MANIFEST")
+        if member is None:
+            raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
+        obj = json.loads(member.read())
+    version = obj.get("version")
+    if not isinstance(version, str) or not version:
+        raise RuntimeError(f"{src_pkg.name}: +COMPACT_MANIFEST has no version string (got {version!r})")
+    return version
+
+
+def reversion_pkg(src_pkg: Path, new_version: str, out_dir: Path) -> Path:
+    """Re-version a built ``.pkg`` to ``new_version``, payload untouched.
+
+    A libpkg ``.pkg`` is a zstd-compressed tar with ``+COMPACT_MANIFEST`` +
+    ``+MANIFEST`` first (UCL/JSON), then the payload files at absolute paths. This
+    edits ONLY the ``version`` field in BOTH manifests (the catalog reads compact,
+    install reads full — they must agree) and repacks: every other manifest field
+    and every payload member is copied through verbatim, manifests kept first, and
+    the archive recompressed as ``tzst`` (the ``packing_format`` meta.conf declares).
+    So the forged builds differ from the real branch ``.pkg`` in NOTHING but the
+    version string — letting a single image prove a real ``pkg upgrade`` moves the
+    box from a LOWER (``<V>_1``) to a HIGHER (``<V>_9``) build of OUR repo.
+
+    Returns the path of the written ``<name>-<new_version>.pkg`` under ``out_dir``.
+    """
+    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
+    repacked = io.BytesIO()
+    pkg_name = ""
+    with (
+        tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tin,
+        tarfile.open(fileobj=repacked, mode="w", format=tarfile.USTAR_FORMAT) as tout,
+    ):
+        for member in tin.getmembers():
+            extracted = tin.extractfile(member) if member.isfile() else None
+            data = extracted.read() if extracted is not None else b""
+            if member.name in _PKG_MANIFEST_MEMBERS:
+                obj = json.loads(data)
+                obj["version"] = new_version
+                pkg_name = obj.get("name", pkg_name)
+                data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+                # A fresh TarInfo so the re-sized manifest writes cleanly (root:wheel,
+                # 0644, deterministic mtime — same framing build-pkg-portable.py uses).
+                ti = tarfile.TarInfo(name=member.name)
+                ti.size = len(data)
+                ti.mode = 0o644
+                ti.uid = ti.gid = 0
+                ti.uname, ti.gname = "root", "wheel"
+                ti.mtime = 0
+                ti.type = tarfile.REGTYPE
+                tout.addfile(ti, io.BytesIO(data))
+            else:
+                tout.addfile(member, io.BytesIO(data) if member.isfile() else None)
+    if not pkg_name:
+        raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST/+MANIFEST with a name — not a libpkg .pkg?")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{pkg_name}-{new_version}.pkg"
+    out_path.write_bytes(_zstd_compress(repacked.getvalue()))
+    return out_path
+
+
 def _repo_block(name: str, directory: str, priority: int) -> str:
     """One NONE-signed ``file://`` repo stanza for the pkg repo conf."""
     return (
@@ -412,6 +542,23 @@ def pkg_install_from_repo(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.
     if result.returncode != 0:
         raise RuntimeError(
             f"pkg install {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
+
+
+def pkg_upgrade(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.CompletedProcess[str]:
+    """``pkg upgrade -y <name>`` across ALL enabled repos — NO ``-f``.
+
+    The exact in-repo update path a published newer build takes: with the catalog
+    re-read (``pkg update -f``), ``pkg upgrade`` moves the installed package to the
+    higher available build (priority decides which repo provides it — ours wins by
+    ``priority:``). NO ``-f`` (a forced reinstall would mask a real version move).
+    Returns the completed process so the caller can read "Missing dependency" off it.
+    """
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "upgrade", "-y", PKG_NAME, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pkg upgrade {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
 
@@ -552,6 +699,83 @@ def test_install_from_our_repo_lands_all_files(repo_vm: SmokeVM) -> None:
     assert file_count > 50, f"only {file_count} files registered — implausibly few for pfBlockerNG"
 
 
+@pytest.mark.timeout(600)  # forge 2 builds + install + a real `pkg upgrade` transition > the 30s cap.
+def test_pkg_upgrade_moves_to_our_newer_build(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """UPGRADE TRANSITION: ``pkg upgrade`` moves the box from a LOWER to a HIGHER
+    build served by OUR repo — the in-repo update path a published newer build takes.
+
+    Re-versions the branch ``.pkg`` (priority-untouched, payload-untouched) into a
+    LOWER (``<V>_1``) and a HIGHER (``<V>_9``) build of the SAME package. The repo
+    holds only the LOWER build first (install lands ``<V>_1`` from ours); then the
+    SAME repo dir is rebuilt with the HIGHER build and a ``pkg upgrade`` must carry
+    the box to ``<V>_9``, still from ours. This is the single-image proof of the
+    update path; a true OS-MAJOR jump is not reachable on one image and degrades to
+    the documented CLI ``pkg upgrade`` (ADR §7).
+
+    Scenario: a newer build published to our repo upgrades an installed box.
+      Background: our NONE-signed file:// repo above the Netgate `pfSense` repo.
+
+    Given the package ABSENT, and our repo carries ONLY the LOWER build ``<V>_1``,
+      When ``pkg install -y`` runs (NO -r, NO -f),
+      Then the box is at ``<V>_1`` from OUR repo (``%v`` == ``<V>_1``, ``%R`` ==
+        ``pfblockerng-devel``) — the asserted BEFORE state.
+    When our repo is REBUILT in place with the HIGHER build ``<V>_9``, ``pkg update
+      -f`` re-reads the catalog, and ``pkg upgrade -y`` runs,
+      Then the box MOVES to ``<V>_9`` from OUR repo (``%v`` == ``<V>_9``, ``%R`` ==
+        ``pfblockerng-devel``) — a real before != after transition, not a final-state
+        snapshot. (Runtime behaviour is the smoke suite's job, not re-probed here.)
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    base_version = read_compact_version(Path(pkg))
+    low_version = f"{base_version}_1"
+    high_version = f"{base_version}_9"
+    assert low_version != high_version  # forged builds must differ for the transition to be real
+
+    # Forge the two builds on the runner (only the version field changes).
+    low_pkg = reversion_pkg(Path(pkg), low_version, tmp_path / "low")
+    high_pkg = reversion_pkg(Path(pkg), high_version, tmp_path / "high")
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    try:
+        # GIVEN: a clean before-state — package absent; our repo carries ONLY the
+        # LOWER build, enabled ABOVE the Netgate `pfSense` repo.
+        pkg_delete(repo_vm)
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the upgrade test"
+
+        # WHEN (1): install the lower build across all enabled repos (no -r/-f).
+        pkg_install_from_repo(repo_vm)
+
+        # THEN (before-state): the box is at the LOWER version, from OUR repo.
+        assert pkg_installed_version(repo_vm) == low_version, (
+            f"expected {low_version!r} installed first, got {pkg_installed_version(repo_vm)!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"lower build came from {pkg_repo_origin(repo_vm)!r}, expected our repo {OURS_REPO_NAME!r}"
+        )
+
+        # WHEN (2): publish the HIGHER build into the SAME repo dir, re-read it, upgrade.
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+        pkg_update(repo_vm)
+        proc = pkg_upgrade(repo_vm)
+
+        # THEN (after-state): the box MOVED to the HIGHER version, still from OUR repo.
+        combined = proc.stdout + proc.stderr
+        assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve on upgrade:\n{combined}"
+        assert pkg_installed_version(repo_vm) == high_version, (
+            f"pkg upgrade did not move {low_version!r} -> {high_version!r}; now at {pkg_installed_version(repo_vm)!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"upgraded build came from {pkg_repo_origin(repo_vm)!r}, expected our repo {OURS_REPO_NAME!r}"
+        )
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
 @pytest.mark.timeout(600)  # decoy-catalog already built; pkg update + a cross-repo install > the 30s cap.
 def test_precedence_ours_higher_priority_wins(repo_vm: SmokeVM) -> None:
     """PRECEDENCE (ours wins): with a competing repo serving the SAME package, OUR
@@ -666,6 +890,55 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
     proc = pkg_install_from_repo(repo_vm)
     combined = proc.stdout + proc.stderr
     assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the script catalog:\n{combined}"
+    origin = pkg_repo_origin(repo_vm)
+    assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+
+
+@pytest.mark.timeout(600)  # build catalog + run the shipped bootstrap + install > the 30s cap.
+def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
+    """PHASE-4 SHIPPED BOOTSTRAP: the user-facing ``scripts/add-repo.sh`` writes the
+    production conf, ``pkg update``s, verifies our package is visible, and the box
+    then installs OUR build (no ``-f``) — the real client path, not a hand-written conf.
+
+    add-repo.sh is run hermetically against a LOCAL ``file://`` catalog via its own
+    ``--base-url`` override; the brait.dev default + a live HTTPS add-repo.sh run are
+    the post-deploy/Phase-6 note. The catalog is laid out by ``build-repo.sh`` under
+    ``<root>/<ABI>/`` so add-repo.sh's literal ``${ABI}`` url resolves to it. The
+    script ships priority 100, above the Netgate ``pfSense`` repo (0), so cross-repo
+    install picks ours — exactly the production mechanism.
+
+    Given the package ABSENT and a ``build-repo.sh`` catalog under ``<root>/<ABI>/``,
+    When ``add-repo.sh --base-url file://<root> devel`` runs (writes the conf, ``pkg
+      update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
+    Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
+      the production conf to ``pfblockerng-devel.conf``, and the install comes from
+      OUR repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+
+    # GIVEN: a catalog under <SCRIPT_REPO_ROOT>/<ABI>/ (build-repo.sh lays it out so),
+    # package absent. The dir add-repo.sh's ${ABI} url will resolve to.
+    abi_dir = build_repo_via_script(repo_vm, [Path(pkg)])
+    assert abi_dir.startswith(f"{SCRIPT_REPO_ROOT}/"), f"unexpected catalog dir {abi_dir!r}"
+    pkg_delete(repo_vm)
+
+    # WHEN: run the SHIPPED bootstrap against the local catalog root. Its verify step
+    # must pass (it raises here otherwise) — proving the shipped conf loads our catalog.
+    proc = run_add_repo_sh(repo_vm, f"file://{SCRIPT_REPO_ROOT}")
+
+    # THEN: add-repo.sh wrote the production conf and its verify confirmed our package.
+    assert "available from 'pfblockerng-devel'" in proc.stdout, (
+        f"add-repo.sh did not report the package from our repo:\n{proc.stdout}"
+    )
+    conf_present = repo_vm.ssh("/bin/test", "-f", REPO_CONF)
+    assert conf_present.returncode == 0, f"add-repo.sh did not write {REPO_CONF}"
+    assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the bootstrap install"
+
+    # The shipped conf is now in place; install across all enabled repos (no -r/-f).
+    install = pkg_install_from_repo(repo_vm)
+    combined = install.stdout + install.stderr
+    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve via the shipped bootstrap:\n{combined}"
     origin = pkg_repo_origin(repo_vm)
     assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
 
