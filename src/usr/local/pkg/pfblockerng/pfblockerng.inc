@@ -1730,7 +1730,7 @@ function pfb_wizard_skip_action(array $post): ?string {
 	if (!isset($post['skip'])) {
 		return null;
 	}
-	return !empty($post['pfb_wizard_suppress']) ? 'disable' : 'skip';
+	return !empty($post['pfb_wizard_disable']) ? 'disable' : 'skip';
 }
 
 /*
