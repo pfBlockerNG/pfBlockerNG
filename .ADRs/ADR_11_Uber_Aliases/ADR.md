@@ -170,15 +170,26 @@ Prompt: `05_UI_Docs_Smoke_DoD.txt`
 
 > CI cannot load pf tables or run HAProxy. Run on a live pfSense CE box after a full pfBlockerNG update.
 
-- [ ] **None selected = no-op.** With no types selected, no `pfB_*_Aggregated_*` alias/table/file exists; existing aliases/rules unchanged.
-- [ ] **Deny aggregate on.** `pfB_Deny_Aggregated_v4`/`_v6` appear as Native `urltable` aliases; contents = deduped+`iprange`d union of the effective Deny set (spot-check: a few member IPs present; a suppressed/whitelisted IP **absent**; a **DNSBLIP** IP present; a **Deny-action GeoIP** continent IP present); **no firewall rule** references them.
-- [ ] **Permit / Match / Native aggregates on.** Each selected type produces `pfB_<Type>_Aggregated_{v4,v6}` from its dir; **no rule**; Permit aggregate is a plain IP-set (no direction/ports).
-- [ ] **All-combinations additive.** Toggle each subset; existing aliases/tables/rules stay byte-identical; only the selected aggregates appear/disappear.
-- [ ] **Lockstep.** A change to a member feed is reflected in that type's aggregate **in the same update pass** (no extra cycle); an unchanged type isn't rebuilt (mtime gate).
-- [ ] **Never-empty file.** With an empty union for a selected type, its consumer `-f` file still exists and is non-empty (placeholder).
-- [ ] **HAProxy referenceable (ADR-12 pre-check).** A `source_ip` ACL referencing `pfB_Deny_Aggregated_v4` causes HAProxy to emit `ipalias_pfB_Deny_Aggregated_v4.lst` (proves `is_alias()` + expansion work).
-- [ ] **Post-hook fires after the aggregate is ready.** With a `post` update hook configured (ADR-12), force a member-feed change and run an update: the hook runs **after** the rebuilt `pfB_<Type>_Aggregated_*` table is loaded (the hook, e.g. `pfctl -t pfB_Deny_Aggregated_v4 -T show` or a freshness marker, sees the **new** content — never the prior pass's), and the aggregate's name appears in `PFB_CHANGED_IP_ALIASES`.
-- [ ] **Teardown.** Deselecting a type removes its alias/table/file cleanly (no orphans), leaving other selected aggregates intact; disabling pfBlockerNG removes them all.
+**Now automated by the live-VM smoke (`tests/smoke/test_smoke_aggregate.py`, ADR-04 harness):**
+the per-checkbox map is below — each is a failable assertion against a REAL pf table on a
+booted pfSense CE VM (dispatched via `smoke.yml`, not the PR gate). Items still needing the
+maintainer's live box (HAProxy, the real GeoIP/suppress content spot-check, the full power-set
+walk) stay **manual** and are called out explicitly — no silent gap.
+
+- [x] **None selected = no-op** — *automated* (`test_aggregate_none_selected_is_noop`): with nothing selected and a Deny member injected, `pfB_Deny_Aggregated_v4` is absent from `pfctl -sTables` and its `.lst` does not exist (the member table still builds, so "absent" is meaningful).
+- [ ] **Deny aggregate on** — *partially automated*. The build + "the fed Deny IP is present" + "**no firewall rule** references it" + the DNSBLIP fold are automated (`test_aggregate_deny_builds_table_native_no_rule`, `test_aggregate_deny_includes_dnsblip`). **Still maintainer-manual:** the *effective post-suppression* CONTENT spot-check — a suppressed/whitelisted IP **absent**, a **Deny-action GeoIP** continent IP **present** (needs the real `suppress` pass + a MaxMind GeoIP download; commands in §7.A).
+- [ ] **Permit / Match / Native aggregates on** — *partially automated*. Permit is built + isolated from Deny (`test_aggregate_permit_does_not_leak_into_deny`); the additive combination is automated (`test_aggregate_additive_across_combination`). Match's empty-union path is automated (never-empty item). A full per-type sweep of all four on the live box stays maintainer-manual.
+- [ ] **All-combinations additive** — *partially automated* (`test_aggregate_additive_across_combination`): `{Deny}`→`{Deny,Permit}` adds only the Permit aggregate and leaves the member tables present/unchanged. **Still maintainer-manual:** the byte-identity power-set sweep over the *non-aggregate* world (§7.B — needs the full subset walk + md5 of every alias file).
+- [ ] **Lockstep** — *automated* (the post-hook test below proves the same-pass freshness: a member-feed change is reflected in the aggregate the hook reads, same update). The mtime-gate "an unchanged type is NOT rebuilt" half stays maintainer-manual (§7.D — `ls -l` mtime check across a no-change pass).
+- [x] **Never-empty file** — *automated* (`test_aggregate_empty_union_writes_never_empty_consumer`): a selected type with no members writes a non-empty `.lst` (`#` placeholder) and loads no content-bearing pf table.
+- [ ] **HAProxy referenceable (ADR-12 pre-check)** — **maintainer-manual** (no HAProxy package on the smoke image). A `source_ip` ACL referencing `pfB_Deny_Aggregated_v4` causes HAProxy to emit `ipalias_pfB_Deny_Aggregated_v4.lst` (proves `is_alias()` + expansion). Commands in §7.E.
+- [x] **Post-hook fires after the aggregate is ready** — *automated* (`test_aggregate_post_hook_sees_fresh_table_and_changed_alias`): a `post` hook records `pfctl -t pfB_Deny_Aggregated_v4 -T show` + its env; after a forced Deny member-feed change the recorded table contains the **new** IP (the build/load ran before the hook — never the stale pass) and `PFB_CHANGED_IP_ALIASES` contains `pfB_Deny_Aggregated_v4`. The before-state (new IP absent from the settled table) is asserted first.
+- [x] **Teardown** — *automated* (`test_aggregate_teardown_on_deselect`): build the Deny aggregate (table + `.lst` present), then deselect everything ⇒ the pf table is gone and the `.lst` is removed. "Disabling pfBlockerNG removes them all" stays maintainer-manual (the module teardown clears the selection; the global-disable path is the §7.B/F live check).
+
+The General-page **`pfb_agg_types` multi-select render** is covered by the ADR-14 Tier-A
+`ui_render` gate (`tests/smoke/ui/test_render_smoke.py`): the page entry now carries the
+**"Aggregated Aliases"** marker, and `test_general_page_renders_aggregate_select` asserts all
+four option values (Deny/Permit/Match/Native) **and** the "no firewall rule" help caveat render.
 
 ### Phase 4 — what is auto-verified off-box vs. deferred here (no silent gap)
 

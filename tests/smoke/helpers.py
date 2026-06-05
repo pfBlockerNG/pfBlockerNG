@@ -1092,6 +1092,76 @@ def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str,
 
 
 # --------------------------------------------------------------------------- #
+# Aggregate ("Uber") aliases (ADR-11) — the opt-in per-type aggregate selector
+# --------------------------------------------------------------------------- #
+# The General-settings multi-select ``pfb_agg_types`` is a CSV SCALAR at
+# CFG_GLOBAL/pfb_agg_types (e.g. "Deny,Permit"; default "" = none) — a single string
+# (NOT a listtag) so it round-trips with no '<0>' list XML (mirrors blacklist_selected;
+# see pfblockerng.inc:1174). For each selected Type x family, the update pass
+# (sync_package_pfblockerng -> pfb_build_aggregate_aliases, inc:2144) builds the Native
+# urltable alias ``pfB_<Type>_Aggregated_<family>`` (Type in {Deny,Permit,Match,Native},
+# family in {v4,v6}) = the deduped/iprange'd union of that type's dir, loads it inline
+# (``pfctl -T replace``), and writes a never-empty ``.lst`` consumer file under
+# PFB_DBDIR. NO firewall rule (Native). Deselect/disable tears the aggregate down. A
+# rebuilt aggregate's name merges into the post-hook PFB_CHANGED_IP_ALIASES.
+
+AGG_TYPES = ("Deny", "Permit", "Match", "Native")
+CFG_AGG_TYPES = CFG_GLOBAL + "/pfb_agg_types"
+
+
+def aggregate_table(agg_type: str, family: str) -> str:
+    """The pf table / urltable alias name for a (type, family) aggregate.
+
+    Matches the PHP ``"pfB_{$type}_Aggregated_{$family}"`` (inc:2158) exactly — this
+    is BOTH the pf table queried via ``pfctl_tables``/``pfctl_table_members`` and the
+    alias name that lands in ``PFB_CHANGED_IP_ALIASES`` when the aggregate is rebuilt.
+    """
+    return f"pfB_{agg_type}_Aggregated_{family}"
+
+
+def aggregate_consumer_path(agg_type: str, family: str) -> str:
+    """The never-empty ``.lst`` consumer file path for a (type, family) aggregate.
+
+    ``{PFB_DBDIR}/pfB_<Type>_Aggregated_<family>.lst`` — the ADR-12 HAProxy ``-f``
+    consumer pfBlockerNG writes on every selected build (a ``#`` placeholder line when
+    the union is empty, so the file is never empty; inc:2160, pfblockerng.sh:392).
+    """
+    return f"{PFB_DBDIR}/{aggregate_table(agg_type, family)}.lst"
+
+
+def set_aggregate_types(vm: SmokeVM, types: list[str], *, timeout: float = 60.0) -> None:
+    """Persist the ADR-11 ``pfb_agg_types`` CSV scalar at CFG_GLOBAL/pfb_agg_types.
+
+    Mirrors :func:`set_update_hooks`'s shape: write via ``config_set_path`` +
+    ``write_config``, then a READ-BACK GUARD that raises if the value did not persist —
+    turning a silent non-persist into an early, precise failure. ``types`` is validated
+    against the four legal action types ({Deny,Permit,Match,Native}); the stored value
+    is ``implode(',', types)`` (the GUI save shape, pfblockerng_general.php:162). An
+    EMPTY list stores ``""`` (the default "none" / OFF branch — no aggregate is built).
+
+    The order is preserved as given (the PHP read intersects against the canonical
+    {Deny,Permit,Match,Native} order, so functional behaviour is order-independent; we
+    keep the caller's order for a faithful round-trip the read-back can compare).
+    """
+    bad = [t for t in types if t not in AGG_TYPES]
+    if bad:
+        raise ValueError(f"set_aggregate_types: invalid type(s) {bad!r}; legal: {AGG_TYPES}")
+    csv = ",".join(types)
+    snippet = (
+        f"config_set_path({_php_str(CFG_AGG_TYPES)}, {_php_str(csv)});\n"
+        "write_config('pfBlockerNG smoke: set aggregate types');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_aggregate_types failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # READ-BACK GUARD: the persisted scalar must equal the CSV we wrote.
+    persisted = config_get(vm, CFG_AGG_TYPES, timeout=timeout)
+    if persisted != csv:
+        raise RuntimeError(f"set_aggregate_types: persisted {persisted!r} != {csv!r} written — did not round-trip")
+
+
+# --------------------------------------------------------------------------- #
 # Config injection — emit exactly the fields a case sets
 # --------------------------------------------------------------------------- #
 

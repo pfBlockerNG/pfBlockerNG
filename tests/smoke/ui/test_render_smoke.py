@@ -64,7 +64,9 @@ class Page:
 # coverage): pfblockerng_category.php and _category_edit.php render an IP view by
 # default and a DNSBL view under ?type=dnsbl; both are listed.
 PAGE_TABLE: tuple[Page, ...] = (
-    Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings")),
+    # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
+    # verbatim) — a third marker so the gate also proves that field renders on the page.
+    Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings", "Aggregated Aliases")),
     Page("ip", "/pfblockerng/pfblockerng_ip.php", ("IP Configuration", "ASN configuration")),
     Page("dnsbl", "/pfblockerng/pfblockerng_dnsbl.php", ("DNSBL Webserver Configuration", "DNSBL Configuration")),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
@@ -211,6 +213,40 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, page.markers)
     assert result.ok, f"render oracle failed for {page.name} ({path}): {result.detail}"
+
+
+# ADR-11: the General page's pfb_agg_types multi-select must render with ALL FOUR
+# option branches (Deny/Permit/Match/Native) AND its no-rule help caveat. Asserting
+# every option proves each branch of the select is emitted (not just the label), and the
+# caveat substring proves the help text — the user's only signal that an aggregate is
+# Native (no firewall rule) — actually rendered. Substrings verified against the real
+# pfblockerng_general.php: the four $options_pfb_agg_types keys render as Form_Select
+# option values ('value="<Type>"'), and the setHelp() copy contains "no firewall rule".
+_AGG_TYPE_OPTIONS = ("Deny", "Permit", "Match", "Native")
+_AGG_HELP_CAVEAT = "no firewall rule"
+_GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+
+
+def test_general_page_renders_aggregate_select(webui: WebUI) -> None:
+    """The General page renders the pfb_agg_types select: all four options + the caveat.
+
+    Hermetic (no network — the General page renders from local config alone). GET the
+    page and assert: (1) the ``pfb_agg_types`` field is present; (2) EACH of the four
+    option values (Deny/Permit/Match/Native) is emitted — every branch of the multi-
+    select, not just one (CLAUDE.md branch coverage); and (3) the "no firewall rule" help
+    caveat — the load-bearing "these are Native reference IP-sets" wording — is present.
+    Pairs with the PAGE_TABLE "Aggregated Aliases" label marker (the field's presence) to
+    pin both the field and its full option set + help.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    assert resp.status_code == 200, f"GET {_GENERAL_PAGE} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert "pfb_agg_types" in body, "pfb_agg_types select not present on the General page"
+    missing = [opt for opt in _AGG_TYPE_OPTIONS if f'value="{opt}"' not in body]
+    assert not missing, f"pfb_agg_types select missing option value(s) {missing} (each is a branch that must render)"
+    assert _AGG_HELP_CAVEAT in body, (
+        f"pfb_agg_types help caveat {_AGG_HELP_CAVEAT!r} (the Native/no-rule wording) not rendered on the General page"
+    )
 
 
 # threats.php's NEGATIVE branches: each malformed/absent param print_info_box()es
