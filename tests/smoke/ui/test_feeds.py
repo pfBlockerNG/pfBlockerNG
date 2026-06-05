@@ -23,13 +23,17 @@ The Feeds save handler (read END TO END):
   (letters/digits/underscore; empty also passes) is written to
   ``installedpackages/pfblockerngglobal/feed_<lower(aliasname)>``. An empty value
   is the "default name" state (no override).
-* ALT-URL: the page emits a hidden ``alt_selected`` CSV of every feed header that
-  has alternate URLs, plus, per such header, a hidden ``alt_<header>`` and a set
-  of same-named radios whose values are ``alt_<header>`` (base, checked by
-  default) / ``alt_<altheader>``. On save, for each header in ``alt_selected`` the
-  handler runs ``pfb_filter($_POST['alt_<header>'], PFB_FILTER_WORD)`` and, when
-  non-empty (word-only), stores it at
-  ``installedpackages/pfblockerngglobal/feed_alt_<lower(header)>``.
+
+ALT-URL save is intentionally NOT covered here -- it is deferred to the browser
+tier (Batch 4). The handler iterates EVERY header in the hidden ``alt_selected``
+CSV and, for each, requires a non-empty ``alt_<header>`` POST value, else it sets
+``$input_errors`` and the whole save aborts before ``write_config``. The page
+emits, per header, a same-named ``<input type=hidden value="">`` alongside the
+checked base radio; reproducing the browser's multi-value same-name POST (hidden
+"" + checked radio value) is exactly what :func:`scrape_form_fields` cannot do
+faithfully -- it resolves the collision to the empty value, so every alt header
+POSTs empty and the save errors. Driving the actual radio click (Playwright)
+sends the right values, so this flow belongs in the browser tier, not here.
 
 Every flow is a TRUE transition test (CLAUDE.md): it asserts the BEFORE value,
 drives the CSRF form POST, asserts the AFTER value via the config oracle, then
@@ -38,10 +42,9 @@ RESTORES the box (asserting the reverse where it applies). Restore runs in a
 sibling flows. Branch coverage: the rename validator gets a VALID case (accepted,
 config changes) AND a REJECTING case (config stays unchanged).
 
-Target aliases are pre-defined entries shipped in ``pfblockerng_feeds.json`` and
+Target alias is a pre-defined entry shipped in ``pfblockerng_feeds.json`` and
 stable across the support matrix: the IPv4 alias ``PRI1`` (field ``feed_pri1``)
-for rename, and its feed header ``Abuse_Feodo_C2`` (which carries alternate URLs)
-for the alt-URL flow.
+for the rename flows.
 """
 
 from __future__ import annotations
@@ -72,17 +75,6 @@ RENAME_VALID = "PRI1renamed"
 # A value containing a space -> preg_match "/\\W/" matches -> input error ->
 # the whole save aborts before write_config, so config.xml stays unchanged.
 RENAME_INVALID = "PRI1 bad"
-
-# A pre-defined feed header (under PRI1) that carries alternate URLs in the JSON,
-# so the page emits its alt_<header> radio group + lists it in alt_selected. The
-# save stores the chosen radio value at feed_alt_<lower(header)>.
-ALT_HEADER = "Abuse_Feodo_C2"
-ALT_FIELD = "alt_Abuse_Feodo_C2"
-ALT_CFG = "installedpackages/pfblockerngglobal/feed_alt_abuse_feodo_c2"
-# The base radio value (default selection) and one alternate radio value. Both are
-# word-only (underscores are word chars) so PFB_FILTER_WORD accepts them verbatim.
-ALT_BASE_VALUE = "alt_Abuse_Feodo_C2"
-ALT_ALTERNATE_VALUE = "alt_Abuse_Feodo_C2_med"
 
 
 def _config_del(vm: helpers.SmokeVM, path: str, *, timeout: float = 60.0) -> None:
@@ -175,47 +167,3 @@ def test_feed_rename_invalid_alias_is_rejected_config_unchanged(webui: WebUI, sm
         )
     finally:
         _config_del(vm, RENAME_CFG)
-
-
-def test_feed_alt_url_save_persists_selected_alternate(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """Selecting an alternate URL persists feed_alt_<header> to config.xml, both ways.
-
-    True transition (CLAUDE.md): the alt selection for the feed header starts
-    absent / NOT the alternate, the form POST overrides the alt_<header> radio to
-    an ALTERNATE value, and config.xml stores that exact value at
-    feed_alt_<lower(header)>; then a second POST selects the BASE value and
-    config.xml holds the base instead. The oracle is config.xml read over SSH.
-
-    The save writes the value of ``pfb_filter($_POST['alt_<header>'],
-    PFB_FILTER_WORD)`` (word-only passes verbatim) -- so the stored node equals
-    the chosen radio value. The node is created by this flow, so the ``finally``
-    deletes it (a form POST can only set a value, not remove the node) to leave
-    the box truly clean for the sibling flows.
-    """
-    vm = smoke_vm
-    # Known baseline: no alt-URL override for this header.
-    _config_del(vm, ALT_CFG)
-    try:
-        # BEFORE: no alternate selected (default-name/base state, node absent).
-        before = helpers.config_get(vm, ALT_CFG)
-        assert before != ALT_ALTERNATE_VALUE, (
-            f"{ALT_CFG} already equals the alternate {ALT_ALTERNATE_VALUE!r} before the POST"
-        )
-
-        # SELECT the alternate URL via the form's radio for this header.
-        resp = webui.post(FEEDS_PAGE, {ALT_FIELD: ALT_ALTERNATE_VALUE}, timeout=120.0)
-        assert not looks_like_login_page(resp.text), "Feeds alt-URL POST returned the login form (session lost)"
-        assert helpers.config_get(vm, ALT_CFG) == ALT_ALTERNATE_VALUE, (
-            f"{ALT_CFG} did not become {ALT_ALTERNATE_VALUE!r} after selecting the alternate "
-            f"(oracle: config.xml, not the HTTP body)"
-        )
-
-        # SELECT the base URL back via the form -- proves the reverse transition.
-        resp = webui.post(FEEDS_PAGE, {ALT_FIELD: ALT_BASE_VALUE}, timeout=120.0)
-        assert not looks_like_login_page(resp.text), "Feeds alt-URL restore POST returned the login form"
-        assert helpers.config_get(vm, ALT_CFG) == ALT_BASE_VALUE, (
-            f"{ALT_CFG} did not become the base {ALT_BASE_VALUE!r} after re-selecting the base URL"
-        )
-    finally:
-        # The flow CREATED this node; drop it so the box is left as it started.
-        _config_del(vm, ALT_CFG)
