@@ -1586,7 +1586,7 @@ $section->addInput(new Form_Select(
 	$pconfig['script_post'],
 	$options_script_post
 ))->sethelp("Post-processing Shell script after download.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_post_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_post_SCRIPT name.sh|py</strong>")
+	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_post_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_post_SCRIPT NAME.sh|py</strong>")
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_script_post_cnt);
 

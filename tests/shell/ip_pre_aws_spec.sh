@@ -79,6 +79,7 @@ Describe 'aws_region_prefixes.sh failure handling'
     When run sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "$awswork" _v4
     The status should be failure
     The output should include "jq failed"
+    The stderr should include "parse error"
     The contents of file "$awswork" should equal "not-json{"
   End
 
