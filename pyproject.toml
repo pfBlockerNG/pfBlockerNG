@@ -14,6 +14,7 @@ markers = [
     "ui_render: live-VM Web-UI render-smoke (ADR-14 Tier A); authenticated HTTP; deselected from the default run",
     "ui_e2e: live-VM Web-UI functional flow (ADR-14 Tier B, HTTP POST); deselected from the default run",
     "ui_browser: live-VM Web-UI browser/JS test (ADR-14 Tier B, Playwright); deselected from the default run",
+    "repo: live-VM release->repository install flow (ADR-17); distinct from -m smoke; deselected from the default run",
 ]
 
 # coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line
