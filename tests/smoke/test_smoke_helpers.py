@@ -30,12 +30,12 @@ pytestmark = pytest.mark.smoke
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
-    """Deploy the branch .pkg once for the helper self-tests; configure the System-DNS
-    upstream (``use_system_dns_upstream`` -> the mock via the 10.0.2.2 host alias)."""
+    """Deploy the branch .pkg once for the helper self-tests; configure the DNS upstream
+    (``wire_dns_upstream`` -> the mock via the 10.0.2.2 host alias; path chosen by env)."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.use_system_dns_upstream(smoke_vm)
+    h.wire_dns_upstream(smoke_vm)
     return smoke_vm
 
 
@@ -404,3 +404,63 @@ def test_b64_textarea_matches_pfblockerng_decode() -> None:
     encoded = h._b64_textarea(lines)
     assert base64.b64decode(encoded).decode().split("\r\n") == lines
     assert h._b64_textarea([]) == "", "empty list -> empty value (no entries)"
+
+
+def test_mock_dns_upstream_snippet_base64_encodes_forward_zone() -> None:
+    """The mock-DNS wiring forwards the ROOT zone to 10.0.2.2@<ephemeral-port>.
+
+    ``unbound/custom_options`` is a base64 field (pfSense ``base64_decode``s it in
+    ``unbound_generate_config_text``), so the forward-zone must ride INSIDE
+    ``base64_encode(...)`` — never a raw assign that would decode to garbage. forwarding
+    and dnssec are dropped so there is no competing root forward-zone and the mock's
+    unsigned answers are not marked bogus. The explicit ``@port`` is what frees the mock
+    from host :53 (the parallel-safety lever)."""
+    snippet = h._mock_dns_upstream_snippet(5399)
+    assert f"forward-addr: {h.GUEST_TO_HOST_ALIAS}@5399" in snippet
+    assert 'name: "."' in snippet
+    # Forward-zone text is base64-encoded by PHP at RUNTIME (not pre-encoded in Python),
+    # so it rides as the literal argument to base64_encode — assert the wrapper.
+    assert "$u['custom_options'] = base64_encode(" in snippet
+    assert "unset($u['forwarding']);" in snippet  # no competing root forward-zone
+    assert "unset($u['dnssec']);" in snippet  # unsigned mock answers
+    assert "services_unbound_configure();" in snippet
+
+
+def test_wire_dns_upstream_dispatches_on_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``wire_dns_upstream`` picks the upstream path by SMOKE_DNS_UPSTREAM — every value asserted.
+
+    Scenario: the dispatcher must DEFAULT to the System-DNS path (so CI, which sets
+    nothing, stays on :53 unchanged) and select the parallel-safe mock path only on
+    explicit opt-in; an unknown value must fail loudly, not silently pick a wrong upstream.
+
+      Given the two upstream helpers are stubbed to record which one ran
+      When  SMOKE_DNS_UPSTREAM is {unset, 'system', 'mock', 'MOCK', 'bogus'}
+      Then  the call routes to {system, system, mock, mock, RuntimeError} respectively
+    """
+    called: list[str] = []
+    monkeypatch.setattr(h, "use_system_dns_upstream", lambda vm, *, timeout=120.0: called.append("system"))
+    monkeypatch.setattr(h, "use_mock_dns_upstream", lambda vm, *, timeout=120.0: called.append("mock"))
+    vm = object()  # the stubs ignore it
+
+    # Given no env (CI) — Then default to the System-DNS path (preserves :53).
+    monkeypatch.delenv("SMOKE_DNS_UPSTREAM", raising=False)
+    h.wire_dns_upstream(vm)  # type: ignore[arg-type]
+    assert called == ["system"]
+
+    # Given explicit 'system' — Then system.
+    called.clear()
+    monkeypatch.setenv("SMOKE_DNS_UPSTREAM", "system")
+    h.wire_dns_upstream(vm)  # type: ignore[arg-type]
+    assert called == ["system"]
+
+    # Given 'mock' (case-insensitively) — Then the ephemeral-port path.
+    for value in ("mock", "MOCK"):
+        called.clear()
+        monkeypatch.setenv("SMOKE_DNS_UPSTREAM", value)
+        h.wire_dns_upstream(vm)  # type: ignore[arg-type]
+        assert called == ["mock"], value
+
+    # Given an unknown value — Then RAISE (no silent fallback to a wrong upstream).
+    monkeypatch.setenv("SMOKE_DNS_UPSTREAM", "bogus")
+    with pytest.raises(RuntimeError, match="SMOKE_DNS_UPSTREAM"):
+        h.wire_dns_upstream(vm)  # type: ignore[arg-type]

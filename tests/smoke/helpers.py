@@ -831,6 +831,99 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         )
 
 
+def _mock_dns_upstream_snippet(port: int) -> str:
+    """Build the PHP that wires Unbound's root forward-zone to the mock at ``port``.
+
+    Pure (no VM) so it is unit-testable. pfSense ``base64_decode``s
+    ``unbound/custom_options`` (unbound.inc ``unbound_generate_config_text``), so the
+    forward-zone text is base64-encoded here — a PLAIN value would decode to garbage.
+    Unbound ``forward-addr`` accepts an explicit ``@port``; that is what frees the mock
+    from host ``:53`` and makes parallel sessions (each its own ephemeral port) safe.
+    """
+    forward_zone = f'forward-zone:\n  name: "."\n  forward-addr: {GUEST_TO_HOST_ALIAS}@{port}\n'
+    return (
+        "$u = config_get_path('unbound', array());\n"
+        f"$u['custom_options'] = base64_encode({_php_str(forward_zone)});\n"
+        "unset($u['forwarding']);\n"
+        "unset($u['dnssec']);\n"
+        "config_set_path('unbound', $u);\n"
+        "write_config('pfBlockerNG smoke: mock DNS upstream (custom forward-zone @ephemeral port)');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+
+
+def use_mock_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Point pfSense at the runner-side mock via a custom forward-zone on an EPHEMERAL port.
+
+    The parallel-safe / no-root sibling of :func:`use_system_dns_upstream`. The
+    System-DNS path pins the mock to host ``:53`` (libslirp's port-preserving NAT of
+    ``10.0.2.2:53`` -> runner ``127.0.0.1:53``), which needs root to bind :53 and
+    collides between concurrent VMs. Here the ``stub_dns`` fixture binds an EPHEMERAL
+    port (``vm.upstream_dns_port``) and Unbound forwards the root zone to
+    ``10.0.2.2@<that-port>`` via a custom ``forward-zone`` — the SAME SLIRP host-alias
+    path the mock-feed HTTP server already rides on an arbitrary port:
+
+        guest Unbound --(forward ".")--> 10.0.2.2@<port> (SLIRP host alias)
+            --(NAT, port-preserving)--> 127.0.0.1:<port> (mock)
+
+    So N parallel sessions each use their own ephemeral DNS port and never clash, and
+    no sysctl/sudo is needed. Selected by :func:`wire_dns_upstream` when
+    ``SMOKE_DNS_UPSTREAM=mock`` (the local-run default).
+
+    Config set (idempotent; written + ``services_unbound_configure``):
+      * ``unbound/custom_options`` = a ``forward-zone: name: "."`` to ``10.0.2.2@<port>``.
+        pfSense ``base64_decode``s this field (unbound.inc ``unbound_generate_config_text``),
+        so it is base64-encoded here — a PLAIN value would decode to garbage.
+      * ``unset unbound/forwarding`` — so pfSense does NOT also emit its OWN
+        ``forward-zone "."`` (to the System DNS servers); a duplicate root forward-zone
+        is ambiguous. Our custom "." zone is the sole forwarder.
+      * ``unset unbound/dnssec`` — the mock's answers are unsigned (a validator would
+        mark them bogus / SERVFAIL).
+    """
+    port = vm.upstream_dns_port
+    if not port:
+        raise RuntimeError("use_mock_dns_upstream needs vm.upstream_dns_port — activate the stub_dns fixture first")
+    result = php_eval(vm, _mock_dns_upstream_snippet(port), timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"use_mock_dns_upstream failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # services_unbound_configure restarts Unbound — wait for it before any probe.
+    wait_unbound_ready(vm)
+    # RELAY SELF-CHECK (fail fast): a throwaway name MUST come back as the sentinel
+    # (forward "." -> 10.0.2.2@port -> mock). The FIRST response is authoritative; if it
+    # isn't the sentinel the relay isn't wired — raise NOW rather than time out per-case.
+    probe = unique_domain("mockdnsselfcheck")
+    ans = dns_probe(vm, probe, "A", timeout=10.0, attempts=3, delay=3.0)
+    if not resolves_to(ans, STUB_DNS_A):
+        raise RuntimeError(
+            f"Mock-DNS relay self-check FAILED: {probe} -> {ans} (expected the mock sentinel "
+            f"{STUB_DNS_A}). Unbound forward-zone -> {GUEST_TO_HOST_ALIAS}@{port} (SLIRP host alias) "
+            f"-> runner 127.0.0.1:{port} mock path is not working."
+        )
+
+
+def wire_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Wire pfSense's DNS upstream to the runner-side mock, choosing the path by env.
+
+    ``SMOKE_DNS_UPSTREAM`` selects the wiring (both make the guest resolve every
+    non-local name via the in-runner mock, so the matrix's block/allow assertions hold
+    identically — only the runner-side port binding differs):
+
+      * ``system`` (DEFAULT) — :func:`use_system_dns_upstream`: System DNS = 10.0.2.2,
+        mock on host ``:53``. The CI path; preserved exactly (CI sets nothing, so it
+        keeps using this).
+      * ``mock`` — :func:`use_mock_dns_upstream`: custom forward-zone to an EPHEMERAL
+        port. Parallel-safe and root-free; the LOCAL-run default (README sets it).
+    """
+    mode = (os.environ.get("SMOKE_DNS_UPSTREAM") or "system").strip().lower()
+    if mode == "mock":
+        use_mock_dns_upstream(vm, timeout=timeout)
+    elif mode == "system":
+        use_system_dns_upstream(vm, timeout=timeout)
+    else:
+        raise RuntimeError(f"SMOKE_DNS_UPSTREAM must be 'system' or 'mock', got {mode!r}")
+
+
 # --------------------------------------------------------------------------- #
 # Update hooks (ADR-12) — pre/post command hooks fired from the update pass
 # --------------------------------------------------------------------------- #

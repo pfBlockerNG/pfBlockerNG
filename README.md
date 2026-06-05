@@ -671,25 +671,70 @@ config (see `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt`):
 (and, to match the baked image, `SMOKE_DNSBL_VIP4` / `SMOKE_CONTROL_NAME` /
 `SMOKE_CONTROL_IP`).
 
-### Running it locally
+### Running it locally (Linux, macOS, Windows — incl. in parallel)
 
-Needs `/dev/kvm`, `qemu-system-x86_64` + `qemu-img`, `oras`, `ssh`, and a built
-`.pkg`. Then:
+The suite runs on a developer machine — no GitHub runner needed. You need a
+built `.pkg`, the private pfSense qcow2, and the matching guest SSH key. The
+**accelerator is auto-detected** per host (override with `SMOKE_QEMU_ACCEL`):
+
+| Host | Accelerator | Speed |
+| --- | --- | --- |
+| Linux + `/dev/kvm` | `kvm` | fast |
+| macOS (Intel) | `hvf` | fast |
+| macOS (Apple Silicon) | `tcg` | **slow** — pfSense is amd64-only, so there is no x86 hardware virt on ARM and QEMU falls back to full emulation. Raise `SMOKE_BOOT_TIMEOUT` (e.g. `1800`). |
+| Windows | WSL2 → `kvm` (recommended) or native `whpx` | fast |
+
+Prerequisites: `qemu-system-x86_64` + `qemu-img`, `ssh`, the smoke Python deps
+(`pip install -r tests/smoke/requirements.txt`), and `oras` **only if** the
+fixture has to pull the image (skip it by pointing at a pre-pulled dir, below).
 
 ```sh
 python -m pip install -r tests/smoke/requirements.txt
-export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>   # private GHCR
-export SMOKE_SSH_KEY=/path/to/guest_priv_key                      # mode 600
-export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg                       # from build-pkg
-oras login ghcr.io                                                # for the pull
+# Pull the image ONCE, then point every run at the pulled dir (no re-pull, and
+# safe to share read-only across parallel runs — the base qcow2 is never mutated):
+oras login ghcr.io
+oras pull ghcr.io/<org>/pfsense-ce@sha256:<digest> --output /tmp/pfb-image
+export SMOKE_IMAGE_DIR=/tmp/pfb-image          # one .qcow2 inside (or SMOKE_IMAGE_REF to pull)
+export SMOKE_SSH_KEY=/path/to/guest_priv_key   # mode 600
+export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg    # from build-pkg
+export SMOKE_DNS_UPSTREAM=mock                 # ephemeral-port DNS upstream (see below)
+export SMOKE_BOOT_TIMEOUT=1800                 # only needed for tcg (Apple Silicon)
 python -m pytest tests/smoke -m smoke --override-ini="addopts="
 ```
 
-The fixture pulls the image by `SMOKE_IMAGE_REF` and boots an ephemeral overlay
-(the base qcow2 is never mutated). Missing KVM/secrets/deps → the suite **skips**
-cleanly, never errors. (CI sets `SMOKE_IMAGE_DIR` instead, pointing at the
-pre-pulled image, so the fixture blocks egress after `deploy()` without
-needing another network pull.)
+`SMOKE_DNS_UPSTREAM=mock` is the key local/parallel switch. The CI default
+(`system`) forwards System DNS to the mock on host `:53`, which needs root and
+binds a single host port; `mock` instead wires Unbound to forward the root zone
+to the mock on an **ephemeral** port via a custom forward-zone — no `sudo`, no
+`:53`, so concurrent runs never clash. Leave it unset to reproduce the CI path.
+
+**Web-UI tiers** (ADR-14) run the same way against the same VM — set
+`SMOKE_ADMIN_PASSWORD` and select the tier marker; the browser tier also needs
+`python -m playwright install chromium`:
+
+```sh
+export SMOKE_ADMIN_PASSWORD=<baked admin password>
+python -m pytest tests/smoke/ui -m ui_render  --override-ini="addopts="
+python -m pytest tests/smoke/ui -m ui_browser --override-ini="addopts="   # needs chromium
+```
+
+**Several at once (parallel):** just launch multiple invocations. Each session
+self-allocates its own ephemeral SSH/web/DNS host ports, its own copy-on-write
+overlay, and its own mock-feed/stub-DNS ports, so N runs on one host never
+collide — point them all at the same read-only `SMOKE_IMAGE_DIR`:
+
+```sh
+python -m pytest tests/smoke -m smoke --override-ini="addopts=" &
+python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts=" &
+wait
+```
+
+A missing accelerator is **not** a skip — `tcg` always works (just slowly).
+Missing image/key/deps → the suite **skips** cleanly, never errors. On Windows,
+run inside **WSL2** (its nested KVM gives the Linux `kvm` path plus real Unix
+tooling for the POSIX-`sh` harness); native QEMU+WHPX works but then needs Git
+Bash/MSYS for `sh`. (CI keeps `SMOKE_DNS_UPSTREAM` unset and adds
+`SMOKE_BLOCK_EGRESS=1` for a hermetic run; a local run leaves egress alone.)
 
 ### Rebuilding the image on a CE bump
 

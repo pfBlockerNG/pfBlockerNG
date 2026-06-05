@@ -99,10 +99,11 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     # lo0 sinkhole VIP once for the matrix. dns_probe queries on-box (drill
     # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
     h.ensure_dnsbl_vip(smoke_vm)
-    # Point pfSense at the controlled mock via its System-DNS path BEFORE any per-test
-    # unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the forwarding
-    # config is part of the baseline and the DNSBL reload still adds only python.
-    h.use_system_dns_upstream(smoke_vm)
+    # Point pfSense at the controlled mock (env-selected upstream path: System-DNS on
+    # :53 in CI, or a custom forward-zone on an ephemeral port for local/parallel) BEFORE
+    # any per-test unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the
+    # forwarding config is part of the baseline and the DNSBL reload still adds only python.
+    h.wire_dns_upstream(smoke_vm)
     h.snap_state(smoke_vm, "vip")
     try:
         yield smoke_vm

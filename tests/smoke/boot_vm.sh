@@ -1,17 +1,27 @@
 #!/bin/sh
-# boot_vm.sh — boot a hand-built pfSense CE qcow2 headless under QEMU/KVM
-# for the ADR-04 Phase-1 de-risking spike.
+# boot_vm.sh — boot a hand-built pfSense CE qcow2 headless under QEMU
+# for the ADR-04 live-VM smoke suite.
 #
 # Usage:
 #   tests/smoke/boot_vm.sh <base-image.qcow2> [overlay.qcow2]
 #
-# Boots the image headless with KVM acceleration and a QEMU user-net
-# (SLIRP) host-forward map so the runner can reach the guest:
-#   host 2222/tcp -> guest 22   (SSH)
-#   host 8080/tcp -> guest 80   (WebUI, HTTP)
-#   host 5353/tcp -> guest 53   (DNS, TCP)
-#   host 5353/udp -> guest 53   (DNS, UDP)
+# Boots the image headless with a hardware accelerator (auto-detected, see
+# below) and a QEMU user-net (SLIRP) host-forward map so the runner can reach
+# the guest. The forwarded host ports default to the historical fixed values
+# but are overridable via env so multiple VMs can run in PARALLEL on one host:
+#   host ${SMOKE_SSH_PORT:-2222}/tcp -> guest 22   (SSH)
+#   host ${SMOKE_WEB_PORT:-8080}/tcp -> guest 80   (WebUI, HTTP)
+#   host ${SMOKE_DNS_PORT:-5353}/tcp -> guest 53   (DNS, TCP)
+#   host ${SMOKE_DNS_PORT:-5353}/udp -> guest 53   (DNS, UDP)
 # The guest reaches the runner at the SLIRP host alias 10.0.2.2.
+#
+# Accelerator (cross-platform): SMOKE_QEMU_ACCEL overrides; otherwise it is
+# auto-detected per host — kvm (Linux + /dev/kvm), hvf (macOS, x86 guest only
+# on an Intel Mac), whpx (Windows), else tcg. pfSense ships amd64 ONLY, so an
+# arm64 host (Apple Silicon) has no hardware virt for the x86 guest and falls
+# back to tcg = full emulation: correct but slow (raise SMOKE_BOOT_TIMEOUT).
+# The CPU model pairs with the accel (-cpu host needs kvm/hvf; tcg/whpx use max);
+# SMOKE_QEMU_CPU overrides.
 #
 # Hardware MIRRORS the source Proxmox VM (qm showcmd 103 --pretty) so the
 # published qcow2 boots without pfSense re-detecting hardware and dropping
@@ -19,7 +29,7 @@
 #   - single virtio-net-pci NIC, MAC pinned to BC:24:11:37:9C:AC
 #     (the source VM's MAC; a MAC is not sensitive, so it is hardcoded)
 #   - VirtIO-SCSI disk (guest sees da0)
-#   - machine type pc (i440fx; Proxmox pc+pve0), -cpu host, 2 vCPU, 4 GB RAM
+#   - machine type pc (i440fx; Proxmox pc+pve0), 2 vCPU, 4 GB RAM
 #
 # The base image is NEVER mutated: an ephemeral copy-on-write overlay is
 # created over it and the guest writes only to the overlay. The overlay is
@@ -81,9 +91,16 @@ if [ -z "$QEMU_IMG" ] || [ ! -x "$QEMU_IMG" ]; then
 fi
 
 # Create the ephemeral copy-on-write overlay over the read-only base.
+# The caller (conftest) normally passes a per-instance overlay path under its
+# own pytest tmp dir (parallel isolation + the tmp dir reaps it). For standalone
+# use we mktemp one — with a TRAILING-X template only: BSD/macOS mktemp leaves a
+# non-trailing run of X's literal (a ".XXXXXX.qcow2" template yields a junk name),
+# whereas a trailing-X template is portable across GNU and BSD. The qcow2 format
+# is forced explicitly on both create (-f) and the -drive (format=), so the
+# overlay needs no ".qcow2" suffix for format detection.
 CLEANUP_OVERLAY=0
 if [ -z "$OVERLAY" ]; then
-    OVERLAY="$(mktemp -t pfb-smoke-overlay.XXXXXX.qcow2)"
+    OVERLAY="$(mktemp -t pfb-smoke-overlay.XXXXXX)"
     CLEANUP_OVERLAY=1
 fi
 
@@ -98,25 +115,56 @@ trap cleanup EXIT INT TERM
 # never written. (Equivalent to -snapshot, but explicit + inspectable.)
 "$QEMU_IMG" create -q -f qcow2 -b "$BASE_IMG" -F qcow2 "$OVERLAY" >/dev/null
 
-echo "boot_vm: booting $BASE_IMG via overlay $OVERLAY" >&2
-echo "boot_vm: hostfwd ssh=2222->22 web=8080->80 dns=5353->53(tcp+udp)" >&2
+# Host-forward ports (env-overridable so parallel VMs don't collide; the
+# defaults preserve the historical fixed map for standalone use).
+SSH_PORT="${SMOKE_SSH_PORT:-2222}"
+WEB_PORT="${SMOKE_WEB_PORT:-8080}"
+DNS_PORT="${SMOKE_DNS_PORT:-5353}"
 
-# KVM acceleration is required for a FreeBSD guest at usable speed. The
-# caller (workflow) asserts /dev/kvm before invoking this helper.
-#
+# Pick the accelerator + CPU model. SMOKE_QEMU_ACCEL/SMOKE_QEMU_CPU override;
+# otherwise detect per host. `-accel <name>` generalises the old `-enable-kvm`
+# (which is just `-accel kvm`). Probe the binary's own `-accel help` for hvf/whpx
+# so an arm64 macOS host (x86 binary lists tcg only) correctly falls back to tcg.
+ACCEL="${SMOKE_QEMU_ACCEL:-}"
+if [ -z "$ACCEL" ]; then
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        Linux)
+            if [ -e /dev/kvm ]; then ACCEL=kvm; else ACCEL=tcg; fi ;;
+        Darwin)
+            if "$QEMU" -accel help 2>/dev/null | grep -qw hvf; then ACCEL=hvf; else ACCEL=tcg; fi ;;
+        CYGWIN*|MINGW*|MSYS*|Windows_NT)
+            if "$QEMU" -accel help 2>/dev/null | grep -qw whpx; then ACCEL=whpx; else ACCEL=tcg; fi ;;
+        *)
+            ACCEL=tcg ;;
+    esac
+fi
+# `-cpu host` is only valid with a hardware accelerator (kvm/hvf); tcg/whpx need
+# a concrete model (max = every feature the accel can emulate).
+CPU="${SMOKE_QEMU_CPU:-}"
+if [ -z "$CPU" ]; then
+    case "$ACCEL" in
+        kvm|hvf) CPU=host ;;
+        *) CPU=max ;;
+    esac
+fi
+
+echo "boot_vm: booting $BASE_IMG via overlay $OVERLAY" >&2
+echo "boot_vm: accel=$ACCEL cpu=$CPU hostfwd ssh=${SSH_PORT}->22 web=${WEB_PORT}->80 dns=${DNS_PORT}->53(tcp+udp)" >&2
+[ "$ACCEL" = tcg ] && echo "boot_vm: WARNING tcg (no hardware virt) — boots are SLOW; raise SMOKE_BOOT_TIMEOUT" >&2
+
 # Build the arg list incrementally so the control/diagnostic channel is
 # optional. If QMP_SOCK is set in the environment, expose a QMP control socket
 # there (used by screendump.py to capture the VGA framebuffer of a wedged,
 # headless boot) and keep the serial console on stdio for the run log. If it is
 # unset (local interactive use), mux the monitor + serial on stdio as before.
 set -- \
-    -enable-kvm -machine pc -cpu host \
+    -accel "$ACCEL" -machine pc -cpu "$CPU" \
     -smp "$VM_SMP" -m "$VM_MEM" \
     -smbios "type=1,uuid=${VM_SMBIOS_UUID}" \
     -device virtio-scsi-pci,id=virtioscsi0 \
     -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,cache=unsafe,discard=unmap,detect-zeroes=unmap" \
     -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-    -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80,hostfwd=tcp::5353-:53,hostfwd=udp::5353-:53 \
+    -netdev "user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${WEB_PORT}-:80,hostfwd=tcp::${DNS_PORT}-:53,hostfwd=udp::${DNS_PORT}-:53" \
     -device "virtio-net-pci,mac=${VM_MAC},netdev=net0,id=nic0" \
     -display none
 

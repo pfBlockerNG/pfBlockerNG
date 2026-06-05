@@ -196,6 +196,28 @@ class BootHandle:
     log_file: object = field(repr=False)
 
 
+def _free_ports(n: int, host: str = DEFAULT_HOST) -> list[int]:
+    """Allocate ``n`` distinct free ephemeral TCP ports on ``host``.
+
+    Bind ``:0`` for all ``n`` at once (held open until every port is read) so the
+    kernel hands out distinct ports, then close them. There is a small TOCTOU
+    window between the close and qemu binding the hostfwd, so the caller allocates
+    immediately before boot. This is what lets parallel VMs each get their own
+    ssh/web/dns host ports instead of the fixed 2222/8080/5353 (which collide).
+    """
+    socks: list[socket.socket] = []
+    try:
+        for _ in range(n):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, 0))
+            socks.append(s)
+        return [s.getsockname()[1] for s in socks]
+    finally:
+        for s in socks:
+            s.close()
+
+
 def boot_and_probe(
     base_image: Path,
     ssh_key_path: str,
@@ -205,6 +227,7 @@ def boot_and_probe(
     ssh_port: int = DEFAULT_SSH_PORT,
     web_port: int = DEFAULT_WEB_PORT,
     dns_port: int = DEFAULT_DNS_PORT,
+    overlay_path: Path | None = None,
     boot_timeout: int = DEFAULT_BOOT_TIMEOUT,
 ) -> BootHandle:
     """Boot ``base_image`` and block until the guest is usable.
@@ -223,10 +246,24 @@ def boot_and_probe(
     log_file = log_path.open("wb")
     # boot_vm.sh backgrounds nothing itself (it execs qemu); we background it
     # via Popen and pass its PID to wait_ready.sh so a dead boot is caught fast.
+    # The host ports ride in via env (boot_vm.sh reads SMOKE_{SSH,WEB,DNS}_PORT)
+    # so each parallel VM forwards on its own ports. overlay_path (when given) is
+    # boot_vm.sh's arg 2 — a per-instance CoW overlay under the caller's tmp dir
+    # (parallel isolation + portable: avoids boot_vm.sh's own mktemp).
+    argv = ["sh", str(BOOT_VM_SH), str(base_image)]
+    if overlay_path is not None:
+        argv.append(str(overlay_path))
+    boot_env = {
+        **os.environ,
+        "SMOKE_SSH_PORT": str(ssh_port),
+        "SMOKE_WEB_PORT": str(web_port),
+        "SMOKE_DNS_PORT": str(dns_port),
+    }
     process: subprocess.Popen[bytes] = subprocess.Popen(
-        ["sh", str(BOOT_VM_SH), str(base_image)],
+        argv,
         stdout=log_file,
         stderr=subprocess.STDOUT,
+        env=boot_env,
     )
 
     vm = SmokeVM(
@@ -333,8 +370,13 @@ def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     if not ssh_key_path or not Path(ssh_key_path).is_file():
         pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
 
-    if not Path("/dev/kvm").exists():
-        pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
+    # No hard /dev/kvm gate: boot_vm.sh auto-detects the accelerator (kvm on
+    # Linux+/dev/kvm, hvf on an Intel Mac, whpx on Windows, else tcg). tcg (full
+    # emulation — the only option for an x86 guest on an arm64 host such as Apple
+    # Silicon) is correct but slow, so a missing hardware accel makes the boot
+    # SLOW, not impossible. A developer who wants the old clean-skip behaviour on
+    # a box without virt can still skip by not setting SMOKE_IMAGE_DIR/REF above.
+    # Raise SMOKE_BOOT_TIMEOUT for tcg (see DEFAULT_BOOT_TIMEOUT).
 
     # `oras` is only needed when we have to pull; a pre-pulled SMOKE_IMAGE_DIR
     # run (egress blocked) does not require it.
@@ -354,10 +396,17 @@ def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     else:
         base_image = oras_pull_image(image_ref, work / "image")
 
+    # Allocate distinct ephemeral host ports immediately before boot so parallel
+    # smoke sessions on one host never collide on the fixed 2222/8080/5353.
+    ssh_port, web_port, dns_port = _free_ports(3)
     handle = boot_and_probe(
         base_image,
         ssh_key_path,
         log_path=work / "vm.log",
+        ssh_port=ssh_port,
+        web_port=web_port,
+        dns_port=dns_port,
+        overlay_path=work / "overlay.qcow2",
         boot_timeout=DEFAULT_BOOT_TIMEOUT,
     )
     try:
