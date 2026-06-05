@@ -13,9 +13,12 @@ name: Repo install (ADR-17, live pfSense VM)
 # `smoke`. The `repo` tests are deselected from `-m smoke`, so the smoke gate never
 # runs them and this never runs the smoke matrix.
 #
-# workflow_dispatch only (same posture as smoke.yml — not an every-PR gate yet).
-# Secrets + required config are smoke.yml's (SMOKE_IMAGE_REF / SMOKE_GHCR_* /
-# SMOKE_SSH_PRIV_KEY); `secrets: inherit` forwards them.
+# TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
+# is GATED — it only proceeds when `devel` actually moved since the previous nightly
+# (no point rebuilding the branch .pkg + booting a VM to re-test unchanged code; the
+# real version push, repo-publish, runs only on release tags). Not an every-PR gate (a
+# live VM under KVM is ~15 min). Secrets + required config are smoke.yml's
+# (SMOKE_IMAGE_REF / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY); `secrets: inherit` forwards them.
 
 on:
   workflow_dispatch:
@@ -24,13 +27,48 @@ on:
         description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
         required: false
         default: ""
+  schedule:
+    # 08:00 UTC nightly — staggered after ui-tests (05), version-tracker (06) and
+    # smoke-fanout (07) so the KVM runs don't pile up. Gated on `devel` having changed.
+    - cron: "0 8 * * *"
 
 permissions:
   contents: read
   packages: read
 
 jobs:
+  # On a `schedule`, run only if `devel` got a commit in the lookback window — skip an
+  # otherwise-wasted ~15-min VM run when nothing changed. A manual dispatch always runs.
+  gate:
+    name: Gate (skip nightly if devel unchanged)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Event '${{ github.event_name }}' — always runs."
+            exit 0
+          fi
+          # 25h lookback (> the 24h cron interval, a margin against scheduler jitter).
+          since="$(date -u -d '25 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          n="$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.ref_name }}&since=${since}" --jq 'length')"
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "${n} commit(s) to ${{ github.ref_name }} since ${since} — running the nightly repo smoke."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No commits to ${{ github.ref_name }} since ${since} — skipping the nightly repo smoke."
+          fi
+
   repo-install:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     uses: ./.github/workflows/smoke.yml
     with:
       image_ref: ${{ inputs.image_ref }}
