@@ -32,6 +32,7 @@ use PHPUnit\Framework\TestCase;
  *   * single member;  result is sorted.
  */
 #[CoversFunction('pfb_aggregate_member_list')]
+#[CoversFunction('pfb_member_file_is_placeholder_only')]
 final class AggregateMemberListTest extends TestCase
 {
 	/** @var string Per-test sandbox root; one fresh dir tree per test. */
@@ -48,6 +49,10 @@ final class AggregateMemberListTest extends TestCase
 		$GLOBALS['pfb']['permitdir'] = "{$this->root}/permit";
 		$GLOBALS['pfb']['matchdir']  = "{$this->root}/match";
 		$GLOBALS['pfb']['nativedir'] = "{$this->root}/native";
+		// Default: no placeholder configured -> the placeholder-only filter is a no-op, so
+		// every membership test that does not opt in is unaffected. The placeholder test sets
+		// it explicitly. Unset here for isolation (PHPUnit shares $GLOBALS across tests).
+		unset($GLOBALS['pfb']['ip_ph']);
 	}
 
 	protected function tearDown(): void
@@ -68,6 +73,14 @@ final class AggregateMemberListTest extends TestCase
 	{
 		$path = "{$GLOBALS['pfb'][$dir]}/{$name}";
 		$this->assertNotFalse(@file_put_contents($path, ''), "could not create {$path}");
+		return $path;
+	}
+
+	/** Write <content> to <dir>/<name>, asserting the write succeeded; return the path. */
+	private function writeMember(string $dir, string $name, string $content): string
+	{
+		$path = "{$GLOBALS['pfb'][$dir]}/{$name}";
+		$this->assertNotFalse(@file_put_contents($path, $content), "could not write {$path}");
 		return $path;
 	}
 
@@ -284,5 +297,36 @@ final class AggregateMemberListTest extends TestCase
 
 		$got = pfb_aggregate_member_list('Deny', 'v4');
 		$this->assertSame([$a, $m, $z], $got, 'members returned in sorted (ascending path) order');
+	}
+
+	/**
+	 * A placeholder-ONLY member file is EXCLUDED from the union. pfBlockerNG pads a zero-IP /
+	 * failed feed (and an empty DNSBLIP file) with the synthetic $pfb['ip_ph'] -- '::'-prefixed
+	 * for v6 -- so the per-alias file is never empty (inc:9901 / :10841); that internal hack
+	 * must not pollute pfB_<Type>_Aggregated_<fam> with the fake IP. Only placeholder-ONLY
+	 * files are dropped: a file mixing the placeholder with a real IP is kept, and a real-IP
+	 * file is kept. Both the v4 and the '::'-prefixed v6 placeholder forms are covered. The
+	 * contrast within one dir (placeholder file dropped, real/mixed files survive) is the
+	 * before/after.
+	 */
+	public function testPlaceholderOnlyMembersAreExcluded(): void
+	{
+		$GLOBALS['pfb']['ip_ph'] = '127.1.7.7';
+
+		// v4: a real feed, an empty-feed placeholder, and a placeholder+real mix.
+		$real  = $this->writeMember('denydir', 'realfeed_v4.txt', "198.51.100.7\n");
+		$this->writeMember('denydir', 'emptyfeed_v4.txt', "127.1.7.7\n");                  // placeholder-only -> dropped
+		$mixed = $this->writeMember('denydir', 'mixed_v4.txt', "127.1.7.7\n203.0.113.9\n"); // a real IP present -> kept
+
+		// glob sorts: emptyfeed, mixed, realfeed; after dropping the placeholder-only file: [mixed, real].
+		$this->assertSame([$mixed, $real], pfb_aggregate_member_list('Deny', 'v4'),
+			'v4: placeholder-only dropped; real + mixed kept');
+
+		// v6: the placeholder is '::'-prefixed.
+		$realv6 = $this->writeMember('denydir', 'realfeed_v6.txt', "2001:db8::1\n");
+		$this->writeMember('denydir', 'emptyfeed_v6.txt', "::127.1.7.7\n");                 // placeholder-only -> dropped
+
+		$this->assertSame([$realv6], pfb_aggregate_member_list('Deny', 'v6'),
+			'v6: ::-prefixed placeholder dropped; real kept');
 	}
 }

@@ -1206,6 +1206,53 @@ def inject(vm: SmokeVM, spec: DnsblCase | IpCase, *, timeout: float = 90.0) -> N
         raise RuntimeError(f"inject failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+def _ip_list_php(spec: IpCase) -> str:
+    """One IP list-group as a PHP assoc-array literal (aliasname/action/cron + its 'row')."""
+    base = ", ".join(
+        f"{_php_str(k)} => {_php_str(v)}"
+        for k, v in (("aliasname", spec.aliasname), ("action", spec.action), ("cron", "EveryDay"))
+    )
+    row = {"header": spec.header, "url": spec.feed_url, "state": "Enabled", "format": "auto"}
+    return f"array({base}, 'row' => array({_php_kv_array(row)}))"
+
+
+def inject_ip_lists(vm: SmokeVM, specs: list[IpCase], *, timeout: float = 90.0) -> None:
+    """Inject MULTIPLE IP lists in ONE config write, preserving every one.
+
+    ``inject()`` (via ``_ip_inject_snippet``) writes a SINGLE-element array to a family's
+    list-config root (``config_set_path(root, array($list))``), so calling it twice for the
+    SAME family REPLACES the first list with the second. When a test needs two same-family
+    lists to coexist -- e.g. a Deny + a Permit IPv4 feed for the additive-combination
+    aggregate test -- use this: it groups the specs by family root and writes each root with
+    ALL its list groups at once (and still sets enable_cb + the inbound/outbound interface,
+    like ``inject``). Control records are applied first, per IpCase, mirroring ``inject``.
+    """
+    for spec in specs:
+        set_control_records(vm, spec.control_local_data, spec.control_local_zone, timeout=timeout)
+    by_root: dict[str, list[str]] = {}
+    for spec in specs:
+        root = CFG_IP_V6_LISTS if spec.family == "v6" else CFG_IP_V4_LISTS
+        by_root.setdefault(root, []).append(_ip_list_php(spec))
+    ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
+    set_roots = "".join(
+        f"config_set_path({_php_str(root)}, array({', '.join(groups)}));\n" for root, groups in by_root.items()
+    )
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$g['enable_cb'] = 'on';\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
+        f"{set_roots}"
+        "write_config('pfBlockerNG smoke: IP cases');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"inject_ip_lists failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings = _dnsbl_mode_settings(spec.mode)
     settings["pfb_dnsbl"] = "on"
