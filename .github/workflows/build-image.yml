@@ -91,44 +91,63 @@ jobs:
   # ── 0. Map the target CE version to its FreeBSD base + PHP runtime ────────
   # The branch .pkg MUST be built against the FreeBSD ABI + PHP runtime of the
   # target pfSense CE version (else `pkg add` ABI-mismatches / the wrong PHP is
-  # pinned). This job is the single source of truth for that mapping: it derives
-  # freebsd_version + php_version from inputs.pfsense_ce_version and HARD-FAILS on
-  # any unmapped version, so the build-pkg job can never silently inherit defaults
-  # that match only CE 2.8.1 (issue #22). It runs first and is cheap (no KVM), so
-  # an unknown version fails in seconds — before the 90-min publish job starts.
+  # pinned). This job derives (freebsd_version, php_version) by looking up the
+  # input CE version in the decoupled supported-versions matrix on the
+  # ci-metadata orphan ref (ADR-09 Phase 2). It HARD-FAILS on any version not
+  # present in the matrix — the same reject-unknown contract as the former
+  # hardcoded case-map (issue #22), now with ONE place to add a version:
+  # edit supported-versions.json on ci-metadata; no workflow change needed.
+  # Runs first and is cheap (no KVM), so an unknown version fails in seconds.
   resolve-version:
     name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      freebsd_version: ${{ steps.map.outputs.freebsd_version }}
-      php_version: ${{ steps.map.outputs.php_version }}
+      freebsd_version: ${{ steps.lookup.outputs.freebsd_version }}
+      php_version: ${{ steps.lookup.outputs.php_version }}
     steps:
-      - name: Map pfsense_ce_version -> (freebsd_version, php_version)
-        id: map
+      - name: Checkout (for scripts/read-version-matrix.sh)
+        uses: actions/checkout@v6
+
+      - name: Look up pfsense_ce_version in the supported-version matrix
+        id: lookup
         env:
           CE_VERSION: ${{ inputs.pfsense_ce_version }}
         run: |
           set -eu
-          # Adding a new supported CE version REQUIRES a new case arm here.
-          # Keep in sync with docs/misc/pfSense_versions.md (the per-version base
-          # facts: FreeBSD base + PHP). 2.8.0 and 2.8.1 share the same toolchain,
-          # so the whole 2.8.x line maps to one base.
-          case "$CE_VERSION" in
-            2.8.*)
-              FREEBSD_VERSION="15.0-RELEASE"
-              PHP_VERSION="8.3"
-              ;;
-            *)
-              echo "::error::no FreeBSD/PHP mapping for pfSense CE '${CE_VERSION}'. Add a case arm in build-image.yml (resolve-version job) and update docs/misc/pfSense_versions.md before publishing this version."
-              exit 1
-              ;;
-          esac
+          # Fetch ci-metadata and read the matrix JSON.
+          git fetch origin ci-metadata
+          MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
+
+          # Find the CE entry whose pfsense_version pattern matches CE_VERSION.
+          # "2.8.x" matches "2.8.0", "2.8.1", etc.: strip trailing ".x" from the
+          # matrix key to get a prefix, then test CE_VERSION starts with it.
+          # An exact match (no ".x" suffix) is also accepted.
+          # Exit 2 = no matching entry -> hard-fail with actionable error message.
+          MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$CE_VERSION" '
+            .versions[]
+            | select(.channel == "CE")
+            | . as $e
+            | select(
+                ($e.pfsense_version | endswith(".x") and ($ver | startswith($e.pfsense_version[:-1])))
+                or $e.pfsense_version == $ver
+              )
+          ' 2>/dev/null | jq -s '.[0] // empty')" || true
+
+          if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
+            printf '::error::no FreeBSD/PHP mapping for pfSense CE '"'"'%s'"'"' in supported-versions.json on ci-metadata. Add a CE entry with a matching pfsense_version (e.g. '"'"'%s.x'"'"') and update docs/misc/pfSense_versions.md before publishing this version.\n' \
+              "$CE_VERSION" "$(printf '%s' "$CE_VERSION" | cut -d. -f1,2)"
+            exit 1
+          fi
+
+          FREEBSD_VERSION="$(printf '%s' "$MATCH" | jq -r '.freebsd_version')"
+          PHP_VERSION="$(printf '%s' "$MATCH" | jq -r '.php_version')"
           {
-            echo "freebsd_version=${FREEBSD_VERSION}"
-            echo "php_version=${PHP_VERSION}"
+            printf 'freebsd_version=%s\n' "$FREEBSD_VERSION"
+            printf 'php_version=%s\n' "$PHP_VERSION"
           } >> "$GITHUB_OUTPUT"
-          echo "CE ${CE_VERSION} -> FreeBSD ${FREEBSD_VERSION}, PHP ${PHP_VERSION}"
+          printf 'CE %s -> FreeBSD %s, PHP %s (from ci-metadata matrix)\n' \
+            "$CE_VERSION" "$FREEBSD_VERSION" "$PHP_VERSION"
 
   # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
   publish-image:

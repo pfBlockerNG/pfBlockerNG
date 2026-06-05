@@ -1,0 +1,50 @@
+name: Read version matrix
+description: >
+  Read supported-versions.json from the ci-metadata orphan ref and emit
+  two workflow output matrices: the BUILD matrix (all entries with their
+  (freebsd_version, php_version) pair) and the CI matrix (ci:true CE
+  entries only). Pure read — no writes anywhere.
+
+inputs:
+  ref:
+    description: >
+      Git ref to fetch the matrix from. Defaults to 'origin/ci-metadata'.
+      Override for testing (e.g. point at a local branch).
+    required: false
+    default: "origin/ci-metadata"
+  matrix_file:
+    description: >
+      Path to the JSON matrix file on the ref. Defaults to
+      'supported-versions.json'.
+    required: false
+    default: "supported-versions.json"
+
+outputs:
+  build_matrix:
+    description: >
+      JSON array of all supported entries, each carrying its full
+      (freebsd_version, php_version) pair plus pfsense_version, channel,
+      freebsd_major, py_flavor, status, and ci. Artifacts dedup by distinct
+      freebsd_major (one .pkg per ABI) — that dedup is the caller's job.
+    value: ${{ steps.read.outputs.build_matrix }}
+  ci_matrix:
+    description: >
+      JSON array of the ci:true CE entries only. Feed this into a
+      strategy.matrix job to fan out the smoke suite across all supported
+      CE versions.
+    value: ${{ steps.read.outputs.ci_matrix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read matrix from ci-metadata
+      id: read
+      shell: sh
+      env:
+        MATRIX_REF: ${{ inputs.ref }}
+        MATRIX_FILE: ${{ inputs.matrix_file }}
+      run: |
+        sh "${{ github.action_path }}/../../scripts/read-version-matrix.sh" \
+          --ref "$MATRIX_REF" \
+          --file "$MATRIX_FILE" \
+          --github-output

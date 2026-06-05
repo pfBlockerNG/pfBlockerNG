@@ -25,12 +25,14 @@ Observed on a CE **2.8.1** box; 2.8.0 shares the same base toolchain.
 | pkg | 1.21.x |
 | Unbound | 1.24.x |
 
-> **The FreeBSD base + PHP row above is also encoded in CI.** The
-> `resolve-version` job in `.github/workflows/build-image.yml` maps
-> `pfsense_ce_version → (freebsd_version, php_version)` so the branch `.pkg` is
-> built against the right ABI/runtime, and hard-fails on any unmapped version.
-> When adding a new supported CE version, add a `case` arm there alongside the
-> table here (issue #22).
+> **The FreeBSD base + PHP row above is also encoded in the supported-version
+> matrix.** `supported-versions.json` on the `ci-metadata` orphan ref is the
+> **single source of truth**: it carries the `(freebsd_version, php_version)` pair
+> per pfSense version and is read at runtime by every workflow, including the
+> `resolve-version` job in `.github/workflows/build-image.yml` (which hard-fails on
+> any unmapped version — the reject-unknown contract from issue #22 is preserved).
+> When adding a new supported CE version, add an entry to `supported-versions.json`
+> on `ci-metadata` **and** update the table here. No workflow edit needed.
 
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
