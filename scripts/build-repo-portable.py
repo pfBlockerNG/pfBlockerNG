@@ -87,11 +87,11 @@ META_CONF = (
 # (expanded by pkg, not the shell), so one conf follows the box across an OS
 # upgrade; priority 100 sits above the base Netgate `pfSense` repo (priority 0) —
 # Phase 1 proved priority dominates version, so this is the precedence lever.
-# The published GitHub Pages base. The repo deploys to a Pages site served at a
-# CUSTOM DOMAIN (gh api repos/.../pages -> html_url http://brait.dev/pfBlockerNG/);
-# we serve over HTTPS, so the base is https://brait.dev/pfBlockerNG. Kept identical
+# The published GitHub Pages base — the repo's standard project Pages URL
+# (gh api repos/.../pages -> html_url https://andrebrait.github.io/pfBlockerNG/);
+# we serve over HTTPS, so the base is https://andrebrait.github.io/pfBlockerNG. Kept identical
 # to scripts/build-repo.sh DEFAULT_BASE_URL so the two generators stay byte-equal.
-DEFAULT_BASE_URL = "https://brait.dev/pfBlockerNG"
+DEFAULT_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
 CONF_PRIORITY = 100
 
 

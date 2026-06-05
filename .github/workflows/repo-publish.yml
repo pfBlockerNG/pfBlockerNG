@@ -228,4 +228,4 @@ jobs:
       - name: Report the published URL
         run: |
           echo "Deployed pkg repository to: ${{ steps.deploy.outputs.page_url }}"
-          echo "Client conf url (per ABI): https://brait.dev/pfBlockerNG/\${ABI}"
+          echo "Client conf url (per ABI): https://andrebrait.github.io/pfBlockerNG/\${ABI}"

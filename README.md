@@ -719,7 +719,7 @@ equivalent inline conf write (what the script emits) is:
 ```sh
 cat > /usr/local/etc/pkg/repos/pfblockerng-devel.conf <<'EOF'
 pfblockerng-devel: {
-  url: "https://brait.dev/pfBlockerNG/${ABI}",
+  url: "https://andrebrait.github.io/pfBlockerNG/${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: 100,
@@ -761,8 +761,8 @@ published version/ABI is retained for free and a rollback is a re-deploy.
   2.8 and Plus 25.03 share it). The client conf's literal `${ABI}` lets one conf follow the
   box across a pfSense OS upgrade.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
-  catalog is served at the custom-domain Pages URL
-  **`https://brait.dev/pfBlockerNG/${ABI}`** — the same base
+  catalog is served at the project's GitHub Pages URL
+  **`https://andrebrait.github.io/pfBlockerNG/${ABI}`** — the same base
   [`add-repo.sh`](scripts/add-repo.sh) writes (above).
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`

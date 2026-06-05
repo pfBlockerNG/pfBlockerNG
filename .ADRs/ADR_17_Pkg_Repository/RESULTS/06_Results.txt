@@ -33,7 +33,7 @@ and DOMINATES version — a higher-priority repo wins even at a LOWER version
     same-name Netgate build by priority even when theirs is newer (blast radius =
     our own package, the catalog carries only pfBlockerNG).
   * Trust-anchor host corrected github.io -> the custom-domain Pages host
-    brait.dev (§2 Trust model + §3 Authenticity) — the real served host (P3b).
+    andrebrait.github.io (§2 Trust model + §3 Authenticity) — the real served host (P3b).
   * Stale filename/marker fixed throughout: test_smoke_repo.py (marker `smoke`) ->
     tests/smoke/test_repo_install.py (marker `repo`, deselected from -m smoke) in
     the header block + the Phase-1/5 action-plan lines; the primary generator
@@ -48,7 +48,7 @@ README.md — new H3 "How the `pkg` repository is published (GitHub Pages)" at t
   one-liner is NOT duplicated — the new subsection cross-references the section
   above it): a DERIVED index REGENERATED over all Release `.pkg` each deploy,
   per-`<ABI>/` tree, NONE-signed/TLS-anchored, served at
-  https://brait.dev/pfBlockerNG/${ABI}; the two generators (build-repo-portable.py
+  https://andrebrait.github.io/pfBlockerNG/${ABI}; the two generators (build-repo-portable.py
   primary, build-repo.sh fallback + single --print-conf source); additive+isolated
   repo-publish job. The honest GUI caveat + deferred GUI panel were ALREADY in the
   install section above (Phase 4) — the new subsection points at them, not restates.
@@ -60,7 +60,7 @@ CLAUDE.md — new H3 "Self-hosted `pkg` repository (ADR-17)" under "Branches and
       on Linux) + repo-publish-freebsd.yml (FreeBSD-VM fallback, build-repo.sh +
       real pkg repo); the `repo-publish` job in release.yml (additive, if:always(),
       leaf in needs:, isolated like attach-pkgs); Pages deploy at
-      brait.dev/pfBlockerNG/${ABI}; pages:write + id-token:write scoped to deploy.
+      andrebrait.github.io/pfBlockerNG/${ABI}; pages:write + id-token:write scoped to deploy.
     * generators + bootstrap: build-repo-portable.py (primary), build-repo.sh
       (fallback + --print-conf template), add-repo.sh (client bootstrap, channel
       arg, priority 100); conf byte-identical, drift-pinned.
@@ -85,7 +85,7 @@ GREEN on the live pfSense CE VM via tests/smoke/test_repo_install.py (marker rep
                                             run 27031334263 (P1). Both directions.
   [x] pkg update accepts the catalog      -> build-repo.sh catalog run 27033922928 (P2)
                                             + portable catalog run 27035602221 (P3a),
-                                            hermetic file://. The real brait.dev leg
+                                            hermetic file://. The real andrebrait.github.io leg
                                             (test_install_from_live_pages_url) is gated
                                             + post-merge.
   [x] Upgrade to our newer build          -> test_pkg_upgrade_moves_to_our_newer_build
@@ -116,14 +116,14 @@ STATUS + THE POST-MERGE ACCEPT STEP
 --------------------------------------------------------------------------------
 Status set: Proposed -> **Implemented (pending the post-merge live Pages deploy +
 the gated live-URL verification)**. HONEST — the hermetic affected-flow smoke
-(install / precedence / upgrade) is GREEN on the live VM, but the public brait.dev
+(install / precedence / upgrade) is GREEN on the live VM, but the public andrebrait.github.io
 Pages deploy has NOT physically run, so NOT Accepted.
 
 Flips to ACCEPTED post-merge (a GitHub constraint: a brand-new workflow_dispatch
 workflow is only dispatchable once it lands on the default branch `devel`):
   1. gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true
      -> deploys the catalog to Pages (capture run id + page_url).
-  2. Dispatch the `repo` smoke with SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG
+  2. Dispatch the `repo` smoke with SMOKE_REPO_LIVE_URL=https://andrebrait.github.io/pfBlockerNG
      set so test_install_from_live_pages_url runs (polls the served catalog, pins
      the Pages anycast IPs, writes our production conf, `pkg install` no -f,
      asserts %R == pfblockerng-devel). Green there confirms the live URL -> Accepted.

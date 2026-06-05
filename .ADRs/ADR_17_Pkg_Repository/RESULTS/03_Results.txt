@@ -81,21 +81,21 @@ PUBLISHED PAGES URL + THE ${ABI} BASE IT EXPOSES
 --------------------------------------------------------------------------------
 GitHub Pages is build_type=workflow (deploy via Actions) on andrebrait/pfBlockerNG
 and serves a CUSTOM DOMAIN: `gh api repos/andrebrait/pfBlockerNG/pages` ->
-  html_url = "http://brait.dev/pfBlockerNG/"  (cname:null, https_enforced:false).
+  html_url = "http://andrebrait.github.io/pfBlockerNG/"  (cname:null, https_enforced:false).
 We serve over HTTPS, so the published base is:
 
-    https://brait.dev/pfBlockerNG/${ABI}
+    https://andrebrait.github.io/pfBlockerNG/${ABI}
 
 Phase 2's conf template hardcoded the github.io URL; FIXED to the real Pages base
 in BOTH generators (the SINGLE source the client conf comes from):
-  * scripts/build-repo.sh        DEFAULT_BASE_URL="https://brait.dev/pfBlockerNG"
-  * scripts/build-repo-portable.py DEFAULT_BASE_URL = "https://brait.dev/pfBlockerNG"
+  * scripts/build-repo.sh        DEFAULT_BASE_URL="https://andrebrait.github.io/pfBlockerNG"
+  * scripts/build-repo-portable.py DEFAULT_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
   --print-conf from both is BYTE-IDENTICAL and emits:
-      url: "https://brait.dev/pfBlockerNG/${ABI}"
+      url: "https://andrebrait.github.io/pfBlockerNG/${ABI}"
   ${ABI} is the literal pkg(8) variable (expanded by pkg, NOT the shell — the
   URL-encoding gate passes); it auto-follows the box's ABI across an OS upgrade.
   --base-url still overrides for a fork/staging host.
-The unit pin tests/test_build_repo_portable.py was updated to assert the brait.dev
+The unit pin tests/test_build_repo_portable.py was updated to assert the andrebrait.github.io
 URL (and the --base-url override case is unchanged).
 
 TODAY exactly ONE ABI is published: FreeBSD:15:amd64 (CE 2.8 + Plus 25.03 both
@@ -140,14 +140,14 @@ builder (pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg, 1801870 bytes, 68 files):
 THE LIVE-URL VM TEST (added, dispatch-only, gated):
   tests/smoke/test_repo_install.py :: test_install_from_live_pages_url (marker
   `repo`, @timeout(900)). GATED on env SMOKE_REPO_LIVE_URL (unset -> SKIP; set to
-  https://brait.dev/pfBlockerNG or a bare 1/true for the default). It:
+  https://andrebrait.github.io/pfBlockerNG or a bare 1/true for the default). It:
     1. RUNNER BACKSTOP: poll_catalog_served() polls
        <base>/FreeBSD:15:amd64/{meta.conf,packagesite.pkg} until both serve 200
        (absorbs first-deploy + DNS/cert lag, ~30x10s).
-    2. Pins GitHub Pages' anycast IPs (185.199.108-111.153) for brait.dev in the
+    2. Pins GitHub Pages' anycast IPs (185.199.108-111.153) for andrebrait.github.io in the
        guest /etc/hosts — the smoke harness sandboxes guest DNS to a mock that only
        answers uuid-*.com, so the custom domain won't resolve; the static hosts
-       entry routes pkg's HTTPS fetch by IP while TLS SNI still presents brait.dev
+       entry routes pkg's HTTPS fetch by IP while TLS SNI still presents andrebrait.github.io
        (the custom-domain cert validates). Egress is OPEN for this flow
        (_ensure_egress_open), so Pages is reachable.
     3. Writes OUR production conf from build-repo-portable.py --print-conf
@@ -160,7 +160,7 @@ THE LIVE-URL VM TEST (added, dispatch-only, gated):
     a) gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true
        -> watch it deploy to Pages (capture run id + page_url).
     b) Dispatch repo-install.yml (it calls smoke.yml -m repo) WITH
-       SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG exported to the run env
+       SMOKE_REPO_LIVE_URL=https://andrebrait.github.io/pfBlockerNG exported to the run env
        (add it as a repo variable, or extend repo-install.yml with the input) so
        test_install_from_live_pages_url runs instead of skipping. Green there is
        the real-URL VM proof; the runner-side poll_catalog_served is the backstop.
@@ -202,8 +202,8 @@ DELIVERABLES
     attach-pkgs (needs build/release jobs, if:always(), uses the reusable). All
     other jobs UNTOUCHED.
   * scripts/build-repo.sh + scripts/build-repo-portable.py — DEFAULT_BASE_URL fixed
-    github.io -> https://brait.dev/pfBlockerNG (the single conf source).
-  * tests/test_build_repo_portable.py           — conf-URL pin updated to brait.dev.
+    github.io -> https://andrebrait.github.io/pfBlockerNG (the single conf source).
+  * tests/test_build_repo_portable.py           — conf-URL pin updated to andrebrait.github.io.
   * tests/smoke/test_repo_install.py            — +test_install_from_live_pages_url
     (dispatch-only, gated on SMOKE_REPO_LIVE_URL) + helpers (poll_catalog_served,
     pin_pages_hosts, write_live_repo_conf). The 5 existing repo tests UNCHANGED.
@@ -211,11 +211,11 @@ DELIVERABLES
 --------------------------------------------------------------------------------
 WHAT PHASE 4 (add-repo.sh) SHOULD POINT url: AT
 --------------------------------------------------------------------------------
-  url: "https://brait.dev/pfBlockerNG/${ABI}"
+  url: "https://andrebrait.github.io/pfBlockerNG/${ABI}"
 
 add-repo.sh + the README MUST reuse the single conf source — emit it from
 `scripts/build-repo.sh --print-conf` (or build-repo-portable.py --print-conf;
-byte-identical), which now defaults to the brait.dev base. Keep ${ABI} literal
+byte-identical), which now defaults to the andrebrait.github.io base. Keep ${ABI} literal
 (pkg expands it), signature_type none, priority above the Netgate pfSense repo
 (template ships 100; add-repo.sh MAY recompute live as effective-pfSense-priority
 + 100, the way the Phase-1 smoke does). The conf name is pfblockerng-devel.conf
@@ -226,7 +226,7 @@ GO-AHEAD / NEXT (Phase 4)
 --------------------------------------------------------------------------------
 Phase 3 = GO. The publish pipeline (pure-Python primary + FreeBSD-VM fallback) is
 additive + isolated and proven to emit a served-ready, VM-acceptable catalog at
-https://brait.dev/pfBlockerNG/${ABI}; the live-URL dispatch + VM proof is the one
+https://andrebrait.github.io/pfBlockerNG/${ABI}; the live-URL dispatch + VM proof is the one
 post-merge step (untriggerable until the workflow is on `devel`). Phase 4 writes
-scripts/add-repo.sh (the client bootstrap) pointing url: at the brait.dev ${ABI}
+scripts/add-repo.sh (the client bootstrap) pointing url: at the andrebrait.github.io ${ABI}
 base above, reusing the single --print-conf conf source + the README one-liner.

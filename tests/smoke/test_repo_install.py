@@ -135,25 +135,25 @@ PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable
 # user-facing script: it writes the production repo conf, runs ``pkg update``, and
 # verifies the package is visible from OUR repo. Here it is staged to the guest and
 # driven against the LOCAL file:// catalog via its existing ``--base-url`` override
-# (hermetic; the brait.dev default + a live add-repo.sh run are a post-deploy note),
+# (hermetic; the github.io default + a live add-repo.sh run are a post-deploy note),
 # proving the SHIPPED bootstrap — not just a hand-written conf — installs our build.
 ADD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "add-repo.sh"
 GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
-# deploys the catalog to a Pages site served at the CUSTOM DOMAIN brait.dev (gh api
-# repos/.../pages -> html_url http://brait.dev/pfBlockerNG/); we serve over HTTPS.
+# deploys the catalog to the repo's standard project Pages URL (gh api
+# repos/.../pages -> html_url https://andrebrait.github.io/pfBlockerNG/); we serve over HTTPS.
 # This dispatch-only test proves a REAL pfSense box `pkg update`/`pkg install`
 # against the LIVE https URL (not file://) — the maintainer's real-URL check. It is
 # GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
 # always-on proof; the live URL only exists once the deploy has run).
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
-DEFAULT_LIVE_BASE_URL = "https://brait.dev/pfBlockerNG"
+DEFAULT_LIVE_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
 GUEST_ABI = "FreeBSD:15:amd64"  # the single supported ABI (CE 2.8 + Plus 25.03)
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
-# only answers `uuid-*.com`, so `brait.dev` does not resolve on the guest. Pinning
+# only answers `uuid-*.com`, so `andrebrait.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
-# (TLS SNI still presents `brait.dev`, so the custom-domain cert validates) without
+# (TLS SNI still presents `andrebrait.github.io`, validated by GitHub's *.github.io cert) without
 # touching the resolver. Egress is OPEN for this flow (_ensure_egress_open).
 PAGES_IPS = ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153")
 
@@ -331,7 +331,7 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
 
     Drives the real client bootstrap on the box: it writes the production conf to
     ``/usr/local/etc/pkg/repos/pfblockerng-devel.conf`` (here pointed at a local
-    ``file://`` catalog via the script's own ``--base-url`` override — the brait.dev
+    ``file://`` catalog via the script's own ``--base-url`` override — the github.io
     default and a live HTTPS add-repo.sh run are a post-deploy note), runs ``pkg
     update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
     verify step failing) raises with the captured output. ``base_url`` points at the
@@ -901,7 +901,7 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     then installs OUR build (no ``-f``) — the real client path, not a hand-written conf.
 
     add-repo.sh is run hermetically against a LOCAL ``file://`` catalog via its own
-    ``--base-url`` override; the brait.dev default + a live HTTPS add-repo.sh run are
+    ``--base-url`` override; the github.io default + a live HTTPS add-repo.sh run are
     the post-deploy/Phase-6 note. The catalog is laid out by ``build-repo.sh`` under
     ``<root>/<ABI>/`` so add-repo.sh's literal ``${ABI}`` url resolves to it. The
     script ships priority 100, above the Netgate ``pfSense`` repo (0), so cross-repo
@@ -1000,7 +1000,7 @@ def _live_base_url() -> str | None:
     """The live Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
-    ``https://brait.dev/pfBlockerNG``) to run the live check after a publish
+    ``https://andrebrait.github.io/pfBlockerNG``) to run the live check after a publish
     dispatch; leave it unset and the test SKIPS (the always-on proof is the
     file:// VM-acceptance above). A bare ``1``/``true`` selects the default base.
     """
@@ -1041,9 +1041,9 @@ def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> None:
     """Pin GitHub Pages' anycast IPs for ``host`` in the guest ``/etc/hosts``.
 
     The smoke harness sandboxes guest DNS to a mock answering only ``uuid-*.com``,
-    so the custom domain does not resolve on the box. A static ``/etc/hosts`` entry
+    so the Pages host does not resolve on the box. A static ``/etc/hosts`` entry
     routes ``pkg``'s HTTPS fetch to Pages by IP while TLS SNI still presents ``host``
-    (the custom-domain cert validates). Idempotent: the entry is removed first.
+    (GitHub's *.github.io cert validates). Idempotent: the entry is removed first.
     """
     # Remove any prior pin for this exact host, then append the fresh one. The line
     # is `<ip> <host>` (the first listed Pages IP suffices; pkg follows the cert).
@@ -1099,7 +1099,7 @@ def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: 
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
-    over its public HTTPS ``https://brait.dev/pfBlockerNG/${ABI}`` URL (no ``-f``).
+    over its public HTTPS ``https://andrebrait.github.io/pfBlockerNG/${ABI}`` URL (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
     proof is the file:// VM-acceptance above; this exercises the REAL transport the

@@ -154,6 +154,6 @@ Phase 5 = GO. The live `repo` flow now covers install + both precedence directio
 + the build-repo.sh / build-repo-portable.py catalogs + the pkg-upgrade transition +
 the shipped add-repo.sh bootstrap. Phase 6 (docs reconciliation per ADR §6): correct
 ADR §1/§2 precedence text (priority dominates version, Phase-1 finding), fold in the
-post-deploy notes (the live brait.dev add-repo.sh run + the gated
+post-deploy notes (the live andrebrait.github.io add-repo.sh run + the gated
 test_install_from_live_pages_url once repo-publish.yml is on devel and Pages serves),
 and record the OS-major degraded-to-CLI verdict above in ADR §7.
