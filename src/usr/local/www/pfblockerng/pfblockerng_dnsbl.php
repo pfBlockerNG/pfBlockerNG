@@ -2454,7 +2454,7 @@ $section->addInput(new Form_Select(
 ))->setHelp('IDN handling (not Regex based).<ul>'
 		. '<li><strong>Off</strong> - no IDN action.</li>'
 		. '<li><strong>Confusable</strong> - block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, '
-		. 'including Cyrillic+Greek). Does not catch whole-script confusables or pure-ASCII typosquats.</li>'
+		. 'including Cyrillic+Greek).<br />Does not catch whole-script confusables or pure-ASCII typosquats.</li>'
 		. '<li><strong>Always</strong> - block every IDN/\'xn--\' domain (blunt).</li></ul>');
 
 $section->addInput(new Form_Checkbox(
