@@ -38,6 +38,7 @@ require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 
+global $pfb;
 pfb_global();
 
 // Get log files from directory
