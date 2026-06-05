@@ -42,13 +42,13 @@ $pfb['gconfig'] = config_get_path('installedpackages/pfblockerng/config/0', []);
 // Select field options
 $options_when = [ 'pre' => 'Pre', 'post' => 'Post' ];
 
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path. Initialise it once.
+$input_errors = array();
+
 // Validate input fields and save
 if ($_POST) {
 	if (isset($_POST['save'])) {
-
-		if (isset($input_errors)) {
-			unset($input_errors);
-		}
 
 		// Parse the repeatable 'rowhelper' hook fields (field-<rowid>) and save
 		// new values into the hooks list, validating each as it is collected.
