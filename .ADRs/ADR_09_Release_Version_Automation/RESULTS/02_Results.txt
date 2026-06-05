@@ -53,7 +53,7 @@ Schema per entry:
     "php_version":     string,  // e.g. "8.3" (USES=php pin)
     "py_flavor":       string,  // e.g. "py311" (for build-pkg-linux.yml)
     "status":          "beta"|"GA",
-    "ci":              bool     // true = include in CI smoke fan-out (CE only; always false for Plus)
+    "ci":              bool     // true = include in CI smoke fan-out (CE only; false for Plus for now — no licensed CI image)
   }
 
 Seeded entries (as of ADR-09 P2):
