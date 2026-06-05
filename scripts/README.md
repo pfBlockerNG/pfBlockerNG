@@ -13,11 +13,12 @@ the **`ci-metadata` orphan branch** (its own history, off `main`/`devel`) as
 | --- | --- |
 | [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD matrix and CI matrix. |
 
-To add or drop a version, edit `supported-versions.json` via a PR against `ci-metadata`.
-**No workflow change is needed** — the `resolve-version` job in `build-image.yml`
-and every other consumer reads from `ci-metadata` at runtime.
+The `read-version-matrix.sh` reader is also exposed as a composite GH Actions action
+(`.github/actions/read-version-matrix/`) that emits two outputs: `build_matrix` (all
+entries → one `.pkg` per distinct FreeBSD major) and `ci_matrix` (`ci: true` CE
+entries → the smoke-fan-out set, never Plus).
 
-The matrix schema per entry:
+### Schema
 
 ```text
 {
@@ -32,14 +33,79 @@ The matrix schema per entry:
 }
 ```
 
-Lifecycle policy:
+### Lifecycle policy
 
-- **Add** when a beta/GA lands (curated — a human edits the JSON).
-- **Drop** the oldest CE only when the newest CE goes GA.
-- **Plus** entries are always `ci: false` (build-only; no licensed CI image).
+- **Add** when a beta/GA lands (curated — a human edits the JSON via a PR against
+  `ci-metadata`). Add immediately on a beta so the build + CI validation starts early;
+  the status field distinguishes beta from GA.
+- **Drop** the oldest CE entry only when the newest CE goes GA (the window is *previous
+  major + current major*, transiently `+1` during a beta).
+- **Plus** entries are always `ci: false` — build-only (no licensed CI image is available).
 
-For the future: if CI infrastructure grows, the file can move to a dedicated public
-`pfBlockerNG-ci-infra` repo (raw URL, no token) — a mechanical swap in `read-version-matrix.sh`.
+**No workflow YAML change is needed when adding or dropping a version** — the
+`resolve-version` job in `build-image.yml` and every other consumer reads from
+`ci-metadata` at runtime.
+
+### Build vs CI split
+
+| Channel | `.pkg` build | Live-VM smoke CI |
+| --- | --- | --- |
+| CE | yes (portable Linux builder by default; FreeBSD `make package` as oracle/fallback) | yes (`ci: true`) |
+| Plus | yes (same builders; build needs only the right FreeBSD-major env, no license) | no (no licensed Plus image) |
+
+**Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
+**default**: it runs on a plain Linux runner and reproduces `make package` from the port's
+Makefile + pkg-plist off-FreeBSD. **FreeBSD `make package`** (`build-pkg.yml`) is retained
+as the **fidelity oracle / fallback** — selectable per entry; used when the portable
+builder diverges from the real package in a way that affects install/behaviour.
+
+### Where `.pkg` artifacts land
+
+A tag push (`vX.Y.Z[-devel]`) triggers `release.yml`, which reads `build_matrix` and
+builds one `.pkg` per entry against its `(freebsd_version, php_version)` pair. Artifacts
+are attached to the **GitHub Release**, deduplicated by FreeBSD major — one `.pkg` per
+distinct major covers every pfSense version on that major. A build failure surfaces in CI
+but must **not** block the `ports-pr` step (the ports PR is the real distribution path).
+
+The daily **version-tracker** (`version-tracker.yml`, `0 6 * * *`) also triggers
+`build-pkg-linux.yml` for every BUILD matrix entry to validate each entry's build pair
+independently of a release tag.
+
+### What happens after a matrix edit (add a CE version)
+
+After `supported-versions.json` is updated on `ci-metadata`, the next
+`version-tracker.yml` run (daily, or dispatch) reacts automatically:
+
+1. **`build-pkg-linux.yml`** — validates the new entry's `(freebsd_version, php_version)`
+   pair by building an installable `.pkg`. One dispatch per BUILD entry.
+2. **`image-refresh.yml`** — upgrade-in-place: pulls the current GHCR tag for the CE
+   version, runs `pfSense-upgrade`, applies the **six-check sanity gate**, and publishes
+   the new tag to GHCR **only on gate pass** (fail-closed — a bad image is never
+   published). One dispatch per `ci: true` CE entry.
+3. **`smoke-fanout.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
+   CE images in parallel (`fail-fast: false`). The **`all-smoke-passed` AND-gate** fails
+   if any single leg fails — one failed leg makes the whole gate red, no partial pass.
+   Never Plus.
+
+The tracker dispatches steps 2 and 3 only for CE entries (`ci: true`). Plus is
+build-only: step 1 runs for Plus, steps 2–3 never do.
+
+### ADR-04 §2 reconciliation (flagged — not edited here)
+
+ADR-04 §2 describes the image-refresh strategy as: "upgrade-in-place for all bumps
+(incl. major)" with the note that a **fresh manual re-seed** is the fallback when the
+gate fails, and its §3 `Negative / risks` contains the wording *"re-baseline on a
+MAJOR version jump"* as a conservative option. ADR-09 refines this: the automated
+`image-refresh.yml` handles **all** version jumps uniformly (minor, major) — upgrade
+→ sanity gate → publish on pass; manual seed only on gate failure. This supersedes
+the "re-baseline on major" as a **default** (the gate is the safety net). A
+reconciling edit to ADR-04 §2 is a **follow-up** and is intentionally deferred — the
+two ADRs are consistent in practice (gate fail → manual seed is the same fallback),
+the wording difference is documentation only.
+
+For the future: if CI infrastructure grows, `supported-versions.json` can move to a
+dedicated public `pfBlockerNG-ci-infra` repo (raw URL, no token) — a mechanical swap
+in `read-version-matrix.sh`.
 
 ## Deploy / install onto a pfSense box
 

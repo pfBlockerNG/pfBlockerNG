@@ -706,10 +706,29 @@ When the minimum supported CE version changes, also:
    versions are supported and their `(freebsd_version, php_version)` build pair; all
    workflows read it at runtime via `scripts/read-version-matrix.sh` and
    `.github/actions/read-version-matrix/`. See `scripts/README.md § "Supported-version matrix"`.
-2. **Rebuild + republish the pfSense CE smoke image** (ADR-04): upgrade-in-place
-   for a patch/minor bump, a fresh seed on a major — via
-   `.github/workflows/build-image.yml` (publish-on-pass, gated by the smoke
-   round-trip). See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
+   The **build vs CI split**: CE gets both `.pkg` builds and live-VM smoke CI (`ci: true`);
+   Plus gets `.pkg` builds only (`ci: false` — no licensed CI image). Adding an entry
+   to `ci-metadata` and letting the **version-tracker** (`version-tracker.yml`) run (or
+   dispatch it) is sufficient — it triggers `build-pkg-linux.yml`, `image-refresh.yml`,
+   and `smoke-fanout.yml` automatically. **No workflow YAML edit is needed.**
+2. **Refresh the pfSense CE smoke image** (ADR-04 + ADR-09): dispatch
+   `.github/workflows/image-refresh.yml` with `pfsense_version` + `freebsd_version`
+   from the new matrix entry. The workflow pulls the current GHCR tag, runs
+   `pfSense-upgrade` (any bump, including major), applies the **six-check sanity gate**,
+   and publishes the new tag **only on gate pass** (fail-closed — a bad image is never
+   published). Manual seed via `scripts/image-publish.sh` is the fallback only when
+   the gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
+   > **ADR-04 §2 note:** ADR-04 §2 mentions "re-baseline on a MAJOR version jump" as a
+   > conservative option. ADR-09 supersedes this as the **default**: `image-refresh.yml`
+   > handles all jumps (minor and major) uniformly via upgrade-in-place; a fresh manual
+   > re-seed is triggered only by a gate failure, not automatically by a major jump. A
+   > reconciling edit to ADR-04 §2 is a tracked follow-up (not yet applied).
+3. **Run the smoke fan-out** to validate the new CE image end-to-end: dispatch
+   `.github/workflows/smoke-fanout.yml` (no inputs needed — it reads the CI matrix
+   itself). The fan-out runs the ADR-04 smoke suite against **all** `ci: true` CE
+   images in parallel (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if
+   any single CE leg fails. Never Plus. The version-tracker triggers this automatically
+   on its daily run; you can also dispatch it manually to verify the new image.
 
 ---
 

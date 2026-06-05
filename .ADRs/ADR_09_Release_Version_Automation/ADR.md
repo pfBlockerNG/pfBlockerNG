@@ -166,20 +166,66 @@ Prompt: `07_Docs_DoD.txt`
 
 ## 7. Definition of done
 
-- **Phases 1–4 + 7** green: both builders are matrix-wired (portable default + FreeBSD oracle); a tag attaches per-FreeBSD-major `.pkg`(s) **and** the ports PR still opens; the matrix is decoupled, carries the `(freebsd_version, php_version)` pair, and editing it drives builds (and the `resolve-version` map) **without** a channel-branch commit; `main → devel → next` linearity and the default `pytest` suite are untouched.
-- **Phases 5–6** (ungated — ADR-04 Accepted) done: image refresh publishes a good image and **fails closed** on a broken upgrade; smoke fan-out runs across all `ci: true` CE images **in parallel with `fail-fast: false`**, never Plus, and the **gate is the AND of all legs**.
-- Workflows/YAML lint-clean; any new `sh` ShellCheck-clean; markdown clean.
-- Status → **Accepted** only after the maintainer confirms the manual checklist below.
+All seven phases are complete (ADR-04 Accepted ⇒ Phases 5–6 are not gated):
 
-### Reject criteria (decide cheaply, before wiring)
+- **Phase 1** (inventory): both builders documented — portable Linux by default, FreeBSD
+  `make package` as oracle/fallback; matrix-driven build invocation defined.
+- **Phase 2** (matrix): `supported-versions.json` on `ci-metadata`; `read-version-matrix.sh`
+  and composite action; `build-image.yml`'s `resolve-version` repointed; seed committed.
+- **Phase 3** (release artifacts): `release.yml` extended — per-matrix `.pkg` builds
+  attached to the GitHub Release per distinct FreeBSD major; `ports-pr` step intact.
+- **Phase 4** (version-tracker): `version-tracker.yml` daily + dispatch; reacts by
+  triggering build + image-refresh + smoke-fanout; probe opens nudge issues only.
+- **Phase 5** (image refresh): `image-refresh.yml` upgrade-in-place + 6-check sanity
+  gate; publishes on pass, fails closed on any gate failure; manual seed as fallback.
+- **Phase 6** (smoke fan-out): `smoke-fanout.yml` `strategy.matrix` over `ci_matrix`
+  (`fail-fast: false`); `all-smoke-passed` AND-gate; Plus excluded at two layers.
+- **Phase 7** (docs + DoD): version pipeline + lifecycle + build/CI split documented
+  in `scripts/README.md`, `README.md`, `CLAUDE.md`; ADR-04 reconciliation flagged;
+  this §7 finalised.
 
-- **Release-side:** the in-CI build is already proven (portable + FreeBSD oracle, §1 fact 3), so the open risk is **portable-vs-`make package` drift**. If the portable `.pkg` ever diverges from the FreeBSD oracle in a way that affects install/behaviour → make the **FreeBSD VM build the release default** for the affected entry (the fallback exists precisely for this) rather than shipping a divergent portable artifact.
-- **CI-side:** if **unattended upgrades (especially major) cannot pass the sanity gate reliably** → reject auto-refresh for that case and fall back to a manual seed for that major (the gate ensures a bad image is never published regardless).
+Linting: workflows/YAML lint-clean; any new `sh` ShellCheck-clean; markdown clean;
+`python -m pytest` (default) green and unchanged throughout.
+
+Status → **Accepted** only after the maintainer confirms the manual checklist below.
+
+### Reject criteria
+
+- **Release-side — portable-vs-`make package` drift.** The in-CI build is proven
+  (portable + FreeBSD oracle, §1 fact 3). If the portable `.pkg` ever diverges from
+  the FreeBSD oracle in a way that affects install/behaviour → make the **FreeBSD VM
+  build the release default** for the affected entry (the fallback exists precisely
+  for this) rather than shipping a divergent portable artifact.
+- **CI-side — unattended upgrade gate failures.** If a major (or any) CE upgrade
+  cannot reliably pass the six-check sanity gate → reject auto-refresh for that
+  version and fall back to a **manual seed** (`scripts/image-publish.sh`) for that
+  major. The gate is fail-closed regardless, so a bad image is never published —
+  but a persistent gate failure signals that the upgrade path needs manual
+  intervention before the CI image can be updated.
+
+### ADR-04 §2 reconciliation (flagged — tracked as a follow-up)
+
+ADR-04 §2 contains "re-baseline on a MAJOR version jump" as a conservative option.
+ADR-09 supersedes this as the **default behaviour**: `image-refresh.yml` handles
+all version jumps (minor and major) via upgrade-in-place, and a fresh manual
+re-seed is the fallback only when the sanity gate fails — not a mandatory step on
+every major. The two ADRs are consistent in practice (gate fail → manual seed);
+the wording difference is documentation only. A reconciling edit to ADR-04 §2 is
+deferred to a separate ADR-04 amendment — it must not be made here (one-ADR-at-a-
+time rule from `CLAUDE.md`).
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-- [ ] A built `.pkg` installs (`pkg add`) on a real pfSense of **each supported FreeBSD major** — CE and Plus.
-- [ ] Editing the matrix (add a version) triggers the `.pkg` build round-trip with **no** commit to `main`/`devel`/`next`.
-- [ ] A normal `vX.Y.Z[-devel]` tag still produces the GitHub Release **and** the `FreeBSD-ports` PR, now with `.pkg` artifacts attached.
-- [ ] The sanity gate **rejects** a deliberately-broken upgrade (no publish) and **accepts** a good one.
-- [ ] The smoke fan-out runs across every `ci: true` CE image **in parallel** and **never** Plus; **one deliberately-failed leg turns the whole gate red** (no partial pass).
+- [ ] A built `.pkg` installs (`pkg add`) on a real pfSense of **each supported
+  FreeBSD major** — CE and Plus.
+- [ ] Editing the matrix on `ci-metadata` (add a version) triggers the `.pkg` build
+  round-trip with **no** commit to `main`/`devel`.
+- [ ] A normal `vX.Y.Z[-devel]` tag still produces the GitHub Release **and** the
+  `FreeBSD-ports` PR, now with `.pkg` artifacts attached per FreeBSD major.
+- [ ] The sanity gate **rejects** a deliberately-broken upgrade (no publish) and
+  **accepts** a good upgrade (publishes the new GHCR tag).
+- [ ] The smoke fan-out runs across every `ci: true` CE image **in parallel** and
+  **never** Plus; **one deliberately-failed leg turns the whole gate red** (no
+  partial pass — the `all-smoke-passed` AND-gate is the required status check).
+- [ ] The version-tracker (`version-tracker.yml`) dispatches in `dry_run=true` mode
+  and logs the correct dispatches without triggering any downstream workflow.

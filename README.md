@@ -58,11 +58,10 @@ The default version is the minimum pfSense CE release supported by this package
 relevant pfSense source files from GitHub and rewrites all stub files except
 `stubs/pfsense/globals.php`, which is manually maintained.
 
-A CE version bump also means **rebuilding and republishing the pfSense CE smoke
-image** (ADR-04): upgrade-in-place for a patch/minor bump, a fresh seed on a
-major, via `.github/workflows/build-image.yml`. See
-[Smoke tests](#smoke-tests-live-pfsense-vm) below and
-[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md).
+A CE version bump also requires updating the **supported-version matrix** and
+refreshing the CI smoke image. See
+[Rebuilding the image on a CE bump](#rebuilding-the-image-on-a-ce-bump) below for
+the full three-step procedure (matrix edit → image refresh → smoke fan-out).
 
 ### Git hooks
 
@@ -694,14 +693,40 @@ needing another network pull.)
 
 ### Rebuilding the image on a CE bump
 
-The pfSense CE image is **seeded once** (one clean manual install, archived) and
-**upgraded in place** for every subsequent release — `build-image.yml` runs
-`pfSense-upgrade` on the prior tag for patch/minor (and major), gated by the
-smoke round-trip (publish-on-pass, fail-closed). A **fresh manual re-seed** is
-the fallback only when that gate fails. **CE only** (Plus is out of scope). The
-seed and every version snapshot are retained as immutable GHCR tags (never
-overwritten); the GHCR package is **private**. Full strategy + what is baked:
-`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md` and `RESULTS/02_Results.txt`.
+When a new pfSense CE release lands (or you raise the minimum supported CE version),
+follow this three-step procedure. The daily **version-tracker** (`version-tracker.yml`)
+performs steps 2–3 automatically once the matrix is updated; you can also dispatch
+each workflow manually.
+
+**Step 1 — Update the supported-version matrix.**
+Edit `supported-versions.json` on the `ci-metadata` orphan branch via a PR against
+`ci-metadata`. Add a new entry (or update `status: "beta"` → `"GA"`; or drop the
+oldest CE entry when the newest goes GA). Schema and lifecycle policy:
+[`scripts/README.md`](scripts/README.md#supported-version-matrix).
+
+**Step 2 — Refresh the CI smoke image.**
+Dispatch `.github/workflows/image-refresh.yml` with `pfsense_version` and
+`freebsd_version` from the new matrix entry. The workflow:
+
+1. Pulls the current GHCR tag for this CE version.
+2. Boots a copy and runs `pfSense-upgrade` (works for patch, minor, and major jumps).
+3. Applies the **six-check sanity gate** (VM boots; SSH answers; `/etc/version` matches;
+   `pfctl -sr` loads; `install-from-repo.sh` + `pfblockerng.php update` exit 0;
+   `dig` control record resolves).
+4. Publishes the new GHCR tag **only on gate pass** — fail-closed (a bad image is
+   never published). Old tags are kept.
+
+If the gate fails, use `scripts/image-publish.sh` to produce a fresh seed from a
+clean manual install (manual fallback — see
+[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)).
+**CE only** (Plus is build-only; no licensed CI image). The seed and every version
+snapshot are retained as immutable GHCR tags; the GHCR package is **private**.
+
+**Step 3 — Run the smoke fan-out.**
+Dispatch `.github/workflows/smoke-fanout.yml` (no inputs — it reads the CI matrix
+itself). The fan-out runs the ADR-04 smoke suite across **all** `ci: true` CE images
+in parallel (`fail-fast: false`). The `all-smoke-passed` AND-gate fails if any single
+leg fails — one red CE leg makes the whole gate red, no partial pass. Never Plus.
 
 ### Adding a matrix case
 
