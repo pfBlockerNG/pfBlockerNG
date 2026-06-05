@@ -157,27 +157,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$database might not be defined\.$#'
-			identifier: variable.undefined
-			count: 7
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$db_create might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$db_handle might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$db_table might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
