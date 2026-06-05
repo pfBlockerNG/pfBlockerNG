@@ -103,7 +103,7 @@ def _post_form(webui: WebUI, payload: dict[str, str]) -> None:
     data = dict(payload)
     data["__csrf_magic"] = token
     data["save"] = "save"
-    resp = webui.session.post(CATEGORY_PAGE, data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)
+    resp = webui.session.post(webui.url(CATEGORY_PAGE), data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "category POST returned the login form (session lost)"
 
 
