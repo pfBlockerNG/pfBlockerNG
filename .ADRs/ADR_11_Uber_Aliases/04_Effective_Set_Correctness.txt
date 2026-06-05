@@ -47,7 +47,13 @@ ACTION PLAN (ordered)
    selected aggregates appear). Capture this as a repeatable check (a fixture-driven
    harness or, where the live pf table is required, a documented manual step folded into
    §7 — do NOT fabricate a passing assertion you cannot actually run off-box).
-4. EDGE CASES: empty dir → never-empty consumer file (placeholder) + NO pf table loaded;
+4. POST-HOOK ORDERING (ADR-12 coupling): confirm by diff-read that the aggregate
+   build → register → table-load sits BEFORE pfb_run_hooks('post', …) (:11764) and that
+   its table is loaded by the ≤:11520 reconcile path — so a post-hook sees the FRESH
+   aggregate. Confirm a rebuilt aggregate's name is merged into PFB_CHANGED_IP_ALIASES.
+   The live proof is a §7 manual-smoke item (a post hook reading the new table); pin the
+   exact commands there.
+5. EDGE CASES: empty dir → never-empty consumer file (placeholder) + NO pf table loaded;
    single member; v4-only and v6-only; a selected type with zero members at all; the
    mtime-gate not skipping a real change and not rebuilding an unchanged type.
 5. Where an automated off-box assertion is genuinely impossible (needs a live pf table /
