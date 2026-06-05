@@ -86,10 +86,13 @@ for those *docs/tooling* files; any change that touches `src/`, `tests/`, or CI 
   rebase-only — see "Branches and releases").
 - The primary checkout stays free for the human; each agent gets its own tree.
 - **Reuse, don't recreate.** A worktree is keyed to its branch/task: if you are already
-  in the worktree for this branch — e.g. an ADR's `adr/NN` worktree mid-implementation —
-  work there, don't spin up a second one. `/adr-all` and `/adr-phase` **reuse the per-ADR
-  `adr/NN` worktree across all phases**; create it (off the latest `devel`) only when it
-  doesn't already exist.
+  in the worktree for this branch — e.g. an ADR's `adr/{NN}-{slug}` worktree
+  mid-implementation — work there, don't spin up a second one. `/adr-all` and
+  `/adr-phase` **reuse the per-ADR `adr/{NN}-{slug}` worktree across all phases**; create
+  it (off the latest `devel`) only when it doesn't already exist.
+- **Name the branch for its work item.** An ADR or GitHub-issue branch carries the
+  item's number then a sanitised title slug (`adr/{NN}-{slug}` / `issue/{NN}-{slug}`) —
+  see "Branch naming (ADRs and issues)" under "Branches and releases".
 - Gotchas (both hit in practice): `git worktree remove` fails when run from
   *inside* the tree being removed — run it from the primary checkout. And
   `gh pr merge --delete-branch` can't check out a base branch that another
@@ -766,6 +769,35 @@ is already on the remote; never reconcile with a merge commit. This keeps the ch
 strictly linear (above) and every PR a clean fast-forward — the same rule applies to each
 follow-up commit you push onto an open PR.
 
+### Branch naming (ADRs and issues)
+
+A branch that tracks an **ADR** or a **GitHub issue** carries the item's **number
+THEN a slug of its title**, so the branch is self-describing at a glance:
+
+- **ADR:** `adr/{NN}-{slug}`
+- **GitHub issue:** `issue/{NN}-{slug}`
+
+`{slug}` is derived from the title — the ADR `{Name}` (or the `ADR.md` H1); the issue
+title — by this sanitiser, which is **mandatory** (it defends against malicious /
+garbage input AND keeps the name inside git's ref rules):
+
+1. **Lowercase.**
+2. **Strip emojis and every non-ASCII char**, then drop anything not `[a-z0-9]`.
+3. **Collapse** each run of removed/non-alphanumeric chars to a single `-`; **trim**
+   leading/trailing `-`.
+4. **Truncate to ≤30 chars** at a `-` boundary (never leave a trailing `-`); don't go
+   far past 30.
+5. If nothing survives (empty slug), **omit it** — bare `adr/{NN}` / `issue/{NN}`.
+
+The output is `[a-z0-9-]` only — no spaces, no `~ ^ : ? * [ \ .. @{`, no leading `-`,
+no `.lock` suffix — so it is always a legal ref. **On collision** (the computed name
+is already taken by an **unrelated** branch), append `-{epoch}` (epoch seconds) to
+make it unique. An ADR **reusing its own** existing `adr/{NN}-*` branch across phases
+is reuse, **not** a collision — don't re-suffix it.
+
+Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsbl`; issue #43
+"TLD-Allow KeyError on …" → `issue/43-tld-allow-keyerror-on`.
+
 ---
 
 ## GitHub issues
@@ -776,6 +808,10 @@ a GitHub issue, read its **title and description AND every comment/update** on i
 narrow, downgrade, or invalidate the original report — issue #25 is a live example: a
 follow-up comment downgraded a claimed crash to a defensive-consistency cleanup and
 corrected the fix. Never act on the opening text alone.
+
+**Branch for the fix** — when you cut a worktree/branch to work an issue, name it
+`issue/{NN}-{slug}` per the title-slug rule in "Branch naming (ADRs and issues)"
+above (sanitised, emoji-stripped, ≤30-char slug; `-{epoch}` on collision).
 
 ### Labels (lifecycle)
 

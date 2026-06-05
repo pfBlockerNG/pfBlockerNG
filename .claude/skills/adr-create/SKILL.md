@@ -134,7 +134,8 @@ section set; the canonical skeleton is:
 
 - **Status:** **Proposed** (<today's date>)
 - **Date:** <today's date>
-- **Branch:** `adr/{NN}` (off <base, e.g. devel>) / **Component(s):** <files>
+- **Branch:** `adr/{NN}-{slug}` (off <base, e.g. devel>; `{slug}` = sanitised ADR-title
+  slug per CLAUDE.md "Branch naming") / **Component(s):** <files>
 - **Target runtime:** <e.g. Python 3.11+ in Unbound pythonmod, stdlib only; PHP 8.3>
 - **Test suite:** <paths>
 

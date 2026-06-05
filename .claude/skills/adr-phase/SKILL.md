@@ -7,7 +7,7 @@ description: >
   per-ADR git worktree (your main checkout stays free); each phase is executed by
   a fresh sub-agent with a clean context — briefed with the phase prompt,
   CLAUDE.md, and the prior phase's handoff, working in the full worktree. Commits
-  AND pushes branch `adr/NN` after every phase
+  AND pushes branch `adr/{NN}-{slug}` after every phase
   (crash-safe), so the run is resumable — on restart it resets to the last
   completed phase and continues. When the ADR is complete it offers a PR (default)
   or a rebase onto the base. Use when the user says "implement phase N of ADR-M",
@@ -25,13 +25,17 @@ prompt directs; what's kept minimal is the *starting context*, not file access.
 The handoff document (`RESULTS/{NN}_Results.txt`) is the **interface between phase
 sessions**.
 
-Branch is always **`adr/{NN}`**. After **every** phase the branch is **committed
-and pushed**, so progress survives a crash/offline machine. Each completed phase —
-code change **plus** its handoff, committed and pushed — is a **transaction**, and
-that is what makes the run resumable.
+Branch is always **`adr/{NN}-{slug}`**, where `{slug}` is the sanitised ADR-title
+slug from CLAUDE.md "Branch naming (ADRs and issues)" — lowercase, emoji/non-ASCII
+stripped, `[a-z0-9-]` only, ≤30 chars; source is the ADR `{Name}` (the `ADR.md` H1
+if you prefer the prose title). The slug is **deterministic** from the ADR, so every
+invocation recomputes the **same** branch name (which is what lets phases reuse it).
+After **every** phase the branch is **committed and pushed**, so progress survives a
+crash/offline machine. Each completed phase — code change **plus** its handoff,
+committed and pushed — is a **transaction**, and that is what makes the run resumable.
 
 **Equivalence invariant (load-bearing).** `/adr-phase {NN} all` must produce
-**exactly** the same end state — same worktree, same `adr/{NN}` branch, same
+**exactly** the same end state — same worktree, same `adr/{NN}-{slug}` branch, same
 per-phase commits in order, same landing — as running the phases one at a time
 (`/adr-phase {NN} 1`, `… 2`, …) and choosing the same landing at the end. `all`
 is just a loop over the single-phase procedure; nothing may differ because it ran
@@ -46,7 +50,7 @@ Args string: `{{ args }}`
 - **Token 2 — phase selector** (optional): a **number** → that single phase;
   **`all`** → every remaining phase in order; **omitted** → the first phase with a
   prompt but no committed handoff.
-- **`--base <branch>`** (optional) → base that `adr/{NN}` is cut from and the
+- **`--base <branch>`** (optional) → base that `adr/{NN}-{slug}` is cut from and the
   eventual PR/rebase target. If omitted, resolve in Step 3.
 
 ## Step 2 — Locate the ADR and list phases
@@ -55,12 +59,15 @@ ADR dirs live under `.ADRs/` as `ADR_{NN}_{Name}/` (zero-padded `NN`). Find the
 match; if none, stop. The **phase prompts** are the `{NN}_*.txt` files, sorted
 numerically — their count is the total phase count.
 
-## Step 3 — Set up the per-ADR worktree on `adr/{NN}`
+## Step 3 — Set up the per-ADR worktree on `adr/{NN}-{slug}`
 
-All phase work happens in a dedicated worktree checked out to `adr/{NN}`; the main
+All phase work happens in a dedicated worktree checked out to `adr/{NN}-{slug}`; the main
 checkout is never edited by phases. Set it up idempotently:
 
-- **Base branch** (needed only to create `adr/{NN}`, and as Step 7's target):
+- **Resolve the branch name first.** Compute `{slug}` from the ADR title per CLAUDE.md
+  "Branch naming (ADRs and issues)" → the target branch `adr/{NN}-{slug}`. This is
+  deterministic, so it matches whatever a prior phase already created.
+- **Base branch** (needed only to create `adr/{NN}-{slug}`, and as Step 7's target):
   `--base` if given; else if exactly one branch contains this ADR's prompt files
   use it (`git for-each-ref` + `git ls-tree -r`); else the current branch if it is
   a base (`devel`/`main`/release); else default **`devel`**. Ask only if genuinely
@@ -69,20 +76,26 @@ checkout is never edited by phases. Set it up idempotently:
   `.claude/worktrees/adr-{NN}` (the harness already uses `.claude/worktrees/`; if
   that area is not ignored, use a path outside the main checkout to avoid polluting
   `git status`).
-- **Create or reuse** (check `git worktree list` first):
-  - If a worktree for `adr/{NN}` already exists → reuse it.
-  - Else if branch `adr/{NN}` exists → `git worktree add <path> adr/{NN}`.
-  - Else (cutting `adr/{NN}` fresh): `git fetch origin <base>`, then **check the
+- **Create or reuse** (check `git worktree list` first; match this ADR's branch by the
+  `adr/{NN}-*` prefix — and the legacy bare `adr/{NN}` — so a branch cut before the
+  slug scheme is still picked up rather than duplicated):
+  - If a worktree for this ADR's branch already exists → reuse it.
+  - Else if the branch exists → `git worktree add <path> <branch>`.
+  - Else (cutting `adr/{NN}-{slug}` fresh): `git fetch origin <base>`, then **check the
     base for unpushed work** — `git rev-list --count origin/<base>..<base>`. **If
     the local base branch has commits not on the remote, WARN the user and ask
     whether to push them first** before the ADR branch is cut — cutting from
     `origin/<base>` would otherwise omit them. Only after that resolve:
-    `git worktree add <path> -b adr/{NN} origin/<base>` (push first if the user
+    `git worktree add <path> -b adr/{NN}-{slug} origin/<base>` (push first if the user
     agreed; if they decline, state explicitly that those local-only base commits
-    are excluded from `adr/{NN}`).
+    are excluded from `adr/{NN}-{slug}`).
 
   This warning fires only when **creating** the worktree/branch; reusing an
-  existing `adr/{NN}` skips it.
+  existing `adr/{NN}-{slug}` skips it.
+  - **Collision:** if `adr/{NN}-{slug}` is already taken by an **unrelated** branch
+    (not this ADR's — e.g. a different title reused the same `{NN}`), append
+    `-{epoch}` (epoch seconds) per CLAUDE.md's rule and use that name consistently
+    for the rest of the run.
 
 From here, every git/file operation for this ADR uses `<path>` (e.g.
 `git -C <path> …`, and absolute paths under `<path>` for edits). Do **not** touch
@@ -90,16 +103,16 @@ the main checkout.
 
 ## Step 4 — Reconcile / resume (in the worktree)
 
-Bring `adr/{NN}` to a clean transaction boundary:
+Bring `adr/{NN}-{slug}` to a clean transaction boundary:
 
-1. `git -C <path> fetch origin` and fast-forward `adr/{NN}` to `origin/adr/{NN}` if
+1. `git -C <path> fetch origin` and fast-forward `adr/{NN}-{slug}` to `origin/adr/{NN}-{slug}` if
    behind (a prior run on another machine).
 2. **Completion state.** Phase `M` is **complete** iff `RESULTS/{MM}_Results.txt`
    is **committed** at HEAD. `L` = highest **contiguous** complete phase from 1
    (0 if none).
 3. **Reset interrupted work above `L`** (a dirty tree, or a commit for phase `L+1`
    without its handoff): target = the commit recording `RESULTS/{LL}_Results.txt`
-   (or `git -C <path> merge-base adr/{NN} origin/<base>` if `L = 0`). **Safety
+   (or `git -C <path> merge-base adr/{NN}-{slug} origin/<base>` if `L = 0`). **Safety
    gate:** only `git -C <path> reset --hard <target>` if everything discarded is
    recognizably ADR-`NN` phase work; else **STOP and ask**. This is safe against
    force-pushes because only completed phases are ever pushed — interrupted work is
@@ -147,7 +160,7 @@ edit:
   off."
 - "Then write `RESULTS/{MM}_Results.txt`, make a **single commit** (code + handoff)
   with the COMMIT-block message, and **push**: `git -C <path> push -u origin
-  adr/{NN}`."
+  adr/{NN}-{slug}`."
 - "Report back: gate results, commit hash, push status, handoff path, and any
   deviation or STOP."
 
@@ -171,11 +184,11 @@ nothing left. Identical whether reached via `all` or the single-phase run that
 completed the last phase. For an intermediate single-phase run that did **not**
 complete the ADR, stop after Step 6b and report — the branch is already pushed.
 
-The branch `adr/{NN}` is already on the remote (pushed each phase). **Ask the
+The branch `adr/{NN}-{slug}` is already on the remote (pushed each phase). **Ask the
 user** (AskUserQuestion) how to land it — confirm the base if unclear:
 
-- **Create a PR** *(default; expected for `… all`)*: `gh pr list --head adr/{NN}
-  --base <base>`; if none, `gh pr create --base <base> --head adr/{NN}
+- **Create a PR** *(default; expected for `… all`)*: `gh pr list --head adr/{NN}-{slug}
+  --base <base>`; if none, `gh pr create --base <base> --head adr/{NN}-{slug}
   --title "ADR-NN: <ADR title>" --body-file <tmpfile>` (always `--body-file`; seed
   from `ADR.md`).
 - **Rebase onto base and push:** `git -C <path> fetch origin <base>`,
@@ -190,7 +203,7 @@ PR is merged / commits have landed; otherwise leave it for follow-up.
 
 Summarize:
 
-- The worktree path and branch `adr/{NN}`; that the main checkout was untouched;
+- The worktree path and branch `adr/{NN}-{slug}`; that the main checkout was untouched;
   whether the run **resumed** (and from which phase).
 - Per phase: which ADR/phase, the sub-agent's gate results and **review verdict**,
   your orchestrator-gate result, commit hash, and confirmation it was pushed.
