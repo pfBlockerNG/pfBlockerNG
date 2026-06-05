@@ -6,8 +6,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.venv/
-venv/
+.venv
+venv
 .mypy_cache/
 .benchmarks/
 
@@ -22,7 +22,7 @@ venv/
 *~
 
 # ── PHP ───────────────────────────────────────────────────────────────────────
-vendor/
+vendor
 .phpunit.cache/
 .phpunit.result.cache
 
