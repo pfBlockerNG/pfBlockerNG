@@ -271,8 +271,10 @@ def test_aggregate_additive_across_combination(deployed_vm: SmokeVM) -> None:
     permit_spec = h.IpCase(
         aliasname="aggcombopermit", feed_url=permit_feed, header="aggcombopermit", action="Permit_Both"
     )
-    h.inject(deployed_vm, deny_spec)
-    h.inject(deployed_vm, permit_spec)
+    # BOTH lists in ONE config write — a second h.inject() to the same v4 root would REPLACE
+    # the first (config_set_path(root, array($list))), leaving only the permit list and
+    # silently voiding the "Deny+Permit together" premise.
+    h.inject_ip_lists(deployed_vm, [deny_spec, permit_spec])
 
     # BEFORE: only Deny selected ⇒ Deny aggregate present, Permit aggregate absent.
     h.set_aggregate_types(deployed_vm, ["Deny"])
@@ -415,43 +417,45 @@ def test_aggregate_post_hook_sees_fresh_table_and_changed_alias(deployed_vm: Smo
         "timeout": "60",
     }
     h.set_update_hooks(deployed_vm, [post_hook])
+    try:
+        # Settle: one update builds + loads the aggregate from the original feed.
+        h.clear_hook_markers(deployed_vm, token)
+        deployed_vm.ssh("/bin/rm", "-f", table_marker)
+        h.reload(deployed_vm, "update")
 
-    # Settle: one update builds + loads the aggregate from the original feed.
-    h.clear_hook_markers(deployed_vm, token)
-    deployed_vm.ssh("/bin/rm", "-f", table_marker)
-    h.reload(deployed_vm, "update")
+        # BEFORE: the settled aggregate does NOT yet contain the new IP.
+        settled = h.wait_pfctl_table(deployed_vm, agg)
+        assert h.member_present(settled, settle_ip), f"settle IP {settle_ip} not in {agg} after settle: {settled}"
+        assert not h.member_present(settled, new_ip), (
+            f"new IP {new_ip} already in {agg} before the feed change — cannot prove freshness"
+        )
 
-    # BEFORE: the settled aggregate does NOT yet contain the new IP.
-    settled = h.wait_pfctl_table(deployed_vm, agg)
-    assert h.member_present(settled, settle_ip), f"settle IP {settle_ip} not in {agg} after settle: {settled}"
-    assert not h.member_present(settled, new_ip), (
-        f"new IP {new_ip} already in {agg} before the feed change — cannot prove freshness"
-    )
+        # CHANGE: rewrite the feed to ADD the new IP + force the re-fetch (bust the reuse cache),
+        # then one update. The aggregate must be (re)built BEFORE the post hook fires.
+        h.write_local_feed(deployed_vm, feed_name, f"{settle_ip}\n{new_ip}\n")
+        h.force_ip_refetch(deployed_vm, on_disk_header)
+        h.clear_hook_markers(deployed_vm, token)
+        deployed_vm.ssh("/bin/rm", "-f", table_marker)
+        h.reload(deployed_vm, "update")
 
-    # CHANGE: rewrite the feed to ADD the new IP + force the re-fetch (bust the reuse cache),
-    # then one update. The aggregate must be (re)built BEFORE the post hook fires.
-    h.write_local_feed(deployed_vm, feed_name, f"{settle_ip}\n{new_ip}\n")
-    h.force_ip_refetch(deployed_vm, on_disk_header)
-    h.clear_hook_markers(deployed_vm, token)
-    deployed_vm.ssh("/bin/rm", "-f", table_marker)
-    h.reload(deployed_vm, "update")
-
-    # (a) The table the hook recorded contains the NEW IP — proof the hook saw the FRESH,
-    #     loaded aggregate (built before the post hook), never the stale pre-update content.
-    assert h.hook_marker_exists(deployed_vm, table_marker), f"post hook did not record the aggregate table {agg}"
-    seen = deployed_vm.ssh("cat", table_marker).stdout
-    assert new_ip in seen, (
-        f"post hook saw a STALE {agg}: new IP {new_ip} absent from the hook's recorded table "
-        f"(the build/load did not complete before the post hook): {seen!r}"
-    )
-    # (b) The rebuilt aggregate's name is in the changed-alias context the hook received.
-    env = h.read_hook_env(deployed_vm, env_marker)
-    assert env is not None, "post hook did not run (no env marker)"
-    changed = env.get("PFB_CHANGED_IP_ALIASES", "").split()
-    assert agg in changed, f"rebuilt aggregate {agg} not in PFB_CHANGED_IP_ALIASES: {changed!r} (env={env})"
-
-    h.clear_update_hooks(deployed_vm)
-    deployed_vm.ssh("/bin/rm", "-f", table_marker)
+        # (a) The table the hook recorded contains the NEW IP — proof the hook saw the FRESH,
+        #     loaded aggregate (built before the post hook), never the stale pre-update content.
+        assert h.hook_marker_exists(deployed_vm, table_marker), f"post hook did not record the aggregate table {agg}"
+        seen = deployed_vm.ssh("cat", table_marker).stdout
+        assert new_ip in seen, (
+            f"post hook saw a STALE {agg}: new IP {new_ip} absent from the hook's recorded table "
+            f"(the build/load did not complete before the post hook): {seen!r}"
+        )
+        # (b) The rebuilt aggregate's name is in the changed-alias context the hook received.
+        env = h.read_hook_env(deployed_vm, env_marker)
+        assert env is not None, "post hook did not run (no env marker)"
+        changed = env.get("PFB_CHANGED_IP_ALIASES", "").split()
+        assert agg in changed, f"rebuilt aggregate {agg} not in PFB_CHANGED_IP_ALIASES: {changed!r} (env={env})"
+    finally:
+        # Always clear the hook (and its marker) so a mid-test failure cannot leave the
+        # table-dumping post hook configured for the rest of the module.
+        h.clear_update_hooks(deployed_vm)
+        deployed_vm.ssh("/bin/rm", "-f", table_marker)
 
 
 # --------------------------------------------------------------------------- #

@@ -2120,7 +2120,48 @@ function pfb_aggregate_member_list($type, $family) {
 	}
 
 	sort($members);
-	return $members;
+
+	// Drop placeholder-only member files. pfBlockerNG pads a zero-IP/failed feed (and an
+	// empty DNSBLIP file) with the synthetic placeholder IP -- $pfb['ip_ph'] (e.g.
+	// 127.1.7.7), '::'-prefixed for v6 -- so the per-alias file is never empty (inc:9901 /
+	// :10841). That is an internal empty-file hack: it must NOT enter the aggregate union or
+	// pfB_<Type>_Aggregated_<fam> would carry the fake IP. An empty union is already handled
+	// by the action's never-empty consumer, so skipping these here is safe.
+	$ip_ph = (string) ($pfb['ip_ph'] ?? '');
+	$placeholder = ($ip_ph === '') ? '' : (($family === 'v6') ? "::{$ip_ph}" : $ip_ph);
+	$kept = array();
+	foreach ($members as $member) {
+		if (!pfb_member_file_is_placeholder_only($member, $placeholder)) {
+			$kept[] = $member;
+		}
+	}
+	return $kept;
+}
+
+
+// TRUE iff every non-blank, non-comment line of $path equals $placeholder -- i.e. the file
+// is an empty-feed placeholder ($pfb['ip_ph']) that contributes nothing real to an aggregate
+// (see pfb_aggregate_member_list). An empty placeholder, or an unreadable/empty file, is NOT
+// placeholder-only (an empty file simply unions to nothing); a comment-only file is treated
+// as placeholder-only (it likewise adds no addresses).
+function pfb_member_file_is_placeholder_only($path, $placeholder) {
+	if ($placeholder === '') {
+		return FALSE;
+	}
+	$lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+	if ($lines === FALSE || empty($lines)) {
+		return FALSE;
+	}
+	foreach ($lines as $line) {
+		$line = trim($line);
+		if ($line === '' || $line[0] === '#') {
+			continue;
+		}
+		if ($line !== $placeholder) {
+			return FALSE;
+		}
+	}
+	return TRUE;
 }
 
 
