@@ -39,6 +39,8 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$SSH_TARGET" ] || { echo "Usage: $0 <ssh-target> --pkg <file> [--port N] [--ssh-key PATH]" >&2; exit 1; }
+# Pure precondition tests; the || branch is the intended else (SC2015 N/A).
+# shellcheck disable=SC2015
 [ -n "$PKGFILE" ] && [ -f "$PKGFILE" ] || { echo "install-pkg: --pkg file not found: ${PKGFILE}" >&2; exit 1; }
 
 SSH_OPTS="-p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"

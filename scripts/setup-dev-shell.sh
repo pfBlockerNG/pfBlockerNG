@@ -102,7 +102,11 @@ ensure_block() {
 log "wiring shell init files:"
 
 # zsh (every invocation) + login sh: just source the snippet.
+# The single quotes are intentional: this is literal shell text written verbatim
+# into the user's init files, NOT meant to expand here.
+# shellcheck disable=SC2016
 printf '%s\n' '[ -r "$HOME/.brew_path.sh" ] && . "$HOME/.brew_path.sh"' | ensure_block "$HOME/.zshenv"
+# shellcheck disable=SC2016
 printf '%s\n' '[ -r "$HOME/.brew_path.sh" ] && . "$HOME/.brew_path.sh"' | ensure_block "$HOME/.profile"
 
 # bash: re-exec an old interactive/login bash to Homebrew's, then source the snippet.
