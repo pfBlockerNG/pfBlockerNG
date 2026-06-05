@@ -469,12 +469,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$alert_log might not be defined\.$#'
-			identifier: variable.undefined
-			count: 19
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$alert_stats might not be defined\.$#'
 			identifier: variable.undefined
 			count: 2

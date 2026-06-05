@@ -95,6 +95,11 @@ foreach (array(81,82,83,84,85,86,87,88,89) as $field_2) {
 	$filterfieldsarray[1][$field_2] = '';
 }
 
+// $alert_log is set by the view handler below but read in the stats section much later;
+// default it so it is defined when that section runs without a view request. file_exists('')
+// is false, so the stats block is skipped exactly as it was when $alert_log was undefined.
+$alert_log = '';
+
 if (isset($_GET) && isset($_GET['view']) || isset($_REQUEST) && isset($_REQUEST['alert_view'])) {
 	switch($_GET['view'] != '' ? $_GET['view'] : $_REQUEST['alert_view']) {
 		case 'dnsbl_stat':
