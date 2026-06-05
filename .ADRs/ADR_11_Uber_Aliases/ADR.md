@@ -1,6 +1,6 @@
 # ADR-11: Native aggregate ("Uber") IP aliases — per action type
 
-- **Status:** **Proposed** (2026-06-02; re-scoped 2026-06-05 to per-type aggregates)
+- **Status:** **Accepted** (2026-06-02; re-scoped 2026-06-05 to per-type aggregates; accepted 2026-06-05 — live-VM aggregate smoke `tests/smoke/test_smoke_aggregate.py` 8/8 + WebUI Tier B green on a real pfSense CE VM)
 - **Date:** 2026-06-02
 - **Branch:** `adr/11-uber-aliases` (off **`devel`** — IP-side only, no Python/DNSBL coupling, so it does **not** depend on ADR-07/10) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (the IP update pass, alias registration, settings read), `pfblockerng.sh` (a new `aggregate` shell action reusing `cidr_aggregate`/`iprange`), `src/usr/local/www/pfblockerng/*` (the opt-in multi-select), `pfblockerng.xml`-side settings as needed.
 - **Target runtime:** PHP 8.3 + POSIX `sh` (pfSense CE 2.8). **No Python** — this is entirely the IP/firewall side; the Unbound plugin is untouched.
@@ -159,7 +159,7 @@ Prompt: `05_UI_Docs_Smoke_DoD.txt`
 - Nothing selected ⇒ byte-identical to today; each selected type ⇒ `pfB_<Type>_Aggregated_{v4,v6}` appears as a Native `urltable` alias with the correct deduped+aggregated set-exact content for that action class, **no firewall rule**, rebuilt in-pass (mtime-gated), with a never-empty consumer file — for every toggle combination.
 - `php -l` + PHPStan + ShellCheck clean; `python -m pytest` untouched/green.
 - The Phase-1 cost is characterised; the per-type mtime-gated full rebuild is the chosen strategy.
-- Status → **Accepted** only after the maintainer confirms the manual smoke below on a live pfSense box.
+- Status → **Accepted** — reached 2026-06-05: the live-VM aggregate smoke (`tests/smoke/test_smoke_aggregate.py`, 8/8 on a real pfSense CE VM via `smoke.yml`) automates the §7 checklist below except **HAProxy referenceability** (no HAProxy package on the smoke image), and the WebUI Tier B suite is green. The HAProxy pre-check (the `ipalias_*.lst` emission) stays a maintainer-manual one-off; everything else is now CI-covered.
 
 ### Reject / pivot criteria (decide cheaply, Phase 1 — DONE)
 
