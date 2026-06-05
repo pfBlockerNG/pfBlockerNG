@@ -2,9 +2,9 @@
 
 WHY THIS FILE EXISTS
 --------------------
-Phase 4 ships the PRODUCTION analyzer (``pfb_idn_analyzer``), which resolves each
-code point's script from the stdlib ``unicodedata.name()`` leading token (no
-shipped Unicode table). This suite grades the analyzer against the Phase-2 oracle
+The PRODUCTION analyzer is inlined in ``pfb_unbound.py``; it resolves each code
+point's script from the stdlib ``unicodedata.name()`` leading token (no shipped
+Unicode table). This suite grades the analyzer against the Phase-2 oracle
 (``test_adr08_decision_spec.py``) over the Phase-1 corpus (``corpus.json``) and the
 Phase-2 golden decision table (``decision_table.json``).
 
@@ -21,7 +21,7 @@ with real, failable assertions and full branch coverage:
 
 A dedicated cross-check (``TestAnalyzerMatchesPhase2OracleAndCorpus``) diffs the
 analyzer's verdicts against the SAME golden table + corpus the oracle is graded
-on, so the shipped tables and the scoped oracle map cannot silently diverge.
+on, so the analyzer and the scoped oracle map cannot silently diverge.
 """
 
 from __future__ import annotations
@@ -32,12 +32,13 @@ import os
 import sys
 import types
 
-# --------------------------------------------------------------------------- #
-# Import the SHIPPED analyzer from the package dir (the same location Unbound
-# loads it from at runtime; conftest already puts that dir on sys.path).
-# --------------------------------------------------------------------------- #
-import pfb_idn_analyzer as A  # noqa: E402
 import pytest
+
+# --------------------------------------------------------------------------- #
+# The analyzer is inlined in pfb_unbound.py (the production matcher module);
+# conftest injects the Unbound runtime symbols so it imports off-appliance.
+# --------------------------------------------------------------------------- #
+import pfb_unbound as A  # noqa: E402
 
 _HERE = os.path.dirname(__file__)
 _SPEC = os.path.join(_HERE, "fixtures", "adr08_spec", "decision_table.json")

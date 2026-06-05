@@ -169,8 +169,7 @@ pfBlockerNG/
 │       │   ├── pfblockerng_install.inc
 │       │   ├── pfblockerng_extra.inc
 │       │   ├── pfb_unbound_include.inc
-│       │   ├── pfb_unbound.py         # Unbound Python plugin (matcher + DNSBL list build: parse/classify/build from the manifest)
-│       │   ├── pfb_idn_analyzer.py     # ADR-08 TR39 mixed-script IDN homoglyph analyzer (pure, stdlib-only; script via unicodedata.name())
+│       │   ├── pfb_unbound.py         # Unbound Python plugin (matcher + DNSBL list build; incl. the ADR-08 TR39 IDN homoglyph analyzer, stdlib unicodedata.name())
 │       │   ├── pfblockerng.sh         # Shell script (POSIX sh)
 │       │   └── list_scripts/          # Feed pre/post transform scripts (AWS region wrappers + shared aws_region_prefixes.sh)
 │       ├── share/             # Package metadata (info.xml)
@@ -498,17 +497,16 @@ Update `stubs/pfsense/` when:
   CE-2.8 functions absent from the 2.7.2 source, e.g. `config_read_file`). PHPStan is the
   gate: prefer a real stub over a `phpstan-baseline.neon` suppression.
 
-The **ADR-08 IDN homoglyph analyzer** (`src/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py`,
-backing **IDN Blocking → Confusable**) ships **no** Unicode data table: it resolves each code
-point's script from the **stdlib `unicodedata.name()`** leading token (`LATIN…`→Latin,
-`CJK…`→Han, …), so there is nothing to regenerate on a UCD bump. It reads the runtime stdlib
-UCD (Python 3.11 ships 14.0.0, 3.12/3.13 15.1.0, 3.14 16.0.0); the name tokens are stable
-across those for the established scripts in scope. The corpus/oracle GOLDEN
-(`tests/fixtures/adr08_*`) is pinned to UCD 15.1.0 and the `tests/test_adr08_*` suite proves
-the analyzer agrees with it across versions. **`pfb_idn_analyzer.py` is imported by
-`pfb_unbound.py` at load**, so it is copied into the Unbound chroot beside it
-(`pfblockerng.inc` / `pfblockerng_install.inc`) — a new sibling module MUST be added to those
-copy sites or the resolver's Python module fails to load.
+The **ADR-08 IDN homoglyph analyzer** (inlined in
+`src/usr/local/pkg/pfblockerng/pfb_unbound.py`, backing **IDN Blocking → Confusable**) ships
+**no** Unicode data table: it resolves each code point's script from the **stdlib
+`unicodedata.name()`** leading token (`LATIN…`→Latin, `CJK…`→Han, …), so there is nothing to
+regenerate on a UCD bump. It reads the runtime stdlib UCD (Python 3.11 ships 14.0.0, 3.12/3.13
+15.1.0, 3.14 16.0.0); the name tokens are stable across those for the established scripts in
+scope. The corpus/oracle GOLDEN (`tests/fixtures/adr08_*`) is pinned to UCD 15.1.0 and the
+`tests/test_adr08_*` suite proves the analyzer agrees with it across versions. It lives **in
+`pfb_unbound.py`** (not a sibling module) precisely so it rides the existing chroot copy +
+`pkg-plist` entry — no new shipped file, no extra deploy wiring.
 
 When the min CE version changes, also:
 
