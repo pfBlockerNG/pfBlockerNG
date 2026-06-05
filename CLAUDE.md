@@ -6,12 +6,11 @@
 
 ### Work-context marker
 
-While you are actively working **an ADR, a GitHub issue, or a GitHub PR** (open / still
-in progress), begin every reply with a one-line status marker so the current work item
-stays on-screen. Plain markdown only — **no ANSI color escapes**: in assistant messages
-they render as literal `[..m` junk on every device (only Bash/tool output colorizes, and
-only on a terminal). The **emoji is the only cross-device signal of state**; identifiers
-and title carry no color.
+While actively working **an ADR, a GitHub issue, or a PR** (open / in progress), begin
+every reply with a one-line status marker so the work item stays on-screen. Plain markdown
+only — **no ANSI color escapes** (they render as literal `[..m` junk in assistant messages;
+only Bash/tool output colorizes, only on a terminal). The emoji is the only cross-device
+state signal; ids and title carry no color.
 
 Format (one space after the emoji):
 
@@ -19,18 +18,14 @@ Format (one space after the emoji):
 <emoji> ***ID***(***#PR***): ***Title***
 ```
 
-- **ID** names the work item: `ADR-NN` for an ADR, `#NN` (issue number) for a GitHub
-  issue, `#NN` (PR number) for a standalone PR that has no issue/ADR.
-- A **PR that belongs to an issue or ADR** keeps the issue/ADR id and appends the PR
-  number in parentheses right beside it — `#43(#56)` or `ADR-10(#56)`. Omit `(#PR)` while
-  no PR exists.
-- **Emphasis:** the id(s) and the title are ***bold + italic*** (`***…***`); the
-  separators `(`, `)`, `:` stay plain.
-- **Budget:** the whole marker — `<emoji> ID(#PR): Title` — fits in ~28 characters,
-  **counting the `(#PR)` group** (the trailing `…` is not counted; allow ~1 char of slack
-  for a 2-cell emoji). Trim the **title** with a trailing `…` to make the line fit. Because
-  `(#PR)` counts, a marker that carries a PR has a correspondingly shorter title than the
-  same item without one.
+- **ID**: `ADR-NN` for an ADR, `#NN` for an issue, `#NN` (PR number) for a standalone PR
+  with no issue/ADR.
+- A **PR belonging to an issue/ADR** keeps that id and appends the PR number beside it —
+  `#43(#56)`, `ADR-10(#56)`. Omit `(#PR)` until a PR exists.
+- **Emphasis**: ids and title are ***bold+italic*** (`***…***`); separators `( ) :` stay plain.
+- **Budget**: the whole marker fits ~28 chars **including the `(#PR)` group** (trailing `…`
+  not counted; ~1 char slack for a 2-cell emoji). Trim the **title** with a trailing `…` to
+  fit — a marker carrying a PR has a correspondingly shorter title.
 
 Emoji = current state:
 
@@ -50,30 +45,25 @@ Examples:
 - 👀 ***#61***: ***skip CI for documentation-only…***
 - 🏗️ ***ADR-10***(***#56***): ***ABP precedence rework***
 
-Omit the marker on plain conversational turns where you are not actively working one of
-these.
+Omit the marker on plain conversational turns.
 
 ---
 
 ## Worktrees (mandatory for AI agents)
 
-**Every AI agent (Claude included) MUST do all repository work in its own
-dedicated git worktree — never directly in the primary checkout, and never
-sharing a worktree with another agent.** This applies even when only one agent is
-active. Reason: multiple agents operating on the same checkout race on the
-filesystem, the index, `HEAD`, and branch/ref state; isolated worktrees prevent
-those conflicts.
+**Every AI agent (Claude included) MUST do all repository work in its own dedicated git
+worktree** — never the primary checkout, never shared with another agent, even when solo.
+Reason: concurrent agents on one checkout race on the filesystem, index, `HEAD`, and refs.
 
-**Exception — ADR docs and skills need no PR.** Two dev-only classes that never ship
-to users (release archives contain only `src/`) skip the PR stage: **ADR text** (the
-`ADR.md` plus the `/adr-phase` prompt `.txt` files under `.ADRs/`) and **skills** (the
-`SKILL.md` files under `.claude/skills/`). Each still goes through a **worktree** (the
-worktree rule always holds), but needs **no PR** — commit it there and push **directly
-to `devel`** (fetch + rebase first, as always). The carve-out is the PR only, and only
-for those *docs/tooling* files; any change that touches `src/`, `tests/`, or CI — ADR
-*implementation* included — still uses the full worktree + rebase-only-PR flow.
+**Exception — ADR docs and skills need no PR.** Two dev-only classes never shipped to users
+(release archives contain only `src/`) skip the PR stage: **ADR text** (`ADR.md` + the
+`/adr-phase` `.txt` prompts under `.ADRs/`) and **skills** (`SKILL.md` under
+`.claude/skills/`). Each still uses a worktree, but commits and pushes **directly to
+`devel`** (fetch + rebase first). The carve-out is the PR only, and only for those
+docs/tooling files; anything touching `src/`, `tests/`, or CI — ADR *implementation*
+included — uses the full worktree + rebase-only-PR flow.
 
-- Create one at the start of a task and remove it when done:
+- Create at task start, remove when done:
 
   ```sh
   git worktree add -b <branch> <path> origin/devel   # branch off the latest base
@@ -81,122 +71,89 @@ for those *docs/tooling* files; any change that touches `src/`, `tests/`, or CI 
   git worktree remove <path>                          # run from the PRIMARY checkout
   ```
 
-- Branch off the **current** base (`git fetch` first); a worktree created off a
-  stale tip needs a rebase onto the base before it can land (PRs are
-  rebase-only — see "Branches and releases").
-- The primary checkout stays free for the human; each agent gets its own tree.
-- **Reuse, don't recreate.** A worktree is keyed to its branch/task: if you are already
-  in the worktree for this branch — e.g. an ADR's `adr/{NN}-{slug}` worktree
-  mid-implementation — work there, don't spin up a second one. `/adr-all` and
-  `/adr-phase` **reuse the per-ADR `adr/{NN}-{slug}` worktree across all phases**; create
-  it (off the latest `devel`) only when it doesn't already exist.
-- **Name the branch for its work item.** An ADR or GitHub-issue branch carries the
-  item's number then a sanitised title slug (`adr/{NN}-{slug}` / `issue/{NN}-{slug}`) —
-  see "Branch naming (ADRs and issues)" under "Branches and releases".
-- Gotchas (both hit in practice): `git worktree remove` fails when run from
-  *inside* the tree being removed — run it from the primary checkout. And
-  `gh pr merge --delete-branch` can't check out a base branch that another
-  worktree already holds (it errors on the local post-merge step even though the
-  remote merge succeeded) — verify the merge landed, then delete the remote
-  branch separately (`git push origin --delete <branch>`).
+- Branch off the **current** base (`git fetch` first); a stale-tip worktree needs a rebase
+  onto the base before it can land (PRs are rebase-only).
+- **Reuse, don't recreate.** A worktree is keyed to its branch/task — if you're already in
+  this branch's worktree (e.g. an ADR mid-implementation), work there. `/adr-all` and
+  `/adr-phase` reuse the per-ADR `adr/{NN}-{slug}` worktree across all phases; create it
+  (off the latest `devel`) only when absent.
+- **Name the branch for its work item** — `adr/{NN}-{slug}` / `issue/{NN}-{slug}` (see
+  "Branch naming (ADRs and issues)").
+- Gotchas: `git worktree remove` fails from *inside* the tree being removed — run from the
+  primary checkout. `gh pr merge --delete-branch` can't check out a base another worktree
+  holds (it errors on the local post-merge step though the remote merge succeeded) — verify
+  the merge landed, then delete the remote branch separately (`git push origin --delete <branch>`).
 
 ---
 
-## Investigating the live system (be thorough — read sources, not proxies)
+## Investigating the live system (read sources, not proxies)
 
-When debugging real pfSense/FreeBSD behaviour, **verify against the source of truth
-and the effective live state — never infer presence/absence from a single generated
-artifact.** A clean grep of one file is not proof. Specifically:
+When debugging real pfSense/FreeBSD behaviour, **verify against the source of truth and the
+effective live state — never infer presence/absence from one generated artifact.** A clean
+grep of one file is not proof.
 
-- **Follow file inclusions.** *NIX config is routinely split across `include:`
-  directives and `*.d/` drop-in directories. Grep the whole tree, then follow the
-  chain — don't grep one top-level file and conclude. Example that bit us: Unbound's
-  DNS-Resolver ACLs are **not** in `/var/unbound/unbound.conf`; they're in the
-  included `/var/unbound/access_lists.conf` (alongside `host_entries.conf`,
-  `domainoverrides.conf`, `remotecontrol.conf`). `grep -rn … /var/unbound/` +
-  `grep include /var/unbound/unbound.conf` finds them; grepping `unbound.conf` alone
-  silently misses them.
-- **Some pfSense services run CHROOTED — account for it when they read files.** A
-  chrooted process resolves absolute paths against its chroot root, not `/`.
-  **Unbound** is chrooted at **`/var/unbound`** (e.g. `pfb_unbound.py` runs there:
+- **Follow file inclusions.** *NIX config splits across `include:` directives and `*.d/`
+  drop-ins. Grep the whole tree, then follow the chain. Example that bit us: Unbound's
+  DNS-Resolver ACLs are **not** in `/var/unbound/unbound.conf` but in the included
+  `/var/unbound/access_lists.conf` (with `host_entries.conf`, `domainoverrides.conf`,
+  `remotecontrol.conf`); grepping `unbound.conf` alone misses them.
+- **Some pfSense services run CHROOTED** — a chrooted process resolves absolute paths
+  against its chroot root. **Unbound** → `/var/unbound` (e.g. `pfb_unbound.py` runs there:
   a host-absolute `/var/unbound/pfb_py_raw/x` becomes `/var/unbound/var/unbound/pfb_py_raw/x`
-  inside and 404s — reference such files by their in-chroot path, or relative to the
-  chroot root; files outside the chroot like `/usr/local/pkg/...` are simply
-  unreachable unless mounted/copied in). **HAProxy** is chrooted at **`/tmp/haproxy`**.
-  A file that plainly exists on the host can be unreadable by the service purely
-  because of the chroot — this caused a real DNSBL feed-loading bug (manifest stored
+  inside and 404s — use in-chroot paths; files outside like `/usr/local/pkg/...` are
+  unreachable). **HAProxy** → `/tmp/haproxy`. A file existing on the host can be unreadable
+  purely from the chroot — caused a real DNSBL feed-loading bug (manifest stored
   host-absolute paths the chrooted module couldn't open).
-- **Ask the tool for its effective state via its own CLI.** It resolves includes and
-  shows what's actually loaded, not what a file says:
-  - **pf** → `pfctl` (`-sr` rules, `-sn` NAT, `-sTables`/`-t <t> -T show` tables,
-    `-ss` states).
+- **Ask the tool for its effective state via its own CLI** (resolves includes, shows what's
+  loaded):
+  - **pf** → `pfctl` (`-sr` rules, `-sn` NAT, `-sTables`/`-t <t> -T show`, `-ss` states).
   - **Unbound** → `unbound-control` (`get_option <opt>` e.g. `access-control`,
-    `list_local_zones`, `status`); `unbound-checkconf` to validate.
-  - pfSense services in general: prefer the CLI/`pfSsh.php` over reading generated files.
-- **Turn on a tool's debug/verbose mode when unsure what it's actually doing** —
-  which URLs/hosts it hits, which files it reads/writes, cache/304 behaviour —
-  instead of guessing. E.g. `pkg -d update` traces the underlying `curl` (repo
-  catalogue `meta.conf`/`data.pkg`, the `If-Modified-Since` → "Simulate an HTTP
-  304" → "repository is up to date" path; local catalogue DB under
-  `/var/db/pkg/repos/<repo>/db`); `curl -v` for raw HTTP. Non-obvious gotcha this
-  revealed: pfSense's pkg uses the **`pkg+https`** scheme — a *mirror indirection*,
-  so `pkg.pfsense.org` does not resolve directly (a plain `dig` looks "broken")
-  while pkg resolves it to a Netgate mirror host (e.g. `pkg00-atx.netgate.com`)
-  and fetches fine. This is why the smoke harness keeps egress OPEN during
-  `deploy()`/reload — `pkg add` pulls RUN_DEPENDS from that mirror.
-- **Confirm what's actually installed with `pkg` — don't assume a tool is present
-  or absent.** Installed: `pkg info` (all), `pkg info <pkg>` (one), `pkg info -l
-  <pkg>` (its files), `pkg which <path>` (owning package). Available to install (repo
-  catalogue, not yet installed): `pkg search <name>` / `pkg rquery` — the answer to
-  "is dependency X available?". The smoke image ships `ldns` (→ `drill`),
-  `bind-tools` (→ `dig`/`host`/`nslookup`), `python311`, `unbound`, `php83`, and
-  `qemu-guest-agent` — so check before installing a dependency or coding a runtime
-  fallback. (`pkg help` / `pkg <cmd> -h` for the full command surface.)
-- **`/conf/config.xml` is the source of truth** for pfSense settings; the files under
-  `/var/…` are *generated* from it. To check whether something is configured, read the
-  relevant `config.xml` section (e.g. `<unbound><acls>`), not just the generated output.
-  If you cite config.xml in your reasoning, actually open that section — don't assume.
-- **"Everything is files" cuts both ways:** read the actual files (and diff
-  before/after a change), and when a value is set/empty, confirm it on the box rather
-  than trusting recollection.
+    `list_local_zones`, `status`); `unbound-checkconf` validates.
+  - pfSense in general: prefer the CLI/`pfSsh.php` over generated files.
+- **Turn on a tool's debug/verbose mode when unsure what it's doing** — which URLs/files it
+  hits, cache/304 behaviour. E.g. `pkg -d update` traces the underlying `curl` (catalogue
+  `meta.conf`/`data.pkg`, the `If-Modified-Since` → "Simulate an HTTP 304" → "repository is
+  up to date" path; local DB under `/var/db/pkg/repos/<repo>/db`); `curl -v` for raw HTTP.
+  Gotcha this revealed: pfSense pkg uses the **`pkg+https`** scheme (mirror indirection) —
+  `pkg.pfsense.org` doesn't resolve directly (a plain `dig` looks "broken") but pkg resolves
+  it to a Netgate mirror (e.g. `pkg00-atx.netgate.com`). This is why the smoke harness keeps
+  egress OPEN during `deploy()`/reload — `pkg add` pulls RUN_DEPENDS from that mirror.
+- **Confirm what's installed with `pkg`.** Installed: `pkg info` / `pkg info <pkg>` /
+  `pkg info -l <pkg>` (files) / `pkg which <path>` (owner). Available to install:
+  `pkg search <name>` / `pkg rquery`. The smoke image ships `ldns` (→ `drill`), `bind-tools`
+  (→ `dig`/`host`/`nslookup`), `python311`, `unbound`, `php83`, `qemu-guest-agent` — check
+  before installing a dep or coding a runtime fallback.
+- **`/conf/config.xml` is the source of truth** for pfSense settings; `/var/…` files are
+  generated from it. To check whether something is configured, read the relevant
+  `config.xml` section (e.g. `<unbound><acls>`) — actually open it, don't assume.
+- **"Everything is files" cuts both ways:** read the actual files (diff before/after a
+  change) and confirm a set/empty value on the box, not from recollection.
 
 ---
 
 ## Resolving pfSense-provided PHP functions (read the real upstream source)
 
-When a pfSense-provided PHP function is missing, undocumented, ambiguous, or you
-can't tell whether it's implicated in a bug — and it isn't stubbed yet — **do NOT
-assume it can be worked around or guess its behaviour.** We depend on open-source
-software; the real implementation is available, so read it. Source of truth:
-<https://github.com/pfsense/pfSense>.
+When a pfSense-provided PHP function is missing, ambiguous, or possibly implicated in a bug
+— and isn't stubbed yet — **do NOT guess or assume a workaround.** The real implementation
+is open source: <https://github.com/pfsense/pfSense>.
 
-A function's existence, signature, or behaviour can differ across releases, so
-treat the **full source trees at these refs** as the authority — check the
-function in each that's relevant:
+Behaviour can differ across releases, so check the function in the **full source trees at
+each relevant ref**:
 
-1. **Minimum supported CE** — youngest commit at or before the launch date of our
-   minimum pfSense CE version (currently **2.8.0**).
-2. **Every CE release since the oldest supported** — youngest commit at or before
-   each CE version's launch date.
-3. **Every pfSense Plus release since our oldest supported CE** — youngest commit
-   at or before each Plus version's launch date.
-4. **`master`** — current upstream tip.
+1. **Minimum supported CE** — youngest commit ≤ the launch date of our min CE (currently **2.8.0**).
+2. **Each CE release since the oldest supported** — youngest commit ≤ its launch date.
+3. **Each pfSense Plus release since our oldest supported CE** — youngest commit ≤ its launch date.
+4. **`master`** — current tip.
 
-Resolve each ref at investigation time, don't hardcode hashes: find the version's
-release date, then take the youngest commit at/before it
-(`git log --before="<release-date>" -1 <branch>`, or the GitHub commits view
-filtered by date). The public mirror may lack release branches/tags (e.g. no
-`RELENG_2_8_0`), so dated commits on the available history are the reliable handle.
-Checking across this set shows whether behaviour is stable across our support
-matrix or version-specific.
+Resolve refs at investigation time (don't hardcode hashes): find the release date, take the
+youngest commit at/before it (`git log --before="<date>" -1 <branch>`, or the GitHub commits
+view filtered by date). The public mirror may lack release branches/tags (no `RELENG_2_8_0`),
+so dated commits are the reliable handle.
 
-**Always prefer stubbing the real function — based on its actual upstream source
-— over making an exception** (a `phpstan-baseline.neon` suppression, an
-`undefinedFunctions` entry, or a code workaround). Stubs encode reality and keep
-PHPStan/Intelephense honest; exceptions hide it. This is the same principle as the
-stub guidance under "Updating documentation" — that section covers the bulk
-generator (`scripts/update-pfsense-stubs.py`); this covers investigating and
-stubbing a single function from upstream by hand.
+**Always prefer stubbing the real function (from its actual upstream source) over an
+exception** (a `phpstan-baseline.neon` suppression, an `undefinedFunctions` entry, or a code
+workaround) — stubs encode reality and keep PHPStan/Intelephense honest. This is the by-hand
+counterpart to the bulk generator under "Updating documentation".
 
 ---
 
@@ -218,7 +175,7 @@ pfBlockerNG/
 │       ├── share/             # Package metadata (info.xml)
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
 ├── tests/                 # Python test suite (pytest)
-├── docs/misc/             # Dev-only reference notes (e.g. pfSense_versions.md — per-version base facts + pfBlockerNG deps)
+├── docs/misc/             # Dev-only reference notes (pfSense_versions.md, architecture-notes.md)
 ├── scripts/               # Developer tooling (deploy, stub generation)
 │   ├── deploy.sh          # Push files to live pfSense over SSH
 │   ├── setup-hooks.sh     # One-time: point git at .githooks (core.hooksPath)
@@ -237,41 +194,36 @@ pfBlockerNG/
 └── README.md
 ```
 
-`tests/` holds the Python suite (pytest) plus `tests/php/` — the PHPUnit suite
-for the pure/extractable PHP helpers (bootstrap loads the real `pfblockerng.inc`
-off-appliance via include shims + pfSense doubles; see `tests/php/README.md`) —
-and `tests/smoke/` — the dispatch-only live-VM suite (ADR-04), which now also
-holds `tests/smoke/ui/`: the ADR-14 Web-UI tiers (`ui_render`/`ui_e2e`/
-`ui_browser`) reusing the `smoke_vm` fixture + `helpers.py`.
+`tests/` holds the Python suite (pytest), `tests/php/` (PHPUnit for the pure/extractable PHP
+helpers — bootstrap loads the real `pfblockerng.inc` off-appliance via include shims +
+pfSense doubles; see `tests/php/README.md`), and `tests/smoke/` (the dispatch-only live-VM
+suite, ADR-04, which also holds `tests/smoke/ui/` — the ADR-14 Web-UI tiers
+`ui_render`/`ui_e2e`/`ui_browser` reusing the `smoke_vm` fixture + `helpers.py`).
 
-Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI, pyproject.toml, `.githooks/`) is dev-only.
+Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI,
+`pyproject.toml`, `.githooks/`) is dev-only.
 
 ---
 
 ## Git hooks
 
-Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`
-to `.githooks`; or run `git config core.hooksPath .githooks` directly). git cannot
-auto-apply a committed hooks path — cloning must not silently install hooks — so
-this one-time opt-in is required.
+Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath` to
+`.githooks`). git can't auto-apply a committed hooks path — cloning must not silently install
+hooks — so this opt-in is required.
 
-**Claude: before working in this repo, ensure the hooks are active.** If
-`git config core.hooksPath` is not `.githooks`, run `sh scripts/setup-hooks.sh`
-once at the start of the session (idempotent; safe to re-run).
+**Claude: ensure hooks are active before working here.** If `git config core.hooksPath` is
+not `.githooks`, run `sh scripts/setup-hooks.sh` once at session start (idempotent).
 
-**Claude: any GitHub Actions workflow that commits code must activate the hooks
-first.** Have the workflow run `sh scripts/setup-hooks.sh` before its commit/push
-steps (after checkout) so automated commits go through the same `pre-commit` /
-`pre-push` checks — subject to which tools the runner has installed.
+**Claude: any GitHub Actions workflow that commits code must run `sh scripts/setup-hooks.sh`
+after checkout, before its commit/push steps** — so automated commits hit the same checks
+(subject to which tools the runner has installed).
 
-- **`.githooks/pre-commit`** runs the fast linters (and the unit suites) and blocks
-  the commit on any failure: `ruff check`/`ruff format --check`, `python -m pytest`,
-  `mypy tests/` (the test suite is fully typed — `tests.*` is `disallow_untyped_defs`
-  in pyproject.toml; `tests/smoke` is excluded), `markdownlint-cli2`, `sh -n` +
-  `shellcheck`, and `php -l`. Each check runs only when its tool is installed (a
-  missing tool is reported and skipped — CI is the hard gate); PHPStan and PHPUnit
-  run only when `vendor/bin/phpstan` / `vendor/bin/phpunit` exist. Bypass in an
-  emergency with `git commit --no-verify`.
+- **`.githooks/pre-commit`** runs the fast linters + unit suites, blocking on any failure:
+  `ruff check`/`ruff format --check`, `python -m pytest`, `mypy tests/` (the suite is fully
+  typed — `tests.*` is `disallow_untyped_defs`; `tests/smoke` excluded), `markdownlint-cli2`,
+  `sh -n` + `shellcheck`, `php -l`. Each runs only when its tool is installed (missing =
+  reported + skipped; CI is the hard gate); PHPStan/PHPUnit run only when `vendor/bin/` has
+  them. Emergency bypass: `git commit --no-verify`.
 - **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---
@@ -282,306 +234,130 @@ steps (after checkout) so automated commits go through the same `pre-commit` /
 python -m pytest
 ```
 
-Run from repo root. `pyproject.toml` sets `testpaths` and `-v`. No `cd` needed.
+From repo root (`pyproject.toml` sets `testpaths` + `-v`; no `cd` needed). Run after **any**
+change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or `tests/` — in-loop for fast
+feedback. The pre-commit hook re-runs it and CI is final, so no separate manual pre-commit
+run is needed.
 
-Run after **any** change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or
-`tests/` — in-loop, for fast feedback; don't wait for the commit to find breakage.
-The pre-commit hook re-runs the suite at commit time and CI is the final authority,
-so a separate manual pre-commit run is not needed.
-
-PHP side — the fast PHPUnit suite for the pure/extractable helpers of
-`pfblockerng.inc` (issue #39):
+PHP — the fast PHPUnit suite for the pure/extractable helpers of `pfblockerng.inc` (issue #39):
 
 ```sh
-composer install      # once — installs phpunit/phpunit into vendor/
+composer install      # once — installs phpunit into vendor/
 vendor/bin/phpunit     # config in phpunit.xml
 ```
 
-It loads the **real** `pfblockerng.inc` off-appliance — `tests/php/bootstrap.php`
-satisfies the file's pfSense `require_once` with empty shims (`tests/php/shims/`)
-and provides behavioural doubles (`tests/php/pfsense_doubles.php`) for the pfSense
-runtime functions; **no production code is moved or modified**. The PHPStan stubs
-in `stubs/pfsense/` are empty-bodied (symbol existence only) so they cannot serve
-as runtime doubles — add a faithful/no-op `function_exists()`-guarded double to
-`pfsense_doubles.php` (and an empty shim if it's a required include) when a tested
-path reaches a new pfSense function. Deep pfSense-runtime integration stays the
-live-VM smoke's job (ADR-04). See `tests/php/README.md`.
+It loads the **real** `pfblockerng.inc` off-appliance: `tests/php/bootstrap.php` satisfies
+the file's `require_once` with empty shims (`tests/php/shims/`) + behavioural doubles
+(`tests/php/pfsense_doubles.php`); no production code is moved/modified. The PHPStan stubs in
+`stubs/pfsense/` are empty-bodied (symbol existence only) — they can't serve as doubles; add
+a faithful/no-op `function_exists()`-guarded double to `pfsense_doubles.php` (+ an empty shim
+if it's a required include) when a tested path reaches a new pfSense function. Deep
+pfSense-runtime integration stays the live-VM smoke's job (ADR-04). See `tests/php/README.md`.
 
-DNSBL list preprocessing (parse → normalise → classify data/zone → build dicts +
-feed/group index + `whiteDB`, then emit `pfb_py_count`) lives in `pfb_unbound.py`'s
-pure `dnsbl_build_from_manifest()` / `build()`, fed by the PHP/shell-written
-manifest (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only
-download + tag + run the DNSBL-IP firewall pass. Decision-equivalence is pinned by
-`tests/test_adr06_*` (golden oracle, build module, init-from-raw, PHP boundary);
-the init/peak-RAM kill-gate is `benchmarks/spike_adr06_build.py` — it exits non-zero
-on NO-GO (`--report-only` forces exit 0). Its synthetic `build()` on a generic runner
-is NOT the production number, so the CI `benchmarks` job is **manual-only** (dispatch
-Tests with `run_benchmarks`, default off); the real build-time/RAM regression gate is
-moving to the live smoke VM (timing `updatednsbl` start→finish + unbound RSS) — see
-issue #76 and `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
-
-ABP/EasyList feeds are parsed **entirely in Python** (ADR-07): PHP header-sniffs an
-ABP feed, tags it `format_hint='abp'`, and passes its raw lines through verbatim
-(IP anchors `||1.2.3.4^` and hosts IPs still divert to the DNSBL-IP firewall pass);
-the old PHP `$easylist` lite parser is deleted. `parse('abp', …)` is the one DNS-only
-ABP parser — it adds `@@` allow exceptions, regex (block `regexDB` / allow
-`allowRegexDB`, with anchored patterns folded to dicts), and `$important`/`$badfilter`
-precedence resolved by a 6-band numeric scale, with a build-emitted `important_rules`
-flag preserving a byte-identical fast path when no ABP precedence feature is loaded.
-Untrusted feed + user regex is guarded by an opt-in "Limit long/complex regex" static
-cap (drops over-long/nested-quantifier patterns at load) plus an always-on runtime
-warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
-evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser,
-reconcile, matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS
-kill-gate is `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO
-(`--report-only` forces exit 0), runnable via the manual-only CI `benchmarks` job
-(dispatch Tests with `run_benchmarks`, default off — see issue #76). See
-`.ADRs/ADR_07_ABP_DNSBL_Support/`.
-
-A DNSBL **DATA** update is a **zero-downtime background swap — no Unbound restart**
-(ADR-10). The module holds the matcher strata as one frozen `Snapshot` behind a single
-module ref; a reload-watcher daemon thread (`kqueue` `EVFILT_VNODE`, mtime-poll
-fallback) wakes on a generation **sentinel** (`/var/unbound/pfb_py_reload`), rebuilds
-off the live snapshot, and **atomically swaps** the single ref (GIL-atomic → visible to
-every query thread, no torn read, no dropped queries). PHP/shell **atomically publish**
-the manifest (stage → `fsync` → `rename`) then **flip the sentinel** (next integer) —
-the all-or-nothing commit. After flipping, PHP **waits (bounded) for the watcher's
-applied-generation marker** to catch up, so the reload call returns only once the new
-lists are LIVE (queries keep flowing on the old snapshot during the wait — still
-zero-downtime; this restores the "lists live on return" invariant the restart had, so
-the ADR-12 `post` hook sees the new state). **Data = swap; config = restart:** feed/cron
-updates AND the user custom-list edits (alerts Lock/Unlock + "add to whitelist" +
-customlist add/delete, #51) take the no-restart fast path; an
-`unbound.conf`/mode/Resolver change still restarts. **Fallback to restart (fail-safe)**
-when the swap can't run: a RAM-constrained box (PHP RAM gate primary, Python free-page
-probe secondary — the ~2× transient build/swap footprint is
-`benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound
-down, a staged config change, or a prior swap/sentinel error. **Cache on swap:** Reports
-reset; `decisionDB` cleared (no stale decision); **block→allow immediate** (blocks not
-C-cached since #43); **allow→block** flushes the prior resolved answer — a targeted
-delta flush for the #51 single-domain case, TTL-bounded for feed/cron (not a regression
-— the restart is TTL-stale there too). Fail-closed: a bad/partial build keeps the
-last-good snapshot serving. Pinned by `tests/test_adr10_*` (snapshot equivalence,
-fail-closed swap, watcher); idle decision-identity stays guarded by
-`tests/test_adr06_*`/`tests/test_adr07_*`. See `.ADRs/ADR_10_Zero_Downtime_DNSBL/`.
-
-Update Hooks (ADR-12, PHP/shell — **no Python**): admin-configurable `pre`/`post`
-commands run once per update pass from `sync_package_pfblockerng` in
-`pfblockerng.inc` — `pfb_run_hooks($when, $ctx)` reads enabled hooks from
-`installedpackages/pfblockerng/config/0/hooks` (`{command, when, enabled,
-description, timeout}`), runs each **as root** via `/usr/bin/timeout … /bin/sh -c
-<escapeshellarg>` in list order, captures output to the pfBlockerNG log, and
-**non-zero/timeout → log + continue** (a hook can never abort/stall an update; no
-enabled hooks ⇒ byte-identical pass). Admin-only **Update Hooks** settings tab
-(`www/pfblockerng/pfblockerng_hooks.php`, same WebCfg priv as the other settings).
-Exported env (only these are promised): `PFB_WHEN` (`pre`|`post`), `PFB_TRIGGER`
-(`cron`|`update`|`force-reload` — the ADR's `force-update` collapses to `cron`),
-and post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on
-these), `PFB_CHANGED_IP_ALIASES` (post-only, space-separated `pfB_*` IP firewall
-aliases **updated this pass**) and `PFB_CHANGED_DNSBL_GROUPS` (post-only,
-space-separated `DNSBL_*` groups **updated this pass** — split from the IP aliases
-because DNSBL groups are not firewall aliases) — both sourced from the signal the
-pass already computes, Reputation-mode-independent, empty on a no-op pass; ADR-12
-Phase 6 — plus `PFB_STATUS` (the sole remaining stable reserved placeholder: always
-`ok` — do not branch on its value). The `post` hook sees the new DNSBL
-state live (ADR-10's bounded wait-for-apply above runs before the pass returns). Hooks
-live in config ⇒ replicate to a CARP/HA secondary and run on whichever node updates.
-The shipped **HAProxy recipe** (README) is a `post` hook guarded on
-`[ "$PFB_IP_CHANGED" = "1" ]` whose command pipes `haproxy_check_run(1)` (graceful
-reload) through `/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck +
-a maintainer manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
+**DNSBL/ABP pipeline architecture** — ADR-06 (preprocessing → Python), ADR-07 (ABP/EasyList),
+ADR-10 (zero-downtime DNSBL swap), ADR-12 (update hooks) — and the per-ADR test/kill-gate map
+are summarized in **`docs/misc/architecture-notes.md`**; read it before touching
+`pfb_unbound.py`, the manifest boundary, the swap/watcher, or the hooks. Full design lives in
+each `.ADRs/ADR_NN_*/`.
 
 ---
 
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`
 
-`tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI
-(`smoke.yml`, workflow_dispatch) and asserts pfBlockerNG end-to-end. These
-truths are non-obvious and each cost real debugging — internalise them first:
+`tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI (`smoke.yml`,
+workflow_dispatch) and asserts pfBlockerNG end-to-end. These truths are non-obvious and each
+cost real debugging — internalise them first:
 
-- **Probe ON-BOX** (`drill @127.0.0.1` over SSH), NOT the runner-side SLIRP
-  hostfwd — the WAN-hostfwd DNS path is not answered in CI. Python-mode DNSBL has
-  **no localhost exemption**: a blocked name returns its block shape even from
-  `127.0.0.1`. After `reload()` → `wait_unbound_ready`, the **first** DNS response
-  is authoritative — assert it, never loop waiting for the expected value.
-- **Test domains MUST be `helpers.unique_domain()`** (`uuid-*.com`): never RFC 6761
-  TLDs (`.test`/`.example`/`.invalid`/…) — Unbound's built-in `local-zone`s shadow
-  them (NXDOMAIN/NODATA) before DNSBL — and never HSTS-preload names — HSTS
-  (`pfb_hsts`, default ON) forces a would-be VIP block to NULL.
-- **Block shapes (python mode):** NOERROR + VIP (`dnsbl_ipv4`) or NULL
-  (`0.0.0.0` / `::`); NEVER NXDOMAIN for a feed match (NXDOMAIN is SafeSearch-only).
-  Per-list `logging` selects VIP vs NULL and is a **LIST-level** field
-  (`$list['logging']`), not per-row. Compare IPs **by value** (`::` == `::0`).
+- **Probe ON-BOX** (`drill @127.0.0.1` over SSH), NOT the runner-side SLIRP hostfwd (the
+  WAN-hostfwd DNS path isn't answered in CI). Python-mode DNSBL has **no localhost
+  exemption** — a blocked name returns its block shape even from `127.0.0.1`. After
+  `reload()` → `wait_unbound_ready`, the **first** DNS response is authoritative — assert it,
+  never loop waiting for the expected value.
+- **Test domains MUST be `helpers.unique_domain()`** (`uuid-*.com`): never RFC 6761 TLDs
+  (`.test`/`.example`/`.invalid`/…) — Unbound's built-in `local-zone`s shadow them
+  (NXDOMAIN/NODATA) before DNSBL — and never HSTS-preload names (`pfb_hsts`, default ON,
+  forces a would-be VIP block to NULL).
+- **Block shapes (python mode):** NOERROR + VIP (`dnsbl_ipv4`) or NULL (`0.0.0.0`/`::`);
+  NEVER NXDOMAIN for a feed match (NXDOMAIN is SafeSearch-only). Per-list `logging` selects
+  VIP vs NULL and is a **LIST-level** field (`$list['logging']`), not per-row. Compare IPs
+  **by value** (`::` == `::0`).
 - **Unbound is chrooted at `/var/unbound`** — files its python module reads must be
-  chroot-relative (see the chroot note under "Investigating the live system"); a
-  host-absolute path silently fails to load.
-- **Enable chain:** DNSBL `mode=='enabled'` needs `enable_cb=on` + `pfb_dnsbl=on` +
-  the DNS Resolver enabled (`unbound_state`). On `devel`, `dnsbl_mode`/`pfb_py_block`
-  are dead keys (python is the only mode); on `main` they're still required.
-- **The image bakes only the deps + qemu-guest-agent** — the harness injects the
-  DNSBL VIP (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline.
-  The package CAN now auto-create the sinkhole VIP (`pfb_dnsvip_auto` ON,
-  ADR-13), but the default is **OFF**, so `ensure_dnsbl_vip` remains accurate
-  for the matrix (default-off ⇒ the harness still must inject the VIP).
-  The smoke qcow2 cache is content-keyed by GHCR digest, so a same-tag re-push
-  invalidates automatically.
+  chroot-relative (see "Investigating the live system"); a host-absolute path silently fails
+  to load.
+- **Enable chain:** DNSBL `mode=='enabled'` needs `enable_cb=on` + `pfb_dnsbl=on` + the DNS
+  Resolver enabled (`unbound_state`). On `devel`, `dnsbl_mode`/`pfb_py_block` are dead keys
+  (python is the only mode); on `main` they're still required.
+- **The image bakes only the deps + qemu-guest-agent** — the harness injects the DNSBL VIP
+  (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline. The package can now
+  auto-create the sinkhole VIP (`pfb_dnsvip_auto`, ADR-13) but defaults **OFF**, so
+  `ensure_dnsbl_vip` stays accurate. The smoke qcow2 cache is content-keyed by GHCR digest
+  (a same-tag re-push invalidates automatically).
 - **The branch `.pkg` is built on a plain Linux runner** (`build-pkg-linux.yml` →
-  `scripts/build-pkg-portable.py`), NOT on a FreeBSD VM: pfBlockerNG is a `NO_BUILD`
-  port, so the portable builder reproduces `make package` from the port's
-  Makefile + pkg-plist. `pkg add` checks a dep is PRESENT, not its version, so the
-  portable `.pkg` installs identically on the baked-deps image. The real FreeBSD
-  `make package` path (`build-pkg.yml`, image cache content-keyed by published
-  SHA256) is RETAINED as a dispatch-only fidelity oracle — not in the smoke gate.
-- **Every run uploads a full guest snapshot** (`smoke-diagnostics` artifact: all
-  `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state,
-  `/var/db/pfblockerng` and `/var/db/aliastables`, scrubbed `config.xml`). On any
-  failure, read it first.
+  `scripts/build-pkg-portable.py`), NOT a FreeBSD VM: pfBlockerNG is a `NO_BUILD` port, so
+  the portable builder reproduces `make package` from the Makefile + pkg-plist. `pkg add`
+  checks a dep is PRESENT, not its version, so the portable `.pkg` installs identically on
+  the baked-deps image. The real FreeBSD `make package` path (`build-pkg.yml`) is retained as
+  a dispatch-only fidelity oracle — not in the smoke gate.
+- **Every run uploads a full guest snapshot** (`smoke-diagnostics`: all `/var/log`, `dmesg`,
+  `pfctl -sa`, unbound + pfBlockerNG state, `/var/db/pfblockerng`, `/var/db/aliastables`,
+  scrubbed `config.xml`). On any failure, read it first.
 
-Full journey, verified response model, and per-step instrument (`SMOKE_STATE_DIFF`):
+Full journey, verified response model, and the `SMOKE_STATE_DIFF` instrument:
 `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/`.
 
-### Web UI tiers (ADR-14) — live under `tests/smoke/ui/`, reuse `smoke_vm`
+The **Web-UI tiers (ADR-14)** under `tests/smoke/ui/` and the **HTTP mock-feed load smoke
+(ADR-16 Part C)** in `tests/smoke/test_smoke_feeds.py` — including the sample-fixture table,
+`_MockFeedServer` mechanics, the CI wiring (`ui-tests.yml`), and gate status — are documented
+in **`docs/misc/architecture-notes.md`**. Operative facts that stay here:
 
-The Web-UI suite (ADR-14) lives under `tests/smoke/ui/` and **reuses** the smoke
-`smoke_vm` fixture + `helpers.py` (no separate harness) to drive the live
-webConfigurator. It is off the default `pytest` like the rest of `tests/smoke/`.
-Three tiers, each its own pytest marker:
-
-- **Tier A — `ui_render`** (cheap/hermetic, the **PR gate**): authenticated-HTTP
-  GET of every pfBlockerNG page → 200, body free of `Fatal error`/`Parse error`/
-  `Warning`/`Notice`/`Uncaught`, a page-specific marker present, **and** no new
-  on-box `php_error.log` line. **Never HTTP 200 alone** — body + marker +
-  `php_error.log` is the oracle.
-- **Tier B — `ui_e2e`** (daily/on-demand): CSRF-POST flows asserting the
-  **effective** `config.xml`/`pfctl`/unbound state via `helpers.config_get`, not
-  the HTTP response.
-- **Tier B — `ui_browser`** (daily/on-demand): headless Playwright/Chromium
-  reusing the auth session (injected `PHPSESSID` cookie — **no second login**),
-  exercising the JS-only UX and capturing per-page screenshots. Needs the
-  separately-downloaded Chromium binary (`python -m playwright install chromium`);
-  module-level `importorskip` SKIPs cleanly without it.
-
-Run a tier against a smoke VM exactly like the smoke suite — re-enable the package
-and select the marker (`SMOKE_ADMIN_PASSWORD` must be set, else the UI fixtures
-SKIP, never fail):
-
-```sh
-python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
-```
-
-The reusable `ui-tests.yml` (`workflow_call` + `workflow_dispatch` + daily
-`schedule`) is matrix-parametric on image-ref/version and tier-selectable, **one
-GH job per (tier × version)** (`fail-fast: false` → "Re-run failed jobs" re-runs
-only a flaky leg). Tier A gates PHP/JS PRs (folded into "All tests passed"); Tier
-B is schedule/dispatch only (non-PR-blocking); `release.yml` `needs:` the full
-suite (`tier: all`, the `ui-suite` job) before publishing, each leg re-runnable in
-isolation. The version axis is parametric but runs the **single CE image** today
-(B1) — adding one is a one-line `DEFAULT_VERSIONS` append + image-ref wire
-(IMAGE_RUNBOOK). Diagnostics (screenshots + VM logs + smoke snapshot) upload
-`if: always()` as `ui-diagnostics-<tier>-<version>`. The §7 browser reliability
-numbers are **CI-pending**; the browser leg has a one-line demote/drop switch
-(drop `browser` from `DEFAULT_SCHEDULE_TIERS` + run release `ui-suite` as
-`tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
-
-### HTTP mock-feed load smoke (ADR-16 Part C) — `tests/smoke/test_smoke_feeds.py`
-
-`test_smoke_feeds.py` (marker `smoke`) is the **only suite file that drives the
-real HTTP fetch path**: each case points an `IpCase`/`DnsblCase` at a URL served
-by `_MockFeedServer` (the in-runner stdlib HTTP server reachable by the guest at
-`http://10.0.2.2:<port>/<name>` over SLIRP — survives the egress block), runs a
-real Force Update, and asserts the feed loaded on the box. Every other smoke case
-supplies a local file via `write_local_feed`.
-
-**Sample fixtures** live under `tests/smoke/fixtures/` (committed to the repo):
-
-| File | Format | Type |
-| --- | --- | --- |
-| `ip_plain_cidr.txt` | plain IPv4 + CIDR | IP v4 |
-| `ip_range.txt` | IPv4 range `a-b` | IP v4 |
-| `ip_ipv6.txt` | IPv6 single + CIDR | IP v6 |
-| `dnsbl_plain.txt` | plain domain | DNSBL |
-| `dnsbl_hosts.txt` | hosts `0.0.0.0 domain` | DNSBL |
-| `dnsbl_abp.txt` | ABP / EasyList (\|\|d^ block, @@ allow) | DNSBL |
-
-All data is inert (RFC 5737 / RFC 3849 IPs; `uuid-<hex>.com` domains). The
-`mock_feeds` fixture auto-registers every file in `tests/smoke/fixtures/` when it
-starts; individual cases call `mock_feeds.feed_url("<name>")` to get the guest URL.
-
-**How `_MockFeedServer.register()` works.** `register(name, body)` stores the body
-in an in-memory dict; the HTTP handler serves it verbatim (plain body, no
-`Content-Encoding`, no `Content-Disposition`) at `GET /<name>`. The fixture
-directory variant (`mock_feeds.feed_url("<filename>")`) reads the file on first
-access and registers it under its basename. `curl` does not send
-`Accept-Encoding: gzip` nor `If-Modified-Since`, so the mock needs no compression
-or ETag/304 logic — plain body is fine.
-
-**Adding a new format fixture.**
-
-1. Drop the fixture file into `tests/smoke/fixtures/` (inert data — TEST-NET IPs
-   / `uuid-*.com` domains; never RFC 6761 TLDs or HSTS-preload names).
-2. Update `tests/smoke/fixtures/README.md` with the member/non-member set.
-3. Add a case in `test_smoke_feeds.py` using `mock_feeds.feed_url("<filename>")`.
-
-**Kill-gate / gate status (ADR-16 §7).** The Part-C premise is falsifiable:
-"a Force Update reliably fetches an HTTP feed from the mock over SLIRP and loads
-it, in CI". The reliability bar is **≥ 4/5 clean runs**. This test is
-`OPTIMISTIC-GO, PENDING-CI` — all 6 representative formats are authored; the live
-CI run (the `ui-tests`-labeled PR suite) decides GO vs DEMOTE. If < 4/5 clean,
-`test_smoke_feeds.py` is demoted to dispatch-only (Part A still ships; the
-local-file load coverage in `test_smoke_matrix.py` / `test_smoke_abp.py`
-remains). The final decision is recorded in
-`.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`.
+- Tier A `ui_render` is the **PR gate**: GET each page → 200, body free of `Fatal
+  error`/`Parse error`/`Warning`/`Notice`/`Uncaught`, a page-specific marker present, AND no
+  new on-box `php_error.log` line — **never HTTP 200 alone**. Tiers B `ui_e2e`/`ui_browser`
+  are schedule/dispatch-only (non-PR-blocking). Run a tier:
+  `python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="` (`SMOKE_ADMIN_PASSWORD`
+  must be set, else the UI fixtures SKIP, never fail).
+- Smoke feed fixtures live in `tests/smoke/fixtures/` (inert data — RFC 5737/3849 IPs,
+  `uuid-*.com`; never RFC 6761 TLDs or HSTS-preload names). Add one: drop the file there,
+  update `tests/smoke/fixtures/README.md`, add a case in `test_smoke_feeds.py` using
+  `mock_feeds.feed_url("<name>")`.
 
 ---
 
 ## Test coverage (mandatory)
 
-When writing tests — **unit, integration, E2E, or smoke** — cover *every* branch of
-the behaviour under test, and assert the state *before* a change as well as after.
-**A test must validate that the code is correct, not merely execute it:** a test
-that runs the code but asserts nothing that would *fail* when the behaviour
-regresses is coverage theater and is **not acceptable**, even at 100% line coverage.
-The test's name (and comments) state the **intent** — the behaviour being pinned —
-not the mechanics. These rules, all required:
+When writing tests — **unit, integration, E2E, or smoke** — cover **every branch** of the
+behaviour and assert the state **before** a change as well as after. **A test must validate
+that the code is correct, not merely execute it:** running the code while asserting nothing
+that would *fail* on a regression is coverage theater and is **not acceptable**, even at 100%
+line coverage. The test's name/comments state the **intent** (the behaviour pinned), not the
+mechanics. All three required:
 
-- **Branch coverage — test every condition, not just one side.** When a result
-  depends on a toggle / flag / mode / input class, assert the outcome for **each**
-  value it can take, not only the interesting one. A boolean toggle gets a case with
-  it **off** *and* a case with it **on** (and any third state); every distinct branch
-  of an `if` / `switch` / match — and each documented input class — gets its own
-  assertion. A test that exercises only the "on" path silently lets the "off" path
-  rot. (Example already in the tree: `test_dnsbl_hsts_override_forces_null` is paired
-  with `test_dnsbl_hsts_disabled_keeps_vip` — same name, HSTS on vs off — so the
-  override is proven a real branch, not an always-null path.)
-
-- **Assert the before-state in transition tests — no false passes.** When a test
-  flips a toggle (or applies an operation) and asserts the *changed* result, it MUST
-  first assert the *original* result, so a green proves the flip **caused** the
-  change rather than the expected end-state happening to hold already. Concretely: if
-  `i=false ⇒ a→x` and `i=true ⇒ a→y`, the test asserts `a→x` while `i=false`, **then**
-  sets `i=true`, **then** asserts `a→y` — never just the final `a→y`. This extends to
-  any observable lifecycle: a test that a domain is *blocked* after listing must first
-  assert it *resolved* before listing (and, after an unblock, resolves again) — see
-  the `tests/smoke` DNSBL lock/unlock lifecycle cases.
-
-- **Specify complex behaviour BDD-style; keep trivial tests trivial.** A utility
-  function, a small rule, or a simple mapping needs only a plain assertion with a
-  descriptive, intent-naming title. Anything with **non-trivial behaviour** — state
-  transitions, precedence, multi-step flows (the DNSBL/ABP decision logic, the
-  decision cache, smoke journeys) — gets a **Scenario / Background + Given–When–Then**
-  specification living **next to the test** (a docstring/comment or the test body),
-  and the body split into explicit **Given** (arrange) / **When** (act) / **Then**
-  (assert) sections, so the test reads as the behaviour it guarantees rather than as
-  a sequence of calls.
+- **Branch coverage — test every condition, not one side.** When a result depends on a
+  toggle/flag/mode/input-class, assert the outcome for **each** value it can take: a boolean
+  gets a case **off** *and* a case **on** (plus any third state); every `if`/`switch`/match
+  branch and each documented input class gets its own assertion. (In-tree:
+  `test_dnsbl_hsts_override_forces_null` paired with `test_dnsbl_hsts_disabled_keeps_vip` —
+  HSTS on vs off — proves it's a real branch, not an always-null path.)
+- **Assert the before-state in transition tests — no false passes.** A test that flips a
+  toggle and asserts the *changed* result MUST first assert the *original*, so green proves
+  the flip **caused** the change. If `i=false ⇒ a→x` and `i=true ⇒ a→y`: assert `a→x` at
+  `i=false`, **then** set `i=true`, **then** assert `a→y` — never just the final state.
+  Extends to any lifecycle: a "blocked after listing" test first asserts the domain *resolved*
+  before listing (and resolves again after unblock) — see the `tests/smoke` DNSBL lock/unlock
+  cases.
+- **Specify complex behaviour BDD-style; keep trivial tests trivial.** A util / small rule /
+  simple mapping needs only a plain, intent-named assertion. Non-trivial behaviour (state
+  transitions, precedence, multi-step flows — the DNSBL/ABP decision logic, the decision
+  cache, smoke journeys) gets a **Scenario / Background + Given–When–Then** spec next to the
+  test, the body split into explicit **Given** (arrange) / **When** (act) / **Then** (assert).
 
 ---
 
 ## Linting
 
-Run the linters below **while working**, for fast feedback. Enforcement is layered,
-so treat them as feedback rather than a manual pre-commit checklist: the
-`.githooks/pre-commit` hook blocks any commit that fails them, and CI is the final
-authority. (CI runs them even when the local hook is inactive or a tool is missing.)
+Run the linters below **while working**, for fast feedback. Enforcement is layered: the
+`.githooks/pre-commit` hook blocks any commit that fails them, and CI is the final authority
+(it runs them even when the local hook is inactive or a tool is missing).
 
 ### Python
 
@@ -591,73 +367,54 @@ ruff check . --fix  # lint + autofix
 ruff format .       # format
 ```
 
-Config in `pyproject.toml`. Target: Python 3.11+ (pfSense CE 2.8 / FreeBSD 15).
-
-Ruff is the canonical linter. `.flake8` exists only so contributors who run
-Flake8 (e.g. the VS Code extension) get the same 120-column limit and ignore set
-— Flake8 can't read `pyproject.toml`, so without it Flake8 falls back to a
-79-column default and to whitespace checks Ruff delegates to `ruff format`. Keep
-the two in sync if the Ruff config changes.
+Config in `pyproject.toml`. Target Python 3.11+ (pfSense CE 2.8 / FreeBSD 15). Ruff is
+canonical; `.flake8` exists only so Flake8 users (e.g. the VS Code extension) get the same
+120-column limit + ignore set (Flake8 can't read `pyproject.toml` — without it, it falls back
+to 79 columns and whitespace checks Ruff delegates to `ruff format`). Keep them in sync.
 
 ### PHP
 
-Intelephense in VS Code. `.inc` files are PHP — `files.associations` handles this.
-Stubs in `stubs/pfsense/` resolve pfSense-provided functions. If Intelephense flags
-a pfSense function as undefined, add it to the appropriate stub file rather than
-expanding the `undefinedFunctions` suppression in `.vscode/settings.json`.
-
-PHPStan (static analysis, `vendor/bin/phpstan`) and PHPUnit (functional unit
-tests, `vendor/bin/phpunit`) are the PHP gates — both pulled by `composer install`
-and enforced in CI (`test.yml`) and the pre-commit hook. See "Running tests" for
-the PHPUnit suite; the `stubs/pfsense/` empty-bodied stubs are for PHPStan, NOT
-runtime test doubles (those live in `tests/php/pfsense_doubles.php`).
+Intelephense in VS Code (`.inc` = PHP via `files.associations`). `stubs/pfsense/` resolves
+pfSense-provided functions — if one is flagged undefined, add it to the right stub file rather
+than expanding `undefinedFunctions` in `.vscode/settings.json`. PHPStan + PHPUnit are the PHP
+gates (both pulled by `composer install`, enforced in CI `test.yml` + the pre-commit hook).
+The `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
+`tests/php/pfsense_doubles.php`).
 
 ### Shell
 
-ShellCheck via VS Code extension. All scripts use `#!/bin/sh` (POSIX sh, not bash).
-`.shellcheckrc` suppresses SC1091 (pfSense source files unreachable locally) and
-SC2154 (rc(8)-injected variables). Do not suppress other rules without justification.
+ShellCheck (VS Code extension). All scripts use `#!/bin/sh` (POSIX sh, not bash).
+`.shellcheckrc` suppresses SC1091 (pfSense sources unreachable locally) + SC2154
+(rc(8)-injected vars); don't suppress others without justification.
 
-**URL-encoding check (`scripts/check_url_encoding.py`).** A preventative gate that
-forbids naked shell-variable interpolation into an HTTP-client (`curl`/`wget`/`fetch`)
-URL query — e.g. `curl "http://h/cb?ip=$VAR"`. A space-separated or empty value (such
-as pfBlockerNG's `PFB_CHANGED_IP_ALIASES`) jammed into the URL breaks: the space
-re-tokenises the command and the parameter collapses. The fix is to let the value ride
-its own option so curl percent-encodes it: `curl --data-urlencode "ip=$VAR" http://h/cb`
-(NOT flagged). With no args it scans every tracked `*.sh` script (the `src/**`
-hook/pre-script surface plus dev `scripts`/`tests` shell, mirroring the shebang/`sh -n`
-checks) AND the `sh`/`bash`/`shell`-tagged fenced code blocks in tracked Markdown docs
-(so the hook/webhook recipe examples are guarded too); static query params (`?fixed=1`)
-and base/host/path interpolation are out of scope. Enforced in both `.githooks/pre-commit` and CI (`test.yml` ShellCheck job);
-pure detection lives in `find_violations()` and is unit-tested in
+**URL-encoding check (`scripts/check_url_encoding.py`)** — a preventative gate forbidding
+naked shell-var interpolation into an HTTP-client (`curl`/`wget`/`fetch`) URL query (e.g.
+`curl "http://h/cb?ip=$VAR"`): a space-separated or empty value (such as
+`PFB_CHANGED_IP_ALIASES`) re-tokenises the command and the param collapses. Fix: let the
+value ride its own option so curl percent-encodes it — `curl --data-urlencode "ip=$VAR"
+http://h/cb`. No-arg run scans every tracked `*.sh` (the `src/**` hook/pre-script surface +
+dev `scripts`/`tests` shell) AND the `sh`/`bash`/`shell`-tagged fenced blocks in tracked
+Markdown; static params (`?fixed=1`) and base/host/path interpolation are out of scope.
+Enforced in pre-commit + CI; detection in `find_violations()`, unit-tested in
 `tests/test_url_encoding_check.py`.
 
 ### Markdown
 
-markdownlint via the VS Code "markdownlint" extension and the CLI. Run from repo root:
+markdownlint (VS Code "markdownlint" extension + CLI). From repo root:
 
 ```sh
 npx markdownlint-cli2          # lint
 npx markdownlint-cli2 --fix    # lint + autofix
 ```
 
-When writing Markdown, produce compliant output directly: put a blank line around
-every heading, list, and fenced code block; give each fenced block a language
-(use a `text` fence for plain output, trees, or ASCII); and end the file with a
-single trailing newline. Long lines and compact (unaligned) tables are fine — `MD013`
-and `MD060` are disabled.
-
-Rule set is in `.markdownlint.jsonc` (read by both the extension and the CLI);
-globs/ignores are in `.markdownlint-cli2.jsonc`. The ruleset is pragmatic — it
-enforces structural/consistency rules but disables ones that fight the
-documentation style: `MD013` (line length), `MD060` (table-column alignment),
-`MD036` (the ADR `**Positive**`/`**Negative**` inline sub-headers), and `MD041`
-(frontmatter-led files such as `.claude/skills/*.md` don't open with an H1);
-`MD024` is `siblings_only`. `**/TRANSCRIPT.md` is ignored (verbatim transcript,
-not maintained docs). Keep the disabled-rule rationale in `.markdownlint.jsonc`
-in sync if the set changes. A clean lint (`0 error(s)`) is enforced by the
-pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
-`npx markdownlint-cli2 --fix` while editing for fast feedback.
+Produce compliant output directly: a blank line around every heading/list/fence; a language
+on every fence (`text` for plain output/trees/ASCII); a single trailing newline. Long lines +
+compact (unaligned) tables are fine (`MD013`/`MD060` disabled). Rules in `.markdownlint.jsonc`
+(extension + CLI); globs/ignores in `.markdownlint-cli2.jsonc`. Disabled to fit the docs
+style: `MD013` (line length), `MD060` (table alignment), `MD036` (ADR
+`**Positive**`/`**Negative**` sub-headers), `MD041` (frontmatter-led files don't open with an
+H1); `MD024` is `siblings_only`; `**/TRANSCRIPT.md` ignored. Keep the rationale in
+`.markdownlint.jsonc` in sync. Clean lint (`0 error(s)`) enforced by pre-commit + CI.
 
 ---
 
@@ -665,128 +422,105 @@ pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
 
 ### Naming — follow the established pattern
 
-Names are not invented in isolation: **a new variable, web-page element `id`,
-map/dict key, or config key follows the conventions already in that file (or in
-similar files) — match the surrounding pattern, don't coin an ad-hoc name.** This
-spans the whole stack (PHP, Python, shell, JS, the `www/` UI, `config.xml` keys).
-For example, when every sibling identifier is `pfB_*`, a wizard "don't show again"
-flag is **`pfB_wizard_disable`**, not `donotshowthisagain`. Before naming
-something, look at its neighbours (the other fields on the page, the other keys in
-the dict, the other settings in the section) and stay consistent — prefix,
-casing, separators, and word order included. Consistency makes the code greppable
-and the intent obvious; an off-pattern name is a smell even when it "works".
+**A new variable, web-page element `id`, dict key, or config key follows the conventions
+already in that file (or similar files) — match the surrounding pattern, don't coin an ad-hoc
+name.** Spans the whole stack (PHP, Python, shell, JS, `www/`, `config.xml` keys). E.g. when
+sibling identifiers are `pfB_*`, a wizard "don't show again" flag is **`pfB_wizard_disable`**,
+not `donotshowthisagain`. Check neighbours (other fields on the page, other keys in the dict,
+other settings in the section) for prefix, casing, separators, word order. An off-pattern name
+is a smell even when it works.
 
 ### PHP
 
-- Indent: **tabs** (enforced by `.editorconfig`)
-- Target: PHP 8.3 (pfSense CE 2.8)
-- Functions injected by pfSense at runtime (from `util.inc`, `config.lib.inc`, etc.)
-  are declared in `stubs/pfsense/` — do not `require_once` pfSense files in tests
-- No `die()`/`exit()` in library code; return values or throw
-- **Web UI help text** (field/page descriptions, mostly in the `www/` PHP pages):
-  keep it **brief yet clear** — match the wording, length, and style of the existing
-  help texts on the surrounding page; don't write longer prose than the neighbours
+- Indent: **tabs** (`.editorconfig`)
+- Target PHP 8.3 (pfSense CE 2.8)
+- pfSense-injected functions (`util.inc`, `config.lib.inc`, …) are declared in
+  `stubs/pfsense/` — don't `require_once` pfSense files in tests
+- No `die()`/`exit()` in library code; return or throw
+- **Web UI help text** (field/page descriptions, mostly in `www/`): brief yet clear — match
+  the wording, length, and style of neighbouring help texts; don't out-prose them
 
 ### Python
 
 - Indent: **4 spaces**
-- Target: Python 3.11+; use `from __future__ import annotations` for forward refs
-- Add type hints to new functions; leave existing untyped code alone unless touching it
-- No bare `except:`; use `except Exception` at minimum
-- `pfb_unbound.py` runs inside Unbound's Python loader — no dependencies outside stdlib
-- Unbound injects its API symbols (`log_info`, `RR_TYPE_*`, `DNSMessage`, …) as
-  globals at runtime; `pfb_unbound.py` references them as bare names. They are
-  declared once in `stubs/python/unboundmodule.py` (a dev/test stand-in), which
-  Pylance/mypy resolve via the `TYPE_CHECKING` import and the test suite copies
-  onto `builtins` (see `tests/conftest.py`). Add a new injected symbol there.
+- Target Python 3.11+; `from __future__ import annotations` for forward refs
+- Type-hint new functions; leave existing untyped code alone unless touching it
+- No bare `except:` — `except Exception` minimum
+- `pfb_unbound.py` runs in Unbound's Python loader — stdlib only, no external deps
+- Unbound injects API symbols (`log_info`, `RR_TYPE_*`, `DNSMessage`, …) as runtime globals;
+  `pfb_unbound.py` uses them as bare names. Declared once in `stubs/python/unboundmodule.py`
+  (Pylance/mypy resolve via the `TYPE_CHECKING` import; the suite copies them onto `builtins`,
+  see `tests/conftest.py`). Add a new injected symbol there.
 
 ### Shell
 
 - POSIX sh only (`#!/bin/sh`), no bash-isms (`[[`, arrays, `$RANDOM`, etc.)
-- Quote all variable expansions: `"$var"`, `"${var}"`
-- Use absolute paths for all binaries (pfSense convention); do not rely on `$PATH`
-- `ip_pre_AWS_*.sh` are near-identical, hand-maintained per-region pre-scripts
-  (selectable in the UI) that differ only by a `jq` region filter; when changing
-  shared logic, apply it uniformly across all of them
+- Quote all expansions: `"$var"`, `"${var}"`
+- Absolute paths for all binaries (pfSense convention); don't rely on `$PATH`
+- `ip_pre_AWS_*.sh` are near-identical, hand-maintained per-region pre-scripts differing only
+  by a `jq` region filter — apply shared-logic changes uniformly across all of them
 
 ---
 
 ## Updating documentation
 
-**Documentation-only changes skip CI.** A commit/PR that touches *only* Markdown
-(`**/*.md` — includes `CLAUDE.md` and `README.md`) or `docs/` is excluded from the
-`test.yml` workflow via `paths-ignore` — there is nothing in the suite to exercise
-for docs. The moment a change also touches code (anything outside those paths), the
-full suite runs again. The local pre-commit hook still lints Markdown regardless, so
-docs stay clean. This is a CI carve-out only: such changes still go through a
-worktree and the normal PR/landing flow ("Worktrees", "Branches and releases").
+**Documentation-only changes skip CI.** A commit/PR touching *only* Markdown (`**/*.md`,
+including `CLAUDE.md`/`README.md`) or `docs/` is excluded from `test.yml` via `paths-ignore`.
+Touch any code (anything outside those paths) and the full suite runs again. The pre-commit
+hook still lints Markdown. This is a CI carve-out only — such changes still go through a
+worktree + the normal PR/landing flow.
 
-Update `README.md` when:
-
-- Workflow steps change (test command, deploy command, release steps)
-- Minimum supported pfSense CE version changes
-- New developer tooling is added
+Update `README.md` when: workflow steps change (test/deploy/release commands); min supported
+pfSense CE changes; new developer tooling is added.
 
 Update `stubs/pfsense/` when:
 
-- Minimum supported pfSense CE version is bumped — run:
+- Min CE is bumped — run:
 
   ```sh
-  python scripts/update-pfsense-stubs.py            # defaults to the newest public source
+  python scripts/update-pfsense-stubs.py            # newest public source
   python scripts/update-pfsense-stubs.py --version X.Y.Z
   ```
 
-  The generator downloads pfSense source from GitHub and emits one stub file per
-  module (`util.php`, `interfaces.php`, `certs.php`, …) with cross-file dedup. It
-  defaults to **2.7.2** (`STUB_SOURCE_VERSION`): Netgate's public mirror is frozen
-  there — no `RELENG_2_8_0` ref — and those signatures are stable across 2.7→2.8,
-  which is all PHPStan level 0 needs (symbol existence). Generate from a real 2.8
-  checkout if/when one is available.
-- pfBlockerNG starts calling a new pfSense API function not yet stubbed — add it
-  to the appropriate file in `stubs/pfsense/` manually
-- `globals.php` is **always** manually maintained (array shapes can't be auto-derived);
-  `logging.php` and `supplemental.php` are likewise hand-maintained and never
-  regenerated (`supplemental.php` holds pfSense functions used on CE 2.8 that are
-  absent from the 2.7.2 stub source, e.g. `config_read_file`). PHPStan is the gate:
-  prefer stubbing a real pfSense function over a `phpstan-baseline.neon` suppression.
+  Downloads pfSense source, emits one stub per module (`util.php`, `interfaces.php`, … ) with
+  cross-file dedup. Defaults to **2.7.2** (`STUB_SOURCE_VERSION`): the public mirror is frozen
+  there (no `RELENG_2_8_0`) and signatures are stable 2.7→2.8, all PHPStan level 0 needs
+  (symbol existence). Regenerate from a real 2.8 checkout if/when available.
+- pfBlockerNG calls a new un-stubbed pfSense function — add it to the right `stubs/pfsense/`
+  file manually.
+- `globals.php` is **always** hand-maintained (array shapes can't be auto-derived);
+  `logging.php` + `supplemental.php` likewise never regenerated (`supplemental.php` holds
+  CE-2.8 functions absent from the 2.7.2 source, e.g. `config_read_file`). PHPStan is the
+  gate: prefer a real stub over a `phpstan-baseline.neon` suppression.
 
-When the minimum supported CE version changes, also:
+When the min CE version changes, also:
 
 1. **Update the supported-version matrix** — edit `supported-versions.json` on the
-   **`ci-metadata` orphan branch** (off `main`/`devel`, its own history) via a PR
-   against `ci-metadata`. This is the **single source of truth** for which pfSense
-   versions are supported and their `(freebsd_version, php_version)` build pair; all
-   workflows read it at runtime via `scripts/read-version-matrix.sh` and
-   `.github/actions/read-version-matrix/`. See `scripts/README.md § "Supported-version matrix"`.
-   The **build vs CI split**: CE gets both `.pkg` builds and live-VM smoke CI (`ci: true`);
-   Plus gets `.pkg` builds only (`ci: false` — no licensed CI image). Adding an entry
-   to `ci-metadata` and letting the **version-tracker** (`version-tracker.yml`) run (or
-   dispatch it) is sufficient — it triggers `build-pkg-linux.yml`, `image-refresh.yml`,
-   and `smoke-fanout.yml` automatically. **No workflow YAML edit is needed.**
-2. **Refresh the pfSense CE smoke image** (ADR-04 + ADR-09): dispatch
-   `.github/workflows/image-refresh.yml` with `pfsense_version` + `freebsd_version`
-   from the new matrix entry. The workflow calls `scripts/image-upgrade.sh --upgrade-pkgs`,
-   which pulls the current GHCR tag, conditionally upgrades baked deps (`pkg upgrade -n`
-   dry-run; only runs `pkg upgrade -y` + reboots if upgrades are actually pending), runs
-   `pfSense-upgrade` (any bump, including major), then applies the **alive/working-fine
-   health gate** (polls up to 300 s for the webConfigurator to answer HTTP or `pfctl` to
-   show a live ruleset) and publishes the new tag only when the box is healthy — fail-closed
-   (a bad image is never published). A non-blocking pfBlockerNG smoke step
-   (`continue-on-error: true`) runs on a discarded overlay after publish — it is
-   informational only and cannot fail the refresh. The authoritative pfBlockerNG validation
-   is `smoke-fanout.yml` (step 3 below). Manual seed via `scripts/image-publish.sh` is the
-   fallback only when the health gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
-   > **ADR-04 §2 note:** ADR-04 §2 mentions "re-baseline on a MAJOR version jump" as a
-   > conservative option. ADR-09 supersedes this as the **default**: `image-refresh.yml`
-   > handles all jumps (minor and major) uniformly via upgrade-in-place; a fresh manual
-   > re-seed is triggered only by a gate failure, not automatically by a major jump. A
-   > reconciling edit to ADR-04 §2 is a tracked follow-up (not yet applied).
-3. **Run the smoke fan-out** to validate the new CE image end-to-end: dispatch
-   `.github/workflows/smoke-fanout.yml` (no inputs needed — it reads the CI matrix
-   itself). The fan-out runs the ADR-04 smoke suite against **all** `ci: true` CE
-   images in parallel (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if
-   any single CE leg fails. Never Plus. The version-tracker triggers this automatically
-   on its daily run; you can also dispatch it manually to verify the new image.
+   **`ci-metadata` orphan branch** via a PR against `ci-metadata`. Single source of truth for
+   supported versions + their `(freebsd_version, php_version)` build pair; workflows read it
+   at runtime via `scripts/read-version-matrix.sh` + `.github/actions/read-version-matrix/`
+   (see `scripts/README.md`). Build vs CI split: CE gets `.pkg` builds + live-VM smoke
+   (`ci: true`); Plus gets builds only (`ci: false`, no licensed CI image). Adding the entry +
+   letting **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
+   `build-pkg-linux.yml`, `image-refresh.yml`, `smoke-fanout.yml` automatically — **no
+   workflow YAML edit needed**.
+2. **Refresh the CE smoke image** (ADR-04 + ADR-09) — dispatch `image-refresh.yml` with
+   `pfsense_version` + `freebsd_version` from the new entry. It runs
+   `scripts/image-upgrade.sh --upgrade-pkgs`: pulls the current GHCR tag, conditionally
+   upgrades baked deps (`pkg upgrade -n` dry-run gate; `pkg upgrade -y` + reboot only if
+   pending), runs `pfSense-upgrade` (any bump incl. major), then an **alive health gate**
+   (polls ≤300 s for the webConfigurator to answer HTTP or `pfctl` to show a live ruleset) and
+   publishes the tag only when healthy — fail-closed. A non-blocking post-publish smoke
+   (`continue-on-error`) runs on a discarded overlay (informational only — authoritative
+   validation is the fan-out, step 3). Manual seed via `scripts/image-publish.sh` is the
+   fallback when the gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`. (ADR-09
+   supersedes ADR-04 §2's "re-baseline on a major jump": `image-refresh.yml` handles all jumps
+   via upgrade-in-place; a fresh re-seed is triggered only by a gate failure. Reconciling the
+   ADR-04 §2 text is a tracked follow-up.)
+3. **Run the smoke fan-out** — dispatch `smoke-fanout.yml` (no inputs; it reads the CI
+   matrix). Runs the ADR-04 suite against **all** `ci: true` CE images in parallel
+   (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if any CE leg fails. Never
+   Plus. version-tracker triggers it daily; dispatch manually to verify a new image.
 
 ---
 
@@ -797,92 +531,75 @@ When the minimum supported CE version changes, also:
 | `main` | Stable  | `net/pfSense-pkg-pfBlockerNG` |
 | `devel` | Development | `net/pfSense-pkg-pfBlockerNG-devel` |
 
-New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub
-Release → PR on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases;
-tags from `main` become stable releases.
+New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub Release → PR
+on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases; from `main`, stable releases.
 
-**Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and
-merge" button); never a merge commit, never squash. History across `main` ← `devel`
-is kept strictly linear (`main` is always an ancestor of `devel`, no merge commits),
-so promotion up the chain — and landing any PR — is a rebase/replay, not a merge. If
-a PR branch is behind its base, rebase it onto the base first so the merge is a clean
-fast-forward.
+**Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and merge");
+never a merge commit, never squash. History across `main` ← `devel` stays strictly linear
+(`main` always an ancestor of `devel`, no merge commits), so promotion up the chain — and
+landing any PR — is a rebase/replay. Rebase a behind-base branch onto its base first for a
+clean fast-forward.
 
-**`devel` advances out of band — rebase onto the latest remote before every push.**
-Multiple agents work in parallel and their commits are rebased on top of `devel`, so the
-remote tip moves under you between operations. Before **any** commit or push — to `devel`
-*or* to a PR branch — `git fetch origin` and rebase your local branch onto the latest
-remote tip (`git rebase origin/devel`, or `origin/<pr-base>` for a PR), resolve, then push
-(`--force-with-lease` if the branch was rewritten). New work always replays **after** what
-is already on the remote; never reconcile with a merge commit. This keeps the chain
-strictly linear (above) and every PR a clean fast-forward — the same rule applies to each
-follow-up commit you push onto an open PR.
+**`devel` advances out of band — rebase onto the latest remote before every push.** Parallel
+agents' commits replay on top of `devel`, so the tip moves under you. Before **any**
+commit/push (to `devel` or a PR branch): `git fetch origin`, rebase onto the latest tip
+(`git rebase origin/devel`, or `origin/<pr-base>` for a PR), resolve, push
+(`--force-with-lease` if rewritten). New work always replays after what's on the remote; never
+reconcile with a merge commit. Same rule for each follow-up commit on an open PR.
 
 ### Branch naming (ADRs and issues)
 
-A branch that tracks an **ADR** or a **GitHub issue** carries the item's **number
-THEN a slug of its title**, so the branch is self-describing at a glance:
+A branch tracking an **ADR** or a **GitHub issue** carries the item's **number then a slug of
+its title**, so it's self-describing:
 
 - **ADR:** `adr/{NN}-{slug}`
 - **GitHub issue:** `issue/{NN}-{slug}`
 
-`{slug}` is derived from the title — the ADR `{Name}` (or the `ADR.md` H1); the issue
-title — by this sanitiser, which is **mandatory** (it defends against malicious /
-garbage input AND keeps the name inside git's ref rules):
+`{slug}` derives from the title (the ADR `{Name}`/`ADR.md` H1; the issue title) by this
+**mandatory** sanitiser (defends against garbage/malicious input + keeps the ref legal):
 
 1. **Lowercase.**
-2. **Strip emojis and every non-ASCII char**, then drop anything not `[a-z0-9]`.
-3. **Collapse** each run of removed/non-alphanumeric chars to a single `-`; **trim**
-   leading/trailing `-`.
-4. **Truncate to ≤30 chars** at a `-` boundary (never leave a trailing `-`); don't go
-   far past 30.
-5. If nothing survives (empty slug), **omit it** — bare `adr/{NN}` / `issue/{NN}`.
+2. **Strip emojis + every non-ASCII char**, then drop anything not `[a-z0-9]`.
+3. **Collapse** each removed/non-alphanumeric run to a single `-`; **trim** leading/trailing `-`.
+4. **Truncate ≤30 chars** at a `-` boundary (never a trailing `-`); don't go far past 30.
+5. Empty slug → **omit it** (bare `adr/{NN}` / `issue/{NN}`).
 
-The output is `[a-z0-9-]` only — no spaces, no `~ ^ : ? * [ \ .. @{`, no leading `-`,
-no `.lock` suffix — so it is always a legal ref. **On collision** (the computed name
-is already taken by an **unrelated** branch), append `-{epoch}` (epoch seconds) to
-make it unique. An ADR **reusing its own** existing `adr/{NN}-*` branch across phases
-is reuse, **not** a collision — don't re-suffix it.
+Output is `[a-z0-9-]` only — no spaces, no `~ ^ : ? * [ \ .. @{`, no leading `-`, no `.lock`
+suffix — always a legal ref. **On collision** with an *unrelated* branch, append `-{epoch}`
+(epoch seconds). An ADR reusing its own `adr/{NN}-*` branch across phases is reuse, not a
+collision — don't re-suffix.
 
-Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsbl`; issue #43
-"TLD-Allow KeyError on …" → `issue/43-tld-allow-keyerror-on`.
+Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsbl`; issue #43 "TLD-Allow
+KeyError on …" → `issue/43-tld-allow-keyerror-on`.
 
 ---
 
 ## GitHub issues
 
-**Read the whole issue before working it.** Whenever you are told to fix or pick up
-a GitHub issue, read its **title and description AND every comment/update** on it
-(`gh issue view <N> --comments`) before starting. Later comments routinely revise,
-narrow, downgrade, or invalidate the original report — issue #25 is a live example: a
-follow-up comment downgraded a claimed crash to a defensive-consistency cleanup and
-corrected the fix. Never act on the opening text alone.
+**Read the whole issue before working it** — title, description, AND every comment
+(`gh issue view <N> --comments`). Later comments routinely revise/narrow/downgrade/invalidate
+the original (issue #25: a follow-up downgraded a claimed crash to a defensive-consistency
+cleanup and corrected the fix). Never act on the opening text alone.
 
-**Branch for the fix** — when you cut a worktree/branch to work an issue, name it
-`issue/{NN}-{slug}` per the title-slug rule in "Branch naming (ADRs and issues)"
-above (sanitised, emoji-stripped, ≤30-char slug; `-{epoch}` on collision).
+**Branch for the fix:** `issue/{NN}-{slug}` per the slug rule above.
 
 ### Labels (lifecycle)
 
-Keep an issue's labels in sync with its stage in the workflow (the labels already
-exist in the repo — see `gh label list`). Apply them with
-`gh issue edit <N> --add-label <l>` / `--remove-label <l>`:
+Keep an issue's labels in sync with its stage (`gh issue edit <N> --add-label/--remove-label`;
+labels already exist — see `gh label list`):
 
-- **Creating an issue** — apply the appropriate descriptive label(s) for what it is
-  (`bug`, `enhancement`, `documentation`, …).
-- **Picking it up** (starting work) — add `WIP`.
-- **It reaches the PR stage** (a PR that fixes it is open) — remove `WIP`, add
-  `Waiting PR`.
-- **That PR is merged** — remove `Waiting PR`.
-- **Resolved/closed without a PR** (e.g. fixed by a direct push, or closed as
-  invalid) — remove `WIP`.
-- **Dropped / can't fix** (won't-fix, not reproducible, …) — remove `WIP`/`Waiting
-  PR` and leave a status-update comment explaining why.
+- **Create** — descriptive label(s) for what it is (`bug`, `enhancement`, `documentation`, …).
+- **Pick up** (start work) — add `WIP`.
+- **PR open** (a PR that fixes it exists) — remove `WIP`, add `Waiting PR`.
+- **PR merged** — remove `Waiting PR`.
+- **Resolved without a PR** (direct push, or closed as invalid) — remove `WIP`.
+- **Dropped / can't fix** (won't-fix, not reproducible) — remove `WIP`/`Waiting PR` + leave a
+  status comment explaining why.
 
 ---
 
 ## Commit style
 
-Follow existing log: `<scope>: <imperative summary>`.
-Examples: `ci: simplify pytest invocation`, `dev: add ShellCheck config`, `pfblockerng: fix IPv6 subnet match`.
-No period at end of subject line. Body optional for non-obvious changes.
+`<scope>: <imperative summary>` (follow the existing log). E.g. `ci: simplify pytest
+invocation`, `dev: add ShellCheck config`, `pfblockerng: fix IPv6 subnet match`. No trailing
+period. Body optional for non-obvious changes.
