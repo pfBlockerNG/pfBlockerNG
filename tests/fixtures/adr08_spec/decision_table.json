@@ -111,6 +111,16 @@
       "intent": "Latin+CJK FP-guard: Han+Katakana (Japanese 'domain name') is UTS#39 Highly Restrictive -> legit. The single most important non-block case: a naive 'any multi-script -> block' would FALSE-POSITIVE here."
     },
     {
+      "id": "japanese_han_hiragana_katakana",
+      "a_label": "xn--w8jxqd8946c",
+      "decoded": "メモ書き",
+      "resolved_scripts": ["Han", "Hiragana", "Katakana"],
+      "restriction_level": "highly_restrictive",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Latin+CJK FP-guard, full Japanese: ALL THREE scripts (Katakana メモ + Han 書 + Hiragana き) co-occur in ONE label -> UTS#39 Highly Restrictive -> legit. Real Japanese routinely mixes kanji + okurigana hiragana + katakana; this must NOT false-positive."
+    },
+    {
       "id": "korean_han_hangul",
       "a_label": "xn--eqr704t9deq8o",
       "decoded": "도메인名",

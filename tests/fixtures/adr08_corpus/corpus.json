@@ -84,6 +84,18 @@
       "note": "Japanese 'domain name', Han+Katakana (Highly-Restrictive legit)"
     },
     {
+      "a_label": "xn--w8jxqd8946c",
+      "decoded": "メモ書き",
+      "label_class": "japanese-han+hiragana+katakana",
+      "resolved_scripts": [
+        "Han",
+        "Hiragana",
+        "Katakana"
+      ],
+      "expected_severity": "legit",
+      "note": "Japanese 'memo writing', ALL THREE scripts in one label (Katakana メモ + Han 書 + Hiragana き) -> Highly-Restrictive legit; the canonical real-Japanese 0-FP case"
+    },
+    {
       "a_label": "xn--3e0bk47br7k",
       "decoded": "한국어",
       "label_class": "korean-hangul",
