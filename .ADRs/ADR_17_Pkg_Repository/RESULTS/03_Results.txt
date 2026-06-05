@@ -1,0 +1,232 @@
+================================================================================
+ADR-17 — Phase 3(b) RESULTS (publish pipeline: regenerate over Releases -> Pages)
+================================================================================
+
+VERDICT: GO (with one CI constraint recorded). The publish pipeline is wired,
+         additive + isolated, lint/actionlint/test-clean, and its load-bearing
+         catalog-gen step is proven byte-correct locally over a REAL branch .pkg.
+         The LIVE-URL dispatch run could NOT execute yet for a hard GitHub reason
+         (a brand-new workflow_dispatch workflow is untriggerable until it lands
+         on the DEFAULT branch `devel`) — see "DISPATCH / LIVE-URL" below for what
+         IS proven and the exact post-merge command to finish the live check.
+
+--------------------------------------------------------------------------------
+THE PUBLISH JOB + ITS ISOLATION (load-bearing)
+--------------------------------------------------------------------------------
+PRIMARY (pure-Python, plain Linux runner) — .github/workflows/repo-publish.yml,
+a REUSABLE (workflow_call) + DISPATCHABLE (workflow_dispatch) workflow:
+  * Jobs:
+      - build-branch-pkg  (if: inputs.build_branch_pkg) — calls the existing
+        build-pkg-linux.yml (portable Linux builder) to build the current branch
+        .pkg. Lets a dispatch publish WITH NO RELEASE present.
+      - publish (if: always(), needs: [build-branch-pkg]) — collects the input
+        set, generates the catalog, deploys to Pages.
+  * Collect step (ADR §2 "derived index over Releases"): `gh release list` ->
+    `gh release download --pattern '*.pkg'` for EVERY release into one flat dir,
+    then folds in the just-built artifacts of the SAME run — the release path's
+    `pfBlockerNG-release-pkgs` (build-pkgs-portable) / `pfBlockerNG-pkg` (FreeBSD
+    builder), and the dispatched branch .pkg. Flat dir; the generator buckets by
+    ABI from each .pkg's OWN +COMPACT_MANIFEST (never the filename).
+  * Generate:  python3 scripts/build-repo-portable.py --in store --out site
+    (Phase-3a PRIMARY — pure Python, stdlib + `apt-get install -y zstd`; NO
+    pkg/libpkg, NO ABI env). One <ABI>/ subtree per ABI; fail-closed on a php/py
+    flavor collision. Adds site/index.html (human landing, conf from --print-conf)
+    + site/.nojekyll (serve the tree verbatim).
+  * Deploy:  actions/upload-pages-artifact@v3 (path=site) -> actions/deploy-pages@v4,
+    environment github-pages. Site REPLACED each deploy — no gh-pages history.
+
+WIRED INTO release.yml as the `repo-publish` job — copied EXACTLY from
+`attach-pkgs`:
+    repo-publish:
+      needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
+      if:    always() && needs.release.result == 'success'
+      uses:  ./.github/workflows/repo-publish.yml
+      with:  { build_branch_pkg: false }    # per-tag .pkg already built this run
+      permissions: { contents: read, pages: write, id-token: write }
+
+LEAST-PRIVILEGE: repo-publish.yml's FILE default is `permissions: contents:read`.
+Only the `publish` job elevates to `pages:write` + `id-token:write` (the Pages
+OIDC deploy contract). No job here commits to any branch.
+
+ISOLATION PROOF (additive + safe — ADR req 5; the contract):
+  * `repo-publish` is a LEAF in release.yml's `needs` graph — NO job lists it in
+    its `needs:` (grep-verified: 0 references outside its own definition/comment).
+  * `ports-pr   needs: [release]`            — never references repo-publish.
+  * `attach-pkgs needs: [release, build-pkgs-portable, build-pkgs-freebsd,
+                          read-matrix]`       — never references repo-publish.
+  * `repo-publish` does NOT `needs: attach-pkgs`.
+  GitHub propagates a failure ONLY up the `needs` chain. Since nothing depends on
+  `repo-publish`, a repo-publish FAILURE (build error, generator abort, Pages
+  deploy failure) leaves `release` / `ports-pr` / `attach-pkgs` GREEN — it cannot
+  gate or break them. (A forced-failure dispatch would show the same; the wiring
+  is the authoritative proof, mirroring attach-pkgs which the project already
+  trusts for the symmetric guarantee.)
+
+--------------------------------------------------------------------------------
+FREEBSD-VM ALTERNATIVE WORKFLOW (the documented fallback / fidelity oracle)
+--------------------------------------------------------------------------------
+.github/workflows/repo-publish-freebsd.yml — workflow_dispatch only, NOT in any
+gate. It builds the catalog with scripts/build-repo.sh driving the REAL libpkg
+`pkg repo` inside an ABI-matched FreeBSD VM (the same proven boot pattern as
+build-pkg.yml: cached prepared qcow2 + baked SSH key, snapshot=on throwaway
+overlay), retrieves the per-<ABI>/ tree via scp, and deploys it to Pages the SAME
+way (upload-pages-artifact + deploy-pages, same least-privilege elevation). Use it
+if the pure-Python generator ever diverges from what a real pfSense `pkg update`
+accepts; it produces an equivalent tree by construction (the same `pkg repo` op
+the pfSense box itself runs). It also collects all Release .pkg + optional branch
+.pkg, identical input set to the primary.
+
+--------------------------------------------------------------------------------
+PUBLISHED PAGES URL + THE ${ABI} BASE IT EXPOSES
+--------------------------------------------------------------------------------
+GitHub Pages is build_type=workflow (deploy via Actions) on andrebrait/pfBlockerNG
+and serves a CUSTOM DOMAIN: `gh api repos/andrebrait/pfBlockerNG/pages` ->
+  html_url = "http://brait.dev/pfBlockerNG/"  (cname:null, https_enforced:false).
+We serve over HTTPS, so the published base is:
+
+    https://brait.dev/pfBlockerNG/${ABI}
+
+Phase 2's conf template hardcoded the github.io URL; FIXED to the real Pages base
+in BOTH generators (the SINGLE source the client conf comes from):
+  * scripts/build-repo.sh        DEFAULT_BASE_URL="https://brait.dev/pfBlockerNG"
+  * scripts/build-repo-portable.py DEFAULT_BASE_URL = "https://brait.dev/pfBlockerNG"
+  --print-conf from both is BYTE-IDENTICAL and emits:
+      url: "https://brait.dev/pfBlockerNG/${ABI}"
+  ${ABI} is the literal pkg(8) variable (expanded by pkg, NOT the shell — the
+  URL-encoding gate passes); it auto-follows the box's ABI across an OS upgrade.
+  --base-url still overrides for a fork/staging host.
+The unit pin tests/test_build_repo_portable.py was updated to assert the brait.dev
+URL (and the --base-url override case is unchanged).
+
+TODAY exactly ONE ABI is published: FreeBSD:15:amd64 (CE 2.8 + Plus 25.03 both
+FreeBSD15 / php83 / py311) -> one <ABI>/ subtree, no flavor collision.
+
+--------------------------------------------------------------------------------
+DISPATCH / LIVE-URL VERIFICATION — what IS proven, and the CI constraint
+--------------------------------------------------------------------------------
+CONSTRAINT (recorded, per the brief's "if infeasible, say exactly why"): a
+brand-new `workflow_dispatch` workflow is UNTRIGGERABLE until it exists on the
+repo's DEFAULT branch (`devel`). The default branch is `devel`; `repo-publish.yml`
+lives only on `adr/17-pkg-repository` so far:
+    $ gh workflow run repo-publish.yml --ref adr/17-pkg-repository -f build_branch_pkg=true
+    HTTP 404: workflow repo-publish.yml not found on the default branch
+This is the same "dispatch workflows unvalidated by PR CI" reality ADR-09 hit. The
+live Pages deploy + the live-URL VM check therefore run only AFTER this lands on
+`devel` (the PR merge). The file:// VM-acceptance of the IDENTICAL catalog is the
+always-on proof and is already GREEN (3a, run 27035602221).
+
+PROVEN NOW (local, this phase), over a REAL branch .pkg built with the portable
+builder (pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg, 1801870 bytes, 68 files):
+  * The EXACT publish-job command
+      python3 scripts/build-repo-portable.py --in store --out site
+    produced the served-ready tree:
+      site/FreeBSD:15:amd64/{meta.conf, meta, packagesite.pkg, data.pkg, <the .pkg>}
+      site/index.html  +  site/.nojekyll
+  * The served bytes validated directly:
+      - meta.conf = the version-2 / tzst catalog header (exact).
+      - packagesite.pkg decompresses (zstd|tar) to NDJSON with the right keys
+        (name/origin/version/.../sum/path), name=pfSense-pkg-pfBlockerNG-devel,
+        abi=FreeBSD:15:amd64, sum prefixed "2$" (checksum-type-2 blake2b/z-base-32
+        — the load-bearing field 3a cracked + pinned; pkg validates it on install).
+    (A loopback HTTP curl could not run — this sandbox blocks loopback sockets —
+    but the SERVED BYTES are the artifact, and the SAME catalog over file:// is
+    VM-accepted live in 3a; HTTP vs file:// transport is orthogonal to the
+    catalog's acceptability, exactly as 3a's note states.)
+  * actionlint: repo-publish.yml + repo-publish-freebsd.yml are CLEAN (0 findings).
+    release.yml's 6 actionlint notes are ALL PRE-EXISTING on origin/devel (same
+    count, same jobs: the `if:false` ui-suite + SC notes in verify-checks/release/
+    attach-pkgs/ports-pr) — the added repo-publish job introduces ZERO new findings.
+
+THE LIVE-URL VM TEST (added, dispatch-only, gated):
+  tests/smoke/test_repo_install.py :: test_install_from_live_pages_url (marker
+  `repo`, @timeout(900)). GATED on env SMOKE_REPO_LIVE_URL (unset -> SKIP; set to
+  https://brait.dev/pfBlockerNG or a bare 1/true for the default). It:
+    1. RUNNER BACKSTOP: poll_catalog_served() polls
+       <base>/FreeBSD:15:amd64/{meta.conf,packagesite.pkg} until both serve 200
+       (absorbs first-deploy + DNS/cert lag, ~30x10s).
+    2. Pins GitHub Pages' anycast IPs (185.199.108-111.153) for brait.dev in the
+       guest /etc/hosts — the smoke harness sandboxes guest DNS to a mock that only
+       answers uuid-*.com, so the custom domain won't resolve; the static hosts
+       entry routes pkg's HTTPS fetch by IP while TLS SNI still presents brait.dev
+       (the custom-domain cert validates). Egress is OPEN for this flow
+       (_ensure_egress_open), so Pages is reachable.
+    3. Writes OUR production conf from build-repo-portable.py --print-conf
+       --base-url <base> (priority raised above the Netgate pfSense repo), then
+       `pkg update` + `pkg install -y` (NO -r, NO -f) and asserts pkg query %R ==
+       pfblockerng-devel with deps resolved (the .pkg `sum` validates on install).
+  Branch + before/after coverage: package ABSENT before, installed FROM-OURS after.
+
+  TO FINISH THE LIVE CHECK (post-merge, once repo-publish.yml is on devel):
+    a) gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true
+       -> watch it deploy to Pages (capture run id + page_url).
+    b) Dispatch repo-install.yml (it calls smoke.yml -m repo) WITH
+       SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG exported to the run env
+       (add it as a repo variable, or extend repo-install.yml with the input) so
+       test_install_from_live_pages_url runs instead of skipping. Green there is
+       the real-URL VM proof; the runner-side poll_catalog_served is the backstop.
+
+--------------------------------------------------------------------------------
+GATES (all green)
+--------------------------------------------------------------------------------
+  * ruff check . / ruff format --check .          -> clean (74 files).
+  * python -m pytest (DEFAULT)                     -> 1142 passed (UNCHANGED vs 3a;
+                                                      smoke tree --ignore'd; the new
+                                                      live test is under tests/smoke).
+  * mypy tests/                                    -> Success (23 source files).
+  * scripts/check_url_encoding.py                  -> clean (conf URL static ${ABI};
+                                                      the gh/curl download URLs use
+                                                      base/host/path interpolation
+                                                      only, no naked $var in a query).
+  * actionlint repo-publish.yml / -freebsd.yml      -> 0 findings (clean).
+  * actionlint release.yml                          -> only the 6 PRE-EXISTING notes
+                                                      (verified identical on
+                                                      origin/devel; no new ones).
+  * sh -n + shellcheck scripts/build-repo.sh        -> clean.
+  * pre-commit hook (ruff/pytest/mypy/markdownlint/sh/shellcheck/shellspec/php)
+                                                    -> green on the commit.
+  * LOCAL publish-pipeline dry-run over a real .pkg -> correct served-ready <ABI>/
+                                                      tree + valid catalog bytes
+                                                      (meta.conf / packagesite NDJSON
+                                                      / type-2 sum), index.html +
+                                                      .nojekyll emitted.
+
+--------------------------------------------------------------------------------
+DELIVERABLES
+--------------------------------------------------------------------------------
+  * .github/workflows/repo-publish.yml          — PRIMARY publish pipeline
+    (workflow_call from release.yml + workflow_dispatch; pure-Python generator;
+    Pages deploy; least-privilege; if:always() isolation).
+  * .github/workflows/repo-publish-freebsd.yml  — FreeBSD-VM ALTERNATIVE
+    (workflow_dispatch; build-repo.sh + real pkg repo in a FreeBSD VM; same deploy).
+  * .github/workflows/release.yml               — +`repo-publish` job, wired like
+    attach-pkgs (needs build/release jobs, if:always(), uses the reusable). All
+    other jobs UNTOUCHED.
+  * scripts/build-repo.sh + scripts/build-repo-portable.py — DEFAULT_BASE_URL fixed
+    github.io -> https://brait.dev/pfBlockerNG (the single conf source).
+  * tests/test_build_repo_portable.py           — conf-URL pin updated to brait.dev.
+  * tests/smoke/test_repo_install.py            — +test_install_from_live_pages_url
+    (dispatch-only, gated on SMOKE_REPO_LIVE_URL) + helpers (poll_catalog_served,
+    pin_pages_hosts, write_live_repo_conf). The 5 existing repo tests UNCHANGED.
+
+--------------------------------------------------------------------------------
+WHAT PHASE 4 (add-repo.sh) SHOULD POINT url: AT
+--------------------------------------------------------------------------------
+  url: "https://brait.dev/pfBlockerNG/${ABI}"
+
+add-repo.sh + the README MUST reuse the single conf source — emit it from
+`scripts/build-repo.sh --print-conf` (or build-repo-portable.py --print-conf;
+byte-identical), which now defaults to the brait.dev base. Keep ${ABI} literal
+(pkg expands it), signature_type none, priority above the Netgate pfSense repo
+(template ships 100; add-repo.sh MAY recompute live as effective-pfSense-priority
++ 100, the way the Phase-1 smoke does). The conf name is pfblockerng-devel.conf
+under /usr/local/etc/pkg/repos/.
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT (Phase 4)
+--------------------------------------------------------------------------------
+Phase 3 = GO. The publish pipeline (pure-Python primary + FreeBSD-VM fallback) is
+additive + isolated and proven to emit a served-ready, VM-acceptable catalog at
+https://brait.dev/pfBlockerNG/${ABI}; the live-URL dispatch + VM proof is the one
+post-merge step (untriggerable until the workflow is on `devel`). Phase 4 writes
+scripts/add-repo.sh (the client bootstrap) pointing url: at the brait.dev ${ABI}
+base above, reusing the single --print-conf conf source + the README one-liner.

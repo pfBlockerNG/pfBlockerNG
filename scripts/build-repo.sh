@@ -71,7 +71,11 @@ set -eu
 #   * enabled: yes.
 # `pfblockerng-devel` matches the channel-named conf Phase 4 writes
 # (/usr/local/etc/pkg/repos/pfblockerng-devel.conf).
-DEFAULT_BASE_URL="https://andrebrait.github.io/pfBlockerNG"
+# The published GitHub Pages base. The repo deploys to a Pages site served at a
+# CUSTOM DOMAIN (gh api repos/.../pages -> html_url http://brait.dev/pfBlockerNG/);
+# we serve over HTTPS, so the base is https://brait.dev/pfBlockerNG and the conf
+# appends the literal ${ABI} pkg(8) variable. Override with --base-url for a fork.
+DEFAULT_BASE_URL="https://brait.dev/pfBlockerNG"
 CONF_PRIORITY=100
 
 print_conf() {
