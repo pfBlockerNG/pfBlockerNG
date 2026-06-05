@@ -88,24 +88,136 @@ class ToggleFlow:
 #            ports, so the box MUST have a valid VIP first -- the fixture calls
 #            helpers.ensure_dnsbl_vip(). The DNSBL settings save only
 #            write_config()s (no reload), so config.xml is the oracle.
+# Page URLs (DRY -- the validator tests below reuse them).
+GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
+SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
+# DNSBL_PAGE is defined further down (used by the auto-VIP test too).
+
 FLOWS: tuple[ToggleFlow, ...] = (
+    # ---- General settings (installedpackages/pfblockerng/config/0) ------------
+    # PFB_FILTER_ON_OFF checkboxes. The General save runs sync_package_pfblockerng()
+    # AFTER write_config -- a full config-rebuild pass that is SLOW but hermetic for
+    # these flags (no feed download / MaxMind conversion is triggered by toggling
+    # enable_cb / pfb_keep; feeds fetch only on a Force Update/CRON). The generous
+    # post_timeout default (300s) covers that sync pass.
+    ToggleFlow(
+        name="general_enable_cb",
+        page=GENERAL_PAGE,
+        field="enable_cb",
+        config_path="installedpackages/pfblockerng/config/0/enable_cb",
+    ),
     ToggleFlow(
         name="general_keep_settings",
-        page="/pfblockerng/pfblockerng_general.php",
+        page=GENERAL_PAGE,
         field="pfb_keep",
         config_path="installedpackages/pfblockerng/config/0/pfb_keep",
     ),
+    # ---- IP settings (installedpackages/pfblockerngipsettings/config/0) -------
+    # The IP save validates ip_placeholder + maxmind_locale and fires a MaxMind
+    # conversion ONLY on a locale CHANGE -- WebUI.post re-posts the page's own
+    # (unchanged) locale, so every toggle here is hermetic under the egress block.
+    # The save only write_config()s (no reload), so config.xml is the oracle.
+    ToggleFlow(
+        name="ip_dedup",
+        page=IP_PAGE,
+        field="enable_dup",
+        config_path="installedpackages/pfblockerngipsettings/config/0/enable_dup",
+    ),
+    ToggleFlow(
+        name="ip_cidr_aggregation",
+        page=IP_PAGE,
+        field="enable_agg",
+        config_path="installedpackages/pfblockerngipsettings/config/0/enable_agg",
+    ),
+    ToggleFlow(
+        name="ip_suppression",
+        page=IP_PAGE,
+        field="suppression",
+        config_path="installedpackages/pfblockerngipsettings/config/0/suppression",
+    ),
     ToggleFlow(
         name="ip_global_logging",
-        page="/pfblockerng/pfblockerng_ip.php",
+        page=IP_PAGE,
         field="enable_log",
         config_path="installedpackages/pfblockerngipsettings/config/0/enable_log",
     ),
+    ToggleFlow(
+        name="ip_database_cc",
+        page=IP_PAGE,
+        field="database_cc",
+        config_path="installedpackages/pfblockerngipsettings/config/0/database_cc",
+    ),
+    ToggleFlow(
+        name="ip_floating_rules",
+        page=IP_PAGE,
+        field="enable_float",
+        config_path="installedpackages/pfblockerngipsettings/config/0/enable_float",
+    ),
+    ToggleFlow(
+        name="ip_killstates",
+        page=IP_PAGE,
+        field="killstates",
+        config_path="installedpackages/pfblockerngipsettings/config/0/killstates",
+    ),
+    # ---- DNSBL settings (installedpackages/pfblockerngdnsblsettings/config/0) -
+    # The DNSBL save validates the sinkhole VIP (pfb_validate_vips, always in manual
+    # mode) and the lighttpd ports, so the box MUST have a valid VIP first -- the
+    # dnsbl_vip_ready fixture calls helpers.ensure_dnsbl_vip(). The save only
+    # write_config()s (no reload), so config.xml is the oracle.
     ToggleFlow(
         name="dnsbl_floating_pass_rule",
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_dnsbl_rule",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_rule",
+    ),
+    ToggleFlow(
+        name="dnsbl_enable",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_dnsbl",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
+    ),
+    ToggleFlow(
+        name="dnsbl_tld_wildcard",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_tld",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_tld",
+    ),
+    ToggleFlow(
+        name="dnsbl_hsts_mode",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_hsts",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
+    ),
+    ToggleFlow(
+        name="dnsbl_regex",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_regex",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex",
+    ),
+    ToggleFlow(
+        name="dnsbl_noaaaa",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_noaaaa",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa",
+    ),
+    ToggleFlow(
+        name="dnsbl_global_bypass",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_gp",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
+    ),
+    ToggleFlow(
+        name="dnsbl_cache",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_cache",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
+    ),
+    ToggleFlow(
+        name="dnsbl_py_nolog",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_py_nolog",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
     ),
 )
 
@@ -189,6 +301,736 @@ def test_toggle_flow_changes_effective_config(
         if helpers.config_get(smoke_vm, flow.config_path) != original:
             overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.off}
             webui.post(flow.page, overrides, timeout=flow.post_timeout)
+
+
+# --------------------------------------------------------------------------- #
+# VALIDATOR / SELECT-COERCION FLOWS (Batch 1)
+#
+# Beyond the on/off toggles above, each settings page validates or coerces
+# scalar/textarea/select fields. These tests follow the SAME transition rule as
+# the toggle test (assert BEFORE, drive VALID, assert stored, drive BOGUS, assert
+# the reject outcome, restore the original) but exercise the non-checkbox save
+# arms. The oracle is always config.xml over SSH, never the HTTP body.
+#
+# Two distinct reject behaviours coexist in the save handlers (load-bearing for
+# the assertions):
+#
+#   * HARD-ABORT validators -- a bad value appends to $input_errors and the
+#     `if (!$input_errors)` guard skips the ENTIRE config_set_path/write_config
+#     block, so config.xml is UNCHANGED (the bad POST does NOT coerce to a
+#     default; it simply does not persist). Covered by `_assert_reject_unchanged`.
+#   * SOFT-COERCE selects -- a value that is an array or not a key of its
+#     options_* whitelist is silently replaced with that field's DEFAULT and the
+#     save SUCCEEDS, so config holds the DEFAULT (not the bogus value, not the
+#     prior value). Covered by `_assert_reject_coerces_to`.
+#
+# Every flow here is HERMETIC: each save only write_config()s (the General page
+# also runs sync_package_pfblockerng(), slow but no egress); none triggers a feed
+# download / MaxMind conversion (no test OVERRIDES maxmind_locale, so WebUI.post
+# re-posts the unchanged locale and no ugc conversion fires). The non-hermetic
+# maxmind_locale change case is EXCLUDED from this batch.
+# --------------------------------------------------------------------------- #
+
+# Generous POST timeout matching the General save's sync_package_pfblockerng() pass.
+SAVE_TIMEOUT = 300.0
+
+
+def _post_and_get(
+    webui: WebUI,
+    vm: helpers.SmokeVM,
+    page: str,
+    overrides: dict[str, str],
+    config_path: str,
+) -> str:
+    """POST ``overrides`` to ``page``'s form and return the EFFECTIVE config value.
+
+    One browser-faithful CSRF round-trip (WebUI.post re-GETs the form, re-scrapes
+    its current fields + the fresh ``__csrf_magic`` token, applies ``overrides``,
+    POSTs back), with a login-bounce sanity check, then reads ``config_path`` over
+    SSH as the oracle.
+    """
+    resp = webui.post(page, overrides, timeout=SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), (
+        f"POST to {page} returned the login form (session lost) -- not a real save result"
+    )
+    return helpers.config_get(vm, config_path)
+
+
+# --------------------------------------------------------------------------- #
+# General settings (installedpackages/pfblockerng/config/0)
+# --------------------------------------------------------------------------- #
+
+
+def test_general_cron_interval_select_coerces_bogus_to_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A CRON select takes a valid in-range key, coerces a bogus value to default 1.
+
+    Representative ``log_max_``-adjacent CRON select (Hour Interval, ``pfb_interval``).
+    Save loop: ``$options_pfb_interval`` keys are 1,2,3,4,6,8,12,24,'Disabled'. A
+    valid key '2' is stored verbatim (truthy, survives the trailing ``?:1``); a
+    bogus '999' is not a key -> ``$_POST`` is coerced to the default 1, then stored
+    1 (the save still SUCCEEDS -- soft coerce, not an abort). '2' is chosen because
+    it is truthy and distinct from the default 1 (a falsy '0'/'Disabled'-adjacent
+    probe would be indistinguishable from the reject outcome).
+
+    Transition: read the box's current value first, drive to '2' (assert '2'),
+    drive back to the original, then prove the bogus POST coerces to 1.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/pfb_interval"
+    original = helpers.config_get(vm, cfg)
+    try:
+        # BEFORE: a fresh image defaults to 1; assert whatever it currently is is a
+        # known key so the transition is meaningful (not asserting it equals '2').
+        assert original != "2", f"pfb_interval already '2' before the valid POST (original={original!r})"
+        # VALID: '2' is a key -> stored verbatim.
+        assert _post_and_confirm_general(webui, vm, {"pfb_interval": "2"}, cfg) == "2"
+        # Restore to the original valid key.
+        assert _post_and_confirm_general(webui, vm, {"pfb_interval": original or "1"}, cfg) == (original or "1")
+        # BOGUS: not a key -> coerced to default 1 (save succeeds, value != '999').
+        got = _post_and_confirm_general(webui, vm, {"pfb_interval": "999"}, cfg)
+        assert got == "1", f"bogus pfb_interval should coerce to default 1, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"pfb_interval": original or "1"}, timeout=SAVE_TIMEOUT)
+
+
+def test_general_log_max_select_coerces_bogus_to_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A ``log_max_*`` select takes a valid key, coerces a bogus value to default 20000.
+
+    Representative ``log_max_log`` (pfBlockerNG General log, max lines). Save loop:
+    ``strpos('log_max_', …)`` validates against ``$options_log_types`` (keys
+    100,1000,2000,4000,6000,8000,10000,20000,40000,…,'nolimit'). Valid '40000' is a
+    key -> stored verbatim (truthy, distinct from the 20000 default); bogus '12345'
+    is not a key -> coerced to default 20000, save SUCCEEDS. Same coercion path
+    covers all ten log_max_* fields.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/log_max_log"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "40000", f"log_max_log already '40000' before the valid POST (original={original!r})"
+        assert _post_and_confirm_general(webui, vm, {"log_max_log": "40000"}, cfg) == "40000"
+        assert _post_and_confirm_general(webui, vm, {"log_max_log": original or "20000"}, cfg) == (original or "20000")
+        got = _post_and_confirm_general(webui, vm, {"log_max_log": "12345"}, cfg)
+        assert got == "20000", f"bogus log_max_log should coerce to default 20000, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"log_max_log": original or "20000"}, timeout=SAVE_TIMEOUT)
+
+
+def test_general_skipfeed_bogus_scalar_resets_to_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``skipfeed`` keeps a valid key and resets a non-key value to the default 0.
+
+    The select-RESET negative exercising the is_array()/!array_key_exists arms.
+    Save loop: ``if (is_array($_POST[$s_option])) $_POST[$s_option] = $s_default;``
+    AND an ``elseif (!array_key_exists(...))`` that also coerces to the default 0.
+    A valid scalar '3' is a key of ``$options_skipfeed`` (0..6) -> stored '3'.
+
+    HARNESS CAVEAT: ``WebUI.post`` overrides a single scalar field (dict[str,str]);
+    it cannot emit the array-bracket form (``skipfeed[]=x``) that PHP parses as an
+    array, so the is_array arm cannot be hit through this client. We therefore use
+    the equivalent bogus SCALAR '99' (not a key 0..6), which hits the
+    ``!array_key_exists`` arm and also coerces to the default 0 -- same observable
+    reset to 0 (NOT '99'). The valid probe is '3' because the default 0 is falsy
+    and would be stored as 0 even when "valid" via the trailing ``?:0``.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/skipfeed"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "3", f"skipfeed already '3' before the valid POST (original={original!r})"
+        assert _post_and_confirm_general(webui, vm, {"skipfeed": "3"}, cfg) == "3"
+        # Restore (the default 0 is the safe baseline; original may be '' on a fresh box).
+        _post_and_confirm_general(webui, vm, {"skipfeed": original or "0"}, cfg)
+        # BOGUS scalar '99' is not a key -> coerced to the default 0.
+        got = _post_and_confirm_general(webui, vm, {"skipfeed": "99"}, cfg)
+        assert got == "0", f"bogus skipfeed should reset to default 0, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"skipfeed": original or "0"}, timeout=SAVE_TIMEOUT)
+
+
+def _post_and_confirm_general(
+    webui: WebUI,
+    vm: helpers.SmokeVM,
+    overrides: dict[str, str],
+    config_path: str,
+) -> str:
+    """:func:`_post_and_get` for the General page (its own slow sync save)."""
+    return _post_and_get(webui, vm, GENERAL_PAGE, overrides, config_path)
+
+
+# --------------------------------------------------------------------------- #
+# IP settings (installedpackages/pfblockerngipsettings/config/0)
+#
+# Two reject behaviours on this page: HARD-ABORT validators (ip_placeholder,
+# maxmind_account, maxmind_key, asn_token, v4suppression) leave config UNCHANGED;
+# the SOFT-COERCE select (asn_reporting) coerces to its default. The interface
+# multiselects are unvalidated (implode comma-join). No test overrides
+# maxmind_locale, so the ugc conversion never fires -- every flow is hermetic.
+# --------------------------------------------------------------------------- #
+
+IP_PLACEHOLDER_CFG = "installedpackages/pfblockerngipsettings/config/0/ip_placeholder"
+
+
+def test_ip_placeholder_valid_isolated_ipv4_and_reject_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``ip_placeholder`` stores a valid isolated IPv4; a bogus value aborts the save.
+
+    Save validates the POSTed value directly: ``is_ipaddrv4`` then
+    ``where_is_ipaddr_configured(..., '')`` must return EMPTY (IP not configured on
+    any iface). 127.1.7.8 is loopback-range, isolated -> passes both (pure config
+    check, NO egress) and is written verbatim. A bogus '999.999.999.999' fails
+    ``is_ipaddrv4`` -> ``$input_errors`` -> the ENTIRE save aborts at
+    ``if (!$input_errors)`` -> config.xml is UNCHANGED (NOT coerced to the
+    127.1.7.7 default -- that default applies only on the empty-config READ path).
+
+    KEEP a valid placeholder in config afterward: the ip_global_logging toggle and
+    every other IP save re-validate ip_placeholder, so a missing/invalid value
+    would abort sibling flows. Restore to the captured original (a valid IP).
+    """
+    vm = smoke_vm
+    cfg = IP_PLACEHOLDER_CFG
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "127.1.7.8", f"ip_placeholder already 127.1.7.8 before the valid POST ({original!r})"
+        # VALID isolated loopback IPv4 -> stored verbatim.
+        assert _post_and_get(webui, vm, IP_PAGE, {"ip_placeholder": "127.1.7.8"}, cfg) == "127.1.7.8"
+        # Restore the original valid placeholder (fall back to the page default).
+        restore = original or "127.1.7.7"
+        assert _post_and_get(webui, vm, IP_PAGE, {"ip_placeholder": restore}, cfg) == restore
+        # REJECT: a bogus IP aborts the whole save -> config UNCHANGED (stays `restore`).
+        got = _post_and_get(webui, vm, IP_PAGE, {"ip_placeholder": "999.999.999.999"}, cfg)
+        assert got == restore, f"bogus ip_placeholder must leave config unchanged at {restore!r}, got {got!r}"
+    finally:
+        webui.post(IP_PAGE, {"ip_placeholder": original or "127.1.7.7"}, timeout=SAVE_TIMEOUT)
+
+
+@pytest.mark.parametrize(
+    ("field", "valid", "bogus"),
+    [
+        ("maxmind_account", "Test_123", "bad-chars!"),
+        ("maxmind_key", "Key_456", "bad/key"),
+        ("asn_token", "Tok_789", "tok@en"),
+    ],
+    ids=["maxmind_account", "maxmind_key", "asn_token"],
+)
+def test_ip_word_filter_field_valid_and_reject_unchanged(
+    field: str,
+    valid: str,
+    bogus: str,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A ``PFB_FILTER_WORD`` field stores a clean word; a non-word value aborts the save.
+
+    ``PFB_FILTER_WORD`` = no non-word char (``/\\W/``): only ``[A-Za-z0-9_]`` passes.
+    Save guard: ``!empty($_POST[field]) && empty(pfb_filter($_POST[field],
+    PFB_FILTER_WORD, 'ip'))`` -> a field-specific input error -> the WHOLE save
+    aborts -> config UNCHANGED. A valid word ('Test_123' / 'Key_456' / 'Tok_789')
+    passes and is stored verbatim; a value with a non-word char ('bad-chars!',
+    'bad/key', 'tok@en') is REJECTED -> config unchanged (NOT the bogus value, NOT
+    empty). Empty input is allowed (the ``!empty`` guard) and stores ''. Pure regex
+    validation, NO egress (these tokens only drive update/reload lookups, not this
+    save). Same mechanism for all three fields -> parametrized.
+    """
+    vm = smoke_vm
+    cfg = f"installedpackages/pfblockerngipsettings/config/0/{field}"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != valid, f"{field} already {valid!r} before the valid POST"
+        # VALID clean word -> stored verbatim.
+        assert _post_and_get(webui, vm, IP_PAGE, {field: valid}, cfg) == valid
+        # Restore the original (typically '' -- empty is allowed and stores '').
+        assert _post_and_get(webui, vm, IP_PAGE, {field: original}, cfg) == original
+        # REJECT: a non-word char aborts the save -> config UNCHANGED.
+        got = _post_and_get(webui, vm, IP_PAGE, {field: bogus}, cfg)
+        assert got == original, f"bogus {field} must leave config unchanged at {original!r}, got {got!r}"
+    finally:
+        webui.post(IP_PAGE, {field: original}, timeout=SAVE_TIMEOUT)
+
+
+def test_ip_v4suppression_mask_validation_base64_and_reject_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``v4suppression`` accepts /32 or /24 subnets (stored base64); other masks abort.
+
+    Textarea, one subnet per line. Validation loop: per non-comment line, the mask
+    ``strstr($host[0],'/')`` must be EXACTLY '/32' or '/24' AND ``is_subnetv4``
+    must pass; either failure -> ``$input_errors`` -> the WHOLE save aborts ->
+    config UNCHANGED. STORAGE IS BASE64 (``base64_encode`` on save, ``base64_decode``
+    on read), so the oracle compares config_get against base64 of the expected
+    textarea content. A valid '10.20.30.0/24' stores base64('10.20.30.0/24'); a
+    '/16' ('10.20.0.0/16') fails the mask check -> rejected -> config unchanged. An
+    empty textarea stores base64('') = '' so clearing/restoring to empty is clean.
+    NO egress, NO reload.
+    """
+    import base64
+
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
+    valid_text = "10.20.30.0/24"
+    valid_b64 = base64.b64encode(valid_text.encode()).decode()
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != valid_b64, f"v4suppression already holds {valid_text!r} (base64) before the valid POST"
+        # VALID /24 -> base64 of the textarea is stored.
+        assert _post_and_get(webui, vm, IP_PAGE, {"v4suppression": valid_text}, cfg) == valid_b64
+        # Restore: an empty textarea stores base64('') = '' (clean clear).
+        got_clear = _post_and_get(webui, vm, IP_PAGE, {"v4suppression": ""}, cfg)
+        assert got_clear == "", f"clearing v4suppression should store '' (base64 of empty), got {got_clear!r}"
+        # REJECT: a /16 mask aborts the whole save -> config UNCHANGED (stays '').
+        got = _post_and_get(webui, vm, IP_PAGE, {"v4suppression": "10.20.0.0/16"}, cfg)
+        assert got == "", f"bogus /16 mask must leave v4suppression unchanged at '', got {got!r}"
+    finally:
+        # Restore whatever was there originally (re-encode if it was a plain capture
+        # -- config_get returns the stored base64 verbatim, so re-post that decoded).
+        restore = ""
+        if original:
+            try:
+                restore = base64.b64decode(original).decode()
+            except Exception:
+                restore = ""
+        webui.post(IP_PAGE, {"v4suppression": restore}, timeout=SAVE_TIMEOUT)
+
+
+def test_ip_asn_reporting_select_coerces_bogus_to_disabled(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``asn_reporting`` takes a valid key; a bogus value coerces to the default 'disabled'.
+
+    Select-validator: for each ``$select_options`` key, a POST value that is an
+    array OR not a key of its ``$options_*`` array is COERCED to the default (the
+    save still SUCCEEDS and writes the coerced value -- NOT an abort). asn_reporting
+    default = 'disabled'; valid keys = disabled/week/24hour/12hour/4hour/1hour.
+    Valid 'week' stores 'week'; bogus 'bogus_option' coerces to 'disabled' (the
+    DEFAULT, NOT the bogus value, NOT unchanged). This differs from the hard-abort
+    validators above. NO egress.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngipsettings/config/0/asn_reporting"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "week", f"asn_reporting already 'week' before the valid POST (original={original!r})"
+        # VALID 'week' -> stored verbatim.
+        assert _post_and_get(webui, vm, IP_PAGE, {"asn_reporting": "week"}, cfg) == "week"
+        # Restore to 'disabled' (the default baseline).
+        assert _post_and_get(webui, vm, IP_PAGE, {"asn_reporting": "disabled"}, cfg) == "disabled"
+        # BOGUS -> coerced to the default 'disabled' (save succeeds, value != bogus).
+        got = _post_and_get(webui, vm, IP_PAGE, {"asn_reporting": "bogus_option"}, cfg)
+        assert got == "disabled", f"bogus asn_reporting should coerce to default 'disabled', got {got!r}"
+    finally:
+        webui.post(IP_PAGE, {"asn_reporting": "disabled"}, timeout=SAVE_TIMEOUT)
+
+
+def test_ip_inbound_interface_multiselect_comma_join_and_empty_clear(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``inbound_interface`` stores the selection comma-joined; an empty selection stores ''.
+
+    Multiselect, NOT validated against the options list: the save unconditionally
+    does ``implode(',', (array)$_POST['inbound_interface']) ?: ''`` and the page
+    READ does ``explode(',', …)``. A single selection 'lan' stores 'lan' (PHP casts
+    the scalar POST to a 1-element array, so the implode yields 'lan'); an
+    EMPTY/omitted selection stores '' (implode of empty -> '' then ``?:''``). 'lan'
+    is the reliably-present interface key on the smoke image. The only "reject"
+    branch is the empty selection -> '' store (the field is unvalidated -- any
+    string passes implode). NO reload, NO egress.
+
+    A two-key comma-join is only deterministic on a VM with >=2 selectable
+    interfaces, so this asserts the single-key store + the empty-clear store; the
+    same mechanism applies to ``outbound_interface``.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngipsettings/config/0/inbound_interface"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "lan", f"inbound_interface already 'lan' before the valid POST (original={original!r})"
+        # VALID single key -> stored as 'lan'.
+        assert _post_and_get(webui, vm, IP_PAGE, {"inbound_interface": "lan"}, cfg) == "lan"
+        # CLEAR: empty selection -> implode of empty -> '' stored.
+        got_clear = _post_and_get(webui, vm, IP_PAGE, {"inbound_interface": ""}, cfg)
+        assert got_clear == "", f"empty inbound_interface selection should store '', got {got_clear!r}"
+    finally:
+        webui.post(IP_PAGE, {"inbound_interface": original}, timeout=SAVE_TIMEOUT)
+
+
+# --------------------------------------------------------------------------- #
+# SafeSearch settings (installedpackages/pfblockerngsafesearch -- BARE node, no
+# /config/0 array). All inputs are <select> (three single + one multi). Save is
+# ALL-OR-NOTHING: the doh-Enable-needs-a-list guard aborts the ENTIRE save, so on
+# that reject path NO field is written. Single-value selects coerce a bogus value
+# to '' then ``?: 'Disable'``; the doh_list multi coerces a bogus key to ''.
+# write_config() only -- fully hermetic.
+# --------------------------------------------------------------------------- #
+
+
+def test_safesearch_enable_select_valid_and_bogus_coerces_to_disable(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``safesearch_enable`` stores a valid option; a bogus value coerces to 'Disable'.
+
+    Select opts {Disable, Enable}; node default 'Disable'. Save validator coerces a
+    non-key value to ``$s_default=''`` then ``?: 'Disable'`` rewrites '' to
+    'Disable' -> a bogus POST stores 'Disable' (NOT the bogus token). Valid 'Enable'
+    stores 'Enable'. CONFIG BASE is the BARE node (no /config/0). write_config()
+    only -- hermetic.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_enable"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "Enable", f"safesearch_enable already 'Enable' before the valid POST (original={original!r})"
+        # VALID 'Enable' -> stored.
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_enable": "Enable"}, cfg) == "Enable"
+        # Restore to 'Disable' (the default baseline).
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_enable": "Disable"}, cfg) == "Disable"
+        # BOGUS -> coerced to 'Disable'.
+        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_enable": "Bogus"}, cfg)
+        assert got == "Disable", f"bogus safesearch_enable should coerce to 'Disable', got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_enable": "Disable"}, timeout=SAVE_TIMEOUT)
+
+
+def test_safesearch_youtube_select_three_branches_and_bogus(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``safesearch_youtube`` covers all three options + the bogus coercion.
+
+    Select opts {Disable, Strict, Moderate} -- branch coverage drives EACH valid
+    option: 'Strict' stores 'Strict', 'Moderate' stores 'Moderate' (the third
+    branch), and a bogus value coerces via ``$s_default=''`` then ``?: 'Disable'``
+    to 'Disable'. write_config() only -- hermetic.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_youtube"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "Strict", f"safesearch_youtube already 'Strict' before the valid POST ({original!r})"
+        # VALID 'Strict'.
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_youtube": "Strict"}, cfg) == "Strict"
+        # VALID 'Moderate' -- the third option branch.
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_youtube": "Moderate"}, cfg) == "Moderate"
+        # Restore to 'Disable'.
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_youtube": "Disable"}, cfg) == "Disable"
+        # BOGUS -> 'Disable'.
+        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_youtube": "Bogus"}, cfg)
+        assert got == "Disable", f"bogus safesearch_youtube should coerce to 'Disable', got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_youtube": "Disable"}, timeout=SAVE_TIMEOUT)
+
+
+def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``safesearch_doh` stores 'Enable' (with a list) and coerces a bogus value to 'Disable'.
+
+    Select opts {Disable, Enable}. CAVEAT: 'Enable' with an EMPTY safesearch_doh_list
+    raises an input_error that aborts the WHOLE save, so the valid branch MUST also
+    supply a valid list (overrides include ``safesearch_doh_list='dns.google'``) ->
+    node == 'Enable'. The BOGUS branch ('Bogus') coerces via ``$s_default=''`` then
+    ``?: 'Disable'`` -> 'Disable' (the doh-list guard compares to the literal
+    'Enable', so a bogus value does not trip it). write_config() only -- hermetic.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != "Enable", f"safesearch_doh already 'Enable' before the valid POST (original={original!r})"
+        # VALID 'Enable' REQUIRES a non-empty list (else the guard aborts the save).
+        got = _post_and_get(
+            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
+        )
+        assert got == "Enable", f"safesearch_doh should store 'Enable' with a valid list, got {got!r}"
+        # Restore: doh back to 'Disable' and clear the list.
+        assert (
+            _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
+            == "Disable"
+        )
+        # BOGUS doh -> coerced to 'Disable' (the empty-list guard only fires for literal 'Enable').
+        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Bogus", "safesearch_doh_list": ""}, cfg)
+        assert got == "Disable", f"bogus safesearch_doh should coerce to 'Disable', got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+
+
+def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``safesearch_doh_list`` stores a valid key (CSV); a bogus key coerces to ''.
+
+    Multi-select, valid keys are the ~180 entries of ``$options_safesearch_doh_list``
+    (e.g. 'dns.google', 'cloudflare-dns.com'), stored as a CSV via
+    ``implode(',', (array)$_POST[...])``. The validator sets the field to '' when a
+    submitted key is NOT in the opts map -> implode of '' -> '' stored (NOT the
+    bogus value). A valid 'dns.google' -> 'dns.google'. We pair the list save with
+    ``safesearch_doh='Disable'`` so the doh-Enable-needs-a-list guard never fires
+    while exercising the list validator in isolation. An explicit override is
+    required (scrape_form_fields harvests only the first <selected>/first option of
+    the multi-select). write_config() only -- hermetic.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
+    try:
+        # VALID single key -> stored verbatim (doh kept Disable so the guard is inert).
+        got = _post_and_get(
+            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": "dns.google"}, cfg
+        )
+        assert got == "dns.google", f"safesearch_doh_list should store 'dns.google', got {got!r}"
+        # Restore/clear to '' (empty list).
+        got_clear = _post_and_get(
+            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg
+        )
+        assert got_clear == "", f"clearing safesearch_doh_list should store '', got {got_clear!r}"
+        # BOGUS key -> not in the opts map -> coerced to '' (NOT the bogus value).
+        got = _post_and_get(
+            webui,
+            vm,
+            SAFESEARCH_PAGE,
+            {"safesearch_doh": "Disable", "safesearch_doh_list": "evil.example.invalid"},
+            cfg,
+        )
+        assert got == "", f"bogus safesearch_doh_list key should coerce to '', got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+
+
+def test_safesearch_doh_enable_requires_list_guard(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Enabling DoH with an EMPTY list aborts the whole save (config unchanged).
+
+    The input_error guard: ``$_POST['safesearch_doh']=='Enable' &&
+    empty($_POST['safesearch_doh_list'])`` -> ``$input_errors`` -> the
+    ``if (!$input_errors)`` save block is skipped -> NO write_config, config
+    UNCHANGED. Two sub-cases on field safesearch_doh:
+
+    * PASS: ``{safesearch_doh:'Enable', safesearch_doh_list:'dns.google'}`` -> guard
+      NOT tripped -> node == 'Enable' AND the list == 'dns.google'.
+    * REJECT: ``{safesearch_doh:'Enable', safesearch_doh_list:''}`` (explicit empty,
+      defeating the scraped first-option default) -> guard fires -> the ENTIRE save
+      aborts -> safesearch_doh stays at its prior value (the captured before-state),
+      NOT 'Enable'.
+
+    Because the save is all-or-nothing, the reject assertion is "config == its
+    pre-POST value". write_config() only on the pass path; no write on reject.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh"
+    list_cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
+    # Establish a known before-state: doh Disable, no list.
+    webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+    before = helpers.config_get(vm, cfg)
+    try:
+        # BEFORE: doh is 'Disable' (not 'Enable').
+        assert before == "Disable", f"expected safesearch_doh 'Disable' baseline, got {before!r}"
+        # PASS path: Enable WITH a valid list -> persists both fields.
+        got = _post_and_get(
+            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
+        )
+        assert got == "Enable", f"safesearch_doh should persist 'Enable' with a valid list, got {got!r}"
+        assert helpers.config_get(vm, list_cfg) == "dns.google", "safesearch_doh_list not persisted on the pass path"
+        # Reset to the Disable baseline before the reject leg.
+        assert (
+            _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
+            == "Disable"
+        )
+        # REJECT path: Enable WITHOUT a list -> the whole save aborts -> UNCHANGED.
+        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": ""}, cfg)
+        assert got == "Disable", f"DoH-Enable-with-empty-list must abort the save (config unchanged), got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+
+
+# --------------------------------------------------------------------------- #
+# DNSBL settings (installedpackages/pfblockerngdnsblsettings/config/0). Save is
+# ALL-OR-NOTHING: any validation failure aborts the ENTIRE save -> config
+# UNCHANGED (so each reject_result is 'unchanged'). PRECONDITION: dnsbl_vip_ready
+# (the lo0 VIP + ports) -- every save runs pfb_validate_vips + is_port, else an
+# unrelated input_error aborts every save. write_config() only -- hermetic.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("field", "valid", "current_default", "bogus", "errlabel"),
+    [
+        ("pfb_dnsport", "8082", "8081", "99999", "DNSBL Port"),
+        ("pfb_dnsport_ssl", "8444", "8443", "abc", "DNSBL SSL Port"),
+    ],
+    ids=["pfb_dnsport", "pfb_dnsport_ssl"],
+)
+def test_dnsbl_port_is_port_valid_and_reject_unchanged(
+    field: str,
+    valid: str,
+    current_default: str,
+    bogus: str,
+    errlabel: str,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """A DNSBL port field accepts a valid port; a bad port aborts the whole save.
+
+    ``is_port($_POST[field])``: a bogus value (99999 > 65535, or non-numeric 'abc')
+    -> is_port FALSE -> ``$input_errors`` ('<label> is invalid!') -> the WHOLE save
+    aborts -> node UNCHANGED. A valid port is stored verbatim. The fixture default
+    is the listed ``current_default`` (8081/8443), so the VALID probe is a DIFFERENT
+    valid port (8082/8444) to satisfy the before/after transition rule (prove the
+    POST CAUSED the change). Restore to the fixture default afterward.
+    """
+    vm = smoke_vm
+    cfg = f"installedpackages/pfblockerngdnsblsettings/config/0/{field}"
+    original = helpers.config_get(vm, cfg)
+    # Restore target: whatever was there, else the documented default.
+    restore = original or current_default
+    try:
+        assert original != valid, f"{field} already {valid!r} before the valid POST (original={original!r})"
+        # VALID port distinct from the current value -> stored verbatim.
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {field: valid}, cfg) == valid
+        # Restore the original valid port.
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {field: restore}, cfg) == restore
+        # REJECT: a bad port aborts the whole save -> config UNCHANGED.
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {field: bogus}, cfg)
+        assert got == restore, f"bogus {field} must leave config unchanged at {restore!r}, got {got!r}"
+    finally:
+        webui.post(DNSBL_PAGE, {field: restore}, timeout=SAVE_TIMEOUT)
+
+
+def test_dnsbl_py_cache_max_unlimited_and_reject_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """``pfb_py_cache_max`` accepts 0 (unlimited); a >5M value aborts the whole save.
+
+    Validation: non-empty AND (NOT ctype_digit OR int > 5_000_000) -> input_error
+    -> the WHOLE save aborts -> node UNCHANGED. So a bogus 9999999 (>5M, or a
+    non-digit) leaves the prior value (NOT coerced to 10000 here -- the 10000
+    fallback fires ONLY for an EMPTY post value, a separate coerce path). Valid '0'
+    is meaningful (unlimited) and KEPT (``ctype_digit('0')`` true -> stored '0').
+    The current default is 10000, so 0 is a real transition. Restore to 10000.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_cache_max"
+    original = helpers.config_get(vm, cfg)
+    restore = original or "10000"
+    try:
+        assert original != "0", f"pfb_py_cache_max already '0' before the valid POST (original={original!r})"
+        # VALID '0' (unlimited) -> stored verbatim.
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_py_cache_max": "0"}, cfg) == "0"
+        # Restore the prior value (the 10000 default baseline).
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_py_cache_max": restore}, cfg) == restore
+        # REJECT: >5M aborts the whole save -> config UNCHANGED.
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_py_cache_max": "9999999"}, cfg)
+        assert got == restore, f"bogus pfb_py_cache_max must leave config unchanged at {restore!r}, got {got!r}"
+    finally:
+        webui.post(DNSBL_PAGE, {"pfb_py_cache_max": restore}, timeout=SAVE_TIMEOUT)
+
+
+def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """``pfb_regex_list`` accepts ASCII (stored base64); a non-ASCII value aborts the save.
+
+    Non-ASCII guard: ``!mb_detect_encoding($_POST['pfb_regex_list'], 'ASCII', TRUE)``
+    -> input_error -> the WHOLE save aborts -> node UNCHANGED. STORED AS BASE64
+    (``base64_encode`` on save, ``base64_decode`` on render), so the oracle compares
+    config_get against base64 of the posted text. A valid ASCII '^ads\\.' stores
+    base64('^ads\\.'); a 'café' (non-ASCII byte) is rejected -> config unchanged.
+    NO egress.
+    """
+    import base64
+
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_list"
+    valid_text = "^ads\\."
+    valid_b64 = base64.b64encode(valid_text.encode()).decode()
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != valid_b64, f"pfb_regex_list already holds {valid_text!r} (base64) before the valid POST"
+        # VALID ASCII regex -> base64 of the text is stored.
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": valid_text}, cfg) == valid_b64
+        # Restore/clear to '' (empty textarea -> base64('') -> '').
+        got_clear = _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": ""}, cfg)
+        assert got_clear == "", f"clearing pfb_regex_list should store '', got {got_clear!r}"
+        # REJECT: a non-ASCII value aborts the whole save -> config UNCHANGED (stays '').
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": "café"}, cfg)
+        assert got == "", f"non-ASCII pfb_regex_list must leave config unchanged at '', got {got!r}"
+    finally:
+        restore = ""
+        if original:
+            try:
+                restore = base64.b64decode(original).decode()
+            except Exception:
+                restore = ""
+        webui.post(DNSBL_PAGE, {"pfb_regex_list": restore}, timeout=SAVE_TIMEOUT)
+
+
+def test_dnsbl_adv_inbound_proto_any_guard(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """Advanced inbound rules with protocol 'Any' abort the save; a real proto persists.
+
+    Guard: IF ``autoports_in`` OR ``autoaddr_in`` is set AND ``autoproto_in`` is
+    empty or 'any' -> input_error ("Protocol setting cannot be set to 'Any' with
+    Advanced Inbound firewall rule settings.") -> the WHOLE save aborts -> config
+    UNCHANGED. REQUIRES TWO FIELDS in the same POST:
+
+    * PASS: ``autoports_in='on'`` + ``autoproto_in='tcp'`` -> save SUCCEEDS,
+      autoproto_in stores 'tcp' ('tcp' is a key of get_ipprotocols() so it survives
+      the select-coercion).
+    * REJECT: ``autoports_in='on'`` + ``autoproto_in='any'`` -> guard fires -> save
+      aborts -> autoproto_in UNCHANGED (its prior value).
+
+    CLEANUP restores autoports_in='' and autoproto_in to its prior value so the box
+    is not left with adv-inbound enabled. NO egress.
+    """
+    vm = smoke_vm
+    proto_cfg = "installedpackages/pfblockerngdnsblsettings/config/0/autoproto_in"
+    ports_cfg = "installedpackages/pfblockerngdnsblsettings/config/0/autoports_in"
+    proto_orig = helpers.config_get(vm, proto_cfg)
+    ports_orig = helpers.config_get(vm, ports_cfg)
+    try:
+        # BEFORE: autoproto_in is not 'tcp' (so the PASS leg is a real transition).
+        assert proto_orig != "tcp", f"autoproto_in already 'tcp' before the valid POST (original={proto_orig!r})"
+        # PASS: adv-inbound ports ON + a concrete protocol -> save succeeds, stores 'tcp'.
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"autoports_in": "on", "autoproto_in": "tcp"}, proto_cfg)
+        assert got == "tcp", f"autoproto_in should store 'tcp' with adv-inbound ports on, got {got!r}"
+        assert helpers.config_get(vm, ports_cfg) == "on", "autoports_in not persisted on the pass path"
+        # Reset autoproto_in to a concrete value baseline before the reject leg
+        # (clear adv-inbound first so this intermediate save is itself valid).
+        _post_and_get(webui, vm, DNSBL_PAGE, {"autoports_in": "", "autoproto_in": proto_orig or "any"}, proto_cfg)
+        proto_baseline = helpers.config_get(vm, proto_cfg)
+        # REJECT: adv-inbound ports ON + proto 'any' -> guard fires -> save aborts,
+        # config UNCHANGED (autoproto_in stays at proto_baseline; ports stays cleared).
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"autoports_in": "on", "autoproto_in": "any"}, proto_cfg)
+        assert got == proto_baseline, (
+            f"adv-inbound 'Any' guard must abort the save (autoproto_in unchanged at {proto_baseline!r}), got {got!r}"
+        )
+        assert helpers.config_get(vm, ports_cfg) != "on", "the rejected save must not have enabled autoports_in"
+    finally:
+        # Leave adv-inbound OFF and autoproto_in at its original value.
+        webui.post(DNSBL_PAGE, {"autoports_in": ports_orig, "autoproto_in": proto_orig or "any"}, timeout=SAVE_TIMEOUT)
 
 
 # --------------------------------------------------------------------------- #
