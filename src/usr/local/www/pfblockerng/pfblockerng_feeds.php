@@ -63,12 +63,12 @@ if (is_array($fconfig)) {
 	}
 }
 
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path. Initialise it once.
+$input_errors = array();
+
 if ($_POST) {
 	if (isset($_POST['save'])) {
-
-		if (isset($input_errors)) {
-			unset($input_errors);
-		}
 
 		$config_mod = FALSE;
 		foreach ($pfb['feeds_list'] as $type => $data) {
