@@ -3270,6 +3270,22 @@ function pfb_dnsbl_abp_extract_ip($line) {
 }
 
 
+// Strip a trailing ":<port>" from a host:port feed line (e.g. 'evil.com:8080' ->
+// 'evil.com'), but NEVER from an IPv6 literal: an address like '2001:db8:5::7' ends
+// in ':<hextet>', so the naive /:[0-9]{1,5}$/ rewrite would mangle it into the
+// invalid '2001:db8:5:' -- is_ipaddrv6() then rejects it and the IP is dropped,
+// leaving pfB_DNSBLIP_v6 with only the '::<placeholder>' sentinel (the dual-stack
+// partition smoke regression, ex-issue #35). A valid IPv6 literal carries no
+// host:port, so guarding on is_ipaddrv6() is safe and leaves every non-v6 line
+// (domains, domain:port, IPv4, IPv4:port) stripped exactly as before.
+function pfb_strip_trailing_port($line) {
+	if (!is_ipaddrv6($line) && strpos($line, ':') !== FALSE) {
+		return preg_replace("/:[0-9]{1,5}$/", '', $line);
+	}
+	return $line;
+}
+
+
 // ADR-10 P5: atomically publish a file to the chroot (/var/unbound). Stage into a
 // temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
 // fix ownership -> atomic rename() over the final path. The plugin only ever reads
@@ -9617,10 +9633,9 @@ function sync_package_pfblockerng($cron='') {
 													}
 												}
 
-												// Remove any Port numbers at end of line
-												if (strpos($line, ':') !== FALSE) {
-													$line = preg_replace("/:[0-9]{1,5}$/", '', $line);
-												}
+												// Remove any Port numbers at end of line (IPv6-safe:
+												// never mangle a bare IPv6 literal's trailing hextet).
+												$line = pfb_strip_trailing_port($line);
 											}
 											$line = trim($line);
 
