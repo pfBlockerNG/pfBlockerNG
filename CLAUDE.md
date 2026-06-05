@@ -171,7 +171,7 @@ pfBlockerNG/
 │       │   ├── pfb_unbound_include.inc
 │       │   ├── pfb_unbound.py         # Unbound Python plugin (matcher + DNSBL list build: parse/classify/build from the manifest)
 │       │   ├── pfblockerng.sh         # Shell script (POSIX sh)
-│       │   └── ip_pre_AWS_*.sh        # Per-region AWS IP-prefix pre-scripts (hand-maintained)
+│       │   └── list_scripts/          # Feed pre/post transform scripts (AWS region wrappers + shared aws_region_prefixes.sh)
 │       ├── share/             # Package metadata (info.xml)
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
 ├── tests/                 # Python test suite (pytest)
@@ -456,9 +456,13 @@ is a smell even when it works.
 
 - POSIX sh only (`#!/bin/sh`), no bash-isms (`[[`, arrays, `$RANDOM`, etc.)
 - Quote all expansions: `"$var"`, `"${var}"`
-- Absolute paths for all binaries (pfSense convention); don't rely on `$PATH`
-- `ip_pre_AWS_*.sh` are near-identical, hand-maintained per-region pre-scripts differing only
-  by a `jq` region filter — apply shared-logic changes uniformly across all of them
+- Absolute paths only for **add-on/privileged** binaries (`iprange`/`grepcidr`/`mmdblookup`/
+  `jq`/`pfctl`) — as `path*` vars, see `pfblockerng.sh`. Base utilities (`grep`/`sed`/`awk`/
+  `sort`/`find`/`cut`…) may be **bare** (the code does so pervasively; these run under pfSense's
+  controlled PATH). Don't rely on `$PATH` outside base.
+- AWS region pre-scripts live in `list_scripts/`: 25 thin `ip_pre_AWS_*.sh` wrappers
+  (UI-selectable) pass a `jq` region filter to the shared `list_scripts/aws_region_prefixes.sh`
+  — change that one, not 25.
 
 ---
 
