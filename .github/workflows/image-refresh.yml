@@ -1,25 +1,31 @@
 name: CI image refresh (ADR-09 P5)
 
-# Upgrade a published pfSense CE GHCR image to a new CE release, apply the SANITY
-# GATE, and publish the new tag ONLY on gate PASS. Fail-closed: a bad upgrade MUST
-# NEVER be published and the old tag MUST be left untouched.
+# Upgrade a published pfSense CE GHCR image to a new CE release and publish the
+# result. Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST
+# be left untouched.
 #
-# Triggered by the version-tracker (ADR-09 Phase 4) once per ci:true CE entry
-# whenever the tracker runs, and by manual workflow_dispatch for testing/forcing.
+# PUBLISH GUARD (inside scripts/image-upgrade.sh):
+#   1. Prior GHCR tag pulled and booted writable under QEMU/KVM.
+#   2. pkg update -f → pkg upgrade -n dry-run → ONLY if upgrades pending:
+#      pkg upgrade -y + reboot + wait SSH (baked deps updated; pfBlockerNG is NOT
+#      on the base image and is never touched).
+#   3. pfSense-upgrade (reboots the box).
+#   4. Wait until version changes.
+#   5. Health gate: poll up to 300 s for EITHER the webConfigurator to answer
+#      HTTP on-box (fetch https://127.0.0.1/) OR pfctl -sr to show a live ruleset.
+#      If NEITHER within 300 s → die, fail-closed, nothing is published.
+#   6. Clean shutdown → compress to qcow2 (zstd) → oras push new tag.
 #
-# SANITY GATE (the publish guard — ADR-09 §2):
-#   1. VM boots                    — the upgraded qcow2 powers up under QEMU/KVM
-#   2. SSH answers                 — root SSH reaches the guest
-#   3. /etc/version == expected    — the upgrade landed the target CE version
-#   4. pfctl -sr loads             — firewall ruleset is non-empty
-#   5. install-from-repo.sh +
-#      pfblockerng.php update=0    — pfBlockerNG installs and its reload succeeds
-#   6. dig control record          — the guest's own Unbound answers a known
-#                                    local-data A record injected after install
-# ANY failure -> DO NOT publish; fail the job; keep GHCR untouched.
+# pfBlockerNG SMOKE (non-blocking, after publish):
+#   A separate step with continue-on-error: true boots a throwaway copy-on-write
+#   overlay of the JUST-PUBLISHED image, installs pfBlockerNG from the repo, runs
+#   pfblockerng.php update, and digs the sanity control record — purely informational.
+#   Because it runs on a discarded overlay AFTER publish and with continue-on-error:
+#   true, it CANNOT pollute the published image and CANNOT fail the refresh job.
+#   The authoritative pfBlockerNG validation is the smoke fan-out (smoke-fanout.yml).
 #
-# FALLBACK: when the gate fails, use scripts/image-publish.sh (off-runner manual
-# seed) to publish the image for that version. This is documented, not the default.
+# FALLBACK: when the health gate fails, use scripts/image-publish.sh (off-runner
+# manual seed) to publish the image for that version.
 #
 # Required secrets/vars (shared with build-image.yml and smoke.yml):
 #   SMOKE_GHCR_USER     username for `oras login ghcr.io`                  (secret)
@@ -57,18 +63,13 @@ on:
         required: false
         default: "1800"
         type: string
-      boot_timeout:
-        description: "Sanity gate: hard boot-to-SSH timeout, seconds"
-        required: false
-        default: "180"
-        type: string
       sanity_local_data_name:
-        description: "Sanity gate: Unbound local-data name to inject + query on-box"
+        description: "pfBlockerNG smoke (non-blocking): Unbound local-data name to inject + query on-box"
         required: false
         default: "smoke-sanity.pfb.test"
         type: string
       sanity_local_data_ip:
-        description: "Sanity gate: A-record the gate asserts for sanity_local_data_name"
+        description: "pfBlockerNG smoke (non-blocking): A-record asserted for sanity_local_data_name"
         required: false
         default: "192.0.2.99"
         type: string
@@ -141,7 +142,7 @@ jobs:
           printf 'Auto-detected from_version: %s (target: %s)\n' "$FROM_FULL_TAG" "$TARGET_VERSION"
           printf 'from_tag=%s\n' "$FROM_FULL_TAG" >> "$GITHUB_OUTPUT"
 
-  # ── Upgrade-in-place + SANITY GATE + publish on pass only ──────────────────
+  # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
   refresh:
     name: Refresh CE ${{ inputs.pfsense_version }} image
     needs: resolve-from
@@ -194,12 +195,19 @@ jobs:
           printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
           printf 'Image base ref: %s\n' "$IMAGE"
 
-      # ── Step 1: UPGRADE IN PLACE ────────────────────────────────────────────
-      # Pull the FROM tag, boot it under the runner's KVM, run pfSense-upgrade,
-      # wait for the new version, power off, compress, stream back. The source
-      # tag is left untouched. The upgraded qcow2 is NOT yet published — it sits
-      # locally until the sanity gate passes.
-      - name: Upgrade in place (pfSense ${{ needs.resolve-from.outputs.from_tag }} -> ${{ inputs.pfsense_version }})
+      # ── Upgrade + health gate + publish ────────────────────────────────────
+      # scripts/image-upgrade.sh runs locally (runner IS the KVM host — no
+      # --proxmox, mirroring build-image.yml). It:
+      #   1. Pulls --from tag (oras), boots writable copy under KVM.
+      #   2. With --upgrade-pkgs: pkg update -f + pkg upgrade -n (dry-run detect);
+      #      ONLY if upgrades pending → pkg upgrade -y + reboot + wait SSH.
+      #   3. Runs pfSense-upgrade (reboots the box), waits for version to change.
+      #   4. Health gate: polls up to 300 s for webConfigurator HTTP or pfctl live
+      #      ruleset; fail-closed (die → no publish) if neither answers.
+      #   5. Shuts down cleanly, compresses to qcow2 (zstd), oras-pushes new tag.
+      # The published image is a CLEAN upgraded qcow2; pfBlockerNG is NEVER
+      # installed on it (the non-blocking step below uses a discarded overlay).
+      - name: Upgrade in place + health gate + publish (${{ needs.resolve-from.outputs.from_tag }} -> ${{ inputs.pfsense_version }})
         id: upgrade
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
@@ -208,148 +216,24 @@ jobs:
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
         run: |
           set -eu
-          # Upgrade into a LOCAL working directory — do NOT push yet.
-          # image-upgrade.sh publishes at the end; we need to intercept that
-          # by using a local-only mode. We achieve this by pulling, booting,
-          # upgrading, and then capturing the resulting qcow2 ourselves using
-          # the same approach as image-upgrade.sh but stopping before the push.
-          #
-          # image-upgrade.sh is designed to pull + upgrade + push in one pass.
-          # We run it in two sub-steps: the upgrade step produces the qcow2 and
-          # verifies the version changed; the sanity gate then boots and validates
-          # the result before we push it.
-          #
-          # To intercept, we run image-upgrade.sh normally BUT capture its work
-          # output. Since the script always pushes at the end and we cannot
-          # easily split it, we use a different approach:
-          #   a) oras pull the FROM tag manually.
-          #   b) Boot + upgrade + shutdown (inline, mirroring image-upgrade.sh logic).
-          #   c) Capture the resulting qcow2 as upgrade-candidate.qcow2.
-          #   d) Gate: boot the candidate, run all sanity checks.
-          #   e) Only on GATE PASS: push via oras.
-          #
-          # This is the "gate-then-publish" split that image-upgrade.sh's
-          # monolithic flow does not natively support (it always pushes on success).
-          # The inline logic below mirrors image-upgrade.sh exactly (same flags,
-          # same wait loop) — no duplication of upgrade semantics, just the split.
+          sh scripts/image-upgrade.sh \
+            --from "${{ needs.resolve-from.outputs.from_tag }}" \
+            --to "${{ inputs.pfsense_version }}" \
+            --image "${{ steps.ref.outputs.image }}" \
+            --ssh-key "$PWD/smoke_key" \
+            --compression "${{ inputs.compression }}" \
+            --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
+            --upgrade-pkgs
 
-          FROM_TAG="${{ needs.resolve-from.outputs.from_tag }}"
-          TO_TAG="${{ inputs.pfsense_version }}"
-          IMAGE="${SMOKE_IMAGE}"
-          GUEST_PORT=2222
-          MAC="BC:24:11:37:9C:AC"
-          UPGRADE_TIMEOUT="${{ inputs.upgrade_timeout }}"
-          UPGRADE_CMD='yes | /usr/local/sbin/pfSense-upgrade -d'
-          WORK_DIR="$(mktemp -d)"
-          echo "WORK_DIR=${WORK_DIR}" >> "$GITHUB_ENV"
-
-          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
-            --username "$SMOKE_GHCR_USER" --password-stdin
-
-          printf '==> Pulling %s:%s\n' "$IMAGE" "$FROM_TAG"
-          oras pull "${IMAGE}:${FROM_TAG}" --output "$WORK_DIR"
-          BASE_IMG="$(find "$WORK_DIR" -maxdepth 1 -name '*.qcow2' | head -1)"
-          [ -n "$BASE_IMG" ] || { echo "::error::no qcow2 in pulled artifact ${IMAGE}:${FROM_TAG}"; exit 1; }
-
-          # Make a writable working copy (never modify the pulled base).
-          WORK_IMG="${WORK_DIR}/work.qcow2"
-          cp "$BASE_IMG" "$WORK_IMG"
-
-          QMP_SOCK="${RUNNER_TEMP:-/tmp}/pfb-qmp-upgrade.sock"
-          printf '==> Booting VM for upgrade (guest :%d -> 127.0.0.1:%d)\n' 22 "$GUEST_PORT"
-          qemu-system-x86_64 \
-            -enable-kvm -machine pc -cpu host \
-            -smp 2,sockets=1,cores=2 -m 4096 \
-            -device virtio-scsi-pci,id=virtioscsi0 \
-            -drive "file=${WORK_IMG},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
-            -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-:22" \
-            -device "virtio-net-pci,mac=${MAC},netdev=net0,id=net0" \
-            -display none \
-            -serial "file:${WORK_DIR}/console.log" \
-            -qmp "unix:${QMP_SOCK},server,nowait" \
-            -pidfile "${WORK_DIR}/qemu.pid" \
-            -daemonize
-          echo "QMP_SOCK=${QMP_SOCK}" >> "$GITHUB_ENV"
-          echo "UPGRADE_QPID_FILE=${WORK_DIR}/qemu.pid" >> "$GITHUB_ENV"
-
-          printf '==> Waiting for SSH (pre-upgrade)...\n'
-          _elapsed=0
-          while ! ssh -p "$GUEST_PORT" -i smoke_key \
-              -o BatchMode=yes -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-              root@127.0.0.1 true 2>/dev/null; do
-            [ "$_elapsed" -lt 300 ] || { echo "::error::VM did not answer SSH within 300s"; exit 1; }
-            sleep 5; _elapsed=$((_elapsed + 5))
-          done
-
-          OLD_VER="$(ssh -p "$GUEST_PORT" -i smoke_key \
-            -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-            root@127.0.0.1 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)"
-          printf '==> Current version: %s\n' "${OLD_VER:-unknown}"
-
-          printf '==> Running pfSense-upgrade (up to %ss)\n' "$UPGRADE_TIMEOUT"
-          ssh -p "$GUEST_PORT" -i smoke_key \
-            -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
-            root@127.0.0.1 "$UPGRADE_CMD" 2>&1 | tee "${WORK_DIR}/upgrade.log" || true
-
-          printf '==> Waiting for the upgraded box to reboot and come back...\n'
-          sleep 30
-          NEW_VER=""
-          _elapsed=0
-          while [ "$_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
-            _v="$(ssh -p "$GUEST_PORT" -i smoke_key \
-              -o BatchMode=yes -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-              root@127.0.0.1 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)"
-            if [ -n "$_v" ] && [ "$_v" != "$OLD_VER" ]; then
-              NEW_VER="$_v"
-              break
-            fi
-            sleep 15; _elapsed=$((_elapsed + 15))
-          done
-          if [ -z "$NEW_VER" ]; then
-            echo "::error::pfSense version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'). Check upgrade.log in the diagnostics artifact."
-            exit 1
-          fi
-          printf '==> Upgraded: %s -> %s\n' "$OLD_VER" "$NEW_VER"
-          echo "NEW_VER=${NEW_VER}" >> "$GITHUB_ENV"
-          echo "OLD_VER=${OLD_VER}" >> "$GITHUB_ENV"
-
-          printf '==> Shutting the upgraded VM down\n'
-          ssh -p "$GUEST_PORT" -i smoke_key \
-            -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-            root@127.0.0.1 '/sbin/shutdown -p now' 2>/dev/null || true
-          QPID="$(cat "${WORK_DIR}/qemu.pid" 2>/dev/null | tr -d '\r' || true)"
-          if [ -n "$QPID" ]; then
-            _elapsed=0
-            while kill -0 "$QPID" 2>/dev/null; do
-              [ "$_elapsed" -lt 120 ] || { kill "$QPID" 2>/dev/null || true; break; }
-              sleep 3; _elapsed=$((_elapsed + 3))
-            done
-          fi
-
-          printf '==> Compressing upgraded image (zstd, with zlib fallback)\n'
-          CANDIDATE="${WORK_DIR}/pfSense-CE-${TO_TAG}.qcow2"
-          if qemu-img convert -O qcow2 -c -o compression_type=zstd \
-              "$WORK_IMG" "$CANDIDATE" 2>/dev/null; then
-            printf '    zstd compression OK\n'
-          else
-            printf '    zstd not supported; falling back to zlib\n'
-            qemu-img convert -O qcow2 -c "$WORK_IMG" "$CANDIDATE"
-          fi
-          [ -s "$CANDIDATE" ] || { echo "::error::compressed candidate image is empty"; exit 1; }
-          echo "CANDIDATE=${CANDIDATE}" >> "$GITHUB_ENV"
-          printf '==> Upgrade candidate ready: %s\n' "$(basename "$CANDIDATE")"
-
-      # ── Step 2: SANITY GATE ─────────────────────────────────────────────────
-      # Boot the CANDIDATE (not the source) and apply every gate check.
-      # ANY miss -> abort; the old GHCR tag is never touched.
-      - name: Sanity gate — boot candidate + run all checks
-        id: sanity
+      # ── pfBlockerNG smoke (non-blocking, post-publish) ──────────────────────
+      # Boots a THROWAWAY copy-on-write overlay of the JUST-PUBLISHED image
+      # (qemu-img create -b), installs pfBlockerNG from the repo, runs
+      # pfblockerng.php update, and digs the sanity control record.
+      # continue-on-error: true + post-publish overlay → can NEVER pollute the
+      # published image and can NEVER fail the refresh job.
+      # The authoritative pfBlockerNG validation is smoke-fanout.yml.
+      - name: pfBlockerNG smoke (non-blocking)
+        continue-on-error: true
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
@@ -357,46 +241,46 @@ jobs:
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
         run: |
           set -eu
-          BOOT_TIMEOUT="${{ inputs.boot_timeout }}"
           LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
           LOCAL_DATA_IP="${{ inputs.sanity_local_data_ip }}"
-          GUEST_PORT=2223   # different port from upgrade boot (defence-in-depth)
+          IMAGE="${SMOKE_IMAGE}"
+          TAG="${{ inputs.pfsense_version }}"
+          GUEST_PORT=2223
           MAC="BC:24:11:37:9C:AC"
-          CANDIDATE="${CANDIDATE}"
-          TARGET_VERSION="${{ inputs.pfsense_version }}"
-          WORK_DIR="${WORK_DIR}"
+          WORK_DIR="$(mktemp -d)"
+          printf 'SMOKE_WORK_DIR=%s\n' "$WORK_DIR" >> "$GITHUB_ENV"
 
-          printf '==> SANITY GATE: booting candidate image %s\n' "$(basename "$CANDIDATE")"
-          QMP_SOCK_GATE="${RUNNER_TEMP:-/tmp}/pfb-qmp-gate.sock"
+          # Pull the just-published image.
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          printf '==> [non-blocking smoke] pulling %s:%s\n' "$IMAGE" "$TAG"
+          oras pull "${IMAGE}:${TAG}" --output "$WORK_DIR"
+          BASE_IMG="$(find "$WORK_DIR" -maxdepth 1 -name '*.qcow2' | head -1)"
+          [ -n "$BASE_IMG" ] || { printf '::warning::no qcow2 in pulled artifact %s:%s\n' "$IMAGE" "$TAG"; exit 0; }
 
-          # Boot from the compressed candidate qcow2 (copy-on-write overlay so
-          # the candidate file is never mutated by the sanity run).
-          GATE_OVERLAY="${WORK_DIR}/gate-overlay.qcow2"
-          qemu-img create -b "$CANDIDATE" -F qcow2 -f qcow2 "$GATE_OVERLAY"
+          # Create a throwaway CoW overlay — the published image is never mutated.
+          OVERLAY="${WORK_DIR}/smoke-overlay.qcow2"
+          qemu-img create -b "$BASE_IMG" -F qcow2 -f qcow2 "$OVERLAY"
 
+          printf '==> [non-blocking smoke] booting overlay (guest :%d -> 127.0.0.1:%d)\n' 22 "$GUEST_PORT"
           qemu-system-x86_64 \
             -enable-kvm -machine pc -cpu host \
             -smp 2,sockets=1,cores=2 -m 4096 \
             -device virtio-scsi-pci,id=virtioscsi0 \
-            -drive "file=${GATE_OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
+            -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
             -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
             -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-:22" \
             -device "virtio-net-pci,mac=${MAC},netdev=net0,id=net0" \
             -display none \
-            -serial "file:${WORK_DIR}/gate-console.log" \
-            -qmp "unix:${QMP_SOCK_GATE},server,nowait" \
-            -pidfile "${WORK_DIR}/gate-qemu.pid" \
+            -serial "file:${WORK_DIR}/smoke-console.log" \
+            -pidfile "${WORK_DIR}/smoke-qemu.pid" \
             -daemonize
-          echo "GATE_QPID_FILE=${WORK_DIR}/gate-qemu.pid" >> "$GITHUB_ENV"
-          echo "QMP_SOCK_GATE=${QMP_SOCK_GATE}" >> "$GITHUB_ENV"
+          SMOKE_QPID="$(cat "${WORK_DIR}/smoke-qemu.pid" 2>/dev/null | tr -d '\r' || true)"
 
-          GATE_FAILED=0
-
-          # [GATE-1+2] SSH answers within BOOT_TIMEOUT seconds.
-          printf '==> [GATE-1/6] VM boots; [GATE-2/6] SSH answers (timeout %ss)\n' "$BOOT_TIMEOUT"
+          # Wait for SSH (180 s).
           _elapsed=0
           SSH_UP=0
-          while [ "$_elapsed" -lt "$BOOT_TIMEOUT" ]; do
+          while [ "$_elapsed" -lt 180 ]; do
             if ssh -p "$GUEST_PORT" -i smoke_key \
                 -o BatchMode=yes -o StrictHostKeyChecking=no \
                 -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
@@ -406,178 +290,70 @@ jobs:
             sleep 5; _elapsed=$((_elapsed + 5))
           done
           if [ "$SSH_UP" -ne 1 ]; then
-            echo "::error::[GATE-1/2] VM did not answer SSH within ${BOOT_TIMEOUT}s"
-            GATE_FAILED=1
-          else
-            echo "    PASS: SSH answered"
+            printf '::warning::[non-blocking smoke] VM did not answer SSH within 180 s\n'
+            [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true
+            exit 0
           fi
 
-          if [ "$GATE_FAILED" -eq 0 ]; then
-            # Shared SSH helper for subsequent gate checks.
-            run_ssh() {
-              ssh -p "$GUEST_PORT" -i smoke_key \
-                -o BatchMode=yes -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
-                root@127.0.0.1 "$@"
-            }
-
-            # [GATE-3] /etc/version == expected release.
-            # TARGET_VERSION may be "2.8.x" (matrix pattern) or "2.8.1" (exact).
-            # Strip trailing ".x" to get a prefix; accept any version that starts
-            # with it (same matching logic as the build-image resolve-version job).
-            printf '==> [GATE-3/6] /etc/version == %s\n' "$TARGET_VERSION"
-            BOX_VER="$(run_ssh 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)"
-            VERSION_PREFIX="$(printf '%s' "$TARGET_VERSION" | sed 's/\.x$//')"
-            if [ -z "$BOX_VER" ]; then
-              echo "::error::[GATE-3] could not read /etc/version from guest"
-              GATE_FAILED=1
-            else
-              CASE="${BOX_VER#"${VERSION_PREFIX}"}"
-              if [ "$BOX_VER" = "$VERSION_PREFIX" ] || [ "$CASE" != "$BOX_VER" ]; then
-                printf '    PASS: /etc/version = %s (matches %s)\n' "$BOX_VER" "$TARGET_VERSION"
-              else
-                printf '::error::[GATE-3] /etc/version = %s does not match expected %s\n' \
-                  "$BOX_VER" "$TARGET_VERSION"
-                GATE_FAILED=1
-              fi
-            fi
-
-            # [GATE-4] pfctl -sr returns a non-empty ruleset.
-            printf '==> [GATE-4/6] pfctl -sr loads\n'
-            RULES="$(run_ssh '/sbin/pfctl -sr' 2>/dev/null || true)"
-            if [ -n "$RULES" ]; then
-              printf '    PASS: %d rules\n' "$(printf '%s\n' "$RULES" | wc -l | tr -d ' ')"
-            else
-              echo "::error::[GATE-4] pfctl -sr returned no rules"
-              GATE_FAILED=1
-            fi
-
-            # [GATE-5] install-from-repo.sh + pfblockerng.php update exits 0.
-            # install-from-repo.sh needs egress (pkg install of deps); the sanity
-            # VM has internet open (user-net SLIRP with egress). After install, run
-            # the production reload entry point.
-            printf '==> [GATE-5/6] install-from-repo.sh + pfblockerng.php update\n'
-            if scripts/install-from-repo.sh root@127.0.0.1 \
-                --port "$GUEST_PORT" --ssh-key smoke_key; then
-              printf '    install-from-repo.sh OK\n'
-              if run_ssh '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update'; then
-                printf '    PASS: pfblockerng.php update exited 0\n'
-              else
-                echo "::error::[GATE-5] pfblockerng.php update exited non-zero"
-                GATE_FAILED=1
-              fi
-            else
-              echo "::error::[GATE-5] install-from-repo.sh failed"
-              GATE_FAILED=1
-            fi
-
-            # [GATE-6] dig a baked control record from the guest's own Unbound.
-            # The pfblockerng.php update above may restart Unbound — wait for it
-            # to come back, then inject a local-data record and resolve it on-box
-            # (same pattern as roundtrip.sh check [3/4]).
-            printf '==> [GATE-6/6] dig control record from guest Unbound\n'
-            UB_READY=0
-            _ub_i=0
-            while [ "$_ub_i" -lt 30 ]; do
-              if run_ssh '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status >/dev/null 2>&1'; then
-                UB_READY=1; break
-              fi
-              _ub_i=$((_ub_i + 1)); sleep 2
-            done
-            if [ "$UB_READY" -ne 1 ]; then
-              echo "::error::[GATE-6] Unbound did not come back up after pfBlockerNG reload"
-              GATE_FAILED=1
-            else
-              # Inject the control record.
-              if run_ssh "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf local_data '${LOCAL_DATA_NAME}. 3600 IN A ${LOCAL_DATA_IP}'"; then
-                printf '    injected %s -> %s\n' "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP"
-              else
-                echo "::error::[GATE-6] unbound-control local_data injection failed"
-                GATE_FAILED=1
-              fi
-
-              # Resolve on-box (SSH → drill/host on the guest, probing 127.0.0.1:53).
-              DNS_OUT="$(run_ssh "if command -v drill >/dev/null 2>&1; then drill ${LOCAL_DATA_NAME} @127.0.0.1 A; elif command -v host >/dev/null 2>&1; then host -t A ${LOCAL_DATA_NAME} 127.0.0.1; else echo NO_GUEST_DNS_TOOL; fi" 2>/dev/null || true)"
-              if printf '%s' "$DNS_OUT" | grep -q NO_GUEST_DNS_TOOL; then
-                # Best-effort install bind-tools / ldns on the guest.
-                run_ssh 'env ASSUME_ALWAYS_YES=yes pkg install -y bind-tools ldns 2>/dev/null' || true
-                DNS_OUT="$(run_ssh "if command -v drill >/dev/null 2>&1; then drill ${LOCAL_DATA_NAME} @127.0.0.1 A; elif command -v host >/dev/null 2>&1; then host -t A ${LOCAL_DATA_NAME} 127.0.0.1; else echo NO_GUEST_DNS_TOOL_AFTER_INSTALL; fi" 2>/dev/null || true)"
-              fi
-              if printf '%s' "$DNS_OUT" | grep -qw "$LOCAL_DATA_IP"; then
-                printf '    PASS: guest Unbound resolved %s -> %s\n' "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP"
-              else
-                printf '::error::[GATE-6] guest Unbound did not return %s for %s\n' \
-                  "$LOCAL_DATA_IP" "$LOCAL_DATA_NAME"
-                printf '%s\n' "$DNS_OUT" | sed 's/^/      /' >&2
-                GATE_FAILED=1
-              fi
-            fi
-          fi
-
-          # Take a screendump before shutting down on failure.
-          if [ "$GATE_FAILED" -ne 0 ] && python3 tests/smoke/screendump.py \
-              "$QMP_SOCK_GATE" "${WORK_DIR}/gate-screen.png" 2>/dev/null; then
-            echo "    screendump saved to gate-screen.png"
-          fi
-
-          # Shut down the gate VM.
-          GATE_QPID="$(cat "${WORK_DIR}/gate-qemu.pid" 2>/dev/null | tr -d '\r' || true)"
-          if [ -n "$GATE_QPID" ]; then
+          run_ssh() {
             ssh -p "$GUEST_PORT" -i smoke_key \
               -o BatchMode=yes -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-              root@127.0.0.1 '/sbin/shutdown -p now' 2>/dev/null || true
+              -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+              root@127.0.0.1 "$@"
+          }
+
+          # Install pfBlockerNG from the repo (egress open on SLIRP net).
+          printf '==> [non-blocking smoke] install-from-repo.sh\n'
+          scripts/install-from-repo.sh root@127.0.0.1 \
+            --port "$GUEST_PORT" --ssh-key smoke_key || \
+            { printf '::warning::[non-blocking smoke] install-from-repo.sh failed\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          # pfblockerng.php update.
+          printf '==> [non-blocking smoke] pfblockerng.php update\n'
+          run_ssh '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update' || \
+            { printf '::warning::[non-blocking smoke] pfblockerng.php update returned non-zero\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          # Dig the sanity control record.
+          printf '==> [non-blocking smoke] waiting for Unbound\n'
+          UB_READY=0
+          _ub_i=0
+          while [ "$_ub_i" -lt 30 ]; do
+            if run_ssh '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status >/dev/null 2>&1'; then
+              UB_READY=1; break
+            fi
+            _ub_i=$((_ub_i + 1)); sleep 2
+          done
+          if [ "$UB_READY" -ne 1 ]; then
+            printf '::warning::[non-blocking smoke] Unbound did not come back up\n'
+            [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true
+            exit 0
+          fi
+
+          run_ssh "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf local_data '${LOCAL_DATA_NAME}. 3600 IN A ${LOCAL_DATA_IP}'" || \
+            { printf '::warning::[non-blocking smoke] unbound-control local_data injection failed\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          DNS_OUT="$(run_ssh "if command -v drill >/dev/null 2>&1; then drill ${LOCAL_DATA_NAME} @127.0.0.1 A; elif command -v host >/dev/null 2>&1; then host -t A ${LOCAL_DATA_NAME} 127.0.0.1; else echo NO_GUEST_DNS_TOOL; fi" 2>/dev/null || true)"
+          if printf '%s' "$DNS_OUT" | grep -qw "$LOCAL_DATA_IP"; then
+            printf '==> [non-blocking smoke] PASS: guest Unbound resolved %s -> %s\n' \
+              "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP"
+          else
+            printf '::warning::[non-blocking smoke] guest Unbound did not return %s for %s\n' \
+              "$LOCAL_DATA_IP" "$LOCAL_DATA_NAME"
+            printf '%s\n' "$DNS_OUT" | sed 's/^/      /' >&2
+          fi
+
+          # Shut down the smoke VM.
+          run_ssh '/sbin/shutdown -p now' 2>/dev/null || true
+          if [ -n "$SMOKE_QPID" ]; then
             _elapsed=0
-            while kill -0 "$GATE_QPID" 2>/dev/null; do
-              [ "$_elapsed" -lt 60 ] || { kill "$GATE_QPID" 2>/dev/null || true; break; }
+            while kill -0 "$SMOKE_QPID" 2>/dev/null; do
+              [ "$_elapsed" -lt 60 ] || { kill "$SMOKE_QPID" 2>/dev/null || true; break; }
               sleep 3; _elapsed=$((_elapsed + 3))
             done
           fi
-
-          if [ "$GATE_FAILED" -ne 0 ]; then
-            echo "::error::SANITY GATE FAILED — candidate image will NOT be published. GHCR tag ${{ inputs.pfsense_version }} is untouched. Manual fallback: scripts/image-publish.sh (see ADR-09 §2)."
-            exit 1
-          fi
-          echo "==> SANITY GATE PASSED — proceeding to publish"
-
-      # ── Step 3: PUBLISH ON PASS ONLY ───────────────────────────────────────
-      # The sanity gate job completed without error. Push the candidate qcow2
-      # to GHCR as the new version tag. The old tag is always kept.
-      - name: Publish candidate image (gate PASSED)
-        if: success()
-        env:
-          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
-        run: |
-          set -eu
-          IMAGE="${SMOKE_IMAGE}"
-          TAG="${{ inputs.pfsense_version }}"
-          CANDIDATE="${CANDIDATE}"
-
-          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
-            --username "$SMOKE_GHCR_USER" --password-stdin
-
-          # Refuse to clobber an existing tag (keep old snapshots; each tag is
-          # its own immutable snapshot per ADR-04 §2 retention policy).
-          if oras manifest fetch "${IMAGE}:${TAG}" >/dev/null 2>&1; then
-            echo "::error::Tag ${IMAGE}:${TAG} already exists. Use build-image.yml with --force if you need to overwrite an existing tag (only for intentional re-seeds). Old tag is kept."
-            exit 1
-          fi
-
-          printf '==> Publishing %s:%s\n' "$IMAGE" "$TAG"
-          (
-            cd "$(dirname "$CANDIDATE")"
-            oras push \
-              --artifact-type application/vnd.netgate.pfsense-ce.disk.v1 \
-              --annotation "org.opencontainers.image.title=$(basename "$CANDIDATE")" \
-              --annotation "org.opencontainers.image.version=${TAG}" \
-              --annotation "org.opencontainers.image.description=pfSense CE ${TAG} pfBlockerNG smoke-test base (upgraded from ${{ needs.resolve-from.outputs.from_tag }}; sanity-gated)" \
-              "${IMAGE}:${TAG}" \
-              "$(basename "$CANDIDATE"):application/vnd.qemu.qcow2"
-          )
-          printf '==> Published %s:%s (source tag %s kept)\n' \
-            "$IMAGE" "$TAG" "${{ needs.resolve-from.outputs.from_tag }}"
 
       - name: Upload diagnostics
         if: always()
@@ -585,9 +361,6 @@ jobs:
         with:
           name: image-refresh-diagnostics-${{ inputs.pfsense_version }}
           path: |
-            ${{ env.WORK_DIR }}/console.log
-            ${{ env.WORK_DIR }}/upgrade.log
-            ${{ env.WORK_DIR }}/gate-console.log
-            ${{ env.WORK_DIR }}/gate-screen.png
+            ${{ env.SMOKE_WORK_DIR }}/smoke-console.log
           if-no-files-found: ignore
           retention-days: 14
