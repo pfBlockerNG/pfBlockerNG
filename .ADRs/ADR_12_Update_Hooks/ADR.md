@@ -196,10 +196,16 @@ live smoke below. Phase 6 (populate `PFB_CHANGED_IP_ALIASES` + `PFB_CHANGED_DNSB
 > via the same `pfblockerng.php <verb>` CLI the GUI/cron use, and reads each hook's
 > `/usr/bin/env` dump back from a `/tmp` marker on the guest) — now automates the
 > no-op, pre/post fire+context, trigger values, IP/DNSBL-changed, and both safety
-> (non-zero / timeout) items below. **HA sync** and the **HAProxy recipe end-to-end**
-> stay maintainer-manual: the smoke image has neither a CARP pair nor the HAProxy
-> package. The `PFB_TRIGGER=update` (`$cron=''`, settings-save) value is not reachable
-> via any smoke `reload()` verb (GUI Force Update / a settings save map to `update` →
+> (non-zero / timeout) items below. The **hook → external-webhook callback SHAPE** —
+> the HAProxy-recipe pattern minus HAProxy — is also automated
+> (`test_hooks_webhook_*`): a recipe-shaped `post` hook guards on `PFB_IP_CHANGED` /
+> `PFB_DNSBL_CHANGED` and `curl`s a runner-side sink, forwarding the changed-alias
+> context with per-field `--data-urlencode`; the sink confirms the guard's off/on
+> branches and the url-encoded payload round-trips. Only the **real HAProxy config
+> emission** (`ipalias_*.lst` via a `source_ip` ACL) and **HA sync** stay
+> maintainer-manual: the smoke image has neither a CARP pair nor the HAProxy package.
+> The `PFB_TRIGGER=update` (`$cron=''`, settings-save) value is not reachable via any
+> smoke `reload()` verb (GUI Force Update / a settings save map to `update` →
 > `cron`), so it remains a manual-only check.
 
 - [x] **No-op.** With no enabled hooks, an update behaves exactly as before (no hook-runner log lines; pass output unchanged). *(automated: `tests/smoke/test_smoke_hooks.py::test_hooks_noop_no_marker`; plus the enabled-flag branch in `test_hooks_disabled_entry_not_run_then_enabled_runs`.)*
@@ -207,4 +213,5 @@ live smoke below. Phase 6 (populate `PFB_CHANGED_IP_ALIASES` + `PFB_CHANGED_DNSB
 - [x] **Safety — non-zero.** A `post` hook `command='exit 7'` is logged with its non-zero exit and the update **completes** (test the same as a `pre` hook). *(automated: `test_hooks_failing_hook_does_not_abort_update` — a non-zero `pre` hook runs but does not abort; the later `post` hook still fires.)*
 - [x] **Safety — timeout.** A hook `command='sleep 30'` with `timeout=2` is killed (logged "timed out … continuing") and the update **completes** — verify both `pre` and `post`. *(automated: `test_hooks_timeout_killed_update_continues` — a `pre` hook is killed mid-run (marker has `START`, not `DONE`) and the `post` hook still fires.)*
 - [ ] **HA sync** (maintainer-manual; no CARP pair on the smoke image). On a CARP pair, the hooks replicate to the secondary's config and run on whichever node performs the update (a hook with an external side effect runs once per updating node — expected).
-- [ ] **HAProxy recipe end-to-end** (maintainer-manual; no HAProxy package on the smoke image). With ADR-11's `pfB_Aggregate_v4`, the recipe HAProxy config (a `source_ip` ACL on `pfB_Aggregate_v4` + a `req.hdr_ip(CF-Connecting-IP) -f …/ipalias_pfB_Aggregate_v4.lst` deny ACL, gated on a Cloudflare-range source ACL), and the documented `post` hook above: an IP update with `PFB_IP_CHANGED=1` fires the hook → graceful HAProxy reload → fresh `ipalias_pfB_Aggregate_v4.lst`; a request whose `CF-Connecting-IP` is in the aggregate is **denied** at HAProxy (and one not in it is **allowed** — assert both, before and after listing). An **empty** aggregate still validates and reloads (never-empty file). Confirm **no `/../../` path trick and no dummy-IP hack** is needed.
+- [x] **Hook → external-webhook callback SHAPE** (automated: `tests/smoke/test_smoke_hooks.py::test_hooks_webhook_fires_on_ip_change`, `::test_hooks_webhook_dnsbl_guard_branch`). The HAProxy-recipe pattern minus HAProxy: a recipe-shaped `post` hook guarded on `PFB_IP_CHANGED` (resp. `PFB_DNSBL_CHANGED`) `curl`s a runner-side mock sink, forwarding the four post-context fields with PER-FIELD `--data-urlencode`. Asserts the guard's OFF branch (a no-op pass ⇒ the guard short-circuits ⇒ **no** callback) and ON branch (a feed change ⇒ exactly one callback whose decoded body carries `ip_changed`/`dnsbl_changed == "1"` and the updated `pfB_*` / `DNSBL_*` token in the url-encoded, space-separated list), and that the DNSBL-only change fires the DNSBL-guarded hook but NOT the IP-guarded one. This proves the fire + `PFB_IP_CHANGED` guard + url-encoded changed-alias payload + external-service-receives-it loop; only the items below stay manual.
+- [ ] **HAProxy recipe end-to-end** (maintainer-manual; no HAProxy package on the smoke image — only the real `ipalias_*.lst` emission + CARP/HA failover remain, the callback shape above is now automated). With ADR-11's `pfB_Aggregate_v4`, the recipe HAProxy config (a `source_ip` ACL on `pfB_Aggregate_v4` + a `req.hdr_ip(CF-Connecting-IP) -f …/ipalias_pfB_Aggregate_v4.lst` deny ACL, gated on a Cloudflare-range source ACL), and the documented `post` hook above: an IP update with `PFB_IP_CHANGED=1` fires the hook → graceful HAProxy reload → fresh `ipalias_pfB_Aggregate_v4.lst`; a request whose `CF-Connecting-IP` is in the aggregate is **denied** at HAProxy (and one not in it is **allowed** — assert both, before and after listing). An **empty** aggregate still validates and reloads (never-empty file). Confirm **no `/../../` path trick and no dummy-IP hack** is needed.

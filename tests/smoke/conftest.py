@@ -45,9 +45,10 @@ import time
 from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -435,6 +436,114 @@ class _MockFeedServer:
         return f"http://{GUEST_TO_HOST_ALIAS}:{self.port}/{name.lstrip('/')}"
 
 
+@dataclass
+class CallbackRecord:
+    """One request a guest hook made to the callback sink.
+
+    ``form`` is the parsed ``application/x-www-form-urlencoded`` body (the default
+    ``--data-urlencode`` shape, POST), ``query`` the parsed URL query string (a GET
+    or a ``?k=v`` URL). Both are ``parse_qs`` dicts (``str -> list[str]``): the
+    space-encoded changed-alias list round-trips back to a real space here, so a
+    test asserts membership against ``form['ip_aliases'][0].split()``.
+    """
+
+    method: str
+    path: str
+    form: dict[str, list[str]]
+    query: dict[str, list[str]]
+
+
+class _MockCallbackSink:
+    """A stdlib HTTP server that RECORDS each guest webhook call and replies 200.
+
+    The runner-side mirror of the ADR-12 HAProxy recipe's external consumer (minus
+    HAProxy): a recipe-shaped ``post`` hook ``curl``s this sink and forwards the
+    url-encoded changed-alias env vars. The sink is OBSERVE-ONLY — it parses the
+    body/query into a thread-safe :class:`CallbackRecord` list and answers ``200``,
+    nothing more (no side effect on the guest). Bound to ``0.0.0.0`` so the SLIRP
+    host alias ``10.0.2.2`` reaches it, exactly like :class:`_MockFeedServer`; the
+    guest hits :meth:`guest_url`.
+    """
+
+    def __init__(self) -> None:
+        self._callbacks: list[CallbackRecord] = []
+        self._lock = threading.Lock()
+        callbacks = self._callbacks
+        lock = self._lock
+
+        class Handler(BaseHTTPRequestHandler):
+            def _record(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+                rec = CallbackRecord(
+                    method=self.command,
+                    path=self.path,
+                    form=parse_qs(body),
+                    query=parse_qs(urlsplit(self.path).query),
+                )
+                with lock:
+                    callbacks.append(rec)
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_POST(self) -> None:  # noqa: N802 (stdlib name)
+                self._record()
+
+            def do_GET(self) -> None:  # noqa: N802 (stdlib name)
+                self._record()
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                # Stay quiet in pytest output; failures surface via assertions.
+                return
+
+        self._httpd = ThreadingHTTPServer(("0.0.0.0", 0), Handler)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    @property
+    def port(self) -> int:
+        return self._httpd.server_address[1]
+
+    @property
+    def callbacks(self) -> list[CallbackRecord]:
+        """A snapshot of the recorded callbacks (safe to iterate while the server runs)."""
+        with self._lock:
+            return list(self._callbacks)
+
+    def clear(self) -> None:
+        """Drop all recorded callbacks (call between phases for clean assertions)."""
+        with self._lock:
+            self._callbacks.clear()
+
+    def guest_url(self, path: str = "/reload") -> str:
+        """The URL the GUEST uses to reach this sink (via the SLIRP host alias)."""
+        return f"http://{GUEST_TO_HOST_ALIAS}:{self.port}{path}"
+
+    def wait_for(self, n: int, timeout: float = 10.0) -> bool:
+        """Poll until at least ``n`` callbacks are recorded, or time out.
+
+        The hook ``curl`` is synchronous within the update pass, but the sink's
+        handler thread records a moment later — poll (no fixed sleep) so the
+        assertion is not racy. Returns True iff the count was reached.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if len(self._callbacks) >= n:
+                    return True
+            time.sleep(0.1)
+        with self._lock:
+            return len(self._callbacks) >= n
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=10)
+
+
 class _StubDnsServer:
     """A controlled, OBSERVABLE DNS upstream for the guest's Unbound (over SLIRP).
 
@@ -721,6 +830,24 @@ def mock_feeds(smoke_vm: SmokeVM) -> Iterator[_MockFeedServer]:
         yield server
     finally:
         smoke_vm.feed_base_url = None
+        server.stop()
+
+
+@pytest.fixture
+def webhook_sink(smoke_vm: SmokeVM) -> Iterator[_MockCallbackSink]:
+    """A runner-side HTTP sink that records guest hook callbacks (ADR-12 webhook recipe).
+
+    FUNCTION-scoped for per-test isolation: each case gets a fresh sink (empty
+    callback list, its own ephemeral port). Reachable from the guest at
+    ``sink.guest_url(path)`` (``http://10.0.2.2:<port><path>``) via the SLIRP host
+    alias — the same path the mock-feed server rides, so it survives the egress
+    block. Shut down on teardown.
+    """
+    server = _MockCallbackSink()
+    server.start()
+    try:
+        yield server
+    finally:
         server.stop()
 
 

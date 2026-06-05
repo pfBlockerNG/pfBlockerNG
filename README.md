@@ -454,6 +454,33 @@ node that performs the update — on a CARP pair each node reloads its own HAPro
 See [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) for the full design and the
 maintainer smoke checklist.
 
+#### Forwarding changed aliases to a webhook
+
+To notify an external service of what a pass updated, add a `post` hook, enabled,
+guarded on the accurate flag, that `POST`s the changed-alias context to your
+endpoint:
+
+```sh
+[ "$PFB_IP_CHANGED" = "1" ] && /usr/local/bin/curl -sS -m 5 \
+  --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
+  --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
+  --data-urlencode "ip_changed=$PFB_IP_CHANGED" \
+  --data-urlencode "dnsbl_changed=$PFB_DNSBL_CHANGED" \
+  https://example.invalid/pfblockerng-update
+```
+
+`curl` lives at `/usr/local/bin/curl` on pfSense. Guard on `PFB_DNSBL_CHANGED`
+instead (or run two hooks) to notify on DNSBL-group changes.
+
+> **`PFB_CHANGED_IP_ALIASES` and `PFB_CHANGED_DNSBL_GROUPS` are space-separated
+> lists (and may be empty) — they MUST be URL-encoded, never interpolated naked
+> into a URL.** Pass each through its own `--data-urlencode` (as above), which sends
+> them as a POST `application/x-www-form-urlencoded` body with the spaces encoded. A
+> naive `?ip_aliases=$PFB_CHANGED_IP_ALIASES` in the URL is **broken**: the embedded
+> space makes `curl` reject the URL (and an empty value yields a malformed query). To
+> send them in the query string instead, use `--data-urlencode "…" --get` so `curl`
+> still encodes each field.
+
 ### Benchmarks
 
 `benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the

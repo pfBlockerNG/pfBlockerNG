@@ -884,6 +884,54 @@ def env_dump_hook(
     }
 
 
+# curl on pfSense (FreeBSD ports prefix) lives at /usr/local/bin/curl — the GUI/pkg
+# download path uses it. The hook runs in HOST context (not chrooted), as root, so
+# this absolute path is correct (CLAUDE.md: absolute binary paths, no $PATH).
+GUEST_CURL = "/usr/local/bin/curl"
+
+
+def webhook_hook(
+    url: str,
+    *,
+    when: str = "post",
+    guard: str = "IP",
+    enabled: str = "on",
+    timeout: str = "60",
+    description: str = "",
+) -> dict[str, str]:
+    """A recipe-shaped ``post`` hook that POSTs the changed-alias context to ``url``.
+
+    Mirrors the README HAProxy recipe's SHAPE (minus HAProxy): a guard on a
+    ``PFB_<guard>_CHANGED`` flag (``guard='IP'`` ⇒ ``PFB_IP_CHANGED``; ``'DNSBL'`` ⇒
+    ``PFB_DNSBL_CHANGED``), then a synchronous ``curl`` that forwards the four
+    post-context fields. Each field goes through its OWN ``--data-urlencode`` so the
+    space-separated ``PFB_CHANGED_*`` lists (which may be empty) are URL-encoded —
+    NEVER interpolated naked into the URL (a naked ``?ip=$VAR`` breaks on the
+    embedded space). Default verb is POST ``application/x-www-form-urlencoded``,
+    which the sink decodes with ``parse_qs`` on the body.
+
+    The command is POSIX-sh-safe (``[ … ] && curl …``): when the guard flag is not
+    ``1`` the ``&&`` short-circuits and ``curl`` never runs (so the sink gets no
+    callback — the OFF branch). ``-sS`` keeps it quiet but surfaces errors; ``-m 5``
+    bounds it well under the per-hook ``timeout``.
+    """
+    command = (
+        f'[ "$PFB_{guard}_CHANGED" = 1 ] && {GUEST_CURL} -sS -m 5 '
+        '--data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" '
+        '--data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" '
+        '--data-urlencode "ip_changed=$PFB_IP_CHANGED" '
+        '--data-urlencode "dnsbl_changed=$PFB_DNSBL_CHANGED" '
+        f"{url}"
+    )
+    return {
+        "command": command,
+        "when": when,
+        "enabled": enabled,
+        "description": description or f"smoke webhook {guard} {when}",
+        "timeout": timeout,
+    }
+
+
 # Hook entries are stored under the 'row' listtag: config/0/hooks/row. A list
 # stored DIRECTLY under the non-listtag <hooks> serializes to invalid <0> child
 # tags that never round-trip through config.xml (see pfb_get_hooks()); 'row' is a
