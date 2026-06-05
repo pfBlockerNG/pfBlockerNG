@@ -1021,18 +1021,6 @@ parameters:
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
 
 		-
-			message: '#^Variable \$dnsbl_last_clear might not be defined\.$#'
-			identifier: variable.undefined
-			count: 4
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Variable \$ip_last_clear might not be defined\.$#'
-			identifier: variable.undefined
-			count: 6
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
 			message: '#^Variable \$key might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
