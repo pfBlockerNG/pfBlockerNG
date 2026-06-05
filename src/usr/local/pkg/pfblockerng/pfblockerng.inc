@@ -2215,6 +2215,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 				if (file_exists($aggout) || file_exists($consumer)) {
 					unlink_if_exists($aggout);
 					unlink_if_exists($consumer);
+					// Also drop the shell action's member-set snapshot + any temp (no orphans).
+					unlink_if_exists("{$aggout}.members");
+					unlink_if_exists("{$aggout}.tmp");
 					// Kill the pf table only when we had built this aggregate before.
 					exec("{$pfb['pfctl']} -t {$aliasname_esc} -T kill 2>&1");
 				}
