@@ -36,11 +36,11 @@ $pfb_wizard['interface_list_cnt']	= count($pfb_wizard['interface_list']) ?: '1';
 // wizard never auto-launches again ('disable'); otherwise skip for this
 // session only ('skip'). pfblockerng_general.php applies both actions.
 function pfb_wizard_skip_check() {
-	if (!$_POST || !isset($_POST['skip'])) {
+	$action = pfb_wizard_skip_action($_POST ?: array());
+	if ($action === null) {
 		return;
 	}
 
-	$action = !empty($_POST['donotshowthisagain']) ? 'disable' : 'skip';
 	header("Location: /pfblockerng/pfblockerng_general.php?wizard={$action}");
 	exit;
 }
