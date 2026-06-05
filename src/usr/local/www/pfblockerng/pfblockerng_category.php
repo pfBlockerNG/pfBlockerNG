@@ -505,8 +505,8 @@ if (isset($savemsg)) {
 						$log_error = '';
 						if ($gtype == 'dnsbl') {
 							$log_options = ['enabled'	=> 'DNSBL WebServer/VIP',
-									'disabled_log'	=> 'Null Block (logging)',
-									'disabled'	=> 'Null Block (no logging)',
+									'disabled_log'	=> 'Null Blocking (logging)',
+									'disabled'	=> 'Null Blocking (no logging)',
 									'nxdomain_log'	=> 'NXDOMAIN (logging)',
 									'nxdomain'	=> 'NXDOMAIN (no logging)'];
 

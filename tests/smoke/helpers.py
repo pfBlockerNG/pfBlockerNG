@@ -249,7 +249,7 @@ class DnsblCase:
     # to the queried name, b_type '_CNAME'). Off (default): only the queried name is
     # checked, so a name whose CNAME target is blocked still resolves.
     cname_validation: bool = False
-    # hsts -> the "HSTS via Null Block mode" toggle (CFG_DNSBL_SETTINGS/pfb_hsts,
+    # hsts -> the "HSTS via Null Blocking mode" toggle (CFG_DNSBL_SETTINGS/pfb_hsts,
     # inc:847 -> ini python_hsts). When on, pfb_unbound.py loads pfb_py_hsts.txt into
     # hstsDB; a VIP-mode (logging='enabled', log_type '1') block on an HSTS-preload
     # name keeps null_blocking=True -> NULL instead of the VIP (evaluate_domain:
@@ -1165,7 +1165,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # CNAME chain and block the original name if a target is blocklisted.
         settings["pfb_cname"] = "on"
     if spec.hsts is not None:
-        # "HSTS via Null Block mode" (inc:847 -> ini python_hsts). On: a VIP-mode
+        # "HSTS via Null Blocking mode" (inc:847 -> ini python_hsts). On: a VIP-mode
         # block on an HSTS-preload name is forced to NULL (pfb_unbound.py loads
         # pfb_py_hsts.txt -> hstsDB). Only emitted when the case sets it explicitly,
         # so the default matrix stays byte-for-byte unchanged. See add_hsts_name.

@@ -1224,7 +1224,7 @@ function pfb_global() {
 	$pfb['dnsbl_global_log']= isset($pfb['dnsblconfig']['global_log']) 	? $pfb['dnsblconfig']['global_log']	 : '';		// Global Logging/Blocking mode
 
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
-	$pfb['dnsbl_hsts']	= $pfb['dnsblconfig']['pfb_hsts'];			// DNSBL Resolver python block HSTS via Null Block mode
+	$pfb['dnsbl_hsts']	= $pfb['dnsblconfig']['pfb_hsts'];			// DNSBL Resolver python block HSTS via Null Blocking mode
 	$pfb['dnsbl_idn']	= $pfb['dnsblconfig']['pfb_idn'];			// DNSBL Resolver python block IDN domains
 	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'];		// DNSBL Resolver python regex list
