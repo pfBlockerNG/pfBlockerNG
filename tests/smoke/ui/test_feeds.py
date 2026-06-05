@@ -42,9 +42,24 @@ RESTORES the box (asserting the reverse where it applies). Restore runs in a
 sibling flows. Branch coverage: the rename validator gets a VALID case (accepted,
 config changes) AND a REJECTING case (config stays unchanged).
 
-Target alias is a pre-defined entry shipped in ``pfblockerng_feeds.json`` and
-stable across the support matrix: the IPv4 alias ``PRI1`` (field ``feed_pri1``)
-for the rename flows.
+Target aliases are pre-defined entries shipped in ``pfblockerng_feeds.json`` and
+stable across the support matrix, one per type so EACH type's rename round-trip is
+pinned independently (ADR-16 Phase 2 -- the oracle the Phase-3 type-scoped save must
+keep green): the IPv4 alias ``PRI1`` (field ``feed_pri1``), the IPv6 alias ``PRI1_6``
+(field ``feed_pri1_6``), and the DNSBL group ``ADs`` (field ``feed_ads``). All three
+are written to ``installedpackages/pfblockerngglobal/feed_<lower(aliasname)>``.
+
+These tests pin TODAY's behaviour on the CURRENT single all-types Feeds page (the
+save loops EVERY type, and :meth:`WebUI.post` re-scrapes and re-POSTs every other
+``feed_*`` field at its present value, so a one-field override here does NOT clobber
+the others). They are the oracle; they must NOT pre-encode the Phase-3 sub-tab split.
+The cross-type non-clobber case (which only becomes possible once a partial,
+single-type POST exists) is added beside these in Phase 3.
+
+Save-handler quirk pinned here: the >24-char "Alternate Aliasname" length guard is
+skipped for DNSBL aliases (``!in_array(..., $feeds_list['dnsbl'])``), so the DNSBL
+reject branch is exercised via the ``preg_match "/\\W/"`` (non-word char) path, the
+same validator the IPv4/IPv6 fields use.
 """
 
 from __future__ import annotations
@@ -75,6 +90,25 @@ RENAME_VALID = "PRI1renamed"
 # A value containing a space -> preg_match "/\\W/" matches -> input error ->
 # the whole save aborts before write_config, so config.xml stays unchanged.
 RENAME_INVALID = "PRI1 bad"
+
+# A pre-defined IPv6 alias shipped in pfblockerng_feeds.json (the IPv6 Primary Tier
+# collection, the IPv6 sibling of PRI1). Rename round-trip via feed_<lower(aliasname)>.
+RENAME6_ALIAS = "PRI1_6"
+RENAME6_FIELD = "feed_pri1_6"
+RENAME6_CFG = "installedpackages/pfblockerngglobal/feed_pri1_6"
+# Word-only (<=24 chars, per the non-DNSBL length guard) -> accepted, stored verbatim.
+RENAME6_VALID = "PRI16renamed"
+
+# A pre-defined DNSBL group shipped in pfblockerng_feeds.json. Same rename mechanism;
+# the >24-char "Alternate Aliasname" length guard does NOT apply to DNSBL aliases.
+DNSBL_RENAME_ALIAS = "ADs"
+DNSBL_RENAME_FIELD = "feed_ads"
+DNSBL_RENAME_CFG = "installedpackages/pfblockerngglobal/feed_ads"
+# Word-only value -> accepted and stored verbatim (no length cap for DNSBL).
+DNSBL_RENAME_VALID = "ADsRenamed"
+# A value containing a space -> preg_match "/\\W/" matches -> input error -> the whole
+# save aborts before write_config; pins the reject branch for the DNSBL field too.
+DNSBL_RENAME_INVALID = "ADs bad"
 
 
 def _config_del(vm: helpers.SmokeVM, path: str, *, timeout: float = 60.0) -> None:
@@ -167,3 +201,117 @@ def test_feed_rename_invalid_alias_is_rejected_config_unchanged(webui: WebUI, sm
         )
     finally:
         _config_del(vm, RENAME_CFG)
+
+
+def test_feed_rename_ipv6_save_changes_effective_config(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """An IPv6 group rename in the current Feeds form persists feed_<alias>, both ways.
+
+    ADR-16 Phase 2 oracle: pins the per-type save for the IPv6 type on the CURRENT
+    single all-types page, so Phase 3's type-scoped save (the IPv6 sub-tab POSTing
+    only its own fields) must keep this green. True transition (CLAUDE.md): the
+    PRI1_6 override starts empty (default-name state), the form POST sets it to a
+    word-only name and config.xml holds that name, then a second POST clears it back
+    to empty and config.xml returns to the default-name state. Oracle is config.xml
+    read over SSH, never the POST response body.
+    """
+    vm = smoke_vm
+    # Known baseline: no rename override for PRI1_6 (the default-name state).
+    _config_del(vm, RENAME6_CFG)
+    try:
+        # BEFORE: the override is empty (default name in effect).
+        assert helpers.config_get(vm, RENAME6_CFG) == "", (
+            f"{RENAME6_CFG} is not empty before the rename POST (expected the default-name state)"
+        )
+
+        # RENAME via the real CSRF form; the page must persist the override.
+        resp = webui.post(FEEDS_PAGE, {RENAME6_FIELD: RENAME6_VALID}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "IPv6 rename POST returned the login form (session lost)"
+        assert helpers.config_get(vm, RENAME6_CFG) == RENAME6_VALID, (
+            f"{RENAME6_CFG} did not become {RENAME6_VALID!r} after the rename POST (oracle: config.xml, not HTTP body)"
+        )
+
+        # RESTORE via the form: clearing the override writes the default-name state
+        # back -- proves the reverse transition.
+        resp = webui.post(FEEDS_PAGE, {RENAME6_FIELD: ""}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "IPv6 rename-restore POST returned the login form"
+        assert helpers.config_get(vm, RENAME6_CFG) == "", (
+            f"{RENAME6_CFG} did not return to the default-name state after clearing the override"
+        )
+    finally:
+        _config_del(vm, RENAME6_CFG)
+
+
+def test_feed_rename_dnsbl_save_changes_effective_config(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """A DNSBL group rename in the current Feeds form persists feed_<alias>, both ways.
+
+    ADR-16 Phase 2 oracle: pins the per-type save for the DNSBL type on the CURRENT
+    single all-types page, so Phase 3's type-scoped save (the DNSBL sub-tab POSTing
+    only its own fields) must keep this green. True transition (CLAUDE.md): the ADs
+    override starts empty (default-name state), the form POST sets it to a word-only
+    name and config.xml holds that name, then a second POST clears it back to empty
+    and config.xml returns to the default-name state. Oracle is config.xml read over
+    SSH, never the POST response body.
+    """
+    vm = smoke_vm
+    # Known baseline: no rename override for ADs (the default-name state).
+    _config_del(vm, DNSBL_RENAME_CFG)
+    try:
+        # BEFORE: the override is empty (default name in effect).
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == "", (
+            f"{DNSBL_RENAME_CFG} is not empty before the rename POST (expected the default-name state)"
+        )
+
+        # RENAME via the real CSRF form; the page must persist the override.
+        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: DNSBL_RENAME_VALID}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "DNSBL rename POST returned the login form (session lost)"
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == DNSBL_RENAME_VALID, (
+            f"{DNSBL_RENAME_CFG} did not become {DNSBL_RENAME_VALID!r} after the rename POST "
+            f"(oracle: config.xml, not HTTP body)"
+        )
+
+        # RESTORE via the form: clearing the override writes the default-name state
+        # back -- proves the reverse transition.
+        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: ""}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "DNSBL rename-restore POST returned the login form"
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == "", (
+            f"{DNSBL_RENAME_CFG} did not return to the default-name state after clearing the override"
+        )
+    finally:
+        _config_del(vm, DNSBL_RENAME_CFG)
+
+
+def test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """An invalid DNSBL alias name is rejected and config.xml stays UNCHANGED.
+
+    Branch coverage for the DNSBL field, paired with the valid DNSBL case: a value
+    containing a space hits ``preg_match "/\\W/"`` -> ``$input_errors`` -> the save
+    aborts before ``write_config`` (a single bad field blocks the whole save). The
+    transition rule still applies: the test seeds a KNOWN valid override first and
+    asserts it, drives the rejecting POST, then asserts the override is STILL the
+    seeded value -- so the green proves the bad POST did NOT mutate config (not that
+    it merely happened to already hold the expected value). This pins the reject
+    branch for the DNSBL type, where the >24-char length guard does not apply.
+    """
+    vm = smoke_vm
+    seeded = "ADsSeed"
+    # Seed a known, valid override via the form so there is a concrete before-value
+    # that a (wrongly) accepted bad POST would overwrite.
+    resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: seeded}, timeout=120.0)
+    assert not looks_like_login_page(resp.text), "DNSBL seed POST returned the login form (session lost)"
+    try:
+        # BEFORE: the seeded override is in effect.
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == seeded, (
+            f"{DNSBL_RENAME_CFG} was not seeded to {seeded!r} before the reject POST"
+        )
+
+        # REJECT: a space makes the alias invalid -> the save aborts with no write.
+        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: DNSBL_RENAME_INVALID}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "DNSBL invalid-alias POST returned the login form"
+
+        # AFTER: config.xml is UNCHANGED -- the invalid POST wrote nothing.
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == seeded, (
+            f"{DNSBL_RENAME_CFG} changed after a rejected invalid-alias POST (it must stay {seeded!r}); "
+            f"the handler should abort write_config when an alias contains a non-word char"
+        )
+    finally:
+        _config_del(vm, DNSBL_RENAME_CFG)
