@@ -1225,7 +1225,11 @@ function pfb_global() {
 
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
 	$pfb['dnsbl_hsts']	= $pfb['dnsblconfig']['pfb_hsts'];			// DNSBL Resolver python block HSTS via Null Blocking mode
-	$pfb['dnsbl_idn']	= $pfb['dnsblconfig']['pfb_idn'];			// DNSBL Resolver python block IDN domains
+	// ADR-08: IDN mode selector (off | all | confusable). Legacy on/off migrates:
+	// 'on' -> 'all' (today's block-all-IDN). Downstream consumers see the normalized value.
+	$pfb['dnsbl_idn']	= ($pfb['dnsblconfig']['pfb_idn'] === 'on') ? 'all' : ($pfb['dnsblconfig']['pfb_idn'] ?: '');	// DNSBL Resolver python IDN mode
+	$pfb['dnsbl_idn_block_malicious']	= isset($pfb['dnsblconfig']['pfb_idn_block_malicious']) ? $pfb['dnsblconfig']['pfb_idn_block_malicious'] : 'on';	// Confusable: block malicious homoglyphs (default-on)
+	$pfb['dnsbl_idn_escalate_suspicious']	= $pfb['dnsblconfig']['pfb_idn_escalate_suspicious'] ?? '';	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'];		// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= $pfb['dnsblconfig']['pfb_regex_cap'] ?? '';		// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
@@ -3553,10 +3557,14 @@ function pfb_unbound_python($mode) {
 			$python_hsts = 'on';
 		}
 
-		$python_idn = 'off';
-		if ($pfb['dnsbl_idn'] == 'on') {
-			$python_idn = 'on';
-		}
+		// ADR-08: emit the IDN mode + the legacy python_idn flag + the Confusable sub-toggles.
+		// python_idn = on ONLY for All-IDN, so the legacy flag (and its blacklist side-effect)
+		// stays byte-identical to today; Confusable rides the explicit idn_mode key instead.
+		$idn_mode = in_array($pfb['dnsbl_idn'], array('all', 'confusable'), TRUE) ? $pfb['dnsbl_idn'] : 'off';
+		$python_idn = ($idn_mode == 'all') ? 'on' : 'off';
+
+		$python_idn_block_malicious = ($pfb['dnsbl_idn_block_malicious'] == 'on') ? 'on' : 'off';
+		$python_idn_escalate_suspicious = ($pfb['dnsbl_idn_escalate_suspicious'] == 'on') ? 'on' : 'off';
 
 		$python_cname = 'off';
 		if ($pfb['dnsbl_cname'] == 'on') {
@@ -3626,6 +3634,9 @@ python_reply	= {$python_reply}
 python_blocking	= {$python_blocking}
 python_hsts	= {$python_hsts}
 python_idn	= {$python_idn}
+idn_mode	= {$idn_mode}
+python_idn_block_malicious	= {$python_idn_block_malicious}
+python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
 python_tld_seg	= {$tld_segments}
 decisiondb_max	= {$decisiondb_max}
 python_tld	= {$python_tld}
@@ -9620,11 +9631,20 @@ function sync_package_pfblockerng($cron='') {
 			}
 		}
 
-		// Add DNSBL Python options to widget statistics
-		if ($pfb['dnsbl_idn'] == 'on') {
+		// Add DNSBL Python options to widget statistics. ADR-08: All-IDN keeps the
+		// DNSBL_IDN alias exactly as before; Confusable mode surfaces the homoglyph +
+		// suspect groups so the Reports/Alerts pages render their counts. Counts are
+		// symbolic (=1) markers -- the Python matcher decides per-query at runtime.
+		if ($pfb['dnsbl_idn'] == 'all') {
 			$idn_cnt = 1;
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
 			dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt);
+		}
+		elseif ($pfb['dnsbl_idn'] == 'confusable') {
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph';
+			dnsbl_alias_update('update', 'DNSBL_Homoglyph', '', '', 1);
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph_Suspect';
+			dnsbl_alias_update('update', 'DNSBL_Homoglyph_Suspect', '', '', 1);
 		}
 		if ($pfb['dnsbl_pytld'] == 'on') {
 			$pytld_cnt = 0;
