@@ -37,8 +37,9 @@ permissions:
   packages: read
 
 jobs:
-  # On a `schedule`, run only if `devel` got a commit in the lookback window — skip an
-  # otherwise-wasted ~15-min VM run when nothing changed. A manual dispatch always runs.
+  # On a `schedule`, run only if `devel` got a commit since the last SUCCESSFUL run of
+  # this workflow — skip an otherwise-wasted ~15-min VM run when nothing changed, while
+  # a failed/missed nightly's commits stay in scope next time. A manual dispatch always runs.
   gate:
     name: Gate (skip nightly if devel unchanged)
     runs-on: ubuntu-latest
@@ -55,15 +56,25 @@ jobs:
             echo "Event '${{ github.event_name }}' — always runs."
             exit 0
           fi
-          # 25h lookback (> the 24h cron interval, a margin against scheduler jitter).
-          since="$(date -u -d '25 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          # Anchor on the LAST SUCCESSFUL run of THIS workflow on this branch — NOT a
+          # fixed window: a failed or dropped nightly then never lets its commits age
+          # out unvalidated, since the anchor only advances when a run actually
+          # succeeded. (A skip-run also "succeeds", but harmlessly — it only happens
+          # when nothing changed.) No prior success (first run) -> run unconditionally.
+          since="$(gh run list --workflow=repo-install.yml --branch="${{ github.ref_name }}" \
+                     --status=success --limit 1 --json createdAt --jq '.[0].createdAt // ""')"
+          if [ -z "$since" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "No prior successful run — running (bootstrap)."
+            exit 0
+          fi
           n="$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.ref_name }}&since=${since}" --jq 'length')"
           if [ "${n:-0}" -gt 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "${n} commit(s) to ${{ github.ref_name }} since ${since} — running the nightly repo smoke."
+            echo "${n} commit(s) to ${{ github.ref_name }} since the last successful run (${since}) — running."
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No commits to ${{ github.ref_name }} since ${since} — skipping the nightly repo smoke."
+            echo "::notice::No commits to ${{ github.ref_name }} since the last successful run (${since}) — skipping."
           fi
 
   repo-install:
