@@ -67,7 +67,26 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings")),
     Page("ip", "/pfblockerng/pfblockerng_ip.php", ("IP Configuration", "ASN configuration")),
     Page("dnsbl", "/pfblockerng/pfblockerng_dnsbl.php", ("DNSBL Webserver Configuration", "DNSBL Configuration")),
-    Page("feeds", "/pfblockerng/pfblockerng_feeds.php", ("Pre-defined Alias/Group/Feeds",)),
+    # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
+    # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
+    # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active
+    # type -- so it distinguishes the three views (the panel title is shared by all). The
+    # coverage guard strips "?", so all three collapse to the one base path.
+    Page(
+        "feeds_ipv4",
+        "/pfblockerng/pfblockerng_feeds.php?type=ipv4",
+        ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):"),
+    ),
+    Page(
+        "feeds_ipv6",
+        "/pfblockerng/pfblockerng_feeds.php?type=ipv6",
+        ("Pre-defined Alias/Group/Feeds", "IPv6 Alias name(s):"),
+    ),
+    Page(
+        "feeds_dnsbl",
+        "/pfblockerng/pfblockerng_feeds.php?type=dnsbl",
+        ("Pre-defined Alias/Group/Feeds", "DNSBL Alias name(s):"),
+    ),
     Page("alerts", "/pfblockerng/pfblockerng_alerts.php", ("Alert Settings",)),
     Page("log", "/pfblockerng/pfblockerng_log.php", ("Log/File Browser selections",)),
     Page("sync", "/pfblockerng/pfblockerng_sync.php", ("XMLRPC Sync Settings",)),
