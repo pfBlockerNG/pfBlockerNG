@@ -79,6 +79,10 @@ WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
 # (#pfb_dnsvip_auto) whose click handler (enable_dnsvip_auto) disables the manual
 # VIP dropdowns (#pfb_dnsvip4/#pfb_dnsvip6).
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+# The ADR-12 Update Hooks page: a `.repeatable` hook-row list (pfSense's
+# client-side row helper) with an Add button (#addrow) and per-row fields
+# (hook_command-<id>, ...).
+HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
 
 # A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
 # fire synchronously on load/click, so this is a flake ceiling, not a wait knob.
@@ -309,3 +313,34 @@ def test_dnsvip_auto_checkbox_disables_manual_dropdowns(
     expect(auto).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(v4).to_be_enabled(timeout=JS_TIMEOUT_MS)
     expect(v6).to_be_enabled(timeout=JS_TIMEOUT_MS)
+
+
+def test_update_hooks_section_renders_and_adds_a_row(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """ADR-12 Update Hooks page renders, and the repeatable-row Add control adds a row.
+
+    Screenshots the section, asserts its key controls render, then clicks Add
+    (pfSense's client-side `.repeatable` row helper) and asserts a new hook row
+    appears. Each row carries exactly one ``hook_command-<id>`` input, so the count
+    of those inputs is the row count (before+after is the transition). The Add /
+    Delete buttons skip server validation, so this never persists or errors.
+    """
+    page = browser_page
+    _open(page, webui, HOOKS_PAGE)
+
+    # Render assertions: the section + the Add button + at least one hook row.
+    expect(page.get_by_text("Hook Entries").first).to_be_visible(timeout=JS_TIMEOUT_MS)
+    add_btn = page.locator("#addrow")
+    expect(add_btn).to_be_visible(timeout=JS_TIMEOUT_MS)
+    rows = page.locator('input[name^="hook_command-"]')
+    expect(rows.first).to_be_attached(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "update_hooks")
+
+    # BEFORE -> exercise the client-side row clone -> AFTER (one more row).
+    before = rows.count()
+    add_btn.click()
+    expect(page.locator('input[name^="hook_command-"]')).to_have_count(before + 1, timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "update_hooks_added")
