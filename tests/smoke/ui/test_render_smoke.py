@@ -91,6 +91,8 @@ PAGE_TABLE: tuple[Page, ...] = (
     # The {domain} placeholder is filled per run with helpers.unique_domain() (uuid-*.com) -- the
     # smoke-domain rule (never a fixed/RFC-6761 name, avoids environment coupling).
     Page("threats", "/pfblockerng/pfblockerng_threats.php?domain={domain}", ("Threat Domain", "Source IP")),
+    # ADR-12 Update Hooks (pre/post update-command list). $pgtitle + the section titles are stable.
+    Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
     # query param, so the plain GET exercises the full-render branch.
@@ -188,15 +190,15 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     """Guard: the table (plus the recorded exclusions) covers the on-disk page set.
 
     A new pfBlockerNG .php page added to src/ without a Tier-A entry should fail
-    this -- the count is asserted so the sweep can't silently skip a page. 14
+    this -- the count is asserted so the sweep can't silently skip a page. 15
     servable main pages: general, ip, dnsbl, feeds, alerts, log, sync,
-    safesearch, update, blacklist, category, category_edit, threats, plus the
-    pfblockerng.php template (excluded). The widget + 2 DNSBL-VIP pages round it
-    out; the VIP pages + the GeoIP/Reputation views are the recorded exclusions.
+    safesearch, update, blacklist, category, category_edit, threats, hooks, plus
+    the pfblockerng.php template (excluded). The widget + 2 DNSBL-VIP pages round
+    it out; the VIP pages + the GeoIP/Reputation views are the recorded exclusions.
     """
     covered_paths = {p.path.split("?", 1)[0] for p in PAGE_TABLE}
-    # 13 distinct main .php files are render-smoked here (pfblockerng.php is the
-    # excluded template), plus the widget = 14 distinct paths.
+    # 14 distinct main .php files are render-smoked here (pfblockerng.php is the
+    # excluded template), plus the widget = 15 distinct paths.
     expected_main = {
         "/pfblockerng/pfblockerng_general.php",
         "/pfblockerng/pfblockerng_ip.php",
@@ -211,6 +213,7 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
         "/pfblockerng/pfblockerng_category.php",
         "/pfblockerng/pfblockerng_category_edit.php",
         "/pfblockerng/pfblockerng_threats.php",
+        "/pfblockerng/pfblockerng_hooks.php",
         "/widgets/widgets/pfblockerng.widget.php",
     }
     missing = expected_main - covered_paths
