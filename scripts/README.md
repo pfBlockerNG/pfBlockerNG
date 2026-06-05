@@ -29,7 +29,7 @@ entries → the smoke-fan-out set, never Plus).
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
   "status":          "GA",           # beta | GA
-  "ci":              true            # include in smoke CI matrix (always false for Plus)
+  "ci":              true            # include in smoke CI matrix (false for Plus for now — no licensed CI image)
 }
 ```
 
