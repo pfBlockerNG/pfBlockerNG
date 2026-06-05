@@ -285,6 +285,52 @@ See [ADR-10](.ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md) for the full contract; the
 swap RAM kill-gate is `benchmarks/spike_adr10_swap.py`, and the snapshot-equivalence
 / fail-closed-swap / watcher guards are the `tests/test_adr10_*` suite.
 
+#### IDN homoglyph protection (ADR-08)
+
+The DNSBL settings page carries an **IDN Blocking** mode selector — **Off | All-IDN
+| Confusable** (replacing the old on/off checkbox; a config that had `pfb_idn='on'`
+comes up as **All-IDN**, byte-identical to today). **Off** takes no IDN action;
+**All-IDN** blocks every `xn--` domain (the blunt legacy behaviour); **Confusable**
+runs a TR39 mixed-script analyzer that decodes each `xn--` label and blocks only the
+**deceptive cross-script** ones:
+
+- **Catches:** cross-script confusable homographs — a single label mixing **≥2 of
+  {Latin, Cyrillic, Greek}** (`Latin+Cyrillic`, `Latin+Greek`, **and** `Cyrillic+Greek`),
+  e.g. `xn--pple-43d` = `аpple` (Cyrillic `а`). Malicious → **blocked by default**
+  (sub-toggle, default-on); other non-restrictive multi-script mixes (e.g.
+  Latin+Armenian/Cherokee/Coptic) → **suspicious → alerted** (opt-in sub-toggle
+  escalates them to block).
+- **Does NOT catch (documented limitation):** **whole-script confusables** (an
+  all-Cyrillic `раураӏ` look-alike — single-script, passes restriction analysis) and
+  **pure-ASCII typosquats** (`g00gle`) — those need a confusables + protected-brand
+  table, deliberately out of scope.
+- **Legit IDNs resolve untouched:** single-script (incl. all-Latin/Cyrillic/Greek)
+  and Latin+CJK (Japanese/Korean/Chinese). Analysis is **per-label, never unioned
+  across the dot**, so a legit ASCII/Latin SLD under an IDN ccTLD (`example.рф`,
+  `site.中国`) resolves. Decode runs only on `xn--` queries; malformed labels are
+  caught and flagged, never crash the resolver. The alert shows the decoded Unicode
+  and the offending script (reusing the alerts page's `idn_to_utf8` display).
+
+Measured over the FP/TP corpus (`tests/fixtures/adr08_corpus/`): **0** false
+positives on the legitimate set (CJK and IDN-ccTLD both 0), **6/6** homographs
+caught. See [ADR-08](.ADRs/ADR_08_Homoglyph_Protection/ADR.md) for the full contract;
+the decision oracle + analyzer + matcher-wiring + corpus guards are the
+`tests/test_adr08_*` suite.
+
+The TR39 **Scripts / Script_Extensions** tables ship as **data**
+(`src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py`, in the release archive — no
+runtime dependency, stdlib only), pinned to **Unicode 15.1.0**. Regenerate them from
+a pinned Unicode version with:
+
+```sh
+python scripts/update-unicode-data.py            # pinned 15.1.0
+python scripts/update-unicode-data.py --version X.Y.Z
+```
+
+The generator downloads that version's `Scripts.txt` / `ScriptExtensions.txt` from
+unicode.org and re-emits the compact range tables byte-for-byte (pattern mirrors
+`update-pfsense-stubs.py`).
+
 ### DNSBL sinkhole VIP
 
 A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the
