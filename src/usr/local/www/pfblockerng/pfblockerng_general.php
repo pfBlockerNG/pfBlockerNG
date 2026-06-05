@@ -301,13 +301,12 @@ $section->addInput(new Form_Select(
 	$options_pfb_agg_types,
 	TRUE
 ))->setHelp('Default: <strong>none</strong><br />'
-		. 'Select action type(s) to build an aggregated alias for. Each selected type creates a Native '
-		. '<strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> urltable alias = the deduped, CIDR-aggregated '
-		. 'union of that type\'s effective set (Deny includes DNSBLIP and Deny-action GeoIP).<br />'
-		. '<span class="text-danger">Note: </span>These are reference IP-sets only (e.g. an HAProxy ACL) - '
-		. 'registered Native, they create <strong>no firewall rule</strong> (a Permit aggregate does not permit). '
-		. 'Each loads its entire union into a pf table, costing kernel RAM proportional to the union size '
-		. '(the Deny set can be millions of entries) - enable only the type(s) you consume.')
+		. 'Select action type(s) to aggregate. Each creates Native <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> '
+		. 'urltable aliases = the deduped, CIDR-aggregated union of that type\'s effective set '
+		. '(Deny folds in DNSBLIP; GeoIP folds in by each continent\'s action - no separate Geo alias).<br />'
+		. '<span class="text-danger">Note: </span>Reference IP-sets only (e.g. an HAProxy ACL): registered Native, '
+		. 'they create <strong>no firewall rule</strong> and do not permit/match by themselves. Each loads its full '
+		. 'union as a wired pf table (the Deny set can be millions of entries) - enable only the type(s) you consume.')
   ->setAttribute('size', count($options_pfb_agg_types))
   ->setAttribute('style', 'width: auto');
 

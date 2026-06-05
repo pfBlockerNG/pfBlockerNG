@@ -260,6 +260,19 @@ are summarized in **`docs/misc/architecture-notes.md`**; read it before touching
 `pfb_unbound.py`, the manifest boundary, the swap/watcher, or the hooks. Full design lives in
 each `.ADRs/ADR_NN_*/`.
 
+**Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
+`pfb_agg_types` multi-select (General settings, **opt-in, default none**) builds, per selected
+action type, the Native urltable aliases **`pfB_<Type>_Aggregated_v4`/`_v6`** = the deduped,
+`iprange`d union of that type's effective set (Deny = post-suppression block set incl. DNSBLIP;
+GeoIP folds in by each continent's action — no separate Geo alias). They are **Native (no
+firewall rule)** — reference IP-sets only. Built **in-pass, mtime-gated** by the
+`pfblockerng.sh aggregate` action via the `pfb_build_aggregate_aliases()` wiring (which loads
+each pf table inline **before** the ADR-12 `post` hook). Each is a **wired kernel pf table**
+(can be millions of entries for Deny) → enable only what you consume. The never-empty `.lst`
+consumer files + the Native aliases are ADR-12's HAProxy input; freshness = a pfBlockerNG-
+triggered graceful HAProxy reload, **not** a socket push. Off-box membership pinned in
+`tests/php/AggregateMemberListTest.php`; live legs are the ADR-11 §7 maintainer smoke.
+
 ---
 
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`
