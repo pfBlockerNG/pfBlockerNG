@@ -1,0 +1,159 @@
+ADR-08 — Phase 4 Results (ship Scripts data + generator + pure analyzer; NOT wired)
+===================================================================================
+Status: DONE. ADDITIVE + PURE — no existing file modified, nothing deleted, the
+analyzer is NOT wired into the matcher (that is Phase 5). One commit on
+adr/08-homoglyph-protection (pushed), 4 NEW files, the Off/All-IDN P3 golden
+untouched and green.
+
+Gates green: python -m pytest = 1252 passed (1177 P3 baseline + 75 new analyzer
+tests); ruff check . clean; ruff format --check . clean; mypy tests/ clean
+(26 files). The shipped data module re-generates BYTE-FOR-BYTE on a second run.
+
+
+1. WHAT SHIPPED (4 new files; strictly additive)
+------------------------------------------------
+  scripts/update-unicode-data.py        (dev tool — NOT in the release archive)
+      Generator. Downloads a PINNED Unicode version's Scripts.txt +
+      ScriptExtensions.txt + PropertyValueAliases.txt from unicode.org and emits
+      the compact range tables. Pattern mirrors scripts/update-pfsense-stubs.py
+      (download pinned source -> emit data). stdlib only.
+
+  src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py   (SHIPPED — in release archive)
+      AUTO-GENERATED compact range tables (parallel sorted arrays, bisect-searchable).
+      ~41 KB. 751 plain-Script ranges + 123 Script_Extensions ranges (Common /
+      Inherited / Unknown DROPPED at generation time as transparent). UNICODE_VERSION
+      = "15.1.0" embedded. Emitted ruff-format-clean (one literal per row, double
+      quotes, magic trailing comma, wide Script_Extensions tuples exploded exactly
+      as ruff-format does) so the committed file passes ruff AND reproduces verbatim.
+
+  src/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py      (SHIPPED — in release archive)
+      The pure TR39 mixed-script analyzer. stdlib only (bisect, dataclasses) + the
+      sibling data module. NO Unbound symbol (grep-verified). 4-space, type-hinted,
+      `from __future__ import annotations`, no bare except.
+
+  tests/test_adr08_analyzer.py          (dev-only test suite — 75 tests)
+      Grades the analyzer against the Phase-2 oracle (test_adr08_decision_spec.py)
+      over the Phase-1 corpus + the Phase-2 golden decision_table.json.
+
+
+2. THE ANALYZER'S PUBLIC API  (Phase 5 import surface)
+------------------------------------------------------
+Module: pfb_idn_analyzer  (importable as a plain module; sibling to pfb_unbound.py,
+already on sys.path at runtime and in tests via conftest).
+
+  decode_idn_label(label: str) -> str
+      Strip xn--, RAW 'punycode' decode (label[4:].encode('ascii').decode('punycode')).
+      Non-xn-- label returned unchanged. NOT the 'idna' codec. MAY raise
+      (UnicodeDecodeError / UnicodeError / ValueError) — callers catch it.
+
+  script_of(codepoint: int) -> tuple[str, ...]
+      Resolved script(s) of ONE code point: Script_Extensions when present (bisect
+      over SCRIPTX_*), else the plain Script (bisect over SCRIPT_*). A transparent
+      (Common/Inherited) or unassigned code point -> () (absent from the tables).
+
+  resolved_script_set(text: str) -> set[str]
+      Union of script_of over one DECODED label's chars. Common/Inherited transparent
+      (contribute nothing). An all-scriptless label -> the EMPTY set (the FLAGGED
+      trigger). NEVER unions across the dot (operates on one label).
+
+  restriction_level(scripts: set[str], *, ascii_only: bool = False) -> str
+      UTS#39 level: LEVEL_ASCII / LEVEL_SINGLE / LEVEL_HIGHLY_RESTRICTIVE /
+      LEVEL_NON_RESTRICTIVE.
+
+  severity_of(text: str) -> str
+      ONE decoded label -> SEV_LEGIT / SEV_SUSPICIOUS / SEV_MALICIOUS / SEV_FLAGGED.
+      Rule: >=2 of CONFUSABLE_SET co-occur -> MALICIOUS; empty letter-set -> FLAGGED;
+      single-script or Latin+CJK (Highly Restrictive) -> LEGIT; else SUSPICIOUS.
+
+  classify_label(a_label: str) -> LabelVerdict
+      Decode-safe (NEVER raises). frozen dataclass:
+        a_label, decoded (None on decode error), scripts (frozenset),
+        severity, offending (frozenset), decode_error (exc type name or None).
+
+  ** classify_idn(q_name: str) -> NameVerdict **   <-- the Phase-5 entry point
+      Splits on '.', classify_label PER LABEL, name severity = MOST SEVERE label
+      (_SEV_ORDER legit<flagged<suspicious<malicious). NEVER unions across the dot.
+      frozen dataclass NameVerdict:
+        a_name, labels (tuple[LabelVerdict, ...]), severity, offending (frozenset).
+      `offending` = the worst label's offending scripts (for dual-form logging:
+      decoded Unicode + offending script/char), per ADR-08 section 2.
+
+  Constants exported (mirror the Phase-2 oracle):
+    SEV_LEGIT / SEV_SUSPICIOUS / SEV_MALICIOUS / SEV_FLAGGED,
+    LEVEL_ASCII / LEVEL_SINGLE / LEVEL_HIGHLY_RESTRICTIVE / LEVEL_NON_RESTRICTIVE,
+    CONFUSABLE_SET = {Latin, Cyrillic, Greek}, CJK_COMPANIONS = {Hiragana, Katakana,
+    Hangul, Bopomofo}.
+
+  OFFENDING-CHAR RETURN: severity + offending scripts on both verdict dataclasses.
+    MALICIOUS -> the >=2 confusable scripts that co-occur (e.g. {Latin, Cyrillic}).
+    SUSPICIOUS -> the full multi-script set (e.g. {Latin, Armenian}).
+    LEGIT / FLAGGED -> empty frozenset.
+  NOTE the API uses severity strings (SEV_MALICIOUS/SEV_SUSPICIOUS/SEV_LEGIT/
+  SEV_FLAGGED), NOT a separate "OK" token; SEV_LEGIT == the prompt's "OK". The
+  Phase-5 action mapping (malicious->block, suspicious/flagged->alert, legit->none)
+  is the oracle's `action(sev, *, block_malicious=True, escalate_suspicious=False)`
+  in test_adr08_decision_spec.py — reproduce it at the matcher seam (the analyzer
+  deliberately returns severity, leaving the action/toggle policy to Phase 5).
+
+
+3. SHIPPED DATA — LOCATION, PINNED VERSION, HOW TO REGENERATE
+-------------------------------------------------------------
+  File:    src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py  (release archive).
+  Pinned:  Unicode 15.1.0 (UNICODE_VERSION in BOTH the generator and the data
+           module). Matches the dev-box stdlib unicodedata.unidata_version and the
+           corpus/spec ucd_version 15.1.0 — so tables, corpus and oracle agree.
+  Regenerate:
+       python scripts/update-unicode-data.py            # pinned 15.1.0
+       python scripts/update-unicode-data.py --version X.Y.Z
+  Reproducibility: VERIFIED byte-for-byte on a second run (fully sorted +
+  deterministic emission). The committed file is ruff-format-clean as emitted, so
+  no post-format step is needed and a regenerate keeps both ruff AND the byte
+  identity green. (README/CLAUDE.md doc of the version + update step is Phase 7's
+  DoD per ADR-08 section 6; not added here to keep Phase 4 pure-additive.)
+
+
+4. PURE / UNBOUND-SYMBOL-FREE + ORACLE-GREEN (verified)
+-------------------------------------------------------
+  - PURE: pfb_idn_analyzer.py imports only `bisect`, `dataclasses`, and the sibling
+    data module pfb_unicode_scripts. grep for Unbound symbols (log_info/log_err/
+    RR_TYPE*/RCODE*/MODULE_*/DNSMessage/qstate/module_qstate/...) = NONE.
+  - NOT WIRED: grep of pfb_unbound.py for classify_idn / pfb_idn_analyzer /
+    pfb_unicode_scripts / decode_idn_label / resolved_script_set = NONE. The matcher
+    decision, PHP, and UI are untouched (git diff --stat = 0 tracked files modified;
+    the 4 files are all new/untracked).
+  - ORACLE-GREEN over the WHOLE corpus + golden table (TestAnalyzerMatchesPhase2-
+    OracleAndCorpus diffs the shipped analyzer's decode / resolved-set / severity
+    against ORACLE.decode_label / resolved_scripts / severity AND against the
+    committed decision_table.json rows, row by row):
+      * malicious-tier FP on the legit set            : 0 / 20  (CJK = 0, IDN-ccTLD = 0)
+      * TP (homographs caught)                         : 6 / 6   (incl. pure
+                                                          Cyrillic+Greek + the subdomain
+                                                          homograph)
+      * malformed/undecodable labels                   : FLAGGED, never raised
+      * per-label IDN-ccTLD never unioned across the dot: example.рф / site.中国 = legit
+    Branch coverage (CLAUDE.md standard): every severity (legit/suspicious/malicious/
+    flagged) and every restriction level has its own failable assertion; the CJK
+    0-FP guard asserts it IS multi-script before asserting legit; the single-trio-
+    script LEGIT case pairs the malicious mix case so the >=2-of-trio rule is a real
+    boundary; the wrong-union FP guard is asserted (the union WOULD be malicious,
+    per-label keeps it legit); the raising edge rows are pinned to genuinely raise so
+    the catch is load-bearing.
+
+
+5. GO-AHEAD FOR PHASE 5 (wire the Confusable branch)
+----------------------------------------------------
+  PROCEED. Wire classify_idn into the matcher's Confusable arm ONLY (the single seam
+  from RESULTS/03 section 4: idn_mode_decision + its call site in evaluate_domain).
+  On an xn-- query in IDN_MODE_CONFUSABLE:
+    - call pfb_idn_analyzer.classify_idn(q_name);
+    - route severity -> action via the oracle's `action(...)` policy: malicious ->
+      block (block_malicious default-ON sub-toggle), suspicious + flagged -> alert
+      (escalate_suspicious default-OFF opt-in escalates to block), legit -> resolve;
+    - emit distinct feed/group labels (e.g. DNSBL_Homoglyph / DNSBL_Homoglyph_Suspect)
+      and dual-form log (xn-- + decoded + offending scripts from NameVerdict.offending);
+    - the analyzer feeds is_found; the existing whiteDB override still wins (after,
+      unchanged).
+  HARD GATE: the Off/All-IDN P3 golden (tests/test_adr08_mode_baseline.py, 11 tests)
+  MUST stay byte-identical green — only the CONFUSABLE arm gains behaviour. The
+  decode-safe contract (classify_idn NEVER raises) means a malformed xn-- never
+  crashes the resolver. Phase 4 wires nothing, so that golden is already green.
