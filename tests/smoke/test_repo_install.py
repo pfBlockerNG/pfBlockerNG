@@ -73,6 +73,10 @@ import os
 import re
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -119,6 +123,23 @@ SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (p
 # the pure-Python catalog. This is the load-bearing fidelity gate for the generator.
 BUILD_REPO_PORTABLE = Path(__file__).resolve().parents[2] / "scripts" / "build-repo-portable.py"
 PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable <ABI>/ tree is shipped
+
+# Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
+# deploys the catalog to a Pages site served at the CUSTOM DOMAIN brait.dev (gh api
+# repos/.../pages -> html_url http://brait.dev/pfBlockerNG/); we serve over HTTPS.
+# This dispatch-only test proves a REAL pfSense box `pkg update`/`pkg install`
+# against the LIVE https URL (not file://) — the maintainer's real-URL check. It is
+# GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
+# always-on proof; the live URL only exists once the deploy has run).
+LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
+DEFAULT_LIVE_BASE_URL = "https://brait.dev/pfBlockerNG"
+GUEST_ABI = "FreeBSD:15:amd64"  # the single supported ABI (CE 2.8 + Plus 25.03)
+# GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
+# only answers `uuid-*.com`, so `brait.dev` does not resolve on the guest. Pinning
+# the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
+# (TLS SNI still presents `brait.dev`, so the custom-domain cert validates) without
+# touching the resolver. Egress is OPEN for this flow (_ensure_egress_open).
+PAGES_IPS = ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153")
 
 
 # --------------------------------------------------------------------------- #
@@ -693,5 +714,161 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
     proc = pkg_install_from_repo(repo_vm)
     combined = proc.stdout + proc.stderr
     assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the portable catalog:\n{combined}"
+    origin = pkg_repo_origin(repo_vm)
+    assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Phase-3b — the LIVE GitHub-Pages-URL end-to-end (dispatch-only; gated)
+# --------------------------------------------------------------------------- #
+
+
+def _live_base_url() -> str | None:
+    """The live Pages base to test against, or None to SKIP.
+
+    Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
+    ``https://brait.dev/pfBlockerNG``) to run the live check after a publish
+    dispatch; leave it unset and the test SKIPS (the always-on proof is the
+    file:// VM-acceptance above). A bare ``1``/``true`` selects the default base.
+    """
+    val = os.environ.get(LIVE_BASE_URL_ENV)
+    if not val:
+        return None
+    if val.strip().lower() in {"1", "true", "yes", "on"}:
+        return DEFAULT_LIVE_BASE_URL
+    return val.rstrip("/")
+
+
+def poll_catalog_served(base_url: str, abi: str, *, attempts: int = 30, delay: float = 10.0) -> None:
+    """Poll the live ``<base>/<ABI>/meta.conf`` until it serves (first deploy + DNS/cert lag).
+
+    The catalog files a client ``pkg update`` consumes are ``meta.conf`` +
+    ``packagesite.pkg``; a 200 on both is the runner-side BACKSTOP that the deploy
+    actually published a usable tree, independent of the guest. Raises with the last
+    error if the URL never serves within the budget.
+    """
+    last_err = ""
+    for _ in range(attempts):
+        try:
+            for fname in ("meta.conf", "packagesite.pkg"):
+                url = f"{base_url}/{abi}/{fname}"
+                with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 (fixed https Pages URL)
+                    if resp.status != 200:
+                        raise RuntimeError(f"{url} -> HTTP {resp.status}")
+                    if not resp.read(1):
+                        raise RuntimeError(f"{url} served an empty body")
+            return
+        except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+            time.sleep(delay)
+    raise AssertionError(f"live catalog never served {base_url}/{abi}/ within budget; last error: {last_err}")
+
+
+def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> None:
+    """Pin GitHub Pages' anycast IPs for ``host`` in the guest ``/etc/hosts``.
+
+    The smoke harness sandboxes guest DNS to a mock answering only ``uuid-*.com``,
+    so the custom domain does not resolve on the box. A static ``/etc/hosts`` entry
+    routes ``pkg``'s HTTPS fetch to Pages by IP while TLS SNI still presents ``host``
+    (the custom-domain cert validates). Idempotent: the entry is removed first.
+    """
+    # Remove any prior pin for this exact host, then append the fresh one. The line
+    # is `<ip> <host>` (the first listed Pages IP suffices; pkg follows the cert).
+    strip = f"grep -v '[[:space:]]{re.escape(host)}$' /etc/hosts > /etc/hosts.pfb 2>/dev/null"
+    script = (
+        f"{strip} || cp /etc/hosts /etc/hosts.pfb; "
+        f"printf '%s %s\\n' '{PAGES_IPS[0]}' '{host}' >> /etc/hosts.pfb; "
+        f"mv /etc/hosts.pfb /etc/hosts"
+    )
+    result = subprocess.run(
+        vm.ssh_argv("/bin/sh", "-c", script),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"pin_pages_hosts failed: rc={result.returncode} {result.stderr!r}")
+
+
+def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: float = 60.0) -> None:
+    """Write OUR production conf pointing at the LIVE ``<base>/${ABI}`` Pages URL.
+
+    Built from the SAME generator the publish job emits (``build-repo-portable.py
+    --print-conf --base-url <base>``), but with the ``priority:`` raised above the
+    Netgate ``pfSense`` repo so cross-repo resolution favours ours. The literal
+    ``${ABI}`` is expanded by pkg(8) (not the shell) and follows the box's ABI.
+    """
+    proc = subprocess.run(
+        [sys.executable, str(BUILD_REPO_PORTABLE), "--print-conf", "--base-url", base_url],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"--print-conf failed: rc={proc.returncode} {proc.stderr!r}")
+    # Raise the priority above pfSense (the template ships priority 100; this flow
+    # sets it deterministically above the box's effective pfSense priority).
+    conf = re.sub(r"priority:\s*\d+", f"priority: {priority}", proc.stdout)
+    written = subprocess.run(
+        vm.ssh_argv("tee", REPO_CONF),
+        input=conf,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if written.returncode != 0:
+        raise RuntimeError(f"write_live_repo_conf failed: rc={written.returncode} {written.stderr!r}")
+
+
+@pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
+def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
+    """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
+    over its public HTTPS ``https://brait.dev/pfBlockerNG/${ABI}`` URL (no ``-f``).
+
+    DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
+    proof is the file:// VM-acceptance above; this exercises the REAL transport the
+    publish pipeline serves, so it can only run after a publish dispatch has deployed.
+
+    Given the publish job has DEPLOYED the catalog to Pages (runner-side backstop:
+      ``<base>/<ABI>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest has the
+      Pages IPs pinned for the host (its DNS is sandboxed), the package is ABSENT, and
+      OUR conf points at the live ``${ABI}`` URL above the Netgate ``pfSense`` repo,
+    When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
+      NO ``-f``),
+    Then ``pkg update`` accepts the deployed catalog AND the install comes from OUR
+      repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved and the .pkg
+      checksum validated — the deployed Pages repo is real + installable over HTTPS.
+    """
+    base_url = _live_base_url()
+    if base_url is None:
+        pytest.skip(f"{LIVE_BASE_URL_ENV} not set — live Pages-URL check is dispatch-only (file:// proof always runs)")
+    assert base_url is not None  # for the type-checker: pytest.skip above is NoReturn
+
+    host = urllib.parse.urlparse(base_url).hostname
+    assert host, f"could not parse a host from {base_url!r}"
+
+    # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
+    # (independent of the guest) — polls through first-deploy / DNS / cert lag.
+    poll_catalog_served(base_url, GUEST_ABI)
+
+    # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
+    # the LIVE url above pfSense.
+    pin_pages_hosts(repo_vm, host)
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_live_repo_conf(repo_vm, base_url, priority=pfsense_prio + 100)
+
+    # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
+    # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
+    pkg_update(repo_vm)
+    assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the live-URL install"
+
+    # THEN: install resolves from our LIVE repo, deps included, .pkg checksum validated.
+    proc = pkg_install_from_repo(repo_vm)
+    combined = proc.stdout + proc.stderr
+    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
     origin = pkg_repo_origin(repo_vm)
     assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"

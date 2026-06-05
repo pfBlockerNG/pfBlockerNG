@@ -503,6 +503,35 @@ jobs:
           done
           echo "All .pkg artifacts attached to release ${TAG}"
 
+  # ── 2d. Regenerate + deploy the pkg repository to GitHub Pages (ADR-17) ────
+  # ADDITIVE + ISOLATED — wired EXACTLY like attach-pkgs so it can NEVER gate or
+  # break release / ports-pr / attach-pkgs:
+  #   * needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
+  #     — runs only after the per-tag artifacts exist (same `needs` set as
+  #     attach-pkgs; a skipped mutually-exclusive build leg satisfies `needs`).
+  #   * if: always() && needs.release.result == 'success' — fires whenever the
+  #     Release was published, regardless of build/attach outcome.
+  #   * ports-pr does NOT `needs:` this; attach-pkgs does NOT `needs:` this; this
+  #     does NOT `needs:` attach-pkgs. So a repo-publish FAILURE leaves
+  #     release / ports-pr / attach-pkgs untouched (they never read its result).
+  #
+  # The reusable repo-publish.yml enumerates EVERY Release's .pkg assets (the
+  # durable store) plus the current run's freshly-built artifacts
+  # (pfBlockerNG-release-pkgs / pfBlockerNG-pkg, downloadable here since this is the
+  # SAME run), regenerates the per-ABI catalog with the pure-Python generator, and
+  # deploys it to Pages. build_branch_pkg=false — the per-tag .pkg are already built.
+  repo-publish:
+    name: Publish pkg repository to Pages
+    needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
+    if: always() && needs.release.result == 'success'
+    uses: ./.github/workflows/repo-publish.yml
+    with:
+      build_branch_pkg: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
   ports-pr:
     name: Open FreeBSD ports PR
