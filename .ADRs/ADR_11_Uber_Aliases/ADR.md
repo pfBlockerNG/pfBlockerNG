@@ -179,3 +179,90 @@ Prompt: `05_UI_Docs_Smoke_DoD.txt`
 - [ ] **HAProxy referenceable (ADR-12 pre-check).** A `source_ip` ACL referencing `pfB_Deny_Aggregated_v4` causes HAProxy to emit `ipalias_pfB_Deny_Aggregated_v4.lst` (proves `is_alias()` + expansion work).
 - [ ] **Post-hook fires after the aggregate is ready.** With a `post` update hook configured (ADR-12), force a member-feed change and run an update: the hook runs **after** the rebuilt `pfB_<Type>_Aggregated_*` table is loaded (the hook, e.g. `pfctl -t pfB_Deny_Aggregated_v4 -T show` or a freshness marker, sees the **new** content — never the prior pass's), and the aggregate's name appears in `PFB_CHANGED_IP_ALIASES`.
 - [ ] **Teardown.** Deselecting a type removes its alias/table/file cleanly (no orphans), leaving other selected aggregates intact; disabling pfBlockerNG removes them all.
+
+### Phase 4 — what is auto-verified off-box vs. deferred here (no silent gap)
+
+Phase 4 pins the **membership decision** — which member files each aggregate unions — as an
+off-box PHPUnit suite against the real `.inc` (`tests/php/AggregateMemberListTest.php`,
+`pfb_aggregate_member_list($type,$family)`). That suite proves, with failable assertions
+(mutation-checked): DNSBLIP folds into Deny; a Deny-action GeoIP continent folds into Deny; a
+Permit-action continent folds into Permit and is **absent** from Deny (no cross-type leakage);
+each type unions exactly its own dir; the `*_<fam>.txt` glob excludes `.update`/`.ip`/foreign-
+family/scratch; v4/v6 are disjoint; empty / missing / single-member / unknown-type / unknown-
+family edges. **What it CANNOT prove off-box** (needs a live pf table / the real `suppress`
+pass / HAProxy) is below as runnable maintainer commands; each maps to a checkbox above. Paths:
+aggregate file = `/var/db/aliastables/<name>.txt` (urltable cache), consumer = `/var/db/pfblockerng/<name>.lst`.
+
+**A. Effective (post-suppression) Deny CONTENT** (checkbox "Deny aggregate on"). The helper
+proved the union reads exactly the denydir member files; suppression rewrites those files'
+*bytes* in place before the union — verify the byte-level effect on the box:
+
+```sh
+# Pick a v4 IP that is in a Deny feed AND in your suppression/whitelist list.
+SUP=<suppressed_ip>;  DENYIP=<unsuppressed_deny_feed_ip>;  DNSBLIP=<a_DNSBLIP_v4_ip>
+# Suppressed IP must be ABSENT from the loaded aggregate table:
+/sbin/pfctl -t pfB_Deny_Aggregated_v4 -T test "${SUP}"      # expect: "0/1 addresses match" (absent)
+# A normal Deny feed IP and a DNSBLIP IP must be PRESENT:
+/sbin/pfctl -t pfB_Deny_Aggregated_v4 -T test "${DENYIP}"   # expect: "1/1 addresses match"
+/sbin/pfctl -t pfB_Deny_Aggregated_v4 -T test "${DNSBLIP}"  # expect: "1/1 addresses match"
+# A Deny-action GeoIP continent IP must be PRESENT (enable one continent as Deny first):
+/sbin/pfctl -t pfB_Deny_Aggregated_v4 -T test "${CONTIP}"   # expect: "1/1 addresses match"
+# No firewall rule references it (Native = no rule):
+/sbin/pfctl -sr | grep -c pfB_Deny_Aggregated_v4            # expect: 0
+```
+
+**B. Additive byte-identity across the power-set** (checkbox "All-combinations additive"). Prove
+the all-off case is byte-identical to today and that selecting a type adds ONLY its aggregates:
+
+```sh
+# Baseline with NOTHING selected, then snapshot the non-aggregate world:
+/sbin/pfctl -sr > /tmp/rules.none ; /sbin/pfctl -sT | grep -v _Aggregated_ | sort > /tmp/tables.none
+md5 /var/db/aliastables/*.txt | grep -v _Aggregated_ | sort > /tmp/aliasmd5.none
+# For each subset {Deny},{Permit},{Match},{Native},{pairs},{all four}: select it, run a full
+# pfBlockerNG update (Update > Force > Reload), then re-snapshot and diff the NON-aggregate sets:
+/sbin/pfctl -sr > /tmp/rules.sub ; /sbin/pfctl -sT | grep -v _Aggregated_ | sort > /tmp/tables.sub
+md5 /var/db/aliastables/*.txt | grep -v _Aggregated_ | sort > /tmp/aliasmd5.sub
+diff /tmp/rules.none /tmp/rules.sub        # expect: NO diff (existing rules byte-identical)
+diff /tmp/tables.none /tmp/tables.sub      # expect: NO diff for non-aggregate tables
+diff /tmp/aliasmd5.none /tmp/aliasmd5.sub  # expect: NO diff (existing alias files unchanged)
+# Only the selected pfB_<Type>_Aggregated_{v4,v6} tables/files appear; deselect => they vanish:
+/sbin/pfctl -sT | grep _Aggregated_        # expect: exactly the selected (type,family) tables
+```
+
+**C. Edge — empty union for a selected type** (checkbox "Never-empty file"). Select a type whose
+dir has zero members for a family:
+
+```sh
+test -s /var/db/pfblockerng/pfB_<Type>_Aggregated_v6.lst && echo "consumer non-empty OK"  # expect OK (a '#' placeholder line)
+/sbin/pfctl -t pfB_<Type>_Aggregated_v6 -T show 2>&1   # expect: empty / "table does not exist" (no empty table loaded)
+```
+
+**D. Lockstep + post-hook freshness** (checkboxes "Lockstep" / "Post-hook fires after the
+aggregate is ready"). Configure a `post` hook (ADR-12) that records the table, then force a Deny
+member change and one update:
+
+```sh
+# post hook command, e.g.:  /sbin/pfctl -t pfB_Deny_Aggregated_v4 -T show > /tmp/agg_seen_by_hook.txt
+# Note a known IP added to a Deny feed this pass; after the update:
+grep -F <newly_added_ip> /tmp/agg_seen_by_hook.txt   # expect: PRESENT (hook saw the FRESH table, same pass)
+# The aggregate name is in the changed-alias context the hook received:
+#   PFB_CHANGED_IP_ALIASES contains pfB_Deny_Aggregated_v4   (echo "$PFB_CHANGED_IP_ALIASES" in the hook)
+# An UNCHANGED type on a no-member-change pass is mtime-gated: its aggout mtime does NOT advance
+# and its name is NOT in PFB_CHANGED_IP_ALIASES:
+ls -l --time-style=full-iso /var/db/aliastables/pfB_<UnchangedType>_Aggregated_v4.txt  # mtime unchanged across the pass
+```
+
+**E. HAProxy referenceability** (checkbox "HAProxy referenceable") — unchanged from the checklist:
+add a `source_ip` ACL referencing `pfB_Deny_Aggregated_v4`, save HAProxy, and confirm:
+
+```sh
+ls /var/etc/haproxy*/ipalias_pfB_Deny_Aggregated_v4.lst   # expect: the file exists (is_alias() + expansion work)
+```
+
+**F. Teardown** (checkbox "Teardown") — after deselecting a type:
+
+```sh
+ls /var/db/aliastables/pfB_<Type>_Aggregated_v4.* /var/db/pfblockerng/pfB_<Type>_Aggregated_v4.lst 2>&1  # expect: No such file
+/sbin/pfctl -t pfB_<Type>_Aggregated_v4 -T show 2>&1   # expect: table does not exist
+# Other still-selected aggregates remain; disabling pfBlockerNG removes ALL pfB_*_Aggregated_* the same way.
+```
