@@ -158,10 +158,13 @@ if (isset($_GET) && isset($_GET['view']) || isset($_REQUEST) && isset($_REQUEST[
 	}
 }
 
+// $clists is read later in contexts PHPStan can't prove are guarded; default it so it is
+// defined even when the (!$alert_summary) collection block below is skipped (empty = no lists).
+$clists = array();
+
 // Collect all Whitelist/Suppression/Permit/Exclusion customlists
 if (!$alert_summary) {
 
-	$clists = array();
 	foreach (array('ipwhitelist4' => 4, 'ipwhitelist6' => 6, 'dnsbl' => 'dnsbl') as $type => $vtype) {
 		$c_config = $clists[$type] = array();
 

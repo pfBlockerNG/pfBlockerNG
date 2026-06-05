@@ -493,12 +493,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$clists might not be defined\.$#'
-			identifier: variable.undefined
-			count: 6
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$colspan might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
