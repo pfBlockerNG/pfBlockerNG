@@ -42,11 +42,11 @@ set -eu
 PKG_BIN="/usr/local/sbin/pkg"
 REPOS_DIR="/usr/local/etc/pkg/repos"
 
-# The published GitHub Pages base (custom domain, served over HTTPS). This is the
+# The published GitHub Pages base (the standard project Pages URL, served over HTTPS). This is the
 # SAME base build-repo.sh / build-repo-portable.py default to — the conf below is
 # byte-identical to their --print-conf for the devel channel. Override --base-url
 # for a fork/staging host. The conf appends the literal ${ABI} pkg(8) variable.
-DEFAULT_BASE_URL="https://brait.dev/pfBlockerNG"
+DEFAULT_BASE_URL="https://andrebrait.github.io/pfBlockerNG"
 CONF_PRIORITY=100
 
 CHANNEL="devel"

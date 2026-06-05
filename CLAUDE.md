@@ -567,7 +567,7 @@ on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases; from `main`, 
 Beyond the Netgate ports channel we publish a **self-hosted FreeBSD `pkg` repository on
 GitHub Pages** — a **derived index** (no stateful store): each deploy enumerates **all**
 Releases, downloads their `.pkg`, buckets by ABI, regenerates the catalog per `<ABI>/`, and
-deploys the tree to `brait.dev/pfBlockerNG/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}`
+deploys the tree to `andrebrait.github.io/pfBlockerNG/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}`
 conf auto-follows an OS upgrade). Cross-repo selection is keyed on repo **`priority:`** (it
 **dominates version** — Phase-1 live finding), so our above-Netgate `priority: 100` makes
 `pkg install`/`upgrade` and the stock GUI **Install** pull our build. GUI discovery + the
@@ -594,8 +594,8 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   the catalog accepted from both generators. Dispatch:
   `gh workflow run smoke.yml -f pytest_marker=repo` (or `repo-install.yml` once it lands on
   `devel`). The gated `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the
-  real `brait.dev` URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable
-  from the default branch).
+  real `andrebrait.github.io` URL — post-merge (a new `workflow_dispatch` workflow is only
+  dispatchable from the default branch).
 
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and merge");
 never a merge commit, never squash. History across `main` ← `devel` stays strictly linear

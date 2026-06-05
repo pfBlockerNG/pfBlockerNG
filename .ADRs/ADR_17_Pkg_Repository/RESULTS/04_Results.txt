@@ -49,7 +49,7 @@ THE EMITTED CONF (devel) — BYTE-IDENTICAL to `build-repo.sh --print-conf`
   # priority 100 sits above the base Netgate `pfSense` repo so cross-repo
   # resolution (pkg install/upgrade, GUI Install) selects our build.
   pfblockerng-devel: {
-    url: "https://brait.dev/pfBlockerNG/${ABI}",
+    url: "https://andrebrait.github.io/pfBlockerNG/${ABI}",
     mirror_type: none,
     signature_type: none,
     priority: 100,
@@ -57,7 +57,7 @@ THE EMITTED CONF (devel) — BYTE-IDENTICAL to `build-repo.sh --print-conf`
   }
 
   Fields (per ADR §2 "Client bootstrap"):
-    * url:            STATIC base https://brait.dev/pfBlockerNG + the literal
+    * url:            STATIC base https://andrebrait.github.io/pfBlockerNG + the literal
                       ${ABI} pkg(8) variable (single-quoted on emission; pkg
                       expands it, NOT the shell -> the URL-encoding gate passes).
                       ${ABI} auto-follows the box across an OS upgrade.
@@ -145,7 +145,7 @@ existing tests/smoke/test_repo_install.py already carries the closest harness):
      Transition coverage: package ABSENT before; `pkg install` (NO -f, NO -r) lands
      it FROM OUR REPO after (pkg query '%R' == pfblockerng-devel), deps resolved.
   2. THE LIVE PAGES URL (post-deploy): once repo-publish.yml has run on `devel` and
-     Pages serves https://brait.dev/pfBlockerNG/${ABI}, the existing gated test
+     Pages serves https://andrebrait.github.io/pfBlockerNG/${ABI}, the existing gated test
      test_install_from_live_pages_url (SMOKE_REPO_LIVE_URL) installs from the REAL
      served catalog. add-repo.sh writes the SAME conf that test pins, so a green
      there + add-repo.sh on the box = the end-to-end client proof.

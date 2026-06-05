@@ -2,11 +2,11 @@
 
 - **Status:** **Implemented** (2026-06-05) — *pending the post-merge live Pages deploy +
   the gated live-URL verification.* The hermetic affected-flow smoke (install / cross-repo
-  precedence / `pkg upgrade`) is **GREEN on the live VM** (§7); only the public `brait.dev`
-  Pages deploy + the live-URL leg remain, which are **post-merge** (a brand-new
+  precedence / `pkg upgrade`) is **GREEN on the live VM** (§7); only the public
+  `andrebrait.github.io` Pages deploy + the live-URL leg remain, which are **post-merge** (a brand-new
   `workflow_dispatch` workflow is only dispatchable once it lands on the default branch
   `devel`). Flips to **Accepted** once that deploy dispatch confirms the live
-  `https://brait.dev/pfBlockerNG/${ABI}` URL.
+  `https://andrebrait.github.io/pfBlockerNG/${ABI}` URL.
 - **Date:** 2026-06-05
 - **Branch:** `adr/17` (off **`devel`**) / **Component(s):** new dev-only CI — a
   **repo-publish** job/workflow that consumes ADR-09's release `.pkg` artifacts +
@@ -20,11 +20,14 @@
   smoke harness (`tests/smoke/conftest.py` `smoke_vm` + `helpers.py` +
   `scripts/install-pkg.sh`). **No shipped (`src/`) code changes** (the repo-only
   scope — §2; the GUI panel that would touch `src/www` is explicitly out of scope).
-- **Target runtime:** GitHub Actions — `ubuntu-latest` with **libpkg on Linux** for
-  catalog generation (the portable builder already proves libpkg-on-Linux), the
-  **FreeBSD VM** (`build-pkg.yml` path) retained as the fidelity fallback if Linux
-  catalog gen is not pfSense-acceptable. Client side: pfSense **CE 2.8+**
-  (`FreeBSD:15:amd64`) `pkg` 1.21+. Smoke: the ADR-04 live pfSense CE VM.
+- **Target runtime:** GitHub Actions — `ubuntu-latest` with a **pure-Python catalog
+  generator** (`scripts/build-repo-portable.py`; **no libpkg** — Phase 3a falsified
+  the "portable builder proves libpkg-on-Linux" assumption: `build-pkg-portable.py`
+  hand-rolls the `.pkg` archive in pure Python and never invokes libpkg, so the
+  catalog is hand-rolled the same way), with the **FreeBSD VM** (`build-pkg.yml`
+  path, `scripts/build-repo.sh` + real `pkg repo`) retained as the fidelity
+  fallback. Client side: pfSense **CE 2.8+** (`FreeBSD:15:amd64`) `pkg` 1.21+.
+  Smoke: the ADR-04 live pfSense CE VM.
 - **Test suite:** a new live-VM `tests/smoke/test_repo_install.py` carrying its **own
   marker `repo`** (a distribution flow, deselected from `-m smoke`). **Default
   `python -m pytest` stays unchanged** (the whole `tests/smoke` tree is `--ignore`d in
@@ -142,7 +145,7 @@ regenerated index over the durable Release assets** — no stateful accumulation
 
 | Area | Decision |
 | --- | --- |
-| **Trust model** | **`signature_type: none`** — `pkg` fetches over HTTPS; trust anchor = TLS to the GitHub-Pages host (the custom domain `brait.dev`; matches the project's image-no-signature precedent). **No signing key in CI** (a CI-resident key would itself be a root-code attack surface). pfSense honors per-repo `none` (Context 4). |
+| **Trust model** | **`signature_type: none`** — `pkg` fetches over HTTPS; trust anchor = TLS to the GitHub-Pages host (`andrebrait.github.io`, GitHub's `*.github.io` cert; matches the project's image-no-signature precedent). **No signing key in CI** (a CI-resident key would itself be a root-code attack surface). pfSense honors per-repo `none` (Context 4). |
 | **Hosting** | **GitHub Pages**, deployed via `actions/upload-pages-artifact` + `actions/deploy-pages` (the site is *replaced* each deploy → **no `gh-pages` history bloat**; the 1 GB source-repo concern never arises). |
 | **Repo = derived index over Releases** | The **GitHub Releases** `.pkg` assets (ADR-09 `attach-pkgs`) are the **durable store**. The publish job **enumerates all releases, downloads their `.pkg` assets, buckets by ABI, runs `pkg repo` per ABI dir, and deploys the whole tree** — **stateless + idempotent**, so every published build (all versions, all ABIs) is retained without accumulating state. |
 | **Layout + `${ABI}`** | One catalog per ABI under `…/<ABI>/` (e.g. `…/FreeBSD:15:amd64/`); the client conf `url:` uses **`${ABI}`** so it auto-follows an OS upgrade. **Flavor collision guard:** today every supported combo collapses to one tree (CE 2.8 + Plus 25.03 are both FreeBSD15 / php83 / py311). **If** two matrix entries ever share ABI **and** package-version but differ in php/py, the same name+version+ABI **cannot coexist** in one catalog → split into `…/<ABI>-<php><py>/` subtrees and have `add-repo.sh` detect+pin the box's flavor. `build-repo.sh` **fails loud** on an unhandled collision (never silently drops a build). |
@@ -204,7 +207,7 @@ regenerated index over the durable Release assets** — no stateful accumulation
 **Negative / risks**
 
 - **Authenticity = TLS only.** `none` means a compromise of the Pages host's TLS
-  (`brait.dev`) or the Pages content could serve altered root-running packages. Accepted
+  (`andrebrait.github.io`) or the Pages content could serve altered root-running packages. Accepted
   per precedent; revisitable to **offline-signed PUBKEY** later (key never in CI) — the
   conf gains a `signature_type`, the layout is unchanged.
 - **GUI discovery + update badge stay Netgate-bound** (Context 3). Our newer builds
@@ -339,7 +342,7 @@ Prompt: `05_Smoke_Coverage.txt`
 - Promote Phase 1 into the full `test_repo_install.py`: **(a)** GUI-path / CLI install from
   our repo (cross-repo precedence both branches, before/after asserts); **(b)** `pkg
   upgrade` from a lower installed version → our newer build (transition); **(c)**
-  **dispatch-only** real-`brait.dev`-URL install (hermetic mock is the gated default).
+  **dispatch-only** real-`andrebrait.github.io`-URL install (hermetic mock is the gated default).
   If the OS-major upgrade-survival case can't favor our build, **document the CLI
   `pkg upgrade` degrade** and record numbers. Branch coverage + VM left clean.
 
@@ -368,7 +371,7 @@ Prompt: `06_Docs_DoD.txt`
 - Status flips **Proposed → Implemented (pending the post-merge live Pages deploy + the
   gated live-URL verification)** — the hermetic affected-flow smoke (install / precedence /
   `pkg upgrade`) is GREEN on the live VM; **→ Accepted** once the post-merge `repo-publish`
-  dispatch deploys the public `brait.dev` catalog and the gated
+  dispatch deploys the public `andrebrait.github.io` catalog and the gated
   `test_install_from_live_pages_url` installs from the served URL — **no human
   manual-smoke gate** (the live-VM smoke is the oracle).
 
@@ -380,7 +383,7 @@ exists on the default branch (`devel`). `repo-publish.yml` lands with this ADR; 
 
 1. `gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true` — deploys the
    catalog to Pages (capture the run id + the `page_url`).
-2. Dispatch the `repo` smoke with `SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG` set, so
+2. Dispatch the `repo` smoke with `SMOKE_REPO_LIVE_URL=https://andrebrait.github.io/pfBlockerNG` set, so
    `test_install_from_live_pages_url` runs instead of skipping (it polls the served catalog,
    pins the Pages anycast IPs, writes our production conf, then `pkg install` with no `-f`
    asserting `%R == pfblockerng-devel`). Green there confirms the live URL → Status **Accepted**.
@@ -428,7 +431,7 @@ All five are GREEN on the live pfSense CE VM via `tests/smoke/test_repo_install.
   from **both** generators — is consumed without error: `build-repo.sh` (real `pkg repo`)
   and `build-repo-portable.py` (pure-Python). *(`test_build_repo_script_catalog_is_accepted`
   — run **27033922928**, P2; `test_portable_catalog_is_accepted` — run **27035602221**, P3a.
-  The real `brait.dev` URL leg, `test_install_from_live_pages_url`, is gated on
+  The real `andrebrait.github.io` URL leg, `test_install_from_live_pages_url`, is gated on
   `SMOKE_REPO_LIVE_URL` and is the post-merge step above.)*
 - [x] **Upgrade to our newer build.** Our repo carrying only `_1` ⇒ installed `%v == _1`
   from `pfblockerng-devel`; same repo rebuilt with `_9` ⇒ `pkg upgrade` moves it to
