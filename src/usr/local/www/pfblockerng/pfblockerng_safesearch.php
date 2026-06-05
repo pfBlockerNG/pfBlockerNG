@@ -182,11 +182,11 @@ $options_safesearch_doh_list	= [
 					'zero.dns0.eu' => 'European public DNS DoH/DoT/DoQ [zero.dns0.eu]'
 					];
 
-if (isset($_POST['save'])) {
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path. Initialise it once.
+$input_errors = array();
 
-	if (isset($input_errors)) {
-		unset($input_errors);
-	}
+if (isset($_POST['save'])) {
 
 	if (($_POST['safesearch_doh'] == 'Enable') && empty($_POST['safesearch_doh_list'])) {
 		$input_errors[] = 'Warning: With DoH/DoT Blocking enabled, you must select at least one List';
