@@ -256,6 +256,16 @@ class DnsblCase:
     # ``log_type == '1' and not in_hsts``). ``None`` (default) emits nothing -> the
     # existing matrix is byte-for-byte unchanged; True/False forces pfb_hsts on/off.
     hsts: bool | None = None
+    # idn_mode -> the "IDN Blocking" selector (CFG_DNSBL_SETTINGS/pfb_idn, ADR-08).
+    # 'off'/'' -> no IDN action; 'all' -> block every xn-- (legacy blunt); 'confusable'
+    # -> the TR39 mixed-script homoglyph analyzer (pfb_unbound.py classify_idn). ``None``
+    # (default) emits nothing -> the existing matrix is unchanged. The two sub-toggles
+    # apply only in Confusable mode (pfb_unbound.py idn_confusable_action): block_malicious
+    # (default ON) blocks a clearly-malicious homoglyph, else alerts; escalate_suspicious
+    # (default OFF) escalates the suspicious/flagged tier from alert to block.
+    idn_mode: str | None = None
+    idn_block_malicious: bool | None = None
+    idn_escalate_suspicious: bool | None = None
 
     @property
     def alias(self) -> str:
@@ -1287,6 +1297,16 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # pfb_py_hsts.txt -> hstsDB). Only emitted when the case sets it explicitly,
         # so the default matrix stays byte-for-byte unchanged. See add_hsts_name.
         settings["pfb_hsts"] = "on" if spec.hsts else "off"
+    if spec.idn_mode is not None:
+        # "IDN Blocking" selector (ADR-08; CFG_DNSBL_SETTINGS/pfb_idn -> ini idn_mode).
+        # 'confusable' runs the TR39 homoglyph analyzer; the two sub-toggles map to the
+        # ini keys the matcher reads (python_idn_block_malicious / _escalate_suspicious).
+        # Only emitted when the case sets it, so the default matrix is unchanged.
+        settings["pfb_idn"] = spec.idn_mode
+    if spec.idn_block_malicious is not None:
+        settings["pfb_idn_block_malicious"] = "on" if spec.idn_block_malicious else ""
+    if spec.idn_escalate_suspicious is not None:
+        settings["pfb_idn_escalate_suspicious"] = "on" if spec.idn_escalate_suspicious else ""
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
     # per row yields one ABP feed per row whose rules the Python build merges.

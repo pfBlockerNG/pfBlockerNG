@@ -249,6 +249,31 @@ def test_general_page_renders_aggregate_select(webui: WebUI) -> None:
     )
 
 
+def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The ADR-08 'IDN Blocking' selector + its two Confusable sub-toggles render
+    cleanly on the DNSBL page — so a regression that drops or breaks the field is
+    caught at the render tier (not just by the matcher smoke).
+
+    Asserts the page passes the clean-render oracle AND that the three POST field
+    names (``pfb_idn`` select + the two sub-toggle checkboxes) and the 'IDN Blocking'
+    / 'Confusable' option labels are present in the body. ``php_error_log_guard``
+    enrolls this GET in the module-level no-growth sweep.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    for needle in (
+        'name="pfb_idn"',
+        'name="pfb_idn_block_malicious"',
+        'name="pfb_idn_escalate_suspicious"',
+        "IDN Blocking",
+        "Confusable",
+    ):
+        assert needle in body, f"DNSBL page is missing the IDN-mode marker {needle!r}"
+
+
 # threats.php's NEGATIVE branches: each malformed/absent param print_info_box()es
 # a specific message and exit()s BEFORE the "$pgtitle" lookup-page chrome. These
 # pair with the positive threats_{domain,host,port} entries above (CLAUDE.md

@@ -333,6 +333,85 @@ def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, mock_feeds: _MockFe
         assert not h.is_null_ip(blocked), f"HSTS off must NOT force NULL: {blocked}"
 
 
+# IDN homoglyph protection — Confusable mode (ADR-08). The block comes from the
+# matcher's TR39 mixed-script analyzer (pfb_unbound.py classify_idn), NOT a feed
+# entry — the feed below is one innocuous filler so the DNSBL list/alias is real and
+# python mode is active; ``idn_mode='confusable'`` is what arms the analyzer.
+
+
+def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """Confusable mode blocks a cross-script homoglyph (VIP) but resolves a legit IDN.
+
+    Scenario: ``pfb_idn='confusable'`` + ``block_malicious`` ON (default). The
+    matcher decodes each ``xn--`` label, runs the TR39 analyzer per-label, and:
+      * ``xn--pple-43d`` (аpple — Cyrillic U+0430 + Latin) is a confusable Latin+
+        Cyrillic mix → MALICIOUS → blocked as feed ``Homoglyph`` (log_type '1',
+        not HSTS) → NOERROR + the DNSBL VIP.
+      * ``xn--mnchen-3ya`` (münchen — single-script Latin) is legit → NO IDN action,
+        so it resolves to its control answer (the before-state: green proves the
+        analyzer is the cause of the block, not an always-block path).
+    Probed on-box (``drill @127.0.0.1``); python-mode has no localhost exemption.
+    """
+    homoglyph = "xn--pple-43d.com"  # аpple — Latin+Cyrillic confusable → MALICIOUS
+    legit = "xn--mnchen-3ya.com"  # münchen — single-script Latin → legit
+    legit_ip = "198.51.100.60"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_idn_confusable.txt", f"{h.unique_domain('idnfiller')}\n")
+    spec = h.DnsblCase(
+        aliasname="smokeidn",
+        feed_url=feed_url,
+        header="smokeidn",
+        mode=h.DnsblMode.VIP,
+        idn_mode="confusable",
+        idn_block_malicious=True,
+        idn_escalate_suspicious=False,
+        control_local_data={legit: {"A": legit_ip}},
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # Before-state: the legit single-script IDN is NOT blocked — it resolves.
+        legit_ans = h.dns_probe(deployed_vm, legit, "A")
+        assert h.resolves_to(legit_ans, legit_ip), f"legit IDN {legit} should resolve to {legit_ip}, got {legit_ans}"
+        assert not h.is_vip(legit_ans), f"legit IDN {legit} must NOT be homoglyph-blocked (FALSE POSITIVE): {legit_ans}"
+        # The confusable homograph blocks with the DNSBL VIP.
+        blocked = h.dns_probe(deployed_vm, homoglyph, "A")
+        assert h.is_vip(blocked), (
+            f"homoglyph {homoglyph} (Latin+Cyrillic) expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
+        )
+
+
+def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """The ``block_malicious`` sub-toggle is a real branch: OFF → the SAME homograph
+    only alerts (resolves), not blocks.
+
+    Same confusable ``xn--pple-43d`` (аpple) as the positive case, but with
+    ``block_malicious`` OFF: ``idn_confusable_action`` maps MALICIOUS → ALERT, so
+    ``is_found`` stays False and the name resolves to its control answer. Paired with
+    the block-on case above (same input, toggle flipped) this proves it is the toggle,
+    not an always-resolve path.
+    """
+    homoglyph = "xn--pple-43d.com"  # аpple — MALICIOUS, but block_malicious is OFF
+    homoglyph_ip = "198.51.100.61"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_idn_alert.txt", f"{h.unique_domain('idnfiller')}\n")
+    spec = h.DnsblCase(
+        aliasname="smokeidnalert",
+        feed_url=feed_url,
+        header="smokeidnalert",
+        mode=h.DnsblMode.VIP,
+        idn_mode="confusable",
+        idn_block_malicious=False,  # malicious → ALERT only (no block)
+        control_local_data={homoglyph: {"A": homoglyph_ip}},
+    )
+    with h.CaseContext(deployed_vm, spec):
+        ans = h.dns_probe(deployed_vm, homoglyph, "A")
+        assert h.resolves_to(ans, homoglyph_ip), (
+            f"block_malicious OFF: {homoglyph} should resolve to {homoglyph_ip}, got {ans}"
+        )
+        assert not h.is_vip(ans), f"block_malicious OFF must NOT block the homograph (alert only): {ans}"
+
+
 def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """WHITELIST: a domain on the whitelist AND in the block feed RESOLVES.
 

@@ -289,3 +289,58 @@ def test_action_select_toggles_advanced_firewall_sections(
     expect(action).to_have_value("Disabled", timeout=JS_TIMEOUT_MS)
     expect(adv_in).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(adv_out).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+
+def test_idn_mode_select_gates_confusable_subtoggles(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_idn` = "Confusable" SHOWS the two Confusable sub-toggle checkboxes; any
+    other mode HIDES them (ADR-08).
+
+    ``enable_idn_mode()`` (pfblockerng_dnsbl.php:3143, bound to ``#pfb_idn.change``)
+    ``hideCheckbox()``s ``#pfb_idn_block_malicious`` + ``#pfb_idn_escalate_suspicious``
+    -- shown ONLY when the select is "confusable". Three states are asserted
+    (Off -> Confusable -> All-IDN) so green proves the sub-toggles are confusable-
+    specific, not always-shown nor merely "anything but Off". Playwright ``to_be_hidden``
+    on the input holds when hideCheckbox sets ``display:none`` on the enclosing
+    ``.form-group`` row. A full-page screenshot is captured at each state.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    sel = page.locator("#pfb_idn")
+    block_mal = page.locator("#pfb_idn_block_malicious")
+    escalate = page.locator("#pfb_idn_escalate_suspicious")
+    expect(sel).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(block_mal).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(escalate).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # Normalise to a deterministic start (Off) regardless of saved config.
+    if sel.input_value() != "":
+        sel.select_option("")
+        sel.dispatch_event("change")
+        expect(sel).to_have_value("", timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: Off -> both sub-toggles hidden.
+    expect(sel).to_have_value("", timeout=JS_TIMEOUT_MS)
+    expect(block_mal).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(escalate).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_idn_off_subtoggles_hidden")
+
+    # SELECT Confusable -> the handler shows both sub-toggles.
+    sel.select_option("confusable")
+    sel.dispatch_event("change")
+    expect(sel).to_have_value("confusable", timeout=JS_TIMEOUT_MS)
+    expect(block_mal).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(escalate).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_idn_confusable_subtoggles_shown")
+
+    # SELECT All-IDN -> hidden again (third state: confusable-specific, not just != Off).
+    sel.select_option("all")
+    sel.dispatch_event("change")
+    expect(sel).to_have_value("all", timeout=JS_TIMEOUT_MS)
+    expect(block_mal).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(escalate).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_idn_all_subtoggles_hidden")
