@@ -1,0 +1,163 @@
+================================================================================
+ADR-17 — Phase 4 RESULTS (client bootstrap: scripts/add-repo.sh + README section)
+================================================================================
+
+VERDICT: GO. scripts/add-repo.sh is the client bootstrap — it writes the pkg(8)
+         repo conf, `pkg update`s, and VERIFIES our package is visible FROM OUR
+         repo. Its devel conf is BYTE-IDENTICAL to `build-repo.sh --print-conf`
+         (the published single source), pinned by a new unit test so the two can
+         never drift. POSIX + idempotent + ShellCheck-clean; static conf URL; no
+         src/ change. The README gains one honest "Install from our pkg
+         repository" section. All gates green. The live "real box -> install from
+         the deployed Pages URL" check is DEFERRED to Phase 5 / post-deploy (the
+         Pages deploy is post-merge, a GitHub constraint).
+
+--------------------------------------------------------------------------------
+scripts/add-repo.sh — INTERFACE
+--------------------------------------------------------------------------------
+Run ON the pfSense box (over SSH). POSIX sh (#!/bin/sh), set -eu.
+
+  add-repo.sh [devel|stable]                 # write conf, pkg update, verify (default: devel)
+  add-repo.sh --print-conf [devel|stable]    # print conf to stdout, exit (NO side effects)
+  add-repo.sh --base-url <url> [devel|stable]# override the base (forks/staging)
+  add-repo.sh -h | --help                    # usage block
+
+CHANNEL -> identity (the ONLY channel-varying things are the repo name / conf
+file / package name; all other conf fields are shared):
+  devel  (default): conf /usr/local/etc/pkg/repos/pfblockerng-devel.conf,
+                    repo name `pfblockerng-devel`, pkg pfSense-pkg-pfBlockerNG-devel
+  stable          : conf /usr/local/etc/pkg/repos/pfblockerng.conf,
+                    repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG
+
+ABSOLUTE BINARY: PKG_BIN=/usr/local/sbin/pkg (pfSense convention; no $PATH trust).
+An unknown channel / unknown option exits != 0 (fails loud, never writes).
+
+THE VERIFY STEP (not just "pkg update ran"):
+  pkg rquery -r <repo-name> '%n %v' <pkg-name>   # queries ONLY our repo's catalog
+A hit => our catalog loaded and carries the package; prints the available
+name-version + the install/upgrade hints. A miss => exit 1 with the conf path and
+a `pkg -d update` hint (catalog not published for this ABI yet, or URL unreachable).
+
+IDEMPOTENT: the conf is rewritten unconditionally on every run (safe re-run).
+
+--------------------------------------------------------------------------------
+THE EMITTED CONF (devel) — BYTE-IDENTICAL to `build-repo.sh --print-conf`
+--------------------------------------------------------------------------------
+  # pfBlockerNG (devel channel) — self-hosted pkg repository (ADR-17).
+  # NONE-signed: trust anchor is HTTPS to the host (no signing key). The ${ABI}
+  # variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.
+  # priority 100 sits above the base Netgate `pfSense` repo so cross-repo
+  # resolution (pkg install/upgrade, GUI Install) selects our build.
+  pfblockerng-devel: {
+    url: "https://brait.dev/pfBlockerNG/${ABI}",
+    mirror_type: none,
+    signature_type: none,
+    priority: 100,
+    enabled: yes
+  }
+
+  Fields (per ADR §2 "Client bootstrap"):
+    * url:            STATIC base https://brait.dev/pfBlockerNG + the literal
+                      ${ABI} pkg(8) variable (single-quoted on emission; pkg
+                      expands it, NOT the shell -> the URL-encoding gate passes).
+                      ${ABI} auto-follows the box across an OS upgrade.
+    * mirror_type:    none.
+    * signature_type: none — NONE-signed; trust = HTTPS to the host (no CI key).
+    * priority:       100 — ABOVE the Netgate `pfSense` repo (ships 0). Phase-1
+                      finding: repo PRIORITY decides cross-repo selection, so this
+                      is what makes our build win.
+    * enabled:        yes.
+
+  STABLE differs ONLY in the stanza key (repo name) `pfblockerng` and the
+  "(stable channel)" comment line — url/mirror_type/signature_type/priority/enabled
+  are identical.
+
+--------------------------------------------------------------------------------
+CONF <-> --print-conf MATCH EVIDENCE
+--------------------------------------------------------------------------------
+  $ diff <(sh scripts/build-repo.sh --print-conf) \
+         <(sh scripts/add-repo.sh  --print-conf devel)
+    -> NO DIFF (byte-identical).
+  The README's inline conf block (the "equivalent inline write") is the SAME
+  stanza, verified equal to the script output.
+
+  PINNED by tests/test_add_repo_conf.py (5 tests, in the DEFAULT pytest set):
+    * test_add_repo_devel_conf_is_byte_identical_to_build_repo — the drift guard:
+      add-repo.sh devel == build-repo.sh --print-conf, byte-for-byte.
+    * test_add_repo_devel_conf_default_channel_matches_explicit — no-arg == devel.
+    * test_add_repo_conf_fields_per_channel[devel|stable] — branch coverage: each
+      channel keys its OWN repo name (and NOT the other's), shares the static
+      ${ABI} url + priority 100 + none/none + enabled:yes.
+    * test_add_repo_rejects_unknown_channel — an unknown channel exits != 0.
+
+--------------------------------------------------------------------------------
+README — "Install from our `pkg` repository"
+--------------------------------------------------------------------------------
+LOCATION: new H2 section, placed after "Building via the FreeBSD ports system"
+and before "Installing on a pfSense instance for testing".
+
+CONTENT (matches the README's existing voice/length):
+  * one-liner: `./scripts/add-repo.sh devel` + `pkg install pfSense-pkg-pfBlockerNG-devel`.
+  * the equivalent inline conf write (the SAME stanza add-repo.sh emits) + `pkg update`.
+  * `stable` note (pfSense-pkg-pfBlockerNG); ${ABI}/NONE-signed/priority-100 rationale.
+  * updates: `pkg upgrade pfSense-pkg-pfBlockerNG-devel`.
+  * HONEST scope (ADR §1 Context 3 / §3 Negative): GUI Install pulls our build via
+    cross-repo priority, BUT Available-Packages discovery + the GUI "update
+    available" badge stay Netgate-bound (our newer builds install via GUI Install /
+    CLI `pkg upgrade`, not a GUI badge); the deferred GUI "Updates/Channel" panel is
+    out of scope (would touch src/).
+  All example URLs are STATIC; the only code fences are pkg/cat (no curl/fetch).
+
+--------------------------------------------------------------------------------
+GATES (all green)
+--------------------------------------------------------------------------------
+  * shellcheck scripts/add-repo.sh                 -> clean.
+  * sh -n scripts/add-repo.sh                       -> clean.
+  * scripts/check_url_encoding.py                   -> clean (conf URL static ${ABI};
+                                                       no curl/wget/fetch in the
+                                                       script or the README fences).
+  * npx markdownlint-cli2 (repo root, 37 files)     -> 0 error(s).
+  * python -m pytest (DEFAULT)                       -> 1147 passed (1142 P3 + 5 new).
+  * ruff check / ruff format --check (new test)     -> clean.
+  * mypy tests/                                      -> Success (24 source files).
+  * add-repo.sh --print-conf devel  ==  build-repo.sh --print-conf  (diff: none).
+  * NO src/ change (diff = README.md + scripts/add-repo.sh + tests/test_add_repo_conf.py).
+
+--------------------------------------------------------------------------------
+DELIVERABLES
+--------------------------------------------------------------------------------
+  * scripts/add-repo.sh           — the client bootstrap (channel arg, conf write,
+    pkg update, verify-from-our-repo; --print-conf dry-run; idempotent).
+  * README.md                     — +"Install from our `pkg` repository" section
+    (one-liner + inline conf + honest discovery/badge caveat).
+  * tests/test_add_repo_conf.py   — the drift guard (add-repo.sh conf == build-repo.sh
+    --print-conf; per-channel field/branch coverage; unknown-channel rejection).
+
+--------------------------------------------------------------------------------
+WHAT PHASE 5 MUST ASSERT AUTOMATICALLY (the live-VM smoke, deferred here)
+--------------------------------------------------------------------------------
+The local proof here is the conf bytes + idempotency + the drift pin. Phase 5 owns
+the live assertions on the ADR-04 VM (reuse the smoke_vm fixture + helpers.py; the
+existing tests/smoke/test_repo_install.py already carries the closest harness):
+  1. ADD-REPO.SH ON A REAL BOX: scp add-repo.sh to the guest, run it (devel),
+     assert it writes /usr/local/etc/pkg/repos/pfblockerng-devel.conf, `pkg update`
+     succeeds, and the verify step finds the package from repo `pfblockerng-devel`.
+     Transition coverage: package ABSENT before; `pkg install` (NO -f, NO -r) lands
+     it FROM OUR REPO after (pkg query '%R' == pfblockerng-devel), deps resolved.
+  2. THE LIVE PAGES URL (post-deploy): once repo-publish.yml has run on `devel` and
+     Pages serves https://brait.dev/pfBlockerNG/${ABI}, the existing gated test
+     test_install_from_live_pages_url (SMOKE_REPO_LIVE_URL) installs from the REAL
+     served catalog. add-repo.sh writes the SAME conf that test pins, so a green
+     there + add-repo.sh on the box = the end-to-end client proof.
+  Both are DEFERRED here because the Pages deploy is post-merge (a new
+  workflow_dispatch workflow is untriggerable until it lands on the default branch,
+  RESULTS/03) — Phase 5 / post-deploy runs them.
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT (Phase 5)
+--------------------------------------------------------------------------------
+Phase 4 = GO. The client bootstrap + the README install section are in place; the
+emitted conf is byte-identical to the published source and pinned against drift.
+Phase 5 (live-VM smoke) is cleared: assert add-repo.sh on the box installs our
+package from our repo, and — once Pages is live — the real-URL install via the
+already-wired gated test.

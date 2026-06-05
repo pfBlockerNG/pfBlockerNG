@@ -700,6 +700,56 @@ The resulting `.pkg` file is in `work/pkg/`.
 
 ---
 
+## Install from our `pkg` repository
+
+We publish a self-hosted FreeBSD `pkg` repository (ADR-17) so a pfSense box can
+`pkg install` / `pkg upgrade` our builds directly — dependencies resolved, no
+`pkg add -f`. Run the bootstrap **on the box** (over SSH), then install:
+
+```sh
+./scripts/add-repo.sh devel
+pkg install pfSense-pkg-pfBlockerNG-devel
+```
+
+`add-repo.sh` writes `/usr/local/etc/pkg/repos/pfblockerng-<channel>.conf`, runs
+`pkg update`, and verifies our package is visible from our repo. Pass `stable` for
+the production package (`pfSense-pkg-pfBlockerNG`); the default is `devel`. The
+equivalent inline conf write (what the script emits) is:
+
+```sh
+cat > /usr/local/etc/pkg/repos/pfblockerng-devel.conf <<'EOF'
+pfblockerng-devel: {
+  url: "https://brait.dev/pfBlockerNG/${ABI}",
+  mirror_type: none,
+  signature_type: none,
+  priority: 100,
+  enabled: yes
+}
+EOF
+pkg update
+```
+
+The `${ABI}` is a `pkg(8)` variable (expanded by `pkg`, not the shell) so one conf
+follows the box across a pfSense OS upgrade. The repo is **NONE-signed** — trust is
+HTTPS to the host. `priority: 100` sits above the Netgate `pfSense` repo, so
+cross-repo resolution picks our build. Update later with:
+
+```sh
+pkg upgrade pfSense-pkg-pfBlockerNG-devel
+```
+
+**What works and what doesn't (honest scope, ADR-17 §1):** because the GUI Install
+action is not repo-locked, the stock webConfigurator **Install** of pfBlockerNG-devel
+transparently pulls our build via cross-repo priority. But Available-Packages
+**discovery** and the GUI **"update available" badge** stay **Netgate-bound** (they
+query the `pfSense` repo only) — our newer builds install via GUI Install or CLI
+`pkg upgrade`, **not** a GUI badge. A pfBlockerNG GUI "Updates/Channel" panel that
+would close the badge gap is deferred (out of scope — it would touch `src/`).
+
+See [`scripts/add-repo.sh`](scripts/add-repo.sh) for full options.
+
+---
+
 ## Installing on a pfSense instance for testing
 
 Use the helper script to push files directly to a running pfSense box
