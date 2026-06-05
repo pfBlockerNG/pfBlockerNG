@@ -159,6 +159,11 @@ def _join_continuations(lines: list[str]) -> list[tuple[int, str]]:
 
 def _scan_logical_line(line: str) -> bool:
     """True if a logical line naked-interpolates a var into an HTTP-client URL."""
+    # A comment-only line (e.g. a "# curl ...?ip=$VAR" anti-pattern shown in a doc
+    # or recipe) is not executed, so it must not be flagged -- otherwise a legitimate
+    # "don't do this" example would fail pre-commit/CI.
+    if line.lstrip().startswith("#"):
+        return False
     if not _HTTP_CLIENT_RE.search(line):
         return False
     for token in _split_tokens(line):
