@@ -1,0 +1,291 @@
+"""Tier-B browser tests (ADR-14 Phase 4): the DNSBL page's inline show/hide JS.
+
+These exercise the client-side toggles wired in the inline ``<script>`` of
+``src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php`` -- the
+checkbox-gated ``Form_Section`` show/hide handlers an HTTP POST cannot reach --
+against the LIVE webConfigurator on the ADR-04 smoke VM, reusing the Phase-1
+authenticated session (the ``PHPSESSID`` cookie the ``browser_context`` fixture
+injects, so the browser never logs in a second time).
+
+``test_browser.py`` already covers the ADR-13 ``#pfb_dnsvip_auto`` ->
+``#pfb_dnsvip4``/``#pfb_dnsvip6`` *disable* handler (``enable_dnsvip_auto``);
+this file covers the OTHER inline handlers, each gating a separate collapsible
+section by ``.show()``/``.hide()`` on the section's OUTER panel div (whose id is
+the second ``Form_Section`` constructor arg). The JS under test is READ-ONLY
+reference (no ``src/`` change); the exact selectors/behaviours are taken from the
+page's inline script (line numbers are pfblockerng_dnsbl.php):
+
+* ``enable_python_regex()`` (3099-3105, bound to ``#pfb_regex`` click at
+  3151-3154 and run on load at 3154): when ``#pfb_regex`` is CHECKED it
+  ``.show()``s the ``Python_regex_list`` section (``Form_Section`` id at 2502),
+  UNCHECKED it ``.hide()``s it.
+* ``enable_python_noaaaa()`` (3107-3113, bound at 3156-3159): ``#pfb_noaaaa``
+  gates the ``Python_noaaaa_list`` section (id at 2524).
+* ``enable_python_gp()`` (3115-3121, bound at 3161-3164): ``#pfb_gp`` gates the
+  ``Python_Group_Policy`` section (id at 2474).
+* ``enable_tld()`` (3067-3075, bound at 3136-3139): ``#pfb_tld`` gates BOTH the
+  ``TLD_Exclusion`` (id at 2802) and ``TLD_BW_list`` (id at 2827) sections at
+  once.
+* ``enable_dnsblip()`` (3123-3133, bound to ``#action`` click at 3166-3169): the
+  ``#action`` List-Action select being non-``Disabled`` ``.show()``s BOTH the
+  ``advinboundsettings`` and ``advoutboundsettings`` sections (ids built at
+  2909); ``Disabled`` ``.hide()``s them.
+
+All five gating controls default OFF on a fresh box (``pfb_regex``/``pfb_noaaaa``/
+``pfb_gp``/``pfb_tld`` default ``''`` -> unchecked; ``action`` defaults
+``Disabled``), so the on-load handler pass leaves every dependent section HIDDEN
+-- the BEFORE state each test asserts before flipping the control, then asserts
+the AFTER (shown), then flips back to re-hide (both branches, per CLAUDE.md
+"Test coverage"). The section ids ride the section's OUTER panel div (the element
+the handler ``.show()``/``.hide()``s), so ``to_be_visible()`` / ``to_be_hidden()``
+reads the jQuery-set ``display`` directly.
+
+NO fixed sleeps: every assertion uses Playwright's auto-waiting
+(``expect(...).to_be_visible()`` / ``to_be_hidden()`` / ``to_be_checked()``).
+Per-state full-page screenshots are written to ``screenshot_dir`` for human
+review (ADR §2 "Screenshots (A1)" -- artifacts, NOT asserted pixel baselines).
+
+DEFERRED (noted in the report): ``enable_python_pytld`` (multi-target
+``hideMultiClass``/``hideCheckbox``), ``enable_ports`` (gated by the
+``#dnsbl_interface`` select, whose non-``lo0`` options depend on the VM's live
+interfaces), and the auto-VIP OPTION-INJECTION half of ``enable_dnsvip_auto``.
+
+Playwright is imported lazily via ``pytest.importorskip`` (in ``conftest`` and
+here) so importing/collecting this module does not hard-error when Playwright is
+absent.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pytest
+
+# Tier-B dep: guard the import so collecting this module without Playwright
+# installed (this dev venv, or any host that skips the browser tier) does not
+# hard-error. Everything below references `expect` from the imported module.
+sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
+expect = sync_api.expect
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
+
+    from .webui import WebUI
+
+pytestmark = pytest.mark.ui_browser
+
+# The DNSBL settings page hosts the inline show/hide handlers under test.
+DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+
+# A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
+# fire synchronously on load/click, so this is a flake ceiling, not a wait knob.
+JS_TIMEOUT_MS = 10_000
+
+
+def _open(page: Page, webui: WebUI, path: str) -> None:
+    """Navigate the (cookie-authenticated) page to ``path`` and settle the DOM.
+
+    Asserts the load did NOT bounce to the login form -- proving the injected
+    session cookie authenticated the browser (no second login). Waits on
+    ``networkidle`` so the page's ``events`` handlers (which pfSense runs after
+    DOMContentLoaded) have executed before any assertion.
+    """
+    page.goto(webui.url(path), wait_until="domcontentloaded", timeout=JS_TIMEOUT_MS * 3)
+    page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
+    # The login form carries #usernamefld; its absence proves we are authed.
+    assert page.locator("#usernamefld").count() == 0, f"GET {path} showed the login form -- cookie not authenticated"
+
+
+def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
+    """Write a full-page screenshot artifact ``<screenshot_dir>/<name>.png``."""
+    page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
+
+
+def _assert_checkbox_gates_section(
+    page: Page,
+    checkbox_id: str,
+    section_id: str,
+    screenshot_dir: Path,
+    shot_prefix: str,
+) -> None:
+    """A checkbox whose click handler ``.show()``/``.hide()``s one section by id.
+
+    Drives the full two-way transition with the before-state asserted: normalise
+    the checkbox to UNCHECKED (the fresh-box default), assert the section HIDDEN,
+    check -> assert SHOWN, uncheck -> assert HIDDEN again. Uses the native
+    ``el.click()`` (via ``evaluate``) so the bound jQuery handler fires regardless
+    of the control's panel geometry (see test_browser.py's enable_change test).
+    """
+    box = page.locator(f"#{checkbox_id}")
+    section = page.locator(f"#{section_id}")
+    expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(section).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # Normalise to a deterministic start (unchecked) regardless of saved config.
+    if box.is_checked():
+        box.evaluate("el => el.click()")
+        expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: checkbox off -> the on-load handler pass left the section hidden.
+    expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(section).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, f"{shot_prefix}_before_hidden")
+
+    # CHECK -> the handler .show()s the section.
+    box.evaluate("el => el.click()")
+    expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(section).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, f"{shot_prefix}_after_shown")
+
+    # UNCHECK -> re-hidden (proves it is a real two-way branch, not always-shown).
+    box.evaluate("el => el.click()")
+    expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(section).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+
+def test_regex_checkbox_toggles_regex_list_section(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_regex` gates the `Python_regex_list` section's visibility.
+
+    ``enable_python_regex()`` (pfblockerng_dnsbl.php:3099-3105): CHECKED ->
+    ``.show()`` the section, UNCHECKED -> ``.hide()`` it. Before->after with both
+    directions exercised.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _assert_checkbox_gates_section(page, "pfb_regex", "Python_regex_list", screenshot_dir, "dnsbl_regex")
+
+
+def test_noaaaa_checkbox_toggles_noaaaa_list_section(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_noaaaa` gates the `Python_noaaaa_list` section's visibility.
+
+    ``enable_python_noaaaa()`` (pfblockerng_dnsbl.php:3107-3113): CHECKED ->
+    ``.show()``, UNCHECKED -> ``.hide()``. Both directions, before-state asserted.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _assert_checkbox_gates_section(page, "pfb_noaaaa", "Python_noaaaa_list", screenshot_dir, "dnsbl_noaaaa")
+
+
+def test_group_policy_checkbox_toggles_group_policy_section(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_gp` gates the `Python_Group_Policy` section's visibility.
+
+    ``enable_python_gp()`` (pfblockerng_dnsbl.php:3115-3121): CHECKED ->
+    ``.show()``, UNCHECKED -> ``.hide()``. Both directions, before-state asserted.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _assert_checkbox_gates_section(page, "pfb_gp", "Python_Group_Policy", screenshot_dir, "dnsbl_gp")
+
+
+def test_tld_checkbox_toggles_both_tld_sections(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_tld` gates BOTH the `TLD_Exclusion` and `TLD_BW_list` sections.
+
+    ``enable_tld()`` (pfblockerng_dnsbl.php:3067-3075) ``.show()``/``.hide()``s
+    the two collapsible TLD sections together off the one checkbox. Branch
+    coverage with the before-state asserted (CLAUDE.md): start unchecked -> BOTH
+    sections hidden, check -> BOTH shown, uncheck -> BOTH hidden again.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    box = page.locator("#pfb_tld")
+    excl = page.locator("#TLD_Exclusion")
+    bwl = page.locator("#TLD_BW_list")
+    expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(excl).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(bwl).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # Normalise to a deterministic start (unchecked) regardless of saved config.
+    if box.is_checked():
+        box.evaluate("el => el.click()")
+        expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: checkbox off -> the on-load handler pass left both sections hidden.
+    expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_tld_before_hidden")
+
+    # CHECK -> the handler .show()s both sections.
+    box.evaluate("el => el.click()")
+    expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(excl).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(bwl).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_tld_after_shown")
+
+    # UNCHECK -> both re-hidden (proves a real two-way branch).
+    box.evaluate("el => el.click()")
+    expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+
+def test_action_select_toggles_advanced_firewall_sections(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#action` != `Disabled` shows the Advanced In/Outbound firewall sections.
+
+    ``enable_dnsblip()`` (pfblockerng_dnsbl.php:3123-3133), bound to the
+    ``#action`` List-Action select's click (3166-3169) and run on load: a
+    non-``Disabled`` value ``.show()``s BOTH ``advinboundsettings`` and
+    ``advoutboundsettings``; ``Disabled`` ``.hide()``s them. The select defaults
+    ``Disabled`` (3124 / $pconfig default), so the on-load pass leaves both
+    sections hidden -- the asserted BEFORE state. The handler reads the select
+    VALUE, so we ``select_option`` then fire the bound ``click`` to run it (a
+    ``<select>`` change does not raise ``click``); both branches are exercised.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    action = page.locator("#action")
+    adv_in = page.locator("#advinboundsettings")
+    adv_out = page.locator("#advoutboundsettings")
+    expect(action).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(adv_in).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(adv_out).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # Normalise to a deterministic start (Disabled) regardless of saved config.
+    if action.input_value() != "Disabled":
+        action.select_option("Disabled")
+        action.dispatch_event("click")
+        expect(action).to_have_value("Disabled", timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: action Disabled -> the on-load handler pass left both adv sections hidden.
+    expect(action).to_have_value("Disabled", timeout=JS_TIMEOUT_MS)
+    expect(adv_in).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(adv_out).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_action_before_hidden")
+
+    # SELECT a Deny action + fire the bound click -> the handler .show()s both.
+    action.select_option("Deny_Both")
+    action.dispatch_event("click")
+    expect(action).to_have_value("Deny_Both", timeout=JS_TIMEOUT_MS)
+    expect(adv_in).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(adv_out).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_action_after_shown")
+
+    # BACK to Disabled -> both re-hidden (proves a real two-way branch).
+    action.select_option("Disabled")
+    action.dispatch_event("click")
+    expect(action).to_have_value("Disabled", timeout=JS_TIMEOUT_MS)
+    expect(adv_in).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(adv_out).to_be_hidden(timeout=JS_TIMEOUT_MS)
