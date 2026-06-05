@@ -746,6 +746,45 @@ Cases live in `tests/smoke/test_smoke_matrix.py` and compose the Phase-4 helpers
    `h.resolves_to`, and `h.pfctl_table_members` / `h.member_present` /
    `h.rule_references` for the IP side. `__exit__` resets to baseline.
 
+### HTTP feed-load smoke (ADR-16)
+
+`tests/smoke/test_smoke_feeds.py` (marker `smoke`) exercises the **real
+HTTP fetch path** — pfBlockerNG's `curl` over SLIRP to the `_MockFeedServer`
+— across the representative IP + DNSBL formats. This is the only place in the
+suite where a feed arrives over HTTP rather than a local file (`write_local_feed`).
+
+**Fixture files** live under `tests/smoke/fixtures/` and are committed to the
+repo. Each file is the verbatim body `curl` fetches; the guest reaches it at
+`http://10.0.2.2:<port>/<filename>` over SLIRP (survives the egress block):
+
+| File | Format | Type |
+|------|--------|------|
+| `ip_plain_cidr.txt` | plain IPv4 + CIDR | IP v4 |
+| `ip_range.txt` | IPv4 range `a-b` | IP v4 |
+| `ip_ipv6.txt` | IPv6 single + CIDR | IP v6 |
+| `dnsbl_plain.txt` | plain domain | DNSBL |
+| `dnsbl_hosts.txt` | hosts `0.0.0.0 domain` | DNSBL |
+| `dnsbl_abp.txt` | ABP / EasyList (\|\|d^ block, @@ allow) | DNSBL |
+
+All data is inert: IP files use RFC 5737 / RFC 3849 documentation ranges;
+DNSBL files use `uuid-<hex>.com` names.
+
+**How cases register a fixture.** In a test, pass `mock_feeds.feed_url("<name>")`
+as the `feed_url` to `IpCase`/`DnsblCase`. `_MockFeedServer.register()` is
+called automatically for each file in `tests/smoke/fixtures/` when the
+`mock_feeds` fixture starts. To add a new format:
+
+1. Drop a fixture file into `tests/smoke/fixtures/` (follow the inert-data rule).
+2. Update `tests/smoke/fixtures/README.md` to document its member/non-member set.
+3. Add a case in `test_smoke_feeds.py` using `mock_feeds.feed_url("<name>")`.
+
+**Kill-gate / gate status.** The HTTP-fetch reliability is the ADR-16 Part-C
+kill-gate (≥ 4/5 clean runs). The test is authored in the `smoke` marker and
+gated as part of the `ui-tests`-labeled PR suite; the GO/DEMOTE decision is
+recorded in `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`
+(status: OPTIMISTIC-GO, pending the live CI run). If the live run shows
+&lt; 4/5 clean, `test_smoke_feeds.py` is demoted to dispatch-only as a fast-follow.
+
 ## Web UI tests (live pfSense VM)
 
 The UI suite (ADR-14, `tests/smoke/ui/`) drives the **webConfigurator** on the
@@ -765,6 +804,18 @@ cost/frequency:
 The pass/fail oracle is **never HTTP 200 alone** (a 200 can carry a rendered PHP
 warning or a blank body) — Tier A reads the body + the page marker + the on-box
 `php_error.log`; Tier B asserts the effective state.
+
+### Feeds page — IPv4 / IPv6 / DNSBL sub-tabs (ADR-16)
+
+The **Feeds** page (`pfblockerng_feeds.php`) is organized into **IPv4 / IPv6 /
+DNSBL sub-tabs** (`?type=ipv4|ipv6|dnsbl`, default `ipv4`), matching the IP /
+DNSBL / Reports top-level structure. Each sub-tab renders only its own type's
+Feed Settings alias-name inputs and predefined-feeds table; a bare URL defaults
+to the IPv4 tab. The Tier-A render entries are `feeds_ipv4`, `feeds_ipv6`, and
+`feeds_dnsbl` (three `ui_render` cases, one per `?type`). A `ui_browser` test
+(`tests/smoke/ui/test_browser_feeds.py`, marker `ui_browser`) screenshots all
+three tabs and asserts the second sub-tab row (`[IPv4 | IPv6 | DNSBL]`), the
+active-tab highlight, and that each tab lists only its type.
 
 ### Running it in CI
 

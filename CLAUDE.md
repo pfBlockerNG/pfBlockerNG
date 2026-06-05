@@ -483,6 +483,55 @@ numbers are **CI-pending**; the browser leg has a one-line demote/drop switch
 (drop `browser` from `DEFAULT_SCHEDULE_TIERS` + run release `ui-suite` as
 `tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
 
+### HTTP mock-feed load smoke (ADR-16 Part C) — `tests/smoke/test_smoke_feeds.py`
+
+`test_smoke_feeds.py` (marker `smoke`) is the **only suite file that drives the
+real HTTP fetch path**: each case points an `IpCase`/`DnsblCase` at a URL served
+by `_MockFeedServer` (the in-runner stdlib HTTP server reachable by the guest at
+`http://10.0.2.2:<port>/<name>` over SLIRP — survives the egress block), runs a
+real Force Update, and asserts the feed loaded on the box. Every other smoke case
+supplies a local file via `write_local_feed`.
+
+**Sample fixtures** live under `tests/smoke/fixtures/` (committed to the repo):
+
+| File | Format | Type |
+| --- | --- | --- |
+| `ip_plain_cidr.txt` | plain IPv4 + CIDR | IP v4 |
+| `ip_range.txt` | IPv4 range `a-b` | IP v4 |
+| `ip_ipv6.txt` | IPv6 single + CIDR | IP v6 |
+| `dnsbl_plain.txt` | plain domain | DNSBL |
+| `dnsbl_hosts.txt` | hosts `0.0.0.0 domain` | DNSBL |
+| `dnsbl_abp.txt` | ABP / EasyList (\|\|d^ block, @@ allow) | DNSBL |
+
+All data is inert (RFC 5737 / RFC 3849 IPs; `uuid-<hex>.com` domains). The
+`mock_feeds` fixture auto-registers every file in `tests/smoke/fixtures/` when it
+starts; individual cases call `mock_feeds.feed_url("<name>")` to get the guest URL.
+
+**How `_MockFeedServer.register()` works.** `register(name, body)` stores the body
+in an in-memory dict; the HTTP handler serves it verbatim (plain body, no
+`Content-Encoding`, no `Content-Disposition`) at `GET /<name>`. The fixture
+directory variant (`mock_feeds.feed_url("<filename>")`) reads the file on first
+access and registers it under its basename. `curl` does not send
+`Accept-Encoding: gzip` nor `If-Modified-Since`, so the mock needs no compression
+or ETag/304 logic — plain body is fine.
+
+**Adding a new format fixture.**
+
+1. Drop the fixture file into `tests/smoke/fixtures/` (inert data — TEST-NET IPs
+   / `uuid-*.com` domains; never RFC 6761 TLDs or HSTS-preload names).
+2. Update `tests/smoke/fixtures/README.md` with the member/non-member set.
+3. Add a case in `test_smoke_feeds.py` using `mock_feeds.feed_url("<filename>")`.
+
+**Kill-gate / gate status (ADR-16 §7).** The Part-C premise is falsifiable:
+"a Force Update reliably fetches an HTTP feed from the mock over SLIRP and loads
+it, in CI". The reliability bar is **≥ 4/5 clean runs**. This test is
+`OPTIMISTIC-GO, PENDING-CI` — all 6 representative formats are authored; the live
+CI run (the `ui-tests`-labeled PR suite) decides GO vs DEMOTE. If < 4/5 clean,
+`test_smoke_feeds.py` is demoted to dispatch-only (Part A still ships; the
+local-file load coverage in `test_smoke_matrix.py` / `test_smoke_abp.py`
+remains). The final decision is recorded in
+`.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`.
+
 ---
 
 ## Test coverage (mandatory)
