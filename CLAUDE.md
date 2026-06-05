@@ -566,6 +566,20 @@ ShellCheck via VS Code extension. All scripts use `#!/bin/sh` (POSIX sh, not bas
 `.shellcheckrc` suppresses SC1091 (pfSense source files unreachable locally) and
 SC2154 (rc(8)-injected variables). Do not suppress other rules without justification.
 
+**URL-encoding check (`scripts/check_url_encoding.py`).** A preventative gate that
+forbids naked shell-variable interpolation into an HTTP-client (`curl`/`wget`/`fetch`)
+URL query — e.g. `curl "http://h/cb?ip=$VAR"`. A space-separated or empty value (such
+as pfBlockerNG's `PFB_CHANGED_IP_ALIASES`) jammed into the URL breaks: the space
+re-tokenises the command and the parameter collapses. The fix is to let the value ride
+its own option so curl percent-encodes it: `curl --data-urlencode "ip=$VAR" http://h/cb`
+(NOT flagged). With no args it scans every tracked `*.sh` script (the `src/**`
+hook/pre-script surface plus dev `scripts`/`tests` shell, mirroring the shebang/`sh -n`
+checks) AND the `sh`/`bash`/`shell`-tagged fenced code blocks in tracked Markdown docs
+(so the hook/webhook recipe examples are guarded too); static query params (`?fixed=1`)
+and base/host/path interpolation are out of scope. Enforced in both `.githooks/pre-commit` and CI (`test.yml` ShellCheck job);
+pure detection lives in `find_violations()` and is unit-tested in
+`tests/test_url_encoding_check.py`.
+
 ### Markdown
 
 markdownlint via the VS Code "markdownlint" extension and the CLI. Run from repo root:

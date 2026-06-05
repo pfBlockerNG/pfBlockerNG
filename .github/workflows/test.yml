@@ -160,6 +160,13 @@ jobs:
         # tests/ shellspec specs trip SC2034 false-positives (separate cleanup).
         run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=warning
 
+      - name: Forbid naked $var in curl/wget/fetch URLs
+        # Preventative: a query value jammed straight into a URL (`?ip=$VAR`) breaks
+        # on empty/space-bearing values (e.g. pfBlockerNG's PFB_CHANGED_IP_ALIASES).
+        # Use `--data-urlencode` instead. Scans tracked src shell + Markdown shell
+        # fences (the checker's defaults). ubuntu-latest ships python3.
+        run: python3 scripts/check_url_encoding.py
+
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
