@@ -18,6 +18,7 @@ phase does NOT edit any workflow.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +30,17 @@ from .webui import SESSION_COOKIE, WebUI
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
+
+# A pfBlockerNG GUI page used as the webConfigurator-readiness probe after deploy
+# (see `webui`). Any package page works; general.php is the lightest and always
+# present.
+PFB_READY_PATH = "/pfblockerng/pfblockerng_general.php"
+# Bound for the readiness poll: pfSense brings a freshly-installed package's GUI
+# pages online a moment AFTER `pkg add` returns (POST-INSTALL reconfigures the
+# webConfigurator/menu); install-pkg.sh only waits on Unbound, a PROXY signal.
+# 60 x 2s = 120s headroom; a real never-served page still fails (raises), not masks.
+PFB_READY_ATTEMPTS = 60
+PFB_READY_DELAY = 2.0
 
 # Env var carrying the baked admin password (ADR-04 SMOKE_ADMIN_PASSWORD).
 ADMIN_PASSWORD_ENV = "SMOKE_ADMIN_PASSWORD"
@@ -96,13 +108,50 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     return smoke_vm
 
 
+def _wait_pfblockerng_pages_served(client: WebUI) -> None:
+    """Block until the webConfigurator actually SERVES a pfBlockerNG GUI page.
+
+    ``deploy()`` (install-pkg.sh) returns as soon as ``unbound-control status``
+    answers -- a PROXY: pfSense brings a freshly-installed package's GUI pages
+    online a moment LATER (POST-INSTALL reconfigures the webConfigurator/menu).
+    A test that GETs a pfBlockerNG page inside that window gets a 404 even though
+    the package installed fine (its backend + Unbound wiring are already up). That
+    race is leg-dependent -- the render tier, the quickest to GET a page after
+    deploy, loses it most often (every page 404s; pfSense core still serves the
+    login form at 200) while the slower functional/browser tiers settle in time.
+
+    So poll the REAL readiness signal here -- the package page returning HTTP 200
+    (served; authenticated -> the real page, but ANY 200 means the file is now
+    routed, vs 404 while it is not) -- before any test runs. A page that is never
+    served raises (a genuine deploy/GUI failure), it is not masked.
+    """
+    last = ""
+    for _ in range(PFB_READY_ATTEMPTS):
+        try:
+            resp = client.get(PFB_READY_PATH)
+        except Exception as exc:  # noqa: BLE001 -- transient HTTP error during GUI reconfigure; retry
+            last = f"GET error: {exc!r}"
+        else:
+            if resp.status_code == 200:
+                return
+            last = f"HTTP {resp.status_code}"
+        time.sleep(PFB_READY_DELAY)
+    raise RuntimeError(
+        f"webConfigurator never served {PFB_READY_PATH} (last: {last}) after "
+        f"{PFB_READY_ATTEMPTS}x{PFB_READY_DELAY}s -- pfBlockerNG GUI pages not online post-deploy"
+    )
+
+
 @pytest.fixture(scope="session")
 def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_protocol: str) -> Iterator[WebUI]:
     """A logged-in :class:`WebUI` against the smoke VM's webConfigurator.
 
     Honours the RECON'd protocol: HTTPS on the throwaway image is driven with
-    ``verify=False`` (self-signed cert). Yields AFTER a successful CSRF login so
-    every consuming test starts authenticated; the session cookie is reusable
+    ``verify=False`` (self-signed cert). Yields AFTER a successful CSRF login AND
+    after the webConfigurator is confirmed to be serving pfBlockerNG's GUI pages
+    (:func:`_wait_pfblockerng_pages_served` -- closes the post-deploy GUI-readiness
+    race, see its docstring), so every consuming test starts authenticated against
+    a GUI that actually serves the package pages. The session cookie is reusable
     via :meth:`WebUI.session_cookie` for a later browser phase.
     """
     username, password = admin_credentials
@@ -116,6 +165,9 @@ def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_proto
         verify=not https,
     )
     client.login()
+    # Login hits pfSense CORE (always up); the package's own GUI pages come online
+    # slightly later -- wait for one to actually serve before yielding to tests.
+    _wait_pfblockerng_pages_served(client)
     yield client
 
 
