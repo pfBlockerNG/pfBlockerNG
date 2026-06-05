@@ -7092,6 +7092,12 @@ function pfb_daemon_dnsbl_index() {
 function pfb_open_sqlite($table, $message) {
 	global $pfb;
 
+	// $table is always 1-7 from callers, but the if/elseif chain below has no else;
+	// default these so they are defined for any value. Behaviour-preserving.
+	$database	= '';
+	$db_table	= '';
+	$db_create	= '';
+
 	if ($table == 1) {
 		$database	= $pfb['dnsbl_info'];
 		$db_table	= 'dnsbl';
