@@ -101,6 +101,20 @@ updates. The shipped **HAProxy recipe** (README) is a `post` hook guarded on
 through `/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck + a maintainer
 manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
 
+### ADR-11 — aggregate ("Uber") aliases live smoke — `tests/smoke/test_smoke_aggregate.py`
+
+`test_smoke_aggregate.py` (marker `smoke`, same ADR-04 harness/`deployed_vm` shape as the hooks
+file) drives the opt-in `pfb_agg_types` multi-select end-to-end on a real pf table: none-selected
+no-op, Deny builds the table with **no firewall rule** (Native), cross-type non-leakage
+(Permit ∉ Deny aggregate), additive `{Deny}`→`{Deny,Permit}`, never-empty `.lst` on an empty
+union, teardown on deselect, the DNSBLIP→Deny fold, and the **post-hook freshness** leg (the
+`post` hook reads `pfctl -t pfB_Deny_Aggregated_v4 -T show` + its env after a forced feed change
+and sees the **new** IP + the alias in `PFB_CHANGED_IP_ALIASES`). Setter `helpers.set_aggregate_types`
+(read-back-guarded CSV scalar) + `aggregate_table`/`aggregate_consumer_path`. The membership
+decision is unit-pinned off-box in `tests/php/AggregateMemberListTest.php`; HAProxy
+referenceability + the GeoIP/suppress content spot-check stay ADR §7 maintainer-manual. The
+General-page `pfb_agg_types` render is covered by the ADR-14 Tier-A gate (next section).
+
 ---
 
 ## Web UI test tiers (ADR-14) — `tests/smoke/ui/`
