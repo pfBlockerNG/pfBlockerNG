@@ -16,6 +16,23 @@ markers = [
     "ui_browser: live-VM Web-UI browser/JS test (ADR-14 Tier B, Playwright); deselected from the default run",
 ]
 
+# coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line
+# coverage hides one-sided decision branches (a feature's ON path tested, its OFF
+# path not). The canonical invocation is
+#   python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
+# (pytest-cov drives coverage.py); these knobs make a bare `coverage run` branchy
+# too and keep the TYPE_CHECKING-only import block out of the denominator. The
+# report is INFORMATIONAL in CI -- no enforced floor yet (mirrors the shell kcov /
+# PHP pcov informational coverage; #38 decides later whether to gate on a floor).
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
+
 [tool.ruff]
 # Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
 target-version = "py311"
