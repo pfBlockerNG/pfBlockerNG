@@ -1168,6 +1168,13 @@ function pfb_global() {
 	$pfb['keep']		= $pfb['config']['pfb_keep'];			// Keep blocklists on pfBlockerNG Disable
 	$pfb['interval']	= $pfb['config']['pfb_interval']	?: '1';	// Hour cycle for scheduler
 
+	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
+	// to aggregate (subset of Deny/Permit/Match/Native), default NONE -> [] -> no-op pass.
+	// CSV (a single string, like blacklist_selected) so it round-trips with no '<0>' list XML.
+	$pfb['agg_types']	= array_values(array_intersect(
+					array('Deny', 'Permit', 'Match', 'Native'),
+					array_filter(explode(',', (string) ($pfb['config']['pfb_agg_types'] ?? '')))));
+
 	// Validate Cron settings
 	if (!is_numeric($pfb['interval'])) {
 		$pfb['interval'] = '1';
@@ -2114,6 +2121,117 @@ function pfb_aggregate_member_list($type, $family) {
 
 	sort($members);
 	return $members;
+}
+
+
+// ADR-11 Phase 3: build + register the opt-in per-type aggregate ("Uber") Native aliases.
+//
+// ONE generic loop over the type->dir map {Deny,Permit,Match,Native} x family {v4,v6}.
+// For each SELECTED type ($pfb['agg_types'], CSV scalar, default none):
+//   pfb_aggregate_member_list($type,$family) -> write a memberlist file -> run
+//   `pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>` (cat|sort -u|
+//   iprange, mtime-gated inside the action) -> register pfB_<Type>_Aggregated_<fam> as a
+//   standard pfB `urltable` alias (mirrors the member-alias registration shape) -> load the
+//   table via `pfctl -T replace -f`. NEVER pfb_firewall_rule -- "Native" is the registration
+//   mode (no rule), regardless of which action class is being aggregated. When an aggregate
+//   is actually (re)built this pass (aggout mtime advanced), its name is merged into
+//   $pfb['changed_ip_aliases'] (emitted to the ADR-12 post-hook as PFB_CHANGED_IP_ALIASES)
+//   and into $pfb_alias_lists, so a recipe can gate its reload on the aggregate changing.
+//
+// A NON-selected type (or pfBlockerNG disabled) is torn down: its aggregate file, consumer
+// file and pf table are removed cleanly, and -- by NOT appending its name to
+// $new_aliases_list -- the caller's existing pfB orphan-prune also unlinks its alias .txt.
+//
+// Additive guarantee: nothing selected => the loop registers/builds nothing and tears down
+// nothing that exists (the aliases were never created), so the pass is byte-identical.
+//
+// $new_aliases, $new_aliases_list, $pfb_alias_lists are taken by reference (the caller's
+// alias-registration arrays); the aggregate alias entries are appended like any other pfB
+// alias so the normal config write + reconcile path carries them.
+function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list, array &$pfb_alias_lists) {
+	global $pfb;
+
+	$all_types	= array('Deny', 'Permit', 'Match', 'Native');
+	$selected	= is_array($pfb['agg_types'] ?? null) ? $pfb['agg_types'] : array();
+
+	// Disabled pfBlockerNG => nothing is selected effectively (tear all down below).
+	if ($pfb['enable'] != 'on') {
+		$selected = array();
+	}
+
+	foreach ($all_types as $type) {
+		foreach (array('v4', 'v6') as $family) {
+
+			$aliasname	= "pfB_{$type}_Aggregated_{$family}";
+			$aggout		= "{$pfb['aliasdir']}/{$aliasname}.txt";
+			$consumer	= "{$pfb['dbdir']}/{$aliasname}.lst";	// never-empty '-f' consumer (ADR-12)
+			$aliasname_esc	= escapeshellarg($aliasname);
+
+			// ---- Teardown: a NON-selected type (or disabled) leaves no orphans. ----
+			// Strictly additive: only act when this aggregate actually exists -- on a box
+			// that never selected this type, nothing is touched (byte-identical to today).
+			if (!in_array($type, $selected, true)) {
+				if (file_exists($aggout) || file_exists($consumer)) {
+					unlink_if_exists($aggout);
+					unlink_if_exists($consumer);
+					// Kill the pf table only when we had built this aggregate before.
+					exec("{$pfb['pfctl']} -t {$aliasname_esc} -T kill 2>&1");
+				}
+				continue;
+			}
+
+			// ---- Build: write the per-(type,family) memberlist, then run the action. ----
+			$members	= pfb_aggregate_member_list($type, $family);
+			$memberlist	= "{$pfb['dbdir']}/{$aliasname}.members";
+			@file_put_contents($memberlist, $members ? (implode("\n", $members) . "\n") : '', LOCK_EX);
+
+			// mtime BEFORE the build, to detect whether the action actually rebuilt.
+			clearstatcache();
+			$mtime_before = file_exists($aggout) ? filemtime($aggout) : 0;
+
+			$family_esc	= escapeshellarg($family);
+			$memberlist_esc	= escapeshellarg($memberlist);
+			$aggout_esc	= escapeshellarg($aggout);
+			$consumer_esc	= escapeshellarg($consumer);
+			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} 2>&1");
+
+			clearstatcache();
+			$rebuilt = file_exists($aggout) && (filemtime($aggout) > $mtime_before);
+
+			// Register the Native urltable alias (mirror the member-alias shape).
+			// NEVER pfb_firewall_rule() -- Native means no firewall rule.
+			$new_aliases_list[]	= $aliasname;
+			$new_aliases[]		= array('name'		=> $aliasname,
+							'url'		=> "{$pfb['weblocal']}?pfb={$aliasname}",
+							'updatefreq'	=> '32',
+							'address'	=> '',
+							'descr'		=> "pfBlockerNG {$type} Aggregated Alias [ {$family} ]",
+							'type'		=> 'urltable',
+							'detail'	=> 'DO NOT EDIT THIS ALIAS'
+							);
+
+			// Load the table now (well before the ADR-12 post-hook), so a hook consumer
+			// (e.g. an HAProxy graceful reload) always sees the FRESH aggregate. A 0-byte
+			// aggout (empty union) is pruned to an empty table, matching pfB member aliases.
+			if (file_exists($aggout) && filesize($aggout) > 0) {
+				exec("{$pfb['pfctl']} -t {$aliasname_esc} -T replace -f {$aggout_esc} 2>&1");
+			} else {
+				exec("{$pfb['pfctl']} -t {$aliasname_esc} -T kill 2>&1");
+			}
+
+			// Merge a (re)built aggregate's name into the changed-alias set so the ADR-12
+			// post-hook's PFB_CHANGED_IP_ALIASES reflects it; additive -- an unchanged
+			// (mtime-gated, skipped) aggregate adds nothing.
+			if ($rebuilt) {
+				$pfb['changed_ip_aliases'][]	= $aliasname;
+				$pfb_alias_lists[]		= $aliasname;
+			}
+
+			// Member list is transient scratch; the never-empty consumer + the alias file
+			// persist for downstream use.
+			unlink_if_exists($memberlist);
+		}
+	}
 }
 
 
@@ -11007,6 +11125,18 @@ function sync_package_pfblockerng($cron='') {
 						);
 		}
 	}
+
+	#########################################################################
+	#  ADR-11: per-type aggregate ("Uber") Native aliases (opt-in)		#
+	#  Wired here -- after every member alias materialises (Deny AFTER the	#
+	#  per-member suppress step above, so denydir is post-suppression) and	#
+	#  while $new_aliases is still being assembled (config write is below)	#
+	#  -- so each selected aggregate is registered + its file built BEFORE	#
+	#  the alias-reconcile region and filter_configure() load the tables,	#
+	#  which themselves precede the ADR-12 post-update hook (closing tail).	#
+	#  Native => registered urltable but NEVER pfb_firewall_rule (no rule).	#
+	#########################################################################
+	pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $pfb_alias_lists);
 
 	#########################################
 	#	UPDATE pfSense ALIAS TABLES	#

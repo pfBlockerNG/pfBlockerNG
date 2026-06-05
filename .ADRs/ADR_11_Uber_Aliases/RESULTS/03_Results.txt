@@ -1,0 +1,165 @@
+================================================================================
+ADR-11 — Phase 3 RESULTS: WIRE the per-type aggregate aliases (opt-in, Native)
+================================================================================
+Status: DONE. The opt-in multi-select + the one generic wiring loop are live in the
+        update pass; default NONE selected => byte-identical to today. ADDITIVE.
+Date:   2026-06-05
+Scope:  src/usr/local/pkg/pfblockerng/pfblockerng.inc       (setting read; new helper
+                                                             pfb_build_aggregate_aliases();
+                                                             one call in the pass)
+        src/usr/local/www/pfblockerng/pfblockerng_general.php (the multi-select field +
+                                                             read/save/render)
+        NO shell change (Phase-2 `aggregate` action reused as-is). No Python/tests. No
+        stubs (all pfSense fns already stubbed). No other ADRs.
+
+--------------------------------------------------------------------------------
+1. THE SETTING — multi-select, default NONE, CSV scalar (round-trips, no <0> XML)
+--------------------------------------------------------------------------------
+KEY:     pfb_agg_types
+STORE:   installedpackages/pfblockerng/config/0/pfb_agg_types   (the General-settings
+         flat config-0 assoc array, beside enable_cb/pfb_keep/pfb_interval/skipfeed).
+SHAPE:   a SINGLE CSV STRING, e.g. "Deny,Native" -- NOT a list. Mirrors the established
+         pfBlockerNG multi-select pattern `blacklist_selected`
+         (pfblockerng_blacklist.php: implode(',', (array)$_POST[..]) on save /
+         explode(',', ..) on read). A scalar string has NO listtag concern at all -- it
+         can never emit the invalid `<0>` XML that a bare list under a non-listtag key
+         would (the "pfSense config lists need a row listtag" trap is sidestepped by NOT
+         using a list). This is the by-construction round-trip argument.
+DEFAULT: '' (empty) => no types selected => the wiring loop is a complete no-op (see §5).
+         No upgrade migration writes it, so existing installs read '' => default none.
+UI (pfblockerng_general.php):
+  * options : $options_pfb_agg_types = [Deny,Permit,Match,Native] (value === label).
+  * read    : $pconfig['pfb_agg_types'] = explode(',', (string)($gconfig['pfb_agg_types'] ?? ''))
+  * save    : sanitise $_POST['pfb_agg_types'] (array) against array_keys($options_..)
+              via array_intersect, then implode(',', ...) -> the CSV scalar. Garbage/
+              unknown options are dropped; empty post => '' (none).
+  * render  : Form_Select('pfb_agg_types', 'Aggregated Aliases', $pconfig, $options, TRUE)
+              -- the 5th arg TRUE = multiple (same call shape as blacklist_selected),
+              size = 4. Help text carries the Native/no-rule + Permit-"reference only" +
+              RAM caveat (ADR §4) inline.
+  * $pfb read (pfb_global, ~:1171): $pfb['agg_types'] = array_values(array_intersect(
+      ['Deny','Permit','Match','Native'], array_filter(explode(',', (string)$cfg)))) --
+      a clean ordered subset, immune to bad config values.
+
+--------------------------------------------------------------------------------
+2. THE WIRE — one generic loop, exact insertion point, table-load BEFORE post-hook
+--------------------------------------------------------------------------------
+NEW HELPER (pfblockerng.inc, right after pfb_aggregate_member_list, ~:2143):
+  function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list,
+                                       array &$pfb_alias_lists)
+  ONE generic nested loop over {Deny,Permit,Match,Native} x {v4,v6} (NO per-type copy-
+  paste). Per (type,family):
+    aliasname = pfB_<Type>_Aggregated_<fam>     (<=24 chars, under pf's 31-char limit)
+    aggout    = {aliasdir}/<aliasname>.txt       (the urltable content; same dir/scheme
+                as every pfB member alias, so the existing -T replace / orphan-prune /
+                filter_configure machinery carries it unchanged)
+    consumer  = {dbdir}/<aliasname>.lst          (the never-empty '-f' consumer, ADR-12)
+  SELECTED type:
+    members = pfb_aggregate_member_list($type,$family) (Phase 2) -> written one-path-per-
+      line to {dbdir}/<aliasname>.members -> exec `{script} aggregate <fam> <memberlist>
+      <aggout> <consumer>` (the Phase-2 action; cat|sort -u|iprange; mtime-gated INSIDE
+      the action) -> register the Native urltable alias by APPENDING to $new_aliases /
+      $new_aliases_list (mirror of the member-alias registration array:
+      url=weblocal?pfb=<name>, updatefreq=32, address='', type='urltable',
+      detail='DO NOT EDIT THIS ALIAS', descr="pfBlockerNG <Type> Aggregated Alias [<fam>]")
+      -> LOAD THE TABLE NOW: `pfctl -t <name> -T replace -f <aggout>` when aggout is
+      non-empty, else `pfctl -t <name> -T kill` (empty union => empty/absent table, same
+      prune semantics as member aliases). The memberlist scratch is unlinked after.
+    *** NEVER pfb_firewall_rule() *** -- "Native" is the REGISTRATION mode (urltable, no
+    rule) regardless of which action class is aggregated. (The two `pfb_firewall_rule`
+    strings in the new code are COMMENTS only; grep-proven no call.)
+  CALL SITE (sync_package_pfblockerng, ~:11104): inserted IMMEDIATELY BEFORE the
+    "UPDATE pfSense ALIAS TABLES" section (the config_read_file + $exist_aliases prune +
+    config_set_path('aliases/alias', $new_aliases) write). At that point:
+      - every member alias has materialised AND the per-member suppress step (~:10884,
+        inside the member loop above) has run -> denydir/*_<fam>.txt is POST-SUPPRESSION
+        (the Phase-2 effective-set requirement -> Deny aggregate runs AFTER suppress). [✓ (c)]
+      - $new_aliases / $new_aliases_list are still being assembled, so the appended
+        aggregate aliases land in the config write at ~:11129 like any other pfB alias.
+
+WHY THE TABLE IS LIVE BEFORE THE POST-HOOK (the re-spec reason):
+  The helper LOADS each aggregate table itself (`pfctl -T replace -f`) at the call site
+  (~:11104) -- this is WELL BEFORE the ADR-12 post-update hook at pfb_run_hooks('post',..)
+  (the closing tail, now ~:11880). This is deliberate and robust: a Native aggregate has
+  NO firewall rule, so it is NOT in $pfb_active_aliases (built only from rule-referenced
+  aliases in the reconcile region) and would otherwise be -T kill'd at the reconcile prune
+  and only reloaded by filter_configure() -- which runs only when $pfb['filter_configure']
+  is TRUE (a rules-changed pass). On an aggregate-ONLY-changed pass filter_configure may be
+  FALSE, so relying on it alone would leave the table unloaded. Loading inline in the
+  helper guarantees the table is LIVE in EVERY pass before any post-hook fires, so a hook
+  consumer (e.g. an HAProxy graceful reload, ADR-12) always sees the FRESH aggregate, never
+  a stale or half-built one. The config registration ALSO makes it a real persistent pfSense
+  urltable alias (survives reboot/filter reloads; is_alias()/HAProxy-referenceable). The
+  post-hook firing point was NOT moved. [✓ (e), ordering <=reconcile region]
+
+CHANGED-NAME MERGE INTO PFB_CHANGED_IP_ALIASES:
+  The helper detects an actual (re)build via the aggout mtime (snapshot before the action,
+  compare after -- the action's own mtime-gate may skip, in which case mtime is unchanged
+  and nothing is merged). On a real rebuild it appends <aliasname> to BOTH
+  $pfb['changed_ip_aliases'] AND $pfb_alias_lists. $pfb['changed_ip_aliases'] is exactly
+  the var the post-hook emits as PFB_CHANGED_IP_ALIASES (merged + array_unique'd at the
+  tail, ~:11877/:11886). So a recipe can gate its reload on the aggregate having actually
+  changed. Additive: an unchanged (mtime-gated, skipped) or unselected type adds nothing. [✓ (e)]
+
+--------------------------------------------------------------------------------
+3. TEARDOWN — per-type, no orphans, strictly additive
+--------------------------------------------------------------------------------
+A NON-selected type (or pfBlockerNG disabled => $selected forced to []) hits the teardown
+branch of the SAME loop. It acts ONLY when that aggregate actually exists on disk
+(file_exists(aggout) || file_exists(consumer)):
+  - unlink_if_exists(aggout) + unlink_if_exists(consumer)
+  - `pfctl -t <name> -T kill` (only inside the existence guard -> a virgin box that never
+    selected the type runs ZERO subprocesses for it -> byte-identical to today). [✓ (b),(f)]
+Because a torn-down aggregate's name is NOT appended to $new_aliases_list, the caller's
+existing pfB orphan-prune (`!in_array(name, $new_aliases_list) -> unlink {aliasdir}/name.*`)
+ALSO clears its alias .txt, and the config write (exist_aliases !== new_aliases) drops it
+from aliases/alias -> filter_configure() removes the stale urltable. The .lst consumer
+lives under dbdir (not aliasdir), so the helper's explicit unlink is what removes it.
+Other selected aggregates are untouched (per-(type,family) isolation). [✓ (f)]
+
+--------------------------------------------------------------------------------
+4. ADDITIVE GUARANTEE (the contract)
+--------------------------------------------------------------------------------
+Nothing selected => $pfb['agg_types']==[] => every (type,family) is non-selected => the
+teardown branch's existence guard is false on a box that never used the feature => the loop
+touches NOTHING (no file, no pfctl, no alias append) => the pass is byte-identical to today.
+Member aliases, their tables and all existing rules are never read/written by the helper;
+the only additions are the selected aggregates' own urltable alias + .txt + .lst + table. [✓ (b),(g)]
+
+--------------------------------------------------------------------------------
+5. GATES (all green)
+--------------------------------------------------------------------------------
+  * python -m pytest                  -> 1124 passed (green/UNCHANGED -- no Python touched).
+  * php -l (both files)               -> No syntax errors. (5 pre-existing Deprecated
+                                         notices in UNRELATED functions -- pfb_parsed_fail/
+                                         pfb_download/pfb_dnsbl_parse/pfb_unlock -- present
+                                         before this phase; none in the new code.)
+  * PHPStan (--memory-limit=1G)       -> [OK] No errors (level 1 + baseline).
+  * PHPUnit (real .inc off-appliance) -> OK 153 tests / 279 assertions (the new helper +
+                                         setting read do not break the bootstrap load).
+  * shellcheck + sh -n pfblockerng.sh -> CLEAN (no shell change this phase).
+  * scripts/check_url_encoding.py     -> clean (every interpolated value rides
+                                         escapeshellarg; no HTTP-client URL query).
+  * grep: pfb_firewall_rule in the new helper -> COMMENTS ONLY, no call. NO RULE EVER.
+
+--------------------------------------------------------------------------------
+6. GO-AHEAD -> Phase 4 (effective-set + all-combinations + post-hook-order correctness)
+--------------------------------------------------------------------------------
+GO. Phase 4 pins membership correctness + the additive invariant across EVERY toggle
+combination (none / each single / pairs / all four), now that the wiring is live:
+  * Deny aggregate = the EFFECTIVE (post-suppression/whitelist) block set, with DNSBLIP
+    PRESENT and Deny-action GeoIP continents PRESENT (and ABSENT from Permit/Match unless
+    their action routes them there); Permit/Match/Native = exact dir unions. (Phase 2 proved
+    the helper's dir membership; Phase 4 pins it end-to-end through the pass.)
+  * Additive invariance: existing aliases/tables/rules byte-identical for every subset;
+    only the selected aggregates appear/disappear. Verify teardown leaves no orphan
+    (alias .txt under aliasdir, .lst under dbdir, pf table).
+  * Edge cases: empty dir -> never-empty .lst (# placeholder) + empty/absent table;
+    single member; v4-only / v6-only; a type with no members at all.
+  * Post-hook ordering: a rebuilt aggregate's table is LIVE (pfctl -T show) before the
+    post-hook, and its name is in PFB_CHANGED_IP_ALIASES; an unchanged type is mtime-gated
+    out (no rebuild, no changed-name). Refine pfb_aggregate_member_list / the helper if any
+    case is wrong.
+NOTE for Phase 4/5: the live-box table-load + HAProxy-referenceability + post-hook freshness
+are the §7 manual-smoke items (CI cannot load pf tables / run HAProxy).
+================================================================================
