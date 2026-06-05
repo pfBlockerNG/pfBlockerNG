@@ -1,0 +1,118 @@
+ADR-16 — Phase 1 Results
+PREP (behaviour-preserving): extract per-type Feeds rendering helpers
+
+STATUS: DONE. Pure refactor. Only src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+changed. No UX/save/test/parser change. Full all-types page renders identically.
+
+================================================================================
+HELPER SIGNATURES (both new, file-scope in pfblockerng_feeds.php)
+================================================================================
+
+1) pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfig)
+   - Location: just above url_compare() (~line 138).
+   - $section : the open Form_Section('Feed Settings','feedsettings',...) object.
+   - $type    : 'ipv4' | 'ipv6' | 'dnsbl'.
+   - $feeds_list, $pconfig : passed BY VALUE; helper only READS them (no mutation).
+   - Emits that type's StaticText label ("IPv4/IPv6/DNSBL Alias name(s):" + its
+     help line) followed by its feed_<lower(alias)> Form_Input set (->setWidth(3)),
+     byte-identical to the three inline loops it replaced.
+   - Page call sites (~605-607): called for 'ipv4', then 'ipv6', then 'dnsbl', in
+     that order, into the single shared $section. Phase 3 = call it for the active
+     type only (one line).
+
+2) pfb_feeds_render_predefined_type($ftype, $info)
+   - Location: just above the $pgtitle assignment, after url_compare() (~line 262).
+   - $ftype : 'ipv4' | 'ipv6' | 'dnsbl'.
+   - $info  : $feed_info[$ftype] (the per-type slice of convert_feeds_json()).
+   - Renders that type's <tr> rows for the "Pre-defined Alias/Group/Feeds" table,
+     including the alt-URL radio group, the hidden alt_<header> input, the per-row
+     icons/links, the blank-separator <tr> between categories, and the alternating
+     row background — verbatim move of the former per-type body of
+     `foreach ($feed_info as $ftype => $info):`. The empty-$info `continue` became a
+     `return` (one type = one call).
+   - Page call site (~734-736): still wrapped in `foreach ($feed_info as $ftype =>
+     $info) { pfb_feeds_render_predefined_type($ftype, $info); }`. Phase 3 = drop the
+     foreach and call once with the active $ftype.
+
+================================================================================
+HOISTED SHARED STATE (the table helper) — and Phase-3 interaction
+================================================================================
+The predefined-feeds table threads several variables ACROSS the three type
+iterations. They stay at PAGE (global) scope, initialised before the loop exactly
+as before, and the helper binds them with `global` (mirroring url_compare, which
+already does `global $ex_feeds, $alt_feeds, $icon`). Two `global` lines in the helper:
+
+    global $ex_feeds, $alt_feeds, $icon, $fconfig, $feed_alt_selected;
+    global $alt_selected, $feed_info_row, $aliasname_found;
+
+Cross-type accumulators (must persist between calls — they DO, via global):
+  - $alt_selected     : CSV of all feeds with Alternate URLs; built across all
+                        types, rtrim'd + emitted ONCE in the hidden
+                        <input name="alt_selected"> after the loop (unchanged).
+  - $feed_info_row     : running row counter; gates the blank separator <tr> before
+                        the first row of types 2 and 3.
+  - $aliasname_found   : accumulates matched aliasnames across types.
+  - $feed_alt_selected : default-radio selections; appended to inside the helper.
+url_compare-shared / read-only state (also bound via global):
+  - $ex_feeds, $alt_feeds : built by url_compare()'s `global`; helper reads them.
+  - $icon                 : the per-feed icon (set in helper, mirrors original).
+  - $fconfig              : read for the feed_alt_<header> saved-default check.
+
+Within-type locals ($p_type, $p_aliasname, $p_tr_style, $tr_style, $status,
+$feed_header, $feed_radio, $feed_alternate, $alt_feed, $counter, $i) stay local to
+the helper. NOTE: $p_type was ALREADY reset to '' at the top of each type iteration
+in the original (line was inside the type foreach), so making it helper-local is
+faithful — the first row of every type still prints the bold "<TYPE> Category"
+header and the leading blank separator. The accumulators above are the ONLY state
+that needed to remain page-global.
+
+PHASE-3 INTERACTION (single active type): because all the cross-type accumulators
+are page-global and `$alt_selected` is emitted by the page after the loop, rendering
+ONE type is simply: keep the page-scope init (`$alt_selected=''`, `$feed_info_row=0`,
+`$aliasname_found=[]`), and call pfb_feeds_render_predefined_type($active, $feed_info
+[$active]) once instead of the 3-iteration foreach. The hidden alt_selected CSV then
+naturally scopes to the rendered type (exactly what A3's type-scoped save relies on,
+per ADR §2 A3 / "the alt_selected CSV is naturally scoped to the rendered type").
+The aliasname-inputs helper is likewise a one-arg change (call only for $active).
+
+================================================================================
+ONE BEHAVIOUR-PRESERVING ADJUSTMENT (not a logic change)
+================================================================================
+The first table's `switch ($ftype)` assigns $type for ipv4/ipv6/dnsbl with no
+default. Originally this ran in PAGE scope, so $type "leaked" and PHPStan inferred it
+defined. Now it lives inside the helper, so PHPStan (correctly) flagged $type as
+possibly-undefined for an out-of-range $ftype (2 NEW errors). Fixed by defaulting the
+guarded var: `$type = '';` immediately before the switch (the documented safe pattern;
+the three real cases always assign, so no render change for any real $ftype).
+Verified this does NOT affect the SECOND table ("Unknown user defined Feeds"): that
+table sets its own $type via `foreach (... as $feedtype => $type)`, and its $p_type
+first-row branch (`$type != $p_type`) is taken in BOTH old (leaked $p_type='dnsbl',
+case-mismatched) and new ($p_type undefined) — identical output; $p_type is then
+reassigned each row. No baseline edit; baseline file untouched.
+
+================================================================================
+VERIFICATION GATES (all green)
+================================================================================
+- php -l pfblockerng_feeds.php : "No syntax errors detected." (the 4 url_compare
+  required-after-optional DEPRECATIONS are PRE-EXISTING on devel — that function was
+  only relocated, not changed; confirmed by stashing the diff: same 4 on baseline).
+- vendor/bin/phpstan analyse --memory-limit=1G : [OK] No errors (no NEW vs baseline;
+  baseline has 4 pre-existing feeds.php entries, all still valid, none added).
+- python -m pytest -q : 1115 passed (unchanged; smoke tree --ignore'd by default).
+- ruff check . / ruff format --check . : clean / 69 files already formatted
+  (no Python touched this phase).
+
+Tier-A render marker for the page — "Pre-defined Alias/Group/Feeds" (the panel
+heading, test_render_smoke.py PAGE_TABLE "feeds" entry) — is untouched and intact.
+
+Scope: `git diff --stat` = 1 file (pfblockerng_feeds.php), +358/-343, net helper
+extraction. No other src/ file, no parser, no test change.
+
+================================================================================
+GO-AHEAD FOR PHASE 2
+================================================================================
+Cleared. Phase 1 leaves the all-types page rendering identically with per-type
+rendering now in two type-keyed helpers. Phase 2 (test-first) pins the CURRENT
+per-type save semantics (DNSBL + IPv6 rename round-trip on the single page) — no
+src/ change required there; the save handler is unchanged by this phase. Phase 3 can
+then make the body type-filtering a one-argument change against these helpers.
