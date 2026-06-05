@@ -351,14 +351,27 @@ def build_repo(in_dir: Path, out_dir: Path) -> list[str]:
     # Collision guard before laying anything out (fail-closed, never a silent drop).
     _check_collisions(entries)
 
-    # Bucket by ABI.
-    by_abi: dict[str, list[tuple[Path, dict]]] = {}
+    # Bucket by ABI, deduping by (name, version). The same package from multiple
+    # sources (e.g. the branch build + a release artifact) is interchangeable —
+    # `_check_collisions` already rejected a same-name+version+ABI/different-flavor
+    # clash — so keep ONE. The published .pkg is named CANONICALLY
+    # (`<name>-<version>.pkg`), never the staging input filename, so the catalog path
+    # is clean + stable regardless of how the publish job staged the inputs.
+    by_abi: dict[str, dict[tuple[str, str], tuple[Path, dict]]] = {}
     for path, manifest in entries:
         abi = manifest["abi"]
         # Validate before it becomes a filesystem path segment (rmtree target below).
         if not isinstance(abi, str) or not _ABI_RE.fullmatch(abi) or ".." in abi:
             raise BuildRepoError(f"{path.name}: unsafe or invalid ABI segment {abi!r}")
-        by_abi.setdefault(abi, []).append((path, manifest))
+        nv = (manifest["name"], manifest["version"])
+        bucket_nv = by_abi.setdefault(abi, {})
+        if nv in bucket_nv:
+            sys.stderr.write(
+                f"==> dedup: {path.name} duplicates {bucket_nv[nv][0].name} "
+                f"({nv[0]}-{nv[1]}, {abi}) — keeping the first\n"
+            )
+            continue
+        bucket_nv[nv] = (path, manifest)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for abi in sorted(by_abi):
@@ -369,14 +382,15 @@ def build_repo(in_dir: Path, out_dir: Path) -> list[str]:
         bucket.mkdir(parents=True)
 
         catalog_objs: list[dict] = []
-        # Deterministic order: by .pkg filename.
-        for path, manifest in sorted(by_abi[abi], key=lambda e: e[0].name):
+        # Deterministic order: by (name, version).
+        for (name, version), (path, manifest) in sorted(by_abi[abi].items()):
+            canonical = f"{name}-{version}.pkg"
             pkg_bytes = path.read_bytes()
-            dest = bucket / path.name
+            dest = bucket / canonical
             dest.write_bytes(pkg_bytes)
             obj = catalog_object(
                 manifest,
-                pkg_name=path.name,
+                pkg_name=canonical,
                 sum_=pkg_checksum(pkg_bytes),
                 pkgsize=len(pkg_bytes),
             )

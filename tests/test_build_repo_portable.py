@@ -321,12 +321,41 @@ def test_per_abi_bucketing(tmp_path: Path) -> None:
     out = tmp_path / "out"
     abis = brp.build_repo(in_dir, out)
     assert abis == ["FreeBSD:15:amd64", "FreeBSD:16:amd64"]
-    # Each bucket's packagesite names exactly its own package; its .pkg lands there.
-    for abi, pkgname, fname in (("FreeBSD:15:amd64", "a", "a15.pkg"), ("FreeBSD:16:amd64", "b", "b16.pkg")):
+    # Each bucket's packagesite names exactly its own package; its .pkg lands there
+    # under the CANONICAL `<name>-<version>.pkg` (NOT the staging input filename
+    # `a15.pkg`/`b16.pkg`).
+    for abi, pkgname, fname in (("FreeBSD:15:amd64", "a", "a-1.0_1.pkg"), ("FreeBSD:16:amd64", "b", "b-1.0_1.pkg")):
         raw = _read_member(out / abi / "packagesite.pkg", "packagesite.yaml").decode()
         objs = [json.loads(ln) for ln in raw.splitlines() if ln]
         assert [o["name"] for o in objs] == [pkgname]
+        assert [o["path"] for o in objs] == [fname]
         assert (out / abi / fname).is_file()
+
+
+def test_duplicate_sources_dedup_to_one_canonical(tmp_path: Path) -> None:
+    """The SAME package staged from two sources (the publish job's `built-<source>-`
+    prefixed copies of the branch build + a release artifact) publishes exactly ONE
+    canonical `.pkg` + ONE catalog entry — not two prefixed duplicates (the bug the
+    first live deploy surfaced)."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    # Same name+version+ABI+flavor; different staging input filenames.
+    make_pkg(in_dir / "built-incoming_branch-pfb.pkg", name="pfb", version="3.2.16")
+    make_pkg(in_dir / "built-incoming_release-freebsd-pfb.pkg", name="pfb", version="3.2.16")
+    out = tmp_path / "out"
+    brp.build_repo(in_dir, out)
+    bucket = out / "FreeBSD:15:amd64"
+    # Exactly one package .pkg on disk, canonically named (no `built-incoming_*`
+    # prefix); the catalog files (packagesite.pkg/data.pkg) also end in `.pkg`.
+    catalog_files = {"packagesite.pkg", "data.pkg", "meta.pkg"}
+    pkgs = sorted(p.name for p in bucket.glob("*.pkg") if p.name not in catalog_files)
+    assert pkgs == ["pfb-3.2.16.pkg"]
+    # The catalog lists it once, at the canonical path/repopath.
+    raw = _read_member(bucket / "packagesite.pkg", "packagesite.yaml").decode()
+    objs = [json.loads(ln) for ln in raw.splitlines() if ln]
+    assert len(objs) == 1
+    assert objs[0]["path"] == "pfb-3.2.16.pkg"
+    assert objs[0]["repopath"] == "pfb-3.2.16.pkg"
 
 
 # --------------------------------------------------------------------------- #
@@ -356,11 +385,11 @@ def test_rebuild_wipes_removed_pkg(tmp_path: Path) -> None:
     make_pkg(in_dir / "b-1.0.pkg", name="b")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    assert (out / "FreeBSD:15:amd64" / "b-1.0.pkg").is_file()
+    assert (out / "FreeBSD:15:amd64" / "b-1.0_1.pkg").is_file()  # canonical <name>-<version>
     # Remove one input and rebuild.
     (in_dir / "b-1.0.pkg").unlink()
     brp.build_repo(in_dir, out)
-    assert not (out / "FreeBSD:15:amd64" / "b-1.0.pkg").exists(), "stale .pkg lingered after rebuild"
+    assert not (out / "FreeBSD:15:amd64" / "b-1.0_1.pkg").exists(), "stale .pkg lingered after rebuild"
     raw = _read_member(out / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
     assert [json.loads(ln)["name"] for ln in raw.splitlines() if ln] == ["a"]
 

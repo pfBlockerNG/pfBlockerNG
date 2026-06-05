@@ -227,7 +227,12 @@ for f in "$@"; do
         *" $abi "*) : ;;                 # already wiped this run
         *) rm -rf "$dir"; mkdir -p "$dir"; built="$built $abi" ;;
     esac
-    cp "$f" "${dir}/"
+    # Copy under the CANONICAL `<name>-<version>.pkg` name (never the staging input
+    # filename), so the catalog path is clean and an identical name+version from
+    # another source (branch + release artifact) overwrites to a single file (dedup;
+    # a different-flavor clash was already rejected above).
+    nv="$(pkg_nv "$f")"
+    cp "$f" "${dir}/${nv}.pkg"
 done
 
 for abi in $built; do
