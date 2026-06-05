@@ -1,17 +1,18 @@
 #shellcheck shell=sh
-# ip_pre_AWS_*.sh — per-region AWS prefix pre-scripts.
+# ip_pre_AWS_*.sh — per-region AWS prefix pre-scripts (list_scripts/).
 #
-# These 25 scripts are near-identical and hand-maintained, differing only by a jq
-# `startswith()` region filter (CLAUDE.md), and they are excluded from ShellCheck
-# / `sh -n` in CI. That makes them prime candidates for silent per-file drift —
-# exactly what this suite guards. Each script is run over the SAME fixture and the
-# exact surviving prefix set is asserted.
+# The 25 region scripts are now thin wrappers under list_scripts/ that each pass a
+# jq `startswith()` region filter to the shared list_scripts/aws_region_prefixes.sh
+# (the parse/aggregate logic). This suite pins, per region, that the wrapper +
+# shared script still select exactly the right prefix set: each is run over the
+# SAME fixture and the exact surviving set is asserted.
 #
 # Mechanics: aws_filter (spec_helper) copies fixtures/aws-ip-ranges.json, runs the
-# script against the copy (which it overwrites in place), and emits the result
-# sorted + space-joined. The real FreeBSD `iprange` aggregator is replaced by a
-# `sort -u` shim (tests/shell/bin/iprange); the fixture uses one non-adjacent /24
-# per region so there is nothing to coalesce and the shim is faithful.
+# wrapper (cwd = list_scripts/, so $0/dirname resolves the shared script) against
+# the copy (which it overwrites in place), and emits the result sorted +
+# space-joined. The real FreeBSD `iprange` aggregator is replaced by a `sort -u`
+# shim (tests/shell/bin/iprange); the fixture uses one non-adjacent /24 per region
+# so there is nothing to coalesce and the shim is faithful.
 #
 # NOTE on the us-/us-gov- overlap: ip_pre_AWS_US.sh filters `startswith("us-")`,
 # which by design also matches the `us-gov-*` regions — so US includes the two
@@ -58,5 +59,35 @@ Describe 'ip_pre_AWS_*.sh region filters'
   Example "$1 ($2) selects only its region prefixes"
     When call aws_filter "$1" "$2"
     The output should equal "$3"
+  End
+End
+
+# Failure handling (the shared aws_region_prefixes.sh). The pre-refactor scripts
+# piped `jq | iprange` with no pipefail and exited 0 even on failure: a malformed
+# download could be silently truncated into the alias, and "failed" looked like
+# success. The shared script parses to a temp, checks jq's status, and only then
+# publishes — failing loudly and leaving the input untouched.
+Describe 'aws_region_prefixes.sh failure handling'
+  awswork=""
+  setup()   { awswork="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awsfail.XXXXXX")"; }
+  cleanup() { rm -f "$awswork"; }
+  Before 'setup'
+  After 'cleanup'
+
+  It 'fails (non-zero) and leaves the input untouched on malformed JSON'
+    printf 'not-json{' > "$awswork"
+    When run sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "$awswork" _v4
+    The status should be failure
+    The output should include "jq failed"
+    The contents of file "$awswork" should equal "not-json{"
+  End
+
+  It 'fails (non-zero) and leaves the input untouched when no region prefixes match'
+    # Valid JSON, but the af- filter matches nothing -> empty result.
+    printf '{"prefixes":[{"ip_prefix":"10.0.0.0/24","region":"us-east-1"}],"ipv6_prefixes":[]}' > "$awswork"
+    When run sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "$awswork" _v4
+    The status should be failure
+    The output should include "no prefixes matched"
+    The contents of file "$awswork" should include '"region":"us-east-1"'
   End
 End

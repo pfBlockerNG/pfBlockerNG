@@ -10208,10 +10208,15 @@ function sync_package_pfblockerng($cron='') {
 						$srcint = $list['srcint'] ?: FALSE;
 
 						// IP v4/6 Advanced Tunable - (Pre/Post Script processing)
+						// List scripts live under list_scripts/; fall back to the
+						// legacy package root so a not-yet-migrated custom script
+						// still runs during the upgrade transition.
 						$pfb_script_pre = FALSE;
 						if (isset($list['script_pre']) && !empty($list['script_pre'])) {
 							$script_pre = basename($list['script_pre']);
-							if (file_exists("/usr/local/pkg/pfblockerng/{$script_pre}")) {
+							if (file_exists("/usr/local/pkg/pfblockerng/list_scripts/{$script_pre}")) {
+								$pfb_script_pre = "/usr/local/pkg/pfblockerng/list_scripts/{$script_pre}";
+							} elseif (file_exists("/usr/local/pkg/pfblockerng/{$script_pre}")) {
 								$pfb_script_pre = "/usr/local/pkg/pfblockerng/{$script_pre}";
 							}
 						}
@@ -10219,7 +10224,9 @@ function sync_package_pfblockerng($cron='') {
 						$pfb_script_post = FALSE;
 						if (isset($list['script_post']) && !empty($list['script_post'])) {
 							$script_post = basename($list['script_post']);
-							if (file_exists("/usr/local/pkg/pfblockerng/{$script_post}")) {
+							if (file_exists("/usr/local/pkg/pfblockerng/list_scripts/{$script_post}")) {
+								$pfb_script_post = "/usr/local/pkg/pfblockerng/list_scripts/{$script_post}";
+							} elseif (file_exists("/usr/local/pkg/pfblockerng/{$script_post}")) {
 								$pfb_script_post = "/usr/local/pkg/pfblockerng/{$script_post}";
 							}
 						}
