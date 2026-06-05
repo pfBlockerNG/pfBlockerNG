@@ -115,16 +115,20 @@ $options_dnsbl_allow_int	= $options_dnsbl_interface;
 
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will overide the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
-			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
+			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
+			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
 			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
 
 $options_global_log	= [	''		=> 'No Global mode',
-				'disabled_log'	=> 'Null Block (logging)',
 				'enabled'	=> 'DNSBL WebServer/VIP',
-				'disabled'	=> 'Null Block (no logging)'];
+				'disabled_log'	=> 'Null Block (logging)',
+				'disabled'	=> 'Null Block (no logging)',
+				'nxdomain_log'	=> 'NXDOMAIN (logging)',
+				'nxdomain'	=> 'NXDOMAIN (no logging)'];
 
 $options_dnsbl_webpage = array();
 $indexdir = '/usr/local/www/pfblockerng/www';

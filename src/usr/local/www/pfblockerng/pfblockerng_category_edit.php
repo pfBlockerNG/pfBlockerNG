@@ -429,8 +429,10 @@ $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
 $options_order			= [ 'default' => 'Default', 'primary' => 'Primary' ];
 
 $options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
+				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',
-				'disabled_log'	=> 'Null Blocking (logging)' ];
+				'nxdomain_log'	=> 'NXDOMAIN (logging)',
+				'nxdomain'	=> 'NXDOMAIN (no logging)' ];
 
 $options_suppression_cidr	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 17, 1), range(1, 17, 1));
 
@@ -1516,8 +1518,10 @@ if ($gtype == 'dnsbl') {
 
 	$log_text = 'Default: <strong>DNSBL WebServer/VIP</strong><br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
+			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
-			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br /><br />'
+			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br /><br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
 			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
 			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';

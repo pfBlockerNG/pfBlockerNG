@@ -193,10 +193,16 @@ if (!$alert_summary) {
 							$d_log = $g_log;
 						}
 
+						// Mirror the pfblockerng.inc logging_type mapping (issue #31 adds
+						// NXDOMAIN '3'/'4'); anything else falls through to null-no-log '2'.
 						if ($d_log == 'disabled_log') {
 							$d_type = '0';
 						} elseif ($d_log == 'enabled') {
 							$d_type = '1';
+						} elseif ($d_log == 'nxdomain_log') {
+							$d_type = '3';
+						} elseif ($d_log == 'nxdomain') {
+							$d_type = '4';
 						} else {
 							$d_type = '2';
 						}
