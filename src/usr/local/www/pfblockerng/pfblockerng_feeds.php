@@ -131,6 +131,41 @@ if ($_POST) {
 	}
 }
 
+// Render the Feed Settings alias-name override inputs for a single $type
+// ('ipv4'|'ipv6'|'dnsbl'). Emits that type's StaticText label + its 'feed_<alias>'
+// Form_Input set into $section, identical to the inline loops it replaces. The page
+// calls it for ipv4, ipv6, dnsbl in turn (Phase 3 calls it for the active type only).
+function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfig) {
+
+	$labels = array(
+		'ipv4'	=> array(
+			'IPv4 Alias name(s):',
+			'To change the default IPv4 Alias name(s), enter new Alias name(s) as desired.'),
+		'ipv6'	=> array(
+			'IPv6 Alias name(s):',
+			'To change the default IPv6 Alias name(s), enter new Alias name(s) as desired.'),
+		'dnsbl'	=> array(
+			'DNSBL Alias name(s):',
+			'To change the default DNSBL Group name(s), enter new Group name(s) as desired.'),
+	);
+
+	if (!isset($labels[$type])) {
+		return;
+	}
+
+	$section->addInput(new Form_StaticText($labels[$type][0], $labels[$type][1]));
+
+	foreach ($feeds_list[$type] as $aliasname) {
+		$l_aliasname = strtolower($aliasname);
+		$section->addInput(new Form_Input(
+			'feed_' . $l_aliasname,
+			$aliasname,
+			'text',
+			$pconfig['feed_' . $l_aliasname]
+		))->setWidth(3);
+	}
+}
+
 function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url, $feed_url, $row_state,
 	    $feed_header, $alternate=FALSE, $alt_header='', $alt_info='', $alt_register='', $a_key) {
 
@@ -216,6 +251,323 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 	}
 }
 
+// Render the predefined-feeds table rows for a single $type ('ipv4'|'ipv6'|'dnsbl'),
+// given $info = $feed_info[$type]. Emits that type's <tr> rows (incl. the alt-URL radio
+// group + the hidden alt_<header> input + the per-row icons), identical to the inline
+// per-type block it replaces. The cross-type accumulators ($alt_selected CSV,
+// $feed_info_row separator counter, $aliasname_found) and the state shared with
+// url_compare ($ex_feeds, $alt_feeds, $icon) live at page (global) scope and are bound
+// via `global` so calling this once per type reproduces the original interleaved render.
+// The page loops it for ipv4+ipv6+dnsbl today; Phase 3 calls it for the active type only.
+function pfb_feeds_render_predefined_type($ftype, $info) {
+
+	global $ex_feeds, $alt_feeds, $icon, $fconfig, $feed_alt_selected;
+	global $alt_selected, $feed_info_row, $aliasname_found;
+
+	if (empty($info)) {
+		print ("<td class=\"bg-danger\"><br /><strong>No feeds definitions found!</strong><br /><br /></td>");
+		return;
+	}
+
+	$p_type = '';
+	foreach ($info as $aliasname => $data):
+		$p_aliasname = '';
+		if (!isset($data['feeds'])) {
+			continue;
+		}
+
+		foreach ($data['feeds'] as $feed):
+			$status = $icon = '';
+
+			if (!empty($ex_feeds[$ftype])) {
+				foreach ($ex_feeds[$ftype] as $key => $row) {
+
+					if (empty($row)) {
+						continue;
+					}
+
+					if (isset($row['aliasname']) && $aliasname == $row['aliasname'] && !isset($aliasname_found[$aliasname])) {
+						$aliasname_found[$aliasname] = $aliasname;
+
+						if ($row['action'] == 'Disabled') {
+							$status = "&emsp;"
+								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+								. "&rowid={$row['rowid']}\"<span class=\"text-danger\""
+								. "title=\"Alias/Group exists but is currently Disabled\">"
+								. "<i class=\"fa-solid fa-check\"></i></span>"
+								. "</a>";
+						} else {
+							$status = "&emsp;"
+								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+								. "&rowid={$row['rowid']}\""
+								. "title=\"Alias/Group exists\">"
+								. "<i class=\"fa-solid fa-check\"></i>"
+								. "</a>";
+						}
+					}
+
+					// Determine all Aliases that reference the Feed URL
+					url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
+							$row['state'], $feed['header'], FALSE, '', '', '', 0);
+
+					// Determine all Aliases that reference the 'Alternate' Feed URLs
+					if (isset($feed['alternate'])) {
+						foreach ($feed['alternate'] as $a_key => $alt) {
+							url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'],
+								$alt['url'], $row['state'], $feed['header'], TRUE, $alt['header'],
+								isset($alt['info']) ? $alt['info'] : '', isset($alt['register']) ? 'register' : '', $a_key);
+						}
+					}
+				}
+
+				if (!isset($aliasname_found[$aliasname])) {
+					$aliasname_found[$aliasname] = $aliasname;
+					$status = "&emsp;"
+						. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+						. "&act=addgroup&atype={$aliasname}\""
+						. "title=\"Add Alias/Group: {$aliasname}\">"
+						. "<i class=\"fa-solid fa-plus-circle\"></i>"
+						. "</a>";
+				}
+			}
+
+			if (isset($feed['feed'])):
+
+				// Print table/row of Feeds and consecutive rows for all 'Alternate' URLs available.
+				$counter = 0;
+				if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
+					$counter = count($alt_feeds[$ftype][$aliasname][$feed['header']]);
+				}
+
+				for ($i=0; $i <= $counter; $i++):
+
+					// Print blank seperator line between Categories (skip first row)
+					if ($feed_info_row > 0 && $ftype != $p_type) {
+						print ("<tr><td><br /></td><td></td><td></td><td></td><td></td><td></td></tr>");
+					}
+
+					// Print applicable alternating background color
+					if ($data['action'] == 'permit') {
+						if ($aliasname == $p_aliasname) {
+							$tr_style = 'background-color: #F5FBF6;';		// Light green 1
+							if ($tr_style == $p_tr_style) {
+								$tr_style = 'background-color: #EEF7EE;';	// Light green 2
+							}
+						} else {
+							// Dark green (New Alias/Group)
+							$tr_style = 'background-color: #A0B8A0;';	// #C8E6C9;';
+						}
+					}
+					else {
+						$tr_style = '';
+						if ($aliasname != $p_aliasname) {
+							// Grey - (New Alias/Group)
+							$tr_style = 'background-color: #B8B8B8;';	//#D8D8D8;';
+						}
+					}
+				?>
+
+		<tr style="<?=$tr_style;?>">
+			<td>
+					<?php
+						// $ftype is always one of ipv4/ipv6/dnsbl here; the default keeps
+						// $type defined for the static analyser (no behaviour change).
+						$type = '';
+						switch ($ftype) {
+							case 'ipv4':
+								$type = 'IPv4';
+								break;
+							case 'ipv6':
+								$type = 'IPv6';
+								break;
+							case 'dnsbl':
+								$type = 'DNSBL';
+								break;
+						}
+						if ($ftype != $p_type) {
+							print ("<strong>{$type} Category</strong>");
+						} else {
+							print ("<p style=\"font-size: 75%\">{$type}<p>");
+						}
+					?>
+			</td>
+
+			<td>
+					<?php
+						if ($aliasname != $p_aliasname) {
+							// Add Line break (bullet)
+							$data['info'] = str_replace('-LB-', "\n&emsp;&#9679;&emsp;", $data['info']);
+							print ("<i title=\"{$data['info']}\" class=\"fa-solid fa-info-circle\"></i>{$status}");
+						}
+
+						if ($i == 0) {
+
+							// If alternative URLs are available, print radio checkbox options. Default to first radio.
+							if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
+
+								// Add first radio option as default if not previously saved
+								if (!isset($fconfig['feed_alt_' . strtolower($feed['header']) ])) {
+									$feed_alt_selected[] = $feed['header'];
+								}
+
+								// Collect all 'Alternative' Feed Header names. (POST/save)
+								$alt_selected .= $feed['header'] . ',';
+
+								if (in_array($feed['header'], $feed_alt_selected) && empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+								elseif (empty($icon)) {
+									$pfb_found = FALSE;
+									foreach ($alt_feeds[$ftype][$aliasname][$feed['header']] as $a_header) {
+										if (!empty($a_header['icon']) ||
+										    in_array($a_header['header'], $feed_alt_selected)) {
+											$pfb_found = TRUE;
+											break;
+										}
+									}
+
+									if (!$pfb_found) {
+										$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+									}
+								}
+
+								$feed_alternate	= '';
+								$feed_header	= $feed['header'];
+								$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
+										. " value=\"alt_{$feed['header']}\" checked=\"checked\" />&emsp;";
+
+								print ("<input type=\"hidden\" name=\"alt_" . "{$feed['header']}" . "\" id=\"alt_"
+									. "{$feed['header']}" . "\" value=\"\" />");
+							}
+							else {
+								if (empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+
+								$feed_alternate	= '';
+								$feed_header	= $feed['header'];
+								$feed_radio	= '';
+							}
+						}
+
+						// Extract 'Alternate Feed' details from alt_feed array.
+						else {
+							$status = '';
+							$alt_feed	= $alt_feeds[$ftype][$aliasname][$feed['header']][$i -1];
+							$icon 		= $alt_feed['icon'];
+
+							if (in_array($alt_feed['header'], $feed_alt_selected)) {
+								$checked = 'checked=\"checked\"';
+								if (empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$alt_feed['header']}\""
+										. "title=\"Add feed: [ {$alt_feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+							}
+							else {
+								$checked = '';
+							}
+
+							$feed['url']	= $alt_feed['url'];
+							$feed_alternate = "&emsp;<i class=\"fa-solid fa-angle-right\" style=\"cursor: default\""
+									. " title=\"Alternate Feed option\"></i>&emsp;";
+							$feed_header	= $alt_feed['header'];
+							$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
+									. " value=\"alt_{$alt_feed['header']}\" {$checked} />&emsp;";
+						}
+					?>
+			</td>
+
+			<td>
+					<?php
+						if ($aliasname != $p_aliasname) {
+							print ("{$aliasname}");
+						} else {
+							print ("<p style=\"font-size: 75%\">{$aliasname}<p>");
+						}
+					?>
+			</td>
+
+			<td>
+				<?=$feed_alternate;?>
+				<a target="_blank" href="<?=$feed['website'];?>"><?=$feed['feed'];?></a>
+					<?php
+						// Add any Alternate Feed icons
+						if (!empty($feed_alternate)) {
+							if (isset($alt_feed['status'])) {
+								$feed['status']		= $alt_feed['status'];
+							}
+							if (isset($alt_feed['info'])) {
+								$feed['info']		= $alt_feed['info'];
+							}
+							if (isset($alt_feed['register'])) {
+								$feed['register']	= $alt_feed['register'];
+							}
+						}
+
+						// Print info about Feed if available
+						if (isset($feed['info']) && !empty($feed['info'])) {
+							print ("&emsp;<i class=\"fa-solid fa-info-circle\" title=\"{$feed['info']}\"></i>");
+						}
+
+						// Print Feed offline status
+						if (isset($feed['status'])) {
+							print ("&emsp;<i class=\"fa-solid fa-bug text-danger\" title=\"Feed temporarily unavailable\"></i>");
+						}
+
+						// Add link to Donate/support link
+						if (isset($feed['donate'])) {
+							print ("&emsp;<a target=\"_blank\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
+							<i class=\"fa-solid fa-cart-plus\"></i></a>");
+						}
+
+						// Add link to Feed registration
+						if ($feed['register']) {
+							print ("&emsp;<a target=\"_blank\" href=\"{$feed['register']}\" title=\"Click to register\">
+								<i class=\"fa-solid fa-right-to-bracket\"></i></a>");
+						}
+					?>
+			</td>
+
+			<td>
+				<?=$feed_radio;?>
+				<a target="_blank" href="<?=$feed['url'];?>"
+					onclick="return confirm('Download feed [ <?=$feed['url'];?> ] ?')"><?=$feed_header;?>
+				</a>
+			</td>
+
+			<td><?=$icon;?></td>
+		</tr>
+					<?php
+						// Collect previous values
+						$p_type		= $ftype;
+						$p_aliasname	= $aliasname;
+						$p_tr_style	= $tr_style;
+						$feed_info_row++;
+					endfor;
+				endif;
+			endforeach;
+		endforeach;
+}
+
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_feeds.php', '@self');
 include_once('head.inc');
@@ -250,47 +602,9 @@ $section->addInput(new Form_StaticText(
 	. ' combine multiple Alias/Groups together by using a duplicate Alias/Group name.'
 ));
 
-$section->addInput(new Form_StaticText(
-	'IPv4 Alias name(s):',
-	'To change the default IPv4 Alias name(s), enter new Alias name(s) as desired.'));
-
-foreach ($feeds_list['ipv4'] as $aliasname) {
-	$l_aliasname = strtolower($aliasname);
-	$section->addInput(new Form_Input(
-		'feed_' . $l_aliasname,
-		$aliasname,
-		'text',
-		$pconfig['feed_' . $l_aliasname]
-	))->setWidth(3);
-}
-
-$section->addInput(new Form_StaticText(
-	'IPv6 Alias name(s):',
-	'To change the default IPv6 Alias name(s), enter new Alias name(s) as desired.'));
-
-foreach ($feeds_list['ipv6'] as $aliasname) {
-	$l_aliasname = strtolower($aliasname);
-	$section->addInput(new Form_Input(
-		'feed_' . $l_aliasname,
-		$aliasname,
-		'text',
-		$pconfig['feed_' . $l_aliasname]
-	))->setWidth(3);
-}
-
-$section->addInput(new Form_StaticText(
-	'DNSBL Alias name(s):',
-	'To change the default DNSBL Group name(s), enter new Group name(s) as desired.'));
-
-foreach ($feeds_list['dnsbl'] as $aliasname) {
-	$l_aliasname = strtolower($aliasname);
-	$section->addInput(new Form_Input(
-		'feed_' . $l_aliasname,
-		$aliasname,
-		'text',
-		$pconfig['feed_' . $l_aliasname]
-	))->setWidth(3);
-}
+pfb_feeds_render_aliasname_inputs($section, 'ipv4', $feeds_list, $pconfig);
+pfb_feeds_render_aliasname_inputs($section, 'ipv6', $feeds_list, $pconfig);
+pfb_feeds_render_aliasname_inputs($section, 'dnsbl', $feeds_list, $pconfig);
 
 $btn_save = new Form_Button(
 	'save',
@@ -417,308 +731,9 @@ print ($section);
 			$feed_info_row = 0;
 			$aliasname_found = array();
 
-			foreach ($feed_info as $ftype => $info):
-
-				if (empty($info)) {
-					print ("<td class=\"bg-danger\"><br /><strong>No feeds definitions found!</strong><br /><br /></td>");
-					continue;
-				}
-
-				$p_type = '';
-				foreach ($info as $aliasname => $data):
-					$p_aliasname = '';
-					if (!isset($data['feeds'])) {
-						continue;
-					}
-
-					foreach ($data['feeds'] as $feed):
-						$status = $icon = '';
-
-						if (!empty($ex_feeds[$ftype])) {
-							foreach ($ex_feeds[$ftype] as $key => $row) {
-
-								if (empty($row)) {
-									continue;
-								}
-
-								if (isset($row['aliasname']) && $aliasname == $row['aliasname'] && !isset($aliasname_found[$aliasname])) {
-									$aliasname_found[$aliasname] = $aliasname;
-
-									if ($row['action'] == 'Disabled') {
-										$status = "&emsp;"
-											. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-											. "&rowid={$row['rowid']}\"<span class=\"text-danger\""
-											. "title=\"Alias/Group exists but is currently Disabled\">"
-											. "<i class=\"fa-solid fa-check\"></i></span>"
-											. "</a>";
-									} else {
-										$status = "&emsp;"
-											. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}" 
-											. "&rowid={$row['rowid']}\""
-											. "title=\"Alias/Group exists\">"
-											. "<i class=\"fa-solid fa-check\"></i>"
-											. "</a>";
-									}
-								}
-
-								// Determine all Aliases that reference the Feed URL
-								url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
-										$row['state'], $feed['header'], FALSE, '', '', '', 0);
-
-								// Determine all Aliases that reference the 'Alternate' Feed URLs
-								if (isset($feed['alternate'])) {
-									foreach ($feed['alternate'] as $a_key => $alt) {
-										url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'],
-											$alt['url'], $row['state'], $feed['header'], TRUE, $alt['header'],
-											isset($alt['info']) ? $alt['info'] : '', isset($alt['register']) ? 'register' : '', $a_key); 
-									}
-								}
-							}
-
-							if (!isset($aliasname_found[$aliasname])) {
-								$aliasname_found[$aliasname] = $aliasname;
-								$status = "&emsp;"
-									. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-									. "&act=addgroup&atype={$aliasname}\""
-									. "title=\"Add Alias/Group: {$aliasname}\">"
-									. "<i class=\"fa-solid fa-plus-circle\"></i>"
-									. "</a>";
-							}
-						}
-
-						if (isset($feed['feed'])):
-
-							// Print table/row of Feeds and consecutive rows for all 'Alternate' URLs available.
-							$counter = 0;
-							if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
-								$counter = count($alt_feeds[$ftype][$aliasname][$feed['header']]);
-							}
-
-							for ($i=0; $i <= $counter; $i++):
-
-								// Print blank seperator line between Categories (skip first row)
-								if ($feed_info_row > 0 && $ftype != $p_type) {
-									print ("<tr><td><br /></td><td></td><td></td><td></td><td></td><td></td></tr>");
-								}
-
-								// Print applicable alternating background color
-								if ($data['action'] == 'permit') {
-									if ($aliasname == $p_aliasname) {
-										$tr_style = 'background-color: #F5FBF6;';		// Light green 1
-										if ($tr_style == $p_tr_style) {
-											$tr_style = 'background-color: #EEF7EE;';	// Light green 2
-										}
-									} else {
-										// Dark green (New Alias/Group)
-										$tr_style = 'background-color: #A0B8A0;';	// #C8E6C9;';
-									}
-								}
-								else {
-									$tr_style = '';
-									if ($aliasname != $p_aliasname) {
-										// Grey - (New Alias/Group)
-										$tr_style = 'background-color: #B8B8B8;';	//#D8D8D8;';
-									}
-								}
-							?>
-
-				<tr style="<?=$tr_style;?>">
-					<td>
-							<?php
-								switch ($ftype) {
-									case 'ipv4':
-										$type = 'IPv4';
-										break;
-									case 'ipv6':
-										$type = 'IPv6';
-										break;
-									case 'dnsbl':
-										$type = 'DNSBL';
-										break;
-								}
-								if ($ftype != $p_type) {
-									print ("<strong>{$type} Category</strong>");
-								} else {
-									print ("<p style=\"font-size: 75%\">{$type}<p>");
-								}
-							?>
-					</td>
-
-					<td>
-							<?php
-								if ($aliasname != $p_aliasname) {
-									// Add Line break (bullet)
-									$data['info'] = str_replace('-LB-', "\n&emsp;&#9679;&emsp;", $data['info']);
-									print ("<i title=\"{$data['info']}\" class=\"fa-solid fa-info-circle\"></i>{$status}");
-								}
-
-								if ($i == 0) {
-
-									// If alternative URLs are available, print radio checkbox options. Default to first radio.
-									if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
-
-										// Add first radio option as default if not previously saved 
-										if (!isset($fconfig['feed_alt_' . strtolower($feed['header']) ])) {
-											$feed_alt_selected[] = $feed['header'];
-										}
-
-										// Collect all 'Alternative' Feed Header names. (POST/save)
-										$alt_selected .= $feed['header'] . ',';
-
-										if (in_array($feed['header'], $feed_alt_selected) && empty($icon)) {
-											$icon = "&emsp;"
-												. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-												. "&act=add&atype={$feed['header']}\""
-												. "title=\"Add feed: [ {$feed['header']} ]\">"
-												. "<i class=\"fa-solid fa-plus-circle\"></i>"
-												. "</a>";
-										}
-										elseif (empty($icon)) {
-											$pfb_found = FALSE;
-											foreach ($alt_feeds[$ftype][$aliasname][$feed['header']] as $a_header) {
-												if (!empty($a_header['icon']) || 
-												    in_array($a_header['header'], $feed_alt_selected)) {
-													$pfb_found = TRUE;
-													break;
-												}
-											}
-
-											if (!$pfb_found) {
-												$icon = "&emsp;"
-												. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-												. "&act=add&atype={$feed['header']}\""
-												. "title=\"Add feed: [ {$feed['header']} ]\">"
-												. "<i class=\"fa-solid fa-plus-circle\"></i>"
-												. "</a>";
-											}
-										}
-
-										$feed_alternate	= '';
-										$feed_header	= $feed['header'];
-										$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
-												. " value=\"alt_{$feed['header']}\" checked=\"checked\" />&emsp;";
-
-										print ("<input type=\"hidden\" name=\"alt_" . "{$feed['header']}" . "\" id=\"alt_"
-											. "{$feed['header']}" . "\" value=\"\" />");
-									}
-									else {
-										if (empty($icon)) {
-											$icon = "&emsp;"
-												. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-												. "&act=add&atype={$feed['header']}\""
-												. "title=\"Add feed: [ {$feed['header']} ]\">"
-												. "<i class=\"fa-solid fa-plus-circle\"></i>"
-												. "</a>";
-										}
-
-										$feed_alternate	= '';
-										$feed_header	= $feed['header'];
-										$feed_radio	= '';
-									}
-								}
-
-								// Extract 'Alternate Feed' details from alt_feed array.
-								else {
-									$status = '';
-									$alt_feed	= $alt_feeds[$ftype][$aliasname][$feed['header']][$i -1];
-									$icon 		= $alt_feed['icon'];
-	
-									if (in_array($alt_feed['header'], $feed_alt_selected)) {
-										$checked = 'checked=\"checked\"';
-										if (empty($icon)) {
-											$icon = "&emsp;"
-												. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
-												. "&act=add&atype={$alt_feed['header']}\""
-												. "title=\"Add feed: [ {$alt_feed['header']} ]\">"
-												. "<i class=\"fa-solid fa-plus-circle\"></i>"
-												. "</a>";
-										}
-									}
-									else {
-										$checked = '';
-									}
-
-									$feed['url']	= $alt_feed['url'];
-									$feed_alternate = "&emsp;<i class=\"fa-solid fa-angle-right\" style=\"cursor: default\""
-											. " title=\"Alternate Feed option\"></i>&emsp;";
-									$feed_header	= $alt_feed['header'];
-									$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
-											. " value=\"alt_{$alt_feed['header']}\" {$checked} />&emsp;";
-								}
-							?>
-					</td>
-
-					<td>
-							<?php
-								if ($aliasname != $p_aliasname) {
-									print ("{$aliasname}");
-								} else {
-									print ("<p style=\"font-size: 75%\">{$aliasname}<p>");
-								}
-							?>
-					</td>
-
-					<td>
-						<?=$feed_alternate;?>
-						<a target="_blank" href="<?=$feed['website'];?>"><?=$feed['feed'];?></a>
-							<?php
-								// Add any Alternate Feed icons
-								if (!empty($feed_alternate)) {
-									if (isset($alt_feed['status'])) {
-										$feed['status']		= $alt_feed['status'];
-									}
-									if (isset($alt_feed['info'])) {
-										$feed['info']		= $alt_feed['info'];
-									}
-									if (isset($alt_feed['register'])) {
-										$feed['register']	= $alt_feed['register'];
-									}
-								}
-
-								// Print info about Feed if available
-								if (isset($feed['info']) && !empty($feed['info'])) {
-									print ("&emsp;<i class=\"fa-solid fa-info-circle\" title=\"{$feed['info']}\"></i>");
-								}
-
-								// Print Feed offline status
-								if (isset($feed['status'])) {
-									print ("&emsp;<i class=\"fa-solid fa-bug text-danger\" title=\"Feed temporarily unavailable\"></i>");
-								}
-
-								// Add link to Donate/support link
-								if (isset($feed['donate'])) {
-									print ("&emsp;<a target=\"_blank\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
-									<i class=\"fa-solid fa-cart-plus\"></i></a>");
-								}
-
-								// Add link to Feed registration
-								if ($feed['register']) {
-									print ("&emsp;<a target=\"_blank\" href=\"{$feed['register']}\" title=\"Click to register\">
-										<i class=\"fa-solid fa-right-to-bracket\"></i></a>");
-								}
-							?>
-					</td>
-
-					<td>
-						<?=$feed_radio;?>
-						<a target="_blank" href="<?=$feed['url'];?>"
-							onclick="return confirm('Download feed [ <?=$feed['url'];?> ] ?')"><?=$feed_header;?>
-						</a>
-					</td>
-
-					<td><?=$icon;?></td>
-				</tr>
-							<?php
-								// Collect previous values
-								$p_type		= $ftype;
-								$p_aliasname	= $aliasname;
-								$p_tr_style	= $tr_style;
-								$feed_info_row++;
-							endfor;
-						endif;
-					endforeach;
-				endforeach;
-			endforeach;
+			foreach ($feed_info as $ftype => $info) {
+				pfb_feeds_render_predefined_type($ftype, $info);
+			}
 			?>
 
 			</tbody>
