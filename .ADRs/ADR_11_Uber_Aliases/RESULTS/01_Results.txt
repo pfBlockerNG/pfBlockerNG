@@ -1,0 +1,232 @@
+================================================================================
+ADR-11 — Phase 1 RESULTS: Measure the union cost (de-risk)
+================================================================================
+Status: GO. Chosen build strategy: FULL REBUILD EACH PASS (gated cheap, see §4).
+Date:   2026-06-05
+Scope:  Measurement only. NO shipped (src/) behaviour change. A dev-only
+        benchmark script + recorded numbers + the live-box procedure.
+
+This is a COST gate, not a viability gate: the feature already runs at real
+scale in production via the maintainer's external-script workaround (ADR.md §1).
+Phase 1 only decides full-rebuild-each-pass vs incremental, and the RAM caveat.
+
+--------------------------------------------------------------------------------
+0. WHAT THE UNION STEP IS (the thing measured)
+--------------------------------------------------------------------------------
+The aggregate alias content = the effective Deny set unioned per family:
+
+    cat ${pfbdeny}<member>.txt ...   ->   sort -u   ->   cidr_aggregate
+
+`cidr_aggregate()` (pfblockerng.sh:281, dispatched :956/:992 via `_agg`) shells
+out to ONE binary:
+
+    pathaggregate = /usr/local/bin/iprange          (pfblockerng.sh:41)
+    "${pathaggregate}" <file> > <out>               (pfblockerng.sh:296)
+
+i.e. `iprange <file>` = sort + collapse of overlapping/adjacent CIDRs into the
+minimal covering set. The union step is exactly this primitive applied once to
+the cat'd+deduped member set (per family — pfBlockerNG calls iprange per family).
+NO new aggregation algorithm is written; Phase 2 composes the existing one.
+
+Member files are already `sort -u`'d per alias (pfblockerng.sh:323/519/585) and
+post-suppression (`pfbsuppression`, :189-253) / post-whitelist — so the union's
+input is the EFFECTIVE (what-pfBlockerNG-actually-blocks) set, per ADR.md §2.
+
+--------------------------------------------------------------------------------
+1. BENCHMARK — method (dev box, synthetic data)
+--------------------------------------------------------------------------------
+Script:  scripts/misc/bench_aggregate_union.sh   (POSIX sh, ShellCheck-clean,
+         dev-only — NOT in the release archive; only src/ ships).
+Run as:  scripts/misc/bench_aggregate_union.sh [v4_cidrs] [v6_cidrs] [members]
+         (defaults: 2000000 IPv4, 500000 IPv6, 30 member files)
+
+It synthesizes representative deny-feed member files with DELIBERATE exact
+duplicates + adjacent/contained subnets across members (so sort -u and the
+aggregate have real collapsing to do — mirrors overlapping real feeds), then
+measures the union step in two halves:
+  * cat -> LC_ALL=C sort -u   (the dedup half)
+  * aggregate                 (the CIDR-collapse half)
+For each: wall-time (real s) + peak RAM (maximum resident set size) +
+input vs output entry counts (the dedup/aggregation ratio).
+
+Timing/RAM wrapper: macOS `/usr/bin/time -l` ("maximum resident set size",
+bytes); GNU `/usr/bin/time -v` ("Maximum resident set size (kbytes)") on Linux;
+plain timing fallback otherwise.
+
+AGGREGATION PRIMITIVE — two modes (auto-selected):
+  (a) If /usr/local/bin/iprange is present  -> it is used DIRECTLY. The wall-clock
+      is then LIVE-equivalent (the production binary).
+  (b) Else (this dev box: macOS arm64, no iprange; not in Homebrew) -> a portable
+      Python `ipaddress.collapse_addresses` stand-in. It performs the IDENTICAL
+      collapse (sort + merge overlapping/adjacent CIDRs -> minimal cover), so the
+      RATIO and OUTPUT COUNT are faithful. Its WALL/RAM are a Python-object proxy
+      and are NOT a prediction of iprange (C; far leaner + faster). The
+      authoritative live iprange timing/RAM is the maintainer slot in §2.
+
+Verified the stand-in collapses correctly: two adjacent /25s -> one /24.
+
+--------------------------------------------------------------------------------
+1b. BENCHMARK — RESULTS (dev box: Darwin 25.5.0 arm64, Apple Silicon)
+--------------------------------------------------------------------------------
+Target scale: 2,000,000 IPv4 + 500,000 IPv6 = 2,500,000 raw union lines across
+30 member files (with injected cross-member duplicates/overlap).
+
+  STEP                       OUTPUT LINES     WALL        PEAK RSS
+  -------------------------  ---------------  ----------  ----------
+  raw union (cat)            2,500,000        -           -
+  -> sort -u                 2,310,331        1.32 s      180.3 MiB   [portable]
+  -> aggregate               2,200,567        25.52 s *   2.1 GiB  *  [stand-in]
+  -------------------------  ---------------  ----------  ----------
+  union total wall                            26.84 s
+
+  Ratios (collapse-faithful regardless of primitive):
+    dedup     raw    -> unique :  1.082x   ( 7.6% removed by sort -u)
+    aggregate unique -> final  :  1.050x   ( 4.8% collapsed by iprange)
+    overall   raw    -> final  :  1.136x   (12.0% removed)
+
+  * The aggregate WALL (25.5 s) and PEAK RSS (2.1 GiB) are the PYTHON STAND-IN's
+    numbers — object-per-CIDR overhead, NOT iprange. iprange (C, mmap+radix) is
+    expected to be ~1-2 orders of magnitude faster and far leaner on the same
+    input. Treat them ONLY as: (i) proof the step completes at million-CIDR
+    scale, and (ii) the faithful ratio/output count. The real iprange wall/RAM
+    is the §2 maintainer slot. The `sort -u` half (1.32 s / 180 MiB) IS portable
+    and broadly representative (same `sort` on the box).
+
+HEADLINE: at 2.5M raw / 2.31M unique / 2.20M final CIDRs, the union dedups+
+collapses ~12% overall. The dominant cost is the OUTPUT SET SIZE (~2.2M CIDRs)
+that becomes a loaded pf table — that is the RAM caveat, measured live in §2.
+
+NOTE on ratio realism: the synthetic generator's overlap injection is modest
+(~12%); real deny feeds overlap MORE across sources (many feeds list the same
+botnet/Tor/abuse ranges), so the live dedup ratio is likely HIGHER (more removed)
+than the synthetic 12%. The synthetic number is a conservative LOWER bound on
+collapse, i.e. a conservative UPPER bound on final table size for a given raw set.
+
+--------------------------------------------------------------------------------
+2. PF TABLE LOAD — LIVE-BOX PROCEDURE (maintainer runs; result slots empty)
+--------------------------------------------------------------------------------
+CI cannot load pf tables (ADR.md §7). Run on a live pfSense CE box after a full
+pfBlockerNG update with the Deny-aggregate toggle ON (Phase 3+), or by hand-
+loading a file of the resulting size into a scratch table.
+
+Paths: aggregate alias file -> /var/db/aliastables/pfB_Aggregate_v4.txt (cache
+       under /var/db/aliastables/, pfblockerng.sh:81); pfctl = /sbin/pfctl.
+
+(a) MEASURE THE LOADED TABLE'S ENTRY COUNT + KERNEL MEMORY
+    # per-table address count:
+    /sbin/pfctl -t pfB_Aggregate_v4 -T show | wc -l
+    # global pf table-entry accounting (limit + current usage):
+    /sbin/pfctl -s memory | grep table-entries
+    # total addresses across ALL tables (pfBlockerNG's own stat, sh:978):
+    /sbin/pfctl -vvsTables | awk '/Addresses/ {s+=$2}; END {print s}'
+    # kernel memory: each pf table entry (struct pfr_kentry) is the cost unit;
+    # bump the limit if needed:
+    /sbin/pfctl -s memory | grep table-entries     # e.g. "table-entries  hard limit  ..."
+    # raise: add  set limit table-entries <N>  (System > Advanced > Firewall, or
+    # pfBlockerNG sets it); confirm current vs hard limit headroom.
+
+(b) MEASURE LOAD TIME OF A TABLE OF THE RESULTING SIZE
+    # time a cold replace-load of the ~2.2M-CIDR file into a scratch table:
+    /usr/bin/time /sbin/pfctl -t pfb_bench_scratch -T replace -f /path/to/aggregate_v4.txt
+    # (repeat for v6); record real seconds + note any "table-entries" limit hit.
+
+(c) MEASURE iprange's OWN TIME/RAM ON THE BOX (the §1 stand-in's live counterpart)
+    /usr/bin/time -l /usr/local/bin/iprange /path/to/union_v4.sorted > /dev/null   # FreeBSD/-l
+    # or the bench script auto-uses iprange when present:
+    /path/to/scripts/misc/bench_aggregate_union.sh 2000000 500000 30
+
+    RESULT SLOTS (fill in from the live box):
+      final v4 CIDR count        : ____________
+      final v6 CIDR count        : ____________
+      iprange wall (v4 / v6)     : ____________ / ____________ s
+      iprange peak RSS           : ____________
+      pfctl -T replace load time : ____________ s (v4) / ____________ s (v6)
+      table-entries used / limit : ____________ / ____________
+      approx kernel RAM for table: ____________ (entries * per-entry struct)
+
+--------------------------------------------------------------------------------
+3. STRATEGY DECISION — full rebuild vs incremental
+--------------------------------------------------------------------------------
+RECOMMENDATION: FULL REBUILD EACH PASS, gated cheaply (no separate incremental
+build machinery in v1). Rationale from the numbers:
+
+  * The union runs INSIDE sync_package_pfblockerng() AFTER the per-member feeds
+    are already downloaded, parsed, suppressed, sort -u'd and per-alias
+    aggregated. That per-member work dominates a pfBlockerNG update pass (network
+    + per-feed iprange). The union is ONE additional `cat | sort -u | iprange`
+    over the already-built member files.
+  * `sort -u` of 2.3M lines = ~1.3 s portable; iprange over ~2.3M CIDRs in C is
+    expected well under the per-feed work already done each pass (the per-alias
+    cidr_aggregate ALREADY runs iprange on each member every pass). The union is
+    additive but same order as existing per-pass aggregation — NOT a new cost
+    class. -> A full rebuild each pass is affordable; an incremental cache would
+    add change-detection state + correctness surface for a marginal save.
+
+  * CHEAP GATE (still added, not full incrementality): only build the aggregate
+    when at least one Deny member file actually changed THIS pass. pfBlockerNG
+    already knows which feeds updated in the pass (the update loop processes
+    changed feeds); gate the union on "any effective-Deny member changed since
+    last successful aggregate". Concretely, the trigger is:
+
+        rebuild aggregate IFF  max(mtime of effective-Deny member .txt files)
+                               >  mtime of the last pfB_Aggregate_<fam>.txt
+        (equivalently: a member was rewritten this pass)
+
+    This is mtime-based, needs no hash store, and falls out of the existing
+    "list updated" signal. It skips the union entirely on passes where no Deny
+    member changed (e.g. cron pass with all feeds 304/unchanged) — the common
+    case — while keeping the simple full-rebuild path when something did change.
+    NOT a member-diff incremental table edit (no per-CIDR add/del bookkeeping);
+    just "rebuild-the-whole-aggregate-only-when-a-member-changed".
+
+  IF the live §2 numbers contradict this (iprange wall on the union, or the
+  pfctl replace-load, blows the pass-time budget at real million-CIDR scale),
+  PIVOT to true incremental in a follow-up: keep per-family member-set hashes,
+  and only re-run iprange when the SET (not just an mtime) changed. The hook
+  point is unchanged, so the pivot is contained.
+
+--------------------------------------------------------------------------------
+4. SOFT BUDGET + RAM CAVEAT (to document on the opt-in setting)
+--------------------------------------------------------------------------------
+SOFT BUDGET (revisit with §2 live numbers):
+  * Added pass time (union build, on-change): target < 30 s on a typical box at
+    a few-million-CIDR union. (`sort -u` ~1-2 s + iprange-in-C over ~2M CIDRs;
+    the dev-box Python proxy of 26 s is NOT this budget.) Hard concern only if
+    iprange-on-box + pfctl replace-load together push the pass materially.
+  * Peak build RAM (transient, userspace): bounded by `sort` + iprange working
+    set over the union (~hundreds of MiB for `sort` at 2.3M lines; iprange in C
+    far less than the Python proxy's 2.1 GiB). Transient — freed after the pass.
+
+RAM CAVEAT (the documented, opt-in-justifying cost — ADR.md §1 fact 2, §3):
+  A Native aggregate is CPU-FREE (no filter rule, never evaluated per packet)
+  but NOT RAM-free: the unioned table loads into the KERNEL pf table at ~the
+  union size. At ~2.2M CIDRs that is a large, permanently-resident pf table
+  whose only purpose is to be referenced by name (HAProxy ACL etc.). Each pf
+  table entry costs a fixed kernel struct; a multi-million-entry table can
+  approach/exceed the default `table-entries` limit and consume tens+ of MiB of
+  wired kernel memory. THIS is why the feature is OPT-IN, DEFAULT OFF, and why
+  the settings help text + README must state: "Loads the entire effective block
+  set as an unused (Native) pf table — costs kernel RAM proportional to the
+  union size (can be millions of entries); enable only if you consume the
+  aggregate alias (e.g. an HAProxy source_ip ACL)."
+
+--------------------------------------------------------------------------------
+5. GATES (this phase)
+--------------------------------------------------------------------------------
+  * python -m pytest          -> 1117 passed (green/UNCHANGED — no Python touched).
+  * shellcheck bench_aggregate_union.sh -> CLEAN; sh -n -> OK.
+  * php -l / PHPStan          -> UNAFFECTED (no PHP/shipped src/ change this phase).
+  * git diff under src/       -> NONE (verified: benchmark lives in scripts/misc/,
+                                results here; ADR docs untouched besides this file).
+
+--------------------------------------------------------------------------------
+6. GO-AHEAD
+--------------------------------------------------------------------------------
+GO to Phase 2 (PREP: `pfblockerng.sh aggregate <family>` action + effective-Deny
+member-list PHP helper, behaviour-preserving, not yet wired).
+
+Chosen build approach for Phase 3 wiring: FULL REBUILD EACH PASS, gated on
+"any effective-Deny member changed this pass" (mtime trigger in §3). Document
+the §4 RAM caveat on the opt-in toggle. Revisit with the §2 live-box numbers;
+pivot to true set-hash incremental only if the live measurements exceed budget.
+================================================================================
