@@ -59,9 +59,9 @@ on:
         default: "zstd"
         type: string
       upgrade_timeout:
-        description: "Seconds to wait for pfSense-upgrade + reboot"
+        description: "MAX seconds to wait for pfSense-upgrade + reboot (poll exits on version change; bounds a stuck upgrade only)"
         required: false
-        default: "1800"
+        default: "1200"
         type: string
       sanity_local_data_name:
         description: "pfBlockerNG smoke (non-blocking): Unbound local-data name to inject + query on-box"
