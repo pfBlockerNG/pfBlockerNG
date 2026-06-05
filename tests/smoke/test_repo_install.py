@@ -97,6 +97,18 @@ DECOY_REPO_NAME = "netgate-decoy"  # a controlled file:// stand-in for a competi
 NETGATE_REPO_NAME = "pfSense"  # the real base-system Netgate repo (left enabled; loses on priority)
 GUEST_FILE_LIST = f"{GUEST_SPIKE_DIR}/installed_files.txt"
 
+# Phase-2 (ADR-17) catalog generator under test. ``build-repo.sh`` is the real,
+# reusable per-ABI catalog tool the Phase-3 publish job runs; here it is staged to
+# the guest and run with the guest's libpkg to prove the SCRIPT's output (an
+# <ABI>/ catalog tree it lays out) is accepted by a real pfSense ``pkg update`` +
+# install. (The libpkg-on-Linux half of the build-side premise — that the SAME
+# script + the SAME ``pkg repo`` op runs on a Linux runner — is proven locally in
+# RESULTS/02; the script is identical regardless of which libpkg invokes it.)
+BUILD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "build-repo.sh"
+GUEST_BUILD_REPO_SH = f"{GUEST_SPIKE_DIR}/build-repo.sh"
+GUEST_PKG_IN_DIR = f"{GUEST_SPIKE_DIR}/pkg_in"  # the input dir of .pkg for build-repo.sh
+SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (per-ABI tree)
+
 
 # --------------------------------------------------------------------------- #
 # Egress — this flow needs the REAL Netgate repo reachable
@@ -172,6 +184,49 @@ def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
         _scp_to_guest(vm, pkg, f"{repo_dir}/{pkg.name}")
     # `pkg repo <dir>` with no key argument => an unsigned catalog.
     _ssh_check(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
+
+
+def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
+    """Run the Phase-2 ``scripts/build-repo.sh`` on the guest over ``pkg_files``.
+
+    Stages the real ``build-repo.sh`` and the input ``.pkg`` to the guest, runs
+    ``build-repo.sh --in <pkg_in> --out <script_catalog>`` with the guest's own
+    libpkg, then returns the single per-ABI catalog directory it produced
+    (``<out>/<ABI>/``) — the dir a ``file://`` repo conf points at.
+
+    This validates the SCRIPT's output (the bucketed ``<ABI>/`` tree + the catalog
+    triple ``pkg repo`` emits) is accepted by a real pfSense box, the live half of
+    the build-side premise. The branch ``.pkg`` is a single ABI
+    (``FreeBSD:15:amd64``), so exactly one ``<ABI>/`` dir is expected.
+    """
+    _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_PKG_IN_DIR, GUEST_SPIKE_DIR)
+    _scp_to_guest(vm, BUILD_REPO_SH, GUEST_BUILD_REPO_SH)
+    for pkg in pkg_files:
+        _scp_to_guest(vm, pkg, f"{GUEST_PKG_IN_DIR}/{pkg.name}")
+    # Run the script exactly as Phase 3 will (just with the guest's pkg as PKG_BIN
+    # default). ASSUME_ALWAYS_YES so `pkg repo` never prompts.
+    _ssh_check(
+        vm,
+        "env",
+        "ASSUME_ALWAYS_YES=yes",
+        "/bin/sh",
+        GUEST_BUILD_REPO_SH,
+        "--in",
+        GUEST_PKG_IN_DIR,
+        "--out",
+        SCRIPT_REPO_ROOT,
+        timeout=240.0,
+    )
+    # The script buckets by ABI; the branch .pkg is one ABI -> one <ABI>/ subdir.
+    listing = _ssh_check(vm, "/bin/ls", "-1", SCRIPT_REPO_ROOT).stdout.split()
+    assert len(listing) == 1, f"build-repo.sh produced {listing!r} ABI buckets, expected exactly 1"
+    abi_dir = f"{SCRIPT_REPO_ROOT}/{listing[0]}"
+    # The catalog triple must be present (what `pkg update` consumes).
+    for fname in ("meta.conf", "packagesite.pkg", "data.pkg"):
+        present = vm.ssh("/bin/test", "-f", f"{abi_dir}/{fname}")
+        assert present.returncode == 0, f"build-repo.sh did not emit {fname} under {abi_dir}"
+    return abi_dir
 
 
 def _repo_block(name: str, directory: str, priority: int) -> str:
@@ -490,3 +545,45 @@ def test_precedence_decoy_higher_priority_wins(repo_vm: SmokeVM) -> None:
         f"installed from {origin!r}, expected the decoy {DECOY_REPO_NAME!r} "
         f"(decoy {pfsense_prio + 200} > ours {pfsense_prio + 100})"
     )
+
+
+@pytest.mark.timeout(600)  # build-repo.sh + pkg update + install from the script's catalog > the 30s cap.
+def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
+    """PHASE-2 BUILD TOOL: the catalog laid out by ``scripts/build-repo.sh`` is
+    accepted by a real pfSense ``pkg update`` and installs from (no ``-f``).
+
+    Phase 1 proved a hand-built (inline ``pkg repo``) catalog installs; this proves
+    the REUSABLE Phase-2 generator produces an equivalent, VM-accepted tree — the
+    live half of the build-side premise (the libpkg-on-Linux half is settled in
+    RESULTS/02 by building the same catalog with a Linux ``pkg``; the script + the
+    ``pkg repo`` op are identical regardless of which libpkg runs them).
+
+    Given the package ABSENT and a catalog produced by ``build-repo.sh`` over the
+      branch ``.pkg`` (its ``<ABI>/`` bucket holds meta.conf/packagesite.pkg/data.pkg),
+      enabled via a NONE-signed ``file://`` repo above the pfSense repo,
+    When ``pkg update`` reads it and ``pkg install -y`` runs (NO ``-r``, NO ``-f``),
+    Then ``pkg update`` accepts the script-generated catalog AND the install comes
+      from OUR repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved —
+      the build tool's output is real and VM-consumable.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+
+    # GIVEN: build the catalog with the Phase-2 SCRIPT (not the inline pkg repo), then
+    # point a NONE-signed file:// repo at the produced <ABI>/ dir, above pfSense.
+    abi_dir = build_repo_via_script(repo_vm, [Path(pkg)])
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+
+    # WHEN: pkg update must ACCEPT the script-generated catalog (rc=0; a rejected
+    # catalog would fail here — that is the build-side premise under test).
+    pkg_update(repo_vm)
+    assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the script-catalog install"
+
+    # THEN: install resolves from our repo over the script's catalog, deps included.
+    proc = pkg_install_from_repo(repo_vm)
+    combined = proc.stdout + proc.stderr
+    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the script catalog:\n{combined}"
+    origin = pkg_repo_origin(repo_vm)
+    assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
