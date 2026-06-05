@@ -28,10 +28,12 @@ against source, not guessed):
     → NOERROR + A = DNSBL VIP (``pfb_dnsvip4``). (**VIP** shape.)
   - ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True``
     → NOERROR + A = ``0.0.0.0`` / AAAA = ``::0``. (**NULL** shape.)
+  - ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns a
+    bare ``RCODE_NXDOMAIN`` (no records). (**NXDOMAIN** shape, issue #31.)
 
   A matched subdomain is NOT in ``dataDB`` and is NOT blocked (exact match only).
-  NXDOMAIN is NEVER the response for a normal feed match (verified on the live
-  box); the only NXDOMAIN path is SafeSearch.
+  Before issue #31 NXDOMAIN was reachable only via SafeSearch; it is now also a
+  user-selectable DNSBL block response (the ``nxdomain``/``nxdomain_log`` modes).
 
   Probed ON-BOX (``drill @127.0.0.1`` over SSH): verified on a live box that
   python-mode DNSBL has NO localhost exemption — a blocked name returns its block
@@ -229,6 +231,34 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
         assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
             f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
         )
+
+
+def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Python-mode NXDOMAIN block (issue #31): a bare NXDOMAIN, no records.
+
+    ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns
+    ``RCODE_NXDOMAIN`` with no DNSMessage (neither the VIP nor the 0.0.0.0 null
+    shape). The rcode is name-level, so BOTH the A and AAAA queries answer
+    NXDOMAIN. A unique non-HSTS-preload ``.com`` is used so the result is the
+    NXDOMAIN block path itself, not an Unbound built-in ``local-zone`` shadowing
+    an RFC-6761 TLD (which would also NXDOMAIN, ahead of DNSBL). Contrast the
+    VIP/null cases above: same feed match, different per-list ``logging`` →
+    different response shape, proving '3' is a distinct, live branch.
+    """
+    domain = h.unique_domain("nxdomain")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_nxdomain.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokenxd",
+        feed_url=feed_url,
+        header="smokenxd",
+        mode=h.DnsblMode.NXDOMAIN,
+    )
+    with h.CaseContext(deployed_vm, spec):
+        a = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_nxdomain(a), f"{domain} A expected NXDOMAIN (no records), got {a}"
+        assert not h.is_vip(a) and not h.is_null_ip(a), f"{domain} must be a bare NXDOMAIN, not a VIP/null record: {a}"
+        aaaa = h.dns_probe(deployed_vm, domain, "AAAA")
+        assert h.is_nxdomain(aaaa), f"{domain} AAAA expected NXDOMAIN (no records), got {aaaa}"
 
 
 def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:

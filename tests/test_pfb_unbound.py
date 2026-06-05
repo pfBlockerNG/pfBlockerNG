@@ -16,6 +16,7 @@ from unboundmodule import (
     MODULE_FINISHED,
     MODULE_WAIT_MODULE,
     RCODE_NOERROR,
+    RCODE_NXDOMAIN,
     DNSMessage,
 )
 
@@ -89,6 +90,7 @@ def _dnsbl_decision(**kw: Any) -> Any:
         "in_whitelist": False,
         "in_hsts": False,
         "null_blocking": True,
+        "nxdomain": False,
         "log_type": "",
         "b_type": "",
         "p_type": "",
@@ -654,6 +656,7 @@ class TestGetDetailsDnsblQtype:
                 in_whitelist=False,
                 in_hsts=False,
                 null_blocking=False,
+                nxdomain=False,
                 log_type="1",
                 b_type="DNSBL_Python",
                 p_type="Python",
@@ -726,6 +729,7 @@ class TestGetDetailsDnsblQtype:
             in_whitelist=False,
             in_hsts=False,
             null_blocking=False,
+            nxdomain=False,
             log_type="1",
             b_type="TLD",
             p_type="Python",
@@ -766,6 +770,51 @@ class TestGetDetailsDnsblQtype:
         )
         pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
         assert len(self._dnsbl_fields(lines)) == 1  # attributed despite mixed-case query
+
+
+class TestGetDetailsDnsblNxdomain:
+    """Issue #31: the per-event logger must treat the two NXDOMAIN variants like the
+    two null variants -- "3" (NXDOMAIN logging) writes a dnsbl.log line, "4" (NXDOMAIN
+    no logging) is silenced, exactly as "0"/"2" are for null. Same skip gate
+    (log_type in ("2","4")), so the no-logging branch is shared and pinned here.
+    """
+
+    def _emit(self, monkeypatch: Any, log_type: str) -> list[tuple[str, str]]:
+        # Given a memoized NXDOMAIN block for blocked.com with the given log flag
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        dnsbl = _dnsbl_decision(
+            is_found=True,
+            nxdomain=True,
+            log_type=log_type,
+            b_type="DNSBL",
+            p_type="Python",
+            feed="F",
+            group="G",
+            b_eval="blocked.com",
+        )
+        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": pfb_unbound.Decision(dnsbl=dnsbl)})
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        qstate = types.SimpleNamespace(
+            qinfo=types.SimpleNamespace(qname_str="blocked.com.", qtype_str="A"),
+            return_msg=None,
+        )
+        # When the logger runs for that block
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        return lines
+
+    def test_nxdomain_logging_writes_a_line(self, monkeypatch: Any) -> None:
+        # Then the "3" variant records the block to dnsbl.log + unified.log
+        lines = self._emit(monkeypatch, "3")
+        assert any(path.endswith("dnsbl.log") for path, _ in lines)
+
+    def test_nxdomain_no_logging_is_silent(self, monkeypatch: Any) -> None:
+        # Then the "4" variant writes nothing -- contrast the "3" case: same NXDOMAIN
+        # block, logging flag flipped, proves the skip gate is a real branch.
+        lines = self._emit(monkeypatch, "4")
+        assert lines == []
 
 
 class TestGetOType:
@@ -928,6 +977,41 @@ class TestOperateDnsbl:
         assert qstate.return_rcode == RCODE_NOERROR
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
+
+    def test_nxdomain_mode_returns_bare_nxdomain(self, monkeypatch: Any) -> None:
+        # Issue #31. Scenario: a DNSBL hit in NXDOMAIN-logging mode ("3").
+        #   Given evil.com on a feed whose Logging/Blocking mode is NXDOMAIN ("3")
+        #   When operate() handles an A query
+        #   Then it FINISHES with rcode NXDOMAIN, builds NO synthetic answer message,
+        #        and the reply is left uncached (#43) -- contrast the VIP test above,
+        #        which returns NOERROR + a dnsbl_ipv4 record.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="3", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        assert qstate.no_cache_store == 0  # before-state: cacheable by default
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_rcode == RCODE_NXDOMAIN
+        assert qstate.return_msg is None  # no A/AAAA reply synthesized
+        assert DNSMessage.instances == []  # the VIP/null DNSMessage path was NOT taken
+        assert qstate.no_cache_store == 1  # not cached, same as VIP/null blocks
+        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True
+
+    def test_nxdomain_no_logging_mode_also_returns_nxdomain(self, monkeypatch: Any) -> None:
+        # The "4" (no-logging) variant produces the IDENTICAL block SHAPE as "3"; only
+        # the dnsbl.log line differs (covered in TestGetDetailsDnsblNxdomain). Pins that
+        # the response shape is logging-independent.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="4", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_rcode == RCODE_NXDOMAIN
+        assert DNSMessage.instances == []
 
     def test_block_sets_no_cache_store(self, monkeypatch: Any) -> None:
         # #43: the synthetic block reply must NOT be stored in Unbound's C message
@@ -1753,6 +1837,7 @@ class TestEvaluateDomainGolden:
         assert dec.group == "BadGroup"
         assert dec.log_type == "1"
         assert dec.null_blocking is False  # log_type="1" and not in_hsts -> null_blocking=False
+        assert dec.nxdomain is False  # VIP is neither null nor NXDOMAIN (issue #31 contrast)
 
     def test_data_exact_does_not_match_subdomain(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -1910,6 +1995,62 @@ class TestEvaluateDomainGolden:
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
         assert dec.is_found is True
         assert dec.null_blocking is True  # log_type="2" != "1" → no null_blocking flip
+        assert dec.nxdomain is False  # null block is not NXDOMAIN (issue #31 contrast)
+
+
+class TestEvaluateDomainNxdomain:
+    """Issue #31: log_type "3"/"4" select the NXDOMAIN block shape in evaluate_domain.
+
+    Scenario: a DNSBL data hit whose per-list Logging/Blocking mode is one of the two
+    new NXDOMAIN variants.
+      Background: a feed entry for evil.com mapped to feed F / group G.
+      Given the entry's log flag is "3" (NXDOMAIN logging) or "4" (NXDOMAIN no logging)
+      When evaluate_domain resolves the block
+      Then dec.nxdomain is True, dec.null_blocking stays True (no 0.0.0.0 reply), and
+           dec.log_type carries the raw flag through for the logger to branch on.
+    Branch coverage pairs these against the VIP ("1", nxdomain False) and null ("2",
+    nxdomain False) cases above, proving "3"/"4" is a real, distinct branch.
+    """
+
+    def _dec(self, log: str, **cfg_kw: Any) -> Any:
+        # Given a single-entry dataDB whose log flag is `log`
+        data_db: dict = {"evil.com": {"log": log, "index": 0}}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, **cfg_kw)
+        # When the domain is evaluated
+        return evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+
+    def test_log_type_3_selects_nxdomain_logging(self) -> None:
+        dec = self._dec("3")
+        # Then it is a block flagged NXDOMAIN, not a null/VIP reply
+        assert dec.is_found is True
+        assert dec.nxdomain is True
+        assert dec.null_blocking is True  # no synthesized 0.0.0.0 / VIP record
+        assert dec.log_type == "3"  # logger logs this variant
+
+    def test_log_type_4_selects_nxdomain_no_logging(self) -> None:
+        dec = self._dec("4")
+        assert dec.is_found is True
+        assert dec.nxdomain is True
+        assert dec.null_blocking is True
+        assert dec.log_type == "4"  # logger silences this variant
+
+    def test_nxdomain_is_immune_to_hsts(self) -> None:
+        # NXDOMAIN avoids the TLS handshake HSTS guards, so the HSTS null-override
+        # (which forces a VIP "1" block to null) must NOT touch an NXDOMAIN block.
+        # Given evil.com is an HSTS name AND its mode is NXDOMAIN-logging ("3")
+        data_db: dict = {"evil.com": {"log": "3", "index": 0}}
+        hsts_db: dict = {"evil.com": 0}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=())
+        # When evaluated
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        # Then HSTS is detected but the block stays NXDOMAIN (not reshaped to null/VIP)
+        assert dec.in_hsts is True
+        assert dec.nxdomain is True
+        assert dec.null_blocking is True
 
 
 class TestEvaluateNoaaaGolden:

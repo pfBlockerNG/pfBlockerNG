@@ -56,6 +56,7 @@ def _seed_decision(name: str) -> P.Decision:
         in_whitelist=False,
         in_hsts=False,
         null_blocking=False,
+        nxdomain=False,
         log_type="1",
         b_type="DNSBL",
         p_type="DNSBL",

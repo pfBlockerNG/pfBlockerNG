@@ -154,21 +154,27 @@ def abp_feed(*lines: str) -> str:
 class DnsblMode(str, Enum):
     """The block shape a DNSBL case expects for a matched name.
 
-    On ``next`` (python-mode-only) the two shapes are:
+    On ``devel`` (python-mode-only) the shapes are:
 
     * ``NULL`` — NOERROR + ``0.0.0.0`` / ``::0``; per-list
       ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True``
       in ``pfb_unbound.py:evaluate_domain``.
     * ``VIP`` — NOERROR + the DNSBL sinkhole VIP (``pfb_dnsvip4``); per-list
       ``logging='enabled'`` → ``logging_type='1'`` → ``null_blocking=False``.
+    * ``NXDOMAIN`` — a bare NXDOMAIN rcode, no records (issue #31); per-list
+      ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns
+      ``RCODE_NXDOMAIN`` with no DNSMessage. (The ``nxdomain`` / no-logging
+      variant '4' yields the IDENTICAL shape — only the dnsbl.log line differs,
+      which this on-box DNS-shape probe cannot observe, so it is unit-pinned in
+      ``tests/test_pfb_unbound.py`` rather than duplicated here.)
 
-    NXDOMAIN is NOT a valid python-mode output for a normal feed match
-    (verified on the live box; the only NXDOMAIN path in pfb_unbound.py is
-    SafeSearch).  The ``NXDOMAIN`` entry has been removed on ``next``.
+    Before issue #31, NXDOMAIN was only reachable via SafeSearch; it is now a
+    selectable per-list DNSBL block response.
     """
 
     NULL = "null"
     VIP = "vip"
+    NXDOMAIN = "nxdomain"
 
 
 @dataclass
@@ -1102,8 +1108,13 @@ def _dnsbl_mode_settings(mode: DnsblMode) -> dict[str, str]:  # noqa: ARG001
 
 
 def _dnsbl_list_logging(mode: DnsblMode) -> str:
-    """Per-list ``logging`` value: 'disabled' → null 0.0.0.0; 'enabled' → VIP."""
-    return "disabled" if mode is DnsblMode.NULL else "enabled"
+    """Per-list ``logging`` value driving the block shape: 'disabled' → null
+    0.0.0.0; 'nxdomain_log' → NXDOMAIN rcode (issue #31); 'enabled' → VIP."""
+    return {
+        DnsblMode.NULL: "disabled",
+        DnsblMode.NXDOMAIN: "nxdomain_log",
+        DnsblMode.VIP: "enabled",
+    }[mode]
 
 
 def inject(vm: SmokeVM, spec: DnsblCase | IpCase, *, timeout: float = 90.0) -> None:

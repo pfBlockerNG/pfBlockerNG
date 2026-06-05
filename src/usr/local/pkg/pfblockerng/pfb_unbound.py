@@ -1777,8 +1777,10 @@ def get_details_dnsbl(
         else:
             _dnsbl_last_event = event_sig
 
-        # Skip logging
-        if dnsbl.log_type == "2":
+        # Skip logging: null-no-log ("2") and NXDOMAIN-no-log ("4"). The per-group
+        # counter above still increments (stats parity with the logged variants); only
+        # the dnsbl.log/unified.log line is suppressed.
+        if dnsbl.log_type in ("2", "4"):
             return True
 
         q_ip = get_q_ip_comm(kwargs)
@@ -3973,6 +3975,10 @@ class DnsblDecision:
     in_whitelist: bool
     in_hsts: bool
     null_blocking: bool
+    # issue #31: NXDOMAIN block shape (log_type "3"/"4"). Distinct from null_blocking
+    # (0.0.0.0/::) and VIP -- operate() returns a bare NXDOMAIN rcode with no answer
+    # records, so HSTS's null-override is irrelevant (no TLS handshake to guard).
+    nxdomain: bool
     log_type: Any
     b_type: str
     p_type: str
@@ -4285,6 +4291,7 @@ def evaluate_domain(
     in_whitelist = False
     in_hsts = False
     null_blocking = True
+    nxdomain = False
     b_type = "Python"
     p_type = "Python"
     feed: Any = "Unknown"
@@ -4433,6 +4440,12 @@ def evaluate_domain(
 
         if log_type == "1" and not in_hsts:
             null_blocking = False
+        # issue #31: NXDOMAIN block shape ("3" logged / "4" silent). It bypasses the
+        # synthesized A/AAAA reply entirely, so the HSTS null-override above does not
+        # apply (NXDOMAIN never triggers a TLS handshake). null_blocking stays True so
+        # the per-event logger does not treat it as a VIP block (get_details_dnsbl).
+        elif log_type in ("3", "4"):
+            nxdomain = True
 
         if is_cname:
             b_type = b_type + "_CNAME"
@@ -4442,6 +4455,7 @@ def evaluate_domain(
         in_whitelist=in_whitelist,
         in_hsts=in_hsts,
         null_blocking=null_blocking,
+        nxdomain=nxdomain,
         log_type=log_type,
         b_type=b_type,
         p_type=p_type,
@@ -4818,6 +4832,18 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # Block iff found and not whitelisted; an allow decision falls through to
             # the resolver (the WAIT_MODULE below).
             if dnsbl.is_found and not dnsbl.in_whitelist:
+                # issue #31: NXDOMAIN block shape ("3" logged / "4" silent). Return a
+                # bare NXDOMAIN rcode with NO answer records -- no DNSMessage, no
+                # sinkhole IP, no DNSBL webserver redirect. Still attributed and logged
+                # via get_details_dnsbl (which internally drops the log line for "4");
+                # not cached, for the same #43 reasons as the VIP/null path below.
+                if dnsbl.nxdomain:
+                    get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": q_ip})
+                    qstate.return_rcode = RCODE_NXDOMAIN
+                    qstate.no_cache_store = 1
+                    qstate.ext_state[id] = MODULE_FINISHED
+                    return True
+
                 # Create FQDN Reply Message
                 msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
 

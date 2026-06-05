@@ -8934,6 +8934,7 @@ function sync_package_pfblockerng($cron='') {
 
 
 							// If Null Blocking mode is selected, use '0.0.0.0|::0', otherwise utilize DNSBL WebServer/DNSBL VIP
+							// NXDOMAIN modes ('3'/'4', issue #31) emit a bare NXDOMAIN in pfb_unbound.py; no sinkhole IP applies.
 							if ($list['logging'] == 'disabled') {
 								$sinkhole_type4 = '0.0.0.0';
 								$sinkhole_type6 = '::0';
@@ -8941,6 +8942,12 @@ function sync_package_pfblockerng($cron='') {
 							}
 							elseif ($list['logging'] == 'disabled_log') {
 								$logging_type	= '0';	// Null Blocking logging
+							}
+							elseif ($list['logging'] == 'nxdomain_log') {
+								$logging_type	= '3';	// NXDOMAIN logging
+							}
+							elseif ($list['logging'] == 'nxdomain') {
+								$logging_type	= '4';	// NXDOMAIN no logging
 							} else {
 								$sinkhole_type4 = "{$pfb['dnsbl_vip4']}";
 								$sinkhole_type6 = "{$pfb['dnsbl_vip6']}";
