@@ -37,10 +37,14 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_browser
 
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
-# The ADR-11 multi-select id + its four option VALUES (the action-type labels the GUI
-# action dropdown / Logs page already use). Order is the canonical type order.
-AGG_SELECT = "#pfb_agg_types"
+# The ADR-11 multi-select's four option VALUES (the action-type labels the GUI action
+# dropdown / Logs page already use). Order is the canonical type order.
 AGG_OPTIONS = ("Deny", "Permit", "Match", "Native")
+# Locate the select by its LABEL, not an id: pfSense Form_Select(multiple) renders
+# name="pfb_agg_types[]" and the id carries the brackets, so a bare ``#pfb_agg_types``
+# CSS id selector does not match. The form-group carrying the "Aggregated Aliases"
+# label is unambiguous and id-rendering-agnostic; the <select> within it is the field.
+AGG_LABEL = "Aggregated Aliases"
 
 # JS-driven DOM settles synchronously; this is a flake ceiling, not a wait knob.
 JS_TIMEOUT_MS = 10_000
@@ -72,9 +76,9 @@ def _shot_field(locator: Locator, screenshot_dir: Path, name: str) -> None:
     locator.screenshot(path=str(screenshot_dir / f"{name}.png"))
 
 
-def _selected_values(page: Page) -> list[str]:
+def _selected_values(select: Locator) -> list[str]:
     """The currently-selected option values of the multi-select, in DOM order."""
-    return page.locator(AGG_SELECT).evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
+    return select.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
 
 
 def test_general_aggregate_types_multiselect(
@@ -94,22 +98,30 @@ def test_general_aggregate_types_multiselect(
     """
     page = browser_page
     _open(page, webui, GENERAL_PAGE)
+    # Confirm we are on the real General page, not the first-run wizard (the webui
+    # fixture dismisses it; assert it here so a regression points at the wizard, not
+    # at the field). The wizard form has no "General Settings" panel title.
+    assert "wizard.php" not in page.url, f"landed on the setup wizard, not General settings: {page.url}"
 
-    select = page.locator(AGG_SELECT)
+    # The field's enclosing form-group (label + multi-select + help-block) — located by
+    # its LABEL, id-rendering-agnostic (see AGG_LABEL). Exactly one such group.
+    field = page.locator("div.form-group").filter(has_text=AGG_LABEL)
+    expect(field).to_have_count(1, timeout=JS_TIMEOUT_MS)
+    select = field.locator("select")
     expect(select).to_be_visible(timeout=JS_TIMEOUT_MS)
+
     # It is a genuine MULTIPLE select (the opt-in multi-select, not a single dropdown).
-    assert page.locator(f"{AGG_SELECT}[multiple]").count() == 1, "pfb_agg_types is not a multiple-select"
+    assert select.evaluate("el => el.multiple") is True, "the Aggregated Aliases field is not a multiple-select"
     # Exactly the four action-type options, by value.
     for opt in AGG_OPTIONS:
         expect(select.locator(f"option[value='{opt}']")).to_have_count(1, timeout=JS_TIMEOUT_MS)
-    assert select.locator("option").count() == len(AGG_OPTIONS), "unexpected option count on pfb_agg_types"
-
-    # The field's enclosing form-group (label + select + help-block), for a focused shot.
-    field = select.locator("xpath=ancestor::div[contains(@class,'form-group')][1]")
+    assert select.locator("option").count() == len(AGG_OPTIONS), (
+        "unexpected option count on the Aggregated Aliases select"
+    )
 
     # BEFORE: the opt-in default is NONE selected.
-    assert _selected_values(page) == [], (
-        f"pfb_agg_types should start with no types selected, got {_selected_values(page)}"
+    assert _selected_values(select) == [], (
+        f"Aggregated Aliases should start with no types selected, got {_selected_values(select)}"
     )
     _shot(page, screenshot_dir, "general_full_aggregate_none")
     _shot_field(field, screenshot_dir, "general_aggregate_types_none")
@@ -118,8 +130,8 @@ def test_general_aggregate_types_multiselect(
     select.select_option(["Deny", "Permit"])
 
     # AFTER: exactly Deny + Permit are selected — the selection took.
-    assert _selected_values(page) == ["Deny", "Permit"], (
-        f"selecting Deny+Permit did not take: selected={_selected_values(page)}"
+    assert _selected_values(select) == ["Deny", "Permit"], (
+        f"selecting Deny+Permit did not take: selected={_selected_values(select)}"
     )
     _shot(page, screenshot_dir, "general_full_aggregate_selected")
     _shot_field(field, screenshot_dir, "general_aggregate_types_selected")
