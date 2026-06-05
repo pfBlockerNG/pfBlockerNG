@@ -1,13 +1,20 @@
 # ADR-17: Self-hosted pfSense `pkg` repository on GitHub Pages
 
-- **Status:** **Proposed** (2026-06-05)
+- **Status:** **Implemented** (2026-06-05) — *pending the post-merge live Pages deploy +
+  the gated live-URL verification.* The hermetic affected-flow smoke (install / cross-repo
+  precedence / `pkg upgrade`) is **GREEN on the live VM** (§7); only the public `brait.dev`
+  Pages deploy + the live-URL leg remain, which are **post-merge** (a brand-new
+  `workflow_dispatch` workflow is only dispatchable once it lands on the default branch
+  `devel`). Flips to **Accepted** once that deploy dispatch confirms the live
+  `https://brait.dev/pfBlockerNG/${ABI}` URL.
 - **Date:** 2026-06-05
 - **Branch:** `adr/17` (off **`devel`**) / **Component(s):** new dev-only CI — a
   **repo-publish** job/workflow that consumes ADR-09's release `.pkg` artifacts +
   `read-version-matrix` action and deploys a `pkg` catalog to **GitHub Pages**; new
-  `scripts/build-repo.sh` (catalog generation + `${ABI}` layout) and
-  `scripts/add-repo.sh` (client bootstrap) + a repo-conf template; new live-VM
-  `tests/smoke/test_smoke_repo.py`. **Reused, not modified:** ADR-09's
+  `scripts/build-repo-portable.py` (primary pure-Python catalog generator) +
+  `scripts/build-repo.sh` (FreeBSD-VM fallback / `--print-conf` template) +
+  `scripts/add-repo.sh` (client bootstrap); new live-VM
+  `tests/smoke/test_repo_install.py` (marker `repo`). **Reused, not modified:** ADR-09's
   `read-version-matrix` action, the portable builder (`build-pkg-linux.yml` /
   `scripts/build-pkg-portable.py`), the `release.yml` `.pkg` artifacts, the ADR-04
   smoke harness (`tests/smoke/conftest.py` `smoke_vm` + `helpers.py` +
@@ -18,11 +25,12 @@
   **FreeBSD VM** (`build-pkg.yml` path) retained as the fidelity fallback if Linux
   catalog gen is not pfSense-acceptable. Client side: pfSense **CE 2.8+**
   (`FreeBSD:15:amd64`) `pkg` 1.21+. Smoke: the ADR-04 live pfSense CE VM.
-- **Test suite:** a new live-VM `tests/smoke/test_smoke_repo.py` (`-m smoke`).
-  **Default `python -m pytest` stays unchanged** (the whole `tests/smoke` tree is
-  `--ignore`d in default collection). No `pytest` oracle for the CI YAML / shell
-  itself → validation = `shellcheck`/`sh -n` + the **live-VM smoke** (§7), which is
-  also the ADR-01-style **kill-gate**.
+- **Test suite:** a new live-VM `tests/smoke/test_repo_install.py` carrying its **own
+  marker `repo`** (a distribution flow, deselected from `-m smoke`). **Default
+  `python -m pytest` stays unchanged** (the whole `tests/smoke` tree is `--ignore`d in
+  default collection). No `pytest` oracle for the CI YAML / shell itself → validation =
+  `shellcheck`/`sh -n` + the **live-VM `repo` smoke** (§7), which is also the
+  ADR-01-style **kill-gate**.
 
 ---
 
@@ -53,11 +61,16 @@
      `pkg_prefix => 'pfSense-pkg-'`). **Available Packages is restricted to the repo
      named `pfSense` (Netgate's)** — a third-party repo **cannot add list entries**.
    - **Install** — `pkg_install()` runs `pkg install -y <name>` with **no `-r`**. So
-     `pkg` resolves the name across **all enabled repos** and installs the **highest
-     version** (repo `priority` breaks ties). → once a package is *listed* (Netgate's
-     repo carries `pfSense-pkg-pfBlockerNG-devel` via our ports PR), the GUI **Install**
-     button **transparently pulls our higher-versioned build** from our repo. No GUI
-     patching, no co-opting the `pfSense` repo name.
+     `pkg` resolves the name across **all enabled repos**, and selection is keyed
+     **first on repo `priority:`** — a **higher-priority repo wins even at a lower
+     version**. *(Phase-1 live-VM finding — falsifies the earlier "highest version
+     wins, priority breaks ties": on the VM a competing repo at `priority: 200` /
+     version `_1` BEAT ours at `priority: 99` / version `_9`. Version is the
+     **secondary** key, only between equal-priority repos.)* → once a package is
+     *listed* (Netgate's repo carries `pfSense-pkg-pfBlockerNG-devel` via our ports
+     PR), our repo wins the GUI **Install** button purely because `add-repo.sh` sets
+     its `priority:` **above** the Netgate `pfSense` repo — **regardless of version**.
+     No GUI patching, no co-opting the `pfSense` repo name.
    - **Installed Packages** (`pkg_mgr_installed.php`) reads the **local pkg db** → a
      pfBlockerNG installed from our repo **shows there and runs normally**, identical
      to a Netgate-repo install. Only Available-list **discovery** and the GUI
@@ -129,7 +142,7 @@ regenerated index over the durable Release assets** — no stateful accumulation
 
 | Area | Decision |
 | --- | --- |
-| **Trust model** | **`signature_type: none`** — `pkg` fetches over HTTPS; trust anchor = TLS to `github.io` (matches the project's image-no-signature precedent). **No signing key in CI** (a CI-resident key would itself be a root-code attack surface). pfSense honors per-repo `none` (Context 4). |
+| **Trust model** | **`signature_type: none`** — `pkg` fetches over HTTPS; trust anchor = TLS to the GitHub-Pages host (the custom domain `brait.dev`; matches the project's image-no-signature precedent). **No signing key in CI** (a CI-resident key would itself be a root-code attack surface). pfSense honors per-repo `none` (Context 4). |
 | **Hosting** | **GitHub Pages**, deployed via `actions/upload-pages-artifact` + `actions/deploy-pages` (the site is *replaced* each deploy → **no `gh-pages` history bloat**; the 1 GB source-repo concern never arises). |
 | **Repo = derived index over Releases** | The **GitHub Releases** `.pkg` assets (ADR-09 `attach-pkgs`) are the **durable store**. The publish job **enumerates all releases, downloads their `.pkg` assets, buckets by ABI, runs `pkg repo` per ABI dir, and deploys the whole tree** — **stateless + idempotent**, so every published build (all versions, all ABIs) is retained without accumulating state. |
 | **Layout + `${ABI}`** | One catalog per ABI under `…/<ABI>/` (e.g. `…/FreeBSD:15:amd64/`); the client conf `url:` uses **`${ABI}`** so it auto-follows an OS upgrade. **Flavor collision guard:** today every supported combo collapses to one tree (CE 2.8 + Plus 25.03 are both FreeBSD15 / php83 / py311). **If** two matrix entries ever share ABI **and** package-version but differ in php/py, the same name+version+ABI **cannot coexist** in one catalog → split into `…/<ABI>-<php><py>/` subtrees and have `add-repo.sh` detect+pin the box's flavor. `build-repo.sh` **fails loud** on an unhandled collision (never silently drops a build). |
@@ -137,7 +150,7 @@ regenerated index over the durable Release assets** — no stateful accumulation
 | **Client bootstrap** | `scripts/add-repo.sh` writes `/usr/local/etc/pkg/repos/pfblockerng-devel.conf` (`url:` with `${ABI}`, `signature_type: none`, `priority:` above the `pfSense` repo, `enabled: yes`), runs `pkg update`, verifies. README one-liner. **CLI-only setup**; thereafter GUI Install works via cross-repo resolution. |
 | **GUI** | **No `src/` change.** Stock GUI **Install** of pfBlockerNG-devel pulls our build (Context 3, install not repo-locked). The GUI **update badge** stays Netgate-bound (a documented limitation); a pfBlockerNG GUI "Updates/Channel" panel for GUI-driven upgrade-to-our-latest is **out of scope** (deferred — would touch `src/www`). |
 | **Catalog contents** | **Only** `pfSense-pkg-pfBlockerNG` / `-devel`. Our repo therefore **only ever competes for our own package** — `pkg upgrade` can never pull anything else from us. |
-| **Version precedence** | Our build's version is published `≥` Netgate's for the same source (and `priority:` breaks ties) so cross-repo resolution selects **ours**. Versioning discipline is a **contract item** pinned by the smoke. |
+| **Repo precedence (priority)** | **Repo `priority:` is the primary key — it dominates version** (Phase-1 live-VM finding: a higher-priority repo wins even at a *lower* version). `add-repo.sh` sets our `priority:` **above** the Netgate `pfSense` repo, so cross-repo resolution selects **ours regardless of version**. Versioning discipline is therefore **secondary** (it only orders equal-priority repos) — `priority:` is the lever; the smoke pins precedence in both directions. |
 
 ### Semantics that MUST be preserved (the contract — pin with tests with the change)
 
@@ -190,16 +203,19 @@ regenerated index over the durable Release assets** — no stateful accumulation
 
 **Negative / risks**
 
-- **Authenticity = TLS only.** `none` means a compromise of github.io's TLS (or the
-  Pages content) could serve altered root-running packages. Accepted per precedent;
-  revisitable to **offline-signed PUBKEY** later (key never in CI) — the conf gains a
-  `signature_type`, the layout is unchanged.
+- **Authenticity = TLS only.** `none` means a compromise of the Pages host's TLS
+  (`brait.dev`) or the Pages content could serve altered root-running packages. Accepted
+  per precedent; revisitable to **offline-signed PUBKEY** later (key never in CI) — the
+  conf gains a `signature_type`, the layout is unchanged.
 - **GUI discovery + update badge stay Netgate-bound** (Context 3). Our newer builds
   install via GUI Install / CLI `pkg upgrade` but the GUI won't *badge* them — a
   documented limitation; the deferred GUI panel would close it.
-- **Cross-repo version races.** If Netgate's `-devel` outranks ours, theirs wins; if
-  ours is mis-versioned high, we could shadow a Netgate fix. Mitigated by versioning
-  discipline + `priority` + the smoke precedence assertions.
+- **Cross-repo precedence races.** `priority:` is the primary key (Phase-1 finding), so
+  our above-Netgate `priority:` makes ours win — but that also means we **shadow** a
+  same-name Netgate build by `priority:` even when theirs is newer (our catalog carries
+  only pfBlockerNG, so the blast radius is our own package). Mitigated by the
+  above-Netgate `priority:` + versioning discipline (the secondary key) + the smoke
+  precedence assertions in both directions.
 - **OS-major upgrade survival is the residual unknown** (Premise 3) — single-image
   precedence is proven; true major-jump survival is dispatch-only and may degrade to a
   documented CLI `pkg upgrade`.
@@ -278,8 +294,9 @@ Prompt: `01_Spike_Repo_Install.txt`
   **with no `-f`**. **Assert (transition):** package absent → installed **from our
   repo** (`pkg query '%R'`), deps resolved, POST-INSTALL ran, pfBlockerNG functions; and
   **cross-repo precedence** picks our build over a lower-versioned decoy (and the decoy
-  wins when ours is lower — both branches). Land as `tests/smoke/test_smoke_repo.py`
-  (marker `smoke`), minimal. **Record the verdict in `RESULTS/01_Results.txt`** — GO only
+  wins when ours is lower — both branches). Land as `tests/smoke/test_repo_install.py`
+  (marker `repo`, deselected from `-m smoke`), minimal. **Record the verdict in
+  `RESULTS/01_Results.txt`** — GO only
   if a real box honors the third-party repo for install + precedence; else REJECT/redesign.
 
 ### Phase 2 — Catalog generator + `${ABI}` layout + repo-conf template (the build tool)
@@ -319,10 +336,10 @@ Prompt: `04_Client_Bootstrap.txt`
 
 Prompt: `05_Smoke_Coverage.txt`
 
-- Promote Phase 1 into the full `test_smoke_repo.py`: **(a)** GUI-path / CLI install from
+- Promote Phase 1 into the full `test_repo_install.py`: **(a)** GUI-path / CLI install from
   our repo (cross-repo precedence both branches, before/after asserts); **(b)** `pkg
   upgrade` from a lower installed version → our newer build (transition); **(c)**
-  **dispatch-only** real-`github.io`-URL install (hermetic mock is the gated default).
+  **dispatch-only** real-`brait.dev`-URL install (hermetic mock is the gated default).
   If the OS-major upgrade-survival case can't favor our build, **document the CLI
   `pkg upgrade` degrade** and record numbers. Branch coverage + VM left clean.
 
@@ -340,15 +357,33 @@ Prompt: `06_Docs_DoD.txt`
 
 - `python -m pytest` unchanged; `shellcheck`/`sh -n`/markdownlint/URL-encoding gate clean.
 - A CI dispatch regenerates the catalog over all Release `.pkg` and deploys it to Pages;
-  a live VM `pkg update` against the URL succeeds.
-- `tests/smoke/test_smoke_repo.py` is green: install-from-our-repo (no `-f`, deps resolve,
-  registers, runs), cross-repo precedence (both branches), and `pkg upgrade` to our newer
-  build — on the ADR-04 VM.
+  a live VM `pkg update` against the URL succeeds. *(The hermetic `file://` + portable +
+  `build-repo.sh` catalogs are VM-accepted now; the public Pages deploy + the live-URL
+  leg are **post-merge** — see below.)*
+- `tests/smoke/test_repo_install.py` (marker **`repo`**) is green: install-from-our-repo
+  (no `-f`, deps resolve, registers, runs), cross-repo precedence (both branches), and
+  `pkg upgrade` to our newer build — on the ADR-04 VM.
 - The existing tag flow still publishes the Release + ports PR; the repo-publish job's
   failure leaves them intact.
-- Status flips **Proposed → Implemented (pending smoke)** once Phases 1–4 hold on
-  `adr/17`; **→ Accepted** once the §7 affected-flow smoke is green on the live VM — **no
-  human manual-smoke gate** (the live-VM smoke is the oracle).
+- Status flips **Proposed → Implemented (pending the post-merge live Pages deploy + the
+  gated live-URL verification)** — the hermetic affected-flow smoke (install / precedence /
+  `pkg upgrade`) is GREEN on the live VM; **→ Accepted** once the post-merge `repo-publish`
+  dispatch deploys the public `brait.dev` catalog and the gated
+  `test_install_from_live_pages_url` installs from the served URL — **no human
+  manual-smoke gate** (the live-VM smoke is the oracle).
+
+### POST-MERGE step (flips Implemented → Accepted)
+
+The live Pages deploy + the gated `test_install_from_live_pages_url` leg are **post-merge**,
+a GitHub constraint: a brand-new `workflow_dispatch` workflow is only dispatchable once it
+exists on the default branch (`devel`). `repo-publish.yml` lands with this ADR; then:
+
+1. `gh workflow run repo-publish.yml --ref devel -f build_branch_pkg=true` — deploys the
+   catalog to Pages (capture the run id + the `page_url`).
+2. Dispatch the `repo` smoke with `SMOKE_REPO_LIVE_URL=https://brait.dev/pfBlockerNG` set, so
+   `test_install_from_live_pages_url` runs instead of skipping (it polls the served catalog,
+   pins the Pages anycast IPs, writes our production conf, then `pkg install` with no `-f`
+   asserting `%R == pfblockerng-devel`). Green there confirms the live URL → Status **Accepted**.
 
 ### Reject / degrade criteria (decide on evidence)
 
@@ -358,23 +393,50 @@ Prompt: `06_Docs_DoD.txt`
   by **Phase 1** before any pipeline is built.
 - **Linux catalog gen is not pfSense-acceptable** → **DEGRADE**: generate the catalog on
   the FreeBSD VM (`build-pkg.yml`); localized, not a sink. Settled by **Phase 2**.
-- **OS-major upgrade can't be made to favor our build** → **DEGRADE**: cross-version
-  upgrade becomes a documented CLI `pkg upgrade` step (single-image precedence still
-  proven). Recorded in `RESULTS/05_Results.txt`.
+- **OS-major upgrade can't be made to favor our build** → **DEGRADE** *(outcome:
+  **DEGRADED-TO-CLI**, recorded in `RESULTS/05_Results.txt`)*: a true OS-major jump
+  (e.g. `FreeBSD:15` → `FreeBSD:16`, which changes `${ABI}` and thus the served `<ABI>/`
+  subtree) is not reachable on a single CE smoke image — an in-place `pfSense-upgrade`
+  across a major is `image-refresh.yml`'s job (ADR-09), not this per-run flow. The
+  single-image upgrade (`_1` → `_9` within one ABI) is proven; the OS-major case degrades
+  to the documented operator action: after a pfSense OS upgrade the box's `${ABI}` follows
+  it automatically (the conf `url:` is the literal `${ABI}`, §2), so a plain CLI
+  `pkg update -f && pkg upgrade` pulls our build for the **new** ABI once that ABI's catalog
+  is published. No test attempts it (it would fail-skip on one image) — a deliberate,
+  documented non-goal for the flow.
 - **Pages bandwidth/size ever bind** (won't at this scale — Context 5) → **MIGRATE** to a
   dedicated static host/CDN (same escape hatch ADR-09 wrote for `ci-metadata`); the conf
   `url:` changes, nothing else.
 
 ### Affected-flow smoke (gates Accept — on the ADR-04 live VM)
 
-- [ ] **Install from our repo, no `-f`.** Package absent → `pkg install
-  pfSense-pkg-pfBlockerNG-devel` installs **from our repo** (`pkg query '%R'`), deps
-  resolve, POST-INSTALL runs, pfBlockerNG answers.
-- [ ] **Cross-repo precedence (both branches).** Our higher version ⇒ ours installs; a
-  lower decoy ⇒ the decoy installs — proving precedence is real, not incidental.
-- [ ] **`pkg update` accepts the catalog.** The Pages-style catalog (hermetic mock by
-  default; real `github.io` dispatch-only) is consumed without error.
-- [ ] **Upgrade to our newer build.** A lower version installed → `pkg upgrade` moves it
-  to our newer build (assert before/after versions).
-- [ ] **Additive safety.** A simulated repo-publish failure leaves `release`/`ports-pr`
-  green (CI-level assertion / job isolation review).
+All five are GREEN on the live pfSense CE VM via `tests/smoke/test_repo_install.py` (marker
+`repo`), dispatched `gh workflow run smoke.yml -f pytest_marker=repo` (the standalone
+`repo-install.yml` is dispatchable once on `devel`). Run ids cite the load-bearing dispatch.
+
+- [x] **Install from our repo, no `-f`.** Package absent → `pkg install
+  pfSense-pkg-pfBlockerNG-devel` installs **from our repo** (`pkg query '%R'` ==
+  `pfblockerng-devel`), deps resolve, every registered file lands (> 50), no `-f`.
+  *(`test_install_from_our_repo_lands_all_files` — run **27031334263**, P1.)*
+- [x] **Cross-repo precedence (both branches).** Proven priority-driven against a controlled
+  `netgate-decoy` repo serving the same package: ours at the higher `priority:` ⇒ ours
+  installs (`%R == pfblockerng-devel`); the decoy at the higher `priority:` ⇒ the decoy
+  installs (`%R == netgate-decoy`) — both directions, so precedence is real, not incidental.
+  *(`test_precedence_ours_higher_priority_wins` + `test_precedence_decoy_higher_priority_wins`
+  — run **27031334263**, P1.)*
+- [x] **`pkg update` accepts the catalog.** The hermetic `file://` Pages-style catalog —
+  from **both** generators — is consumed without error: `build-repo.sh` (real `pkg repo`)
+  and `build-repo-portable.py` (pure-Python). *(`test_build_repo_script_catalog_is_accepted`
+  — run **27033922928**, P2; `test_portable_catalog_is_accepted` — run **27035602221**, P3a.
+  The real `brait.dev` URL leg, `test_install_from_live_pages_url`, is gated on
+  `SMOKE_REPO_LIVE_URL` and is the post-merge step above.)*
+- [x] **Upgrade to our newer build.** Our repo carrying only `_1` ⇒ installed `%v == _1`
+  from `pfblockerng-devel`; same repo rebuilt with `_9` ⇒ `pkg upgrade` moves it to
+  `%v == _9`, still from `pfblockerng-devel` — a real before ≠ after transition, both
+  versions asserted. The shipped `add-repo.sh` bootstrap is also exercised end-to-end.
+  *(`test_pkg_upgrade_moves_to_our_newer_build` + `test_shipped_add_repo_sh_bootstrap_installs`
+  — run **27040686824**, P5.)*
+- [x] **Additive safety.** `repo-publish` is a **leaf** in `release.yml`'s `needs:` graph
+  (nothing depends on it) and is gated `if: always()`, copied from `attach-pkgs` — so a
+  repo-publish failure (build / generator / Pages deploy) cannot gate or break
+  `release`/`ports-pr`/`attach-pkgs`. *(Job-isolation review, P3 — `RESULTS/03_Results.txt`.)*
