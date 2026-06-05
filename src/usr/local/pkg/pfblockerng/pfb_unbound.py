@@ -709,6 +709,9 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["gpListDB"] = False
     pfb["noAAAADB"] = False
     pfb["python_idn"] = False
+    # ADR-08: the IDN-feature mode, derived from python_idn (see idn_mode_from_legacy).
+    # Default OFF; the ini load below recomputes it from the loaded python_idn.
+    pfb["idn_mode"] = IDN_MODE_OFF
     # TLD-Allow defaults. The PHP ini writer always emits these three MAIN keys, so
     # the config.has_option() loads below normally populate them -- but default them
     # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
@@ -861,6 +864,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_hsts"] = config.getboolean("MAIN", "python_hsts")
             if config.has_option("MAIN", "python_idn"):
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
+            # ADR-08: derive the IDN mode from the (just-loaded) legacy python_idn flag.
+            # The PHP ini still writes only python_idn=on|off this phase, so 'on'->All-IDN,
+            # off->Off -- today's exact behaviour. The Confusable value plumbs in at Phase 6.
+            pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
             if config.has_option("MAIN", "python_tld_seg"):
                 pfb["python_tld_seg"] = config.getint("MAIN", "python_tld_seg")
             if config.has_option("MAIN", "decisiondb_max"):
@@ -1318,8 +1325,46 @@ def init_standard(id: int, env: module_env) -> bool:
     return True
 
 
+# ADR-08: IDN-feature mode selector. The legacy on/off ``python_idn`` toggle becomes
+# a three-valued mode so a later phase can add a surgical cross-script-homoglyph tier
+# without disturbing the two behaviour-preserving modes:
+#   IDN_MODE_OFF        -- the IDN feed never fires (every xn-- query resolves normally).
+#   IDN_MODE_ALL        -- TODAY'S behaviour: EVERY xn-- query is blocked as feed="IDN"
+#                          (pure prefix match, no punycode decode).
+#   IDN_MODE_CONFUSABLE  -- reserved for the Phase-5 TR39 mixed-script analyzer. INERT
+#                          this phase: behaves exactly like OFF until the analyzer is wired
+#                          (no decode, no script work, no block).
+# Migration (RESULTS/01 SS1): the PHP ini still writes only python_idn=on|off, so 'on'
+# maps to IDN_MODE_ALL and off/absent to IDN_MODE_OFF -- byte-identical to today.
+IDN_MODE_OFF = "off"
+IDN_MODE_ALL = "all"
+IDN_MODE_CONFUSABLE = "confusable"
+
+
+def idn_mode_from_legacy(python_idn: bool) -> str:
+    """Map the legacy on/off ``python_idn`` flag to an IDN mode (RESULTS/01 SS1).
+
+    True ('on') -> IDN_MODE_ALL (today's block-all-IDN behaviour); False -> IDN_MODE_OFF.
+    The Confusable value cannot arise from the legacy flag -- it reaches Python only once
+    the PHP UI emits it (Phase 6); until then this is the sole derivation of the mode.
+    """
+    return IDN_MODE_ALL if python_idn else IDN_MODE_OFF
+
+
 def is_idn_domain(q_name: str) -> bool:
     return q_name.startswith("xn--") or ".xn--" in q_name
+
+
+def idn_mode_decision(q_name: str, idn_mode: str) -> bool:
+    """Pure IDN feed decision: should this query be blocked by the IDN feed?
+
+    Extracted verbatim from the evaluate_domain IDN branch so the contract can be
+    pinned (ADR-08 Phase 3). Returns True only in IDN_MODE_ALL on an xn-- query --
+    the exact condition the inline ``cfg["python_idn"] and is_idn_domain(q_name)``
+    encoded. IDN_MODE_OFF and IDN_MODE_CONFUSABLE return False (Confusable is INERT
+    this phase; its analyzer arrives in Phase 5). No punycode decode, no script work.
+    """
+    return idn_mode == IDN_MODE_ALL and is_idn_domain(q_name)
 
 
 def get_q_name_qstate(qstate: module_qstate | None) -> str:
@@ -4346,10 +4391,17 @@ def evaluate_domain(
             feed = "TLD_Allow"
             group = "DNSBL_TLD_Allow"
 
-        if not is_found and cfg["python_idn"] and is_idn_domain(q_name):
-            is_found = True
-            feed = "IDN"
-            group = "DNSBL_IDN"
+        # ADR-08: the IDN feed. ``idn_mode`` is the three-valued selector (off/all/
+        # confusable); derive it from the legacy cfg["python_idn"] when a cfg predates
+        # the key (legacy callers/tests still pass only python_idn -- True->All-IDN).
+        # idn_mode_decision is byte-equivalent to the old inline test in All-IDN mode;
+        # Off and the INERT Confusable mode both return False this phase.
+        if not is_found:
+            idn_mode = cfg.get("idn_mode") or idn_mode_from_legacy(cfg.get("python_idn", False))
+            if idn_mode_decision(q_name, idn_mode):
+                is_found = True
+                feed = "IDN"
+                group = "DNSBL_IDN"
 
         if not is_found and cfg["regexDB"] and q_name:
             # Snapshot-iterate (list(...)) so the runtime eviction can mutate the live
@@ -4803,6 +4855,10 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     "dnsbl_ipv4": pfb["dnsbl_ipv4"],
                     "dnsbl_ipv6": pfb["dnsbl_ipv6"],
                     "python_idn": pfb["python_idn"],
+                    # ADR-08: derive defensively so a pfb that predates the key (a
+                    # hand-edited ini, or a test seeding only python_idn) still resolves
+                    # to today's mode rather than KeyError-ing.
+                    "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
                     "regexDB": bool(snap.regex_db),
                     "whiteDB": bool(snap.white_db),
                     "allowRegexDB": bool(snap.allow_regex_db),
