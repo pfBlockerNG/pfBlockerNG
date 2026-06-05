@@ -45,7 +45,10 @@
 #   --ssh-port N     Proxmox-local port forwarded to the guest's :22 (default: 2222)
 #   --mac ADDR       guest NIC MAC (default: BC:24:11:37:9C:AC — must match the image)
 #   --compression T  qcow2 compression for the published image: zstd|zlib|off (default: zstd)
-#   --upgrade-timeout S  seconds to wait for the pfSense-upgrade+reboot (default: 1800)
+#   --upgrade-timeout S  MAX seconds to wait for the pfSense-upgrade+reboot
+#                    (default: 1200). The poll exits the instant /etc/version
+#                    changes, so this only bounds how long a STUCK upgrade waits
+#                    before the run fails — it is not added to a successful run.
 #   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
 #                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
 #                    versions; reboots the guest and waits for SSH before proceeding.
@@ -70,7 +73,7 @@ GUEST_KEY="${SMOKE_SSH_KEY:-}"
 GUEST_PORT=2222
 MAC="BC:24:11:37:9C:AC"
 COMPRESSION=zstd
-UPGRADE_TIMEOUT=1800
+UPGRADE_TIMEOUT=1200
 UPGRADE_PKGS=0
 KEEP=0
 FORCE=0
