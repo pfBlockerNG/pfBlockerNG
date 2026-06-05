@@ -513,12 +513,12 @@ pfBlockerNG IP update.
 **1. HAProxy config (frontend ACLs).** Add, on the frontend:
 
 - a **`source_ip`** ACL (type *"Source IP matches IP or Alias"*) whose value is the
-  alias **`pfB_Aggregate_v4`** (ADR-11). The HAProxy package emits the alias members
-  to `ipalias_pfB_Aggregate_v4.lst` **only for a `source_ip`-type ACL referencing a
+  alias **`pfB_Deny_Aggregated_v4`** (ADR-11). The HAProxy package emits the alias members
+  to `ipalias_pfB_Deny_Aggregated_v4.lst` **only for a `source_ip`-type ACL referencing a
   pfSense alias** (`haproxy.inc:1084-1092`, written as `src -f …/ipalias_<alias>.lst`).
   This ACL exists purely to make the package emit and maintain that `.lst` file.
 - a **custom header ACL** matching the CF real-client IP against that same file, e.g.
-  `acl cf_blocked req.hdr_ip(CF-Connecting-IP) -f /var/etc/haproxy/ipalias_pfB_Aggregate_v4.lst`
+  `acl cf_blocked req.hdr_ip(CF-Connecting-IP) -f /var/etc/haproxy/ipalias_pfB_Deny_Aggregated_v4.lst`
   (use `req.hdr_ip(X-Forwarded-For)` if you front with XFF instead), and an action to
   `http-request deny if cf_blocked`.
 
@@ -527,7 +527,7 @@ pfBlockerNG IP update.
 > Gate the deny on the TCP source being a Cloudflare edge range (e.g. an additional
 > `src -f` ACL of Cloudflare's published IP ranges) before honouring the header.
 
-Because ADR-11 ships a **never-empty** `pfB_Aggregate_*` consumer file, an empty
+Because ADR-11 ships a **never-empty** `pfB_Deny_Aggregated_*` consumer file, an empty
 aggregate still validates and reloads — **no `/../../` path trick or dummy-IP hack**
 is needed (the old workarounds are gone).
 
@@ -541,7 +541,7 @@ reloads when IP data actually changed):
 
 `haproxy_check_run(1)` (wrapped by `haproxy_configure()`, `haproxy.inc:1347-1350`;
 the reload core is `haproxy.inc:2491`) is the package's **graceful** reload: it
-re-writes the config — re-emitting `ipalias_pfB_Aggregate_v4.lst` from the current
+re-writes the config — re-emitting `ipalias_pfB_Deny_Aggregated_v4.lst` from the current
 alias — and restarts with `-sf` (finish existing connections; hitless), **not** a
 hard restart. `pfSsh.php` (`/usr/local/sbin/pfSsh.php`) is used rather than a bare
 `php -r` because it bootstraps the pfSense environment (`globals.inc`/`functions.inc`/
