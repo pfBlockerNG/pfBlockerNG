@@ -1,5 +1,5 @@
 #!/bin/sh
-# ip_pre_AWS_IL.sh - Amazon AWS Region (IL))
+# ip_pre_AWS_IL.sh - Amazon AWS Region (IL)
 # Thin wrapper: the parse/aggregate logic lives in aws_region_prefixes.sh;
 # this only supplies the jq region filter. The shared script is resolved
 # relative to THIS script's own location ($0), so it works regardless of the
