@@ -52,7 +52,7 @@
           },
           "ci": {
             "type": "boolean",
-            "description": "true = include in the CI smoke matrix (CE only). false = build-only (always false for Plus; use for beta CE if no image is available yet)."
+            "description": "true = include in the CI smoke matrix (CE only). false = build-only (false for Plus for now — no licensed/redistributable CI image; use for beta CE if no image is available yet)."
           }
         },
         "additionalProperties": false
