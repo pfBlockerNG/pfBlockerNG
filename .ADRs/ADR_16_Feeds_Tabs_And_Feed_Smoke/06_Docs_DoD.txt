@@ -1,0 +1,60 @@
+================================================================================
+PHASE 6 PROMPT — Docs + Definition of Done + manual smoke
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 6 (final) of ADR-16. Update the user/dev docs
+for the Feeds-page tabs + the new feed-load smoke, finalise §7, and set the ADR Status. Mostly
+docs; no behaviour change. Work in this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The Feeds page UX changed (IPv4/IPv6/DNSBL tabs) and a new smoke feed-set exists; README/CLAUDE.md
+must reflect both, and the ADR Status + manual-smoke checklist must be finalised so the maintainer
+knows exactly what to confirm on a live box before Accept.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt — the Part-C GO/DEMOTE outcome +
+  which formats are covered (so the docs + §7 reflect reality). If missing, STOP and report.
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§7 DoD, reject criteria, manual smoke) and the
+  RESULTS/01-05 handoffs (to summarise what actually landed).
+- README.md / CLAUDE.md — the sections describing the Feeds page (if any) and the smoke harness /
+  how to add a feed fixture or run the smoke.
+- CLAUDE.md "## Updating documentation" (docs-only CI carve-out; markdownlint compliance).
+
+ACTION PLAN (ordered)
+1. README.md: note the Feeds page is organized into IPv4/IPv6/DNSBL tabs (matching IP/DNSBL/Reports).
+2. CLAUDE.md (smoke section): document the mock-feed load smoke — where the sample fixtures live,
+   how `_MockFeedServer.register()` serves them, how to add a format, and the Part-C gate status
+   (gated vs dispatch-only per RESULTS/05).
+3. ADR.md: finalise §7 (tick what's done in-repo; leave the maintainer's live-box items), record
+   the Part-C outcome (covered formats / any demotion), and set Status →
+   "Implemented (pending smoke test)" (or reflect a demotion). Keep the reject criteria.
+4. Make sure the manual-smoke checklist in §7 is concrete and matches what landed.
+
+CONSTRAINTS
+- Docs + ADR text only (no src/ or test behaviour change). markdownlint-clean (blank lines around
+  headings/lists/fences; language on fences; single trailing newline).
+- ADR text (ADR.md + this RESULTS handoff) may push direct to `devel` per the CLAUDE.md carve-out;
+  README/CLAUDE.md are docs (CI-skipped) and go through the normal worktree flow. Keep it one commit.
+
+VERIFICATION (must all pass before the phase is done)
+- npx markdownlint-cli2 → 0 errors on the touched .md files.
+- python -m pytest → unchanged; the tree is otherwise untouched.
+- Read-through: README/CLAUDE.md describe the tabs + the feed smoke accurately; §7 matches reality.
+
+EXPECTED RESULT
+Docs reflect the Feeds tabs + the feed-load smoke; ADR-16 §7 is finalised; Status set; the
+maintainer has a precise live-box manual-smoke checklist for Accept.
+
+COMMIT (single)
+    docs: finalize ADR-16 (Feeds tabs + feed-load smoke) + set Status (ADR-16 P6)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`. The
+README/CLAUDE.md doc changes land on `devel` (docs-only, CI-skipped); the ADR.md/RESULTS push
+direct per the carve-out. PR body via --body-file if a PR is used.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/06_Results.txt` (plain .txt)
+State: what docs changed; the final Status; the Part-C outcome (formats covered / demotion); the
+outstanding maintainer manual-smoke items; confirmation the ADR is fully implemented in-repo.

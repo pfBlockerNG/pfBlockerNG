@@ -1,0 +1,88 @@
+================================================================================
+PHASE 5 PROMPT — Live HTTP-feed load smoke (FALSIFY first, then expand) — the Part-C kill-gate
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §1 Context 4-6 + "Premise to
+     falsify" + §7 reject/demote criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 5 of ADR-16. Add a live-VM smoke that loads
+the Phase-4 sample feeds OVER HTTP (the existing mock server) via a real Force Update, and
+asserts they load on the box. This is the falsifiable Part-C premise: prove ONE IP + ONE DNSBL
+HTTP feed loads reliably BEFORE adding the format matrix; if it can't hit the §7 bar, DEMOTE
+Part C to dispatch-only and record it. Work in this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The HTTP feed-fetch path (curl → matcher) is built but NEVER tested — every existing case feeds
+a LOCAL file, and the harness comment hints local files were chosen partly for HTTP-fetch
+reliability (Context 5). This phase composes the proven pieces (mock server + curl + load/assert
+helpers + System-DNS→mock wiring) for an actual feed fetch — the gap Part C closes — and treats
+the reliability as a kill-gate (ADR-01/ADR-10 discipline: falsify the premise cheaply first).
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/04_Results.txt — the fixture paths + the known
+  member/non-member per file. If missing, STOP and report.
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§1 Context 4-6, the premise-to-falsify, §7
+  reject/demote criteria).
+- tests/smoke/conftest.py — `_MockFeedServer`/`mock_feeds` (register + guest_url), `_StubDnsServer`
+  (`.received()`), `use_system_dns_upstream` wiring (so DNSBL forwarding works), and how existing
+  smoke tests acquire `deployed_vm`/`mock_feeds`.
+- tests/smoke/helpers.py — `IpCase`/`DnsblCase(feed_url=…)`, `inject`, `reload`/the Force-Update
+  scopes, `CaseContext` (inject→reload→probe→reset; note egress is OPEN during inject/reload, so
+  the mock fetch is reachable, and BLOCKED during the probe body), `pfctl_table_members` +
+  `rule_references` (IP asserts), `dns_probe` + `is_vip`/`is_null_ip`/`resolves_to` (DNSBL asserts).
+- tests/smoke/test_smoke_matrix.py — the EXISTING local-file IP + DNSBL cases to mirror (same
+  asserts, but feed_url = the mock URL instead of write_local_feed).
+- CLAUDE.md "## Smoke tests (ADR-04)" (probe on-box; first DNS answer after reload is
+  authoritative; the block shapes) + "## Test coverage" (transition + branch coverage).
+
+ACTION PLAN (ordered — kill-gate FIRST)
+1. KILL-GATE (the two proof cases): new tests/smoke/test_smoke_feeds.py (marker `smoke`):
+   - IP: `mock_feeds.register(...)` (or point at the Phase-4 fixture file) → `IpCase(feed_url=
+     <mock URL>)` → `CaseContext` (Force Update) → assert the known member IP is in
+     `pfctl_table_members(alias)` AND a known non-member is NOT, and `rule_references(alias)`.
+   - DNSBL: same shape → `DnsblCase(feed_url=<mock URL>)` → assert the known member domain
+     returns the block shape via `dns_probe` (and, if wired, never reached the stub upstream via
+     `stub_dns.received`), while a non-member resolves. Use `helpers.unique_domain`-style names
+     per the fixture.
+   Confirm BOTH pass and are not flaky (re-run locally via the smoke dispatch / the CI smoke leg
+   per the §7 measurement). This is the premise: HTTP feed fetch over the mock loads end-to-end.
+2. GATE DECISION: if the kill-gate can't reach ≥4/5 clean at a sane budget → DEMOTE: keep
+   test_smoke_feeds.py but mark/wire it dispatch-only (out of the gated smoke set), record the
+   numbers + decision in RESULTS/05_Results.txt, and STOP expanding (Part A already shipped;
+   local-file load coverage already exists). Otherwise continue.
+3. EXPAND (only if the gate held): add one case per remaining representative format from Phase 4
+   — IP {range, IPv6}, DNSBL {hosts, ABP/EasyList} — each a transition test (member loads /
+   non-member doesn't; for ABP, the `@@` allow exception must NOT block). Keep each small; reuse
+   `CaseContext` for inject→reload→assert→reset isolation.
+4. Ensure session isolation: each case resets the box (CaseContext does); the VM is left clean.
+
+CONSTRAINTS
+- Tests + fixtures wiring only. No src/ change, no new HTTP server, no second VM path. Reuse
+  `_MockFeedServer`/`mock_feeds`, `IpCase`/`DnsblCase`, `CaseContext`, the existing asserts.
+- Marker `smoke`; stay out of default collection. 4-space, type hints, no bare except.
+- Probe on-box (`drill @127.0.0.1`); the first post-reload answer is authoritative (don't loop
+  for a better one). Inert fixture data only.
+- Do NOT silently cap coverage — if a format is dropped (gate miss or curl rejects it), log/record it.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → unchanged (smoke ignored by default); ruff clean.
+- Live smoke: the kill-gate IP + DNSBL HTTP-feed cases pass; (if expanded) each format case
+  passes; the §7 reliability numbers are recorded.
+
+EXPECTED RESULT
+The HTTP feed-fetch path has live coverage: representative IP + DNSBL feeds served over the mock
+load via Force Update and are asserted on the box — OR Part C is demoted to dispatch-only with the
+gap recorded, Part A unaffected.
+
+COMMIT (single)
+    tests: add live mock-feed-over-HTTP load smoke (IP + DNSBL formats) (ADR-16 P5)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`, push
+`adr/16`. Touches tests/ → lands on `devel` via a rebase-only PR. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt` (plain .txt)
+State: the kill-gate result (IP + DNSBL HTTP load pass? the reliability numbers); the GO/DEMOTE
+decision + why; which formats are covered vs dropped (and why); the test function names + how
+they're gated (smoke vs dispatch-only); any HTTP-fetch gotcha (timeouts, egress timing, gzip);
+the go-ahead for Phase 6.
