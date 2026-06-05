@@ -3,6 +3,44 @@
 Helper scripts for developing, deploying, and building pfBlockerNG. **Dev-only** —
 none of this ships in the release archive (which contains only `src/`).
 
+## Supported-version matrix
+
+The single source of truth for which pfSense versions pfBlockerNG supports lives on
+the **`ci-metadata` orphan branch** (its own history, off `main`/`devel`) as
+`supported-versions.json`. All CI/build workflows read it at runtime.
+
+| Script | Use |
+| --- | --- |
+| [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD matrix and CI matrix. |
+
+To add or drop a version, edit `supported-versions.json` via a PR against `ci-metadata`.
+**No workflow change is needed** — the `resolve-version` job in `build-image.yml`
+and every other consumer reads from `ci-metadata` at runtime.
+
+The matrix schema per entry:
+
+```text
+{
+  "pfsense_version": "2.8.x",       # pfSense version (CE: X.Y.x; Plus: release label)
+  "channel":         "CE",           # CE | Plus
+  "freebsd_version": "15.0-RELEASE", # full FreeBSD version string (build env)
+  "freebsd_major":   "15",           # FreeBSD major (ABI dedup key; artifact suffix)
+  "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
+  "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
+  "status":          "GA",           # beta | GA
+  "ci":              true            # include in smoke CI matrix (always false for Plus)
+}
+```
+
+Lifecycle policy:
+
+- **Add** when a beta/GA lands (curated — a human edits the JSON).
+- **Drop** the oldest CE only when the newest CE goes GA.
+- **Plus** entries are always `ci: false` (build-only; no licensed CI image).
+
+For the future: if CI infrastructure grows, the file can move to a dedicated public
+`pfBlockerNG-ci-infra` repo (raw URL, no token) — a mechanical swap in `read-version-matrix.sh`.
+
 ## Deploy / install onto a pfSense box
 
 | Script | Use |

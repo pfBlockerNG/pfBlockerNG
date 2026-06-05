@@ -698,10 +698,18 @@ Update `stubs/pfsense/` when:
   absent from the 2.7.2 stub source, e.g. `config_read_file`). PHPStan is the gate:
   prefer stubbing a real pfSense function over a `phpstan-baseline.neon` suppression.
 
-When the minimum supported CE version changes, also **rebuild + republish the
-pfSense CE smoke image** (ADR-04): upgrade-in-place for a patch/minor bump, a
-fresh seed on a major — via `.github/workflows/build-image.yml` (publish-on-pass,
-gated by the smoke round-trip). See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
+When the minimum supported CE version changes, also:
+
+1. **Update the supported-version matrix** — edit `supported-versions.json` on the
+   **`ci-metadata` orphan branch** (off `main`/`devel`, its own history) via a PR
+   against `ci-metadata`. This is the **single source of truth** for which pfSense
+   versions are supported and their `(freebsd_version, php_version)` build pair; all
+   workflows read it at runtime via `scripts/read-version-matrix.sh` and
+   `.github/actions/read-version-matrix/`. See `scripts/README.md § "Supported-version matrix"`.
+2. **Rebuild + republish the pfSense CE smoke image** (ADR-04): upgrade-in-place
+   for a patch/minor bump, a fresh seed on a major — via
+   `.github/workflows/build-image.yml` (publish-on-pass, gated by the smoke
+   round-trip). See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
 
 ---
 

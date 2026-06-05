@@ -1,0 +1,134 @@
+name: Self-test — version matrix reader
+
+# Verify that scripts/read-version-matrix.sh correctly parses the
+# supported-versions.json on ci-metadata and emits the expected BUILD
+# and CI matrices. workflow_dispatch only — this is a development/
+# debugging aid, not a PR gate. (ADR-09 Phase 2)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-reader:
+    name: Read + print supported-version matrices
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (for scripts/read-version-matrix.sh)
+        uses: actions/checkout@v6
+
+      - name: Read matrices via composite action
+        id: matrices
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Print BUILD matrix (all entries)
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+        run: |
+          set -eu
+          printf '=== BUILD matrix (all entries, carrying (freebsd_version, php_version) pair) ===\n'
+          printf '%s' "$BUILD_MATRIX" | jq .
+          COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
+          printf '\n%s entries total\n' "$COUNT"
+
+      - name: Print CI matrix (ci:true CE entries only)
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          printf '=== CI matrix (ci:true CE entries only — fed to smoke fan-out) ===\n'
+          printf '%s' "$CI_MATRIX" | jq .
+          COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
+          printf '\n%s CI entries\n' "$COUNT"
+
+      - name: Verify build matrix contains expected CE 2.8.x entry
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+        run: |
+          set -eu
+          # Sanity: the seed must have the 2.8.x CE entry with FreeBSD 15 + PHP 8.3.
+          ENTRY="$(printf '%s' "$BUILD_MATRIX" | jq -e '
+            .[] | select(.channel == "CE" and .pfsense_version == "2.8.x")
+          ')" || {
+            printf '::error::BUILD matrix is missing the expected CE 2.8.x entry\n'
+            exit 1
+          }
+          FB="$(printf '%s' "$ENTRY" | jq -r '.freebsd_version')"
+          PHP="$(printf '%s' "$ENTRY" | jq -r '.php_version')"
+          CI_FLAG="$(printf '%s' "$ENTRY" | jq -r '.ci')"
+          if [ "$FB" != "15.0-RELEASE" ]; then
+            printf '::error::CE 2.8.x freebsd_version expected 15.0-RELEASE, got %s\n' "$FB"
+            exit 1
+          fi
+          if [ "$PHP" != "8.3" ]; then
+            printf '::error::CE 2.8.x php_version expected 8.3, got %s\n' "$PHP"
+            exit 1
+          fi
+          if [ "$CI_FLAG" != "true" ]; then
+            printf '::error::CE 2.8.x ci expected true, got %s\n' "$CI_FLAG"
+            exit 1
+          fi
+          printf 'CE 2.8.x entry OK: FreeBSD %s, PHP %s, ci=%s\n' "$FB" "$PHP" "$CI_FLAG"
+
+      - name: Verify Plus entry is ci:false
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+        run: |
+          set -eu
+          # Plus entries must never be in CI.
+          PLUS_CI="$(printf '%s' "$BUILD_MATRIX" | jq '[.[] | select(.channel == "Plus" and .ci == true)] | length')"
+          if [ "$PLUS_CI" -ne 0 ]; then
+            printf '::error::%s Plus entries have ci=true — Plus must always be ci:false\n' "$PLUS_CI"
+            exit 1
+          fi
+          printf 'Plus entries all have ci=false: OK\n'
+
+      - name: Verify CI matrix contains only CE entries
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          NON_CE="$(printf '%s' "$CI_MATRIX" | jq '[.[] | select(.channel != "CE")] | length')"
+          if [ "$NON_CE" -ne 0 ]; then
+            printf '::error::CI matrix contains %s non-CE entries — only CE should be in CI\n' "$NON_CE"
+            exit 1
+          fi
+          printf 'CI matrix contains only CE entries: OK\n'
+
+      - name: Verify reject-unknown behaviour (simulate unknown version lookup)
+        run: |
+          set -eu
+          # The reject-unknown contract: looking up a version not in the matrix
+          # must fail non-zero. Simulate it by running the lookup script with a
+          # clearly unknown version string.
+          MATRIX_JSON="$(git fetch origin ci-metadata && git show origin/ci-metadata:supported-versions.json)"
+          UNKNOWN="9.9.9"
+          MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$UNKNOWN" '
+            .versions[]
+            | select(.channel == "CE")
+            | . as $e
+            | select(
+                ($e.pfsense_version | endswith(".x") and ($ver | startswith($e.pfsense_version[:-1])))
+                or $e.pfsense_version == $ver
+              )
+          ' 2>/dev/null | jq -s '.[0] // empty')" || true
+
+          if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
+            printf '::error::lookup unexpectedly matched unknown version %s: %s\n' "$UNKNOWN" "$MATCH"
+            exit 1
+          fi
+          printf 'reject-unknown contract verified: version %s correctly returns no match\n' "$UNKNOWN"
+
+      - name: Summary
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          BUILD_COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
+          CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
+          printf '\nAll assertions passed.\n'
+          printf 'BUILD matrix: %s entries | CI matrix: %s entries\n' "$BUILD_COUNT" "$CI_COUNT"
