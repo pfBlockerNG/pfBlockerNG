@@ -92,6 +92,17 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         yield smoke_vm
     finally:
         h.unblock_egress()
+        # MODULE ISOLATION: this module enables non-default DNSBL settings (pfb_regex +
+        # pfb_regex_list, pfb_regex_cap, pfb_cname) via user_regex/regex_cap/cname_validation
+        # cases. inject() MERGES into the DNSBL-settings node and reset() does NOT clear it,
+        # so a leftover (e.g. pfb_regex=on) would keep rebuilding DNSBL_Regex and flipping
+        # PFB_DNSBL_CHANGED on a LATER module's reloads (e.g. the hooks module's changed-list
+        # assertions). Delete the node so the next module starts from the default state.
+        # (Best-effort: never mask the test outcome with a teardown error.)
+        try:
+            h.clear_dnsbl_settings(smoke_vm)
+        except Exception as cleanup_exc:  # noqa: BLE001
+            print(f"[smoke] clear_dnsbl_settings failed on ABP teardown (suppressed): {cleanup_exc!r}")
         h.collect_host_diagnostics(smoke_vm)
 
 

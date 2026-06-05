@@ -379,25 +379,37 @@ no other value is promised):
 | --- | --- | --- |
 | `PFB_WHEN` | pre, post | `pre` or `post` |
 | `PFB_TRIGGER` | pre, post | `cron` \| `update` \| `force-reload` |
-| `PFB_IP_CHANGED` | post | `0` \| `1` — IP-side (firewall) data changed this pass |
+| `PFB_IP_CHANGED` | post | `0` \| `1` — a firewall **rule** change happened this pass (a filter reload ran); **not** set by a content-only alias change |
 | `PFB_DNSBL_CHANGED` | post | `0` \| `1` — DNSBL data changed this pass |
 | `PFB_STATUS` | post | reserved placeholder — currently always `ok` |
-| `PFB_CHANGED_IP_ALIASES` | post | space-separated list of IP firewall aliases (`pfB_*`) updated this pass; empty when none |
-| `PFB_CHANGED_DNSBL_GROUPS` | post | space-separated list of DNSBL groups (`DNSBL_*`) updated this pass; empty when none |
+| `PFB_CHANGED_IP_ALIASES` | post | space-separated list of IP firewall aliases (`pfB_*`) whose **contents** changed this pass; empty when none |
+| `PFB_CHANGED_DNSBL_GROUPS` | post | space-separated list of DNSBL groups (`DNSBL_*`) genuinely updated this pass; empty when none |
 
-`PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` are **accurate** and are the flags a hook
-should guard on. `PFB_TRIGGER` emits exactly `cron | update | force-reload`:
-`update` is a settings save, `force-reload` is a GUI IP-only / DNSBL-only Force
-Reload, and `cron` covers scheduled cron **and** GUI Force Update / Force
-Reload (All) — the ADR's nominal `force-update` collapses to `cron` because both
-arrive identically. `PFB_CHANGED_IP_ALIASES` and `PFB_CHANGED_DNSBL_GROUPS` list
-what the pass **updated** this run (feeds re-processed / list rebuilt / removed) —
-the IP firewall aliases (`pfB_*`) and the DNSBL groups (`DNSBL_*`) respectively, on
-their own vars because DNSBL groups are not firewall aliases — sourced from the
-signal the pass already computes; both are Reputation-mode-independent and are
-**not** a byte-level membership diff. `PFB_STATUS` remains a stable reserved
-placeholder (no pass-wide error accumulator exists); its **name** is stable, but do
-not branch a recipe on its value.
+`PFB_TRIGGER` emits exactly `cron | update | force-reload`: `update` is a settings
+save, `force-reload` is a GUI IP-only / DNSBL-only Force Reload, and `cron` covers
+scheduled cron **and** GUI Force Update / Force Reload (All) — the ADR's nominal
+`force-update` collapses to `cron` because both arrive identically.
+
+**`PFB_IP_CHANGED` is a rule-change signal, not a data-change signal.** It is `1`
+only when the pass actually changed firewall **rules** (a filter reload ran). A pass
+that merely refreshes an alias table's **contents** (the common case: a feed
+re-downloaded with new entries, applied via `pfctl -T replace`) does **not** change
+any rule, so `PFB_IP_CHANGED` stays `0` even though the table changed. To act when
+the **blocklist data** changed, guard on a **non-empty** `PFB_CHANGED_IP_ALIASES`
+(`[ -n "$PFB_CHANGED_IP_ALIASES" ]`), not `PFB_IP_CHANGED=1` — the latter misses
+content-only updates. The HAProxy recipe below is the exception: it guards on
+`PFB_IP_CHANGED` on purpose (it only needs to reload HAProxy when pfBlockerNG's
+**rules** changed). `PFB_DNSBL_CHANGED` is the DNSBL data-changed flag.
+
+`PFB_CHANGED_IP_ALIASES` and `PFB_CHANGED_DNSBL_GROUPS` list what the pass
+**genuinely updated** this run (feeds re-processed / list rebuilt / removed) — the IP
+firewall aliases (`pfB_*`) and the DNSBL groups (`DNSBL_*`) respectively, on their own
+vars because DNSBL groups are not firewall aliases. The DNSBL list carries only groups
+whose feed was actually (re)parsed this pass; the always-rebuilt internal specials
+(`DNSBL_Regex` / `DNSBL_IDN` / `DNSBL_TLD_Allow`) are **excluded**. Both are
+Reputation-mode-independent and are **not** a byte-level membership diff. `PFB_STATUS`
+remains a stable reserved placeholder (no pass-wide error accumulator exists); its
+**name** is stable, but do not branch a recipe on its value.
 Hooks live in `config.xml`, so they **replicate to a CARP/HA secondary and run on
 whichever node performs the update** — correct for the HAProxy recipe (the
 secondary's HAProxy needs its own reload), but be aware a hook with an external
@@ -457,11 +469,12 @@ maintainer smoke checklist.
 #### Forwarding changed aliases to a webhook
 
 To notify an external service of what a pass updated, add a `post` hook, enabled,
-guarded on the accurate flag, that `POST`s the changed-alias context to your
-endpoint:
+that `POST`s the changed-alias context to your endpoint. Guard on a **non-empty
+changed list** so the hook fires whenever the blocklist **data** changed — including
+content-only refreshes that leave `PFB_IP_CHANGED=0` (see the note above):
 
 ```sh
-[ "$PFB_IP_CHANGED" = "1" ] && /usr/local/bin/curl -sS -m 5 \
+[ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
   --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
   --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
   --data-urlencode "ip_changed=$PFB_IP_CHANGED" \
@@ -469,9 +482,18 @@ endpoint:
   https://example.invalid/pfblockerng-update
 ```
 
-`curl` lives at `/usr/local/bin/curl` on pfSense. Guard on `PFB_DNSBL_CHANGED`
-instead (or run two hooks) to notify on DNSBL-group changes.
+`curl` lives at `/usr/local/bin/curl` on pfSense. Guard on
+`[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]` instead (or run two hooks) to notify on
+DNSBL-group changes.
 
+> **Guard on the changed-list, not `PFB_IP_CHANGED`.** `PFB_IP_CHANGED=1` means a
+> firewall **rule** changed — it stays `0` on a pure alias-content refresh (the table
+> is updated via `pfctl -T replace`, no rule change), so guarding on it would **miss**
+> the data-changed case this recipe is for. `[ -n "$PFB_CHANGED_IP_ALIASES" ]` (a
+> non-empty list of the IP aliases whose contents changed) is the correct
+> "data changed" guard; `[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]` is its DNSBL counterpart.
+> `PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` are still forwarded in the payload above.
+>
 > **`PFB_CHANGED_IP_ALIASES` and `PFB_CHANGED_DNSBL_GROUPS` are space-separated
 > lists (and may be empty) — they MUST be URL-encoded, never interpolated naked
 > into a URL.** Pass each through its own `--data-urlencode` (as above), which sends

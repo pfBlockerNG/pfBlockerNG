@@ -901,22 +901,33 @@ def webhook_hook(
 ) -> dict[str, str]:
     """A recipe-shaped ``post`` hook that POSTs the changed-alias context to ``url``.
 
-    Mirrors the README HAProxy recipe's SHAPE (minus HAProxy): a guard on a
-    ``PFB_<guard>_CHANGED`` flag (``guard='IP'`` ⇒ ``PFB_IP_CHANGED``; ``'DNSBL'`` ⇒
-    ``PFB_DNSBL_CHANGED``), then a synchronous ``curl`` that forwards the four
-    post-context fields. Each field goes through its OWN ``--data-urlencode`` so the
-    space-separated ``PFB_CHANGED_*`` lists (which may be empty) are URL-encoded —
-    NEVER interpolated naked into the URL (a naked ``?ip=$VAR`` breaks on the
+    Mirrors the README webhook recipe's SHAPE (minus HAProxy): a guard on the
+    NON-EMPTY ``PFB_CHANGED_*`` list for the side (``guard='IP'`` ⇒
+    ``[ -n "$PFB_CHANGED_IP_ALIASES" ]``; ``'DNSBL'`` ⇒
+    ``[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]``), then a synchronous ``curl`` that forwards
+    the four post-context fields. Each field goes through its OWN ``--data-urlencode``
+    so the space-separated ``PFB_CHANGED_*`` lists (which may be empty) are URL-encoded
+    — NEVER interpolated naked into the URL (a naked ``?ip=$VAR`` breaks on the
     embedded space). Default verb is POST ``application/x-www-form-urlencoded``,
     which the sink decodes with ``parse_qs`` on the body.
 
-    The command is POSIX-sh-safe (``[ … ] && curl …``): when the guard flag is not
-    ``1`` the ``&&`` short-circuits and ``curl`` never runs (so the sink gets no
-    callback — the OFF branch). ``-sS`` keeps it quiet but surfaces errors; ``-m 5``
-    bounds it well under the per-hook ``timeout``.
+    GUARD = non-empty changed-list, NOT ``PFB_IP_CHANGED=1``: ``PFB_IP_CHANGED`` is a
+    firewall-RULE-change signal (``$pfb['filter_configure']``) and stays ``0`` on a
+    pure alias-CONTENT change (the ``pfctl -T replace`` else-branch, inc:11277, never
+    sets it), even though the table changed and ``PFB_CHANGED_IP_ALIASES`` IS
+    populated. Guarding on the rule flag would MISS the content-only reload — the exact
+    "blocklist data changed" case a webhook wants — so the recipe (and this helper)
+    keys off the non-empty changed-list, which tracks the genuinely-updated set on both
+    sides. ``PFB_IP_CHANGED`` / ``PFB_DNSBL_CHANGED`` are still forwarded as payload.
+
+    The command is POSIX-sh-safe (``[ … ] && curl …``): when the changed list is empty
+    the ``&&`` short-circuits and ``curl`` never runs (so the sink gets no callback —
+    the OFF branch). ``-sS`` keeps it quiet but surfaces errors; ``-m 5`` bounds it well
+    under the per-hook ``timeout``.
     """
+    guard_var = "PFB_CHANGED_IP_ALIASES" if guard == "IP" else "PFB_CHANGED_DNSBL_GROUPS"
     command = (
-        f'[ "$PFB_{guard}_CHANGED" = 1 ] && {GUEST_CURL} -sS -m 5 '
+        f'[ -n "${guard_var}" ] && {GUEST_CURL} -sS -m 5 '
         '--data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" '
         '--data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" '
         '--data-urlencode "ip_changed=$PFB_IP_CHANGED" '
@@ -1007,6 +1018,30 @@ def clear_update_hooks(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"clear_update_hooks failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def clear_dnsbl_settings(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Delete the whole CFG_DNSBL_SETTINGS node so DNSBL settings return to baseline.
+
+    ``inject()`` MERGES into ``installedpackages/pfblockerngdnsblsettings/config/0``
+    (``array_merge``, inc-side ``config_set_path``), so a setting one case turns on —
+    ``pfb_regex`` + ``pfb_regex_list`` (user-regex), ``pfb_regex_cap``, ``pfb_cname``,
+    and any IDN/pytld toggles — STAYS on for every later case/module, because a plain
+    (non-regex) ``DnsblCase`` never sets those keys to clear them. ``reset()`` only does
+    ``clearip``/``cleardnsbl`` + a forced update (it drops tables/sqlite, NOT config
+    settings), so the toggle bleeds across modules: e.g. a leftover ``pfb_regex=on``
+    rebuilds ``DNSBL_Regex`` and flips ``PFB_DNSBL_CHANGED`` on an unrelated module's
+    reloads. Deleting the node (the UI "all-default" state) isolates modules; the next
+    module's ``inject()`` rebuilds the settings it needs from scratch. Call from a
+    MODULE FINALIZER of any module that enables non-default DNSBL settings.
+    """
+    snippet = (
+        f"config_del_path({_php_str(CFG_DNSBL_SETTINGS)});\n"
+        "write_config('pfBlockerNG smoke: clear DNSBL settings');\necho 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"clear_dnsbl_settings failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def clear_hook_markers(vm: SmokeVM, token: str, *, timeout: float = 30.0) -> None:
@@ -1594,6 +1629,33 @@ def force_dnsbl_refetch(vm: SmokeVM, header: str, *, timeout: float = 30.0) -> N
     result = vm.ssh("/usr/bin/touch", marker, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"force_dnsbl_refetch({header}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+def force_ip_refetch(vm: SmokeVM, header: str, *, timeout: float = 30.0) -> None:
+    """Force pfBlockerNG to RE-INGEST an IP feed whose local source was edited mid-case.
+
+    The IP side caches each feed's downloaded copy at ``{denydir}/{header}.txt`` and, on
+    an ``update``, REUSES that cache (logs ``exists``, skips the re-parse) when the
+    ``.txt`` exists, no per-feed ``.update``/``.fail`` marker is present, and ``$pfbreuse``
+    is empty (inc:10211-10222). Crucially this holds even for a FULL ``update`` (the
+    ``cron`` verb leaves ``$pfb['reuse']`` at its default empty), so a test that merely
+    rewrites the local feed fixture (``write_local_feed``) would NOT see the edit
+    re-parsed — the feed's alias is never appended to ``$pfb_alias_lists`` and so never
+    reaches ``PFB_CHANGED_IP_ALIASES``. Touching ``{denydir}/{header}.update`` defeats the
+    reuse gate, forcing the next ``update`` down the re-download/re-parse fork (inc:10223+)
+    so the genuinely-changed feed populates the changed-IP-alias set — the IP-side
+    equivalent of ``force_dnsbl_refetch``.
+
+    NOTE on ``header``: the IP loop names each on-disk feed file ``{row.header}{vtype}``
+    (vtype = ``_v4`` / ``_v6``; inc:10126), so an IPv4 ``IpCase(header='x')`` writes
+    ``x_v4.txt`` / ``x_v4.update``. Pass the FULL on-disk header INCLUDING the family
+    suffix (e.g. ``f"{spec.header}_v4"``), not the bare ``IpCase.header``. (DNSBL feed
+    files carry no vtype suffix, so ``force_dnsbl_refetch`` takes the bare header.)
+    """
+    marker = f"{PFB_DBDIR}/deny/{header}.update"
+    result = vm.ssh("/usr/bin/touch", marker, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"force_ip_refetch({header}) failed: rc={result.returncode} {result.stderr!r}")
 
 
 def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: float = 300.0) -> None:
