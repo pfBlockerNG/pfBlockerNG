@@ -1,0 +1,159 @@
+================================================================================
+ADR-11 — Phase 2 RESULTS: PREP (behaviour-preserving) aggregate action + helper
+================================================================================
+Status: DONE. Behaviour-PRESERVING — both building blocks are isolated and UNWIRED
+        (nothing in the update pass calls them). No observable change.
+Date:   2026-06-05
+Scope:  src/usr/local/pkg/pfblockerng/pfblockerng.sh  (new `aggregate` shell action)
+        src/usr/local/pkg/pfblockerng/pfblockerng.inc (new pfb_aggregate_member_list)
+        NO other files. No stubs (glob is a PHP builtin). No Python/tests. No other ADRs.
+
+--------------------------------------------------------------------------------
+1. THE `aggregate` SHELL ACTION (type-AGNOSTIC)
+--------------------------------------------------------------------------------
+Function pfb_aggregate() in pfblockerng.sh (inserted right after cidr_aggregate,
+~:310); dispatched by a new `aggregate)` case (~:1094) that forwards "$@".
+
+INTERFACE:
+    pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>
+      $2 family      : 'v4' | 'v6'  (informational/log only; iprange handles either)
+      $3 memberlist  : path to a file listing member-file paths, ONE PER LINE
+      $4 aggout      : path to write the aggregate alias file (the urltable content)
+      $5 consumerout : path to write the never-empty '-f' consumer file
+    (Args read DIRECTLY as $2..$5, not via the global $alias/$max slots. The forwarded
+    $1 = 'aggregate' is harmless — the function only reads $2..$5.)
+
+PIPELINE (composes the EXISTING primitive; NO new aggregation algorithm):
+    cat each existing member file  ->  LC_ALL=C sort -u (dedup, into ${dedupfile})
+      ->  "${pathaggregate}" (= /usr/local/bin/iprange, the SAME binary cidr_aggregate
+          shells out to, pfblockerng.sh:41) collapse  ->  write <aggout>.
+    iprange is set-EXACT (minimal CIDR cover equal to the union; never adds an
+    address), so the union cannot widen the set. Empty/missing member files are
+    skipped; a missing iprange or memberlist logs to errorlog and returns (no die).
+
+OUTPUT PATHS — DECIDED BY THE CALLER, not the action. The action is type-agnostic;
+Phase 3 passes the per-(type,family) paths. The targeted aggregate alias names are
+  pfB_<Type>_Aggregated_{v4,v6}   (Type in {Deny,Permit,Match,Native}),
+so Phase 3 will pass e.g.
+      aggout      = ${pfb['aliasdir']}/pfB_Deny_Aggregated_v4.txt  (urltable content,
+                    mirrors how member alias files live under aliasdir, inc:10869)
+      consumerout = a stable per-(type,family) path for the ADR-12 `-f` consumer
+                    (exact path is a Phase-3/ADR-12 decision; the action just writes
+                    wherever told).
+
+EMPTY-SET BEHAVIOUR (never-empty consumer contract):
+    * <aggout>      : truncated to 0 bytes when the union is empty (so the pf urltable
+                      is simply not loaded, per inc:10863's empty-table prune — same as
+                      today's member aliases).
+    * <consumerout> : NEVER empty — a single '#'-comment placeholder line when the
+                      union is empty; otherwise a byte copy of <aggout>. This kills the
+                      dummy-IP hack for downstream `-f` consumers (ADR-12).
+
+mtime-GATE (Phase 1 strategy — "full rebuild, only when a member changed"):
+    Skip the whole cat|sort -u|iprange when BOTH hold:
+      (a) <aggout> exists AND no listed member file is newer (`-nt`) than <aggout>, AND
+      (b) <consumerout> already exists and is non-empty (`-s`).
+    If either fails -> full rebuild (honours the never-empty contract even if only the
+    consumer went missing). On skip it logs "no member newer ... skipping rebuild".
+
+MANUAL VERIFICATION (off-appliance, stub iprange = `sort -u` passthrough; only the
+plumbing/gate is being proven, not iprange's collapse):
+    RUN 1 cold build : 4 raw lines (1 cross-member dup) -> 3 deduped CIDRs in <aggout>;
+                       <consumerout> mirrors it.                                 PASS
+    RUN 2 no change  : mtime-gate SKIPS ("no member newer ...").                 PASS
+    RUN 3 touch m2   : member now newer -> REBUILDS.                             PASS
+    RUN 4 empty union: <aggout> = 0 bytes; <consumerout> = '#' placeholder.      PASS
+
+--------------------------------------------------------------------------------
+2. THE PHP PER-TYPE MEMBER HELPER
+--------------------------------------------------------------------------------
+Signature (pure, no side effects, NOT called from the pass this phase):
+    function pfb_aggregate_member_list($type, $family)  // pfblockerng.inc ~:2053
+      $type   : 'Deny' | 'Permit' | 'Match' | 'Native'   (GUI action-group labels)
+      $family : 'v4' | 'v6'
+      returns : sorted array of absolute member-file paths; [] for an unknown
+                type/family OR a missing dir (caller => "nothing to aggregate").
+
+TYPE -> DIR MAP (mirrors pfb_determine_list_detail's action->folder routing, inc:1957):
+      Deny   -> $pfb['denydir']     Permit -> $pfb['permitdir']
+      Match  -> $pfb['matchdir']    Native -> $pfb['nativedir']
+    Globs `<dir>/*_<family>.txt` and sort()s. The family-suffixed `.txt` glob is the
+    INCLUDE/EXCLUDE rule:
+      INCLUDES : every '<header>_v4.txt' / '<header>_v6.txt' member in that dir,
+                 because the build loop writes each member as
+                 ${pfbfolder}/${header}.txt with $header = "{row.header}{vtype}"
+                 (inc:10807/10641), e.g. feedA_v4.txt, somecustom_custom_v4.txt.
+      EXCLUDES : '.update' markers, '.ip' embedded-IP feeds, and any non-family scratch
+                 files in the same dir.
+
+WHAT EACH TYPE INCLUDES/EXCLUDES (the membership contract):
+  * Deny  = denydir union. Includes DNSBLIP_<fam>.txt and Deny-action GeoIP continents
+            FOR FREE — both are deposited into denydir BY THEIR ACTION during the pass
+            (DNSBLIP via $pfb['dnsbl_ip'] routing; continents via inc:~9926), so they
+            are already plain '<header>_<fam>.txt' members the glob picks up. A
+            continent (or DNSBLIP) set to Match/Permit lands in THAT type's dir
+            instead — never double-listed. No special-casing in the helper.
+  * Permit= permitdir union.   * Match = matchdir union.   * Native = nativedir union.
+
+*** KEY PHASE-4 FACT — denydir IS ALREADY POST-SUPPRESSION ***
+    The denydir '<header>_<fam>.txt' files on disk ARE the EFFECTIVE
+    (post-suppression / post-whitelist) block set. Proof from source:
+      - pfb_create_suppression_file() (inc:2195) builds pfbsuppression.txt from the
+        user v4 suppression list + local/interface IPs + DNS servers + Permit-customlist
+        IPs (inc:5812-5873).
+      - During the pass the shell `suppress` action (pfblockerng.sh:194,
+        `${pathgrepcidr} -vf pfbsuppression.txt`) rewrites EACH Deny member file
+        IN PLACE (invoked inc:10829-10834) BEFORE that file is read into the alias
+        (inc:10836). So whatever the glob reads from denydir is already the effective
+        set; the helper applies NO further suppression.
+    PHASE-3 ORDERING CONSEQUENCE: run the Deny aggregate AFTER the per-member suppress
+    step in the pass (the suppress exec precedes the alias read at inc:10836; place the
+    aggregate at/after the alias-assembly point so it unions post-suppression files).
+    (Permit/Match/Native dirs are plain unions; no suppression applies to them.)
+
+--------------------------------------------------------------------------------
+3. CHOSEN NAMES (why they fit the pattern)
+--------------------------------------------------------------------------------
+  * Shell function  pfb_aggregate  — `pfb_` snake_case like the other multi-word shell
+    helpers; "aggregate" matches the existing cidr_aggregate it reuses. Dispatch verb
+    `aggregate` matches the existing `cidr_aggregate`/`aliastables`/`suppress` verbs.
+  * PHP function  pfb_aggregate_member_list  — `pfb_` snake_case verb-noun, mirroring
+    pfb_determine_list_detail / pfb_create_suppression_file (the per-list routing/build
+    helpers it sits beside, inc:1953/2195).
+  * No new config keys this phase (helper takes plain $type/$family args). The Phase-3
+    multi-select setting + the pfB_<Type>_Aggregated_{v4,v6} alias names are the
+    config-key/naming decisions for Phase 3, per ADR §2 ("Naming" row).
+
+--------------------------------------------------------------------------------
+4. GATES
+--------------------------------------------------------------------------------
+  * python -m pytest                 -> 1124 passed (green/UNCHANGED — no Python).
+  * sh -n + shellcheck pfblockerng.sh -> CLEAN.
+  * php -l pfblockerng.inc            -> "No syntax errors detected" (the 5 Deprecated
+                                        notices are PRE-EXISTING, in other functions;
+                                        none in the new helper).
+  * PHPStan (vendor via composer)     -> "[OK] No errors" (level 1 + baseline; run with
+                                        --memory-limit=1G — 128M default OOMs, not a
+                                        code error).
+  * PHPUnit (real .inc off-appliance) -> OK 153 tests / 279 assertions (the new helper
+                                        does not break the bootstrap load).
+  * Helper behaviour (driven via the PHPUnit bootstrap against the REAL .inc):
+        Deny v4 -> [DNSBLIP_v4, feedA_v4, feedB_v4] (sorted; DNSBLIP folds in;
+                   .update/.ip excluded); Deny v6 -> [feedA_v6]; Permit v4 -> own dir;
+                   missing dir / bad type / bad family -> [].                  ALL PASS
+
+--------------------------------------------------------------------------------
+5. GO-AHEAD
+--------------------------------------------------------------------------------
+GO to Phase 3 (WIRE): add the opt-in multi-select (default none); in
+sync_package_pfblockerng(), after members materialise AND after the per-member
+suppress step, for each SELECTED type x family:
+    members = pfb_aggregate_member_list($type, $family)  (write the list to a temp
+              file, one path per line)
+      -> pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>
+      -> register pfB_<Type>_Aggregated_{v4,v6} as a `urltable` Native alias (mirror
+         inc:10880-10887; NO pfb_firewall_rule) -> load via pfb_aliastables.
+mtime-gate is inside the action (no extra PHP gate needed). Deselect/disable => remove
+that aggregate's alias/table/<aggout>/<consumerout> cleanly. One generic loop over the
+type->dir map. Additive: existing aliases/rules untouched.
+================================================================================
