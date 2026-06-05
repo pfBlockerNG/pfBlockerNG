@@ -346,6 +346,11 @@ def test_hooks_ip_changed_reflects_pass(deployed_vm: SmokeVM, mock_feeds: _MockF
     #     local feed, so a full 'update' is required to pick up the feed change.
     domain2 = h.unique_domain("hookipchg2")
     h.write_local_feed(deployed_vm, "smoke_hook_ipchg_dnsbl.txt", f"{domain}\n{domain2}\n")
+    # Force the DNSBL re-fetch: even a full 'update' reuse-caches an unchanged-on-disk
+    # feed (inc:8917), so a plain rewrite alone would be skipped (no re-parse, DNSBL
+    # builders report no change). Touching the '.update' marker forces the re-parse fork
+    # so PFB_DNSBL_CHANGED genuinely flips to 1.
+    h.force_dnsbl_refetch(deployed_vm, dnsbl_spec.header)
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
     env_dnsbl = h.read_hook_env(deployed_vm, marker)
@@ -465,25 +470,33 @@ def test_hooks_timeout_killed_update_continues(deployed_vm: SmokeVM) -> None:
 
 def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """``PFB_CHANGED_IP_ALIASES`` / ``PFB_CHANGED_DNSBL_GROUPS`` (ADR-12 P6) list what was
-    UPDATED this pass, split by side (DNSBL groups are not firewall aliases).
+    GENUINELY UPDATED this pass, split by side (DNSBL groups are not firewall aliases).
 
     Both branches of the changed signal, with the no-op state asserted FIRST so a green
     proves the feed change CAUSED the alias/group to be reported (CLAUDE.md before/after
     rule):
 
     * **BEFORE (no-op).** After a first full ``update`` that processes the injected IP
-      + DNSBL feeds, a SECOND full ``update`` over the SAME, UNCHANGED feeds re-reads
-      nothing new ⇒ neither the IP ``$pfb_alias_lists`` site nor the DNSBL
-      ``dnsbl_alias_update('update', …)`` seam fires for them ⇒ BOTH
-      ``PFB_CHANGED_IP_ALIASES`` and ``PFB_CHANGED_DNSBL_GROUPS`` are EMPTY (the post
-      hook is enabled, so present-and-empty, not absent).
-    * **AFTER (changed).** Rewriting BOTH feeds with new content and running a full
-      ``update`` re-processes both ⇒ the IP table ``pfB_<ip>_v4`` appears in
-      ``PFB_CHANGED_IP_ALIASES`` and the DNSBL group ``DNSBL_<dnsbl>`` in
-      ``PFB_CHANGED_DNSBL_GROUPS`` (each space-separated, on its own var).
+      + DNSBL feeds, a SECOND full ``update`` over the SAME, UNCHANGED feeds reuse-caches
+      both (inc:8917 / inc:10211 — ``.txt`` present, no ``.update`` marker) ⇒ neither the
+      IP ``$pfb_alias_lists`` site nor the DNSBL per-group ``aliasupdate`` capture fires
+      ⇒ BOTH ``PFB_CHANGED_IP_ALIASES`` and ``PFB_CHANGED_DNSBL_GROUPS`` are EMPTY (the
+      post hook is enabled, so present-and-empty, not absent).
+    * **AFTER (changed).** Rewriting BOTH feeds with new content AND forcing a genuine
+      re-fetch (touch each feed's ``.update`` marker) re-processes both ⇒ the IP table
+      ``pfB_<ip>_v4`` appears in ``PFB_CHANGED_IP_ALIASES`` and the DNSBL group
+      ``DNSBL_<dnsbl>`` in ``PFB_CHANGED_DNSBL_GROUPS`` (each space-separated, on its own
+      var). The always-rebuilt DNSBL specials (``DNSBL_Regex``/``DNSBL_IDN``/
+      ``DNSBL_TLD_Allow``) are recorded OUTSIDE the per-group loop and must NOT appear —
+      only genuinely aliasupdate-changed feed groups do (the production fix).
 
-    Reputation-mode-independent by construction: it is the updated set
-    (``$pfb_alias_lists`` + the DNSBL seam), NOT the rep-inflated ``$final_alias``.
+    Load-bearing semantic asserted explicitly: a pure alias-CONTENT change populates
+    ``PFB_CHANGED_IP_ALIASES`` (the table changed via ``pfctl -T replace``, inc:11277)
+    WITHOUT flipping ``PFB_IP_CHANGED`` (no firewall RULE change ⇒ ``filter_configure``
+    stays FALSE) — so ``PFB_IP_CHANGED`` is ``0`` here even though the IP alias is in the
+    changed-list. Reputation-mode-independent by construction: it is the genuinely-updated
+    set (``$pfb_alias_lists`` + the per-group ``aliasupdate`` capture), NOT the
+    rep-inflated ``$final_alias``.
     """
     token = "chgali"
     marker = h.hook_marker_path(token, "post")
@@ -491,6 +504,7 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     fed_ip = "198.51.100.7"
     ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_chgali_ip.txt", f"{fed_ip}\n")
     ip_spec = h.IpCase(aliasname="smokehookchgip", feed_url=ip_feed, header="smokehookchgip")
+    ip_on_disk_header = f"{ip_spec.header}_{ip_spec.family}"  # IP feed file is {header}{vtype} (inc:10126)
     domain = h.unique_domain("hookchg")
     dnsbl_feed = h.write_local_feed(deployed_vm, "smoke_hook_chgali_dnsbl.txt", f"{domain}\n")
     dnsbl_spec = h.DnsblCase(
@@ -504,7 +518,7 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
 
-    # BEFORE: a second update over the UNCHANGED feeds updates nothing ⇒ both lists empty.
+    # BEFORE: a second update over the UNCHANGED feeds reuse-caches both ⇒ both lists empty.
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
     env_noop = h.read_hook_env(deployed_vm, marker)
@@ -516,10 +530,13 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
         f"PFB_CHANGED_DNSBL_GROUPS should be EMPTY when no DNSBL group was updated, got {env_noop}"
     )
 
-    # AFTER: rewrite BOTH feeds with new content ⇒ both are re-processed.
+    # AFTER: rewrite BOTH feeds with new content AND force a genuine re-fetch of each
+    # (bust the reuse cache) ⇒ both are re-processed.
     domain2 = h.unique_domain("hookchg2")
     h.write_local_feed(deployed_vm, "smoke_hook_chgali_ip.txt", f"{fed_ip}\n203.0.113.9\n")
     h.write_local_feed(deployed_vm, "smoke_hook_chgali_dnsbl.txt", f"{domain}\n{domain2}\n")
+    h.force_ip_refetch(deployed_vm, ip_on_disk_header)
+    h.force_dnsbl_refetch(deployed_vm, dnsbl_spec.header)
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
     env_chg = h.read_hook_env(deployed_vm, marker)
@@ -529,6 +546,19 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     assert ip_spec.alias in changed_ip, f"updated IP table {ip_spec.alias} not in PFB_CHANGED_IP_ALIASES: {env_chg}"
     assert dnsbl_spec.alias in changed_dnsbl, (
         f"updated DNSBL group {dnsbl_spec.alias} not in PFB_CHANGED_DNSBL_GROUPS: {env_chg}"
+    )
+    # Production fix: ONLY genuinely-changed groups — the always-rebuilt specials are
+    # added outside the per-group loop and must NOT bleed into the changed-groups list.
+    for special in ("DNSBL_Regex", "DNSBL_IDN", "DNSBL_TLD_Allow"):
+        assert special not in changed_dnsbl, (
+            f"special {special} leaked into PFB_CHANGED_DNSBL_GROUPS (should be excluded): {changed_dnsbl!r}"
+        )
+    # Load-bearing distinction: the IP alias content changed (it is in the changed-list)
+    # but no firewall RULE changed ⇒ PFB_IP_CHANGED stays '0'. This is exactly why a
+    # data-changed webhook must guard on PFB_CHANGED_IP_ALIASES, not PFB_IP_CHANGED.
+    assert env_chg.get("PFB_IP_CHANGED") == "0", (
+        "PFB_IP_CHANGED should be '0' on a content-only IP change (no rule change) even though "
+        f"PFB_CHANGED_IP_ALIASES is populated: {env_chg}"
     )
 
     h.clear_update_hooks(deployed_vm)
@@ -545,27 +575,38 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
 def test_hooks_webhook_fires_on_ip_change(
     deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, webhook_sink: _MockCallbackSink
 ) -> None:
-    """An IP-guarded webhook ``post`` hook fires ONLY when IP data changed, with the
-    changed-alias payload URL-encoded.
+    """An IP-guarded webhook ``post`` hook fires ONLY when IP blocklist DATA changed,
+    with the changed-alias payload URL-encoded.
 
-    Both sides of the ``PFB_IP_CHANGED`` guard, before-state asserted first
-    (CLAUDE.md before/after rule):
+    The guard is ``[ -n "$PFB_CHANGED_IP_ALIASES" ]`` (non-empty changed-list), NOT
+    ``PFB_IP_CHANGED=1``: a pure alias-CONTENT change goes through the ``pfctl -T
+    replace`` else-branch (inc:11277) that does NOT set ``$pfb['filter_configure']``, so
+    ``PFB_IP_CHANGED`` stays ``0`` even though the table changed and
+    ``PFB_CHANGED_IP_ALIASES`` IS populated. Guarding on the rule flag would MISS this
+    content-only reload — the exact case a webhook wants. Both sides of the guard, with
+    the before-state asserted first (CLAUDE.md before/after rule):
 
     * **BEFORE (guard off).** After a settling full ``update`` lands the injected IP
-      feed (``PFB_IP_CHANGED=1`` that pass), a SECOND full ``update`` over the SAME,
-      UNCHANGED feed makes no rule change ⇒ ``PFB_IP_CHANGED=0`` ⇒ the
-      ``[ "$PFB_IP_CHANGED" = 1 ] && curl …`` guard short-circuits ⇒ NO callback
+      feed, a SECOND full ``update`` over the SAME, UNCHANGED feed hits the IP reuse
+      cache (inc:10211 — ``.txt`` present, no ``.update`` marker, ``$pfbreuse``
+      empty) ⇒ the feed is NOT re-parsed ⇒ its alias never reaches
+      ``$pfb_alias_lists`` ⇒ ``PFB_CHANGED_IP_ALIASES`` is EMPTY ⇒ the
+      ``[ -n "$PFB_CHANGED_IP_ALIASES" ] && curl …`` guard short-circuits ⇒ NO callback
       reaches the sink (``sink.callbacks == []``).
-    * **AFTER (guard on).** Rewriting the IP feed with new content and running a full
-      ``update`` re-processes it ⇒ ``PFB_IP_CHANGED=1`` ⇒ the hook ``curl``s the sink
-      EXACTLY ONCE. The recorded form body decodes (``parse_qs``) to
-      ``ip_changed == "1"`` and ``ip_aliases`` whose space-decoded value CONTAINS the
-      updated ``pfB_*`` table token — proving the per-field ``--data-urlencode``
-      round-trips the space-separated list intact (not a broken naked ``?ip=$VAR``).
+    * **AFTER (guard on).** Rewriting the IP feed with new content AND forcing a genuine
+      re-fetch (``force_ip_refetch`` touches the ``.update`` marker, defeating the reuse
+      gate) ⇒ the feed is re-parsed ⇒ its alias lands in ``PFB_CHANGED_IP_ALIASES`` ⇒
+      the hook ``curl``s the sink EXACTLY ONCE. The recorded form body decodes
+      (``parse_qs``) to ``ip_aliases`` whose space-decoded value CONTAINS the updated
+      ``pfB_*`` table token — proving the per-field ``--data-urlencode`` round-trips the
+      space-separated list intact (not a broken naked ``?ip=$VAR``). ``ip_changed``
+      stays ``"0"`` on this content-only change (no rule change) — the load-bearing
+      ``PFB_IP_CHANGED`` vs ``PFB_CHANGED_IP_ALIASES`` distinction.
     """
     fed_ip = "198.51.100.8"
     ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_whip_ip.txt", f"{fed_ip}\n")
     ip_spec = h.IpCase(aliasname="smokehookwhip", feed_url=ip_feed, header="smokehookwhip")
+    on_disk_header = f"{ip_spec.header}_{ip_spec.family}"  # IP feed file is {header}{vtype} (inc:10126)
     h.inject(deployed_vm, ip_spec)
     h.set_update_hooks(deployed_vm, [h.webhook_hook(webhook_sink.guest_url("/ip"), guard="IP")])
 
@@ -574,31 +615,40 @@ def test_hooks_webhook_fires_on_ip_change(
     # below is clean).
     h.reload(deployed_vm, "update")
 
-    # BEFORE (guard off): a second update over the UNCHANGED feed ⇒ PFB_IP_CHANGED=0 ⇒
-    # the guard short-circuits ⇒ curl never runs ⇒ no callback.
+    # BEFORE (guard off): a second update over the UNCHANGED feed hits the reuse cache ⇒
+    # PFB_CHANGED_IP_ALIASES empty ⇒ the guard short-circuits ⇒ curl never runs ⇒ no callback.
     webhook_sink.clear()
     h.reload(deployed_vm, "update")
     # Give any (erroneous) in-flight callback a moment to land before asserting absence.
     assert not webhook_sink.wait_for(1, timeout=3.0), (
-        f"a webhook callback arrived on a no-op pass — the PFB_IP_CHANGED guard did not hold: {webhook_sink.callbacks}"
+        "a webhook callback arrived on a no-op pass — the non-empty PFB_CHANGED_IP_ALIASES "
+        f"guard did not hold: {webhook_sink.callbacks}"
     )
     assert webhook_sink.callbacks == [], f"unexpected callback(s) on the guard-off pass: {webhook_sink.callbacks}"
 
-    # AFTER (guard on): rewrite the IP feed ⇒ PFB_IP_CHANGED=1 ⇒ the hook fires once.
+    # AFTER (guard on): rewrite the IP feed AND force a genuine re-fetch (bust the reuse
+    # cache) ⇒ the feed re-parses ⇒ PFB_CHANGED_IP_ALIASES populated ⇒ the hook fires once.
     webhook_sink.clear()
     h.write_local_feed(deployed_vm, "smoke_hook_whip_ip.txt", f"{fed_ip}\n203.0.113.18\n")
+    h.force_ip_refetch(deployed_vm, on_disk_header)
     h.reload(deployed_vm, "update")
     assert webhook_sink.wait_for(1, timeout=10.0), "the IP-guarded webhook hook did not fire on the IP change"
     callbacks = webhook_sink.callbacks
     assert len(callbacks) == 1, f"expected exactly one webhook callback on the IP change, got {len(callbacks)}"
     rec = callbacks[0]
     assert rec.method == "POST", f"webhook should POST, got {rec.method}"
-    assert rec.form.get("ip_changed") == ["1"], f"callback ip_changed should be '1', got {rec.form}"
     # The space-separated list round-trips back to a real space after parse_qs; assert
     # the updated pfB_* table is a member of the split value (encoding survived intact).
     ip_aliases = rec.form.get("ip_aliases", [""])[0].split()
     assert ip_spec.alias in ip_aliases, (
         f"updated IP table {ip_spec.alias} not in the callback's ip_aliases {ip_aliases!r}: {rec.form}"
+    )
+    # Load-bearing distinction: a content-only change populates PFB_CHANGED_IP_ALIASES
+    # (above) but does NOT flip PFB_IP_CHANGED (no firewall RULE change) — so the
+    # forwarded ip_changed is '0'. This is precisely why the guard keys off the
+    # changed-list, not the rule flag.
+    assert rec.form.get("ip_changed") == ["0"], (
+        f"callback ip_changed should be '0' on a content-only change (no rule change), got {rec.form}"
     )
 
     h.clear_update_hooks(deployed_vm)
@@ -615,21 +665,29 @@ def test_hooks_webhook_dnsbl_guard_branch(
     deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, webhook_sink: _MockCallbackSink
 ) -> None:
     """With BOTH guards configured, a DNSBL-only change fires the DNSBL-guarded hook and
-    NOT the IP-guarded one — proving each guard keys off its OWN flag.
+    NOT the IP-guarded one — proving each guard keys off its OWN changed-list.
 
     Two recipe-shaped ``post`` hooks on DISTINCT sink paths (``/ip`` vs ``/dnsbl``):
-    one guarded on ``PFB_IP_CHANGED``, one on ``PFB_DNSBL_CHANGED``. We settle both
-    feeds with a full ``update``, then change ONLY the DNSBL feed and run a full
-    ``update``: the IP alias content is unchanged ⇒ ``PFB_IP_CHANGED=0`` (IP hook's
-    guard holds, no ``/ip`` callback), while the DNSBL feed content changed ⇒
-    ``PFB_DNSBL_CHANGED=1`` (DNSBL hook fires, a ``/dnsbl`` callback whose
-    ``dnsbl_changed == "1"`` and whose ``dnsbl_groups`` contains the updated
-    ``DNSBL_*`` group token). This is the complementary guard branch to
-    ``test_hooks_webhook_fires_on_ip_change`` and proves the DNSBL payload encodes.
+    one guarded on ``[ -n "$PFB_CHANGED_IP_ALIASES" ]``, one on
+    ``[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]``. We settle both feeds with a full ``update``,
+    then change ONLY the DNSBL feed (and FORCE its re-fetch — see below) and run a full
+    ``update``: the IP feed is untouched and reuse-cached ⇒ ``PFB_CHANGED_IP_ALIASES``
+    EMPTY (IP hook's guard holds, no ``/ip`` callback), while the DNSBL feed is
+    re-parsed ⇒ ``$pfb['aliasupdate']`` fires for its group ⇒ the group lands in
+    ``PFB_CHANGED_DNSBL_GROUPS`` (DNSBL hook fires, a ``/dnsbl`` callback whose
+    ``dnsbl_changed == "1"`` and whose ``dnsbl_groups`` CONTAINS the updated
+    ``DNSBL_<group>`` token and EXCLUDES the always-rebuilt specials
+    ``DNSBL_Regex``/``DNSBL_IDN``/``DNSBL_TLD_Allow``). This is the complementary guard
+    branch to ``test_hooks_webhook_fires_on_ip_change`` and proves the DNSBL payload
+    encodes AND the production per-group fix (genuine ``aliasupdate`` changes only,
+    specials excluded).
 
-    A full ``update`` (not ``updatednsbl``) is required to RE-READ the edited local
-    DNSBL feed: ``updatednsbl`` sets ``reuse_dnsbl`` and reloads from cache without
-    re-downloading (``inc:7437``), so it would not pick up the feed edit.
+    A full ``update`` (not ``updatednsbl``) is required AND the feed's ``.update`` marker
+    must be forced: ``updatednsbl`` sets ``reuse_dnsbl`` and reloads from cache without
+    re-downloading (``inc:7437``); even a full ``update`` reuse-caches an unchanged-on-disk
+    feed (``inc:8917`` — ``.txt`` present, no ``.update``), so a plain rewrite would be
+    skipped (``aliasupdate`` FALSE, group NOT recorded). ``force_dnsbl_refetch`` touches
+    the ``.update`` marker to force the re-parse fork.
     """
     fed_ip = "198.51.100.9"
     ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_whgd_ip.txt", f"{fed_ip}\n")
@@ -653,20 +711,24 @@ def test_hooks_webhook_dnsbl_guard_branch(
     h.reload(deployed_vm, "update")
     webhook_sink.clear()
 
-    # DNSBL-only change: rewrite ONLY the DNSBL feed, leave the IP feed untouched.
+    # DNSBL-only change: rewrite ONLY the DNSBL feed, leave the IP feed untouched, and
+    # FORCE the DNSBL re-fetch so the feed is genuinely re-parsed (aliasupdate fires).
     domain2 = h.unique_domain("hookwhgd2")
     h.write_local_feed(deployed_vm, "smoke_hook_whgd_dnsbl.txt", f"{domain}\n{domain2}\n")
+    h.force_dnsbl_refetch(deployed_vm, dnsbl_spec.header)
     h.reload(deployed_vm, "update")
 
-    # The DNSBL hook fires (its guard flag is 1); wait for that one callback.
+    # The DNSBL hook fires (its changed-list is non-empty); wait for that one callback.
     assert webhook_sink.wait_for(1, timeout=10.0), "the DNSBL-guarded webhook hook did not fire on the DNSBL change"
     callbacks = webhook_sink.callbacks
     dnsbl_calls = [c for c in callbacks if c.path == "/dnsbl"]
     ip_calls = [c for c in callbacks if c.path == "/ip"]
     assert len(dnsbl_calls) == 1, f"expected exactly one /dnsbl callback, got {len(dnsbl_calls)}: {callbacks}"
-    # The IP guard held: PFB_IP_CHANGED=0 ⇒ the IP hook's curl never ran ⇒ no /ip call.
+    # The IP guard held: the IP feed was reuse-cached ⇒ PFB_CHANGED_IP_ALIASES empty ⇒
+    # the IP hook's curl never ran ⇒ no /ip call.
     assert ip_calls == [], (
-        f"the IP-guarded hook fired on a DNSBL-only change — its PFB_IP_CHANGED guard did not hold: {ip_calls}"
+        "the IP-guarded hook fired on a DNSBL-only change — its non-empty "
+        f"PFB_CHANGED_IP_ALIASES guard did not hold: {ip_calls}"
     )
     rec = dnsbl_calls[0]
     assert rec.method == "POST", f"webhook should POST, got {rec.method}"
@@ -675,5 +737,11 @@ def test_hooks_webhook_dnsbl_guard_branch(
     assert dnsbl_spec.alias in dnsbl_groups, (
         f"updated DNSBL group {dnsbl_spec.alias} not in the callback's dnsbl_groups {dnsbl_groups!r}: {rec.form}"
     )
+    # Production fix: the always-rebuilt specials are recorded OUTSIDE the per-group
+    # loop and must NOT appear — only genuinely aliasupdate-changed feed groups do.
+    for special in ("DNSBL_Regex", "DNSBL_IDN", "DNSBL_TLD_Allow"):
+        assert special not in dnsbl_groups, (
+            f"special {special} leaked into PFB_CHANGED_DNSBL_GROUPS (should be excluded): {dnsbl_groups!r}"
+        )
 
     h.clear_update_hooks(deployed_vm)

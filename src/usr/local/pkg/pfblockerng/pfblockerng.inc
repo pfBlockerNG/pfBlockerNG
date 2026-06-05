@@ -2245,18 +2245,6 @@ function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $al
 			$pfb['dnsbl_info_stats'][] = array ( 'groupname' => $alias, 'timestamp' => $dns_now, 'entries' => $alias_cnt, 'counter' => 0);
 		}
 
-		// ADR-12 Phase 6: this is the central DNSBL changed-group seam. Every
-		// 'update' caller is change-gated -- the per-group feed loop fires it under
-		// $pfb['aliasupdate'] (inc:~9509), the TLD-finalize loop under non-empty
-		// $pfb['tld_update'] (inc:~4054), and the IDN/TLD_Allow/Regex specials rebuild
-		// when those features are enabled (inc:~9542/:9556/:9583). Recording $alias
-		// here (DNSBL_<group>) folds all of them into PFB_CHANGED_DNSBL_GROUPS with no
-		// new tracking. De-dup happens when the post hook emits the list. DNSBL groups
-		// are NOT firewall aliases, so they ride their own accumulator/env var (split
-		// from the IP-side $pfb['changed_ip_aliases']).
-		if (isset($pfb['changed_dnsbl_groups']) && is_array($pfb['changed_dnsbl_groups'])) {
-			$pfb['changed_dnsbl_groups'][] = $alias;
-		}
 	}
 	elseif ($mode == 'disabled') {
 		// Record disabled alias statistics
@@ -7786,8 +7774,11 @@ function sync_package_pfblockerng($cron='') {
 	// machinery. Fed from two existing signals:
 	//   * changed_ip_aliases <- the IP-side updated set ($pfb_alias_lists, pfB_*_v4/_v6)
 	//     copied in at the tail below.
-	//   * changed_dnsbl_groups <- the DNSBL-side dnsbl_alias_update('update', ...) seam
-	//     (DNSBL_<group>), appended as it runs.
+	//   * changed_dnsbl_groups <- the DNSBL-side per-group feed loop appends the
+	//     DNSBL_<group> name only when $pfb['aliasupdate'] is TRUE (a feed in that
+	//     group was actually (re)downloaded+parsed -- stays FALSE on file-reuse).
+	//     The always-rebuilt specials (DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex) are
+	//     added OUTSIDE that loop and are deliberately NOT recorded here.
 	// Each is de-duped when emitted. Semantic = "updated this pass" (feeds re-processed
 	// / list rebuilt / removed), Reputation-mode-INDEPENDENT (it is NOT $final_alias,
 	// which rep mode inflates to all active aliases).
@@ -9573,6 +9564,22 @@ function sync_package_pfblockerng($cron='') {
 								unlink_if_exists("{$pfbfolder}/{$header}.update");
 							}
 						}
+					}
+
+					// ADR-12 Phase 6: record GENUINELY-changed DNSBL groups for
+					// PFB_CHANGED_DNSBL_GROUPS. $pfb['aliasupdate'] is final for the
+					// group here (reset at :8859, set TRUE at :9500 ONLY when a feed in
+					// this group was actually (re)downloaded+parsed -- stays FALSE on
+					// file-reuse). Captured BEFORE the TLD/non-TLD routing split below so
+					// it covers BOTH modes. $alias is the DNSBL_<group> name (set :8864)
+					// and we are inside the foreach ($lists ...) group loop. The
+					// always-rebuilt specials (DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex) are
+					// added later, OUTSIDE this loop (:9572/:9586/:9613), so they are
+					// excluded here -- only real feed changes ride the env var. De-dup is
+					// handled at emit (array_unique). DNSBL groups are NOT firewall
+					// aliases, so this is split from the IP-side $pfb['changed_ip_aliases'].
+					if ($pfb['aliasupdate']) {
+						$pfb['changed_dnsbl_groups'][] = $alias;
 					}
 
 					// If changes found update DNSBL alias and TLD disabled, call function to update DNSBL alias
@@ -11666,11 +11673,13 @@ function sync_package_pfblockerng($cron='') {
 	//       The IP locals are in scope only at this tail, so they are merged into
 	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.
 	//   PFB_CHANGED_DNSBL_GROUPS = the space-separated list of DNSBL groups UPDATED this
-	//       pass (ADR-12 Phase 6) = the DNSBL_<group> names appended at the
-	//       dnsbl_alias_update() 'update' seam into $pfb['changed_dnsbl_groups'], de-duped
-	//       at emit. DNSBL groups are NOT firewall aliases, so they ride their own var.
-	//       Both lists are empty on a no-op pass. Semantic = "updated this pass",
-	//       Reputation-mode-INDEPENDENT; a member-level diff stays a future increment.
+	//       pass (ADR-12 Phase 6) = the DNSBL_<group> names appended in the per-group
+	//       feed loop under $pfb['aliasupdate'] (genuine feed (re)parse only -- file-reuse
+	//       and the always-rebuilt DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex specials are
+	//       excluded), de-duped at emit. DNSBL groups are NOT firewall aliases, so they
+	//       ride their own var. Both lists are empty on a no-op pass. Semantic =
+	//       "updated this pass", Reputation-mode-INDEPENDENT; a member-level diff stays a
+	//       future increment.
 	// PFB_STATUS has no clean pass-wide ok/partial/error signal today, so it is reported
 	// as 'ok' (a stable reserved placeholder; the ADR forbids inventing an accumulator
 	// for it -- do not branch a recipe on its value). No enabled 'post' hook =>

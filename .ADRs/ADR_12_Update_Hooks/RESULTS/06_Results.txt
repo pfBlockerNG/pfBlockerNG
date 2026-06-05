@@ -186,3 +186,47 @@ smoke test function NAME test_hooks_changed_aliases_ip_and_dnsbl is a generic de
   smoke collect (test_smoke_hooks)  PASS  (8 tests collected)
   markdownlint-cli2                 PASS  (0 error(s))
   ShellCheck                        N/A   (no shell file touched)
+
+
+11. POST-MERGE CORRECTION (DNSBL per-group seam + webhook guard)
+----------------------------------------------------------------
+A live smoke run after #114 merged caught two real defects; the maintainer chose the
+full fix (new commit on top, not an amend):
+
+A) DNSBL RECORDING POINT WAS WRONG (over-recorded). Section 3 above recorded the group
+   from INSIDE dnsbl_alias_update() on $mode=='update'. That swept in the three
+   always-rebuilt specials (DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex), whose 'update' calls
+   (inc:~9572/:9586/:9613) are gated on the FEATURE being on — NOT on a change — so they
+   produced PFB_CHANGED_DNSBL_GROUPS noise on every pass that has any of those features
+   enabled. (Section 3's claim "none fires unconditionally" missed that "feature on" is
+   not "changed".) FIX: removed the in-function append; ADDED the recording at the
+   per-group feed-loop site where $pfb['aliasupdate'] is final for the group, BEFORE the
+   TLD/non-TLD routing split, so it covers BOTH modes and records ONLY groups whose feed
+   was genuinely (re)parsed (aliasupdate TRUE; FALSE on file-reuse). The specials, added
+   OUTSIDE that loop, are now naturally EXCLUDED. De-dup at emit (array_unique) unchanged.
+   New PHPUnit (DnsblAliasUpdateChangedTest) pins that dnsbl_alias_update() no longer
+   touches the accumulator (both modes + specials + preserve-existing).
+
+B) WEBHOOK GUARD SEMANTIC MISMATCH. PFB_IP_CHANGED = $pfb['filter_configure'], set TRUE
+   only on a RULE change (inc:~11241). A pure alias-CONTENT change takes the else-branch
+   (inc:~11277) that `pfctl -T replace`s the table WITHOUT setting filter_configure — so
+   PFB_IP_CHANGED=0 on a content-only change even though PFB_CHANGED_IP_ALIASES IS
+   populated and the table changed. A webhook guarded on `[ "$PFB_IP_CHANGED" = 1 ]`
+   therefore MISSES the content-only reload — the exact case it wants. FIX (docs + smoke
+   recipe helper): the data-changed guard is a NON-EMPTY changed list,
+   `[ -n "$PFB_CHANGED_IP_ALIASES" ]` (resp. PFB_CHANGED_DNSBL_GROUPS). The HAProxy recipe
+   still guards on PFB_IP_CHANGED on purpose (it reloads only when rules change).
+
+C) SMOKE TESTS FORCE A GENUINE CHANGE. The earlier tests changed feed CONTENT but hit the
+   reuse-cache gate (DNSBL inc:~8917, IP inc:~10211 — even on a full `update`, $pfbreuse
+   is empty so an unchanged-on-disk feed is reused), so the feed was NOT re-parsed and
+   neither changed list was populated. The tests now touch the feed's `.update` marker
+   (force_dnsbl_refetch / the new force_ip_refetch) to force the re-parse fork, and assert
+   the specials are excluded and the PFB_IP_CHANGED-vs-PFB_CHANGED_IP_ALIASES distinction
+   (content-only IP change ⇒ PFB_IP_CHANGED=0 but PFB_CHANGED_IP_ALIASES populated).
+
+D) ABP MODULE ISOLATION. test_smoke_abp enabled pfb_regex/pfb_regex_list (+cap/cname) and
+   never cleared them; inject() MERGES the DNSBL-settings node and reset() doesn't clear
+   it, so those toggles bled into later modules (rebuilding DNSBL_Regex / flipping
+   PFB_DNSBL_CHANGED). Added a module finalizer (clear_dnsbl_settings) that deletes the
+   DNSBL-settings node on ABP teardown.
