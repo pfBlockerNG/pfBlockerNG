@@ -32,6 +32,12 @@ WHAT THIS FILE AUTOMATES (ADR §7 manual-smoke checklist):
 * **Changed aliases/groups** — ``PFB_CHANGED_IP_ALIASES`` + ``PFB_CHANGED_DNSBL_GROUPS``
   (ADR-12 P6) are empty on a no-op pass; the updated ``pfB_*`` IP table appears in the
   former and the updated ``DNSBL_*`` group in the latter when feeds change.
+* **Webhook recipe SHAPE** — a recipe-shaped ``post`` hook (the HAProxy pattern minus
+  HAProxy) guards on ``PFB_IP_CHANGED`` / ``PFB_DNSBL_CHANGED`` and ``curl``s a
+  runner-side sink, forwarding the changed-alias context with PER-FIELD
+  ``--data-urlencode`` (the space-separated lists are URL-encoded, never naked). We
+  assert the guard's OFF branch (no-op pass ⇒ no callback) AND its ON branch (a feed
+  change ⇒ exactly one callback carrying the encoded payload), for both guards.
 
 WHAT STAYS MAINTAINER-MANUAL (the smoke image has neither package): **HA sync** (no
 CARP pair on the single-NIC image) and the **HAProxy recipe end-to-end** (no HAProxy
@@ -69,7 +75,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import SmokeVM, _MockCallbackSink, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -523,6 +529,151 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     assert ip_spec.alias in changed_ip, f"updated IP table {ip_spec.alias} not in PFB_CHANGED_IP_ALIASES: {env_chg}"
     assert dnsbl_spec.alias in changed_dnsbl, (
         f"updated DNSBL group {dnsbl_spec.alias} not in PFB_CHANGED_DNSBL_GROUPS: {env_chg}"
+    )
+
+    h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 9) Webhook recipe SHAPE — a recipe-shaped post hook curls a runner-side sink and
+#    forwards the url-encoded changed-alias payload (the HAProxy pattern, minus
+#    HAProxy). Guard's OFF branch (no-op ⇒ no callback) vs ON branch (IP change ⇒
+#    one callback carrying the encoded payload).
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_webhook_fires_on_ip_change(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, webhook_sink: _MockCallbackSink
+) -> None:
+    """An IP-guarded webhook ``post`` hook fires ONLY when IP data changed, with the
+    changed-alias payload URL-encoded.
+
+    Both sides of the ``PFB_IP_CHANGED`` guard, before-state asserted first
+    (CLAUDE.md before/after rule):
+
+    * **BEFORE (guard off).** After a settling full ``update`` lands the injected IP
+      feed (``PFB_IP_CHANGED=1`` that pass), a SECOND full ``update`` over the SAME,
+      UNCHANGED feed makes no rule change ⇒ ``PFB_IP_CHANGED=0`` ⇒ the
+      ``[ "$PFB_IP_CHANGED" = 1 ] && curl …`` guard short-circuits ⇒ NO callback
+      reaches the sink (``sink.callbacks == []``).
+    * **AFTER (guard on).** Rewriting the IP feed with new content and running a full
+      ``update`` re-processes it ⇒ ``PFB_IP_CHANGED=1`` ⇒ the hook ``curl``s the sink
+      EXACTLY ONCE. The recorded form body decodes (``parse_qs``) to
+      ``ip_changed == "1"`` and ``ip_aliases`` whose space-decoded value CONTAINS the
+      updated ``pfB_*`` table token — proving the per-field ``--data-urlencode``
+      round-trips the space-separated list intact (not a broken naked ``?ip=$VAR``).
+    """
+    fed_ip = "198.51.100.8"
+    ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_whip_ip.txt", f"{fed_ip}\n")
+    ip_spec = h.IpCase(aliasname="smokehookwhip", feed_url=ip_feed, header="smokehookwhip")
+    h.inject(deployed_vm, ip_spec)
+    h.set_update_hooks(deployed_vm, [h.webhook_hook(webhook_sink.guest_url("/ip"), guard="IP")])
+
+    # Settle: a first full update processes the IP feed (its alias IS updated here, so
+    # this pass WOULD fire the hook — clear the sink afterwards so the no-op assertion
+    # below is clean).
+    h.reload(deployed_vm, "update")
+
+    # BEFORE (guard off): a second update over the UNCHANGED feed ⇒ PFB_IP_CHANGED=0 ⇒
+    # the guard short-circuits ⇒ curl never runs ⇒ no callback.
+    webhook_sink.clear()
+    h.reload(deployed_vm, "update")
+    # Give any (erroneous) in-flight callback a moment to land before asserting absence.
+    assert not webhook_sink.wait_for(1, timeout=3.0), (
+        f"a webhook callback arrived on a no-op pass — the PFB_IP_CHANGED guard did not hold: {webhook_sink.callbacks}"
+    )
+    assert webhook_sink.callbacks == [], f"unexpected callback(s) on the guard-off pass: {webhook_sink.callbacks}"
+
+    # AFTER (guard on): rewrite the IP feed ⇒ PFB_IP_CHANGED=1 ⇒ the hook fires once.
+    webhook_sink.clear()
+    h.write_local_feed(deployed_vm, "smoke_hook_whip_ip.txt", f"{fed_ip}\n203.0.113.18\n")
+    h.reload(deployed_vm, "update")
+    assert webhook_sink.wait_for(1, timeout=10.0), "the IP-guarded webhook hook did not fire on the IP change"
+    callbacks = webhook_sink.callbacks
+    assert len(callbacks) == 1, f"expected exactly one webhook callback on the IP change, got {len(callbacks)}"
+    rec = callbacks[0]
+    assert rec.method == "POST", f"webhook should POST, got {rec.method}"
+    assert rec.form.get("ip_changed") == ["1"], f"callback ip_changed should be '1', got {rec.form}"
+    # The space-separated list round-trips back to a real space after parse_qs; assert
+    # the updated pfB_* table is a member of the split value (encoding survived intact).
+    ip_aliases = rec.form.get("ip_aliases", [""])[0].split()
+    assert ip_spec.alias in ip_aliases, (
+        f"updated IP table {ip_spec.alias} not in the callback's ip_aliases {ip_aliases!r}: {rec.form}"
+    )
+
+    h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 10) Webhook guard branch — an IP-guarded AND a DNSBL-guarded hook; a DNSBL-only
+#     change fires the DNSBL hook and NOT the IP hook (the other guard branch +
+#     the DNSBL payload).
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_webhook_dnsbl_guard_branch(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, webhook_sink: _MockCallbackSink
+) -> None:
+    """With BOTH guards configured, a DNSBL-only change fires the DNSBL-guarded hook and
+    NOT the IP-guarded one — proving each guard keys off its OWN flag.
+
+    Two recipe-shaped ``post`` hooks on DISTINCT sink paths (``/ip`` vs ``/dnsbl``):
+    one guarded on ``PFB_IP_CHANGED``, one on ``PFB_DNSBL_CHANGED``. We settle both
+    feeds with a full ``update``, then change ONLY the DNSBL feed and run a full
+    ``update``: the IP alias content is unchanged ⇒ ``PFB_IP_CHANGED=0`` (IP hook's
+    guard holds, no ``/ip`` callback), while the DNSBL feed content changed ⇒
+    ``PFB_DNSBL_CHANGED=1`` (DNSBL hook fires, a ``/dnsbl`` callback whose
+    ``dnsbl_changed == "1"`` and whose ``dnsbl_groups`` contains the updated
+    ``DNSBL_*`` group token). This is the complementary guard branch to
+    ``test_hooks_webhook_fires_on_ip_change`` and proves the DNSBL payload encodes.
+
+    A full ``update`` (not ``updatednsbl``) is required to RE-READ the edited local
+    DNSBL feed: ``updatednsbl`` sets ``reuse_dnsbl`` and reloads from cache without
+    re-downloading (``inc:7437``), so it would not pick up the feed edit.
+    """
+    fed_ip = "198.51.100.9"
+    ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_whgd_ip.txt", f"{fed_ip}\n")
+    ip_spec = h.IpCase(aliasname="smokehookwhgdip", feed_url=ip_feed, header="smokehookwhgdip")
+    domain = h.unique_domain("hookwhgd")
+    dnsbl_feed = h.write_local_feed(deployed_vm, "smoke_hook_whgd_dnsbl.txt", f"{domain}\n")
+    dnsbl_spec = h.DnsblCase(
+        aliasname="smokehookwhgdd", feed_url=dnsbl_feed, header="smokehookwhgdd", mode=h.DnsblMode.NULL
+    )
+    h.inject(deployed_vm, ip_spec)
+    h.inject(deployed_vm, dnsbl_spec)
+    ip_url = webhook_sink.guest_url("/ip")
+    dnsbl_url = webhook_sink.guest_url("/dnsbl")
+    h.set_update_hooks(
+        deployed_vm,
+        [h.webhook_hook(ip_url, guard="IP"), h.webhook_hook(dnsbl_url, guard="DNSBL")],
+    )
+
+    # Settle: a first full update processes both feeds (both WOULD fire here); clear the
+    # sink afterwards so the DNSBL-only assertion below is clean.
+    h.reload(deployed_vm, "update")
+    webhook_sink.clear()
+
+    # DNSBL-only change: rewrite ONLY the DNSBL feed, leave the IP feed untouched.
+    domain2 = h.unique_domain("hookwhgd2")
+    h.write_local_feed(deployed_vm, "smoke_hook_whgd_dnsbl.txt", f"{domain}\n{domain2}\n")
+    h.reload(deployed_vm, "update")
+
+    # The DNSBL hook fires (its guard flag is 1); wait for that one callback.
+    assert webhook_sink.wait_for(1, timeout=10.0), "the DNSBL-guarded webhook hook did not fire on the DNSBL change"
+    callbacks = webhook_sink.callbacks
+    dnsbl_calls = [c for c in callbacks if c.path == "/dnsbl"]
+    ip_calls = [c for c in callbacks if c.path == "/ip"]
+    assert len(dnsbl_calls) == 1, f"expected exactly one /dnsbl callback, got {len(dnsbl_calls)}: {callbacks}"
+    # The IP guard held: PFB_IP_CHANGED=0 ⇒ the IP hook's curl never ran ⇒ no /ip call.
+    assert ip_calls == [], (
+        f"the IP-guarded hook fired on a DNSBL-only change — its PFB_IP_CHANGED guard did not hold: {ip_calls}"
+    )
+    rec = dnsbl_calls[0]
+    assert rec.method == "POST", f"webhook should POST, got {rec.method}"
+    assert rec.form.get("dnsbl_changed") == ["1"], f"callback dnsbl_changed should be '1', got {rec.form}"
+    dnsbl_groups = rec.form.get("dnsbl_groups", [""])[0].split()
+    assert dnsbl_spec.alias in dnsbl_groups, (
+        f"updated DNSBL group {dnsbl_spec.alias} not in the callback's dnsbl_groups {dnsbl_groups!r}: {rec.form}"
     )
 
     h.clear_update_hooks(deployed_vm)
