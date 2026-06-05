@@ -486,7 +486,11 @@ numbers are **CI-pending**; the browser leg has a one-line demote/drop switch
 
 When writing tests — **unit, integration, E2E, or smoke** — cover *every* branch of
 the behaviour under test, and assert the state *before* a change as well as after.
-Two rules, both required:
+**A test must validate that the code is correct, not merely execute it:** a test
+that runs the code but asserts nothing that would *fail* when the behaviour
+regresses is coverage theater and is **not acceptable**, even at 100% line coverage.
+The test's name (and comments) state the **intent** — the behaviour being pinned —
+not the mechanics. These rules, all required:
 
 - **Branch coverage — test every condition, not just one side.** When a result
   depends on a toggle / flag / mode / input class, assert the outcome for **each**
@@ -507,6 +511,16 @@ Two rules, both required:
   any observable lifecycle: a test that a domain is *blocked* after listing must first
   assert it *resolved* before listing (and, after an unblock, resolves again) — see
   the `tests/smoke` DNSBL lock/unlock lifecycle cases.
+
+- **Specify complex behaviour BDD-style; keep trivial tests trivial.** A utility
+  function, a small rule, or a simple mapping needs only a plain assertion with a
+  descriptive, intent-naming title. Anything with **non-trivial behaviour** — state
+  transitions, precedence, multi-step flows (the DNSBL/ABP decision logic, the
+  decision cache, smoke journeys) — gets a **Scenario / Background + Given–When–Then**
+  specification living **next to the test** (a docstring/comment or the test body),
+  and the body split into explicit **Given** (arrange) / **When** (act) / **Then**
+  (assert) sections, so the test reads as the behaviour it guarantees rather than as
+  a sequence of calls.
 
 ---
 
@@ -582,6 +596,19 @@ pre-commit hook and in CI (`test.yml`) alongside ShellCheck/PHP; run
 ---
 
 ## Code standards
+
+### Naming — follow the established pattern
+
+Names are not invented in isolation: **a new variable, web-page element `id`,
+map/dict key, or config key follows the conventions already in that file (or in
+similar files) — match the surrounding pattern, don't coin an ad-hoc name.** This
+spans the whole stack (PHP, Python, shell, JS, the `www/` UI, `config.xml` keys).
+For example, when every sibling identifier is `pfB_*`, a wizard "don't show again"
+flag is **`pfB_wizard_disable`**, not `donotshowthisagain`. Before naming
+something, look at its neighbours (the other fields on the page, the other keys in
+the dict, the other settings in the section) and stay consistent — prefix,
+casing, separators, and word order included. Consistency makes the code greppable
+and the intent obvious; an off-pattern name is a smell even when it "works".
 
 ### PHP
 
