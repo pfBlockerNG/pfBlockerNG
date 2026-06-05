@@ -42,6 +42,10 @@ on:
         description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
         required: false
         default: ""
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
+        required: false
+        default: "smoke"
   workflow_call:
     inputs:
       image_ref:
@@ -49,6 +53,11 @@ on:
         required: false
         type: string
         default: ""
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
+        required: false
+        type: string
+        default: "smoke"
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -237,8 +246,11 @@ jobs:
       # resolves every answer from the in-runner mock-feed server (guest ->
       # SLIRP 10.0.2.2 -> runner loopback) + injected Unbound local-data, so it
       # still passes with real egress dark.
-      - name: Run the smoke matrix (pytest -m smoke)
+      - name: Run the live-VM matrix (pytest -m ${{ inputs.pytest_marker || 'smoke' }})
         env:
+          # Selected marker: 'smoke' by default (byte-identical to before); 'repo'
+          # for the ADR-17 repository-install flow (repo-install.yml calls in with it).
+          PYTEST_MARKER: ${{ inputs.pytest_marker || 'smoke' }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
@@ -274,7 +286,7 @@ jobs:
           # (inject->reload->probe; slowest observed ~6s), NOT the slow module fixtures
           # (deploy ~1-2 min) — so a per-case stall fails fast (vs the old 300s -> job-
           # timeout wipe) while leaving comfortable margin over the real per-case time.
-          python3 -m pytest tests/smoke -m smoke \
+          python3 -m pytest tests/smoke -m "${PYTEST_MARKER}" \
             --override-ini="addopts=" --override-ini="timeout_func_only=true" \
             --timeout=30 --timeout-method=signal -v
 
