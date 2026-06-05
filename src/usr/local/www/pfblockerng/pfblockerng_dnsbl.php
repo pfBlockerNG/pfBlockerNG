@@ -56,7 +56,16 @@ $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']
 
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
+// ADR-08: IDN mode selector (Off | All-IDN | Confusable). Legacy on/off migrates:
+// 'on' -> 'all' (today's block-all-IDN), empty/'off' -> '' (Off).
 $pconfig['pfb_idn']		= $pfb['dconfig']['pfb_idn']				?: '';
+if ($pconfig['pfb_idn'] === 'on') {
+	$pconfig['pfb_idn'] = 'all';
+}
+// Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
+// escalate suspicious mixed-script (else alert only) is opt-in (default off).
+$pconfig['pfb_idn_block_malicious']	= isset($pfb['dconfig']['pfb_idn_block_malicious'])	? $pfb['dconfig']['pfb_idn_block_malicious'] : 'on';
+$pconfig['pfb_idn_escalate_suspicious']	= $pfb['dconfig']['pfb_idn_escalate_suspicious']		?: '';
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
 $pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
 $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
@@ -535,7 +544,15 @@ if ($_POST) {
 
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_idn']		= pfb_filter($_POST['pfb_idn'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			// ADR-08: IDN mode selector. Validate the raw word, migrate legacy 'on' -> 'all',
+			// then whitelist to Off ('') | All-IDN ('all') | Confusable ('confusable').
+			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
+			if ($pfb_idn_mode === 'on') {
+				$pfb_idn_mode = 'all';
+			}
+			$pfb['dconfig']['pfb_idn']		= in_array($pfb_idn_mode, array('all', 'confusable'), TRUE) ? $pfb_idn_mode : '';
+			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -2423,13 +2440,34 @@ foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 	}
 }
 
-$section->addInput(new Form_Checkbox(
+$section->addInput(new Form_Select(
 	'pfb_idn',
 	gettext('IDN Blocking'),
+	$pconfig['pfb_idn'],
+	array(
+		''		=> 'Off',
+		'all'		=> 'All-IDN',
+		'confusable'	=> 'Confusable',
+	)
+))->setHelp('IDN handling (not Regex based). <strong>Off</strong>: no IDN action. <strong>All-IDN</strong>: block every IDN/\'xn--\' domain (blunt). '
+		. '<strong>Confusable</strong>: block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, including Cyrillic+Greek). '
+		. 'Does not catch whole-script confusables or pure-ASCII typosquats.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_idn_block_malicious',
+	gettext('Block clearly-malicious homoglyphs'),
 	'Enable',
-	$pconfig['pfb_idn'] === 'on' ? true:false,
+	$pconfig['pfb_idn_block_malicious'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enable the IDN blocking feature (not Regex based). This will block all IDN\'s and domains that include \'xn--\'.');
+))->setHelp('Confusable mode: block names that mix confusable scripts in one label (clearly malicious). Disable to alert only.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_idn_escalate_suspicious',
+	gettext('Block suspicious mixed-script'),
+	'Enable',
+	$pconfig['pfb_idn_escalate_suspicious'] === 'on' ? true:false,
+	'on'
+))->setHelp('Confusable mode: escalate suspicious mixed-script names to a block. Default alerts only (no block).');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_regex',
@@ -3100,6 +3138,17 @@ function enable_python_pytld() {
 	}
 }
 
+function enable_idn_mode() {
+	// ADR-08: the two Confusable sub-toggles apply only in Confusable mode.
+	if ($('#pfb_idn').val() == 'confusable') {
+		hideCheckbox('pfb_idn_block_malicious', false);
+		hideCheckbox('pfb_idn_escalate_suspicious', false);
+	} else {
+		hideCheckbox('pfb_idn_block_malicious', true);
+		hideCheckbox('pfb_idn_escalate_suspicious', true);
+	}
+}
+
 function enable_python_regex() {
 	if ($('#pfb_regex').prop('checked')) {
 		$('#Python_regex_list').show();
@@ -3151,6 +3200,11 @@ events.push(function(){
 		enable_python_pytld();
 	});
 	enable_python_pytld();
+
+	$('#pfb_idn').change(function() {
+		enable_idn_mode();
+	});
+	enable_idn_mode();
 
 	$('#pfb_regex').click(function() {
 		enable_python_regex();

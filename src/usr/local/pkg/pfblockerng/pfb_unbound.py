@@ -877,11 +877,18 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_hsts"] = config.getboolean("MAIN", "python_hsts")
             if config.has_option("MAIN", "python_idn"):
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
-            # ADR-08: derive the IDN mode from the (just-loaded) legacy python_idn flag.
-            # The PHP ini still writes only python_idn=on|off this phase, so 'on'->All-IDN,
-            # off->Off -- today's exact behaviour. The Confusable value + the explicit
-            # idn_mode key plumb in via PHP at Phase 6; until then this is the sole source.
-            pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
+            # ADR-08: the IDN mode. The PHP ini writer (Phase 6+) emits an explicit
+            # idn_mode = off|all|confusable key; honour it when present. For a config that
+            # predates the key (only python_idn=on|off written), fall back to the legacy
+            # derivation -- 'on'->All-IDN, off->Off -- byte-identical to today.
+            if config.has_option("MAIN", "idn_mode"):
+                idn_mode = config.get("MAIN", "idn_mode").strip().lower()
+                if idn_mode in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+                    pfb["idn_mode"] = idn_mode
+                else:
+                    pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
+            else:
+                pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
             # ADR-08 Phase 5: the two Confusable sub-toggles. The PHP ini writer emits these
             # MAIN keys from Phase 6 on; read them when present so the matcher honours the
             # operator's choice, else keep the defaults (block_malicious ON, escalate OFF).
@@ -955,8 +962,10 @@ def init_standard(id: int, env: module_env) -> bool:
             }
 
         if pfb["python_enable"]:
-            # Enable the Blacklist functions (IDN)
-            if pfb["python_idn"]:
+            # Enable the Blacklist functions (IDN). ADR-08: ANY active IDN mode (All-IDN
+            # via the legacy python_idn flag, OR Confusable) needs the blacklist machinery
+            # (whitelist load + stats) -- the Confusable matcher feeds is_found like a feed.
+            if pfb["python_idn"] or pfb["idn_mode"] != IDN_MODE_OFF:
                 pfb["python_blacklist"] = True
 
             # Enable the Blacklist functions (TLD Allow)
