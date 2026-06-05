@@ -351,19 +351,29 @@ pfb_aggregate() {
 		return
 	fi
 
-	# mtime-gate: skip the rebuild when the existing aggregate output is at least as
-	# new as every listed member file AND the consumer file is already non-empty.
-	if [ -f "${agg_out}" ] && [ -s "${agg_consumer}" ]; then
+	# Snapshot (beside the aggregate) of the member SET that produced the current ${agg_out}.
+	# The gate must rebuild not only when a member is NEWER but also when the member set
+	# CHANGED -- a feed removed/added, or the union emptied -- else a shrink would leave stale
+	# content forever. PHP rewrites ${agg_memberlist} every pass (so its mtime is useless), so
+	# we compare its CONTENT (the sorted member paths) against this snapshot.
+	agg_setsnap="${agg_out}.members"
+
+	# Skip the rebuild only when the aggregate + consumer already exist, the member set is
+	# UNCHANGED since the last build, AND no listed member is newer than the aggregate output.
+	if [ -f "${agg_out}" ] && [ -s "${agg_consumer}" ] && [ -f "${agg_setsnap}" ] && \
+	   cmp -s "${agg_memberlist}" "${agg_setsnap}"; then
 		agg_stale=''
 		while IFS= read -r agg_member; do
 			[ -z "${agg_member}" ] && continue
-			if [ "${agg_member}" -nt "${agg_out}" ]; then
+			# POSIX sh has no '-nt'; `find <member> -newer <out>` prints the member iff its
+			# mtime is strictly newer than the aggregate output's.
+			if [ -n "$(find "${agg_member}" -newer "${agg_out}" 2>/dev/null)" ]; then
 				agg_stale=1
 				break
 			fi
 		done < "${agg_memberlist}"
 		if [ -z "${agg_stale}" ]; then
-			echo "aggregate [ ${agg_family} ]: no member newer than [ ${agg_out} ], skipping rebuild."
+			echo "aggregate [ ${agg_family} ]: member set unchanged, no member newer than [ ${agg_out} ], skipping rebuild."
 			return
 		fi
 	fi
@@ -376,9 +386,18 @@ pfb_aggregate() {
 	done < "${agg_memberlist}"
 	LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
 
-	# CIDR-collapse the deduped union via iprange (set-exact) into the aggregate file.
+	# CIDR-collapse the deduped union via iprange (set-exact). Write to a temp and mv into
+	# place only on success, so a transient iprange failure cannot clobber a previously valid
+	# aggregate (the '>' redirect would otherwise truncate ${agg_out} before iprange even ran).
 	if [ -s "${dedupfile}" ]; then
-		"${pathaggregate}" "${dedupfile}" > "${agg_out}"
+		agg_tmp="${agg_out}.tmp"
+		if ! "${pathaggregate}" "${dedupfile}" > "${agg_tmp}"; then
+			rm -f "${agg_tmp}"
+			log="aggregate [ ${agg_family} ]: iprange failed; keeping existing [ ${agg_out} ]."
+			echo "${log}" | tee -a "${errorlog}"
+			return
+		fi
+		mv -f "${agg_tmp}" "${agg_out}"
 	else
 		: > "${agg_out}"
 	fi
@@ -391,6 +410,11 @@ pfb_aggregate() {
 	else
 		echo '#' > "${agg_consumer}"
 	fi
+
+	# Record the member set that produced this aggregate so the NEXT pass's gate can detect a
+	# membership change (shrink/grow/empty), not just a newer member. Only reached on a real
+	# (re)build -- a skipped pass returns above, an iprange failure returns without touching it.
+	cp -f "${agg_memberlist}" "${agg_setsnap}"
 
 	aggin="$(grep -c ^ "${dedupfile}" 2>/dev/null)"
 	aggfinal="$(grep -c ^ "${agg_out}" 2>/dev/null)"
