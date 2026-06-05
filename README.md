@@ -396,6 +396,44 @@ the IPv4 VIP / IPv6 VIP dropdowns on the DNSBL settings page.
 
 See [ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md) for the full design.
 
+### Aggregated Aliases ("Uber" aliases, ADR-11)
+
+The **Aggregated Aliases** multi-select on the General settings tab builds, per
+selected **action type** (`Deny` / `Permit` / `Match` / `Native`), a pair of
+**Native** urltable aliases — `pfB_<Type>_Aggregated_v4` and `_v6` — each holding
+the deduped, `iprange`-aggregated **union of that type's effective set** for the
+family. `Deny` is the *effective* (post-suppression/whitelist) block set and folds
+in **DNSBLIP**; **GeoIP folds in by each continent's configured action** (a
+Deny-action continent lands in the Deny aggregate), so there is **no separate Geo
+alias**. `Permit` / `Match` / `Native` are the exact unions of their own dirs.
+
+- **Native = no firewall rule.** The aggregates are registered as `urltable`
+  aliases only; pfBlockerNG creates **no rule** for them. They are **reference
+  IP-sets** — a `Permit` or `Match` aggregate does **not** permit or match anything
+  by itself. To use one, reference it by name in your own firewall rule or in an
+  HAProxy/service ACL (the motivating use case, ADR-12 below).
+- **Opt-in, default none.** With nothing selected the update pass is byte-identical
+  to before. Each selected aggregate is a **wired kernel pf table** of its full
+  union — RAM proportional to the union size, and the Deny set can run to **millions
+  of entries**. Enable only the type(s) you actually consume.
+- **Built in lockstep, mtime-gated.** Each selected aggregate is rebuilt **in the
+  same update pass** as its members (`cat` → `sort -u` → `iprange`), with no extra
+  cycle; an unchanged type is skipped via an mtime gate. Every built aggregate also
+  writes a **never-empty** `-f` consumer file (a `#` placeholder line when the union
+  is empty), so a downstream `-f` reference always validates.
+
+**ADR-12 hand-off.** The Native aggregate aliases plus their never-empty `.lst`
+consumer files are exactly what an HAProxy ACL (or any `-f`-reading service)
+consumes. pfBlockerNG **loads each aggregate's pf table inline, before** the ADR-12
+`post` update hook fires, so a hook always sees the **fresh** table; a rebuilt
+aggregate's name is merged into `PFB_CHANGED_IP_ALIASES`. Freshness for HAProxy is
+therefore a **pfBlockerNG-triggered graceful reload** from a `post` hook (the
+HAProxy package re-reads its `-f` files only at reload), **not** a runtime-socket
+push — see the HAProxy recipe under **Update Hooks** below.
+
+See [ADR-11](.ADRs/ADR_11_Uber_Aliases/ADR.md) for the full design, the union-cost
+benchmark, and the maintainer smoke checklist.
+
 ### Update Hooks (pre/post update commands, ADR-12)
 
 The **Update Hooks** settings tab (after **Update**) lets an admin run their own
