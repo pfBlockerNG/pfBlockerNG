@@ -1,0 +1,277 @@
+{
+  "_meta": {
+    "purpose": "ADR-08 Phase 2 TARGET decision spec. The committed, human-readable golden mapping (input label/name -> resolved per-label script set -> UTS#39 restriction level -> severity -> action) that EVERY later phase (the Phase-4 analyzer, the Phase-5 matcher wiring) is graded against. There is NO existing-code oracle: today's feature blocks ALL IDN, the bluntness ADR-08 replaces. So this file AUTHORS the target, before any analyzer code exists.",
+    "ucd_version": "15.1.0",
+    "confusable_set": ["Latin", "Cyrillic", "Greek"],
+    "cjk_companions": ["Hiragana", "Katakana", "Hangul", "Bopomofo"],
+    "rule": ">=2 of the confusable_set co-occur in ONE label -> malicious; analysed PER-LABEL, never unioned across the dot; a name is malicious iff SOME label is.",
+    "scripts_property": "Script_Extensions when present else Script; Common+Inherited dropped (transparent) -- see RESULTS/01 section 4.",
+    "restriction_levels": {
+      "ascii_only": "all code points are ASCII (UTS#39 ASCII-Only).",
+      "single_script": "after dropping Common/Inherited, the resolved set is a single script (UTS#39 Single Script).",
+      "highly_restrictive": "single script OR Latin + one of {Jpan: Han+Hiragana+Katakana, Kore: Han+Hangul, Hanb: Han+Bopomofo} (UTS#39 Highly Restrictive). The legit allow-set.",
+      "non_restrictive": "fails Highly Restrictive: any other multi-script mix (UTS#39 Moderately Restrictive / Minimally Restrictive / Unrestricted collapsed -- ADR-08 does not distinguish them, only 'fails Highly Restrictive')."
+    },
+    "severity_to_action": {
+      "legit": "none (resolve normally; never touched in Confusable mode).",
+      "suspicious": "alert (logged, resolution NOT broken) by default; block only when the opt-in suspicious->block sub-toggle is enabled.",
+      "malicious": "block by default (the block-malicious sub-toggle is default-ON; the operator may disable it, downgrading the action to alert).",
+      "flagged": "an undecodable / unresolvable-script label (malformed punycode, or a decoded label whose code points carry no letter-script). NOT malicious; surfaced as flagged so it is never silently passed and never crashes the resolver. Action under the default policy = alert (it is a non-legit anomaly, treated as the suspicious tier for the action mapping)."
+    },
+    "borderline_calls": [
+      "Cherokee / Armenian / Coptic mixed with Latin are SUSPICIOUS, not malicious: they confuse with Latin but are outside the high-confidence {Latin,Cyrillic,Greek} trio and have legitimate single-script use; folding them into default-block risks FP without a measured TP need (RESULTS/01 section 3). Revisit only if a future corpus shows a real missed attack class.",
+      "Cyrillic+Greek (no Latin) IS malicious: the rule is >=2 of the trio, NOT Latin-anchored (RESULTS/01 section 3); proven by xn--mxa00ab.",
+      "An empty / control-char / emoji label resolves to NO letter-script -> severity 'flagged', NOT 'legit'. It carries no confusable mix so it is not malicious, but it is an anomaly and is surfaced (action = alert), never silently passed."
+    ],
+    "documented_limitations": [
+      "Whole-script confusables (an all-Cyrillic look-alike of a Latin word, e.g. xn--80ak6aa92e 'аррӏе') are single-script -> NOT caught. Out of scope (ADR-08 section 7): catching them needs a confusables + protected-brand table, deliberately not built here.",
+      "Pure-ASCII typosquats (g00gle, rn-vs-m) are single-script ASCII, no xn-- -> NOT caught. Out of scope."
+    ]
+  },
+
+  "single_label": [
+    {
+      "id": "ascii_only_noop",
+      "a_label": "example",
+      "decoded": "example",
+      "resolved_scripts": ["Latin"],
+      "restriction_level": "ascii_only",
+      "severity": "legit",
+      "action": "none",
+      "intent": "A plain ASCII label is not an xn-- label at all -> the analyzer is never even invoked -> no-op. Pins the fast path."
+    },
+    {
+      "id": "latin_accented",
+      "a_label": "xn--mnchen-3ya",
+      "decoded": "münchen",
+      "resolved_scripts": ["Latin"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Accented Latin (münchen) is single-script Latin -> legit."
+    },
+    {
+      "id": "single_cyrillic",
+      "a_label": "xn--h1alffa9f",
+      "decoded": "россия",
+      "resolved_scripts": ["Cyrillic"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "All-Cyrillic (россия) is single-script -> legit even though Cyrillic is in the confusable trio (the rule needs >=2 of the trio)."
+    },
+    {
+      "id": "single_greek",
+      "a_label": "xn--hxakic4aa",
+      "decoded": "ελλάδα",
+      "resolved_scripts": ["Greek"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "All-Greek (ελλάδα) is single-script -> legit (mirror of the all-Cyrillic case)."
+    },
+    {
+      "id": "arabic",
+      "a_label": "xn--4gbrim",
+      "decoded": "موقع",
+      "resolved_scripts": ["Arabic"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Single-script Arabic -> legit (RTL, non-trio script)."
+    },
+    {
+      "id": "thai",
+      "a_label": "xn--o3cw4h",
+      "decoded": "ไทย",
+      "resolved_scripts": ["Thai"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Single-script Thai -> legit."
+    },
+    {
+      "id": "japanese_katakana",
+      "a_label": "xn--zckzah",
+      "decoded": "テスト",
+      "resolved_scripts": ["Katakana"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Single-script Katakana -> legit."
+    },
+    {
+      "id": "japanese_han_katakana",
+      "a_label": "xn--eckwd4c7c777u",
+      "decoded": "ドメイン名",
+      "resolved_scripts": ["Han", "Katakana"],
+      "restriction_level": "highly_restrictive",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Latin+CJK FP-guard: Han+Katakana (Japanese 'domain name') is UTS#39 Highly Restrictive -> legit. The single most important non-block case: a naive 'any multi-script -> block' would FALSE-POSITIVE here."
+    },
+    {
+      "id": "korean_han_hangul",
+      "a_label": "xn--eqr704t9deq8o",
+      "decoded": "도메인名",
+      "resolved_scripts": ["Han", "Hangul"],
+      "restriction_level": "highly_restrictive",
+      "severity": "legit",
+      "action": "none",
+      "intent": "Latin+CJK FP-guard: Han+Hangul (Korean) is Highly Restrictive -> legit. Second CJK companion combo."
+    },
+    {
+      "id": "malicious_latin_cyrillic",
+      "a_label": "xn--pple-43d",
+      "decoded": "аpple",
+      "resolved_scripts": ["Cyrillic", "Latin"],
+      "restriction_level": "non_restrictive",
+      "severity": "malicious",
+      "action": "block",
+      "intent": "Latin+Cyrillic homograph (apple with Cyrillic а) -> >=2 of the trio -> malicious -> block by default."
+    },
+    {
+      "id": "malicious_latin_greek",
+      "a_label": "xn--ggle-0nda",
+      "decoded": "gοοgle",
+      "resolved_scripts": ["Greek", "Latin"],
+      "restriction_level": "non_restrictive",
+      "severity": "malicious",
+      "action": "block",
+      "intent": "Latin+Greek homograph (google with Greek ο) -> >=2 of the trio -> malicious -> block."
+    },
+    {
+      "id": "malicious_cyrillic_greek",
+      "a_label": "xn--mxa00ab",
+      "decoded": "сαр",
+      "resolved_scripts": ["Cyrillic", "Greek"],
+      "restriction_level": "non_restrictive",
+      "severity": "malicious",
+      "action": "block",
+      "intent": "Cyrillic+Greek with NO Latin -> still >=2 of the trio -> malicious. Proves the rule is NOT Latin-anchored (borderline call, RESULTS/01)."
+    },
+    {
+      "id": "suspicious_latin_armenian",
+      "a_label": "xn--bnk-1ce",
+      "decoded": "bաnk",
+      "resolved_scripts": ["Armenian", "Latin"],
+      "restriction_level": "non_restrictive",
+      "severity": "suspicious",
+      "action": "alert",
+      "intent": "Latin+Armenian: fails Highly Restrictive but Armenian is OUTSIDE the trio -> suspicious -> alert (block opt-in). Borderline call kept out of malicious."
+    },
+    {
+      "id": "suspicious_latin_cherokee",
+      "a_label": "xn--bnk-u8p",
+      "decoded": "bᎠnk",
+      "resolved_scripts": ["Cherokee", "Latin"],
+      "restriction_level": "non_restrictive",
+      "severity": "suspicious",
+      "action": "alert",
+      "intent": "Latin+Cherokee -> suspicious -> alert. Second non-trio confusable script."
+    },
+    {
+      "id": "suspicious_latin_coptic",
+      "a_label": "xn--bnk-q10b",
+      "decoded": "bⲁnk",
+      "resolved_scripts": ["Coptic", "Latin"],
+      "restriction_level": "non_restrictive",
+      "severity": "suspicious",
+      "action": "alert",
+      "intent": "Latin+Coptic -> suspicious -> alert. Third non-trio confusable script."
+    },
+    {
+      "id": "limitation_whole_script_cyrillic",
+      "a_label": "xn--80ak6aa92e",
+      "decoded": "аррӏе",
+      "resolved_scripts": ["Cyrillic"],
+      "restriction_level": "single_script",
+      "severity": "legit",
+      "action": "none",
+      "intent": "DOCUMENTED LIMITATION: an all-Cyrillic look-alike of 'apple' is single-script -> passes restriction-level analysis -> NOT caught. Asserted as a no-op to PIN that mixed-script detection does not catch whole-script confusables (ADR-08 section 7)."
+    }
+  ],
+
+  "multi_label": [
+    {
+      "id": "idn_cctld_latin_under_cyrillic",
+      "name": "example.рф",
+      "a_name": "example.xn--p1ai",
+      "per_label_scripts": [["Latin"], ["Cyrillic"]],
+      "per_label_severity": ["legit", "legit"],
+      "wrong_union_scripts": ["Cyrillic", "Latin"],
+      "severity": "legit",
+      "action": "none",
+      "intent": "Latin SLD under Cyrillic .рф ccTLD. Each label is single-script -> legit. The WRONG whole-name union {Cyrillic,Latin} would falsely read malicious; per-label keeps it legit. Pins 'never union across the dot'."
+    },
+    {
+      "id": "idn_cctld_latin_under_han",
+      "name": "site.中国",
+      "a_name": "site.xn--fiqs8s",
+      "per_label_scripts": [["Latin"], ["Han"]],
+      "per_label_severity": ["legit", "legit"],
+      "wrong_union_scripts": ["Han", "Latin"],
+      "severity": "legit",
+      "action": "none",
+      "intent": "Latin SLD under Han .中国 ccTLD -> per-label legit. Mirror of example.рф with a CJK TLD label."
+    },
+    {
+      "id": "malicious_subdomain_label",
+      "name": "раypal.example.com",
+      "a_name": "xn--ypal-43d9g.example.com",
+      "per_label_scripts": [["Cyrillic", "Latin"], ["Latin"], ["Latin"]],
+      "per_label_severity": ["malicious", "legit", "legit"],
+      "wrong_union_scripts": ["Cyrillic", "Latin"],
+      "severity": "malicious",
+      "action": "block",
+      "intent": "paypal homograph in the SUBDOMAIN label (раypal: Cyrillic mixed with Latin). Registry policy cannot validate subdomains; per-label analysis flags the offending label -> whole name malicious -> block."
+    }
+  ],
+
+  "edge_decode": [
+    {
+      "id": "edge_empty_payload",
+      "a_label": "xn--",
+      "decode_ok": true,
+      "severity": "flagged",
+      "note": "empty punycode payload -> '' decodes ok, but an empty label resolves to NO scripts -> flagged (contentless; never asserted malicious or silently passed). Decode must NOT raise."
+    },
+    {
+      "id": "edge_overlong_byte",
+      "a_label": "xn--a",
+      "decode_ok": true,
+      "severity": "flagged",
+      "note": "single overlong byte -> control char U+0080. Decodes ok but the char has no resolvable letter-script (resolves to the Unknown sentinel) -> flagged. NOT malicious, NOT silently legit."
+    },
+    {
+      "id": "edge_junk_payload_raises",
+      "a_label": "xn--zz",
+      "decode_ok": false,
+      "raises": "UnicodeDecodeError",
+      "severity": "flagged",
+      "note": "incomplete punycode -> UnicodeDecodeError. MUST be caught and the label FLAGGED, never propagated (the resolver must not crash)."
+    },
+    {
+      "id": "edge_lone_digit_raises",
+      "a_label": "xn--0",
+      "decode_ok": false,
+      "raises": "UnicodeDecodeError",
+      "severity": "flagged",
+      "note": "lone digit payload -> UnicodeDecodeError -> caught + flagged."
+    },
+    {
+      "id": "edge_emoji_ok",
+      "a_label": "xn--ls8h",
+      "decode_ok": true,
+      "severity": "flagged",
+      "note": "valid emoji label (pile of poo) -> decodes ok; emoji carries no letter-script (resolves to the Unknown sentinel) -> flagged. Not a confusable mix."
+    },
+    {
+      "id": "edge_looks_ascii_decodes_cjk",
+      "a_label": "xn--google",
+      "decode_ok": true,
+      "severity": "legit",
+      "note": "looks-ASCII payload decodes to junk Han ideographs -> single-script Han -> legit (decodes ok; no exception, no confusable mix)."
+    }
+  ]
+}
