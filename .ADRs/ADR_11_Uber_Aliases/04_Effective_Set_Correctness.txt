@@ -1,0 +1,86 @@
+================================================================================
+PHASE 4 PROMPT — Effective-set & additive correctness (membership + all-combinations)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §2 "Per-type member set" + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/11-uber-aliases` branch performing Phase 4 of ADR-11. Phase 3 landed
+the generic plumbing (multi-select + build + register + teardown). This phase PINS
+CORRECTNESS: that each aggregate's membership is exactly right and that the feature is
+additive across EVERY toggle combination. Refine the Phase-2 helper / Phase-3 wiring only
+as needed to make the contract hold. Work inline on the branch, one commit, push directly
+(PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The plumbing being correct does not prove the SET is correct. The Deny aggregate must be
+the EFFECTIVE block set (post-suppression/whitelist), must include DNSBLIP, and must
+include Deny-action GeoIP continents (which already live in denydir, ADR §1.5) — while
+Permit/Match/Native are exact unions of their own dirs. And "additive" must hold for the
+whole power-set of the four toggles, not just the all-off and all-on ends.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_11_Uber_Aliases/RESULTS/03_Results.txt — the multi-select + the generic loop
+  + registration/teardown. If missing, STOP and report. Also 02_Results.txt (the member
+  helper) + 01_Results.txt.
+- .ADRs/ADR_11_Uber_Aliases/ADR.md (§2 "Per-type member set", the contract, §4, §7 smoke).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the suppression/whitelist application
+  point and the order vs the denydir member files (confirm the union reflects the
+  EFFECTIVE set, not raw feed contents); the DNSBLIP alias files (:9696-9737 area); the
+  GeoIP continent routing (pfb_determine_list_detail at :9926, $pfb['continents']); the
+  empty-alias prune (:9495-9498).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — the `aggregate` action + cidr_aggregate.
+- CLAUDE.md (test-validity rule — assert before/after, every branch).
+
+ACTION PLAN (ordered)
+1. MEMBERSHIP CORRECTNESS (Deny): verify/ensure the Deny aggregate equals the EFFECTIVE
+   block set — a suppressed/whitelisted IP is ABSENT, a DNSBLIP IP is PRESENT, a
+   Deny-action GeoIP continent IP is PRESENT. If Phase 2 took the denydir files as-is but
+   suppression is applied later (at table load), fix the helper/action so the aggregate
+   reflects the effective set (mirror how pfB applies suppression for its own tables).
+2. MEMBERSHIP CORRECTNESS (others): Permit/Match/Native aggregates = exact unions of
+   permitdir/matchdir/nativedir respectively; a Permit-action GeoIP continent appears in
+   the Permit aggregate (and NOT the Deny one), etc. No cross-type leakage.
+3. ADDITIVE INVARIANT across the power-set: for none / each single / representative pairs
+   / all four selected, the existing aliases/tables/rules are byte-identical (only the
+   selected aggregates appear). Capture this as a repeatable check (a fixture-driven
+   harness or, where the live pf table is required, a documented manual step folded into
+   §7 — do NOT fabricate a passing assertion you cannot actually run off-box).
+4. EDGE CASES: empty dir → never-empty consumer file (placeholder) + NO pf table loaded;
+   single member; v4-only and v6-only; a selected type with zero members at all; the
+   mtime-gate not skipping a real change and not rebuilding an unchanged type.
+5. Where an automated off-box assertion is genuinely impossible (needs a live pf table /
+   real feeds), add the case to the §7 manual smoke with exact commands + an expected
+   result, and say so explicitly in the handoff — no silent gaps.
+
+CONSTRAINTS
+- Still ADDITIVE + Native (no rule). Any refactor stays within the generic code path.
+- PHP tabs/8.3, no die()/exit() in library code; POSIX sh; lint-clean. Do NOT touch
+  Python/tests. Do NOT edit other ADRs.
+- A test/check must VALIDATE correctness (a failable, meaningful assertion), not merely
+  execute the code (CLAUDE.md). State log-PROVEN vs inferred.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck → clean.
+- The membership cases (suppressed absent / DNSBLIP present / GeoIP-by-action / no
+  cross-type leakage) are demonstrated (off-box where possible, else pinned in §7 with
+  runnable commands); the additive power-set check + the edge cases are covered or
+  explicitly deferred to §7 with no silent gap.
+
+EXPECTED RESULT
+Each aggregate's content is provably the correct set for its action class; the feature is
+additive for every toggle combination; edge cases handled; any unavoidably-live checks are
+written into §7 as runnable maintainer steps.
+
+COMMIT (single)
+    pfblockerng: ADR-11 P4 pin aggregate membership + additive invariants (ADR-11 P4)
+Push directly to `adr/11-uber-aliases`; open a PR only if the direct push is rejected.
+PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/04_Results.txt` (plain .txt)
+State: how the EFFECTIVE Deny set is achieved (where suppression/whitelist applies);
+the DNSBLIP + GeoIP-by-action verification result; the no-cross-type-leakage result; the
+additive power-set check (what is auto-verified vs deferred to §7 and why); the edge cases
+handled; the go-ahead for Phase 5.

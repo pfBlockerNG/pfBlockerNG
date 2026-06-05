@@ -1,71 +1,91 @@
 ================================================================================
-PHASE 2 PROMPT — PREP (behaviour-preserving): `aggregate` shell action + member helper
+PHASE 2 PROMPT — PREP (behaviour-preserving): `aggregate` shell action + per-type member helper
 Target model: Claude Opus 4.8
 ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §2 decision table + the contract FIRST)
 ================================================================================
 
 ROLE
-You are on the `adr/11` branch performing Phase 2 of ADR-11. Behaviour-PRESERVING:
-add the union as an ISOLATED, lint-clean building block — a `pfblockerng.sh aggregate`
-shell action + a PHP member-list helper — WITHOUT wiring it into the update pass. No
-observable change yet. Standalone-valuable. Work inline on `adr/11`, one commit, push
-directly (PR only if rejected).
+You are on the `adr/11-uber-aliases` branch performing Phase 2 of ADR-11. Behaviour-
+PRESERVING: add the union as an ISOLATED, lint-clean building block — a `pfblockerng.sh
+aggregate` shell action + a PHP per-type member-list helper — WITHOUT wiring it into the
+update pass. No observable change yet. Standalone-valuable. Work inline on the branch,
+one commit, push directly (PR only if rejected).
 
 WHY THIS PHASE EXISTS
 Landing the union logic in isolation (and getting it lint-clean) before it runs in the
 pass keeps the risky wiring (Phase 3) to pure plumbing. The action composes already-
-trusted steps (sort -u + cidr_aggregate); the helper encodes the "effective Deny set"
-membership the contract requires.
+trusted steps (sort -u + iprange via cidr_aggregate); the helper encodes the per-type
+membership the contract requires. The four action classes (Deny/Permit/Match/Native)
+are mechanically identical to union — the action is type-AGNOSTIC (it takes a member
+list), and the helper is parameterised by a type→dir map. Build the generic primitive
+ONCE here.
 
 REQUIRED READING (inspect before editing)
 - FIRST, read the prior phase's handoff:
-  .ADRs/ADR_11_Uber_Aliases/RESULTS/01_Results.txt — the chosen build strategy
-  (full vs incremental) + the change-detection trigger. If missing, STOP and report.
-- .ADRs/ADR_11_Uber_Aliases/ADR.md (§2 table, contract).
-- src/usr/local/pkg/pfblockerng/pfblockerng.sh — cidr_aggregate() (:268, dispatch
-  :956), aliastables() (:111/:989) for the action-style, ${pfbdeny}${alias}.txt member
-  files, suppression (:189).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc — denydir (:48), DNSBLIP alias names,
-  the effective-set processing (suppression/whitelist), how member alias names are
-  enumerated; the urltable registration (:9512-9520) for later.
-- CLAUDE.md (POSIX sh, absolute paths, ShellCheck; PHP tabs/8.3, PHPStan).
+  .ADRs/ADR_11_Uber_Aliases/RESULTS/01_Results.txt — the chosen build strategy (full
+  rebuild, mtime-gated per type) + the primitive (/usr/local/bin/iprange) + the bench
+  script under scripts/misc/. If missing, STOP and report.
+- .ADRs/ADR_11_Uber_Aliases/ADR.md (§2 table, the contract, §1.3-1.6 facts).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — cidr_aggregate() (:268, dispatch :956)
+  and HOW it invokes iprange (the path* var); aliastables() (:111/:989) for the action-
+  style; the member files ${dir}/${alias}.txt; suppression (:189).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the per-type dirs denydir/permitdir/
+  matchdir/nativedir (:47-50); pfb_determine_list_detail action→dir routing (:1957-1982);
+  DNSBLIP alias names; how member alias names/files are enumerated; the effective-set
+  processing (where suppression/whitelist is applied — establish whether the denydir
+  files are ALREADY post-suppression or not, and record it); the urltable registration
+  (:9512-9520) for later.
+- CLAUDE.md (POSIX sh, absolute paths for add-on binaries, ShellCheck; PHP tabs/8.3,
+  PHPStan; follow-the-pattern naming).
 
 ACTION PLAN (ordered)
-1. SHELL ACTION `pfblockerng.sh aggregate`: given a family (v4/v6) + a member-file list
-   (path to a file listing the member alias files, or args), produce: cat members ->
-   sort -u -> cidr_aggregate -> write the aggregate alias file AND the never-empty
-   `-f` consumer file (a single `#` placeholder line when the union is empty). Absolute
-   binary paths, quoted, ShellCheck-clean. If Phase 1 chose incremental, implement the
-   change-detection guard (skip rebuild when no member changed).
-2. PHP HELPER: compute the effective **Deny** member list per family — block-action IP
-   aliases, post-suppression/whitelist, **incl. DNSBLIP_v4/_v6, excl. GeoIP**. Pure
-   (returns the list); no side effects, not yet called from the pass. PHPStan-clean;
-   stub any new pfSense fn in stubs/pfsense/.
+1. SHELL ACTION `pfblockerng.sh aggregate <family> <memberlist>`: given a family
+   (v4/v6) + a path to a file listing the member files (one per line), produce:
+   cat members -> sort -u -> iprange (REUSE cidr_aggregate's invocation; do NOT
+   reimplement aggregation) -> write the aggregate alias file AND the never-empty `-f`
+   consumer file (a single `#` placeholder line when the union is empty). Type-AGNOSTIC
+   (it does not care which action class the members belong to). Absolute add-on binary
+   paths, quoted, ShellCheck-clean. Implement the mtime-gate helper (skip the rebuild
+   when no listed member file is newer than the existing aggregate output) per Phase 1.
+2. PHP HELPER: a function that, given an action type in {Deny, Permit, Match, Native}
+   and a family, returns its **effective member-file list** — the type→dir map
+   (Deny→denydir incl. DNSBLIP_v4/_v6 and Deny-action GeoIP continents which already
+   live there; Permit→permitdir; Match→matchdir; Native→nativedir), post-suppression/
+   whitelist for Deny per what you found in the source. Pure (returns the list); no side
+   effects; not yet called from the pass. PHPStan-clean; stub any new pfSense fn in
+   stubs/pfsense/. Name the function + any config keys per the surrounding pfb_* pattern.
 3. Keep both **unwired** — no change to sync_package_pfblockerng or alias registration
    this phase. (A tiny CLI/manual invocation path for testing the shell action is fine.)
 
 CONSTRAINTS
 - Behaviour-PRESERVING: nothing in the normal update pass calls this yet → no
   observable change.
-- POSIX sh only; reuse cidr_aggregate (do not reimplement aggregation). No die()/exit()
-  in PHP library code. Do NOT touch Python/tests.
+- POSIX sh only; reuse cidr_aggregate/iprange (do not reimplement aggregation). No
+  die()/exit() in PHP library code. Do NOT touch Python/tests. Do NOT edit other ADRs.
+- The aggregate names this targets are pfB_<Type>_Aggregated_{v4,v6} (Type ∈ Deny/
+  Permit/Match/Native) — but the SHELL action stays type-agnostic; the TYPE lives in the
+  PHP helper + the (Phase-3) caller.
 
 VERIFICATION (must all pass before the phase is done)
-- python -m pytest → green/unchanged.
+- python -m pytest → green/unchanged (use the venv python; no Python touched).
 - ShellCheck (the new action) + php -l + PHPStan → clean.
-- Manual: invoke `pfblockerng.sh aggregate v4` against a small fixture member list →
-  correct deduped+aggregated file + a non-empty consumer file (placeholder on empty).
+- Manual: invoke `pfblockerng.sh aggregate v4 <fixture-memberlist>` against a small
+  fixture → correct deduped+aggregated file + a non-empty consumer file (placeholder on
+  empty); re-run with no member change → mtime-gate skips the rebuild.
 
 EXPECTED RESULT
-A lint-clean `aggregate` shell action + an effective-Deny member-list helper, both
-isolated and ready to wire — no change to live behaviour.
+A lint-clean, type-AGNOSTIC `aggregate` shell action (with the mtime-gate) + a per-type
+effective-member-list helper, both isolated and ready to wire — no change to live
+behaviour.
 
 COMMIT (single)
-    pfblockerng: ADR-11 P2 add aggregate union action + member helper (ADR-11 P2)
-Push directly to `adr/11`; open a PR only if the direct push is rejected. PR body via
---body-file.
+    pfblockerng: ADR-11 P2 add aggregate union action + per-type member helper (ADR-11 P2)
+Push directly to `adr/11-uber-aliases`; open a PR only if the direct push is rejected.
+PR body via --body-file.
 
 HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/02_Results.txt` (plain .txt)
-State: the `aggregate` action's interface (args, output paths, empty-set behaviour);
-the member-helper signature + exactly what it includes/excludes; whether incremental
-guard is implemented; the go-ahead for Phase 3 (wiring + alias registration).
+State: the `aggregate` action's interface (args, output paths per (type,family), empty-
+set behaviour, the mtime-gate); the member-helper signature + EXACTLY what each type
+includes/excludes (and whether denydir is already post-suppression); the chosen config-
+key/function names + why they fit the pattern; the go-ahead for Phase 3 (wiring +
+multi-select + registration).
