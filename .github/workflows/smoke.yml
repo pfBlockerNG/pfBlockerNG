@@ -104,11 +104,15 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Install host tools (qemu, oras, dnsutils, python)
+      - name: Install host tools (qemu, oras, dnsutils, python, zstd)
         run: |
           set -eu
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv
+          # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
+          # the runner to forge a lower+higher build for the pkg-upgrade transition
+          # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
+          # Harmless for the default `smoke` marker (the helper just isn't called).
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv zstd
 
       - name: Resolve the pfSense image ref (input overrides secret/variable)
         id: ref
