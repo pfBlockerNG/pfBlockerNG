@@ -72,6 +72,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -108,6 +109,16 @@ BUILD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "build-repo.sh
 GUEST_BUILD_REPO_SH = f"{GUEST_SPIKE_DIR}/build-repo.sh"
 GUEST_PKG_IN_DIR = f"{GUEST_SPIKE_DIR}/pkg_in"  # the input dir of .pkg for build-repo.sh
 SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (per-ABI tree)
+
+# Phase-3a (ADR-17) PURE-PYTHON catalog generator under test. Unlike build-repo.sh
+# (which needs a libpkg ``pkg`` binary), ``build-repo-portable.py`` builds the
+# catalog WITHOUT libpkg — the way the Phase-3b publish job will, on a plain Linux
+# runner with no ``pkg``. Here it is run ON THE RUNNER (this test process's python,
+# no guest involvement) over the branch ``.pkg``; only the produced ``<ABI>/`` tree
+# is shipped to the guest, proving a real pfSense ``pkg update``/``install`` accepts
+# the pure-Python catalog. This is the load-bearing fidelity gate for the generator.
+BUILD_REPO_PORTABLE = Path(__file__).resolve().parents[2] / "scripts" / "build-repo-portable.py"
+PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable <ABI>/ tree is shipped
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +238,55 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
         present = vm.ssh("/bin/test", "-f", f"{abi_dir}/{fname}")
         assert present.returncode == 0, f"build-repo.sh did not emit {fname} under {abi_dir}"
     return abi_dir
+
+
+def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) -> str:
+    """Run ``scripts/build-repo-portable.py`` ON THE RUNNER, then ship its catalog to the guest.
+
+    This is the Phase-3a proof: the catalog is generated in PURE PYTHON on the runner
+    (no libpkg, no guest involvement) exactly as the Phase-3b publish job will, then
+    only the produced ``<out>/<ABI>/`` tree is copied to the guest. A real pfSense
+    ``pkg update``/``install`` then has to accept it — the fidelity gate that the
+    pure-Python catalog is byte-compatible with what real ``pkg repo`` emits.
+
+    Returns the on-guest path of the single ``<ABI>/`` directory (the branch ``.pkg``
+    is one ABI, ``FreeBSD:15:amd64``), which the ``file://`` repo conf points at.
+    """
+    in_dir = tmp_path / "portable_in"
+    out_dir = tmp_path / "portable_out"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    for pkg in pkg_files:
+        # Copy (not symlink) so the generator reads real bytes regardless of cwd.
+        (in_dir / pkg.name).write_bytes(pkg.read_bytes())
+
+    # Run the pure-Python generator with THIS process's interpreter — no `pkg`/libpkg.
+    proc = subprocess.run(
+        [sys.executable, str(BUILD_REPO_PORTABLE), "--in", str(in_dir), "--out", str(out_dir)],
+        capture_output=True,
+        text=True,
+        timeout=180.0,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"build-repo-portable.py failed on the runner: rc={proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    abi_buckets = sorted(p for p in out_dir.iterdir() if p.is_dir())
+    assert len(abi_buckets) == 1, f"portable generator produced {[p.name for p in abi_buckets]} ABI buckets, expected 1"
+    local_abi_dir = abi_buckets[0]
+    # The catalog triple must be present locally before shipping.
+    for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
+        assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
+
+    # Ship the <ABI>/ tree to the guest (fresh dir per run).
+    guest_abi_dir = f"{PORTABLE_REPO_ROOT}/{local_abi_dir.name}"
+    _ssh_check(vm, "/bin/rm", "-rf", PORTABLE_REPO_ROOT)
+    _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
+    for f in sorted(local_abi_dir.iterdir()):
+        if f.is_file():
+            _scp_to_guest(vm, f, f"{guest_abi_dir}/{f.name}")
+    return guest_abi_dir
 
 
 def _repo_block(name: str, directory: str, priority: int) -> str:
@@ -585,5 +645,53 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
     proc = pkg_install_from_repo(repo_vm)
     combined = proc.stdout + proc.stderr
     assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the script catalog:\n{combined}"
+    origin = pkg_repo_origin(repo_vm)
+    assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+
+
+@pytest.mark.timeout(600)  # runner-side portable build + ship + pkg update + install > the 30s cap.
+def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """PHASE-3a PURE-PYTHON GENERATOR: the catalog built by ``build-repo-portable.py``
+    ON THE RUNNER (no libpkg) is accepted by a real pfSense ``pkg update`` and installs
+    from (no ``-f``) — the load-bearing fidelity gate.
+
+    Phase 2's ``build-repo.sh`` drives real ``pkg repo`` (libpkg) and STAYS the
+    FreeBSD-VM fallback; this proves the pure-Python catalog the Phase-3b publish job
+    will emit on a plain Linux runner (no ``pkg`` binary) is byte-compatible with what
+    libpkg produces — a real box honors its ``meta.conf``/``packagesite.pkg``/
+    ``data.pkg`` AND its blake2b/z-base-32 ``sum`` (the .pkg integrity check passes).
+
+    Given the package ABSENT and a catalog produced by ``build-repo-portable.py`` over
+      the branch ``.pkg`` — generated ENTIRELY on the runner in pure Python, then its
+      ``<ABI>/`` tree shipped to the guest — enabled via a NONE-signed ``file://`` repo
+      above the pfSense repo,
+    When ``pkg update`` reads the pure-Python catalog and ``pkg install -y`` runs
+      (NO ``-r``, NO ``-f``),
+    Then ``pkg update`` accepts it AND the install comes from OUR repo
+      (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved and the ``.pkg``
+      checksum validated — the pure-Python generator's output is real + VM-consumable.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+
+    # GIVEN: build the catalog with the PURE-PYTHON generator on the runner (no libpkg),
+    # ship its <ABI>/ tree to the guest, point a NONE-signed file:// repo above pfSense.
+    abi_dir = build_repo_via_portable(repo_vm, [Path(pkg)], tmp_path)
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+
+    # WHEN: pkg update must ACCEPT the pure-Python catalog (rc=0; a rejected catalog —
+    # bad meta.conf, malformed packagesite, or a mismatched sum — would fail here).
+    pkg_update(repo_vm)
+    assert pkg_installed_version(repo_vm) is None, (
+        f"{PKG_NAME} unexpectedly present before the portable-catalog install"
+    )
+
+    # THEN: install resolves from our repo over the pure-Python catalog, deps included,
+    # and the .pkg checksum (the catalog `sum`) validates — origin proves it came from ours.
+    proc = pkg_install_from_repo(repo_vm)
+    combined = proc.stdout + proc.stderr
+    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the portable catalog:\n{combined}"
     origin = pkg_repo_origin(repo_vm)
     assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
