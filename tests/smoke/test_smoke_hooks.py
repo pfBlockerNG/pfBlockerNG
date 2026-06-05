@@ -20,7 +20,7 @@ WHAT THIS FILE AUTOMATES (ADR §7 manual-smoke checklist):
 * **No-op** — no enabled hooks ⇒ no marker, update succeeds (the OFF branch + the
   byte-identical baseline).
 * **Pre/post fire + context** — both fire points with their full exported context;
-  the pre-vs-post context branch (pre has no IP/DNSBL/STATUS/CHANGED_ALIASES keys).
+  the pre-vs-post context branch (pre has no IP/DNSBL/STATUS/changed-list keys).
 * **Trigger values** — ``PFB_TRIGGER`` for both reachable verbs (``update`` ⇒
   ``cron``; ``updateip``/``updatednsbl`` ⇒ ``force-reload``).
 * **IP/DNSBL-changed** — both sides of ``PFB_IP_CHANGED`` (1 on an IP-affecting
@@ -29,6 +29,9 @@ WHAT THIS FILE AUTOMATES (ADR §7 manual-smoke checklist):
   continues (the next/other hooks still run).
 * **Safety — timeout** — a hook that overruns its ``timeout`` is killed mid-run and
   the pass continues.
+* **Changed aliases/groups** — ``PFB_CHANGED_IP_ALIASES`` + ``PFB_CHANGED_DNSBL_GROUPS``
+  (ADR-12 P6) are empty on a no-op pass; the updated ``pfB_*`` IP table appears in the
+  former and the updated ``DNSBL_*`` group in the latter when feeds change.
 
 WHAT STAYS MAINTAINER-MANUAL (the smoke image has neither package): **HA sync** (no
 CARP pair on the single-NIC image) and the **HAProxy recipe end-to-end** (no HAProxy
@@ -178,7 +181,10 @@ def test_hooks_pre_and_post_fire_with_context(deployed_vm: SmokeVM, mock_feeds: 
       ``PFB_TRIGGER=force-reload``, and NO ``PFB_IP_CHANGED`` key.
     * ``post`` ctx is the full set ⇒ ``PFB_WHEN=post``, ``PFB_TRIGGER=force-reload``,
       ``PFB_IP_CHANGED`` present, ``PFB_DNSBL_CHANGED`` present, ``PFB_STATUS=ok``, and
-      ``PFB_CHANGED_ALIASES`` present-and-EMPTY (a stable reserved placeholder).
+      both changed-list keys present (ADR-12 P6: this ``updateip`` re-processes the
+      injected IP feed, so the updated table ``pfB_smokehookctx_v4`` appears in
+      ``PFB_CHANGED_IP_ALIASES``; no DNSBL group changes, so ``PFB_CHANGED_DNSBL_GROUPS``
+      is present-and-empty — the DNSBL side's empty branch).
 
     The absence of ``PFB_IP_CHANGED`` on pre AND its presence on post is the proof
     the two fire points carry different contexts, not one shared blob.
@@ -218,9 +224,18 @@ def test_hooks_pre_and_post_fire_with_context(deployed_vm: SmokeVM, mock_feeds: 
     assert "PFB_IP_CHANGED" in post_env, f"post ctx missing PFB_IP_CHANGED: {post_env}"
     assert "PFB_DNSBL_CHANGED" in post_env, f"post ctx missing PFB_DNSBL_CHANGED: {post_env}"
     assert post_env.get("PFB_STATUS") == "ok", f"post PFB_STATUS wrong: {post_env}"
-    # CHANGED_ALIASES is a reserved placeholder: present-and-empty, not absent.
-    assert "PFB_CHANGED_ALIASES" in post_env, f"post ctx missing PFB_CHANGED_ALIASES: {post_env}"
-    assert post_env["PFB_CHANGED_ALIASES"] == "", f"post PFB_CHANGED_ALIASES not empty: {post_env}"
+    # PFB_STATUS stays the sole reserved placeholder (always 'ok').
+    # Both changed-list keys (ADR-12 P6) are always PRESENT; this updateip re-processed
+    # the injected IP feed, so the updated table appears in PFB_CHANGED_IP_ALIASES while
+    # PFB_CHANGED_DNSBL_GROUPS stays present-and-empty (no DNSBL group changed).
+    assert "PFB_CHANGED_IP_ALIASES" in post_env, f"post ctx missing PFB_CHANGED_IP_ALIASES: {post_env}"
+    assert spec.alias in post_env["PFB_CHANGED_IP_ALIASES"].split(), (
+        f"updated IP table {spec.alias} not in PFB_CHANGED_IP_ALIASES: {post_env}"
+    )
+    assert "PFB_CHANGED_DNSBL_GROUPS" in post_env, f"post ctx missing PFB_CHANGED_DNSBL_GROUPS: {post_env}"
+    assert post_env["PFB_CHANGED_DNSBL_GROUPS"] == "", (
+        f"post PFB_CHANGED_DNSBL_GROUPS should be empty (no DNSBL change): {post_env}"
+    )
 
     h.clear_update_hooks(deployed_vm)
 
@@ -432,5 +447,82 @@ def test_hooks_timeout_killed_update_continues(deployed_vm: SmokeVM) -> None:
     )
     if "TIMED OUT" not in log_grep.stdout:
         print(f"[smoke] note: no 'TIMED OUT' line found in the pfBlockerNG log (non-fatal): {log_grep.stdout!r}")
+
+    h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 8) PFB_CHANGED_IP_ALIASES + PFB_CHANGED_DNSBL_GROUPS — empty on a no-op pass,
+#    the updated alias/group on a change (split by side)
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """``PFB_CHANGED_IP_ALIASES`` / ``PFB_CHANGED_DNSBL_GROUPS`` (ADR-12 P6) list what was
+    UPDATED this pass, split by side (DNSBL groups are not firewall aliases).
+
+    Both branches of the changed signal, with the no-op state asserted FIRST so a green
+    proves the feed change CAUSED the alias/group to be reported (CLAUDE.md before/after
+    rule):
+
+    * **BEFORE (no-op).** After a first full ``update`` that processes the injected IP
+      + DNSBL feeds, a SECOND full ``update`` over the SAME, UNCHANGED feeds re-reads
+      nothing new ⇒ neither the IP ``$pfb_alias_lists`` site nor the DNSBL
+      ``dnsbl_alias_update('update', …)`` seam fires for them ⇒ BOTH
+      ``PFB_CHANGED_IP_ALIASES`` and ``PFB_CHANGED_DNSBL_GROUPS`` are EMPTY (the post
+      hook is enabled, so present-and-empty, not absent).
+    * **AFTER (changed).** Rewriting BOTH feeds with new content and running a full
+      ``update`` re-processes both ⇒ the IP table ``pfB_<ip>_v4`` appears in
+      ``PFB_CHANGED_IP_ALIASES`` and the DNSBL group ``DNSBL_<dnsbl>`` in
+      ``PFB_CHANGED_DNSBL_GROUPS`` (each space-separated, on its own var).
+
+    Reputation-mode-independent by construction: it is the updated set
+    (``$pfb_alias_lists`` + the DNSBL seam), NOT the rep-inflated ``$final_alias``.
+    """
+    token = "chgali"
+    marker = h.hook_marker_path(token, "post")
+
+    fed_ip = "198.51.100.7"
+    ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_chgali_ip.txt", f"{fed_ip}\n")
+    ip_spec = h.IpCase(aliasname="smokehookchgip", feed_url=ip_feed, header="smokehookchgip")
+    domain = h.unique_domain("hookchg")
+    dnsbl_feed = h.write_local_feed(deployed_vm, "smoke_hook_chgali_dnsbl.txt", f"{domain}\n")
+    dnsbl_spec = h.DnsblCase(
+        aliasname="smokehookchgd", feed_url=dnsbl_feed, header="smokehookchgd", mode=h.DnsblMode.NULL
+    )
+    h.inject(deployed_vm, ip_spec)
+    h.inject(deployed_vm, dnsbl_spec)
+    h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
+
+    # Settle: a first full update processes both feeds (their aliases ARE updated here).
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+
+    # BEFORE: a second update over the UNCHANGED feeds updates nothing ⇒ both lists empty.
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+    env_noop = h.read_hook_env(deployed_vm, marker)
+    assert env_noop is not None, "post hook did not run for the no-op update"
+    assert env_noop.get("PFB_CHANGED_IP_ALIASES", None) == "", (
+        f"PFB_CHANGED_IP_ALIASES should be EMPTY when no IP alias was updated, got {env_noop}"
+    )
+    assert env_noop.get("PFB_CHANGED_DNSBL_GROUPS", None) == "", (
+        f"PFB_CHANGED_DNSBL_GROUPS should be EMPTY when no DNSBL group was updated, got {env_noop}"
+    )
+
+    # AFTER: rewrite BOTH feeds with new content ⇒ both are re-processed.
+    domain2 = h.unique_domain("hookchg2")
+    h.write_local_feed(deployed_vm, "smoke_hook_chgali_ip.txt", f"{fed_ip}\n203.0.113.9\n")
+    h.write_local_feed(deployed_vm, "smoke_hook_chgali_dnsbl.txt", f"{domain}\n{domain2}\n")
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+    env_chg = h.read_hook_env(deployed_vm, marker)
+    assert env_chg is not None, "post hook did not run for the changed update"
+    changed_ip = env_chg.get("PFB_CHANGED_IP_ALIASES", "").split()
+    changed_dnsbl = env_chg.get("PFB_CHANGED_DNSBL_GROUPS", "").split()
+    assert ip_spec.alias in changed_ip, f"updated IP table {ip_spec.alias} not in PFB_CHANGED_IP_ALIASES: {env_chg}"
+    assert dnsbl_spec.alias in changed_dnsbl, (
+        f"updated DNSBL group {dnsbl_spec.alias} not in PFB_CHANGED_DNSBL_GROUPS: {env_chg}"
+    )
 
     h.clear_update_hooks(deployed_vm)

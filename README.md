@@ -382,16 +382,22 @@ no other value is promised):
 | `PFB_IP_CHANGED` | post | `0` \| `1` — IP-side (firewall) data changed this pass |
 | `PFB_DNSBL_CHANGED` | post | `0` \| `1` — DNSBL data changed this pass |
 | `PFB_STATUS` | post | reserved placeholder — currently always `ok` |
-| `PFB_CHANGED_ALIASES` | post | reserved placeholder — currently always empty |
+| `PFB_CHANGED_IP_ALIASES` | post | space-separated list of IP firewall aliases (`pfB_*`) updated this pass; empty when none |
+| `PFB_CHANGED_DNSBL_GROUPS` | post | space-separated list of DNSBL groups (`DNSBL_*`) updated this pass; empty when none |
 
 `PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` are **accurate** and are the flags a hook
 should guard on. `PFB_TRIGGER` emits exactly `cron | update | force-reload`:
 `update` is a settings save, `force-reload` is a GUI IP-only / DNSBL-only Force
 Reload, and `cron` covers scheduled cron **and** GUI Force Update / Force
 Reload (All) — the ADR's nominal `force-update` collapses to `cron` because both
-arrive identically. `PFB_STATUS` / `PFB_CHANGED_ALIASES` are stable reserved
-placeholders today (no pass-wide error or changed-alias accumulator exists);
-their **names** are stable, but do not branch a recipe on their value.
+arrive identically. `PFB_CHANGED_IP_ALIASES` and `PFB_CHANGED_DNSBL_GROUPS` list
+what the pass **updated** this run (feeds re-processed / list rebuilt / removed) —
+the IP firewall aliases (`pfB_*`) and the DNSBL groups (`DNSBL_*`) respectively, on
+their own vars because DNSBL groups are not firewall aliases — sourced from the
+signal the pass already computes; both are Reputation-mode-independent and are
+**not** a byte-level membership diff. `PFB_STATUS` remains a stable reserved
+placeholder (no pass-wide error accumulator exists); its **name** is stable, but do
+not branch a recipe on its value.
 Hooks live in `config.xml`, so they **replicate to a CARP/HA secondary and run on
 whichever node performs the update** — correct for the HAProxy recipe (the
 secondary's HAProxy needs its own reload), but be aware a hook with an external

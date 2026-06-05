@@ -847,7 +847,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 # which is exactly how these smoke tests observe a hook's environment and that it
 # ran. The env carries PFB_WHEN plus one PFB_<UPPER(key)> per ctx entry
 # (inc:1797): pre ⇒ {WHEN, TRIGGER}; post ⇒ {WHEN, TRIGGER, IP_CHANGED,
-# DNSBL_CHANGED, STATUS, CHANGED_ALIASES}. reload(vm, scope) fires the hooks
+# DNSBL_CHANGED, STATUS, CHANGED_IP_ALIASES, CHANGED_DNSBL_GROUPS}. reload(vm, scope) fires the hooks
 # because it runs the same ``pfblockerng.php <scope>`` CLI the GUI/cron use.
 
 HOOK_MARKER_DIR = "/tmp"
@@ -986,7 +986,7 @@ def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str,
     ``cat`` the marker; a non-zero rc (file missing ⇒ the hook never ran) returns
     None so callers can distinguish "did not fire" from "fired with empty PFB_*".
     Only ``PFB_*`` lines are kept (the rest of root's env is noise); each is split
-    on the FIRST ``=`` so an empty value (``PFB_CHANGED_ALIASES=``) parses to ''
+    on the FIRST ``=`` so an empty value (``PFB_CHANGED_DNSBL_GROUPS=``) parses to ''
     and a value containing ``=`` is preserved.
     """
     result = vm.ssh("cat", path, timeout=timeout)

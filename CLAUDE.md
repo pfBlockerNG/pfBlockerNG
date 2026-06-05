@@ -374,8 +374,13 @@ enabled hooks ⇒ byte-identical pass). Admin-only **Update Hooks** settings tab
 Exported env (only these are promised): `PFB_WHEN` (`pre`|`post`), `PFB_TRIGGER`
 (`cron`|`update`|`force-reload` — the ADR's `force-update` collapses to `cron`),
 and post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on
-these) plus `PFB_STATUS`/`PFB_CHANGED_ALIASES` (stable reserved placeholders:
-`ok` / empty — do not branch on their value). The `post` hook sees the new DNSBL
+these), `PFB_CHANGED_IP_ALIASES` (post-only, space-separated `pfB_*` IP firewall
+aliases **updated this pass**) and `PFB_CHANGED_DNSBL_GROUPS` (post-only,
+space-separated `DNSBL_*` groups **updated this pass** — split from the IP aliases
+because DNSBL groups are not firewall aliases) — both sourced from the signal the
+pass already computes, Reputation-mode-independent, empty on a no-op pass; ADR-12
+Phase 6 — plus `PFB_STATUS` (the sole remaining stable reserved placeholder: always
+`ok` — do not branch on its value). The `post` hook sees the new DNSBL
 state live (ADR-10's bounded wait-for-apply above runs before the pass returns). Hooks
 live in config ⇒ replicate to a CARP/HA secondary and run on whichever node updates.
 The shipped **HAProxy recipe** (README) is a `post` hook guarded on
