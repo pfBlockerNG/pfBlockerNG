@@ -114,7 +114,7 @@ $options_dnsbl_interface_cnt	= count($options_dnsbl_interface) ?: '1';
 $options_dnsbl_allow_int	= $options_dnsbl_interface;
 
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
-			. 'Enabling this option will overide the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
+			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Block (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Block (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'

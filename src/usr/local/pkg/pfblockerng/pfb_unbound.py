@@ -4444,7 +4444,12 @@ def evaluate_domain(
         # synthesized A/AAAA reply entirely, so the HSTS null-override above does not
         # apply (NXDOMAIN never triggers a TLS handshake). null_blocking stays True so
         # the per-event logger does not treat it as a VIP block (get_details_dnsbl).
+        # HSTS played no part in this decision, so clear the attribution hsts_check_domain
+        # set above -- otherwise an NXDOMAIN block on an HSTS-listed name would mislog its
+        # p_type as HSTS / HSTS_TLD (the response shape is right, the "why" would be wrong).
         elif log_type in ("3", "4"):
+            in_hsts = False
+            p_type = "Python"
             nxdomain = True
 
         if is_cname:
