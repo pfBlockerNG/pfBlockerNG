@@ -219,6 +219,21 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_py_nolog",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
     ),
+    # ADR-08 Confusable sub-toggles (on/off checkboxes). The DNSBL save only
+    # write_config()s, so config.xml is the oracle. block_malicious defaults 'on',
+    # escalate_suspicious defaults '' -- the flow flips from whatever is stored.
+    ToggleFlow(
+        name="dnsbl_idn_block_malicious",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_idn_block_malicious",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious",
+    ),
+    ToggleFlow(
+        name="dnsbl_idn_escalate_suspicious",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_idn_escalate_suspicious",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
+    ),
 )
 
 
@@ -354,6 +369,37 @@ def _post_and_get(
         f"POST to {page} returned the login form (session lost) -- not a real save result"
     )
     return helpers.config_get(vm, config_path)
+
+
+# --------------------------------------------------------------------------- #
+# DNSBL settings — the ADR-08 "IDN Blocking" selector (a 3-value select, not the
+# on/off ToggleFlow shape, so it round-trips here explicitly).
+# --------------------------------------------------------------------------- #
+
+
+def test_dnsbl_idn_mode_select_round_trips_all_modes(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """The 'IDN Blocking' select (``pfb_idn``) round-trips all three modes via config.xml.
+
+    Off (``''``) / All-IDN (``'all'``) / Confusable (``'confusable'``) are the options;
+    the save stores the value verbatim for 'all'/'confusable', else '' (Off). Drives
+    EACH mode and asserts the effective config node (branch coverage: every selectable
+    value, not just one), restoring the original at the end. The DNSBL save only
+    write_config()s (config.xml is the oracle) and needs the sinkhole VIP -- supplied
+    by ``dnsbl_vip_ready``.
+    """
+    page = "/pfblockerng/pfblockerng_dnsbl.php"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn"
+    original = helpers.config_get(smoke_vm, cfg)
+    try:
+        for mode in ("confusable", "all", ""):
+            got = _post_and_get(webui, smoke_vm, page, {"pfb_idn": mode}, cfg)
+            assert got == mode, f"pfb_idn select: POSTing {mode!r} stored {got!r} (expected {mode!r})"
+    finally:
+        _post_and_get(webui, smoke_vm, page, {"pfb_idn": original}, cfg)
 
 
 # --------------------------------------------------------------------------- #
