@@ -90,6 +90,10 @@ if (isset($_POST)) {
 // Set 'active' GUI Tabs
 $active = array('ip' => FALSE, 'ipv4' => FALSE, 'ipv6' => FALSE, 'dnsbl' => FALSE, 'geoip' => FALSE);
 
+// Default so $conf_type is defined on every path. The GeoIP case below doesn't set it;
+// it is only ever used under the `$type != 'GeoIP'` guard, where the switch always sets it.
+$conf_type = '';
+
 switch ($gtype) {
 	case 'ipv4':
 		$type		= 'IPv4';

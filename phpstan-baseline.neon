@@ -745,12 +745,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
 
 		-
-			message: '#^Variable \$conf_type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
 			message: '#^Variable \$input_errors might not be defined\.$#'
 			identifier: variable.undefined
 			count: 3
@@ -838,12 +832,6 @@ parameters:
 			message: '#^Variable \$active might not be defined\.$#'
 			identifier: variable.undefined
 			count: 5
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$conf_type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 44
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
