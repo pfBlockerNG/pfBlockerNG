@@ -14,11 +14,13 @@ The automation is only maintainable if the version lifecycle + build/CI split ar
 documented for the next maintainer, and the DoD/reject criteria are pinned.
 
 REQUIRED READING (inspect before editing)
-- FIRST, read RESULTS/04_Results.txt (release-side done) and, if ADR-04 is Accepted,
-  RESULTS/05+06 (CI-side). If the now-buildable phases (1-4) aren't done, STOP.
+- FIRST, read RESULTS/04_Results.txt (release-side done) and RESULTS/05+06 (CI-side —
+  ADR-04 is Accepted, so these phases run). If any of Phases 1-6 aren't done, STOP.
 - .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§5, §7).
+- docs/misc/pfSense_versions.md  (the per-version base-facts table the matrix mirrors —
+  it already cross-references build-image.yml's resolve-version; keep them in sync).
 - scripts/README.md + README.md + CLAUDE.md  (where the version/CE-support checklist
-  lives — extend it).
+  lives — extend it; add the ci-metadata matrix pointer).
 - .ADRs/ADR_04_VM_Smoke_Tests/ADR.md §2  (the "re-baseline on a MAJOR version jump"
   wording this ADR refines — FLAG it for reconciliation; do NOT edit ADR-04 here).
 
@@ -30,11 +32,13 @@ ACTION PLAN (ordered)
 2. RECONCILE FLAG: note (in this ADR / the docs) that ADR-04 §2's "re-baseline on a MAJOR
    version jump" is superseded by ADR-09's upgrade-in-place + sanity gate — to be
    reconciled in a separate ADR-04 edit (not here).
-3. DoD + REJECT: finalise §7 — Phases 1-4+7 green now; 5-6 gated on ADR-04; the reject
-   criteria (release build infeasible -> manual fallback; unattended major upgrade can't
-   pass the gate -> manual seed fallback) and the manual checklist.
-4. FOLD: retire the Phase-1 build-spike workflow into the final release build (or keep it
-   as a dispatchable smoke), per RESULTS/01.
+3. DoD + REJECT: finalise §7 — all phases 1-7 green (ADR-04 Accepted ⇒ 5-6 are not
+   gated); the reject criteria (portable-vs-make-package drift -> FreeBSD build as the
+   default for that entry; unattended major upgrade can't pass the gate -> manual seed
+   fallback) and the manual checklist (incl. the smoke AND-gate: one failed leg -> red).
+4. NO SPIKE TO FOLD: Phase 1 added NO build-spike workflow (it inventoried the two
+   existing builders), so there is nothing to retire — just confirm the release build
+   wires build-pkg-linux.yml (default) + build-pkg.yml (fallback) per RESULTS/01/03.
 
 CONSTRAINTS
 - Do NOT edit ADR-04 (flag the reconciliation only). Do NOT touch src/.
@@ -55,6 +59,7 @@ COMMIT (single)
 Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
 
 HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/07_Results.txt` (plain .txt)
-Final summary: what's live (release-side) vs gated (CI-side); the matrix lifecycle; the
-ADR-04 reconciliation flag; the manual checklist status; and whether the ADR is ready to
-flip from Proposed toward Accepted (release-side) pending the maintainer checklist.
+Final summary: what's live across BOTH release-side and CI-side (ADR-04 Accepted ⇒ all
+phases run); the matrix lifecycle; the ADR-04 reconciliation flag; the manual checklist
+status; and whether the ADR is ready to flip from Proposed toward Accepted pending the
+maintainer checklist.

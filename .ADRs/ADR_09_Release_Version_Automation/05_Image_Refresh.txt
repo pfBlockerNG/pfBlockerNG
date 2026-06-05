@@ -1,19 +1,21 @@
 ================================================================================
-PHASE 5 PROMPT — [GATED on ADR-04] CI smoke-image refresh: upgrade-in-place + sanity gate
+PHASE 5 PROMPT — CI smoke-image refresh: upgrade-in-place + sanity gate (ungated)
 Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §2 "CI image refresh" +
      "Sanity gate" rows, §3 risks, §7 reject FIRST)
 ================================================================================
 
-GATE — STOP unless ADR-04 is ACCEPTED
-This phase consumes ADR-04's VM smoke harness + GH-hosted KVM, which are UNPROVEN until
-ADR-04 is Accepted (its Phase-1 KVM kill-gate must have passed and the image pipeline
-must exist). Before doing anything: check ADR-04's Status (.ADRs/ADR_04_VM_Smoke_Tests/
-ADR.md). If it is NOT Accepted, STOP and report "blocked on ADR-04" — do not build.
+GATE — SATISFIED (ADR-04 is Accepted)
+This phase consumes ADR-04's VM smoke harness + GH-hosted KVM. ADR-04 is Accepted (its
+KVM premise is proven and the image pipeline exists), so the gate is lifted. NOTE:
+`build-image.yml` ALREADY implements much of this (upgrade-in-place publish + verify
+round-trip for a single version) — your job is to GENERALISE it to be matrix-driven, not
+build it from scratch. Sanity-confirm ADR-04 still reads Accepted before starting; if it
+has regressed, STOP and report.
 
 ROLE
-You are on the `adr/09` branch performing Phase 5 of ADR-09 (GATED). Automate the GHCR
-CE smoke-image refresh: upgrade-in-place to a new CE version, SANITY-GATE it, and publish
+You are on the `adr/09` branch performing Phase 5 of ADR-09. Automate the GHCR CE
+smoke-image refresh: upgrade-in-place to a new CE version, SANITY-GATE it, and publish
 ONLY on pass. Work inline on `adr/09`, one commit, push directly.
 
 WHY THIS PHASE EXISTS
@@ -22,11 +24,12 @@ seed is minimal, upgrades are appliance-grade, even across majors). The sanity g
 the safety net: a bad upgrade must NEVER be published.
 
 REQUIRED READING (inspect before editing)
-- FIRST, read RESULTS/04_Results.txt (the tracker's gated trigger for this step) AND
-  ADR-04's RESULTS (the qemu/boot recipe + image-upgrade.sh contract). If missing or
-  ADR-04 not Accepted, STOP.
+- FIRST, read RESULTS/04_Results.txt (the tracker's trigger for this step) AND
+  ADR-04's RESULTS (the qemu/boot recipe + image-upgrade.sh contract). If missing, STOP.
 - .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 image-refresh + sanity-gate rows;
   §7 reject).
+- .github/workflows/build-image.yml  (the EXISTING single-version refresh: publish-image
+  upgrade-in-place + verify-image round-trip — generalise THIS to matrix-driven).
 - scripts/image-upgrade.sh + scripts/install-from-repo.sh + scripts/image-publish.sh.
 - .ADRs/ADR_04_VM_Smoke_Tests/  (the harness this consumes) + its RESULTS.
 - CLAUDE.md.
@@ -47,7 +50,6 @@ ACTION PLAN (ordered)
    /etc/version) MUST fail the gate and publish nothing.
 
 CONSTRAINTS
-- GATED on ADR-04 Accepted — STOP otherwise.
 - A broken image MUST NEVER be published (fail closed). Keep old tags.
 - Do NOT touch src/. POSIX sh; workflows lint-clean; secrets via Actions secrets.
 - python -m pytest (default) green/unchanged.
