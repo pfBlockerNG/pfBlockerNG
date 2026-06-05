@@ -31,8 +31,7 @@
 		<div style="width: 75%; height: 170px; float: left;">
 			<p><h4>Welcome to pfBlockerNG!</h4></p>
 			<p>This wizard will configure an entry level configuration of pfBlockerNG for IP and DNSBL.</p>
-			<p>You can opt-out of this wizard and manually configure pfBlockerNG as required!</p>
-			<p><strong>pfBlockerNG</strong> is developed and maintained by 
+			<p><strong>pfBlockerNG</strong> is developed and maintained by
 				<a target="_blank" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
 
 			<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
@@ -114,22 +113,28 @@
 		<line id="XMLID_7_" class="st4" x1="260.4" y1="425.6" x2="390.9" y2="425.6"/>
 		</g></g></svg></a>
 		</div>
-
-		<div style="width: 100%; float: left;">
-			<br />
-			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
-				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
-			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
-				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
-		</div>
 		]]>
 	</description>
 	<fields>
+		<field>
+			<name>Skip</name>
+			<type>submit</type>
+		</field>
+		<field>
+			<name>Do not show this again</name>
+			<displayname>Do not show this again</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
+			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<type>checkbox</type>
+			<value>on</value>
+		</field>
 		<field>
 			<name>Next</name>
 			<type>submit</type>
 		</field>
 	</fields>
+	<stepsubmitphpaction>pfb_wizard_skip_check();</stepsubmitphpaction>
+	<includefile>/usr/local/www/wizards/pfblockerng_wizard.inc</includefile>
 </step>
 <step>
 	<id>2</id>
@@ -156,22 +161,28 @@
 				<li>A VIP on the Localhost interface <strong>must be configured first</strong> at <a target="_blank" href="/firewall_virtual_ip.php">Firewall > Virtual IPs</a>.</li>
 			</ul>
 		</div>
-		<div class="col-sm-11">
-			<br />
-			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
-				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
-			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
-				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
-		</div>
 		]]>
 	</description>
 	<fields>
+		<field>
+			<name>Skip</name>
+			<type>submit</type>
+		</field>
+		<field>
+			<name>Do not show this again</name>
+			<displayname>Do not show this again</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
+			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<type>checkbox</type>
+			<value>on</value>
+		</field>
 		<field>
 			<name>Next</name>
 			<type>submit</type>
 		</field>
 	</fields>
 	<stepsubmitbeforesave>step2_stepbeforeformdisplay();</stepsubmitbeforesave>
+	<stepsubmitphpaction>pfb_wizard_skip_check();</stepsubmitphpaction>
 	<includefile>/usr/local/www/wizards/pfblockerng_wizard.inc</includefile>
 </step>
 <step>
@@ -214,6 +225,18 @@
 		<field>
 			<name>Back</name>
 			<type>submit</type>
+		</field>
+		<field>
+			<name>Skip</name>
+			<type>submit</type>
+		</field>
+		<field>
+			<name>Do not show this again</name>
+			<displayname>Do not show this again</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
+			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<type>checkbox</type>
+			<value>on</value>
 		</field>
 		<field>
 			<name>Next</name>
@@ -283,6 +306,18 @@
 			<type>submit</type>
 		</field>
 		<field>
+			<name>Skip</name>
+			<type>submit</type>
+		</field>
+		<field>
+			<name>Do not show this again</name>
+			<displayname>Do not show this again</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
+			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<type>checkbox</type>
+			<value>on</value>
+		</field>
+		<field>
 			<name>Next</name>
 			<type>submit</type>
 		</field>
@@ -303,13 +338,20 @@
 			<span style="color: red;"> wiped!</span>
 			<br/><br/>
 			To save this default configuration and apply these changes, press the <strong>Finish</strong> button!
-			<br/><br/>
-			<a class="btn btn-sm btn-default" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=skip">
-				<i class="fa-solid fa-forward icon-embed-btn"></i>Skip</a>
-			<a class="btn btn-sm btn-warning" role="button" href="/pfblockerng/pfblockerng_general.php?wizard=disable">
-				<i class="fa-solid fa-ban icon-embed-btn"></i>Do not show this again</a>
 	]]></description>
 	<fields>
+		<field>
+			<name>Skip</name>
+			<type>submit</type>
+		</field>
+		<field>
+			<name>Do not show this again</name>
+			<displayname>Do not show this again</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;skip-&gt;noshow</bindstofield>
+			<description>Tick this and press Skip to exit and never launch this wizard automatically again.</description>
+			<type>checkbox</type>
+			<value>on</value>
+		</field>
 		<field>
 			<name>Finish</name>
 			<type>submit</type>

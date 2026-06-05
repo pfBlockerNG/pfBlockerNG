@@ -31,6 +31,20 @@ global $pfb_wizard;
 $pfb_wizard['interface_list']		= pfb_build_if_list(TRUE, FALSE);
 $pfb_wizard['interface_list_cnt']	= count($pfb_wizard['interface_list']) ?: '1';
 
+// Exit the wizard when the 'Skip' button is pressed on any step. If the
+// 'Do not show this again' checkbox is ticked, persist the choice so the
+// wizard never auto-launches again ('disable'); otherwise skip for this
+// session only ('skip'). pfblockerng_general.php applies both actions.
+function pfb_wizard_skip_check() {
+	if (!$_POST || !isset($_POST['skip'])) {
+		return;
+	}
+
+	$action = !empty($_POST['donotshowthisagain']) ? 'disable' : 'skip';
+	header("Location: /pfblockerng/pfblockerng_general.php?wizard={$action}");
+	exit;
+}
+
 function step2_stepbeforeformdisplay() {
 	global $pkg, $stepid, $pfb_wizard;
 
@@ -49,6 +63,8 @@ function step2_stepbeforeformdisplay() {
 
 function step2_submitphpaction() {
 	global $stepid, $input_errors, $pfb_wizard;
+
+	pfb_wizard_skip_check();
 
 	if ($_POST) {
 		if ($_POST['back'] == 'Back') {
@@ -86,6 +102,8 @@ function step2_submitphpaction() {
 function step3_submitphpaction() {
 	global $stepid, $input_errors;
 
+	pfb_wizard_skip_check();
+
 	if ($_POST) {
 		if ($_POST['back'] == 'Back') {
 			$stepid = 0;
@@ -117,6 +135,8 @@ function step3_submitphpaction() {
 
 function step4_submitphpaction() {
 	global $pfb, $input_errors;
+
+	pfb_wizard_skip_check();
 
 	// Load all pfBlockerNG Feeds
 	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
