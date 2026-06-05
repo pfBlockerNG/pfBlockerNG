@@ -24,7 +24,9 @@ aws_filter() {
 	_aws_proto="$2"
 	_aws_work="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awsfix.XXXXXX")"
 	cp "${PFB_FIXTURES}/aws-ip-ranges.json" "${_aws_work}"
-	( cd "${PFB_PKGDIR}" && sh "${_aws_script}" "${_aws_work}" "${_aws_proto}" ) >/dev/null 2>&1
+	# The AWS region scripts live under list_scripts/; each is a thin wrapper that
+	# resolves the shared aws_region_prefixes.sh relative to its own $0.
+	( cd "${PFB_PKGDIR}/list_scripts" && sh "${_aws_script}" "${_aws_work}" "${_aws_proto}" ) >/dev/null 2>&1
 	sort "${_aws_work}" | tr '\n' ' ' | sed 's/ *$//'
 	rm -f "${_aws_work}"
 }

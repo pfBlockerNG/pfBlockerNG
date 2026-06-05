@@ -1,6 +1,9 @@
 #!/bin/sh
-# script_AWS_SA.sh - By BBcan177@gmail.com - 03-20-2022
-# Pre-Script to collect Amazon AWS Region (South America)
+# ip_pre_AWS_ME.sh - Amazon AWS Region (Middle East)
+# Thin wrapper: the parse/aggregate logic lives in aws_region_prefixes.sh;
+# this only supplies the jq region filter. The shared script is resolved
+# relative to THIS script's own location ($0), so it works regardless of the
+# install path or a chroot - no hard-coded absolute path.
 # Copyright (c) 2015-2024 BBcan177@gmail.com
 #
 # This program is free software; you can redistribute it and/or modify
@@ -14,20 +17,4 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-tempfile="$(mktemp "${TMPDIR:-/tmp}/pfbtemp1.XXXXXXXX")" || exit 1
-alias="${1}"
-prefix="${2}"
-
-if [ "${prefix}" = '_v4' ]; then
-	jq -r '.prefixes[] | select(.region | startswith("sa-")) .ip_prefix' "${alias}" | iprange > "${tempfile}"
-else
-	jq -r '.ipv6_prefixes[] | select(.region | startswith("sa-")) .ipv6_prefix' "${alias}" > "${tempfile}"
-fi
-
-if [ -s "${tempfile}" ]; then
-	mv -f "${tempfile}" "${alias}"
-else
-	rm -f "${tempfile}"
-	echo "Failed to process pre-script"
-fi
-exit
+exec sh "$(dirname "$0")/aws_region_prefixes.sh" "${1}" "${2}" 'me-'

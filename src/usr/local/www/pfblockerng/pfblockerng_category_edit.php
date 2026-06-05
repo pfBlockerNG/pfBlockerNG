@@ -348,19 +348,25 @@ if (is_dir("{$indexdir}")) {
 		$list_prefix = 'dnsbl';
 	}
 
-	$list = glob("{$indexdir}/{$list_prefix}_pre_*.{sh,py}", GLOB_BRACE);
-	if (!empty($list)) {
-		foreach ($list as $line) {
-			$file = pathinfo($line, PATHINFO_BASENAME);
-			$options_script_pre = array_merge($options_script_pre, array($file => $file));
-		}
-	}
+	// List scripts live under list_scripts/; also scan the legacy package root so
+	// a not-yet-migrated custom script still appears during the upgrade transition.
+	$script_dirs = array("{$indexdir}list_scripts", rtrim($indexdir, '/'));
 
-	$list = glob("{$indexdir}/{$list_prefix}_post_*.{sh,py}", GLOB_BRACE);
-	if (!empty($list)) {
-		foreach ($list as $line) {
-			$file = pathinfo($line, PATHINFO_BASENAME);
-			$options_script_post = array_merge($options_script_post, array($file => $file));
+	foreach ($script_dirs as $script_dir) {
+		$list = glob("{$script_dir}/{$list_prefix}_pre_*.{sh,py}", GLOB_BRACE);
+		if (!empty($list)) {
+			foreach ($list as $line) {
+				$file = pathinfo($line, PATHINFO_BASENAME);
+				$options_script_pre[$file] = $file;
+			}
+		}
+
+		$list = glob("{$script_dir}/{$list_prefix}_post_*.{sh,py}", GLOB_BRACE);
+		if (!empty($list)) {
+			foreach ($list as $line) {
+				$file = pathinfo($line, PATHINFO_BASENAME);
+				$options_script_post[$file] = $file;
+			}
 		}
 	}
 }
@@ -1570,7 +1576,7 @@ $section->addInput(new Form_Select(
 	$pconfig['script_pre'],
 	$options_script_pre
 ))->sethelp("Pre-processing Shell script after download.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>")
+	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>")
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_script_pre_cnt);
 
@@ -1580,7 +1586,7 @@ $section->addInput(new Form_Select(
 	$pconfig['script_post'],
 	$options_script_post
 ))->sethelp("Post-processing Shell script after download.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/<strong>ip_post_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_post_SCRIPT name.sh|py</strong>")
+	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_post_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_post_SCRIPT name.sh|py</strong>")
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_script_post_cnt);
 

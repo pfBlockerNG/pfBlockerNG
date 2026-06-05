@@ -204,6 +204,27 @@ if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
 // *** [ UPGRADE previous settings ] ***
 update_status("Upgrading previous settings:\n");
 
+// Relocate user-supplied list pre/post scripts into list_scripts/. The shipped
+// AWS region scripts now install there; move any *_pre_*/*_post_* (.sh/.py) a
+// previous version left at the package root, UNLESS a same-named file already
+// exists in list_scripts/ (i.e. it is a shipped script pkg will clean up itself).
+// Config stores only the basename, so the relocation needs no config change.
+update_status(" Relocating custom list scripts to list_scripts/...");
+$pfb_pkgdir  = '/usr/local/pkg/pfblockerng';
+$pfb_listdir = "{$pfb_pkgdir}/list_scripts";
+if (!is_dir($pfb_listdir)) {
+	@mkdir($pfb_listdir, 0755, TRUE);
+}
+$pfb_moved = 0;
+foreach (glob("{$pfb_pkgdir}/{ip,dnsbl}_{pre,post}_*.{sh,py}", GLOB_BRACE) ?: [] as $pfb_oldscript) {
+	$pfb_dest = "{$pfb_listdir}/" . basename($pfb_oldscript);
+	if (!file_exists($pfb_dest) && @rename($pfb_oldscript, $pfb_dest)) {
+		@chmod($pfb_dest, 0755);
+		$pfb_moved++;
+	}
+}
+update_status(($pfb_moved > 0 ? " moved {$pfb_moved} ... done.\n" : " none ... done.\n"));
+
 // Remove discontinued pfBlockerNG CRON job
 foreach (config_get_path('cron/item', []) as $key => $item) {
 	if (strpos($item['command'], 'pfblockerng.php dc >>') !== FALSE) {
