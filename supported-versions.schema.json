@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pfBlockerNG supported-versions matrix",
+  "description": "Each entry describes one supported pfSense version and its build environment (FreeBSD ABI + PHP runtime). Workflows read this at runtime to drive .pkg builds and CI.",
+  "type": "object",
+  "required": ["versions"],
+  "properties": {
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "pfsense_version",
+          "channel",
+          "freebsd_version",
+          "freebsd_major",
+          "php_version",
+          "py_flavor",
+          "status",
+          "ci"
+        ],
+        "properties": {
+          "pfsense_version": {
+            "type": "string",
+            "description": "pfSense version label, e.g. '2.8.x' or '25.03'. For CE minor families use 'X.Y.x'; for Plus use the Plus release label."
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["CE", "Plus"],
+            "description": "CE = Community Edition; Plus = pfSense Plus (build-only, ci must be false)."
+          },
+          "freebsd_version": {
+            "type": "string",
+            "description": "Full FreeBSD version string used as the build environment, e.g. '15.0-RELEASE'. Matches build-pkg.yml's freebsd_version input."
+          },
+          "freebsd_major": {
+            "type": "string",
+            "description": "FreeBSD major version digit only, e.g. '15'. Used to construct the ABI tag FreeBSD:<major>:amd64 for build-pkg-linux.yml and for artifact dedup (one .pkg per distinct major)."
+          },
+          "php_version": {
+            "type": "string",
+            "description": "PHP version string, e.g. '8.3'. Passed to both builders to pin USES=php so dep names match the target pfSense."
+          },
+          "py_flavor": {
+            "type": "string",
+            "description": "Python flavor string, e.g. 'py311'. Passed to build-pkg-linux.yml (portable builder). build-pkg.yml derives it from the VM's installed Python."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["beta", "GA"],
+            "description": "beta = pre-release; GA = generally available. Set to beta when first added; update to GA on release."
+          },
+          "ci": {
+            "type": "boolean",
+            "description": "true = include in the CI smoke matrix (CE only). false = build-only (always false for Plus; use for beta CE if no image is available yet)."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/andrebrait/pfBlockerNG/ci-metadata/supported-versions.schema.json",
+  "description": "pfBlockerNG supported pfSense version matrix. Edit this file to add/drop a version; all CI/build workflows read it at runtime. See LIFECYCLE below.",
+  "lifecycle_policy": {
+    "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
+    "drop_ce": "Drop the oldest CE entry only when the newest CE goes GA. The supported window is always (previous GA CE + current GA CE), transiently +1 during an active beta.",
+    "plus": "Plus entries are always ci=false (build-only: we track the version and build .pkg artifacts, but never run Plus in CI — licensing).",
+    "ci_metadata_pr": "Changes to this file should be made via a PR against ci-metadata (branch-protected) so there is a git audit trail (diff/blame/rollback) without touching main/devel.",
+    "future_migration": "If CI infrastructure grows, this file can move to a dedicated public pfBlockerNG-ci-infra repo (read via raw URL, no token) — a mechanical swap."
+  },
+  "versions": [
+    {
+      "pfsense_version": "2.8.x",
+      "channel": "CE",
+      "freebsd_version": "15.0-RELEASE",
+      "freebsd_major": "15",
+      "php_version": "8.3",
+      "py_flavor": "py311",
+      "status": "GA",
+      "ci": true
+    },
+    {
+      "pfsense_version": "25.03",
+      "channel": "Plus",
+      "freebsd_version": "15.0-RELEASE",
+      "freebsd_major": "15",
+      "php_version": "8.3",
+      "py_flavor": "py311",
+      "status": "GA",
+      "ci": false
+    }
+  ]
+}
