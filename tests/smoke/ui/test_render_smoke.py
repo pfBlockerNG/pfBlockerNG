@@ -86,11 +86,19 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("category_edit_ip", "/pfblockerng/pfblockerng_category_edit.php?type=ipv4", ("Advanced Tuneables",)),
     Page("category_edit_dnsbl", "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl", ("Advanced Tuneables",)),
     # threats.php REQUIRES a host/domain/port param -- with none it print_info_box()es and exit()s
-    # before rendering $pgtitle. A syntactically-valid domain renders the lookup page chrome; the
+    # before rendering $pgtitle. A syntactically-valid param renders the lookup page chrome; the
     # threat links it draws are <a href> only (no server-side network call), so it stays hermetic.
-    # The {domain} placeholder is filled per run with helpers.unique_domain() (uuid-*.com) -- the
-    # smoke-domain rule (never a fixed/RFC-6761 name, avoids environment coupling).
-    Page("threats", "/pfblockerng/pfblockerng_threats.php?domain={domain}", ("Threat Domain", "Source IP")),
+    # All THREE positive views ($title is 'Source IP'/'Domain'/'Port' -> the "Threat <title> Lookup"
+    # breadcrumb + "Threat <title>:" panel) are probed (CLAUDE.md branch coverage); the reject /
+    # no-request branches are covered by test_threats_rejects_malformed_lookup below. The {domain}
+    # placeholder is filled per run with helpers.unique_domain() (uuid-*.com) -- the smoke-domain
+    # rule (never a fixed/RFC-6761 name); host/port use a documentation IP (TEST-NET-3) + a valid
+    # port (no network coupling either way).
+    Page("threats_domain", "/pfblockerng/pfblockerng_threats.php?domain={domain}", ("Threat Domain", "Source IP")),
+    Page(
+        "threats_host", "/pfblockerng/pfblockerng_threats.php?host=203.0.113.5", ("Threat Source IP", "Threat Lookups")
+    ),
+    Page("threats_port", "/pfblockerng/pfblockerng_threats.php?port=8443", ("Threat Port",)),
     # ADR-12 Update Hooks (pre/post update-command list). $pgtitle + the section titles are stable.
     Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
@@ -184,6 +192,42 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, page.markers)
     assert result.ok, f"render oracle failed for {page.name} ({path}): {result.detail}"
+
+
+# threats.php's NEGATIVE branches: each malformed/absent param print_info_box()es
+# a specific message and exit()s BEFORE the "$pgtitle" lookup-page chrome. These
+# pair with the positive threats_{domain,host,port} entries above (CLAUDE.md
+# branch coverage: prove the validators REJECT, not only that valid input renders).
+THREATS_PAGE = "/pfblockerng/pfblockerng_threats.php"
+# (id, query, expected info-box message) -- messages verified verbatim against
+# pfblockerng_threats.php (is_ipaddr / is_port guards + the no-param else).
+THREATS_REJECTS: tuple[tuple[str, str, str], ...] = (
+    ("invalid_host", "host=not-an-ip", "Invalid IP Address, cannot proceed!"),
+    ("invalid_port", "port=99999", "Invalid Port cannot proceed!"),
+    ("no_request", "", "No Requests found, cannot proceed!"),
+)
+# The lookup-page chrome titles ("Threat <title> Lookup") that MUST be absent on a
+# reject (the handler exit()s before rendering $pgtitle).
+_THREATS_LOOKUP_TITLES = ("Threat Domain Lookup", "Threat Source IP Lookup", "Threat Port Lookup")
+
+
+@pytest.mark.parametrize(("name", "query", "message"), THREATS_REJECTS, ids=[r[0] for r in THREATS_REJECTS])
+def test_threats_rejects_malformed_lookup(name: str, query: str, message: str, webui: WebUI) -> None:
+    """A malformed/absent threats lookup renders its info-box, NOT the lookup page.
+
+    HTTP 200 (head.inc is included before the dispatch, so the page still renders
+    its header) with the exact info-box message present and the "Threat ... Lookup"
+    chrome absent -- proving the validator rejected and exit()ed rather than
+    rendering the lookup view. The before-state (a valid param DOES render that
+    chrome) is the positive threats_{domain,host,port} entries in PAGE_TABLE.
+    """
+    path = f"{THREATS_PAGE}?{query}" if query else THREATS_PAGE
+    resp = webui.get(path)
+    assert resp.status_code == 200, f"{name}: GET {path} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert message in body, f"{name}: expected info-box {message!r} not present in {path} body"
+    present = [title for title in _THREATS_LOOKUP_TITLES if title in body]
+    assert not present, f"{name}: reject path unexpectedly rendered lookup chrome {present}"
 
 
 def test_page_table_covers_every_pfblockerng_page() -> None:
