@@ -1,6 +1,6 @@
 # ADR-13: Automatic creation of DNSBL sinkhole Virtual IPs
 
-- **Status:** **Proposed** (2026-06-03)
+- **Status:** **Implemented (pending smoke test)** (2026-06-03; **status corrected 2026-06-05** — the line previously read "Proposed" but all phases had merged). Merged to `devel` (#69 / #84 / #89). The live-VM smoke now **automates the core VIP lifecycle** (`tests/smoke/test_smoke_matrix.py:784-839`: auto-create on `lo0` → `pfb_dnsvip4` points at it → a listed name **sinks** to `10.10.10.53` → teardown removes it from config and `lo0`), green in the 52-passed run `26984168211`; the auto-VIP UI (#84) is green on `devel`. **Flips to Accepted** only after the maintainer confirms the items the smoke image cannot host (§7): **HA/CARP** sync, uninstall-removes-VIP, conflict-exhaustion-disables-checkbox, and a real **AAAA** sink to the v6 auto-VIP.
 - **Date:** 2026-06-03
 - **Branch:** `adr/13` (off **`devel`** — the refactored VIP model (`pfb_get_vips`/`pfb_validate_vips`/`_vip<uniqid>`) exists on `devel`; the feature is DNSBL-mode-agnostic PHP/UI, no Python/Unbound-matcher coupling. Independent of the ADR-07/10 chain; promote `devel → next` by rebase) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (VIP candidate/pick helpers, `pfb_manage_dnsbl_vip()`, the `pfb_create_dnsbl($mode)` fire point, the `pfb_validate_vips`/`pfb_global` v6 recommendation (non-blocking warning), `pfb_unbound_listens_v6()`), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` + its inline JS (the "Create VIPs automatically" checkbox, prefill/disable, warning tooltip, save-time create), `stubs/pfsense/` (interface/vip apply fns), `README.md`/`CLAUDE.md` + the settings help.
 - **Target runtime:** PHP 8.3 + jQuery (the DNSBL settings page) on pfSense CE 2.8. **No Python** — the Unbound plugin and `pytest` suite are untouched. No new shell.
@@ -170,15 +170,20 @@ Prompt: `05_Docs_Smoke_DoD.txt`
 
 ### Manual smoke (owner: maintainer) — required before Accept
 
-> CI has no live pf/Unbound to apply a VIP. Run on a live pfSense CE box.
+> The ADR-04 live-VM smoke now applies real VIPs on a pfSense CE box, so the **core
+> lifecycle below is AUTOMATED** (`tests/smoke/test_smoke_matrix.py:784-839`, green in run
+> `26984168211`) — auto-create on `lo0`, the listed-name sink, and teardown. What remains
+> needs hardware the smoke image lacks (a CARP pair) or a flow it does not run (uninstall):
+> run those on a live pfSense CE box.
 >
-> Items verified in CI / by code inspection are noted; the rest require on-box confirmation.
+> Items **automated** in the live-VM smoke / verified in CI are marked `[x]`; the rest
+> require on-box confirmation.
 
 - [ ] **No-op (default off).** Fresh/upgraded install with the box off behaves exactly as today; manual dropdowns + validation unchanged. *(verified: save + render byte-identical when `pfb_dnsvip_auto` is absent/off — Phase 4 trace)*
-- [ ] **Auto create.** Check the box, save, enable DNSBL → a `pfB_AUTO_VIP_v4` IP-Alias VIP at `10.10.10.53/32` appears on `lo0`, is live (`ifconfig lo0`), and `pfb_dnsvip4` points at it; a blocked name sinks to it.
+- [x] **Auto create.** Check the box, save, enable DNSBL → a `pfB_AUTO_VIP_v4` IP-Alias VIP at `10.10.10.53/32` appears on `lo0`, is live (`ifconfig lo0`), and `pfb_dnsvip4` points at it; a blocked name sinks to it. *(AUTOMATED on the ADR-04 VM — `test_smoke_matrix.py:784-839`, green in run `26984168211`; on-box re-confirm optional.)*
 - [ ] **Conflict.** With `10.10.10.53` already used (a manual VIP / interface subnet), the sweep picks the next free `.53`; with the whole sweep exhausted the checkbox is disabled + warning tooltip shown.
 - [ ] **Range fills up post-enable.** Enable auto-create (VIP provisioned), then consume all `10.10.X.53` / `fd00:X::53` candidates with other VIPs — on the next settings page load the checkbox renders disabled+unchecked with the warning; `pfb_dnsvip_auto` stays `on` in stored config until the next save; the lifecycle manager no-ops safely (logs, leaves config untouched).
-- [ ] **Teardown.** Disable DNSBL → the marked VIP is removed (config + `ifconfig`); disable pfBlockerNG → same; the `pfb_dnsvip_auto` setting + address choice persist; re-enable recreates it. A manually-created VIP present throughout is never touched.
+- [x] **Teardown.** Disable DNSBL → the marked VIP is removed (config + `ifconfig`); disable pfBlockerNG → same; the `pfb_dnsvip_auto` setting + address choice persist; re-enable recreates it. A manually-created VIP present throughout is never touched. *(Core teardown — VIP removed from config + `lo0` on disable — AUTOMATED in `test_smoke_matrix.py:784-839`; the disable-pfBlockerNG variant + the manual-VIP-untouched assertion still on-box.)*
 - [ ] **IPv6 recommendation (softened — §7 pivot).** With the resolver listening on IPv6: auto mode provisions `pfB_AUTO_VIP_v6` `fd00::53/128`; manual mode without a v6 VIP does **not** force-disable — DNSBL keeps running on IPv4 and `pfb_global` logs the non-blocking warning. *(CI-proven that the predicate fires on the smoke box — the resolver listens on `lo0` `::1`; the live smoke matrix confirms manual-mode DNSBL is NOT force-disabled. On-box still worth confirming the auto v6 VIP is created + a real AAAA block sinks to it.)*
 - [ ] **HA sync.** On a CARP pair, the flag + VIP replicate and each node creates/removes its own lo0 VIP on its own enable/disable.
 - [ ] **Uninstall.** Removing the package deletes the marked VIP(s); no orphan alias on lo0.
