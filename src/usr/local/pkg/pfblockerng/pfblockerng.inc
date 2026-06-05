@@ -2057,6 +2057,66 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 }
 
 
+// ADR-11: Return the EFFECTIVE member-file list for one aggregate action type and
+// family -- the input the Phase-3 caller hands to `pfblockerng.sh aggregate` to union
+// into pfB_<Type>_Aggregated_<fam>. Pure: it reads the per-type dir off disk and
+// returns the matching family member files; it has NO side effects and is NOT yet
+// called from the update pass (Phase 2 is behaviour-preserving).
+//
+// Type -> dir map (mirrors pfb_determine_list_detail's action -> folder routing):
+//   'Deny'   -> denydir    'Permit' -> permitdir
+//   'Match'  -> matchdir   'Native' -> nativedir
+//
+// EFFECTIVE / post-suppression -- the key Phase-4 fact:
+//   The denydir '<header>_<fam>.txt' member files are ALREADY the effective
+//   (post-suppression / post-whitelist) block set on disk. During the update pass
+//   the shell 'suppress' action (pfblockerng.sh suppress, grepcidr -vf
+//   pfbsuppression.txt) rewrites each Deny member file IN PLACE (pfblockerng.inc
+//   ~:10829-10834) BEFORE it is read into the alias (~:10836) -- and
+//   pfb_create_suppression_file() folds the user whitelist, local/DNS IPs and
+//   Permit-customlist IPs into pfbsuppression.txt. So reading denydir/*_<fam>.txt
+//   yields the effective set directly; the helper applies NO further suppression.
+//   (Phase 3 must therefore run the aggregate AFTER the per-member suppress step.)
+//
+// DNSBLIP + GeoIP fold in for FREE -- no special-casing here:
+//   DNSBLIP_<fam>.txt is deposited into the dir of its configured action
+//   ($pfb['dnsbl_ip'], e.g. Deny -> denydir) during the build loop, and each
+//   Deny-action GeoIP continent likewise lands in denydir by its action
+//   (pfblockerng.inc ~:9926, the §1.5 "GeoIP folds by action" fact). Both are plain
+//   '<header>_<fam>.txt' members in the type's dir, so this glob already includes
+//   them; a continent set to Permit/Match lands in that type's dir instead, never
+//   double-listed.
+//
+// $type   : 'Deny' | 'Permit' | 'Match' | 'Native'   (the GUI action-group labels)
+// $family : 'v4' | 'v6'
+// Returns : array of absolute member-file paths (possibly empty); [] for an unknown
+//           type/family so the caller can treat it as "nothing to aggregate".
+function pfb_aggregate_member_list($type, $family) {
+	global $pfb;
+
+	$type_dirs = array(
+		'Deny'   => $pfb['denydir'],
+		'Permit' => $pfb['permitdir'],
+		'Match'  => $pfb['matchdir'],
+		'Native' => $pfb['nativedir'],
+	);
+
+	if (!isset($type_dirs[$type]) || ($family !== 'v4' && $family !== 'v6')) {
+		return array();
+	}
+
+	// Family-suffixed '.txt' members only -- this excludes '.update' markers, '.ip'
+	// feeds and any non-family scratch files in the dir.
+	$members = glob("{$type_dirs[$type]}/*_{$family}.txt");
+	if ($members === FALSE) {
+		return array();
+	}
+
+	sort($members);
+	return $members;
+}
+
+
 // Determine if cron task requires updating
 function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_wday) {
 	foreach (config_get_path('cron/item', []) as $item) {

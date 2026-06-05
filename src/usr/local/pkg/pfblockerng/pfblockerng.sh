@@ -307,6 +307,97 @@ cidr_aggregate() {
 }
 
 
+# ADR-11: Union a set of already-effective member files into ONE deduped + CIDR-
+# aggregated alias file, plus a never-empty '-f' consumer file. Type-AGNOSTIC: it is
+# handed a plain list of member-file paths (one per line) and does not care which
+# action class (Deny/Permit/Match/Native) they belong to -- the per-type membership
+# is decided in PHP (pfb_aggregate_member_list) by the Phase-3 caller.
+#
+# Reuses the existing aggregation primitive (${pathaggregate} = iprange, the same
+# binary cidr_aggregate() shells out to) -- NO new aggregation algorithm. iprange is
+# set-exact (minimal CIDR cover equal to the union; never adds an address), so the
+# union cannot widen the set.
+#
+# Positional args (read directly, not via the global $alias/$max slots):
+#   $2 family       : 'v4' | 'v6'   (informational; iprange handles either family)
+#   $3 memberlist   : path to a file listing member files, one path per line
+#   $4 aggout       : path to write the aggregate alias file (the urltable content)
+#   $5 consumerout  : path to write the never-empty '-f' consumer file
+#
+# mtime-gate (Phase 1 strategy): rebuild only when a listed member file is newer than
+# the existing aggregate output -- otherwise the prior aggregate is current, so skip
+# the cat|sort -u|iprange entirely. The consumer file must also already exist and be
+# non-empty, else we always (re)build to honour the never-empty contract.
+pfb_aggregate() {
+	if [ ! -x "${pathaggregate}" ]; then
+		log="Application [ iprange ] Not found. Cannot proceed."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
+
+	agg_family="${2}"
+	agg_memberlist="${3}"
+	agg_out="${4}"
+	agg_consumer="${5}"
+
+	if [ -z "${agg_memberlist}" ] || [ -z "${agg_out}" ] || [ -z "${agg_consumer}" ]; then
+		log="aggregate [ ${agg_family} ]: missing memberlist/output path argument."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
+	if [ ! -f "${agg_memberlist}" ]; then
+		log="aggregate [ ${agg_family} ]: member list [ ${agg_memberlist} ] not found."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
+
+	# mtime-gate: skip the rebuild when the existing aggregate output is at least as
+	# new as every listed member file AND the consumer file is already non-empty.
+	if [ -f "${agg_out}" ] && [ -s "${agg_consumer}" ]; then
+		agg_stale=''
+		while IFS= read -r agg_member; do
+			[ -z "${agg_member}" ] && continue
+			if [ "${agg_member}" -nt "${agg_out}" ]; then
+				agg_stale=1
+				break
+			fi
+		done < "${agg_memberlist}"
+		if [ -z "${agg_stale}" ]; then
+			echo "aggregate [ ${agg_family} ]: no member newer than [ ${agg_out} ], skipping rebuild."
+			return
+		fi
+	fi
+
+	# Concatenate every existing member file, then dedup (sort -u) into the temp file.
+	: > "${tempfile}"
+	while IFS= read -r agg_member; do
+		[ -z "${agg_member}" ] && continue
+		[ -f "${agg_member}" ] && cat "${agg_member}" >> "${tempfile}"
+	done < "${agg_memberlist}"
+	LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
+
+	# CIDR-collapse the deduped union via iprange (set-exact) into the aggregate file.
+	if [ -s "${dedupfile}" ]; then
+		"${pathaggregate}" "${dedupfile}" > "${agg_out}"
+	else
+		: > "${agg_out}"
+	fi
+
+	# Never-empty '-f' consumer file: mirror the aggregate, but substitute a single
+	# '#'-comment placeholder line when the union is empty so a downstream '-f'
+	# consumer (ADR-12) never trips empty-file validation.
+	if [ -s "${agg_out}" ]; then
+		cp -f "${agg_out}" "${agg_consumer}"
+	else
+		echo '#' > "${agg_consumer}"
+	fi
+
+	aggin="$(grep -c ^ "${dedupfile}" 2>/dev/null)"
+	aggfinal="$(grep -c ^ "${agg_out}" 2>/dev/null)"
+	echo "aggregate [ ${agg_family} ]: union ${aggin} -> ${aggfinal} CIDRs -> ${agg_out}"
+}
+
+
 # Function to remove duplicate entries in each list individually.
 duplicate() {
 	if [ ! -x "${pathgrepcidr}" ]; then
@@ -999,6 +1090,10 @@ case "${1}" in
 	cidr_aggregate)
 		agg_folder=true
 		cidr_aggregate
+		;;
+	aggregate)
+		# ADR-11: pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>
+		pfb_aggregate "$@"
 		;;
 	whoisconvert)
 		whoisconvert
