@@ -24,8 +24,8 @@ A DNS query name reaches the matcher as punycode ASCII (``xn--…``). Script
 analysis is impossible on the A-label, so each ``xn--`` label is decoded to
 Unicode with the stdlib RAW ``'punycode'`` codec (NOT ``'idna'`` — its IDNA2003
 validation throws on analysable attack labels), its resolved script set computed
-from the shipped Scripts / Script_Extensions range tables (``pfb_unicode_scripts``,
-Common/Inherited/Unknown transparent), and a severity assigned:
+from each code point's script (read from the stdlib ``unicodedata.name()`` leading
+token; Common/Inherited transparent), and a severity assigned:
 
   * **MALICIOUS** — the label's resolved set contains >= 2 of the mutually-
     confusable trio {Latin, Cyrillic, Greek} (Latin+Cyrillic, Latin+Greek, OR
@@ -52,17 +52,8 @@ matcher (Phase 5) can call it and it stays unit-testable off-appliance.
 
 from __future__ import annotations
 
-import bisect
+import unicodedata
 from dataclasses import dataclass
-
-from pfb_unicode_scripts import (
-    SCRIPT_RANGE_ENDS,
-    SCRIPT_RANGE_NAMES,
-    SCRIPT_RANGE_STARTS,
-    SCRIPTX_RANGE_ENDS,
-    SCRIPTX_RANGE_NAMES,
-    SCRIPTX_RANGE_STARTS,
-)
 
 # --------------------------------------------------------------------------- #
 # Severity / restriction-level vocabulary (mirrors the Phase-2 oracle).
@@ -93,8 +84,21 @@ _DECODE_ERRORS = (UnicodeDecodeError, UnicodeError, ValueError)
 
 
 # --------------------------------------------------------------------------- #
-# Punycode decode + per-code-point script lookup (shipped range tables).
+# Punycode decode + per-code-point script lookup (stdlib unicodedata.name()).
 # --------------------------------------------------------------------------- #
+
+# ``unicodedata.name()``'s leading token IS the script long-name for essentially
+# every letter -- LATIN/CYRILLIC/GREEK/ARABIC/THAI/HEBREW/ARMENIAN/CHEROKEE/
+# COPTIC/DEVANAGARI/HIRAGANA/KATAKANA/BOPOMOFO/HANGUL... -- so the script is read
+# straight from the name, with no shipped table. CJK ideographs name themselves
+# "CJK ..." -> Han. The tokens are stable across UCD versions for these
+# established scripts (validated against the corpus on UCD 14/15/16).
+_NAME_PREFIX_TO_SCRIPT = {"CJK": "Han"}
+
+# Common/Inherited code points of general category Lo whose name would otherwise
+# misattribute a script (the Lm modifier-letter marks -- U+30FC ー, 々, tatweel --
+# are dropped by the category test below; these two are Lo and need naming out).
+_COMMON_LO_MARKS = frozenset({0x3006, 0x303C})  # 〆 IDEOGRAPHIC CLOSING, 〼 MASU MARK
 
 
 def decode_idn_label(label: str) -> str:
@@ -112,24 +116,27 @@ def decode_idn_label(label: str) -> str:
 
 
 def script_of(codepoint: int) -> tuple[str, ...]:
-    """Resolved script(s) of one code point: Script_Extensions when present, else Script.
+    """Resolved script of one code point, derived from its ``unicodedata.name()``.
 
-    Returns the tuple of script long-names a code point carries for confusable
-    analysis. Script_Extensions takes precedence (a code point shared by several
-    scripts narrows to that set); otherwise the plain Script applies. Common /
-    Inherited / Unknown are NOT in the shipped tables (dropped at generation time),
-    so a transparent or unassigned code point returns the empty tuple — it
-    contributes no script to the resolved set.
+    Only LETTERS carry a script identity. Non-letters (digits, combining marks,
+    punctuation, symbols) AND modifier letters (category ``Lm`` — the CJK
+    prolonged-sound / iteration marks ``ー`` ``々`` and the Arabic tatweel, which
+    Unicode assigns to the Common/Inherited script) are transparent and return the
+    empty tuple, contributing no script to the resolved set; a couple of Common
+    ideographic ``Lo`` marks are excluded explicitly. A letter's script is the
+    leading token of its Unicode name (``LATIN`` → ``Latin``, ``CJK`` → ``Han``);
+    an unnamed/unassigned code point returns ``()``. stdlib only — no shipped table,
+    so it tracks the runtime UCD (stable for the established scripts in scope).
     """
-    # Script_Extensions first (binary search over sorted range starts).
-    i = bisect.bisect_right(SCRIPTX_RANGE_STARTS, codepoint) - 1
-    if i >= 0 and codepoint <= SCRIPTX_RANGE_ENDS[i]:
-        return SCRIPTX_RANGE_NAMES[i]
-    # Fall back to the plain Script property.
-    j = bisect.bisect_right(SCRIPT_RANGE_STARTS, codepoint) - 1
-    if j >= 0 and codepoint <= SCRIPT_RANGE_ENDS[j]:
-        return (SCRIPT_RANGE_NAMES[j],)
-    return ()
+    ch = chr(codepoint)
+    cat = unicodedata.category(ch)
+    if cat[0] != "L" or cat == "Lm" or codepoint in _COMMON_LO_MARKS:
+        return ()
+    name = unicodedata.name(ch, "")
+    if not name:
+        return ()
+    token = name.split(" ", 1)[0]
+    return (_NAME_PREFIX_TO_SCRIPT.get(token, token.capitalize()),)
 
 
 def resolved_script_set(text: str) -> set[str]:

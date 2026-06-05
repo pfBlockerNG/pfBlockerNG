@@ -170,8 +170,7 @@ pfBlockerNG/
 │       │   ├── pfblockerng_extra.inc
 │       │   ├── pfb_unbound_include.inc
 │       │   ├── pfb_unbound.py         # Unbound Python plugin (matcher + DNSBL list build: parse/classify/build from the manifest)
-│       │   ├── pfb_idn_analyzer.py     # ADR-08 TR39 mixed-script IDN homoglyph analyzer (pure, stdlib-only)
-│       │   ├── pfb_unicode_scripts.py  # ADR-08 SHIPPED Unicode Scripts/Script_Extensions range tables (auto-generated, pinned 15.1.0)
+│       │   ├── pfb_idn_analyzer.py     # ADR-08 TR39 mixed-script IDN homoglyph analyzer (pure, stdlib-only; script via unicodedata.name())
 │       │   ├── pfblockerng.sh         # Shell script (POSIX sh)
 │       │   └── list_scripts/          # Feed pre/post transform scripts (AWS region wrappers + shared aws_region_prefixes.sh)
 │       ├── share/             # Package metadata (info.xml)
@@ -182,8 +181,7 @@ pfBlockerNG/
 │   ├── deploy.sh          # Push files to live pfSense over SSH
 │   ├── setup-hooks.sh     # One-time: point git at .githooks (core.hooksPath)
 │   ├── misc/              # Per-pfSense-version helpers (e.g. install_deps_CE_2.8.sh — bake RUN_DEPENDS on the image)
-│   ├── update-pfsense-stubs.py  # Regenerate stubs from pfSense source
-│   └── update-unicode-data.py   # Regenerate the shipped ADR-08 Unicode Scripts tables (pinned version)
+│   └── update-pfsense-stubs.py  # Regenerate stubs from pfSense source
 ├── stubs/pfsense/         # PHP stubs for Intelephense (IDE only, not shipped)
 ├── stubs/python/          # unboundmodule.py stub for Pylance/mypy + tests (not shipped)
 ├── .editorconfig          # Indent rules per language
@@ -500,22 +498,17 @@ Update `stubs/pfsense/` when:
   CE-2.8 functions absent from the 2.7.2 source, e.g. `config_read_file`). PHPStan is the
   gate: prefer a real stub over a `phpstan-baseline.neon` suppression.
 
-Update the **shipped ADR-08 Unicode Scripts data** (`src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py`)
-when the pinned Unicode version is bumped — it backs the **IDN Blocking → Confusable** mode's
-TR39 mixed-script analyzer (`pfb_idn_analyzer.py`). Pinned to **Unicode 15.1.0** (`UNICODE_VERSION`
-in both the generator and the data module — matches the dev-box `unicodedata.unidata_version` and
-the ADR-08 corpus/oracle). It ships **as data** (release archive), stdlib only, no runtime
-dependency. Regenerate:
-
-```sh
-python scripts/update-unicode-data.py            # pinned 15.1.0
-python scripts/update-unicode-data.py --version X.Y.Z
-```
-
-Downloads that version's `Scripts.txt` / `ScriptExtensions.txt` from unicode.org and re-emits the
-compact range tables byte-for-byte, ruff-format-clean (pattern mirrors `update-pfsense-stubs.py`).
-A bump shifts script attribution, so re-run `python -m pytest tests/test_adr08_*` and the
-`measure_fp_tp.py` FP/TP gate afterwards.
+The **ADR-08 IDN homoglyph analyzer** (`src/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py`,
+backing **IDN Blocking → Confusable**) ships **no** Unicode data table: it resolves each code
+point's script from the **stdlib `unicodedata.name()`** leading token (`LATIN…`→Latin,
+`CJK…`→Han, …), so there is nothing to regenerate on a UCD bump. It reads the runtime stdlib
+UCD (Python 3.11 ships 14.0.0, 3.12/3.13 15.1.0, 3.14 16.0.0); the name tokens are stable
+across those for the established scripts in scope. The corpus/oracle GOLDEN
+(`tests/fixtures/adr08_*`) is pinned to UCD 15.1.0 and the `tests/test_adr08_*` suite proves
+the analyzer agrees with it across versions. **`pfb_idn_analyzer.py` is imported by
+`pfb_unbound.py` at load**, so it is copied into the Unbound chroot beside it
+(`pfblockerng.inc` / `pfblockerng_install.inc`) — a new sibling module MUST be added to those
+copy sites or the resolver's Python module fails to load.
 
 When the min CE version changes, also:
 

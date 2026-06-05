@@ -82,11 +82,18 @@ pfb: dict[str, Any] = {}
 from collections import OrderedDict, defaultdict
 from configparser import ConfigParser
 
-# ADR-08 Phase 5: the pure TR39 cross-script IDN homoglyph analyzer (sibling module,
-# shipped alongside this file in the package dir -- so its own dir is on Unbound's
-# sys.path at runtime, and conftest adds it for the suite). stdlib-only, Unbound-
-# symbol-free; the matcher's Confusable arm calls classify_idn (decode-safe, NEVER
-# raises) so a malformed xn-- label can never crash the resolver.
+# ADR-08 Phase 5: the pure TR39 cross-script IDN homoglyph analyzer (sibling module
+# shipped alongside this file and copied into the Unbound chroot next to it -- see
+# pfblockerng.inc / pfblockerng_install.inc). Unbound's pythonmod does NOT reliably
+# put the script's own directory on sys.path (it is version-dependent and chroot
+# strips it), so add it explicitly: __file__ when set, else the CWD (the chroot root
+# where the package files sit -- the same dir this script reads pfb_py_* from). The
+# suite imports it via conftest. stdlib-only, Unbound-symbol-free; the matcher's
+# Confusable arm calls classify_idn (decode-safe, NEVER raises) so a malformed xn--
+# label can never crash the resolver.
+_pfb_pkg_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+if _pfb_pkg_dir not in sys.path:
+    sys.path.insert(0, _pfb_pkg_dir)
 import pfb_idn_analyzer as idn_analyzer
 
 # Module-level globals populated by init_standard() at runtime. Declared here
@@ -4550,6 +4557,10 @@ def evaluate_domain(
                 is_found = True
                 feed = "IDN"
                 group = "DNSBL_IDN"
+                # An IDN block is a feed-stratum block: give it the feed band so the
+                # numeric important_rules path doesn't treat block_band=0 as already
+                # overridden (allow_band >= 0 is always true) and resolve it anyway.
+                block_band = PRIO_FEED_BLOCK
             elif idn_mode == IDN_MODE_CONFUSABLE:
                 # Confusable arm (Phase 5): decode + TR39 mixed-script analysis, PER-LABEL,
                 # gated by is_idn_domain (a non-xn-- query pays nothing). classify_idn is
@@ -4563,6 +4574,9 @@ def evaluate_domain(
                     # Malicious (or escalated suspicious/flagged) -> block. Distinct
                     # feed/group so it is attributed apart from the blunt All-IDN feed.
                     is_found = True
+                    # Feed-stratum block band (see the All-IDN arm above) so the
+                    # numeric important_rules resolution honours the homoglyph block.
+                    block_band = PRIO_FEED_BLOCK
                     if verdict.severity == idn_analyzer.SEV_MALICIOUS:
                         feed = IDN_FEED_MALICIOUS
                         group = IDN_GROUP_MALICIOUS

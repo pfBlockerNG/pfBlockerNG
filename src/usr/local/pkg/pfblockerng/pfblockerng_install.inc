@@ -540,6 +540,9 @@ unlink_if_exists('/var/db/pfblockerng/dnsbl.sqlite');
  * RAM Disks enabled; defer the file copy to pfb_unbound_dnsbl(). */
 if (is_dir(g_get('unbound_chroot_path'))) {
 	@copy("/usr/local/pkg/pfblockerng/pfb_unbound.py", "{$g['unbound_chroot_path']}/pfb_unbound.py");
+	// ADR-08: pfb_unbound.py imports this sibling at load; it MUST be in the chroot
+	// next to it, else Unbound's Python module fails to load and DNS resolution breaks.
+	@copy("/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py", "{$g['unbound_chroot_path']}/pfb_idn_analyzer.py");
 	@copy("/usr/local/pkg/pfblockerng/pfb_unbound_include.inc", "{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 	@copy("/usr/local/pkg/pfblockerng/pfb_py_hsts.txt", "{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
 }
