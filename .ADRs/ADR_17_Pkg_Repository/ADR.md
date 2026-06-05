@@ -1,12 +1,15 @@
 # ADR-17: Self-hosted pfSense `pkg` repository on GitHub Pages
 
-- **Status:** **Implemented** (2026-06-05) — *pending the post-merge live Pages deploy +
-  the gated live-URL verification.* The hermetic affected-flow smoke (install / cross-repo
-  precedence / `pkg upgrade`) is **GREEN on the live VM** (§7); only the public
-  `andrebrait.github.io` Pages deploy + the live-URL leg remain, which are **post-merge** (a brand-new
-  `workflow_dispatch` workflow is only dispatchable once it lands on the default branch
-  `devel`). Flips to **Accepted** once that deploy dispatch confirms the live
-  `https://andrebrait.github.io/pfBlockerNG/${ABI}` URL.
+- **Status:** **Accepted** (2026-06-06; implemented 2026-06-05). The §7 affected-flow smoke
+  (install / cross-repo precedence / `pkg upgrade`) is **GREEN on the live VM**, and the
+  public Pages deploy is **live + verified**: `repo-publish.yml` (dispatched on `devel`)
+  deploys to `https://andrebrait.github.io/pfBlockerNG/${ABI}`, and the served catalog is a
+  clean **canonical single entry** — `meta.conf` v2, a 1-package `packagesite`, and
+  `pfSense-pkg-pfBlockerNG-devel-<version>.pkg` served over HTTPS (confirmed by `curl`). The
+  first deploy surfaced a catalog naming/dedup defect (staging-prefixed `built-incoming_*`
+  filenames + a duplicate entry), fixed in follow-up **PR #144** (canonical
+  `<name>-<version>.pkg` + per-(name,version,ABI) dedup in both generators) and re-verified
+  clean on re-deploy.
 - **Date:** 2026-06-05
 - **Branch:** `adr/17` (off **`devel`**) / **Component(s):** new dev-only CI — a
   **repo-publish** job/workflow that consumes ADR-09's release `.pkg` artifacts +
