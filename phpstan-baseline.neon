@@ -925,12 +925,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
 			message: '#^Variable \$p_tr_style might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
