@@ -2883,11 +2883,6 @@ function pfb_unbound_dnsbl($mode) {
 			if (!file_exists("{$g['unbound_chroot_path']}/pfb_unbound.py")) {
 				@copy("/usr/local/pkg/pfblockerng/pfb_unbound.py", "{$g['unbound_chroot_path']}/pfb_unbound.py");
 			}
-			// ADR-08: pfb_unbound.py imports this sibling at load; it MUST be in the
-			// chroot next to it or Unbound's Python module fails to load (DNS breaks).
-			if (!file_exists("{$g['unbound_chroot_path']}/pfb_idn_analyzer.py")) {
-				@copy("/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py", "{$g['unbound_chroot_path']}/pfb_idn_analyzer.py");
-			}
 			if (!file_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc")) {
 				@copy("/usr/local/pkg/pfblockerng/pfb_unbound_include.inc", "{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 			}
@@ -2896,7 +2891,6 @@ function pfb_unbound_dnsbl($mode) {
 			}
 		} else {
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_idn_analyzer.py");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
 		}
@@ -5638,7 +5632,7 @@ function pfb_aliastables($mode) {
 			pfb_logger("\nArchiving Aliastable folder", 1);
 
 			$files_to_backup = '';
-			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf,/var/unbound/pfb_unbound*,/var/unbound/pfb_idn_analyzer.py,/var/unbound/pfb_py_*}", GLOB_BRACE);
+			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf,/var/unbound/pfb_unbound*,/var/unbound/pfb_py_*}", GLOB_BRACE);
 			if (!empty($files)) {
 				$files_to_backup = implode(' ', array_map('escapeshellarg', array_filter($files)));
 			}

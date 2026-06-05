@@ -2,7 +2,7 @@
 
 - **Status:** **Implemented — pending live smoke** (2026-06-05; authored 2026-06-02). All seven phases landed on `adr/08-homoglyph-protection`; the suite + FP/TP gate are green on-branch (§7 *Build evidence*). Status flips to **Accepted** only after the maintainer runs the live-box manual smoke below (CI cannot reach Unbound's Python loader).
 - **Date:** 2026-06-02
-- **Branch:** `adr/08-homoglyph-protection` (off `devel`; `next` retired) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help), the **IDN script analyzer** `pfb_idn_analyzer.py` (code-point script identity from the stdlib `unicodedata.name()` — **no shipped Unicode table**; see the §7 amendment).
+- **Branch:** `adr/08-homoglyph-protection` (off `devel`; `next` retired) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new punycode-decode + script analyzer + the matcher's IDN branch), `pfblockerng.inc` (`python_idn` config plumbing, `DNSBL_IDN` alias/count), `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (the `pfb_idn` mode selector + help). The IDN script analyzer is **inlined in `pfb_unbound.py`** — code-point script identity from the stdlib `unicodedata.name()`, **no shipped Unicode table** (see the §7 amendment).
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (the `'punycode'` codec decodes; code-point script identity comes from `unicodedata.name()` — **no shipped Unicode table**, see §7 amendment); PHP 8.3; POSIX `sh`.
 - **Test suite:** `tests/test_pfb_unbound.py`, `tests/conftest.py`; new `tests/test_adr08_*` (the TR39 decision spec/oracle, the punycode+script analyzer, the matcher wiring, the FP/TP corpus).
 - **References (the rule this enforces):** ICANN *Guidelines for the Implementation of Internationalized Domain Names, **Version 4.1*** (2022-09-22) <https://www.icann.org/en/system/files/files/idn-guidelines-22sep22-en.pdf>; EURid IDN policy <https://eurid.eu/en/knowledge-centre/domain-names-with-special-characters-idns/>; Unicode **UTS#39** Security Mechanisms (Restriction-Level Detection) <https://www.unicode.org/reports/tr39/>; ICANN SSAC IDN Homographs <https://itp.cdn.icann.org/en/files/meetings/presentation-ssac-idn-homograph-22oct18-en.pdf>.
@@ -189,24 +189,26 @@ Prompt: `07_Validation_Smoke_DoD.txt`
 
 The phase work (§ below) shipped the TR39 **Scripts/Script_Extensions** as a generated
 2820-line data module (`pfb_unicode_scripts.py`) + a `scripts/update-unicode-data.py`
-generator. **During review this was replaced** with deriving each code point's script
-from the **stdlib `unicodedata.name()`** leading token in `pfb_idn_analyzer.py` — the
-data module and generator are **deleted**. Rationale: it removes a 2820-line shipped
-file, a second module to copy into the Unbound chroot, and a FreeBSD-ports `pkg-plist`
-entry, with **no behaviour change** — the name()-derivation reproduces every corpus
-label's resolved-script set and severity (FP 0 / TP 6) and is stable across the runtime
-UCDs (validated Python 3.13/UCD 15.1.0 and 3.14/UCD 16.0.0; the in-scope script-name
-tokens are stable since UCD 1.x). Modifier-letter marks (`Lm`: ー U+30FC, 々, tatweel)
-and a couple of Common ideographic `Lo` marks are treated transparent so a legit
-Japanese name does not read as multi-script. The phase prompts/RESULTS below record the
-original table approach as history; the corpus/oracle GOLDEN stays pinned to UCD 15.1.0.
+generator, with the analyzer in a sibling `pfb_idn_analyzer.py`. **During review both
+were removed:** each code point's script is now derived from the **stdlib
+`unicodedata.name()`** leading token, and the ~90-line analyzer is **inlined into
+`pfb_unbound.py`** (the data module, the generator, and the sibling module are all
+**deleted**). Rationale: it removes a 2820-line shipped file AND a second shipped module —
+so there is **no extra file to copy into the Unbound chroot and no FreeBSD-ports
+`pkg-plist` entry** (the analyzer rides `pfb_unbound.py`, already deployed + listed) — with
+**no behaviour change**: the name()-derivation reproduces every corpus label's
+resolved-script set and severity (FP 0 / TP 6) and is stable across the runtime UCDs
+(validated Python 3.13/UCD 15.1.0 and 3.14/UCD 16.0.0; the in-scope script-name tokens are
+stable since UCD 1.x). Modifier-letter marks (`Lm`: ー U+30FC, 々, tatweel) and a couple of
+Common ideographic `Lo` marks are treated transparent so a legit Japanese name does not
+read as multi-script. The phase prompts/RESULTS below record the original table approach as
+history; the corpus/oracle GOLDEN stays pinned to UCD 15.1.0.
 
 Also fixed in review: an IDN block (All-IDN **and** Confusable) now sets a non-zero
 `block_band`, so the ABP numeric `important_rules` resolution no longer treats it as
-already overridden; `pfb_idn_analyzer.py` is copied into the Unbound chroot beside
-`pfb_unbound.py` (it is imported at load); and the decode-error / UCD-version tests are
-version-tolerant (Python 3.11 ships UCD 14.0.0; the raw `'punycode'` codec raises the
-base `UnicodeError` on 3.11/3.12).
+already overridden; and the decode-error / UCD-version tests are version-tolerant
+(Python 3.11 ships UCD 14.0.0; the raw `'punycode'` codec raises the base `UnicodeError`
+on 3.11/3.12).
 
 ### Build evidence (recorded Phase 7, amended in review)
 
@@ -228,7 +230,7 @@ rework).
   query blocked with `feed="IDN"`/`group="DNSBL_IDN"`, byte-identical to today; the
   `'on'`→All-IDN migration changes nothing observable.
 - **Pure analyzer vs oracle (Phase 4): 75 passed** — `tests/test_adr08_analyzer.py`
-  (the shipped `pfb_idn_analyzer.classify_idn` decode / resolved-script-set / severity
+  (the inlined `classify_idn` decode / resolved-script-set / severity
   graded row-by-row against the oracle + the whole corpus).
 - **Confusable matcher wiring (Phase 5): 44 passed** —
   `tests/test_adr08_confusable_matcher.py` (production `evaluate_domain` +

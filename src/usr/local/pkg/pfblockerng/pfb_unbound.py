@@ -79,22 +79,10 @@ if TYPE_CHECKING:
 global pfb
 pfb: dict[str, Any] = {}
 
+# ADR-08: stdlib unicodedata backs the inlined IDN homoglyph analyzer below (script_of).
+import unicodedata
 from collections import OrderedDict, defaultdict
 from configparser import ConfigParser
-
-# ADR-08 Phase 5: the pure TR39 cross-script IDN homoglyph analyzer (sibling module
-# shipped alongside this file and copied into the Unbound chroot next to it -- see
-# pfblockerng.inc / pfblockerng_install.inc). Unbound's pythonmod does NOT reliably
-# put the script's own directory on sys.path (it is version-dependent and chroot
-# strips it), so add it explicitly: __file__ when set, else the CWD (the chroot root
-# where the package files sit -- the same dir this script reads pfb_py_* from). The
-# suite imports it via conftest. stdlib-only, Unbound-symbol-free; the matcher's
-# Confusable arm calls classify_idn (decode-safe, NEVER raises) so a malformed xn--
-# label can never crash the resolver.
-_pfb_pkg_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-if _pfb_pkg_dir not in sys.path:
-    sys.path.insert(0, _pfb_pkg_dir)
-import pfb_idn_analyzer as idn_analyzer
 
 # Module-level globals populated by init_standard() at runtime. Declared here
 # without assignment (PEP 526) so type checkers can resolve them across the
@@ -1406,6 +1394,141 @@ def idn_mode_decision(q_name: str, idn_mode: str) -> bool:
     return idn_mode == IDN_MODE_ALL and is_idn_domain(q_name)
 
 
+# --------------------------------------------------------------------------- #
+# ADR-08: TR39 cross-script IDN homoglyph analyzer (stdlib only). Each xn-- label
+# is punycode-decoded, each code point's script read from unicodedata.name(), and
+# a severity assigned PER LABEL (never unioned across the dot). Decode-safe: a
+# malformed label is FLAGGED, never raised into operate(). Graded against the
+# Phase-2 oracle + corpus in tests/test_adr08_*.
+# --------------------------------------------------------------------------- #
+
+SEV_LEGIT = "legit"
+SEV_SUSPICIOUS = "suspicious"
+SEV_MALICIOUS = "malicious"
+SEV_FLAGGED = "flagged"
+
+LEVEL_ASCII = "ascii_only"
+LEVEL_SINGLE = "single_script"
+LEVEL_HIGHLY_RESTRICTIVE = "highly_restrictive"
+LEVEL_NON_RESTRICTIVE = "non_restrictive"
+
+# >=2 of the mutually-confusable trio in ONE label -> malicious (incl. Cyrillic+Greek).
+# UTS#39 Highly Restrictive allow-set: single script, OR Latin + a CJK companion
+# {Han, Hiragana, Katakana, Hangul, Bopomofo}.
+CONFUSABLE_SET = frozenset({"Latin", "Cyrillic", "Greek"})
+_HIGHLY_RESTRICTIVE_SET = frozenset({"Latin", "Han", "Hiragana", "Katakana", "Hangul", "Bopomofo"})
+_SEV_ORDER = {SEV_LEGIT: 0, SEV_FLAGGED: 1, SEV_SUSPICIOUS: 2, SEV_MALICIOUS: 3}
+_DECODE_ERRORS = (UnicodeDecodeError, UnicodeError, ValueError)
+# unicodedata.name() leading token -> script; CJK ideographs name themselves "CJK".
+_NAME_PREFIX_TO_SCRIPT = {"CJK": "Han"}
+# Common ideographic Lo marks name() would misattribute (Lm marks drop out by category).
+_COMMON_LO_MARKS = frozenset({0x3006, 0x303C})
+
+
+def decode_idn_label(label: str) -> str:
+    """Raw stdlib 'punycode' decode of one label (NOT 'idna'); MAY raise on malformed input."""
+    if not label.startswith("xn--"):
+        return label
+    return label[4:].encode("ascii").decode("punycode")
+
+
+def script_of(codepoint: int) -> tuple[str, ...]:
+    """Script of a code point from its unicodedata.name() leading token; () for a transparent
+    point (non-letter, Lm modifier mark, Common Lo mark, or unnamed -- contributes no script)."""
+    ch = chr(codepoint)
+    cat = unicodedata.category(ch)
+    if cat[0] != "L" or cat == "Lm" or codepoint in _COMMON_LO_MARKS:
+        return ()
+    name = unicodedata.name(ch, "")
+    if not name:
+        return ()
+    token = name.split(" ", 1)[0]
+    return (_NAME_PREFIX_TO_SCRIPT.get(token, token.capitalize()),)
+
+
+def resolved_script_set(text: str) -> set[str]:
+    """Distinct scripts in ONE decoded label (Common/Inherited transparent; never unions)."""
+    out: set[str] = set()
+    for ch in text:
+        out.update(script_of(ord(ch)))
+    return out
+
+
+def restriction_level(scripts: set[str], *, ascii_only: bool = False) -> str:
+    """UTS#39 restriction level for a resolved script set (the documented intermediate)."""
+    if ascii_only:
+        return LEVEL_ASCII
+    if len(scripts) == 1:
+        return LEVEL_SINGLE
+    if scripts and len(scripts) >= 2 and scripts <= _HIGHLY_RESTRICTIVE_SET:
+        return LEVEL_HIGHLY_RESTRICTIVE
+    return LEVEL_NON_RESTRICTIVE
+
+
+def severity_of(text: str) -> str:
+    """legit | suspicious | malicious | flagged for ONE decoded label (never unions across the dot)."""
+    scripts = resolved_script_set(text)
+    if len(scripts & CONFUSABLE_SET) >= 2:
+        return SEV_MALICIOUS
+    if not scripts:
+        return SEV_FLAGGED
+    if restriction_level(scripts) in (LEVEL_SINGLE, LEVEL_HIGHLY_RESTRICTIVE):
+        return SEV_LEGIT
+    return SEV_SUSPICIOUS
+
+
+@dataclass(frozen=True)
+class LabelVerdict:
+    """Decode-safe analysis of ONE label; ``offending`` = the scripts to surface in the log."""
+
+    a_label: str
+    decoded: str | None
+    scripts: frozenset[str]
+    severity: str
+    offending: frozenset[str]
+    decode_error: str | None
+
+
+@dataclass(frozen=True)
+class NameVerdict:
+    """Per-label analysis of a whole name; the most severe label wins."""
+
+    a_name: str
+    labels: tuple[LabelVerdict, ...]
+    severity: str
+    offending: frozenset[str]
+
+
+def _offending_scripts(scripts: frozenset[str], severity: str) -> frozenset[str]:
+    """The script(s) explaining a non-legit verdict (for the dual-form log line)."""
+    if severity == SEV_MALICIOUS:
+        return frozenset(scripts & CONFUSABLE_SET)
+    if severity == SEV_SUSPICIOUS:
+        return scripts
+    return frozenset()
+
+
+def classify_label(a_label: str) -> LabelVerdict:
+    """Decode + classify ONE label, NEVER raising (a punycode decode error -> FLAGGED)."""
+    try:
+        decoded = decode_idn_label(a_label)
+    except _DECODE_ERRORS as exc:
+        return LabelVerdict(a_label, None, frozenset(), SEV_FLAGGED, frozenset(), type(exc).__name__)
+    scripts = frozenset(resolved_script_set(decoded))
+    sev = severity_of(decoded)
+    return LabelVerdict(a_label, decoded, scripts, sev, _offending_scripts(scripts, sev), None)
+
+
+def classify_idn(q_name: str) -> NameVerdict:
+    """Classify a whole name PER LABEL; most-severe label wins, never unions across the dot."""
+    verdicts = tuple(classify_label(lbl) for lbl in q_name.split("."))
+    worst = verdicts[0]
+    for v in verdicts[1:]:
+        if _SEV_ORDER[v.severity] > _SEV_ORDER[worst.severity]:
+            worst = v
+    return NameVerdict(q_name, verdicts, worst.severity, worst.offending)
+
+
 # ADR-08 Phase 5: the Confusable tier. Distinct feed/group labels so a homoglyph block
 # is attributed apart from the blunt All-IDN feed ("IDN"/"DNSBL_IDN") and the alerts
 # page / Reports can break it out. Malicious -> the Homoglyph feed; the suspicious/
@@ -1422,7 +1545,7 @@ IDN_ACT_ALERT = "alert"
 IDN_ACT_BLOCK = "block"
 
 
-def _idn_dual_form(verdict: idn_analyzer.NameVerdict) -> str:
+def _idn_dual_form(verdict: NameVerdict) -> str:
     """Actionable dual-form description of the offending label, for the log line.
 
     ``xn--pple-43d [аpple] Cyrillic`` -- the A-label, the decoded Unicode in brackets,
@@ -1451,7 +1574,7 @@ def idn_confusable_action(
     *,
     block_malicious: bool,
     escalate_suspicious: bool,
-) -> tuple[str, idn_analyzer.NameVerdict | None]:
+) -> tuple[str, NameVerdict | None]:
     """Confusable-mode action for one query name + the verdict that drove it.
 
     Gated by ``is_idn_domain`` (a non-xn-- query pays NOTHING -- no decode, no script
@@ -1466,11 +1589,11 @@ def idn_confusable_action(
     """
     if not is_idn_domain(q_name):
         return IDN_ACT_NONE, None
-    verdict = idn_analyzer.classify_idn(q_name)
+    verdict = classify_idn(q_name)
     sev = verdict.severity
-    if sev == idn_analyzer.SEV_LEGIT:
+    if sev == SEV_LEGIT:
         return IDN_ACT_NONE, verdict
-    if sev == idn_analyzer.SEV_MALICIOUS:
+    if sev == SEV_MALICIOUS:
         return (IDN_ACT_BLOCK if block_malicious else IDN_ACT_ALERT), verdict
     # SUSPICIOUS or FLAGGED: alert by default, escalatable to block via the opt-in.
     return (IDN_ACT_BLOCK if escalate_suspicious else IDN_ACT_ALERT), verdict
@@ -4577,7 +4700,7 @@ def evaluate_domain(
                     # Feed-stratum block band (see the All-IDN arm above) so the
                     # numeric important_rules resolution honours the homoglyph block.
                     block_band = PRIO_FEED_BLOCK
-                    if verdict.severity == idn_analyzer.SEV_MALICIOUS:
+                    if verdict.severity == SEV_MALICIOUS:
                         feed = IDN_FEED_MALICIOUS
                         group = IDN_GROUP_MALICIOUS
                     else:
@@ -4588,7 +4711,7 @@ def evaluate_domain(
                     # Suspicious/flagged (or malicious with block disabled) -> ALERT only:
                     # the name still resolves (is_found stays False); record the attribution
                     # so operate() emits a log line in the block-line shape (dual-form b_eval).
-                    is_malicious = verdict.severity == idn_analyzer.SEV_MALICIOUS
+                    is_malicious = verdict.severity == SEV_MALICIOUS
                     idn_alert = (
                         IDN_FEED_MALICIOUS if is_malicious else IDN_FEED_SUSPECT,
                         IDN_GROUP_MALICIOUS if is_malicious else IDN_GROUP_SUSPECT,
