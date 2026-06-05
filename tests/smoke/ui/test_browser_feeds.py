@@ -26,9 +26,14 @@ cheap/hermetic half). No ``src/`` change here.
 DOM-FRAGILITY NOTE: ``display_top_tabs`` renders pfSense's standard ``nav-pills``
 list; the load-bearing, version-tolerant handles are the anchor ``href`` (carries
 ``?type=``) and the ``active`` class on the highlighted ``<li>`` — NOT a brittle
-DOM path. The Feed Settings section is ``COLLAPSIBLE|SEC_CLOSED`` (collapsed on
-load), so its alias-name label is in the DOM but not visible — we assert DOM
-PRESENCE (``count()``), not visibility, for the per-type label.
+DOM path. An ``href*="?type="`` match alone is NOT unique, though: by ADR-16 A4 the
+main top bar's own "Feeds" tab AND the breadcrumb also carry ``?type=<active>``, so
+the active type's query string appears in THREE anchors. The sub-tab row is the only
+``<ul class="nav …">`` that contains ALL THREE type anchors at once — so we locate
+that row first (``_subtab_nav``) and scope the presence/active assertions to it. The
+Feed Settings section is ``COLLAPSIBLE|SEC_CLOSED`` (collapsed on load), so its
+alias-name label is in the DOM but not visible — we assert DOM PRESENCE (``count()``),
+not visibility, for the per-type label.
 
 NO fixed sleeps: every assertion uses Playwright auto-waiting / ``count()`` after
 ``networkidle``. Playwright is imported lazily via ``pytest.importorskip`` so
@@ -47,7 +52,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Locator, Page
 
     from .webui import WebUI
 
@@ -88,13 +93,26 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
 
 
-def _subtab_anchor(page: Page, gtype: str):  # type: ignore[no-untyped-def]
-    """The sub-tab row anchor whose href targets ``?type=<gtype>``.
+def _subtab_nav(page: Page) -> Locator:
+    """The SECOND ``display_top_tabs`` row -- the ``[IPv4 | IPv6 | DNSBL]`` sub-tab ``<ul>``.
 
-    Matched by href (``pfblockerng_feeds.php?type=<gtype>``) -- the version-tolerant
-    handle for a ``display_top_tabs`` tab, independent of the surrounding markup.
+    ``display_top_tabs`` renders every tab row as ``<ul class="nav nav-…">``; the page
+    has TWO (the main top bar + this sub-tab row), and -- since ADR-16 A4 -- the main
+    bar's own "Feeds" tab AND the breadcrumb also carry ``?type=<active>``. So a bare
+    ``href*="?type="`` match is NOT unique (three hits for the active type). The sub-tab
+    row is the ONLY nav that contains ALL THREE type anchors at once; filter on that.
+    Version-tolerant (works for ``nav-pills`` or ``nav-tabs``, independent of the
+    surrounding markup).
     """
-    return page.locator(f'a[href*="pfblockerng_feeds.php?type={gtype}"]')
+    nav = page.locator("ul.nav")
+    for t in ("ipv4", "ipv6", "dnsbl"):
+        nav = nav.filter(has=page.locator(f'a[href*="{FEEDS_BASE}?type={t}"]'))
+    return nav
+
+
+def _subtab_anchor(nav: Locator, gtype: str) -> Locator:
+    """The ``?type=<gtype>`` anchor WITHIN the sub-tab row ``nav`` (scoped, so unique)."""
+    return nav.locator(f'a[href*="{FEEDS_BASE}?type={gtype}"]')
 
 
 @pytest.mark.parametrize("gtype", ["ipv4", "ipv6", "dnsbl"])
@@ -125,18 +143,23 @@ def test_feeds_subtab_row_active_and_type_scoped(
     page = browser_page
     _open(page, webui, f"{FEEDS_BASE}?type={gtype}")
 
-    # The second sub-tab row exists: all three anchors are present.
+    # The second sub-tab row exists exactly once -- the only nav carrying all three
+    # type anchors (A4 makes the top "Feeds" tab + the breadcrumb also carry ?type, so
+    # a bare href match is not unique; scope to the sub-tab <ul>).
+    nav = _subtab_nav(page)
+    expect(nav).to_have_count(1, timeout=JS_TIMEOUT_MS)
     for t in ("ipv4", "ipv6", "dnsbl"):
-        expect(_subtab_anchor(page, t)).to_have_count(1, timeout=JS_TIMEOUT_MS)
+        expect(_subtab_anchor(nav, t)).to_have_count(1, timeout=JS_TIMEOUT_MS)
 
     # The requested type's sub-tab is ACTIVE; the other two are not. pfSense's
     # display_top_tabs puts the `active` class on the highlighted tab's <li> (the
     # anchor's parent). Assert via the ancestor <li>'s class -- the version-tolerant
-    # handle (the <li> wraps the <a>).
-    active_li = _subtab_anchor(page, gtype).locator("xpath=ancestor::li[1]")
+    # handle (the <li> wraps the <a>) -- scoped to the sub-tab row so the A4 self-links
+    # in the top bar/breadcrumb don't confuse the match.
+    active_li = _subtab_anchor(nav, gtype).locator("xpath=ancestor::li[1]")
     expect(active_li).to_have_class(re.compile(r"\bactive\b"), timeout=JS_TIMEOUT_MS)
     for other in (t for t in ("ipv4", "ipv6", "dnsbl") if t != gtype):
-        other_li = _subtab_anchor(page, other).locator("xpath=ancestor::li[1]")
+        other_li = _subtab_anchor(nav, other).locator("xpath=ancestor::li[1]")
         expect(other_li).not_to_have_class(re.compile(r"\bactive\b"), timeout=JS_TIMEOUT_MS)
 
     # The body lists ONLY this type: its Feed Settings alias-name label is in the DOM
