@@ -174,6 +174,45 @@ class TestBadfilterPrune:
         assert _resolve(res, "a.example.com") == "pass"
         assert _resolve(res, "b.example.com") == "block"
 
+    def test_feed_badfilter_prunes_cross_feed_block(self) -> None:
+        """A FEED ``$badfilter`` prunes a matching-signature block in a DIFFERENT feed.
+
+        The prune collects ``$badfilter`` signatures across ALL feed rules and drops
+        every feed rule with a matching signature -- it is scoped by PROVENANCE (feed,
+        not user), NOT by feed identity. So feed A's ``$badfilter`` neutralizes feed B's
+        block (matching uBlock Origin's cross-list ``$badfilter``). Transition test:
+        feed B's block stands ALONE, then feed A's ``$badfilter`` prunes it.
+        """
+        block_b = P.parse_abp("||y.example.com^", provenance=P.RULE_PROV_FEED, feed="FeedB")
+        bad_a = P.parse_abp("||y.example.com^$badfilter", provenance=P.RULE_PROV_FEED, feed="FeedA")
+        assert block_b is not None and bad_a is not None
+        assert block_b.feed == "FeedB" and bad_a.feed == "FeedA"  # genuinely two different feeds
+
+        # BEFORE: feed B's block alone -> the name is blocked.
+        before = P.reconcile([block_b], _TLDS, _EXCLUSION)
+        assert _resolve(before, "y.example.com") == "block"
+        assert before.pruned == 0
+
+        # AFTER: add feed A's $badfilter (different feed, same signature) -> feed B's
+        # block is pruned cross-feed and the name resolves.
+        after = P.reconcile([block_b, bad_a], _TLDS, _EXCLUSION)
+        assert _resolve(after, "y.example.com") == "pass"
+        assert after.pruned == 1
+        assert after.skipped_badfilter == 1
+
+    def test_feed_badfilter_does_not_prune_cross_feed_user_block(self) -> None:
+        """Cross-feed reach is PROVENANCE-bounded: a FEED ``$badfilter`` (feed A) does
+        NOT prune a USER block in feed B with the same signature -- sovereignty holds
+        across feeds, not only within one (the complement of the cross-feed prune above).
+        """
+        user_block_b = P.parse_abp("||y.example.com^", provenance=P.RULE_PROV_USER, feed="FeedB")
+        bad_a = P.parse_abp("||y.example.com^$badfilter", provenance=P.RULE_PROV_FEED, feed="FeedA")
+        assert user_block_b is not None and bad_a is not None
+        res = P.reconcile([user_block_b, bad_a], _TLDS, _EXCLUSION)
+        assert _resolve(res, "y.example.com") == "block"  # user block survives the cross-feed feed $badfilter
+        assert res.pruned == 0
+        assert any(b.band == P.PRIO_USER_BLOCK for b in res.block_domains)
+
 
 # --------------------------------------------------------------------------- #
 # 2. Regex reduction: reducible -> domain rule (== dict form); irreducible stays
