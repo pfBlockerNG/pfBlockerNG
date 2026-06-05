@@ -140,12 +140,23 @@ Prompt: `04_Recipe_Docs_Smoke_DoD.txt`
 
 - Document the worked **HAProxy recipe** (a `post` hook guarded on `PFB_IP_CHANGED`, the exact graceful-reload command, the `source_ip`-ACL + header-ACL config consuming the ADR-11 aggregate + never-empty file) in README/CLAUDE.md. Note the HA-sync behaviour. Finalise §7 manual smoke + reject criteria.
 
+### Phase 5 — Live-VM smoke coverage (post-merge add-on)
+
+No prompt (`RESULTS/05_Results.txt` only). Added the automated live-VM smoke module `tests/smoke/test_smoke_hooks.py` + the "Update hooks" helpers, mapping §7's no-op / pre-post-context / trigger-value / IP-DNSBL-changed / safety items to assertions. No production code touched.
+
+### Phase 6 — Populate `PFB_CHANGED_ALIASES` (IP + DNSBL)
+
+Prompt: `06_Populate_Changed_Aliases.txt`
+
+- Turn the reserved-placeholder `PFB_CHANGED_ALIASES` into the real space-separated list of aliases **updated this pass**, both `pfB_*` (IP) and `DNSBL_*`. **Decision:** semantic = "updated this pass" (the signal the pass already computes — IP `$pfb_alias_lists`, DNSBL the `dnsbl_alias_update('update', …)` per-group seam), **not** a byte-level membership diff and **not** the rep-mode-inflated reloaded set (`$final_alias`); so it is Reputation-mode-independent. **Additive** — a single accumulator collecting names the pass already decided were updated; no new tracking. `PFB_STATUS` stays the reserved `ok` placeholder. A literal member-level diff remains a possible future increment.
+
 ---
 
 ## 7. Definition of done
 
 **Implementation status (2026-06-04): code + docs complete (Phases 1-4 landed on
-`adr/12`); Status stays Proposed pending the maintainer live smoke below.**
+`adr/12`, Phase 5 smoke add-on merged); Status stays Proposed pending the maintainer
+live smoke below. Phase 6 (populate `PFB_CHANGED_ALIASES`) is a later additive follow-up.**
 
 - No enabled hooks ⇒ byte-identical update pass; with hooks, `pre`/`post` fire on all triggers with correct context; a failing/hanging hook is logged + timed out and the update continues. **(Done — `pfb_run_hooks` early-returns with no enabled hooks; `/usr/bin/timeout -s TERM -k 5 <to> /bin/sh -c …` kills a hung hook as a process group, non-zero/timeout log-and-continue. Phase 1.)**
 - `php -l` + PHPStan + ShellCheck clean; `python -m pytest` untouched/green. **(Done — green every phase; ShellCheck N/A, no shell file shipped.)**
@@ -156,7 +167,8 @@ Prompt: `04_Recipe_Docs_Smoke_DoD.txt`
 
 - `PFB_WHEN` = `pre` | `post` (always). `PFB_TRIGGER` ∈ **`cron` | `update` | `force-reload`** — the §2-nominal `force-update` **collapses to `cron`** (GUI Force Update and scheduled cron arrive with an identical `$cron` and are indistinguishable). `update` = a settings save; `force-reload` = a GUI IP-only / DNSBL-only Force Reload.
 - post adds `PFB_IP_CHANGED` / `PFB_DNSBL_CHANGED` (`0`|`1`, **accurate** — derived from `$pfb['filter_configure']` and `$pfbupdate`/`$pfbpython`; these are the flags a recipe guards on).
-- `PFB_STATUS` = `ok` and `PFB_CHANGED_ALIASES` = `''` are **stable reserved placeholders** today: no pass-wide error/partial accumulator or changed-alias list exists, and the ADR forbids inventing tracking machinery. The env-var **names** are stable and always present; **do not branch a recipe on their value**. A future phase may add real accumulation without changing the names.
+- `PFB_CHANGED_ALIASES` — **Phase 1-5: `''` reserved placeholder. Phase 6: populated** with the space-separated list of aliases updated this pass (`pfB_*` IP + `DNSBL_*`), sourced from the signal the pass already computes (IP `$pfb_alias_lists`; DNSBL the `dnsbl_alias_update('update', …)` per-group seam) — semantic = "updated this pass", Reputation-mode-independent, **not** a byte-level membership diff. Empty on a no-op pass.
+- `PFB_STATUS` = `ok` remains a **stable reserved placeholder**: no pass-wide error/partial accumulator exists and the ADR forbids inventing one. Its **name** is stable and always present; **do not branch a recipe on its value**. A future phase may add real status accumulation without changing the name.
 
 ### Reject / pivot criteria (decided)
 
