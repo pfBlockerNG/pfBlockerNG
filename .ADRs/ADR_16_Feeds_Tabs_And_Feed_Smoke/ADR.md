@@ -18,7 +18,9 @@
   for Part A; a new live-VM `tests/smoke/test_smoke_feeds.py` (`-m smoke`) for Part C.
   **Default `python -m pytest` stays unchanged** (the whole `tests/smoke` tree is
   `--ignore`d in default collection). No `pytest` oracle for the PHP itself (it only
-  runs inside pfSense) → validation = the live-VM assertions in §7 + a manual review.
+  runs inside pfSense) → validation = the **automated affected-flow UI tests** on the live VM
+  (§7) — there is **no human manual-smoke gate** (it is replaced by those tests, which may land
+  as a post-initial-merge step).
 
 ---
 
@@ -162,8 +164,9 @@ and asserts the feeds load — exercising the real HTTP-fetch path the suite has
   falsifying with one case first + the demote-to-dispatch switch (§7).
 - **PHP refactor risk** in a 849-line procedural page — mitigated by the behaviour-preserving
   extraction (Phase 1) + the pinned save oracle (Phase 2) before the split (Phase 3).
-- **No automated oracle for the PHP rendering itself** (runs only in pfSense) → a human eyeballs
-  the 3 tabs (manual smoke, §7).
+- **No automated oracle for the PHP rendering itself** (runs only in pfSense) → covered by a
+  `ui_browser` screenshot/render test of the 3 tabs (§7); an optional human glance at the
+  screenshot artifact is review, not a gate.
 - **Sample-feed realism** — generated from the format catalogue, not live feeds; mitigated by
   matching real line shapes (Context 7) and the maintainer optionally seeding real samples.
 
@@ -216,6 +219,13 @@ Each phase = one commit, leaves `python -m pytest` unchanged/green and the tree 
 (Phases 1–3) ships independently of Part C (Phases 4–5), whose HTTP-feed premise is **falsified at
 the head of Phase 5** before the format matrix.
 
+**The affected-flow UI tests replace the old maintainer manual smoke and land as a
+post-initial-merge step.** Part A (Phases 1–3) merges first with its functional + Tier-A render
+tests (the core correctness — the cross-type non-clobber + the per-type render); then Phases 4–6
+add, as a fast-follow, the custom-feed-load smoke (Phase 5) and a `ui_browser` tabs
+render/screenshot test (the visual replacement for the old eyeball, Phase 5). All are automated on
+the live VM (`ui-tests`-labeled) — **Accept rides on them, not on a human** (§7).
+
 ### Phase 1 — PREP (behaviour-preserving): extract per-type rendering helpers
 
 Prompt: `01_Extract_Render_Helpers.txt`
@@ -265,12 +275,13 @@ Prompt: `05_Feed_Load_Smoke.txt`
   the bar, **demote** Part C to dispatch-only and record it (local-file load coverage already
   exists). New `tests/smoke/test_smoke_feeds.py`, marker `smoke`.
 
-### Phase 6 — Docs + DoD + manual smoke
+### Phase 6 — Docs + DoD + finalise the affected-flow UI tests
 
 Prompt: `06_Docs_DoD.txt`
 
 - Update README/CLAUDE.md (the Feeds-page tabs; the smoke feed-set + how to add a format).
-  Finalise §7 manual smoke + reject criteria; set Status after the maintainer confirms.
+  Finalise §7's affected-flow UI-test list (which replaces the manual smoke) + the reject
+  criteria; set Status — Accept rides on those automated tests being green, not on a human.
 
 ---
 
@@ -282,8 +293,9 @@ Prompt: `06_Docs_DoD.txt`
   non-clobber test + the 3 `?type` render entries are green on the live VM.
 - The HTTP-feed load smoke is green for the representative formats (or Part C is demoted to
   dispatch-only with the gap recorded).
-- Status flips **Proposed → Implemented (pending smoke test)** once the above hold on `adr/16`; it
-  flips to **Accepted** only after the maintainer completes the manual smoke below.
+- Status flips **Proposed → Implemented (pending smoke test)** once Part A + its tests hold on
+  `adr/16`; it flips to **Accepted** once the affected-flow UI tests below are green on the live VM
+  (the `ui-tests`-labeled suite) — **no human manual-smoke gate**.
 
 ### Reject / demote criteria (decide on evidence)
 
@@ -297,16 +309,23 @@ Prompt: `06_Docs_DoD.txt`
 - **`_MockFeedServer` can't serve a needed format faithfully** (curl rejects it) → drop that format
   from the smoke set with a note; keep the rest.
 
-### Manual smoke (owner: maintainer) — required before Accept
+### Affected-flow UI tests (replace the manual smoke; land as a post-initial-merge step)
 
-> CI asserts rendering/state/load but not *visual* correctness. Confirm on a live pfSense box.
+> The old maintainer live-box manual smoke is **replaced by automated UI tests** on the ADR-04
+> live VM (`ui-tests`-labeled). They may land as a **fast-follow after Part A's initial merge** —
+> the split + the functional/render tests merge first; these complete the picture and **gate
+> Accept**. (An optional human glance at the browser-tier screenshot artifact is review, not a gate.)
 
-- [ ] **Tabs render.** `Firewall ▸ pfBlockerNG ▸ Feeds` shows a second row `[IPv4 | IPv6 | DNSBL]`;
-  each tab lists only that type's predefined feeds; the bare URL lands on IPv4; the breadcrumb
-  shows the type.
-- [ ] **No clobber.** Rename a feed on the IPv4 tab + Save; switch to DNSBL, rename one + Save;
-  return to IPv4 → the IPv4 rename is **still there** (and vice-versa). Confirms the type-scoped save.
-- [ ] **Custom feed loads (the Part-C journey, by hand).** Add a custom group/feed pointing at a
-  reachable URL (or the mock), Force Update → the IP alias table populates (`pfctl -t <alias> -T
-  show`) / the DNSBL name blocks (`drill @127.0.0.1`). Spot-check one IP and one DNSBL format.
-- [ ] **No regressions.** Existing predefined feeds still save/rename/alt-URL as before on their tab.
+- [ ] **Tabs render (each type, incl. visual).** `feeds_ipv4`/`feeds_ipv6`/`feeds_dnsbl` pass the
+  Tier-A render oracle (Phase 3, with the merge), AND a **`ui_browser` test screenshots each tab +
+  asserts the second sub-tab row `[IPv4 | IPv6 | DNSBL]`** and that each tab lists only its type
+  (Phase 5, post-merge) — the visual replacement for the old eyeball.
+- [ ] **Type-scoped save / no clobber.** The cross-type non-clobber `ui_e2e` test (Phase 3): saving
+  the IPv4 tab leaves DNSBL renames intact, and vice-versa.
+- [ ] **Custom feed loads.** The HTTP-feed load smoke (Phase 5, post-merge): representative IP +
+  DNSBL feeds served over the mock load via Force Update and are asserted on the box
+  (`pfctl_table_members` / `dns_probe`).
+- [ ] **No regressions.** The retargeted per-type rename/alt-URL `ui_e2e`/`ui_browser` tests
+  (Phases 2–3) stay green on the typed URLs.
+
+All run in CI on the live VM; **Accept is when they pass** — there is no human manual-smoke gate.

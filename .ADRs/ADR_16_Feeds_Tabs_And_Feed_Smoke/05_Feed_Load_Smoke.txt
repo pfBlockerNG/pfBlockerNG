@@ -57,11 +57,20 @@ ACTION PLAN (ordered — kill-gate FIRST)
    non-member doesn't; for ABP, the `@@` allow exception must NOT block). Keep each small; reuse
    `CaseContext` for inject→reload→assert→reset isolation.
 4. Ensure session isolation: each case resets the box (CaseContext does); the VM is left clean.
+5. BROWSER-TABS UI TEST (the visual replacement for the old manual smoke; post-merge): add a
+   `ui_browser` test (tests/smoke/ui/, e.g. test_browser_feeds.py or extend test_browser_misc.py)
+   that opens `pfblockerng_feeds.php?type=ipv4|ipv6|dnsbl`, asserts the SECOND sub-tab row
+   `[IPv4 | IPv6 | DNSBL]` is present + the active tab highlighted, asserts each tab lists ONLY its
+   type's feeds, and writes a per-tab screenshot to the `screenshot_dir` artifact (reuse the ADR-14
+   browser-tier `_open`/`_shot`/`browser_page` pattern). This — not a human eyeball — is the
+   affected-flow "tabs render (visual)" coverage in ADR §7.
 
 CONSTRAINTS
 - Tests + fixtures wiring only. No src/ change, no new HTTP server, no second VM path. Reuse
-  `_MockFeedServer`/`mock_feeds`, `IpCase`/`DnsblCase`, `CaseContext`, the existing asserts.
-- Marker `smoke`; stay out of default collection. 4-space, type hints, no bare except.
+  `_MockFeedServer`/`mock_feeds`, `IpCase`/`DnsblCase`, `CaseContext`, the existing asserts, and the
+  ADR-14 browser-tier fixtures/helpers for the tabs test.
+- Markers: `smoke` for the feed-load cases, `ui_browser` for the tabs test; stay out of default
+  collection. 4-space, type hints, no bare except.
 - Probe on-box (`drill @127.0.0.1`); the first post-reload answer is authoritative (don't loop
   for a better one). Inert fixture data only.
 - Do NOT silently cap coverage — if a format is dropped (gate miss or curl rejects it), log/record it.
@@ -70,19 +79,24 @@ VERIFICATION (must all pass before the phase is done)
 - python -m pytest → unchanged (smoke ignored by default); ruff clean.
 - Live smoke: the kill-gate IP + DNSBL HTTP-feed cases pass; (if expanded) each format case
   passes; the §7 reliability numbers are recorded.
+- Live UI (ui-tests label): the `ui_browser` tabs test passes (the 3 tabs render, sub-tab row +
+  per-type listing asserted, screenshots written).
 
 EXPECTED RESULT
-The HTTP feed-fetch path has live coverage: representative IP + DNSBL feeds served over the mock
-load via Force Update and are asserted on the box — OR Part C is demoted to dispatch-only with the
-gap recorded, Part A unaffected.
+The HTTP feed-fetch path has live coverage (representative IP + DNSBL feeds load via Force Update,
+asserted on the box) AND the Feeds tabs have a `ui_browser` render/screenshot test — the automated
+affected-flow coverage that replaces the old manual smoke (ADR §7). If the HTTP load can't hit the
+bar, Part C's load smoke is demoted to dispatch-only (gap recorded); the tabs test + Part A stand.
 
 COMMIT (single)
-    tests: add live mock-feed-over-HTTP load smoke (IP + DNSBL formats) (ADR-16 P5)
+    tests: add mock-feed-over-HTTP load smoke + Feeds-tabs browser test (ADR-16 P5)
 In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`, push
-`adr/16`. Touches tests/ → lands on `devel` via a rebase-only PR. PR body via --body-file.
+`adr/16`. Touches tests/ → lands on `devel` via a rebase-only PR (carry the `ui-tests` label so the
+browser tabs test + the smoke run on the live VM). PR body via --body-file.
 
 HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt` (plain .txt)
 State: the kill-gate result (IP + DNSBL HTTP load pass? the reliability numbers); the GO/DEMOTE
-decision + why; which formats are covered vs dropped (and why); the test function names + how
-they're gated (smoke vs dispatch-only); any HTTP-fetch gotcha (timeouts, egress timing, gzip);
-the go-ahead for Phase 6.
+decision + why; which formats are covered vs dropped (and why); the `ui_browser` tabs test result;
+the test function names + how they're gated (smoke vs dispatch-only vs ui_browser); any HTTP-fetch
+gotcha (timeouts, egress timing, gzip); the go-ahead for Phase 6 — and confirm the affected-flow
+UI tests (§7) that replace the manual smoke are now all in place.
