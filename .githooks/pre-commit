@@ -129,7 +129,7 @@ fi
 if have shellcheck; then
 	step 'shellcheck'
 	find src scripts -name '*.sh' | sort \
-		| xargs shellcheck --severity=warning || failed 'shellcheck'
+		| xargs shellcheck --severity=info || failed 'shellcheck'
 else
 	skip shellcheck
 fi

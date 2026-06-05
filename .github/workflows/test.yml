@@ -158,7 +158,9 @@ jobs:
       - name: Run ShellCheck
         # .shellcheckrc in the repo root configures suppressions. Scoped to src+scripts;
         # tests/ shellspec specs trip SC2034 false-positives (separate cleanup).
-        run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=warning
+        # --severity=info also gates the unquoted-variable class (SC2086) so the
+        # quoting / word-splitting bugs the shell audit found cannot silently regress.
+        run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=info
 
       - name: Forbid naked $var in curl/wget/fetch URLs
         # Preventative: a query value jammed straight into a URL (`?ip=$VAR`) breaks

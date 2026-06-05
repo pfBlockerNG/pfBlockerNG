@@ -42,6 +42,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Pure precondition tests; the || branch (usage + exit) is the intended else and
+# the && chain is side-effect-free, so SC2015's "C may run when A is true" caveat
+# does not apply here.
+# shellcheck disable=SC2015
 [ -n "$PORTS" ] && [ -n "$GH_TAGNAME" ] || {
     echo "Usage: $0 --ports <freebsd-ports> --gh-tagname <commit-sha> [--channel devel|stable] [--out <dir>]" >&2
     exit 2
