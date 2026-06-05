@@ -10,9 +10,11 @@ All-IDN). So here we extract the inline decision into a pure unit and pin its co
   - IDN_MODE_ALL        : EVERY xn-- query is blocked as feed="IDN"/group="DNSBL_IDN"
                           (pure prefix match, no punycode decode) -- byte-identical to the
                           pre-ADR ``cfg["python_idn"] and is_idn_domain(q_name)`` branch.
-  - IDN_MODE_CONFUSABLE : INERT this phase -- behaves EXACTLY like OFF (no analyzer yet;
-                          it is wired in Phase 5). Pinned so a later wiring change that
-                          accidentally activated it on this branch goes red here first.
+  - IDN_MODE_CONFUSABLE : LIVE since Phase 5 -- the TR39 analyzer is wired, so it blocks
+                          ONLY genuine cross-script homographs (not block-all). The All/Off
+                          arms below are STILL byte-identical to today (the no-regression
+                          contract); full Confusable tier coverage is in
+                          tests/test_adr08_confusable_matcher.py.
 
 Non-IDN queries are unaffected in EVERY mode (no xn-- => the IDN branch is never taken).
 
@@ -119,11 +121,12 @@ class TestIdnModeDecisionUnit:
         for q in _IDN_QUERIES + _NON_IDN_QUERIES:
             assert idn_mode_decision(q, IDN_MODE_OFF) is False, q
 
-    def test_confusable_mode_is_inert_this_phase(self) -> None:
-        # Confusable is a RECOGNISED mode but behaves as OFF until the Phase-5 analyzer
-        # lands: it must NOT block any xn-- query yet (would be a premature activation).
+    def test_idn_mode_decision_is_the_all_gate_only(self) -> None:
+        # ``idn_mode_decision`` is the All-IDN / Off gate ONLY: it blocks IFF All-IDN on an
+        # xn-- query. The Confusable tier is decided by ``idn_confusable_action`` (Phase 5),
+        # NOT here -- so this gate stays False for CONFUSABLE (the All/Off arm is unchanged).
         for q in _IDN_QUERIES:
-            # Sanity: All-IDN WOULD block these, so a green here proves Confusable is the
+            # Sanity: All-IDN WOULD block these, so a green here proves the mode value is the
             # cause of the non-block, not an always-False input.
             assert idn_mode_decision(q, IDN_MODE_ALL) is True, q
             assert idn_mode_decision(q, IDN_MODE_CONFUSABLE) is False, q
@@ -166,14 +169,22 @@ class TestEvaluateDomainIdnBaselineGolden:
             assert _evaluate(q, idn_mode=IDN_MODE_ALL).is_found is True, q  # before-state
             assert _evaluate(q, idn_mode=IDN_MODE_OFF).is_found is False, q
 
-    def test_confusable_is_inert_and_resolves_like_off(self) -> None:
-        # Given Confusable mode (INERT this phase); When an xn-- query is evaluated; Then
-        # it resolves exactly as in Off -- the analyzer is not wired until Phase 5. The
-        # All-IDN assertion first pins that these queries WOULD block, so green proves the
-        # Confusable branch is the inert cause.
+    def test_confusable_blocks_only_the_homograph_not_every_idn(self) -> None:
+        # Phase 5 wires the analyzer: Confusable is no longer inert. It must block ONLY the
+        # genuine cross-script homograph (xn--pple-43d = аpple, Latin+Cyrillic), while the
+        # other IDN forms in the All-IDN set resolve -- the surgical-vs-blunt contract. The
+        # All-IDN before-state pins that ALL of these block under All-IDN, so green proves
+        # Confusable's analyzer (not the input) narrows the block to the homograph. Full
+        # severity-tier coverage lives in tests/test_adr08_confusable_matcher.py; this guard
+        # just pins that Confusable diverges from All-IDN (no longer inert / block-all).
+        homograph = "xn--pple-43d.com"  # аpple -- Latin+Cyrillic, MALICIOUS
         for q in _IDN_QUERIES:
             assert _evaluate(q, idn_mode=IDN_MODE_ALL).is_found is True, q  # before-state
-            assert _evaluate(q, idn_mode=IDN_MODE_CONFUSABLE).is_found is False, q
+        # Only the homograph blocks under Confusable; the rest are not block-all'd.
+        assert _evaluate(homograph, idn_mode=IDN_MODE_CONFUSABLE).is_found is True
+        for q in _IDN_QUERIES:
+            if q != homograph:
+                assert _evaluate(q, idn_mode=IDN_MODE_CONFUSABLE).is_found is False, q
 
     def test_non_idn_unaffected_in_every_mode(self) -> None:
         # Non-IDN queries (no xn-- label) are never touched by the IDN branch, in ANY mode.

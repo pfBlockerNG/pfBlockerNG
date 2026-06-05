@@ -267,11 +267,11 @@ def classify_idn(q_name: str) -> NameVerdict:
     malicious subdomain label makes the whole name malicious). ``offending`` carries
     the offending scripts of the worst label for logging.
     """
+    # str.split(".") is ALWAYS non-empty (even "" -> [""]) so verdicts[0] exists --
+    # init worst non-Optional so a type checker doesn't read it as possibly-None.
     verdicts = tuple(classify_label(lbl) for lbl in q_name.split("."))
-    worst = verdicts[0] if verdicts else None
+    worst = verdicts[0]
     for v in verdicts[1:]:
         if _SEV_ORDER[v.severity] > _SEV_ORDER[worst.severity]:
             worst = v
-    severity = worst.severity if worst is not None else SEV_LEGIT
-    offending = worst.offending if worst is not None else frozenset()
-    return NameVerdict(a_name=q_name, labels=verdicts, severity=severity, offending=offending)
+    return NameVerdict(a_name=q_name, labels=verdicts, severity=worst.severity, offending=worst.offending)
