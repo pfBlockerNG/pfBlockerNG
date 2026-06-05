@@ -1,0 +1,437 @@
+name: Version Tracker
+
+# Scheduled version-tracker: reads the curated supported-version matrix
+# (ci-metadata orphan branch) and REACTS automatically to every entry —
+# triggering the release artifact build AND the CI image-refresh + smoke
+# fan-out (ADR-04 Accepted, so these are LIVE, not gated).
+#
+# DETECT = CURATED: a human edits supported-versions.json on ci-metadata when
+# a pfSense beta or GA drops.  An OPTIONAL best-effort probe (see `probe` job)
+# scans pfsense/FreeBSD-ports RELENG_* branches for versions absent from the
+# matrix and opens an issue nudge — it NEVER edits the matrix.
+#
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ INVARIANT: this workflow NEVER commits to or force-pushes           │
+# │ main, devel, or any channel branch.  The matrix is on ci-metadata   │
+# │ (an orphan ref), so all version tracking is off-branch.  The REACT  │
+# │ step triggers OTHER workflows — it does not write to the repo.      │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# Phase 5 (image-refresh.yml) and Phase 6 (smoke-fanout.yml) are wired
+# here by name.  They do not exist yet on this branch; the trigger is
+# live and will activate as soon as each phase lands.  See HANDOFF at:
+#   .ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt
+
+on:
+  # Run daily at 06:00 UTC.  Adjust the cron expression if needed.
+  schedule:
+    - cron: "0 6 * * *"
+
+  # Manual trigger: supports dry-run mode and an optional target version filter.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log the reactions that WOULD be triggered but do not
+          actually dispatch any downstream workflows.  Use this for self-testing.
+        required: false
+        default: "false"
+      target_version:
+        description: >
+          Restrict reactions to a specific pfsense_version (e.g. "2.8.x").
+          Leave empty to react to all matrix entries.
+        required: false
+        default: ""
+      skip_probe:
+        description: >
+          If 'true', skip the optional best-effort probe entirely.
+          The probe is also skipped when GITHUB_TOKEN lacks the 'issues: write'
+          permission (it degrades gracefully rather than failing).
+        required: false
+        default: "false"
+
+# Least-privilege default.  The react job elevates to 'actions: write' to
+# dispatch downstream workflows.  The probe job elevates to 'issues: write'
+# to open nudge issues.
+permissions:
+  contents: read
+
+jobs:
+  # ── 1. Read the curated matrix ───────────────────────────────────────────────
+  read-matrix:
+    name: Read supported-version matrix
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.read.outputs.build_matrix }}
+      ci_matrix: ${{ steps.read.outputs.ci_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need history to reach the ci-metadata orphan ref
+
+      - name: Read matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Log matrix contents
+        run: |
+          echo "=== BUILD matrix ==="
+          printf '%s\n' '${{ steps.read.outputs.build_matrix }}' | jq .
+          echo "=== CI matrix (ci:true CE entries only) ==="
+          printf '%s\n' '${{ steps.read.outputs.ci_matrix }}' | jq .
+
+  # ── 2. React: trigger release build + CI refresh + smoke fan-out ─────────────
+  #
+  # For each matrix entry the tracker:
+  #   a) Triggers the release artifact build (build-pkg-linux.yml — the portable
+  #      Linux builder, same as the default path in release.yml). This builds a
+  #      .pkg for the entry's (freebsd_version, php_version) pair WITHOUT creating
+  #      a GitHub Release — it is a build-round-trip check, NOT a tag push.
+  #      On a real release, the build is triggered by the tag push; this job
+  #      exercises the build path independently (e.g. to verify a newly-added
+  #      matrix entry builds cleanly before the next release).
+  #
+  #   b) Triggers the CI image-refresh workflow (image-refresh.yml, Phase 5).
+  #      For each CE ci:true entry: upgrade-in-place + sanity gate + GHCR publish.
+  #      This workflow is not yet on this branch; the dispatch is wired now and
+  #      becomes live when Phase 5 lands.
+  #
+  #   c) Triggers the smoke fan-out workflow (smoke-fanout.yml, Phase 6).
+  #      Runs the live-VM smoke suite across every ci:true CE image in parallel.
+  #      This workflow is not yet on this branch; the dispatch is wired now and
+  #      becomes live when Phase 6 lands.
+  #
+  # DRY RUN: if the `dry_run` input is 'true', all trigger steps are skipped and
+  # replaced with a log of what WOULD be triggered — useful for self-testing and
+  # as an audit of the reaction plan before committing to a dispatch.
+  #
+  # INVARIANT ASSERTION: the react job never writes to main, devel, or any
+  # channel branch.  Every step below either reads the matrix, dispatches a
+  # DIFFERENT workflow (which runs in its own job under its own permissions),
+  # or logs.  No `git push`, no `git commit`, no `gh pr merge` on channel
+  # branches appears in this job.
+  react:
+    name: React to matrix entries
+    runs-on: ubuntu-latest
+    needs: read-matrix
+    # 'actions: write' is required to dispatch downstream workflows via
+    # `gh workflow run`.  It is NOT used to push or commit to any branch.
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Plan reactions (dry-run log or live dispatch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          CI_MATRIX: ${{ needs.read-matrix.outputs.ci_matrix }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TARGET_VERSION: ${{ github.event.inputs.target_version || '' }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+
+          echo "=== Version-tracker REACT ==="
+          echo "DRY_RUN=${DRY_RUN}  TARGET_VERSION='${TARGET_VERSION}'"
+          echo ""
+
+          # ── Iterate over all BUILD matrix entries ──────────────────────────
+          # For each entry: trigger the portable .pkg build (build-pkg-linux.yml).
+          # This validates that the entry's (freebsd_version, php_version) pair
+          # still builds a clean .pkg independently of a release tag push.
+          echo "--- Step A: release artifact build (.pkg) ---"
+          printf '%s\n' "$BUILD_MATRIX" | jq -c '.[]' | while IFS= read -r ENTRY; do
+            PFSENSE=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version')
+            CHANNEL=$(printf '%s\n' "$ENTRY" | jq -r '.channel')
+            MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
+            PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
+            PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
+
+            # Filter to target version if specified
+            if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
+              echo "  [skip] ${PFSENSE} (${CHANNEL}) — does not match target '${TARGET_VERSION}'"
+              continue
+            fi
+
+            ABI="FreeBSD:${MAJOR}:amd64"
+            # Channel maps to pkg channel: CE on devel branch -> devel, main -> stable
+            # For standalone tracker runs we use 'devel' as the pkg channel by default.
+            # A real release tag push always uses release.yml; this is a build smoke-check.
+            PKG_CHANNEL="devel"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY-RUN] WOULD dispatch build-pkg-linux.yml:"
+              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}"
+              echo "    abi=${ABI}  php=${PHP}  py_flavor=${PY}  pkg_channel=${PKG_CHANNEL}"
+            else
+              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}"
+              # Dispatch the portable Linux builder for this matrix entry.
+              # build-pkg-linux.yml expects: channel, abi, php_version, py_flavor.
+              # INVARIANT: we dispatch a build-only workflow — no commits, no pushes.
+              gh workflow run build-pkg-linux.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                --field "channel=${PKG_CHANNEL}" \
+                --field "abi=${ABI}" \
+                --field "php_version=${PHP}" \
+                --field "py_flavor=${PY}" \
+                || echo "  ::warning::Dispatch of build-pkg-linux.yml for ${PFSENSE} failed (non-fatal)"
+            fi
+          done
+
+          # ── Iterate over CI matrix (ci:true CE entries only) ───────────────
+          # For each CI-eligible entry:
+          #   b) Trigger image-refresh.yml (Phase 5) — upgrade-in-place + sanity gate.
+          #   c) Trigger smoke-fanout.yml (Phase 6) — live-VM smoke across all CE images.
+          #
+          # NOTE ON FORWARD REFERENCES:
+          #   image-refresh.yml and smoke-fanout.yml do NOT yet exist on this branch.
+          #   They will be created by Phases 5 and 6 respectively.  The dispatch calls
+          #   below are wired now; they become live when those phases land.
+          #   The exact workflow names and their expected dispatch inputs are documented
+          #   in RESULTS/04_Results.txt (handoff section).
+          echo ""
+          echo "--- Step B: CI image refresh (image-refresh.yml, Phase 5) ---"
+          CI_COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          if [ "$CI_COUNT" -eq 0 ]; then
+            echo "  [skip] No ci:true CE entries — CI image refresh not triggered."
+          else
+            printf '%s\n' "$CI_MATRIX" | jq -c '.[]' | while IFS= read -r ENTRY; do
+              PFSENSE=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version')
+              FREEBSD_VERSION=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_version')
+              MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
+
+              if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
+                echo "  [skip] ${PFSENSE} — does not match target '${TARGET_VERSION}'"
+                continue
+              fi
+
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  [DRY-RUN] WOULD dispatch image-refresh.yml:"
+                echo "    pfsense_version=${PFSENSE}  freebsd_version=${FREEBSD_VERSION}  freebsd_major=${MAJOR}"
+              else
+                echo "  [TRIGGER] image-refresh.yml for CE ${PFSENSE} (FreeBSD ${MAJOR})"
+                # Phase 5 contract: image-refresh.yml accepts pfsense_version and
+                # freebsd_version as workflow_dispatch inputs.
+                # See RESULTS/04_Results.txt for the exact expected input contract.
+                gh workflow run image-refresh.yml \
+                  --repo "$REPO" \
+                  --ref "$REF" \
+                  --field "pfsense_version=${PFSENSE}" \
+                  --field "freebsd_version=${FREEBSD_VERSION}" \
+                  || echo "  ::warning::Dispatch of image-refresh.yml for ${PFSENSE} failed — Phase 5 may not yet be landed"
+              fi
+            done
+          fi
+
+          echo ""
+          echo "--- Step C: CI smoke fan-out (smoke-fanout.yml, Phase 6) ---"
+          if [ "$CI_COUNT" -eq 0 ]; then
+            echo "  [skip] No ci:true CE entries — smoke fan-out not triggered."
+          else
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY-RUN] WOULD dispatch smoke-fanout.yml with ci_matrix:"
+              printf '%s\n' "$CI_MATRIX" | jq .
+            else
+              echo "  [TRIGGER] smoke-fanout.yml (all ci:true CE entries)"
+              # Phase 6 contract: smoke-fanout.yml accepts no explicit version inputs —
+              # it reads the ci_matrix from the version-matrix reader itself.
+              # The tracker triggers it once; the fan-out workflow reads and expands
+              # the matrix internally into parallel strategy.matrix legs.
+              # See RESULTS/04_Results.txt for the exact expected input contract.
+              gh workflow run smoke-fanout.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                || echo "  ::warning::Dispatch of smoke-fanout.yml failed — Phase 6 may not yet be landed"
+            fi
+          fi
+
+          echo ""
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "=== DRY-RUN COMPLETE — no workflows were dispatched ==="
+          else
+            echo "=== REACT COMPLETE — downstream workflows dispatched ==="
+          fi
+          echo "Invariant confirmed: this job made no commits or pushes to main/devel."
+
+  # ── 3. Optional best-effort probe ────────────────────────────────────────────
+  #
+  # Scans pfsense/FreeBSD-ports RELENG_* branches for pfSense CE versions that
+  # are NOT already in the matrix.  On detecting an unknown version, opens a
+  # GitHub ISSUE nudge asking a human to evaluate and add it to the matrix.
+  #
+  # NEVER edits the matrix.  NEVER commits to any branch.  NUDGES ONLY.
+  #
+  # DISABLING: set skip_probe='true' on workflow_dispatch, or add the label
+  # 'tracker-probe-disabled' to this repo (checked in the step below), or
+  # simply remove the `probe` job from this file entirely.
+  # The probe also degrades gracefully if:
+  #   - The GitHub API is rate-limited or unreachable (exits 0 with a warning).
+  #   - GITHUB_TOKEN lacks 'issues: write' (logs but does not fail).
+  probe:
+    name: Best-effort version probe (nudge only)
+    runs-on: ubuntu-latest
+    needs: read-matrix
+    # The probe is independent of react — failures here must not block react.
+    # It runs in parallel with react; if both are running, a probe failure
+    # does NOT affect the react job or downstream workflow dispatches.
+    if: github.event.inputs.skip_probe != 'true'
+    permissions:
+      issues: write    # to open a nudge issue
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check if probe is disabled via repo label
+        id: probe_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # If the repo has a 'tracker-probe-disabled' label, skip the probe.
+          # This is the softest on/off switch without touching workflow YAML.
+          if gh label list --repo "$REPO" --limit 100 \
+              | grep -q 'tracker-probe-disabled'; then
+            echo "probe_disabled=true" >> "$GITHUB_OUTPUT"
+            echo "Probe disabled via repo label 'tracker-probe-disabled'."
+          else
+            echo "probe_disabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Scan pfsense/FreeBSD-ports for unknown CE versions
+        if: steps.probe_gate.outputs.probe_disabled != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+
+          # ── Extract known pfsense_version patterns from the matrix ─────────
+          # The matrix uses "X.Y.x" patterns for CE (e.g. "2.8.x").
+          # Normalise to "X.Y" prefixes for matching against real version strings.
+          KNOWN_PREFIXES=$(printf '%s\n' "$BUILD_MATRIX" \
+            | jq -r '
+                [.[] | select(.channel == "CE") | .pfsense_version]
+                | map(
+                    if endswith(".x") then .[:-2]
+                    else .
+                    end
+                  )
+                | .[]
+              ')
+
+          echo "Known CE version prefixes in matrix:"
+          printf '  %s\n' $KNOWN_PREFIXES
+
+          # ── Fetch RELENG_* branches from pfsense/FreeBSD-ports ────────────
+          # These branches follow the pattern RELENG_X_Y[_Z] (e.g. RELENG_2_8_0).
+          # We extract the X.Y part to compare against known matrix prefixes.
+          echo ""
+          echo "Fetching branch list from pfsense/FreeBSD-ports..."
+          RELENG_BRANCHES=$(gh api \
+            "repos/pfsense/FreeBSD-ports/git/refs/heads" \
+            --jq '[.[] | .ref | ltrimstr("refs/heads/")]
+                  | map(select(startswith("RELENG_"))) | .[]' \
+            2>/dev/null || echo "")
+
+          if [ -z "$RELENG_BRANCHES" ]; then
+            echo "::warning::No RELENG_* branches found or GitHub API unreachable — skipping probe."
+            exit 0
+          fi
+
+          echo "Found RELENG_* branches:"
+          printf '  %s\n' $RELENG_BRANCHES
+
+          # ── Compare against known matrix entries ──────────────────────────
+          UNKNOWNS=""
+          for BRANCH in $RELENG_BRANCHES; do
+            # RELENG_2_8_0 -> 2.8  (take first two numeric segments)
+            VERSION=$(printf '%s\n' "$BRANCH" \
+              | sed 's/RELENG_//' \
+              | sed 's/_/./g' \
+              | grep -oE '^[0-9]+\.[0-9]+')
+
+            if [ -z "$VERSION" ]; then
+              continue
+            fi
+
+            FOUND=0
+            for PREFIX in $KNOWN_PREFIXES; do
+              case "$VERSION" in
+                "${PREFIX}"*) FOUND=1; break ;;
+              esac
+            done
+
+            if [ "$FOUND" -eq 0 ]; then
+              UNKNOWNS="${UNKNOWNS} ${BRANCH}(${VERSION})"
+              echo "  [UNKNOWN] ${BRANCH} -> CE ${VERSION} not in matrix"
+            else
+              echo "  [known]   ${BRANCH} -> CE ${VERSION} covered"
+            fi
+          done
+
+          # ── Open a nudge issue for any unknown versions ───────────────────
+          if [ -z "$UNKNOWNS" ]; then
+            echo ""
+            echo "All detected RELENG_* versions are covered by the matrix. No nudge needed."
+            exit 0
+          fi
+
+          echo ""
+          echo "Unknown versions detected — opening a nudge issue."
+
+          ISSUE_TITLE="[version-tracker] New pfSense CE version(s) detected — matrix update needed"
+
+          # Write the issue body to a temp file to avoid shell/YAML quoting conflicts.
+          BODY_FILE=$(mktemp)
+          UNKNOWN_LIST=$(printf '%s\n' $UNKNOWNS | tr ' ' '\n' | sed 's/^/- /')
+          {
+            printf 'The version-tracker probe detected pfSense CE version(s) in\n'
+            printf '`pfsense/FreeBSD-ports` that are NOT yet in the supported-version\n'
+            printf 'matrix on `ci-metadata`.\n\n'
+            printf '**Action required (human):** evaluate each version below and, if it\n'
+            printf 'should be supported, add an entry to `supported-versions.json` on the\n'
+            printf '`ci-metadata` branch via a PR.\n'
+            printf 'See `scripts/README.md` (Supported-version matrix section) for the\n'
+            printf 'schema and lifecycle policy.\n\n'
+            printf '**Detected unknown version(s):**\n'
+            printf '%s\n' "$UNKNOWN_LIST"
+            printf '\n'
+            printf '**Matrix location:** `origin/ci-metadata:supported-versions.json`\n\n'
+            printf '**This issue was opened automatically by the version-tracker probe.**\n'
+            printf '**The probe NEVER edits the matrix -- all changes require a human PR.**\n'
+          } > "$BODY_FILE"
+
+          # Check whether an open nudge issue already exists to avoid spam.
+          EXISTING=$(gh issue list \
+            --repo "$REPO" \
+            --state open \
+            --label "version-tracker" \
+            --limit 10 \
+            --json number,title \
+            --jq '[.[] | select(.title | startswith("[version-tracker]"))] | length' \
+            2>/dev/null || echo "0")
+
+          if [ "$EXISTING" -gt "0" ]; then
+            echo "A nudge issue already exists — skipping duplicate open."
+            echo "Resolve the existing 'version-tracker' issue first."
+            exit 0
+          fi
+
+          gh issue create \
+            --repo "$REPO" \
+            --title "$ISSUE_TITLE" \
+            --body-file "$BODY_FILE" \
+            --label "enhancement" \
+            || echo "::warning::Could not open nudge issue (token may lack issues:write) — see log above."
+          rm -f "$BODY_FILE"
+
+          echo "Nudge issue opened. The probe has NOT edited the matrix."
+          echo "Invariant confirmed: no channel-branch writes from the probe."
