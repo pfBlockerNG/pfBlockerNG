@@ -2134,6 +2134,28 @@ def member_present(members: list[str], ip: str) -> bool:
     return ip in members or any(m.split("/", 1)[0] == ip for m in members)
 
 
+def member_covers(members: list[str], ip: str) -> bool:
+    """True iff ``ip`` is CONTAINED in any member entry, treating each as a network.
+
+    Stronger than :func:`member_present` (which matches an exact IP or a member's network
+    *address*): this tests CIDR containment, needed when an aggregate's ``iprange`` collapse
+    has folded ``ip`` into a SUPERNET. E.g. an aggregate holding ``198.51.100.16/31`` covers
+    both ``.16`` and ``.17`` — an exact check for ``.17`` misses it, but ``.17`` is genuinely
+    in the set. Malformed members / a bad ``ip`` are skipped (return False), never raise.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for m in members:
+        try:
+            if addr in ipaddress.ip_network(m, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # Diagnostics — dump live box state on a failed case (printed to the CI log)
 # --------------------------------------------------------------------------- #
