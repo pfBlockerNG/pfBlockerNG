@@ -145,12 +145,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$csvline might not be defined\.$#'
-			identifier: variable.undefined
-			count: 14
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
