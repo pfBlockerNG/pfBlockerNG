@@ -9103,6 +9103,10 @@ function sync_package_pfblockerng($cron='') {
 													$line = strstr($line, ' #', TRUE);
 												}
 
+												// Default per line so $csvline is defined for the count()/index reads below;
+												// str_getcsv overwrites it whenever the CSV path runs. Behaviour-preserving.
+												$csvline = array();
+
 												// Convert CSV line into array
 												if ($csv_parser) {
 													$csvline = str_getcsv($line, ',', '"', '"');
