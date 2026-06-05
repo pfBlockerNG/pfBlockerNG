@@ -817,12 +817,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
-			message: '#^Variable \$active might not be defined\.$#'
-			identifier: variable.undefined
-			count: 5
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
 			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
@@ -868,18 +862,6 @@ parameters:
 			message: '#^Variable \$pre might not be defined\.$#'
 			identifier: variable.undefined
 			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$suffix might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 18
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-

@@ -150,14 +150,14 @@ if (isset($_POST)) {
 }
 
 // Define variables for page
-// Default so $conf_type is defined even when $gtype is empty (the switch below, which
-// sets it for every type, runs only inside this guard). Behaviour-preserving: an
-// undefined $conf_type already interpolated to '' in the config paths.
-$conf_type = '';
+// Default the per-type variables so they are defined even when $gtype is empty (the
+// switch below, which sets them for every type, runs only inside this guard).
+// Behaviour-preserving: an undefined value already read as '' / the all-FALSE tab set.
+$conf_type	= '';
+$type		= '';
+$suffix		= '';
+$active		= array('ip' => FALSE, 'ipv4' => FALSE, 'ipv6' => FALSE, 'dnsbl' => FALSE, 'feeds' => FALSE);
 if (!empty($gtype)) {
-
-	// Set 'active' GUI Tabs
-	$active = array('ip' => FALSE, 'ipv4' => FALSE, 'ipv6' => FALSE, 'dnsbl' => FALSE, 'feeds' => FALSE);
 
 	switch ($gtype) {
 		case 'ipv4':
