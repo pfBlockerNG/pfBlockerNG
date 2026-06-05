@@ -49,12 +49,19 @@ keep green): the IPv4 alias ``PRI1`` (field ``feed_pri1``), the IPv6 alias ``PRI
 (field ``feed_pri1_6``), and the DNSBL group ``ADs`` (field ``feed_ads``). All three
 are written to ``installedpackages/pfblockerngglobal/feed_<lower(aliasname)>``.
 
-These tests pin TODAY's behaviour on the CURRENT single all-types Feeds page (the
-save loops EVERY type, and :meth:`WebUI.post` re-scrapes and re-POSTs every other
-``feed_*`` field at its present value, so a one-field override here does NOT clobber
-the others). They are the oracle; they must NOT pre-encode the Phase-3 sub-tab split.
-The cross-type non-clobber case (which only becomes possible once a partial,
-single-type POST exists) is added beside these in Phase 3.
+ADR-16 Phase 3 -- the split + type-scoped save. ``pfblockerng_feeds.php`` is now three
+``?type=ipv4|ipv6|dnsbl`` sub-tabs: only the active type renders, and the save loops
+ONLY ``$pfb['feeds_list'][$type]`` (the active type, carried in a hidden ``type`` form
+field). The per-type rename oracles below are retargeted to the typed URL of the type
+they pin (IPv4 -> ``?type=ipv4``, IPv6 -> ``?type=ipv6``, DNSBL -> ``?type=dnsbl``); the
+type-scoped save must keep them green. :meth:`WebUI.post` re-scrapes the typed page, so
+it re-POSTs only that type's fields plus the hidden ``type`` -- a partial, single-type
+POST, which is what makes the cross-type non-clobber test below possible.
+
+``test_feed_rename_cross_type_save_does_not_clobber`` is the headline contract guarantee
+(ADR §2 A3): saving the IPv4 tab leaves a DNSBL rename intact, and saving the DNSBL tab
+leaves an IPv4 rename intact -- proven a real transition in BOTH directions (seed both,
+assert both present, POST one type, assert the OTHER unchanged; and vice-versa).
 
 Save-handler quirk pinned here: the >24-char "Alternate Aliasname" length guard is
 skipped for DNSBL aliases (``!in_array(..., $feeds_list['dnsbl'])``), so the DNSBL
@@ -76,7 +83,13 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.ui_e2e
 
+# The Feeds page is split into ?type sub-tabs (ADR-16 Phase 3); each rename oracle posts
+# to the typed URL of the type it pins, so the page renders that type's fields and the
+# save is scoped to it.
 FEEDS_PAGE = "/pfblockerng/pfblockerng_feeds.php"
+FEEDS_PAGE_IPV4 = f"{FEEDS_PAGE}?type=ipv4"
+FEEDS_PAGE_IPV6 = f"{FEEDS_PAGE}?type=ipv6"
+FEEDS_PAGE_DNSBL = f"{FEEDS_PAGE}?type=dnsbl"
 
 # A pre-defined IPv4 alias shipped in pfblockerng_feeds.json. The page renders its
 # rename input as feed_<lower(aliasname)>, and the save writes the override to
@@ -147,8 +160,8 @@ def test_feed_rename_save_changes_effective_config(webui: WebUI, smoke_vm: helpe
             f"{RENAME_CFG} is not empty before the rename POST (expected the default-name state)"
         )
 
-        # RENAME via the real CSRF form; the page must persist the override.
-        resp = webui.post(FEEDS_PAGE, {RENAME_FIELD: RENAME_VALID}, timeout=120.0)
+        # RENAME via the real CSRF form (IPv4 tab); the page must persist the override.
+        resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: RENAME_VALID}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "Feeds rename POST returned the login form (session lost)"
         assert helpers.config_get(vm, RENAME_CFG) == RENAME_VALID, (
             f"{RENAME_CFG} did not become {RENAME_VALID!r} after the rename POST (oracle: config.xml, not HTTP body)"
@@ -156,7 +169,7 @@ def test_feed_rename_save_changes_effective_config(webui: WebUI, smoke_vm: helpe
 
         # RESTORE via the form: clear the override (empty value is accepted and
         # writes the default-name state back) -- proves the reverse transition.
-        resp = webui.post(FEEDS_PAGE, {RENAME_FIELD: ""}, timeout=120.0)
+        resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: ""}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "Feeds rename-restore POST returned the login form"
         assert helpers.config_get(vm, RENAME_CFG) == "", (
             f"{RENAME_CFG} did not return to the default-name state after clearing the override"
@@ -182,7 +195,7 @@ def test_feed_rename_invalid_alias_is_rejected_config_unchanged(webui: WebUI, sm
     seeded = "PRI1seed"
     # Seed a known, valid override via the form so there is a concrete before-value
     # that a (wrongly) accepted bad POST would overwrite.
-    resp = webui.post(FEEDS_PAGE, {RENAME_FIELD: seeded}, timeout=120.0)
+    resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: seeded}, timeout=120.0)
     assert not looks_like_login_page(resp.text), "Feeds seed POST returned the login form (session lost)"
     try:
         # BEFORE: the seeded override is in effect.
@@ -191,7 +204,7 @@ def test_feed_rename_invalid_alias_is_rejected_config_unchanged(webui: WebUI, sm
         )
 
         # REJECT: a space makes the alias invalid -> the save aborts with no write.
-        resp = webui.post(FEEDS_PAGE, {RENAME_FIELD: RENAME_INVALID}, timeout=120.0)
+        resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: RENAME_INVALID}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "Feeds invalid-alias POST returned the login form"
 
         # AFTER: config.xml is UNCHANGED -- the invalid POST wrote nothing.
@@ -223,8 +236,8 @@ def test_feed_rename_ipv6_save_changes_effective_config(webui: WebUI, smoke_vm: 
             f"{RENAME6_CFG} is not empty before the rename POST (expected the default-name state)"
         )
 
-        # RENAME via the real CSRF form; the page must persist the override.
-        resp = webui.post(FEEDS_PAGE, {RENAME6_FIELD: RENAME6_VALID}, timeout=120.0)
+        # RENAME via the real CSRF form (IPv6 tab); the page must persist the override.
+        resp = webui.post(FEEDS_PAGE_IPV6, {RENAME6_FIELD: RENAME6_VALID}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "IPv6 rename POST returned the login form (session lost)"
         assert helpers.config_get(vm, RENAME6_CFG) == RENAME6_VALID, (
             f"{RENAME6_CFG} did not become {RENAME6_VALID!r} after the rename POST (oracle: config.xml, not HTTP body)"
@@ -232,7 +245,7 @@ def test_feed_rename_ipv6_save_changes_effective_config(webui: WebUI, smoke_vm: 
 
         # RESTORE via the form: clearing the override writes the default-name state
         # back -- proves the reverse transition.
-        resp = webui.post(FEEDS_PAGE, {RENAME6_FIELD: ""}, timeout=120.0)
+        resp = webui.post(FEEDS_PAGE_IPV6, {RENAME6_FIELD: ""}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "IPv6 rename-restore POST returned the login form"
         assert helpers.config_get(vm, RENAME6_CFG) == "", (
             f"{RENAME6_CFG} did not return to the default-name state after clearing the override"
@@ -261,8 +274,8 @@ def test_feed_rename_dnsbl_save_changes_effective_config(webui: WebUI, smoke_vm:
             f"{DNSBL_RENAME_CFG} is not empty before the rename POST (expected the default-name state)"
         )
 
-        # RENAME via the real CSRF form; the page must persist the override.
-        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: DNSBL_RENAME_VALID}, timeout=120.0)
+        # RENAME via the real CSRF form (DNSBL tab); the page must persist the override.
+        resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: DNSBL_RENAME_VALID}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "DNSBL rename POST returned the login form (session lost)"
         assert helpers.config_get(vm, DNSBL_RENAME_CFG) == DNSBL_RENAME_VALID, (
             f"{DNSBL_RENAME_CFG} did not become {DNSBL_RENAME_VALID!r} after the rename POST "
@@ -271,7 +284,7 @@ def test_feed_rename_dnsbl_save_changes_effective_config(webui: WebUI, smoke_vm:
 
         # RESTORE via the form: clearing the override writes the default-name state
         # back -- proves the reverse transition.
-        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: ""}, timeout=120.0)
+        resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: ""}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "DNSBL rename-restore POST returned the login form"
         assert helpers.config_get(vm, DNSBL_RENAME_CFG) == "", (
             f"{DNSBL_RENAME_CFG} did not return to the default-name state after clearing the override"
@@ -296,7 +309,7 @@ def test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged(webui: Web
     seeded = "ADsSeed"
     # Seed a known, valid override via the form so there is a concrete before-value
     # that a (wrongly) accepted bad POST would overwrite.
-    resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: seeded}, timeout=120.0)
+    resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: seeded}, timeout=120.0)
     assert not looks_like_login_page(resp.text), "DNSBL seed POST returned the login form (session lost)"
     try:
         # BEFORE: the seeded override is in effect.
@@ -305,7 +318,7 @@ def test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged(webui: Web
         )
 
         # REJECT: a space makes the alias invalid -> the save aborts with no write.
-        resp = webui.post(FEEDS_PAGE, {DNSBL_RENAME_FIELD: DNSBL_RENAME_INVALID}, timeout=120.0)
+        resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: DNSBL_RENAME_INVALID}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "DNSBL invalid-alias POST returned the login form"
 
         # AFTER: config.xml is UNCHANGED -- the invalid POST wrote nothing.
@@ -314,4 +327,81 @@ def test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged(webui: Web
             f"the handler should abort write_config when an alias contains a non-word char"
         )
     finally:
+        _config_del(vm, DNSBL_RENAME_CFG)
+
+
+def test_feed_rename_cross_type_save_does_not_clobber(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Saving one type's Feeds tab leaves the OTHER types' renames UNCHANGED (ADR-16 A3).
+
+    Scenario (the headline contract guarantee of the split): the page is three
+    ``?type`` sub-tabs and the save is type-scoped -- it loops only
+    ``$pfb['feeds_list'][$type]`` (the active type, carried in the hidden ``type``
+    field). A per-type tab therefore POSTs only its own ``feed_*`` fields, and the
+    handler must NOT reset any other type's ``feed_<alias>`` node to ''.
+
+    Background: on the OLD single all-types page the save looped EVERY type and wrote
+    each absent field as '' -- a partial single-type POST there would have clobbered
+    the other types. That regression is exactly what this test forbids.
+
+    True transition in BOTH directions (CLAUDE.md): seed an IPv4 rename AND a DNSBL
+    rename and assert BOTH are present (the before-state). Then:
+      * POST the IPv4 tab changing ONLY the IPv4 field  -> assert the DNSBL rename is
+        STILL its seeded value (IPv4 save did not touch DNSBL).
+      * POST the DNSBL tab changing ONLY the DNSBL field -> assert the IPv4 rename is
+        STILL its (new) value (DNSBL save did not touch IPv4).
+    Asserting the before-state first proves a green is the non-clobber guarantee, not
+    a value that happened to already hold. Both overrides are dropped in ``finally``.
+    Oracle is config.xml read over SSH, never the POST response body.
+    """
+    vm = smoke_vm
+    ipv4_seed = "PRI1cross"
+    ipv4_new = "PRI1cross2"
+    dnsbl_seed = "ADsCross"
+    dnsbl_new = "ADsCross2"
+
+    # Known baseline: drop any stray override on both nodes.
+    _config_del(vm, RENAME_CFG)
+    _config_del(vm, DNSBL_RENAME_CFG)
+    try:
+        # GIVEN: seed an IPv4 rename (on the IPv4 tab) and a DNSBL rename (on the
+        # DNSBL tab); each save is scoped to its own type.
+        resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: ipv4_seed}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "IPv4 seed POST returned the login form (session lost)"
+        resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: dnsbl_seed}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "DNSBL seed POST returned the login form (session lost)"
+
+        # BEFORE: BOTH renames are present (the cross-type starting state).
+        assert helpers.config_get(vm, RENAME_CFG) == ipv4_seed, (
+            f"{RENAME_CFG} was not seeded to {ipv4_seed!r} before the cross-type POSTs"
+        )
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == dnsbl_seed, (
+            f"{DNSBL_RENAME_CFG} was not seeded to {dnsbl_seed!r} before the cross-type POSTs"
+        )
+
+        # WHEN: POST the IPv4 tab changing ONLY the IPv4 field.
+        resp = webui.post(FEEDS_PAGE_IPV4, {RENAME_FIELD: ipv4_new}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "IPv4 cross-type POST returned the login form"
+        # THEN: the IPv4 node took the new value AND the DNSBL node is UNCHANGED
+        # (the IPv4 tab's POST carries no DNSBL field, and the save is type-scoped).
+        assert helpers.config_get(vm, RENAME_CFG) == ipv4_new, (
+            f"{RENAME_CFG} did not become {ipv4_new!r} after the IPv4 tab POST"
+        )
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == dnsbl_seed, (
+            f"{DNSBL_RENAME_CFG} was CLOBBERED by an IPv4-tab save (it must stay {dnsbl_seed!r}); "
+            f"the type-scoped save must not touch another type's feed_<alias> nodes"
+        )
+
+        # WHEN: POST the DNSBL tab changing ONLY the DNSBL field.
+        resp = webui.post(FEEDS_PAGE_DNSBL, {DNSBL_RENAME_FIELD: dnsbl_new}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "DNSBL cross-type POST returned the login form"
+        # THEN: the DNSBL node took the new value AND the IPv4 node is UNCHANGED.
+        assert helpers.config_get(vm, DNSBL_RENAME_CFG) == dnsbl_new, (
+            f"{DNSBL_RENAME_CFG} did not become {dnsbl_new!r} after the DNSBL tab POST"
+        )
+        assert helpers.config_get(vm, RENAME_CFG) == ipv4_new, (
+            f"{RENAME_CFG} was CLOBBERED by a DNSBL-tab save (it must stay {ipv4_new!r}); "
+            f"the type-scoped save must not touch another type's feed_<alias> nodes"
+        )
+    finally:
+        _config_del(vm, RENAME_CFG)
         _config_del(vm, DNSBL_RENAME_CFG)

@@ -66,7 +66,9 @@ UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 # The Sync page hosts the `.repeatable` XMLRPC Replication Targets rowhelper.
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 # The Feeds page hosts the per-feed Alternate-URL radio group (auto-submit wiring).
-FEEDS_PAGE = "/pfblockerng/pfblockerng_feeds.php"
+# Split into ?type sub-tabs (ADR-16 Phase 3); the IPv4 tab carries the bulk of the
+# pre-defined feeds (and so any Alternate-URL radios), so the alt-URL flow targets it.
+FEEDS_PAGE = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
 
 # A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
 # fire synchronously on load/click, so this is a flake ceiling, not a wait knob.

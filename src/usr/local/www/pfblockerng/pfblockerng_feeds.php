@@ -35,21 +35,37 @@ $feed_info	= convert_feeds_json();
 $feed_count	= $feed_info['count'];
 unset($feed_info['count']);
 
+// Active sub-tab type (?type=ipv4|ipv6|dnsbl, default ipv4). The page is split into
+// IPv4/IPv6/DNSBL sub-tabs (mirroring pfblockerng_category.php): only the active type
+// renders, and the save is scoped to it. A bare URL (no ?type) defaults to ipv4, so the
+// other pages' plain "Feeds" links keep working.
+$gtype = 'ipv4';
+if (isset($_REQUEST['type']) && !empty($_REQUEST['type'])) {
+	$temp_value = pfb_filter($_REQUEST['type'], PFB_FILTER_HTML, 'feeds');
+	if (in_array($temp_value, array('ipv4', 'ipv6', 'dnsbl'))) {
+		$gtype = $temp_value;
+	}
+}
+
+// 'active' GUI sub-tab map (the second [IPv4 | IPv6 | DNSBL] row).
+$active = array('ipv4' => FALSE, 'ipv6' => FALSE, 'dnsbl' => FALSE);
+$active[$gtype] = TRUE;
+
 $pconfig = $feeds_list = array();
 $feeds_list['ipv4'] = $feeds_list['ipv6'] = $feeds_list['dnsbl'] = array();
 
-// $pfb['feeds_list'] created by load_feeds_json() function
-if (is_array($pfb['feeds_list'])) {
-	foreach ($pfb['feeds_list'] as $type => $data) {
-		foreach ($data as $o_aliasname => $aliasname) {
-			$l_aliasname = strtolower($o_aliasname);
+// $pfb['feeds_list'] created by load_feeds_json() function. Collect only the active
+// type's aliasnames/overrides (the body and the save are type-scoped); the 'dnsbl' key
+// is left present-but-empty for the non-DNSBL tabs so the length guard below behaves.
+if (is_array($pfb['feeds_list']) && isset($pfb['feeds_list'][$gtype]) && is_array($pfb['feeds_list'][$gtype])) {
+	foreach ($pfb['feeds_list'][$gtype] as $o_aliasname => $aliasname) {
+		$l_aliasname = strtolower($o_aliasname);
 
-			// Collect any user-defined alternate aliasname(s)
-			$pconfig['feed_' . $l_aliasname] = $fconfig['feed_' . $l_aliasname] ?: '';
+		// Collect any user-defined alternate aliasname(s)
+		$pconfig['feed_' . $l_aliasname] = $fconfig['feed_' . $l_aliasname] ?: '';
 
-			// Collect list of original aliasnames/type (ipv4, ipv4 and dnsbl)
-			$feeds_list[$type][] = $o_aliasname;
-		}
+		// Collect list of original aliasnames for the active type
+		$feeds_list[$gtype][] = $o_aliasname;
 	}
 }
 
@@ -71,28 +87,37 @@ if ($_POST) {
 	if (isset($_POST['save'])) {
 
 		$config_mod = FALSE;
-		foreach ($pfb['feeds_list'] as $type => $data) {
-			foreach ($data as $o_aliasname => $aliasname) {
-				$l_aliasname = strtolower($o_aliasname);
 
-				if (preg_match("/\W/", $_POST['feed_' . $l_aliasname])) {
-					$input_errors[] = "Feed Settings: [ {$aliasname} ]"
-							. 'Alias/Group name cannot contain spaces, special or international characters.';
+		// Type-scoped save: only the active type's feed_<alias> nodes are ever
+		// written. The hidden 'type' form field carries the active sub-tab, validated
+		// into $gtype above (via $_REQUEST, which includes $_POST). Looping only
+		// $pfb['feeds_list'][$gtype] means a per-type tab never touches another type's
+		// feed_*/feed_alt_* nodes (the cross-type non-clobber guarantee).
+		$type_data = (is_array($pfb['feeds_list']) && isset($pfb['feeds_list'][$gtype])
+			&& is_array($pfb['feeds_list'][$gtype])) ? $pfb['feeds_list'][$gtype] : array();
 
-					$pconfig['feed_' . $l_aliasname] = htmlspecialchars($_POST['feed_' . $l_aliasname]) ?: '';
-				}
-				else {
-					$fconfig['feed_' . $l_aliasname] = $_POST['feed_' . $l_aliasname] ?: '';
-					config_set_path("installedpackages/pfblockerngglobal/feed_{$l_aliasname}", $fconfig['feed_' . $l_aliasname]);
-					$config_mod = TRUE;
+		foreach ($type_data as $o_aliasname => $aliasname) {
+			$l_aliasname = strtolower($o_aliasname);
 
-					// IPv4/6 Aliasnames cannot exceed 31 characters in PF. ( pfB_ + aliasname + _v? )
-					if (!in_array(str_replace('feed_', '', $fconfig['feed_' . $l_aliasname]), $feeds_list['dnsbl'])) {
-						$len_post = strlen($fconfig['feed_' . $l_aliasname]);
-						if ($len_post > 24) {
-							$input_errors[] = "Alternate Aliasname : [ {$o_aliasname} -> {$aliasname} ]"
-									. " Field cannot exceed 24 characters. [ {$len_post} characters submitted. ]";
-						}
+			if (preg_match("/\W/", $_POST['feed_' . $l_aliasname])) {
+				$input_errors[] = "Feed Settings: [ {$aliasname} ]"
+						. 'Alias/Group name cannot contain spaces, special or international characters.';
+
+				$pconfig['feed_' . $l_aliasname] = htmlspecialchars($_POST['feed_' . $l_aliasname]) ?: '';
+			}
+			else {
+				$fconfig['feed_' . $l_aliasname] = $_POST['feed_' . $l_aliasname] ?: '';
+				config_set_path("installedpackages/pfblockerngglobal/feed_{$l_aliasname}", $fconfig['feed_' . $l_aliasname]);
+				$config_mod = TRUE;
+
+				// IPv4/6 Aliasnames cannot exceed 31 characters in PF. ( pfB_ + aliasname + _v? )
+				// $feeds_list['dnsbl'] is only populated on the DNSBL tab, so this length
+				// guard correctly applies on IPv4/IPv6 tabs and is skipped on the DNSBL tab.
+				if (!in_array(str_replace('feed_', '', $fconfig['feed_' . $l_aliasname]), $feeds_list['dnsbl'])) {
+					$len_post = strlen($fconfig['feed_' . $l_aliasname]);
+					if ($len_post > 24) {
+						$input_errors[] = "Alternate Aliasname : [ {$o_aliasname} -> {$aliasname} ]"
+								. " Field cannot exceed 24 characters. [ {$len_post} characters submitted. ]";
 					}
 				}
 			}
@@ -124,7 +149,7 @@ if ($_POST) {
 		if ($config_mod) {
 			if (!$input_errors) {
 				write_config('[pfBlockerNG] save Feed settings');
-				header('Location: /pfblockerng/pfblockerng_feeds.php');
+				header("Location: /pfblockerng/pfblockerng_feeds.php?type={$gtype}");
 				exit;
 			}
 		}
@@ -568,8 +593,11 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 		endforeach;
 }
 
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_feeds.php', '@self');
+// Breadcrumb label for the active sub-tab type.
+$type_label = array('ipv4' => 'IPv4', 'ipv6' => 'IPv6', 'dnsbl' => 'DNSBL');
+
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), gettext($type_label[$gtype]));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', "/pfblockerng/pfblockerng_feeds.php?type={$gtype}", '@self');
 include_once('head.inc');
 
 if ($input_errors) {
@@ -591,8 +619,16 @@ $tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php')
 $tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
 display_top_tabs($tab_array, true);
 
+// Second sub-tab row: [IPv4 | IPv6 | DNSBL] -> pfblockerng_feeds.php?type=...
+$tab_array	= array();
+$tab_array[]	= array(gettext('IPv4'),	$active['ipv4'],	'/pfblockerng/pfblockerng_feeds.php?type=ipv4');
+$tab_array[]	= array(gettext('IPv6'),	$active['ipv6'],	'/pfblockerng/pfblockerng_feeds.php?type=ipv6');
+$tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_feeds.php?type=dnsbl');
+display_top_tabs($tab_array, true);
+
 ?>
-<form action="/pfblockerng/pfblockerng_feeds.php" method="post" name="iform" id="iform" class="form-horizontal">
+<form action="/pfblockerng/pfblockerng_feeds.php?type=<?=$gtype?>" method="post" name="iform" id="iform" class="form-horizontal">
+<input type="hidden" name="type" id="type" value="<?=$gtype?>" />
 <?php
 
 $section = new Form_Section('Feed Settings', 'feedsettings', COLLAPSIBLE|SEC_CLOSED);
@@ -602,9 +638,8 @@ $section->addInput(new Form_StaticText(
 	. ' combine multiple Alias/Groups together by using a duplicate Alias/Group name.'
 ));
 
-pfb_feeds_render_aliasname_inputs($section, 'ipv4', $feeds_list, $pconfig);
-pfb_feeds_render_aliasname_inputs($section, 'ipv6', $feeds_list, $pconfig);
-pfb_feeds_render_aliasname_inputs($section, 'dnsbl', $feeds_list, $pconfig);
+// Render only the active type's alias-name override inputs (type-scoped UI).
+pfb_feeds_render_aliasname_inputs($section, $gtype, $feeds_list, $pconfig);
 
 $btn_save = new Form_Button(
 	'save',
@@ -703,36 +738,39 @@ print ($section);
 			<tbody>
 
 			<?php
-			$list_type = array( 'pfblockernglistsv4' => 'ipv4', 'pfblockernglistsv6' => 'ipv6', 'pfblockerngdnsbl' => 'dnsbl');
-			foreach ($list_type as $type => $feedtype) {
-				foreach (config_get_path("installedpackages/{$type}/config", []) as $rowid => $list) {
-					if (isset($list['row'])) {
-						foreach ($list['row'] as $row) {
-							if (!empty($row['url']) && !empty($row['header'])) {
+			// Build $ex_feeds for the active type only (the body is type-scoped).
+			$list_type = array( 'ipv4' => 'pfblockernglistsv4', 'ipv6' => 'pfblockernglistsv6', 'dnsbl' => 'pfblockerngdnsbl');
+			$conf_type = $list_type[$gtype];
+			$feedtype  = $gtype;
 
-								$ex_feeds[$feedtype][] = array(	'aliasname'	=>	$list['aliasname'],
-												'action'	=>	$list['action'],
-												'state'		=>	$row['state'],
-												'url'		=>	$row['url'],
-												'header'	=>	$row['header'],
-												'rowid'		=>	$rowid
-												);
-							}
+			foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $rowid => $list) {
+				if (isset($list['row'])) {
+					foreach ($list['row'] as $row) {
+						if (!empty($row['url']) && !empty($row['header'])) {
+
+							$ex_feeds[$feedtype][] = array(	'aliasname'	=>	$list['aliasname'],
+											'action'	=>	$list['action'],
+											'state'		=>	$row['state'],
+											'url'		=>	$row['url'],
+											'header'	=>	$row['header'],
+											'rowid'		=>	$rowid
+											);
 						}
 					}
 				}
+			}
 
-				if (!isset($ex_feeds[$feedtype])) {
-					$ex_feeds[$feedtype][] = array();
-				}
+			if (!isset($ex_feeds[$feedtype])) {
+				$ex_feeds[$feedtype][] = array();
 			}
 
 			$alt_selected = '';		// CSV list of all Feeds which have 'Alternate URLs' (Used in POST/save)
 			$feed_info_row = 0;
 			$aliasname_found = array();
 
-			foreach ($feed_info as $ftype => $info) {
-				pfb_feeds_render_predefined_type($ftype, $info);
+			// Render only the active type's predefined feeds.
+			if (isset($feed_info[$gtype])) {
+				pfb_feeds_render_predefined_type($gtype, $feed_info[$gtype]);
 			}
 			?>
 
@@ -766,8 +804,9 @@ print ($section);
 
 				<?php
 				$p_aliasname = '';
+				// Only the active type's unknown user-defined feeds (type-scoped body).
 				if (!empty($ex_feeds)):
-					foreach (array('ipv4' => 'IPv4', 'ipv6' => 'IPv6', 'dnsbl' => 'DNSBL') as $feedtype => $type):
+					foreach (array($gtype => $type_label[$gtype]) as $feedtype => $type):
 
 						if (!empty($ex_feeds[$feedtype])):
 							foreach ($ex_feeds[$feedtype] as $row):
