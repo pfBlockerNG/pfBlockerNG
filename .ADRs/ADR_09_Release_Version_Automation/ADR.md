@@ -51,16 +51,16 @@ Add a **curated-then-automated** version pipeline. A human nudges a **decoupled 
 | **Matrix lifecycle** | **Add** an entry when a beta lands (curated). **Drop** the oldest supported **CE** only when the **newest CE goes GA** (so the window is *previous + current CE major*, transiently `+1` during a beta). Plus entries are `ci: false`, build-only. |
 | **Detect vs react** | **Detect = curated:** a human edits the matrix when a beta/release drops. *Optional* best-effort scheduled **probe** (scan `RELENG_*` / pkg ABI) that **opens a PR/issue nudge** — it **never** auto-edits the matrix. **React = fully automated:** a matrix change (or schedule) drives the release build **and** the CI refresh + fan-out. |
 | **Release `.pkg` artifacts** | Extend `release.yml`: read the matrix → for each entry build a `.pkg` against its `(freebsd_version, php_version)` pair, **defaulting to the portable Linux builder** (`build-pkg-linux.yml`) and keeping the **FreeBSD `make package` VM builder** (`build-pkg.yml`) as the **fidelity-oracle / fallback** variant (selectable; "Linux by default, FreeBSD if we fuck up"). **Attach one `.pkg` per distinct FreeBSD major** to the GitHub Release (artifact dedup by ABI — §1 fact 2). CE **and** Plus built (Plus build-only). The existing `ports-pr` step is **unchanged**; a build failure surfaces but must not break `ports-pr`. |
-| **CI image refresh** | Triggered by a new CE entry (or schedule): on a KVM runner, `image-upgrade.sh` pulls the current GHCR tag → `pfSense-upgrade` (**any** bump, incl. major) → **SANITY GATE** → `oras push` the new tag **only on pass**; **fail (no publish) on any sanity failure**. A manual seed (`image-publish.sh`) is a **fallback**, used only when the gate fails. *(`build-image.yml` already realises much of this — the upgrade-in-place publish + verify round-trip; Phase 5 generalises it to be matrix-driven.)* |
+| **CI image refresh** | Triggered by a new CE entry (or schedule): on a KVM runner, `image-upgrade.sh --upgrade-pkgs` pulls the current GHCR tag → optionally upgrades baked deps (`pkg update -f` + `pkg upgrade -n` dry-run; **only if upgrades are pending**: `pkg upgrade -y` + reboot + wait SSH; skip otherwise) → `pfSense-upgrade` (any bump, incl. major) → **alive/working-fine health gate** → `oras push` the new tag on pass; **fail-closed (no publish)** if the box does not become healthy. A non-blocking pfBlockerNG smoke step (with `continue-on-error: true`) runs on a discarded overlay **after** publish — it cannot pollute the published image and cannot fail the refresh job. The authoritative pfBlockerNG validation is the smoke fan-out (`smoke-fanout.yml`). A manual seed (`image-publish.sh`) is a **fallback**, used only when the health gate fails. |
 | **CI smoke fan-out** | The ADR-04 smoke workflow reads the matrix → runs the suite against **every `ci: true` CE image**, **never Plus**, as a **`strategy.matrix` job with `fail-fast: false`** so every leg runs to completion. **The pass criterion is the AND of all legs:** a single gating job `needs:` the whole matrix and fails red if **any** leg failed (a green is only green when *all* combinations passed). The version-tracker triggers it on a new CE image. |
-| **Sanity gate (the publish guard)** | Boots; SSH answers; `/etc/version` advanced to the expected release; `pfctl -sr` loads; `install-from-repo.sh` installs pfBlockerNG and `pfblockerng.php update` exits 0; a `dig` of a baked control/blocked name returns the expected shape. **Any miss → do not publish.** |
+| **Publish guard (the alive/working-fine health gate)** | After the pfSense upgrade version change is detected, poll up to 300 s until EITHER the webConfigurator answers HTTP on-box (`fetch -qT 15 https://127.0.0.1/`) OR `pfctl -sr` returns a non-empty ruleset. If neither within 300 s → die, fail-closed, nothing is published. pfBlockerNG is validated **separately and non-blockingly** (see CI image refresh above). |
 | **Linearity** | The matrix is off-branch, so **version tracking never touches the channel branches**. The pfBlockerNG **package-version** bump (per channel, in the port `Makefile`/`info.xml`) stays the **existing manual tag flow** (devel-first, rebase-promote) — out of scope here. |
 
 ### Semantics that MUST be preserved (the contract — pin before relying)
 
 - **The existing release flow is intact.** A normal tag push still produces the GitHub Release **and** the `FreeBSD-ports` PR; the `.pkg` build is **additive** and a build failure must **not** silently skip or break the `ports-pr` step (the ports PR is the real distribution path).
 - **The version-tracker never writes to `main`/`devel`/`next`** (no commits, no force-push). Linearity is untouched.
-- **A broken image is never published** — the sanity gate fails **closed**.
+- **A broken image is never published** — the health gate fails **closed**.
 - **Plus is never executed in CI** (licensing).
 - **The smoke fan-out gate is the AND of every leg.** With `fail-fast: false` all CE combinations run; the overall result is green **only if every leg passed** — one red leg fails the gate. No leg is silently dropped or allowed to pass partially.
 - **The default unit suite (`test.yml`) is unchanged** — no new deps, no new required jobs on the unit path.
@@ -144,11 +144,11 @@ Prompt: `04_Version_Tracker.txt`
 
 - `.github/workflows/version-tracker.yml` (`schedule` + `workflow_dispatch`): read the matrix; **react** = trigger the release-artifact build and (gated) the CI refresh/fan-out for new entries. Optional best-effort **probe** that opens a **PR/issue nudge** on a new `RELENG_*` — never edits the matrix, never touches channel branches.
 
-### Phase 5 — CI smoke-image refresh: upgrade-in-place + sanity gate (ungated — ADR-04 Accepted)
+### Phase 5 — CI smoke-image refresh: upgrade-in-place + health gate + non-blocking smoke (ungated — ADR-04 Accepted)
 
 Prompt: `05_Image_Refresh.txt`
 
-- On a KVM runner: `image-upgrade.sh` pull current tag → `pfSense-upgrade` (any bump) → **sanity gate** (§2) → `oras push` the new tag **only on pass**; fail closed otherwise. Manual seed = fallback. Self-test: a deliberately-broken upgrade must **not** publish. *(Generalise `build-image.yml`, which already does this for a single version, to be matrix-driven.)*
+- On a KVM runner: `image-upgrade.sh --upgrade-pkgs` pulls current tag → conditionally upgrades baked deps (`pkg upgrade -n` dry-run; only reboots if upgrades are pending) → `pfSense-upgrade` (any bump) → **alive/working-fine health gate** (webConfigurator HTTP or `pfctl` live ruleset, 300 s) → `oras push` on pass; fail-closed otherwise. A non-blocking pfBlockerNG smoke step (with `continue-on-error: true`) runs on a discarded overlay after publish — informational only; `smoke-fanout.yml` is the real pfBlockerNG gate. Manual seed = fallback. *(Generalises `build-image.yml`, which already does this for a single version, to be matrix-driven.)*
 
 ### Phase 6 — CI smoke matrix fan-out across CE minors (ungated — ADR-04 Accepted)
 
@@ -176,8 +176,12 @@ All seven phases are complete (ADR-04 Accepted ⇒ Phases 5–6 are not gated):
   attached to the GitHub Release per distinct FreeBSD major; `ports-pr` step intact.
 - **Phase 4** (version-tracker): `version-tracker.yml` daily + dispatch; reacts by
   triggering build + image-refresh + smoke-fanout; probe opens nudge issues only.
-- **Phase 5** (image refresh): `image-refresh.yml` upgrade-in-place + 6-check sanity
-  gate; publishes on pass, fails closed on any gate failure; manual seed as fallback.
+- **Phase 5** (image refresh): `image-refresh.yml` upgrade-in-place (conditional dep
+  upgrade via `pkg upgrade -n` dry-run) + alive/working-fine health gate (webConfigurator
+  HTTP or `pfctl` live ruleset, 300 s); publishes clean image on pass, fails closed on
+  health-gate failure; non-blocking pfBlockerNG smoke step (`continue-on-error: true`)
+  on a discarded overlay after publish; `smoke-fanout.yml` is the real pfBlockerNG gate;
+  manual seed as fallback.
 - **Phase 6** (smoke fan-out): `smoke-fanout.yml` `strategy.matrix` over `ci_matrix`
   (`fail-fast: false`); `all-smoke-passed` AND-gate; Plus excluded at two layers.
 - **Phase 7** (docs + DoD): version pipeline + lifecycle + build/CI split documented
@@ -196,10 +200,11 @@ Status → **Accepted** only after the maintainer confirms the manual checklist 
   the FreeBSD oracle in a way that affects install/behaviour → make the **FreeBSD VM
   build the release default** for the affected entry (the fallback exists precisely
   for this) rather than shipping a divergent portable artifact.
-- **CI-side — unattended upgrade gate failures.** If a major (or any) CE upgrade
-  cannot reliably pass the six-check sanity gate → reject auto-refresh for that
-  version and fall back to a **manual seed** (`scripts/image-publish.sh`) for that
-  major. The gate is fail-closed regardless, so a bad image is never published —
+- **CI-side — unattended upgrade health-gate failures.** If a major (or any) CE
+  upgrade cannot reliably pass the alive/working-fine health gate (webConfigurator
+  HTTP or `pfctl` live ruleset within 300 s) → reject auto-refresh for that version
+  and fall back to a **manual seed** (`scripts/image-publish.sh`) for that major.
+  The gate is fail-closed regardless, so a bad image is never published —
   but a persistent gate failure signals that the upgrade path needs manual
   intervention before the CI image can be updated.
 
@@ -222,8 +227,9 @@ time rule from `CLAUDE.md`).
   round-trip with **no** commit to `main`/`devel`.
 - [ ] A normal `vX.Y.Z[-devel]` tag still produces the GitHub Release **and** the
   `FreeBSD-ports` PR, now with `.pkg` artifacts attached per FreeBSD major.
-- [ ] The sanity gate **rejects** a deliberately-broken upgrade (no publish) and
-  **accepts** a good upgrade (publishes the new GHCR tag).
+- [ ] The health gate **rejects** a deliberately-broken upgrade (no publish) and
+  **accepts** a good upgrade (publishes the new GHCR tag); the non-blocking pfBlockerNG
+  smoke step is `continue-on-error: true` and does not affect the job result.
 - [ ] The smoke fan-out runs across every `ci: true` CE image **in parallel** and
   **never** Plus; **one deliberately-failed leg turns the whole gate red** (no
   partial pass — the `all-smoke-passed` AND-gate is the required status check).

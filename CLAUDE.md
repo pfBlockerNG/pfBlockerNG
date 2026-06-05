@@ -713,11 +713,17 @@ When the minimum supported CE version changes, also:
    and `smoke-fanout.yml` automatically. **No workflow YAML edit is needed.**
 2. **Refresh the pfSense CE smoke image** (ADR-04 + ADR-09): dispatch
    `.github/workflows/image-refresh.yml` with `pfsense_version` + `freebsd_version`
-   from the new matrix entry. The workflow pulls the current GHCR tag, runs
-   `pfSense-upgrade` (any bump, including major), applies the **six-check sanity gate**,
-   and publishes the new tag **only on gate pass** (fail-closed — a bad image is never
-   published). Manual seed via `scripts/image-publish.sh` is the fallback only when
-   the gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
+   from the new matrix entry. The workflow calls `scripts/image-upgrade.sh --upgrade-pkgs`,
+   which pulls the current GHCR tag, conditionally upgrades baked deps (`pkg upgrade -n`
+   dry-run; only runs `pkg upgrade -y` + reboots if upgrades are actually pending), runs
+   `pfSense-upgrade` (any bump, including major), then applies the **alive/working-fine
+   health gate** (polls up to 300 s for the webConfigurator to answer HTTP or `pfctl` to
+   show a live ruleset) and publishes the new tag only when the box is healthy — fail-closed
+   (a bad image is never published). A non-blocking pfBlockerNG smoke step
+   (`continue-on-error: true`) runs on a discarded overlay after publish — it is
+   informational only and cannot fail the refresh. The authoritative pfBlockerNG validation
+   is `smoke-fanout.yml` (step 3 below). Manual seed via `scripts/image-publish.sh` is the
+   fallback only when the health gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`.
    > **ADR-04 §2 note:** ADR-04 §2 mentions "re-baseline on a MAJOR version jump" as a
    > conservative option. ADR-09 supersedes this as the **default**: `image-refresh.yml`
    > handles all jumps (minor and major) uniformly via upgrade-in-place; a fresh manual

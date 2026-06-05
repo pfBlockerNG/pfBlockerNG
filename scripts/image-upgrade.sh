@@ -10,10 +10,13 @@
 # directly on the KVM host), as before.
 #
 # Flow: pull the current image from GHCR (local) -> stream it to the Proxmox host
-# -> boot it under QEMU/KVM there (read-write, with internet) -> run pfSense-upgrade
-# over an SSH jump -> wait for it to finish and reboot -> power off cleanly ->
-# compress on Proxmox -> stream back -> push the new tag (local). The source tag is
-# left untouched, so the old image is always kept.
+# -> boot it under QEMU/KVM there (read-write, with internet) ->
+# [optional: pkg update -f + pkg upgrade, reboot, wait SSH back] ->
+# run pfSense-upgrade over an SSH jump -> wait for it to finish and reboot ->
+# health-gate (webConfigurator HTTP or pfctl live ruleset) ->
+# power off cleanly -> compress on Proxmox -> stream back ->
+# push the new tag (local). The source tag is left untouched, so the old image
+# is always kept.
 #
 # Usage:
 #   ./scripts/image-upgrade.sh --from <current-version> [options]
@@ -21,6 +24,7 @@
 # Examples:
 #   ./scripts/image-upgrade.sh --from 2.8.1 --proxmox root@pve.lan --ssh-key ~/.ssh/smoke_ed25519
 #   ./scripts/image-upgrade.sh --from 2.8.1 --to 2.8.2 --proxmox pve.lan --proxmox-port 2222 --force
+#   ./scripts/image-upgrade.sh --from 2.8.1 --to 2.8.2 --upgrade-pkgs   # also upgrades baked deps
 #
 # Proxmox connection (the KVM host that boots the VM):
 #   --proxmox [USER@]HOST   SSH target of the Proxmox/KVM host. If omitted (and
@@ -41,7 +45,13 @@
 #   --ssh-port N     Proxmox-local port forwarded to the guest's :22 (default: 2222)
 #   --mac ADDR       guest NIC MAC (default: BC:24:11:37:9C:AC — must match the image)
 #   --compression T  qcow2 compression for the published image: zstd|zlib|off (default: zstd)
-#   --upgrade-timeout S  seconds to wait for the upgrade+reboot (default: 1800)
+#   --upgrade-timeout S  seconds to wait for the pfSense-upgrade+reboot (default: 1800)
+#   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
+#                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
+#                    versions; reboots the guest and waits for SSH before proceeding.
+#                    Default OFF; pass this flag to enable. build-image.yml does NOT
+#                    pass this flag (it calls this script directly), so callers that
+#                    only want the pfSense-upgrade step are unaffected.
 #   --keep           keep the work dirs (image copies, console log) afterwards
 #   --force          overwrite the target tag if it already exists
 #
@@ -61,6 +71,7 @@ GUEST_PORT=2222
 MAC="BC:24:11:37:9C:AC"
 COMPRESSION=zstd
 UPGRADE_TIMEOUT=1800
+UPGRADE_PKGS=0
 KEEP=0
 FORCE=0
 
@@ -77,6 +88,10 @@ REMOTE_TMPDIR="${PROXMOX_TMPDIR:-/tmp}"
 # real completion regardless of how it reboots.
 UPGRADE_CMD='yes | /usr/local/sbin/pfSense-upgrade -d'
 
+# After pfSense-upgrade completes and a new version is detected, poll up to this
+# many seconds for the box to be "working fine" before proceeding to shutdown.
+HEALTH_TIMEOUT=300
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --proxmox)         PX_TARGET="$2"; shift 2 ;;
@@ -91,9 +106,10 @@ while [ $# -gt 0 ]; do
         --mac)             MAC="$2"; shift 2 ;;
         --compression)     COMPRESSION="$2"; shift 2 ;;
         --upgrade-timeout) UPGRADE_TIMEOUT="$2"; shift 2 ;;
+        --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,48p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,62p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
@@ -145,6 +161,17 @@ ssh_guest() {
             -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
             root@127.0.0.1 "$@"
     fi
+}
+
+# wait_guest_ssh TIMEOUT — poll until root SSH answers or TIMEOUT seconds elapse.
+wait_guest_ssh() {
+    _wgs_timeout="$1"
+    _wgs_elapsed=0
+    while ! ssh_guest true 2>/dev/null; do
+        [ "$_wgs_elapsed" -ge "$_wgs_timeout" ] && \
+            die "VM did not answer SSH within ${_wgs_timeout}s (see $REMOTE_DIR/console.log on the KVM host)"
+        sleep 5; _wgs_elapsed=$((_wgs_elapsed + 5))
+    done
 }
 
 # Local tooling: oras always; ssh only when driving a remote host.
@@ -214,16 +241,38 @@ QPID=$(px "cat '$REMOTE_DIR/qemu.pid'" | tr -d '\r')
 [ -n "$QPID" ] || die "QEMU did not write a pidfile (see ${PX_HOST:+$PX_HOST:}$REMOTE_DIR/console.log)"
 
 log "waiting for SSH..."
-_elapsed=0
-while ! ssh_guest true 2>/dev/null; do
-    [ "$_elapsed" -ge 300 ] && die "VM did not answer SSH within 300s (see $REMOTE_DIR/console.log on the KVM host)"
-    sleep 5; _elapsed=$((_elapsed + 5))
-done
+wait_guest_ssh 300
 
 OLD_VER=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r')
 log "current version on box: ${OLD_VER:-unknown}"
 
-# --- run the upgrade -------------------------------------------------------
+# --- optional: upgrade baked deps (pkg update -f + conditional pkg upgrade) -
+if [ "$UPGRADE_PKGS" -eq 1 ]; then
+    log "refreshing package catalogue (pkg update -f)"
+    # pkg update may print output; connection stays up (not a reboot command).
+    ssh_guest 'pkg update -f' 2>&1 | tee "$LOCAL_DIR/pkg-update.log" || true
+
+    # Dry-run detect: pkg prints "Your packages are up to date" when nothing is
+    # pending; otherwise it prints an upgrade plan (Number of packages to be
+    # upgraded / to be installed / to be reinstalled, etc.).  Parse the output —
+    # do NOT rely solely on exit code, as pkg(8) exit semantics vary by version.
+    log "checking for pending package upgrades (pkg upgrade -n)"
+    _pkg_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade-dryrun.log" || true)
+    if printf '%s' "$_pkg_dry" | grep -q 'Your packages are up to date'; then
+        log "packages already up to date — skipping pkg upgrade + reboot"
+    else
+        log "package upgrades pending — running pkg upgrade -y"
+        ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade.log" || true
+        log "rebooting after pkg upgrade"
+        # /sbin/reboot drops the connection — expected; ignore the exit code.
+        ssh_guest '/sbin/reboot' 2>/dev/null || true
+        log "waiting for SSH after pkg-upgrade reboot..."
+        wait_guest_ssh 300
+        log "box is back after pkg-upgrade reboot"
+    fi
+fi
+
+# --- run the pfSense upgrade -----------------------------------------------
 log "running pfSense upgrade (this reboots the box; up to ${UPGRADE_TIMEOUT}s)"
 # Connection will drop when the box reboots — that is expected, so ignore it.
 ssh_guest "$UPGRADE_CMD" 2>&1 | tee "$LOCAL_DIR/upgrade.log" || true
@@ -243,6 +292,33 @@ while [ "$_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
 done
 [ -n "$NEW_VER" ] || die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
 log "upgraded: ${OLD_VER} -> ${NEW_VER}"
+
+# --- health gate: wait until box is "working fine" -------------------------
+# Poll up to HEALTH_TIMEOUT seconds. The box is considered healthy when EITHER:
+#   a) the webConfigurator answers HTTP (login page is up), OR
+#   b) pfctl -sr returns a live (non-empty) ruleset.
+# If neither within HEALTH_TIMEOUT, die — fail-closed; no publish.
+log "health-gating upgraded box (up to ${HEALTH_TIMEOUT}s for webConfigurator/pfctl)..."
+_hg_elapsed=0
+_hg_healthy=0
+while [ "$_hg_elapsed" -lt "$HEALTH_TIMEOUT" ]; do
+    # Check webConfigurator: fetch https://127.0.0.1/ on-box (port 443).
+    # fetch(1) is the FreeBSD/pfSense http client available on all pfSense versions.
+    if ssh_guest 'fetch -qT 15 --no-verify-peer --no-verify-hostname -o /dev/null https://127.0.0.1/ 2>/dev/null' 2>/dev/null; then
+        log "health gate PASS: webConfigurator answered HTTP"
+        _hg_healthy=1
+        break
+    fi
+    # Fallback: check pfctl for a live ruleset.
+    _pf_rules=$(ssh_guest '/sbin/pfctl -sr' 2>/dev/null | grep -c '.' || true)
+    if [ "${_pf_rules:-0}" -gt 0 ]; then
+        log "health gate PASS: pfctl shows ${_pf_rules} live rules"
+        _hg_healthy=1
+        break
+    fi
+    sleep 10; _hg_elapsed=$((_hg_elapsed + 10))
+done
+[ "$_hg_healthy" -eq 1 ] || die "upgraded box did not become healthy within ${HEALTH_TIMEOUT}s (webConfigurator and pfctl both failed; see $LOCAL_DIR/upgrade.log)"
 
 # --- power off cleanly -----------------------------------------------------
 log "shutting the box down"

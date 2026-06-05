@@ -1,156 +1,166 @@
 ================================================================================
-ADR-09 Phase 5 Results — CI smoke-image refresh: upgrade-in-place + sanity gate
+ADR-09 Phase 5 Results — CI smoke-image refresh (revised flow)
 ================================================================================
 
-Status: GO — image-refresh.yml implemented; upgrade-in-place + 6-check sanity
-gate + fail-closed publish; Phase 4 dispatch contract honoured; all gates green.
+Status: GO — image-refresh.yml slimmed to a single upgrade+publish step backed by
+scripts/image-upgrade.sh (with --upgrade-pkgs); health gate replaces the 6-check
+sanity gate; pfBlockerNG smoke is a separate non-blocking step; all gates green.
 
 
 --------------------------------------------------------------------------------
 1. WHAT WAS DONE
 --------------------------------------------------------------------------------
 
-Added .github/workflows/image-refresh.yml:
+Revised .github/workflows/image-refresh.yml:
 
   Trigger:    workflow_dispatch (the tracker dispatches it; manual runs also work)
   Required inputs:
     pfsense_version   string  e.g. "2.8.1" or "2.8.x"   — MATCHES Phase 4 contract
     freebsd_version   string  e.g. "15.0-RELEASE"        — MATCHES Phase 4 contract
   Optional inputs:
-    from_version      string  prior tag (auto-detected from matrix if blank)
-    compression       string  zstd|zlib|off (default: zstd)
-    upgrade_timeout   string  seconds for pfSense-upgrade+reboot (default: 1800)
-    boot_timeout      string  SSH-ready timeout for sanity gate (default: 180)
-    sanity_local_data_name  Unbound local-data name to probe (default: smoke-sanity.pfb.test)
-    sanity_local_data_ip    A-record to assert (default: 192.0.2.99)
+    from_version          string  prior tag (auto-detected from matrix if blank)
+    compression           string  zstd|zlib|off (default: zstd)
+    upgrade_timeout       string  seconds for pfSense-upgrade+reboot (default: 1800)
+    sanity_local_data_name  Unbound local-data name for the non-blocking smoke
+                            (default: smoke-sanity.pfb.test)
+    sanity_local_data_ip    A-record for the non-blocking smoke (default: 192.0.2.99)
 
   Jobs:
     resolve-from  — determines from_version (caller-supplied or auto-detected from
                     the ci-metadata matrix: latest prior CE GA tag by version sort)
-    refresh       — all three phases inline (upgrade → gate → publish):
-                    Step 1: upgrade in place
-                    Step 2: SANITY GATE (fail-closed, 6 checks)
-                    Step 3: publish ONLY on gate pass
+    refresh       — two steps inside one job:
+                    Step 1: Upgrade in place + health gate + publish
+                            (single call to scripts/image-upgrade.sh --upgrade-pkgs;
+                             runner IS the KVM host — no --proxmox, mirroring
+                             build-image.yml)
+                    Step 2: pfBlockerNG smoke (non-blocking, continue-on-error: true)
 
   Permissions:  contents: read, packages: write
   Invariant:    NEVER writes to main/devel/next; ONLY writes to GHCR (packages).
 
-No changes to src/, tests/, or any existing workflow.
+Enhanced scripts/image-upgrade.sh:
+
+  --upgrade-pkgs   (existed; behaviour strengthened)
+    Before pfSense-upgrade:
+      1. pkg update -f — refresh the catalogue.
+      2. pkg upgrade -n — dry-run; capture output.
+         Parse: if output contains "Your packages are up to date" → skip upgrade
+         and reboot entirely (log: "packages already up to date — skipping").
+         Otherwise upgrades are pending → run pkg upgrade -y, /sbin/reboot,
+         wait_guest_ssh 300.  Only one code path reboots; the other is a no-op.
+      ONLY if upgrades pending: pkg upgrade -y + reboot + wait SSH.
+      If nothing pending: log message, no reboot, proceed immediately.
+
+  Health gate (strengthened; applies to ALL callers, not just --upgrade-pkgs):
+    After version-change detection, poll up to HEALTH_TIMEOUT (300 s) until EITHER:
+      a) webConfigurator answers HTTP on-box:
+           fetch -qT 15 --no-verify-peer --no-verify-hostname -o /dev/null https://127.0.0.1/
+         (FreeBSD's fetch(1), available on all pfSense versions)
+      b) pfctl -sr returns a non-empty ruleset on-box
+    If neither within HEALTH_TIMEOUT → die, fail-closed, nothing compressed/published.
+
+No changes to src/, tests/, or any other workflow.
 
 
 --------------------------------------------------------------------------------
-2. REFRESH TRIGGER
+2. UPGRADE + PUBLISH FLOW (step order)
 --------------------------------------------------------------------------------
 
-Primary trigger: workflow_dispatch dispatched by version-tracker.yml (Phase 4)
-  react job Step B: dispatches image-refresh.yml with pfsense_version +
-  freebsd_version for each ci:true CE entry in the ci_matrix.
+  1. Pull --from tag via oras (local runner).
+  2. Stream work copy to KVM host (local — runner IS KVM host).
+  3. Boot VM under QEMU/KVM (internet open for pkg + pfSense-upgrade).
+  4. Wait for SSH (wait_guest_ssh 300).
+  5. Read OLD_VER (/etc/version).
+  6. [--upgrade-pkgs] pkg update -f.
+  7. [--upgrade-pkgs] pkg upgrade -n (dry-run detect).
+  8. [--upgrade-pkgs, only if pending] pkg upgrade -y + /sbin/reboot + wait_guest_ssh 300.
+  9. pfSense-upgrade (reboots the box; connection drop expected).
+  10. Poll until /etc/version != OLD_VER (up to UPGRADE_TIMEOUT).
+  11. Health gate: poll up to HEALTH_TIMEOUT for webConfigurator HTTP or pfctl live
+      ruleset; die if neither within HEALTH_TIMEOUT (fail-closed, no publish).
+  12. /sbin/shutdown -p now → wait QEMU exit.
+  13. qemu-img convert (compress: zstd with zlib fallback).
+  14. Stream out.qcow2 back to runner.
+  15. oras push new tag (fail if tag already exists unless --force).
 
-Secondary trigger: manual workflow_dispatch for testing, forcing a re-refresh,
-  or running a specific version independently.
-
-The workflow reads the supported-versions matrix from ci-metadata (for
-auto-detecting from_version only). It does not write to the matrix.
-
-
---------------------------------------------------------------------------------
-3. EXACT SANITY GATE CHECKS
---------------------------------------------------------------------------------
-
-All six checks run against the CANDIDATE image (the upgraded-but-not-yet-published
-qcow2), booted under QEMU/KVM with internet open (user-net SLIRP). ANY miss →
-GATE_FAILED=1, no publish, job exits 1.
-
-  [GATE-1/6] VM boots
-    The candidate qcow2 (booted from a copy-on-write overlay, so the candidate
-    file is never mutated by the gate run) starts under qemu-system-x86_64 with
-    the same hardware profile as the smoke VM (virtio-scsi disk, virtio-net NIC,
-    pinned MAC BC:24:11:37:9C:AC, 2 vCPU, 4 GB RAM).
-
-  [GATE-2/6] SSH answers
-    root SSH on the guest's forwarded :22 (runner port 2223) must respond within
-    BOOT_TIMEOUT seconds (default 180). Uses the baked SMOKE_SSH_PRIV_KEY.
-
-  [GATE-3/6] /etc/version == expected release
-    cat /etc/version over SSH must return a string that starts with the
-    pfsense_version prefix (".x" stripped: "2.8.x" → prefix "2.8"). An empty
-    or non-matching value fails the gate. This confirms the upgrade landed.
-
-  [GATE-4/6] pfctl -sr loads
-    /sbin/pfctl -sr over SSH must return a non-empty ruleset. An empty result
-    (e.g. pf not running, firewall rules wiped by the upgrade) fails the gate.
-
-  [GATE-5/6] install-from-repo.sh + pfblockerng.php update exits 0
-    scripts/install-from-repo.sh rsync-installs pfBlockerNG from the repo's src/
-    onto the candidate VM (same as the smoke harness), then runs the production
-    reload entry point:
-      /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update
-    Both must exit 0. A non-zero exit from either fails the gate.
-    (install-from-repo.sh also installs RUN_DEPENDS via pkg on the guest; the
-    gate VM has internet open for this step — same as the image-build flow.)
-
-  [GATE-6/6] dig control record from guest Unbound
-    After the pfBlockerNG reload (which may restart Unbound), waits for
-    unbound-control status to confirm Unbound is up, then:
-      a) Injects a local-data A record via unbound-control local_data on the guest.
-      b) Resolves it on-box (drill @127.0.0.1 / host, over SSH) and asserts the
-         expected IP is present in the response.
-    The probe is internal (on-box), matching the smoke harness pattern. Failure
-    to inject or an incorrect/empty resolution fails the gate.
-
-After all gate checks pass (GATE_FAILED=0), the gate step exits 0 and the
-publish step runs with `if: success()`. If any check sets GATE_FAILED=1, the
-gate step exits 1 and the publish step is SKIPPED (not just skipped — the job
-exits non-zero so the run is red).
+The published image is a CLEAN upgraded qcow2. pfBlockerNG is NEVER installed
+on it (the non-blocking smoke step boots a discarded overlay, not the published
+image itself).
 
 
 --------------------------------------------------------------------------------
-4. PUBLISH-ON-PASS-ONLY PROOF
+3. CONDITIONAL pkg UPGRADE GATE (dry-run detect)
 --------------------------------------------------------------------------------
 
-The publish step is conditioned on `if: success()` — it runs ONLY when ALL
-preceding steps (upgrade + sanity gate) completed without error. The sanity gate
-step explicitly exits 1 on any gate failure, which:
-  a) marks that step as failed
-  b) causes `success()` to return false for subsequent steps
-  c) means the publish step is unconditionally skipped on a gate failure
+Decision logic (POSIX sh, in scripts/image-upgrade.sh):
 
-Additionally, the publish step itself:
-  - Refuses to clobber an existing tag (exits 1 if the tag already exists),
-    preserving the retention invariant from ADR-04 §2.
+  ssh_guest 'pkg upgrade -n' → capture output as _pkg_dry
+  if _pkg_dry contains "Your packages are up to date":
+      log "packages already up to date — skipping pkg upgrade + reboot"
+      # fall through to pfSense-upgrade; NO reboot
+  else:
+      # upgrades are pending (plan output present)
+      ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y'
+      ssh_guest '/sbin/reboot' 2>/dev/null || true
+      wait_guest_ssh 300
 
-Old tags are NEVER overwritten. A failed upgrade publishes nothing.
+The "Your packages are up to date" string is the canonical pkg(8) message when
+there is nothing to upgrade. The else-branch matches ANY other output (an upgrade
+plan always includes "Number of packages to be upgraded", "to be installed",
+"to be reinstalled", etc.). Exit codes are NOT the sole discriminant — pkg(8)
+exit-code semantics vary by version; string parsing is the reliable gate.
 
 
 --------------------------------------------------------------------------------
-5. FALSE-GREEN GUARD (fail-closed self-test)
+4. HEALTH GATE (publish guard)
 --------------------------------------------------------------------------------
 
-A deliberately-broken upgrade fails the gate in at least two ways:
+The publish guard is the alive/working-fine health check inside image-upgrade.sh —
+NOT pfBlockerNG installation or DNS resolution. It applies to ALL callers (not just
+image-refresh.yml), including build-image.yml's "upgrade" path.
 
-  a) Broken /etc/version (or upgrade that didn't land):
-     GATE-3 (/etc/version mismatch) fires → GATE_FAILED=1 → exit 1 → no publish.
+Poll condition (either is sufficient):
+  a) fetch -qT 15 --no-verify-peer --no-verify-hostname -o /dev/null https://127.0.0.1/
+     exits 0 on the guest (webConfigurator login page answers HTTPS).
+  b) /sbin/pfctl -sr on the guest returns a non-empty ruleset (at least 1 line).
 
-  b) pfSense services non-functional post-upgrade:
-     GATE-4 (pfctl empty), GATE-5 (pfblockerng.php update non-zero), or GATE-6
-     (Unbound not answering) fire → GATE_FAILED=1 → exit 1 → no publish.
+Timeout: HEALTH_TIMEOUT=300 s (constant in the script; polled every 10 s).
 
-  c) VM that doesn't boot:
-     GATE-2 (SSH timeout) fires first → exit 1 → no publish.
+Fail-closed: if neither check succeeds within 300 s → die "upgraded box did not
+become healthy within 300s" → nothing is compressed or published; job exits non-zero;
+GHCR tag is untouched; old tag kept.
 
-In all cases the publish step's `if: success()` condition is false and the step
-is skipped. The old GHCR tag remains untouched. The job exits red.
 
-Manual verification approach for CI: dispatch with a known-bad from_version (a
-version that doesn't exist in GHCR, or a from_version whose upgrade path is
-known to fail), confirm the job is red and no new tag appears in GHCR packages.
+--------------------------------------------------------------------------------
+5. NON-BLOCKING pfBlockerNG SMOKE
+--------------------------------------------------------------------------------
+
+Step 2 of the refresh job (continue-on-error: true):
+
+  a) oras pull the JUST-PUBLISHED tag.
+  b) qemu-img create -b <pulled.qcow2> -F qcow2 -f qcow2 overlay.qcow2
+     (throwaway CoW overlay — the published image file is NEVER written).
+  c) Boot overlay under QEMU/KVM (port 2223, internet open).
+  d) Wait SSH (180 s).
+  e) scripts/install-from-repo.sh → pfblockerng.php update.
+  f) unbound-control local_data injection → drill/host on-box → assert sanity IP.
+  g) Shut down overlay VM.
+
+Properties:
+  - continue-on-error: true  → even a complete step failure returns exit 0 to the
+    job; the refresh job always succeeds if Step 1 (upgrade+publish) succeeded.
+  - Discarded overlay         → the published image qcow2 is never mutated.
+  - Runs AFTER publish        → pfBlockerNG is never on the published image.
+  - Informational only        → warnings emitted as ::warning::, not ::error::.
+
+The authoritative pfBlockerNG validation is smoke-fanout.yml (Phase 6).
 
 
 --------------------------------------------------------------------------------
 6. MANUAL-SEED FALLBACK
 --------------------------------------------------------------------------------
 
-When the sanity gate fails (or the upgrade itself fails), the published GHCR tag
+When the health gate fails (or the upgrade itself fails), the published GHCR tag
 for the target version does NOT exist. The documented fallback is:
 
   scripts/image-publish.sh <pfsense-ce-version> --proxmox <host>
@@ -160,9 +170,9 @@ GHCR. It is NOT automated and requires the maintainer to run it once. The
 ADR-04 IMAGE_RUNBOOK.md documents the full procedure.
 
 Failure mode → fallback protocol:
-  1. image-refresh.yml fails the gate → run is red, no GHCR write.
+  1. image-refresh.yml fails the health gate → run is red, no GHCR write.
   2. Maintainer inspects diagnostics artifact (console.log, upgrade.log,
-     gate-console.log, gate-screen.png) to diagnose the gate failure.
+     smoke-console.log) to diagnose the failure.
   3. If the failure is transient (flaky network, slow runner): re-dispatch
      image-refresh.yml.
   4. If the upgrade is genuinely broken for this version: use image-publish.sh
@@ -175,39 +185,27 @@ Failure mode → fallback protocol:
 
 The workflow handles major CE version bumps (e.g. 2.7.x → 2.8.x) identically
 to patch/minor bumps — it calls the same pfSense-upgrade flow and the same
-sanity gate. ADR-09 §1 fact 6 documents that pfSense upgrades are designed to
+health gate. ADR-09 §1 fact 6 documents that pfSense upgrades are designed to
 work out-of-the-box even across FreeBSD-major jumps, and the seed image is
-minimal (little upgrade-chain cruft). The sanity gate is the safety net: if a
+minimal (little upgrade-chain cruft). The health gate is the safety net: if a
 major-jump upgrade is NOT turnkey, the gate fails closed and the old tag is kept
 (no bad image is published). Manual seed remains the fallback for any version
 where the gate cannot be made to pass.
-
-The freebsd_version input is passed by the tracker (from the matrix) and is
-available to the workflow for informational/future use (e.g. building the correct
-ABI .pkg in a combined workflow). The upgrade step itself uses pfSense-upgrade
-on the guest (which determines the target FreeBSD version internally from the
-pfSense package repo — the freebsd_version input is not passed to the upgrade
-command, consistent with the ADR-04 design where the upgrade is appliance-driven).
 
 
 --------------------------------------------------------------------------------
 8. GATE RESULTS
 --------------------------------------------------------------------------------
 
-python -m pytest:           1069 passed (unchanged)   [GREEN]
-ruff check .:               All checks passed          [CLEAN]
-ruff format --check .:      54 files already formatted [CLEAN]
-YAML (image-refresh.yml):   valid (yaml.safe_load)    [CLEAN]
-YAML (all 10 workflows):    all valid                  [CLEAN]
-markdownlint-cli2:           0 error(s), 33 .md files  [CLEAN]
-sh -n image-refresh.yml:    N/A (YAML, not shell)      [N/A]
-ShellCheck (*.sh):           clean (unmodified scripts) [CLEAN]
-src/: no changes                                       [CONFIRMED]
-tests/: no changes                                     [CONFIRMED]
-
-Note: markdownlint globs *.md only; the workflow YAML is not a Markdown file
-and is not in scope for markdownlint. The 10 workflow YAML files all pass
-yaml.safe_load validation.
+python -m pytest:                1089 passed (unchanged)   [GREEN]
+ruff check .:                    All checks passed          [CLEAN]
+ruff format --check .:           files already formatted    [CLEAN]
+ShellCheck (scripts/image-upgrade.sh):  0 errors/warnings  [CLEAN]
+sh -n scripts/image-upgrade.sh: no syntax errors           [CLEAN]
+YAML (image-refresh.yml):        valid (yaml.safe_load)    [CLEAN]
+markdownlint-cli2:               0 error(s)                [CLEAN]
+src/: no changes                                           [CONFIRMED]
+tests/: no changes                                         [CONFIRMED]
 
 
 --------------------------------------------------------------------------------
@@ -223,40 +221,48 @@ Phase 4 (RESULTS/04_Results.txt §3) requires:
     freebsd_version   string  e.g. "15.0-RELEASE"               CONFIRMED ✓
   Behaviour:
     KVM runner, pulls current GHCR tag, pfSense-upgrade,        CONFIRMED ✓
-    SANITY GATE (all 6 checks), oras push ONLY on pass,         CONFIRMED ✓
-    fail-closed on any gate failure                             CONFIRMED ✓
-
-The tracker's `react` job Step B dispatches with exactly these two required
-inputs and no others. The workflow accepts them as required and additional
-optional inputs do not change the dispatch interface.
+    health gate (fail-closed), oras push ONLY on pass           CONFIRMED ✓
 
 
 --------------------------------------------------------------------------------
 10. FILES CHANGED (adr/09 branch commit)
 --------------------------------------------------------------------------------
 
-New files:
-  .github/workflows/image-refresh.yml                               (this workflow)
-  .ADRs/ADR_09_Release_Version_Automation/RESULTS/05_Results.txt    (this file)
+Modified files:
+  scripts/image-upgrade.sh
+    - --upgrade-pkgs: conditional pkg upgrade (dry-run detect via pkg upgrade -n)
+    - health gate applies to all callers (already present; docs updated)
+
+  .github/workflows/image-refresh.yml
+    - Slimmed to single upgrade+publish step (image-upgrade.sh --upgrade-pkgs)
+    - Non-blocking pfBlockerNG smoke step (continue-on-error: true, CoW overlay)
+    - boot_timeout input removed (unused after inline logic gone)
+    - Diagnostics upload updated
+
+  .ADRs/ADR_09_Release_Version_Automation/ADR.md
+    - §2 CI image refresh row + publish guard row updated
+    - §6 Phase 5 bullet updated
+    - §7 DoD Phase 5 bullet + reject criteria + manual checklist updated
+
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/05_Results.txt
+    - This file (full rewrite reflecting the new flow)
+
+  CLAUDE.md
+    - "When the minimum supported CE version changes" step 2: replace six-check
+      sanity gate wording with new flow (conditional dep upgrade + health gate +
+      non-blocking smoke + smoke-fanout as real pfBlockerNG gate)
 
 
 --------------------------------------------------------------------------------
 11. HANDOFF FOR PHASE 6
 --------------------------------------------------------------------------------
 
-Phase 6 (06_Smoke_Fanout.txt):
+Phase 6 (06_Smoke_Fanout.txt) is unchanged:
   MUST create: .github/workflows/smoke-fanout.yml
-  MUST accept workflow_dispatch with NO version inputs (reads ci_matrix itself
-  via the read-version-matrix action).
+  MUST accept workflow_dispatch with NO version inputs (reads ci_matrix itself).
   The tracker dispatches it once (Step C) with only --repo and --ref (no inputs).
   Behaviour: reads ci_matrix, expands to strategy.matrix (fail-fast: false),
   runs ADR-04 smoke suite (tests/smoke/) per leg, gating job needs: all legs
   (AND gate), never Plus (ci:false excluded by ci_matrix filter).
-
-  The image-refresh.yml (Phase 5, this file) is now live on adr/09. A
-  smoke-fanout.yml can reference images by their published tags (pfsense_version
-  from the ci_matrix entry → ghcr.io/<owner>/pfsense-ce:<version>). The
-  Phase-4 tracker already dispatches smoke-fanout.yml once for all ci:true CE
-  entries; Phase 6 just needs to implement the fan-out logic itself.
 
 GO.
