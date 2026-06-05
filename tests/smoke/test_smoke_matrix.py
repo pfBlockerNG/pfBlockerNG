@@ -712,24 +712,28 @@ def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _Mo
 def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A DNSBL feed with BOTH families -> pfB_DNSBLIP_v4 AND pfB_DNSBLIP_v6.
 
-    ADR §2 contract: with the DNSBL-IP feature on and a feed carrying both an
-    IPv4 and an IPv6 literal, pfBlockerNG must populate TWO distinct alias tables
-    (the hardcoded ``DNSBLIP`` base name is suffixed per family ``_v4``/``_v6``,
-    inc:9306) — each holding ONLY its own family, never merged onto one table.
-    The inet/inet6 rules must reference the matching table.
+    Scenario: a DNSBL-IP feed carrying BOTH families partitions onto two tables.
+      Given a feed file with exactly one IPv4 literal and one IPv6 literal
+        And a DNSBL list referencing it with the DNSBL-IP action 'Deny_Both' on
+      When a Force Update builds the domain DB and the IP firewall tables
+      Then pfBlockerNG populates TWO distinct alias tables, pfB_DNSBLIP_v4 and
+           pfB_DNSBLIP_v6 (the hardcoded ``DNSBLIP`` base name suffixed per family,
+           inc:9306) — each holding ONLY its own family, never merged onto one
+        And the inet/inet6 rules each reference the matching per-family table.
 
-    DEFERRED: ``pfB_DNSBLIP_v4`` / ``pfB_DNSBLIP_v6`` are not present when
-    ``pfctl_tables()`` runs — the tables appear in teardown diagnostics, showing
-    that ``filter_configure`` populates them asynchronously after
-    ``pfblockerng.php update`` exits.  The assertion needs a polling helper (like
-    ``rule_references``).  Re-deferred; the IP-firewall path itself is already
-    proven by ``test_ip_alias_table_and_rule``.
-    Tracked: https://github.com/andrebrait/pfBlockerNG/issues/35
+    ADR §2 contract; on the maintainer's §7 manual checklist. The IP-firewall path
+    itself is already proven synchronously by ``test_ip_alias_table_and_rule``; what
+    this pins is specifically the dual-stack PARTITION (families never collide on one
+    table).
+
+    ``pfB_DNSBLIP_v4`` / ``pfB_DNSBLIP_v6`` are populated ASYNC — ``filter_configure``
+    lands them slightly after ``pfblockerng.php update`` returns (absent on a sync read
+    right after the reload, present in teardown diagnostics — issue #35). So the table
+    read goes through the bounded :func:`~helpers.wait_pfctl_table` poll, mirroring the
+    ``rule_references`` reload-lag pattern; a real miss surfaces as an assertion on the
+    empty list (with diagnostics uploaded), never a hang.
     """
-    pytest.skip(
-        "pfB_DNSBLIP_v4/v6 populated async by filter_configure; needs poll-based "
-        "assertion — deferred (see docstring; un-skip: #35)"
-    )
+    # Given: a feed carrying exactly one literal per family.
     v4 = "203.0.113.7"  # RFC 5737 documentation range
     v6 = "2001:db8:5::7"  # RFC 3849 documentation range
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsblip_dual.txt", f"{v4}\n{v6}\n")
@@ -744,20 +748,21 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
         dnsbl_ip_action="Deny_Both",
     )
     with h.CaseContext(deployed_vm, spec, scope="update"):
-        tables = h.pfctl_tables(deployed_vm)
-        assert "pfB_DNSBLIP_v4" in tables, f"pfB_DNSBLIP_v4 missing: {tables}"
-        assert "pfB_DNSBLIP_v6" in tables, f"pfB_DNSBLIP_v6 missing: {tables}"
+        # When: read each per-family table through the bounded async-population poll.
+        # Then: both tables exist and are non-empty (empty list -> clear assertion).
+        v4_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v4")
+        v6_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v6")
+        assert v4_members, "pfB_DNSBLIP_v4 never appeared/populated within the poll window"
+        assert v6_members, "pfB_DNSBLIP_v6 never appeared/populated within the poll window"
 
-        v4_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v4")
-        v6_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v6")
-
-        # Each table holds ONLY its own family (no collision / merge).
+        # Then: each table holds ONLY its own family (the partition — no collision / merge).
         assert h.member_present(v4_members, v4), f"{v4} not in pfB_DNSBLIP_v4: {v4_members}"
         assert not any(":" in m for m in v4_members), f"IPv6 leaked into pfB_DNSBLIP_v4: {v4_members}"
+        assert h.member_present(v6_members, v6), f"{v6} not in pfB_DNSBLIP_v6: {v6_members}"
         assert any(":" in m for m in v6_members), f"no IPv6 in pfB_DNSBLIP_v6: {v6_members}"
         assert not any(_is_v4_literal(m) for m in v6_members), f"IPv4 leaked into pfB_DNSBLIP_v6: {v6_members}"
 
-        # inet/inet6 rules reference the matching per-family table.
+        # Then: inet/inet6 rules reference the matching per-family table.
         assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v4"), "no rule references pfB_DNSBLIP_v4"
         assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v6"), "no rule references pfB_DNSBLIP_v6"
 

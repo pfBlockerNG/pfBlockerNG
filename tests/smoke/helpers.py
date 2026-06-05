@@ -1957,6 +1957,31 @@ def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def wait_pfctl_table(vm: SmokeVM, name: str, *, timeout: float = 30.0, interval: float = 2.0) -> list[str]:
+    """Poll ``pfctl -t <name> -T show`` until the table EXISTS and is NON-EMPTY.
+
+    Returns the members once populated, or ``[]`` on timeout — the caller asserts
+    on the result, so a genuine failure surfaces as a clear assertion (with the
+    per-run diagnostics snapshot already uploaded), never an open-ended hang.
+
+    A BOUNDED poll is the right primitive here precisely because DNSBL-IP table
+    population is legitimately ASYNC: ``filter_configure`` lands ``pfB_DNSBLIP_v4``/
+    ``pfB_DNSBLIP_v6`` slightly AFTER ``pfblockerng.php update`` returns (the tables
+    are absent on a synchronous read right after the reload, but present in teardown
+    diagnostics — issue #35). This is NOT the ADR-04 "first response is authoritative"
+    DNS case (that holds after :func:`wait_unbound_ready`, where the first answer is
+    the truth); it mirrors the :func:`rule_references` reload-lag poll instead.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if name in pfctl_tables(vm):
+            members = pfctl_table_members(vm, name)
+            if members:
+                return members
+        time.sleep(interval)
+    return []
+
+
 def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts: int = 10, delay: float = 2.0) -> bool:
     """True iff a loaded pf rule references ``alias`` (``pfctl -sr`` | grep).
 
