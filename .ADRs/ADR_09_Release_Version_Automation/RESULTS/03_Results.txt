@@ -1,0 +1,225 @@
+================================================================================
+ADR-09 Phase 3 Results — Release artifacts: build + attach per-FreeBSD-major .pkg
+================================================================================
+
+Status: GO — release.yml extended; per-FreeBSD-major .pkg built and attached;
+ports-pr intact; all gates green.
+
+
+--------------------------------------------------------------------------------
+1. WHAT WAS DONE
+--------------------------------------------------------------------------------
+
+Extended .github/workflows/release.yml to:
+  - Read the supported-version matrix (from ci-metadata via read-matrix job)
+  - Build one .pkg per distinct FreeBSD major (deduped from the matrix)
+  - Rename each artifact to embed the FreeBSD major for unambiguous naming
+  - Append the renamed .pkg file(s) to the already-published GitHub Release
+  - Keep ports-pr completely unblocked by any build outcome
+
+No changes to src/, tests/, or any other workflow file.
+
+
+--------------------------------------------------------------------------------
+2. BUILD JOB SHAPE + HOW IT READS THE MATRIX
+--------------------------------------------------------------------------------
+
+New jobs added to release.yml (in execution order):
+
+JOB: read-matrix
+  - Runs in parallel with verify-checks and the release job.
+  - Checks out the repo (fetch-depth: 0 for ci-metadata ref access).
+  - Detects pkg channel from the tag name: "*-devel" -> "devel", else "stable".
+  - Calls ./.github/actions/read-version-matrix to get the full build_matrix.
+  - Dedupes build_matrix by freebsd_major: for each distinct major, prefer the
+    first CE entry; fall back to the first Plus entry if no CE for that major.
+    Emits: build_matrix (JSON array), pkg_channel, and first_* scalar outputs
+    (first_freebsd_version, first_freebsd_major, first_php_version, first_py_flavor)
+    for the FreeBSD-builder reusable-workflow call (which cannot use strategy.matrix).
+
+JOB: build-pkgs-portable  [DEFAULT — runs on tag push and on builder!=freebsd dispatch]
+  - needs: [verify-checks, read-matrix]
+  - if: github.event.inputs.builder != 'freebsd'
+  - Runs inline portable builder steps (mirrors build-pkg-linux.yml logic).
+  - Loops over the deduped build_matrix entries via jq; for each entry:
+      - Clones andrebrait/FreeBSD-ports at pfblockerng/use-github
+      - Runs scripts/build-pkg-portable.py with abi, py_flavor, php_version
+      - Renames output: <portname>-<version>.pkg -> <portname>-<version>-FreeBSD-<major>.pkg
+  - Uploads all renamed .pkg files as artifact "pfBlockerNG-release-pkgs".
+  - On tag push: github.event.inputs.builder is empty -> condition != 'freebsd' is
+    TRUE -> this job always runs on a real release tag.
+
+JOB: build-pkgs-freebsd  [FALLBACK — runs only on builder==freebsd dispatch]
+  - needs: [verify-checks, read-matrix]
+  - if: github.event.inputs.builder == 'freebsd'
+  - Calls ./.github/workflows/build-pkg.yml (the FreeBSD make-package VM builder)
+    with first_freebsd_version, pkg_channel, first_php_version from read-matrix.
+    Note: GitHub Actions does not allow strategy.matrix alongside uses: for
+    reusable workflows; first_* scalar outputs from read-matrix are used directly.
+    Today's deduped matrix has exactly one entry (FreeBSD 15); when a second major
+    is added, the FreeBSD path would need extending to multiple calls.
+  - build-pkg.yml uploads as "pfBlockerNG-pkg" (its existing contract).
+
+JOB: attach-pkgs
+  - needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
+  - if: always() && needs.release.result == 'success'
+  - Downloads from "pfBlockerNG-release-pkgs" (portable) and "pfBlockerNG-pkg"
+    (FreeBSD), both with continue-on-error: true.
+  - Renames any untagged .pkg using first_freebsd_major (FreeBSD builder output).
+    Portable builder output is already tagged; rename step is idempotent.
+  - Uploads renamed files to the GitHub Release via gh release upload --clobber.
+  - Emits ::warning:: if no .pkg files are present.
+
+
+--------------------------------------------------------------------------------
+3. ARTIFACT NAMING
+--------------------------------------------------------------------------------
+
+Pattern: <portname>-<portversion>-FreeBSD-<major>.pkg
+
+Example (CE 2.8.x, devel channel, version 3.2.16):
+  pfSense-pkg-pfBlockerNG-devel-3.2.16-FreeBSD-15.pkg
+
+The portname is determined by the port Makefile (channel-specific:
+pfSense-pkg-pfBlockerNG-devel for devel, pfSense-pkg-pfBlockerNG for stable).
+The portversion comes from the same Makefile (PORTVERSION). The FreeBSD major
+comes from the deduped build_matrix's freebsd_major field.
+
+ABI dedup key: freebsd_major. Both CE 2.8.x and Plus 25.03 share freebsd_major=15
+in the current seed, so exactly ONE .pkg is built and attached per release.
+
+
+--------------------------------------------------------------------------------
+4. DEPENDENCY EDGES — WHY ports-pr IS INTACT
+--------------------------------------------------------------------------------
+
+Job dependency graph (simplified):
+
+  [tag push / workflow_dispatch]
+        |
+  verify-checks ──────────────────────────────────────┐
+        |                                             |
+  release (needs: verify-checks) ──→ ports-pr        |
+        |         (needs: release only)               |
+        └────────── build-pkgs-portable  ←────────────┘
+        └────────── build-pkgs-freebsd   ←────────────┘
+                           |
+                     attach-pkgs (needs: [release, build-pkgs-*, read-matrix])
+                     if: always() && needs.release.result == 'success'
+
+KEY PROOF:
+  ports-pr needs: [release]
+           NOT: build-pkgs-portable, build-pkgs-freebsd, attach-pkgs
+
+  Therefore: a build failure (either or both build-pkgs-* jobs red) does NOT
+  block ports-pr. ports-pr runs as soon as release succeeds, in parallel with
+  attach-pkgs (which waits for builds to finish via its own needs).
+
+  A build failure scenario:
+    - release: succeeds -> ports-pr: starts immediately (unblocked)
+    - build-pkgs-portable: fails -> build-pkgs-portable: red (surfaces clearly)
+    - attach-pkgs: runs (if: always() && release==success), downloads nothing,
+      emits ::warning::, completes green
+    - ports-pr: already running/completed, unaffected
+
+  The build is ADDITIVE: a build failure is visible (red job) but never silently
+  skipped or hidden, and never breaks the real distribution path (ports PR).
+
+
+--------------------------------------------------------------------------------
+5. PLUS BUILD-ONLY
+--------------------------------------------------------------------------------
+
+Plus entries (ci: false in the matrix) ARE included in the deduped build matrix.
+With the current seed, Plus 25.03 and CE 2.8.x both have freebsd_major=15, so the
+CE entry is preferred (CE is first in the group, channel=="CE" takes priority).
+The resulting single .pkg covers both CE and Plus on FreeBSD 15.
+
+When Plus gets its own FreeBSD major (e.g., Plus on FreeBSD 16), the dedupe will
+produce a second entry for FreeBSD 16. The build-pkgs-portable loop will build
+both. Plus entries are never passed to the CI smoke fan-out (ci: false) — that
+guard is in Phase 6.
+
+
+--------------------------------------------------------------------------------
+6. BUILDER SELECTION — PORTABLE DEFAULT / FREEBSD FALLBACK
+--------------------------------------------------------------------------------
+
+On a tag push (push: tags: trigger):
+  - github.event.inputs.builder is empty string
+  - '' != 'freebsd' is TRUE -> build-pkgs-portable runs
+  - '' == 'freebsd' is FALSE -> build-pkgs-freebsd is skipped
+  => Default is ALWAYS portable Linux builder on real releases.
+
+On workflow_dispatch with builder=portable (or unset):
+  - Same as tag push; portable builder runs.
+
+On workflow_dispatch with builder=freebsd:
+  - build-pkgs-portable is skipped (if: false)
+  - build-pkgs-freebsd runs (calls build-pkg.yml, the FreeBSD VM builder)
+  => Explicit selection of the fidelity oracle / fallback.
+
+"Linux by default, FreeBSD if we fuck up." — Phase 1 contract preserved.
+
+
+--------------------------------------------------------------------------------
+7. GATE RESULTS
+--------------------------------------------------------------------------------
+
+python -m pytest:       1069 passed (unchanged)  [GREEN]
+ruff check .:           All checks passed         [CLEAN]
+ruff format --check .:  54 files already formatted [CLEAN]
+YAML (all workflows):   valid (python yaml.safe_load)  [CLEAN]
+markdownlint-cli2:      0 error(s), 33 files      [CLEAN]
+src/: no changes                                  [CONFIRMED]
+tests/: no changes                                [CONFIRMED]
+
+
+--------------------------------------------------------------------------------
+8. FILES CHANGED (adr/09 branch commit)
+--------------------------------------------------------------------------------
+
+Modified:
+  .github/workflows/release.yml  (new jobs + workflow_dispatch input)
+
+New:
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/03_Results.txt  (this file)
+
+
+--------------------------------------------------------------------------------
+9. KNOWN LIMITATIONS / FUTURE WORK
+--------------------------------------------------------------------------------
+
+a) FreeBSD builder path (build-pkgs-freebsd) handles only the first deduped entry
+   (FreeBSD 15 today). When a second FreeBSD major is added, extend the FreeBSD
+   path to call build-pkg.yml twice (or use an inline loop like build-pkgs-portable).
+
+b) On workflow_dispatch from a non-tag ref, read-matrix's channel detection sees
+   the branch name (e.g., "adr/09") instead of a tag name; it defaults to "stable".
+   This only affects dry-runs dispatched from a branch, not real tag-triggered runs.
+   Document and accept; workflow_dispatch dry-runs should be dispatched from a tag ref.
+
+c) The portable builder uploads "pfBlockerNG-release-pkgs"; the FreeBSD builder
+   uploads "pfBlockerNG-pkg" (reusable workflow contract). attach-pkgs downloads
+   both artifact names (continue-on-error) and takes whichever is present.
+
+
+--------------------------------------------------------------------------------
+10. HANDOFF FOR PHASE 4
+--------------------------------------------------------------------------------
+
+Phase 4 (version-tracker) can consume the matrix reader and trigger the build
+artifacts path via workflow_dispatch on release.yml, or by dispatching the
+build-pkgs-portable job directly. The key wiring:
+
+  - read-matrix outputs: build_matrix (JSON), ci_matrix (JSON for Phase 6 fan-out),
+    pkg_channel
+  - Trigger release workflow: gh workflow run release.yml --ref <tag>
+  - Or trigger builds independently: gh workflow run build-pkg-linux.yml
+    --field channel=devel --field abi=FreeBSD:15:amd64 ...
+
+The ports-pr intact proof in §4 (dependency edges) is the contract for Phase 4 to
+trust: any matrix-driven build trigger should maintain the same non-blocking
+relationship with the ports PR path.
+
+GO.
