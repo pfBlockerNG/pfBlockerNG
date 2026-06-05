@@ -187,12 +187,14 @@ SCRIPT_MAP: dict[int, list[str]] = {
     0x0E44: ["Thai"],
     0x13A0: ["Cherokee"],  # Ꭰ
     0x2C81: ["Coptic"],  # ⲁ
+    0x304D: ["Hiragana"],  # き
     0x30A4: ["Katakana"],
     0x30B9: ["Katakana"],
     0x30C6: ["Katakana"],
     0x30C8: ["Katakana"],
     0x30C9: ["Katakana"],
     0x30E1: ["Katakana"],
+    0x30E2: ["Katakana"],  # モ
     0x30F3: ["Katakana"],
     0x4E2D: ["Han"],
     0x456E: ["Han"],  # xn--google junk ideograph
@@ -203,6 +205,7 @@ SCRIPT_MAP: dict[int, list[str]] = {
     0x56FD: ["Han"],
     0x6587: ["Han"],
     0x65E5: ["Han"],
+    0x66F8: ["Han"],  # 書
     0x672C: ["Han"],
     0x8A9E: ["Han"],
     0xAD6D: ["Hangul"],

@@ -136,6 +136,8 @@ class TestScriptOf:
             ("α", "Greek"),  # U+03B1
             ("中", "Han"),
             ("テ", "Katakana"),
+            ("の", "Hiragana"),  # U+306E
+            ("き", "Hiragana"),  # U+304D
             ("한", "Hangul"),
             ("ا", "Arabic"),
         ],
@@ -180,6 +182,7 @@ class TestResolvedScriptSet:
     def test_single_script_label(self) -> None:
         assert A.resolved_script_set("münchen") == {"Latin"}
         assert A.resolved_script_set("россия") == {"Cyrillic"}
+        assert A.resolved_script_set("ひらがな") == {"Hiragana"}  # all-Hiragana
 
     def test_digits_and_hyphen_are_transparent(self) -> None:
         # ASCII letters+digits+hyphen -> only Latin (Common digits/hyphen dropped).
@@ -189,6 +192,8 @@ class TestResolvedScriptSet:
         # Han + Katakana legit CJK mix; Latin + Cyrillic homograph mix.
         assert A.resolved_script_set("ドメイン名") == {"Han", "Katakana"}
         assert A.resolved_script_set("аpple") == {"Cyrillic", "Latin"}
+        # Full Japanese: Katakana (メモ) + Han (書) + Hiragana (き) all in one label.
+        assert A.resolved_script_set("メモ書き") == {"Han", "Hiragana", "Katakana"}
 
     def test_scriptless_label_is_empty_set(self) -> None:
         # Empty, control char, emoji: no letter-script -> empty set (flagged later).
@@ -216,6 +221,8 @@ class TestRestrictionLevel:
         # Latin/Han + CJK companions -> Highly Restrictive (the legit multi allow-set).
         assert A.restriction_level({"Han", "Katakana"}) == A.LEVEL_HIGHLY_RESTRICTIVE
         assert A.restriction_level({"Han", "Hangul"}) == A.LEVEL_HIGHLY_RESTRICTIVE
+        # Full Japanese: Han + Hiragana + Katakana together is still Highly Restrictive.
+        assert A.restriction_level({"Han", "Hiragana", "Katakana"}) == A.LEVEL_HIGHLY_RESTRICTIVE
 
     def test_non_restrictive_mix(self) -> None:
         # A non-allow-set multi-script mix -> Non Restrictive.
@@ -256,6 +263,19 @@ class TestCjkLegitIsZeroFalsePositive:
         scripts = A.resolved_script_set(decoded)
         assert scripts == {"Han", "Hangul"} and len(scripts) >= 2
         assert A.severity_of(decoded) == A.SEV_LEGIT
+
+    def test_japanese_all_three_scripts_is_legit(self) -> None:
+        # Given メモ書き ('memo writing') -- Katakana (メモ) + Han (書) + Hiragana (き)
+        # in ONE label, the canonical real-Japanese form (kanji + okurigana hiragana +
+        # katakana that appears in countless legitimate .jp domains).
+        decoded = A.decode_idn_label("xn--w8jxqd8946c")
+        scripts = A.resolved_script_set(decoded)
+        # When we observe all THREE Japanese scripts co-occur (a naive any-mix rule blocks)...
+        assert scripts == {"Han", "Hiragana", "Katakana"} and len(scripts) == 3
+        # Then it is UTS#39 Highly Restrictive -> legit, end-to-end through classify_idn.
+        assert A.restriction_level(scripts) == A.LEVEL_HIGHLY_RESTRICTIVE
+        assert A.severity_of(decoded) == A.SEV_LEGIT
+        assert A.classify_idn("xn--w8jxqd8946c").severity == A.SEV_LEGIT
 
 
 class TestMaliciousConfusablePairs:
