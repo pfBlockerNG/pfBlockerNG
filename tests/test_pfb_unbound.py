@@ -1007,11 +1007,16 @@ class TestOperateDnsbl:
         add_data("evil.com", log="4", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
+        assert qstate.no_cache_store == 0  # before-state: cacheable by default
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
+        # IDENTICAL shape to the "3" case: bare NXDOMAIN, no message, uncached, nxdomain.
         assert qstate.return_rcode == RCODE_NXDOMAIN
+        assert qstate.return_msg is None
         assert DNSMessage.instances == []
+        assert qstate.no_cache_store == 1
+        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True
 
     def test_block_sets_no_cache_store(self, monkeypatch: Any) -> None:
         # #43: the synthetic block reply must NOT be stored in Unbound's C message
@@ -2036,10 +2041,12 @@ class TestEvaluateDomainNxdomain:
         assert dec.null_blocking is True
         assert dec.log_type == "4"  # logger silences this variant
 
-    def test_nxdomain_is_immune_to_hsts(self) -> None:
+    def test_nxdomain_does_not_inherit_hsts_attribution(self) -> None:
         # NXDOMAIN avoids the TLS handshake HSTS guards, so the HSTS null-override
-        # (which forces a VIP "1" block to null) must NOT touch an NXDOMAIN block.
-        # Given evil.com is an HSTS name AND its mode is NXDOMAIN-logging ("3")
+        # (which forces a VIP "1" block to null) must NOT touch an NXDOMAIN block AND
+        # the block must not be MISreported as HSTS in the logs (issue #31 / PR review).
+        # Given evil.com is in the HSTS DB AND its mode is NXDOMAIN-logging ("3") --
+        # hsts_check_domain WILL match it, so without the clear it would set in_hsts/p_type.
         data_db: dict = {"evil.com": {"log": "3", "index": 0}}
         hsts_db: dict = {"evil.com": 0}
         fgi_db: dict = {0: {"feed": "F", "group": "G"}}
@@ -2047,10 +2054,12 @@ class TestEvaluateDomainNxdomain:
         cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=())
         # When evaluated
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        # Then HSTS is detected but the block stays NXDOMAIN (not reshaped to null/VIP)
-        assert dec.in_hsts is True
+        # Then the block stays NXDOMAIN (not reshaped to null/VIP) AND reports as a clean
+        # Python block -- the HSTS attribution is cleared, not carried into the decision.
         assert dec.nxdomain is True
         assert dec.null_blocking is True
+        assert dec.in_hsts is False  # HSTS membership did not influence NXDOMAIN -> cleared
+        assert dec.p_type == "Python"  # mislabeled "HSTS"/"HSTS_TLD" before the fix
 
 
 class TestEvaluateNoaaaGolden:
