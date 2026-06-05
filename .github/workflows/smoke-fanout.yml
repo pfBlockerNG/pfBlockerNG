@@ -1,0 +1,194 @@
+name: Smoke Fan-out (all CE, ADR-09 P6)
+
+# Fan the ADR-04 smoke suite across every ci:true CE image in parallel.
+# NEVER runs Plus images (ci:false entries are excluded by the CI matrix filter;
+# an additional guard below aborts any leg that carries channel != CE or ci != true).
+#
+# Workflow name + no-version-input dispatch contract (Phase 4 / RESULTS/04):
+#   Workflow file name:  .github/workflows/smoke-fanout.yml
+#   Trigger:            workflow_dispatch (no version inputs)
+#   Behaviour:          reads ci_matrix from read-version-matrix action,
+#                       expands to strategy.matrix (fail-fast: false),
+#                       runs ADR-04 smoke suite per leg (smoke.yml callee),
+#                       gating job needs: all legs (AND gate).
+#
+# AND-gate semantics (GitHub Actions needs.*.result):
+#   - All legs pass  → smoke job result = 'success' → gate = green
+#   - Any leg fails  → smoke job result = 'failure' → gate = red
+#   - Zero legs      → smoke job is skipped         → gate sees 'skipped' → red
+#   - Cancelled legs → smoke job result = 'cancelled' → gate = red
+# The gate job uses `if: always()` so it runs regardless of the matrix outcome,
+# and it hard-fails unless needs.smoke.result == 'success'.
+#
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ INVARIANT: this workflow NEVER commits to or writes any branch.     │
+# │ Plus is NEVER run (ci:false entries are excluded at the matrix     │
+# │ read step and double-guarded in the smoke job itself).             │
+# └─────────────────────────────────────────────────────────────────────┘
+
+on:
+  # Manual trigger — dispatched by version-tracker.yml (Step C) with no inputs.
+  # Also usable for ad-hoc full-suite runs.
+  workflow_dispatch:
+
+  # Called by other workflows (e.g. release.yml) without version inputs.
+  workflow_call:
+
+  # Daily nightly run — runs the full CE suite every night.
+  schedule:
+    - cron: "0 7 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # ── 1. Read CI matrix (ci:true CE entries only) ──────────────────────────────
+  #
+  # Emits `ci_matrix` (JSON array) as the `include` list for the smoke job's
+  # strategy.matrix.  The reader already filters to ci:true CE entries; Plus
+  # entries (ci:false) are NEVER present in ci_matrix.
+  prepare:
+    name: Read CI matrix
+    runs-on: ubuntu-latest
+    outputs:
+      ci_matrix: ${{ steps.read.outputs.ci_matrix }}
+      leg_count: ${{ steps.count.outputs.leg_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # reach the ci-metadata orphan ref
+
+      - name: Read CI matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Log CI matrix
+        run: |
+          echo "=== CI matrix (ci:true CE entries — fed to smoke strategy.matrix) ==="
+          printf '%s\n' '${{ steps.read.outputs.ci_matrix }}' | jq .
+
+      - name: Count legs + assert no Plus entries
+        id: count
+        env:
+          CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
+        run: |
+          set -eu
+          COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Legs in CI matrix: ${COUNT}"
+
+          # PLUS GUARD: assert that every entry in the CI matrix is a CE entry
+          # with ci=true.  The matrix reader already filters to these; this step
+          # is a hard fail-safe so a schema change can never silently let Plus in.
+          PLUS_COUNT=$(printf '%s\n' "$CI_MATRIX" \
+            | jq '[.[] | select(.channel != "CE" or .ci != true)] | length')
+          if [ "$PLUS_COUNT" -ne 0 ]; then
+            echo "::error::PLUS GUARD: CI matrix contains ${PLUS_COUNT} non-CE or ci:false entries — aborting."
+            printf '%s\n' "$CI_MATRIX" \
+              | jq '.[] | select(.channel != "CE" or .ci != true)'
+            exit 1
+          fi
+          echo "Plus guard: OK — all ${COUNT} leg(s) are CE ci:true."
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::CI matrix is empty — no CE images to smoke-test."
+          fi
+
+  # ── 2. Per-CE smoke run (parallel, fail-fast: false) ─────────────────────────
+  #
+  # One leg per ci:true CE entry.  Each leg calls the ADR-04 smoke workflow
+  # (smoke.yml) as a reusable callee, passing the per-version image ref.
+  # `fail-fast: false` ensures EVERY leg runs to completion regardless of
+  # whether another leg has already failed.
+  #
+  # IMAGE REF RESOLUTION:
+  # The CI matrix entry carries pfsense_version (e.g. "2.8.x").  The GHCR
+  # image tag for that version is:
+  #   ghcr.io/<owner>/pfsense-ce:<pfsense_version>
+  # The SMOKE_IMAGE_REF secret/variable used by smoke.yml can be overridden
+  # per-leg via the `image_ref` input — we pass the version-specific tag here.
+  # If SMOKE_IMAGE_BASE_URL is set (org/repo variable), that base is used;
+  # otherwise it defaults to the repository owner's GHCR namespace.
+  smoke:
+    name: Smoke (${{ matrix.pfsense_version }})
+    needs: prepare
+    # Run even if prepare had warnings; skip only if prepare hard-failed.
+    if: needs.prepare.outputs.leg_count != '0'
+    strategy:
+      fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      # Construct the per-version GHCR image ref.
+      # Format: ghcr.io/<owner>/pfsense-ce:<pfsense_version>
+      # e.g.   ghcr.io/myorg/pfsense-ce:2.8.x
+      # The smoke.yml callee falls back to SMOKE_IMAGE_REF secret/variable when
+      # image_ref is blank; passing a version-specific tag here overrides that.
+      image_ref: "ghcr.io/${{ github.repository_owner }}/pfsense-ce:${{ matrix.pfsense_version }}"
+    secrets: inherit
+
+  # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────
+  #
+  # This is the REQUIRED STATUS check.  It runs regardless of the smoke matrix
+  # outcome (if: always()) and hard-fails unless every leg passed.
+  #
+  # GitHub Actions matrix semantics (verified):
+  #   needs.smoke.result == 'success'   → all legs passed
+  #   needs.smoke.result == 'failure'   → at least one leg failed
+  #   needs.smoke.result == 'skipped'   → zero legs (empty matrix)
+  #   needs.smoke.result == 'cancelled' → run was cancelled
+  #
+  # The gate fails on anything other than 'success' — including zero legs (skipped)
+  # and cancelled (which can hide failures).  This gives the AND of all legs with
+  # no partial-pass escape hatch.
+  all-smoke-passed:
+    name: All smoke legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [prepare, smoke]
+    if: always()   # run even if smoke failed/skipped/cancelled
+    steps:
+      - name: Assert every smoke leg passed
+        env:
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+        run: |
+          set -eu
+          echo "Smoke matrix result : ${SMOKE_RESULT}"
+          echo "CI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          # Zero-leg guard: an empty matrix skips the smoke job (result='skipped').
+          # Treat this as a gate failure — the matrix should always have at least
+          # one CE entry.  A skipped gate silently hides a matrix-read problem.
+          if [ "${LEG_COUNT:-0}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — CI matrix was empty (zero legs); nothing was tested."
+            exit 1
+          fi
+
+          # Main gate: the smoke job result must be 'success'.
+          # 'failure' = at least one leg failed.
+          # 'skipped' = all legs were skipped (should not happen if leg_count > 0).
+          # 'cancelled' = run was cancelled (masks potential failures).
+          case "$SMOKE_RESULT" in
+            success)
+              echo "AND gate PASS — all ${LEG_COUNT} smoke leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more smoke legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — smoke job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — smoke job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected smoke result '${SMOKE_RESULT}'."
+              exit 1
+              ;;
+          esac
