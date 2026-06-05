@@ -179,7 +179,14 @@ jobs:
           echo "Image: ${IMG_URL}"
           curl -fSL "${IMG_URL}" -o fbsd.qcow2.xz
           # Verify the download against the published checksum BEFORE decompressing
-          # — never assume the bytes are correct/complete.
+          # — never assume the bytes are correct/complete. INTEGRITY ONLY, NOT
+          # AUTHENTICITY: FreeBSD publishes no signature for VM-IMAGES (no .asc/.sig
+          # beside the checksums, release or snapshot), and CHECKSUM.SHA256 is fetched
+          # from the same host as the image — so this catches a corrupt/truncated
+          # download, not a malicious mirror. TLS to download.freebsd.org is the trust
+          # anchor. Pinning a known-good hash in-repo would only help -RELEASE; pfSense
+          # tracks moving -CURRENT/-STABLE snapshots (Latest/ respins), so there is
+          # nothing stable to pin. Left as-is by decision (2026-06).
           echo "${IMG_SHA}  fbsd.qcow2.xz" | sha256sum -c -
           unxz fbsd.qcow2.xz
           ls -l fbsd.qcow2
