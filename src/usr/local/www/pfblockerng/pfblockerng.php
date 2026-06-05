@@ -1384,6 +1384,11 @@ function pfblockerng_get_countries() {
 			$pfb['complete']	= FALSE;
 			$linenum		= 1;
 			$total			= 0;
+			// $country/$isocode are carried across lines and read in the
+			// `$pfb['complete']` flush block below; default them so they are
+			// always defined (the flush only runs after a header has set them).
+			$country		= '';
+			$isocode		= '';
 
 			if (($handle = @fopen("{$file}", 'r')) !== FALSE) {
 				while (($line = @fgets($handle)) !== FALSE) {
