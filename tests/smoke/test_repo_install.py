@@ -991,6 +991,56 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
     assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
 
 
+@pytest.mark.timeout(600)  # runner-side portable build over 2 inputs + ship + pkg update + install > the 30s cap.
+def test_portable_catalog_dedups_duplicate_sources(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """DEDUP on the live VM (PR #144): the SAME package staged from TWO sources — the
+    publish job's ``built-<source>-`` prefixed copies of the branch build + a release
+    artifact — produces ONE canonically-named ``.pkg`` + ONE catalog entry that a real
+    pfSense ``pkg`` installs, not two prefixed duplicates (the defect the first live
+    Pages deploy actually served). Complements the unit pin
+    (``test_duplicate_sources_dedup_to_one_canonical``) by driving the REAL generator
+    output through a real ``pkg update``/``install`` on the box.
+
+    Given the branch ``.pkg`` copied under TWO distinct ``built-<source>-`` filenames and
+      a catalog built over BOTH by ``build-repo-portable.py`` on the runner, shipped to
+      the guest, enabled via a NONE-signed ``file://`` repo above the pfSense repo,
+    When ``pkg update`` reads it and ``pkg install -y`` runs (NO ``-r``, NO ``-f``),
+    Then the bucket holds exactly ONE package ``.pkg``, canonically named
+      ``<name>-<version>.pkg`` (no ``built-incoming_*`` prefix), and the install comes
+      from OUR repo — the two staging duplicates collapsed to one.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    src = Path(pkg)
+
+    # GIVEN: the SAME build staged under two `built-<source>-` filenames (mirrors the
+    # publish job's store/ layout), built into one catalog by the pure-Python generator.
+    a = tmp_path / "built-incoming_branch-pfb.pkg"
+    b = tmp_path / "built-incoming_release-freebsd-pfb.pkg"
+    a.write_bytes(src.read_bytes())
+    b.write_bytes(src.read_bytes())
+    abi_dir = build_repo_via_portable(repo_vm, [a, b], tmp_path)
+
+    # THEN (catalog shape): exactly ONE package .pkg, canonically named (no prefix) — the
+    # catalog files (packagesite.pkg/data.pkg) also end in .pkg, so exclude them.
+    listing = _ssh_check(repo_vm, "/bin/ls", "-1", abi_dir).stdout.split()
+    catalog_files = {"packagesite.pkg", "data.pkg", "meta.pkg"}
+    pkgs = [n for n in listing if n.endswith(".pkg") and n not in catalog_files]
+    assert len(pkgs) == 1, f"expected ONE deduped package .pkg in the bucket, got {pkgs}"
+    assert pkgs[0].startswith(f"{PKG_NAME}-") and "built-incoming" not in pkgs[0], (
+        f"published .pkg is not canonically named: {pkgs[0]!r}"
+    )
+
+    # WHEN/THEN (install): a real pkg installs the deduped catalog from OUR repo.
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+    pkg_update(repo_vm)
+    assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the dedup install"
+    pkg_install_from_repo(repo_vm)
+    assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "deduped catalog did not install from our repo"
+
+
 # --------------------------------------------------------------------------- #
 # Phase-3b — the LIVE GitHub-Pages-URL end-to-end (dispatch-only; gated)
 # --------------------------------------------------------------------------- #
