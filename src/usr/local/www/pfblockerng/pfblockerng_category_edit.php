@@ -150,6 +150,10 @@ if (isset($_POST)) {
 }
 
 // Define variables for page
+// Default so $conf_type is defined even when $gtype is empty (the switch below, which
+// sets it for every type, runs only inside this guard). Behaviour-preserving: an
+// undefined $conf_type already interpolated to '' in the config paths.
+$conf_type = '';
 if (!empty($gtype)) {
 
 	// Set 'active' GUI Tabs
