@@ -58,7 +58,10 @@ permissions:
 # Serialise deploys to the single Pages environment; never cancel an in-flight
 # deploy (a half-replaced site is worse than a queued one).
 concurrency:
-  group: pages-${{ github.ref }}
+  # One global key for the Pages site — ALL deploys (this workflow on a tag, a
+  # branch dispatch, and the FreeBSD fallback) share it so they serialise instead
+  # of racing on the same target.
+  group: pages-pfblockerng
   cancel-in-progress: false
 
 jobs:
@@ -148,7 +151,9 @@ jobs:
           mkdir -p store
 
           # 1. Every published Release's .pkg assets (the durable store).
-          TAGS="$(gh release list -R "$REPO" --limit 200 --json tagName --jq '.[].tagName' || true)"
+          # ALL releases (paginated — no cap, so older .pkg never drop out of the
+          # derived-over-Releases catalog).
+          TAGS="$(gh api "repos/$REPO/releases" --paginate --jq '.[].tag_name' || true)"
           if [ -n "$TAGS" ]; then
             printf '%s\n' "$TAGS" | while IFS= read -r TAG; do
               [ -n "$TAG" ] || continue

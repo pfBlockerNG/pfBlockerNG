@@ -1045,13 +1045,15 @@ def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> None:
     routes ``pkg``'s HTTPS fetch to Pages by IP while TLS SNI still presents ``host``
     (GitHub's *.github.io cert validates). Idempotent: the entry is removed first.
     """
-    # Remove any prior pin for this exact host, then append the fresh one. The line
-    # is `<ip> <host>` (the first listed Pages IP suffices; pkg follows the cert).
-    strip = f"grep -v '[[:space:]]{re.escape(host)}$' /etc/hosts > /etc/hosts.pfb 2>/dev/null"
+    # Drop any prior line carrying this host as a whitespace-separated field (not
+    # just a line-ending match, so stale aliases/comments don't survive), then pin
+    # ALL the Pages IPs (resilient to a single-IP failure; pkg follows the cert).
+    # Atomic via a tmp file + mv.
+    strip = f"grep -Ev '[[:space:]]{re.escape(host)}([[:space:]]|$)' /etc/hosts > /etc/hosts.pfb 2>/dev/null"
     script = (
         f"{strip} || cp /etc/hosts /etc/hosts.pfb; "
-        f"printf '%s %s\\n' '{PAGES_IPS[0]}' '{host}' >> /etc/hosts.pfb; "
-        f"mv /etc/hosts.pfb /etc/hosts"
+        + "".join(f"printf '%s %s\\n' '{ip}' '{host}' >> /etc/hosts.pfb; " for ip in PAGES_IPS)
+        + "mv /etc/hosts.pfb /etc/hosts"
     )
     result = subprocess.run(
         vm.ssh_argv("/bin/sh", "-c", script),

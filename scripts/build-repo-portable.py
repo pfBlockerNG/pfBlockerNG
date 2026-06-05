@@ -61,6 +61,7 @@ import argparse
 import hashlib
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -93,6 +94,12 @@ META_CONF = (
 # to scripts/build-repo.sh DEFAULT_BASE_URL so the two generators stay byte-equal.
 DEFAULT_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
 CONF_PRIORITY = 100
+
+# A safe single path segment: an ABI is used UNVALIDATED from manifest data as a
+# directory name (out_dir / abi) that is rmtree'd + rebuilt, so reject anything
+# that could escape out_dir. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is
+# allowed); `/`, `\`, whitespace, and traversal are not.
+_ABI_RE = re.compile(r"^[A-Za-z0-9:._+-]+$")
 
 
 class BuildRepoError(Exception):
@@ -348,6 +355,9 @@ def build_repo(in_dir: Path, out_dir: Path) -> list[str]:
     by_abi: dict[str, list[tuple[Path, dict]]] = {}
     for path, manifest in entries:
         abi = manifest["abi"]
+        # Validate before it becomes a filesystem path segment (rmtree target below).
+        if not isinstance(abi, str) or not _ABI_RE.fullmatch(abi) or ".." in abi:
+            raise BuildRepoError(f"{path.name}: unsafe or invalid ABI segment {abi!r}")
         by_abi.setdefault(abi, []).append((path, manifest))
 
     out_dir.mkdir(parents=True, exist_ok=True)

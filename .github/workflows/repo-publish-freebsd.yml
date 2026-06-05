@@ -35,7 +35,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.ref }}
+  # The SAME global key as repo-publish.yml — the FreeBSD fallback and the primary
+  # deploy to one Pages site, so they must serialise, not race.
+  group: pages-pfblockerng
   cancel-in-progress: false
 
 jobs:
@@ -95,7 +97,8 @@ jobs:
         run: |
           set -eu
           mkdir -p store
-          TAGS="$(gh release list -R "$REPO" --limit 200 --json tagName --jq '.[].tagName' || true)"
+          # ALL releases (paginated — no cap).
+          TAGS="$(gh api "repos/$REPO/releases" --paginate --jq '.[].tag_name' || true)"
           if [ -n "$TAGS" ]; then
             printf '%s\n' "$TAGS" | while IFS= read -r TAG; do
               [ -n "$TAG" ] || continue
