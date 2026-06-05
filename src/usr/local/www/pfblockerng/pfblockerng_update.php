@@ -38,6 +38,7 @@ require_once('functions.inc');
 require_once('util.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 
+global $pfb;
 pfb_global();
 
 // Collect pfBlockerNG log file and post live output to terminal window.

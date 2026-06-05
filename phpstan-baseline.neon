@@ -1015,12 +1015,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
 
 		-
-			message: '#^Variable \$pfb might not be defined\.$#'
-			identifier: variable.undefined
-			count: 17
-			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
-
-		-
 			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
@@ -1042,12 +1036,6 @@ parameters:
 			message: '#^Variable \$nextcron might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
-
-		-
-			message: '#^Variable \$pfb might not be defined\.$#'
-			identifier: variable.undefined
-			count: 21
 			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
 		-
