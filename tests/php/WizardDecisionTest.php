@@ -37,14 +37,14 @@ final class WizardDecisionTest extends TestCase
 	public function testSkipWithSuppressIsDisable(): void
 	{
 		// Skip pressed, checkbox ticked ('on') -> persist disable.
-		$this->assertSame('disable', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_suppress' => 'on']));
+		$this->assertSame('disable', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_disable' => 'on']));
 	}
 
 	public function testSuppressCheckboxFalseyValuesStaySkip(): void
 	{
 		// An empty / unchecked value must not count as ticked.
-		$this->assertSame('skip', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_suppress' => '']));
-		$this->assertSame('skip', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_suppress' => '0']));
+		$this->assertSame('skip', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_disable' => '']));
+		$this->assertSame('skip', pfb_wizard_skip_action(['skip' => 'Skip', 'pfb_wizard_disable' => '0']));
 	}
 
 	// --- pfb_wizard_get_action(): ?wizard=<action> normalisation --- //
