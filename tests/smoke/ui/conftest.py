@@ -108,6 +108,30 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     return smoke_vm
 
 
+# general.php?wizard=disable: the "Do not show this again" action. A fresh pfBlockerNG
+# install AUTO-LAUNCHES its setup wizard -- pfblockerng_general.php 302-redirects to
+# wizard.php until `pfb_wizard_skip` is 'on' (or config/0 is populated), so a UI test
+# that GETs general.php on a fresh box lands on the WIZARD, not General settings
+# (pfb_wizard_suppress_autolaunch, pfblockerng.inc:1759). The readiness probe accepts the
+# wizard's 200, so it passes uninformed.
+WIZARD_DISMISS_PATH = PFB_READY_PATH + "?wizard=disable"
+
+
+def _dismiss_pfblockerng_wizard(client: WebUI) -> None:
+    """GET general.php?wizard=disable once so the first-run wizard stops shadowing it.
+
+    The `disable` action persists `pfb_wizard_skip='on'` (general.php:38) AND renders the
+    real General page on the same request (pfb_wizard_suppress_autolaunch reads the
+    just-written flag), so one authenticated GET makes general.php deterministic for the
+    whole session -- exactly what an admin clicking "Do not show this again" does. Raises
+    on a non-200 so a failed dismiss surfaces precisely here rather than as a confusing
+    "field not found" in every general.php test downstream.
+    """
+    resp = client.get(WIZARD_DISMISS_PATH)
+    if resp.status_code != 200:
+        raise RuntimeError(f"wizard-dismiss GET {WIZARD_DISMISS_PATH} -> HTTP {resp.status_code}")
+
+
 def _wait_pfblockerng_pages_served(client: WebUI) -> None:
     """Block until the webConfigurator actually SERVES a pfBlockerNG GUI page.
 
@@ -168,6 +192,9 @@ def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_proto
     # Login hits pfSense CORE (always up); the package's own GUI pages come online
     # slightly later -- wait for one to actually serve before yielding to tests.
     _wait_pfblockerng_pages_served(client)
+    # On a fresh install general.php auto-launches the setup wizard (redirects to
+    # wizard.php); dismiss it once so every general.php test sees the real page.
+    _dismiss_pfblockerng_wizard(client)
     yield client
 
 
