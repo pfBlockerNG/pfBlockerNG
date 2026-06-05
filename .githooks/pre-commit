@@ -114,6 +114,16 @@ find src scripts tests -name '*.sh' | sort | while IFS= read -r f; do
 	sh -n "$f" || exit 1
 done || failed 'sh -n'
 
+# --- Shell + docs: forbid naked $var interpolation into curl/wget/fetch URLs.
+#     Reuses the python found above for pytest (CI is the hard gate when absent).
+#     Scans tracked src shell + Markdown shell fences via the checker's defaults. ---
+if [ -n "$py_bin" ]; then
+	step 'url-encoding (no naked $var in curl URLs)'
+	"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
+else
+	skip url-encoding
+fi
+
 # --- Shell: shellcheck (src + scripts only; tests/ shellspec specs trip SC2034
 #     false-positives — tracked as a separate cleanup) ---
 if have shellcheck; then
