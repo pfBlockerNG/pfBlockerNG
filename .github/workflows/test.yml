@@ -76,11 +76,22 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: pip install pytest
+        # pytest-cov drives the informational branch-coverage report below.
+        run: pip install pytest pytest-cov
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
+
+      - name: Branch coverage (informational)
+        # Issue #38: measure BRANCH coverage of pfb_unbound.py (line coverage hides
+        # one-sided decision branches). Informational only -- no enforced floor yet
+        # (mirrors the shell kcov / PHP pcov steps). continue-on-error so a coverage
+        # hiccup never blocks the gate; the canonical `python -m pytest` above is the
+        # authority. coverage knobs (branch=true, TYPE_CHECKING exclude) live in
+        # pyproject.toml [tool.coverage.*].
+        continue-on-error: true
+        run: python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
 
   test-typing:
     name: Test type checking (mypy)

@@ -26,6 +26,13 @@ vendor
 .phpunit.cache/
 .phpunit.result.cache
 
+# ── Python coverage (pytest-cov / coverage.py; issue #38) ─────────────────────
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
+
 # ── Shell tests (shellspec / kcov) ────────────────────────────────────────────
 coverage/
 .shellspec-quick.log

@@ -122,6 +122,16 @@ python3 -m pytest
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
 
+Optional **branch**-coverage report for the Unbound matcher (issue #38 — line
+coverage hides one-sided decision branches; this surfaces them):
+
+```sh
+python3 -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
+```
+
+Needs `pytest-cov` (`pip install pytest-cov`). It is informational only — CI runs
+the same report (non-blocking), with no enforced floor.
+
 PHP unit tests (PHPUnit) cover the pure/extractable PHP helpers
 (input filtering, IDN/textarea decode, ABP-IP extraction, IPv4 normalisation,
 the Python manifest writer). Install the dev dependencies once, then run:
