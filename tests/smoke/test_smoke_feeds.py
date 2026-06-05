@@ -167,8 +167,13 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
         # The "resolves" probes must reach the controlled stub: leave egress OPEN. The
         # member's VIP block returns locally regardless, so this is no false-green.
         h.unblock_egress()
-        blocked = h.dns_probe(deployed_vm, member, "A")
-        assert h.is_vip(blocked), f"listed {member} expected VIP block, got {blocked}"
+        # The `before` probe pre-resolved `member` via the stub (TTL 60s). A feed/cron
+        # allow->block swap is TTL-bounded BY DESIGN (ADR-10) and does NOT flush the
+        # C-cache, so that cached real answer would serve past the swap. Clear the one
+        # name (as test_smoke_matrix.py's unlock lifecycle does), then poll until the
+        # async swap's VIP block lands.
+        h.flush_unbound_name(deployed_vm, member)
+        blocked = h.dns_probe_until(deployed_vm, member, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
         passed = h.dns_probe(deployed_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
@@ -255,8 +260,9 @@ def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeed
 
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the non-member "resolves" probe must reach the stub upstream
-        blocked = h.dns_probe(deployed_vm, member, "A")
-        assert h.is_vip(blocked), f"listed {member} (hosts line) expected VIP block, got {blocked}"
+        # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
+        h.flush_unbound_name(deployed_vm, member)
+        blocked = h.dns_probe_until(deployed_vm, member, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
         passed = h.dns_probe(deployed_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
@@ -299,8 +305,9 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
         # controlled stub: leave egress OPEN. The || block returns the VIP locally, so
         # this is no false-green.
         h.unblock_egress()
-        ans_blocked = h.dns_probe(deployed_vm, blocked_name, "A")
-        assert h.is_vip(ans_blocked), f"ABP ||-blocked {blocked_name} expected VIP, got {ans_blocked}"
+        # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
+        h.flush_unbound_name(deployed_vm, blocked_name)
+        ans_blocked = h.dns_probe_until(deployed_vm, blocked_name, h.is_vip)
         assert not h.resolves_to(ans_blocked, STUB_DNS_A), (
             f"{blocked_name} still resolving after the || block: {ans_blocked}"
         )
