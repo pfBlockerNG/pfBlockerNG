@@ -55,10 +55,13 @@ Two channels track two branches of this repository:
 |---------|--------|---------|-----|
 | **Stable** | `main` | `pfSense-pkg-pfBlockerNG` | Production use |
 | **Development** | `devel` | `pfSense-pkg-pfBlockerNG-devel` | Latest features, early testing |
+| **Nightly** | `devel` (HEAD, built nightly) | `pfSense-pkg-pfBlockerNG-nightly` | Bleeding edge; self-hosted repo only |
 
 New work lands on `devel` first; once it has settled it is promoted to `main` to
-cut a stable release. The two packages are mutually exclusive — install **one**.
-Choose **stable** unless you specifically want to track development builds.
+cut a stable release. **Nightly** rebuilds the `devel` tip each night as a separate,
+opt-in package available **only** from this fork's self-hosted repository (Option 2).
+The three packages are mutually exclusive — install **one**. Choose **stable** unless
+you specifically want to track development builds.
 
 ## Installation
 
@@ -102,6 +105,23 @@ pfblockerng-devel: {
 
 > **Note:** Installs and updates work via the **Install** button or `pkg upgrade`,
 > but pfSense's GUI won't show an "update available" badge for our builds.
+
+#### Nightly channel (bleeding edge)
+
+To track the **`devel` tip rebuilt every night**, opt into the separate `nightly`
+channel — a distinct package `pfSense-pkg-pfBlockerNG-nightly` served from a
+`nightly/` catalog subtree:
+
+```sh
+./scripts/add-repo.sh nightly
+pkg install pfSense-pkg-pfBlockerNG-nightly
+```
+
+It **conflicts with the stable and `-devel` packages** (they install the same files),
+so it replaces whichever you had; switch back any time with `./scripts/add-repo.sh devel`
+(or `stable`) and `pkg install` the release package. Nightly versions order as
+`<target>.YYYYMMDD.N`, so `pkg upgrade` always moves to the newest build, and the
+source commit rides the package — `pkg info -A pfSense-pkg-pfBlockerNG-nightly` shows it.
 
 ### Updating
 
