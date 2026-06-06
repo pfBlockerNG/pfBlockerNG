@@ -57,6 +57,10 @@ def safesearch_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, h.DnsAnswer, h.D
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.unblock_egress()  # recursive resolution for the chase + the BEFORE probe
+    # Force recursive mode: a prior matrix module on the SHARED VM may have set
+    # use_system_dns_upstream (catch-all forward-zone), which re-forwards the source
+    # name on the iterator restart and defeats the cache-planted chase (issue #149).
+    h.use_recursive_resolver(smoke_vm)
 
     # Enable DNSBL (so the python module is loaded) with a dummy local feed. SafeSearch
     # is still OFF here, so the CNAME names resolve to their real sites.
