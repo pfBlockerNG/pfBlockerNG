@@ -100,11 +100,8 @@ pfblockerng-devel: {
 - **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
   resolution (and the webConfigurator's **Install** button) picks our build.
 
-> **Honest scope.** Because the repository sits above Netgate's, the GUI **Install**
-> action and CLI `pkg install`/`upgrade` transparently pull our build. However,
-> Available-Packages **discovery** and the GUI **"update available" badge** stay
-> Netgate-bound (they query the `pfSense` repo only) — so newer builds are picked up
-> via GUI Install or CLI `pkg upgrade`, not a GUI badge.
+> **Note:** Installs and updates work via the **Install** button or `pkg upgrade`,
+> but pfSense's GUI won't show an "update available" badge for our builds.
 
 ### Updating
 
