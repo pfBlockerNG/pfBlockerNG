@@ -610,6 +610,14 @@ never a merge commit, never squash. History across `main` ← `devel` stays stri
 landing any PR — is a rebase/replay. Rebase a behind-base branch onto its base first for a
 clean fast-forward.
 
+**Default landing flow — `/pr-merge-flow N`.** After completing any GitHub issue, ADR, or
+code change in general, land its PR with **`/pr-merge-flow N`** — shorthand for
+`/pr-comments N --wait-for=coderabbitai && /pr-merge N`: wait for CodeRabbit, validate +
+apply its findings and reply, then (only if that completes cleanly) rebase-merge once the
+real CI is green. The **only** exemptions are the dev-only classes that go straight to
+`devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills — see "Worktrees");
+everything touching `src/`, `tests/`, or CI uses this flow.
+
 **`devel` advances out of band — rebase onto the latest remote before every push.** Parallel
 agents' commits replay on top of `devel`, so the tip moves under you. Before **any**
 commit/push (to `devel` or a PR branch): `git fetch origin`, rebase onto the latest tip
