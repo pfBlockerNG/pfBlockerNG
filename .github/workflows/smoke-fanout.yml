@@ -103,13 +103,10 @@ jobs:
   # whether another leg has already failed.
   #
   # IMAGE REF RESOLUTION:
-  # The CI matrix entry carries pfsense_version (e.g. "2.8.x").  The GHCR
-  # image tag for that version is:
-  #   ghcr.io/<owner>/pfsense-ce:<pfsense_version>
-  # The SMOKE_IMAGE_REF secret/variable used by smoke.yml can be overridden
-  # per-leg via the `image_ref` input — we pass the version-specific tag here.
-  # If SMOKE_IMAGE_BASE_URL is set (org/repo variable), that base is used;
-  # otherwise it defaults to the repository owner's GHCR namespace.
+  # The CI matrix entry carries pfsense_version (e.g. "2.8.x"). We pass it to
+  # smoke.yml as `pfsense_version`; smoke.yml composes the GHCR ref from the
+  # SMOKE_IMAGE_REPO / SMOKE_IMAGE_NAME / SMOKE_IMAGE_TAG repo variables, with
+  # pfsense_version overriding the tag.
   smoke:
     name: Smoke (${{ matrix.pfsense_version }})
     needs: prepare
@@ -121,12 +118,11 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
     uses: ./.github/workflows/smoke.yml
     with:
-      # Construct the per-version GHCR image ref.
-      # Format: ghcr.io/<owner>/pfsense-ce:<pfsense_version>
-      # e.g.   ghcr.io/myorg/pfsense-ce:2.8.x
-      # The smoke.yml callee falls back to SMOKE_IMAGE_REF secret/variable when
-      # image_ref is blank; passing a version-specific tag here overrides that.
-      image_ref: "ghcr.io/${{ github.repository_owner }}/pfsense-ce:${{ matrix.pfsense_version }}"
+      # Pass only the per-leg version; smoke.yml composes the ref from the
+      # SMOKE_IMAGE_{REPO,NAME,TAG} vars (pfsense_version overrides the tag). This
+      # keeps the namespace/name in one place (the repo vars) instead of hardcoding
+      # ghcr.io/<owner>/pfsense-ce here.
+      pfsense_version: ${{ matrix.pfsense_version }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────

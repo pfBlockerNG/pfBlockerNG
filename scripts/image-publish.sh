@@ -33,8 +33,9 @@
 # Options:
 #   --vmid N         Proxmox VM id (default: 103)
 #   --disk KEY       disk config key to export (default: scsi0)
-#   --image REF      GHCR image ref without tag
-#                    (default: $SMOKE_IMAGE or ghcr.io/andrebrait/pfsense-ce)
+#   --image REF      GHCR image ref without tag (default composed from the
+#                    SMOKE_IMAGE_REPO + SMOKE_IMAGE_NAME env vars:
+#                    ${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}/${SMOKE_IMAGE_NAME:-pfsense-ce})
 #   --compression T  qcow2 compression: zstd | zlib | off (default: zstd)
 #   --out FILE       local working qcow2 path (default: a temp file, removed after)
 #   --keep           keep the local qcow2 after publishing
@@ -52,7 +53,10 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 VMID=103
 DISK=scsi0
-IMAGE="${SMOKE_IMAGE:-ghcr.io/andrebrait/pfsense-ce}"
+# Compose the untagged image ref from the namespace + name vars (org-transfer
+# scheme; supports pfsense-ce, pfsense-plus, … under one namespace). --image overrides.
+IMAGE="${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}"
+IMAGE="${IMAGE%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
 COMPRESSION=zstd
 OUT=""
 KEEP=0

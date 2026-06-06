@@ -36,8 +36,9 @@ name: UI tests (pfSense VM, ADR-14)
 #
 # Required config (Actions secrets/variables) — same set as smoke.yml, plus the
 # baked admin password the UI tier needs to log in:
-#   SMOKE_IMAGE_REF      GHCR OCI ref of the qcow2 (variable OR secret; secret wins;
-#                        input overrides both). Pin by @sha256:<digest>.
+#   SMOKE_IMAGE_REPO/_NAME/_TAG  compose the GHCR ref (variables): the pull ref is
+#                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
+#                        the image_ref input (full ref) or version input (tag) override it.
 #   SMOKE_GHCR_USER      username for `oras login ghcr.io` (secret)
 #   SMOKE_GHCR_TOKEN     PAT/token with read:packages for the GHCR pull (secret)
 #   SMOKE_SSH_PRIV_KEY   private SSH key matching the image's baked authorized_keys (secret)
@@ -52,7 +53,7 @@ on:
   workflow_call:
     inputs:
       image_ref:
-        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable)."
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars; `version` sets the tag)."
         required: false
         type: string
         default: ""
@@ -69,11 +70,11 @@ on:
   workflow_dispatch:
     inputs:
       image_ref:
-        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars; `version` sets the tag). Pin by @sha256:<digest>."
         required: false
         default: ""
       version:
-        description: "Version label for the matrix leg / screenshot dir (blank = the default CE version)."
+        description: "Version label for the matrix leg / screenshot dir AND the image tag (blank = the default CE version)."
         required: false
         default: ""
       tier:
@@ -244,22 +245,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv
 
-      - name: Resolve the pfSense image ref (input overrides secret/variable)
+      - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
         id: ref
         env:
-          # The image ref is not sensitive: accept it as a variable, falling
-          # back to a secret if one is set (secret wins). The workflow input
-          # wins over both. Same resolution order as smoke.yml.
+          # image_ref input (full ref) wins; else compose from the
+          # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars, with the `version` input
+          # overriding the TAG. Same resolution as smoke.yml.
           INPUT_REF: ${{ inputs.image_ref }}
-          SMOKE_IMAGE_REF: ${{ secrets.SMOKE_IMAGE_REF || vars.SMOKE_IMAGE_REF }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
+          SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
         run: |
           set -eu
-          REF="${INPUT_REF:-${SMOKE_IMAGE_REF:-}}"
-          if [ -z "$REF" ]; then
-            echo "::error::no image ref (set the image_ref input, or the SMOKE_IMAGE_REF secret/variable)"
-            exit 1
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
+            REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+            NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
+            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8.1}}"
+            REF="${REPO%/}/${NAME}:${TAG}"
           fi
           echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "resolved image ref: ${REF}"
 
       - name: Install oras
         uses: oras-project/setup-oras@v2

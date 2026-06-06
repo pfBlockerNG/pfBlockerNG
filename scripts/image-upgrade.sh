@@ -38,8 +38,9 @@
 # Options:
 #   --from VERSION   current published tag to upgrade (required)
 #   --to VERSION     tag to publish as (default: auto-detected from the upgraded box)
-#   --image REF      GHCR image ref without tag
-#                    (default: $SMOKE_IMAGE or ghcr.io/andrebrait/pfsense-ce)
+#   --image REF      GHCR image ref without tag (default composed from the
+#                    SMOKE_IMAGE_REPO + SMOKE_IMAGE_NAME env vars:
+#                    ${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}/${SMOKE_IMAGE_NAME:-pfsense-ce})
 #   --ssh-key PATH   GUEST SSH private key (default: $SMOKE_SSH_KEY) — its public
 #                    half is baked into the image's root authorized_keys
 #   --ssh-port N     Proxmox-local port forwarded to the guest's :22 (default: 2222)
@@ -68,7 +69,10 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 FROM=""
 TO=""
-IMAGE="${SMOKE_IMAGE:-ghcr.io/andrebrait/pfsense-ce}"
+# Compose the untagged image ref from the namespace + name vars (org-transfer
+# scheme; supports pfsense-ce, pfsense-plus, … under one namespace). --image overrides.
+IMAGE="${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}"
+IMAGE="${IMAGE%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
 GUEST_KEY="${SMOKE_SSH_KEY:-}"
 GUEST_PORT=2222
 MAC="BC:24:11:37:9C:AC"
