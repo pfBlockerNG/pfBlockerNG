@@ -119,6 +119,59 @@ directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
 `net/pfSense-pkg-pfBlockerNG-devel` (devel); the resulting `.pkg` lands in
 `work/pkg/`.
 
+## Usage
+
+Most configuration lives in the webConfigurator under **Firewall ▸ pfBlockerNG**;
+the [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
+is the general reference. A couple of this fork's additions are worth calling out.
+
+### Update Hooks
+
+The **Update Hooks** tab runs your own shell commands at the start (`pre`) and end
+(`post`) of every update pass — for example to reload a downstream service when the
+blocklist changes. Each enabled hook runs as root via `/bin/sh -c` (the same trust
+class as pfSense's `shellcmd`/cron) under a timeout; a hook's failure is logged and
+never aborts the update, and with no enabled hooks the pass is unchanged.
+
+A `post` hook receives this environment:
+
+| Variable | Value |
+| --- | --- |
+| `PFB_WHEN` | `pre` or `post` |
+| `PFB_TRIGGER` | `cron` \| `update` \| `force-reload` |
+| `PFB_IP_CHANGED` | `1` if a firewall **rule** changed this pass — a content-only alias refresh leaves it `0` |
+| `PFB_DNSBL_CHANGED` | `1` if DNSBL data changed this pass |
+| `PFB_CHANGED_IP_ALIASES` | space-separated IP aliases (`pfB_*`) whose contents changed (empty when none) |
+| `PFB_CHANGED_DNSBL_GROUPS` | space-separated DNSBL groups (`DNSBL_*`) updated (empty when none) |
+| `PFB_STATUS` | reserved — currently always `ok` |
+
+> To act when the blocklist **data** changed, guard on a **non-empty**
+> `PFB_CHANGED_IP_ALIASES`, not `PFB_IP_CHANGED=1` — the latter fires only on a rule
+> change and misses content-only feed refreshes.
+
+**Reload HAProxy after an IP update** — the motivating use case: block a
+Cloudflare-fronted real client IP via an aggregate alias, refreshed by a graceful
+HAProxy reload. Add a `post` hook with:
+
+```sh
+[ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+```
+
+**Notify a webhook of what changed** — fires on any blocklist-data change (including
+content-only refreshes). Each field rides its own `--data-urlencode` so the
+space-separated lists are encoded correctly:
+
+```sh
+[ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
+  --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
+  --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
+  https://example.invalid/pfblockerng-update
+```
+
+The full trust model, the complete HAProxy frontend ACL setup, and the URL-encoding
+rules are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-commands-adr-12).
+
 ## Documentation
 
 - **Using pfBlockerNG:**
