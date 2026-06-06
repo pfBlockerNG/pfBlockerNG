@@ -1,0 +1,25 @@
+name: Trigger pkg repository republish
+
+# Manual dispatch that fires pfBlockerNG/pkg's publish.yml via the
+# PKG_DISPATCH_TOKEN PAT — the SAME cross-repo dispatch release.yml's repo-publish
+# job runs on a release. Two uses: republish the self-hosted pkg catalog on demand
+# (the pkg repo also runs daily on its own schedule), and verify PKG_DISPATCH_TOKEN
+# works — a FAILED run means the PAT is missing / expired / lacks Actions:write on
+# pfBlockerNG/pkg. Least-privilege: the PAT (an env secret) starts a workflow in the
+# other repo; nothing from this repo's contents is needed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch pfBlockerNG/pkg publish.yml
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger publish.yml via PKG_DISPATCH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
+        run: gh workflow run publish.yml -R pfBlockerNG/pkg
