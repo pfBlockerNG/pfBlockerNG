@@ -142,18 +142,18 @@ GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
 # deploys the catalog to the repo's standard project Pages URL (gh api
-# repos/.../pages -> html_url https://andrebrait.github.io/pfBlockerNG/); we serve over HTTPS.
+# repos/.../pages -> html_url https://pfblockerng.github.io/pkg/); we serve over HTTPS.
 # This dispatch-only test proves a REAL pfSense box `pkg update`/`pkg install`
 # against the LIVE https URL (not file://) — the maintainer's real-URL check. It is
 # GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
 # always-on proof; the live URL only exists once the deploy has run).
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
-DEFAULT_LIVE_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
+DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg"
 GUEST_ABI = "FreeBSD:15:amd64"  # the single supported ABI (CE 2.8 + Plus 25.03)
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
-# only answers `uuid-*.com`, so `andrebrait.github.io` does not resolve on the guest. Pinning
+# only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
-# (TLS SNI still presents `andrebrait.github.io`, validated by GitHub's *.github.io cert) without
+# (TLS SNI still presents `pfblockerng.github.io`, validated by GitHub's *.github.io cert) without
 # touching the resolver. Egress is OPEN for this flow (_ensure_egress_open).
 PAGES_IPS = ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153")
 
@@ -1050,7 +1050,7 @@ def _live_base_url() -> str | None:
     """The live Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
-    ``https://andrebrait.github.io/pfBlockerNG``) to run the live check after a publish
+    ``https://pfblockerng.github.io/pkg``) to run the live check after a publish
     dispatch; leave it unset and the test SKIPS (the always-on proof is the
     file:// VM-acceptance above). A bare ``1``/``true`` selects the default base.
     """
@@ -1151,7 +1151,7 @@ def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: 
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
-    over its public HTTPS ``https://andrebrait.github.io/pfBlockerNG/${ABI}`` URL (no ``-f``).
+    over its public HTTPS ``https://pfblockerng.github.io/pkg/${ABI}`` URL (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
     proof is the file:// VM-acceptance above; this exercises the REAL transport the

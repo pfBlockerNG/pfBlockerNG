@@ -46,7 +46,7 @@ REPOS_DIR="/usr/local/etc/pkg/repos"
 # SAME base build-repo.sh / build-repo-portable.py default to — the conf below is
 # byte-identical to their --print-conf for the devel channel. Override --base-url
 # for a fork/staging host. The conf appends the literal ${ABI} pkg(8) variable.
-DEFAULT_BASE_URL="https://andrebrait.github.io/pfBlockerNG"
+DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
 CHANNEL="devel"

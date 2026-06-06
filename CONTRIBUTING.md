@@ -720,26 +720,31 @@ See [`scripts/deploy.sh`](scripts/deploy.sh) for full options.
 ### How the `pkg` repository is published (GitHub Pages)
 
 The self-hosted repository (installed per the [README](README.md#option-2--this-forks-self-hosted-pkg-repository))
-is a **derived index** — there is no stateful store to maintain. On each deploy the
-publish pipeline enumerates **all** GitHub Releases, downloads their `.pkg` assets,
-buckets them by ABI, **regenerates** a fresh `pkg` catalog
-(`meta.conf`/`packagesite.pkg`/`data.pkg`) per ABI, and deploys the whole `${ABI}/` tree
-to **GitHub Pages**. The site is replaced each run (no `gh-pages` history), so every
-published version/ABI is retained for free and a rollback is a re-deploy.
+is a **derived index** — there is no stateful store to maintain. It is hosted and
+deployed by the **separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo**
+(its `publish.yml`), which deploys to **its own** GitHub Pages via same-repo OIDC — no
+cross-repo deploy key. On each run it builds the current **devel** `.pkg` (running this
+repo's `scripts/build-pkg-portable.py` against a checkout of the source), folds in the
+`.pkg` assets of **all** GitHub Releases, buckets by ABI, **regenerates** a fresh `pkg`
+catalog (`meta.conf`/`packagesite.pkg`/`data.pkg`) per ABI, and deploys the whole
+`${ABI}/` tree. The site is replaced each run (no history), so every published version/ABI
+is retained for free and a rollback is a re-deploy.
 
 - **Per-`${ABI}` tree.** One catalog under `…/<ABI>/` (today only `FreeBSD:15:amd64` — CE
   2.8 and Plus 25.03 share it). The client conf's literal `${ABI}` lets one conf follow the
   box across a pfSense OS upgrade.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
   catalog is served at the project's GitHub Pages URL
-  **`https://andrebrait.github.io/pfBlockerNG/${ABI}`**.
+  **`https://pfblockerng.github.io/pkg/${ABI}`**.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
   bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
-- **Additive + isolated.** Publishing rides each tag's `release.yml` as a separate
-  `repo-publish` job (`if: always()`, like `attach-pkgs`) plus the dispatchable
-  `repo-publish.yml`; its failure never breaks the Release or the ports PR.
+- **Triggers.** `pfBlockerNG/pkg`'s `publish.yml` runs on a daily `schedule` +
+  `workflow_dispatch`, and `release.yml`'s `repo-publish` job fires it on each release
+  (`gh workflow run`, auth via the `PKG_DISPATCH_TOKEN` fine-grained PAT — `Actions:write`
+  on `pfBlockerNG/pkg` only). That job is additive + isolated (only `needs: [release]`), so
+  its failure never breaks the Release or the ports PR.
 
 See [ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
 

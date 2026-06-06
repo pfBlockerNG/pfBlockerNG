@@ -335,7 +335,7 @@ jobs:
 
                 PORTS_DIR="${RUNNER_TEMP}/ports-${MAJOR}"
                 git clone --depth 1 -b pfblockerng/use-github \
-                  "https://github.com/andrebrait/FreeBSD-ports" \
+                  "https://github.com/pfBlockerNG/FreeBSD-ports" \
                   "$PORTS_DIR"
 
                 PKG_OUT="out/major-${MAJOR}"
@@ -503,34 +503,31 @@ jobs:
           done
           echo "All .pkg artifacts attached to release ${TAG}"
 
-  # ── 2d. Regenerate + deploy the pkg repository to GitHub Pages (ADR-17) ────
-  # ADDITIVE + ISOLATED — wired EXACTLY like attach-pkgs so it can NEVER gate or
-  # break release / ports-pr / attach-pkgs:
-  #   * needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
-  #     — runs only after the per-tag artifacts exist (same `needs` set as
-  #     attach-pkgs; a skipped mutually-exclusive build leg satisfies `needs`).
-  #   * if: always() && needs.release.result == 'success' — fires whenever the
-  #     Release was published, regardless of build/attach outcome.
-  #   * ports-pr does NOT `needs:` this; attach-pkgs does NOT `needs:` this; this
-  #     does NOT `needs:` attach-pkgs. So a repo-publish FAILURE leaves
-  #     release / ports-pr / attach-pkgs untouched (they never read its result).
-  #
-  # The reusable repo-publish.yml enumerates EVERY Release's .pkg assets (the
-  # durable store) plus the current run's freshly-built artifacts
-  # (pfBlockerNG-release-pkgs / pfBlockerNG-pkg, downloadable here since this is the
-  # SAME run), regenerates the per-ABI catalog with the pure-Python generator, and
-  # deploys it to Pages. build_branch_pkg=false — the per-tag .pkg are already built.
+  # ── 2d. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
+  # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo:
+  # its own publish.yml enumerates this repo's Releases (the durable store),
+  # rebuilds the per-ABI catalog, and deploys to its OWN GitHub Pages via
+  # same-repo OIDC — no cross-repo deploy key. On a release we just trigger it so
+  # the new Release appears at pfblockerng.github.io/pkg within seconds (its daily
+  # schedule is the backstop).
+  # ADDITIVE + ISOLATED — wired like attach-pkgs: ports-pr / attach-pkgs do NOT
+  # `needs:` this, and this only `needs: [release]`, so a failure here can NEVER
+  # gate or break release / ports-pr / attach-pkgs.
   repo-publish:
-    name: Publish pkg repository to Pages
-    needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
+    name: Trigger pkg repository publish
+    runs-on: ubuntu-latest
+    needs: [release]
     if: always() && needs.release.result == 'success'
-    uses: ./.github/workflows/repo-publish.yml
-    with:
-      build_branch_pkg: false
     permissions:
       contents: read
-      pages: write
-      id-token: write
+    steps:
+      - name: Dispatch pfBlockerNG/pkg publish.yml
+        # PKG_DISPATCH_TOKEN: a fine-grained PAT scoped to pfBlockerNG/pkg with
+        # Actions:write — only enough to start a workflow there (cannot push code).
+        env:
+          GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
+        run: |
+          gh workflow run publish.yml -R pfBlockerNG/pkg
 
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
   ports-pr:
@@ -544,7 +541,7 @@ jobs:
       - name: Checkout FreeBSD-ports fork
         uses: actions/checkout@v6
         with:
-          repository: andrebrait/FreeBSD-ports
+          repository: pfBlockerNG/FreeBSD-ports
           token: ${{ secrets.PORTS_TOKEN }}
           fetch-depth: 1
 
@@ -588,7 +585,7 @@ jobs:
 
           git checkout -b "${{ steps.port.outputs.pr_branch }}"
           git add "$MAKEFILE"
-          git commit -m "$(printf '%s: update to %s\n\nPoints GH_TAGNAME to %s in andrebrait/pfBlockerNG.' \
+          git commit -m "$(printf '%s: update to %s\n\nPoints GH_TAGNAME to %s in pfBlockerNG/pfBlockerNG.' \
             "${{ steps.port.outputs.port_path }}" "$VERSION" "$TAG")"
           git push origin "${{ steps.port.outputs.pr_branch }}"
 
@@ -610,8 +607,8 @@ jobs:
           gh pr create \
             --repo pfsense/FreeBSD-ports \
             --base devel \
-            --head "andrebrait:${{ steps.port.outputs.pr_branch }}" \
+            --head "pfBlockerNG:${{ steps.port.outputs.pr_branch }}" \
             --title "${PORT}: update to ${VERSION}${CHANNEL_NOTE}" \
             --body "$(printf \
-              'Bump \`GH_TAGNAME\` to \`%s\` in \`%s\`.\n\nSource: https://github.com/andrebrait/pfBlockerNG/releases/tag/%s' \
+              'Bump \`GH_TAGNAME\` to \`%s\` in \`%s\`.\n\nSource: https://github.com/pfBlockerNG/pfBlockerNG/releases/tag/%s' \
               "$TAG" "$PORT" "$TAG")"

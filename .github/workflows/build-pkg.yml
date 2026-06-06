@@ -59,7 +59,7 @@ on:
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework"
         required: false
-        default: "andrebrait/FreeBSD-ports"
+        default: "pfBlockerNG/FreeBSD-ports"
       ports_ref:
         description: "FreeBSD-ports branch"
         required: false
@@ -81,7 +81,7 @@ on:
       ports_repo:
         required: false
         type: string
-        default: "andrebrait/FreeBSD-ports"
+        default: "pfBlockerNG/FreeBSD-ports"
       ports_ref:
         required: false
         type: string

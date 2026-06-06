@@ -89,10 +89,10 @@ META_CONF = (
 # upgrade; priority 100 sits above the base Netgate `pfSense` repo (priority 0) —
 # Phase 1 proved priority dominates version, so this is the precedence lever.
 # The published GitHub Pages base — the repo's standard project Pages URL
-# (gh api repos/.../pages -> html_url https://andrebrait.github.io/pfBlockerNG/);
-# we serve over HTTPS, so the base is https://andrebrait.github.io/pfBlockerNG. Kept identical
+# (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
+# we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg. Kept identical
 # to scripts/build-repo.sh DEFAULT_BASE_URL so the two generators stay byte-equal.
-DEFAULT_BASE_URL = "https://andrebrait.github.io/pfBlockerNG"
+DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
 CONF_PRIORITY = 100
 
 # A safe single path segment: an ABI is used UNVALIDATED from manifest data as a
@@ -435,7 +435,7 @@ def main(argv: list[str]) -> int:
             "  # build a catalog tree from a dir of release .pkg\n"
             "  build-repo-portable.py --in ./pkgs --out ./site\n\n"
             "  # print the client repo-conf (Phase 4 add-repo.sh + README reuse it)\n"
-            "  build-repo-portable.py --print-conf --base-url https://example.github.io/pfBlockerNG\n"
+            "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n"
         ),
     )
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")

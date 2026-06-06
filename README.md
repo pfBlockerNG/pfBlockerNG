@@ -9,7 +9,7 @@ domain blocklists directly in the Unbound resolver. It adds reports, alerts, a
 dashboard widget, and HA/CARP sync on top.
 
 This repository is a community-maintained fork —
-[andrebrait/pfBlockerNG](https://github.com/andrebrait/pfBlockerNG) — of the
+[pfBlockerNG/pfBlockerNG](https://github.com/pfBlockerNG/pfBlockerNG) — of the
 original package by [BBcan177](https://github.com/BBcan177). It is licensed under
 the **Apache License 2.0**.
 
@@ -86,7 +86,7 @@ pkg install pfSense-pkg-pfBlockerNG-devel
 
 ```sh
 pfblockerng-devel: {
-  url: "https://andrebrait.github.io/pfBlockerNG/${ABI}",
+  url: "https://pfblockerng.github.io/pkg/${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: 100,

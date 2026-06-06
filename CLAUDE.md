@@ -567,21 +567,28 @@ on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases; from `main`, 
 Beyond the Netgate ports channel we publish a **self-hosted FreeBSD `pkg` repository on
 GitHub Pages** — a **derived index** (no stateful store): each deploy enumerates **all**
 Releases, downloads their `.pkg`, buckets by ABI, regenerates the catalog per `<ABI>/`, and
-deploys the tree to `andrebrait.github.io/pfBlockerNG/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}`
+deploys the tree to `pfblockerng.github.io/pkg/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}`
 conf auto-follows an OS upgrade). Cross-repo selection is keyed on repo **`priority:`** (it
 **dominates version** — Phase-1 live finding), so our above-Netgate `priority: 100` makes
 `pkg install`/`upgrade` and the stock GUI **Install** pull our build. GUI discovery + the
 update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (would touch
 `src/`).
 
-- **Publish pipeline:** `.github/workflows/repo-publish.yml` (PRIMARY — pure-Python
-  `scripts/build-repo-portable.py` on a plain Linux runner, `apt-get install -y zstd`, no
-  libpkg/ABI env) + `.github/workflows/repo-publish-freebsd.yml` (FreeBSD-VM fallback /
-  fidelity oracle — `scripts/build-repo.sh` + real `pkg repo`). Wired into `release.yml` as
-  the `repo-publish` job — additive, `if: always()`, a **leaf** in the `needs:` graph
-  isolated exactly like `attach-pkgs` (its failure never breaks `release`/`ports-pr`).
-  Deploys via `upload-pages-artifact` + `deploy-pages` (`pages: write` + `id-token: write`
-  scoped to the deploy job only).
+- **Publish pipeline:** the catalog is hosted + deployed by the **separate
+  `pfBlockerNG/pkg` repo** (its `.github/workflows/publish.yml`), NOT this repo. Each run
+  it builds the current **devel** `.pkg` by running this repo's own
+  `scripts/build-pkg-portable.py` against a checkout of the source (a reusable workflow
+  can't be reused cross-repo — it runs in the caller's context — so it runs the *script*),
+  folds in **every** Release `.pkg`, regenerates the per-ABI catalog with
+  `scripts/build-repo-portable.py`, and deploys to its **own** GitHub Pages via same-repo
+  OIDC `actions/deploy-pages` → served at `pfblockerng.github.io/pkg`. **No deploy key, no
+  cross-repo secret** — everything it reads from here is public. Triggers: a daily
+  `schedule` + `workflow_dispatch`. This repo's `release.yml` `repo-publish` job just fires
+  `gh workflow run publish.yml -R pfBlockerNG/pkg` (auth: the **`PKG_DISPATCH_TOKEN`**
+  fine-grained PAT — `Actions:write` on `pfBlockerNG/pkg` only) so a release publishes
+  within seconds; additive + isolated (only `needs: [release]`), so its failure never
+  breaks `release`/`ports-pr`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
+  (`scripts/build-repo.sh`) is retained as a script only.
 - **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
   `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
   `scripts/add-repo.sh` (client bootstrap — `devel|stable` channel arg, `priority: 100`,
@@ -594,7 +601,7 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   the catalog accepted from both generators. Dispatch:
   `gh workflow run smoke.yml -f pytest_marker=repo` (or `repo-install.yml` once it lands on
   `devel`). The gated `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the
-  real `andrebrait.github.io` URL — post-merge (a new `workflow_dispatch` workflow is only
+  real `pfblockerng.github.io` URL — post-merge (a new `workflow_dispatch` workflow is only
   dispatchable from the default branch).
 
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and merge");
