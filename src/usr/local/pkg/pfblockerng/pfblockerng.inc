@@ -4510,7 +4510,7 @@ function pfb_unbound_py_ccache_flush_cmds($names, $chroot_cmd) {
 	$seen = array();
 	foreach ($names as $name) {
 		// Drop anything that is not a valid domain BEFORE it can reach the command.
-		$name = pfb_filter(trim((string) $name), PFB_FILTER_DOMAIN, 'pfb_ccache_flush');
+		$name = pfb_filter(trim((string) $name), PFB_FILTER_DOMAIN, 'pfb_unbound_py_ccache_flush_cmds');
 		if (empty($name)) {
 			continue;
 		}
