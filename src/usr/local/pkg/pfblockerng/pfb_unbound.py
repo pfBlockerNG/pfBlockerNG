@@ -45,7 +45,9 @@ if TYPE_CHECKING:
         MODULE_EVENT_NEW,
         MODULE_EVENT_PASS,
         MODULE_FINISHED,
+        MODULE_RESTART_NEXT,
         MODULE_WAIT_MODULE,
+        MODULE_WAIT_SUBQUERY,
         PKT_QR,
         PKT_RA,
         PKT_RD,
@@ -64,6 +66,7 @@ if TYPE_CHECKING:
         RR_TYPE_SRV,
         RR_TYPE_TXT,
         DNSMessage,
+        invalidateQueryInCache,
         log_err,
         log_info,
         module_env,
@@ -74,6 +77,9 @@ if TYPE_CHECKING:
         register_inplace_cb_reply_local,
         register_inplace_cb_reply_servfail,
         reply_info,
+        sec_status_indeterminate,
+        sec_status_insecure,
+        storeQueryInCache,
     )
 
 global pfb
@@ -1052,8 +1058,13 @@ def init_standard(id: int, env: module_env) -> bool:
                     with open(pfb["pfb_py_ss"]) as csv_file:
                         csv_reader = csv.reader(csv_file, delimiter=",")
                         for row in csv_reader:
+                            # 3 cols: domain,A,AAAA (A/AAAA rewrite or nxdomain).
+                            # 5 cols: domain,cname,target,baked_v4,baked_v6 -- a CNAME
+                            # redirect (issue #149); v4/v6 are the #2 baked fallback IPs.
                             if row and len(row) == 3:
                                 safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2]}
+                            elif row and len(row) == 5:
+                                safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2], "v4": row[3], "v6": row[4]}
                             else:
                                 sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_ss"], row))
 
@@ -4851,6 +4862,142 @@ def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
     return find_noaaaa_wildcard_parent(q_name, noaaaa_db) is not None
 
 
+def safesearch_entry(q_name_original: str) -> Any:
+    """Look up (and memoize on the Decision) the SafeSearch entry for a name.
+
+    Returns the matched ``{A, AAAA, ...}`` dict, or ``None`` for no match. The
+    verdict is memoized on the name's Decision (safesearch axis): ``UNSET`` = not
+    yet evaluated, the dict = rewrite, ``None`` = no match (the old excludeSS
+    negative memo). Shared by the pre-resolution (NEW) and post-resolution
+    (MODDONE, CNAME redirect) passes so both agree on the same memoized verdict.
+    """
+    dec = _decision_for(q_name_original)
+    if dec.safesearch is UNSET:
+        entry = safeSearchDB.get(q_name_original)
+        # Validate 'www.' Domains
+        if entry is None and not q_name_original.startswith("www."):
+            entry = safeSearchDB.get("www." + q_name_original)
+        dec.safesearch = entry
+    return dec.safesearch
+
+
+def _ss_answer_has_cname_to(qstate: module_qstate, target: str) -> bool:
+    """True if the resolved answer carries a CNAME pointing at ``target``.
+
+    Identifies the post-restart pass of the SafeSearch CNAME redirect: the
+    iterator has chased the ``orig -> CNAME -> target`` referral we planted, so
+    the answer now contains that CNAME. A genuine answer for the original name
+    would not CNAME to our SafeSearch target.
+    """
+    rm = getattr(qstate, "return_msg", None)
+    if rm is None or getattr(rm, "rep", None) is None:
+        return False
+    rep = rm.rep
+    target = target.rstrip(".").lower()
+    for i in range(0, rep.an_numrrsets or 0):
+        rr = rep.rrsets[i]
+        if rr.rk.type_str != "CNAME":
+            continue
+        for j in range(0, rr.entry.data.count):
+            if convert_other(rr.entry.data.rr_data[j]).rstrip(".").lower() == target:
+                return True
+    return False
+
+
+def _ss_answer_has_address(qstate: module_qstate) -> bool:
+    """True if the resolved answer carries at least one A/AAAA RRset.
+
+    On the post-restart pass this means the iterator successfully chased the
+    CNAME to the target's address (the #1 live path); its absence means the
+    chase produced only a bare CNAME and the #2 baked fallback must answer.
+    """
+    rm = getattr(qstate, "return_msg", None)
+    if rm is None or getattr(rm, "rep", None) is None:
+        return False
+    rep = rm.rep
+    for i in range(0, rep.an_numrrsets or 0):
+        if rep.rrsets[i].rk.type_str in ("A", "AAAA"):
+            return True
+    return False
+
+
+def _safesearch_baked_fallback(id: int, qstate: module_qstate, q_type: Any, isSafeSearch: Any) -> bool:
+    """#2 fallback: answer a SafeSearch CNAME name with the baked target IP.
+
+    Used when the #1 live chase yields no address (this Unbound refuses to chase
+    a module-planted CNAME, or the target failed to resolve). The baked v4/v6 are
+    resolved by PHP at list-build and kept ~15-min-fresh by the freshness cron.
+    Returns True if it answered (caller must ``return True``), False to fall
+    through (no baked IP available for this qtype).
+    """
+    ip = isSafeSearch.get("v4") if q_type == RR_TYPE_A else isSafeSearch.get("v6")
+    if not ip:
+        return False
+    rrtype = "A" if q_type == RR_TYPE_A else "AAAA"
+    qname = qstate.qinfo.qname_str
+    msg = DNSMessage(qname, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
+    msg.answer.append("{} 300 IN {} {}".format(qname, rrtype, ip))
+    if not msg.set_return_msg(qstate):
+        qstate.ext_state[id] = MODULE_ERROR
+        return True
+    qstate.return_rcode = RCODE_NOERROR
+    # Synthesized, deliberately unsigned -> stop the validator marking it bogus.
+    qstate.return_msg.rep.security = sec_status_insecure
+    qstate.ext_state[id] = MODULE_FINISHED
+    return True
+
+
+def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSafeSearch: Any) -> bool:
+    """SafeSearch CNAME redirect (e.g. duckduckgo.com -> safe.duckduckgo.com).
+
+    Unbound will not chase a CNAME a module hands it (NLnetLabs/unbound #976), so
+    this uses the field-proven nxforward technique post-resolution (MODDONE):
+
+      1. First pass: plant the synthetic ``orig -> CNAME -> target`` into
+         Unbound's message cache as a REFERRAL and restart the iterator
+         (MODULE_RESTART_NEXT) so the ITERATOR chases the target's A/AAAA itself.
+      2. Post-restart pass (the answer now carries our CNAME): if the chase
+         produced an address, force ``rep.security`` so the unsigned synthesized
+         hop is not marked bogus (the historical DNSSEC blocker, issue #149),
+         re-cache as a final answer and finish; if it produced no address, fall
+         back to the baked target IP (#2).
+
+    Runs only for A/AAAA queries. Returns True if it took over the query (caller
+    must ``return True``), False to let normal processing continue.
+    """
+    target = isSafeSearch.get("AAAA")
+    if not target or q_type not in (RR_TYPE_A, RR_TYPE_AAAA):
+        return False
+
+    # Post-restart pass: the iterator has chased our planted CNAME.
+    if _ss_answer_has_cname_to(qstate, target):
+        if _ss_answer_has_address(qstate):
+            qstate.return_rcode = RCODE_NOERROR
+            # The orig->target hop is synthesized (unsigned); without this the
+            # validator marks a signed original zone bogus -> SERVFAIL (issue #149).
+            qstate.return_msg.rep.security = sec_status_insecure
+            invalidateQueryInCache(qstate, qstate.qinfo)
+            qstate.no_cache_store = 0
+            storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)
+            qstate.ext_state[id] = MODULE_FINISHED
+            return True
+        # #1 chase yielded only a bare CNAME -> #2 baked fallback.
+        return _safesearch_baked_fallback(id, qstate, q_type, isSafeSearch)
+
+    # First pass: plant the synthetic CNAME referral and restart the iterator.
+    qname = qstate.qinfo.qname_str
+    cname_msg = DNSMessage(qname, q_type, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA)
+    cname_msg.answer.append("{} 3600 IN CNAME {}".format(qname, target))
+    if not cname_msg.set_return_msg(qstate):
+        qstate.ext_state[id] = MODULE_ERROR
+        return True
+    invalidateQueryInCache(qstate, qstate.return_msg.qinfo)
+    storeQueryInCache(qstate, qstate.return_msg.qinfo, qstate.return_msg.rep, 1)
+    qstate.no_cache_store = 1
+    qstate.ext_state[id] = MODULE_RESTART_NEXT
+    return True
+
+
 def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
     global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, decisionDB
     global noAAAADB, gpListDB, safeSearchDB
@@ -4894,72 +5041,22 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
 
         # SafeSearch Redirection validation
         if qstate_valid and pfb["safeSearchDB"]:
-            # SafeSearch verdict memoized on the name's Decision (safesearch axis):
-            # UNSET = not yet evaluated, the matched {A,AAAA} entry = rewrite, None = no
-            # match (the old excludeSS negative memo). No separate excludeSS structure.
-            dec = _decision_for(q_name_original)
-            if dec.safesearch is UNSET:
-                isSafeSearch = safeSearchDB.get(q_name_original)
-
-                # Validate 'www.' Domains
-                if isSafeSearch is None and not q_name_original.startswith("www."):
-                    isSafeSearch = safeSearchDB.get("www." + q_name_original)
-
-                # TODO: See CNAME message below
-                # if isSafeSearch is None and q_name_original != 'safe.duckduckgo.com'
-                #        and q_name_original.endswith('duckduckgo.com'):
-                #    isSafeSearch = safeSearchDB.get('duckduckgo.com')
-                # if isSafeSearch is None and q_name_original != 'safesearch.pixabay.com'
-                #        and q_name_original.endswith('pixabay.com'):
-                #    isSafeSearch = safeSearchDB.get('pixabay.com')
-
-                dec.safesearch = isSafeSearch
-            isSafeSearch = dec.safesearch
+            isSafeSearch = safesearch_entry(q_name_original)
 
             if isSafeSearch is not None:
                 ss_found = False
                 msg = None
-                cname_msg = None
                 if isSafeSearch["A"] == "nxdomain":
                     qstate.return_rcode = RCODE_NXDOMAIN
                     qstate.ext_state[id] = MODULE_FINISHED
                     return True
 
-                # TODO: Unbound will not chase a CNAME we hand it (module-injected here,
-                # or via local-zone/local-data) to its target's A/AAAA -- it returns the
-                # bare CNAME. So we restart the module chain (module_restart_next, below)
-                # to get the target resolved, and the config side also wires SafeSearch
-                # CNAMEs as local-data. Revisit if Unbound gains native chasing of a
-                # supplied CNAME. Upstream defect (open, unfixed as of Unbound 1.25.x):
-                # https://github.com/NLnetLabs/unbound/issues/976
+                # CNAME redirect (duckduckgo.com / pixabay.com) is deferred to the
+                # post-resolution MODDONE pass (safesearch_cname_redirect): Unbound
+                # will not chase a CNAME we hand it here (issue #149 / unbound #976),
+                # so we plant it in the cache and let the iterator chase the target.
                 elif isSafeSearch["A"] == "cname":
-                    if isSafeSearch["AAAA"] is not None and isSafeSearch["AAAA"] != "":
-                        if q_type == RR_TYPE_A:
-                            cname_msg = DNSMessage(
-                                qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
-                            )
-                            cname_msg.answer.append(
-                                "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
-                            )
-                            ss_found = True
-                        elif q_type == RR_TYPE_AAAA:
-                            cname_msg = DNSMessage(
-                                qstate.qinfo.qname_str, RR_TYPE_AAAA, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA
-                            )
-                            cname_msg.answer.append(
-                                "{} 3600 IN CNAME {}".format(qstate.qinfo.qname_str, isSafeSearch["AAAA"])
-                            )
-                            ss_found = True
-
-                        if ss_found:
-                            if cname_msg is None or not cname_msg.set_return_msg(qstate):
-                                qstate.ext_state[id] = MODULE_ERROR
-                                return True
-
-                            MODULE_RESTART_NEXT = 3
-                            qstate.no_cache_store = 1
-                            qstate.ext_state[id] = MODULE_RESTART_NEXT
-                            return True
+                    pass
                 else:
                     if (q_type == RR_TYPE_A and isSafeSearch["A"] != "") or (
                         q_type == RR_TYPE_AAAA and isSafeSearch["AAAA"] == ""
@@ -5285,6 +5382,18 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         return True
 
     if event == MODULE_EVENT_MODDONE:
+        # SafeSearch CNAME redirect (duckduckgo.com / pixabay.com). Handled here,
+        # post-resolution, because Unbound will not chase a CNAME the module hands
+        # it (issue #149 / unbound #976): we plant the synthetic CNAME in the cache
+        # and restart the iterator so it chases the target itself. Phase 1 (plant +
+        # restart) and phase 2 (fix DNSSEC + finish, or #2 baked fallback) are
+        # distinguished inside safesearch_cname_redirect by the resolved answer.
+        if qstate_valid and pfb["safeSearchDB"]:
+            isSafeSearch = safesearch_entry(q_name_original)
+            if isSafeSearch is not None and isSafeSearch["A"] == "cname":
+                if safesearch_cname_redirect(id, qstate, q_type, isSafeSearch):
+                    return True
+
         # Log entry
         if qstate_valid and qstate.return_msg:
             kwargs = {"pfb_addr": q_ip}

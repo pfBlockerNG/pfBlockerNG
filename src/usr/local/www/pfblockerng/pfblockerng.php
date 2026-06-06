@@ -99,6 +99,14 @@ if (isset($argv[1])) {
 		pfb_run_hooks($when, $ctx);
 		exit;
 	}
+	// issue #149: SafeSearch CNAME fallback freshness. Light cron path (every 15
+	// min): re-resolves the SafeSearch CNAME targets (duckduckgo/pixabay) and
+	// refreshes their baked #2-fallback IPs in the SafeSearch CSV, triggering a
+	// python reload only on change. Does NOT run sync_package_pfblockerng.
+	elseif ($argv[1] == 'ss_refresh') {
+		pfblockerng_ss_refresh();
+		exit;
+	}
 }
 
 // Extras - MaxMind/TOP1M Download URLs/filenames/settings

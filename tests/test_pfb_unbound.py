@@ -1,3 +1,4 @@
+import builtins
 import random
 import re
 import types
@@ -14,10 +15,12 @@ from unboundmodule import (
     MODULE_EVENT_MODDONE,
     MODULE_EVENT_NEW,
     MODULE_FINISHED,
+    MODULE_RESTART_NEXT,
     MODULE_WAIT_MODULE,
     RCODE_NOERROR,
     RCODE_NXDOMAIN,
     DNSMessage,
+    sec_status_insecure,
 )
 
 import pfb_unbound
@@ -1273,6 +1276,242 @@ class TestOperateEvents:
         rcd = pfb_unbound.operate(0, 99, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_ERROR
+
+
+class TestSafeSearchEntry:
+    """safesearch_entry() lookup + 'www.' fallback + memoization (issue #149)."""
+
+    def test_exact_match_returns_entry(self) -> None:
+        pfb_unbound.pfb["safeSearchDB"] = True
+        pfb_unbound.safeSearchDB["forcesafe.com"] = {"A": "1.2.3.4", "AAAA": ""}
+        assert pfb_unbound.safesearch_entry("forcesafe.com") == {"A": "1.2.3.4", "AAAA": ""}
+
+    def test_www_fallback_matches_bare_entry(self) -> None:
+        # A query for 'x.com' (no www) falls back to the 'www.x.com' entry.
+        pfb_unbound.pfb["safeSearchDB"] = True
+        pfb_unbound.safeSearchDB["www.x.com"] = {"A": "1.2.3.4", "AAAA": ""}
+        assert pfb_unbound.safesearch_entry("x.com") == {"A": "1.2.3.4", "AAAA": ""}
+
+    def test_no_match_memoizes_none(self) -> None:
+        # A miss is memoized as None on the Decision so it is decided once.
+        pfb_unbound.pfb["safeSearchDB"] = True
+        assert pfb_unbound.safesearch_entry("nomatch.com") is None
+        assert pfb_unbound.decisionDB.get("nomatch.com").safesearch is None
+
+
+class TestSafeSearchAnswerHelpers:
+    """The post-restart detectors used by the CNAME redirect (issue #149)."""
+
+    @staticmethod
+    def _reply(rrtypes: list[str]) -> types.SimpleNamespace:
+        rrsets = [
+            types.SimpleNamespace(
+                rk=types.SimpleNamespace(type_str=t),
+                entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
+            )
+            for t in rrtypes
+        ]
+        return types.SimpleNamespace(
+            return_msg=types.SimpleNamespace(rep=types.SimpleNamespace(an_numrrsets=len(rrsets), rrsets=rrsets))
+        )
+
+    def test_has_cname_to_true_when_target_matches(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "safe.duckduckgo.com")
+        qstate = self._reply(["CNAME", "A"])
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is True
+
+    def test_has_cname_to_false_for_other_target(self, monkeypatch: Any) -> None:
+        # A genuine CNAME chain to some OTHER name is not our planted redirect.
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "cdn.example.net")
+        qstate = self._reply(["CNAME"])
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False
+
+    def test_has_cname_to_false_when_no_return_msg(self) -> None:
+        qstate = types.SimpleNamespace(return_msg=None)
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False
+
+    def test_has_address_true_with_a(self) -> None:
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "A"])) is True
+
+    def test_has_address_true_with_aaaa(self) -> None:
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "AAAA"])) is True
+
+    def test_has_address_false_bare_cname(self) -> None:
+        # The chase produced only a bare CNAME -> no address -> #2 fallback territory.
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME"])) is False
+
+
+class TestSafeSearchCnameRedirect:
+    """SafeSearch CNAME redirect state machine (issue #149): duckduckgo / pixabay.
+
+    Scenario: redirect a CNAME-SafeSearch name to its safe variant.
+      Background:
+        Given SafeSearch is enabled
+        And 'duckduckgo.com' is a CNAME entry -> 'safe.duckduckgo.com'
+        And the entry carries baked #2-fallback IPs (v4 203.0.113.7 / v6 2001:db8::7)
+      Unbound will not chase a module-handed CNAME (#976), so the redirect runs
+      post-resolution (MODDONE) in two phases: phase 1 plants the CNAME in cache and
+      restarts the iterator; phase 2 finalizes the chased answer (DNSSEC re-stamped),
+      or, when the chase yields no address, answers from the baked fallback IP.
+    """
+
+    TARGET = "safe.duckduckgo.com"
+
+    def _enable(self, *, v4: str = "203.0.113.7", v6: str = "2001:db8::7") -> None:
+        pfb_unbound.pfb["safeSearchDB"] = True
+        entry = {"A": "cname", "AAAA": self.TARGET}
+        if v4 or v6:
+            entry["v4"] = v4
+            entry["v6"] = v6
+        pfb_unbound.safeSearchDB["duckduckgo.com"] = entry
+
+    @staticmethod
+    def _spy_cache(monkeypatch: Any) -> dict[str, Any]:
+        calls: dict[str, Any] = {"store": [], "invalidate": 0}
+        monkeypatch.setattr(builtins, "storeQueryInCache", lambda qs, qi, rep, ref: calls["store"].append(ref))
+        monkeypatch.setattr(
+            builtins, "invalidateQueryInCache", lambda qs, qi: calls.update(invalidate=calls["invalidate"] + 1)
+        )
+        return calls
+
+    @staticmethod
+    def _reply(qname: str, *, cname: bool, has_a: bool) -> types.SimpleNamespace:
+        # A resolved answer: optional CNAME rrset (its target read via convert_other,
+        # monkeypatched to TARGET) and/or an A rrset (the chased address).
+        rrsets = []
+        if has_a:
+            rrsets.append(
+                types.SimpleNamespace(
+                    rk=types.SimpleNamespace(type_str="A"),
+                    entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
+                )
+            )
+        if cname:
+            rrsets.append(
+                types.SimpleNamespace(
+                    rk=types.SimpleNamespace(type_str="CNAME"),
+                    entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
+                )
+            )
+        return types.SimpleNamespace(
+            rep=types.SimpleNamespace(security=0, an_numrrsets=len(rrsets), rrsets=rrsets),
+            qinfo=types.SimpleNamespace(qname_str=qname, qname_list=qname.rstrip(".").split(".")),
+        )
+
+    def test_cname_deferred_in_new_pass(self) -> None:
+        # Given a CNAME entry, When the query first arrives (NEW), Then no answer is
+        # synthesized pre-resolution -- the name passes to the resolver (the redirect
+        # is deferred to MODDONE). Contrast with test_a_entry_answered_in_new_pass.
+        self._enable()
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert DNSMessage.instances == []
+
+    def test_a_entry_answered_in_new_pass(self) -> None:
+        # The with/without pair: a plain A-rewrite SafeSearch entry IS answered in the
+        # NEW pass (no resolution needed), proving the CNAME case is specifically the
+        # one deferred above.
+        pfb_unbound.pfb["safeSearchDB"] = True
+        pfb_unbound.safeSearchDB["forcesafe.com"] = {"A": "1.2.3.4", "AAAA": ""}
+        qstate = make_qstate("forcesafe.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert any(a.startswith("forcesafe.com. ") and " A 1.2.3.4" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_phase1_plants_cname_and_restarts(self, monkeypatch: Any) -> None:
+        # Phase 1 (When the resolved answer does not yet carry our CNAME): plant the
+        # synthetic 'duckduckgo.com -> CNAME -> safe.duckduckgo.com' into the cache as a
+        # REFERRAL and restart the iterator so it chases the target itself.
+        self._enable()
+        calls = self._spy_cache(monkeypatch)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_RESTART_NEXT
+        assert qstate.no_cache_store == 1
+        assert calls["store"] == [1]  # is_referral=1
+        assert calls["invalidate"] == 1
+        assert any("IN CNAME safe.duckduckgo.com" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_phase2_success_restamps_dnssec_and_finishes(self, monkeypatch: Any) -> None:
+        # Phase 2 success (the AFTER of phase 1): the iterator chased our CNAME to an
+        # address. Force rep.security to insecure (the synthesized hop is unsigned;
+        # without this a signed original zone would go bogus -> SERVFAIL), re-cache as a
+        # final answer (is_referral=0), and finish.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        calls = self._spy_cache(monkeypatch)
+        qstate = make_qstate(
+            "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=True)
+        )
+        # Given the chased answer is not yet marked (security 0 = unchecked)...
+        assert qstate.return_msg.rep.security == 0
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_msg.rep.security == sec_status_insecure
+        assert calls["store"] == [0]  # is_referral=0 (final answer)
+        assert calls["invalidate"] == 1
+
+    def test_phase2_baked_fallback_when_chase_has_no_address_a(self, monkeypatch: Any) -> None:
+        # #2 fallback (When the chase yields only a bare CNAME, no address): answer the
+        # A query from the baked v4 fallback IP.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        qstate = make_qstate(
+            "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
+        )
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_phase2_baked_fallback_aaaa_uses_v6(self, monkeypatch: Any) -> None:
+        # The AAAA leg of the baked fallback uses the v6 column.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        qstate = make_qstate(
+            "duckduckgo.com.", qtype=RR_AAAA, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
+        )
+        pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_phase2_no_address_no_baked_falls_through(self, monkeypatch: Any) -> None:
+        # The without-baked side of the fallback pair: a CNAME entry with NO baked IPs
+        # whose chase produced no address falls THROUGH the redirect (synthesizes
+        # nothing) to the normal MODDONE logger. Proves the baked-IP branch is real,
+        # not an always-answer path.
+        self._enable(v4="", v6="")
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        monkeypatch.setattr(pfb_unbound, "get_details_reply", lambda *a, **k: None)
+        qstate = make_qstate(
+            "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
+        )
+        pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED  # finished by the generic logger
+        assert DNSMessage.instances == []  # redirect synthesized nothing
+
+    def test_non_address_qtype_not_redirected(self, monkeypatch: Any) -> None:
+        # A non-A/AAAA query (e.g. MX) for a CNAME-SafeSearch name is NOT redirected;
+        # it falls through to the normal MODDONE logger.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "get_details_reply", lambda *a, **k: None)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_TXT, return_msg=None)
+        assert (
+            pfb_unbound.safesearch_cname_redirect(0, qstate, RR_TXT, pfb_unbound.safeSearchDB["duckduckgo.com"])
+            is False
+        )
+
+    def test_non_safesearch_name_unaffected_at_moddone(self, monkeypatch: Any) -> None:
+        # A name with no SafeSearch entry is never touched by the redirect at MODDONE.
+        pfb_unbound.pfb["safeSearchDB"] = True
+        monkeypatch.setattr(pfb_unbound, "get_details_reply", lambda *a, **k: None)
+        qstate = make_qstate("normal.com.", qtype=RR_A, return_msg=None)
+        pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert DNSMessage.instances == []
 
 
 class TestGetDetailsReplyNoaaaa:
