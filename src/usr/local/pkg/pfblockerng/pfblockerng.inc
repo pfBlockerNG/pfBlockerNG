@@ -4490,20 +4490,28 @@ function pfb_unbound_py_mode_active() {
 // Coalesced into ONE chroot unbound-control session and gated behind the DNSBL-queries
 // daemon's '.sync' suppression marker (touched by pfb_update_unbound / the fast path) so
 // the flush does not collide with the daemon on the control socket.
-function pfb_unbound_py_ccache_flush($names) {
-	global $pfb;
-
+// Build the coalesced unbound-control C-cache flush command list for the newly-blocked
+// names. Each name is VALIDATED as a domain via pfb_filter() (issue #153) before it can be
+// interpolated into a command: a non-domain / shell-metachar entry is DROPPED, never
+// reaching the exec() in pfb_unbound_py_ccache_flush() -- defence in depth atop the
+// escapeshellarg() below (the names already arrive PFB_FILTER_DOMAIN-filtered from the
+// alerts page, but this choke point must not trust its input). Returns the full command
+// strings (chroot_cmd-prefixed, each variant escapeshellarg'd), de-duplicated across each
+// name + its 'www.' sibling. Pure (no globals / side effects) so every branch is
+// unit-testable off-appliance (the exec lives in the wrapper below).
+function pfb_unbound_py_ccache_flush_cmds($names, $chroot_cmd) {
+	$cmds = array();
 	if (!is_array($names) || empty($names)) {
-		return;
+		return $cmds;
 	}
 
 	// One control session: flush each name + its 'www.' sibling (the alerts unlock path
 	// flushes the same pair) so the prior resolved A/AAAA cannot keep serving.
-	$cmds = array();
 	$seen = array();
 	foreach ($names as $name) {
-		$name = trim((string) $name);
-		if ($name === '') {
+		// Drop anything that is not a valid domain BEFORE it can reach the command.
+		$name = pfb_filter(trim((string) $name), PFB_FILTER_DOMAIN, 'pfb_ccache_flush');
+		if (empty($name)) {
 			continue;
 		}
 		foreach (array($name, "www.{$name}") as $variant) {
@@ -4511,10 +4519,17 @@ function pfb_unbound_py_ccache_flush($names) {
 				continue;
 			}
 			$seen[$variant] = TRUE;
-			$cmds[] = "{$pfb['chroot_cmd']} flush " . escapeshellarg($variant) . ' 2>&1';
+			$cmds[] = "{$chroot_cmd} flush " . escapeshellarg($variant) . ' 2>&1';
 		}
 	}
 
+	return $cmds;
+}
+
+function pfb_unbound_py_ccache_flush($names) {
+	global $pfb;
+
+	$cmds = pfb_unbound_py_ccache_flush_cmds($names, $pfb['chroot_cmd']);
 	if (empty($cmds)) {
 		return;
 	}
