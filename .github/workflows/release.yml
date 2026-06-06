@@ -534,6 +534,7 @@ jobs:
           # whitespace is lossless and removes any set/paste artifact.
           GH_TOKEN="$(printf '%s' "${GH_TOKEN:-}" | tr -d '[:space:]')"
           export GH_TOKEN
+          [ -n "$GH_TOKEN" ] || { echo "::error::PKG_DISPATCH_TOKEN secret is empty or unset on this repo."; exit 1; }
           echo "::add-mask::$GH_TOKEN"
           gh workflow run publish.yml -R pfBlockerNG/pkg
 
