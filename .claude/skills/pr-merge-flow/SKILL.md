@@ -6,9 +6,10 @@ description: >
   feedback, validate + apply each finding and reply, and ONLY if that completes
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
-  delete the branch. The review step adapts to the repo: if CodeRabbit is active it
-  waits on CodeRabbit; if CodeRabbit is NOT available for the repo it spawns a
-  Claude Sonnet sub-agent to review in its place, then triages the same way. This
+  delete the branch. The review step gives CodeRabbit ~5 minutes to acknowledge the
+  PR: if it does, wait on its review; if it stays silent, spawn a Claude Sonnet
+  sub-agent to review in its place (still folding CodeRabbit's review in if it shows
+  up late) — and handle every comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
   (documentation-only, CLAUDE.md, ADR text, skills). Args: [PR number] (defaults to
@@ -43,42 +44,61 @@ Args: `{{ args }}`
 
 ## Step 1 — Review feedback
 
-First decide the review source (1a), run the matching path (1b or 1c), then apply the
-shared gate. The gate is identical for both paths.
+Decide the review source with a **5-minute acknowledgement window** (1a), run the
+matching path — 1b (CodeRabbit) or 1c (Sonnet substitute, which still folds CodeRabbit
+back in if it shows up late) — then apply the shared gate. Whichever reviews you end up
+with, **handle every comment of every review you receive**; *how* each comment is
+handled (the triage below) never changes.
 
-### Step 1a — Is CodeRabbit available for this repo?
+### Step 1a — Give CodeRabbit 5 minutes to acknowledge THIS PR
 
-There is no unauthenticated API for "is the app installed", so probe by recent
-activity: if CodeRabbit has reviewed/commented on **any** of the last few PRs it is
-active; if the last several PRs show **zero** CodeRabbit activity it is not installed
-on this repo (e.g. it was left behind by an org transfer).
+CodeRabbit, when installed, posts something on a new PR within a few minutes. So judge
+availability per-PR, anchored on the PR's creation time: if **any** CodeRabbit message
+(issue comment, review, or inline comment) appears within **5 minutes of the PR's
+creation**, it is active → **Step 1b**. If those 5 minutes elapse with **no CodeRabbit
+message whatsoever**, assume it is not available → **Step 1c**. (If the PR is already
+older than 5 minutes when you start and CodeRabbit has posted nothing, conclude `NOACK`
+immediately — no need to wait.)
+
+Run the wait as a background Bash command (a self-exiting loop = one wake; never a
+foreground `sleep`), then read `$RESULT`:
 
 ```sh
-# OWNER_REPO from Step 0. Counts CodeRabbit (login matches "coderabbit") activity
-# across the last 6 closed PRs; any non-zero line => available.
-for n in $(gh pr list --repo "$OWNER_REPO" --state closed --limit 6 --json number -q '.[].number'); do
-  gh api "repos/$OWNER_REPO/issues/$n/comments" --paginate \
-    -q '[.[]|select((.user.login|ascii_downcase)|test("coderabbit"))]|length'
-  gh api "repos/$OWNER_REPO/pulls/$n/reviews" --paginate \
-    -q '[.[]|select((.user.login|ascii_downcase)|test("coderabbit"))]|length'
+# Set first: OWNER_REPO  PR  RESULT(tmpfile). Waits until 5 min past PR creation for
+# ANY CodeRabbit ("coderabbit" login) message; ACK as soon as one appears, else NOACK.
+created=$(gh pr view "$PR" --repo "$OWNER_REPO" --json createdAt -q .createdAt)
+# createdAt + 300s as epoch. BSD date (macOS): -juf; GNU date: the `date -d` fallback.
+deadline=$(( $(date -juf "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null || date -d "$created" +%s) + 300 ))
+while :; do
+  hits=$(
+    { gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
+        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
+      gh api "repos/$OWNER_REPO/pulls/$PR/reviews" --paginate \
+        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
+      gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
+        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
+    } 2>/dev/null)
+  [ -n "$hits" ] && { echo ACK > "$RESULT"; exit 0; }
+  [ "$(date -u +%s)" -ge "$deadline" ] && { echo NOACK > "$RESULT"; exit 0; }
+  sleep 30
 done
 ```
 
-- **Available** (any non-zero) → **Step 1b**.
-- **Not available** (all zero) → **Step 1c**.
+- **`ACK`** (a CodeRabbit message appeared) → **Step 1b**.
+- **`NOACK`** (silent for the full window) → **Step 1c**.
 
-### Step 1b — CodeRabbit available → wait on CodeRabbit
+### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
 - Invoke the **pr-comments** skill with `N --wait-for=coderabbitai`. It blocks until
   CodeRabbit has finished reviewing, then validates each finding against the current
   code, applies the ones that genuinely hold, skips the rest with a reason, and
   replies on every thread.
-- If that wait **times out** (CodeRabbit silently went away despite the probe), do
-  not stall the flow — fall back to **Step 1c**.
+- If that wait **times out** (CodeRabbit acknowledged but never finished the review),
+  do not stall the flow — fall back to **Step 1c**.
 
-### Step 1c — CodeRabbit NOT available → Claude Sonnet sub-agent reviewer
+### Step 1c — No ack in 5 min → Claude Sonnet sub-agent reviewer (fold in a late CodeRabbit)
 
-Stand in a reviewer yourself, then triage exactly as `pr-comments` would.
+Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in too.
 
 1. **Spawn one sub-agent** with the Agent tool, `model: sonnet`, briefed to act as
    CodeRabbit: review the PR's diff (`git diff origin/<BASE>...HEAD` in the PR's
@@ -87,20 +107,26 @@ Stand in a reviewer yourself, then triage exactly as `pr-comments` would.
    (`blocking` / `nitpick` / `outside-diff`), `file:line`, a grounded explanation,
    and a concrete suggested fix — plus a short "considered-and-fine" list. Tell it
    the result IS its final message and not to edit anything.
-2. **Triage each finding yourself against the CURRENT code** — do not auto-apply.
-   Per finding: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
+2. **When the sub-agent finishes, re-check the PR for CodeRabbit.** If it has now
+   posted anything (it acknowledged late, during the Sonnet review), treat it as
+   available after all: wait for its review to finish (the `pr-comments`
+   `--wait-for=coderabbitai` wait, or poll until a terminal CodeRabbit result), so you
+   hold **both** reviews. If it is still silent, you have only the Sonnet review.
+3. **Triage and handle EACH comment of EACH review you received** — every Sonnet
+   finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
+   unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
    wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
-   pre-existing/orthogonal → its own branch+PR). This mirrors `pr-comments` Step 5;
-   honour the repo's lint config and `CLAUDE.md` conventions.
-3. **Apply the valid fixes**, re-run the relevant gates (`php -l` / PHPUnit / PHPStan
+   pre-existing/orthogonal → its own branch+PR); mirror `pr-comments` Step 5 and reply
+   on every CodeRabbit thread. Honour the repo's lint config and `CLAUDE.md`.
+4. **Apply the valid fixes**, re-run the relevant gates (`php -l` / PHPUnit / PHPStan
    for PHP, `python -m pytest` / `ruff` / `mypy` for Python, ShellCheck for shell —
    whatever the change touches), commit (`<scope>: <imperative summary>`) and push to
    the PR head branch.
-4. **Record the review on the PR** — post one comment summarising the substitute
-   review and the per-finding resolution (applied + commit / skipped + reason /
-   deferred + link), so there is an audit trail. Use `gh pr comment N --body-file`
-   and append the attribution footer (resolve `<gh-login>` once with
-   `gh api user -q .login`):
+5. **Record the review on the PR** — post one comment summarising the Sonnet substitute
+   review (and noting CodeRabbit's, if it was folded in) plus the per-finding
+   resolution (applied + commit / skipped + reason / deferred + link), so there is an
+   audit trail. Use `gh pr comment N --body-file` and append the attribution footer
+   (resolve `<gh-login>` once with `gh api user -q .login`):
 
    ```text
    ---
