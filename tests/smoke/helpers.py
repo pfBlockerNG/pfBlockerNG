@@ -744,6 +744,32 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         )
 
 
+CFG_SAFESEARCH_ENABLE = "installedpackages/pfblockerngsafesearch/safesearch_enable"
+
+
+def set_safesearch_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle DNSBL SafeSearch (``safesearch_enable`` = 'Enable' / 'Disable').
+
+    SafeSearch lives at its OWN config root (``pfblockerngsafesearch``), a scalar
+    (not under ``config/0``) read by pfb_global() as
+    ``config_get_path('installedpackages/pfblockerngsafesearch/safesearch_enable')``.
+    When 'Enable', the next DNSBL update writes the SafeSearch python CSV
+    (``pfb_py_ss.txt``) — including the duckduckgo/pixabay CNAME redirect rows
+    (issue #149) — which pfb_unbound.py loads as ``safeSearchDB``.
+    """
+    val = "Enable" if on else "Disable"
+    snippet = (
+        f"config_set_path({_php_str(CFG_SAFESEARCH_ENABLE)}, {_php_str(val)});\n"
+        "write_config('pfBlockerNG smoke: toggle safesearch_enable');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_safesearch_enabled({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: float = 60.0) -> str:
     """Subnet (IP) of the first ``virtualip/vip`` entry whose ``descr`` == ``descr``, or '' if none.
 

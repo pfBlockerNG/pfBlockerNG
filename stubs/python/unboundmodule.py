@@ -56,7 +56,18 @@ __all__ = [
     "MODULE_EVENT_MODDONE",
     "MODULE_FINISHED",
     "MODULE_WAIT_MODULE",
+    "MODULE_WAIT_SUBQUERY",
+    "MODULE_RESTART_NEXT",
     "MODULE_ERROR",
+    # DNSSEC security status (rep.security)
+    "sec_status_unchecked",
+    "sec_status_bogus",
+    "sec_status_indeterminate",
+    "sec_status_insecure",
+    "sec_status_secure",
+    # Message-cache helpers
+    "storeQueryInCache",
+    "invalidateQueryInCache",
 ]
 
 # ---------------------------------------------------------------------------
@@ -102,7 +113,23 @@ MODULE_EVENT_MODDONE = 3  # Downstream module finished; resume this module
 # ---------------------------------------------------------------------------
 MODULE_FINISHED = 4  # Module completed successfully; pass to next module
 MODULE_WAIT_MODULE = 2  # Module is waiting for another module to finish
+MODULE_WAIT_SUBQUERY = 4  # Module is waiting for a sub-query it attached to finish
+MODULE_RESTART_NEXT = 3  # Restart the module chain at the next module (re-run iterator)
 MODULE_ERROR = 5  # Module encountered an error; abort query processing
+
+# ---------------------------------------------------------------------------
+# DNSSEC security status — values for ``qstate.return_msg.rep.security``.
+# Mirrors the Python-visible SWIG enum (pythonmod/interface.i), which omits the
+# C-only ``sec_status_secure_sentinel_fail`` — so ``secure`` is 4 here, not 5.
+# A synthesized/injected answer (e.g. a SafeSearch CNAME redirect) must overwrite
+# ``security`` to a non-bogus value, else the validator marks the unsigned hop
+# bogus -> SERVFAIL.
+# ---------------------------------------------------------------------------
+sec_status_unchecked = 0  # Not yet validated
+sec_status_bogus = 1  # Validation failed (signatures/chain broken)
+sec_status_indeterminate = 2  # Insecure, but not authoritatively so
+sec_status_insecure = 3  # Authoritatively known to be insecure
+sec_status_secure = 4  # Validated secure
 
 
 def log_info(msg: object) -> None:
@@ -188,6 +215,40 @@ def register_inplace_cb_reply_servfail(*_: Any) -> bool:
         True on success, False on failure.
     """
     return True
+
+
+def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) -> bool:
+    """Insert a query's reply into Unbound's message cache.
+
+    Used by the SafeSearch CNAME redirect to plant a synthesized
+    ``orig -> CNAME -> target`` referral so the iterator (re-run via
+    :data:`MODULE_RESTART_NEXT`) chases the target itself — working around
+    NLnetLabs/unbound #976 (a module-injected CNAME is not chased).
+
+    Args:
+        qstate:      The :class:`module_qstate`.
+        qinfo:       The :class:`query_info` to key the cache entry on.
+        msgrep:      The reply (``qstate.return_msg.rep``) to store.
+        is_referral: 1 to store as a referral (lets the iterator continue the
+                     chase), 0 to store as a final answer.
+
+    Returns:
+        True on success.
+    """
+    return True
+
+
+def invalidateQueryInCache(qstate: Any, qinfo: Any) -> None:
+    """Evict a query's entry from Unbound's message cache.
+
+    Paired with :func:`storeQueryInCache` so a stale entry never shadows the
+    freshly synthesized one.
+
+    Args:
+        qstate: The :class:`module_qstate`.
+        qinfo:  The :class:`query_info` whose cache entry to invalidate.
+    """
+    ...
 
 
 class _Struct:

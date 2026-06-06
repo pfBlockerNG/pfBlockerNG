@@ -2925,6 +2925,117 @@ function pfb_create_dnsbl($mode) {
 }
 
 
+// Resolve a SafeSearch CNAME target (e.g. safe.duckduckgo.com) to its current
+// A/AAAA via the configured external DNS server. These are the #2 baked-fallback
+// IPs written into the SafeSearch CSV (issue #149): pfb_unbound.py uses them only
+// when the live CNAME chase yields no address, and the SafeSearch freshness cron
+// re-runs this every 15 minutes to keep them current. Returns array($v4, $v6),
+// each '' when unresolved.
+function pfb_ss_resolve_target($target) {
+	global $pfb;
+
+	if (empty($target)) {
+		return array('', '');
+	}
+
+	$target_esc = escapeshellarg($target);
+	$extdns_esc = escapeshellarg("@{$pfb['extdns']}");
+
+	$out4 = array();
+	exec("/usr/bin/drill A {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+A[ \\t]/ {print \$5; exit}'", $out4);
+	$v4 = filter_var(trim($out4[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '';
+
+	$out6 = array();
+	exec("/usr/bin/drill AAAA {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+AAAA[ \\t]/ {print \$5; exit}'", $out6);
+	$v6 = filter_var(trim($out6[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
+
+	return array($v4, $v6);
+}
+
+// Format the SafeSearch python CSV row(s) for one host. Pure (resolution is done
+// by the caller via pfb_ss_resolve_target) so it is unit-testable off-appliance.
+// Columns: 3 = domain,A,AAAA (A/AAAA rewrite or nxdomain); 5 =
+// domain,cname,target,baked_v4,baked_v6 (a CNAME redirect, issue #149). Emits the
+// host AND its 'www.' variant for the rewrite/cname forms (matching A/AAAA).
+function pfb_ss_csv_rows($host, $data, $v4 = '', $v6 = '') {
+	if (isset($data['nxdomain'])) {
+		return "{$host},nxdomain,nxdomain\n";
+	}
+	if (($data['A'] ?? '') === 'cname') {
+		$target = $data['AAAA'] ?? '';
+		return "{$host},cname,{$target},{$v4},{$v6}\n" .
+			"www.{$host},cname,{$target},{$v4},{$v6}\n";
+	}
+	$a = $data['A'] ?? '';
+	$aaaa = $data['AAAA'] ?? '';
+	return "{$host},{$a},{$aaaa}\n" .
+		"www.{$host},{$a},{$aaaa}\n";
+}
+
+// Pure transform behind pfblockerng_ss_refresh(): given the SafeSearch CSV lines
+// and a $resolver($target) => array($v4, $v6) callable, refresh the baked #2-fallback
+// IPs on each CNAME row (domain,cname,target,v4,v6) in place; every other row is kept
+// verbatim. Re-resolution failure (empty result) KEEPS the prior baked IP (never
+// blanks a good value). Each distinct target is resolved once. Returns
+// array($out_lines, $changed). Side-effect-free so it is unit-testable off-appliance.
+function pfb_ss_refresh_lines(array $lines, callable $resolver) {
+	$resolved = array();	// target => array(v4, v6), resolved once per target
+	$changed = FALSE;
+	$out = array();
+	foreach ($lines as $line) {
+		$cols = explode(',', $line);
+
+		// CNAME row: domain,cname,target,baked_v4,baked_v6
+		if (count($cols) === 5 && $cols[1] === 'cname') {
+			$target = $cols[2];
+			if (!isset($resolved[$target])) {
+				$resolved[$target] = $resolver($target);
+			}
+			list($v4, $v6) = $resolved[$target];
+
+			// Keep the prior baked IP when re-resolution fails (don't blank it).
+			$v4 = $v4 ?: $cols[3];
+			$v6 = $v6 ?: $cols[4];
+			if ($v4 !== $cols[3] || $v6 !== $cols[4]) {
+				$changed = TRUE;
+			}
+			$out[] = "{$cols[0]},cname,{$target},{$v4},{$v6}";
+		} else {
+			$out[] = $line;
+		}
+	}
+
+	return array($out, $changed);
+}
+
+// SafeSearch CNAME fallback freshness (issue #149). Light cron task: re-resolve each
+// CNAME target in the SafeSearch CSV and refresh its baked #2-fallback IPs in place.
+// On change, rewrite the CSV and touch the reload sentinel so pfb_unbound.py picks up
+// the new IPs without a full DNSBL rebuild. No-op when the CSV or its CNAME rows are
+// absent (or nothing changed). Pure row transform lives in pfb_ss_refresh_lines().
+function pfblockerng_ss_refresh() {
+	global $pfb;
+	pfb_global();
+
+	$ss_file = $pfb['unbound_py_ss'];
+	if (!file_exists($ss_file)) {
+		return;
+	}
+
+	$lines = file($ss_file, FILE_IGNORE_NEW_LINES);
+	if (empty($lines)) {
+		return;
+	}
+
+	list($out, $changed) = pfb_ss_refresh_lines($lines, 'pfb_ss_resolve_target');
+
+	if ($changed) {
+		@file_put_contents($ss_file, implode("\n", $out) . "\n", LOCK_EX);
+		touch("{$pfb['dnsbl_file']}.reload");
+		pfb_logger("\n SafeSearch CNAME fallback IPs refreshed", 1);
+	}
+}
+
 // Define DNSBL Unbound include settings (config.xml)
 function pfb_unbound_dnsbl($mode) {
 	global $g, $pfb;
@@ -2934,7 +3045,7 @@ function pfb_unbound_dnsbl($mode) {
 	config_read_file(false, true);
 
 	$pfbupdate = FALSE;
-	$unbound_include = "server:include: {$pfb['dnsbl_file']}.*conf";
+	$log = '';
 
 	// Collect Unbound custom option pfSense conf line
 	$pfb['unboundconfig']	= config_get_path('unbound/custom_options');
@@ -2945,47 +3056,20 @@ function pfb_unbound_dnsbl($mode) {
 		$unbound_custom = '';
 	}
 
-	// Determine if DNSBL include line exists
-	if (!empty($unbound_custom)) {
-		// Append DNSBL Unbound pfSense conf integration
-		if (!strstr($unbound_custom, 'pfb_dnsbl.*conf')) {
-			if ($mode == 'enabled') {
-				if ($pfb['safesearch_enable'] !== 'Disable') {
-					$pfbupdate = TRUE;
-					$unbound_custom .= "\n{$unbound_include}";
-					$log = "\nAdding DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
-				}
-			}
-		}
-		else {
-			// Remove DNSBL Unbound pfSense conf integration when disabled
-			// or when DNSBL python mode is enabled but not when SafeSearch is enabled
-			$custom = explode ("\n", $unbound_custom);
-			foreach ($custom as $key => $line) {
-				if (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
-					if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
-						//
-					}
-
-					else {
-						$log = "\nRemoving DNSBL Unbound mode and/or DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
-						unset($custom[$key]);
-						$pfbupdate = TRUE;
-					}
-				}
-			}
-			$unbound_custom = implode("\n", $custom);
-		}
-	}
-	else {
-		// Add DNSBL Unbound pfSense conf integration
-		if ($mode == 'enabled') {
-			if ($pfb['safesearch_enable'] !== 'Disable') {
+	// The legacy SafeSearch CNAME include (server:include: pfb_dnsbl.*conf) is no
+	// longer produced -- the CNAME redirect is done in Python (issue #149). Strip it
+	// from the Resolver custom options so an upgraded box drops the orphaned
+	// native-mode include; it is never re-added.
+	if (!empty($unbound_custom) && strstr($unbound_custom, 'pfb_dnsbl.*conf')) {
+		$custom = explode("\n", $unbound_custom);
+		foreach ($custom as $key => $line) {
+			if (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
+				unset($custom[$key]);
 				$pfbupdate = TRUE;
-				$unbound_custom = "{$unbound_include}";
-				$log = "\nAdding DNSBL SafeSearch CNAME mode (Resolver adv. setting)";
 			}
 		}
+		$unbound_custom = implode("\n", $custom);
+		$log = "\nRemoving orphaned DNSBL SafeSearch CNAME include (Resolver adv. setting)";
 	}
 
 	// Remove the previous include line, see Bug #6603
@@ -3015,7 +3099,6 @@ function pfb_unbound_dnsbl($mode) {
 			pfb_logger("\nDNS Resolver configuration file missing or empty, Exiting!", 1);
 		}
 
-		$unbound = FALSE;	// Unbound mode
 		$unbound_py_script = FALSE;	// pfb_unbound.py 'python:' script block present
 
 		$u_update = FALSE;
@@ -3027,21 +3110,11 @@ function pfb_unbound_dnsbl($mode) {
 			}
 
 			elseif (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
-				if ($mode == 'enabled') {
-					if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
-						$unbound = TRUE;
-					}
-
-					else {
-						$u_update = TRUE;
-						$u_msg .= "  Removed DNSBL SafeSearch mode\n";
-						unset($conf[$key]);
-					}
-				} else {
-					$u_update = TRUE;
-					$u_msg .= "  Removed DNSBL Unbound mode\n"; 
-					unset($conf[$key]);
-				}
+				// Orphaned native SafeSearch CNAME include (issue #149) -- always drop;
+				// the CNAME redirect is now done by pfb_unbound.py.
+				$u_update = TRUE;
+				$u_msg .= "  Removed orphaned DNSBL SafeSearch CNAME include\n";
+				unset($conf[$key]);
 			}
 
 			elseif (strpos($line, 'module-config:') !== FALSE) {
@@ -3082,15 +3155,6 @@ function pfb_unbound_dnsbl($mode) {
 					unset($conf[$key-1]); // remove 'python:' line above
 					unset($conf[$key]);
 				}
-			}
-		}
-
-		// Add Unbound include line
-		if (!$unbound && $mode == 'enabled') {
-			if ($mode == 'enabled' && $pfb['safesearch_enable'] !== 'Disable') {
-				$u_update = TRUE;
-				$u_msg .= "  Added DNSBL SafeSearch CNAME mode\n";
-				$conf[] = "\nserver:include: {$pfb['dnsbl_file']}.*conf\n";
 			}
 		}
 
@@ -8805,23 +8869,12 @@ function sync_package_pfblockerng($cron='') {
 					}
 
 
-					// Python Mode determine if user manually entered these SafeSearch CNAMES to avoid duplicate zone errors
-					if ($safe_type[0] == 'safesearch_enable') {
-						$DDG = $PIX = $ss_cname = FALSE;
-						if (file_exists('/var/unbound/unbound.conf')) {
-							$pfb_py_conf_ex = @file_get_contents('/var/unbound/unbound.conf');
-							if (strstr($pfb_py_conf_ex, 'duckduckgo.com')) {
-								$CNAME_LOG = "\n *** Found manual Resolver entry for duckduckgo.com. This manual entry should be removed in future!\n";
-								$DDG = TRUE;
-							}
-							if (strstr($pfb_py_conf_ex, 'pixabay.com')) {
-								$CNAME_LOG .= "\n *** Found manual Resolver entry for pixabay.com. This manual entry should be removed in future!\n";
-								$PIX = TRUE;
-							}
-						}
-						$ss_ex = @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
-					}
-					unlink_if_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf"); // Remove Unbound mode file
+					// pfBlockerNG <= 3.2.x wrote the SafeSearch CNAMEs (duckduckgo /
+					// pixabay) to a native Unbound-mode local-data conf and included it.
+					// The CNAME redirect is now done in Python (issue #149), so drop any
+					// leftover native conf on upgrade (its include line is stripped in
+					// pfb_unbound_dnsbl()).
+					unlink_if_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
 
 					$safesearch_file = file($pfb["dnsbl_{$safe_type[2]}"]);
 					if (!empty($safesearch_file)) {
@@ -8843,28 +8896,20 @@ function sync_package_pfblockerng($cron='') {
 							} elseif (strpos($line, ' AAAA ') !== FALSE) {
 								$safesearch_hosts[$domain]['AAAA'] = $host_ip;
 
-							# CNAME SafeSearch is not compatible in Python Mode, use Unbound mode for now
+							// CNAME SafeSearch (duckduckgo.com / pixabay.com): redirected in
+							// Python via a cache-planted CNAME the iterator chases (issue
+							// #149). Store a 'cname' entry; the CSV writer below bakes the
+							// target's A/AAAA as the #2 fallback.
 							} elseif (strpos($line, ' CNAME ') !== FALSE) {
-								$ss_cname = TRUE;
-								if (!$DDG && strpos($line, 'duckduckgo.com') !== FALSE) {
-									@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
-								}
-								if (!$PIX && strpos($line, 'pixabay.com') !== FALSE) {
-									@file_put_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf", "{$host}", FILE_APPEND);
-								}
-								# $cname = trim(str_replace('CNAME ', '', strstr($line, 'CNAME', FALSE)));
-								# $safesearch_hosts[$domain]['A'] = 'cname';
-								# $safesearch_hosts[$domain]['AAAA'] = $cname;
+								$cname = trim(str_replace('CNAME ', '', strstr($line, 'CNAME', FALSE)));
+								$safesearch_hosts[$domain]['A'] = 'cname';
+								$safesearch_hosts[$domain]['AAAA'] = $cname;
 							} elseif (strpos($line, 'always_nxdomain') !== FALSE) {
 								$safesearch_hosts[$domain]['nxdomain'] = '';
 							}
 						}
 					}
 
-					if ($safe_type[2] == 'safesearch' && ($ss_cname && $ss_ex !== @file_get_contents("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) ||
-					    (($DDG || $PIX) && !$ss_cname)) {
-						$safesearch_update = TRUE;
-					}
 				}
 				elseif (file_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf")) {
 					unlink("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
@@ -8875,13 +8920,13 @@ function sync_package_pfblockerng($cron='') {
 			// Python mode create a CSV list of SafeSearch hosts
 			if (!empty($safesearch_hosts)) {
 				foreach ($safesearch_hosts as $host => $data) {
-					if (isset($data['nxdomain'])) {
-						$line = "{$host},nxdomain,nxdomain\n";
-					} else {
-						$line = "{$host}," . ($data['A'] ?: '') . ',' . ($data['AAAA'] ?: '') . "\n"
-							. "www.{$host}," . ($data['A'] ?: '') . ',' . ($data['AAAA'] ?: '') . "\n";
+					$v4 = $v6 = '';
+					// CNAME redirect: bake the target's current A/AAAA as the #2
+					// fallback (issue #149); the freshness cron keeps them current.
+					if (($data['A'] ?? '') === 'cname') {
+						list($v4, $v6) = pfb_ss_resolve_target($data['AAAA'] ?? '');
 					}
-					@file_put_contents('/var/unbound/pfb_py_ss.raw', $line, FILE_APPEND);
+					@file_put_contents('/var/unbound/pfb_py_ss.raw', pfb_ss_csv_rows($host, $data, $v4, $v6), FILE_APPEND);
 				}
 
 				// Copy file if not exists or has been updated
@@ -11838,6 +11883,30 @@ function sync_package_pfblockerng($cron='') {
 	else {
 		// Clear any existing pfBlockerNG CRON jobs
 		install_cron_job('pfblockerng.php dcc', false);
+	}
+
+	// Define pfBlockerNG SafeSearch CNAME fallback freshness cron (issue #149).
+	// The SafeSearch CNAMEs (duckduckgo/pixabay) are redirected in Python; their
+	// baked #2-fallback IPs can drift between full DNSBL rebuilds, so this light
+	// job re-resolves them every 15 minutes and reloads only on change. Installed
+	// only while SafeSearch is enabled (the only source of CNAME entries).
+	if ($pfb['enable'] == 'on' && $pfb['safesearch_enable'] !== 'Disable') {
+		$pfb_sscmd	= "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ss_refresh >> {$pfb['log']} 2>&1";
+		$pfb_ssmin	= '*/15';
+		$pfb_sshour	= '*';
+		$pfb_ssmday	= '*';
+		$pfb_ssmonth	= '*';
+		$pfb_sswday	= '*';
+		$pfb_sswho	= 'root';
+
+		if (!pfblockerng_cron_exists($pfb_sscmd, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_sswday)) {
+			install_cron_job('pfblockerng.php ss_refresh', false);
+			install_cron_job($pfb_sscmd, true, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_ssmonth, $pfb_sswday, $pfb_sswho);
+		}
+	}
+	else {
+		// Clear the SafeSearch freshness CRON job when SafeSearch is disabled
+		install_cron_job('pfblockerng.php ss_refresh', false);
 	}
 
 
