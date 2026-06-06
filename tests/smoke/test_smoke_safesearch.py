@@ -11,10 +11,12 @@ hop is not bogus. A #2 baked-IP fallback (resolved at list-build, kept fresh by 
 15-min cron) answers if the chase ever yields no address.
 
 This is the make-or-break gate for the #1 live-chase mechanism, which can only be
-proven on a real Unbound. To make the proof deterministic AND hermetic, the two
-CNAME targets are pinned to RFC-5737 TEST-NET addresses via DNS-Resolver Host
-Overrides: a working chase lands on those exact IPs. (The targets are unsigned in
-real DNS, so the chase has no DNSSEC angle here regardless.)
+proven on a real Unbound. The resolver runs RECURSIVE (pfSense's default and what
+the chase targets) — deliberately NOT use_system_dns_upstream, whose catch-all
+``forward-zone: "."`` re-forwards the SOURCE name on the iterator restart and
+defeats the cache-planted chase. The chase therefore resolves the real
+``safe.duckduckgo.com`` / ``safesearch.pixabay.com`` (unsigned in DNS, so no DNSSEC
+angle), and the test asserts ``duckduckgo.com`` ends up at that same address.
 
 Probed ON-BOX (``drill @127.0.0.1``); SafeSearch redirects have no localhost
 exemption, so the redirect shows there.
@@ -28,10 +30,8 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _StubDnsServer
+from .conftest import SmokeVM
 
-# Marked ``smoke`` (runs under the full ``-m smoke`` matrix) AND ``safesearch`` (so a
-# focused ``-m safesearch`` dispatch runs just this CNAME-redirect case).
 pytestmark = [pytest.mark.smoke, pytest.mark.safesearch]
 
 # The two shipped CNAME-SafeSearch names and their redirect targets.
@@ -40,55 +40,32 @@ DDG_TARGET = "safe.duckduckgo.com"
 PIX = "pixabay.com"
 PIX_TARGET = "safesearch.pixabay.com"
 
-# Controlled addresses the targets are pinned to (RFC 5737 / RFC 3849 test ranges),
-# so a working chase resolves the SafeSearch name to a KNOWN value rather than a
-# live CDN IP. A #2 baked fallback would instead serve the real (extdns-resolved)
-# target IP, so the controlled IP is also what distinguishes #1 from #2.
-DDG_V4, DDG_V6 = "198.51.100.50", "2001:db8::50"
-PIX_V4, PIX_V6 = "198.51.100.51", "2001:db8::51"
-
-CONTROL = {
-    DDG_TARGET: {"A": DDG_V4, "AAAA": DDG_V6},
-    PIX_TARGET: {"A": PIX_V4, "AAAA": PIX_V6},
-}
-
 
 @pytest.fixture(scope="module")
-def safesearch_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[tuple[SmokeVM, h.DnsAnswer, h.DnsAnswer]]:
-    """Deploy, enable DNSBL with SafeSearch, and capture the BEFORE answers.
+def safesearch_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, h.DnsAnswer, h.DnsAnswer]]:
+    """Deploy, enable DNSBL + SafeSearch (recursive resolver), capture the BEFORE answers.
 
-    RECURSIVE mode (deliberately NOT use_system_dns_upstream): a catch-all
-    ``forward-zone: "."`` re-forwards the SOURCE name on the iterator restart, which
-    defeats the cache-planted CNAME chase — and pfSense's default resolver is
-    recursive anyway, which is what the #1 mechanism targets. The redirect TARGET
-    (safe.duckduckgo.com / safesearch.pixabay.com) is pinned to a TEST-NET IP via a
-    Host Override (local-data), so the chase resolves it LOCALLY — the proof needs no
-    real internet. Egress stays open so the SafeSearch-off BEFORE probe can resolve
-    the real site and the #2 bake can run, but the AFTER redirect does not depend on
-    it.
+    Egress stays OPEN: the resolver is recursive, so the redirect chase resolves the
+    real SafeSearch target, and the SafeSearch-off BEFORE probe resolves the real site.
 
     Yields ``(vm, ddg_before, pix_before)`` — the pre-redirect answers, so each test
-    can prove the redirect CHANGED them (no false green from a name that already
-    resolved to the target).
+    proves the redirect CHANGED them.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
 
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
-    h.unblock_egress()  # recursive resolution for the BEFORE probe + the #2 bake
+    h.unblock_egress()  # recursive resolution for the chase + the BEFORE probe
 
-    # Enable DNSBL (so the python module is loaded) with a dummy feed; pin the CNAME
-    # targets to the controlled TEST-NET IPs. SafeSearch is still OFF here.
+    # Enable DNSBL (so the python module is loaded) with a dummy local feed. SafeSearch
+    # is still OFF here, so the CNAME names resolve to their real sites.
     feed = h.write_local_feed(smoke_vm, "smoke_ss_dummy.txt", f"{h.unique_domain('ssdummy')}\n")
-    spec = h.DnsblCase(aliasname="smokess", feed_url=feed, header="smokess", control_local_data=CONTROL)
+    spec = h.DnsblCase(aliasname="smokess", feed_url=feed, header="smokess")
     h.set_safesearch_enabled(smoke_vm, False)
     h.inject(smoke_vm, spec)
     h.reload(smoke_vm, "update")
 
-    # BEFORE: with SafeSearch off, the CNAME names resolve normally (recursive); in CI
-    # recursion can be flaky, so this is a best-effort baseline (tests only require it
-    # is NOT already the controlled target, not that it succeeded).
     ddg_before = h.dns_probe(smoke_vm, DDG, "A")
     pix_before = h.dns_probe(smoke_vm, PIX, "A")
 
@@ -112,18 +89,14 @@ def safesearch_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[tuple
 def test_safesearch_cname_redirect_takes_effect(
     safesearch_vm: tuple[SmokeVM, h.DnsAnswer, h.DnsAnswer],
 ) -> None:
-    """The gate: enabling SafeSearch REDIRECTS duckduckgo.com to the safe target.
+    """The gate: enabling SafeSearch REDIRECTS duckduckgo.com away from its real site.
 
     When SafeSearch is enabled, Then the on-box answer becomes a clean NOERROR with
     records, is NOT a SERVFAIL (which would mean the synthesized hop went
     DNSSEC-bogus), and DIFFERS from the SafeSearch-off baseline — the redirect took
-    effect. The baseline is only required to NOT already be the controlled target (CI
-    recursion can be flaky, so we do not require it to have resolved).
+    effect.
     """
     vm, ddg_before, _ = safesearch_vm
-
-    # Baseline must not already be the SafeSearch target (else "changed" is vacuous).
-    assert not h.resolves_to(ddg_before, DDG_V4), "baseline must not already be the SafeSearch target"
 
     after = h.dns_probe(vm, DDG, "A")
     assert after.rcode != "SERVFAIL", f"{DDG} SERVFAIL after redirect (synthesized hop went bogus?) — {after}"
@@ -137,24 +110,24 @@ def test_safesearch_cname_redirect_takes_effect(
 def test_safesearch_cname_chase_reaches_target(
     safesearch_vm: tuple[SmokeVM, h.DnsAnswer, h.DnsAnswer],
 ) -> None:
-    """#1 live chase: the redirect resolves to the CONTROLLED target address.
+    """#1 live chase: duckduckgo.com resolves to safe.duckduckgo.com's own address.
 
-    The targets are pinned to TEST-NET IPs via Host Overrides, so a working iterator
-    chase of our planted CNAME lands EXACTLY on them. This is the proof that #1 (plant
-    CNAME -> restart iterator -> chase) works on real Unbound — if instead the #2 baked
-    fallback answered, the IP would be the real (extdns-resolved) target, not the
-    controlled one, and this asserts the difference. Covers both A and AAAA, and a
-    second CNAME name (pixabay) so it is not a single-name fluke.
+    The redirect plants ``duckduckgo.com -> CNAME -> safe.duckduckgo.com`` and the
+    iterator chases it, so the queried name ends up at the TARGET's address. Proven by
+    comparing duckduckgo.com's answer to a direct lookup of safe.duckduckgo.com: the
+    chase populated the target's cache entry, so the direct lookup is a cache hit and
+    the two share an address (rotation-proof). A second CNAME name (pixabay) shows the
+    redirect is general, not duckduckgo-special.
     """
-    vm, _, pix_before = safesearch_vm
+    vm, _, _ = safesearch_vm
 
-    ddg_a = h.dns_probe(vm, DDG, "A")
-    assert h.resolves_to(ddg_a, DDG_V4), f"{DDG} A should chase to controlled {DDG_V4} (#1), got {ddg_a}"
-
-    ddg_aaaa = h.dns_probe(vm, DDG, "AAAA")
-    assert h.resolves_to(ddg_aaaa, DDG_V6), f"{DDG} AAAA should chase to controlled {DDG_V6} (#1), got {ddg_aaaa}"
-
-    # A second CNAME-SafeSearch name proves the redirect is general, not duckduckgo-special.
-    assert not h.resolves_to(pix_before, PIX_V4), f"baseline {PIX} must not already be the target, got {pix_before}"
-    pix_a = h.dns_probe(vm, PIX, "A")
-    assert h.resolves_to(pix_a, PIX_V4), f"{PIX} A should chase to controlled {PIX_V4} (#1), got {pix_a}"
+    for name, target in ((DDG, DDG_TARGET), (PIX, PIX_TARGET)):
+        redirected = h.dns_probe(vm, name, "A")
+        assert redirected.rcode == "NOERROR" and redirected.records, (
+            f"{name} did not resolve after redirect: {redirected}"
+        )
+        target_ans = h.dns_probe(vm, target, "A")  # cache hit from the chase above
+        assert set(redirected.records) & set(target_ans.records), (
+            f"{name} should resolve to {target}'s address (CNAME chase); "
+            f"{name}={redirected.records} vs {target}={target_ans.records}"
+        )
