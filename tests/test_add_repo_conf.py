@@ -77,23 +77,28 @@ def test_add_repo_devel_conf_default_channel_matches_explicit() -> None:
     [
         ("devel", "pfblockerng-devel", 'url: "https://pfblockerng.github.io/pkg/${ABI}"'),
         ("stable", "pfblockerng", 'url: "https://pfblockerng.github.io/pkg/${ABI}"'),
+        # nightly is served from a DISTINCT `nightly/` catalog subtree (so it never
+        # collides with the release tree on Pages) — its url carries the extra path.
+        ("nightly", "pfblockerng-nightly", 'url: "https://pfblockerng.github.io/pkg/nightly/${ABI}"'),
     ],
 )
 def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str) -> None:
     """Each channel names its repo distinctly but shares the precedence-bearing fields.
 
-    devel -> repo `pfblockerng-devel`; stable -> repo `pfblockerng`. Both carry
-    the SAME static ${ABI} url, priority 100 (above Netgate's 0), and none/none
-    (NONE-signed). The repo NAME is the only channel-varying field — a stable conf
-    that reused the devel repo name (or vice versa) would collide on a box.
+    devel -> `pfblockerng-devel`; stable -> `pfblockerng`; nightly ->
+    `pfblockerng-nightly` (and a `nightly/${ABI}` url subtree). All carry priority 100
+    (above Netgate's 0) and none/none (NONE-signed). The repo NAME (and, for nightly,
+    the url subpath) is the only channel-varying field — a conf that reused another
+    channel's repo name would collide on a box.
     """
     conf = _print_conf(_ADD_REPO, channel)
 
     # The stanza is keyed by the channel-specific repo name (and ONLY that name).
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), conf
-    other = "pfblockerng" if channel == "devel" else "pfblockerng-devel"
-    # `pfblockerng-devel:` must not match a bare `pfblockerng:` probe — anchor the colon.
-    assert not re.search(rf"^{re.escape(other)}:\s*\{{", conf, re.MULTILINE), conf
+    # No OTHER channel's repo name appears as a stanza key (each conf names exactly one;
+    # the anchored `:` keeps `pfblockerng:` from matching `pfblockerng-devel:` etc.).
+    for other in {"pfblockerng", "pfblockerng-devel", "pfblockerng-nightly"} - {repo_name}:
+        assert not re.search(rf"^{re.escape(other)}:\s*\{{", conf, re.MULTILINE), conf
 
     # The literal ${ABI} survives (single-quoted on emission — pkg expands it, not the shell).
     assert url in conf
@@ -107,9 +112,12 @@ def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str
 
 
 def test_add_repo_rejects_unknown_channel() -> None:
-    """An unknown channel arg fails loud (exit != 0), never silently writing a conf."""
+    """An unknown channel arg fails loud (exit != 0), never silently writing a conf.
+
+    (devel/stable/nightly are the three valid channels; anything else is rejected.)
+    """
     proc = subprocess.run(
-        ["sh", str(_ADD_REPO), "--print-conf", "nightly"],
+        ["sh", str(_ADD_REPO), "--print-conf", "bogus"],
         capture_output=True,
         text=True,
         check=False,

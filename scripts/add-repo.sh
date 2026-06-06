@@ -12,6 +12,8 @@
 #                       repo name `pfblockerng-devel`, pkg pfSense-pkg-pfBlockerNG-devel
 #   stable           -> conf /usr/local/etc/pkg/repos/pfblockerng.conf
 #                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG
+#   nightly          -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf
+#                       repo name `pfblockerng-nightly`, pkg ...-nightly (bleeding edge, nightly/ subtree)
 #
 # THE CONF (single source of truth — matches `build-repo.sh --print-conf`):
 #   url:            STATIC base + the literal ${ABI} pkg(8) variable (expanded by
@@ -30,9 +32,9 @@
 # IDEMPOTENT: re-running rewrites the conf (safe to run again at any time).
 #
 # Usage:
-#   add-repo.sh [devel|stable]      # write the conf, pkg update, verify (default: devel)
-#   add-repo.sh --print-conf [devel|stable]   # print the conf to stdout and exit (no writes)
-#   add-repo.sh --base-url <url> [devel|stable]   # override the base (forks/staging)
+#   add-repo.sh [devel|stable|nightly]      # write the conf, pkg update, verify (default: devel)
+#   add-repo.sh --print-conf [devel|stable|nightly]   # print the conf to stdout and exit (no writes)
+#   add-repo.sh --base-url <url> [devel|stable|nightly]   # override the base (forks/staging)
 #
 # POSIX sh; quoted expansions; absolute path for the privileged `pkg` binary.
 
@@ -58,29 +60,44 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --print-conf)   PRINT_CONF=1; shift ;;
         --base-url)     BASE_URL="$2"; shift 2 ;;
-        devel|stable)   CHANNEL="$1"; shift ;;
+        devel|stable|nightly)   CHANNEL="$1"; shift ;;
         -h|--help)
-            sed -n '29,40p' "$0"   # the Usage block from the header
+            sed -n '34,39p' "$0"   # the Usage block from the header
             exit 0 ;;
         -*) echo "add-repo: unknown option: $1" >&2; exit 2 ;;
-        *)  echo "add-repo: unknown channel '$1' (expected devel|stable)" >&2; exit 2 ;;
+        *)  echo "add-repo: unknown channel '$1' (expected devel|stable|nightly)" >&2; exit 2 ;;
     esac
 done
 
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# devel -> repo `pfblockerng-devel`, conf pfblockerng-devel.conf, pkg ...-devel
-# stable-> repo `pfblockerng`,       conf pfblockerng.conf,       pkg pfSense-pkg-pfBlockerNG
-if [ "$CHANNEL" = devel ]; then
-    REPO_NAME="pfblockerng-devel"
-    CONF_NAME="pfblockerng-devel.conf"
-    PKG_NAME="pfSense-pkg-pfBlockerNG-devel"
-    CHANNEL_LABEL="devel"
-else
-    REPO_NAME="pfblockerng"
-    CONF_NAME="pfblockerng.conf"
-    PKG_NAME="pfSense-pkg-pfBlockerNG"
-    CHANNEL_LABEL="stable"
-fi
+# devel  -> repo `pfblockerng-devel`,   conf pfblockerng-devel.conf,   pkg ...-devel
+# stable -> repo `pfblockerng`,         conf pfblockerng.conf,         pkg pfSense-pkg-pfBlockerNG
+# nightly-> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, pkg ...-nightly
+# URL_SUBPATH: nightly is served from the `nightly/` catalog subtree; the release
+# channels from the Pages root. The literal ${ABI} pkg(8) variable follows it.
+case "$CHANNEL" in
+    devel)
+        REPO_NAME="pfblockerng-devel"
+        CONF_NAME="pfblockerng-devel.conf"
+        PKG_NAME="pfSense-pkg-pfBlockerNG-devel"
+        CHANNEL_LABEL="devel"
+        URL_SUBPATH=""
+        ;;
+    stable)
+        REPO_NAME="pfblockerng"
+        CONF_NAME="pfblockerng.conf"
+        PKG_NAME="pfSense-pkg-pfBlockerNG"
+        CHANNEL_LABEL="stable"
+        URL_SUBPATH=""
+        ;;
+    nightly)
+        REPO_NAME="pfblockerng-nightly"
+        CONF_NAME="pfblockerng-nightly.conf"
+        PKG_NAME="pfSense-pkg-pfBlockerNG-nightly"
+        CHANNEL_LABEL="nightly"
+        URL_SUBPATH="nightly/"
+        ;;
+esac
 CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
 
 # ── The conf body (single source of truth; matches build-repo.sh --print-conf) ──
@@ -96,7 +113,7 @@ print_conf() {
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.
 ${REPO_NAME}: {
-  url: "${base}/\${ABI}",
+  url: "${base}/${URL_SUBPATH}\${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: ${CONF_PRIORITY},
