@@ -1,0 +1,38 @@
+name: Trigger pkg repository republish
+
+# Manually fire the SEPARATE pfBlockerNG/pkg repo's publish.yml — it rebuilds the
+# self-hosted FreeBSD `pkg` catalog (the release + nightly subtrees, ADR-17/18) and
+# redeploys its GitHub Pages. This performs the SAME cross-repo dispatch that
+# release.yml's `repo-publish` job runs on a release, using the same fine-grained
+# PAT (PKG_DISPATCH_TOKEN, Actions:write on pfBlockerNG/pkg only).
+#
+# Two uses:
+#   * Republish on demand (e.g. after a devel change) — the pkg repo also runs on
+#     its own daily schedule, this is the manual button.
+#   * Verify PKG_DISPATCH_TOKEN works — a FAILED dispatch here means the PAT is
+#     missing / expired / lacks Actions:write on pfBlockerNG/pkg.
+
+on:
+  workflow_dispatch:
+
+# Least privilege: starts a workflow in the OTHER repo via the PAT (an env secret);
+# it needs nothing from this repo's contents.
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch pfBlockerNG/pkg publish.yml
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger publish.yml via PKG_DISPATCH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PKG_DISPATCH_TOKEN secret is empty or unset on this repo."
+            exit 1
+          fi
+          gh workflow run publish.yml -R pfBlockerNG/pkg
+          echo "Dispatched pfBlockerNG/pkg publish.yml — PKG_DISPATCH_TOKEN auth OK."
