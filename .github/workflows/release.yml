@@ -527,15 +527,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
         run: |
-          set -eu
-          # Sanitize the PAT before use: a stray newline/whitespace in the secret
-          # value corrupts gh's Authorization header ("invalid header field value
-          # for Authorization"). A GitHub PAT is whitespace-free, so stripping all
-          # whitespace is lossless and removes any set/paste artifact.
-          GH_TOKEN="$(printf '%s' "${GH_TOKEN:-}" | tr -d '[:space:]')"
-          export GH_TOKEN
-          [ -n "$GH_TOKEN" ] || { echo "::error::PKG_DISPATCH_TOKEN secret is empty or unset on this repo."; exit 1; }
-          echo "::add-mask::$GH_TOKEN"
           gh workflow run publish.yml -R pfBlockerNG/pkg
 
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
