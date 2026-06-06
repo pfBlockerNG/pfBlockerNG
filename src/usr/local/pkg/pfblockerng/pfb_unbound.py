@@ -4972,6 +4972,7 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
     # Post-restart pass: the iterator has chased our planted CNAME.
     if _ss_answer_has_cname_to(qstate, target):
         if _ss_answer_has_address(qstate):
+            log_info("[pfBlockerNG]: DEBUG#149 ss phase2 OK chased -> address")  # DEBUG#149 (remove)
             qstate.return_rcode = RCODE_NOERROR
             # The orig->target hop is synthesized (unsigned); without this the
             # validator marks a signed original zone bogus -> SERVFAIL (issue #149).
@@ -4982,10 +4983,12 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
             qstate.ext_state[id] = MODULE_FINISHED
             return True
         # #1 chase yielded only a bare CNAME -> #2 baked fallback.
+        log_info("[pfBlockerNG]: DEBUG#149 ss phase2 no-address -> baked fallback")  # DEBUG#149 (remove)
         return _safesearch_baked_fallback(id, qstate, q_type, isSafeSearch)
 
     # First pass: plant the synthetic CNAME referral and restart the iterator.
     qname = qstate.qinfo.qname_str
+    log_info("[pfBlockerNG]: DEBUG#149 ss phase1 plant CNAME {} -> {}".format(qname, target))  # DEBUG#149 (remove)
     cname_msg = DNSMessage(qname, q_type, RR_CLASS_IN, PKT_QR | PKT_RD | PKT_RA)
     cname_msg.answer.append("{} 3600 IN CNAME {}".format(qname, target))
     if not cname_msg.set_return_msg(qstate):
