@@ -139,6 +139,12 @@ def test_safesearch_cname_chase_reaches_target(
     the two share an address (rotation-proof). A second CNAME name (pixabay) shows the
     redirect is general, not duckduckgo-special. Asserted in BOTH recursive and
     forwarding mode (the fixture parametrization).
+
+    This asserts the OUTCOME — the queried name resolves to the safe target's address —
+    which the #1 live chase satisfies and (were it ever to fail) the #2 baked fallback
+    would too; the assertion does not distinguish them. That the #1 chase specifically
+    fires in BOTH modes was confirmed during bring-up via the module's phase log trace
+    (issue #149), not re-derived here.
     """
     vm, forwarding_on, _, _ = safesearch_vm
 
@@ -148,6 +154,9 @@ def test_safesearch_cname_chase_reaches_target(
             f"[forwarding={forwarding_on}] {name} did not resolve after redirect: {redirected}"
         )
         target_ans = h.dns_probe(vm, target, "A")  # cache hit from the chase above
+        assert target_ans.records, (
+            f"[forwarding={forwarding_on}] {target} did not resolve (expected the chase cache hit): {target_ans}"
+        )
         assert set(redirected.records) & set(target_ans.records), (
             f"[forwarding={forwarding_on}] {name} should resolve to {target}'s address (CNAME chase); "
             f"{name}={redirected.records} vs {target}={target_ans.records}"
