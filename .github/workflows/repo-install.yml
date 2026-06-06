@@ -24,7 +24,11 @@ on:
   workflow_dispatch:
     inputs:
       image_ref:
-        description: "GHCR pfSense CE image ref (blank = SMOKE_IMAGE_REF secret/variable). Pin by @sha256:<digest>."
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars). Pin by @sha256:<digest>."
+        required: false
+        default: ""
+      pfsense_version:
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8.1). Ignored when image_ref is set."
         required: false
         default: ""
   schedule:
@@ -83,5 +87,6 @@ jobs:
     uses: ./.github/workflows/smoke.yml
     with:
       image_ref: ${{ inputs.image_ref }}
+      pfsense_version: ${{ inputs.pfsense_version }}
       pytest_marker: repo
     secrets: inherit

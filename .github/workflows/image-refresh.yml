@@ -31,8 +31,10 @@ name: CI image refresh (ADR-09 P5)
 #   SMOKE_GHCR_USER     username for `oras login ghcr.io`                  (secret)
 #   SMOKE_GHCR_TOKEN    token with write:packages (publish) / read:packages (secret)
 #   SMOKE_SSH_PRIV_KEY  guest SSH private key baked into the image          (secret)
-#   SMOKE_IMAGE         GHCR image ref WITHOUT tag (var or secret;          (var/secret)
-#                       default ghcr.io/<owner>/pfsense-ce)
+#   SMOKE_IMAGE_REPO    GHCR namespace, e.g. ghcr.io/pfblockerng            (variable)
+#                       (default ghcr.io/<owner-lowercased>); the untagged image
+#                       is ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}.
+#   SMOKE_IMAGE_NAME    image name appended to it (default pfsense-ce)        (variable)
 #
 # INVARIANT: this workflow NEVER writes to main/devel/next or any channel branch.
 # It writes ONLY to GHCR (packages). The tracker dispatches it; it publishes or fails.
@@ -188,10 +190,14 @@ jobs:
       - name: Resolve the GHCR image ref
         id: ref
         env:
-          SMOKE_IMAGE: ${{ secrets.SMOKE_IMAGE || vars.SMOKE_IMAGE }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
         run: |
           set -eu
-          IMAGE="${SMOKE_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/pfsense-ce}"
+          # Compose the untagged image from the namespace + name vars (org-transfer
+          # scheme). Fallback: lowercased owner (GHCR refs MUST be lowercase).
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
           printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
           printf 'Image base ref: %s\n' "$IMAGE"
 

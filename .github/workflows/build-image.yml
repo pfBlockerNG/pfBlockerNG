@@ -32,11 +32,10 @@ name: Build pfSense CE image (ADR-04 P2)
 #                       read:packages (verify pull)
 #   SMOKE_SSH_PRIV_KEY  guest SSH private key; its public half is     (secret)
 #                       baked into the image's root authorized_keys
-#   SMOKE_IMAGE         GHCR image ref WITHOUT tag (var or secret;    (var/secret)
-#                       default ghcr.io/<owner>/pfsense-ce)
-#   SMOKE_IMAGE_REF     verify-only fallback: the seed/base OCI ref   (var/secret)
-#                       by digest, used when verifying without a freshly
-#                       published :version tag.
+#   SMOKE_IMAGE_REPO    GHCR namespace, e.g. ghcr.io/pfblockerng      (variable)
+#                       (default ghcr.io/<owner-lowercased>); the untagged image
+#                       is ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}.
+#   SMOKE_IMAGE_NAME    image name appended to it (default pfsense-ce) (variable)
 
 on:
   workflow_dispatch:
@@ -210,11 +209,15 @@ jobs:
       - name: Resolve the GHCR image ref
         id: ref
         env:
-          SMOKE_IMAGE: ${{ secrets.SMOKE_IMAGE || vars.SMOKE_IMAGE }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
         run: |
           set -eu
-          # Default to ghcr.io/<owner>/pfsense-ce when SMOKE_IMAGE is unset.
-          IMAGE="${SMOKE_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/pfsense-ce}"
+          # Compose the untagged image from the namespace + name vars (org-transfer
+          # scheme; one namespace, many images). Fallback: lowercased owner —
+          # GHCR/OCI refs MUST be lowercase (a literal pfBlockerNG owner would 400).
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "publishing target: ${IMAGE}:${{ inputs.pfsense_ce_version }}"
 
@@ -226,13 +229,13 @@ jobs:
         # the secret), waits for the new version, powers off, compresses, and
         # pushes the new tag. The source tag is left untouched (snapshot kept).
         env:
-          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
         run: |
           set -eu
           sh scripts/image-upgrade.sh \
+            --image "${{ steps.ref.outputs.image }}" \
             --from "${{ inputs.from_version }}" \
             --to "${{ inputs.pfsense_ce_version }}" \
             --compression "${{ inputs.compression }}" \
@@ -305,10 +308,12 @@ jobs:
       - name: Resolve the GHCR image ref
         id: ref
         env:
-          SMOKE_IMAGE: ${{ secrets.SMOKE_IMAGE || vars.SMOKE_IMAGE }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
         run: |
           set -eu
-          IMAGE="${SMOKE_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/pfsense-ce}"
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Pull the freshly published image from private GHCR
