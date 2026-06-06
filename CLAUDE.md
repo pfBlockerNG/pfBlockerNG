@@ -627,6 +627,17 @@ commit/push (to `devel` or a PR branch): `git fetch origin`, rebase onto the lat
 (`--force-with-lease` if rewritten). New work always replays after what's on the remote; never
 reconcile with a merge commit. Same rule for each follow-up commit on an open PR.
 
+**Clean the diff before you push/PR.** Before the first push (and before each follow-up commit),
+diff the branch against its base (`git diff origin/devel...HEAD`) and reduce it to **only what
+the change requires** — the substantive edit plus the comments, tests, and docs that move *with*
+it. Strip the debris of getting there: temporary debug logging (`log_info`/`print`/`DBG*`
+probes), dead or commented-out experiments, code churned then reverted, an introduced-then-
+unused symbol, gratuitous reformatting/whitespace of untouched lines, and scratch files. A
+reviewer (human, CodeRabbit, or a stand-in) — and the permanent git history — should see the
+minimal, intentional change, not the trial-and-error path you took to find it. If a probe was
+genuinely useful, either delete it or make it a deliberate, justified part of the change (not a
+leftover). The cheapest time to do this is **before** the PR exists.
+
 ### Branch naming (ADRs and issues)
 
 A branch tracking an **ADR** or a **GitHub issue** carries the item's **number then a slug of
