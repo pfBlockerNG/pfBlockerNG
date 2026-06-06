@@ -873,34 +873,47 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         )
 
 
-def use_recursive_resolver(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Force Unbound into RECURSIVE mode (forwarding OFF), undoing any prior
-    :func:`use_system_dns_upstream` left on the SHARED session VM by another module.
+def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", timeout: float = 120.0) -> None:
+    """Set Unbound to RECURSIVE (``on=False``) or FORWARDING (``on=True``) mode.
 
-    The SafeSearch CNAME redirect (issue #149) needs recursion: it plants the
-    ``orig -> CNAME -> target`` in the cache and restarts the iterator to chase the
-    target, but a catch-all ``forward-zone: "."`` (what use_system_dns_upstream
-    installs) RE-FORWARDS the source name on MODULE_RESTART_NEXT, so the chase never
-    runs. Recursive is also pfSense's default and what the #1 mechanism targets.
-    Calling this in the SafeSearch fixture makes that smoke order-independent in the
-    full ``-m smoke`` matrix (where a matrix module may have set forwarding first).
+    Toggles ``unbound/forwarding`` while holding the System DNS server CONSTANT
+    (``system/dnsserver = [upstream]``) and DNSSEC OFF, so a recursive-vs-forwarding
+    comparison of the SafeSearch CNAME redirect (issue #149) varies exactly one thing.
+    ``on=False`` = recursive (the constant dnsserver is then unused); ``on=True`` =
+    forward every query to ``upstream`` (a REAL resolver — the redirect chase then
+    resolves the real SafeSearch target, unlike the mock stub which answers every name
+    identically and would mask the result).
 
-    Idempotent; written + ``services_unbound_configure`` (which restarts Unbound).
-    pfBlockerNG's own reloads never call services_unbound_configure, so this base
-    config survives the later inject()/reload().
+    The redirect works in BOTH modes (the iterator checks the message cache — where the
+    module plants the CNAME — before forwarding or recursing; the chase then forwards/
+    recurses the TARGET). Forcing the mode in the SafeSearch fixture only makes the
+    smoke order-independent on the SHARED session VM (a prior matrix module may have
+    set use_system_dns_upstream's catch-all forward-to-stub, which masks the result by
+    answering every name identically).
+
+    Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: that
+    regenerates the base unbound.conf WITHOUT pfBlockerNG's python module, so the caller
+    MUST run a pfBlockerNG reload afterwards to re-add the module + reload safeSearchDB.
     """
     snippet = (
+        "$s = config_get_path('system', array());\n"
+        f"$s['dnsserver'] = array({_php_str(upstream)});\n"
+        "unset($s['dnsallowoverride']);\n"
+        "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
-        "unset($u['forwarding']);\n"  # recursive (no upstream forward)
+        + ("$u['forwarding'] = 'on';\n" if on else "unset($u['forwarding']);\n")
+        + "unset($u['dnssec']);\n"  # held OFF in both states (unsigned upstream answers)
         "unset($u['custom_options']);\n"  # drop any leftover forward-zone
         "config_set_path('unbound', $u);\n"
-        "write_config('pfBlockerNG smoke: recursive resolver (forwarding off)');\n"
+        "write_config('pfBlockerNG smoke: set unbound forwarding');\n"
         "services_unbound_configure();\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"use_recursive_resolver failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+        raise RuntimeError(
+            f"set_unbound_forwarding({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
     # services_unbound_configure restarts Unbound — wait for it before any probe.
     wait_unbound_ready(vm)
 
