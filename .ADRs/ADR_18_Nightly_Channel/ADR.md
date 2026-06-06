@@ -1,6 +1,7 @@
 # ADR-18: Publish a nightly `pkg` build channel
 
-- **Status:** **Proposed** (2026-06-06)
+- **Status:** **Implemented** (2026-06-06; pending the post-merge live `…/nightly`
+  Pages deploy + the gated live-URL leg — see §7)
 - **Date:** 2026-06-06
 - **Branch:** `adr/18-nightly-channel` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):** dev-only
@@ -23,6 +24,49 @@
   `tests/smoke` tree is `--ignore`d in default collection). No `pytest` oracle for
   the CI YAML itself → validation = `shellcheck`/`sh -n` + the **live-VM `repo`
   smoke** (§7), which is also the ADR-01-style **kill-gate**.
+
+---
+
+## 0. AS-BUILT — design corrections (authoritative; supersede the Proposed text below)
+
+The Phase-1 live-VM kill-gate (and a deep follow-up) overturned three premises the
+Proposed text below still states. The implementation follows THIS section; the
+original prose is retained for the decision record.
+
+- **The distinct `-nightly` rename is a DEEP package rename, not a "single-field"
+  one (§1.3 is wrong), and it was the blocker — resolved by a real bug fix.** The
+  pfSense registration name lives in `info.xml <name>`, which `rc.packages`
+  (`install_package_xml` → `get_package_id`) looks up by the **`pfSense-pkg-`-prefix-
+  stripped** name. Our fork had regressed `<name>` to the FULL `${PORTNAME}` → the
+  install hook ABORTED ("…is not installed. Installation aborted."), which also broke
+  the shipped `-devel`/`-stable` hook. **Fix (PR #151, landed): the post-extract sed
+  emits `${PORTNAME:S/pfSense-pkg-//}` (short name) + the portable builder evaluates
+  make's `:S`.** With that, a dedicated **`net/pfSense-pkg-pfBlockerNG-nightly` port**
+  cascades the whole rename from `PORTNAME` (manifest `name`, the `share/<name>/`
+  dir, the short `info.xml <name>`, the `%%PORTNAME%%` rc.packages hook args) — the
+  same machinery `-devel`/`-stable` use.
+- **NO `conflicts` manifest key (§1.4 / §2 "Conflicts" / Phase 2 are wrong) —
+  file-overlap only.** An explicit `conflicts:` array naming an un-installed sibling
+  **crashes CE libpkg** (`pkgdb.c:1892`, exact-name NULL). `-nightly` and the release
+  packages install the SAME `src/` paths, so they mutually exclude + replace cleanly
+  by **file overlap** alone (the portable builder emits no `conflicts` key). The
+  builder gained `--channel nightly` + `--pkgversion`/`--annotate`, NOT `--conflicts`.
+- **Version = pkg-safe `<target>.YYYYMMDD.N` (not a bare date; §1.5 / §2 refined),
+  pretty string in metadata.** Distinct name ⇒ compared nightly-to-nightly only; the
+  comparable version is `.`-separated, no `-` (e.g. `3.2.16.20260606.7`, target = the
+  `-nightly` port PORTVERSION, `.N` = the publish run number). The source commit rides
+  a manifest **annotation + the COMMENT** (`pkg info -A`), never the version.
+- **Hosting is the SEPARATE `pfBlockerNG/pkg` repo's `publish.yml` (§1.6 / §2
+  "Hosting" are pre-org-transfer).** Post-transfer, that repo self-deploys the unified
+  Pages site at `pfblockerng.github.io/pkg`; the nightly is a `nightly/${ABI}` subtree
+  built there (stateless, one deploy) — not an extension of this repo's
+  `repo-publish.yml`, and not `andrebrait.github.io`.
+
+**As-built surface:** `net/pfSense-pkg-pfBlockerNG-nightly` (FreeBSD-ports); builder
+`--channel nightly` + `--pkgversion`/`--annotate` + unit oracle; `add-repo.sh nightly`
+(+ README) → `nightly/${ABI}` conf; `pfBlockerNG/pkg` `publish.yml` nightly subtree;
+the live-VM `repo`-marker smoke `tests/smoke/test_nightly_install.py`
+(install+hook+provenance / file-overlap replace both directions / monotonic upgrade).
 
 ---
 
@@ -130,11 +174,11 @@ with pre-releases as the durable store in place of Releases. Users opt in with
 
 | Area | Decision |
 | --- | --- |
-| **Package identity** | A **separate package name** `pfSense-pkg-pfBlockerNG-NIGHTLY` (single-field override of `PORTNAME` — Context 3), **built from the `-devel` port** (identical recipe/plist/deps). A separate name means its version is compared **only nightly-to-nightly**, so a bare date orders correctly and it never shadows a release by version (Context 5). |
-| **Version** | **`YYYYMMDD`** (UTC build date); a same-day rebuild appends **`.HHMMSS`** (UTC) → monotonic, stateless, no counter to track. The comparable version contains **no `-` and no hash** (Context 5). New `--pkgversion` builder override (CI passes the date). |
+| **Package identity** | *(§0)* A **separate, lowercase package** `pfSense-pkg-pfBlockerNG-nightly` from a **dedicated `-nightly` port** (mirrors `-devel`). This is a **DEEP rename** cascaded from `PORTNAME` (manifest `name`, `share/<name>/` dir, the **short** `info.xml <name>` via `${PORTNAME:S/pfSense-pkg-//}`, the `%%PORTNAME%%` hook args) — NOT a single field. Enabled by the `info.xml` short-name fix (PR #151). A separate name means its version is compared only nightly-to-nightly. |
+| **Version** | *(§0)* **`<target>.YYYYMMDD.N`** — pkg-safe + monotonic (`.`-separated, **no `-`**), e.g. `3.2.16.20260606.7` (target = the `-nightly` port PORTVERSION; date dominates; `.N` = the publish run number breaks same-day ties). New `--pkgversion` builder override (CI passes it). The pretty string + commit ride a manifest **annotation + COMMENT** (`pkg info -A`), never the version. |
 | **Commit provenance** | The source `devel` HEAD sha rides as a **manifest annotation** `commit=<sha>` (already-supported `annotations` dict, Context 4) + appended to the package **COMMENT**; surfaced by `pkg info -A pfSense-pkg-pfBlockerNG-NIGHTLY`. **Not** in the version, **not** in the `.pkg` filename (ADR-17 canonical `<name>-<version>.pkg` + dedup is preserved). New repeatable `--annotate K=V` builder override. |
-| **Conflicts** | Emit an explicit **`conflicts: [pfSense-pkg-pfBlockerNG, pfSense-pkg-pfBlockerNG-devel]`** in the nightly manifest (new `conflicts` key, Context 4) — a *named* conflict + clean replace prompt **on top of** the file-overlap conflict the three packages already share. New repeatable `--conflicts <glob>` builder override (default empty → release builds unchanged). |
-| **Hosting (forced by Context 6)** | **Unify into ADR-17's `repo-publish.yml`** — one Pages deploy emits **both** `…/${ABI}/` (release, over Releases) **and** `…/nightly/${ABI}/` (nightly, over the last-14 nightly pre-releases). A second deploy workflow is **impossible** (it would clobber the site). The nightly **schedule** triggers this unified deploy; a release tag also triggers it (the release catalog regenerated each time — stateless, harmless). |
+| **Conflicts** | *(§0)* **NO `conflicts` manifest key** — an explicit `conflicts:` array naming an un-installed sibling **crashes CE libpkg** (`pkgdb.c:1892`). `-nightly` and the release packages share identical `src/` paths, so they mutually exclude + replace cleanly by **file overlap** alone (the portable builder emits no `conflicts` key). No `--conflicts` flag. |
+| **Hosting** | *(§0)* The **separate `pfBlockerNG/pkg` repo's `publish.yml`** (post-org-transfer) builds devel HEAD as a nightly `.pkg` and generates a **`nightly/${ABI}` subtree** in the SAME Pages deploy as the release catalog — served at `pfblockerng.github.io/pkg/nightly/${ABI}`. Stateless (one current nightly per run, no pre-release store). NOT an extension of this repo's `repo-publish.yml`. |
 | **Catalog = derived index over pre-releases** | The nightly `.pkg` per ABI is attached to a **dated GitHub pre-release `nightly-YYYYMMDD`** (the durable store, mirroring ADR-17's Releases). The unified publish enumerates the **last 14** nightly pre-releases, downloads their assets, buckets by ABI, runs `build-repo-portable.py` into `nightly/<ABI>/`. **Stateless + idempotent** (Pages holds no state of its own). |
 | **Retention** | **Keep the last 14 nightly pre-releases** (≈ 14 build-days; within a day the `nightly-YYYYMMDD` tag is updated in place). The nightly build job **prunes** pre-releases older than the newest 14 after staging. ~28 MB/ABI retained (Context 7). |
 | **Catalog gen** | **`scripts/build-repo-portable.py` reused unchanged** (pure-Python, no libpkg, ADR-17 Phase 3a). It already dedups per `(name,version,ABI)` and canonical-names — the nightly subtree gets the same treatment for free. |
@@ -308,6 +352,13 @@ make it usable + pinned; docs/DoD close it (Phase 6).
 ### Phase 1 — KILL-GATE: falsify date-version ordering + conflict-and-replace on the smoke VM
 
 Prompt: `01_Kill_Gate_Pkg_Mechanics.txt`
+
+> **DONE (verdict in §0).** The kill-gate ran and reshaped the design: the explicit
+> `conflicts` key crashes CE libpkg (→ file-overlap only), the rename is deep (→ the
+> `info.xml` short-name fix + a dedicated `-nightly` port), and the version is
+> `<target>.YYYYMMDD.N`. All three `pkg` mechanics are now pinned GREEN on the live VM
+> by `tests/smoke/test_nightly_install.py` (install+hook+provenance / file-overlap
+> replace both directions / monotonic upgrade). The bullets below are the original plan.
 
 - Cheaply prove the two `pkg` premises **before** building any tooling. Hand-build a
   minimal `pfSense-pkg-pfBlockerNG-NIGHTLY` `.pkg` at versions `20260605`, `20260606`,
