@@ -8732,6 +8732,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
+	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
 
 	$dnsbl_error = FALSE;
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
@@ -8940,6 +8941,13 @@ function sync_package_pfblockerng($cron='') {
 				unlink_if_exists('/var/unbound/pfb_py_ss.raw');
 			}
 			else {
+				// SafeSearch off (no hosts): drop the CSV. If one existed, flag a
+				// change so Unbound RESTARTS and the module clears its loaded
+				// safeSearchDB (issue #149 -- init-only; the data swap won't clear it,
+				// so without this a disabled SafeSearch keeps redirecting until restart).
+				if (file_exists("{$pfb['unbound_py_ss']}")) {
+					$safesearch_update = TRUE;
+				}
 				unlink_if_exists("/var/unbound/pfb_py_ss.*");
 			}
 
@@ -10172,6 +10180,15 @@ function sync_package_pfblockerng($cron='') {
 
 		// Create backup of existing DNSBL Unbound database
 
+		// SafeSearch data (safeSearchDB, incl. the issue #149 CNAME redirect rows) is
+		// loaded ONLY at python-module init, so a SafeSearch CSV change must RESTART
+		// Unbound, not take the zero-downtime data swap (which rebuilds only the DNSBL
+		// matcher, not safeSearchDB). Force the config-change/restart path. Pre-#149
+		// this restart was an incidental side effect of toggling the native SafeSearch
+		// 'pfb_dnsbl.*conf' include (now removed), so it must be requested explicitly.
+		if ($safesearch_update) {
+			$pfbpython = TRUE;
+		}
 
 		pfb_update_unbound($mode, $pfbupdate, $pfbpython);
 	}
