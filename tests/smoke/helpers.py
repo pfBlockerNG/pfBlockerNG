@@ -873,6 +873,38 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         )
 
 
+def use_recursive_resolver(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Force Unbound into RECURSIVE mode (forwarding OFF), undoing any prior
+    :func:`use_system_dns_upstream` left on the SHARED session VM by another module.
+
+    The SafeSearch CNAME redirect (issue #149) needs recursion: it plants the
+    ``orig -> CNAME -> target`` in the cache and restarts the iterator to chase the
+    target, but a catch-all ``forward-zone: "."`` (what use_system_dns_upstream
+    installs) RE-FORWARDS the source name on MODULE_RESTART_NEXT, so the chase never
+    runs. Recursive is also pfSense's default and what the #1 mechanism targets.
+    Calling this in the SafeSearch fixture makes that smoke order-independent in the
+    full ``-m smoke`` matrix (where a matrix module may have set forwarding first).
+
+    Idempotent; written + ``services_unbound_configure`` (which restarts Unbound).
+    pfBlockerNG's own reloads never call services_unbound_configure, so this base
+    config survives the later inject()/reload().
+    """
+    snippet = (
+        "$u = config_get_path('unbound', array());\n"
+        "unset($u['forwarding']);\n"  # recursive (no upstream forward)
+        "unset($u['custom_options']);\n"  # drop any leftover forward-zone
+        "config_set_path('unbound', $u);\n"
+        "write_config('pfBlockerNG smoke: recursive resolver (forwarding off)');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"use_recursive_resolver failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # services_unbound_configure restarts Unbound — wait for it before any probe.
+    wait_unbound_ready(vm)
+
+
 # --------------------------------------------------------------------------- #
 # Update hooks (ADR-12) — pre/post command hooks fired from the update pass
 # --------------------------------------------------------------------------- #
