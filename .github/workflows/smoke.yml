@@ -258,6 +258,25 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r tests/smoke/requirements.txt pytest
 
+      # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
+      # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).
+      # Build it here from devel HEAD via the portable builder + the new --channel
+      # nightly, off the SAME ports ref build-pkg-linux uses; export its path.
+      # Only for the `repo` marker (the default `smoke` flow doesn't read it).
+      - name: Build a nightly .pkg (repo-flow nightly smoke)
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
+        run: |
+          set -eu
+          git clone --depth 1 -b pfblockerng/use-github \
+            https://github.com/pfBlockerNG/FreeBSD-ports "${{ runner.temp }}/ports-nightly"
+          mkdir -p out-nightly
+          python3 scripts/build-pkg-portable.py \
+            --ports "${{ runner.temp }}/ports-nightly" --channel nightly \
+            --local-src . --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 \
+            --pkgversion 3.2.16.20260606.2 --annotate commit=${{ github.sha }} \
+            --out out-nightly
+          echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"
+
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
       # assertions (helpers.block_egress, gated by SMOKE_BLOCK_EGRESS=1 below;
@@ -281,6 +300,9 @@ jobs:
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # The builder-produced -nightly .pkg (set above for the `repo` marker; the
+          # nightly cases SKIP when unset). Propagated via $GITHUB_ENV from that step.
+          SMOKE_NIGHTLY_PKG: ${{ env.SMOKE_NIGHTLY_PKG }}
           # Turn on the in-test hermetic egress block (after deploy, see fixture).
           SMOKE_BLOCK_EGRESS: "1"
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
