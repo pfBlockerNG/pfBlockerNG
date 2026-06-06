@@ -548,3 +548,91 @@ def test_end_to_end_plist_drift_aborts(tmp_path: Path) -> None:
 )
 def test_makefile_apply_mods_substitution(val: str, mods: str, expected: str) -> None:
     assert bpp.Makefile._apply_mods(val, mods) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Nightly overrides (ADR-18 --channel nightly): --pkgversion / --annotate.
+# The pair below is the branch contrast — OFF (release build, default flags) vs
+# ON (nightly overrides) — proving the overrides are a real branch, not an
+# always-on path. Neither ever emits a `conflicts` key (the portable builder
+# never does — mutual exclusion with the release builds is by file overlap).
+# --------------------------------------------------------------------------- #
+
+
+def test_overrides_off_release_build_is_plain(tmp_path: Path) -> None:
+    """OFF: with no --pkgversion/--annotate the manifest is the plain release shape.
+
+    Given the synthetic port built with default flags,
+    When no nightly override is passed,
+    Then version comes from PORTVERSION(_PORTREVISION), the comment is verbatim, the
+      only annotation is the FreeBSD_version, and there is no `conflicts` key.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        ["--ports", str(ports), "--port-dir", str(portdir), "--abi", "FreeBSD:15:amd64",
+         "--py-flavor", "py311", "--compression", "xz", "--freebsd-version", "1500068", "--out", str(out)]
+    )  # fmt: skip
+    assert rc == 0
+    full, compact, _ = _read_pkg(out / "testpkg-1.0_2.pkg")
+    assert full["version"] == "1.0_2"  # from PORTVERSION(_PORTREVISION), not an override
+    assert full["comment"] == "Test port"  # verbatim
+    assert full["annotations"] == {"FreeBSD_version": "1500068"}  # no commit
+    assert "conflicts" not in full and "conflicts" not in compact
+
+
+def test_overrides_on_nightly_version_and_annotation(tmp_path: Path) -> None:
+    """ON: --pkgversion sets the comparable version; --annotate rides annotations + comment.
+
+    Given the SAME synthetic port,
+    When --pkgversion <target>.YYYYMMDD.N and repeatable --annotate K=V are passed,
+    Then the manifest version is the override (NOT PORTVERSION), each K=V merges into
+      `annotations` (on top of FreeBSD_version) AND appends to `comment` (so both
+      `pkg info` and `pkg info -A` surface the provenance) — still NO `conflicts` key.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        ["--ports", str(ports), "--port-dir", str(portdir), "--abi", "FreeBSD:15:amd64",
+         "--py-flavor", "py311", "--compression", "xz", "--freebsd-version", "1500068",
+         "--pkgversion", "3.2.16.20260606.1", "--annotate", "commit=deadbeef", "--annotate", "build=ci",
+         "--out", str(out)]
+    )  # fmt: skip
+    assert rc == 0
+    full, compact, _ = _read_pkg(out / "testpkg-3.2.16.20260606.1.pkg")
+    assert full["version"] == "3.2.16.20260606.1"  # the override, NOT 1.0_2
+    assert full["annotations"] == {"FreeBSD_version": "1500068", "commit": "deadbeef", "build": "ci"}
+    assert full["comment"] == "Test port (commit=deadbeef, build=ci)"
+    assert "conflicts" not in full and "conflicts" not in compact
+
+
+@pytest.mark.parametrize("ver", ["20260606", "3.2.16.20260606.1", "4.0.0.20260606.10"])
+def test_validate_pkgversion_accepts_pkg_safe_dotted(ver: str) -> None:
+    assert bpp.validate_pkgversion(ver) == ver
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "3.2-nightly", "3.2.16-20260606"])
+def test_validate_pkgversion_rejects_empty_or_dash(bad: str) -> None:
+    # '-' is the pkg name/version delimiter (<name>-<version>.pkg); empty is meaningless.
+    with pytest.raises(bpp.BuildError):
+        bpp.validate_pkgversion(bad)
+
+
+@pytest.mark.parametrize(
+    "items, expected",
+    [
+        ([], {}),
+        (["commit=abc"], {"commit": "abc"}),
+        (["a=1", "b=2"], {"a": "1", "b": "2"}),
+        (["k=v=w"], {"k": "v=w"}),  # value may itself contain '='
+        (["k=1", "k=2"], {"k": "2"}),  # a later key wins
+    ],
+)
+def test_parse_annotations(items: list[str], expected: dict[str, str]) -> None:
+    assert bpp.parse_annotations(items) == expected
+
+
+@pytest.mark.parametrize("bad", ["noequals", "=v", "  =v"])
+def test_parse_annotations_rejects_malformed(bad: str) -> None:
+    with pytest.raises(bpp.BuildError):
+        bpp.parse_annotations([bad])
