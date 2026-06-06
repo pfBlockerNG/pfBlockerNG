@@ -527,3 +527,24 @@ def test_end_to_end_plist_drift_aborts(tmp_path: Path) -> None:
     )
     assert rc == 1
     assert not list(out.glob("*.pkg")) if out.exists() else True
+
+
+@pytest.mark.parametrize(
+    "val, mods, expected",
+    [
+        # :S/old/new/ — the post-extract recipe uses ${PORTNAME:S/pfSense-pkg-//} to
+        # template info.xml's <name> to the SHORT (prefix-stripped) registration name.
+        # That is the name rc.packages (install_package_xml -> get_package_id) looks up;
+        # the FULL ${PORTNAME} aborts the install hook (live-VM proven — Netgate ships the
+        # short name; our fork had regressed to the full one). The builder must evaluate
+        # :S so it reproduces the make-package recipe faithfully.
+        ("pfSense-pkg-pfBlockerNG-devel", "S/pfSense-pkg-//", "pfBlockerNG-devel"),
+        ("pfSense-pkg-pfBlockerNG", "S/pfSense-pkg-//", "pfBlockerNG"),
+        ("pfSense-pkg-pfBlockerNG-devel", "S/^pfSense-pkg-//", "pfBlockerNG-devel"),  # ^ anchor
+        ("aXbXc", "S/X/-/g", "a-b-c"),  # g (global) flag
+        ("no-match", "S/zzz/q/", "no-match"),  # no occurrence → unchanged
+        ("/usr/local/share/x.txt", "T", "x.txt"),  # pre-existing :T still works
+    ],
+)
+def test_makefile_apply_mods_substitution(val: str, mods: str, expected: str) -> None:
+    assert bpp.Makefile._apply_mods(val, mods) == expected

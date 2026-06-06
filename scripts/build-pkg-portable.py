@@ -200,8 +200,10 @@ class Makefile:
 
     @staticmethod
     def _apply_mods(val: str, mods: str) -> str:
-        # Minimal :H (dirname), :T (basename), :R (root), :E (ext). Enough for the
-        # recipes we run; extend if a port starts using more.
+        # Minimal :H (dirname), :T (basename), :R (root), :E (ext), and :S/old/new/[g]
+        # (string substitution — used to strip the pfSense-pkg- prefix for the info.xml
+        # registration <name>). Enough for the recipes we run; extend if a port needs more.
+        # Split on ':' but keep an :S/.../.../ group intact (its body has no ':').
         for mod in mods.split(":"):
             if mod == "H":
                 val = os.path.dirname(val)
@@ -211,6 +213,27 @@ class Makefile:
                 val = os.path.splitext(val)[0]
             elif mod == "E":
                 val = os.path.splitext(val)[1].lstrip(".")
+            elif mod.startswith("S") and len(mod) >= 4:
+                # :S<delim>old<delim>new<delim>[1g]  (make string substitution). Supports
+                # a leading ^ / trailing $ anchor in <old> and the g (global) flag.
+                delim = mod[1]
+                parts = mod[2:].split(delim)
+                if len(parts) >= 2:
+                    old, new = parts[0], parts[1]
+                    flags = parts[2] if len(parts) > 2 else ""
+                    anchor_start, anchor_end = old.startswith("^"), old.endswith("$")
+                    pat = old[1:] if anchor_start else old
+                    pat = pat[:-1] if anchor_end else pat
+                    if not pat:
+                        pass
+                    elif "g" in flags and not (anchor_start or anchor_end):
+                        val = val.replace(pat, new)
+                    elif anchor_start and val.startswith(pat):
+                        val = new + val[len(pat) :]
+                    elif anchor_end and val.endswith(pat):
+                        val = val[: -len(pat)] + new
+                    elif not (anchor_start or anchor_end):
+                        val = val.replace(pat, new, 1)
         return val
 
     def get(self, name: str, default: str = "") -> str:
