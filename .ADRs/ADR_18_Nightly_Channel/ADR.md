@@ -59,8 +59,9 @@ original prose is retained for the decision record.
 - **Hosting is the SEPARATE `pfBlockerNG/pkg` repo's `publish.yml` (§1.6 / §2
   "Hosting" are pre-org-transfer).** Post-transfer, that repo self-deploys the unified
   Pages site at `pfblockerng.github.io/pkg`; the nightly is a `nightly/${ABI}` subtree
-  built there (stateless, one deploy) — not an extension of this repo's
-  `repo-publish.yml`, and not `andrebrait.github.io`.
+  built there (one deploy; the **last 14 builds retained** via a same-repo Actions-cache
+  rolling store — build only the current HEAD, fold in the cached prior builds, prune to
+  14) — not an extension of this repo's `repo-publish.yml`, and not `andrebrait.github.io`.
 
 **As-built surface:** `net/pfSense-pkg-pfBlockerNG-nightly` (FreeBSD-ports); builder
 `--channel nightly` + `--pkgversion`/`--annotate` + unit oracle; `add-repo.sh nightly`
@@ -178,7 +179,7 @@ with pre-releases as the durable store in place of Releases. Users opt in with
 | **Version** | *(§0)* **`<target>.YYYYMMDD.N`** — pkg-safe + monotonic (`.`-separated, **no `-`**), e.g. `3.2.16.20260606.7` (target = the `-nightly` port PORTVERSION; date dominates; `.N` = the publish run number breaks same-day ties). New `--pkgversion` builder override (CI passes it). The pretty string + commit ride a manifest **annotation + COMMENT** (`pkg info -A`), never the version. |
 | **Commit provenance** | The source `devel` HEAD sha rides as a **manifest annotation** `commit=<sha>` (already-supported `annotations` dict, Context 4) + appended to the package **COMMENT**; surfaced by `pkg info -A pfSense-pkg-pfBlockerNG-NIGHTLY`. **Not** in the version, **not** in the `.pkg` filename (ADR-17 canonical `<name>-<version>.pkg` + dedup is preserved). New repeatable `--annotate K=V` builder override. |
 | **Conflicts** | *(§0)* **NO `conflicts` manifest key** — an explicit `conflicts:` array naming an un-installed sibling **crashes CE libpkg** (`pkgdb.c:1892`). `-nightly` and the release packages share identical `src/` paths, so they mutually exclude + replace cleanly by **file overlap** alone (the portable builder emits no `conflicts` key). No `--conflicts` flag. |
-| **Hosting** | *(§0)* The **separate `pfBlockerNG/pkg` repo's `publish.yml`** (post-org-transfer) builds devel HEAD as a nightly `.pkg` and generates a **`nightly/${ABI}` subtree** in the SAME Pages deploy as the release catalog — served at `pfblockerng.github.io/pkg/nightly/${ABI}`. Stateless (one current nightly per run, no pre-release store). NOT an extension of this repo's `repo-publish.yml`. |
+| **Hosting** | *(§0)* The **separate `pfBlockerNG/pkg` repo's `publish.yml`** (post-org-transfer) builds devel HEAD as a nightly `.pkg` and generates a **`nightly/${ABI}` subtree** in the SAME Pages deploy as the release catalog — served at `pfblockerng.github.io/pkg/nightly/${ABI}`. **Retains the last 14 builds** via a same-repo Actions cache (rolling store — build only the current devel HEAD, fold in the cached prior builds, prune to 14; the catalog carries all 14, so `pkg install` takes the newest while an older build stays pinnable for rollback). No dated-pre-release store (no cross-repo write token needed). NOT an extension of this repo's `repo-publish.yml`. |
 | **Catalog = derived index over pre-releases** | The nightly `.pkg` per ABI is attached to a **dated GitHub pre-release `nightly-YYYYMMDD`** (the durable store, mirroring ADR-17's Releases). The unified publish enumerates the **last 14** nightly pre-releases, downloads their assets, buckets by ABI, runs `build-repo-portable.py` into `nightly/<ABI>/`. **Stateless + idempotent** (Pages holds no state of its own). |
 | **Retention** | **Keep the last 14 nightly pre-releases** (≈ 14 build-days; within a day the `nightly-YYYYMMDD` tag is updated in place). The nightly build job **prunes** pre-releases older than the newest 14 after staging. ~28 MB/ABI retained (Context 7). |
 | **Catalog gen** | **`scripts/build-repo-portable.py` reused unchanged** (pure-Python, no libpkg, ADR-17 Phase 3a). It already dedups per `(name,version,ABI)` and canonical-names — the nightly subtree gets the same treatment for free. |

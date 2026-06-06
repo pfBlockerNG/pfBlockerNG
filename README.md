@@ -122,6 +122,8 @@ so it replaces whichever you had; switch back any time with `./scripts/add-repo.
 (or `stable`) and `pkg install` the release package. Nightly versions order as
 `<target>.YYYYMMDD.N`, so `pkg upgrade` always moves to the newest build, and the
 source commit rides the package — `pkg info -A pfSense-pkg-pfBlockerNG-nightly` shows it.
+The **last 14 builds** are kept, so you can roll back by installing an older version
+explicitly (`pkg install pfSense-pkg-pfBlockerNG-nightly-<version>`).
 
 ### Updating
 
