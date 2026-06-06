@@ -312,11 +312,6 @@ parameters:
 			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
-		-
-			message: '#^Variable \$safesearch_update might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
 			message: '#^Variable \$src_ip in empty\(\) is never defined\.$#'
