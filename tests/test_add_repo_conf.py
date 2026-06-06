@@ -75,8 +75,8 @@ def test_add_repo_devel_conf_default_channel_matches_explicit() -> None:
 @pytest.mark.parametrize(
     ("channel", "repo_name", "url"),
     [
-        ("devel", "pfblockerng-devel", 'url: "https://andrebrait.github.io/pfBlockerNG/${ABI}"'),
-        ("stable", "pfblockerng", 'url: "https://andrebrait.github.io/pfBlockerNG/${ABI}"'),
+        ("devel", "pfblockerng-devel", 'url: "https://pfblockerng.github.io/pkg/${ABI}"'),
+        ("stable", "pfblockerng", 'url: "https://pfblockerng.github.io/pkg/${ABI}"'),
     ],
 )
 def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str) -> None:

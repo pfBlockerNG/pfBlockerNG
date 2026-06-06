@@ -72,10 +72,10 @@ set -eu
 # `pfblockerng-devel` matches the channel-named conf Phase 4 writes
 # (/usr/local/etc/pkg/repos/pfblockerng-devel.conf).
 # The published GitHub Pages base — the repo's standard project Pages URL
-# (gh api repos/.../pages -> html_url https://andrebrait.github.io/pfBlockerNG/);
-# we serve over HTTPS, so the base is https://andrebrait.github.io/pfBlockerNG and the conf
+# (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
+# we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg and the conf
 # appends the literal ${ABI} pkg(8) variable. Override with --base-url for a fork.
-DEFAULT_BASE_URL="https://andrebrait.github.io/pfBlockerNG"
+DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
 print_conf() {
