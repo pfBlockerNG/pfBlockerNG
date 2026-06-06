@@ -1121,6 +1121,39 @@ def compute_pkgversion(mk: Makefile) -> str:
     return ver
 
 
+def validate_pkgversion(ver: str) -> str:
+    """Validate a `--pkgversion` override (the nightly's comparable version).
+
+    `pkg` orders versions component-wise on `.`/`_`/`,`. The nightly carries a
+    pkg-safe `<target>.YYYYMMDD.N` (e.g. `3.2.16.20260606.1`), compared only
+    nightly-to-nightly (separate package name) so a later build always supersedes.
+    A `-` is the pkg name/version separator (`<name>-<version>.pkg`), so it MUST NOT
+    appear in the version — the commit / pretty string rides the annotation + comment.
+    """
+    ver = ver.strip()
+    if not ver:
+        raise BuildError("--pkgversion was empty")
+    if "-" in ver:
+        raise BuildError(f"--pkgversion must not contain '-' (the pkg name/version separator): {ver!r}")
+    return ver
+
+
+def parse_annotations(items: list[str]) -> dict[str, str]:
+    """Parse repeatable `--annotate K=V` items into an ordered {K: V} dict.
+
+    Each item is `K=V` (V may itself contain `=`); a later K wins. Used to MERGE
+    into the manifest `annotations` and to append `K=V` tokens to `comment`.
+    """
+    out: dict[str, str] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise BuildError(f"--annotate must be K=V (got {item!r})")
+        out[key] = value.strip()
+    return out
+
+
 def seed_vars(portdir: Path, workdir: Path, py_flavor: str) -> dict[str, str]:
     prefix = "/usr/local"
     stagedir = str(workdir / "stage")
@@ -1148,7 +1181,11 @@ def run_build(args: argparse.Namespace) -> Build:
     if args.port_dir:
         portdir = Path(args.port_dir).resolve()
     else:
-        sub = "pfSense-pkg-pfBlockerNG" if args.channel == "stable" else "pfSense-pkg-pfBlockerNG-devel"
+        sub = {
+            "stable": "pfSense-pkg-pfBlockerNG",
+            "devel": "pfSense-pkg-pfBlockerNG-devel",
+            "nightly": "pfSense-pkg-pfBlockerNG-nightly",
+        }[args.channel]
         portdir = ports_root / "net" / sub
     makefile = portdir / "Makefile"
     if not makefile.is_file():
@@ -1187,7 +1224,10 @@ def run_build(args: argparse.Namespace) -> Build:
 
     prefix = mk.get("PREFIX")
     portname = mk.get("PORTNAME")
-    pkgversion = compute_pkgversion(mk)
+    # The version is computed from the Makefile by default; a nightly build overrides
+    # it with `--pkgversion <target>.YYYYMMDD.N` (CI passes it). Must be pkg-safe (no
+    # '-'); the commit / pretty string rides the annotation + comment, not the version.
+    pkgversion = validate_pkgversion(args.pkgversion) if args.pkgversion else compute_pkgversion(mk)
     # PKGVERSION/PKGNAME are framework-derived, not assigned in the Makefile, but
     # the recipe references them (e.g. the info.xml %%PKGVERSION%% reinplace). Seed
     # them so they expand to real values instead of empty.
@@ -1210,11 +1250,19 @@ def run_build(args: argparse.Namespace) -> Build:
     desc, descr_www = parse_descr(descr_path.read_text()) if descr_path.is_file() else ("", "")
     www = resolve_www(mk, descr_www)
 
+    # Nightly provenance: `--annotate K=V` merges into the manifest `annotations`
+    # AND appends `(K=V, …)` to the comment, so both `pkg info` and `pkg info -A`
+    # surface it (e.g. commit=<sha>). Default empty -> release build unchanged.
+    extra_annotations = parse_annotations(args.annotate)
+    comment = mk.get("COMMENT")
+    if extra_annotations:
+        comment += " (" + ", ".join(f"{k}={v}" for k, v in extra_annotations.items()) + ")"
+
     b = Build(
         portname=portname,
         pkgversion=pkgversion,
         origin=origin,
-        comment=mk.get("COMMENT"),
+        comment=comment,
         maintainer=mk.get("MAINTAINER"),
         categories=categories,
         licenses=mk.get("LICENSE").split() or [],
@@ -1281,6 +1329,8 @@ def run_build(args: argparse.Namespace) -> Build:
         apply_repo_catalogue(b.deps, args.repo_catalogue, abi)
     if args.freebsd_version:
         b.annotations = {"FreeBSD_version": args.freebsd_version}
+    # `--annotate K=V` merges on top (e.g. commit=<sha>); release build adds nothing.
+    b.annotations.update(extra_annotations)
     return b
 
 
@@ -1308,7 +1358,12 @@ def main(argv: list[str]) -> int:
     )
 
     g_port = ap.add_argument_group("port selection")
-    g_port.add_argument("--channel", choices=("devel", "stable"), default="devel", help="which port (default: devel)")
+    g_port.add_argument(
+        "--channel",
+        choices=("devel", "stable", "nightly"),
+        default="devel",
+        help="which port: devel/stable release, or nightly (default: devel)",
+    )
     g_port.add_argument("--port-dir", help="explicit port directory (overrides --channel)")
 
     g_target = ap.add_argument_group(
@@ -1324,6 +1379,26 @@ def main(argv: list[str]) -> int:
     )
     g_target.add_argument(
         "--freebsd-version", default="", help="build host __FreeBSD_version for annotations, e.g. 1500068 (optional)"
+    )
+
+    g_snap = ap.add_argument_group("nightly overrides (ADR-18; default off — release build byte-identical)")
+    g_snap.add_argument(
+        "--pkgversion",
+        default="",
+        help=(
+            "override the computed package version with the nightly's pkg-safe comparable "
+            "version, e.g. 3.2.16.20260606.1 (must not contain '-')."
+        ),
+    )
+    g_snap.add_argument(
+        "--annotate",
+        action="append",
+        default=[],
+        metavar="K=V",
+        help=(
+            "add a manifest annotation K=V (repeatable; e.g. --annotate commit=<sha>). "
+            "Merged into `annotations` and appended to `comment` (surfaced by pkg info -A)."
+        ),
     )
 
     g_src = ap.add_argument_group("source (USE_GITHUB ports)")
