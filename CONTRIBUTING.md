@@ -426,6 +426,11 @@ benchmark, and the maintainer smoke checklist.
 
 ### Update Hooks (pre/post update commands, ADR-12)
 
+> The practical recipes (the environment table, the HAProxy reload, and the webhook)
+> are summarized for users in the [README Usage section](README.md#usage). This
+> section is the full reference: the trust model, the complete environment contract,
+> and the rule-vs-data distinction.
+
 The **Update Hooks** settings tab (after **Update**) lets an admin run their own
 shell commands at the **start** (`pre`) and **end** (`post`) of every pfBlockerNG
 update pass — to nudge a downstream consumer (the worked HAProxy recipe below),
