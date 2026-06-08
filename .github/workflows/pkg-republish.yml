@@ -27,6 +27,7 @@ jobs:
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
+          permission-actions: write
 
       - name: Trigger publish.yml via GitHub App token
         env:
