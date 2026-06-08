@@ -584,8 +584,9 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   OIDC `actions/deploy-pages` → served at `pfblockerng.github.io/pkg`. **No deploy key, no
   cross-repo secret** — everything it reads from here is public. Triggers: a daily
   `schedule` + `workflow_dispatch`. This repo's `release.yml` `repo-publish` job just fires
-  `gh workflow run publish.yml -R pfBlockerNG/pkg` (auth: the **`PKG_DISPATCH_TOKEN`**
-  fine-grained PAT — `Actions:write` on `pfBlockerNG/pkg` only) so a release publishes
+  `gh workflow run publish.yml -R pfBlockerNG/pkg` (auth: a GitHub App token via
+  `actions/create-github-app-token@v3`, secrets **`PKG_GITHUB_APP_ID`** +
+  **`PKG_GITHUB_APP_PRIVATE_KEY`** — `Actions:write` on `pfBlockerNG/pkg` only) so a release publishes
   within seconds; additive + isolated (only `needs: [release]`), so its failure never
   breaks `release`/`ports-pr`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
   (`scripts/build-repo.sh`) is retained as a script only.
