@@ -529,6 +529,7 @@ jobs:
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
+          permission-actions: write
 
       - name: Dispatch pfBlockerNG/pkg publish.yml
         # GitHub App scoped to pfBlockerNG/pkg with Actions:write — only enough to
