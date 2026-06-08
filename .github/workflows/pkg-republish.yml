@@ -1,12 +1,12 @@
 name: Trigger pkg repository republish
 
-# Manual dispatch that fires pfBlockerNG/pkg's publish.yml via the
-# PKG_DISPATCH_TOKEN PAT — the SAME cross-repo dispatch release.yml's repo-publish
-# job runs on a release. Two uses: republish the self-hosted pkg catalog on demand
-# (the pkg repo also runs daily on its own schedule), and verify PKG_DISPATCH_TOKEN
-# works — a FAILED run means the PAT is missing / expired / lacks Actions:write on
-# pfBlockerNG/pkg. Least-privilege: the PAT (an env secret) starts a workflow in the
-# other repo; nothing from this repo's contents is needed.
+# Manual dispatch that fires pfBlockerNG/pkg's publish.yml via a GitHub App token.
+# The SAME cross-repo dispatch release.yml's repo-publish job runs on a release.
+# Two uses: republish the self-hosted pkg catalog on demand (the pkg repo also runs
+# daily on its own schedule), and verify the GitHub App credentials work — a FAILED
+# run means the App ID / private key is missing, misconfigured, or lacks
+# Actions:write on pfBlockerNG/pkg. Least-privilege: the generated token starts a
+# workflow in the other repo; nothing from this repo's contents is needed.
 
 on:
   workflow_dispatch:
@@ -19,7 +19,16 @@ jobs:
     name: Dispatch pfBlockerNG/pkg publish.yml
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger publish.yml via PKG_DISPATCH_TOKEN
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+
+      - name: Trigger publish.yml via GitHub App token
         env:
-          GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh workflow run publish.yml -R pfBlockerNG/pkg

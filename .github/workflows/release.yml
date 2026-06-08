@@ -521,11 +521,20 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+
       - name: Dispatch pfBlockerNG/pkg publish.yml
-        # PKG_DISPATCH_TOKEN: a fine-grained PAT scoped to pfBlockerNG/pkg with
-        # Actions:write — only enough to start a workflow there (cannot push code).
+        # GitHub App scoped to pfBlockerNG/pkg with Actions:write — only enough to
+        # start a workflow there (cannot push code).
         env:
-          GH_TOKEN: ${{ secrets.PKG_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg
 

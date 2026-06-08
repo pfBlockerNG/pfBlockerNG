@@ -742,8 +742,9 @@ is retained for free and a rollback is a re-deploy.
   bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
 - **Triggers.** `pfBlockerNG/pkg`'s `publish.yml` runs on a daily `schedule` +
   `workflow_dispatch`, and `release.yml`'s `repo-publish` job fires it on each release
-  (`gh workflow run`, auth via the `PKG_DISPATCH_TOKEN` fine-grained PAT — `Actions:write`
-  on `pfBlockerNG/pkg` only). That job is additive + isolated (only `needs: [release]`), so
+  (`gh workflow run`, auth via a GitHub App token from `actions/create-github-app-token@v3` —
+  secrets `PKG_GITHUB_APP_ID` + `PKG_GITHUB_APP_PRIVATE_KEY`, `Actions:write` on
+  `pfBlockerNG/pkg` only). That job is additive + isolated (only `needs: [release]`), so
   its failure never breaks the Release or the ports PR.
 
 See [ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
