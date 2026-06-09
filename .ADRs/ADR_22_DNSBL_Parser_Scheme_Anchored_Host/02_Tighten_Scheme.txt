@@ -36,13 +36,15 @@ ACTION PLAN (ordered)
    - In `pfblockerng_general.php` (DNSBL General Settings tab), add a checkbox field
      `pfb_scheme_strict` with a short help text:
      "Validate URL schemes against RFC 3986 before stripping. Lines with invalid schemes
-     (e.g., 123://) are logged and skipped. Enabled automatically for existing installs.
-     Known-affected feeds always use strict mode regardless of this setting."
+     (e.g., 123://) are logged and skipped. Enabled by default for new installs; existing
+     installs are migrated to off to preserve prior behavior. Known-affected feeds always
+     use strict mode regardless of this setting."
    - In `pfblockerng.inc`, wherever DNSBL config keys are read/defaulted, add:
      `$pfb['scheme_strict'] = isset($config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'])
          && $config['...']['pfb_scheme_strict'] === 'on' ? 'on' : 'off';`
      (Match the exact config read pattern of neighboring keys — don't guess the path.)
-   - Default: `'off'` (opt-in for new installs). Phase 3 handles migration.
+   - Default: `'on'` (new installs get strict by default). Phase 3 handles migration of
+     existing installs to `'off'` to preserve their prior permissive behavior.
 
 2. CHANGE `pfb_dnsbl_strip_scheme()` return type to `string|false` with toggle-gated
    RFC 3986 validation. The function must accept a `bool $strict` parameter:
@@ -130,7 +132,7 @@ CONSTRAINTS
 - Do NOT implement the known-affected feeds list in this phase — that is Phase 3. The
   `TODO` comment at the call site is sufficient.
 - Do NOT implement the migration logic in this phase — that is Phase 3.
-- Default for new installs is `'off'` — do NOT default to `'on'` in the config read.
+- Default for new installs is `'on'` — do NOT default to `'off'` in the config read.
 - The Phase 1 oracle tests must pass WITHOUT modification (the `$strict` default of `false`
   ensures this).
 - PHP tabs; PHP 8.3.

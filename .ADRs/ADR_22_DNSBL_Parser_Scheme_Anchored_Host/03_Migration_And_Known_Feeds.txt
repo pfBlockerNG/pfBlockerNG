@@ -49,13 +49,13 @@ ACTION PLAN (ordered)
 2. IMPLEMENT migration in `pfblockerng_install.inc`:
 
    On package upgrade, if `pfb_scheme_strict` does not exist in the config, write it
-   as `'on'`:
+   as `'off'` to preserve the permissive behavior existing users already rely on:
 
    ```php
-   // ADR-22: migrate existing installs to strict scheme validation.
+   // ADR-22: preserve permissive scheme behavior for existing installs on upgrade.
    if (!isset($config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'])) {
-       $config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'] = 'on';
-       write_config('pfBlockerNG: enable strict scheme validation (ADR-22 migration)');
+       $config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'] = 'off';
+       write_config('pfBlockerNG: preserve permissive scheme validation for existing install (ADR-22 migration)');
    }
    ```
 
@@ -94,13 +94,13 @@ ACTION PLAN (ordered)
 4. WRITE PHPUnit tests for migration and (if applicable) per-feed bypass:
 
    Migration tests:
-   a. `test_migration_sets_scheme_strict_on_when_absent`:
+   a. `test_migration_sets_scheme_strict_off_when_absent`:
       Simulate a config array without `pfb_scheme_strict`; run migration logic; assert
-      the key is now `'on'`.
+      the key is now `'off'` (existing installs get permissive behavior preserved).
 
    b. `test_migration_does_not_overwrite_existing_value`:
-      Simulate a config array with `pfb_scheme_strict = 'off'`; run migration; assert
-      it remains `'off'` (migration only sets, never overwrites).
+      Simulate a config array with `pfb_scheme_strict = 'on'`; run migration; assert
+      it remains `'on'` (migration only sets, never overwrites).
 
    Known-affected feed tests (only if list is non-empty):
    c. `test_known_feed_uses_strict_regardless_of_toggle`:
@@ -129,8 +129,9 @@ VERIFICATION (must all pass before the phase is done)
 - `git diff origin/devel...HEAD` shows ONLY the expected files. (Plus Phases 1–2 files.)
 
 EXPECTED RESULT
-Existing users upgraded without `pfb_scheme_strict` get it written to `'on'`. Known-affected
-feeds (if any) bypass the toggle. Both behaviors proven by PHPUnit.
+Existing users upgraded without `pfb_scheme_strict` get it written to `'off'` (permissive
+behavior preserved). Known-affected feeds (if any) bypass the toggle unconditionally.
+Both behaviors proven by PHPUnit.
 
 COMMIT (single)
     pfblockerng: ADR-22 migration + known-affected feeds (ADR-22 P3)

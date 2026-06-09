@@ -72,11 +72,11 @@ applied after ADR-21 Phase 2 merges.
 
 ## 2. Decision
 
-### 2.1 Opt-in toggle
+### 2.1 Toggle
 
 The RFC 3986 scheme validation is gated by a **global DNSBL setting** `pfb_scheme_strict`
 (value: `'on'` / `'off'`). The setting lives in the General Settings → DNSBL tab and
-defaults to `'off'` for **new installs** (opt-in — the user must consciously enable it).
+defaults to `'on'` for **new installs** — correct behavior out of the box.
 
 - **When `off`:** behavior is identical to today — any `://` is stripped, including
   `123://evil.com`. No new parse errors.
@@ -86,10 +86,11 @@ defaults to `'off'` for **new installs** (opt-in — the user must consciously e
 ### 2.2 Existing-user migration
 
 On package upgrade (handled in `pfblockerng_install.inc`), if `pfb_scheme_strict` does not
-exist in the saved config, it is written as `'on'`. Rationale: existing users are upgrading
-from a version where invalid-scheme lines were silently accepted; migrating them to strict
-mode surfaces any affected feeds via the parse-fail log (which they already check), while
-new installs can evaluate whether to enable it.
+exist in the saved config, it is written as `'off'`. Rationale: existing users are upgrading
+from a version where invalid-scheme lines were silently accepted and blocked; preserving that
+behavior on upgrade prevents unexpected feed failures. They can opt in to strict mode via the
+UI once they have evaluated their feeds. New installs start with `'on'` since they have no
+prior behavior to preserve.
 
 ### 2.3 Known-affected feeds (TBD — ask maintainer when implementing Phase 3)
 
@@ -154,8 +155,9 @@ current (left-column) output.
 
 **Negative / risks**
 
-- Existing users migrated to `on` may see new parse-fail log entries for feeds with
-  malformed scheme lines. These are intentional — the feeds are producing unexpected input.
+- Existing users migrated to `'off'` must consciously opt in to strict mode to get the
+  corrected behavior. The known-affected feeds list is the mechanism that enforces strict mode
+  for specific misbehaving feeds regardless of the global toggle.
 - The known-affected feeds list is TBD; Phase 3 is blocked until the maintainer provides it.
 
 ## 4. Requirements (acceptance)
@@ -168,8 +170,8 @@ current (left-column) output.
    blocked (current behavior preserved when toggle is off).
 6. `123://evil.com` when `pfb_scheme_strict='on'` OR known-affected → skipped + logged.
 7. `://evil.com` when `pfb_scheme_strict='on'` → skipped + logged.
-8. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'on'`.
-9. New install without migration trigger: `pfb_scheme_strict` defaults to `'off'`.
+8. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
+9. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
 10. `python -m pytest` → unchanged (no regressions in any suite).
 11. PHPUnit → green.
 
@@ -229,17 +231,19 @@ All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 
 **Manual smoke checklist** (maintainer, live pfSense box):
 
-1. Upgrade from a previous version; confirm `pfb_scheme_strict = 'on'` in config.
+1. Upgrade from a previous version; confirm `pfb_scheme_strict = 'off'` in config (migration
+   preserves permissive behavior for existing users).
 2. Feed with `http://should-be-blocked.com` → blocked (always; valid scheme).
 3. Feed with `evil://also-blocked.com` → blocked (always; valid scheme).
-4. Feed with `123://should-be-skipped.com` → skipped + logged (toggle on via migration).
-5. Toggle `pfb_scheme_strict` to `off` via UI; re-run update; `123://...` now blocked
-   (current behavior restored when toggle off).
-6. Known-affected feed: confirm skipped + logged even when toggle is `off`.
+4. Feed with `123://should-be-skipped.com` → blocked (toggle off via migration — current
+   behavior preserved).
+5. Toggle `pfb_scheme_strict` to `on` via UI; re-run update; `123://...` now skipped + logged
+   (strict mode enabled).
+6. Known-affected feed: confirm skipped + logged even when toggle is `'off'`.
 
 **Reject criteria:**
 
 - Any valid-scheme regression (requirements §4.1–§4.4 fail).
 - Toggle-off behavior not byte-identical to today (§4.5 fails).
-- Migration does not set `pfb_scheme_strict = 'on'` for existing installs (§4.8 fails).
+- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.8 fails).
 - `python -m pytest` count changes.
