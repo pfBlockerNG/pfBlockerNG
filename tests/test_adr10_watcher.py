@@ -247,6 +247,15 @@ class _Harness:
                     return
             time.sleep(0.01)
 
+    def wait_snapshot_changed(self, old: Any, timeout: float = 3.0) -> None:
+        # wait_builds returns when a build is RECORDED (before the builder returns),
+        # so P._snapshot may not be swapped yet. Poll until the swap completes.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if P._snapshot is not old:
+                return
+            time.sleep(0.005)
+
     def stop_join(self, timeout: float = 5.0) -> None:
         P.pfb_reload_stop.set()
         self._gate.set()  # release a blocked build so the thread can exit promptly
@@ -267,6 +276,7 @@ class TestWatcherLoop:
 
             h.publish(1)  # ADVANCE.
             h.wait_builds(1)
+            h.wait_snapshot_changed(old)  # wait_builds returns before the swap completes.
             # AFTER: a new snapshot for generation 1 is installed.
             assert "gen1.example.com" in P._snapshot.data_db
             assert P._snapshot is not old
@@ -379,6 +389,7 @@ class TestWatcherLoop:
             assert P._snapshot is old  # BEFORE.
             h.publish(1)
             h.wait_builds(1)
+            h.wait_snapshot_changed(old)  # wait_builds returns before the swap completes.
             assert "gen1.example.com" in P._snapshot.data_db  # AFTER: swapped via poll path.
         finally:
             h.stop_join()
@@ -399,6 +410,7 @@ class TestWatcherLoop:
             assert P._snapshot is old  # BEFORE: failed-kqueue waiter, old snapshot live.
             h.publish(1)
             h.wait_builds(1)
+            h.wait_snapshot_changed(old)  # wait_builds returns before the swap completes.
             assert "gen1.example.com" in P._snapshot.data_db  # AFTER: swapped via the poll downgrade.
         finally:
             h.stop_join()
