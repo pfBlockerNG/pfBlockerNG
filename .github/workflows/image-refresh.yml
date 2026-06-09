@@ -218,8 +218,8 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           sh scripts/image-upgrade.sh \
@@ -243,8 +243,8 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
