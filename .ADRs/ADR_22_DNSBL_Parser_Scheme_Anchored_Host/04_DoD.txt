@@ -37,49 +37,54 @@ ACTION PLAN
 2. ADD two `@pytest.mark.smoke` + `@pytest.mark.timeout(300)` test cases to
    `tests/smoke/test_smoke_feeds.py`:
 
-   === Test A: `test_invalid_scheme_skipped_when_strict_on` ===
+   === Test A: `test_strict_on_skips_invalid_scheme_and_path` ===
 
    ```text
-   Scenario: When pfb_scheme_strict='on', a feed line with an invalid RFC 3986 scheme is
-   skipped (not blocked); a line with a valid custom scheme is still blocked.
+   Scenario: When pfb_scheme_strict='on', lines with an invalid RFC 3986 scheme or a path
+   are skipped; lines with a valid scheme and no path are blocked.
 
    Background: pfb_scheme_strict set to 'on' in config. Custom_List feed containing:
-     http://<unique-http>.<tld>      (valid scheme → blocked)
-     evil://<unique-evil>.<tld>      (valid RFC 3986 custom scheme → blocked)
-     123://<unique-skipped>.<tld>    (digit-start → invalid → skipped, not blocked)
+     http://<unique-http>.<tld>             (valid scheme, no path → blocked)
+     evil://<unique-evil>.<tld>             (valid RFC 3986 custom scheme, no path → blocked)
+     123://<unique-bad-scheme>.<tld>        (digit-start → invalid scheme → skipped)
+     http://<unique-has-path>.<tld>/path    (valid scheme, has path → skipped)
 
-   Given: none of the three domains are in DNSBL.
-     Assert BEFORE: drill @127.0.0.1 <http-domain>    → NOERROR (not blocked yet).
-     Assert BEFORE: drill @127.0.0.1 <evil-domain>    → NOERROR (not blocked yet).
-     Assert BEFORE: drill @127.0.0.1 <skipped-domain> → NOERROR (not blocked yet).
+   Given: none of the four domains are in DNSBL.
+     Assert BEFORE: drill @127.0.0.1 <http-domain>       → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <evil-domain>       → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <bad-scheme-domain> → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <has-path-domain>   → NOERROR (not blocked yet).
 
    When: pfb_scheme_strict='on' written to config; feed loaded; pfBlockerNG DNSBL update;
          Unbound reloads.
 
    Then:
-     drill @127.0.0.1 <http-domain>    → sinkhole VIP or NULL (http:// valid, blocked).
-     drill @127.0.0.1 <evil-domain>    → sinkhole VIP or NULL (evil:// valid, blocked).
-     drill @127.0.0.1 <skipped-domain> → NOERROR (123:// invalid → skipped, NOT blocked).
+     drill @127.0.0.1 <http-domain>       → sinkhole VIP or NULL (valid, blocked).
+     drill @127.0.0.1 <evil-domain>       → sinkhole VIP or NULL (valid, blocked).
+     drill @127.0.0.1 <bad-scheme-domain> → NOERROR (123:// invalid → skipped).
+     drill @127.0.0.1 <has-path-domain>   → NOERROR (path present → skipped).
    ```
 
-   === Test B: `test_invalid_scheme_blocked_when_strict_off` ===
+   === Test B: `test_strict_off_blocks_invalid_scheme_and_path` ===
 
    ```text
-   Scenario: When pfb_scheme_strict='off', a feed line with an invalid RFC 3986 scheme is
-   still silently stripped and the extracted host is blocked (current behavior preserved).
+   Scenario: When pfb_scheme_strict='off', lines with an invalid scheme or a path are
+   silently normalised and the extracted host is blocked (current behavior preserved).
 
    Background: pfb_scheme_strict set to 'off' in config. Custom_List feed containing:
-     123://<unique-passthrough>.<tld>  (digit-start → strict=off → host extracted + blocked)
+     123://<unique-bad-scheme>.<tld>        (digit-start → stripped → host blocked)
+     http://<unique-has-path>.<tld>/path    (path stripped downstream → host blocked)
 
-   Given: the domain is not in DNSBL.
-     Assert BEFORE: drill @127.0.0.1 <passthrough-domain> → NOERROR (not blocked yet).
+   Given: neither domain is in DNSBL.
+     Assert BEFORE: drill @127.0.0.1 <bad-scheme-domain> → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <has-path-domain>   → NOERROR (not blocked yet).
 
    When: pfb_scheme_strict='off' written to config; feed loaded; pfBlockerNG DNSBL update;
          Unbound reloads.
 
    Then:
-     drill @127.0.0.1 <passthrough-domain> → sinkhole VIP or NULL
-     (toggle off: 123:// stripped silently, host blocked — current behavior preserved).
+     drill @127.0.0.1 <bad-scheme-domain> → sinkhole VIP or NULL (123:// stripped, blocked).
+     drill @127.0.0.1 <has-path-domain>   → sinkhole VIP or NULL (path stripped, blocked).
    ```
 
    Implementation notes for both tests:
@@ -125,10 +130,10 @@ VERIFICATION (must all pass)
 
 EXPECTED RESULT
 Live-VM evidence:
-- Toggle ON: `123://evil.com` is skipped (not blocked); `evil://evil.com` is blocked;
-  `http://evil.com` is blocked.
-- Toggle OFF: `123://evil.com` is blocked (current behavior preserved — host silently
-  extracted and passed through the downstream filters).
+- Toggle ON: `123://evil.com` skipped; `http://evil.com/path` skipped; `evil://evil.com`
+  blocked; `http://evil.com` blocked.
+- Toggle OFF: `123://evil.com` blocked; `http://evil.com/path` blocked (path stripped
+  downstream — current behavior preserved).
 
 COMMIT (single)
     tests: ADR-22 P4 smoke — RFC 3986 scheme validation (ADR-22 P4)

@@ -105,40 +105,48 @@ implementing Phase 3. The Phase 3 prompt contains an explicit STOP instruction f
 `pfb_dnsbl_strip_scheme(string $line): string|false`:
 
 - No `://` present → return `$line` unchanged.
-- `://` present: validate the text before `://` against `^[a-zA-Z][a-zA-Z0-9+\-.]*$`.
-  - Valid → return line with `scheme://` stripped (same as today for any valid scheme).
-  - Invalid → return `false`; caller calls `pfb_parsed_fail()` + `continue`.
+- `://` present:
+  1. Validate the text before `://` against `^[a-zA-Z][a-zA-Z0-9+\-.]*$`.
+     Invalid → return `false`; caller calls `pfb_parsed_fail()` + `continue`.
+  2. Strip `scheme://` to get the remainder.
+  3. If the remainder contains `/` (path present) → return `false`; caller calls
+     `pfb_parsed_fail()` + `continue`.
+  4. Return the remainder.
 
 **Any syntactically valid RFC 3986 scheme is accepted.** The fix is scheme syntax
-validation, not a whitelist of specific scheme names.
+validation + path rejection, not a whitelist of specific scheme names. Path stripping
+at lines 9679–9706 is unchanged and continues to handle paths when strict is `'off'`.
 
 ### 2.5 Decision table (when `pfb_scheme_strict = 'on'` or feed is known-affected)
 
 | Input | Current output | New output | Reason |
 | ----- | -------------- | ---------- | ------ |
-| `http://evil.com/path` | `evil.com/path` | `evil.com/path` | valid scheme, unchanged |
-| `evil://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
-| `pkg+https://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
-| `telnet://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
+| `http://evil.com` | `evil.com` | `evil.com` | valid scheme, no path |
+| `evil://evil.com` | `evil.com` | `evil.com` | valid scheme, no path |
+| `pkg+https://evil.com` | `evil.com` | `evil.com` | valid scheme, no path |
+| `telnet://evil.com` | `evil.com` | `evil.com` | valid scheme, no path |
 | `evil.com` | `evil.com` | `evil.com` | no `://`, unchanged |
+| `http://evil.com/path` | `evil.com` | `false` → skip + log | path present |
+| `ftp://ftp.evil.com/` | `ftp.evil.com` | `false` → skip + log | trailing `/` is a path |
 | `123://evil.com` | `evil.com` | `false` → skip + log | digit-start invalid scheme |
 | `://evil.com` | `evil.com` | `false` → skip + log | empty scheme |
 | `!!bad://evil.com` | `evil.com` | `false` → skip + log | non-alpha-start |
 
 When `pfb_scheme_strict = 'off'` and feed is NOT known-affected: all rows produce the
-current (left-column) output.
+current (left-column) output (path stripping at 9679–9706 handles paths downstream).
 
 ### 2.6 Semantics that MUST be preserved (the contract — pinned by oracle tests in Phase 1)
 
-1. Any valid RFC 3986 scheme is accepted regardless of toggle state.
+1. Any valid RFC 3986 scheme with no path is accepted regardless of toggle state.
 2. `pfb_filter()` remains the unconditional domain validity gate.
 3. When the toggle is `off` and the feed is not known-affected, behavior is byte-identical
-   to today for every input.
-4. `123://evil.com` and `://evil.com` → `false` when toggle is `on`.
+   to today for every input (paths stripped downstream as before).
+4. `123://evil.com`, `://evil.com`, and `http://evil.com/path` → `false` when toggle is `on`.
 
 ### 2.7 Explicitly kept / out of scope
 
-- Path/query/fragment/port stripping at lines 9679–9706 is NOT changed.
+- Path/query/fragment/port stripping at lines 9679–9706 is NOT changed (active when
+  strict is `'off'`; never reached in strict mode since path lines are rejected first).
 - Lite path, ABP-header path: NOT changed.
 - ADR-21's `||`/`@@||` guard: NOT changed.
 - `pfb_filter()`: NOT changed.
@@ -148,9 +156,9 @@ current (left-column) output.
 
 **Positive**
 
-- `123://evil.com` and `://evil.com` are logged and skipped when strict mode is on.
-- New installs can evaluate the behavior before enabling; existing users get it on
-  automatically (surfacing any issues in the parse-fail log).
+- `123://evil.com`, `://evil.com`, and `http://evil.com/path` are logged and skipped when
+  strict mode is on — feeds must supply clean host-only lines.
+- New installs get strict mode by default; existing users preserve prior behavior and opt in.
 - The helper is independently testable in PHPUnit.
 
 **Negative / risks**
@@ -162,18 +170,21 @@ current (left-column) output.
 
 ## 4. Requirements (acceptance)
 
-1. `http://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
-2. `evil://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
-3. `pkg+https://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
+1. `http://evil.com` → `evil.com` blocked, always (valid scheme, no path; toggle irrelevant).
+2. `evil://evil.com` → `evil.com` blocked, always (valid scheme, no path; toggle irrelevant).
+3. `pkg+https://evil.com` → `evil.com` blocked, always (valid scheme, no path; toggle irrelevant).
 4. `evil.com` → `evil.com` blocked, always (no scheme; unchanged).
 5. `123://evil.com` when `pfb_scheme_strict='off'` and NOT known-affected → `evil.com`
    blocked (current behavior preserved when toggle is off).
 6. `123://evil.com` when `pfb_scheme_strict='on'` OR known-affected → skipped + logged.
 7. `://evil.com` when `pfb_scheme_strict='on'` → skipped + logged.
-8. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
-9. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
-10. `python -m pytest` → unchanged (no regressions in any suite).
-11. PHPUnit → green.
+8. `http://evil.com/path` when `pfb_scheme_strict='on'` → skipped + logged (path present).
+9. `http://evil.com/path` when `pfb_scheme_strict='off'` → `evil.com` blocked (path stripped
+   downstream at lines 9679–9706; current behavior unchanged).
+10. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
+11. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
+12. `python -m pytest` → unchanged (no regressions in any suite).
+13. PHPUnit → green.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -227,7 +238,8 @@ All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 - PHPUnit → green (oracle + toggle + migration + per-feed tests).
 - `python -m pytest` → unchanged.
 - `ruff check . && ruff format .` → clean.
-- Phase 4 smoke: `123://` skipped (toggle on); `evil://` blocked; migration confirmed.
+- Phase 4 smoke: toggle=on → `123://` skipped, `http://host/path` skipped, `evil://host`
+  blocked; toggle=off → `123://` and `http://host/path` blocked; migration confirmed.
 
 **Manual smoke checklist** (maintainer, live pfSense box):
 
@@ -237,13 +249,15 @@ All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 3. Feed with `evil://also-blocked.com` → blocked (always; valid scheme).
 4. Feed with `123://should-be-skipped.com` → blocked (toggle off via migration — current
    behavior preserved).
-5. Toggle `pfb_scheme_strict` to `on` via UI; re-run update; `123://...` now skipped + logged
-   (strict mode enabled).
-6. Known-affected feed: confirm skipped + logged even when toggle is `'off'`.
+5. Feed with `http://has-path.example.com/path` → blocked (toggle off — path stripped
+   downstream as before).
+6. Toggle `pfb_scheme_strict` to `on` via UI; re-run update; `123://...` now skipped + logged;
+   `http://has-path.example.com/path` now skipped + logged (strict mode enabled).
+7. Known-affected feed: confirm skipped + logged even when toggle is `'off'`.
 
 **Reject criteria:**
 
 - Any valid-scheme regression (requirements §4.1–§4.4 fail).
 - Toggle-off behavior not byte-identical to today (§4.5 fails).
-- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.8 fails).
+- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.10 fails).
 - `python -m pytest` count changes.

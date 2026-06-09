@@ -61,12 +61,18 @@ ACTION PLAN (ordered)
                return FALSE;
            }
        }
-       return substr($line, $pos + 3);
+       $remainder = substr($line, $pos + 3);
+       if ($strict && strpos($remainder, '/') !== FALSE) {
+           return FALSE;
+       }
+       return $remainder;
    }
    ```
 
    Note: the `$strict` parameter defaults to `false` so Phase 1's oracle tests pass without
-   modification (they call the function without the second argument).
+   modification (they call the function without the second argument). The path check (`/` in
+   remainder) only fires in strict mode — non-strict path stripping continues downstream at
+   lines 9679–9706 as before.
 
 3. UPDATE the call site in the non-lite block:
 
@@ -95,30 +101,42 @@ ACTION PLAN (ordered)
    b. `test_empty_scheme_passthrough_when_strict_off`:
       `pfb_dnsbl_strip_scheme('://evil.com', false)` → `'evil.com'`
 
+   c. `test_path_passthrough_when_strict_off`:
+      `pfb_dnsbl_strip_scheme('http://evil.com/path', false)` → `'evil.com/path'`
+      (Toggle off: path returned; downstream stripping at 9679–9706 handles it — req §4.9.)
+
    Toggle-on tests (strict = true — new behavior):
 
-   c. `test_invalid_scheme_rejected_when_strict_on`:
+   d. `test_invalid_scheme_rejected_when_strict_on`:
       `pfb_dnsbl_strip_scheme('123://evil.com', true)` → `false`
       Before-state comment: "Phase 1 oracle (strict=false): returned 'evil.com'."
 
-   d. `test_empty_scheme_rejected_when_strict_on`:
+   e. `test_empty_scheme_rejected_when_strict_on`:
       `pfb_dnsbl_strip_scheme('://evil.com', true)` → `false`
 
-   e. `test_special_chars_scheme_rejected_when_strict_on`:
+   f. `test_special_chars_scheme_rejected_when_strict_on`:
       `pfb_dnsbl_strip_scheme('!!bad://evil.com', true)` → `false`
+
+   g. `test_path_rejected_when_strict_on`:
+      `pfb_dnsbl_strip_scheme('http://evil.com/path', true)` → `false`
+      Before-state comment: "Phase 1 oracle (strict=false): returned 'evil.com/path'."
+
+   h. `test_trailing_slash_rejected_when_strict_on`:
+      `pfb_dnsbl_strip_scheme('ftp://ftp.evil.com/', true)` → `false`
+      (Trailing `/` is a path root — rejected in strict mode.)
 
    Regression guards (both toggle states — must pass):
 
-   f. `test_valid_scheme_accepted_strict_off`:
+   i. `test_valid_scheme_accepted_strict_off`:
       `pfb_dnsbl_strip_scheme('evil://evil.com', false)` → `'evil.com'`
 
-   g. `test_valid_scheme_accepted_strict_on`:
+   j. `test_valid_scheme_accepted_strict_on`:
       `pfb_dnsbl_strip_scheme('evil://evil.com', true)` → `'evil.com'`
 
-   h. `test_compound_scheme_strict_on`:
+   k. `test_compound_scheme_strict_on`:
       `pfb_dnsbl_strip_scheme('pkg+https://evil.com', true)` → `'evil.com'`
 
-   i. `test_no_scheme_strict_on`:
+   l. `test_no_scheme_strict_on`:
       `pfb_dnsbl_strip_scheme('evil.com', true)` → `'evil.com'`
 
 5. CONFIRM the Phase 1 oracle tests still pass (they call the function without `$strict`,
