@@ -20,11 +20,11 @@
       "ci": true
     },
     {
-      "pfsense_version": "25.03",
+      "pfsense_version": "26.03",
       "channel": "Plus",
-      "freebsd_version": "15.0-RELEASE",
-      "freebsd_major": "15",
-      "php_version": "8.3",
+      "freebsd_version": "16.0-RELEASE",
+      "freebsd_major": "16",
+      "php_version": "8.5",
       "py_flavor": "py311",
       "status": "GA",
       "ci": false
