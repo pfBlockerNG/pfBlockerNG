@@ -76,10 +76,16 @@ noted. Fields are cited as they appear in the probe output.
    PHP dep), and when CE and Plus converge on the same FreeBSD ABI the catalog would
    be structurally ambiguous — one `${ABI}` path, two incompatible manifests possible.
 
-7. **One CE major + one Plus major at a time (maintainer-confirmed constraint).**
-   The `ci-metadata` matrix has at most two active entries: one CE (e.g. `2.8.x`) and
-   one Plus (e.g. `26.03`). This simplifies the build matrix from a fan-out to two
-   fixed targets. The probe findings confirm the current active pair:
+7. **Up to N CE + M Plus entries can be active simultaneously (N, M ≥ 1).**
+   During a version-transition window — e.g. when the next CE pre-release is public
+   while the previous CE is still Netgate-supported — the `ci-metadata` matrix holds
+   two CE entries (old FreeBSD 15 + new FreeBSD 16) alongside one or two Plus entries.
+   The worst-case overlap is four active entries: CE 2.8.x (FreeBSD 15, php83), CE 2.9.x
+   (FreeBSD 16, php?), Plus 26.x (FreeBSD 16, php85), Plus 26.07 (FreeBSD 16, php?).
+   The catalog structure (`ce/${ABI}/`, `plus/${ABI}/`) handles this transparently — each
+   (channel, FreeBSD-major) pair becomes a distinct subtree — and the routing layer is
+   unaffected (it discriminates CE vs Plus only; the ABI is already in the request URL).
+   The current active pair confirmed by probe:
    CE 2.8.1 / FreeBSD 15 / php83 / py311 and Plus 26.03.1 / FreeBSD 16 / php85 / py311.
 
 8. **`pfSense.conf` in `/usr/local/etc/pkg/repos/` is a symlink on both systems.**
@@ -129,7 +135,7 @@ Keep the **meta-package option** explicitly open as a deferred complement.
 |---|---|
 | **Catalog structure** | Two subtrees: `pfblockerng.github.io/pkg/ce/${ABI}/` and `.../plus/${ABI}/`. Nightly likewise: `.../nightly/ce/${ABI}/` and `.../nightly/plus/${ABI}/`. The existing `pfblockerng.github.io/pkg/${ABI}/` path (ADR-17 CE-only) is retained during transition and deprecated once Phase 6 smoke is green. |
 | **Manifest deps** | `build-pkg-portable.py` reads PHP and Python dep names from the `ci-metadata` entry for the target variant (`php_version` → `phpNN`, `py_flavor` → `pyNNN-*`). Separate `.pkg` per variant per ABI. No shared package between CE and Plus. |
-| **`ci-metadata`** | Add `"variant": "CE"` or `"variant": "Plus"` to each entry in `supported-versions.json`. The one-CE-one-Plus constraint means the matrix has at most two active entries. `read-version-matrix.sh` and the composite action gain a `--variant` filter. |
+| **`ci-metadata`** | Add `"variant": "CE"` or `"variant": "Plus"` to each entry in `supported-versions.json`. The matrix may hold N CE + M Plus entries simultaneously (N, M ≥ 1) during transition windows. `read-version-matrix.sh` and the composite action gain a `--variant` filter that returns ALL matching entries, not just one. The build pipeline iterates all active entries per variant. |
 | **Dynamic routing (primary)** | A stateless edge function (Cloudflare Worker) at a canonical URL (e.g. `pkg.pfblockerng.io/${ABI}/...`) reads the `User-Agent` header, detects `Plus` → proxies/redirects to `plus/${ABI}/...`; else → `ce/${ABI}/...`. Single URL in the conf; CE→Plus migration is transparent even with a stale conf. **Conditioned on Phase-1 kill-gate** — if UA is stripped, this is dropped. |
 | **`add-repo.sh` (fallback)** | Adds CE/Plus auto-detection: check `globals.plus.inc` existence → `VARIANT=plus` else `VARIANT=ce`. Writes static URL `pfblockerng.github.io/pkg/${VARIANT}/${ABI}`. Works independently of the routing layer; is the authoritative bootstrap even when the routing layer is live (sets the correct URL from the start, avoiding a redirect round-trip on every fetch). |
 | **Meta-package (deferred, open)** | A `pfblockerng-repo` companion package whose `+POST_INSTALL` calls `add-repo.sh` for the current variant + channel is **not built in this ADR** but is explicitly deferred rather than rejected. Its post-install would run on every `pkg upgrade pfBlockerNG`, refreshing the conf after a CE→Plus migration. Pre-decided mechanism: same `globals.plus.inc` detection, same `add-repo.sh` call. Pick up after Phase 6 if the dynamic routing layer proves operationally costly. |

@@ -53,12 +53,16 @@ ACTION PLAN (ordered — tests before wiring)
 
 2. EXTEND `read-version-matrix.sh` with a `--variant CE|Plus` filter:
    - Add a `--variant` option that, when supplied, filters the output to only entries
-     whose `variant` field matches the given value (case-insensitive).
+     whose `variant` field matches the given value (case-insensitive). The filter
+     returns ALL matching entries — during a version-transition window there may be
+     two CE entries (e.g. 2.8.x on FreeBSD 15 AND 2.9.x on FreeBSD 16) or two Plus
+     entries simultaneously. The caller iterates all of them.
    - Without `--variant`, behaviour is UNCHANGED (all entries returned, backward-
      compatible).
    - Emit `variant` in the per-entry JSON output so callers can read it.
    - Update `.github/actions/read-version-matrix/action.yml` to accept a `variant`
-     input and pass it through to the script; expose `variant` in `outputs`.
+     input and pass it through to the script; expose `variant` as a JSON array in
+     `outputs` (not a scalar — there may be multiple matching entries).
    - ShellCheck + `sh -n` clean.
 
 3. EXTEND `build-pkg-portable.py` with `--variant CE|Plus`:
@@ -87,6 +91,10 @@ ACTION PLAN (ordered — tests before wiring)
      lacks both versioned names, after-state per variant has exactly the correct one).
    - `test_no_variant_flag_unchanged`: invoking without `--variant` produces the same
      dep list as the current baseline (no regression).
+   - `test_two_simultaneous_ce_entries`: simulate a transition-window matrix with two
+     CE entries (FreeBSD 15 + php83 AND FreeBSD 16 + php84); assert `--variant CE`
+     returns BOTH, each with the correct php dep; the catalog builder (Phase 3) will
+     produce two distinct `ce/${ABI}/` subtrees from them.
    - Run on both the CE matrix entry values and the Plus matrix entry values from the
      current `supported-versions.json`.
    All tests must be typed (`mypy tests/`) and follow the CLAUDE.md branch-coverage rule.

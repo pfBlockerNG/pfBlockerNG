@@ -20,6 +20,13 @@ each variant from a distinct URL path. This phase creates `ce/${ABI}/` and
 `.../plus/FreeBSD:16:amd64/` gets only Plus packages. The legacy `${ABI}/` path
 (serving the CE build) is retained during the transition window.
 
+Note: the matrix may contain N CE + M Plus entries simultaneously (N, M ≥ 1) during
+version-transition windows. `build-repo-portable.py --variant CE` must handle ALL
+active CE entries in one pass — e.g. during a CE 2.8.x → 2.9.x transition it emits
+BOTH `ce/FreeBSD:15:amd64/` and `ce/FreeBSD:16:amd64/` subtrees. The catalog
+generator loops over all matching `.pkg` files; each (channel, ABI) pair becomes a
+distinct subtree automatically.
+
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/02_Results.txt — confirm both
@@ -63,18 +70,26 @@ ACTION PLAN (ordered — tests before pipeline wiring)
    - `test_wrong_variant_pkg_excluded`: a CE pkg is NOT present in the `plus/` catalog
      and a Plus pkg is NOT present in the `ce/` catalog (assert packagesite contents
      by package name, not just path existence — this is the wrong-variant guard).
+   - `test_two_ce_entries_produce_two_subtrees`: pass two CE `.pkg` files with
+     different ABIs (FreeBSD:15:amd64 and FreeBSD:16:amd64) to `--variant CE` →
+     BOTH `ce/FreeBSD:15:amd64/meta.conf` and `ce/FreeBSD:16:amd64/meta.conf` are
+     generated; each packagesite contains only its own pkg (no cross-contamination).
+     This is the transition-window regression guard.
    - Assert before-state (no `ce/` or `plus/` dir before the call) and after-state.
    All tests typed; follow CLAUDE.md branch-coverage rule.
 
 3. UPDATE `pfBlockerNG/pkg publish.yml` (cross-repo PR):
-   - Run `build-pkg-portable.py` twice (once for CE, once for Plus) and
-     `build-repo-portable.py --variant CE` + `--variant Plus` to generate both
-     subtrees, plus the legacy `--variant` omitted run for the transition CE path.
-   - Pass the variant from the matrix (Phase 2 added `variant` to the matrix output).
-   - Deploy all three subtrees (ce/, plus/, legacy ABI/) in a single
-     `actions/deploy-pages` invocation (one deploy per run, not per variant).
+   - Run `build-pkg-portable.py` for EACH active matrix entry (loop over all CE entries,
+     then all Plus entries — during a transition window this may be 2 CE + 2 Plus = 4
+     builds). Phase 2's `read-version-matrix.sh --variant CE` returns ALL CE entries as
+     a JSON array; the workflow iterates them.
+   - Run `build-repo-portable.py --variant CE` once (all CE `.pkg` files in, all
+     `ce/${ABI}/` subtrees out), then `--variant Plus` once, plus the legacy
+     `--variant`-omitted run for the transition CE path.
+   - Deploy all subtrees (ce/*, plus/*, legacy ABI/*) in a single
+     `actions/deploy-pages` invocation (one deploy per run, not per variant or entry).
    - The cross-repo dispatch inputs from this repo's `release.yml` `repo-publish` job
-     remain compatible (the publish workflow now handles both variants internally).
+     remain compatible (the publish workflow handles all active entries internally).
 
 4. VERIFY the conf template in `scripts/build-repo.sh` (the `--print-conf` path, ADR-17
    §3): if it hard-codes the `${ABI}` path without a `${VARIANT}/` prefix, note it —
