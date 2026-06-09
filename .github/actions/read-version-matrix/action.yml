@@ -44,7 +44,7 @@ runs:
         MATRIX_REF: ${{ inputs.ref }}
         MATRIX_FILE: ${{ inputs.matrix_file }}
       run: |
-        sh "${{ github.action_path }}/../../../scripts/read-version-matrix.sh" \
+        sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
           --ref "$MATRIX_REF" \
           --file "$MATRIX_FILE" \
           --github-output
