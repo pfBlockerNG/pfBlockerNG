@@ -28,8 +28,8 @@ name: CI image refresh (ADR-09 P5)
 # manual seed) to publish the image for that version.
 #
 # Required secrets/vars (shared with build-image.yml and smoke.yml):
-#   SMOKE_GHCR_USER     username for `oras login ghcr.io`                  (secret)
-#   SMOKE_GHCR_TOKEN    token with write:packages (publish) / read:packages (secret)
+#   SMOKE_GHCR_USER     username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN    token with write:packages (publish) / read:packages (defaults to GITHUB_TOKEN)
 #   SMOKE_SSH_PRIV_KEY  guest SSH private key baked into the image          (secret)
 #   SMOKE_IMAGE_REPO    GHCR namespace, e.g. ghcr.io/pfblockerng            (variable)
 #                       (default ghcr.io/<owner-lowercased>); the untagged image
@@ -218,8 +218,8 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           sh scripts/image-upgrade.sh \
@@ -243,8 +243,8 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
