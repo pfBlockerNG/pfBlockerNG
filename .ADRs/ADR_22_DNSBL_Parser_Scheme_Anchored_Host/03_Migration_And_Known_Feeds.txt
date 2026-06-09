@@ -1,0 +1,144 @@
+================================================================================
+PHASE 3 PROMPT — Migration + known-affected feeds
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §2.2 migration, §2.3 known-affected feeds, §4 requirements §8–§9 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 3
+of ADR-22. This phase: (a) writes the migration logic that sets `pfb_scheme_strict='on'`
+for existing users on upgrade, and (b) hardcodes the known-affected feeds list and wires
+it into the download loop to bypass the toggle. Inline on the branch, one commit, push.
+
+⚠️  STOP BEFORE CODING — KNOWN-AFFECTED FEEDS LIST ⚠️
+
+Before writing any code for the known-affected feeds list, you MUST ask the maintainer
+for the definitive list. Do NOT guess, do NOT hardcode placeholder URLs. Use
+AskUserQuestion to surface the following question:
+
+"ADR-22 Phase 3 requires the list of feed URLs / feed identifiers that are known to use
+invalid RFC 3986 schemes (e.g., digit-start scheme like `123://`, empty scheme `://`).
+These feeds will have strict scheme validation unconditionally enabled regardless of the
+global `pfb_scheme_strict` toggle. Please provide the list, or confirm the list is empty
+(no known-affected feeds at this time)."
+
+If the maintainer confirms the list is empty → skip the known-affected feeds wiring
+entirely (no hardcoded list, no per-feed bypass); document this in the handoff. If a list
+is provided → implement as specified below.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt — confirm Phase 2
+  is complete, the toggle is wired, the TODO comment is at the call site. If missing, Phase 2
+  is not complete; STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §2.2 (migration), §2.3
+  (known-affected feeds), §4 requirements §8–§9.
+- src/usr/local/pkg/pfblockerng/pfblockerng_install.inc — read the existing migration/
+  upgrade logic; find where config key defaults are written on upgrade; follow the
+  same pattern for writing `pfb_scheme_strict = 'on'`.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the call site from Phase 2 (the TODO
+  comment for the known-affected feeds bypass).
+- CLAUDE.md — "PHP" standards.
+
+ACTION PLAN (ordered)
+
+1. STOP — ask the maintainer for the known-affected feeds list (see ⚠️ above).
+   Do not proceed past this point until you have an answer.
+
+2. IMPLEMENT migration in `pfblockerng_install.inc`:
+
+   On package upgrade, if `pfb_scheme_strict` does not exist in the config, write it
+   as `'on'`:
+
+   ```php
+   // ADR-22: migrate existing installs to strict scheme validation.
+   if (!isset($config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'])) {
+       $config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'] = 'on';
+       write_config('pfBlockerNG: enable strict scheme validation (ADR-22 migration)');
+   }
+   ```
+
+   (Adapt the config path to match the actual path used in `pfblockerng_install.inc` —
+   read the file first; don't assume the path. Follow the exact pattern of adjacent
+   migration blocks.)
+
+3. IMPLEMENT known-affected feeds bypass (only if the maintainer provided a non-empty list):
+
+   a. Define the list as a PHP constant or static array near the top of `pfblockerng.inc`
+      (follow the naming convention of similar constants):
+
+      ```php
+      // Feed URLs known to use invalid RFC 3986 schemes (ADR-22).
+      define('PFB_SCHEME_STRICT_FEEDS', [
+          'https://feed-url-1.example.com/feed.txt',
+          // ... (maintainer-confirmed list)
+      ]);
+      ```
+
+   b. At the Phase 2 `TODO` comment in the download loop, replace with the bypass check:
+
+      ```php
+      $strict = ($pfb['scheme_strict'] === 'on')
+          || in_array($feed_url, PFB_SCHEME_STRICT_FEEDS, true);
+      ```
+
+      (Where `$feed_url` is the variable holding the current feed's URL — read the download
+      loop to find the correct variable name.)
+
+   If the list is empty: remove the `TODO` comment, simplify to:
+   ```php
+   $strict = ($pfb['scheme_strict'] === 'on');
+   ```
+
+4. WRITE PHPUnit tests for migration and (if applicable) per-feed bypass:
+
+   Migration tests:
+   a. `test_migration_sets_scheme_strict_on_when_absent`:
+      Simulate a config array without `pfb_scheme_strict`; run migration logic; assert
+      the key is now `'on'`.
+
+   b. `test_migration_does_not_overwrite_existing_value`:
+      Simulate a config array with `pfb_scheme_strict = 'off'`; run migration; assert
+      it remains `'off'` (migration only sets, never overwrites).
+
+   Known-affected feed tests (only if list is non-empty):
+   c. `test_known_feed_uses_strict_regardless_of_toggle`:
+      Call `pfb_dnsbl_strip_scheme('123://evil.com', false)` for a known-affected feed
+      context; confirm `false` is returned (strict forced on).
+      Note: this may require the call-site logic to be extracted for unit testing, or
+      tested via an integration approach — use the simplest testable seam.
+
+5. RUN `php -l` on all modified PHP files → no syntax errors.
+6. RUN `vendor/bin/phpunit` → green.
+7. RUN `python -m pytest` → unchanged.
+8. RUN `ruff check . && ruff format .` → clean.
+
+CONSTRAINTS
+- Do NOT guess the known-affected feeds list. Ask first.
+- If the list is empty: document it in the handoff and skip steps 3c.
+- Migration must NOT overwrite an existing `pfb_scheme_strict` value.
+- Modify only `pfblockerng.inc`, `pfblockerng_install.inc`, and `tests/php/`.
+- PHP tabs; PHP 8.3.
+
+VERIFICATION (must all pass before the phase is done)
+- `php -l` on all modified files → clean.
+- `vendor/bin/phpunit` → green (migration + per-feed tests, or migration-only if list empty).
+- `python -m pytest` → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `git diff origin/devel...HEAD` shows ONLY the expected files. (Plus Phases 1–2 files.)
+
+EXPECTED RESULT
+Existing users upgraded without `pfb_scheme_strict` get it written to `'on'`. Known-affected
+feeds (if any) bypass the toggle. Both behaviors proven by PHPUnit.
+
+COMMIT (single)
+    pfblockerng: ADR-22 migration + known-affected feeds (ADR-22 P3)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/03_Results.txt`
+(plain .txt)
+Record: migration code location + diff; known-affected feeds list (confirmed by maintainer,
+or "empty — no known-affected feeds"); per-feed bypass code (or "skipped — empty list");
+PHPUnit test class + method names; `php -l`/PHPUnit/`python -m pytest` outcome; go-ahead
+for Phase 4.

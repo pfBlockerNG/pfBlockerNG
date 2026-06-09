@@ -1,0 +1,141 @@
+================================================================================
+PHASE 4 PROMPT — Smoke + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §7 DoD + manual smoke checklist FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 4
+of ADR-22 — the final phase. This phase adds live-VM smoke cases for all three toggle
+states, updates the inline comment at the changed call site, and records the DoD evidence.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/03_Results.txt — confirm Phase 3
+  is complete (migration code + known-affected feeds, PHPUnit green). If missing, Phase 3 is
+  not complete; STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §7 DoD + manual smoke checklist.
+- tests/smoke/test_smoke_feeds.py — the existing feed smoke structure.
+- CLAUDE.md — "Smoke tests (ADR-04)" — `unique_domain()` mandatory; probe on-box via
+  `drill @127.0.0.1`; first response is authoritative; block shape = NOERROR + VIP or
+  NULL, NOT NXDOMAIN.
+
+ACTION PLAN
+
+1. UPDATE the inline comment at the scheme-strip call site in the non-lite block:
+
+   Replace the old `// If 'http|https|telnet|ftp://' found, remove` comment (or whatever
+   comment Phase 2 left at the `pfb_dnsbl_strip_scheme()` call) with:
+
+   ```php
+   // Strip scheme:// if present. Any valid RFC 3986 scheme is accepted
+   // (http, https, ftp, telnet, evil, pkg+https, ...); an invalid scheme
+   // (digit-start, empty, special chars) → pfb_parsed_fail() + skip (ADR-22).
+   ```
+
+2. ADD two `@pytest.mark.smoke` + `@pytest.mark.timeout(300)` test cases to
+   `tests/smoke/test_smoke_feeds.py`:
+
+   === Test A: `test_invalid_scheme_skipped_when_strict_on` ===
+
+   ```text
+   Scenario: When pfb_scheme_strict='on', a feed line with an invalid RFC 3986 scheme is
+   skipped (not blocked); a line with a valid custom scheme is still blocked.
+
+   Background: pfb_scheme_strict set to 'on' in config. Custom_List feed containing:
+     http://<unique-http>.<tld>      (valid scheme → blocked)
+     evil://<unique-evil>.<tld>      (valid RFC 3986 custom scheme → blocked)
+     123://<unique-skipped>.<tld>    (digit-start → invalid → skipped, not blocked)
+
+   Given: none of the three domains are in DNSBL.
+     Assert BEFORE: drill @127.0.0.1 <http-domain>    → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <evil-domain>    → NOERROR (not blocked yet).
+     Assert BEFORE: drill @127.0.0.1 <skipped-domain> → NOERROR (not blocked yet).
+
+   When: pfb_scheme_strict='on' written to config; feed loaded; pfBlockerNG DNSBL update;
+         Unbound reloads.
+
+   Then:
+     drill @127.0.0.1 <http-domain>    → sinkhole VIP or NULL (http:// valid, blocked).
+     drill @127.0.0.1 <evil-domain>    → sinkhole VIP or NULL (evil:// valid, blocked).
+     drill @127.0.0.1 <skipped-domain> → NOERROR (123:// invalid → skipped, NOT blocked).
+   ```
+
+   === Test B: `test_invalid_scheme_blocked_when_strict_off` ===
+
+   ```text
+   Scenario: When pfb_scheme_strict='off', a feed line with an invalid RFC 3986 scheme is
+   still silently stripped and the extracted host is blocked (current behavior preserved).
+
+   Background: pfb_scheme_strict set to 'off' in config. Custom_List feed containing:
+     123://<unique-passthrough>.<tld>  (digit-start → strict=off → host extracted + blocked)
+
+   Given: the domain is not in DNSBL.
+     Assert BEFORE: drill @127.0.0.1 <passthrough-domain> → NOERROR (not blocked yet).
+
+   When: pfb_scheme_strict='off' written to config; feed loaded; pfBlockerNG DNSBL update;
+         Unbound reloads.
+
+   Then:
+     drill @127.0.0.1 <passthrough-domain> → sinkhole VIP or NULL
+     (toggle off: 123:// stripped silently, host blocked — current behavior preserved).
+   ```
+
+   Implementation notes for both tests:
+   - `helpers.unique_domain()` for every domain in both tests.
+   - Set `pfb_scheme_strict` directly in config via the pfSense config API before running
+     the DNSBL update (pattern: same as how other smoke tests set config keys).
+   - After update: `wait_unbound_ready` before asserting DNS.
+   - Clean up in `finally`: restore original `pfb_scheme_strict` setting + remove custom
+     list + re-run update to clear injected blocks.
+
+3. DISPATCH smoke: `gh workflow run smoke.yml -f pytest_marker=smoke`. Capture run ID.
+
+4. CONFIRM the ADR.md title remains "DNSBL Parser Scheme-Validated Host Extraction" in the
+   header — no change needed if already correct.
+
+5. RECORD DoD evidence in `RESULTS/04_Results.txt`:
+   - Phase 1: helper `pfb_dnsbl_strip_scheme()` definition, oracle tests, PHPUnit pass count.
+   - Phase 2: tightened function body (`string|false`, `$strict` param), call site update,
+     toggle wired, UI field added, PHPUnit pass count.
+   - Phase 3: migration code location, known-affected feeds (confirmed by maintainer, or
+     "empty"), PHPUnit pass count.
+   - Phase 4: smoke run ID + per-case PASS (Test A and Test B); exact `drill` outputs.
+   - Comment update: old text vs new text (the non-lite block comment).
+   - All CI gates: PASS.
+   - Manual smoke checklist status (maintainer — items from §7).
+   - Explicit statement: ADR-22 complete pending maintainer sign-off.
+
+CONSTRAINTS
+- `@pytest.mark.smoke` only (NOT `repo`).
+- `unique_domain()` mandatory for every domain.
+- VM left CLEAN in `finally` (config + custom list both restored).
+- Do NOT set `pfb_scheme_strict='on'` as a permanent config default in CI config — toggle is
+  per-test only; restore original value in `finally`.
+
+VERIFICATION (must all pass)
+- `python -m pytest` (default, without smoke) → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+- `php -l` → clean (comment change only).
+- `vendor/bin/phpunit` → green (Phase 1–3 tests all still pass).
+- Smoke: both new tests GREEN; existing smoke GREEN.
+- `git diff origin/devel...HEAD` shows ONLY the expected ADR-22 files + `tests/smoke/`.
+
+EXPECTED RESULT
+Live-VM evidence:
+- Toggle ON: `123://evil.com` is skipped (not blocked); `evil://evil.com` is blocked;
+  `http://evil.com` is blocked.
+- Toggle OFF: `123://evil.com` is blocked (current behavior preserved — host silently
+  extracted and passed through the downstream filters).
+
+COMMIT (single)
+    tests: ADR-22 P4 smoke — RFC 3986 scheme validation (ADR-22 P4)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/04_Results.txt`
+(plain .txt)
+Record: smoke run ID + per-case PASS (both Test A + Test B); exact `drill` outputs;
+manual smoke checklist status; all CI gates PASS.
+Final handoff — ADR-22 complete pending maintainer sign-off on the manual smoke checklist.

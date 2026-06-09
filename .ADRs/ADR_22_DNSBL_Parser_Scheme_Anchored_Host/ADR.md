@@ -4,8 +4,9 @@
 - **Date:** 2026-06-09
 - **Branch:** `adr/22-dnsbl-parser-scheme-anchored-host` (off `devel`; depends on ADR-21)
 - **Tracks:** GitHub issue [#46](https://github.com/pfBlockerNG/pfBlockerNG/issues/46)
-- **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (non-lite scheme strip,
-  `pfblockerng.inc:9674–9676`; new helper function)
+- **Component(s):**
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (non-lite scheme strip; global toggle;
+  migration), `src/usr/local/pkg/pfblockerng/pfblockerng_install.inc` (migration logic)
 - **Target runtime:** PHP 8.3
 - **Test suite:** `tests/php/` (PHPUnit)
 
@@ -28,16 +29,11 @@ if (strpos($line, '://') !== FALSE) {
 including `//`. This means:
 
 - `http://evil.com` → `evil.com` ✓
-- `evil://evil.com` → `evil.com` ✓ (any scheme accepted — fine)
+- `evil://evil.com` → `evil.com` ✓ (valid RFC 3986 scheme — fine)
 - `pkg+https://evil.com` → `evil.com` ✓ (compound scheme — fine)
-- `123://evil.com` → `evil.com` — **WRONG**: `123` is not a valid RFC 3986 scheme
-  (starts with a digit). The line is extracted and blocked when it should be rejected.
-- `://evil.com` → `evil.com` — **WRONG**: empty scheme prefix; `strpos` finds `://` at
-  position 0 and strips it. Same problem.
-
-The root issue is not which specific schemes are allowed — **any** scheme is fine — but
-that the code does not validate whether the text before `://` is a syntactically valid RFC
-3986 scheme before stripping it.
+- `123://evil.com` → `evil.com` — scheme starts with a digit; not a valid RFC 3986
+  scheme. The line is silently extracted and blocked when it should be logged and skipped.
+- `://evil.com` → `evil.com` — empty scheme prefix; same problem.
 
 ### 1.2 RFC 3986 scheme syntax
 
@@ -47,137 +43,145 @@ Per [RFC 3986 §3.1](https://datatracker.ietf.org/doc/html/rfc3986#section-3.1):
 scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
 ```
 
-A scheme must:
-
-- Start with an ASCII letter (`[a-zA-Z]`).
-- Continue with zero or more ASCII letters, digits, `+`, `-`, or `.`.
-
-Examples of **valid** schemes: `http`, `https`, `ftp`, `telnet`, `evil`, `goat`,
-`pkg+https`, `s3`, `git+ssh`. Examples of **invalid** schemes: `123` (digit start),
-`` (empty), `!!bad` (special chars), `evil com` (space).
+A scheme must start with an ASCII letter, followed by zero or more letters, digits, `+`,
+`-`, or `.`. Examples of valid schemes: `http`, `https`, `ftp`, `telnet`, `evil`, `goat`,
+`pkg+https`, `s3`, `git-ssh`. Examples of invalid schemes: `123` (digit start), `` (empty),
+`!!bad` (non-alpha start).
 
 ### 1.3 The safety net
 
-`pfb_filter($line, PFB_FILTER_DOMAIN)` is the unconditional final gate (line 9757). It
-validates charset `^[a-zA-Z0-9_.-]+$`, presence of `.`, label lengths, etc. Any non-domain
-value extracted from a malformed line is caught here. **This is not a security bug** — the
-output is always a syntactically valid hostname if it passes this gate. The scheme issue is
-a correctness gap: `123://evil.com` produces `evil.com`, which passes `pfb_filter` and gets
-blocked — but the feed line is malformed and should arguably be flagged + skipped.
+`pfb_filter($line, PFB_FILTER_DOMAIN)` is the unconditional final gate (line 9757). Any
+non-domain value extracted from a malformed line is caught here. **This is not a security
+bug** — the output is always a syntactically valid hostname if it passes the gate. The issue
+is correctness: `123://evil.com` produces `evil.com`, which passes `pfb_filter` and gets
+blocked, when the feed line is malformed and arguably should be flagged and skipped.
 
 ### 1.4 What changed with ADR-21
 
-ADR-21 Phase 2 inserts an `||`/`@@||` guard at line ~9754 (after dot trim, before domain
-validation) in the same download loop. ADR-22 modifies the non-lite block at lines 9672–9707
-— a different code region. Both modify the same function in the same file, so ADR-22 must be
-applied **after** ADR-21 Phase 2 is merged to `devel`, to avoid merge conflicts.
+ADR-21 Phase 2 inserts an `||`/`@@||` guard at line ~9754 in the same function. ADR-22
+modifies the non-lite block at lines 9672–9707 — a different code region. ADR-22 must be
+applied after ADR-21 Phase 2 merges.
 
 ### 1.5 Load-bearing facts
 
 - The non-lite block runs only when `$lite == FALSE`. A plain `evil.com` never reaches it.
-- `pfb_strip_trailing_port()` (line 9706) is the existing pattern for extracting a sub-task
-  into a named helper — the same pattern applies here.
-- The path/query/fragment/port strips at lines 9679–9706 are NOT changed by this ADR.
-- ABP feeds (`$easylist = TRUE`) and the lite path never reach the non-lite block.
-- **`pfb_filter()` remains the domain validity gate, unchanged.**
+- `pfb_strip_trailing_port()` (line 9706) is the pattern for named helpers — follow it.
+- Path/query/fragment/port strips at lines 9679–9706 are NOT changed by this ADR.
+- ABP feeds and the lite path never reach the non-lite block.
+- `pfb_filter()` remains the domain validity gate, unchanged.
 
 ## 2. Decision
 
-### 2.1 Rule
+### 2.1 Opt-in toggle
 
-Replace the scheme strip at `pfblockerng.inc:9675–9676` with a helper function
+The RFC 3986 scheme validation is gated by a **global DNSBL setting** `pfb_scheme_strict`
+(value: `'on'` / `'off'`). The setting lives in the General Settings → DNSBL tab and
+defaults to `'off'` for **new installs** (opt-in — the user must consciously enable it).
+
+- **When `off`:** behavior is identical to today — any `://` is stripped, including
+  `123://evil.com`. No new parse errors.
+- **When `on`:** `pfb_dnsbl_strip_scheme()` validates the scheme against RFC 3986;
+  invalid schemes → `pfb_parsed_fail()` + skip.
+
+### 2.2 Existing-user migration
+
+On package upgrade (handled in `pfblockerng_install.inc`), if `pfb_scheme_strict` does not
+exist in the saved config, it is written as `'on'`. Rationale: existing users are upgrading
+from a version where invalid-scheme lines were silently accepted; migrating them to strict
+mode surfaces any affected feeds via the parse-fail log (which they already check), while
+new installs can evaluate whether to enable it.
+
+### 2.3 Known-affected feeds (TBD — ask maintainer when implementing Phase 3)
+
+Certain curated feed URLs are known to contain lines with invalid RFC 3986 schemes. For
+these feeds, scheme validation runs unconditionally — regardless of the `pfb_scheme_strict`
+global toggle — so their malformed lines are always logged. The definitive list of
+known-affected feed URLs is **TBD** and must be confirmed with the maintainer before
+implementing Phase 3. The Phase 3 prompt contains an explicit STOP instruction for this.
+
+### 2.4 Scheme validation rule (when active)
+
 `pfb_dnsbl_strip_scheme(string $line): string|false`:
 
-- If no `://` is present → return the line unchanged.
-- If `://` IS present, validate that the text **before** `://` is a valid RFC 3986 scheme
-  (`^[a-zA-Z][a-zA-Z0-9+\-.]*$` anchored at the start of the token). If valid → return
-  the line with `scheme://` stripped (same as today for any valid scheme).
-- If `://` is present but the preceding text is NOT a valid RFC 3986 scheme → return
-  `false`. The caller calls `pfb_parsed_fail()` and skips the line.
+- No `://` present → return `$line` unchanged.
+- `://` present: validate the text before `://` against `^[a-zA-Z][a-zA-Z0-9+\-.]*$`.
+  - Valid → return line with `scheme://` stripped (same as today for any valid scheme).
+  - Invalid → return `false`; caller calls `pfb_parsed_fail()` + `continue`.
 
-**Any syntactically valid RFC 3986 scheme is accepted, regardless of semantics.** The fix
-is scheme syntax validation, not a whitelist of specific scheme names.
+**Any syntactically valid RFC 3986 scheme is accepted.** The fix is scheme syntax
+validation, not a whitelist of specific scheme names.
 
-### 2.2 Decision table
+### 2.5 Decision table (when `pfb_scheme_strict = 'on'` or feed is known-affected)
 
 | Input | Current output | New output | Reason |
 | ----- | -------------- | ---------- | ------ |
 | `http://evil.com/path` | `evil.com/path` | `evil.com/path` | valid scheme, unchanged |
-| `https://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
-| `ftp://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
-| `telnet://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
 | `evil://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
-| `goat://meeeh.com` | `meeeh.com` | `meeeh.com` | valid scheme, unchanged |
-| `pkg+https://evil.com` | `evil.com` | `evil.com` | valid scheme (`+` allowed), unchanged |
-| `s3://bucket.evil.com` | `bucket.evil.com` | `bucket.evil.com` | valid scheme, unchanged |
+| `pkg+https://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
+| `telnet://evil.com` | `evil.com` | `evil.com` | valid scheme, unchanged |
 | `evil.com` | `evil.com` | `evil.com` | no `://`, unchanged |
-| `123://evil.com` | `evil.com` (WRONG) | `false` → skip + log | digit-start → invalid scheme |
-| `://evil.com` | `evil.com` (WRONG) | `false` → skip + log | empty scheme → invalid |
-| `!!bad://evil.com` | `evil.com` (WRONG) | `false` → skip + log | non-alpha-start → invalid |
+| `123://evil.com` | `evil.com` | `false` → skip + log | digit-start invalid scheme |
+| `://evil.com` | `evil.com` | `false` → skip + log | empty scheme |
+| `!!bad://evil.com` | `evil.com` | `false` → skip + log | non-alpha-start |
 
-Note: `evil.com://junk` — scheme `evil.com` is syntactically valid (`.` is allowed); it
-extracts `junk`, which then fails `pfb_filter` (no `.`). Behavior unchanged from today.
+When `pfb_scheme_strict = 'off'` and feed is NOT known-affected: all rows produce the
+current (left-column) output.
 
-### 2.3 Semantics that MUST be preserved (the contract — pinned by oracle tests in Phase 1)
+### 2.6 Semantics that MUST be preserved (the contract — pinned by oracle tests in Phase 1)
 
-1. **Any valid RFC 3986 scheme is accepted:** `http://`, `https://`, `ftp://`, `telnet://`,
-   `evil://`, `goat://`, `pkg+https://`, `s3://` all produce the same extracted host as today.
-2. **No scheme present:** line returned unchanged (no `://` → falls through to path strip etc.).
-3. **`pfb_filter()` gate is unchanged:** every extracted host still passes through domain
-   validation; a non-domain result (e.g., extracting `junk` from `evil.com://junk`) is caught
-   and logged there, not in this helper.
-4. **`123://evil.com`** → `false` → `pfb_parsed_fail()` + skip (changed from today).
-5. **`://evil.com`** → `false` → `pfb_parsed_fail()` + skip (changed from today).
+1. Any valid RFC 3986 scheme is accepted regardless of toggle state.
+2. `pfb_filter()` remains the unconditional domain validity gate.
+3. When the toggle is `off` and the feed is not known-affected, behavior is byte-identical
+   to today for every input.
+4. `123://evil.com` and `://evil.com` → `false` when toggle is `on`.
 
-### 2.4 Explicitly kept / out of scope
+### 2.7 Explicitly kept / out of scope
 
 - Path/query/fragment/port stripping at lines 9679–9706 is NOT changed.
-- The lite path (`$lite = TRUE`) is NOT changed.
-- The ABP-header path (`$easylist = TRUE`) is NOT changed.
-- ADR-21's `||`/`@@||` guard (inserted at ~line 9754) is NOT changed.
-- `pfb_filter()` domain validation gate is NOT changed.
-- No scheme whitelist is introduced — this ADR validates scheme SYNTAX, not semantics.
+- Lite path, ABP-header path: NOT changed.
+- ADR-21's `||`/`@@||` guard: NOT changed.
+- `pfb_filter()`: NOT changed.
+- No scheme whitelist — syntax validation only.
 
 ## 3. Consequences
 
 **Positive**
 
-- `123://evil.com` and `://evil.com` in a feed are now skipped + logged instead of silently
-  producing a host that passes domain validation (a correctness fix, not a security fix).
-- The helper is independently testable in PHPUnit without mocking the full download loop.
-- The implementation now matches the comment at line 9674 in spirit (arbitrary valid schemes
-  are accepted, as originally intended by `http|https|telnet|ftp://`).
+- `123://evil.com` and `://evil.com` are logged and skipped when strict mode is on.
+- New installs can evaluate the behavior before enabling; existing users get it on
+  automatically (surfacing any issues in the parse-fail log).
+- The helper is independently testable in PHPUnit.
 
 **Negative / risks**
 
-- Feeds with `123://evil.com`-style malformed lines currently silently produce a blocked
-  domain; after this change they are skipped + logged. Practically: no legitimate feed uses
-  a digit-start scheme. The parse-fail log surfaces any affected lines.
-- Slightly increased code surface (one new helper function + regex).
+- Existing users migrated to `on` may see new parse-fail log entries for feeds with
+  malformed scheme lines. These are intentional — the feeds are producing unexpected input.
+- The known-affected feeds list is TBD; Phase 3 is blocked until the maintainer provides it.
 
 ## 4. Requirements (acceptance)
 
-1. `http://evil.com` → `evil.com` blocked (no regression).
-2. `https://evil.com` → `evil.com` blocked (no regression).
-3. `ftp://evil.com` → `evil.com` blocked (no regression).
-4. `telnet://evil.com` → `evil.com` blocked (valid scheme, no regression).
-5. `evil://evil.com` → `evil.com` blocked (valid scheme, no regression).
-6. `goat://meeeh.com` → `meeeh.com` blocked (valid scheme, no regression).
-7. `pkg+https://evil.com` → `evil.com` blocked (valid scheme with `+`, no regression).
-8. `evil.com` → `evil.com` blocked (no scheme, no regression).
-9. `123://evil.com` → skipped; `pfb_parsed_fail()` called (digit-start scheme).
-10. `://evil.com` → skipped; `pfb_parsed_fail()` called (empty scheme).
-11. `python -m pytest` → unchanged (no regressions in any suite).
-12. PHPUnit → green (new + existing PHP tests).
+1. `http://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
+2. `evil://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
+3. `pkg+https://evil.com` → `evil.com` blocked, always (valid scheme; toggle irrelevant).
+4. `evil.com` → `evil.com` blocked, always (no scheme; unchanged).
+5. `123://evil.com` when `pfb_scheme_strict='off'` and NOT known-affected → `evil.com`
+   blocked (current behavior preserved when toggle is off).
+6. `123://evil.com` when `pfb_scheme_strict='on'` OR known-affected → skipped + logged.
+7. `://evil.com` when `pfb_scheme_strict='on'` → skipped + logged.
+8. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'on'`.
+9. New install without migration trigger: `pfb_scheme_strict` defaults to `'off'`.
+10. `python -m pytest` → unchanged (no regressions in any suite).
+11. PHPUnit → green.
 
 ## 5. Constraints (from CLAUDE.md)
 
 - PHP 8.3; tabs; no `die()`/`exit()` in library code.
-- `preg_match()` is appropriate for the RFC 3986 scheme validation.
-- The new helper `pfb_dnsbl_strip_scheme()` follows the naming convention of existing
-  helpers (`pfb_strip_trailing_port`, `pfb_dnsbl_abp_extract_ip`).
+- `preg_match()` for RFC 3986 scheme validation.
+- The helper `pfb_dnsbl_strip_scheme()` follows naming conventions.
 - `php -l` + PHPUnit on every modified file.
-- ADR-21 Phase 2 must be merged to `devel` before this branch is opened.
+- ADR-21 Phase 2 must be merged before this branch opens.
+- **Known-affected feeds list is TBD** — Phase 3 must not be implemented until the
+  maintainer confirms the list. The Phase 3 prompt contains an explicit STOP.
 
 ## 6. Action plan
 
@@ -185,62 +189,57 @@ extracts `junk`, which then fails `pfb_filter` (no `.`). Behavior unchanged from
 
 Prompt: `01_Extract_And_Oracle.txt`
 
-Behaviour-preserving prep. Extract the scheme-strip logic at lines 9675–9676 into
-`pfb_dnsbl_strip_scheme(string $line): string` (string return only — current behavior,
-no `false` yet). Add PHPUnit oracle tests pinning the CURRENT behavior, including:
-`evil://evil.com` → `'evil.com'`; `pkg+https://fakepkg.com` → `'fakepkg.com'`;
-`123://evil.com` → `'evil.com'` (the BEFORE-state that Phase 2 changes);
-`://evil.com` → `'evil.com'` (same). End state: behaviour-preserving, all tests green.
+Behaviour-preserving extraction of the inline scheme-strip into `pfb_dnsbl_strip_scheme()`
+(`string` return only, no toggle yet) + PHPUnit oracle tests pinning current behavior for
+all inputs including the pathological ones that later phases will change.
 
-### Phase 2 — Validate scheme per RFC 3986; reject invalid
+### Phase 2 — Toggle + conditional validation
 
 Prompt: `02_Tighten_Scheme.txt`
 
-Change return type to `string|false`. Add `preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/',
-$scheme)` validation before stripping. Invalid scheme → `false`. Caller: `false` →
-`pfb_parsed_fail()` + `continue`. Oracle tests for Phase 1 become before-state;
-add after-state tests (`123://evil.com` → `false`; `://evil.com` → `false`). All
-§4 requirements proven. `php -l`, PHPUnit, `python -m pytest` green.
+Add `pfb_scheme_strict` config key + UI toggle. Change `pfb_dnsbl_strip_scheme()` return
+type to `string|false` with RFC 3986 validation. Download loop checks the toggle (and the
+known-affected-feed flag from Phase 3 — leave a `TODO` placeholder for that). Tests cover
+both toggle states. Implementor must STOP before Phase 3 to confirm the known-affected list.
 
-### Phase 3 — DoD
+### Phase 3 — Migration + known-affected feeds
 
-Prompt: `03_DoD.txt`
+Prompt: `03_Migration_And_Known_Feeds.txt`
 
-Smoke case: deploy a feed containing `123://evil.com` (invalid scheme) alongside
-`http://valid.com` (valid). Confirm: `123://evil.com` skipped + logged; `valid.com`
-still blocked. Record DoD evidence.
+Migration logic in `pfblockerng_install.inc` (existing users → `'on'`). Hardcode the
+known-affected feeds list (confirmed with maintainer). Wire the per-feed bypass of the
+toggle into the download loop. Tests prove migration and per-feed override.
+
+### Phase 4 — DoD
+
+Prompt: `04_DoD.txt`
+
+Smoke: `123://evil.com` with toggle on → skipped; with toggle off → blocked; `evil://`
+always blocked. Migration smoke (simulate upgrade). Record DoD evidence.
 
 ## 7. Definition of done
 
-All criteria met and evidence recorded in `RESULTS/03_Results.txt`:
+All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 
-- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
-- PHPUnit → green (oracle + tightened tests; existing PHP tests unaffected).
+- `php -l` → clean on all modified files.
+- PHPUnit → green (oracle + toggle + migration + per-feed tests).
 - `python -m pytest` → unchanged.
 - `ruff check . && ruff format .` → clean.
-- Phase 3 smoke: `123://evil.com` → not blocked, parse-fail logged.
-- Phase 3 smoke: `http://evil.com` → still blocked (no regression).
-- Phase 3 smoke: `evil://evil.com` → still blocked (valid scheme, no regression).
+- Phase 4 smoke: `123://` skipped (toggle on); `evil://` blocked; migration confirmed.
 
 **Manual smoke checklist** (maintainer, live pfSense box):
 
-1. Add a DNSBL Group Custom_List entry containing:
-   - `http://should-be-blocked.com`
-   - `evil://also-blocked.com` (valid RFC 3986 scheme)
-   - `pkg+https://blocked-too.com` (valid scheme with `+`)
-   - `123://should-be-skipped.com` (invalid scheme: digit start)
-   - `://also-skipped.com` (invalid scheme: empty)
-2. Run pfBlockerNG → DNSBL update; check the log for parse-fail entries for
-   `123://should-be-skipped.com` and `://also-skipped.com`.
-3. `drill @127.0.0.1 should-be-blocked.com` → sinkhole VIP or NULL (blocked).
-4. `drill @127.0.0.1 also-blocked.com` → sinkhole VIP or NULL (valid scheme, blocked).
-5. `drill @127.0.0.1 blocked-too.com` → sinkhole VIP or NULL (valid scheme, blocked).
-6. `drill @127.0.0.1 should-be-skipped.com` → NOERROR (not blocked).
-7. `drill @127.0.0.1 also-skipped.com` → NOERROR (not blocked).
+1. Upgrade from a previous version; confirm `pfb_scheme_strict = 'on'` in config.
+2. Feed with `http://should-be-blocked.com` → blocked (always; valid scheme).
+3. Feed with `evil://also-blocked.com` → blocked (always; valid scheme).
+4. Feed with `123://should-be-skipped.com` → skipped + logged (toggle on via migration).
+5. Toggle `pfb_scheme_strict` to `off` via UI; re-run update; `123://...` now blocked
+   (current behavior restored when toggle off).
+6. Known-affected feed: confirm skipped + logged even when toggle is `off`.
 
 **Reject criteria:**
 
-- Any valid-scheme regression: a line that was blocked before is not blocked after
-  (requirements §4.1–§4.8 fail).
-- PHPUnit oracle tests don't match actual current behavior (fix oracle first).
+- Any valid-scheme regression (requirements §4.1–§4.4 fail).
+- Toggle-off behavior not byte-identical to today (§4.5 fails).
+- Migration does not set `pfb_scheme_strict = 'on'` for existing installs (§4.8 fails).
 - `python -m pytest` count changes.

@@ -1,74 +1,80 @@
 ================================================================================
-PHASE 2 PROMPT — Validate scheme per RFC 3986; reject malformed
+PHASE 2 PROMPT — opt-in toggle + conditional RFC 3986 scheme validation
 Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
-     (read §1.2 RFC 3986, §2 Decision, §4 requirements, §5 constraints FIRST)
+     (read §2.1 opt-in toggle, §2.4 validation rule, §4 requirements FIRST)
 ================================================================================
 
 ROLE
 You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 2
-of ADR-22. This phase adds RFC 3986 scheme validation to `pfb_dnsbl_strip_scheme()`:
-any syntactically valid scheme continues to work exactly as before; a syntactically
-invalid scheme (digit start, empty, special characters) returns `false` so the caller
-can log and skip the line. Inline on the branch, one commit, push directly.
+of ADR-22. This phase: (a) adds the `pfb_scheme_strict` global DNSBL toggle, (b) wires
+the RFC 3986 scheme validation in `pfb_dnsbl_strip_scheme()` behind that toggle, and (c)
+leaves a `TODO` placeholder for the known-affected-feeds per-feed bypass (Phase 3). Inline
+on the branch, one commit, push directly.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/01_Results.txt — confirm the
-  helper is extracted, the oracle tests are green, and note the exact line numbers of
-  the helper definition and call site. If missing, Phase 1 is not complete; STOP.
-- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §1.2 (RFC 3986 scheme ABNF),
-  §2.1 (the rule), §2.2 (decision table), §2.3 (contract), §4 (all requirements).
-  **CRITICAL:** re-read §2.1 carefully. ANY valid RFC 3986 scheme is accepted — the fix
-  is scheme SYNTAX validation, NOT a whitelist of http/https/ftp. `evil://`, `goat://`,
-  `pkg+https://`, `telnet://`, `s3://` are ALL accepted unchanged.
+  helper is extracted, oracle tests are green, exact helper location + call site line. If
+  missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §2.1 (opt-in toggle), §2.2
+  (migration — this phase adds the toggle; Phase 3 does the migration), §2.3 (known-affected
+  — Phase 3 only), §2.4 (validation rule), §2.5 (decision table), §4 requirements §1–§7.
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc:
-  • `pfb_dnsbl_strip_scheme()` as extracted in Phase 1.
-  • Call site in the non-lite block; surroundings (`pfb_parsed_fail()` signature, `$oline`
-    variable in scope).
-- tests/php/ — the Phase 1 oracle test class: tests h and i are the before-states.
-- CLAUDE.md — "Test coverage" (before-state asserts for transition tests).
+  • The DNSBL General Settings config key naming convention — read nearby keys (e.g.,
+    `pfb_dnsbl`, `pfb_dnsbl_ip`) to match the style for the new `pfb_scheme_strict` key.
+  • The download loop and where `pfb_dnsbl_strip_scheme()` is called (from Phase 1).
+  • `pfb_parsed_fail()` signature.
+- src/usr/local/www/pfblockerng/pfblockerng_general.php (or wherever DNSBL General Settings
+  UI is defined) — find the DNSBL tab settings to add the toggle checkbox.
+- CLAUDE.md — "PHP" standards (tabs; PHP 8.3; help text "brief yet clear").
 
 ACTION PLAN (ordered)
 
-1. CHANGE `pfb_dnsbl_strip_scheme()` return type to `string|false`:
+1. ADD `pfb_scheme_strict` config key and UI toggle:
 
-   RFC 3986 scheme grammar: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
-   Regex: `^[a-zA-Z][a-zA-Z0-9+\-.]*$`
+   - In `pfblockerng_general.php` (DNSBL General Settings tab), add a checkbox field
+     `pfb_scheme_strict` with a short help text:
+     "Validate URL schemes against RFC 3986 before stripping. Lines with invalid schemes
+     (e.g., 123://) are logged and skipped. Enabled automatically for existing installs.
+     Known-affected feeds always use strict mode regardless of this setting."
+   - In `pfblockerng.inc`, wherever DNSBL config keys are read/defaulted, add:
+     `$pfb['scheme_strict'] = isset($config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'])
+         && $config['...']['pfb_scheme_strict'] === 'on' ? 'on' : 'off';`
+     (Match the exact config read pattern of neighboring keys — don't guess the path.)
+   - Default: `'off'` (opt-in for new installs). Phase 3 handles migration.
+
+2. CHANGE `pfb_dnsbl_strip_scheme()` return type to `string|false` with toggle-gated
+   RFC 3986 validation. The function must accept a `bool $strict` parameter:
 
    ```php
-   function pfb_dnsbl_strip_scheme(string $line): string|false {
+   function pfb_dnsbl_strip_scheme(string $line, bool $strict = false): string|false {
        $pos = strpos($line, '://');
        if ($pos === FALSE) {
            return $line;
        }
-       $scheme = substr($line, 0, $pos);
-       if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
-           return FALSE;
+       if ($strict) {
+           $scheme = substr($line, 0, $pos);
+           if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
+               return FALSE;
+           }
        }
        return substr($line, $pos + 3);
    }
    ```
 
-   Notes:
-   - `$pos = strpos($line, '://')` finds the first `://`.
-   - `$scheme = substr($line, 0, $pos)` extracts the potential scheme text.
-   - `preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)` validates it:
-     - `^[a-zA-Z]` — must start with a letter.
-     - `[a-zA-Z0-9+\-.]*` — followed by letters, digits, `+`, `-`, `.`.
-     - `$` — anchored end (no trailing junk).
-   - If validation FAILS → return `FALSE`.
-   - If validation PASSES → `substr($line, $pos + 3)` strips `scheme://` (same as today).
-   - Note: `evil.com://junk` → scheme `evil.com` → matches the regex (`.` is valid!) →
-     returns `junk`. This is intentional — `pfb_filter` downstream catches `junk` (no `.`).
-     Behavior unchanged from current. Do NOT special-case this.
+   Note: the `$strict` parameter defaults to `false` so Phase 1's oracle tests pass without
+   modification (they call the function without the second argument).
 
-2. UPDATE the call site in the non-lite block to handle `false`:
+3. UPDATE the call site in the non-lite block:
 
-   Replace the single call `$line = pfb_dnsbl_strip_scheme($line);` with:
+   Pass the strict flag from config and leave a `TODO` placeholder for Phase 3's per-feed
+   override:
 
    ```php
-   $stripped = pfb_dnsbl_strip_scheme($line);
+   // TODO ADR-22 P3: also pass true if this feed is in the known-affected list.
+   $strict = ($pfb['scheme_strict'] === 'on');
+   $stripped = pfb_dnsbl_strip_scheme($line, $strict);
    if ($stripped === FALSE) {
        pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err']);
        continue;
@@ -76,86 +82,82 @@ ACTION PLAN (ordered)
    $line = $stripped;
    ```
 
-   Verify: `$header`, `$line`, `$oline`, and `$pfb['dnsbl_parse_err']` are all in scope
-   at this point (confirm by reading the Phase 1 handoff for the exact line number and
-   scanning upward in the loop for these variable declarations).
+4. WRITE new PHPUnit tests (add to the Phase 1 test class or a new class):
 
-3. UPDATE the Phase 1 oracle tests:
+   Toggle-off tests (strict = false — current behavior, no change):
 
-   Tests h (`test_digit_start_scheme_current_behavior`) and i (`test_empty_scheme_current_behavior`)
-   were labelled as BEFORE-state oracles. Update them:
-   - Rename: drop the `_current_behavior` suffix.
-   - Change assertion from `assertEquals('evil.com', ...)` / `assertEquals('evil.com', ...)`
-     to `assertFalse(...)`.
-   - Add a comment recording the BEFORE-state: "Phase 1 oracle: this returned 'evil.com'.
-     Phase 2 tightening: now returns false (invalid RFC 3986 scheme)."
+   a. `test_invalid_scheme_passthrough_when_strict_off`:
+      `pfb_dnsbl_strip_scheme('123://evil.com', false)` → `'evil.com'`
+      (Toggle off: invalid scheme still stripped silently — requirement §4.5.)
 
-   Add new regression-guard tests to prove valid schemes still work:
+   b. `test_empty_scheme_passthrough_when_strict_off`:
+      `pfb_dnsbl_strip_scheme('://evil.com', false)` → `'evil.com'`
 
-   k. `test_valid_custom_scheme_accepted`:
-      `'evil://evil.com'` → `'evil.com'` (any-letter-start scheme still accepted).
+   Toggle-on tests (strict = true — new behavior):
 
-   l. `test_compound_scheme_accepted`:
-      `'pkg+https://fakepkg.com'` → `'fakepkg.com'` (`+` is valid).
+   c. `test_invalid_scheme_rejected_when_strict_on`:
+      `pfb_dnsbl_strip_scheme('123://evil.com', true)` → `false`
+      Before-state comment: "Phase 1 oracle (strict=false): returned 'evil.com'."
 
-   m. `test_hyphen_scheme_accepted`:
-      `'git-ssh://host.com'` → `'host.com'` (`-` is valid).
+   d. `test_empty_scheme_rejected_when_strict_on`:
+      `pfb_dnsbl_strip_scheme('://evil.com', true)` → `false`
 
-   n. `test_dot_scheme_accepted`:
-      `'a.b://host.com'` → `'host.com'` (`.` is valid).
+   e. `test_special_chars_scheme_rejected_when_strict_on`:
+      `pfb_dnsbl_strip_scheme('!!bad://evil.com', true)` → `false`
 
-   o. `test_telnet_still_accepted`:
-      `'telnet://host.com'` → `'host.com'` (NOT rejected by Phase 2; valid scheme).
+   Regression guards (both toggle states — must pass):
 
-   p. `test_invalid_digit_start_rejected`:
-      `'123://evil.com'` → `false`.
-      Before-state comment: "Phase 1 oracle returned 'evil.com'."
+   f. `test_valid_scheme_accepted_strict_off`:
+      `pfb_dnsbl_strip_scheme('evil://evil.com', false)` → `'evil.com'`
 
-   q. `test_invalid_empty_scheme_rejected`:
-      `'://evil.com'` → `false`.
-      Before-state comment: "Phase 1 oracle returned 'evil.com'."
+   g. `test_valid_scheme_accepted_strict_on`:
+      `pfb_dnsbl_strip_scheme('evil://evil.com', true)` → `'evil.com'`
 
-   r. `test_invalid_special_chars_rejected`:
-      `'!!bad://evil.com'` → `false`.
+   h. `test_compound_scheme_strict_on`:
+      `pfb_dnsbl_strip_scheme('pkg+https://evil.com', true)` → `'evil.com'`
 
-   Note: test j (`test_mid_token_valid_scheme_current_behavior`, `evil.com://junk` → `'junk'`)
-   does NOT need to change — Phase 2 also returns `'junk'` for this case (valid scheme).
-   Leave it as-is to document the edge case.
+   i. `test_no_scheme_strict_on`:
+      `pfb_dnsbl_strip_scheme('evil.com', true)` → `'evil.com'`
 
-4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
-5. RUN `vendor/bin/phpunit` → green (updated + new tests pass).
-6. RUN `python -m pytest` → unchanged pass count.
-7. RUN `ruff check . && ruff format .` → clean.
+5. CONFIRM the Phase 1 oracle tests still pass (they call the function without `$strict`,
+   defaulting to `false` — behavior unchanged).
+6. RUN `php -l` on all modified PHP files → no syntax errors.
+7. RUN `vendor/bin/phpunit` → green.
+8. RUN `python -m pytest` → unchanged.
+9. RUN `ruff check . && ruff format .` → clean.
 
 CONSTRAINTS
-- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and `tests/php/`.
-- Do NOT modify `pfb_unbound.py`, CI YAML, or any other file.
-- The ADR-21 `||`/`@@||` guard is NOT touched.
-- `pfb_filter()` (downstream) is NOT changed.
-- **ANY valid RFC 3986 scheme must continue to work.** Do NOT add a whitelist. The
-  regex `^[a-zA-Z][a-zA-Z0-9+\-.]*$` is the complete check — nothing more.
-- PHP tabs; PHP 8.3; no `die()`/`exit()`.
-- All new PHPUnit tests: `void` return type; typed; before-state comment on changed cases.
+- Do NOT implement the known-affected feeds list in this phase — that is Phase 3. The
+  `TODO` comment at the call site is sufficient.
+- Do NOT implement the migration logic in this phase — that is Phase 3.
+- Default for new installs is `'off'` — do NOT default to `'on'` in the config read.
+- The Phase 1 oracle tests must pass WITHOUT modification (the `$strict` default of `false`
+  ensures this).
+- PHP tabs; PHP 8.3.
+- Modify only `pfblockerng.inc`, `pfblockerng_general.php`, and `tests/php/`.
+- ADR-21 `||`/`@@||` guard: NOT touched.
+- `pfb_filter()`: NOT touched.
 
 VERIFICATION (must all pass before the phase is done)
-- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
-- `vendor/bin/phpunit` → green (all updated oracle tests + regression guards).
-- `python -m pytest` → unchanged pass count.
+- `php -l` on each modified PHP file → no syntax errors.
+- `vendor/bin/phpunit` → green (Phase 1 oracles + new toggle tests pass).
+- `python -m pytest` → unchanged.
 - `ruff check . && ruff format .` → clean.
 - `git diff origin/devel...HEAD` shows ONLY:
-  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and `tests/php/`. (Plus Phase 1 files.)
+  `pfblockerng.inc`, `pfblockerng_general.php`, `tests/php/`. (Plus Phase 1 files.)
 
 EXPECTED RESULT
-`pfb_dnsbl_strip_scheme()` accepts any valid RFC 3986 scheme (unchanged behavior) and
-returns `false` only when the text before `://` is not a valid scheme. The caller skips
-+ logs such lines. All §4 requirements §1–§12 proven by PHPUnit.
+`pfb_scheme_strict = 'on'` enables RFC 3986 scheme validation; `'off'` preserves today's
+behavior exactly. The toggle is in the DNSBL General Settings UI. PHPUnit proves both
+paths. Migration and known-affected feeds are `TODO` stubs for Phase 3.
 
 COMMIT (single)
-    pfblockerng: validate RFC 3986 scheme in pfb_dnsbl_strip_scheme() (ADR-22 P2)
+    pfblockerng: pfb_scheme_strict toggle + RFC 3986 validation (ADR-22 P2)
 Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
 
 HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt`
 (plain .txt)
-Record: final function body (8 lines); call site update (4 lines); PHPUnit test class
-name + all test method names; `php -l`/PHPUnit/`python -m pytest` outcome; any edge case
-found during implementation; go-ahead for Phase 3.
+Record: exact function signature + body; call site code (including TODO); config key name
+and path; UI field name; PHPUnit test class + method names; `php -l`/PHPUnit/`python -m
+pytest` outcome; any edge case; go-ahead for Phase 3 (note: Phase 3 requires maintainer
+confirmation of known-affected feeds list before coding begins).
