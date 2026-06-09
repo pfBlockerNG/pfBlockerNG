@@ -160,12 +160,19 @@ CONSTRAINTS
 - Tests: 4-space indent, type hints, no bare `except:`, intent-named, all branches
   covered, before-state asserted for all transition tests.
 - Only `DNSBL_KIND_BLOCK` / `DNSBL_KIND_ALLOW` in tests — no magic string literals.
+- CRITICAL — ABP test-suite freeze: every existing test function in `test_adr07_*.py`
+  (and every other pre-existing test file) must pass completely functionally unmodified.
+  Do NOT modify, rename, delete, re-parametrize, or split any existing test function —
+  not even as "cleanup" or "consolidation." `tests/test_adr21_abp_per_line.py` is the
+  ONLY file added or changed in the test suite by this phase.
 
 VERIFICATION (must all pass before the phase is done)
 - `python -m pytest tests/test_adr21_abp_per_line.py -v` → all N test cases green.
 - `python -m pytest` → unchanged (no regressions in test_adr07_* or any other suite).
 - `ruff check . && ruff format .` → 0 errors, 0 diffs.
 - `mypy tests/` → 0 errors.
+- `git diff origin/devel...HEAD -- tests/test_adr07_*.py` → empty (no changes to any
+  existing ABP test file — the ABP test-suite freeze is non-negotiable).
 - Read `git diff origin/devel...HEAD` — diff contains ONLY:
   `src/usr/local/pkg/pfblockerng/pfb_unbound.py` and
   `tests/test_adr21_abp_per_line.py`. Nothing else.

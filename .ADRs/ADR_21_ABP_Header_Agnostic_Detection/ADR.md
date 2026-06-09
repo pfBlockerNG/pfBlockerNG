@@ -120,6 +120,13 @@ decision in `build()`, not a feed-mode switch.
 - The `format_hint` field in the manifest is NOT changed — `'plain'` feeds stay `'plain'`.
 - The `$liteparser` PHP variable and lite/non-lite path are NOT changed.
 - PHP DNSBL-IP extraction for non-ABP feeds (lines 9710–9731) is NOT changed.
+- **Existing `test_adr07_*` tests are a frozen regression oracle:** no existing test
+  function in any `test_adr07_*.py` file is modified, renamed, deleted, re-parametrized,
+  or split. They must pass byte-for-byte identical (functionally unmodified) after every
+  phase. The only tests that may be written, updated, or removed are ones that were
+  explicitly probing behavior that changes in this ADR (e.g., a test that asserted a
+  mixed-feed `||` line is NOT blocked — that before-state assertion is valid to keep and
+  becomes the BEFORE half of a transition test).
 
 ## 3. Consequences
 
@@ -160,6 +167,11 @@ decision in `build()`, not a feed-mode switch.
 - All new Python tests: typed, named for intent, branch-covering, before/after state asserted.
 - `python -m pytest` + `ruff check .` + `ruff format .` + `mypy tests/` must stay green.
 - PHP: `php -l` + PHPStan on each modified file; PHPUnit for the PHP test additions.
+- **ABP test-suite freeze:** every existing test function in `test_adr07_*.py` (and every
+  other pre-existing test file) must pass completely functionally unmodified after every
+  phase. Do not modify, rename, delete, re-parametrize, or split any existing test
+  function. The new `tests/test_adr21_abp_per_line.py` file is the only permitted
+  addition. This rule applies unconditionally — even if refactoring appears convenient.
 
 ## 6. Action plan
 
