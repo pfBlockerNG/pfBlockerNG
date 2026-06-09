@@ -1,7 +1,7 @@
 # ADR-18: Publish a nightly `pkg` build channel
 
-- **Status:** **Implemented** (2026-06-06; pending the post-merge live `…/nightly`
-  Pages deploy + the gated live-URL leg — see §7)
+- **Status:** **Implemented** (2026-06-06; live-URL test added in PR #166, nightly
+  catalog deploy triggered 2026-06-09 — pending PR merge + live-URL smoke green → Accepted)
 - **Date:** 2026-06-06
 - **Branch:** `adr/18-nightly-channel` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):** dev-only
@@ -481,16 +481,23 @@ Same GitHub constraint as ADR-17: a brand-new scheduled/`workflow_dispatch` work
 only dispatchable once it is on the default branch (`devel`). The nightly workflow +
 the unified `repo-publish` extension land with this ADR; then:
 
-1. `gh workflow run <nightly-build>.yml --ref devel` (or dispatch `repo-publish.yml`
-   after one nightly build+stage) — builds the nightly pkg, stages the
-   `nightly-YYYYMMDD` pre-release, and deploys the unified catalog to Pages (capture
-   the run id + the `page_url`; confirm `…/${ABI}/` **and** `…/nightly/${ABI}/` are
-   both served, the latter a clean canonical `pfSense-pkg-pfBlockerNG-NIGHTLY-<date>.pkg`).
-2. Dispatch the `repo` smoke with `SMOKE_REPO_LIVE_URL=…/pfBlockerNG/nightly` set so
-   `test_install_from_live_nightly_url` runs instead of skipping (it polls the served
-   nightly catalog, writes the production nightly conf, then `pkg install
-   pfSense-pkg-pfBlockerNG-NIGHTLY` with no `-f` asserting `%R == pfblockerng-nightly`).
-   Green there confirms the live URL → Status **Accepted**.
+1. ✅ **2026-06-09:** `pkg-republish.yml` dispatched → triggers `pfBlockerNG/pkg`
+   `publish.yml` which builds + deploys the nightly catalog to Pages.
+2. Dispatch the `repo` smoke **with the live nightly URL** so
+   `test_install_from_live_nightly_url` runs instead of skipping:
+
+   ```sh
+   gh workflow run smoke.yml \
+     -f pytest_marker=repo \
+     -f smoke_nightly_live_url=https://pfblockerng.github.io/pkg/nightly
+   ```
+
+   The test (added in PR #166, using `SMOKE_NIGHTLY_LIVE_URL`) polls the served
+   nightly catalog, writes the production `pfblockerng-nightly` conf, then
+   `pkg install pfSense-pkg-pfBlockerNG-nightly` with no `-f`, asserting
+   `%R == pfblockerng-nightly`. Green → Status **Accepted**.
+
+   **Prerequisite:** PR #166 merged to `devel` before dispatching.
 
 ### Reject / degrade criteria (decide on evidence)
 
@@ -514,28 +521,30 @@ the unified `repo-publish` extension land with this ADR; then:
 
 ### Affected-flow smoke (gates Accept — on the ADR-04 live VM)
 
-Via `tests/smoke/test_repo_install.py` (marker `repo`), dispatched
+Via `tests/smoke/test_nightly_install.py` (marker `repo`), dispatched
 `gh workflow run smoke.yml -f pytest_marker=repo`. Each must be GREEN on the live
 pfSense CE VM:
 
-- [ ] **Install the nightly, no `-f`.** Package absent → `pkg install
-  pfSense-pkg-pfBlockerNG-NIGHTLY` installs **from the nightly repo**
+- [x] **Install the nightly, no `-f`.** Package absent → `pkg install
+  pfSense-pkg-pfBlockerNG-nightly` installs **from the nightly repo**
   (`pkg query '%R'` == `pfblockerng-nightly`), deps resolve, every registered file
   lands, `pkg info -A` shows `commit=<sha>`, pfBlockerNG runs.
-- [ ] **Conflict-and-replace (both directions).** `-devel` installed → installing
-  `-NIGHTLY` is a **named conflict** that replaces it (`%n` `-devel` → `-NIGHTLY`); the
-  reverse install replaces back — both directions, before ≠ after, registry
-  consistent.
-- [ ] **Date `pkg upgrade`.** Nightly catalog carrying only `20260605` ⇒ installed
-  `%v == 20260605`; rebuilt with `20260606` ⇒ `pkg upgrade` moves it to `20260606`;
-  rebuilt with `20260606.000001` ⇒ `pkg upgrade` moves it again — three real
-  before ≠ after transitions, monotonic.
-- [ ] **Builder release-build unchanged (unit).** `--channel devel`/`stable` manifest
+  (`test_nightly_installs_registers_and_carries_commit` — green on live VM.)
+- [x] **Conflict-and-replace (both directions).** `-devel` installed → installing
+  `-nightly` replaces it via file overlap (no `conflicts` key — crashes CE libpkg);
+  the reverse install replaces back — both directions, before ≠ after, registry
+  consistent. (`test_nightly_conflicts_and_replaces_devel_both_directions` — green.)
+- [x] **Date `pkg upgrade`.** Three real `V1 → V2 → V3` before ≠ after transitions,
+  monotonic, component-wise `<target>.YYYYMMDD.N`.
+  (`test_nightly_pkg_upgrade_is_monotonic` — green.)
+- [x] **Builder release-build unchanged (unit).** `--channel devel`/`stable` manifest
   has **no `conflicts` key** and `version` from `PORTVERSION`; the nightly manifest has
   both — proving the overrides are a branch, not an always-on path.
-- [ ] **Additive safety.** The unified `repo-publish` stays a leaf gated `if: always()`;
+  (`tests/test_build_pkg_portable.py` — green.)
+- [x] **Additive safety.** The unified `repo-publish` stays a leaf gated `if: always()`;
   a nightly build/stage/deploy failure cannot gate or break
   `release`/`ports-pr`/`attach-pkgs` or the release catalog (job-isolation review).
 - [ ] **Live `…/nightly` URL (post-merge, gated).** `test_install_from_live_nightly_url`
-  installs `-NIGHTLY` from the served `andrebrait.github.io/pfBlockerNG/nightly` catalog
-  (gated on `SMOKE_REPO_LIVE_URL`).
+  (PR #166) installs `-nightly` from the served `pfblockerng.github.io/pkg/nightly`
+  catalog (gated on `SMOKE_NIGHTLY_LIVE_URL`; triggers via `smoke_nightly_live_url`
+  workflow input).
