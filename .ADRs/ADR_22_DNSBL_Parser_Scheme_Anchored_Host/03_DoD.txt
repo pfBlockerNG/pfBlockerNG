@@ -1,0 +1,107 @@
+================================================================================
+PHASE 3 PROMPT — Smoke + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §7 DoD + manual smoke checklist FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 3
+of ADR-22 — the final phase. This phase adds a live-VM smoke case, polishes the
+inline comment at the changed line, and records the DoD evidence. One commit, push
+directly.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt — confirm Phase 2
+  is complete and all PHPUnit + Python tests pass. If missing, Phase 2 is not complete;
+  STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §7 DoD + manual smoke checklist.
+- tests/smoke/test_smoke_feeds.py — the existing feed smoke structure (for adding a new
+  case or confirming the existing `telnet://` coverage if already present).
+- CLAUDE.md — "Smoke tests (ADR-04)" — `unique_domain()` mandatory; probe on-box via
+  `drill @127.0.0.1`; first response is authoritative.
+
+ACTION PLAN
+
+1. UPDATE the inline comment at the scheme-strip call site in the non-lite block to
+   reflect the tightened behavior:
+
+   ```php
+   // Scheme strip: only http:// / https:// / ftp:// anchored at token start
+   // are accepted. Any other scheme:// → pfb_parsed_fail() + skip (ADR-22).
+   ```
+
+   Remove or replace the old `// If 'http|https|telnet|ftp://' found, remove` comment
+   (now inaccurate since telnet is rejected).
+
+2. ADD one `@pytest.mark.smoke` + `@pytest.mark.timeout(300)` test case to
+   `tests/smoke/test_smoke_feeds.py` (or a new file if the feed smoke file is too large
+   to add cleanly — prefer the existing file):
+
+   `test_unrecognised_scheme_not_blocked`
+
+   ```text
+   Scenario: A feed line with an unrecognised scheme is skipped — not blocked.
+
+   Background: Custom_List feed containing:
+     telnet://<unique-not-blocked>.<tld>   (unrecognised scheme → should be skipped)
+     http://<unique-blocked>.<tld>         (http:// → should be blocked)
+
+   Given: neither domain is blocked before the feed is loaded.
+     Assert BEFORE: drill @127.0.0.1 <not-blocked> → NOERROR (not in DNSBL).
+     Assert BEFORE: drill @127.0.0.1 <blocked> → NOERROR (not in DNSBL yet).
+
+   When: the feed is loaded; pfBlockerNG DNSBL update runs; Unbound reloads.
+
+   Then:
+     drill @127.0.0.1 <not-blocked> → NOERROR (NOT blocked; telnet:// was skipped).
+     drill @127.0.0.1 <blocked> → sinkhole VIP or NULL (blocked; http:// accepted).
+   ```
+
+   Notes:
+   - Use `helpers.unique_domain()` for both domains.
+   - Clean up in `finally`: remove the custom list, re-run update.
+   - Block shape: NOERROR + VIP or `0.0.0.0`/`::` (per "Block shapes (python mode)"
+     in CLAUDE.md) — NOT NXDOMAIN.
+
+3. DISPATCH the smoke and confirm green:
+   `gh workflow run smoke.yml -f pytest_marker=smoke`
+   Capture the run ID.
+
+4. RECORD DoD evidence in `RESULTS/03_Results.txt`:
+   - Phase 1: helper definition, oracle tests, PHPUnit pass count.
+   - Phase 2: tightened function body, call site update, PHPUnit pass count.
+   - Phase 3: smoke run ID + per-case PASS; exact `drill` outputs (telnet:// not blocked;
+     http:// blocked).
+   - Comment update: exact old text vs new text.
+   - All CI gates: PASS.
+   - Manual smoke checklist status (done or pending for maintainer).
+
+CONSTRAINTS
+- `@pytest.mark.smoke` only (NOT `repo`).
+- `unique_domain()` mandatory for every domain.
+- VM left CLEAN in `finally`.
+- Python file touched (if any): only the smoke test addition.
+- The PHP inline comment must accurately describe the new behavior.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` (default, without smoke) → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean (if smoke test is typed).
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → clean (if comment touched).
+- Smoke workflow run: new test GREEN; existing smoke GREEN.
+
+EXPECTED RESULT
+Live-VM evidence that `telnet://evil.com` is skipped (not blocked) and `http://evil.com`
+still produces a DNSBL block — confirmed by on-box `drill` responses.
+
+COMMIT (single)
+    tests: ADR-22 P3 smoke — scheme-anchored host extraction (ADR-22 P3)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/03_Results.txt`
+(plain .txt)
+Record: smoke run ID + per-case PASS; exact `drill` outputs; manual smoke checklist status;
+all CI gates PASS. This is the final handoff — the ADR is complete pending status update
+to Accepted on maintainer sign-off.

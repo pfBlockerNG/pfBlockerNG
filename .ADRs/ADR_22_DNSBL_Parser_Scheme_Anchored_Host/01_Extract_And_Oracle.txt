@@ -1,0 +1,150 @@
+================================================================================
+PHASE 1 PROMPT — Extract pfb_dnsbl_strip_scheme() helper + oracle tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §1 Context, §2.3 Contract, §6 Phase 1, §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 1
+of ADR-22. This phase is behaviour-preserving (no change in observed output for any
+existing feed line). Its sole purpose is to extract the inline scheme-strip logic into
+a named helper and pin the CURRENT behavior with PHPUnit oracle tests. Inline on the
+branch, one commit, push directly.
+
+PREREQUISITE
+ADR-21 Phase 2 must be merged to `devel` before this branch is created. Confirm by
+running `git log --oneline origin/devel | grep "ADR-21 P2"` (or similar). If ADR-21
+Phase 2 is not merged, STOP and report.
+
+WHY THIS PHASE EXISTS
+The inline scheme-strip at `pfblockerng.inc:9675–9676` is two lines of code with no
+function boundary. It can't be tested in PHPUnit without invoking the entire download
+loop (which talks to the filesystem and network). Extracting it into
+`pfb_dnsbl_strip_scheme()` creates a pure, testable seam. The oracle tests capture
+the CURRENT behavior — including `weird://evil.com` → `'evil.com'` — as the before-state
+for Phase 2's tightening. This phase is safe to land on `devel` independently: the
+behavior of every feed line is byte-identical before and after.
+
+REQUIRED READING
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §1.1 (the exact code being
+  extracted), §2.3 (contract items 1–6), §5 constraints, §7 reject criteria.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  • Lines 9671–9707: the full non-lite block — read every line to understand what the
+    helper covers and what stays inline. The helper covers ONLY the scheme strip (lines
+    9675–9676). Lines 9679–9706 stay inline.
+  • `pfb_strip_trailing_port()`: the existing helper that this phase mirrors — find it,
+    read its signature and where it's defined; follow the same placement convention for
+    the new helper.
+  • `pfb_parsed_fail()`: note its signature (called by the download loop on bad lines).
+    Phase 1 does NOT call it from the helper; that's Phase 2.
+- tests/php/ — read the existing PHPUnit test files; follow the same structure, namespace,
+  and bootstrap patterns.
+- CLAUDE.md — "PHP" code standards (tabs; PHP 8.3; `str_starts_with()` available).
+
+ACTION PLAN (ordered)
+
+1. DEFINE `pfb_dnsbl_strip_scheme(string $line): string` in `pfblockerng.inc`:
+
+   Place it near `pfb_strip_trailing_port()` (look up its location first — define the
+   new helper immediately before or after it, following the code layout).
+
+   Phase 1 signature: `string` return type only (no `false` yet — that's Phase 2).
+   Current behavior to encapsulate:
+   ```php
+   function pfb_dnsbl_strip_scheme(string $line): string {
+       if (strpos($line, '://') !== FALSE) {
+           return substr($line, strpos($line, '://') + 3);
+       }
+       return $line;
+   }
+   ```
+
+   Note: this is EXACTLY the current inline logic wrapped in a function — zero behavior
+   change. The caller replaces the two inline lines with one function call.
+
+2. REPLACE the inline scheme strip in the non-lite block (lines 9675–9676) with a call:
+   ```php
+   $line = pfb_dnsbl_strip_scheme($line);
+   ```
+
+   The surrounding `if (!$lite) { ... }` block is unchanged. Lines 9679–9706 (path/query/
+   fragment/port strips) are unchanged.
+
+3. WRITE PHPUnit oracle tests in `tests/php/` (new test class or added to an existing
+   relevant class — check what's there first):
+
+   Class: `PfbDnslbStripSchemeTest` (or similar). Each test is intent-named and asserts
+   the CURRENT behavior as an oracle.
+
+   Required test cases:
+
+   a. `test_http_scheme_stripped`:
+      Input: `'http://evil.com/path'` → `'evil.com/path'`
+      (Path stripping is downstream; helper returns with path intact.)
+
+   b. `test_https_scheme_stripped`:
+      Input: `'https://evil.com'` → `'evil.com'`
+
+   c. `test_ftp_scheme_stripped`:
+      Input: `'ftp://evil.com'` → `'evil.com'`
+
+   d. `test_telnet_scheme_stripped_current_behavior`:
+      Input: `'telnet://evil.com'` → `'evil.com'`
+      Comment: this is the CURRENT (lenient) behavior; Phase 2 changes it to `false`.
+
+   e. `test_unrecognised_scheme_stripped_current_behavior`:
+      Input: `'garbage://evil.com'` → `'evil.com'`
+      Comment: same — Phase 2 changes this to `false`.
+
+   f. `test_no_scheme_unchanged`:
+      Input: `'evil.com'` → `'evil.com'`
+
+   g. `test_plain_dot_domain_unchanged`:
+      Input: `'sub.evil.com'` → `'sub.evil.com'`
+
+   h. `test_mid_token_colon_slash_slash_current_behavior`:
+      Input: `'evil.com://junk'` → `'junk'`
+      Comment: CURRENT behavior (strpos finds first `://`); Phase 2 rejects this.
+
+   All test methods must:
+   - Be typed (`void` return type).
+   - Assert the return value, not side effects.
+   - Have a comment marking which tests represent BEFORE-state (will change in Phase 2).
+
+4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
+5. RUN `vendor/bin/phpunit` → green (all existing + new oracle tests pass).
+6. RUN `python -m pytest` → unchanged (no regressions in the Python suite).
+7. RUN `ruff check . && ruff format .` → clean.
+
+CONSTRAINTS
+- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (extract helper + call site)
+  and `tests/php/` (new oracle test class).
+- The helper return type in Phase 1 is `string` only — NOT `string|false`.
+- Do NOT change any behavior in Phase 1 — this is a pure extraction.
+- PHP tabs; do not add `die()`/`exit()`.
+- Do NOT touch `pfb_unbound.py`, CI YAML, or any other file.
+- The `||`/`@@||` guard added by ADR-21 Phase 2 (at line ~9754) is NOT touched.
+
+VERIFICATION (must all pass before the phase is done)
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
+- `vendor/bin/phpunit` → green (including all new oracle tests).
+- `python -m pytest` → unchanged pass count and results.
+- `ruff check . && ruff format .` → clean.
+- `git diff origin/devel...HEAD` shows ONLY:
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and files under `tests/php/`.
+
+EXPECTED RESULT
+`pfb_dnsbl_strip_scheme()` is defined, called from the non-lite block, and covered by
+oracle tests proving current (lenient) behavior. Phase 2 can now tighten the function
+without touching the download loop caller.
+
+COMMIT (single)
+    pfblockerng: extract pfb_dnsbl_strip_scheme() + oracle tests (ADR-22 P1)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/01_Results.txt`
+(plain .txt)
+Record: exact function definition (the 4-line helper); exact call site line number;
+PHPUnit test class name + test method names; `php -l`/PHPUnit/`python -m pytest` outcome;
+location of the helper in the file (near which function); go-ahead for Phase 2.
