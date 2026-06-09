@@ -7,8 +7,8 @@ name: Version Tracker
 #
 # DETECT = CURATED: a human edits supported-versions.json on ci-metadata when
 # a pfSense beta or GA drops.  An OPTIONAL best-effort probe (see `probe` job)
-# scans pfsense/FreeBSD-ports RELENG_* branches for versions absent from the
-# matrix and opens an issue nudge — it NEVER edits the matrix.
+# scrapes the Netgate docs versions page for CE + Plus versions absent from the
+# matrix and opens per-version nudge/tracking issues — it NEVER edits the matrix.
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │ INVARIANT: this workflow NEVER commits to or force-pushes           │
@@ -260,28 +260,24 @@ jobs:
 
   # ── 3. Optional best-effort probe ────────────────────────────────────────────
   #
-  # Scans pfsense/FreeBSD-ports RELENG_* branches for pfSense CE versions that
-  # are NOT already in the matrix.  On detecting an unknown version, opens a
-  # GitHub ISSUE nudge asking a human to evaluate and add it to the matrix.
+  # Scrapes docs.netgate.com for authoritative CE + Plus version coverage and
+  # compares against the BUILD matrix.  Opens one nudge issue per still-supported
+  # version absent from the matrix, and one tracking issue per upcoming/TBD version
+  # (updated in place as the stage advances).
   #
   # NEVER edits the matrix.  NEVER commits to any branch.  NUDGES ONLY.
+  # Best-effort: any fetch/parse failure → empty result, no issues, no job failure.
   #
   # DISABLING: set skip_probe='true' on workflow_dispatch, or add the label
-  # 'tracker-probe-disabled' to this repo (checked in the step below), or
-  # simply remove the `probe` job from this file entirely.
-  # The probe also degrades gracefully if:
-  #   - The GitHub API is rate-limited or unreachable (exits 0 with a warning).
-  #   - GITHUB_TOKEN lacks 'issues: write' (logs but does not fail).
+  # 'tracker-probe-disabled' to this repo, or remove this job entirely.
   probe:
     name: Best-effort version probe (nudge only)
     runs-on: ubuntu-latest
     needs: read-matrix
-    # The probe is independent of react — failures here must not block react.
-    # It runs in parallel with react; if both are running, a probe failure
-    # does NOT affect the react job or downstream workflow dispatches.
+    # Probe runs in parallel with react; failures here NEVER block react.
     if: github.event.inputs.skip_probe != 'true'
     permissions:
-      issues: write    # to open a nudge issue
+      issues: write
       contents: read
     steps:
       - uses: actions/checkout@v6
@@ -294,8 +290,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          # If the repo has a 'tracker-probe-disabled' label, skip the probe.
-          # This is the softest on/off switch without touching workflow YAML.
           if gh label list --repo "$REPO" --limit 100 \
               | grep -q 'tracker-probe-disabled'; then
             echo "probe_disabled=true" >> "$GITHUB_OUTPUT"
@@ -304,134 +298,162 @@ jobs:
             echo "probe_disabled=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Scan pfsense/FreeBSD-ports for unknown CE versions
+      - name: Detect pfSense versions via Netgate docs page
+        id: detect
         if: steps.probe_gate.outputs.probe_disabled != 'true'
+        continue-on-error: true
+        env:
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+        run: |
+          set -eu
+          # On any fetch/parse failure the script exits 0 with an empty result.
+          python3 scripts/check-pfsense-versions.py \
+            --matrix-json "$BUILD_MATRIX" \
+            > probe_result.json
+          echo "Probe result:"
+          python3 -m json.tool probe_result.json || cat probe_result.json
+
+      - name: Ensure version-tracker labels exist
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "version-tracker" \
+            --color "0052CC" \
+            --description "Automated version tracking" \
+            --repo "$REPO" 2>/dev/null || true
+          gh label create "tracker-wontfix" \
+            --color "e4e669" \
+            --description "Suppress future version-tracker nudges for this version" \
+            --repo "$REPO" 2>/dev/null || true
+
+      - name: Open nudge issues for supported-but-missing versions
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -eu
+          COUNT=$(jq '.supported_missing | length' probe_result.json)
+          echo "supported_missing count: ${COUNT}"
+          [ "$COUNT" -eq 0 ] && echo "No supported-but-missing versions detected." && exit 0
 
-          # ── Extract known pfsense_version patterns from the matrix ─────────
-          # The matrix uses "X.Y.x" patterns for CE (e.g. "2.8.x").
-          # Normalise to "X.Y" prefixes for matching against real version strings.
-          KNOWN_PREFIXES=$(printf '%s\n' "$BUILD_MATRIX" \
-            | jq -r '
-                [.[] | select(.channel == "CE") | .pfsense_version]
-                | map(
-                    if endswith(".x") then .[:-2]
-                    else .
-                    end
-                  )
-                | .[]
-              ')
+          i=0
+          while [ "$i" -lt "$COUNT" ]; do
+            VERSION=$(jq -r ".supported_missing[$i].version" probe_result.json)
+            CHANNEL=$(jq -r ".supported_missing[$i].channel" probe_result.json)
+            FREEBSD=$(jq -r ".supported_missing[$i].freebsd_major" probe_result.json)
+            i=$((i + 1))
 
-          echo "Known CE version prefixes in matrix:"
-          printf '  %s\n' $KNOWN_PREFIXES
+            TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} still-supported — evaluate for matrix"
 
-          # ── Fetch RELENG_* branches from pfsense/FreeBSD-ports ────────────
-          # These branches follow the pattern RELENG_X_Y[_Z] (e.g. RELENG_2_8_0).
-          # We extract the X.Y part to compare against known matrix prefixes.
-          echo ""
-          echo "Fetching branch list from pfsense/FreeBSD-ports..."
-          RELENG_BRANCHES=$(gh api \
-            "repos/pfsense/FreeBSD-ports/git/refs/heads" \
-            --jq '[.[] | .ref | ltrimstr("refs/heads/")]
-                  | map(select(startswith("RELENG_"))) | .[]' \
-            2>/dev/null || echo "")
-
-          if [ -z "$RELENG_BRANCHES" ]; then
-            echo "::warning::No RELENG_* branches found or GitHub API unreachable — skipping probe."
-            exit 0
-          fi
-
-          echo "Found RELENG_* branches:"
-          printf '  %s\n' $RELENG_BRANCHES
-
-          # ── Compare against known matrix entries ──────────────────────────
-          UNKNOWNS=""
-          for BRANCH in $RELENG_BRANCHES; do
-            # RELENG_2_8_0 -> 2.8  (take first two numeric segments)
-            VERSION=$(printf '%s\n' "$BRANCH" \
-              | sed 's/RELENG_//' \
-              | sed 's/_/./g' \
-              | grep -oE '^[0-9]+\.[0-9]+')
-
-            if [ -z "$VERSION" ]; then
+            # Skip if an open issue with this exact title already exists.
+            EXISTING=$(gh issue list --repo "$REPO" --state open --json title 2>/dev/null \
+              | jq --arg t "$TITLE" '[.[] | select(.title == $t)] | length')
+            if [ "${EXISTING:-0}" -gt 0 ]; then
+              echo "  [skip] open issue already exists for ${CHANNEL} ${VERSION}"
               continue
             fi
 
-            FOUND=0
-            for PREFIX in $KNOWN_PREFIXES; do
-              case "$VERSION" in
-                "${PREFIX}"*) FOUND=1; break ;;
-              esac
-            done
-
-            if [ "$FOUND" -eq 0 ]; then
-              UNKNOWNS="${UNKNOWNS} ${BRANCH}(${VERSION})"
-              echo "  [UNKNOWN] ${BRANCH} -> CE ${VERSION} not in matrix"
-            else
-              echo "  [known]   ${BRANCH} -> CE ${VERSION} covered"
+            # Skip if a closed issue with tracker-wontfix mentions this version.
+            WONTFIX=$(gh issue list --repo "$REPO" --state closed --label "tracker-wontfix" \
+              --json title 2>/dev/null \
+              | jq --arg v "$VERSION" '[.[] | select(.title | contains($v))] | length')
+            if [ "${WONTFIX:-0}" -gt 0 ]; then
+              echo "  [wontfix] suppressed for ${CHANNEL} ${VERSION}"
+              continue
             fi
+
+            BODY_FILE=$(mktemp)
+            {
+              printf '## pfSense %s %s is still-supported but absent from the matrix\n\n' "$CHANNEL" "$VERSION"
+              printf 'pfSense **%s %s** (FreeBSD %s) appears as **still-supported** on the\n' "$CHANNEL" "$VERSION" "$FREEBSD"
+              printf '[Netgate versions page](https://docs.netgate.com/pfsense/en/latest/releases/versions.html)\n'
+              printf 'but is **not in the supported-version matrix** on `ci-metadata`.\n\n'
+              printf '**Action (human required):** if this version should be supported,\n'
+              printf 'add an entry to `supported-versions.json` on the `ci-metadata` branch\n'
+              printf 'via a PR. See `scripts/README.md` for the schema and lifecycle policy.\n\n'
+              printf 'To suppress future nudges for this version: close this issue and add\n'
+              printf 'the `tracker-wontfix` label.\n\n'
+              printf '_This issue was opened automatically by the version-tracker probe._\n'
+              printf '_The probe NEVER edits the matrix — all changes require a human PR._\n'
+            } > "$BODY_FILE"
+
+            echo "  [create] Opening nudge issue for ${CHANNEL} ${VERSION}"
+            gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label "version-tracker,enhancement" \
+              || echo "  ::warning::Could not open nudge issue for ${CHANNEL} ${VERSION}"
+            rm -f "$BODY_FILE"
           done
 
-          # ── Open a nudge issue for any unknown versions ───────────────────
-          if [ -z "$UNKNOWNS" ]; then
-            echo ""
-            echo "All detected RELENG_* versions are covered by the matrix. No nudge needed."
-            exit 0
-          fi
+          echo "Invariant confirmed: no channel-branch writes from the probe."
 
-          echo ""
-          echo "Unknown versions detected — opening a nudge issue."
+      - name: Open or update tracking issues for upcoming/TBD versions
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          COUNT=$(jq '.future | length' probe_result.json)
+          echo "future count: ${COUNT}"
+          [ "$COUNT" -eq 0 ] && echo "No future/TBD versions detected." && exit 0
 
-          ISSUE_TITLE="[version-tracker] New pfSense CE version(s) detected — matrix update needed"
+          i=0
+          while [ "$i" -lt "$COUNT" ]; do
+            VERSION=$(jq -r ".future[$i].version" probe_result.json)
+            CHANNEL=$(jq -r ".future[$i].channel" probe_result.json)
+            RELEASED=$(jq -r ".future[$i].released" probe_result.json)
+            FREEBSD=$(jq -r ".future[$i].freebsd_major" probe_result.json)
+            i=$((i + 1))
 
-          # Write the issue body to a temp file to avoid shell/YAML quoting conflicts.
-          BODY_FILE=$(mktemp)
-          UNKNOWN_LIST=$(printf '%s\n' $UNKNOWNS | tr ' ' '\n' | sed 's/^/- /')
-          {
-            printf 'The version-tracker probe detected pfSense CE version(s) in\n'
-            printf '`pfsense/FreeBSD-ports` that are NOT yet in the supported-version\n'
-            printf 'matrix on `ci-metadata`.\n\n'
-            printf '**Action required (human):** evaluate each version below and, if it\n'
-            printf 'should be supported, add an entry to `supported-versions.json` on the\n'
-            printf '`ci-metadata` branch via a PR.\n'
-            printf 'See `scripts/README.md` (Supported-version matrix section) for the\n'
-            printf 'schema and lifecycle policy.\n\n'
-            printf '**Detected unknown version(s):**\n'
-            printf '%s\n' "$UNKNOWN_LIST"
-            printf '\n'
-            printf '**Matrix location:** `origin/ci-metadata:supported-versions.json`\n\n'
-            printf '**This issue was opened automatically by the version-tracker probe.**\n'
-            printf '**The probe NEVER edits the matrix -- all changes require a human PR.**\n'
-          } > "$BODY_FILE"
+            TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} — upcoming version tracking"
 
-          # Check whether an open nudge issue already exists to avoid spam.
-          EXISTING=$(gh issue list \
-            --repo "$REPO" \
-            --state open \
-            --label "version-tracker" \
-            --limit 10 \
-            --json number,title \
-            --jq '[.[] | select(.title | startswith("[version-tracker]"))] | length' \
-            2>/dev/null || echo "0")
+            BODY_FILE=$(mktemp)
+            {
+              printf '## Upcoming pfSense %s %s\n\n' "$CHANNEL" "$VERSION"
+              printf '| Field | Value |\n'
+              printf '| --- | --- |\n'
+              printf '| Version | `%s` |\n' "$VERSION"
+              printf '| Channel | %s |\n' "$CHANNEL"
+              printf '| FreeBSD major | %s |\n' "$FREEBSD"
+              printf '| Released | %s |\n' "$RELEASED"
+              printf '\n'
+              printf 'pfSense **%s %s** is listed as an upcoming/TBD version on the\n' "$CHANNEL" "$VERSION"
+              printf '[Netgate versions page](https://docs.netgate.com/pfsense/en/latest/releases/versions.html).\n\n'
+              printf 'Once it reaches GA, evaluate adding an entry to `supported-versions.json`\n'
+              printf 'on the `ci-metadata` branch via a PR.\n\n'
+              printf '_This issue is updated automatically by the version-tracker probe as_\n'
+              printf '_the page signal changes (TBD → released date → GA)._\n'
+            } > "$BODY_FILE"
 
-          if [ "$EXISTING" -gt "0" ]; then
-            echo "A nudge issue already exists — skipping duplicate open."
-            echo "Resolve the existing 'version-tracker' issue first."
-            exit 0
-          fi
+            # Update an existing open tracking issue; create one if none exists.
+            EXISTING_NUM=$(gh issue list --repo "$REPO" --state open --json number,title \
+              2>/dev/null \
+              | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
+              | head -1)
 
-          gh issue create \
-            --repo "$REPO" \
-            --title "$ISSUE_TITLE" \
-            --body-file "$BODY_FILE" \
-            --label "enhancement" \
-            || echo "::warning::Could not open nudge issue (token may lack issues:write) — see log above."
-          rm -f "$BODY_FILE"
+            if [ -n "$EXISTING_NUM" ]; then
+              echo "  [update] Updating tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
+              gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE" \
+                || echo "  ::warning::Could not update tracking issue #${EXISTING_NUM}"
+            else
+              echo "  [create] Opening tracking issue for ${CHANNEL} ${VERSION}"
+              gh issue create \
+                --repo "$REPO" \
+                --title "$TITLE" \
+                --body-file "$BODY_FILE" \
+                --label "version-tracker,enhancement" \
+                || echo "  ::warning::Could not create tracking issue for ${CHANNEL} ${VERSION}"
+            fi
+            rm -f "$BODY_FILE"
+          done
 
-          echo "Nudge issue opened. The probe has NOT edited the matrix."
           echo "Invariant confirmed: no channel-branch writes from the probe."
