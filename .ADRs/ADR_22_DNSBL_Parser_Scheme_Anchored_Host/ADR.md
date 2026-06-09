@@ -109,9 +109,11 @@ implementing Phase 3. The Phase 3 prompt contains an explicit STOP instruction f
   1. Validate the text before `://` against `^[a-zA-Z][a-zA-Z0-9+\-.]*$`.
      Invalid → return `false`; caller calls `pfb_parsed_fail()` + `continue`.
   2. Strip `scheme://` to get the remainder.
-  3. If the remainder contains `/` (path present) → return `false`; caller calls
-     `pfb_parsed_fail()` + `continue`.
-  4. Return the remainder.
+  3. Strip a single trailing `/` from the remainder if present (root-path slash is
+     harmless and normalised away).
+  4. If the remainder still contains `/` (actual path present) → return `false`; caller
+     calls `pfb_parsed_fail()` + `continue`.
+  5. Return the remainder.
 
 **Any syntactically valid RFC 3986 scheme is accepted.** The fix is scheme syntax
 validation + path rejection, not a whitelist of specific scheme names. Path stripping
@@ -127,7 +129,7 @@ at lines 9679–9706 is unchanged and continues to handle paths when strict is `
 | `telnet://evil.com` | `evil.com` | `evil.com` | valid scheme, no path |
 | `evil.com` | `evil.com` | `evil.com` | no `://`, unchanged |
 | `http://evil.com/path` | `evil.com` | `false` → skip + log | path present |
-| `ftp://ftp.evil.com/` | `ftp.evil.com` | `false` → skip + log | trailing `/` is a path |
+| `ftp://ftp.evil.com/` | `ftp.evil.com` | `ftp.evil.com` | trailing `/` = root path, normalised |
 | `123://evil.com` | `evil.com` | `false` → skip + log | digit-start invalid scheme |
 | `://evil.com` | `evil.com` | `false` → skip + log | empty scheme |
 | `!!bad://evil.com` | `evil.com` | `false` → skip + log | non-alpha-start |
@@ -142,6 +144,7 @@ current (left-column) output (path stripping at 9679–9706 handles paths downst
 3. When the toggle is `off` and the feed is not known-affected, behavior is byte-identical
    to today for every input (paths stripped downstream as before).
 4. `123://evil.com`, `://evil.com`, and `http://evil.com/path` → `false` when toggle is `on`.
+5. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` regardless of toggle state.
 
 ### 2.7 Explicitly kept / out of scope
 
@@ -181,10 +184,12 @@ current (left-column) output (path stripping at 9679–9706 handles paths downst
 8. `http://evil.com/path` when `pfb_scheme_strict='on'` → skipped + logged (path present).
 9. `http://evil.com/path` when `pfb_scheme_strict='off'` → `evil.com` blocked (path stripped
    downstream at lines 9679–9706; current behavior unchanged).
-10. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
-11. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
-12. `python -m pytest` → unchanged (no regressions in any suite).
-13. PHPUnit → green.
+10. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` blocked regardless of toggle
+    (trailing `/` normalised away; not treated as a path).
+11. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
+12. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
+13. `python -m pytest` → unchanged (no regressions in any suite).
+14. PHPUnit → green.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -259,5 +264,5 @@ All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 
 - Any valid-scheme regression (requirements §4.1–§4.4 fail).
 - Toggle-off behavior not byte-identical to today (§4.5 fails).
-- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.10 fails).
+- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.11 fails).
 - `python -m pytest` count changes.
