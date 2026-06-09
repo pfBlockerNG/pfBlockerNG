@@ -82,6 +82,7 @@ decision in `build()`, not a feed-mode switch.
 | PHP download loop (non-ABP feed) | `\|\|domain^` → dropped at `pfb_filter()` (line 9757) | `startswith("\|\|")` or `startswith("@@\|\|")` before `pfb_filter()` → write verbatim to `.txt`; `continue` |
 | PHP manifest builder (plain path) | reads col 1 from CSV | detect `startswith("\|\|")` / `startswith("@@\|\|")` → write verbatim to `.raw`; else CSV col-1 as before |
 | Python `build()` (non-ABP loop) | `parse(fmt, raw_line)` for every line | if `raw_line.startswith("\|\|")` or `raw_line.startswith("@@\|\|")` → `parse_abp(raw_line, ...)` → append to `abp_rules` and `continue`; else unchanged |
+| Per-feed format selector (`'abp'`) | N/A (new) | download loop: `$easylist = TRUE` (skip header scan); manifest: `format_hint = 'abp'` |
 | ABP-header feed | `fmt == "abp"` → `parse_abp()` for every line | **unchanged** |
 | `parse_abp()` | unchanged | **unchanged** |
 | `_dnsbl_parse_abp_line()` | called by `parse()` for `format_hint="abp"` | **unchanged** (not used by the new per-line path) |
@@ -110,14 +111,26 @@ decision in `build()`, not a feed-mode switch.
    PHP `pfb_dnsbl_abp_extract_ip()` in the ABP block — but since this is a non-ABP feed
    the IP is already handled by PHP's IP collection at lines 9710–9731. No double-handling.
 
-### 2.4 Explicitly kept / out of scope
+### 2.4 Explicit format selector (per-feed)
 
-- The whole-feed ABP mode (`$easylist`) and its PHP verbatim-write path are NOT touched.
+An optional per-feed **Format** selector (values: `'auto'` / `'abp'`) lets the user
+declare that a feed is ABP format without relying on header detection.
+
+- **`'auto'` (default):** existing behavior — detect the ABP header; if absent, use
+  per-line detection (ADR-21 Phase 1).
+- **`'abp'`:** skip header detection entirely; set `$easylist = TRUE` immediately for the
+  download loop; set `format_hint = 'abp'` in the manifest row so Python's `build()` routes
+  the entire feed to `parse_abp()`.
+
+This is implemented in Phase 2 alongside the download loop and manifest builder changes.
+The selector covers feeds that are known ABP feeds but ship without a recognizable header.
+
+### 2.5 Explicitly kept / out of scope
+
 - `_dnsbl_parse_abp_line()` is NOT modified or removed (still used by `parse()` for
   `format_hint="abp"` feeds).
 - Regex ABP rules (`/re/`, `@@/re/`) in non-ABP feeds: supported by `parse_abp()` and will
   work correctly once the per-line routing is in place.
-- The `format_hint` field in the manifest is NOT changed — `'plain'` feeds stay `'plain'`.
 - The `$liteparser` PHP variable and lite/non-lite path are NOT changed.
 - PHP DNSBL-IP extraction for non-ABP feeds (lines 9710–9731) is NOT changed.
 - **Existing `test_adr07_*` tests are a frozen regression oracle:** no existing test
@@ -158,6 +171,11 @@ decision in `build()`, not a feed-mode switch.
 6. ABP-header feeds produce identical results before and after this change (no regression).
 7. PHP: `||domain^` in a non-ABP feed's `.txt` file is written verbatim (no leading comma).
 8. PHP manifest builder: verbatim `||domain^` in `.txt` is passed verbatim to `.raw`.
+9. Per-feed format selector `'abp'`: download loop sets `$easylist = TRUE` without reading
+   the feed header; manifest row gets `format_hint = 'abp'`; Python routes all lines to
+   `parse_abp()` — identical outcome to a header-detected ABP feed.
+10. Per-feed format selector `'auto'` (default): existing behavior unchanged — header
+    detection runs first; per-line detection is the fallback.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -187,7 +205,7 @@ Prompt: `01_Python_Per_Line_Detection.txt`
   acceptance requirements; before-state assertions (plain feed without `||` lines →
   no such block in the result).
 
-### Phase 2 — PHP companion: download loop + manifest builder
+### Phase 2 — PHP companion: download loop + manifest builder + format selector
 
 Prompt: `02_PHP_Companion.txt`
 
@@ -195,8 +213,12 @@ Prompt: `02_PHP_Companion.txt`
   before `pfb_filter()` domain validation; write verbatim to `.txt`; `continue`.
 - `pfblockerng.inc` manifest builder (~line 3600): insert same guard before CSV col-1
   extraction; write verbatim to `.raw`; `continue`.
-- PHPUnit tests (or Python integration test) proving: verbatim pass-through to `.txt`
-  and to `.raw`; existing plain CSV path unaffected; ABP-header feed unaffected.
+- **Format selector:** add a `pfb_dnsbl_format` per-feed setting (`'auto'` / `'abp'`);
+  in the download loop, if `$feed['pfb_dnsbl_format'] === 'abp'`, set `$easylist = TRUE`
+  before the header-detection scan; in the manifest builder, emit `format_hint = 'abp'`
+  for forced-ABP feeds.
+- PHPUnit/Python tests: verbatim pass-through to `.txt` and `.raw`; format selector forces
+  ABP mode without a header; `'auto'` feed with a header still works unchanged.
 
 ### Phase 3 — Smoke + DoD
 

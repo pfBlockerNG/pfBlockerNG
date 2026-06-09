@@ -72,16 +72,32 @@ applied after ADR-21 Phase 2 merges.
 
 ## 2. Decision
 
-### 2.1 Toggle
+### 2.1 Scheme validation toggle
 
-The RFC 3986 scheme validation is gated by a **global DNSBL setting** `pfb_scheme_strict`
-(value: `'on'` / `'off'`). The setting lives in the General Settings → DNSBL tab and
-defaults to `'on'` for **new installs** — correct behavior out of the box.
+RFC 3986 scheme validation is controlled at two levels:
 
-- **When `off`:** behavior is identical to today — any `://` is stripped, including
-  `123://evil.com`. No new parse errors.
-- **When `on`:** `pfb_dnsbl_strip_scheme()` validates the scheme against RFC 3986;
-  invalid schemes → `pfb_parsed_fail()` + skip.
+**Global setting** — `pfb_scheme_strict` (value: `'on'` / `'off'`) in General Settings →
+DNSBL tab. Defaults to `'on'` for new installs.
+
+**Per-feed setting** — a tri-state selector on each DNSBL feed row (value: `'on'` /
+`'off'` / `'global'`). Defaults to `'global'` (follow the global toggle). Allows individual
+feeds to opt in or opt out independently of the global setting.
+
+**Cascade (evaluated at call-site for each feed):**
+
+```text
+strict = (feed == 'on')
+      OR (feed == 'global' AND global == 'on')
+      OR (feed is in the known-affected list)
+```
+
+Equivalently: `feed == 'off'` suppresses strict even when the global is `'on'`, EXCEPT
+for known-affected feeds which always force strict regardless of both settings.
+
+- **When strict resolves to `false`:** behavior is identical to today — any `://` is
+  stripped, paths handled downstream. No new parse errors.
+- **When strict resolves to `true`:** `pfb_dnsbl_strip_scheme()` validates the scheme
+  against RFC 3986 and rejects lines with invalid schemes or non-root paths.
 
 ### 2.2 Existing-user migration
 
@@ -95,10 +111,13 @@ prior behavior to preserve.
 ### 2.3 Known-affected feeds (TBD — ask maintainer when implementing Phase 3)
 
 Certain curated feed URLs are known to contain lines with invalid RFC 3986 schemes. For
-these feeds, scheme validation runs unconditionally — regardless of the `pfb_scheme_strict`
-global toggle — so their malformed lines are always logged. The definitive list of
-known-affected feed URLs is **TBD** and must be confirmed with the maintainer before
-implementing Phase 3. The Phase 3 prompt contains an explicit STOP instruction for this.
+these feeds, scheme validation runs unconditionally — **regardless of both the global toggle
+and the per-feed setting**, even if the per-feed setting is explicitly `'off'` — so their
+malformed lines are always logged and skipped. The per-feed selector reduces the need for
+this list (users can now enable strict per-feed), but the list remains the mechanism for
+feeds where the maintainer wants to enforce correct behavior regardless of user preference.
+The definitive list is **TBD** and must be confirmed with the maintainer before implementing
+Phase 3. The Phase 3 prompt contains an explicit STOP instruction for this.
 
 ### 2.4 Scheme validation rule (when active)
 
@@ -119,7 +138,7 @@ implementing Phase 3. The Phase 3 prompt contains an explicit STOP instruction f
 validation + path rejection, not a whitelist of specific scheme names. Path stripping
 at lines 9679–9706 is unchanged and continues to handle paths when strict is `'off'`.
 
-### 2.5 Decision table (when `pfb_scheme_strict = 'on'` or feed is known-affected)
+### 2.5 Decision table (when strict resolves to `true` — see §2.1 cascade)
 
 | Input | Current output | New output | Reason |
 | ----- | -------------- | ---------- | ------ |
@@ -134,17 +153,19 @@ at lines 9679–9706 is unchanged and continues to handle paths when strict is `
 | `://evil.com` | `evil.com` | `false` → skip + log | empty scheme |
 | `!!bad://evil.com` | `evil.com` | `false` → skip + log | non-alpha-start |
 
-When `pfb_scheme_strict = 'off'` and feed is NOT known-affected: all rows produce the
-current (left-column) output (path stripping at 9679–9706 handles paths downstream).
+When strict resolves to `false` (per §2.1 cascade): all rows produce the current
+(left-column) output (path stripping at 9679–9706 handles paths downstream).
 
 ### 2.6 Semantics that MUST be preserved (the contract — pinned by oracle tests in Phase 1)
 
-1. Any valid RFC 3986 scheme with no path is accepted regardless of toggle state.
+1. Any valid RFC 3986 scheme with no path is accepted regardless of strict state.
 2. `pfb_filter()` remains the unconditional domain validity gate.
-3. When the toggle is `off` and the feed is not known-affected, behavior is byte-identical
-   to today for every input (paths stripped downstream as before).
-4. `123://evil.com`, `://evil.com`, and `http://evil.com/path` → `false` when toggle is `on`.
-5. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` regardless of toggle state.
+3. When strict resolves to `false`, behavior is byte-identical to today for every input
+   (paths stripped downstream as before).
+4. `123://evil.com`, `://evil.com`, and `http://evil.com/path` → `false` when strict is `true`.
+5. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` regardless of strict state.
+6. Per-feed `'off'` suppresses strict even when the global is `'on'` — EXCEPT for
+   known-affected feeds, which ignore both settings and force strict unconditionally.
 
 ### 2.7 Explicitly kept / out of scope
 
@@ -177,19 +198,22 @@ current (left-column) output (path stripping at 9679–9706 handles paths downst
 2. `evil://evil.com` → `evil.com` blocked, always (valid scheme, no path; toggle irrelevant).
 3. `pkg+https://evil.com` → `evil.com` blocked, always (valid scheme, no path; toggle irrelevant).
 4. `evil.com` → `evil.com` blocked, always (no scheme; unchanged).
-5. `123://evil.com` when `pfb_scheme_strict='off'` and NOT known-affected → `evil.com`
-   blocked (current behavior preserved when toggle is off).
-6. `123://evil.com` when `pfb_scheme_strict='on'` OR known-affected → skipped + logged.
-7. `://evil.com` when `pfb_scheme_strict='on'` → skipped + logged.
-8. `http://evil.com/path` when `pfb_scheme_strict='on'` → skipped + logged (path present).
-9. `http://evil.com/path` when `pfb_scheme_strict='off'` → `evil.com` blocked (path stripped
+5. `123://evil.com` when strict resolves to `false` → `evil.com` blocked (current behavior).
+6. `123://evil.com` when strict resolves to `true` → skipped + logged.
+7. `://evil.com` when strict resolves to `true` → skipped + logged.
+8. `http://evil.com/path` when strict resolves to `true` → skipped + logged (path present).
+9. `http://evil.com/path` when strict resolves to `false` → `evil.com` blocked (path stripped
    downstream at lines 9679–9706; current behavior unchanged).
-10. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` blocked regardless of toggle
-    (trailing `/` normalised away; not treated as a path).
-11. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
-12. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`.
-13. `python -m pytest` → unchanged (no regressions in any suite).
-14. PHPUnit → green.
+10. `ftp://ftp.evil.com/` (root-path slash only) → `ftp.evil.com` blocked regardless of strict
+    state (trailing `/` normalised away; not treated as a path).
+11. Per-feed `'on'` forces strict even when global is `'off'`.
+12. Per-feed `'off'` suppresses strict even when global is `'on'` — except known-affected feeds.
+13. Per-feed `'global'` (default) follows the global toggle.
+14. Migration: an existing install without `pfb_scheme_strict` in config → migrated to `'off'`.
+15. New install without migration trigger: `pfb_scheme_strict` defaults to `'on'`; per-feed
+    defaults to `'global'`.
+16. `python -m pytest` → unchanged (no regressions in any suite).
+17. PHPUnit → green.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -264,5 +288,6 @@ All criteria met and evidence recorded in `RESULTS/04_Results.txt`:
 
 - Any valid-scheme regression (requirements §4.1–§4.4 fail).
 - Toggle-off behavior not byte-identical to today (§4.5 fails).
-- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.11 fails).
+- Migration does not set `pfb_scheme_strict = 'off'` for existing installs (§4.14 fails).
+- Per-feed `'off'` does not suppress strict for known-affected feeds (§4.12 fails).
 - `python -m pytest` count changes.

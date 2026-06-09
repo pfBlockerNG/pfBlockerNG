@@ -31,20 +31,30 @@ REQUIRED READING
 
 ACTION PLAN (ordered)
 
-1. ADD `pfb_scheme_strict` config key and UI toggle:
+1. ADD `pfb_scheme_strict` global config key + UI toggle, AND per-feed selector:
 
-   - In `pfblockerng_general.php` (DNSBL General Settings tab), add a checkbox field
-     `pfb_scheme_strict` with a short help text:
+   GLOBAL (General Settings → DNSBL tab):
+   - In `pfblockerng_general.php`, add a checkbox field `pfb_scheme_strict` with help text:
      "Validate URL schemes against RFC 3986 before stripping. Lines with invalid schemes
-     (e.g., 123://) are logged and skipped. Enabled by default for new installs; existing
-     installs are migrated to off to preserve prior behavior. Known-affected feeds always
-     use strict mode regardless of this setting."
+     (e.g., 123://) or with URL paths are logged and skipped. Enabled by default for new
+     installs; existing installs are migrated to off. Per-feed setting overrides this.
+     Known-affected feeds always use strict mode regardless."
    - In `pfblockerng.inc`, wherever DNSBL config keys are read/defaulted, add:
-     `$pfb['scheme_strict'] = isset($config['installedpackages']['pfblockerng']['config'][0]['pfb_scheme_strict'])
+     `$pfb['scheme_strict'] = isset($config['...']['pfb_scheme_strict'])
          && $config['...']['pfb_scheme_strict'] === 'on' ? 'on' : 'off';`
      (Match the exact config read pattern of neighboring keys — don't guess the path.)
-   - Default: `'on'` (new installs get strict by default). Phase 3 handles migration of
-     existing installs to `'off'` to preserve their prior permissive behavior.
+   - Default: `'on'` for new installs. Phase 3 handles migration to `'off'` for existing.
+
+   PER-FEED (DNSBL feed/group configuration page):
+   - Add a `pfb_scheme_strict` select/dropdown per feed row with three options:
+     `'global'` (default — "Follow global setting"), `'on'` ("Always strict"),
+     `'off'` ("Never strict").
+     Match the naming convention of adjacent per-feed settings in the feed UI page.
+   - In `pfblockerng.inc`, where per-feed config keys are read for the download loop,
+     read the per-feed value:
+     `$feed_scheme_strict = $feed_config['pfb_scheme_strict'] ?? 'global';`
+     (Adapt key name and read path to match actual feed config structure — read the
+     file first; don't guess.)
 
 2. CHANGE `pfb_dnsbl_strip_scheme()` return type to `string|false` with toggle-gated
    RFC 3986 validation. The function must accept a `bool $strict` parameter:
@@ -83,12 +93,14 @@ ACTION PLAN (ordered)
 
 3. UPDATE the call site in the non-lite block:
 
-   Pass the strict flag from config and leave a `TODO` placeholder for Phase 3's per-feed
-   override:
+   Compute `$strict` from the two-level cascade and leave a `TODO` for Phase 3's
+   known-affected feeds bypass:
 
    ```php
-   // TODO ADR-22 P3: also pass true if this feed is in the known-affected list.
-   $strict = ($pfb['scheme_strict'] === 'on');
+   // TODO ADR-22 P3: also force true if this feed is in the known-affected list.
+   $feed_scheme_strict = $feed_config['pfb_scheme_strict'] ?? 'global'; // adapt key name
+   $strict = ($feed_scheme_strict === 'on')
+       || ($feed_scheme_strict !== 'off' && $pfb['scheme_strict'] === 'on');
    $stripped = pfb_dnsbl_strip_scheme($line, $strict);
    if ($stripped === FALSE) {
        pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err']);
@@ -96,6 +108,9 @@ ACTION PLAN (ordered)
    }
    $line = $stripped;
    ```
+
+   (Where `$feed_config` is the variable holding the current feed's config row —
+   read the download loop to find the correct variable name.)
 
 4. WRITE new PHPUnit tests (add to the Phase 1 test class or a new class):
 
@@ -150,6 +165,28 @@ ACTION PLAN (ordered)
    m. `test_no_scheme_strict_on`:
       `pfb_dnsbl_strip_scheme('evil.com', true)` → `'evil.com'`
 
+   Cascade tests (call-site logic — test via the cascade expression, not the helper):
+
+   n. `test_cascade_feed_on_overrides_global_off`:
+      `$feed_scheme_strict = 'on'`, global `$pfb['scheme_strict'] = 'off'` →
+      `$strict` resolves to `true` (per-feed 'on' wins).
+
+   o. `test_cascade_feed_off_overrides_global_on`:
+      `$feed_scheme_strict = 'off'`, global `$pfb['scheme_strict'] = 'on'` →
+      `$strict` resolves to `false` (per-feed 'off' wins).
+
+   p. `test_cascade_feed_global_follows_global_on`:
+      `$feed_scheme_strict = 'global'`, global `$pfb['scheme_strict'] = 'on'` →
+      `$strict` resolves to `true`.
+
+   q. `test_cascade_feed_global_follows_global_off`:
+      `$feed_scheme_strict = 'global'`, global `$pfb['scheme_strict'] = 'off'` →
+      `$strict` resolves to `false`.
+
+   Note: tests n–q test the cascade expression at the call site, not `pfb_dnsbl_strip_scheme()`
+   directly. Extract the cascade logic into a small testable helper, or test it via an
+   integration approach — use the simplest testable seam.
+
 5. CONFIRM the Phase 1 oracle tests still pass (they call the function without `$strict`,
    defaulting to `false` — behavior unchanged).
 6. RUN `php -l` on all modified PHP files → no syntax errors.
@@ -161,11 +198,12 @@ CONSTRAINTS
 - Do NOT implement the known-affected feeds list in this phase — that is Phase 3. The
   `TODO` comment at the call site is sufficient.
 - Do NOT implement the migration logic in this phase — that is Phase 3.
-- Default for new installs is `'on'` — do NOT default to `'off'` in the config read.
+- Global default for new installs is `'on'`; per-feed default is `'global'`.
 - The Phase 1 oracle tests must pass WITHOUT modification (the `$strict` default of `false`
   ensures this).
 - PHP tabs; PHP 8.3.
-- Modify only `pfblockerng.inc`, `pfblockerng_general.php`, and `tests/php/`.
+- Modify only `pfblockerng.inc`, `pfblockerng_general.php`, the DNSBL feed UI page, and
+  `tests/php/`.
 - ADR-21 `||`/`@@||` guard: NOT touched.
 - `pfb_filter()`: NOT touched.
 

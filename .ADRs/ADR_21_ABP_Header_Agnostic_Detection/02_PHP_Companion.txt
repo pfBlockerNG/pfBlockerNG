@@ -115,13 +115,43 @@ ACTION PLAN (ordered)
    - Do NOT touch the manifest row builder (lines 3618–3625) — `format_hint` stays
      `'plain'`.
 
-3. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` — must show no syntax
+3. ADD per-feed format selector:
+
+   a. In the DNSBL feed UI page (wherever individual feed settings are configured), add a
+      `pfb_dnsbl_format` select field with two options:
+      - `''` or `'auto'` (default): "Auto-detect (header or per-line)"
+      - `'abp'`: "Force ABP"
+      Match the naming convention and UI style of adjacent per-feed settings.
+
+   b. In `pfblockerng.inc`, at the start of each feed's download processing — BEFORE the
+      header-detection loop — add:
+      ```php
+      // Force ABP mode if the feed is explicitly configured as ABP (ADR-21).
+      if (isset($feed_config['pfb_dnsbl_format']) && $feed_config['pfb_dnsbl_format'] === 'abp') {
+          $easylist = TRUE;
+      }
+      ```
+      (Adapt `$feed_config` to the actual variable holding the feed's config row — read
+      the download loop to find the correct variable name. Tabs for indent.)
+
+   c. In the manifest builder, where the manifest row is assembled (~line 3618–3625),
+      emit `format_hint = 'abp'` when the feed's `pfb_dnsbl_format` is `'abp'` (or when
+      `$easylist` is `TRUE` — whichever is the cleanest hook given the code structure).
+      Read the manifest builder to find where `format_hint` is set and follow the same
+      pattern.
+
+   Notes:
+   - A forced-ABP feed skips the per-line `||`/`@@||` guard (step 1 above) — the entire
+     feed is already going through `parse_abp()` via the `$easylist = TRUE` path.
+   - `'auto'` feeds are unchanged: header detection runs first, then per-line detection.
+
+4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` — must show no syntax
    errors.
 
-4. RUN `vendor/bin/phpunit` (if PHPUnit is installed via `composer install`) to check
+5. RUN `vendor/bin/phpunit` (if PHPUnit is installed via `composer install`) to check
    existing PHP tests still pass. If not installed, note it and rely on CI.
 
-5. VERIFY the end-to-end pipeline with a focused integration test:
+6. VERIFY the end-to-end pipeline with a focused integration test:
    Add a Python integration test (in the existing `tests/test_adr21_abp_per_line.py`
    or a new `tests/test_adr21_php_pipeline.py`) that simulates the `.txt` file format
    produced by the PHP download loop change, then calls the manifest builder's reading
@@ -135,18 +165,20 @@ ACTION PLAN (ordered)
    NOTE: if you add this integration test, add it to `tests/test_adr21_abp_per_line.py`
    rather than creating a third file. Name it `test_manifest_builder_mixed_feed`.
 
-6. RUN `python -m pytest` — full suite must still be green (no regressions).
-7. RUN `ruff check . && ruff format .` — clean.
-8. RUN `mypy tests/` — clean.
+7. RUN `python -m pytest` — full suite must still be green (no regressions).
+8. RUN `ruff check . && ruff format .` — clean.
+9. RUN `mypy tests/` — clean.
 
 CONSTRAINTS
-- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and (optionally)
-  `tests/test_adr21_abp_per_line.py` (adding `test_manifest_builder_mixed_feed`).
+- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, the DNSBL feed UI page,
+  and (optionally) `tests/test_adr21_abp_per_line.py` (adding `test_manifest_builder_mixed_feed`).
 - Do NOT modify `pfb_unbound.py`.
 - Do NOT touch the `if ($easylist)` block (ABP-header path) — it is correct and must
-  remain unchanged.
+  remain unchanged. The format selector sets `$easylist = TRUE` BEFORE that block; the
+  block itself is not modified.
 - Tabs for PHP indent; match the surrounding code style exactly.
-- The `$format_hint` in the manifest row stays `'plain'`; do NOT change it.
+- `format_hint` stays `'plain'` for `'auto'` feeds; it is set to `'abp'` only for
+  feeds with `pfb_dnsbl_format === 'abp'`.
 - IP anchors (`||1.2.3.4^`) are handled correctly by `parse_abp()` returning `None` —
   no additional PHP guard is needed.
 
