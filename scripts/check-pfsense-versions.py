@@ -312,7 +312,7 @@ def _load_matrix(matrix_arg: str | None) -> list[dict[str, str]]:
     elif not sys.stdin.isatty():
         try:
             raw = sys.stdin.read()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return []
     else:
         return []
