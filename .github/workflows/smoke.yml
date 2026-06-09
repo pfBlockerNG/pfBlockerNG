@@ -29,8 +29,8 @@ name: Smoke (pfSense VM, ADR-04)
 #                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
 #                        the image_ref input (full ref) or pfsense_version input
 #                        (tag) override it.
-#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (secret)
-#   SMOKE_GHCR_TOKEN     PAT/token with read:packages for the GHCR pull (secret)
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN     token with read:packages for the GHCR pull (defaults to GITHUB_TOKEN)
 #   SMOKE_SSH_PRIV_KEY   private SSH key; matching public key is baked into the
 #                        image's root authorized_keys (secret)
 # Optional (match the baked image; defaults track RESULTS/02):
@@ -173,8 +173,8 @@ jobs:
         id: digest
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
