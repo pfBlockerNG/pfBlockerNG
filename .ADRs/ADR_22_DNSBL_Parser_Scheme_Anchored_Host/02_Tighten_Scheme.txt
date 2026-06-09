@@ -1,65 +1,71 @@
 ================================================================================
-PHASE 2 PROMPT — Tighten pfb_dnsbl_strip_scheme(): anchor + reject unrecognised
+PHASE 2 PROMPT — Validate scheme per RFC 3986; reject malformed
 Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
-     (read §2 Decision, §4 requirements, §5 constraints FIRST)
+     (read §1.2 RFC 3986, §2 Decision, §4 requirements, §5 constraints FIRST)
 ================================================================================
 
 ROLE
 You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 2
-of ADR-22. This phase changes `pfb_dnsbl_strip_scheme()` to return `string|false` and
-rejects non-http(s)/ftp schemes, and updates the caller and test suite accordingly.
-Inline on the branch, one commit, push directly.
+of ADR-22. This phase adds RFC 3986 scheme validation to `pfb_dnsbl_strip_scheme()`:
+any syntactically valid scheme continues to work exactly as before; a syntactically
+invalid scheme (digit start, empty, special characters) returns `false` so the caller
+can log and skip the line. Inline on the branch, one commit, push directly.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/01_Results.txt — confirm the
-  helper is extracted, the oracle tests are green, and the exact line numbers of the
-  helper definition and call site. If missing, Phase 1 is not complete; STOP and report.
-- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §2.1 (tightening rule),
-  §2.2 (decision table), §2.3 (contract), §4 (requirements).
+  helper is extracted, the oracle tests are green, and note the exact line numbers of
+  the helper definition and call site. If missing, Phase 1 is not complete; STOP.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §1.2 (RFC 3986 scheme ABNF),
+  §2.1 (the rule), §2.2 (decision table), §2.3 (contract), §4 (all requirements).
+  **CRITICAL:** re-read §2.1 carefully. ANY valid RFC 3986 scheme is accepted — the fix
+  is scheme SYNTAX validation, NOT a whitelist of http/https/ftp. `evil://`, `goat://`,
+  `pkg+https://`, `telnet://`, `s3://` are ALL accepted unchanged.
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc:
   • `pfb_dnsbl_strip_scheme()` as extracted in Phase 1.
-  • The call site in the non-lite block and what surrounds it (the ADR-21 `||`/`@@||`
-    guard at ~line 9754; the `pfb_filter()` gate below).
-  • `pfb_parsed_fail()`: signature — understand what arguments it takes so the caller
-    passes the correct values on `false` return.
-- tests/php/ — the Phase 1 oracle test class: these become before-state assertions.
+  • Call site in the non-lite block; surroundings (`pfb_parsed_fail()` signature, `$oline`
+    variable in scope).
+- tests/php/ — the Phase 1 oracle test class: tests h and i are the before-states.
 - CLAUDE.md — "Test coverage" (before-state asserts for transition tests).
 
 ACTION PLAN (ordered)
 
 1. CHANGE `pfb_dnsbl_strip_scheme()` return type to `string|false`:
 
-   Accepted schemes, anchored at the start: `http://`, `https://`, `ftp://`.
-   All other `://` → return `false`. No `://` at all → return `$line` unchanged.
+   RFC 3986 scheme grammar: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
+   Regex: `^[a-zA-Z][a-zA-Z0-9+\-.]*$`
 
    ```php
    function pfb_dnsbl_strip_scheme(string $line): string|false {
-       if (str_starts_with($line, 'http://') ||
-           str_starts_with($line, 'https://') ||
-           str_starts_with($line, 'ftp://')) {
-           return substr($line, strpos($line, '://') + 3);
+       $pos = strpos($line, '://');
+       if ($pos === FALSE) {
+           return $line;
        }
-       if (strpos($line, '://') !== FALSE) {
+       $scheme = substr($line, 0, $pos);
+       if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
            return FALSE;
        }
-       return $line;
+       return substr($line, $pos + 3);
    }
    ```
 
    Notes:
-   - `str_starts_with()` is available in PHP 8.0+; this is PHP 8.3 — use it.
-   - The three `str_starts_with` checks are the anchored scheme check: `://` must be at
-     position 4 (`http`), 5 (`https`), or 3 (`ftp`) from the start.
-   - The fallback `strpos($line, '://')` catches any `://` NOT starting with an accepted
-     scheme (e.g. `telnet://`, `garbage://`, `evil.com://junk`) → returns `false`.
-   - If no `://` is present at all → `return $line` (unchanged; no scheme to strip).
+   - `$pos = strpos($line, '://')` finds the first `://`.
+   - `$scheme = substr($line, 0, $pos)` extracts the potential scheme text.
+   - `preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)` validates it:
+     - `^[a-zA-Z]` — must start with a letter.
+     - `[a-zA-Z0-9+\-.]*` — followed by letters, digits, `+`, `-`, `.`.
+     - `$` — anchored end (no trailing junk).
+   - If validation FAILS → return `FALSE`.
+   - If validation PASSES → `substr($line, $pos + 3)` strips `scheme://` (same as today).
+   - Note: `evil.com://junk` → scheme `evil.com` → matches the regex (`.` is valid!) →
+     returns `junk`. This is intentional — `pfb_filter` downstream catches `junk` (no `.`).
+     Behavior unchanged from current. Do NOT special-case this.
 
-2. UPDATE the call site in the non-lite block:
+2. UPDATE the call site in the non-lite block to handle `false`:
 
-   The single-line call from Phase 1 (`$line = pfb_dnsbl_strip_scheme($line);`) must
-   now handle `false`:
+   Replace the single call `$line = pfb_dnsbl_strip_scheme($line);` with:
 
    ```php
    $stripped = pfb_dnsbl_strip_scheme($line);
@@ -70,82 +76,86 @@ ACTION PLAN (ordered)
    $line = $stripped;
    ```
 
-   Look up the exact parameters of `pfb_parsed_fail()` (from Phase 1 notes or by reading
-   the function definition). The `$oline` variable (the original unmodified line, captured
-   at the top of the loop) must be passed — confirm it is still in scope at this point.
+   Verify: `$header`, `$line`, `$oline`, and `$pfb['dnsbl_parse_err']` are all in scope
+   at this point (confirm by reading the Phase 1 handoff for the exact line number and
+   scanning upward in the loop for these variable declarations).
 
-3. UPDATE the Phase 1 oracle tests — add before/after structure:
+3. UPDATE the Phase 1 oracle tests:
 
-   For each test that asserted CURRENT (lenient) behavior (tests d, e, h from Phase 1 —
-   `telnet://`, `garbage://`, `evil.com://junk`):
-   - The old assertion becomes the BEFORE comment/assertion in a before/after test pair.
-   - The AFTER assertion now expects `false`.
-   - Do NOT delete the old test; update it to assert `false` and add a comment noting
-     what the before-state was (or keep the old test as a `@before` sub-case).
-   - Simplest: rename the test to drop the `_current_behavior` suffix and change the
-     assertion from `assertEquals('evil.com', ...)` to `assertFalse(...)`, with a
-     comment on the old behavior preserved.
+   Tests h (`test_digit_start_scheme_current_behavior`) and i (`test_empty_scheme_current_behavior`)
+   were labelled as BEFORE-state oracles. Update them:
+   - Rename: drop the `_current_behavior` suffix.
+   - Change assertion from `assertEquals('evil.com', ...)` / `assertEquals('evil.com', ...)`
+     to `assertFalse(...)`.
+   - Add a comment recording the BEFORE-state: "Phase 1 oracle: this returned 'evil.com'.
+     Phase 2 tightening: now returns false (invalid RFC 3986 scheme)."
 
-   Add new tests for the tightened behavior:
+   Add new regression-guard tests to prove valid schemes still work:
 
-   i. `test_telnet_scheme_rejected`:
-      Input: `'telnet://evil.com'` → `false`.
-      Before-state comment: Phase 1 oracle showed this returned `'evil.com'`.
+   k. `test_valid_custom_scheme_accepted`:
+      `'evil://evil.com'` → `'evil.com'` (any-letter-start scheme still accepted).
 
-   j. `test_unrecognised_scheme_rejected`:
-      Input: `'garbage://evil.com'` → `false`.
+   l. `test_compound_scheme_accepted`:
+      `'pkg+https://fakepkg.com'` → `'fakepkg.com'` (`+` is valid).
 
-   k. `test_mid_token_colon_slash_slash_rejected`:
-      Input: `'evil.com://junk'` → `false`.
-      (No accepted scheme at start → falls through to the `strpos` catch.)
+   m. `test_hyphen_scheme_accepted`:
+      `'git-ssh://host.com'` → `'host.com'` (`-` is valid).
 
-   l. `test_http_scheme_still_accepted` (regression guard):
-      Input: `'http://evil.com'` → `'evil.com'`. Assert unchanged.
+   n. `test_dot_scheme_accepted`:
+      `'a.b://host.com'` → `'host.com'` (`.` is valid).
 
-   m. `test_https_scheme_still_accepted` (regression guard):
-      Input: `'https://evil.com'` → `'evil.com'`. Assert unchanged.
+   o. `test_telnet_still_accepted`:
+      `'telnet://host.com'` → `'host.com'` (NOT rejected by Phase 2; valid scheme).
 
-   n. `test_ftp_scheme_still_accepted` (regression guard):
-      Input: `'ftp://evil.com'` → `'evil.com'`. Assert unchanged.
+   p. `test_invalid_digit_start_rejected`:
+      `'123://evil.com'` → `false`.
+      Before-state comment: "Phase 1 oracle returned 'evil.com'."
 
-   o. `test_no_scheme_still_unchanged` (regression guard):
-      Input: `'evil.com'` → `'evil.com'`. Assert unchanged.
+   q. `test_invalid_empty_scheme_rejected`:
+      `'://evil.com'` → `false`.
+      Before-state comment: "Phase 1 oracle returned 'evil.com'."
+
+   r. `test_invalid_special_chars_rejected`:
+      `'!!bad://evil.com'` → `false`.
+
+   Note: test j (`test_mid_token_valid_scheme_current_behavior`, `evil.com://junk` → `'junk'`)
+   does NOT need to change — Phase 2 also returns `'junk'` for this case (valid scheme).
+   Leave it as-is to document the edge case.
 
 4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
-5. RUN `vendor/bin/phpunit` → green.
-6. RUN `python -m pytest` → unchanged.
+5. RUN `vendor/bin/phpunit` → green (updated + new tests pass).
+6. RUN `python -m pytest` → unchanged pass count.
 7. RUN `ruff check . && ruff format .` → clean.
 
 CONSTRAINTS
 - Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and `tests/php/`.
-- Do NOT modify any Python file, any CI YAML, or `pfb_unbound.py`.
-- The ADR-21 `||`/`@@||` guard (inserted at ~line 9754) is NOT touched.
-- `pfb_filter()` gate (downstream of the scheme strip, at ~line 9757) is NOT changed.
-- PHP 8.3; tabs; `str_starts_with()` for the scheme anchoring.
-- PHPUnit tests: `void` return type; typed; before-state comment/assertion preserved
-  for every case that changes behavior (Phase 1 oracle before-state).
+- Do NOT modify `pfb_unbound.py`, CI YAML, or any other file.
+- The ADR-21 `||`/`@@||` guard is NOT touched.
+- `pfb_filter()` (downstream) is NOT changed.
+- **ANY valid RFC 3986 scheme must continue to work.** Do NOT add a whitelist. The
+  regex `^[a-zA-Z][a-zA-Z0-9+\-.]*$` is the complete check — nothing more.
+- PHP tabs; PHP 8.3; no `die()`/`exit()`.
+- All new PHPUnit tests: `void` return type; typed; before-state comment on changed cases.
 
 VERIFICATION (must all pass before the phase is done)
 - `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
-- `vendor/bin/phpunit` → green (all regression guards + new tightened cases).
+- `vendor/bin/phpunit` → green (all updated oracle tests + regression guards).
 - `python -m pytest` → unchanged pass count.
 - `ruff check . && ruff format .` → clean.
 - `git diff origin/devel...HEAD` shows ONLY:
-  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and files under `tests/php/`.
-  (Plus Phase 1 files.)
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and `tests/php/`. (Plus Phase 1 files.)
 
 EXPECTED RESULT
-`pfb_dnsbl_strip_scheme()` returns `false` for non-http(s)/ftp schemes and mid-token
-`://`. The download loop skips + logs such lines. `http://`, `https://`, `ftp://`,
-and scheme-free lines produce the same output as before. §4 requirements §1–§9 all
-proven by PHPUnit.
+`pfb_dnsbl_strip_scheme()` accepts any valid RFC 3986 scheme (unchanged behavior) and
+returns `false` only when the text before `://` is not a valid scheme. The caller skips
++ logs such lines. All §4 requirements §1–§12 proven by PHPUnit.
 
 COMMIT (single)
-    pfblockerng: tighten pfb_dnsbl_strip_scheme() — anchor scheme (ADR-22 P2)
+    pfblockerng: validate RFC 3986 scheme in pfb_dnsbl_strip_scheme() (ADR-22 P2)
 Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
 
 HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt`
 (plain .txt)
-Record: the final function body (5 lines); the call site update (4 lines); the PHPUnit
-test class name + all test method names; `php -l`/PHPUnit/`python -m pytest` outcome;
-any edge case found; go-ahead for Phase 3.
+Record: final function body (8 lines); call site update (4 lines); PHPUnit test class
+name + all test method names; `php -l`/PHPUnit/`python -m pytest` outcome; any edge case
+found during implementation; go-ahead for Phase 3.
