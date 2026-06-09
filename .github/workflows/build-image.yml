@@ -230,8 +230,8 @@ jobs:
         # pushes the new tag. The source tag is left untouched (snapshot kept).
         env:
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           sh scripts/image-upgrade.sh \
@@ -251,8 +251,8 @@ jobs:
         # the verify job round-trip it.
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
@@ -319,8 +319,8 @@ jobs:
       - name: Pull the freshly published image from private GHCR
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \

@@ -280,8 +280,8 @@ jobs:
         id: digest
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
