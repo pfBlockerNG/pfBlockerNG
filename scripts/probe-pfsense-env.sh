@@ -26,24 +26,26 @@ date
 sep "OS IDENTITY (uname / sysctl)"
 uname -a
 printf '\nOS fields pkg uses for URL variable expansion:\n'
-printf '  ${OSNAME}:         %s\n' "$(uname -s)"
-printf '  ${RELEASE}:        %s\n' "$(uname -r)"
-printf '  ${VERSION_MAJOR}:  %s\n' "$(uname -r | cut -d. -f1)"
-printf '  ${VERSION_MINOR}:  %s\n' "$(uname -r | cut -d. -f2 | cut -d- -f1)"
-printf '  ${ARCH}:           %s\n' "$(uname -m)"
+# \${VAR} labels are intentionally literal — these show pkg's variable names.
+printf "  \${OSNAME}:         %s\n" "$(uname -s)"
+printf "  \${RELEASE}:        %s\n" "$(uname -r)"
+printf "  \${VERSION_MAJOR}:  %s\n" "$(uname -r | cut -d. -f1)"
+printf "  \${VERSION_MINOR}:  %s\n" "$(uname -r | cut -d. -f2 | cut -d- -f1)"
+printf "  \${ARCH}:           %s\n" "$(uname -m)"
 printf '\nsysctl kern.*:\n'
 sysctl kern.ostype kern.osrelease kern.osrevision kern.version 2>/dev/null
 
 # ── 3. pkg built-in variable values ─────────────────────────────────────────
 sep "PKG BUILT-IN VARIABLES"
-printf '  ${ABI}:       %s\n' "$(pkg config ABI 2>/dev/null || echo 'ERROR')"
-printf '  ${OSVERSION}: %s\n' "$(pkg config OSVERSION 2>/dev/null || echo 'not supported')"
+printf "  \${ABI}:       %s\n" "$(pkg config ABI 2>/dev/null || echo 'ERROR')"
+printf "  \${OSVERSION}: %s\n" "$(pkg config OSVERSION 2>/dev/null || echo 'not supported')"
 
 sub "pkg -vv (full effective configuration)"
 pkg -vv 2>/dev/null || echo "pkg -vv failed"
 
 # ── 4. pfSense product identity (PHP globals) ────────────────────────────────
 sep "PFSENSE PRODUCT IDENTITY (globals.inc)"
+# shellcheck disable=SC2016  # PHP variables ($g, $k, $v) must not expand in shell
 php -r '
 require_once("/etc/inc/globals.inc");
 $keys = [
@@ -58,6 +60,7 @@ foreach ($keys as $k) {
 ' 2>/dev/null || echo "PHP globals read failed"
 
 sub "HTTP_USER_AGENT pkg will send (product_label/product_version[:uniqueid])"
+# shellcheck disable=SC2016  # PHP variables ($env) must not expand in shell
 php -r '
 require_once("/etc/inc/globals.inc");
 require_once("/etc/inc/pkg-utils.inc");
