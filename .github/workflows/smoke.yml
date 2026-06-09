@@ -52,6 +52,10 @@ on:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
         default: "smoke"
+      smoke_nightly_live_url:
+        description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pfblockerng.github.io/pkg/nightly). Blank -> SKIP."
+        required: false
+        default: ""
   workflow_call:
     inputs:
       image_ref:
@@ -69,6 +73,11 @@ on:
         required: false
         type: string
         default: "smoke"
+      smoke_nightly_live_url:
+        description: "Live nightly Pages base URL for test_install_from_live_nightly_url. Blank -> SKIP."
+        required: false
+        type: string
+        default: ""
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -303,6 +312,9 @@ jobs:
           # The builder-produced -nightly .pkg (set above for the `repo` marker; the
           # nightly cases SKIP when unset). Propagated via $GITHUB_ENV from that step.
           SMOKE_NIGHTLY_PKG: ${{ env.SMOKE_NIGHTLY_PKG }}
+          # Live nightly Pages URL for test_install_from_live_nightly_url (ADR-18 §7).
+          # Unset (blank) -> the test SKIPS; set to .../nightly to run it post-deploy.
+          SMOKE_NIGHTLY_LIVE_URL: ${{ inputs.smoke_nightly_live_url }}
           # Turn on the in-test hermetic egress block (after deploy, see fixture).
           SMOKE_BLOCK_EGRESS: "1"
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
