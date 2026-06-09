@@ -97,6 +97,16 @@
    (`pfSense-pkg-pfBlockerNG-NIGHTLY`, dated version, `conflicts` with the release
    names) and a `nightly` channel in `add-repo.sh`. This ADR **reads** latest versions
    from those repos via `pkg`; it does not change the repo or the builder.
+   **ADR-20** (**Proposed**, 2026-06-09) supersedes ADR-17's single-ABI catalog model:
+   it splits the catalog into `ce/${ABI}/` and `plus/${ABI}/` subtrees and updates
+   `add-repo.sh` to auto-detect CE vs Plus (via `globals.plus.inc`) and write a
+   variant-correct static URL. **Impact on this ADR:** the `pkg rquery -r <ourrepo>`
+   invocation in §2 "Read latest" uses the conf section name written by `add-repo.sh`
+   (e.g. `pfblockerng-devel`); ADR-20 Phase 4 determines whether that name changes to
+   include the variant (e.g. `pfblockerng-ce-devel`) or stays unchanged with only the
+   URL differing. If the name changes, ADR-19 Phase-1 kill-gate must be re-validated
+   against the variant-correct repo name. ADR-20's Phase-7 handoff records the
+   authoritative conf name and whether this ADR's §2 / Phase-1 are affected.
 
 ### Premise to falsify cheaply (the ADR-01 guard)
 
@@ -145,7 +155,7 @@ Netgate-bound by design (the ceiling, §1.3).
 | **Background check** | Piggyback the existing `pfblockerng.php cron` path (~daily). Writes a cache file under `/var/db/pfblockerng/` (channel, installed, latest, last-checked, last-notified) — the page reads the cache; "Check now" forces a refresh. Mirrors pfSense's `version_cache_file` pattern. |
 | **Page / tab** | New `pfblockerng_software.php`; tab label **"Software"** added to every page's `$tab_array[]`; new `match[]` line in `pfblockerng.priv.inc`. Shows channel, installed-vs-latest, last-checked, the notify knob, and the action buttons. |
 | **Update now** | Same-channel `pkg upgrade -y <currentpkg>` via the existing live-terminal-output mechanic (reuse `pfblockerng_update.php`'s streaming pattern). **No cross-channel install.** |
-| **Repo bootstrap** | Button → `scripts/add-repo.sh <current-channel>` (writes the conf for the channel the box is already on + `pkg update`). A convenience/repair; the conf usually already exists (ADR-17 install path). |
+| **Repo bootstrap** | Button → `scripts/add-repo.sh <current-channel>` (writes the conf for the channel the box is already on + `pkg update`). A convenience/repair; the conf usually already exists (ADR-17 install path). ADR-20 adds CE/Plus auto-detection to `add-repo.sh`; no variant argument is required — the script detects the variant from `globals.plus.inc`. The "Bootstrap repo" button invocation is unchanged (channel only). |
 | **Helper seam (testability)** | **Pure** functions take strings — `pfb_channel_from_pkgname($name)`, `pfb_update_available($installed, $latest)`, `pfb_notify_default_for_channel($channel)`, `pfb_should_notify($cur, $last_notified, $available, $knob, $channel)` — fully PHPUnit-tested. A **thin** `pfb_pkg_*()` IO wrapper isolates the actual `pkg` shellout (covered by live smoke, not unit). |
 
 ### Semantics that MUST be preserved (the contract — pin with tests with the change)
@@ -212,6 +222,12 @@ Netgate-bound by design (the ceiling, §1.3).
 - **Couples to ADR-18 for nightly** — until ADR-18 lands, the nightly channel is
   detectable in code but has no live repo; the nightly path is unit-tested and
   smoke-deferred.
+- **Couples to ADR-20 for variant-correct repo access.** ADR-20 (Proposed) splits the
+  catalog into `ce/${ABI}/` and `plus/${ABI}/` subtrees. After ADR-20 Phase 4 lands,
+  `add-repo.sh` writes a variant-specific URL; the `pkg rquery -r <ourrepo>` call in
+  Phase-1 must target the variant-correct repo. If ADR-20 changes the conf section
+  name (e.g. `pfblockerng-ce-devel`), this ADR's Phase-1 kill-gate must be re-run
+  against the new name. ADR-20 Phase-7 resolves this dependency explicitly.
 - **`pkg` shellout from a web request / cron** must respect pkg locking and DNS
   availability (mirror `get_system_pkg_version`'s `get_dnsavailable()` guard) or it
   stalls the page/cron.

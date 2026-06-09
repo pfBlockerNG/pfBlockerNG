@@ -1,0 +1,136 @@
+================================================================================
+PHASE 5 PROMPT — Dynamic routing layer (Cloudflare Worker)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §2 "Dynamic routing (primary)", §1.3 premise, §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 5 of
+ADR-20. **This phase is CONDITIONED on Phase 1's USER_AGENT_VISIBLE verdict.**
+If Phase 1 returned REJECT, do NOT implement this phase — record that skip in
+`RESULTS/05_Results.txt` and proceed to Phase 6. If GO, implement the Worker.
+The Worker lives outside this repo (a separate Cloudflare project / Workers script);
+this repo contributes only documentation and any config/wrangler files committed here.
+
+WHY THIS PHASE EXISTS
+With only static URLs from Phase 4, a CE conf on a Plus box fails dep-check (safe,
+but requires a manual re-run of `add-repo.sh`). The routing layer eliminates that
+manual step: a stale CE conf on a Plus box fetches the routing URL → the Worker
+reads `User-Agent` → sees "Plus" → proxies/redirects to the Plus catalog →
+dep-correct package returned. The CE→Plus migration becomes transparent at the
+pkg-fetch level. The Worker is also the canonical URL clients should configure
+going forward (a single URL that never changes even when the catalog layout evolves).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/04_Results.txt — confirm the
+  static-URL conf format; the exact `${VARIANT}/${ABI}` URL written by `add-repo.sh`.
+  Also re-read Phase 1 handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/01_Results.txt — USER_AGENT_VISIBLE
+  verdict. If REJECT, STOP implementation here and write the skip handoff.
+  If either file is missing, STOP and report.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §1.3 (UA strings), §2 "Dynamic
+  routing (primary)", §3 negative risks (Worker failure mode), §7 reject criteria.
+- Cloudflare Workers documentation (read the live docs — the Worker API surface for
+  `Request.headers.get()`, `fetch()` proxying, and 302 redirect is stable).
+- CLAUDE.md — "Branches and releases" (no cross-repo secrets; Worker deployment is
+  external to the repo pipeline), §5 constraints.
+
+ACTION PLAN (ONLY if Phase 1 USER_AGENT_VISIBLE = GO)
+1. DESIGN the Worker logic (stateless, no KV):
+   ```javascript
+   export default {
+     async fetch(request) {
+       const ua = request.headers.get('User-Agent') ?? '';
+       const variant = ua.includes('Plus') ? 'plus' : 'ce';
+       // Rewrite the URL: insert variant/ before the ABI segment
+       // Input: https://pkg.pfblockerng.io/FreeBSD:16:amd64/...
+       // Output: https://pfblockerng.github.io/pkg/plus/FreeBSD:16:amd64/...
+       const url = new URL(request.url);
+       const newUrl = `https://pfblockerng.github.io/pkg/${variant}${url.pathname}`;
+       return fetch(newUrl, { headers: request.headers });
+     }
+   };
+   ```
+   The input URL structure is the routing URL with the `${ABI}` prefix already
+   expanded client-side (pkg expands `${ABI}` before making the HTTPS request).
+   The Worker rewrites `/<ABI>/...` → `/ce/<ABI>/...` or `/plus/<ABI>/...`.
+
+2. VERIFY the URL rewrite logic handles ALL pkg fetch paths:
+   - `meta.conf` → `https://pfblockerng.github.io/pkg/ce/FreeBSD:15:amd64/meta.conf`
+   - `packagesite.yaml.pkg` → same path under the variant subdir
+   - Individual `.pkg` files → same
+   The `${ABI}` segment is always the first path component after the root (pkg's
+   `url:` in the conf is `https://pkg.pfblockerng.io/${ABI}` — the Worker sees the
+   ABI in `url.pathname`).
+
+3. DEPLOY the Worker:
+   - Create a minimal `wrangler.toml` in a `infra/worker/` directory in this repo
+     (dev tooling, not shipped in `src/`). Record the canonical URL
+     (e.g. `pkg.pfblockerng.io` or `pfblockerng-pkg-router.YOUR-ACCOUNT.workers.dev`).
+   - Deploy via `wrangler deploy` from the maintainer's account (this is an infra
+     action outside CI — document it as a maintainer step, not a CI step, because
+     the Worker is not rebuilt on every merge).
+   - Confirm the Worker is live: `curl -A 'pfSense/2.8.1-RELEASE' -I <routing-url>/
+     FreeBSD:15:amd64/meta.conf` → 200 or redirect to the CE path; `curl -A 'Netgate
+     pfSense Plus/26.03.1-RELEASE' -I <routing-url>/FreeBSD:16:amd64/meta.conf` →
+     200 or redirect to the Plus path.
+
+4. SMOKE-VERIFY from CE and Plus boxes (if available):
+   - Write a test conf pointing `pfblockerng-test` to the routing URL; run `pkg update
+     -r pfblockerng-test -d` (verbose). Assert the catalog fetched is the CE one (CE
+     box) or Plus one (Plus box) by inspecting the `meta.conf` package name list.
+   - If live boxes are not available, document that this smoke is in the Phase 6
+     live-VM `repo`-marked cases and proceed.
+
+5. UPDATE `scripts/add-repo.sh` comment (one line) and `README.md` to document the
+   routing URL as the preferred conf URL (the static `pfblockerng.github.io/pkg/${VARIANT}/
+   ${ABI}` URL from Phase 4 is the fallback for when the Worker is down).
+
+CONSTRAINTS (ONLY if proceeding)
+- Worker is deployed from the MAINTAINER'S account; it is NOT a CI deploy. Document
+  the `wrangler deploy` step as a maintainer infra action.
+- The Worker must be STATELESS — no KV, no Durable Objects, no storage. Failure mode:
+  5xx → pkg error, no silent wrong install.
+- The Worker script lives in `infra/worker/` (dev tooling), NOT in `src/`.
+- Do NOT change `add-repo.sh` to write the routing URL instead of the static URL;
+  the static URL remains the primary written value in Phase 4. The routing URL is the
+  canonical URL in documentation, but the conf written by `add-repo.sh` is the static
+  variant-specific one (simpler, no single-point-of-failure).
+- If Cloudflare Worker proves impractical (account requirements, domain setup, etc.),
+  document an alternative (nginx on a VPS, Netlify redirect, GitHub Actions Pages
+  `_redirects`) with the same UA-routing logic in `05_Results.txt` and implement the
+  simplest viable option.
+
+VERIFICATION (ONLY if proceeding)
+- `curl -A 'pfSense/2.8.1-RELEASE' <routing-url>/FreeBSD:15:amd64/meta.conf` →
+  returns the CE meta.conf (assert package name in the response body).
+- `curl -A 'Netgate pfSense Plus/26.03.1-RELEASE' <routing-url>/FreeBSD:16:amd64/
+  meta.conf` → returns the Plus meta.conf.
+- Worker failure mode: bring the Worker offline (disable it in the Cloudflare
+  dashboard); `pkg update` times out or returns 5xx; no package is installed or
+  corrupted (pkg errors, user sees the error).
+- `python -m pytest` → unchanged.
+- `ruff check . && ruff format .` → clean (any Python helper files).
+
+EXPECTED RESULT
+A live Cloudflare Worker at a canonical routing URL that reads `User-Agent` and
+proxies CE vs Plus requests to the correct variant subtree. Documentation updated
+to reference the routing URL as the preferred endpoint.
+
+COMMIT (single, if proceeding)
+    infra: Cloudflare Worker for CE/Plus pkg routing by User-Agent (ADR-20 P5)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
+
+SKIP HANDOFF (if Phase 1 REJECT)
+Write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/05_Results.txt` with:
+`PHASE_5_STATUS: SKIPPED — Phase 1 USER_AGENT_VISIBLE = REJECT`
+`REASON: UA stripped/replaced in CDN path; static variant URL (Phase 4) is the sole
+mechanism; meta-package option noted as next-ADR scope per §2 "Meta-package".`
+Then proceed to Phase 6.
+
+HANDOFF (if proceeding) — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/05_Results.txt`
+Record: the routing URL; the Worker script (or infra/worker/ path); curl verification
+results (exact UA strings sent + responses); smoke-verify outcome (if done); Worker
+failure mode test result; any alternative to Cloudflare used and why; go-ahead for Phase 6.

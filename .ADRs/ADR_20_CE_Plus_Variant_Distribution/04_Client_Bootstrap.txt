@@ -1,0 +1,138 @@
+================================================================================
+PHASE 4 PROMPT — add-repo.sh CE/Plus auto-detection + static variant URL
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §2 "add-repo.sh (fallback)", §1.4, §4, §5 constraints FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 4 of
+ADR-20. This phase modifies `scripts/add-repo.sh` (the client bootstrap) and extends
+`tests/test_add_repo_conf.py`. It lands as a rebase-only PR against `devel`.
+Use the existing `adr/20-ce-plus-variant-distribution` worktree.
+This phase is the last one that is unconditional (Phase 5 is conditioned on Phase 1's
+USER_AGENT_VISIBLE verdict). After this phase, the client bootstrap is correct for
+both CE and Plus regardless of whether the routing layer exists.
+
+WHY THIS PHASE EXISTS
+`add-repo.sh` currently writes a static URL of the form
+`pfblockerng.github.io/pkg/${ABI}` (the ADR-17 CE-only path). A Plus user running
+this script would get a CE-catalog URL, fetch CE packages, and hit a dep error. The
+fix is auto-detection of the variant using `globals.plus.inc` (already verified
+reliable by the live probe, 2026-06-09) and writing the variant-correct static URL
+`pfblockerng.github.io/pkg/${VARIANT}/${ABI}`. This makes `add-repo.sh` the correct
+bootstrap mechanism even if the routing layer (Phase 5) is never built or goes down.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/03_Results.txt — confirm the
+  catalog subtrees are built correctly; the exact URL paths used in the catalog;
+  the legacy path status. If missing, Phase 3 is not complete; STOP and report.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §1.4 (globals.plus.inc probe
+  findings), §2 "add-repo.sh (fallback)", §4, §5 constraints.
+- scripts/add-repo.sh — the current script: channel arg, conf template, ABI
+  detection, how the conf file is written, what `pkg update` command is run.
+- tests/test_add_repo_conf.py — existing tests to extend (ADR-17 drove this file).
+- scripts/build-repo.sh — the `--print-conf` path: check whether it must be updated
+  to match the new URL structure for documentation consistency.
+- CLAUDE.md — "Shell" (POSIX sh, quote expansions, absolute paths for add-ons,
+  ShellCheck), "Test coverage" (branch coverage + before-state asserts).
+
+ACTION PLAN (ordered — tests capture intent before the script edit)
+1. PLAN the detection logic (write it down before touching the file):
+   ```sh
+   if [ -f /etc/inc/globals.plus.inc ]; then
+       VARIANT="plus"
+   else
+       VARIANT="ce"
+   fi
+   ```
+   The conf URL becomes:
+   `https://pfblockerng.github.io/pkg/${VARIANT}/${ABI}`
+   (replace the current `https://pfblockerng.github.io/pkg/${ABI}` pattern — exact
+   variable name may differ; read the script first).
+   The channel arg (`devel|stable|nightly`) is unchanged — it is orthogonal to variant.
+   The repo name in the conf file (`pfblockerng-devel`, `pfblockerng`, `pfblockerng-nightly`)
+   is unchanged.
+
+2. EXTEND `tests/test_add_repo_conf.py` BEFORE editing the script:
+   - `test_ce_detection_writes_ce_url`: stub `globals.plus.inc` as ABSENT (e.g. mock
+     the filesystem check or pass a temp dir without the file); run `add-repo.sh devel`;
+     assert the written conf URL contains `/ce/` and does NOT contain `/plus/`.
+     Before-state: assert the conf either doesn't exist or contains the OLD URL pattern
+     (no `/ce/` prefix yet).
+   - `test_plus_detection_writes_plus_url`: stub `globals.plus.inc` as PRESENT; run
+     `add-repo.sh devel`; assert the written conf URL contains `/plus/` and does NOT
+     contain `/ce/`.
+   - `test_ce_and_plus_are_mutually_exclusive`: run both detection cases in the same
+     test run; assert the URLs are different strings (prove the fork, not just the
+     individual outcomes).
+   - `test_channel_arg_unchanged_for_both_variants`: run CE detection with `stable` and
+     Plus detection with `nightly`; assert the repo name / conf section name in each
+     written conf matches the channel (unchanged from before), independent of the variant.
+   All tests must be typed and assert effective state (written conf contents), not
+   just exit codes.
+   Note: the test must be able to override the `globals.plus.inc` path — either by
+   setting an env var the script reads, or by passing a `--root` argument to the
+   script, or by using a temp directory. Read the script first to understand how to
+   mock the filesystem check cleanly. If there is no existing mechanism, add a
+   `PFBLOCKERNG_ROOT` env var override (checked ONLY in tests, defaulting to `/`).
+
+3. EDIT `scripts/add-repo.sh`:
+   - Add the variant detection block (§1 of the plan above) near the top, after the
+     channel arg is parsed.
+   - Update the conf URL template to include `${VARIANT}/`.
+   - If `PFBLOCKERNG_ROOT` override was added for tests, guard it:
+     `PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"` and check
+     `"${PFBLOCKERNG_ROOT}/etc/inc/globals.plus.inc"`.
+   - Do NOT add a user-supplied variant argument — auto-detection is the only mechanism.
+   - Keep the channel arg unchanged.
+   - Do NOT remove the legacy `${ABI}/` path from the catalog (that's Phase 3's
+     responsibility to maintain; the script simply writes the NEW variant URL).
+
+4. UPDATE `scripts/build-repo.sh --print-conf` comment or output: if it documents the
+   URL pattern in a comment, update it to reflect the new `${VARIANT}/${ABI}` structure.
+   The actual conf written by `add-repo.sh` is the canonical truth; `build-repo.sh`
+   is documentation. Do NOT change the conf template test in `test_add_repo_conf.py`
+   (which pins byte-identity across both generators, ADR-17) — update the template to
+   include `${VARIANT}/` there too.
+
+5. RUN ShellCheck and `sh -n` on the modified scripts.
+
+CONSTRAINTS
+- POSIX sh only; no bash-isms (`[[`, arrays, etc.); quote all expansions including
+  `"${VARIANT}"` and `"${ABI}"`.
+- The `globals.plus.inc` check path must be `/etc/inc/globals.plus.inc` on a live box
+  (not `/usr/local/etc/…` — confirmed by probe output, §1.4 of the ADR).
+- The channel arg (`devel|stable|nightly`) remains the ONLY user-supplied argument.
+  Do NOT add a `--variant` user argument.
+- Do NOT touch `build-repo-portable.py`, `build-pkg-portable.py`, or any CI YAML —
+  those are Phase 2/3.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` → green (including new tests).
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+- `sh -n scripts/add-repo.sh` → no syntax error.
+- `shellcheck scripts/add-repo.sh` → clean (or existing suppressions only).
+- `sh -n scripts/build-repo.sh` → no syntax error.
+- `shellcheck scripts/build-repo.sh` → clean.
+- Manual check: run `add-repo.sh devel` in a temp env where `globals.plus.inc` is
+  absent → conf contains `/ce/FreeBSD:…`; run with it present → conf contains
+  `/plus/FreeBSD:…`.
+
+EXPECTED RESULT
+`add-repo.sh` auto-detects CE vs Plus and writes the variant-correct static URL
+without user input. Tests prove both detection branches and their mutual exclusion.
+The script is the authoritative bootstrap whether or not the routing layer exists.
+
+COMMIT (single)
+    dev: add-repo.sh CE/Plus auto-detection + static variant URL (ADR-20 P4)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/04_Results.txt`
+Record: the exact detection logic added (the `if [ -f ... ]` block); the final conf
+URL template; the `PFBLOCKERNG_ROOT` override mechanism (if added) and its guard;
+the test names added; the ShellCheck/sh-n outcome; any deviation from the plan (e.g.
+if the conf name was changed to include the variant); go-ahead for Phase 5 (or note
+if Phase 5 is SKIPPED per Phase 1's REJECT verdict and Phase 6 should follow directly).

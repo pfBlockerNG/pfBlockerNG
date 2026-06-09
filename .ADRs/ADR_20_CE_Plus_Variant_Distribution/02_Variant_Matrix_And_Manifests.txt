@@ -1,0 +1,128 @@
+================================================================================
+PHASE 2 PROMPT — ci-metadata variant field + variant-aware manifest generation
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §2 "ci-metadata" and "Manifest deps" rows, §4, §5 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 2 of
+ADR-20. This phase has two landing points: a PR against `ci-metadata` (the orphan
+branch) for the `variant` field, and a PR against `devel` (via the worktree) for
+the `build-pkg-portable.py` extension + tests. Both must land before Phase 3.
+Use the existing `adr/20-ce-plus-variant-distribution` worktree.
+
+WHY THIS PHASE EXISTS
+The manifest deps (`php83` vs `php85`, `py311` or whatever the Plus Python becomes)
+are the single guard against a wrong-variant package silently installing. They must
+be injected at build time from a machine-readable source — not hardcoded — so that
+when CE or Plus bumps their PHP/Python version, updating `ci-metadata` is the only
+change needed. Phase 1's verdicts do not affect this phase; proceed regardless.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/01_Results.txt — confirm
+  USER_AGENT_VISIBLE (GO or REJECT) and GLOBALS_PLUS_INC (GO). If missing, Phase 1
+  is not complete; STOP and report.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §2 "ci-metadata", "Manifest
+  deps", "Semantics that MUST be preserved", §4 requirements, §5 constraints.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md — §2 decision table on `ci-metadata` shape and
+  `read-version-matrix.sh` interface; RESULTS/02_Results.txt for the existing
+  `supported-versions.json` field set.
+- scripts/read-version-matrix.sh — current interface, option parsing, output format.
+- .github/actions/read-version-matrix/action.yml — the composite action that wraps
+  the script; its `outputs` block.
+- scripts/build-pkg-portable.py — current manifest generation; how deps are declared
+  today; the Makefile-derived field names.
+- .github/workflows/build-pkg-linux.yml — how `build-pkg-portable.py` is invoked
+  and how it receives matrix values from `read-version-matrix.sh`.
+- tests/test_build_pkg_portable.py — existing tests to extend.
+- CLAUDE.md — "Updating documentation" (ci-metadata PR flow), §5 constraints.
+
+ACTION PLAN (ordered — tests before wiring)
+1. OPEN the `ci-metadata` PR (separate from the devel PR):
+   - Fetch the `ci-metadata` branch: `git fetch origin ci-metadata`.
+   - In the `ci-metadata` worktree (create one if not present), edit
+     `supported-versions.json`: add `"variant": "CE"` to each CE entry (currently
+     the 2.8.x row) and `"variant": "Plus"` to each Plus entry (currently the 25.03
+     row — note: a separate task corrects this to 26.03 with FreeBSD 16; this phase
+     adds the `variant` field to whatever entries currently exist).
+   - Validate the JSON is well-formed (`python -m json.tool supported-versions.json`).
+   - Commit: `ci-metadata: add variant field (CE/Plus) to supported-versions.json
+     (ADR-20 P2)` and open a PR against `ci-metadata`.
+
+2. EXTEND `read-version-matrix.sh` with a `--variant CE|Plus` filter:
+   - Add a `--variant` option that, when supplied, filters the output to only entries
+     whose `variant` field matches the given value (case-insensitive).
+   - Without `--variant`, behaviour is UNCHANGED (all entries returned, backward-
+     compatible).
+   - Emit `variant` in the per-entry JSON output so callers can read it.
+   - Update `.github/actions/read-version-matrix/action.yml` to accept a `variant`
+     input and pass it through to the script; expose `variant` in `outputs`.
+   - ShellCheck + `sh -n` clean.
+
+3. EXTEND `build-pkg-portable.py` with `--variant CE|Plus`:
+   - When `--variant` is supplied, resolve the PHP dep as `php{php_version_nodot}`
+     (e.g. `php_version: "8.3"` → strip dot → `php83`) and the Python dep as
+     `{py_flavor}` (e.g. `py311`). Emit both as `RUN_DEPENDS` entries in the manifest.
+   - When `--variant` is absent, behaviour is UNCHANGED (existing dep logic preserved,
+     no regression for the current CI invocation).
+   - Add a helper `_resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]`
+     (pure function, takes strings, returns dep list) — testable without invoking the
+     full build.
+
+4. EXTEND `build-pkg-linux.yml`: add `--variant` to the `build-pkg-portable.py`
+   invocation, reading the value from the matrix (the composite action now emits it).
+   The build matrix strategy loop passes it through. Existing behaviour is unchanged
+   for any matrix entry that ran before (backward-compatible: if `variant` is absent
+   from an old matrix entry, the flag is omitted and old dep logic applies).
+
+5. WRITE tests in `tests/test_build_pkg_portable.py` (extend existing file):
+   - `test_ce_manifest_has_php83_dep`: call `_resolve_variant_deps(php_version="8.3",
+     py_flavor="py311")` → list contains `php83`; does NOT contain `php85`.
+   - `test_plus_manifest_has_php85_dep`: call with `php_version="8.5", py_flavor="py311"`
+     → list contains `php85`; does NOT contain `php83`.
+   - `test_wrong_variant_dep_absent`: assert CE result lacks `php85`; Plus result lacks
+     `php83` (both sides of the mutual-exclusion; before-state: unfiltered old list
+     lacks both versioned names, after-state per variant has exactly the correct one).
+   - `test_no_variant_flag_unchanged`: invoking without `--variant` produces the same
+     dep list as the current baseline (no regression).
+   - Run on both the CE matrix entry values and the Plus matrix entry values from the
+     current `supported-versions.json`.
+   All tests must be typed (`mypy tests/`) and follow the CLAUDE.md branch-coverage rule.
+
+CONSTRAINTS
+- Python 3.11+, 4-space indent, type hints on new functions, no bare `except`.
+- POSIX sh for `read-version-matrix.sh` changes; quote all expansions.
+- Do NOT hardcode `php83`/`php85` in the script — derive from the `php_version` field
+  in `ci-metadata`. The field drives the dep name; updating the field is the only
+  change needed when PHP bumps.
+- The `ci-metadata` PR is SEPARATE from the devel PR. Do not mix them.
+- Do NOT touch `build-repo-portable.py` or the publish pipeline — that is Phase 3.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` → green (all new tests pass; existing suite unchanged).
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+- `sh -n scripts/read-version-matrix.sh` → no syntax error.
+- `shellcheck scripts/read-version-matrix.sh` → clean (or existing suppressions only).
+- `python -m json.tool supported-versions.json` on the ci-metadata branch → valid.
+- Manually verify: `./scripts/read-version-matrix.sh --variant CE` returns only CE
+  entries; `--variant Plus` returns only Plus entries; no args returns all (as today).
+
+EXPECTED RESULT
+- `ci-metadata` PR open and green with the `variant` field on each entry.
+- `devel` PR open with: `read-version-matrix.sh --variant` filter + composite action
+  update + `build-pkg-portable.py --variant` + unit tests green.
+
+COMMIT (devel PR — single commit)
+    ci: variant-aware manifest deps (--variant CE|Plus) + ci-metadata variant field (ADR-20 P2)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
+Separate commit on `ci-metadata`: `ci-metadata: add variant field (ADR-20 P2)`.
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/02_Results.txt`
+Record: the `variant` field values added to `supported-versions.json`; the
+`read-version-matrix.sh --variant` interface (exact option name, output shape); the
+`_resolve_variant_deps` signature; which tests were added (names + file); both PR
+numbers (ci-metadata + devel); any dep-name derivation rule (e.g. `php_version "8.3"
+→ strip dot → php83`); go-ahead for Phase 3.

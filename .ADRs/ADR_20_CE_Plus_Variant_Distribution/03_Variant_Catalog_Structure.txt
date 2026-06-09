@@ -1,0 +1,118 @@
+================================================================================
+PHASE 3 PROMPT — Variant catalog subtrees in the publish pipeline
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §2 "Catalog structure", §2 "Failure mode (wrong-variant conf)", §4, §5 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 3 of
+ADR-20. This phase touches `scripts/build-repo-portable.py` (this repo) and
+`pfBlockerNG/pkg publish.yml` (the separate `pfBlockerNG/pkg` repo). The devel-side
+change lands as a PR; the cross-repo change follows that repo's own flow.
+Use the existing `adr/20-ce-plus-variant-distribution` worktree.
+
+WHY THIS PHASE EXISTS
+Splitting manifests per variant (Phase 2) is useless without a catalog that serves
+each variant from a distinct URL path. This phase creates `ce/${ABI}/` and
+`plus/${ABI}/` subtrees in the published catalog so that `pkg` fetching from
+`pfblockerng.github.io/pkg/ce/FreeBSD:15:amd64/` gets only CE packages and
+`.../plus/FreeBSD:16:amd64/` gets only Plus packages. The legacy `${ABI}/` path
+(serving the CE build) is retained during the transition window.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/02_Results.txt — confirm both
+  PRs landed (ci-metadata variant field + devel manifest deps); the exact
+  `_resolve_variant_deps` signature and dep derivation rule; the `--variant`
+  interface. If missing, Phase 2 is not complete; STOP and report.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §2 "Catalog structure",
+  "Failure mode", §4 acceptance, §5 constraints.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md — §2 decision on catalog structure and
+  `build-repo-portable.py`; RESULTS/03_Results.txt for the existing generator
+  interface + URL layout.
+- scripts/build-repo-portable.py — current generator: how it discovers `.pkg`
+  files, how it builds `meta.conf`, `packagesite.yaml`, and the ABI-keyed layout.
+- tests/test_build_repo_portable.py — existing tests to extend.
+- pfBlockerNG/pkg publish.yml (read via GitHub MCP or `gh api`) — the current
+  publish workflow that builds the repo and deploys to Pages.
+- CLAUDE.md — §5 constraints (pure Python stdlib, no libpkg), "Branches and releases"
+  (cross-repo publish, repo-publish job, GitHub App auth).
+
+ACTION PLAN (ordered — tests before pipeline wiring)
+1. EXTEND `build-repo-portable.py` with `--variant CE|Plus`:
+   - When `--variant` is supplied, write the catalog under `<outdir>/<variant_lc>/${ABI}/`
+     (variant lowercased: `ce/` or `plus/`) instead of `<outdir>/${ABI}/`.
+   - When `--variant` is absent, behaviour is UNCHANGED (writes to `${ABI}/`
+     as today — the legacy path, the CE build during the transition window).
+   - The generator accepts only `.pkg` files matching the given variant (identified
+     by the `variant` field embedded in the filename or a `--pkg-list` argument that
+     lists the variant-specific pkgs). Design: add a `--pkg-list` option that accepts
+     an explicit list of `.pkg` paths to include, bypassing directory scan. This is
+     cleaner than encoding variant in the filename.
+   - Nightly likewise: `nightly/ce/${ABI}/` and `nightly/plus/${ABI}/`.
+
+2. WRITE tests in `tests/test_build_repo_portable.py` (extend existing file):
+   - `test_ce_catalog_under_ce_subdir`: call `build_repo(variant="CE", pkgs=[ce_pkg])`
+     → `meta.conf` exists at `ce/FreeBSD:15:amd64/meta.conf`; the packagesite contains
+     the CE pkg; `plus/` dir does NOT exist.
+   - `test_plus_catalog_under_plus_subdir`: call with `variant="Plus"` and a Plus pkg
+     → `meta.conf` at `plus/FreeBSD:16:amd64/meta.conf`; CE dir does NOT exist.
+   - `test_legacy_path_retained_for_ce`: call without `--variant` → `meta.conf` at
+     `FreeBSD:15:amd64/meta.conf` (unchanged legacy behaviour).
+   - `test_wrong_variant_pkg_excluded`: a CE pkg is NOT present in the `plus/` catalog
+     and a Plus pkg is NOT present in the `ce/` catalog (assert packagesite contents
+     by package name, not just path existence — this is the wrong-variant guard).
+   - Assert before-state (no `ce/` or `plus/` dir before the call) and after-state.
+   All tests typed; follow CLAUDE.md branch-coverage rule.
+
+3. UPDATE `pfBlockerNG/pkg publish.yml` (cross-repo PR):
+   - Run `build-pkg-portable.py` twice (once for CE, once for Plus) and
+     `build-repo-portable.py --variant CE` + `--variant Plus` to generate both
+     subtrees, plus the legacy `--variant` omitted run for the transition CE path.
+   - Pass the variant from the matrix (Phase 2 added `variant` to the matrix output).
+   - Deploy all three subtrees (ce/, plus/, legacy ABI/) in a single
+     `actions/deploy-pages` invocation (one deploy per run, not per variant).
+   - The cross-repo dispatch inputs from this repo's `release.yml` `repo-publish` job
+     remain compatible (the publish workflow now handles both variants internally).
+
+4. VERIFY the conf template in `scripts/build-repo.sh` (the `--print-conf` path, ADR-17
+   §3): if it hard-codes the `${ABI}` path without a `${VARIANT}/` prefix, note it —
+   Phase 4 (`add-repo.sh`) owns the conf URL; `build-repo.sh --print-conf` is used
+   for documentation. Update the comment in `build-repo.sh` to reference the
+   `ce/`/`plus/` structure, but do NOT change the conf template (Phase 4 owns that).
+
+CONSTRAINTS
+- Pure Python stdlib only in `build-repo-portable.py`; no libpkg.
+- The legacy `${ABI}/` path MUST still be generated (CE build, transition window) —
+  do NOT remove it. Verify it is present in the output and in the `test_legacy_path`
+  test.
+- Do NOT touch `add-repo.sh` — that is Phase 4.
+- Do NOT touch `scripts/build-pkg-portable.py` — Phase 2 owns that.
+- The `pfBlockerNG/pkg` repo change is a cross-repo PR; do NOT commit it to this repo.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` → green (all new tests pass; existing suite unchanged).
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+- Manually run `build-repo-portable.py --variant CE` and `--variant Plus` against
+  fixture `.pkg` files and confirm the catalog structure (`meta.conf` paths, package
+  names in the packagesite) is correct for each variant.
+- `pfBlockerNG/pkg publish.yml` PR is open and CI is green on that repo.
+
+EXPECTED RESULT
+- `devel` PR merged with variant-aware `build-repo-portable.py` + tests.
+- `pfBlockerNG/pkg` PR open (or merged) with the dual-variant publish pipeline.
+- `pfblockerng.github.io/pkg/ce/${ABI}/` and `.../plus/${ABI}/` will be live after
+  the publish workflow runs.
+
+COMMIT (devel PR — single commit)
+    ci: variant catalog subtrees (ce/ plus/) in build-repo-portable.py (ADR-20 P3)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/03_Results.txt`
+Record: the `build-repo-portable.py --variant` interface (exact option, output dir
+structure); the `--pkg-list` interface if added; the legacy path retention mechanism;
+the `pfBlockerNG/pkg publish.yml` PR number and CI status; the test names added;
+any catalog structure decisions (e.g. how nightly variant paths are named); go-ahead
+for Phase 4.
