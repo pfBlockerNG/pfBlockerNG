@@ -43,12 +43,15 @@ ACTION PLAN (ordered — tests before wiring)
 1. OPEN the `ci-metadata` PR (separate from the devel PR):
    - Fetch the `ci-metadata` branch: `git fetch origin ci-metadata`.
    - In the `ci-metadata` worktree (create one if not present), edit
-     `supported-versions.json`: add `"variant": "CE"` to each CE entry (currently
-     the 2.8.x row) and `"variant": "Plus"` to each Plus entry (currently the 25.03
-     row — note: a separate task corrects this to 26.03 with FreeBSD 16; this phase
-     adds the `variant` field to whatever entries currently exist).
+     `supported-versions.json`:
+     - Add `"variant": "CE"` to each CE entry (currently the 2.8.x row).
+     - Add `"variant": "Plus"` to each Plus entry (currently the 25.03 row — note: a
+       separate task corrects this to 26.03 with FreeBSD 16; this phase adds the
+       `variant` field to whatever entries currently exist).
+     - Add `"status": "active"` to each currently-supported entry. (Legacy entries,
+       if any, would get `"status": "legacy"` — but currently all entries are active.)
    - Validate the JSON is well-formed (`python -m json.tool supported-versions.json`).
-   - Commit: `ci-metadata: add variant field (CE/Plus) to supported-versions.json
+   - Commit: `ci-metadata: add variant + status fields to supported-versions.json
      (ADR-20 P2)` and open a PR against `ci-metadata`.
 
 2. EXTEND `read-version-matrix.sh` with a `--variant CE|Plus` filter:
@@ -129,8 +132,9 @@ Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
 Separate commit on `ci-metadata`: `ci-metadata: add variant field (ADR-20 P2)`.
 
 HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/02_Results.txt`
-Record: the `variant` field values added to `supported-versions.json`; the
-`read-version-matrix.sh --variant` interface (exact option name, output shape); the
-`_resolve_variant_deps` signature; which tests were added (names + file); both PR
-numbers (ci-metadata + devel); any dep-name derivation rule (e.g. `php_version "8.3"
-→ strip dot → php83`); go-ahead for Phase 3.
+Record: the `variant` and `status` field values added to `supported-versions.json`;
+the `read-version-matrix.sh --variant` interface (exact option name, output shape,
+whether it filters by `status: active` or returns all); the `_resolve_variant_deps`
+signature; which tests were added (names + file); both PR numbers (ci-metadata + devel);
+any dep-name derivation rule (e.g. `php_version "8.3" → strip dot → php83`);
+go-ahead for Phase 3.

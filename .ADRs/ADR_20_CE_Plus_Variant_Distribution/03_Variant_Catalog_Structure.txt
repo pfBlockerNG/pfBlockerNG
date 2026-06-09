@@ -1,8 +1,8 @@
 ================================================================================
-PHASE 3 PROMPT — Variant catalog subtrees in the publish pipeline
+PHASE 3 PROMPT — Version-keyed catalog dirs + routing manifest
 Target model: Claude Opus 4.8
 ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
-     (read §2 "Catalog structure", §2 "Failure mode (wrong-variant conf)", §4, §5 FIRST)
+     (read §2 "Catalog structure", "Routing manifest", §4, §5 FIRST)
 ================================================================================
 
 ROLE
@@ -14,27 +14,25 @@ Use the existing `adr/20-ce-plus-variant-distribution` worktree.
 
 WHY THIS PHASE EXISTS
 Splitting manifests per variant (Phase 2) is useless without a catalog that serves
-each variant from a distinct URL path. This phase creates `ce/${ABI}/` and
-`plus/${ABI}/` subtrees in the published catalog so that `pkg` fetching from
-`pfblockerng.github.io/pkg/ce/FreeBSD:15:amd64/` gets only CE packages and
-`.../plus/FreeBSD:16:amd64/` gets only Plus packages. The legacy `${ABI}/` path
-(serving the CE build) is retained during the transition window.
+each pfSense version from a distinct URL path. This phase creates version-keyed
+catalog dirs (`ce-2.8/${ABI}/`, `plus-26.03/${ABI}/`, etc.) on GitHub Pages and
+generates a `routing.json` manifest that maps pfSense UA patterns to those dirs.
+The Cloudflare Worker (Phase 5) fetches this manifest to route pkg requests; Phase 4's
+`add-repo.sh` writes the Worker URL into the conf. Together they let the conf be
+written once and never changed on pfSense upgrades.
 
-Note: the matrix may contain N CE + M Plus entries simultaneously (N, M ≥ 1) during
-version-transition windows. `build-repo-portable.py --variant CE` must handle ALL
-active CE entries in one pass — e.g. during a CE 2.8.x → 2.9.x transition it emits
-BOTH `ce/FreeBSD:15:amd64/` and `ce/FreeBSD:16:amd64/` subtrees. The catalog
-generator loops over all matching `.pkg` files; each (channel, ABI) pair becomes a
-distinct subtree automatically.
+The matrix may contain N CE + M Plus entries simultaneously (N, M ≥ 1) during
+version-transition windows. `build-repo-portable.py --catalog-name ce-2.8` handles
+one entry; the publish pipeline loops over all active entries.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/02_Results.txt — confirm both
-  PRs landed (ci-metadata variant field + devel manifest deps); the exact
-  `_resolve_variant_deps` signature and dep derivation rule; the `--variant`
-  interface. If missing, Phase 2 is not complete; STOP and report.
+  PRs landed (ci-metadata variant+status fields + devel manifest deps); the exact
+  `_resolve_variant_deps` signature and dep derivation rule; the `--variant` interface.
+  If missing, Phase 2 is not complete; STOP and report.
 - .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §2 "Catalog structure",
-  "Failure mode", §4 acceptance, §5 constraints.
+  "Routing manifest", "Failure mode", §4 acceptance, §5 constraints.
 - .ADRs/ADR_17_Pkg_Repository/ADR.md — §2 decision on catalog structure and
   `build-repo-portable.py`; RESULTS/03_Results.txt for the existing generator
   interface + URL layout.
@@ -47,62 +45,79 @@ REQUIRED READING
   (cross-repo publish, repo-publish job, GitHub App auth).
 
 ACTION PLAN (ordered — tests before pipeline wiring)
-1. EXTEND `build-repo-portable.py` with `--variant CE|Plus`:
-   - When `--variant` is supplied, write the catalog under `<outdir>/<variant_lc>/${ABI}/`
-     (variant lowercased: `ce/` or `plus/`) instead of `<outdir>/${ABI}/`.
-   - When `--variant` is absent, behaviour is UNCHANGED (writes to `${ABI}/`
-     as today — the legacy path, the CE build during the transition window).
-   - The generator accepts only `.pkg` files matching the given variant (identified
-     by the `variant` field embedded in the filename or a `--pkg-list` argument that
-     lists the variant-specific pkgs). Design: add a `--pkg-list` option that accepts
-     an explicit list of `.pkg` paths to include, bypassing directory scan. This is
-     cleaner than encoding variant in the filename.
-   - Nightly likewise: `nightly/ce/${ABI}/` and `nightly/plus/${ABI}/`.
+1. EXTEND `build-repo-portable.py` with `--catalog-name NAME`:
+   - When `--catalog-name` is supplied (e.g. `ce-2.8`, `plus-26.03`), write the
+     catalog under `<outdir>/<catalog-name>/${ABI}/` instead of `<outdir>/${ABI}/`.
+   - When absent, behaviour is UNCHANGED (writes to `${ABI}/` — the legacy path).
+   - Keep the existing `--pkg-list` option (from ADR-17) for explicit pkg file lists.
+   - Nightly likewise: `nightly/ce-2.8/${ABI}/` etc. when channel is `nightly`.
 
-2. WRITE tests in `tests/test_build_repo_portable.py` (extend existing file):
-   - `test_ce_catalog_under_ce_subdir`: call `build_repo(variant="CE", pkgs=[ce_pkg])`
-     → `meta.conf` exists at `ce/FreeBSD:15:amd64/meta.conf`; the packagesite contains
-     the CE pkg; `plus/` dir does NOT exist.
-   - `test_plus_catalog_under_plus_subdir`: call with `variant="Plus"` and a Plus pkg
-     → `meta.conf` at `plus/FreeBSD:16:amd64/meta.conf`; CE dir does NOT exist.
-   - `test_legacy_path_retained_for_ce`: call without `--variant` → `meta.conf` at
+2. ADD `build-repo-portable.py --generate-routing-json` (or a separate
+   `scripts/generate-routing-json.py`):
+   - Accepts a list of routing-entry dicts (JSON array via `--routing-entries` arg or
+     stdin), each with `{"pattern": "pfSense/2.8", "catalog": "ce-2.8",
+     "status": "active"}`.
+   - Emits `routing.json` to a specified output path.
+   - Schema is the canonical format: `{"routes": [...]}`.
+   - Pure Python stdlib, no network I/O.
+   - The routing entries are derived from the `ci-metadata` matrix (the publish
+     pipeline reads the matrix and passes the entries through). The generator does
+     not read ci-metadata directly — it receives the data as structured input.
+
+3. WRITE tests in `tests/test_build_repo_portable.py` (extend existing file):
+   - `test_catalog_under_versioned_subdir`: call with `catalog_name="ce-2.8"` and a
+     CE pkg → `meta.conf` at `ce-2.8/FreeBSD:15:amd64/meta.conf`; the packagesite
+     contains the CE pkg; no plain `FreeBSD:15:amd64/meta.conf` at the root.
+   - `test_plus_catalog_under_versioned_subdir`: call with `catalog_name="plus-26.03"`
+     and a Plus pkg → `meta.conf` at `plus-26.03/FreeBSD:16:amd64/meta.conf`;
+     CE dir does NOT exist.
+   - `test_legacy_path_retained`: call without `--catalog-name` → `meta.conf` at
      `FreeBSD:15:amd64/meta.conf` (unchanged legacy behaviour).
-   - `test_wrong_variant_pkg_excluded`: a CE pkg is NOT present in the `plus/` catalog
-     and a Plus pkg is NOT present in the `ce/` catalog (assert packagesite contents
-     by package name, not just path existence — this is the wrong-variant guard).
-   - `test_two_ce_entries_produce_two_subtrees`: pass two CE `.pkg` files with
-     different ABIs (FreeBSD:15:amd64 and FreeBSD:16:amd64) to `--variant CE` →
-     BOTH `ce/FreeBSD:15:amd64/meta.conf` and `ce/FreeBSD:16:amd64/meta.conf` are
-     generated; each packagesite contains only its own pkg (no cross-contamination).
-     This is the transition-window regression guard.
-   - Assert before-state (no `ce/` or `plus/` dir before the call) and after-state.
+   - `test_wrong_variant_pkg_excluded`: a CE pkg is NOT present in the
+     `plus-26.03/` packagesite and a Plus pkg is NOT present in `ce-2.8/`
+     (assert packagesite contents by package name — this is the wrong-variant guard).
+   - `test_two_ce_entries_produce_two_versioned_dirs`: build `ce-2.8/` and `ce-2.9/`
+     separately (two calls with different `--catalog-name` values, different ABIs);
+     BOTH `ce-2.8/FreeBSD:15:amd64/meta.conf` and `ce-2.9/FreeBSD:16:amd64/meta.conf`
+     exist; each packagesite contains only its own pkg (no cross-contamination).
+   - `test_routing_json_correct_entries`: call the routing.json generator with two
+     active entries and one legacy entry; assert `routing.json` contains all three
+     with correct `catalog`, `pattern`, and `status` fields; assert active and legacy
+     are both present (legacy routes must be retained until the grace period ends).
+   - `test_routing_json_legacy_retained`: build routing.json with a legacy entry;
+     assert it is present and `"status": "legacy"` — NOT absent (legacy routes stay).
+   - Assert before-state (no versioned subdirs before the call) and after-state.
    All tests typed; follow CLAUDE.md branch-coverage rule.
 
-3. UPDATE `pfBlockerNG/pkg publish.yml` (cross-repo PR):
-   - Run `build-pkg-portable.py` for EACH active matrix entry (loop over all CE entries,
-     then all Plus entries — during a transition window this may be 2 CE + 2 Plus = 4
-     builds). Phase 2's `read-version-matrix.sh --variant CE` returns ALL CE entries as
-     a JSON array; the workflow iterates them.
-   - Run `build-repo-portable.py --variant CE` once (all CE `.pkg` files in, all
-     `ce/${ABI}/` subtrees out), then `--variant Plus` once, plus the legacy
-     `--variant`-omitted run for the transition CE path.
-   - Deploy all subtrees (ce/*, plus/*, legacy ABI/*) in a single
-     `actions/deploy-pages` invocation (one deploy per run, not per variant or entry).
-   - The cross-repo dispatch inputs from this repo's `release.yml` `repo-publish` job
-     remain compatible (the publish workflow handles all active entries internally).
+4. UPDATE `pfBlockerNG/pkg publish.yml` (cross-repo PR):
+   - Read all active matrix entries from `ci-metadata` (using `read-version-matrix.sh`
+     without `--variant` to get all active entries, or with `--variant CE` / `--variant
+     Plus` for two passes).
+   - For each active entry, run `build-pkg-portable.py --variant <variant>` (Phase 2)
+     and `build-repo-portable.py --catalog-name <catalog>` where catalog name is
+     derived: CE `pfsense_version` `2.8.x` → `ce-2.8`; Plus `pfsense_version` `26.03`
+     → `plus-26.03`.
+   - Generate `routing.json` from all entries (active + any legacy entries that should
+     remain). The publish workflow owns the routing entries list.
+   - Legacy entries (kept on Pages, no new build): include them in `routing.json` with
+     `"status": "legacy"` but do NOT run `build-pkg-portable.py` for them.
+   - Also run the legacy `--catalog-name`-omitted `build-repo-portable.py` for the
+     transition `${ABI}/` path.
+   - Deploy all subtrees (versioned dirs + legacy ABI path + `routing.json`) in a
+     single `actions/deploy-pages` invocation.
 
-4. VERIFY the conf template in `scripts/build-repo.sh` (the `--print-conf` path, ADR-17
-   §3): if it hard-codes the `${ABI}` path without a `${VARIANT}/` prefix, note it —
-   Phase 4 (`add-repo.sh`) owns the conf URL; `build-repo.sh --print-conf` is used
-   for documentation. Update the comment in `build-repo.sh` to reference the
-   `ce/`/`plus/` structure, but do NOT change the conf template (Phase 4 owns that).
+5. VERIFY the conf template comment in `scripts/build-repo.sh` (the `--print-conf`
+   path): if it documents the URL structure, update the comment to reference the
+   version-keyed and Worker URL structure. Do NOT change the conf template itself —
+   Phase 4 owns that.
 
 CONSTRAINTS
 - Pure Python stdlib only in `build-repo-portable.py`; no libpkg.
-- The legacy `${ABI}/` path MUST still be generated (CE build, transition window) —
-  do NOT remove it. Verify it is present in the output and in the `test_legacy_path`
-  test.
-- Do NOT touch `add-repo.sh` — that is Phase 4.
+- The legacy `${ABI}/` path MUST still be generated (CE build, transition window).
+- Catalog name derivation rule: CE `pfsense_version` strip trailing `.x` → take
+  `Major.Minor` → prepend `ce-`; Plus `pfsense_version` is already `YY.MM` → prepend
+  `plus-`. E.g. `2.8.x` → `ce-2.8`; `26.03` → `plus-26.03`. Document this rule in
+  the generator and confirm it matches the routing.json `catalog` field.
 - Do NOT touch `scripts/build-pkg-portable.py` — Phase 2 owns that.
 - The `pfBlockerNG/pkg` repo change is a cross-repo PR; do NOT commit it to this repo.
 
@@ -110,24 +125,25 @@ VERIFICATION (must all pass before the phase is done)
 - `python -m pytest` → green (all new tests pass; existing suite unchanged).
 - `ruff check . && ruff format .` → clean.
 - `mypy tests/` → clean.
-- Manually run `build-repo-portable.py --variant CE` and `--variant Plus` against
-  fixture `.pkg` files and confirm the catalog structure (`meta.conf` paths, package
-  names in the packagesite) is correct for each variant.
+- Manually run `build-repo-portable.py --catalog-name ce-2.8` against a fixture `.pkg`
+  file and confirm `ce-2.8/FreeBSD:15:amd64/meta.conf` is generated.
+- Manually run the routing.json generator with sample entries and confirm the output
+  matches the expected schema.
 - `pfBlockerNG/pkg publish.yml` PR is open and CI is green on that repo.
 
 EXPECTED RESULT
-- `devel` PR merged with variant-aware `build-repo-portable.py` + tests.
-- `pfBlockerNG/pkg` PR open (or merged) with the dual-variant publish pipeline.
-- `pfblockerng.github.io/pkg/ce/${ABI}/` and `.../plus/${ABI}/` will be live after
-  the publish workflow runs.
+- `devel` PR merged with version-keyed `build-repo-portable.py` + routing.json
+  generator + tests.
+- `pfBlockerNG/pkg` PR open (or merged) with the version-keyed publish pipeline that
+  generates versioned dirs and `routing.json`.
 
 COMMIT (devel PR — single commit)
-    ci: variant catalog subtrees (ce/ plus/) in build-repo-portable.py (ADR-20 P3)
+    ci: version-keyed catalog dirs + routing.json in build-repo-portable.py (ADR-20 P3)
 Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
 
 HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/03_Results.txt`
-Record: the `build-repo-portable.py --variant` interface (exact option, output dir
-structure); the `--pkg-list` interface if added; the legacy path retention mechanism;
-the `pfBlockerNG/pkg publish.yml` PR number and CI status; the test names added;
-any catalog structure decisions (e.g. how nightly variant paths are named); go-ahead
-for Phase 4.
+Record: the `build-repo-portable.py --catalog-name` interface (exact option, output dir
+structure); the routing.json generator interface (CLI or function); the catalog name
+derivation rule; the legacy path retention mechanism; the `pfBlockerNG/pkg publish.yml`
+PR number and CI status; the test names added; the routing.json schema (exact JSON
+shape); go-ahead for Phase 4.
