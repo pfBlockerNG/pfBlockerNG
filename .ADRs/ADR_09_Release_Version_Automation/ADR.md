@@ -1,6 +1,6 @@
 # ADR-09: Scheduled version tracking & release automation
 
-- **Status:** **Proposed** (2026-06-02; **amended 2026-06-05**). The amendment reconciles
+- **Status:** **Proposed** (2026-06-02; **amended 2026-06-05**; **amended 2026-06-09**). The amendment reconciles
   the ADR with three facts that landed after it was authored: (1) the **portable Linux
   `.pkg` builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) now exists and
   is the **default** build path (the FreeBSD `make package` VM build is retained as a
@@ -235,3 +235,63 @@ time rule from `CLAUDE.md`).
   partial pass — the `all-smoke-passed` AND-gate is the required status check).
 - [ ] The version-tracker (`version-tracker.yml`) dispatches in `dry_run=true` mode
   and logs the correct dispatches without triggering any downstream workflow.
+
+---
+
+## Amendment 2 — Probe redesign: Netgate-page scraper (2026-06-09)
+
+### Supersedes
+
+**§1 fact 5** (original): "No clean pfSense release/beta API. `RELENG_*` branches/tags in
+`pfsense/FreeBSD-ports` and Netgate's pkg ABI list are the closest machine signals, and they
+lag — unreliable for **betas**. → detection is **curated**, not auto-merged."
+
+**Amended:** The `pfsense/FreeBSD-ports` public mirror is **frozen at CE branches 2.3–2.7**
+and is unmaintained. Scanning it produces false-positive nudges for ancient EOL versions
+(confirmed spam: issues #168, #169) while **never detecting CE 2.8.x, CE 2.9.x, or any
+pfSense Plus version**. The authoritative signal is the Netgate documentation site:
+`docs.netgate.com/.../releases/versions.html`. It covers both CE (`Major.Minor.Patch`) and
+Plus (`Year.Month.Patch`), explicitly marks supported/EOL/future rows, and names the FreeBSD
+version and branch per row. Fetch is **best-effort with graceful degradation** (any
+HTTP/parse error → empty result + `::warning::`, exit 0, no action). Detection remains
+**curated** — the probe only nudges (never edits the matrix) — but the signal is now
+authoritative rather than a stale frozen proxy.
+
+**§2 "Detect vs react"** row (original): "…Optional best-effort scheduled **probe** (scan
+`RELENG_*` / pkg ABI) that **opens a PR/issue nudge** — it **never** auto-edits the matrix."
+
+**Amended:** The RELENG scan is **removed** and replaced by
+`scripts/check-pfsense-versions.py` (stdlib-only, Python 3.11):
+
+- Fetches `versions.html` with full browser headers; `--html-file PATH` override for
+  offline/test use.
+- Parses the Sphinx tables (`Version | Support | Released | Config Rev | FreeBSD Version |
+  Branch`). Channel from Branch column: `plus-RELENG_*` → Plus, bare `RELENG_*` → CE.
+  Support state from Support cell: `fa-check` = supported; `fa-times` = EOL;
+  empty + Released TBD = future/unreleased.
+- Normalises to family level: CE `Major.Minor.Patch` → `Major.Minor.x`;
+  Plus `Year.Month.Patch` → `Year.Month`.
+- Diffs against the BUILD matrix (via `--matrix-json`/stdin) on `pfsense_version`.
+- Emits `{ "supported_missing": […], "future": […] }` JSON to stdout; exits 0 on any
+  failure (warn to stderr, empty result — never fails the workflow).
+
+Probe reactions in `version-tracker.yml`:
+
+- **`supported_missing`** → one nudge issue per version (title:
+  `[version-tracker] pfSense <Channel> <version> still-supported — evaluate for matrix`).
+  Dedup: skip if an open issue for that exact version token already exists; skip if labelled
+  `tracker-wontfix`.
+- **`future`** → one tracking issue per upcoming version; if it already exists, **update its
+  body** with current stage (TBD → alpha → beta → RC → GA, FreeBSD base, released date)
+  rather than reopen.
+- Best-effort (`continue-on-error`), `skip_probe` input, and `tracker-probe-disabled` label
+  disable are retained.
+
+### Implementation scope
+
+| File | Change |
+| --- | --- |
+| `scripts/check-pfsense-versions.py` | New — fetch + parse + diff + emit; no `gh` calls |
+| `tests/test_version_probe.py` | New — branch-covering unit tests |
+| `tests/fixtures/netgate_versions_*.html` | New — real Netgate page table markup |
+| `.github/workflows/version-tracker.yml` | Rewrite `probe` job; remove RELENG scan |
