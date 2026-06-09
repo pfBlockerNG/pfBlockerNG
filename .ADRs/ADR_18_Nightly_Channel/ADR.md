@@ -1,7 +1,7 @@
 # ADR-18: Publish a nightly `pkg` build channel
 
-- **Status:** **Implemented** (2026-06-06; live-URL test added in PR #166, nightly
-  catalog deploy triggered 2026-06-09 — pending PR merge + live-URL smoke green → Accepted)
+- **Status:** **Accepted** (2026-06-09; PR #166 merged; live-URL smoke green —
+  `test_install_from_live_nightly_url` passed, `pkg query %R == pfblockerng-nightly` confirmed)
 - **Date:** 2026-06-06
 - **Branch:** `adr/18-nightly-channel` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):** dev-only
