@@ -39,8 +39,8 @@ name: UI tests (pfSense VM, ADR-14)
 #   SMOKE_IMAGE_REPO/_NAME/_TAG  compose the GHCR ref (variables): the pull ref is
 #                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
 #                        the image_ref input (full ref) or version input (tag) override it.
-#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (secret)
-#   SMOKE_GHCR_TOKEN     PAT/token with read:packages for the GHCR pull (secret)
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN     token with read:packages for the GHCR pull (defaults to GITHUB_TOKEN)
 #   SMOKE_SSH_PRIV_KEY   private SSH key matching the image's baked authorized_keys (secret)
 #   SMOKE_ADMIN_PASSWORD baked webConfigurator admin password (secret) — REQUIRED here:
 #                        the UI tier logs in over the CSRF form; without it the ui
@@ -280,8 +280,8 @@ jobs:
         id: digest
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
-          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER }}
-          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
