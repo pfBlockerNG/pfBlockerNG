@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import urllib.parse
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -43,9 +44,12 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM
 from .test_repo_install import (
+    GUEST_ABI,
     _ensure_egress_open,
     _ssh_check,
     build_guest_repo,
+    pin_pages_hosts,
+    poll_catalog_served,
     read_compact_version,
     repo_priority,
     reversion_pkg,
@@ -62,6 +66,12 @@ SPIKE = "/tmp/pfb_nightly_spike"
 NIGHTLY_DIR = f"{SPIKE}/nightly"  # the file:// nightly catalog
 DEVEL_DIR = f"{SPIKE}/devel"  # a controlled file:// -devel catalog (for the conflict leg)
 CONF = "/usr/local/etc/pkg/repos/pfb_nightly_smoke.conf"
+
+# Phase-5d — live nightly Pages URL check (dispatch-only; gated on SMOKE_NIGHTLY_LIVE_URL).
+# Unset -> SKIP (the file:// VM-acceptance above is the always-on proof).
+LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
+DEFAULT_LIVE_NIGHTLY_URL = "https://pfblockerng.github.io/pkg/nightly"
+NIGHTLY_LIVE_CONF = "/usr/local/etc/pkg/repos/pfb_nightly_live_smoke.conf"
 
 # The rc.packages install hook aborts with one of these when the registration name
 # is wrong (the short-name regression test_install_hook.py guards); the nightly must
@@ -306,3 +316,105 @@ def test_nightly_pkg_upgrade_is_monotonic(nightly_vm: SmokeVM, tmp_path: Path) -
     _serve(V3)
     pkg_upgrade(vm, NIGHTLY_NAME)
     assert pkg_q(vm, "%v", NIGHTLY_NAME) == V3, "pkg upgrade must move V2 -> V3"
+
+
+# --------------------------------------------------------------------------- #
+# Phase-5d — live nightly Pages URL (dispatch-only; gated on SMOKE_NIGHTLY_LIVE_URL)
+# --------------------------------------------------------------------------- #
+
+
+def _live_nightly_url() -> str | None:
+    """The live nightly Pages base to test against, or None to SKIP.
+
+    Gated on ``SMOKE_NIGHTLY_LIVE_URL``: set it to the deployed nightly base
+    (e.g. ``https://pfblockerng.github.io/pkg/nightly``) after a nightly publish
+    dispatch; leave it unset and the test SKIPS.  A bare ``1``/``true`` selects
+    the default base.
+    """
+    val = os.environ.get(LIVE_NIGHTLY_URL_ENV)
+    if not val:
+        return None
+    if val.strip().lower() in {"1", "true", "yes", "on"}:
+        return DEFAULT_LIVE_NIGHTLY_URL
+    return val.rstrip("/")
+
+
+@pytest.mark.timeout(900)
+def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
+    """PHASE-5d LIVE NIGHTLY URL: a real pfSense box installs -nightly from the
+    deployed nightly Pages catalog over its public HTTPS URL (no ``-f``).
+
+    DISPATCH-ONLY + GATED on ``SMOKE_NIGHTLY_LIVE_URL`` (unset -> SKIP). The
+    always-on proof is the ``file://`` VM-acceptance above; this exercises the
+    REAL transport the nightly publish pipeline serves, so it can only run after a
+    nightly publish dispatch has deployed the catalog.
+
+    Given the nightly publish pipeline has DEPLOYED the catalog to Pages (runner-side
+      backstop: ``<base>/<ABI>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
+      has the Pages IPs pinned for the host (its DNS is sandboxed), the package is
+      ABSENT, and our nightly conf points at the live ``nightly/${ABI}`` URL above the
+      Netgate ``pfSense`` repo,
+    When ``pkg update`` reads the live nightly catalog and ``pkg install -y`` runs
+      (NO ``-r``, NO ``-f``),
+    Then the install comes from our nightly repo (``pkg query %R`` ==
+      ``pfblockerng-nightly``) with deps resolved and the .pkg checksum validated —
+      the deployed nightly Pages catalog is real + installable over HTTPS.
+    """
+    base_url = _live_nightly_url()
+    if base_url is None:
+        pytest.skip(
+            f"{LIVE_NIGHTLY_URL_ENV} not set — live nightly URL check is dispatch-only (file:// proof always runs)"
+        )
+    assert base_url is not None  # for the type-checker
+
+    host = urllib.parse.urlparse(base_url).hostname
+    assert host, f"could not parse a host from {base_url!r}"
+
+    # BACKSTOP: prove the deploy actually serves the nightly catalog from the runner
+    # first (independent of the guest) — polls through first-deploy / DNS / cert lag.
+    poll_catalog_served(base_url, GUEST_ABI)
+
+    _ensure_egress_open()
+
+    # GIVEN: Pages IPs pinned (guest DNS is sandboxed), nightly package absent, our
+    # nightly conf at the live URL above the Netgate pfSense repo.
+    pin_pages_hosts(smoke_vm, host)
+    pfsense_prio = repo_priority(smoke_vm, "pfSense")
+    pkg_delete(smoke_vm, NIGHTLY_NAME)
+
+    # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
+    # ${ABI} is a pkg(8) variable — must survive in the file as-is (not shell-expanded).
+    conf = (
+        f"{NIGHTLY_REPO}: {{\n"
+        f'  url: "{base_url}/${{ABI}}",\n'
+        "  mirror_type: none,\n"
+        "  signature_type: none,\n"
+        f"  priority: {pfsense_prio + 100},\n"
+        "  enabled: yes\n"
+        "}\n"
+    )
+    r = subprocess.run(
+        smoke_vm.ssh_argv("tee", NIGHTLY_LIVE_CONF),
+        input=conf,
+        capture_output=True,
+        text=True,
+        timeout=60.0,
+        check=False,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"write nightly live conf failed: rc={r.returncode} {r.stderr!r}")
+
+    try:
+        # WHEN: pkg update reads the live nightly catalog.
+        pkg_update(smoke_vm)
+        assert not pkg_present(smoke_vm, NIGHTLY_NAME), "precondition: -nightly absent before live install"
+
+        out = pkg_install(smoke_vm, NIGHTLY_NAME)
+
+        # THEN: installed from our nightly repo, deps resolved, checksum validated.
+        assert "Missing dependency" not in out, f"deps did not resolve from the live nightly catalog:\n{out}"
+        origin = pkg_q(smoke_vm, "%R", NIGHTLY_NAME)
+        assert origin == NIGHTLY_REPO, f"installed from {origin!r}, expected our nightly repo {NIGHTLY_REPO!r}"
+    finally:
+        pkg_delete(smoke_vm, NIGHTLY_NAME)
+        smoke_vm.ssh("/bin/rm", "-f", NIGHTLY_LIVE_CONF, timeout=60.0)
