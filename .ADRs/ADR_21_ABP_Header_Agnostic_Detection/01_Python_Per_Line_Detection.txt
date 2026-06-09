@@ -1,0 +1,186 @@
+================================================================================
+PHASE 1 PROMPT — Python per-line ABP detection in build() + unit tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md
+     (read §1 Context, §2 Decision table, §2.3 Contract, §6 Phase 1 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/21-abp-header-agnostic-detection` branch performing Phase 1
+of ADR-21. This phase is purely Python (no PHP, no CI YAML). It is
+behaviour-preserving for ABP-header feeds and additive for non-ABP feeds. Inline
+on the branch, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+`parse_abp()` is already the complete DNS-only ABP parser with full `@@`,
+`$important`, `$badfilter`, and regex support. The only missing piece is the
+routing: in `build()` the non-ABP feed loop calls `parse(fmt, raw_line)` for
+every line, which silently drops `||domain^` entries (they look like invalid
+domains to the plain parser). This phase adds a single `startswith` guard before
+`parse()` that routes any `||` / `@@||` line to `parse_abp()` instead, with
+identical provenance/feed/group/log plumbing as the existing ABP feed path.
+Tests prove all §4 acceptance requirements, with before-state assertions.
+
+REQUIRED READING
+- .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md — §1.4, §2.1–2.4,
+  §4 requirements, §5 constraints. Internalise the contract before touching code.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+  • `build()` at ~line 3893: the feed dispatch (the `if fmt == "abp"` branch and
+    the non-ABP for-loop at lines 3899–3917 — the insertion point).
+  • `parse_abp()` at ~line 2997: the full ABP parser — signature, return type
+    (Rule | None), the `provenance`/`feed`/`group`/`log` kwargs. Do NOT modify.
+  • `parse()` at ~line 3167: the plain-domain dispatcher — shows what happens
+    today for `||domain^` (goes to the `hosts/plain` branch, NOT `format_hint="abp"`
+    sub-branch, and is returned as ParsedEntry; actually it would fail normalise()
+    because `|` is not a valid domain char). Confirm by reading.
+  • `reconcile()` and the `abp_rules` list — understand how `parse_abp()` results
+    are aggregated (lines ~3919–3935: `result.block_domains` → `data_db`/`zone_db`;
+    ~3937+: allow → `white_db`).
+- tests/test_adr07_decision_spec.py + tests/test_adr07_parser.py — see how existing
+  ABP unit tests are structured; follow the same patterns.
+- tests/test_adr07_reconcile.py — reconcile test style.
+- CLAUDE.md — "Test coverage" (branch coverage + before-state asserts + BDD-style
+  for multi-step journeys).
+
+ACTION PLAN (ordered)
+
+1. UNDERSTAND the exact insertion point in `build()`:
+
+   Current structure (non-ABP loop, ~lines 3899–3917):
+   ```python
+   for raw_line in line_reader(feed_row["raw"]):
+       entry = parse(fmt, raw_line)
+       if entry is None:
+           continue
+       domain = normalise(entry.value)
+       if domain is None:
+           continue
+       if entry.kind != DNSBL_KIND_BLOCK:
+           continue
+       ...  # band/payload, data_db or zone_db
+   ```
+
+   New structure — insert before `parse()`:
+   ```python
+   for raw_line in line_reader(feed_row["raw"]):
+       stripped = raw_line.strip()
+       if stripped.startswith("||") or stripped.startswith("@@||"):
+           rule = parse_abp(stripped, provenance=provenance, feed=feed,
+                            group=group, log=log_flag)
+           if rule is not None:
+               abp_rules.append(rule)
+           continue
+       entry = parse(fmt, raw_line)
+       ...  # unchanged
+   ```
+
+   Critical: `abp_rules` is already declared before the feed loop at ~line 3870;
+   it is the list that feeds `reconcile()` in Stage-B. Confirm `abp_rules` is in
+   scope and used correctly.
+
+2. MAKE the change in `pfb_unbound.py`. Do NOT modify `parse_abp()`, `parse()`,
+   `reconcile()`, or `_dnsbl_parse_abp_line()`.
+
+3. WRITE `tests/test_adr21_abp_per_line.py` with these scenarios:
+
+   All tests use `build()` via its public call path — not `parse_abp()` directly.
+   Pass a minimal synthetic manifest (a dict with `raw`, `feed`, `group`,
+   `format_hint='plain'`, `log_flag`, `provenance='feed'`). Use a helper that
+   writes the raw content to a temp file and constructs the manifest row; model
+   it after the patterns in `tests/test_adr07_*.py` and `tests/test_adr06_build_module.py`.
+
+   a. `test_plain_feed_abp_anchor_block`:
+      Scenario: `||domain.com^` in a non-ABP feed produces a DNSBL block.
+      Background: `format_hint='plain'` feed with lines: `domain.com`, `||block-me.com^`.
+      Given: `block-me.com` is NOT in the result before the new routing.
+        (Assert the BEFORE: build a feed with only `domain.com` → `block-me.com` absent.)
+      When: feed contains `||block-me.com^`.
+      Then: `block-me.com` is in `data_db` or `zone_db` with `band=PRIO_FEED_BLOCK`.
+      Also assert: `domain.com` is still blocked (no regression to plain path).
+
+   b. `test_plain_feed_abp_anchor_allow_overrides_plain_block`:
+      Scenario: `@@||allow.com^` in a non-ABP feed overrides a plain block in the
+      same feed.
+      Background: feed with `allow.com` (plain block) and `@@||allow.com^` (ABP allow).
+      Given: `allow.com` IS blocked when only the plain line is present.
+        (Assert BEFORE: plain-only feed → `allow.com` in block DB.)
+      When: `@@||allow.com^` is added to the same feed.
+      Then: `allow.com` is NOT in the block DB (allow overrides block).
+
+   c. `test_plain_feed_important_modifier`:
+      Scenario: `||domain.com^$important` sets `important=True` in the result.
+      Background: `format_hint='plain'` feed with `||domain.com^$important`.
+      Given: without `$important`, an `||domain.com^` entry has `important=False`.
+      When: `$important` is present.
+      Then: the reconciled payload for `domain.com` has `"important": True`.
+
+   d. `test_plain_feed_badfilter_cancels_block`:
+      Scenario: `||domain.com^$badfilter` cancels a block for `domain.com`.
+      Background: feed with `domain.com` (plain) and `||domain.com^$badfilter`.
+      Given: `domain.com` is blocked when only the plain entry is present.
+      When: `||domain.com^$badfilter` is also present.
+      Then: `domain.com` is NOT in `data_db` or `zone_db`.
+
+   e. `test_plain_path_unchanged_no_abp_lines`:
+      Scenario: a plain feed with no `||` lines is processed exactly as before.
+      Background: feed with `example.com`, `subdomain.example.com`.
+      Then: both are in the block DB; no exceptions; no entries in `white_db` / `abp_rules`.
+
+   f. `test_abp_header_feed_unchanged`:
+      Scenario: ABP-header feed (`format_hint='abp'`) is unaffected by this change.
+      Background: feed with `||block.com^`, `@@||allow.com^`, `plain.com`.
+      Then: `block.com` is blocked; `allow.com` is allowed; `plain.com` is blocked
+      (all three are handled by `parse_abp()`'s existing plain-bare-domain logic).
+      Regression guard: this result must be IDENTICAL before and after Phase 1's
+      `build()` change — the new `startswith` guard must NOT run for `fmt == "abp"`.
+
+   g. `test_wildcard_and_path_anchors_skipped`:
+      Scenario: `||domain.com/path^` and `||*.com^` in a plain feed → skipped.
+      Then: neither domain appears in the block DB (parse_abp returns None for `/`
+      and `*`).
+
+   h. `test_page_context_option_skipped`:
+      Scenario: `||domain.com^$third-party` in a plain feed → skipped (page-context
+      option, not DNS-relevant).
+      Then: `domain.com` NOT in the block DB.
+
+4. RUN `python -m pytest tests/test_adr21_abp_per_line.py -v` — all must be green.
+5. RUN `python -m pytest` (full suite) — no regressions.
+6. RUN `ruff check . && ruff format .` — clean.
+7. RUN `mypy tests/` — clean.
+
+CONSTRAINTS
+- Modify only `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the `build()` function
+  only) and `tests/test_adr21_abp_per_line.py` (new file).
+- Do NOT modify `parse_abp()`, `parse()`, `_dnsbl_parse_abp_line()`, `reconcile()`.
+- Do NOT touch PHP, CI YAML, or any other file.
+- The `startswith` check must come BEFORE `parse()` — not after a failed `parse()`.
+- `parse_abp()` call in the non-ABP loop must pass the same `provenance`, `feed`,
+  `group`, `log=log_flag` as the ABP-feed branch at line 3895. Exact same kwargs.
+- Tests: 4-space indent, type hints, no bare `except:`, intent-named, all branches
+  covered, before-state asserted for all transition tests.
+- Only `DNSBL_KIND_BLOCK` / `DNSBL_KIND_ALLOW` in tests — no magic string literals.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest tests/test_adr21_abp_per_line.py -v` → all N test cases green.
+- `python -m pytest` → unchanged (no regressions in test_adr07_* or any other suite).
+- `ruff check . && ruff format .` → 0 errors, 0 diffs.
+- `mypy tests/` → 0 errors.
+- Read `git diff origin/devel...HEAD` — diff contains ONLY:
+  `src/usr/local/pkg/pfblockerng/pfb_unbound.py` and
+  `tests/test_adr21_abp_per_line.py`. Nothing else.
+
+EXPECTED RESULT
+`build()` routes `||` / `@@||` lines in non-ABP feeds to `parse_abp()` → `abp_rules`
+before the existing `parse()` call. All §4 acceptance requirements proven by typed,
+before-state-asserting unit tests. ABP-header feeds produce bit-identical results.
+
+COMMIT (single)
+    pfb_unbound: per-line ABP detection in build() for plain feeds (ADR-21 P1)
+Push to `adr/21-abp-header-agnostic-detection`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/01_Results.txt`
+(plain .txt)
+Record: the exact inserted code block (the 6-line guard); the test file name and
+list of test names; `python -m pytest` outcome (N passed); `ruff`/`mypy` outcome;
+any edge case discovered during implementation; go-ahead for Phase 2.

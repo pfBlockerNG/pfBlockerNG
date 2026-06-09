@@ -1,0 +1,177 @@
+================================================================================
+PHASE 2 PROMPT — PHP companion: download loop + manifest builder
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md
+     (read §1 Context, §2 Decision table, §2.3 Contract, §6 Phase 2 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/21-abp-header-agnostic-detection` branch performing Phase 2
+of ADR-21. This phase modifies `pfblockerng.inc` at two call sites: the download
+loop and the manifest builder. It completes the pipeline so that PHP correctly
+feeds `||`/`@@||` lines from non-ABP feeds through to the Python `.raw` file
+where Phase 1's detection can pick them up. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 1 wired Python's `build()` to detect `||`/`@@||` lines in `.raw` files.
+But for non-ABP feeds, PHP currently drops those lines at `pfb_filter()` domain
+validation before they ever reach `.raw`. Without this PHP fix the pipeline is
+only half-repaired: the Python routing in `build()` is correct but the lines
+never arrive. This phase inserts two short guards — one in the download loop
+(writes verbatim to `.txt`) and one in the manifest builder (writes verbatim to
+`.raw`) — completing the end-to-end path.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/01_Results.txt — confirm
+  Phase 1 is complete and all Python tests pass. If missing, Phase 1 is not
+  complete; STOP and report.
+- .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md — §1.3 (the gap), §2.2
+  (decision table for PHP), §2.3 (contract items 7 and 8), §2.4 (out of scope).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  • Download loop insertion point: after `$line = trim(trim($line), '.');` at
+    ~line 9754 and BEFORE `if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, ...)))`.
+    Read lines 9640–9778 in full to understand the surrounding context: the
+    `$easylist` guard, `$lite`/`!$lite` stripping, IP collection, IDN conversion,
+    dot trimming.
+  • Manifest builder insertion point: inside `if ($format !== 'abp')` path around
+    line 3600, BEFORE `$cols = explode(',', $line, 3)`. Read lines 3565–3626 in
+    full to understand `$format`, the fopen/fgets loop, and how the ABP path
+    (`$format === 'abp'`) writes verbatim.
+- CLAUDE.md — "PHP" code standards (tabs; PHP 8.3; `substr()` not `str_starts_with()`
+  unless you verify PHP 8.0+ is safe here — PHP 8.3 target, so `str_starts_with()`
+  is fine); ShellCheck not applicable; `php -l` is the gate.
+
+ACTION PLAN (ordered)
+
+1. DOWNLOAD LOOP change in `pfblockerng.inc`:
+
+   Insertion point: after `$line = trim(trim($line), '.');` (~line 9754) and
+   BEFORE the `if (empty(pfb_filter(…)))` block (~line 9757).
+
+   Exact guard to insert:
+   ```php
+					// ABP-anchored line in a non-ABP feed: write verbatim to
+					// allow Python per-line detection in build() (ADR-21).
+					if (str_starts_with($line, '||') || str_starts_with($line, '@@||')) {
+						@fwrite($dhandle, "{$line}\n");
+						$domain_data = "{$line}\n";
+						continue;
+					}
+   ```
+
+   Notes:
+   - Tabs for indent (PHP house style).
+   - The `$domain_data` assignment matches the pattern used at line 9451 in the
+     ABP path; it carries the last-written raw line for any post-loop consumer.
+   - `@fwrite($dhandle, ...)` matches the pattern used by both the ABP path
+     (line 9450) and the plain path (line 9777).
+   - Do NOT touch the ABP-header path above this (`if ($easylist) { ... }`) or
+     the IP-collection / IDN / dot-trim logic above the insertion point.
+   - The DNSBL-IP coexistence check for ABP (`pfb_dnsbl_abp_extract_ip()` at
+     lines 9418–9438) runs only inside `if ($easylist)` — it does NOT run here.
+     A `||1.2.3.4^` line in a non-ABP feed passes this guard and reaches Python,
+     which calls `parse_abp()` and returns `None` for IP anchors (ADR-06 no-leak
+     contract). This is correct — no double-handling.
+   - Similarly, `@@||1.2.3.4^` is not a valid domain anchor; `parse_abp()` skips
+     it. No regression.
+
+2. MANIFEST BUILDER change in `pfblockerng.inc`:
+
+   Insertion point: inside the `while (($line = @fgets($in_h)) !== FALSE)` loop,
+   AFTER the `if ($format === 'abp') { ... continue; }` block (~line 3595) and
+   BEFORE the `$cols = explode(',', $line, 3)` line (~line 3600).
+
+   The current 'plain' path is:
+   ```php
+				// 'plain': extract bare domains (col1) from the 6-col CSV ...
+				$cols = explode(',', $line, 3);
+				if (isset($cols[1]) && $cols[1] !== '') {
+					@fwrite($raw_h, "{$cols[1]}\n");
+				}
+   ```
+
+   After the fix:
+   ```php
+				// ABP-anchored verbatim line from non-ABP feed: pass through
+				// to Python without CSV extraction (ADR-21).
+				$rawline = rtrim($line, "\r\n");
+				if (str_starts_with($rawline, '||') || str_starts_with($rawline, '@@||')) {
+					@fwrite($raw_h, "{$rawline}\n");
+					continue;
+				}
+				// 'plain': extract bare domains (col1) from the 6-col CSV ...
+				$cols = explode(',', $line, 3);
+				if (isset($cols[1]) && $cols[1] !== '') {
+					@fwrite($raw_h, "{$cols[1]}\n");
+				}
+   ```
+
+   Notes:
+   - `rtrim($line, "\r\n")` strips the trailing newline before the `str_starts_with`
+     check; the explicit `\n` added on write ensures a clean line. This matches the
+     pattern used by the ABP path at line 3591–3593.
+   - Do NOT touch the `if ($format === 'abp')` block above (lines 3587–3595).
+   - Do NOT touch the manifest row builder (lines 3618–3625) — `format_hint` stays
+     `'plain'`.
+
+3. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` — must show no syntax
+   errors.
+
+4. RUN `vendor/bin/phpunit` (if PHPUnit is installed via `composer install`) to check
+   existing PHP tests still pass. If not installed, note it and rely on CI.
+
+5. VERIFY the end-to-end pipeline with a focused integration test:
+   Add a Python integration test (in the existing `tests/test_adr21_abp_per_line.py`
+   or a new `tests/test_adr21_php_pipeline.py`) that simulates the `.txt` file format
+   produced by the PHP download loop change, then calls the manifest builder's reading
+   logic (or simulates it) and verifies the `.raw` output. Specifically:
+   - A `.txt` with a mix of CSV lines AND verbatim `||domain^` lines → the `.raw`
+     contains both bare domains (from CSV col-1) and verbatim `||domain^` lines.
+   - This can be tested purely in Python by constructing the `.txt` content and verifying
+     the `.raw` content as Python code (no PHP invocation required), since the manifest
+     builder's logic (split on comma, take col-1 OR write verbatim) is simple enough
+     to re-verify by reading the two types of lines.
+   NOTE: if you add this integration test, add it to `tests/test_adr21_abp_per_line.py`
+   rather than creating a third file. Name it `test_manifest_builder_mixed_feed`.
+
+6. RUN `python -m pytest` — full suite must still be green (no regressions).
+7. RUN `ruff check . && ruff format .` — clean.
+8. RUN `mypy tests/` — clean.
+
+CONSTRAINTS
+- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and (optionally)
+  `tests/test_adr21_abp_per_line.py` (adding `test_manifest_builder_mixed_feed`).
+- Do NOT modify `pfb_unbound.py`.
+- Do NOT touch the `if ($easylist)` block (ABP-header path) — it is correct and must
+  remain unchanged.
+- Tabs for PHP indent; match the surrounding code style exactly.
+- The `$format_hint` in the manifest row stays `'plain'`; do NOT change it.
+- IP anchors (`||1.2.3.4^`) are handled correctly by `parse_abp()` returning `None` —
+  no additional PHP guard is needed.
+
+VERIFICATION (must all pass before the phase is done)
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax errors.
+- `vendor/bin/phpunit` → green (if installed).
+- `python -m pytest` → unchanged (no regressions).
+- `ruff check . && ruff format .` → 0 errors.
+- `mypy tests/` → 0 errors.
+- `git diff origin/devel...HEAD` shows ONLY:
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and (optionally)
+  `tests/test_adr21_abp_per_line.py`. Plus Phase 1's files. Nothing else.
+
+EXPECTED RESULT
+Non-ABP feed lines starting with `||` or `@@||` flow through the entire pipeline:
+PHP download loop → verbatim in `.txt` → manifest builder → verbatim in `.raw` →
+Python `build()` Phase-1 routing → `parse_abp()` → `abp_rules` → `reconcile()`.
+
+COMMIT (single)
+    pfblockerng: PHP companion for per-line ABP detection (ADR-21 P2)
+Push to `adr/21-abp-header-agnostic-detection`; amend the existing PR against `devel`
+or open a second PR (whichever is cleaner given Phase 1's PR state).
+
+HANDOFF — write `.ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/02_Results.txt`
+(plain .txt)
+Record: the exact diff for each of the two insertion points (download loop and
+manifest builder); the `php -l` / PHPUnit outcome; `python -m pytest` pass count;
+any edge case or deviation from the plan; go-ahead for Phase 3.

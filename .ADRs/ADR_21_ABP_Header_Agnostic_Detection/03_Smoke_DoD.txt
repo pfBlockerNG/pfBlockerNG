@@ -1,0 +1,131 @@
+================================================================================
+PHASE 3 PROMPT — Smoke test + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md
+     (read §7 DoD + manual smoke checklist FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/21-abp-header-agnostic-detection` branch performing Phase 3
+of ADR-21 — the final phase. This phase adds a live-VM smoke case and records the
+DoD evidence. One commit, push directly; open a PR against `devel`.
+
+WHY THIS PHASE EXISTS
+Phases 1 and 2 proved the Python and PHP logic with unit tests. The smoke case
+proves that the full pipeline — PHP download, manifest build, Python `build()`,
+Unbound DNSBL — behaves correctly on a real pfSense CE VM. The `@@||allow^`
+case in particular requires a live Unbound round-trip to verify the allow wins
+over the plain block.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/02_Results.txt — confirm
+  PHP changes are complete and all tests pass. If missing, Phase 2 is not
+  complete; STOP and report.
+- .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md — §7 DoD, manual smoke
+  checklist items 1–6.
+- tests/smoke/test_smoke_feeds.py — the existing ADR-16 live-VM feed smoke; study
+  the `_MockFeedServer` pattern, `unique_domain()` usage, the BDD-style structure.
+- tests/smoke/helpers.py + tests/smoke/conftest.py — `smoke_vm`, `on_box`,
+  `wait_unbound_ready`, `@pytest.mark.timeout`.
+- CLAUDE.md — "Smoke tests (ADR-04)" — all the non-obvious smoke truths:
+  `unique_domain()` mandatory, probe on-box via `drill @127.0.0.1`, first
+  response is authoritative.
+
+ACTION PLAN
+
+1. ADD one `smoke` + `timeout(300)` marked test to `tests/smoke/test_smoke_feeds.py`
+   (or a new `tests/smoke/test_smoke_abp_perline.py` — prefer adding to the existing
+   feed smoke file if the structure fits; otherwise create a new file):
+
+   `test_abp_perline_detection_in_plain_feed`
+
+   Scenario: `||block^`, `@@||allow^` alongside plain domains in a non-ABP
+   custom-list feed → correct block/allow resolution after pfBlockerNG DNSBL update.
+
+   ```text
+   Background:
+     A Custom_List feed (no ABP header) containing three entries:
+       ||<unique-block>.<tld>^
+       @@||<unique-allow>.<tld>^
+       <unique-plain>.<tld>     (plain block — used to verify @@|| overrides it)
+     where <unique-allow> is also added as a plain block in the same list:
+       <unique-allow>.<tld>
+     (This tests that @@|| overrides even a plain block in the same feed.)
+
+   Given:
+     pfBlockerNG DNSBL is enabled; the custom list is not yet loaded.
+     Assert: drill @127.0.0.1 <block-domain> → NOERROR (not blocked).
+     Assert: drill @127.0.0.1 <allow-domain> → NOERROR (not blocked).
+     Assert: drill @127.0.0.1 <plain-domain> → NOERROR (not blocked).
+
+   When:
+     The custom list is added; pfBlockerNG DNSBL update is run; Unbound reloads.
+
+   Then:
+     drill @127.0.0.1 <block-domain> → sinkhole VIP or NULL (blocked by ||domain^).
+     drill @127.0.0.1 <allow-domain> → NOERROR, real/NXDOMAIN response (NOT blocked,
+       because @@||allow^ overrides the plain block for that domain).
+     drill @127.0.0.1 <plain-domain> → sinkhole VIP or NULL (plain block, unaffected).
+   ```
+
+   Implementation notes:
+   - Use `helpers.unique_domain()` for each of the three domains; **never** RFC 6761
+     TLDs; **never** HSTS-preload names.
+   - Inject the custom list via pfBlockerNG's DNSBL Group Custom_List mechanism
+     (match how existing smoke tests inject custom entries).
+   - After the update, use `wait_unbound_ready` before asserting DNS responses.
+   - Clean up in `finally`: remove the custom list entry and re-run the DNSBL update.
+   - @pytest.mark.timeout(300) on the test function.
+   - Assert BLOCK shape: NOERROR + sinkhole VIP or `0.0.0.0`/`::` (per "Block shapes
+     (python mode)" in CLAUDE.md). Do NOT assert NXDOMAIN for a feed-block match.
+
+2. DISPATCH the smoke and confirm green:
+   `gh workflow run smoke.yml -f pytest_marker=smoke`
+   Capture the run ID. The new test must be GREEN. All existing smoke tests must
+   remain GREEN.
+
+3. UPDATE inline comments at the two PHP insertion points if they need clarification
+   (the ADR-21 reference comments added in Phase 2 should already be sufficient —
+   only touch if something is unclear or incorrect).
+
+4. RECORD DoD evidence in `RESULTS/03_Results.txt`:
+   - Phase 1: `python -m pytest` outcome; `ruff`/`mypy` outcome; test names.
+   - Phase 2: PHP diff summary; `php -l` outcome; PHPUnit outcome.
+   - Phase 3: smoke run ID; per-case PASS/FAIL; exact `drill` outputs confirming
+     block/allow semantics.
+   - All CI gates: PASS.
+   - Confirmation that ABP-header feed test is a green regression guard.
+   - Manual smoke checklist status (run on live CE box — maintainer task; record
+     whether done or pending).
+
+CONSTRAINTS
+- @pytest.mark.smoke only (NOT `repo`); deselected from default `python -m pytest`
+  run automatically (smoke tree is `--ignore`d by default).
+- Use `unique_domain()` for every domain assertion — mandatory.
+- Leave the VM CLEAN in `finally`.
+- Do NOT add a new VM boot path; reuse the `smoke_vm` fixture.
+- The existing `test_adr07_*` and `test_adr21_*` unit tests continue to pass;
+  the smoke test is additive.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` (default, without smoke) → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+- Smoke workflow run: new test GREEN; existing smoke GREEN.
+- `git diff origin/devel...HEAD` shows: Phase 1 + Phase 2 files + the smoke test
+  addition + `RESULTS/03_Results.txt`. Nothing else.
+
+EXPECTED RESULT
+Live-VM evidence that `||domain^` in a custom-list produces a DNSBL block and
+`@@||domain^` cancels a plain block — proven by on-box `drill` responses.
+
+COMMIT (single)
+    tests: ADR-21 P3 smoke — per-line ABP detection in plain feed (ADR-21 P3)
+Push to `adr/21-abp-header-agnostic-detection`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/03_Results.txt`
+(plain .txt)
+Record: smoke run ID + per-case PASS; exact `drill` outputs; manual smoke checklist
+status; all CI gates PASS. This is the final handoff — the ADR is complete pending
+status update to Accepted on maintainer sign-off of the manual smoke.
