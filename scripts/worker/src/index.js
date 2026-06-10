@@ -47,7 +47,8 @@ async function getRoutes(ctx) {
     if (!resp.ok) return null;
     const ttlResp = new Response(resp.body, resp);
     ttlResp.headers.set("Cache-Control", `s-maxage=${CACHE_TTL}`);
-    ctx.waitUntil(cache.put(cacheKey, ttlResp));
+    ctx.waitUntil(cache.put(cacheKey, ttlResp.clone()));
+    resp = ttlResp;
   }
   const data = await resp.clone().json();
   return data.routes ?? null;
