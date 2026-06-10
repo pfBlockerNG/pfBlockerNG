@@ -226,11 +226,11 @@ jobs:
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          FROM_TAG: ${{ needs.resolve-from.outputs.from_tag }}
+          TARGET: ${{ inputs.pfsense_version }}
+          FORCE_FLAG: ${{ needs.resolve-from.outputs.force_flag }}
         run: |
           set -eu
-          FROM_TAG="${{ needs.resolve-from.outputs.from_tag }}"
-          TARGET="${{ inputs.pfsense_version }}"
-          FORCE_FLAG="${{ needs.resolve-from.outputs.force_flag }}"
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
