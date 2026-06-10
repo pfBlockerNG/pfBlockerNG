@@ -549,7 +549,8 @@ jobs:
     needs: [release]
     if: always() && needs.release.result == 'success'
     uses: ./.github/workflows/deploy-worker.yml
-    secrets: inherit
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
   ports-pr:
