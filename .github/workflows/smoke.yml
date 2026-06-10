@@ -154,6 +154,13 @@ jobs:
             # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
             REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
             NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
+            # Strip wildcard-style version inputs (e.g. "2.8.x") — the CI
+            # matrix uses ".x" as a range marker, not a literal GHCR tag.
+            # Fall back to SMOKE_IMAGE_TAG (the concrete build tag, e.g.
+            # "2.8.1") or the hardcoded default.
+            case "$INPUT_VERSION" in
+              *.x) INPUT_VERSION="" ;;
+            esac
             TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8.1}}"
             REF="${REPO%/}/${NAME}:${TAG}"
           fi
