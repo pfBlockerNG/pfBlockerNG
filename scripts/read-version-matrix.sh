@@ -112,8 +112,7 @@ CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[] | select(.ci == true and 
 
 # ── Sanity: CI matrix must not be empty ───────────────────────────────────────
 # Skip when --variant filters to a non-CE variant (Plus has ci=false by policy).
-_VF_LOWER_CHECK="$(printf '%s' "${VARIANT_FILTER:-}" | tr '[:upper:]' '[:lower:]')"
-if [ "$_VF_LOWER_CHECK" != "plus" ]; then
+if [ "${_VF_LOWER:-}" != "plus" ]; then
   CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
   if [ "$CI_COUNT" -eq 0 ]; then
     printf '::error::CI matrix is empty — no ci:true CE entries in %s\n' "$MATRIX_FILE" >&2

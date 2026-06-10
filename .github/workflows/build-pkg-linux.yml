@@ -126,26 +126,20 @@ jobs:
         run: |
           set -eu
           mkdir -p out
+          VARIANT_ARG=""
           if [ -n "$BUILD_VARIANT" ]; then
-            python3 scripts/build-pkg-portable.py \
-              --ports "${{ runner.temp }}/ports" \
-              --channel '${{ inputs.channel }}' \
-              --local-src . \
-              --abi '${{ inputs.abi }}' \
-              --py-flavor '${{ inputs.py_flavor }}' \
-              --php '${{ inputs.php_version }}' \
-              --variant "$BUILD_VARIANT" \
-              --out out
-          else
-            python3 scripts/build-pkg-portable.py \
-              --ports "${{ runner.temp }}/ports" \
-              --channel '${{ inputs.channel }}' \
-              --local-src . \
-              --abi '${{ inputs.abi }}' \
-              --py-flavor '${{ inputs.py_flavor }}' \
-              --php '${{ inputs.php_version }}' \
-              --out out
+            VARIANT_ARG="--variant $BUILD_VARIANT"
           fi
+          # shellcheck disable=SC2086
+          python3 scripts/build-pkg-portable.py \
+            --ports "${{ runner.temp }}/ports" \
+            --channel '${{ inputs.channel }}' \
+            --local-src . \
+            --abi '${{ inputs.abi }}' \
+            --py-flavor '${{ inputs.py_flavor }}' \
+            --php '${{ inputs.php_version }}' \
+            $VARIANT_ARG \
+            --out out
           ls -l out
 
       - name: Upload package
