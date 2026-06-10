@@ -97,16 +97,16 @@
    (`pfSense-pkg-pfBlockerNG-NIGHTLY`, dated version, `conflicts` with the release
    names) and a `nightly` channel in `add-repo.sh`. This ADR **reads** latest versions
    from those repos via `pkg`; it does not change the repo or the builder.
-   **ADR-20** (**Proposed**, 2026-06-09) supersedes ADR-17's single-ABI catalog model:
-   it splits the catalog into `ce/${ABI}/` and `plus/${ABI}/` subtrees and updates
-   `add-repo.sh` to auto-detect CE vs Plus (via `globals.plus.inc`) and write a
-   variant-correct static URL. **Impact on this ADR:** the `pkg rquery -r <ourrepo>`
-   invocation in §2 "Read latest" uses the conf section name written by `add-repo.sh`
-   (e.g. `pfblockerng-devel`); ADR-20 Phase 4 determines whether that name changes to
-   include the variant (e.g. `pfblockerng-ce-devel`) or stays unchanged with only the
-   URL differing. If the name changes, ADR-19 Phase-1 kill-gate must be re-validated
-   against the variant-correct repo name. ADR-20's Phase-7 handoff records the
-   authoritative conf name and whether this ADR's §2 / Phase-1 are affected.
+   **ADR-20** (**Accepted**, 2026-06-10) supersedes ADR-17's single-ABI catalog model:
+   it splits the catalog into version-keyed dirs (`ce-2.8/${ABI}/`, `plus-26.03/${ABI}/`)
+   and routes requests via a Cloudflare Worker at `pkg.pfblockerng.workers.dev` that
+   reads the pfSense `User-Agent` to redirect CE vs Plus boxes to the correct catalog.
+   `add-repo.sh` writes a **single Worker URL** (no variant or pfSense version in the
+   conf); the conf section name is **unchanged** — `pfblockerng-devel`, `pfblockerng`,
+   `pfblockerng-nightly`. **Impact on this ADR:** the `pkg rquery -r <ourrepo>`
+   invocation in §2 "Read latest" is **UNAFFECTED** — the repo section name remains
+   `pfblockerng-devel` (or `pfblockerng` / `pfblockerng-nightly`); only the URL in the
+   conf now points to the Worker. ADR-19 Phase-1 kill-gate is valid as written.
 
 ### Premise to falsify cheaply (the ADR-01 guard)
 
