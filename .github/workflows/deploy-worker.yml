@@ -17,6 +17,8 @@ on:
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
   workflow_dispatch:
   push:
     branches: [devel, main]
@@ -39,4 +41,5 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: scripts/worker

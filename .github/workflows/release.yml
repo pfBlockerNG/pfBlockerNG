@@ -551,6 +551,7 @@ jobs:
     uses: ./.github/workflows/deploy-worker.yml
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
   ports-pr:
