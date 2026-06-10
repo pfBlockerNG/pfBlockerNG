@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/andrebrait/pfBlockerNG/ci-metadata/supported-versions.schema.json",
+  "$schema": "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/ci-metadata/supported-versions.schema.json",
   "description": "pfBlockerNG supported pfSense version matrix. Edit this file to add/drop a version; all CI/build workflows read it at runtime. See LIFECYCLE below.",
   "lifecycle_policy": {
     "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
