@@ -22,7 +22,7 @@
         "properties": {
           "pfsense_version": {
             "type": "string",
-            "description": "pfSense version label, e.g. '2.8.x' or '25.03'. For CE minor families use 'X.Y.x'; for Plus use the Plus release label."
+            "description": "pfSense version label, e.g. '2.8' or '26.03'. For CE minor families use 'X.Y' (floating Major.Minor GHCR tag); for Plus use the Plus release label."
           },
           "channel": {
             "type": "string",
@@ -47,8 +47,13 @@
           },
           "status": {
             "type": "string",
-            "enum": ["beta", "GA"],
-            "description": "beta = pre-release; GA = generally available. Set to beta when first added; update to GA on release."
+            "enum": ["beta", "active", "GA"],
+            "description": "beta = pre-release; active = GA and currently supported; GA = generally available (legacy alias for active). Set to beta when first added; update to active on GA release."
+          },
+          "variant": {
+            "type": "string",
+            "enum": ["CE", "Plus"],
+            "description": "Variant alias for channel. CE = Community Edition; Plus = pfSense Plus. Must match the channel field."
           },
           "ci": {
             "type": "boolean",
