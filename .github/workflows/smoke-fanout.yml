@@ -104,9 +104,13 @@ jobs:
   #
   # IMAGE REF RESOLUTION:
   # The CI matrix entry carries pfsense_version (e.g. "2.8.x"). We pass it to
-  # smoke.yml as `pfsense_version`; smoke.yml composes the GHCR ref from the
-  # SMOKE_IMAGE_REPO / SMOKE_IMAGE_NAME / SMOKE_IMAGE_TAG repo variables, with
-  # pfsense_version overriding the tag.
+  # smoke.yml as `pfsense_version` so smoke.yml can compose the GHCR ref.
+  # IMPORTANT: pfsense_version entries ending in ".x" are WILDCARD PATTERNS (e.g.
+  # "2.8.x" covers the whole 2.8 release line). A ".x" pattern does NOT exist as a
+  # GHCR image tag — only the specific patch release does (e.g. "2.8.1"), which is
+  # stored in the SMOKE_IMAGE_TAG repo variable. In that case pass empty string so
+  # smoke.yml falls back to SMOKE_IMAGE_TAG. For exact-version entries (e.g. "26.03")
+  # pass the version directly — it matches the GHCR tag verbatim.
   smoke:
     name: Smoke (${{ matrix.pfsense_version }})
     needs: prepare
@@ -118,11 +122,10 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
     uses: ./.github/workflows/smoke.yml
     with:
-      # Pass only the per-leg version; smoke.yml composes the ref from the
-      # SMOKE_IMAGE_{REPO,NAME,TAG} vars (pfsense_version overrides the tag). This
-      # keeps the namespace/name in one place (the repo vars) instead of hardcoding
-      # ghcr.io/<owner>/pfsense-ce here.
-      pfsense_version: ${{ matrix.pfsense_version }}
+      # Wildcard-pattern versions (ending in .x, e.g. "2.8.x") are NOT valid GHCR
+      # tags — pass empty so smoke.yml uses the SMOKE_IMAGE_TAG repo variable (which
+      # holds the actual patch tag, e.g. "2.8.1"). Exact-version entries pass through.
+      pfsense_version: ${{ endsWith(matrix.pfsense_version, '.x') && '' || matrix.pfsense_version }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────

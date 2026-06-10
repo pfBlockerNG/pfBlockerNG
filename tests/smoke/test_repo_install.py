@@ -1348,8 +1348,13 @@ def forge_plus_pkg(src_pkg: Path, out_dir: Path) -> Path:
 
 
 def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
-    """Return the raw ``pkg query '%d %v' <PKG_NAME>`` output (dep names + versions)."""
-    result = vm.ssh("pkg", "query", "%d %v", PKG_NAME, timeout=timeout)
+    """Return the raw ``pkg query '%dn %dv' <PKG_NAME>`` output (dep names + versions).
+
+    Uses ``%dn`` (dep name) and ``%dv`` (dep version) — the correct per-dependency
+    sub-field specifiers in libpkg's query format. ``%d`` alone is an iterator
+    marker with no output; ``%v`` is the package's own version (not the dep's).
+    """
+    result = vm.ssh("pkg", "query", "%dn %dv", PKG_NAME, timeout=timeout)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -1369,7 +1374,7 @@ def test_ce_install_from_variant_ce_catalog(repo_vm: SmokeVM, tmp_path: Path) ->
     Given the package ABSENT and a variant-keyed catalog under ``ce-2.8/${ABI}/``
       built from the branch .pkg by the pure-Python generator,
     When ``pkg install -y <pkgname>`` resolves from this CE catalog,
-    Then ``pkg query '%d %v' <pkgname>`` shows ``php83`` in the dep list (CE dep
+    Then ``pkg query '%dn %dv' <pkgname>`` shows ``php83`` in the dep list (CE dep
       satisfied), the version matches the branch .pkg, and the origin is our repo.
     Assert BEFORE: ``pkg query '%n' <pkgname>`` returns empty (package absent).
     Assert AFTER: dep list contains ``php83``; version and origin correct.
@@ -1403,10 +1408,10 @@ def test_ce_install_from_variant_ce_catalog(repo_vm: SmokeVM, tmp_path: Path) ->
     # THEN: dep list contains php83 (CE dep), origin is ours.
     deps_out = pkg_query_deps(repo_vm)
     assert "php83" in deps_out, (
-        f"php83 dep not satisfied after CE variant install; pkg query '%d %v' output:\n{deps_out}"
+        f"php83 dep not satisfied after CE variant install; pkg query '%dn %dv' output:\n{deps_out}"
     )
     assert "php85" not in deps_out, (
-        f"Plus dep php85 should not appear in CE install; pkg query '%d %v' output:\n{deps_out}"
+        f"Plus dep php85 should not appear in CE install; pkg query '%dn %dv' output:\n{deps_out}"
     )
     origin = pkg_repo_origin(repo_vm)
     assert origin == OURS_REPO_NAME, f"CE variant install: came from {origin!r}, expected {OURS_REPO_NAME!r}"
@@ -1466,7 +1471,7 @@ def test_wrong_variant_plus_catalog_fails_on_ce_vm(repo_vm: SmokeVM, tmp_path: P
     ce_combined = ce_install.stdout + ce_install.stderr
     assert "Missing dependency" not in ce_combined, f"Control (CE) install: RUN_DEPENDS did not resolve:\n{ce_combined}"
     ce_deps = pkg_query_deps(repo_vm)
-    assert "php83" in ce_deps, f"Control (CE) install: php83 not in deps; pkg query '%d %v':\n{ce_deps}"
+    assert "php83" in ce_deps, f"Control (CE) install: php83 not in deps; pkg query '%dn %dv':\n{ce_deps}"
     # CE install succeeded — this is the before-state anchor.
 
     # ---- Forge Plus .pkg (php85 dep, FreeBSD:16 ABI) ----
