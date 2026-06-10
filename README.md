@@ -76,8 +76,9 @@ simplest path and the right one for most users.
 
 To run **this fork's latest builds** — ahead of, and independent of, the Netgate
 catalog — add our self-hosted FreeBSD `pkg` repository
-([ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md)). It resolves dependencies normally
-(no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
+([ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md),
+[ADR-20](.ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md)). It resolves dependencies
+normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
 
 ```sh
 ./scripts/add-repo.sh devel        # or: stable
@@ -85,11 +86,12 @@ pkg install pfSense-pkg-pfBlockerNG-devel
 ```
 
 `add-repo.sh` writes `/usr/local/etc/pkg/repos/pfblockerng-<channel>.conf`, runs
-`pkg update`, and verifies the package is visible. The configuration it writes is:
+`pkg update`, and verifies the package is visible. No variant argument is needed — the
+script auto-detects CE vs Plus via the routing layer. The configuration it writes is:
 
 ```sh
 pfblockerng-devel: {
-  url: "https://pfblockerng.github.io/pkg/${ABI}",
+  url: "https://pkg.pfblockerng.workers.dev/${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: 100,
@@ -99,11 +101,20 @@ pfblockerng-devel: {
 
 - **`${ABI}`** is a `pkg(8)` variable (expanded by `pkg`, not the shell), so one
   configuration follows the box across a pfSense OS upgrade.
+- The **routing URL** (`pkg.pfblockerng.workers.dev`) is a Cloudflare Worker that reads
+  the pfSense `User-Agent` on each request and redirects to the correct variant catalog:
+  CE boxes get `ce-2.8/${ABI}/` (php83 dep); Plus boxes get `plus-26.03/${ABI}/`
+  (php85 dep). The conf is written once and **never needs re-running on a pfSense
+  upgrade** — the Worker reroutes automatically.
 - The repository is **NONE-signed** — trust is anchored in HTTPS to the host.
 - **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
   resolution (and the webConfigurator's **Install** button) picks our build.
 
-> **Note:** Installs and updates work via the **Install** button or `pkg upgrade`,
+> **Transition note (ADR-20):** If you configured the repo before 2026-06-10, re-run
+> `sh scripts/add-repo.sh devel` (or `stable`) to refresh the conf to the Worker URL.
+> The legacy `pfblockerng.github.io/pkg/${ABI}/` path continues to serve CE packages
+> during the transition window.
+> Installs and updates work via the **Install** button or `pkg upgrade`,
 > but pfSense's GUI won't show an "update available" badge for our builds.
 
 #### Nightly channel (bleeding edge)

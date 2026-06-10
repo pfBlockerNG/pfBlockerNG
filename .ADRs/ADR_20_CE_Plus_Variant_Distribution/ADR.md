@@ -1,6 +1,6 @@
 # ADR-20: CE/Plus variant-aware pkg distribution
 
-- **Status:** **Proposed** (2026-06-09)
+- **Status:** **Accepted** (2026-06-10)
 - **Date:** 2026-06-09
 - **Branch:** `adr/20-ce-plus-variant-distribution` (off **`devel`**; `{slug}` =
   sanitised ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):**
