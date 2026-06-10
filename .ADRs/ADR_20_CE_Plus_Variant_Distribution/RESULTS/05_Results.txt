@@ -1,0 +1,187 @@
+================================================================================
+PHASE 5 RESULTS — Dynamic routing layer: Worker + routing.json
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+PHASE_5_STATUS: GO — Phase 1 USER_AGENT_VISIBLE = GO
+
+--------------------------------------------------------------------------------
+PRECONDITION CHECK
+--------------------------------------------------------------------------------
+
+Phase 1 verdict: USER_AGENT_VISIBLE = GO (01_Results.txt)
+Phase 4 conf URL written: https://pkg.pfblockerng.workers.dev (04_Results.txt)
+Proceeding with implementation path (not the skip path).
+
+--------------------------------------------------------------------------------
+WORKER DEPLOYMENT
+--------------------------------------------------------------------------------
+
+Routing URL (canonical): https://pkg.pfblockerng.workers.dev
+Worker name:             pkg  (account subdomain: pfblockerng)
+Deployed by:             maintainer manually via Cloudflare dashboard
+
+Worker script syntax: Service Worker syntax (addEventListener / event.respondWith),
+NOT ES Module syntax (export default { async fetch() {} }).
+
+The deployed Worker code:
+
+  const ROUTING_MANIFEST_URL = 'https://pfblockerng.github.io/pkg/routing.json';
+  const CACHE_TTL = 300;
+
+  addEventListener('fetch', event => {
+    event.respondWith(handleRequest(event.request, event));
+  });
+
+  async function handleRequest(request, event) {
+    const ua = request.headers.get('User-Agent') ?? '';
+    const url = new URL(request.url);
+    const routes = await getRoutes(event);
+    if (!routes) {
+      return new Response('Routing manifest unavailable', { status: 502 });
+    }
+    const route = routes.find(r => ua.includes(r.pattern));
+    if (!route) {
+      return new Response('Unsupported pfSense version (UA: ' + ua + ')', { status: 404 });
+    }
+    const target = 'https://pfblockerng.github.io/pkg/' + route.catalog + url.pathname;
+    return Response.redirect(target, 302);
+  }
+
+  async function getRoutes(event) {
+    const cache = caches.default;
+    const cacheKey = new Request(ROUTING_MANIFEST_URL);
+    let resp = await cache.match(cacheKey);
+    if (!resp) {
+      resp = await fetch(ROUTING_MANIFEST_URL);
+      if (!resp.ok) return null;
+      const ttlResp = new Response(resp.body, resp);
+      ttlResp.headers.set('Cache-Control', 's-maxage=' + CACHE_TTL);
+      event.waitUntil(cache.put(cacheKey, ttlResp.clone()));
+      resp = ttlResp;
+    }
+    const data = await resp.clone().json();
+    return data.routes ?? null;
+  }
+
+Design points:
+  - Stateless: no KV, no Durable Objects, no persistent storage.
+  - routing.json fetched from Pages and edge-cached for CACHE_TTL (300 s / 5 min).
+  - UA matched as substring (ua.includes(r.pattern)); first match wins.
+    Most-specific patterns must be listed before less-specific ones in routing.json.
+  - Failure modes: routing.json unavailable -> 502; no matching route -> 404.
+    Never a silent wrong redirect.
+
+--------------------------------------------------------------------------------
+CURL VERIFICATION
+--------------------------------------------------------------------------------
+
+Live smoke verified by maintainer before Phase 5 hand-off:
+
+  curl -sI -A 'pfSense/2.8.1-RELEASE:test' \
+    https://pkg.pfblockerng.workers.dev/FreeBSD:15:amd64/meta.conf
+
+  Result: HTTP/2 502
+  Interpretation: Worker is ALIVE and responding; 502 is expected because
+  routing.json has not yet been deployed to Pages (Phase 6 prerequisite).
+  The 502 response body is "Routing manifest unavailable" — correct Worker
+  behaviour when routing.json is absent (not a silent fail, not a 500).
+
+  Unmatched UA test: not yet testable (Worker returns 502 before route-matching
+  when routing.json is absent). Will be verified in Phase 6 with routing.json live.
+
+  routing.json live-update cycle: not yet testable; deferred to Phase 6.
+
+--------------------------------------------------------------------------------
+scripts/add-repo.sh HEADER — NO CHANGE NEEDED
+--------------------------------------------------------------------------------
+
+Phase 4 (commit 7936433) already updated the add-repo.sh header comment to
+document the Worker URL as canonical and explain the dynamic routing mechanism.
+The relevant lines (18–23):
+
+  # THE CONF (single source of truth — matches `build-repo.sh --print-conf`):
+  #   url:            Cloudflare Worker URL (ADR-20). The Worker routes requests to
+  #                   the correct versioned catalog dir based on the pfSense User-Agent
+  #                   (CE vs Plus, major.minor version). One conf written once; never
+  #                   needs re-running after a pfSense OS upgrade — the Worker re-routes
+  #                   automatically. Override --base-url for forks/staging.
+
+And line 62:
+  DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
+
+No further change to this repo's files is required for Phase 5.
+
+--------------------------------------------------------------------------------
+WHAT pfBlockerNG/pkg NEEDS FOR CI AUTOMATION
+--------------------------------------------------------------------------------
+
+The Worker code is deployed manually; to automate via CI, pfBlockerNG/pkg needs:
+
+1. infra/worker/src/index.js (or worker.js)
+   Place the Service Worker code above verbatim.
+
+2. infra/worker/wrangler.toml (minimal):
+     name = "pfblockerng-pkg-router"
+     main = "src/index.js"
+     compatibility_date = "2024-01-01"
+     [routes]
+     pattern = "pkg.pfblockerng.io/*"
+     zone_name = "pfblockerng.io"
+   NOTE: if the pfblockerng.io domain is not registered, use the workers.dev
+   subdomain (pkg.pfblockerng.workers.dev is already live as the workers.dev URL).
+
+3. infra/worker/package.json
+   wrangler as a devDependency (npm ci installs it in the deploy step).
+
+4. deploy-worker step in publish.yml (after the Pages deploy step):
+     - name: Deploy Cloudflare Worker
+       working-directory: infra/worker
+       run: |
+         npm ci
+         npx wrangler deploy
+       env:
+         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+   Auth: CLOUDFLARE_API_TOKEN secret (Actions secret in pfBlockerNG/pkg);
+   requires Workers:Edit scope on the pfblockerng.io zone (or account-level).
+   DO NOT use continue-on-error — a failed Worker deploy means pkg routing is broken.
+
+5. CLOUDFLARE_API_TOKEN Actions secret: set in pfBlockerNG/pkg repo settings.
+   Scope: Workers Scripts:Edit (+ optionally Workers Routes:Edit for custom domain).
+
+The Worker redeploys on every publish.yml run (~2 s, stateless, no downtime risk).
+Adding/retiring a pfSense version = edit routing.json only; no Worker redeploy needed.
+
+--------------------------------------------------------------------------------
+WRANGLER DEPLOY STATUS
+--------------------------------------------------------------------------------
+
+CI-automated: NOT YET — Worker deployed manually by maintainer.
+The CI automation (infra/worker/ + wrangler deploy in publish.yml) is a cross-repo
+change that goes in pfBlockerNG/pkg. Described above; not implemented here (this repo
+contributes only documentation per the Phase 5 prompt).
+
+--------------------------------------------------------------------------------
+ROUTING.JSON LIVE-UPDATE
+--------------------------------------------------------------------------------
+
+Not yet testable: routing.json has not been deployed to Pages. The Worker correctly
+returns 502 when routing.json is absent (verified above). Full routing verification
+(UA -> catalog redirect) is deferred to Phase 6, which will:
+  1. Confirm routing.json is live on Pages.
+  2. curl CE UA -> assert 302 to ce-2.8/<ABI>/meta.conf.
+  3. curl Plus UA -> assert 302 to plus-26.03/<ABI>/meta.conf.
+  4. curl unmatched UA -> assert 404 (not silent).
+  5. Simulate routing.json unavailable -> assert 502 (not silent).
+  6. Verify live-update cycle: edit routing.json -> wait <=5 min -> new route active.
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 6
+--------------------------------------------------------------------------------
+
+Phase 6 (smoke: verify Worker routing end-to-end on a live CE VM) can proceed.
+Prerequisite: routing.json must be deployed to Pages before Phase 6 live smoke runs.
+The Worker is live and responds correctly to the absence of routing.json (502).
+Once routing.json is on Pages, the full UA -> versioned catalog redirect chain is
+testable without any further changes to this repo.
