@@ -59,15 +59,13 @@ runs:
         MATRIX_FILE: ${{ inputs.matrix_file }}
         VARIANT_INPUT: ${{ inputs.variant }}
       run: |
+        VARIANT_ARG=""
         if [ -n "$VARIANT_INPUT" ]; then
-          sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
-            --ref "$MATRIX_REF" \
-            --file "$MATRIX_FILE" \
-            --variant "$VARIANT_INPUT" \
-            --github-output
-        else
-          sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
-            --ref "$MATRIX_REF" \
-            --file "$MATRIX_FILE" \
-            --github-output
+          VARIANT_ARG="--variant $VARIANT_INPUT"
         fi
+        # shellcheck disable=SC2086
+        sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
+          --ref "$MATRIX_REF" \
+          --file "$MATRIX_FILE" \
+          $VARIANT_ARG \
+          --github-output

@@ -744,7 +744,8 @@ def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]:
     Pure function: no I/O, no side effects.  Testable without a ports tree.
     """
     php_dep = "php" + php_version.replace(".", "")
-    return [php_dep, py_flavor]
+    py_dep = py_flavor if py_flavor.startswith("py") else f"py{py_flavor}"
+    return [php_dep, py_dep]
 
 
 def apply_repo_catalogue(deps: list[Dep], source: str, abi: str) -> None:
