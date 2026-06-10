@@ -42,6 +42,10 @@ on:
         description: "PHP version for dep names (CE 2.8.1 = 8.3)"
         required: false
         default: "8.3"
+      variant:
+        description: "pfSense variant (CE or Plus). Injects variant-specific RUN_DEPENDS. Omit for legacy behaviour."
+        required: false
+        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework"
         required: false
@@ -68,6 +72,10 @@ on:
         required: false
         type: string
         default: "8.3"
+      variant:
+        required: false
+        type: string
+        default: ""
       ports_repo:
         required: false
         type: string
@@ -113,17 +121,31 @@ jobs:
             "https://github.com/${{ inputs.ports_repo }}" "${{ runner.temp }}/ports"
 
       - name: Build the .pkg (portable, from the local tree)
+        env:
+          BUILD_VARIANT: ${{ inputs.variant }}
         run: |
           set -eu
           mkdir -p out
-          python3 scripts/build-pkg-portable.py \
-            --ports "${{ runner.temp }}/ports" \
-            --channel '${{ inputs.channel }}' \
-            --local-src . \
-            --abi '${{ inputs.abi }}' \
-            --py-flavor '${{ inputs.py_flavor }}' \
-            --php '${{ inputs.php_version }}' \
-            --out out
+          if [ -n "$BUILD_VARIANT" ]; then
+            python3 scripts/build-pkg-portable.py \
+              --ports "${{ runner.temp }}/ports" \
+              --channel '${{ inputs.channel }}' \
+              --local-src . \
+              --abi '${{ inputs.abi }}' \
+              --py-flavor '${{ inputs.py_flavor }}' \
+              --php '${{ inputs.php_version }}' \
+              --variant "$BUILD_VARIANT" \
+              --out out
+          else
+            python3 scripts/build-pkg-portable.py \
+              --ports "${{ runner.temp }}/ports" \
+              --channel '${{ inputs.channel }}' \
+              --local-src . \
+              --abi '${{ inputs.abi }}' \
+              --py-flavor '${{ inputs.py_flavor }}' \
+              --php '${{ inputs.php_version }}' \
+              --out out
+          fi
           ls -l out
 
       - name: Upload package

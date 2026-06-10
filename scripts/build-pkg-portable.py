@@ -732,6 +732,21 @@ def _glob_origin(ports_root: Path, pkgdir: str) -> str:
     return ""
 
 
+def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]:
+    """Return the RUN_DEPENDS package names for a specific pfSense variant.
+
+    Derives the PHP dep name by stripping the dot from ``php_version``
+    (e.g. ``"8.3"`` → ``"php83"``); uses ``py_flavor`` directly as the
+    Python dep name (e.g. ``"py311"``).  Both are needed because the exact
+    versions differ between CE and Plus — this is the variant guard that
+    prevents a wrong-variant package from silently installing.
+
+    Pure function: no I/O, no side effects.  Testable without a ports tree.
+    """
+    php_dep = "php" + php_version.replace(".", "")
+    return [php_dep, py_flavor]
+
+
 def apply_repo_catalogue(deps: list[Dep], source: str, abi: str) -> None:
     """Pin each dep's version/origin to the binary repo's — the exact source
     `make package` records (the INSTALLED package versions). `source` is a path to
@@ -1320,6 +1335,15 @@ def run_build(args: argparse.Namespace) -> Build:
     deps: dict[str, Dep] = {}
     for d in resolve_deps(mk, ports_root, seed) + synthesize_uses_deps(mk, ports_root, php_ver, py_flavor, seed):
         deps.setdefault(d.name, d)
+    # When --variant is given, inject variant-specific RUN_DEPENDS entries derived
+    # from --php and --py-flavor. These are the variant guard: they ensure `pkg add`
+    # rejects a wrong-variant .pkg (CE php83 won't satisfy a Plus php85 dep).
+    # The dep names are derived — not hardcoded — so updating ci-metadata is the
+    # only change needed when CE/Plus bumps their PHP or Python version.
+    if args.variant:
+        for dep_name in _resolve_variant_deps(php_ver, py_flavor):
+            # Variant deps augment (never override) USES-synthesised deps.
+            deps.setdefault(dep_name, Dep(name=dep_name, origin="", version="0"))
     b.deps = list(deps.values())
     # Best-effort dep versions come from the ports tree; the version make package
     # actually records is the INSTALLED binary package's. Pin those exactly from
@@ -1379,6 +1403,17 @@ def main(argv: list[str]) -> int:
     )
     g_target.add_argument(
         "--freebsd-version", default="", help="build host __FreeBSD_version for annotations, e.g. 1500068 (optional)"
+    )
+    g_target.add_argument(
+        "--variant",
+        default="",
+        metavar="CE|Plus",
+        help=(
+            "pfSense variant (CE or Plus). When set, injects variant-specific RUN_DEPENDS "
+            "entries derived from --php and --py-flavor (e.g. php83 + py311 for CE 2.8). "
+            "Prevents wrong-variant packages from silently installing. "
+            "Without this flag behaviour is unchanged (backward-compatible)."
+        ),
     )
 
     g_snap = ap.add_argument_group("nightly overrides (ADR-18; default off — release build byte-identical)")

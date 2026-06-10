@@ -5,6 +5,7 @@
 # Usage:
 #   read-version-matrix.sh [--ref <git-ref>] [--file <path>] [--github-output]
 #                          [--print-build | --print-ci | --print-all]
+#                          [--variant CE|Plus]
 #
 # Options:
 #   --ref <git-ref>      Git ref to read from (default: origin/ci-metadata).
@@ -16,11 +17,16 @@
 #   --print-build        Print BUILD matrix JSON to stdout.
 #   --print-ci           Print CI matrix JSON to stdout.
 #   --print-all          Print both matrices to stdout (labelled).
+#   --variant CE|Plus    Filter both matrices to entries whose `variant` field
+#                        matches the given value (case-insensitive). Returns ALL
+#                        matching entries — during a transition window there may
+#                        be multiple CE or Plus entries simultaneously. Without
+#                        this flag all entries are returned (backward-compatible).
 #
 # Outputs:
 #   BUILD matrix — all entries from supported-versions.json, each carrying:
 #     pfsense_version, channel, freebsd_version, freebsd_major,
-#     php_version, py_flavor, status, ci
+#     php_version, py_flavor, variant, status, ci
 #   CI matrix    — the ci:true CE entries only (subset of BUILD matrix).
 #
 # Requirements: git, jq (both available on ubuntu-latest GH runners).
@@ -38,12 +44,14 @@ MATRIX_FILE="${MATRIX_FILE:-supported-versions.json}"
 DO_GITHUB_OUTPUT=0
 DO_PRINT_BUILD=0
 DO_PRINT_CI=0
+VARIANT_FILTER=""
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref)       MATRIX_REF="$2";  shift 2 ;;
     --file)      MATRIX_FILE="$2"; shift 2 ;;
+    --variant)   VARIANT_FILTER="$2"; shift 2 ;;
     --github-output) DO_GITHUB_OUTPUT=1; shift ;;
     --print-build)   DO_PRINT_BUILD=1;   shift ;;
     --print-ci)      DO_PRINT_CI=1;      shift ;;
@@ -88,20 +96,35 @@ if ! printf '%s' "$RAW_JSON" | jq -e '.versions | type == "array"' >/dev/null 2>
   exit 1
 fi
 
-# ── Build matrix: all entries ──────────────────────────────────────────────────
-BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
+# ── Build matrix: all entries (optionally filtered by --variant) ──────────────
+if [ -n "$VARIANT_FILTER" ]; then
+  # Case-insensitive match: compare lowercase of both sides.
+  _VF_LOWER="$(printf '%s' "$VARIANT_FILTER" | tr '[:upper:]' '[:lower:]')"
+  BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c \
+    --arg vf "$_VF_LOWER" \
+    '[.versions[] | select((.variant // "" | ascii_downcase) == $vf)]')"
+else
+  BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
+fi
 
-# ── CI matrix: ci:true CE entries only ────────────────────────────────────────
-CI_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '[.versions[] | select(.ci == true and .channel == "CE")]')"
+# ── CI matrix: ci:true CE entries only (within the variant-filtered set) ──────
+CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[] | select(.ci == true and .channel == "CE")]')"
 
 # ── Sanity: CI matrix must not be empty ───────────────────────────────────────
-CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
-if [ "$CI_COUNT" -eq 0 ]; then
-  printf '::error::CI matrix is empty — no ci:true CE entries in %s\n' "$MATRIX_FILE" >&2
-  exit 1
+# Skip when --variant filters to a non-CE variant (Plus has ci=false by policy).
+_VF_LOWER_CHECK="$(printf '%s' "${VARIANT_FILTER:-}" | tr '[:upper:]' '[:lower:]')"
+if [ "$_VF_LOWER_CHECK" != "plus" ]; then
+  CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
+  if [ "$CI_COUNT" -eq 0 ]; then
+    printf '::error::CI matrix is empty — no ci:true CE entries in %s\n' "$MATRIX_FILE" >&2
+    exit 1
+  fi
 fi
 
 # ── Emit ──────────────────────────────────────────────────────────────────────
+# Variant JSON array: distinct variant values present in the BUILD matrix.
+VARIANT_ARRAY="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].variant // empty] | unique')"
+
 if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
   if [ -z "${GITHUB_OUTPUT:-}" ]; then
     printf '::error::GITHUB_OUTPUT is not set — cannot write step outputs\n' >&2
@@ -111,6 +134,7 @@ if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
   {
     printf 'build_matrix<<__EOF_BUILD_MATRIX__\n%s\n__EOF_BUILD_MATRIX__\n' "$BUILD_MATRIX"
     printf 'ci_matrix<<__EOF_CI_MATRIX__\n%s\n__EOF_CI_MATRIX__\n' "$CI_MATRIX"
+    printf 'variant<<__EOF_VARIANT__\n%s\n__EOF_VARIANT__\n' "$VARIANT_ARRAY"
   } >> "$GITHUB_OUTPUT"
 fi
 
