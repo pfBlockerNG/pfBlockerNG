@@ -1,0 +1,169 @@
+================================================================================
+PHASE 4 RESULTS — add-repo.sh Worker URL conf
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+VERDICT: GO — all verification steps pass, tests green, lint clean.
+
+--------------------------------------------------------------------------------
+PATH TAKEN: PRIMARY (Phase 1 USER_AGENT_VISIBLE = GO)
+--------------------------------------------------------------------------------
+
+Phase 1 returned GO, so the primary path was implemented: the Cloudflare Worker URL.
+The fallback (version-detect + static GitHub Pages URL) was NOT implemented.
+Documentation of the fallback approach is in §FALLBACK below.
+
+--------------------------------------------------------------------------------
+CONF URL WRITTEN
+--------------------------------------------------------------------------------
+
+Canonical URL (add-repo.sh + build-repo.sh --print-conf, byte-identical):
+
+  url: "https://pkg.pfblockerng.workers.dev/${ABI}",        (devel / stable)
+  url: "https://pkg.pfblockerng.workers.dev/nightly/${ABI}", (nightly channel)
+
+The Worker base URL is: https://pkg.pfblockerng.workers.dev
+
+Written once; never needs re-running after a pfSense OS upgrade. The Worker
+re-routes requests to the correct versioned catalog dir (ce-2.8/${ABI}/,
+plus-26.03/${ABI}/) based on the pfSense User-Agent header.
+
+${ABI} IN THE CONF: NO — the Worker base URL itself does NOT contain the literal
+text "${ABI}". The placeholder appears only in the full url: line value (appended
+after the base), where pkg(8) expands it at fetch time. The Worker receives
+requests at the version-keyed path (e.g. /ce-2.8/FreeBSD:15:amd64/) after
+pkg expands ${ABI}; the conf URL the admin writes is just the clean Worker base.
+
+--------------------------------------------------------------------------------
+PFBLOCKERNG_ROOT OVERRIDE MECHANISM
+--------------------------------------------------------------------------------
+
+Guard in scripts/add-repo.sh (line ~52):
+  PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
+  REPOS_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/etc/pkg/repos"
+
+Tests set PFBLOCKERNG_ROOT to a tmpdir to redirect conf writes without needing
+root or a live pfSense box.
+
+PKG_BIN OVERRIDE (added in Phase 4):
+  PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
+
+Also added in this phase. The script previously hardcoded /usr/local/sbin/pkg;
+making it env-overridable allows tests to inject a fake pkg stub so the conf-write
+path (which precedes the pkg binary check) can be exercised off-box.
+
+--------------------------------------------------------------------------------
+FALLBACK DETECTION LOGIC (NOT IMPLEMENTED — REFERENCE ONLY)
+--------------------------------------------------------------------------------
+
+If Phase 1 had returned REJECT, the fallback would:
+  1. Read pfSense version: $(cat /etc/version) e.g. "2.8.1" or "26.03.1"
+  2. Extract major.minor: echo "$VERSION" | sed 's/\.[0-9]*$//' -> "2.8" / "26.03"
+  3. Detect CE vs Plus: if [ -f "${PFBLOCKERNG_ROOT%/}/etc/inc/globals.plus.inc" ]
+     then VARIANT=plus; else VARIANT=ce; fi
+  4. Construct catalog name: CE -> "ce-${MAJOR_MINOR}"; Plus -> "plus-${MAJOR_MINOR}"
+  5. Write conf URL: url: "https://pfblockerng.github.io/pkg/${CATALOG_NAME}/${ABI}",
+  6. Add conf comment: # Written for pfSense ${VERSION} — re-run add-repo.sh after
+     a major pfSense version upgrade
+
+This is NOT implemented. Phase 5 (Worker deployment) is the authoritative path.
+
+--------------------------------------------------------------------------------
+CHANGES MADE
+--------------------------------------------------------------------------------
+
+scripts/add-repo.sh:
+  - DEFAULT_BASE_URL already set to https://pkg.pfblockerng.workers.dev (in place
+    from an earlier partial commit on the branch).
+  - Added PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}" env-override guard (header
+    comment updated to document it).
+  - Updated header comments to document Worker URL semantics (ADR-20).
+
+scripts/build-repo.sh:
+  - Updated DEFAULT_BASE_URL from https://pfblockerng.github.io/pkg to
+    https://pkg.pfblockerng.workers.dev (--print-conf output now byte-identical
+    to add-repo.sh devel).
+  - Updated NOTE block in the --print-conf comment section to document the Worker
+    URL as canonical and its role in routing to versioned dirs.
+
+tests/test_add_repo_conf.py:
+  - Updated existing test parametrize URLs from old GitHub Pages pattern to
+    Worker URL pattern (_WORKER_URL constant).
+  - Added _WORKER_URL and _OLD_PAGES_URL module constants.
+  - Added _run_add_repo() helper: writes a fake pkg stub, sets PFBLOCKERNG_ROOT +
+    PKG_BIN env vars, runs add-repo.sh with check=False (conf write is the goal).
+  - Added 4 new tests (see TEST NAMES below).
+
+--------------------------------------------------------------------------------
+TEST NAMES ADDED
+--------------------------------------------------------------------------------
+
+File: tests/test_add_repo_conf.py  (4 new tests; total 10)
+
+  1. test_primary_url_is_worker_url
+     Before-state: conf does not exist (fresh tmpdir).
+     Run add-repo.sh devel -> assert written conf contains pkg.pfblockerng.workers.dev
+     and does NOT contain pfblockerng.github.io.
+
+  2. test_worker_url_has_no_abi_placeholder
+     Asserts the Worker base URL portion does NOT contain the literal text ${ABI}.
+     The ${ABI} placeholder appears only in the full url: line (appended after the
+     base); the Worker hostname/path-prefix is a clean URL.
+
+  3. test_worker_url_unchanged_regardless_of_channel
+     Runs add-repo.sh with devel, stable, nightly -> all three contain the same
+     Worker base URL in the url: field. Only the repo section name (and nightly's
+     `nightly/` subpath) differ; the Worker hostname is channel-invariant.
+
+  4. test_conf_written_once_invariant
+     Before-state: first run writes conf with Worker URL (confirmed present).
+     Second run -> conf content identical to first run (idempotent rewrite).
+
+--------------------------------------------------------------------------------
+VERIFICATION RESULTS
+--------------------------------------------------------------------------------
+
+python3 -m pytest tests/test_add_repo_conf.py -v  -> 10 passed (was 6)
+python3 -m pytest tests/ --ignore=tests/smoke -q  -> 1475 passed
+ruff check + ruff format --check                  -> All checks passed
+mypy tests/ --ignore-missing-imports              -> Success: no issues (31 files)
+sh -n scripts/add-repo.sh                         -> clean
+shellcheck scripts/add-repo.sh                    -> clean
+sh -n scripts/build-repo.sh                       -> clean
+shellcheck scripts/build-repo.sh                  -> clean
+pre-commit hook                                   -> all checks passed
+
+Manual verification:
+  add-repo.sh --print-conf devel | grep url
+    -> url: "https://pkg.pfblockerng.workers.dev/${ABI}",   (literal ${ABI})
+  diff <(add-repo.sh --print-conf devel) <(build-repo.sh --print-conf)
+    -> IDENTICAL (byte-for-byte)
+
+--------------------------------------------------------------------------------
+COMMIT
+--------------------------------------------------------------------------------
+
+Branch: adr/20-ce-plus-variant-distribution
+Commit: 7936433
+Message: dev: add-repo.sh single Worker URL conf (ADR-20 P4)
+Files:   scripts/add-repo.sh, scripts/build-repo.sh, tests/test_add_repo_conf.py
+Pushed:  yes -> origin/adr/20-ce-plus-variant-distribution
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 5
+--------------------------------------------------------------------------------
+
+Phase 5 (Cloudflare Worker implementation) can proceed. The client conf is in place:
+  - add-repo.sh writes https://pkg.pfblockerng.workers.dev as the base URL
+  - build-repo.sh --print-conf is byte-identical to add-repo.sh devel
+  - All 4 new tests green; full suite 1475/1475 green
+  - ShellCheck/sh-n clean on both scripts
+
+Phase 5 implements the Cloudflare Worker at pkg.pfblockerng.workers.dev that:
+  1. Reads the pfSense User-Agent (CE vs Plus, version)
+  2. Resolves it against routing.json (generated by build-repo-portable.py in Phase 3)
+  3. Rewrites the request to the correct versioned catalog dir on GitHub Pages
+     (e.g. /ce-2.8/FreeBSD:15:amd64/ for a CE 2.8.x box)
+
+Phase 6 (smoke: verify Worker routing end-to-end on a live CE VM) follows Phase 5.
