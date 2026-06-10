@@ -133,7 +133,7 @@ jobs:
         # Also emits first_* scalar outputs for the FreeBSD-builder reusable-workflow
         # call (which cannot use strategy.matrix alongside uses:) — these are the
         # first deduped entry's fields. Today there is exactly one deduped entry
-        # (both CE 2.8.x and Plus 25.03 share FreeBSD 15); when a second major is
+        # (both CE 2.8 and Plus 26.03 share FreeBSD 15); when a second major is
         # added, build-pkgs-portable's inline loop handles all of them, and the
         # FreeBSD-builder path would need extending to multiple calls.
         run: |

@@ -22,9 +22,9 @@
 #   ./scripts/image-upgrade.sh --from <current-version> [options]
 #
 # Examples:
-#   ./scripts/image-upgrade.sh --from 2.8.1 --proxmox root@pve.lan --ssh-key ~/.ssh/smoke_ed25519
-#   ./scripts/image-upgrade.sh --from 2.8.1 --to 2.8.2 --proxmox pve.lan --proxmox-port 2222 --force
-#   ./scripts/image-upgrade.sh --from 2.8.1 --to 2.8.2 --upgrade-pkgs   # also upgrades baked deps
+#   ./scripts/image-upgrade.sh --from 2.8 --proxmox root@pve.lan --ssh-key ~/.ssh/smoke_ed25519
+#   ./scripts/image-upgrade.sh --from 2.8 --to 2.9 --proxmox pve.lan --proxmox-port 2222
+#   ./scripts/image-upgrade.sh --from 2.8 --to 2.8 --force --upgrade-pkgs   # patch refresh
 #
 # Proxmox connection (the KVM host that boots the VM):
 #   --proxmox [USER@]HOST   SSH target of the Proxmox/KVM host. If omitted (and

@@ -44,34 +44,34 @@ jobs:
           COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
           printf '\n%s CI entries\n' "$COUNT"
 
-      - name: Verify build matrix contains expected CE 2.8.x entry
+      - name: Verify build matrix contains expected CE 2.8 entry
         env:
           BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
         run: |
           set -eu
-          # Sanity: the seed must have the 2.8.x CE entry with FreeBSD 15 + PHP 8.3.
+          # Sanity: the seed must have the 2.8 CE entry with FreeBSD 15 + PHP 8.3.
           ENTRY="$(printf '%s' "$BUILD_MATRIX" | jq -e '
-            .[] | select(.channel == "CE" and .pfsense_version == "2.8.x")
+            .[] | select(.channel == "CE" and .pfsense_version == "2.8")
           ')" || {
-            printf '::error::BUILD matrix is missing the expected CE 2.8.x entry\n'
+            printf '::error::BUILD matrix is missing the expected CE 2.8 entry\n'
             exit 1
           }
           FB="$(printf '%s' "$ENTRY" | jq -r '.freebsd_version')"
           PHP="$(printf '%s' "$ENTRY" | jq -r '.php_version')"
           CI_FLAG="$(printf '%s' "$ENTRY" | jq -r '.ci')"
           if [ "$FB" != "15.0-RELEASE" ]; then
-            printf '::error::CE 2.8.x freebsd_version expected 15.0-RELEASE, got %s\n' "$FB"
+            printf '::error::CE 2.8 freebsd_version expected 15.0-RELEASE, got %s\n' "$FB"
             exit 1
           fi
           if [ "$PHP" != "8.3" ]; then
-            printf '::error::CE 2.8.x php_version expected 8.3, got %s\n' "$PHP"
+            printf '::error::CE 2.8 php_version expected 8.3, got %s\n' "$PHP"
             exit 1
           fi
           if [ "$CI_FLAG" != "true" ]; then
-            printf '::error::CE 2.8.x ci expected true, got %s\n' "$CI_FLAG"
+            printf '::error::CE 2.8 ci expected true, got %s\n' "$CI_FLAG"
             exit 1
           fi
-          printf 'CE 2.8.x entry OK: FreeBSD %s, PHP %s, ci=%s\n' "$FB" "$PHP" "$CI_FLAG"
+          printf 'CE 2.8 entry OK: FreeBSD %s, PHP %s, ci=%s\n' "$FB" "$PHP" "$CI_FLAG"
 
       - name: Verify Plus entry is ci:false
         env:
@@ -105,15 +105,10 @@ jobs:
           # must fail non-zero. Simulate it by running the lookup script with a
           # clearly unknown version string.
           MATRIX_JSON="$(git fetch origin ci-metadata && git show origin/ci-metadata:supported-versions.json)"
-          UNKNOWN="9.9.9"
+          UNKNOWN="9.9"
           MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$UNKNOWN" '
             .versions[]
-            | select(.channel == "CE")
-            | . as $e
-            | select(
-                ($e.pfsense_version | endswith(".x") and ($ver | startswith($e.pfsense_version[:-1])))
-                or $e.pfsense_version == $ver
-              )
+            | select(.channel == "CE" and .pfsense_version == $ver)
           ' 2>/dev/null | jq -s '.[0] // empty')" || true
 
           if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then

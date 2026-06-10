@@ -25,7 +25,7 @@ name: Smoke (pfSense VM, ADR-04)
 #   SMOKE_IMAGE_REPO     GHCR namespace (variable), e.g. ghcr.io/pfblockerng
 #                        (default ghcr.io/<owner-lowercased>).
 #   SMOKE_IMAGE_NAME     image name appended to it (variable, default pfsense-ce).
-#   SMOKE_IMAGE_TAG      default tag (variable, default 2.8.1). The pull ref is
+#   SMOKE_IMAGE_TAG      default tag (variable, default 2.8). The pull ref is
 #                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
 #                        the image_ref input (full ref) or pfsense_version input
 #                        (tag) override it.
@@ -45,7 +45,7 @@ on:
         required: false
         default: ""
       pfsense_version:
-        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8.1). Wildcard patterns (e.g. '2.8.x') are cleared to blank. Ignored when image_ref is set."
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
         required: false
         default: ""
       pytest_marker:
@@ -64,7 +64,7 @@ on:
         type: string
         default: ""
       pfsense_version:
-        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8.1). Wildcard patterns (e.g. '2.8.x') are cleared to blank. Ignored when image_ref is set."
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
         required: false
         type: string
         default: ""
@@ -99,7 +99,7 @@ jobs:
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-    # abi/py_flavor/php_version default to CE 2.8.1 (FreeBSD:15:amd64 / py311 / 8.3).
+    # abi/py_flavor/php_version default to CE 2.8 (FreeBSD:15:amd64 / py311 / 8.3).
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
@@ -154,14 +154,7 @@ jobs:
             # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
             REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
             NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
-            # Strip wildcard-style version inputs (e.g. "2.8.x") — the CI
-            # matrix uses ".x" as a range marker, not a literal GHCR tag.
-            # Fall back to SMOKE_IMAGE_TAG (the concrete build tag, e.g.
-            # "2.8.1") or the hardcoded default.
-            case "$INPUT_VERSION" in
-              *.x|*.X) INPUT_VERSION="" ;;
-            esac
-            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8.1}}"
+            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
             REF="${REPO%/}/${NAME}:${TAG}"
           fi
           echo "ref=${REF}" >> "$GITHUB_OUTPUT"
@@ -171,7 +164,7 @@ jobs:
         uses: oras-project/setup-oras@v2
 
       # Key the image cache on the RESOLVED MANIFEST DIGEST, not the ref string.
-      # SMOKE_IMAGE_REF is typically a MOVING tag (e.g. :2.8.1); a re-push to the
+      # SMOKE_IMAGE_REF is a MOVING (floating) tag (e.g. :2.8); a re-push to the
       # same tag changes the content (digest) but not the ref string. Keying on
       # the digest makes a new image invalidate the cache automatically — a fresh
       # pull, no manual cache bust. Needs a GHCR login (private repo) first; the

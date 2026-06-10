@@ -43,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       pfsense_version:
-        description: "Target pfSense CE version (e.g. 2.8.1). The tracker passes the exact version from supported-versions.json."
+        description: "Target pfSense CE floating tag (e.g. 2.8). The tracker passes the exact version from supported-versions.json."
         required: true
         type: string
       freebsd_version:
@@ -51,7 +51,7 @@ on:
         required: true
         type: string
       from_version:
-        description: "Prior published CE tag to upgrade from (e.g. 2.8.0). Leave empty to auto-detect from the matrix (the most recent prior CE tag)."
+        description: "Prior published CE floating tag to upgrade from (e.g. 2.7). Leave empty to auto-detect from the matrix (the most recent prior CE tag, or self for a patch refresh)."
         required: false
         default: ""
         type: string
@@ -82,15 +82,21 @@ permissions:
 
 jobs:
   # ── Resolve prior published tag (from_version) ─────────────────────────────
-  # Determine which existing GHCR tag to upgrade FROM. The tracker always passes
-  # pfsense_version + freebsd_version; from_version is optional (the tracker does
-  # not currently pass it, so we auto-detect from the matrix here).
+  # Determine which existing GHCR tag to upgrade FROM, and whether --force is
+  # needed (patch refresh: target tag already exists and will be overwritten).
+  #
+  # With the floating-tag scheme, pfsense_version IS the GHCR tag (e.g. "2.8").
+  # Two cases:
+  #   New minor/major (e.g. "2.9"): upgrade FROM the previous version (e.g. "2.8").
+  #   Patch refresh (e.g. "2.8" is the only/oldest entry): upgrade FROM itself,
+  #     overwriting :2.8 in place (--force required since the tag already exists).
   resolve-from:
     name: Resolve upgrade source tag
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       from_tag: ${{ steps.resolve.outputs.from_tag }}
+      force_flag: ${{ steps.resolve.outputs.force_flag }}
     steps:
       - name: Checkout (for read-version-matrix action)
         uses: actions/checkout@v6
@@ -104,45 +110,45 @@ jobs:
           set -eu
           if [ -n "$FROM_VERSION" ]; then
             # Caller supplied an explicit prior tag — use it directly.
+            # Self-refresh (same tag) still needs --force.
+            FORCE=""
+            [ "$FROM_VERSION" = "$TARGET_VERSION" ] && FORCE="--force"
             printf 'from_tag=%s\n' "$FROM_VERSION" >> "$GITHUB_OUTPUT"
-            printf 'Using caller-supplied from_version: %s\n' "$FROM_VERSION"
+            printf 'force_flag=%s\n' "$FORCE" >> "$GITHUB_OUTPUT"
+            printf 'Using caller-supplied from_version: %s%s\n' "$FROM_VERSION" \
+              "${FORCE:+ (self-refresh, --force)}"
             exit 0
           fi
 
-          # Auto-detect: read the matrix for the most recent prior CE GA entry.
+          # Auto-detect: read all CE entries sorted by version, find the one
+          # immediately before TARGET_VERSION. Uses sort -V (version sort) so
+          # "2.9" < "2.10" is handled correctly regardless of jq string ordering.
           git fetch origin ci-metadata
           MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
 
-          # Strip trailing ".x" suffix from pfsense_version inputs (e.g. "2.8.x" -> "2.8").
-          TARGET_PREFIX="$(printf '%s' "$TARGET_VERSION" | sed 's/\.x$//')"
+          ALL_CE="$(printf '%s' "$MATRIX_JSON" | jq -r '
+            .versions[] | select(.channel == "CE") | .pfsense_version
+          ' | sort -V)"
 
-          # Find all CE GA entries whose version prefix is strictly less than the
-          # target prefix (older versions), pick the latest by sorted order.
-          FROM_TAG="$(printf '%s' "$MATRIX_JSON" | jq -r --arg target "$TARGET_PREFIX" '
-            .versions[]
-            | select(.channel == "CE" and .status == "GA")
-            | . as $e
-            | ($e.pfsense_version | gsub("\\.x$"; "")) as $pfx
-            | select($pfx < $target)
-            | $pfx
-          ' | sort -V | tail -1)"
+          FROM_TAG="$(printf '%s\n' "$ALL_CE" | awk -v target="$TARGET_VERSION" '
+            prev != "" && $0 == target { print prev; exit }
+            { prev = $0 }
+          ')"
 
+          # Patch-refresh fallback: target is the oldest/only CE entry — upgrade
+          # in-place, overwriting the floating tag (--force required).
+          FORCE=""
           if [ -z "$FROM_TAG" ] || [ "$FROM_TAG" = "null" ]; then
-            printf '::error::Cannot determine from_version: no prior CE GA entry in the matrix older than %s. Pass from_version explicitly or add a prior GA entry to supported-versions.json on ci-metadata.\n' \
-              "$TARGET_VERSION"
-            exit 1
+            FROM_TAG="$TARGET_VERSION"
+            FORCE="--force"
+            printf 'Patch refresh: self-upgrade %s -> %s (--force)\n' \
+              "$FROM_TAG" "$TARGET_VERSION"
+          else
+            printf 'New-version upgrade: %s -> %s\n' "$FROM_TAG" "$TARGET_VERSION"
           fi
 
-          # Reconstruct the published tag from the matrix entry for this prefix.
-          FROM_FULL_TAG="$(printf '%s' "$MATRIX_JSON" | jq -r --arg pfx "${FROM_TAG}" '
-            .versions[]
-            | select(.channel == "CE" and .status == "GA")
-            | select((.pfsense_version | gsub("\\.x$"; "")) == $pfx)
-            | .pfsense_version | gsub("\\.x$"; "")
-          ' | head -1)"
-
-          printf 'Auto-detected from_version: %s (target: %s)\n' "$FROM_FULL_TAG" "$TARGET_VERSION"
-          printf 'from_tag=%s\n' "$FROM_FULL_TAG" >> "$GITHUB_OUTPUT"
+          printf 'from_tag=%s\n' "$FROM_TAG" >> "$GITHUB_OUTPUT"
+          printf 'force_flag=%s\n' "$FORCE" >> "$GITHUB_OUTPUT"
 
   # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
   refresh:
@@ -222,9 +228,13 @@ jobs:
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
+          FROM_TAG="${{ needs.resolve-from.outputs.from_tag }}"
+          TARGET="${{ inputs.pfsense_version }}"
+          FORCE_FLAG="${{ needs.resolve-from.outputs.force_flag }}"
           sh scripts/image-upgrade.sh \
-            --from "${{ needs.resolve-from.outputs.from_tag }}" \
-            --to "${{ inputs.pfsense_version }}" \
+            ${FORCE_FLAG:+"$FORCE_FLAG"} \
+            --from "$FROM_TAG" \
+            --to "$TARGET" \
             --image "${{ steps.ref.outputs.image }}" \
             --ssh-key "$PWD/smoke_key" \
             --compression "${{ inputs.compression }}" \

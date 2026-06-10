@@ -41,9 +41,9 @@ on:
   workflow_dispatch:
     inputs:
       pfsense_ce_version:
-        description: "Target pfSense CE version tag to publish (e.g. 2.8.1)"
+        description: "Target pfSense CE floating tag to publish (e.g. 2.8)"
         required: true
-        default: "2.8.1"
+        default: "2.8"
       base_source:
         description: "Base source: 'upgrade' (boot a prior tag + pfSense-upgrade in place) or 'seed' (re-verify an existing maintainer seed; seeds are created off-runner via image-publish.sh)"
         required: true
@@ -118,24 +118,18 @@ jobs:
           git fetch origin ci-metadata
           MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
 
-          # Find the CE entry whose pfsense_version pattern matches CE_VERSION.
-          # "2.8.x" matches "2.8.0", "2.8.1", etc.: strip trailing ".x" from the
-          # matrix key to get a prefix, then test CE_VERSION starts with it.
-          # An exact match (no ".x" suffix) is also accepted.
-          # Exit 2 = no matching entry -> hard-fail with actionable error message.
+          # Find the CE entry whose pfsense_version exactly matches CE_VERSION.
+          # pfsense_version is now the floating Major.Minor tag (e.g. "2.8"), so
+          # build-image.yml inputs must use the same tag (not a patch version like
+          # "2.8.1"). Exit 2 = no match -> hard-fail with actionable error.
           MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$CE_VERSION" '
             .versions[]
-            | select(.channel == "CE")
-            | . as $e
-            | select(
-                ($e.pfsense_version | endswith(".x") and ($ver | startswith($e.pfsense_version[:-1])))
-                or $e.pfsense_version == $ver
-              )
+            | select(.channel == "CE" and .pfsense_version == $ver)
           ' 2>/dev/null | jq -s '.[0] // empty')" || true
 
           if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
-            printf '::error::no FreeBSD/PHP mapping for pfSense CE '"'"'%s'"'"' in supported-versions.json on ci-metadata. Add a CE entry with a matching pfsense_version (e.g. '"'"'%s.x'"'"') and update docs/misc/pfSense_versions.md before publishing this version.\n' \
-              "$CE_VERSION" "$(printf '%s' "$CE_VERSION" | cut -d. -f1,2)"
+            printf '::error::no FreeBSD/PHP mapping for pfSense CE '"'"'%s'"'"' in supported-versions.json on ci-metadata. Add a CE entry with pfsense_version='"'"'%s'"'"' and update docs/misc/pfSense_versions.md before publishing this version.\n' \
+              "$CE_VERSION" "$CE_VERSION"
             exit 1
           fi
 
