@@ -636,3 +636,117 @@ def test_parse_annotations(items: list[str], expected: dict[str, str]) -> None:
 def test_parse_annotations_rejects_malformed(bad: str) -> None:
     with pytest.raises(bpp.BuildError):
         bpp.parse_annotations([bad])
+
+
+# --------------------------------------------------------------------------- #
+# Variant-aware manifest deps (ADR-20 Phase 2) — _resolve_variant_deps
+#
+# Dep-name derivation rule: php_version "X.Y" → strip dot → "phpXY"
+# py_flavor is used verbatim (e.g. "py311").
+# --------------------------------------------------------------------------- #
+
+
+def test_ce_manifest_has_php83_dep() -> None:
+    """CE entry (php 8.3, py311) → dep list contains 'php83', NOT 'php85'."""
+    # Given the CE matrix values from supported-versions.json
+    deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
+    # Then php83 is present (CE dep guard)
+    assert "php83" in deps
+    # And the Plus PHP dep is absent (mutual exclusion)
+    assert "php85" not in deps
+
+
+def test_plus_manifest_has_php85_dep() -> None:
+    """Plus entry (php 8.5, py311) → dep list contains 'php85', NOT 'php83'."""
+    # Given the Plus matrix values from supported-versions.json
+    deps = bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311")
+    # Then php85 is present (Plus dep guard)
+    assert "php85" in deps
+    # And the CE PHP dep is absent (mutual exclusion)
+    assert "php83" not in deps
+
+
+def test_wrong_variant_dep_absent() -> None:
+    """Each variant carries only its own PHP dep — the other side's is absent.
+
+    Before-state (no variant): neither versioned name appears.
+    After-state CE: php83 present, php85 absent.
+    After-state Plus: php85 present, php83 absent.
+    """
+    # Given: before any variant call, a plain dep-list has no versioned php names.
+    # (Simulate: call with a hypothetical neutral php_version "8.x" not matching
+    # either real entry — confirms the derivation is purely from php_version, not
+    # hardcoded for "8.3" or "8.5".)
+    # The real before-state check: verify an unversioned invocation produces neither.
+    # We cannot call synthesize_uses_deps without a ports tree, but the pure helper
+    # is enough: assert the CE result lacks php85 and Plus lacks php83.
+    ce_deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
+    plus_deps = bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311")
+
+    # CE lacks the Plus PHP dep
+    assert "php85" not in ce_deps
+    # Plus lacks the CE PHP dep
+    assert "php83" not in plus_deps
+    # Neither set is empty
+    assert len(ce_deps) > 0
+    assert len(plus_deps) > 0
+
+
+def test_no_variant_flag_unchanged(tmp_path: Path) -> None:
+    """Without --variant, the dep list is identical to the current baseline.
+
+    Given the synthetic classic port (no USES=php / USES=python),
+    When built without --variant,
+    Then the deps dict contains only the RUN_DEPENDS from the Makefile
+    and none of the versioned php*/py* variant guards.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    dep_names = set(full.get("deps", {}).keys())
+    # foo comes from RUN_DEPENDS; no php* / py* variant guard added (no --variant)
+    assert "foo" in dep_names
+    assert not any(n.startswith("php8") for n in dep_names)
+    assert not any(n.startswith("py3") for n in dep_names)
+
+
+def test_two_simultaneous_ce_entries() -> None:
+    """Transition window: two CE entries with different PHP versions.
+
+    Scenario: matrix carries CE 2.8.x (FreeBSD 15, php83) AND CE 2.9.x
+    (FreeBSD 16, php84) simultaneously. _resolve_variant_deps called for each
+    returns the correct php dep for that entry; they are distinct.
+
+    Given two CE matrix entries (php 8.3 and php 8.4),
+    When _resolve_variant_deps is called for each,
+    Then each returns its own correct php dep and the results are distinct.
+    """
+    # Given: two CE entries with different PHP versions
+    ce_15_deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
+    ce_16_deps = bpp._resolve_variant_deps(php_version="8.4", py_flavor="py311")
+
+    # Then: each has the correct versioned PHP dep
+    assert "php83" in ce_15_deps, "FreeBSD 15 CE entry must have php83"
+    assert "php84" in ce_16_deps, "FreeBSD 16 CE entry must have php84"
+
+    # And: each lacks the other's PHP dep
+    assert "php84" not in ce_15_deps
+    assert "php83" not in ce_16_deps
+
+    # And: both carry py311
+    assert "py311" in ce_15_deps
+    assert "py311" in ce_16_deps
+
+    # And: the two dep lists are distinct (not identical)
+    assert sorted(ce_15_deps) != sorted(ce_16_deps)

@@ -18,14 +18,22 @@ inputs:
       'supported-versions.json'.
     required: false
     default: "supported-versions.json"
+  variant:
+    description: >
+      Optional variant filter: 'CE' or 'Plus' (case-insensitive). When set,
+      only entries whose `variant` field matches are returned. Without this
+      input all entries are returned (backward-compatible).
+    required: false
+    default: ""
 
 outputs:
   build_matrix:
     description: >
-      JSON array of all supported entries, each carrying its full
-      (freebsd_version, php_version) pair plus pfsense_version, channel,
-      freebsd_major, py_flavor, status, and ci. Artifacts dedup by distinct
-      freebsd_major (one .pkg per ABI) — that dedup is the caller's job.
+      JSON array of all supported entries (optionally filtered by variant),
+      each carrying its full (freebsd_version, php_version) pair plus
+      pfsense_version, channel, freebsd_major, py_flavor, variant, status,
+      and ci. Artifacts dedup by distinct freebsd_major (one .pkg per ABI)
+      — that dedup is the caller's job.
     value: ${{ steps.read.outputs.build_matrix }}
   ci_matrix:
     description: >
@@ -33,6 +41,12 @@ outputs:
       strategy.matrix job to fan out the smoke suite across all supported
       CE versions.
     value: ${{ steps.read.outputs.ci_matrix }}
+  variant:
+    description: >
+      JSON array of distinct variant values present in the build_matrix
+      output (e.g. ["CE"] or ["CE","Plus"]). Useful for downstream jobs
+      that need to know which variants are present.
+    value: ${{ steps.read.outputs.variant }}
 
 runs:
   using: composite
@@ -43,8 +57,17 @@ runs:
       env:
         MATRIX_REF: ${{ inputs.ref }}
         MATRIX_FILE: ${{ inputs.matrix_file }}
+        VARIANT_INPUT: ${{ inputs.variant }}
       run: |
-        sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
-          --ref "$MATRIX_REF" \
-          --file "$MATRIX_FILE" \
-          --github-output
+        if [ -n "$VARIANT_INPUT" ]; then
+          sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
+            --ref "$MATRIX_REF" \
+            --file "$MATRIX_FILE" \
+            --variant "$VARIANT_INPUT" \
+            --github-output
+        else
+          sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
+            --ref "$MATRIX_REF" \
+            --file "$MATRIX_FILE" \
+            --github-output
+        fi
