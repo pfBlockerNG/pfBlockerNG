@@ -38,6 +38,10 @@ coverage/
 .shellspec-quick.log
 report/
 
+# ── Node / Cloudflare Worker (scripts/worker/) ────────────────────────────────
+node_modules/
+.wrangler/
+
 # ── Build / release artefacts ─────────────────────────────────────────────────
 *.tar.gz
 *.tar.bz2

@@ -539,6 +539,18 @@ jobs:
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg
 
+  # ── 2e. Redeploy the Cloudflare routing Worker (ADR-20) ─────────────────────
+  # The Worker reads routing.json from Pages and 302-redirects pkg to the
+  # correct variant catalog.  Redeployed on every release so the live Worker
+  # always matches the current wrangler.toml / source.  ADDITIVE + ISOLATED —
+  # same pattern as repo-publish: only needs: [release], never blocks ports-pr.
+  deploy-worker:
+    name: Deploy Cloudflare routing Worker
+    needs: [release]
+    if: always() && needs.release.result == 'success'
+    uses: ./.github/workflows/deploy-worker.yml
+    secrets: inherit
+
   # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
   ports-pr:
     name: Open FreeBSD ports PR
