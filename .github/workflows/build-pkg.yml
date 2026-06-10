@@ -12,7 +12,7 @@ name: build-pkg (FreeBSD)
 # pkg ABI matches and the artifact installs on pfSense with `pkg add` (properly
 # registered, so rc.packages POST-INSTALL runs the package's hooks):
 #
-#   pfSense CE 2.8.1 -> FreeBSD 15  (releases/VM-IMAGES/15.0-RELEASE/...)
+#   pfSense CE 2.8 -> FreeBSD 15  (releases/VM-IMAGES/15.0-RELEASE/...)
 #   pfSense Plus     -> FreeBSD 16  (snapshots/VM-IMAGES/16.0-CURRENT/...)
 #
 # Two-tier image cache to minimise per-run setup:
@@ -45,7 +45,7 @@ on:
   workflow_dispatch:
     inputs:
       freebsd_version:
-        description: "FreeBSD version for the build env — match the pfSense base (CE 2.8.1 = 15.0-RELEASE; Plus = 16.0-CURRENT)"
+        description: "FreeBSD version for the build env — match the pfSense base (CE 2.8 = 15.0-RELEASE; Plus = 16.0-CURRENT)"
         required: false
         default: "15.0-RELEASE"
       channel:
@@ -53,7 +53,7 @@ on:
         required: false
         default: "devel"
       php_version:
-        description: "PHP default to pin (match the target pfSense: CE 2.8.1 = 8.3)"
+        description: "PHP default to pin (match the target pfSense: CE 2.8 = 8.3)"
         required: false
         default: "8.3"
       ports_repo:

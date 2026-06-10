@@ -111,7 +111,7 @@ jobs:
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-    # abi/py_flavor/php_version default to CE 2.8.1 (FreeBSD:15:amd64 / py311 / 8.3).
+    # abi/py_flavor/php_version default to CE 2.8 (FreeBSD:15:amd64 / py311 / 8.3).
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
@@ -264,7 +264,7 @@ jobs:
             # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
             REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
             NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
-            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8.1}}"
+            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
             REF="${REPO%/}/${NAME}:${TAG}"
           fi
           echo "ref=${REF}" >> "$GITHUB_OUTPUT"

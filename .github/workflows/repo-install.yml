@@ -28,7 +28,7 @@ on:
         required: false
         default: ""
       pfsense_version:
-        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8.1). Ignored when image_ref is set."
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
         required: false
         default: ""
   schedule:

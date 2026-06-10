@@ -18,7 +18,7 @@ name: build-pkg (Linux, portable)
 # `make package` fidelity oracle (dispatch-only) — not deleted.
 #
 # TARGET facts (ABI, py-flavor, PHP) are INPUTS, never read from this fork's tree:
-# they describe the pfSense the .pkg installs onto (CE 2.8.1 = FreeBSD 15 / py311 /
+# they describe the pfSense the .pkg installs onto (CE 2.8 = FreeBSD 15 / py311 /
 # php 8.3).
 #
 # workflow_dispatch (iterate on the build) + workflow_call (smoke consumes it).
@@ -31,15 +31,15 @@ on:
         required: false
         default: "devel"
       abi:
-        description: "Target ABI — match the pfSense base (CE 2.8.1 = FreeBSD:15:amd64; Plus = FreeBSD:16:amd64)"
+        description: "Target ABI — match the pfSense base (CE 2.8 = FreeBSD:15:amd64; Plus = FreeBSD:16:amd64)"
         required: false
         default: "FreeBSD:15:amd64"
       py_flavor:
-        description: "Python flavor for dep names (CE 2.8.1 = py311)"
+        description: "Python flavor for dep names (CE 2.8 = py311)"
         required: false
         default: "py311"
       php_version:
-        description: "PHP version for dep names (CE 2.8.1 = 8.3)"
+        description: "PHP version for dep names (CE 2.8 = 8.3)"
         required: false
         default: "8.3"
       variant:
