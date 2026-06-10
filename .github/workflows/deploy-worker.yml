@@ -2,7 +2,7 @@ name: Deploy Cloudflare Worker
 
 # Deploys the pfBlockerNG pkg-routing Worker (scripts/worker/) to Cloudflare.
 #
-# Auth: CLOUDFLARE_API_TOKEN secret (Workers:Edit scope on the account).
+# Auth: CLOUDFLARE_API_TOKEN (Workers:Edit scope) and CLOUDFLARE_ACCOUNT_ID secrets.
 # The Worker reads User-Agent, fetches routing.json from Pages (edge-cached
 # 5 min), and 302-redirects to the correct version-keyed catalog dir.
 #
