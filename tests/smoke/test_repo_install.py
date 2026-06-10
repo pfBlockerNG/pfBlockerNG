@@ -1646,7 +1646,7 @@ def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
     Given a CE VM with the conf pointing at the Worker URL (``${ABI}`` suffix added
       by pkg), ``pkg update -r pfblockerng-devel`` fetches from the Worker.
     Then the fetched catalog contains the CE package (not Plus) — confirmed by
-      ``pkg rquery -r pfblockerng-devel '%d %v' <pkgname>`` showing ``php83`` dep.
+      ``pkg rquery -r pfblockerng-devel '%dn %dv' <pkgname>`` showing ``php83`` dep.
 
     XFAIL: the Cloudflare Worker is live but routing.json has not yet been deployed
     to Pages (Phase 5 RESULTS: Worker returns 502 when routing.json absent).  Once
@@ -1682,10 +1682,10 @@ def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
 
     # If pkg update succeeded (routing.json live), assert the catalog contains the CE package.
     if update_result.returncode == 0:
-        rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%d %v", PKG_NAME, timeout=60.0)
+        rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
         rquery_out = rquery.stdout.strip()
         assert "php83" in rquery_out, (
-            f"Worker URL catalog does not contain CE php83 dep; pkg rquery '%d %v' output:\n{rquery_out}"
+            f"Worker URL catalog does not contain CE php83 dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
         )
         assert "php85" not in rquery_out, (
             f"Worker URL returned Plus (php85) catalog to a CE box; pkg rquery output:\n{rquery_out}"
