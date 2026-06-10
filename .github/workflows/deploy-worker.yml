@@ -1,0 +1,37 @@
+name: Deploy Cloudflare Worker
+
+# Deploys the pfBlockerNG pkg-routing Worker (scripts/worker/) to Cloudflare.
+#
+# Auth: CLOUDFLARE_API_TOKEN secret (Workers:Edit scope on the account).
+# The Worker reads User-Agent, fetches routing.json from Pages (edge-cached
+# 5 min), and 302-redirects to the correct version-keyed catalog dir.
+#
+# Triggers:
+#   - workflow_call:   called by release.yml after a successful release
+#   - workflow_dispatch: ad-hoc redeploy (e.g. after updating wrangler.toml)
+#   - push to devel/main with changes under scripts/worker/: keeps the live
+#     Worker in sync with the source without requiring a full release
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [devel, main]
+    paths:
+      - "scripts/worker/**"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: scripts/worker
