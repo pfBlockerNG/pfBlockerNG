@@ -16,7 +16,8 @@
       "freebsd_major": "15",
       "php_version": "8.3",
       "py_flavor": "py311",
-      "status": "GA",
+      "variant": "CE",
+      "status": "active",
       "ci": true
     },
     {
@@ -26,7 +27,8 @@
       "freebsd_major": "16",
       "php_version": "8.5",
       "py_flavor": "py311",
-      "status": "GA",
+      "variant": "Plus",
+      "status": "active",
       "ci": false
     }
   ]
