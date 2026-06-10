@@ -13,13 +13,14 @@
 #   stable           -> conf /usr/local/etc/pkg/repos/pfblockerng.conf
 #                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG
 #   nightly          -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf
-#                       repo name `pfblockerng-nightly`, pkg ...-nightly (bleeding edge, nightly/ subtree)
+#                       repo name `pfblockerng-nightly`, pkg ...-nightly (bleeding edge)
 #
 # THE CONF (single source of truth — matches `build-repo.sh --print-conf`):
-#   url:            STATIC base + the literal ${ABI} pkg(8) variable (expanded by
-#                   pkg, NOT the shell) so one conf auto-follows the box's ABI
-#                   across a pfSense OS upgrade. No shell/query interpolation, so
-#                   the URL-encoding gate passes.
+#   url:            Cloudflare Worker URL (ADR-20). The Worker routes requests to
+#                   the correct versioned catalog dir based on the pfSense User-Agent
+#                   (CE vs Plus, major.minor version). One conf written once; never
+#                   needs re-running after a pfSense OS upgrade — the Worker re-routes
+#                   automatically. Override --base-url for forks/staging.
 #   mirror_type:    none.
 #   signature_type: none — NONE-signed; trust anchor is HTTPS to the host (no CI
 #                   signing key). pfSense honors per-repo `none` (ADR §1 Context 4).
@@ -37,18 +38,28 @@
 #   add-repo.sh --base-url <url> [devel|stable|nightly]   # override the base (forks/staging)
 #
 # POSIX sh; quoted expansions; absolute path for the privileged `pkg` binary.
+# Env:
+#   PFBLOCKERNG_ROOT  filesystem root prefix (default: /); override in tests to
+#                     redirect conf writes to a temp dir.
+#   PKG_BIN           pkg binary path (default: /usr/local/sbin/pkg); override
+#                     in tests to stub out pkg (conf write happens before any pkg call).
 
 set -eu
 
 # Absolute path for the privileged binary (pfSense convention; don't trust $PATH).
-PKG_BIN="/usr/local/sbin/pkg"
-REPOS_DIR="/usr/local/etc/pkg/repos"
+# Override via PKG_BIN env var for testing without a live pfSense box.
+PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 
-# The published GitHub Pages base (the standard project Pages URL, served over HTTPS). This is the
-# SAME base build-repo.sh / build-repo-portable.py default to — the conf below is
-# byte-identical to their --print-conf for the devel channel. Override --base-url
-# for a fork/staging host. The conf appends the literal ${ABI} pkg(8) variable.
-DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
+# PFBLOCKERNG_ROOT: filesystem root prefix (tests override to a tmpdir).
+PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
+REPOS_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/etc/pkg/repos"
+
+# Cloudflare Worker URL (ADR-20, primary path). The Worker routes to the correct
+# versioned catalog dir (ce-2.8/${ABI}/, plus-26.03/${ABI}/, …) based on the
+# pfSense User-Agent header — pkg(8) injects it automatically on every repo fetch.
+# Written once; the conf never needs updating on a pfSense OS upgrade.
+# Override with --base-url for forks/staging.
+DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
 CONF_PRIORITY=100
 
 CHANNEL="devel"

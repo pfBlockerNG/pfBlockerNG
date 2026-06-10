@@ -75,14 +75,16 @@ set -eu
 # (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
 # we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg and the conf
 # appends the literal ${ABI} pkg(8) variable. Override with --base-url for a fork.
-# NOTE (ADR-20 Phase 3): the Pages tree also publishes VERSION-KEYED subdirs:
+# NOTE (ADR-20 Phase 3/4): the Pages tree also publishes VERSION-KEYED subdirs:
 #   https://pfblockerng.github.io/pkg/ce-2.8/${ABI}/   (CE 2.8.x)
 #   https://pfblockerng.github.io/pkg/plus-26.03/${ABI}/  (Plus 26.03)
-# A Cloudflare Worker (Phase 5) rewrites requests to the correct versioned dir
-# based on the pfSense User-Agent; the conf URL written by Phase 4's add-repo.sh
-# points at the Worker, not the versioned dirs directly. This template remains the
-# legacy direct-to-Pages URL (for the transition window + the FreeBSD fidelity path).
-DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
+# The Cloudflare Worker (Phase 5) at https://pkg.pfblockerng.workers.dev rewrites
+# requests to the correct versioned dir based on the pfSense User-Agent.
+# add-repo.sh (Phase 4) writes the Worker URL as the canonical conf URL — written
+# once, never needs updating on a pfSense OS upgrade (Worker re-routes automatically).
+# This --print-conf template is kept in sync with add-repo.sh (byte-identical devel
+# stanza). Override with --base-url for forks/staging.
+DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
 CONF_PRIORITY=100
 
 print_conf() {
