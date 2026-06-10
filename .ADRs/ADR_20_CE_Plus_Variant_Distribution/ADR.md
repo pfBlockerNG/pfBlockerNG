@@ -442,3 +442,90 @@ explicitly open as a deferred complement.
 - **STOP Phase 5** if `wrangler deploy` cannot be integrated cleanly into
   `pfBlockerNG/pkg publish.yml` (auth, token scope, or Node.js toolchain constraints)
   — document the blocker in `05_Results.txt` and fall back to Phase 4's static URL.
+
+---
+
+## Amendment (2026-06-10): nightly channel CE/Plus variant split
+
+**All three channels (stable, devel, nightly) carry a CE/Plus variant split.**
+This was implicit in the catalog-structure decision above ("Nightly likewise:
+`.../nightly/ce-2.8/${ABI}/`…") but the implementation details were not spelled out.
+
+### How stable and devel work (no channel prefix in path)
+
+Both `stable` and `devel` write the Worker URL without any path prefix:
+
+```text
+url: "https://pkg.pfblockerng.workers.dev/${ABI}"
+```
+
+- `add-repo.sh devel` → conf `pfblockerng-devel.conf`, `URL_SUBPATH=""`
+  → URL: `https://pkg.pfblockerng.workers.dev/${ABI}`
+- `add-repo.sh stable` → conf `pfblockerng.conf`, `URL_SUBPATH=""`
+  → URL: `https://pkg.pfblockerng.workers.dev/${ABI}`
+
+The Worker receives a request like `/FreeBSD:15:amd64/packagesite.pkg`, reads the
+`User-Agent`, finds the catalog (`ce-2.8` or `plus-26.03`), and redirects to:
+
+```text
+pfblockerng.github.io/pkg/ce-2.8/FreeBSD:15:amd64/packagesite.pkg
+```
+
+Channel distinction lives entirely in the **package name** and **repo conf name**,
+never in the catalog URL. Both channels coexist in the same variant-keyed catalog dir.
+
+### How nightly works (nightly/ prefix in path)
+
+`add-repo.sh nightly` → conf `pfblockerng-nightly.conf`, `URL_SUBPATH="nightly/"`
+→ URL: `https://pkg.pfblockerng.workers.dev/nightly/${ABI}`
+
+The Worker receives `/nightly/FreeBSD:15:amd64/packagesite.pkg`. Without special
+handling it would produce the wrong target (prepending `ce-2.8` before the `nightly/`
+segment). The Worker must strip the channel prefix before routing.
+
+### Worker path-stripping for nightly
+
+The Cloudflare Worker must detect the `/nightly/` path prefix and strip it before
+constructing the redirect target:
+
+```javascript
+// Strip channel prefix (nightly) so catalog + ABI path are constructed correctly.
+let channelPrefix = '';
+let abiPath = url.pathname;
+const m = url.pathname.match(/^\/(nightly)\//);
+if (m) {
+    channelPrefix = m[1] + '/';                    // "nightly/"
+    abiPath = url.pathname.slice(m[0].length - 1); // strip prefix, keep leading /
+}
+// route.catalog = "ce-2.8" or "plus-26.03" (routing.json has no channel knowledge)
+const target = `https://pfblockerng.github.io/pkg/${channelPrefix}${route.catalog}${abiPath}`;
+```
+
+Result for a nightly CE box (`pfSense/2.8.1` UA, ABI `FreeBSD:15:amd64`):
+
+```text
+/nightly/FreeBSD:15:amd64/packagesite.pkg
+  channelPrefix="nightly/"  abiPath="/FreeBSD:15:amd64/packagesite.pkg"
+  → pfblockerng.github.io/pkg/nightly/ce-2.8/FreeBSD:15:amd64/packagesite.pkg
+```
+
+`routing.json` remains channel-agnostic — catalog names are `"ce-2.8"`,
+`"plus-26.03"` with no `"nightly/"` prefix. The channel prefix is a path concern
+handled at the Worker edge.
+
+### `catalog_name_from_version` API extension
+
+`catalog_name_from_version(pfsense_version, variant, *, channel="")` gains an
+optional keyword-only `channel` argument. When supplied (e.g. `channel="nightly"`),
+the returned string is prefixed: `"nightly/ce-2.8"`. `build_repo(catalog_name=)`
+already accepts slash-containing strings, placing the ABI subtree under
+`<out>/nightly/ce-2.8/<ABI>/`.
+
+### Test coverage (added in same commit)
+
+- `test_catalog_name_from_version_nightly` — nightly prefix for CE and Plus; no-channel
+  unchanged; patch stripping with nightly.
+- `test_nightly_catalog_under_versioned_subdir` — CE nightly build lands at
+  `nightly/ce-2.8/<ABI>/`; release path and legacy root untouched.
+- `test_nightly_plus_catalog_under_versioned_subdir` — CE + Plus nightly coexist under
+  `nightly/`; no cross-contamination between the two variant dirs.

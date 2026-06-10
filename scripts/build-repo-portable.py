@@ -365,17 +365,22 @@ def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def catalog_name_from_version(pfsense_version: str, variant: str) -> str:
+def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: str = "") -> str:
     """Derive catalog dir name: major.minor only, prefixed by variant.
 
     Both CE and Plus strip any trailing patch component:
-      "2.8.1"  + "CE"   -> "ce-2.8"
-      "2.8.x"  + "CE"   -> "ce-2.8"
-      "26.03"  + "Plus" -> "plus-26.03"
-      "26.03.1"+ "Plus" -> "plus-26.03"
+      "2.8.1"  + "CE"             -> "ce-2.8"
+      "2.8.x"  + "CE"             -> "ce-2.8"
+      "26.03"  + "Plus"           -> "plus-26.03"
+      "26.03.1"+ "Plus"           -> "plus-26.03"
+
+    When channel is supplied (e.g. "nightly"), it is prepended as a path prefix:
+      "2.8.1"  + "CE"   + "nightly" -> "nightly/ce-2.8"
+      "26.03.1"+ "Plus" + "nightly" -> "nightly/plus-26.03"
     """
     major_minor = ".".join(pfsense_version.split(".")[:2])
-    return f"{variant.lower()}-{major_minor}"
+    name = f"{variant.lower()}-{major_minor}"
+    return f"{channel}/{name}" if channel else name
 
 
 def generate_routing_json(entries: list[dict], output_path: str) -> None:

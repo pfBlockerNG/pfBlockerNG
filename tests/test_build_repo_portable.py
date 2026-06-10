@@ -724,3 +724,99 @@ def test_routing_json_legacy_retained(tmp_path: Path) -> None:
     assert len(routes) == 1
     assert routes[0]["status"] == "legacy"
     assert routes[0]["catalog"] == "ce-2.7"
+
+
+# --------------------------------------------------------------------------- #
+# Nightly channel: CE/Plus variant split with nightly/ path prefix
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_name_from_version_nightly() -> None:
+    """catalog_name_from_version with channel="nightly" prepends "nightly/" prefix.
+
+    CE and Plus both get the nightly/ prefix; the variant-keyed name is unchanged:
+      "2.8.1"  + "CE"   + channel="nightly" -> "nightly/ce-2.8"
+      "26.03.1"+ "Plus" + channel="nightly" -> "nightly/plus-26.03"
+    Without channel= the behaviour is unchanged (no prefix):
+      "2.8.1"  + "CE"                       -> "ce-2.8"
+    """
+    # Nightly CE: prefix applied
+    assert brp.catalog_name_from_version("2.8.1", "CE", channel="nightly") == "nightly/ce-2.8"
+    # Nightly Plus: prefix applied
+    assert brp.catalog_name_from_version("26.03.1", "Plus", channel="nightly") == "nightly/plus-26.03"
+    # No channel: unchanged
+    assert brp.catalog_name_from_version("2.8.1", "CE") == "ce-2.8"
+    # Patch stripping still works with nightly
+    assert brp.catalog_name_from_version("2.8.x", "CE", channel="nightly") == "nightly/ce-2.8"
+
+
+def test_nightly_catalog_under_versioned_subdir(tmp_path: Path) -> None:
+    """build_repo with catalog_name="nightly/ce-2.8" writes tree under nightly/ce-2.8/<ABI>/.
+
+    Scenario: nightly CE build
+      Given no nightly/ dir exists in <out>
+      When build_repo(catalog_name="nightly/ce-2.8") with a CE pkg (ABI=FreeBSD:15:amd64)
+      Then meta.conf exists at nightly/ce-2.8/FreeBSD:15:amd64/meta.conf
+       And no meta.conf exists at ce-2.8/FreeBSD:15:amd64/meta.conf (release path untouched)
+       And no meta.conf exists at FreeBSD:15:amd64/meta.conf (legacy root untouched)
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "nightly-ce.pkg", name="pfBlockerNG-nightly", abi="FreeBSD:15:amd64")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    # Before-state: no nightly/ dir
+    assert not (out / "nightly").exists()
+
+    brp.build_repo(in_dir, out, catalog_name="nightly/ce-2.8")
+
+    # Nightly versioned path exists
+    assert (out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    # Release path NOT created as side-effect
+    assert not (out / "ce-2.8").exists()
+    # Legacy root-level ABI path NOT created
+    assert not (out / "FreeBSD:15:amd64" / "meta.conf").exists()
+
+
+def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
+    """build_repo with catalog_name="nightly/plus-26.03" writes under nightly/plus-26.03/<ABI>/.
+
+    Scenario: nightly Plus build, nightly CE build in same output tree
+      Given no nightly/ dir exists
+      When build_repo(catalog_name="nightly/ce-2.8") with CE pkg (FreeBSD:15:amd64)
+       And build_repo(catalog_name="nightly/plus-26.03") with Plus pkg (FreeBSD:16:amd64)
+      Then nightly/ce-2.8/FreeBSD:15:amd64/meta.conf exists
+       And nightly/plus-26.03/FreeBSD:16:amd64/meta.conf exists
+       And the CE and Plus nightly packagesite contents do not cross-contaminate
+    """
+    ce_dir = tmp_path / "ce_in"
+    ce_dir.mkdir()
+    plus_dir = tmp_path / "plus_in"
+    plus_dir.mkdir()
+    make_pkg(ce_dir / "ce-nightly.pkg", name="pfBlockerNG-nightly-ce", abi="FreeBSD:15:amd64")
+    make_pkg(plus_dir / "plus-nightly.pkg", name="pfBlockerNG-nightly-plus", abi="FreeBSD:16:amd64")
+    out = tmp_path / "out"
+
+    # Before-state: no nightly dir
+    assert not (out / "nightly").exists()
+
+    brp.build_repo(ce_dir, out, catalog_name="nightly/ce-2.8")
+    brp.build_repo(plus_dir, out, catalog_name="nightly/plus-26.03")
+
+    assert (out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    assert (out / "nightly" / "plus-26.03" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+
+    ce_raw = _read_member(
+        out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml"
+    ).decode()
+    ce_names = {json.loads(ln)["name"] for ln in ce_raw.splitlines() if ln}
+    assert "pfBlockerNG-nightly-ce" in ce_names
+    assert "pfBlockerNG-nightly-plus" not in ce_names
+
+    plus_raw = _read_member(
+        out / "nightly" / "plus-26.03" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml"
+    ).decode()
+    plus_names = {json.loads(ln)["name"] for ln in plus_raw.splitlines() if ln}
+    assert "pfBlockerNG-nightly-plus" in plus_names
+    assert "pfBlockerNG-nightly-ce" not in plus_names
