@@ -46,12 +46,38 @@
 # py311); the fix when one arises is a flavored layout <out>/<ABI>-<php><py>/,
 # intentionally NOT implemented here.
 #
+# VERSION-KEYED CATALOG DIRS (ADR-20 Phase 3)
+#   Pass --catalog-name <name> (e.g. "ce-2.8", "plus-26.03") to write the catalog
+#   under <out>/<catalog-name>/<ABI>/ instead of <out>/<ABI>/.
+#   When absent, behaviour is UNCHANGED (writes to <ABI>/ — the legacy path).
+#
+#   Catalog name derivation rule (use catalog_name_from_version()):
+#     Both CE and Plus strip any trailing patch component, taking only major.minor:
+#       "2.8.1"  + "CE"   -> "ce-2.8"
+#       "2.8.x"  + "CE"   -> "ce-2.8"
+#       "26.03"  + "Plus" -> "plus-26.03"
+#       "26.03.1"+ "Plus" -> "plus-26.03"
+#
+#   The publish pipeline loops over all active ci-metadata entries and calls this
+#   tool once per entry with the appropriate --catalog-name. Each versioned subdir
+#   is self-contained; multiple coexist under the same <out> root.
+#
+# ROUTING MANIFEST (ADR-20 Phase 3)
+#   Pass --generate-routing-json with --routing-entries '<JSON array>' and
+#   --routing-json-path <path> to write a routing manifest instead of building a
+#   catalog. Entries have {pattern, catalog, status}; output is {"routes": [...]}.
+#   Also callable from Python as generate_routing_json(entries, output_path).
+#
 # Requires: python3 (stdlib only) + a zstd encoder (the `zstd` binary, or the
 # python `zstandard` module) — the same compressor contract as build-pkg-portable.py.
 #
 # Usage:
 #   build-repo-portable.py --in <dir-of-.pkg> --out <dir>   # build the per-ABI tree
+#   build-repo-portable.py --in <dir> --out <dir> --catalog-name ce-2.8  # versioned
 #   build-repo-portable.py --print-conf [--base-url <url>]  # print the client repo-conf
+#   build-repo-portable.py --generate-routing-json \        # write routing manifest
+#     --routing-entries '[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]' \
+#     --routing-json-path routing.json
 #
 # This is a developer tool (not shipped in release archives). See --help.
 
@@ -335,12 +361,46 @@ def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# ADR-20 Phase 3: catalog name derivation + routing manifest
+# --------------------------------------------------------------------------- #
+
+
+def catalog_name_from_version(pfsense_version: str, variant: str) -> str:
+    """Derive catalog dir name: major.minor only, prefixed by variant.
+
+    Both CE and Plus strip any trailing patch component:
+      "2.8.1"  + "CE"   -> "ce-2.8"
+      "2.8.x"  + "CE"   -> "ce-2.8"
+      "26.03"  + "Plus" -> "plus-26.03"
+      "26.03.1"+ "Plus" -> "plus-26.03"
+    """
+    major_minor = ".".join(pfsense_version.split(".")[:2])
+    return f"{variant.lower()}-{major_minor}"
+
+
+def generate_routing_json(entries: list[dict], output_path: str) -> None:
+    """Write a routing manifest JSON file from a list of routing entry dicts.
+
+    Each entry must have keys: pattern, catalog, status.
+    Output schema: {"routes": [{"pattern": ..., "catalog": ..., "status": ...}, ...]}.
+    Pure Python stdlib; no network I/O.
+    """
+    payload = {"routes": list(entries)}
+    Path(output_path).write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 
 
-def build_repo(in_dir: Path, out_dir: Path) -> list[str]:
-    """Build the per-ABI catalog tree. Returns the list of ABIs built (sorted)."""
+def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) -> list[str]:
+    """Build the per-ABI catalog tree. Returns the list of ABIs built (sorted).
+
+    When ``catalog_name`` is supplied (e.g. ``"ce-2.8"``), the ABI subtrees are
+    written under ``out_dir / catalog_name / <ABI>/`` instead of ``out_dir / <ABI>/``.
+    When absent, the legacy ``out_dir / <ABI>/`` layout is used (unchanged behaviour).
+    """
     pkgs = sorted(p for p in in_dir.glob("*.pkg") if p.is_file())
     if not pkgs:
         raise BuildRepoError(f"no .pkg files in {in_dir}")
@@ -373,9 +433,11 @@ def build_repo(in_dir: Path, out_dir: Path) -> list[str]:
             continue
         bucket_nv[nv] = (path, manifest)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # When catalog_name is given, place all ABI subtrees under out_dir/catalog_name/.
+    catalog_root = out_dir / catalog_name if catalog_name else out_dir
+    catalog_root.mkdir(parents=True, exist_ok=True)
     for abi in sorted(by_abi):
-        bucket = out_dir / abi
+        bucket = catalog_root / abi
         # Wipe + rebuild for determinism (a removed .pkg never lingers).
         if bucket.exists():
             shutil.rmtree(bucket)
@@ -434,8 +496,14 @@ def main(argv: list[str]) -> int:
             "examples:\n"
             "  # build a catalog tree from a dir of release .pkg\n"
             "  build-repo-portable.py --in ./pkgs --out ./site\n\n"
+            "  # build under a version-keyed subdir (ADR-20)\n"
+            "  build-repo-portable.py --in ./pkgs --out ./site --catalog-name ce-2.8\n\n"
             "  # print the client repo-conf (Phase 4 add-repo.sh + README reuse it)\n"
-            "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n"
+            "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n\n"
+            "  # write a routing manifest (ADR-20)\n"
+            "  build-repo-portable.py --generate-routing-json \\\n"
+            '    --routing-entries \'[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]\' \\\n'
+            "    --routing-json-path routing.json\n"
         ),
     )
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")
@@ -446,21 +514,64 @@ def main(argv: list[str]) -> int:
         default=DEFAULT_BASE_URL,
         help="base URL for --print-conf (the conf appends the literal ${ABI} pkg variable)",
     )
+    ap.add_argument(
+        "--catalog-name",
+        dest="catalog_name",
+        default=None,
+        help=(
+            "when supplied, write the per-ABI tree under <out>/<catalog-name>/<ABI>/ "
+            "instead of the legacy <out>/<ABI>/ path (e.g. 'ce-2.8', 'plus-26.03'). "
+            "Derive from pfsense_version + variant via catalog_name_from_version()."
+        ),
+    )
+    ap.add_argument(
+        "--generate-routing-json",
+        action="store_true",
+        help=(
+            "write a routing manifest JSON file from --routing-entries to "
+            "--routing-json-path and exit (does NOT build a catalog)"
+        ),
+    )
+    ap.add_argument(
+        "--routing-entries",
+        default=None,
+        help="JSON array of routing entry dicts ({pattern, catalog, status}) for --generate-routing-json",
+    )
+    ap.add_argument(
+        "--routing-json-path",
+        default=None,
+        help="output file path for --generate-routing-json",
+    )
     args = ap.parse_args(argv)
 
     if args.print_conf:
         print_conf(args.base_url)
         return 0
 
+    if args.generate_routing_json:
+        if not args.routing_entries or not args.routing_json_path:
+            ap.error("--generate-routing-json requires --routing-entries and --routing-json-path")
+        try:
+            entries = json.loads(args.routing_entries)
+        except ValueError as e:
+            sys.stderr.write(f"build-repo-portable: --routing-entries is not valid JSON: {e}\n")
+            return 1
+        if not isinstance(entries, list):
+            sys.stderr.write("build-repo-portable: --routing-entries must be a JSON array\n")
+            return 1
+        generate_routing_json(entries, args.routing_json_path)
+        sys.stderr.write(f"==> wrote routing manifest: {args.routing_json_path} ({len(entries)} route(s))\n")
+        return 0
+
     if not args.in_dir or not args.out_dir:
-        ap.error("--in and --out are required (or use --print-conf)")
+        ap.error("--in and --out are required (or use --print-conf / --generate-routing-json)")
     in_dir = Path(args.in_dir)
     if not in_dir.is_dir():
         sys.stderr.write(f"build-repo-portable: --in is not a directory: {in_dir}\n")
         return 1
 
     try:
-        abis = build_repo(in_dir, Path(args.out_dir))
+        abis = build_repo(in_dir, Path(args.out_dir), catalog_name=args.catalog_name)
     except BuildRepoError as e:
         sys.stderr.write(f"build-repo-portable: {e}\n")
         return 1

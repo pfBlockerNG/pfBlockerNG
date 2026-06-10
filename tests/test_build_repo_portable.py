@@ -501,3 +501,226 @@ def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:
     """Without --in/--out (and no --print-conf) the CLI errors."""
     with pytest.raises(SystemExit):
         brp.main([])
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Phase 3: version-keyed catalog dirs + routing manifest
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_name_from_version() -> None:
+    """catalog_name_from_version derives major.minor, prefixed by lowercased variant.
+
+    CE and Plus both strip any trailing patch component:
+      "2.8.1"  + "CE"   -> "ce-2.8"
+      "2.8.x"  + "CE"   -> "ce-2.8"
+      "26.03"  + "Plus" -> "plus-26.03"
+      "26.03.1"+ "Plus" -> "plus-26.03"
+    """
+    assert brp.catalog_name_from_version("2.8.1", "CE") == "ce-2.8"
+    assert brp.catalog_name_from_version("2.8.x", "CE") == "ce-2.8"
+    assert brp.catalog_name_from_version("26.03", "Plus") == "plus-26.03"
+    assert brp.catalog_name_from_version("26.03.1", "Plus") == "plus-26.03"
+
+
+def test_catalog_under_versioned_subdir(tmp_path: Path) -> None:
+    """--catalog-name writes the ABI tree under <out>/<catalog-name>/<ABI>/, not <out>/<ABI>/.
+
+    Scenario: CE 2.8 build
+      Given no ce-2.8/ dir exists in <out>
+      When build_repo(catalog_name="ce-2.8") is called with a CE pkg (ABI=FreeBSD:15:amd64)
+      Then meta.conf exists at ce-2.8/FreeBSD:15:amd64/meta.conf
+      And no meta.conf exists at the plain FreeBSD:15:amd64/meta.conf (root-level)
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:amd64")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    # Before-state: no ce-2.8/ dir
+    assert not (out / "ce-2.8").exists()
+
+    brp.build_repo(in_dir, out, catalog_name="ce-2.8")
+
+    # Versioned path exists
+    assert (out / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    # Legacy root-level path does NOT exist
+    assert not (out / "FreeBSD:15:amd64" / "meta.conf").exists()
+
+
+def test_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
+    """--catalog-name plus-26.03 writes under plus-26.03/<ABI>/, no ce-2.8/ dir created.
+
+    Scenario: Plus 26.03 build
+      Given no plus-26.03/ or ce-2.8/ dir exists
+      When build_repo(catalog_name="plus-26.03") with Plus pkg (ABI=FreeBSD:16:amd64)
+      Then meta.conf at plus-26.03/FreeBSD:16:amd64/meta.conf
+      And no ce-2.8/ dir exists
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "plus-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:16:amd64")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    # Before-state: neither versioned dir exists
+    assert not (out / "plus-26.03").exists()
+    assert not (out / "ce-2.8").exists()
+
+    brp.build_repo(in_dir, out, catalog_name="plus-26.03")
+
+    assert (out / "plus-26.03" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+    # CE dir must NOT have been created as a side-effect
+    assert not (out / "ce-2.8").exists()
+
+
+def test_legacy_path_retained(tmp_path: Path) -> None:
+    """Without --catalog-name, meta.conf lands at <out>/<ABI>/meta.conf (legacy layout unchanged).
+
+    This is the regression guard: passing catalog_name=None must NOT change existing behaviour.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo.pkg", abi="FreeBSD:15:amd64")
+    out = tmp_path / "out"
+
+    brp.build_repo(in_dir, out)  # no catalog_name
+
+    assert (out / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    # No versioned subdirs created
+    assert not (out / "ce-2.8").exists()
+    assert not (out / "plus-26.03").exists()
+
+
+def test_wrong_variant_pkg_excluded(tmp_path: Path) -> None:
+    """A CE pkg built into ce-2.8/ does NOT appear in plus-26.03/ and vice-versa.
+
+    Scenario: cross-variant contamination guard
+      Given a CE pkg named "pfBlockerNG-ce" (ABI FreeBSD:15:amd64)
+        And a Plus pkg named "pfBlockerNG-plus" (ABI FreeBSD:16:amd64)
+      When each is built into its own versioned catalog dir
+      Then the CE packagesite contains only "pfBlockerNG-ce"
+       And the Plus packagesite contains only "pfBlockerNG-plus"
+       And "pfBlockerNG-plus" is NOT in the CE packagesite
+       And "pfBlockerNG-ce" is NOT in the Plus packagesite
+    """
+    ce_dir = tmp_path / "ce_in"
+    ce_dir.mkdir()
+    plus_dir = tmp_path / "plus_in"
+    plus_dir.mkdir()
+    make_pkg(ce_dir / "ce.pkg", name="pfBlockerNG-ce", abi="FreeBSD:15:amd64")
+    make_pkg(plus_dir / "plus.pkg", name="pfBlockerNG-plus", abi="FreeBSD:16:amd64")
+    out = tmp_path / "out"
+
+    brp.build_repo(ce_dir, out, catalog_name="ce-2.8")
+    brp.build_repo(plus_dir, out, catalog_name="plus-26.03")
+
+    # CE packagesite names
+    ce_raw = _read_member(out / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    ce_names = {json.loads(ln)["name"] for ln in ce_raw.splitlines() if ln}
+    assert "pfBlockerNG-ce" in ce_names
+    assert "pfBlockerNG-plus" not in ce_names
+
+    # Plus packagesite names
+    plus_raw = _read_member(out / "plus-26.03" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    plus_names = {json.loads(ln)["name"] for ln in plus_raw.splitlines() if ln}
+    assert "pfBlockerNG-plus" in plus_names
+    assert "pfBlockerNG-ce" not in plus_names
+
+
+def test_two_ce_entries_produce_two_versioned_dirs(tmp_path: Path) -> None:
+    """Two CE builds (different versions, different ABIs) each get their own versioned dir.
+
+    Scenario: transition window with two active CE versions
+      Given no ce-2.8/ or ce-2.9/ dir exists
+      When build_repo(catalog_name="ce-2.8") with ABI=FreeBSD:15:amd64
+       And build_repo(catalog_name="ce-2.9") with ABI=FreeBSD:16:amd64
+      Then ce-2.8/FreeBSD:15:amd64/meta.conf exists
+       And ce-2.9/FreeBSD:16:amd64/meta.conf exists
+       And each packagesite contains only its own pkg (no cross-contamination)
+    """
+    in28 = tmp_path / "in28"
+    in28.mkdir()
+    in29 = tmp_path / "in29"
+    in29.mkdir()
+    make_pkg(in28 / "pkg28.pkg", name="pfBlockerNG-2.8", abi="FreeBSD:15:amd64")
+    make_pkg(in29 / "pkg29.pkg", name="pfBlockerNG-2.9", abi="FreeBSD:16:amd64")
+    out = tmp_path / "out"
+
+    # Before-state: neither dir exists
+    assert not (out / "ce-2.8").exists()
+    assert not (out / "ce-2.9").exists()
+
+    brp.build_repo(in28, out, catalog_name="ce-2.8")
+    brp.build_repo(in29, out, catalog_name="ce-2.9")
+
+    assert (out / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    assert (out / "ce-2.9" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+
+    # No cross-contamination: each packagesite has only its pkg
+    raw28 = _read_member(out / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    names28 = [json.loads(ln)["name"] for ln in raw28.splitlines() if ln]
+    assert names28 == ["pfBlockerNG-2.8"]
+
+    raw29 = _read_member(out / "ce-2.9" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    names29 = [json.loads(ln)["name"] for ln in raw29.splitlines() if ln]
+    assert names29 == ["pfBlockerNG-2.9"]
+
+
+def test_routing_json_correct_entries(tmp_path: Path) -> None:
+    """generate_routing_json writes all entries with correct catalog/pattern/status fields.
+
+    Scenario: two active + one legacy entry
+      Given entries with two "active" and one "legacy" status
+      When generate_routing_json is called
+      Then routing.json contains all three entries
+       And each has the correct catalog, pattern, and status fields
+       And both active and legacy entries are present (legacy routes retained)
+    """
+    entries = [
+        {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"},
+        {"pattern": "pfSense/26.03", "catalog": "plus-26.03", "status": "active"},
+        {"pattern": "pfSense/2.7", "catalog": "ce-2.7", "status": "legacy"},
+    ]
+    output_path = str(tmp_path / "routing.json")
+
+    brp.generate_routing_json(entries, output_path)
+
+    with open(output_path) as f:
+        doc = json.load(f)
+
+    assert "routes" in doc
+    routes = doc["routes"]
+    assert len(routes) == 3
+
+    by_catalog = {r["catalog"]: r for r in routes}
+    assert by_catalog["ce-2.8"]["pattern"] == "pfSense/2.8"
+    assert by_catalog["ce-2.8"]["status"] == "active"
+    assert by_catalog["plus-26.03"]["pattern"] == "pfSense/26.03"
+    assert by_catalog["plus-26.03"]["status"] == "active"
+    assert by_catalog["ce-2.7"]["pattern"] == "pfSense/2.7"
+    assert by_catalog["ce-2.7"]["status"] == "legacy"
+
+
+def test_routing_json_legacy_retained(tmp_path: Path) -> None:
+    """Legacy entries are present in routing.json with status="legacy" — NOT omitted.
+
+    Scenario: legacy entry preservation
+      Given a single entry with status "legacy"
+      When generate_routing_json is called
+      Then routing.json contains the entry
+       And its status is "legacy" (not absent, not "active")
+    """
+    entries = [{"pattern": "pfSense/2.7", "catalog": "ce-2.7", "status": "legacy"}]
+    output_path = str(tmp_path / "routing.json")
+
+    brp.generate_routing_json(entries, output_path)
+
+    with open(output_path) as f:
+        doc = json.load(f)
+
+    routes = doc["routes"]
+    assert len(routes) == 1
+    assert routes[0]["status"] == "legacy"
+    assert routes[0]["catalog"] == "ce-2.7"
