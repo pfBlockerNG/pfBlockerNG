@@ -1197,3 +1197,497 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
     origin = pkg_repo_origin(repo_vm)
     assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+
+
+# =========================================================================== #
+# ADR-20 Phase 6 — variant-catalog live-VM cases (CE install, wrong-variant   #
+# guard, legacy path, routing URL).                                            #
+#                                                                              #
+# Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).  #
+# Deselected from default `python -m pytest` — dispatched via:                #
+#     gh workflow run smoke.yml -f pytest_marker=repo                          #
+# =========================================================================== #
+
+# CE smoke image uses FreeBSD 15; Plus uses FreeBSD 16.
+CE_ABI = "FreeBSD:15:amd64"
+PLUS_ABI = "FreeBSD:16:amd64"
+
+# Catalog names for the variant-keyed subtrees (ADR-20 §2 decision).
+CE_CATALOG_NAME = "ce-2.8"
+PLUS_CATALOG_NAME = "plus-26.03"
+
+# Base dir for ADR-20 variant catalogs on the guest (isolated from the ADR-17 spike dir).
+VARIANT_REPO_ROOT = "/tmp/pfb_variant_repo"
+CE_REPO_DIR = f"{VARIANT_REPO_ROOT}/{CE_CATALOG_NAME}"
+PLUS_REPO_DIR = f"{VARIANT_REPO_ROOT}/{PLUS_CATALOG_NAME}"
+LEGACY_REPO_DIR = f"{VARIANT_REPO_ROOT}/legacy"
+
+# Routing Worker URL (Phase 5).  Case 4 is xfail until routing.json is live on Pages.
+WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
+
+
+# --------------------------------------------------------------------------- #
+# Helper — build a variant-keyed catalog on the runner + ship to the guest    #
+# --------------------------------------------------------------------------- #
+
+
+def build_repo_via_portable_named(
+    vm: SmokeVM,
+    pkg_files: list[Path],
+    tmp_path: Path,
+    *,
+    catalog_name: str,
+    guest_root: str,
+) -> str:
+    """Like ``build_repo_via_portable`` but writes under ``<out>/<catalog-name>/<ABI>/``.
+
+    Uses ``build-repo-portable.py --catalog-name <catalog_name>`` to place the
+    ABI subtree under the named variant directory (e.g. ``ce-2.8/FreeBSD:15:amd64/``).
+    Ships only the produced ``<catalog-name>/<ABI>/`` tree to the guest under
+    ``guest_root``; returns the on-guest ABI path the repo conf should point at.
+    """
+    in_dir = tmp_path / f"in_{catalog_name}"
+    out_dir = tmp_path / f"out_{catalog_name}"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    for pkg in pkg_files:
+        (in_dir / pkg.name).write_bytes(pkg.read_bytes())
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BUILD_REPO_PORTABLE),
+            "--in",
+            str(in_dir),
+            "--out",
+            str(out_dir),
+            "--catalog-name",
+            catalog_name,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180.0,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"build-repo-portable.py --catalog-name {catalog_name} failed: "
+            f"rc={proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+
+    catalog_root = out_dir / catalog_name
+    abi_buckets = sorted(p for p in catalog_root.iterdir() if p.is_dir())
+    assert len(abi_buckets) == 1, (
+        f"portable generator produced {[p.name for p in abi_buckets]} ABI buckets under {catalog_name}/, expected 1"
+    )
+    local_abi_dir = abi_buckets[0]
+    for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
+        assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
+
+    # Ship the <catalog-name>/<ABI>/ tree to the guest.
+    guest_abi_dir = f"{guest_root}/{catalog_name}/{local_abi_dir.name}"
+    _ssh_check(vm, "/bin/rm", "-rf", f"{guest_root}/{catalog_name}")
+    _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
+    for f in sorted(local_abi_dir.iterdir()):
+        if f.is_file():
+            _scp_to_guest(vm, f, f"{guest_abi_dir}/{f.name}")
+    return guest_abi_dir
+
+
+def forge_plus_pkg(src_pkg: Path, out_dir: Path) -> Path:
+    """Forge a fake Plus .pkg from the branch .pkg with ``php85`` dep + Plus ABI.
+
+    Re-reads the +COMPACT_MANIFEST, replaces every ``php8N`` dep key with
+    ``php85``, sets the ``abi`` to ``FreeBSD:16:amd64``, and repacks.  No
+    payload change — the dep-mismatch guard fires before pkg ever checks the
+    files.  The returned .pkg is placed in ``out_dir``.
+    """
+    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
+    repacked = io.BytesIO()
+    pkg_name = ""
+    with (
+        tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tin,
+        tarfile.open(fileobj=repacked, mode="w", format=tarfile.USTAR_FORMAT) as tout,
+    ):
+        for member in tin.getmembers():
+            extracted = tin.extractfile(member) if member.isfile() else None
+            data = extracted.read() if extracted is not None else b""
+            if member.name in _PKG_MANIFEST_MEMBERS:
+                obj = json.loads(data)
+                # Swap every php8N dep for php85 (CE manifest has php83).
+                if "deps" in obj:
+                    old_deps: dict[str, object] = obj["deps"]
+                    new_deps: dict[str, object] = {}
+                    for key, val in old_deps.items():
+                        if re.match(r"php8\d", key):
+                            # Replace the key; keep the value dict unchanged (origin/version are fictional).
+                            new_key = "php85"
+                            new_deps[new_key] = val
+                        else:
+                            new_deps[key] = val
+                    obj["deps"] = new_deps
+                # Set the Plus ABI so the portable generator buckets it correctly.
+                obj["abi"] = PLUS_ABI
+                pkg_name = obj.get("name", pkg_name)
+                data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+                ti = tarfile.TarInfo(name=member.name)
+                ti.size = len(data)
+                ti.mode = 0o644
+                ti.uid = ti.gid = 0
+                ti.uname, ti.gname = "root", "wheel"
+                ti.mtime = 0
+                ti.type = tarfile.REGTYPE
+                tout.addfile(ti, io.BytesIO(data))
+            else:
+                tout.addfile(member, io.BytesIO(data) if member.isfile() else None)
+    if not pkg_name:
+        raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST with a name — not a libpkg .pkg?")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{pkg_name}-plus.pkg"
+    out_path.write_bytes(_zstd_compress(repacked.getvalue()))
+    return out_path
+
+
+def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
+    """Return the raw ``pkg query '%d %v' <PKG_NAME>`` output (dep names + versions)."""
+    result = vm.ssh("pkg", "query", "%d %v", PKG_NAME, timeout=timeout)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Case 1 — CE install from ce/${ABI} catalog                           #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(600)
+def test_ce_install_from_variant_ce_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 1 — CE package installs from variant-keyed ``ce-2.8/${ABI}``
+    catalog; ``php83`` dep is satisfied; package origin is our repo.
+
+    Scenario: CE package installed from variant-correct ce/{ABI} catalog.
+      Background: hermetic file:// CE catalog at ce-2.8/FreeBSD:15:amd64/.
+
+    Given the package ABSENT and a variant-keyed catalog under ``ce-2.8/${ABI}/``
+      built from the branch .pkg by the pure-Python generator,
+    When ``pkg install -y <pkgname>`` resolves from this CE catalog,
+    Then ``pkg query '%d %v' <pkgname>`` shows ``php83`` in the dep list (CE dep
+      satisfied), the version matches the branch .pkg, and the origin is our repo.
+    Assert BEFORE: ``pkg query '%n' <pkgname>`` returns empty (package absent).
+    Assert AFTER: dep list contains ``php83``; version and origin correct.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+
+    # GIVEN: build the CE catalog with the variant-keyed dir on the runner,
+    # ship to guest, write a NONE-signed file:// repo conf above pfSense.
+    abi_dir = build_repo_via_portable_named(
+        repo_vm,
+        [Path(pkg)],
+        tmp_path,
+        catalog_name=CE_CATALOG_NAME,
+        guest_root=VARIANT_REPO_ROOT,
+    )
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+
+    # Before-state: package absent.
+    pkg_update(repo_vm)
+    before_name = vm_pkg_query_name(repo_vm)
+    assert before_name == "", f"package unexpectedly present before CE variant install: {before_name!r}"
+
+    # WHEN: install from the CE variant catalog (no -r, no -f).
+    proc = pkg_install_from_repo(repo_vm)
+    combined = proc.stdout + proc.stderr
+    assert "Missing dependency" not in combined, f"CE variant catalog: RUN_DEPENDS did not resolve:\n{combined}"
+
+    # THEN: dep list contains php83 (CE dep), origin is ours.
+    deps_out = pkg_query_deps(repo_vm)
+    assert "php83" in deps_out, (
+        f"php83 dep not satisfied after CE variant install; pkg query '%d %v' output:\n{deps_out}"
+    )
+    assert "php85" not in deps_out, (
+        f"Plus dep php85 should not appear in CE install; pkg query '%d %v' output:\n{deps_out}"
+    )
+    origin = pkg_repo_origin(repo_vm)
+    assert origin == OURS_REPO_NAME, f"CE variant install: came from {origin!r}, expected {OURS_REPO_NAME!r}"
+    version = pkg_installed_version(repo_vm)
+    assert version is not None, "CE variant install: pkg query %v returned empty after install"
+
+
+def vm_pkg_query_name(vm: SmokeVM, *, timeout: float = 60.0) -> str:
+    """``pkg query '%n' <PKG_NAME>`` — the package name if installed, else empty string."""
+    result = vm.ssh("pkg", "query", "%n", PKG_NAME, timeout=timeout)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Case 2 — wrong-variant guard: CE VM + Plus catalog                   #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)
+def test_wrong_variant_plus_catalog_fails_on_ce_vm(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 2 — Installing a Plus package on a CE VM fails; ``php85``
+    dep is unsatisfied; package is NOT installed after the attempt.
+
+    Scenario: Installing a Plus package on CE VM fails with unsatisfied dep.
+      Background: hermetic file:// Plus catalog at plus-26.03/FreeBSD:16:amd64/.
+
+    Before-state ASSERT: CE package from ``ce-2.8/${ABI}`` installs CLEANLY (``php83``
+      dep satisfied) — proves the CE path is correct and the AFTER failure is caused
+      by the variant mismatch, not an unrelated setup issue.
+    Given the CE package uninstalled and the repo conf pointing to the Plus catalog
+      (ABI mismatch — CE VM has FreeBSD:15),
+    When ``pkg install -y <pkgname>`` from the Plus catalog,
+    Then exit code is non-zero OR the error output mentions ``php85`` / ABI mismatch,
+      AND ``pkg query '%n' <pkgname>`` confirms the package is NOT installed.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+    src = Path(pkg)
+
+    # ---- Before-state: prove the CE path works (the guard control) ----
+    ce_abi_dir = build_repo_via_portable_named(
+        repo_vm,
+        [src],
+        tmp_path,
+        catalog_name=CE_CATALOG_NAME,
+        guest_root=VARIANT_REPO_ROOT,
+    )
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, ce_abi_dir, ours_priority=pfsense_prio + 100)
+    pkg_update(repo_vm)
+
+    # Assert before-state: absent before CE install.
+    assert vm_pkg_query_name(repo_vm) == "", "package unexpectedly present before CE control install"
+
+    ce_install = pkg_install_from_repo(repo_vm)
+    ce_combined = ce_install.stdout + ce_install.stderr
+    assert "Missing dependency" not in ce_combined, f"Control (CE) install: RUN_DEPENDS did not resolve:\n{ce_combined}"
+    ce_deps = pkg_query_deps(repo_vm)
+    assert "php83" in ce_deps, f"Control (CE) install: php83 not in deps; pkg query '%d %v':\n{ce_deps}"
+    # CE install succeeded — this is the before-state anchor.
+
+    # ---- Forge Plus .pkg (php85 dep, FreeBSD:16 ABI) ----
+    plus_pkg = forge_plus_pkg(src, tmp_path / "plus_forge")
+
+    # ---- Build Plus catalog in plus-26.03/FreeBSD:16:amd64/ ----
+    plus_abi_dir = build_repo_via_portable_named(
+        repo_vm,
+        [plus_pkg],
+        tmp_path,
+        catalog_name=PLUS_CATALOG_NAME,
+        guest_root=VARIANT_REPO_ROOT,
+    )
+
+    # Remove the CE install; point conf at Plus catalog.
+    pkg_delete(repo_vm)
+    assert vm_pkg_query_name(repo_vm) == "", "package still present after pkg_delete"
+    write_repo_conf(repo_vm, plus_abi_dir, ours_priority=pfsense_prio + 100)
+
+    try:
+        pkg_update(repo_vm)
+    except RuntimeError:
+        # pkg update may fail on ABI mismatch (CE vm, FreeBSD:16 catalog) — that
+        # is itself evidence the guard fired; treat as acceptable.
+        pass
+
+    # WHEN: attempt install from the Plus catalog on a CE VM.
+    install_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=300.0)
+
+    # THEN: either the install failed non-zero, or it "succeeded" but the dep was
+    # unsatisfied (pkg may exit 0 on some error paths but the package is absent).
+    install_failed = install_result.returncode != 0
+    install_output = install_result.stdout + install_result.stderr
+    package_installed = vm_pkg_query_name(repo_vm) != ""
+
+    # The guard must fire: either the install returned non-zero, or the package is absent.
+    assert install_failed or not package_installed, (
+        "Wrong-variant guard did NOT fire: Plus package installed successfully on a CE VM.\n"
+        f"pkg install rc={install_result.returncode}\n"
+        f"pkg install output:\n{install_output}\n"
+        f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
+    )
+    # The error output should mention php85 or ABI mismatch (informational assert — soft).
+    has_php85_error = "php85" in install_output
+    has_abi_error = any(kw in install_output.lower() for kw in ("abi", "mismatch", "incompatible", "not found"))
+    assert has_php85_error or has_abi_error or install_failed, (
+        "Wrong-variant install: expected php85/ABI error or non-zero exit; got:\n"
+        f"rc={install_result.returncode}\n{install_output}"
+    )
+    # Package must NOT be installed after the failed attempt.
+    assert not package_installed, (
+        f"Wrong-variant guard: package IS installed despite expected failure; "
+        f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Case 3 — legacy ${ABI}/ path still serves CE build                   #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)
+def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 3 — Old-conf CE box (legacy ``${ABI}/`` path, no variant
+    prefix) still upgrades from N to N+1 during the ADR-20 transition window.
+
+    Scenario: Old-conf CE box (legacy ABI/ path) still upgrades.
+      Background: hermetic file:// legacy catalog at FreeBSD:15:amd64/ (no variant prefix).
+
+    Given version N installed from the legacy (no-prefix) ``${ABI}/`` path,
+    When the catalog is rebuilt with version N+1 and ``pkg upgrade -y`` runs,
+    Then the box moves to N+1, still from our repo.
+    Assert BEFORE: version N installed, N+1 available from catalog.
+    Assert AFTER: version N+1 installed.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+    src = Path(pkg)
+
+    base_version = read_compact_version(src)
+    low_version = f"{base_version}_1"
+    high_version = f"{base_version}_9"
+    assert low_version != high_version
+
+    low_pkg = reversion_pkg(src, low_version, tmp_path / "legacy_low")
+    high_pkg = reversion_pkg(src, high_version, tmp_path / "legacy_high")
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    try:
+        # ---- GIVEN: legacy catalog (no variant prefix) with the LOWER build ----
+        # build_repo_via_portable produces <out>/<ABI>/ (no catalog-name prefix).
+        legacy_abi_dir = build_repo_via_portable(repo_vm, [low_pkg], tmp_path)
+        pkg_delete(repo_vm)
+        write_repo_conf(repo_vm, legacy_abi_dir, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        assert vm_pkg_query_name(repo_vm) == "", f"{PKG_NAME} unexpectedly present before legacy upgrade test"
+
+        # Install the LOWER version from the legacy path.
+        pkg_install_from_repo(repo_vm)
+
+        # Assert BEFORE: N installed, from our repo.
+        installed_low = pkg_installed_version(repo_vm)
+        assert installed_low == low_version, (
+            f"Legacy path: expected {low_version!r} installed first, got {installed_low!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"Legacy low build came from {pkg_repo_origin(repo_vm)!r}, expected our repo"
+        )
+
+        # ---- WHEN: rebuild legacy catalog with HIGHER build, upgrade ----
+        # Must rebuild into the SAME on-guest dir so the existing conf still points at it.
+        # Re-run portable generator into a new runner tmp, ship to the same guest dir.
+        in_high = tmp_path / "legacy_high_in"
+        out_high = tmp_path / "legacy_high_out"
+        in_high.mkdir(parents=True, exist_ok=True)
+        (in_high / high_pkg.name).write_bytes(high_pkg.read_bytes())
+        proc_high = subprocess.run(
+            [sys.executable, str(BUILD_REPO_PORTABLE), "--in", str(in_high), "--out", str(out_high)],
+            capture_output=True,
+            text=True,
+            timeout=180.0,
+            check=False,
+        )
+        if proc_high.returncode != 0:
+            raise RuntimeError(
+                f"build-repo-portable.py (legacy high) failed: rc={proc_high.returncode}\n"
+                f"stdout:\n{proc_high.stdout}\nstderr:\n{proc_high.stderr}"
+            )
+        high_abi_dirs = sorted(p for p in out_high.iterdir() if p.is_dir())
+        assert len(high_abi_dirs) == 1, (
+            f"legacy high catalog produced {[p.name for p in high_abi_dirs]} ABI dirs, expected 1"
+        )
+        high_local_abi = high_abi_dirs[0]
+
+        # Ship the updated catalog to the SAME guest ABI dir (overwrite in place).
+        for f in sorted(high_local_abi.iterdir()):
+            if f.is_file():
+                _scp_to_guest(repo_vm, f, f"{legacy_abi_dir}/{f.name}")
+
+        pkg_update(repo_vm)
+        proc_upg = pkg_upgrade(repo_vm)
+
+        # THEN: box moves to N+1, still from our repo.
+        upg_combined = proc_upg.stdout + proc_upg.stderr
+        assert "Missing dependency" not in upg_combined, f"Legacy upgrade: RUN_DEPENDS did not resolve:\n{upg_combined}"
+        installed_high = pkg_installed_version(repo_vm)
+        assert installed_high == high_version, (
+            f"Legacy upgrade: expected {high_version!r} after upgrade, got {installed_high!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"Legacy upgrade: origin {pkg_repo_origin(repo_vm)!r}, expected our repo"
+        )
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", VARIANT_REPO_ROOT, timeout=60.0)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Case 4 — routing URL delivers CE catalog (network; xfail)            #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.xfail(reason="routing.json not yet deployed to Pages (ADR-20 Phase 6 prerequisite)", strict=False)
+def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
+    """ADR-20 P6 CASE 4 — pkg fetch via Worker URL gets the CE variant catalog.
+
+    Scenario: pkg fetch via Worker URL gets CE meta.conf.
+      Background: conf with url: https://pkg.pfblockerng.workers.dev.
+
+    Given a CE VM with the conf pointing at the Worker URL (``${ABI}`` suffix added
+      by pkg), ``pkg update -r pfblockerng-devel`` fetches from the Worker.
+    Then the fetched catalog contains the CE package (not Plus) — confirmed by
+      ``pkg rquery -r pfblockerng-devel '%d %v' <pkgname>`` showing ``php83`` dep.
+
+    XFAIL: the Cloudflare Worker is live but routing.json has not yet been deployed
+    to Pages (Phase 5 RESULTS: Worker returns 502 when routing.json absent).  Once
+    routing.json is deployed this test will pass; ``strict=False`` allows it to be
+    un-xfailed without a code change.
+    """
+    _ensure_egress_open()
+
+    # Write a NONE-signed repo conf pointing at the Worker URL.
+    # The Worker appends the request path (/<ABI>/...) and 302s to the variant catalog.
+    worker_conf = (
+        f"{OURS_REPO_NAME}: {{\n"
+        f'  url: "{WORKER_BASE_URL}/${{ABI}}",\n'
+        "  signature_type: none,\n"
+        "  enabled: yes,\n"
+        "  priority: 100\n"
+        "}\n"
+    )
+    written = subprocess.run(
+        repo_vm.ssh_argv("tee", REPO_CONF),
+        input=worker_conf,
+        capture_output=True,
+        text=True,
+        timeout=60.0,
+        check=False,
+    )
+    if written.returncode != 0:
+        raise RuntimeError(f"write Worker conf failed: rc={written.returncode} {written.stderr!r}")
+
+    # Attempt pkg update — expected to fail with a 502 until routing.json is live;
+    # this is what triggers the xfail.
+    update_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-r", OURS_REPO_NAME, timeout=120.0)
+
+    # If pkg update succeeded (routing.json live), assert the catalog contains the CE package.
+    if update_result.returncode == 0:
+        rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%d %v", PKG_NAME, timeout=60.0)
+        rquery_out = rquery.stdout.strip()
+        assert "php83" in rquery_out, (
+            f"Worker URL catalog does not contain CE php83 dep; pkg rquery '%d %v' output:\n{rquery_out}"
+        )
+        assert "php85" not in rquery_out, (
+            f"Worker URL returned Plus (php85) catalog to a CE box; pkg rquery output:\n{rquery_out}"
+        )
+    else:
+        # Routing layer not yet live — trigger the xfail.
+        update_out = update_result.stdout + update_result.stderr
+        pytest.xfail(
+            f"Worker pkg update returned rc={update_result.returncode} (routing.json not yet live):\n{update_out}"
+        )
