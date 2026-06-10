@@ -105,7 +105,7 @@ jobs:
           # must fail non-zero. Simulate it by running the lookup script with a
           # clearly unknown version string.
           MATRIX_JSON="$(git fetch origin ci-metadata && git show origin/ci-metadata:supported-versions.json)"
-          UNKNOWN="9.9"
+          UNKNOWN="__invalid__"
           MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$UNKNOWN" '
             .versions[]
             | select(.channel == "CE" and .pfsense_version == $ver)
