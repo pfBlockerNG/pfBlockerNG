@@ -1,0 +1,97 @@
+## ADR-23 Phase 2 — PHPUnit tests
+
+Add `tests/php/WizardVipAutoTest.php` covering the new `pfb_dnsvip_auto` gate in
+`pfblockerng_wizard.inc` (Phase 1 changes).
+
+### Context
+
+Phase 1 added two `$pfb_auto` branches:
+1. `step3_submitphpaction()` — skips `pfb_validate_vips()` when auto=ON
+2. `step4_submitphpaction()` — persists `pfb_dnsvip_auto` flag; guards VIP id writes
+
+These branches must be covered per CLAUDE.md mandatory test rules:
+- Every condition tested both sides (auto ON + auto OFF)
+- Assert the before-state before asserting the after-state
+- Name / spec each test by intent, not mechanics
+
+### Required test file: `tests/php/WizardVipAutoTest.php`
+
+Style reference: `tests/php/DnsblMarkedVipTest.php`, `tests/php/DnsblV6RequiredTest.php`.
+Bootstrap: `tests/php/bootstrap.php` (loads real `pfblockerng_wizard.inc` via include shims
++ `pfsense_doubles.php`). Add `pfblockerng_wizard.inc` to the bootstrap require chain if not
+already included.
+
+#### Part A — Decision predicate
+
+If Phase 1 extracted a named helper (e.g., `pfb_wizard_vip_auto_enabled(array $post): bool`),
+test it directly. Otherwise, test the behaviour via a thin wrapper or by inspecting
+`$_POST`-driven outcomes.
+
+```
+Scenario: auto flag is parsed correctly
+  Background:
+    Given the wizard POST array under test
+
+  When pfb_dnsvip_auto = 'on'
+  Then the feature is considered enabled → true
+
+  When pfb_dnsvip_auto is absent
+  Then the feature is disabled → false
+
+  When pfb_dnsvip_auto = '' or '0' (falsey strings)
+  Then the feature is disabled → false
+```
+
+Case names: `testAutoFlagOnIsEnabled`, `testAutoFlagAbsentIsDisabled`,
+`testAutoFlagFalseyValuesAreDisabled` (mirrors `testSuppressCheckboxFalseyValuesStaySkip`
+in WizardDecisionTest).
+
+#### Part B — step4 persistence shape
+
+Test `step4_submitphpaction()` — or, if the function calls `pfb_remove_config_settings()`
+and `write_config()` in ways that make direct invocation impractical, test the extracted
+persistence logic. The doubles in `pfsense_doubles.php` already handle `config_get_path`,
+`config_set_path`, `write_config`, and `pfb_global`. The feeds JSON load
+(`pfb['feeds']`) may need a fixture or a stub returning `[]`.
+
+```
+Scenario: Auto-VIP flag and VIP ids are persisted correctly
+  Background:
+    Given a wizard step3 config with pfb_dnsvip4 = '_vip1', pfb_dnsvip6 = '_vip2'
+
+  When pfb_dnsvip_auto = '' (auto OFF)
+  Then pfb_dnsvip_auto is written as ''
+  AND  pfb_dnsvip4 is written as '_vip1'
+  AND  pfb_dnsvip6 is written as '_vip2'
+
+  --- assert the before-state above first ---
+
+  When pfb_dnsvip_auto = 'on' (auto ON)
+  Then pfb_dnsvip_auto is written as 'on'
+  AND  pfb_dnsvip4 is NOT written (key absent or unchanged)
+  AND  pfb_dnsvip6 is NOT written (key absent or unchanged)
+```
+
+Case names: `testManualModeWritesVipIds`, `testAutoModeWritesFlagAndSkipsVipIds`.
+
+#### Part B fallback
+
+If `step4_submitphpaction()` cannot be exercised without significant refactoring
+(e.g., the function exits or the feeds JSON is unavoidable), note this in a `@todo` comment
+and cover Part A fully. The ADR-13 engine coverage in `DnsblMarkedVipTest` already pins the
+server-side provisioning; the Part A predicate coverage is the minimum acceptable gate here.
+
+### Verify
+
+```sh
+vendor/bin/phpunit
+python -m pytest       # unchanged — confirm no regression
+```
+
+Commit message: `tests: add WizardVipAutoTest for ADR-23 auto-VIP wizard gate`
+
+### Handoff to Phase 3
+
+Pass:
+- Whether Part B was fully implemented or fell back to Part A only, and why.
+- Full test output showing new test names and counts.
