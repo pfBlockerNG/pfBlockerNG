@@ -7,7 +7,7 @@ Branch coverage rules (CLAUDE.md):
 Scenario: Version probe against the Netgate docs page fixture
   Background:
     Given the fixture HTML contains Plus 26.x (supported + future),
-          Plus 25.x (all EOL), CE 2.9.x (future), CE 2.8.x (supported)
+          Plus 25.x (all EOL), CE 2.9 (future), CE 2.8 (supported)
     And the BUILD matrix represents the current ci-metadata state
 """
 
@@ -143,28 +143,36 @@ class TestChannelFromBranch:
 
 
 class TestNormalize:
-    """Scenario: Raw version string → family key.
+    """Scenario: Raw version string → Major.Minor family key.
 
-    Given a raw version and channel
+    Given a raw version string
     When _normalize() is called
-    Then CE is reduced to Major.Minor.x and Plus to Year.Month
+    Then both channels collapse to their leading two dot components (CE Y.Z,
+         Plus YY.MM) — every patch level of a family maps to one key, the
+         floating Major.Minor form the matrix uses (no '.x' suffix).
     """
 
     def test_ce_patch_normalizes_to_family(self) -> None:
-        # Given CE version with patch component
-        assert cvs._normalize("2.8.1", "CE") == "2.8.x"
+        # Given a CE version with a patch component → Major.Minor (no '.x')
+        assert cvs._normalize("2.8.1") == "2.8"
 
     def test_ce_zero_patch_normalizes_to_family(self) -> None:
         # Given CE version 2.9.0 (zero patch — same rule)
-        assert cvs._normalize("2.9.0", "CE") == "2.9.x"
+        assert cvs._normalize("2.9.0") == "2.9"
+
+    def test_ce_already_major_minor_is_idempotent(self) -> None:
+        # Given a CE version already at Major.Minor: it stays '2.8' so it matches
+        # the matrix key. Regression guard: the old rule emitted '2.8.x', which
+        # never matched '2.8' and triggered a false 'missing from matrix' nudge.
+        assert cvs._normalize("2.8") == "2.8"
 
     def test_plus_patch_normalizes_to_year_month(self) -> None:
-        # Given Plus version with patch component
-        assert cvs._normalize("26.03.1", "Plus") == "26.03"
+        # Given a Plus version with a patch component
+        assert cvs._normalize("26.03.1") == "26.03"
 
     def test_plus_without_patch_is_idempotent(self) -> None:
         # Given Plus version already at Year.Month level
-        assert cvs._normalize("26.07", "Plus") == "26.07"
+        assert cvs._normalize("26.07") == "26.07"
 
 
 # ── FreeBSD major extraction ──────────────────────────────────────────────────
@@ -211,21 +219,21 @@ class TestParseFixture:
         rows = cvs.parse_tables(p.tables)
         self.families = {(f.version, f.channel): f for f in cvs.group_families(rows)}
 
-    def test_ce_2_8_x_is_supported(self) -> None:
-        fam = self.families[("2.8.x", "CE")]
+    def test_ce_2_8_is_supported(self) -> None:
+        fam = self.families[("2.8", "CE")]
         assert fam.status == "supported"
 
-    def test_ce_2_8_x_has_freebsd_15(self) -> None:
-        fam = self.families[("2.8.x", "CE")]
+    def test_ce_2_8_has_freebsd_15(self) -> None:
+        fam = self.families[("2.8", "CE")]
         assert fam.freebsd_major == "15"
 
-    def test_ce_2_9_x_is_future(self) -> None:
-        # Before-state: 2.9.x has no released row → future (not supported/EOL)
-        fam = self.families[("2.9.x", "CE")]
+    def test_ce_2_9_is_future(self) -> None:
+        # Before-state: 2.9 has no released row → future (not supported/EOL)
+        fam = self.families[("2.9", "CE")]
         assert fam.status == "future"
 
-    def test_ce_2_9_x_released_is_tbd(self) -> None:
-        fam = self.families[("2.9.x", "CE")]
+    def test_ce_2_9_released_is_tbd(self) -> None:
+        fam = self.families[("2.9", "CE")]
         assert fam.released == "TBD"
 
     def test_plus_26_03_is_supported(self) -> None:
@@ -234,7 +242,7 @@ class TestParseFixture:
         assert fam.status == "supported"
 
     def test_plus_26_03_has_freebsd_16(self) -> None:
-        # FreeBSD major for Plus 26.03 is 16, distinct from CE 2.8.x (FreeBSD 15)
+        # FreeBSD major for Plus 26.03 is 16, distinct from CE 2.8 (FreeBSD 15)
         fam = self.families[("26.03", "Plus")]
         assert fam.freebsd_major == "16"
 
@@ -256,7 +264,7 @@ class TestDiffSupportedMissing:
     """Scenario: Supported families absent from the matrix are reported.
 
     Background:
-      Given the fixture has CE 2.8.x (supported) and Plus 26.03 (supported)
+      Given the fixture has CE 2.8 (supported) and Plus 26.03 (supported)
 
     Tests prove both the positive case (missing → reported) and the negative
     case (present → not reported), so a regression in either direction fails.
@@ -269,18 +277,19 @@ class TestDiffSupportedMissing:
         rows = cvs.parse_tables(p.tables)
         self.families = cvs.group_families(rows)
 
-    def test_ce_2_8_x_present_in_matrix_not_reported(self) -> None:
-        # Given 2.8.x IS in the matrix
-        # Then it does NOT appear in supported_missing
-        matrix = [{"pfsense_version": "2.8.x", "channel": "CE"}]
+    def test_ce_2_8_present_in_matrix_not_reported(self) -> None:
+        # Given 2.8 IS in the matrix (the floating Major.Minor key)
+        # Then it does NOT appear in supported_missing. Regression guard: the old
+        # '2.8.x' normalization never matched '2.8' and falsely reported it missing.
+        matrix = [{"pfsense_version": "2.8", "channel": "CE"}]
         result = cvs.diff(self.families, matrix)
         versions = [e["version"] for e in result["supported_missing"]]
-        assert "2.8.x" not in versions
+        assert "2.8" not in versions
 
     def test_plus_26_03_absent_from_matrix_is_reported(self) -> None:
-        # Given 26.03 is NOT in the matrix (matrix only has 2.8.x)
+        # Given 26.03 is NOT in the matrix (matrix only has 2.8)
         # Then 26.03 DOES appear in supported_missing
-        matrix = [{"pfsense_version": "2.8.x", "channel": "CE"}]
+        matrix = [{"pfsense_version": "2.8", "channel": "CE"}]
         result = cvs.diff(self.families, matrix)
         versions = [e["version"] for e in result["supported_missing"]]
         assert "26.03" in versions
@@ -288,7 +297,7 @@ class TestDiffSupportedMissing:
     def test_channel_and_freebsd_major_in_missing_entry(self) -> None:
         # Given Plus 26.03 is absent
         # Then the entry carries channel=Plus and freebsd_major=16
-        matrix = [{"pfsense_version": "2.8.x", "channel": "CE"}]
+        matrix = [{"pfsense_version": "2.8", "channel": "CE"}]
         result = cvs.diff(self.families, matrix)
         entry = next(e for e in result["supported_missing"] if e["version"] == "26.03")
         assert entry["channel"] == "Plus"
@@ -319,12 +328,12 @@ class TestDiffFuture:
         rows = cvs.parse_tables(p.tables)
         self.families = cvs.group_families(rows)
 
-    def test_ce_2_9_x_in_future_not_missing(self) -> None:
+    def test_ce_2_9_in_future_not_missing(self) -> None:
         result = cvs.diff(self.families, [])
         future_versions = [e["version"] for e in result["future"]]
         missing_versions = [e["version"] for e in result["supported_missing"]]
-        assert "2.9.x" in future_versions
-        assert "2.9.x" not in missing_versions
+        assert "2.9" in future_versions
+        assert "2.9" not in missing_versions
 
     def test_plus_26_07_in_future_not_missing(self) -> None:
         result = cvs.diff(self.families, [])
@@ -335,12 +344,12 @@ class TestDiffFuture:
 
     def test_future_entry_has_tbd_released(self) -> None:
         result = cvs.diff(self.families, [])
-        entry_29 = next(e for e in result["future"] if e["version"] == "2.9.x")
+        entry_29 = next(e for e in result["future"] if e["version"] == "2.9")
         assert entry_29["released"] == "TBD"
 
     def test_future_entry_includes_freebsd_major(self) -> None:
         result = cvs.diff(self.families, [])
-        entry_29 = next(e for e in result["future"] if e["version"] == "2.9.x")
+        entry_29 = next(e for e in result["future"] if e["version"] == "2.9")
         assert entry_29["freebsd_major"] == "16"
 
 
@@ -380,9 +389,9 @@ class TestGracefulDegradation:
         result = self._run_capture(_fixture(), "[]")
         assert isinstance(result["supported_missing"], list)
         assert isinstance(result["future"], list)
-        # At least CE 2.8.x and Plus 26.03 should be missing
+        # At least CE 2.8 and Plus 26.03 should be missing
         missing = [e["version"] for e in result["supported_missing"]]
-        assert "2.8.x" in missing
+        assert "2.8" in missing
         assert "26.03" in missing
 
 
