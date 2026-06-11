@@ -51,7 +51,7 @@ class _Row(NamedTuple):
     freebsd_version: str
     freebsd_major: str
     channel: str  # "CE" | "Plus"
-    normalized: str  # family key: "2.8.x" (CE) or "26.03" (Plus)
+    normalized: str  # family key: "2.8" (CE) or "26.03" (Plus)
 
 
 class _Family(NamedTuple):
@@ -151,16 +151,20 @@ def _channel_from_branch(branch: str) -> str | None:
     return None
 
 
-def _normalize(raw: str, channel: str) -> str:
-    """Normalize a raw version string to its family key.
+def _normalize(raw: str) -> str:
+    """Normalize a raw version string to its Major.Minor family key.
 
-    CE  '2.8.1'    → '2.8.x'
-    Plus '26.03.1' → '26.03'
+    CE   '2.8.1'   → '2.8'    (Y.Z)
+    Plus '26.03.1' → '26.03'  (YY.MM)
+
+    The rule is channel-agnostic: both schemes collapse to their leading two
+    dot-separated components, so every patch level of the same family maps to a
+    single key — matching the floating Major.Minor matrix on ci-metadata, which
+    carries no '.x' suffix (the pre-#184 CE form '2.8.x' would never match '2.8'
+    and produced a false 'still-supported, missing from matrix' nudge).
     """
     parts = raw.strip().split(".")
-    if channel == "CE" and len(parts) >= 2:
-        return f"{parts[0]}.{parts[1]}.x"
-    if channel == "Plus" and len(parts) >= 2:
+    if len(parts) >= 2:
         return f"{parts[0]}.{parts[1]}"
     return raw
 
@@ -216,7 +220,7 @@ def parse_tables(tables: list[list[list[str]]]) -> list[_Row]:
                     freebsd_version=fbsd_raw,
                     freebsd_major=_freebsd_major(fbsd_raw),
                     channel=channel,
-                    normalized=_normalize(ver_raw, channel),
+                    normalized=_normalize(ver_raw),
                 )
             )
     return rows

@@ -22,7 +22,7 @@ entries → the smoke-fan-out set, never Plus).
 
 ```text
 {
-  "pfsense_version": "2.8.x",       # pfSense version (CE: X.Y.x; Plus: release label)
+  "pfsense_version": "2.8",          # pfSense Major.Minor family (CE: Y.Z; Plus: YY.MM)
   "channel":         "CE",           # CE | Plus
   "freebsd_version": "15.0-RELEASE", # full FreeBSD version string (build env)
   "freebsd_major":   "15",           # FreeBSD major (ABI dedup key; artifact suffix)
