@@ -633,8 +633,8 @@ code change in general, land its PR with **`/pr-merge-flow N`** — roughly
 `/pr-comments N --wait-for=coderabbitai && /pr-merge N`: get the review feedback, validate +
 apply its findings and reply, then (only if that completes cleanly) rebase-merge once the
 real CI is green. The review source adapts: it waits on **CodeRabbit** when that bot is
-active on the repo, else falls back to a **Claude Sonnet sub-agent reviewer** (CodeRabbit is
-not currently installed on the `pfBlockerNG` org). The **only** exemptions are the dev-only
+active on the repo (it is — installed on the `pfBlockerNG` org), else falls back to a **Claude
+Sonnet sub-agent reviewer**. The **only** exemptions are the dev-only
 classes that go straight to `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text,
 skills — see "Worktrees"); everything touching `src/`, `tests/`, or CI uses this flow.
 
