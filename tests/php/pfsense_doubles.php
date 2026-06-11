@@ -132,6 +132,101 @@ if (!function_exists('is_ipaddr_configured')) {
 	}
 }
 
+// --- config.lib.inc doubles (faithful path walkers over $GLOBALS['config']) ---
+//
+// pfb_manage_dnsbl_vip() (ADR-13 / PFBL-01) reads and writes config via the pfSense
+// config path API. These mirror config.lib.inc's array_get_path/array_set_path
+// semantics over a plain $GLOBALS['config'] array the tests seed, so the lifecycle
+// code runs unmodified off-appliance. write_config() records each invocation in
+// $GLOBALS['pfb_test_write_config_calls'] so tests can assert a path persisted
+// config -- or, just as load-bearing, that an abort path did NOT.
+
+if (!function_exists('config_get_path')) {
+	// pfSense config.lib.inc: walk a '/'-separated path, $default when absent.
+	function config_get_path(string $path, $default = null) {
+		$node = $GLOBALS['config'] ?? [];
+		foreach (explode('/', rtrim($path, '/')) as $key) {
+			if (!is_array($node) || !array_key_exists($key, $node)) {
+				return $default;
+			}
+			$node = $node[$key];
+		}
+		return $node;
+	}
+}
+
+if (!function_exists('config_set_path')) {
+	// pfSense config.lib.inc: set the value at a '/'-separated path (creating
+	// intermediate arrays), returning the value set.
+	function config_set_path(string $path, $value, $default = null) {
+		$node = &$GLOBALS['config'];
+		if (!is_array($node)) {
+			$node = [];
+		}
+		foreach (explode('/', rtrim($path, '/')) as $key) {
+			if (!is_array($node)) {
+				return $default;
+			}
+			if (!array_key_exists($key, $node) || !is_array($node[$key])) {
+				$node[$key] = [];
+			}
+			$node = &$node[$key];
+		}
+		$node = $value;
+		return $value;
+	}
+}
+
+if (!function_exists('config_path_enabled')) {
+	// pfSense config.lib.inc: node exists, is an array and carries the enable key.
+	function config_path_enabled(string $path, $enable_key = 'enable') {
+		$node = config_get_path($path);
+		return (is_array($node) && array_key_exists($enable_key, $node));
+	}
+}
+
+if (!function_exists('write_config')) {
+	// Persisting is out of scope off-appliance; record the call (so tests can
+	// assert whether a code path wrote config) and report success like pfSense.
+	function write_config($desc = 'Unknown', $backup = true, $write_config_only = false) {
+		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
+		return true;
+	}
+}
+
+if (!function_exists('get_configured_vip_ipv4')) {
+	// pfSense util.inc (faithful-lite): resolve a '_vip<uniqid>' id against
+	// virtualip/vip and return the entry's v4 address, null when unresolved.
+	function get_configured_vip_ipv4($vipinterface = '') {
+		if (!is_string($vipinterface) || !str_starts_with($vipinterface, '_vip')) {
+			return null;
+		}
+		$uniqid = substr($vipinterface, strlen('_vip'));
+		foreach (config_get_path('virtualip/vip', []) as $vip) {
+			if (($vip['uniqid'] ?? '') === $uniqid && is_ipaddrv4($vip['subnet'] ?? '')) {
+				return $vip['subnet'];
+			}
+		}
+		return null;
+	}
+}
+
+if (!function_exists('get_configured_vip_ipv6')) {
+	// pfSense util.inc (faithful-lite): v6 counterpart of the above.
+	function get_configured_vip_ipv6($vipinterface = '') {
+		if (!is_string($vipinterface) || !str_starts_with($vipinterface, '_vip')) {
+			return null;
+		}
+		$uniqid = substr($vipinterface, strlen('_vip'));
+		foreach (config_get_path('virtualip/vip', []) as $vip) {
+			if (($vip['uniqid'] ?? '') === $uniqid && is_ipaddrv6($vip['subnet'] ?? '')) {
+				return $vip['subnet'];
+			}
+		}
+		return null;
+	}
+}
+
 // --- VIP doubles for pfb_validate_vips() (ADR-13) ---
 //
 // The v6-recommendation tests (DnsblV6RequiredTest) drive pfb_validate_vips() and the
