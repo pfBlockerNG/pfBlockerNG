@@ -55,3 +55,31 @@ $pfb_prev_er = error_reporting();
 error_reporting($pfb_prev_er & ~E_DEPRECATED & ~E_WARNING);
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 error_reporting($pfb_prev_er);
+
+// 5. Load the setup-wizard controller's FUNCTIONS so the unit suite can invoke
+//    them on shipped code (WizardVipAutoTest -> step3_submitphpaction). The wizard
+//    .inc cannot be require()d as-is here: it opens with four require_once()s —
+//    three relative (config.inc/util.inc/services.inc, satisfiable by the shims)
+//    plus one HOST-ABSOLUTE require of /usr/local/pkg/pfblockerng/pfblockerng.inc
+//    (NOT resolvable via include_path, and a duplicate of the real include already
+//    loaded above) — and then runs top-level wiring (pfb_global(), interface-list
+//    build) that needs runtime pfSense state we deliberately do not stand up.
+//    So we read the source, strip its require_once() lines, and eval only from the
+//    first function definition onward: the function bodies are the shipped code
+//    under test, defined verbatim; no production file is modified. Guarded so a
+//    real include path (on-appliance) never double-defines.
+if (!function_exists('step3_submitphpaction')) {
+	$pfb_wizard_src = file_get_contents(
+		dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc'
+	);
+	// Drop the top-of-file require_once() statements (shims/real include already
+	// satisfy them); keep everything else byte-for-byte.
+	$pfb_wizard_src = preg_replace('/^\s*require_once\(.*\);\s*$/m', '', $pfb_wizard_src);
+	// Eval only the function definitions (from the first `function ` keyword),
+	// skipping the top-level wiring that would call into unprovisioned runtime.
+	$pfb_fn_pos = strpos($pfb_wizard_src, 'function ');
+	if ($pfb_fn_pos !== false) {
+		eval("\n" . substr($pfb_wizard_src, $pfb_fn_pos));
+	}
+	unset($pfb_wizard_src, $pfb_fn_pos);
+}

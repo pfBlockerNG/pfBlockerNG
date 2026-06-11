@@ -65,6 +65,20 @@ if (!function_exists('is_hostname')) {
 	}
 }
 
+if (!function_exists('is_port')) {
+	// pfSense util.inc: a single TCP/UDP port — a pure-digit string in 1..65535
+	// (no ranges, no aliases). step3_submitphpaction() validates pfb_dnsport /
+	// pfb_dnsport_ssl through this; WizardVipAutoTest supplies valid ports so the
+	// port branch never masks the VIP-validation branch under test.
+	function is_port($port) {
+		if (!ctype_digit((string) $port)) {
+			return false;
+		}
+		$port = (int) $port;
+		return ($port >= 1 && $port <= 65535);
+	}
+}
+
 if (!function_exists('system_get_uniqueid')) {
 	// Called at pfblockerng.inc load time (cURL user-agent). Any stable string.
 	function system_get_uniqueid() {
