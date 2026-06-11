@@ -249,11 +249,19 @@
 <step>
 	<id>4</id>
 	<title>pfBlockerNG DNSBL Component Configuration</title>
-	<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />A VIP on the Localhost interface <strong>must be configured first</strong> at <a target="_blank" href="/firewall_virtual_ip.php">Firewall > Virtual IPs</a>.]]></description>
+	<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />Enable <strong>Create VIPs automatically</strong> below to have pfBlockerNG manage the DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at <a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.]]></description>
 	<fields>
 		<field>
 			<name>DNSBL Webserver Configuration</name>
 			<type>listtopic</type>
+		</field>
+		<field>
+			<name>pfb_dnsvip_auto</name>
+			<displayname>Auto VIP</displayname>
+			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip_auto</bindstofield>
+			<description><![CDATA[Create VIPs automatically. When enabled, pfBlockerNG creates and manages the DNSBL sinkhole Virtual IP in the <strong>10.10.X.53</strong> range (IPv6: <strong>fd00:X::53</strong>) &#8212; the manual selections below are ignored.<br /><span class="text-danger">Note:</span> auto-created VIPs are <strong>not HA/CARP aware</strong>. On a CARP/HA cluster, configure the DNSBL Virtual IP manually instead.]]></description>
+			<type>checkbox</type>
+			<value>on</value>
 		</field>
 		<field>
 			<name>pfb_dnsvip4</name>
@@ -261,7 +269,7 @@
 			<source><![CDATA[pfb_get_vip_options(AF_INET, true)]]></source>
 			<source_name>descr</source_name>
 			<source_value>id</source_value>
-			<description>Select the IPv4 DNSBL Virtual IP</description>
+			<description>Select the IPv4 DNSBL Virtual IP (manual mode only — ignored when Auto VIP is enabled)</description>
 			<displayname>IPv4 DNSBL Virtual IP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip4</bindstofield>
 		</field>
@@ -271,7 +279,7 @@
 			<source><![CDATA[pfb_get_vip_options(AF_INET6, true)]]></source>
 			<source_name>descr</source_name>
 			<source_value>id</source_value>
-			<description>Select the IPv6 DNSBL Virtual IP</description>
+			<description>Select the IPv6 DNSBL Virtual IP (manual mode only — ignored when Auto VIP is enabled)</description>
 			<displayname>IPv6 DNSBL Virtual IP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip6</bindstofield>
 		</field>

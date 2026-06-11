@@ -111,16 +111,19 @@ function step3_submitphpaction() {
 		}
 	}
 
-	// Validate DNSBL VIP address
-	if ($_POST['pfb_dnsvip4'] == 'none') {
-		$_POST['pfb_dnsvip4'] = '';
-	}
-	if ($_POST['pfb_dnsvip6'] == 'none') {
-		$_POST['pfb_dnsvip6'] = '';
-	}
-	list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
-	if (!$vips_valid) {
-		$input_errors[] = "DNSBL: {$error}";
+	// Validate DNSBL VIP address (manual mode only — skip when Auto VIP is enabled)
+	$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+	if (!$pfb_auto) {
+		if ($_POST['pfb_dnsvip4'] == 'none') {
+			$_POST['pfb_dnsvip4'] = '';
+		}
+		if ($_POST['pfb_dnsvip6'] == 'none') {
+			$_POST['pfb_dnsvip6'] = '';
+		}
+		list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
+		if (!$vips_valid) {
+			$input_errors[] = "DNSBL: {$error}";
+		}
 	}
 
 	// Validate DNSBL Port selections
@@ -162,8 +165,12 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_deny_action']	= 'reject';	
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
 
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip4'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4');
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip6'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6');
+	$pfb_auto_wiz = (config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto') == 'on');
+	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip_auto'] = $pfb_auto_wiz ? 'on' : '';
+	if (!$pfb_auto_wiz) {
+		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip4'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4');
+		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip6'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6');
+	}
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport');
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport_ssl']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl');
 
