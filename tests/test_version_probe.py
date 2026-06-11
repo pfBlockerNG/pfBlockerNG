@@ -174,6 +174,11 @@ class TestNormalize:
         # Given Plus version already at Year.Month level
         assert cvs._normalize("26.07") == "26.07"
 
+    def test_single_component_version_uses_fallback_branch(self) -> None:
+        # Given a raw version with no dot (len(parts) < 2): the false side of the
+        # Major.Minor split returns the input unchanged.
+        assert cvs._normalize("2") == "2"
+
 
 # ── FreeBSD major extraction ──────────────────────────────────────────────────
 
