@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<ruleset name="pfBlockerNG-validation">
+    <description>
+        PFBL-01 input-validation gate. Runs the project's custom PfBlockerNG standard
+        (the RequirePfbFilter sniff) over the package include that holds the
+        ADR-06/07/10/13 in-scope surfaces. PHPStan + PHPUnit remain the broad PHP
+        gates; this is a single, targeted rule, not a style standard.
+    </description>
+
+    <!-- The in-scope surface lives in the main package include. -->
+    <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+
+    <!-- The bundled custom standard (its ruleset.xml references the sniff). -->
+    <rule ref="./tests/phpcs/PfBlockerNG/ruleset.xml"/>
+</ruleset>

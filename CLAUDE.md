@@ -190,7 +190,8 @@ pfBlockerNG/
 ├── .markdownlint-cli2.jsonc  # markdownlint-cli2 globs + ignores
 ├── pyproject.toml         # pytest + ruff + mypy config
 ├── phpunit.xml            # PHPUnit config (PHP unit suite; tests/php/)
-├── composer.json          # PHP dev deps: phpstan + phpunit
+├── phpcs.xml.dist         # PHPCS config (PFBL-01 RequirePfbFilter sniff over pfblockerng.inc)
+├── composer.json          # PHP dev deps: phpstan + phpunit + php_codesniffer
 └── README.md
 ```
 
@@ -199,6 +200,8 @@ helpers — bootstrap loads the real `pfblockerng.inc` off-appliance via include
 pfSense doubles; see `tests/php/README.md`), and `tests/smoke/` (the dispatch-only live-VM
 suite, ADR-04, which also holds `tests/smoke/ui/` — the ADR-14 Web-UI tiers
 `ui_render`/`ui_e2e`/`ui_browser` reusing the `smoke_vm` fixture + `helpers.py`).
+`tests/phpcs/` holds the custom PHP_CodeSniffer standard (the PFBL-01 `RequirePfbFilter`
+sniff) plus its `fixtures/` (driven by `tests/php/RequirePfbFilterSniffTest.php`).
 
 Release archives contain only `src/`. Everything else (stubs, scripts, tests, CI,
 `pyproject.toml`, `.githooks/`) is dev-only.
@@ -222,8 +225,8 @@ after checkout, before its commit/push steps** — so automated commits hit the 
   `ruff check`/`ruff format --check`, `python -m pytest`, `mypy tests/` (the suite is fully
   typed — `tests.*` is `disallow_untyped_defs`; `tests/smoke` excluded), `markdownlint-cli2`,
   `sh -n` + `shellcheck`, `php -l`. Each runs only when its tool is installed (missing =
-  reported + skipped; CI is the hard gate); PHPStan/PHPUnit run only when `vendor/bin/` has
-  them. Emergency bypass: `git commit --no-verify`.
+  reported + skipped; CI is the hard gate); PHPStan/PHPCS/PHPUnit run only when `vendor/bin/`
+  has them. Emergency bypass: `git commit --no-verify`.
 - **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---
@@ -389,10 +392,24 @@ to 79 columns and whitespace checks Ruff delegates to `ruff format`). Keep them 
 
 Intelephense in VS Code (`.inc` = PHP via `files.associations`). `stubs/pfsense/` resolves
 pfSense-provided functions — if one is flagged undefined, add it to the right stub file rather
-than expanding `undefinedFunctions` in `.vscode/settings.json`. PHPStan + PHPUnit are the PHP
-gates (both pulled by `composer install`, enforced in CI `test.yml` + the pre-commit hook).
-The `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
+than expanding `undefinedFunctions` in `.vscode/settings.json`. PHPStan + PHPUnit + PHPCS are
+the PHP gates (all pulled by `composer install`, enforced in CI `test.yml` + the pre-commit
+hook). The `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
 `tests/php/pfsense_doubles.php`).
+
+**PHPCS — the PFBL-01 RequirePfbFilter sniff.** A single custom PHP_CodeSniffer rule
+(`PfBlockerNG.Validation.RequirePfbFilter`, in `tests/phpcs/PfBlockerNG/`) mechanically enforces
+PFBL-01: inside an **in-scope (allow-listed) function** — the ADR-06/07/10/13 input-handling
+surfaces — no `exec`-family call, `json_encode` manifest write, or dynamic filesystem-path
+build may appear **without a preceding semantic-validation call** (`pfb_filter()` /
+`pfb_sanitise_feed_header()` / `sanitize_ipaddr()`) in the same function scope. It enforces the
+*semantic* layer `escapeshellarg()` cannot — both layers are required. Scope is an explicit
+allow-list (the `scopeFunctions` property), so the ADR's "legacy code is out of scope"
+carve-out is encoded by **not listing** a function, never a blanket scan; add a function name
+there when a new in-scope surface lands. Run it: `vendor/bin/phpcs` (config auto-discovered
+from `phpcs.xml.dist`). The sniff's own behaviour — fires on each sink class, silent when a
+validator precedes the sink or the function is out of scope — is pinned by
+`tests/php/RequirePfbFilterSniffTest.php` against fixtures in `tests/phpcs/fixtures/`.
 
 ### Shell
 
