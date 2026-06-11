@@ -8,7 +8,7 @@ INVOKING the real shipped step3_submitphpaction() (no re-implemented predicate b
 - Part A (step3 gate): IMPLEMENTED against shipped code. Drives step3_submitphpaction()
   and observes whether pfb_validate_vips() runs (the gate's observable consequence).
   Orchestrator directive followed: NO standalone predicate test (would re-implement the
-  inlined `isset($_POST['pfb_dnsvip_auto']) && == 'on'` boolean = coverage theater).
+  inlined `isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on'` boolean = coverage theater).
 - Part B (step4 persistence shape): FELL BACK (documented @todo + markTestSkipped).
   Confirmed the Phase-1 NOT-WITHOUT-REFACTOR verdict by reading step4_submitphpaction()
   end-to-end. Three hard blockers, all before any assertable persistence:
