@@ -48,6 +48,7 @@ final class SafeSearchCnameTest extends TestCase
 {
 	private string $tmp;
 	private array $savedPfbKeys = [];
+	private array $hadPfbKeys = [];
 
 	protected function setUp(): void
 	{
@@ -55,8 +56,8 @@ final class SafeSearchCnameTest extends TestCase
 		$this->tmp = sys_get_temp_dir() . '/pfb_ss_' . uniqid('', true);
 		mkdir($this->tmp, 0777, true);
 		foreach (['log', 'errlog', 'extdns'] as $key) {
-			$this->savedPfbKeys[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? [])
-				? $GLOBALS['pfb'][$key] : null;
+			$this->hadPfbKeys[$key]   = array_key_exists($key, $GLOBALS['pfb'] ?? []);
+			$this->savedPfbKeys[$key] = $GLOBALS['pfb'][$key] ?? null;
 		}
 		$GLOBALS['pfb']['log']    = "{$this->tmp}/log";
 		$GLOBALS['pfb']['errlog'] = "{$this->tmp}/errlog";
@@ -67,10 +68,10 @@ final class SafeSearchCnameTest extends TestCase
 	protected function tearDown(): void
 	{
 		foreach ($this->savedPfbKeys as $key => $value) {
-			if ($value === null) {
-				unset($GLOBALS['pfb'][$key]);
-			} else {
+			if ($this->hadPfbKeys[$key]) {
 				$GLOBALS['pfb'][$key] = $value;
+			} else {
+				unset($GLOBALS['pfb'][$key]);
 			}
 		}
 		rmdir_recursive($this->tmp);

@@ -8,6 +8,6 @@
 
 function pfb_unbound_python_sources($feeds)
 {
-    $header = $feeds[0]['header'];
-    return json_encode(array('feed' => $header));
+	$header = $feeds[0]['header'];
+	return json_encode(array('feed' => $header));
 }
