@@ -35,12 +35,52 @@ use PHPUnit\Framework\TestCase;
  *                  non-CNAME / malformed rows preserved verbatim;
  *                  each distinct target resolved exactly once (memo).
  *   resolve_target: empty target -> ['',''] without calling the resolver.
+ *
+ * PFBL-01 boundary (both sides): a target failing pfb_filter(PFB_FILTER_DOMAIN) is
+ * rejected BEFORE any command is composed — logged + the same ['',''] shape as the
+ * empty-target guard (so the refresh keeps prior baked IPs); a domain-valid target
+ * passes the boundary with no rejection logged and proceeds to resolution.
  */
 #[CoversFunction('pfb_ss_csv_rows')]
 #[CoversFunction('pfb_ss_refresh_lines')]
 #[CoversFunction('pfb_ss_resolve_target')]
 final class SafeSearchCnameTest extends TestCase
 {
+	private string $tmp;
+	private array $savedPfbKeys = [];
+
+	protected function setUp(): void
+	{
+		// Per-test log + extdns sandbox for the resolve_target boundary assertions.
+		$this->tmp = sys_get_temp_dir() . '/pfb_ss_' . uniqid('', true);
+		mkdir($this->tmp, 0777, true);
+		foreach (['log', 'errlog', 'extdns'] as $key) {
+			$this->savedPfbKeys[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? [])
+				? $GLOBALS['pfb'][$key] : null;
+		}
+		$GLOBALS['pfb']['log']    = "{$this->tmp}/log";
+		$GLOBALS['pfb']['errlog'] = "{$this->tmp}/errlog";
+		// Loopback resolver: never generates external traffic off-appliance.
+		$GLOBALS['pfb']['extdns'] = '127.0.0.1';
+	}
+
+	protected function tearDown(): void
+	{
+		foreach ($this->savedPfbKeys as $key => $value) {
+			if ($value === null) {
+				unset($GLOBALS['pfb'][$key]);
+			} else {
+				$GLOBALS['pfb'][$key] = $value;
+			}
+		}
+		rmdir_recursive($this->tmp);
+	}
+
+	private function logContents(): string
+	{
+		$path = $GLOBALS['pfb']['log'];
+		return file_exists($path) ? (string) file_get_contents($path) : '';
+	}
 	// --- pfb_ss_csv_rows -------------------------------------------------------
 
 	public function test_csv_rows_nxdomain_is_single_three_col_row(): void
@@ -187,5 +227,37 @@ final class SafeSearchCnameTest extends TestCase
 	{
 		// The empty-target guard returns ['',''] without attempting resolution.
 		$this->assertSame(['', ''], pfb_ss_resolve_target(''));
+	}
+
+	public function test_resolve_target_rejects_non_domain_value_with_log(): void
+	{
+		// Given a target that is not a valid domain, and an empty log
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+
+		// When resolution is requested
+		$result = pfb_ss_resolve_target('safe.example.com;ls');
+
+		// Then it returns the same empty-pair shape as the empty-target guard
+		// (so pfb_ss_refresh_lines keeps prior baked IPs) and logs the rejection.
+		$this->assertSame(['', ''], $result);
+		$log = $this->logContents();
+		$this->assertStringContainsString('pfb_ss_resolve_target', $log);
+		$this->assertStringContainsString('failed validation', $log);
+		$this->assertStringContainsString(htmlspecialchars('safe.example.com;ls'), $log);
+	}
+
+	public function test_resolve_target_valid_domain_passes_boundary_unlogged(): void
+	{
+		// The accept side of the same branch: a domain-valid target proceeds past
+		// the validation boundary to the resolution stage with no rejection logged.
+		// Off-appliance the resolver tool is absent / answers nothing on loopback,
+		// so resolution yields the empty pair — same contract as a failed lookup;
+		// the live resolution leg stays smoke territory.
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+
+		$result = pfb_ss_resolve_target('safe.duckduckgo.com');
+
+		$this->assertSame(['', ''], $result);
+		$this->assertStringNotContainsString('failed validation', $this->logContents());
 	}
 }

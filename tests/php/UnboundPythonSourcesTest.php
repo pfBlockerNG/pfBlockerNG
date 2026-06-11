@@ -15,10 +15,20 @@ use PHPUnit\Framework\TestCase;
  * Also covers the #51 temporary-unlock plumbing: the full build clears
  * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock()
  * recomputes it in place from the live pfb_unlock store (pfb_dnsbl_unlock_lines()).
+ *
+ * PFBL-01 boundary coverage (both sides of each new validation branch):
+ *   - feed headers re-validated at the manifest choke point: a valid header builds
+ *     its raw + manifest row exactly as before; a non-\w header is skipped + logged
+ *     before any file is touched.
+ *   - suppression (whitelist) lines and unlock-store domains must be
+ *     PFB_FILTER_DOMAIN-valid to enter the manifest: valid lines (incl. the
+ *     leading-dot wildcard form) pass unchanged with nothing logged; a failing
+ *     line is skipped + logged, never silently dropped.
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 #[CoversFunction('pfb_unbound_python_sources_unlock')]
 #[CoversFunction('pfb_dnsbl_unlock_lines')]
+#[CoversFunction('pfb_dnsbl_whitelist_lines')]
 final class UnboundPythonSourcesTest extends TestCase
 {
 	private string $tmp;
@@ -37,6 +47,8 @@ final class UnboundPythonSourcesTest extends TestCase
 		mkdir("{$this->tmp}/db", 0777, true);
 
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
+			'log'                => "{$this->tmp}/pfblockerng.log",
+			'errlog'             => "{$this->tmp}/error.log",
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
@@ -205,5 +217,94 @@ final class UnboundPythonSourcesTest extends TestCase
 		// No full build ran -> no manifest to patch.
 		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_sources.json");
 		$this->assertFalse(pfb_unbound_python_sources_unlock());
+	}
+
+	// --- PFBL-01: header re-validation at the manifest choke point ----------------
+
+	private function logContents(): string
+	{
+		$path = $GLOBALS['pfb']['log'];
+		return file_exists($path) ? (string) file_get_contents($path) : '';
+	}
+
+	public function testInvalidHeaderRowIsSkippedAndLoggedValidRowsKept(): void
+	{
+		// Given a build whose feed list carries one non-\w header among valid rows
+		// (its source file even exists, so only the validation can be the skip cause)
+		file_put_contents("{$this->tmp}/dnsbl/bad.header.txt", "1,example.com,a,b,c,d\n");
+		$feeds = $this->feeds();
+		$feeds[] = ['header' => 'bad.header', 'group' => 'g', 'log' => '1', 'format' => 'plain'];
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+
+		// When the manifest is built
+		$m = pfb_unbound_python_sources($feeds);
+
+		// Then the invalid row is absent, logged, and produced no raw file ...
+		$this->assertSame(['feed1', 'abpfeed'], array_column($m['feeds'], 'feed'));
+		$log = $this->logContents();
+		$this->assertStringContainsString('pfb_unbound_python_sources', $log);
+		$this->assertStringContainsString('Feed header failed validation', $log);
+		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_raw/bad.header.raw");
+
+		// ... and the valid rows built exactly as in an all-valid run.
+		$this->assertSame("example.com\nfoo.com\n",
+			file_get_contents("{$this->tmp}/pfb_py_raw/feed1.raw"));
+	}
+
+	public function testAllValidHeadersBuildWithoutValidationLogging(): void
+	{
+		// The accept side of the same branch: an all-valid build logs no rejection.
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+		$m = pfb_unbound_python_sources($this->feeds());
+		$this->assertCount(2, $m['feeds']);
+		$this->assertStringNotContainsString('failed validation', $this->logContents());
+	}
+
+	// --- PFBL-01: suppression (whitelist) lines must be domain-valid --------------
+
+	public function testWhitelistKeepsValidDomainAndWildcardLinesUnchanged(): void
+	{
+		// Plain domain + leading-dot wildcard both pass through unchanged, no log.
+		$GLOBALS['pfb']['dnsblconfig']['suppression'] =
+			base64_encode("good.example.com\r\n.wild.example.com");
+
+		$this->assertSame(['good.example.com', '.wild.example.com'], pfb_dnsbl_whitelist_lines());
+		$this->assertSame('', $this->logContents(), 'valid lines must not be logged');
+	}
+
+	public function testWhitelistSkipsAndLogsNonDomainLine(): void
+	{
+		// Given one failing line among valid ones, and an empty log
+		$GLOBALS['pfb']['dnsblconfig']['suppression'] =
+			base64_encode("good.example.com\r\nbad domain;ls\r\n.wild.example.com");
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+
+		// When the manifest whitelist is collected
+		$lines = pfb_dnsbl_whitelist_lines();
+
+		// Then only the valid lines remain and the rejection is logged
+		$this->assertSame(['good.example.com', '.wild.example.com'], $lines);
+		$log = $this->logContents();
+		$this->assertStringContainsString('pfb_dnsbl_whitelist_lines', $log);
+		$this->assertStringContainsString('failed validation', $log);
+	}
+
+	// --- PFBL-01: unlock-store domains re-validated at read -----------------------
+
+	public function testUnlockLinesSkipAndLogNonDomainStoreRow(): void
+	{
+		// Given a store carrying one non-domain row among valid ones, and an empty log
+		file_put_contents("{$this->tmp}/dnsbl_unlock",
+			"evil.com,python\nbad;row.com,python\nfoo.org,python\n");
+		$this->assertSame('', $this->logContents(), 'log must start empty');
+
+		// When the store is read back for the manifest
+		$lines = pfb_dnsbl_unlock_lines();
+
+		// Then the failing row is skipped and logged; the valid rows survive
+		$this->assertSame(['evil.com', 'foo.org'], $lines);
+		$log = $this->logContents();
+		$this->assertStringContainsString('pfb_dnsbl_unlock_lines', $log);
+		$this->assertStringContainsString('failed validation', $log);
 	}
 }

@@ -985,9 +985,9 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // interface_ipalias_configure(). Every legal friendly name is \w-only, so the WORD
 // filter passes all of them unchanged and rejects anything carrying separators,
 // spaces, quotes or other non-word characters. As a singular required parameter, a
-// value failing the filter is to ABORT VIP management for the run (log + return, no
-// config write). Enforcement lands with PFBL-01; the constant's accept/reject
-// behaviour is pinned by tests/php/PfbFilterContractTest.php.
+// value failing the filter ABORTS VIP management for the run (log + return, no
+// config read or write, no VIP operation). The constant's accept/reject behaviour
+// is pinned by tests/php/PfbFilterContractTest.php.
 function pfb_manage_dnsbl_vip(string $mode): void {
 	global $pfb;
 
@@ -998,6 +998,16 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 
 	$auto      = ($pfb['dnsbl_vip_auto'] ?? '') == 'on';
 	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
+
+	// PFBL-01: $interface is a singular required parameter -- validate it as a \w-only
+	// friendly interface name before anything else runs. On failure: log + abort the
+	// whole run (no config read/write, no VIP operation).
+	if (empty(pfb_filter($interface, PFB_FILTER_WORD, 'pfb_manage_dnsbl_vip'))) {
+		pfb_logger("\npfb_manage_dnsbl_vip: DNSBL VIP interface failed validation [ " .
+			substr(htmlspecialchars((string) $interface), 0, 100) . " ] *aborting*", 2);
+		return;
+	}
+
 	$dnsblcfg_path = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
 	// NOTE: the enabled+auto-OFF case deliberately does NOT early-return. It falls through
@@ -2949,10 +2959,11 @@ function pfb_create_dnsbl($mode) {
 // that $target must ALSO validate as a domain via pfb_filter(PFB_FILTER_DOMAIN)
 // before any command is composed -- semantic validation and shell quoting are
 // two distinct layers (the pattern pfb_unbound_py_ccache_flush_cmds() already
-// follows). A value failing the filter is to be rejected: logged and returned
-// as array('', '') with no command run. Enforcement of that check at this
-// boundary lands with PFBL-01; the constant's accept/reject behaviour is pinned
-// by tests/php/PfbFilterContractTest.php.
+// follows). A value failing the filter is rejected: logged and returned as
+// array('', '') with no command run -- the same shape as the empty-target
+// guard, so pfb_ss_refresh_lines() keeps the prior baked IPs for a rejected
+// target exactly as it does for a failed resolution. The constant's
+// accept/reject behaviour is pinned by tests/php/PfbFilterContractTest.php.
 function pfb_ss_resolve_target($target) {
 	global $pfb;
 
@@ -2960,7 +2971,15 @@ function pfb_ss_resolve_target($target) {
 		return array('', '');
 	}
 
-	$target_esc = escapeshellarg($target);
+	// PFBL-01: validate the target as a domain before any command is composed.
+	$filtered = pfb_filter($target, PFB_FILTER_DOMAIN, 'pfb_ss_resolve_target');
+	if (empty($filtered)) {
+		pfb_logger("\npfb_ss_resolve_target: SafeSearch target failed validation [ " .
+			substr(htmlspecialchars((string) $target), 0, 100) . " ] *skipping*", 2);
+		return array('', '');
+	}
+
+	$target_esc = escapeshellarg($filtered);
 	$extdns_esc = escapeshellarg("@{$pfb['extdns']}");
 
 	$out4 = array();
@@ -3268,9 +3287,8 @@ function pfb_unbound_python_whitelist($mode='') {
 // each line lands in the manifest (config.user_whitelist) and from there in the
 // query-time whiteDB. Each line must validate via pfb_filter(PFB_FILTER_DOMAIN)
 // before it is returned -- the filter accepts the leading-dot wildcard form
-// ('.example.com') as well as plain domains. A line failing the filter is to be
-// SKIPPED + logged (list iteration), never silently dropped. Enforcement lands
-// with PFBL-01.
+// ('.example.com') as well as plain domains. A line failing the filter is
+// SKIPPED + logged (list iteration), never silently dropped.
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
@@ -3279,9 +3297,17 @@ function pfb_dnsbl_whitelist_lines() {
 	if (!empty($lines)) {
 		foreach ($lines as $line) {
 			$line = trim($line);
-			if ($line !== '') {
-				$out[] = $line;
+			if ($line === '') {
+				continue;
 			}
+			// PFBL-01: only domain-valid lines (incl. '.example.com' wildcards) may
+			// enter the manifest; skip the line + log on failure.
+			if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'pfb_dnsbl_whitelist_lines'))) {
+				pfb_logger("\npfb_dnsbl_whitelist_lines: Suppression line failed validation [ " .
+					substr(htmlspecialchars($line), 0, 100) . " ] *skipping*", 2);
+				continue;
+			}
+			$out[] = $line;
 		}
 	}
 	return $out;
@@ -3303,9 +3329,9 @@ function pfb_dnsbl_whitelist_lines() {
 // a plain file under /tmp re-read here later -- so this reader is a boundary of its
 // own and must not trust the file contents (same posture as
 // pfb_unbound_py_ccache_flush_cmds() towards its callers). Each domain read from
-// the store must re-validate via pfb_filter(PFB_FILTER_DOMAIN) before it is placed
-// into the manifest (config.user_unlock); a row failing the filter is to be SKIPPED
-// + logged. Enforcement lands with PFBL-01.
+// the store re-validates via pfb_filter(PFB_FILTER_DOMAIN) before it is placed
+// into the manifest (config.user_unlock); a row failing the filter is SKIPPED
+// + logged.
 function pfb_dnsbl_unlock_lines() {
 	global $pfb;
 
@@ -3314,9 +3340,17 @@ function pfb_dnsbl_unlock_lines() {
 	if (is_array($store)) {
 		foreach (array_keys($store) as $domain) {
 			$domain = trim((string) $domain);
-			if ($domain !== '') {
-				$out[] = $domain;
+			if ($domain === '') {
+				continue;
 			}
+			// PFBL-01: the store is re-read from a plain file; re-validate each
+			// domain before it enters the manifest (skip the row + log on failure).
+			if (empty(pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_unlock_lines'))) {
+				pfb_logger("\npfb_dnsbl_unlock_lines: Unlock domain failed validation [ " .
+					substr(htmlspecialchars($domain), 0, 100) . " ] *skipping*", 2);
+				continue;
+			}
+			$out[] = $domain;
 		}
 	}
 	return $out;
@@ -3563,6 +3597,23 @@ function pfb_unbound_py_swap_fits_ram() {
 }
 
 
+// PFBL-01: validate a feed header / list label before it is used to derive a file
+// path or a manifest key. Returns the header UNCHANGED when it validates via
+// pfb_filter(PFB_FILTER_WORD); returns FALSE on rejection, after logging the
+// supplied $reference and a truncated (max 100 chars) htmlspecialchars()-encoded
+// copy of the offending value (never the raw bytes). Pure apart from the log
+// write. Callers MUST check the return strictly (=== FALSE) and SKIP the row when
+// iterating a list, or ABORT when the header is a singular required parameter.
+function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanitise_feed_header'): string|false {
+	if (empty(pfb_filter($header, PFB_FILTER_WORD, $reference))) {
+		pfb_logger("\n{$reference}: Feed header failed validation [ " .
+			substr(htmlspecialchars($header), 0, 100) . " ] *skipping*", 2);
+		return FALSE;
+	}
+	return $header;
+}
+
+
 // ADR-06: Build the shell->Python contract. Writes the per-feed manifest
 // ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
 // lower-cased domain per line) referenced by the manifest. The Python plugin's
@@ -3592,13 +3643,14 @@ function pfb_unbound_py_swap_fits_ram() {
 // '.txt' and staged '.raw' files and becomes the manifest 'feed'/'raw' keys. The
 // producing loops already validate headers with pfb_filter(PFB_FILTER_WORD) (e.g.
 // 'DNSBL - Processes'), but this writer is the choke point for every path derived
-// from a header and must RE-validate each one with the same constant before use --
-// it must not trust its callers (the posture pfb_unbound_py_ccache_flush_cmds()
-// documents). Note PFB_FILTER_WORD is the correct constant here, NOT
-// PFB_FILTER_DOMAIN: headers are \w-only list labels (no dots), so the DOMAIN
-// filter would reject every legal header. A row whose header fails the filter is
-// to be SKIPPED + logged. Enforcement lands with PFBL-01; the constant's
-// accept/reject behaviour is pinned by tests/php/PfbFilterContractTest.php.
+// from a header and RE-validates each one via pfb_sanitise_feed_header() before
+// use -- it must not trust its callers (the posture
+// pfb_unbound_py_ccache_flush_cmds() documents). Note PFB_FILTER_WORD is the
+// correct constant here, NOT PFB_FILTER_DOMAIN: headers are \w-only list labels
+// (no dots), so the DOMAIN filter would reject every legal header. A row whose
+// header fails the filter is SKIPPED + logged, before any file is touched. The
+// constant's accept/reject behaviour is pinned by
+// tests/php/PfbFilterContractTest.php.
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
@@ -3620,6 +3672,12 @@ function pfb_unbound_python_sources($feeds) {
 		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
 
 		if ($header === '') {
+			continue;
+		}
+
+		// PFBL-01: re-validate the header at this choke point, BEFORE it derives the
+		// source/raw paths or any manifest key (skip the row + log on failure).
+		if (pfb_sanitise_feed_header($header, 'pfb_unbound_python_sources') === FALSE) {
 			continue;
 		}
 
