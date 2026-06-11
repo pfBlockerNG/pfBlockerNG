@@ -306,7 +306,9 @@ cost real debugging — internalise them first:
 - **The image bakes only the deps + qemu-guest-agent** — the harness injects the DNSBL VIP
   (`ensure_dnsbl_vip`) and all per-case config; `pkg add` runs offline. The package can now
   auto-create the sinkhole VIP (`pfb_dnsvip_auto`, ADR-13) but defaults **OFF**, so
-  `ensure_dnsbl_vip` stays accurate. The smoke qcow2 cache is content-keyed by GHCR digest
+  `ensure_dnsbl_vip` stays accurate. The setup wizard (ADR-23) also exposes the
+  `pfb_dnsvip_auto` toggle, but `ensure_dnsbl_vip` remains the harness fixture since the smoke
+  harness does not run the wizard flow. The smoke qcow2 cache is content-keyed by GHCR digest
   (a same-tag re-push invalidates automatically).
 - **The branch `.pkg` is built on a plain Linux runner** (`build-pkg-linux.yml` →
   `scripts/build-pkg-portable.py`), NOT a FreeBSD VM: pfBlockerNG is a `NO_BUILD` port, so

@@ -1,6 +1,6 @@
 # ADR-23: DNSBL Wizard VIP Auto-Toggle
 
-**Status:** Proposed
+**Status:** Implemented (pending smoke test)
 **Issue:** [#178](https://github.com/pfBlockerNG/pfBlockerNG/issues/178)
 **Slack:** [thread](https://pfblockerng.slack.com/archives/C0B9QBZBEQG/p1781160111017199?thread_ts=1781008355.595609&cid=C0B9QBZBEQG)
 
@@ -214,3 +214,27 @@ No migration logic needed: `pfb_dnsvip_auto` defaults to absent/off in existing 
       accepts valid lo0 VIP; `pfb_dnsvip4` stored correctly
 - [ ] Back navigation from step 4: checkbox state restored correctly
 - [ ] HA/CARP disclaimer visible in rendered wizard step 4
+
+---
+
+## 8  Notes
+
+Two implementation choices deviated from the §4.3 sketch enough to record:
+
+- **Test approach — indirect over a helper.** §4.3 offered "extract a
+  `pfb_wizard_vip_auto_enabled()` helper OR test `step3_submitphpaction()` indirectly". Phase 1
+  inlined the boolean (no helper extracted), so Phase 2 took the indirect route:
+  `WizardVipAutoTest` drives the real shipped `step3_submitphpaction()` and observes whether
+  `pfb_validate_vips()` runs (the gate's observable effect) — avoiding a coverage-theater
+  re-implementation of the predicate. To load the wizard controller off-appliance,
+  `tests/php/bootstrap.php` reads the wizard `.inc`, strips its top-of-file `require_once()`s
+  (one is a host-absolute path unsatisfiable via `include_path`), and evals from the first
+  `function` keyword onward (skipping top-level `pfb_global()`/interface-list wiring); a
+  faithful `is_port()` double was added to `pfsense_doubles.php`. No production code changed.
+- **Part B (step4 persistence shape) deferred.** Writing `pfb_dnsvip_auto` + guarding the
+  manual VIP-id writes is NOT unit-invoked: `step4_submitphpaction()` ends in `header()+exit`,
+  requires a live feeds-DB JSON fixture, and calls undoubled pfSense services. Covering it
+  cleanly needs the config-mutation block extracted into a pure helper (a `src/`-touching
+  change) — tracked as a follow-up, out of scope for ADR-23's tests phase. The step3 coverage
+  pins the same inlined gate predicate on shipped code; `DnsblMarkedVipTest` pins the ADR-13
+  engine the flag drives.
