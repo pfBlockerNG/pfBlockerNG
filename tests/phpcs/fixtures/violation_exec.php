@@ -8,7 +8,7 @@
 
 function pfb_ss_resolve_target($target)
 {
-    $out = array();
-    exec('/usr/bin/drill ' . escapeshellarg($target), $out);
-    return $out;
+	$out = array();
+	exec('/usr/bin/drill ' . escapeshellarg($target), $out);
+	return $out;
 }

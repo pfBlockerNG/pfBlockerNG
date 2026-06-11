@@ -11,11 +11,11 @@
 
 function pfb_ss_resolve_target($target)
 {
-    $filtered = pfb_filter($target, PFB_FILTER_DOMAIN, 'pfb_ss_resolve_target');
-    if (empty($filtered)) {
-        return array('', '');
-    }
-    $out = array();
-    exec('/usr/bin/drill ' . escapeshellarg($filtered), $out);
-    return $out;
+	$filtered = pfb_filter($target, PFB_FILTER_DOMAIN, 'pfb_ss_resolve_target');
+	if (empty($filtered)) {
+		return array('', '');
+	}
+	$out = array();
+	exec('/usr/bin/drill ' . escapeshellarg($filtered), $out);
+	return $out;
 }

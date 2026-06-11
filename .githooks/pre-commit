@@ -164,6 +164,8 @@ fi
 if [ -x vendor/bin/phpcs ]; then
 	step 'phpcs (PFBL-01)'
 	vendor/bin/phpcs || failed 'phpcs'
+else
+	skip phpcs
 fi
 
 # --- PHP: PHPUnit (only when the Composer vendor tree is installed) ---

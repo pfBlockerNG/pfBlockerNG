@@ -10,5 +10,5 @@
 
 function some_legacy_helper($value)
 {
-    exec('/bin/echo ' . $value);
+	exec('/bin/echo ' . $value);
 }

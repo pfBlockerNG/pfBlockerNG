@@ -30,6 +30,7 @@ final class DnsblVipInterfaceValidationTest extends TestCase
 {
 	private string $tmp;
 	private array $savedPfbKeys = [];
+	private array $hadPfbKeys = [];
 	private bool $hadConfig = false;
 	private array $savedConfig = [];
 
@@ -40,8 +41,8 @@ final class DnsblVipInterfaceValidationTest extends TestCase
 
 		// Fresh per-test log targets + the inputs pfb_manage_dnsbl_vip reads from $pfb.
 		foreach (['log', 'errlog', 'dnsbl_vip_auto', 'dnsbl_iface', 'dnsblconfig'] as $key) {
-			$this->savedPfbKeys[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? [])
-				? $GLOBALS['pfb'][$key] : null;
+			$this->hadPfbKeys[$key]   = array_key_exists($key, $GLOBALS['pfb'] ?? []);
+			$this->savedPfbKeys[$key] = $GLOBALS['pfb'][$key] ?? null;
 		}
 		$GLOBALS['pfb']['log']    = "{$this->tmp}/log";
 		$GLOBALS['pfb']['errlog'] = "{$this->tmp}/errlog";
@@ -67,10 +68,10 @@ final class DnsblVipInterfaceValidationTest extends TestCase
 	protected function tearDown(): void
 	{
 		foreach ($this->savedPfbKeys as $key => $value) {
-			if ($value === null) {
-				unset($GLOBALS['pfb'][$key]);
-			} else {
+			if ($this->hadPfbKeys[$key]) {
 				$GLOBALS['pfb'][$key] = $value;
+			} else {
+				unset($GLOBALS['pfb'][$key]);
 			}
 		}
 		if ($this->hadConfig) {

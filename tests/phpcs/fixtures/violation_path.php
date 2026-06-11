@@ -9,7 +9,7 @@
 
 function pfb_manage_dnsbl_vip($mode)
 {
-    $iface = $_POST['if'];
-    $path  = "/var/db/pfblockerng/{$iface}.txt";
-    return $path;
+	$iface = $_POST['if'];
+	$path  = "/var/db/pfblockerng/{$iface}.txt";
+	return $path;
 }
