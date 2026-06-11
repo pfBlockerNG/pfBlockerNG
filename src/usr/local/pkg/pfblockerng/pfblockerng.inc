@@ -977,6 +977,17 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // apply): the vip entry is written into virtualip/vip and the dnsvip id into the DNSBL
 // settings, write_config fires ONCE iff anything changed, then interface_ipalias_configure()
 // brings the alias up live.
+//
+// Validation contract (PFBL-01): $interface (the stored dnsbl_interface setting; a
+// pfSense friendly interface name -- 'lo0', 'lan', 'optN', 'enc0', 'openvpn', 'l2tp',
+// per pfb_build_if_list()) must validate via pfb_filter(PFB_FILTER_WORD) before it is
+// written into a VIP entry or handed to interface_vip_bring_down() /
+// interface_ipalias_configure(). Every legal friendly name is \w-only, so the WORD
+// filter passes all of them unchanged and rejects anything carrying separators,
+// spaces, quotes or other non-word characters. As a singular required parameter, a
+// value failing the filter is to ABORT VIP management for the run (log + return, no
+// config write). Enforcement lands with PFBL-01; the constant's accept/reject
+// behaviour is pinned by tests/php/PfbFilterContractTest.php.
 function pfb_manage_dnsbl_vip(string $mode): void {
 	global $pfb;
 
@@ -2931,6 +2942,17 @@ function pfb_create_dnsbl($mode) {
 // when the live CNAME chase yields no address, and the SafeSearch freshness cron
 // re-runs this every 15 minutes to keep them current. Returns array($v4, $v6),
 // each '' when unresolved.
+//
+// Validation contract (PFBL-01): $target is built into an exec() command line
+// (escapeshellarg() supplies the quoting; $pfb['extdns'] is already
+// PFB_FILTER_IPV4-validated in pfb_global). The contract for this boundary is
+// that $target must ALSO validate as a domain via pfb_filter(PFB_FILTER_DOMAIN)
+// before any command is composed -- semantic validation and shell quoting are
+// two distinct layers (the pattern pfb_unbound_py_ccache_flush_cmds() already
+// follows). A value failing the filter is to be rejected: logged and returned
+// as array('', '') with no command run. Enforcement of that check at this
+// boundary lands with PFBL-01; the constant's accept/reject behaviour is pinned
+// by tests/php/PfbFilterContractTest.php.
 function pfb_ss_resolve_target($target) {
 	global $pfb;
 
@@ -3240,6 +3262,15 @@ function pfb_unbound_python_whitelist($mode='') {
 // for the Python build manifest (config.user_whitelist). The Python build performs
 // the www-strip / leading-dot->wildcard normalisation itself (pfb_unbound.py
 // _dnsbl_normalise_whitelist), so this hands the RAW suppression lines through.
+//
+// Validation contract (PFBL-01): the suppression textarea is free-form user input
+// and pfbng_text_area_decode() only normalises encoding (no domain validation), yet
+// each line lands in the manifest (config.user_whitelist) and from there in the
+// query-time whiteDB. Each line must validate via pfb_filter(PFB_FILTER_DOMAIN)
+// before it is returned -- the filter accepts the leading-dot wildcard form
+// ('.example.com') as well as plain domains. A line failing the filter is to be
+// SKIPPED + logged (list iteration), never silently dropped. Enforcement lands
+// with PFBL-01.
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
@@ -3266,6 +3297,15 @@ function pfb_dnsbl_whitelist_lines() {
 // rebuilt manifest re-locks every unlock (the "re-locked on Cron/Force" behaviour
 // documented in the alerts icon tooltip). Only pfb_unbound_python_sources_unlock()
 // (the incremental alerts path) feeds the live store into the manifest.
+//
+// Validation contract (PFBL-01): the alerts handler filters the POSTed domain with
+// pfb_filter(PFB_FILTER_DOMAIN) before it enters the store, but the store itself is
+// a plain file under /tmp re-read here later -- so this reader is a boundary of its
+// own and must not trust the file contents (same posture as
+// pfb_unbound_py_ccache_flush_cmds() towards its callers). Each domain read from
+// the store must re-validate via pfb_filter(PFB_FILTER_DOMAIN) before it is placed
+// into the manifest (config.user_unlock); a row failing the filter is to be SKIPPED
+// + logged. Enforcement lands with PFBL-01.
 function pfb_dnsbl_unlock_lines() {
 	global $pfb;
 
@@ -3547,6 +3587,18 @@ function pfb_unbound_py_swap_fits_ram() {
 //         'format' => 'abp'|'plain', 'provenance' => 'user'|'feed' ]. ADR-07: a
 //         Custom_List ({alias}_custom) row is 'user' -> the Python build bands it as a
 //         sovereign user block (5); a downloaded feed is 'feed' -> band 1.
+//
+// Validation contract (PFBL-01): each row's 'header' names the per-feed source
+// '.txt' and staged '.raw' files and becomes the manifest 'feed'/'raw' keys. The
+// producing loops already validate headers with pfb_filter(PFB_FILTER_WORD) (e.g.
+// 'DNSBL - Processes'), but this writer is the choke point for every path derived
+// from a header and must RE-validate each one with the same constant before use --
+// it must not trust its callers (the posture pfb_unbound_py_ccache_flush_cmds()
+// documents). Note PFB_FILTER_WORD is the correct constant here, NOT
+// PFB_FILTER_DOMAIN: headers are \w-only list labels (no dots), so the DOMAIN
+// filter would reject every legal header. A row whose header fails the filter is
+// to be SKIPPED + logged. Enforcement lands with PFBL-01; the constant's
+// accept/reject behaviour is pinned by tests/php/PfbFilterContractTest.php.
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
