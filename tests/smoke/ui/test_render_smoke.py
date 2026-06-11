@@ -275,6 +275,46 @@ def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: Php
         assert needle in body, f"DNSBL page is missing the IDN-mode marker {needle!r}"
 
 
+# ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
+# toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
+# against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
+# directly). The DNSBL step is the 4th <step> (<id>4</id>, "DNSBL Component Configuration")
+# in pfblockerng_wizard.xml -> stepid=3. The wizard is NOT in PAGE_TABLE (a core-rendered
+# www/wizards/ page, not a www/pfblockerng/ one), so it gets its own render assertion.
+_WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
+
+
+def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """ADR-23: the wizard DNSBL step renders the Auto VIP (pfb_dnsvip_auto) checkbox cleanly.
+
+    The setup wizard exposes ADR-13's auto-create toggle on its DNSBL step so a first-run
+    user need not pre-create a sinkhole VIP — a render regression that drops/breaks the field
+    (or the wizard step itself) must fail here, not only in the maintainer on-box check. A
+    direct authenticated GET renders the step regardless of the first-run dismissal the
+    `webui` fixture performs (dismissal only suppresses general.php's auto-launch redirect,
+    not wizard.php itself).
+
+    Asserts the step passes the clean-render oracle (200, no PHP diagnostic, the step-title
+    Form_Section marker present, not the login form) AND — from three independent wizard.php
+    render paths — that the field's POST name (`pfb_dnsvip_auto`), its 'Auto VIP' displayname
+    label, and the 'Create VIPs automatically' setHelp() wording are present. The IPv4/IPv6
+    manual selectors carry the new "manual mode only" note, asserted too so the mode framing
+    that pairs with the checkbox is pinned. `php_error_log_guard` enrolls this GET in the
+    module-level no-growth sweep.
+    """
+    resp = webui.get(_WIZARD_DNSBL_STEP)
+    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL Component Configuration",))
+    assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
+    body = resp.text
+    for needle in (
+        "pfb_dnsvip_auto",  # the checkbox field's POST name (input name/id)
+        "Auto VIP",  # the <displayname> label
+        "Create VIPs automatically",  # the <description> setHelp() wording
+        "manual mode only",  # the pfb_dnsvip4/6 selectors' new mode-dependency note
+    ):
+        assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
+
+
 # threats.php's NEGATIVE branches: each malformed/absent param print_info_box()es
 # a specific message and exit()s BEFORE the "$pgtitle" lookup-page chrome. These
 # pair with the positive threats_{domain,host,port} entries above (CLAUDE.md
