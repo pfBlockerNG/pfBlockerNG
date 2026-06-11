@@ -158,7 +158,7 @@
 				<dd>Utilizing the DNS Resolver, ADverts and the worst known malicious domains will be blocked.</dd>
 			</dl>
 			<ul>
-				<li>A VIP on the Localhost interface <strong>must be configured first</strong> at <a target="_blank" href="/firewall_virtual_ip.php">Firewall > Virtual IPs</a>.</li>
+				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or pfBlockerNG can create one automatically in the DNSBL step.</li>
 			</ul>
 		</div>
 		]]>
