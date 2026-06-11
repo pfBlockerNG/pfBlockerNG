@@ -261,6 +261,29 @@ jobs:
         # suppressed; new errors introduced by future changes will fail CI.
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
+  php-codesniffer:
+    name: PHPCS PFBL-01 RequirePfbFilter sniff
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPCS
+        # Config auto-discovered from phpcs.xml.dist: the custom PfBlockerNG standard
+        # (the RequirePfbFilter sniff) over the in-scope package include.
+        # PFBL-01 Requirement 4 — the mechanical enforcement of the filter contract.
+        run: vendor/bin/phpcs
+
   php-unit:
     name: PHPUnit unit tests
     runs-on: ubuntu-latest
@@ -380,7 +403,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-unit, markdownlint, ui-suite]
+    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, ui-suite]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -411,6 +434,10 @@ jobs:
           fi
           if [ "${{ needs.php-static-analysis.result }}" != "success" ]; then
             echo "PHPStan static analysis failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-codesniffer.result }}" != "success" ]; then
+            echo "PHPCS PFBL-01 RequirePfbFilter sniff failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.php-unit.result }}" != "success" ]; then

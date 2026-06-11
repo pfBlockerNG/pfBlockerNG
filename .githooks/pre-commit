@@ -158,6 +158,14 @@ if [ -x vendor/bin/phpstan ]; then
 	vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
 fi
 
+# --- PHP: PHPCS PFBL-01 RequirePfbFilter sniff (only when the vendor tree is installed).
+#     Config auto-discovered from phpcs.xml.dist (the RequirePfbFilter rule over the
+#     in-scope package include). ---
+if [ -x vendor/bin/phpcs ]; then
+	step 'phpcs (PFBL-01)'
+	vendor/bin/phpcs || failed 'phpcs'
+fi
+
 # --- PHP: PHPUnit (only when the Composer vendor tree is installed) ---
 if [ -x vendor/bin/phpunit ]; then
 	step 'phpunit'
