@@ -202,7 +202,9 @@ No migration logic needed: `pfb_dnsvip_auto` defaults to absent/off in existing 
 - [ ] PHPStan clean (no new un-stubbed calls)
 - [ ] `vendor/bin/phpunit` — all tests pass including new `WizardVipAutoTest`
 - [ ] ADR-14 Tier A (`ui_render`): GET wizard page → 200, no PHP errors, `pfb_dnsvip_auto`
-      checkbox present in response body, no new `php_error.log` line
+      checkbox present in response body, no new `php_error.log` line — test added
+      (`tests/smoke/ui/test_render_smoke.py::test_wizard_dnsbl_step_renders_auto_vip`, GETs
+      `wizard.php?xml=pfblockerng_wizard.xml&stepid=3`); runs in the live-VM `ui_render` CI leg
 
 ### Manual smoke (maintainer, on-box)
 
