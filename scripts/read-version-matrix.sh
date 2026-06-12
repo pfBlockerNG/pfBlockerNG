@@ -150,15 +150,18 @@ PYTHON_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '
   ] | unique')"
 PHP_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].php_version] | unique')"
 
-# Fail-closed: a non-empty BUILD matrix must derive at least one python + php
-# version. An empty derive means a malformed py_flavor / missing php_version.
+# Fail-closed: every entry in a non-empty BUILD matrix must yield a python AND a php
+# version. The py_flavor map above already aborts on a malformed flavor (jq capture()
+# errors under set -e); guard the php side SYMMETRICALLY — a null/empty php_version on
+# any entry must fail HERE, not slip through as a [null] matrix leg (a bare length check
+# would pass [null], whose length is 1, straight into test.yml's strategy.matrix).
 if [ "$(printf '%s' "$BUILD_MATRIX" | jq 'length')" -gt 0 ]; then
   if [ "$(printf '%s' "$PYTHON_VERSIONS" | jq 'length')" -eq 0 ]; then
     printf '::error::no python versions derived from py_flavor in %s (malformed py_flavor?)\n' "$MATRIX_FILE" >&2
     exit 1
   fi
-  if [ "$(printf '%s' "$PHP_VERSIONS" | jq 'length')" -eq 0 ]; then
-    printf '::error::no php versions found (missing php_version?) in %s\n' "$MATRIX_FILE" >&2
+  if [ "$(printf '%s' "$BUILD_MATRIX" | jq '[.[].php_version | select(. == null or . == "")] | length')" -gt 0 ]; then
+    printf '::error::an entry has a missing/empty php_version in %s\n' "$MATRIX_FILE" >&2
     exit 1
   fi
 fi
