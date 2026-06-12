@@ -166,10 +166,13 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
 
 	$pfb_auto_wiz = (config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto') == 'on');
-	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip_auto'] = $pfb_auto_wiz ? 'on' : '';
-	if (!$pfb_auto_wiz) {
-		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip4'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4');
-		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip6'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6');
+	$dnsvip_settings = pfb_wizard_dnsvip_settings(
+		$pfb_auto_wiz,
+		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4'),
+		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6')
+	);
+	foreach ($dnsvip_settings as $pfb_dnsvip_key => $pfb_dnsvip_val) {
+		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsvip_key] = $pfb_dnsvip_val;
 	}
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport');
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport_ssl']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl');

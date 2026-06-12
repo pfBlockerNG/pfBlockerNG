@@ -233,10 +233,15 @@ Two implementation choices deviated from the §4.3 sketch enough to record:
   (one is a host-absolute path unsatisfiable via `include_path`), and evals from the first
   `function` keyword onward (skipping top-level `pfb_global()`/interface-list wiring); a
   faithful `is_port()` double was added to `pfsense_doubles.php`. No production code changed.
-- **Part B (step4 persistence shape) deferred.** Writing `pfb_dnsvip_auto` + guarding the
-  manual VIP-id writes is NOT unit-invoked: `step4_submitphpaction()` ends in `header()+exit`,
-  requires a live feeds-DB JSON fixture, and calls undoubled pfSense services. Covering it
-  cleanly needs the config-mutation block extracted into a pure helper (a `src/`-touching
-  change) — tracked as a follow-up, out of scope for ADR-23's tests phase. The step3 coverage
-  pins the same inlined gate predicate on shipped code; `DnsblMarkedVipTest` pins the ADR-13
-  engine the flag drives.
+- **Part B (step4 persistence shape) — covered via an extracted pure helper.**
+  `step4_submitphpaction()` itself can't be unit-invoked (it ends in `header()+exit`), so the
+  DNSBL-VIP settings decision was extracted into the pure `pfb_wizard_dnsvip_settings(bool $auto,
+  $vip4, $vip6): array` (in `pfblockerng.inc`, beside the other `pfb_wizard_*` deciders); the
+  controller now merges the returned slice into the DNSBL config. `WizardVipAutoTest`
+  (`testAutoVipToggleDecidesPersistedDnsvipSettings`) asserts the shape both ways — auto OFF →
+  `pfb_dnsvip_auto=''` + both manual ids written; auto ON → `'on'` + neither id pinned (ADR-13
+  owns the VIP) — passing the same ids to prove the flag drove the change. (The earlier
+  feeds-DB/services framing was a non-issue: the feeds catalog ships with the package and the
+  `pfb_dnsvip_auto` write does not depend on it; the only genuine obstacle was the terminal
+  `exit`, which the extraction removes from the test path.) `DnsblMarkedVipTest` still pins the
+  ADR-13 engine the flag drives.
