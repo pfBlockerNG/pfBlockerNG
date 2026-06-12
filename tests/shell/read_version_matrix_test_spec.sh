@@ -99,4 +99,26 @@ Describe 'read-version-matrix.sh derived test matrices'
       The stderr should include 'no python versions derived'
     End
   End
+
+  Describe 'fail-closed on a missing/empty php_version'
+    It 'exits non-zero when an entry omits php_version (no [null] matrix leg)'
+      # Given a non-empty matrix whose only entry has NO php_version key
+      # Then the derive fails closed rather than emitting a [null] php matrix leg
+      #      — symmetric with the malformed-py_flavor guard above; a bare length
+      #      check would pass [null] (length 1) straight into test.yml's matrix.
+      json='{"versions":[{"channel":"CE","ci":true,"py_flavor":"py311"}]}'
+      When call run_print_test "$json"
+      The status should be failure
+      The stderr should include 'missing/empty php_version'
+    End
+
+    It 'exits non-zero when an entry has an empty php_version string'
+      # Given an entry whose php_version is the empty string "" (the other invalid
+      # input class) — Then the same fail-closed guard fires.
+      json='{"versions":[{"channel":"CE","ci":true,"php_version":"","py_flavor":"py311"}]}'
+      When call run_print_test "$json"
+      The status should be failure
+      The stderr should include 'missing/empty php_version'
+    End
+  End
 End
