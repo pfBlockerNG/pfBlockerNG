@@ -162,6 +162,30 @@ One behavioural delta vs today worth naming: the legacy check used `strpos(...) 
 tolerant prefix match. Within the `!`-comment window this is equivalent for real feeds
 (headers start their line); the prefix form is strictly safer.
 
+**Why a feed-level ABP bit must exist at all — pure per-line routing considered and
+rejected.** "Route every line to the right parser by its own shape" was examined as the
+simpler alternative (no header sniff, no feed mode). It cannot work, because several line
+shapes demand *opposite* correct handling depending on what the feed is, and that context
+is not reconstructible line-locally:
+
+- `x.com/path` — in a plain/URL feed the non-lite stripper recovers `x.com` and blocks it;
+  in an ABP list it is a URL-path rule that must NOT DNS-block `x.com` (overblock).
+  Same bytes, opposite outcomes.
+- `/ads/` — junk to drop in a plain feed; a live regex rule in an ABP list. Routing it
+  per-line would turn path-like junk into a regex matching every name containing "ads".
+- `x.com##.ad` — cosmetic rule to drop in an ABP list; under the plain stripper it
+  degrades to a block of `x.com`.
+- The plain path additionally owns the CSV dialects (`pt`/`bbc`/`h3x`/`otx`/`pon`/`et`,
+  `pfblockerng.inc:9649+`) and bare-IP collection — shapes `parse_abp()` correctly refuses.
+
+Per-line detection therefore covers exactly the *self-identifying* subset — `||`/`@@||`
+anchors, which are not valid in any plain dialect — and everything context-dependent rides
+the feed-level bit. The feed's header is the only signal available for that bit, which is
+why the (pre-existing) sniff stays and is merely broadened, not why new machinery is added.
+Unifying the two pipelines so PHP passes every feed verbatim and Python owns all parsing
+would dissolve the split for real, but that is a rework of the whole download/manifest
+contract (CSV dialects, IP extraction, IDN) — out of ADR-21's scope; a candidate future ADR.
+
 ### 2.5 Explicitly kept / out of scope
 
 - `_dnsbl_parse_abp_line()` is NOT modified or removed (still used by `parse()` for
@@ -232,6 +256,11 @@ tolerant prefix match. Within the `!`-comment window this is equivalent for real
 10. Sniff scope unchanged: a `! Title:`-like token appearing only AFTER the first
     non-comment line does NOT flip the feed; a feed with no recognizable header stays
     `'plain'` and gets per-line detection only.
+11. **Red→green proof (no coverage theater):** every test pinning changed behaviour
+    (§4.1–§4.4, §4.7–§4.9) demonstrably FAILS against the pre-change code and passes
+    after it. A new test that passes pre-change pins nothing and must be fixed.
+    Deliberate regression pins (§4.5, §4.6, §4.10 — freezing unchanged behaviour) pass
+    on both sides by design and are named as such in RESULTS.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -239,6 +268,12 @@ tolerant prefix match. Within the `!`-comment window this is equivalent for real
   Unbound's chroot (no filesystem access to the host-absolute `/etc/inc/` path).
 - PHP: tabs; PHP 8.3; no `die()`/`exit()` in library code.
 - All new Python tests: typed, named for intent, branch-covering, before/after state asserted.
+- **Regression testing is explicit (red→green):** tests must prove the solution, not
+  merely execute it. Each phase writes its behaviour-pinning tests FIRST, runs them
+  against the unmodified source, and records the RED output in its RESULTS handoff;
+  only then applies the change and records the GREEN run. Tests that cannot go red
+  (deliberate regression pins; off-appliance simulations of PHP logic) are exempt but
+  must be named as such in RESULTS.
 - `python -m pytest` + `ruff check .` + `ruff format .` + `mypy tests/` must stay green.
 - PHP: `php -l` + PHPStan on each modified file; PHPUnit for the PHP test additions.
 - **ABP test-suite freeze:** every existing test function in `test_adr07_*.py` (and every
@@ -291,6 +326,8 @@ Prompt: `03_Smoke_DoD.txt`
 All criteria must be met and evidence recorded in `RESULTS/03_Results.txt`:
 
 - `python -m pytest` → green (all new tests pass; no regressions in `test_adr07_*`).
+- Red→green evidence: RESULTS record each behaviour-pinning test FAILING pre-change
+  (exact output) and passing post-change; regression pins and exempt simulations named.
 - `ruff check . && ruff format .` → clean.
 - `mypy tests/` → clean.
 - `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → no syntax error.

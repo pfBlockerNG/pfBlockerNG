@@ -170,6 +170,12 @@ ACTION PLAN (ordered)
      magic strings → TRUE; '! Title: HaGeZi ...' → TRUE; '[uBlock Origin' →
      TRUE; 'x.com' / '0.0.0.0 x.com' / '||x^' / '! plain comment' / a data line
      CONTAINING '! Title:' mid-line → FALSE.
+   - RED→GREEN (ADR §4.11): write the PHPUnit cases BEFORE implementing
+     pfb_dnsbl_is_abp_header(); run vendor/bin/phpunit and record the red
+     (undefined function). Implement; re-run; record green. Where a case CAN
+     fail behaviourally pre-change, prefer that red over the undefined-function
+     error (e.g. assert '! Title: HaGeZi' flips $easylist only via the helper —
+     pre-change there is nothing to call, which IS the red).
 
 4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` — must show no syntax
    errors.
@@ -190,6 +196,10 @@ ACTION PLAN (ordered)
      to re-verify by reading the two types of lines.
    NOTE: if you add this integration test, add it to `tests/test_adr21_abp_per_line.py`
    rather than creating a third file. Name it `test_manifest_builder_mixed_feed`.
+   NOTE (ADR §5 red→green): this is an off-appliance SIMULATION of PHP logic — it
+   cannot go red against the PHP change. Name it as an exempt simulation in the
+   RESULTS handoff; do not present it as proof the PHP change works (the live
+   proof is Phase 3's smoke).
 
 7. RUN `python -m pytest` — full suite must still be green (no regressions).
 8. RUN `ruff check . && ruff format .` — clean.

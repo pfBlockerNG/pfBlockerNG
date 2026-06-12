@@ -78,10 +78,8 @@ ACTION PLAN (ordered)
    it is the list that feeds `reconcile()` in Stage-B. Confirm `abp_rules` is in
    scope and used correctly.
 
-2. MAKE the change in `pfb_unbound.py`. Do NOT modify `parse_abp()`, `parse()`,
-   `reconcile()`, or `_dnsbl_parse_abp_line()`.
-
-3. WRITE `tests/test_adr21_abp_per_line.py` with these scenarios:
+2. WRITE `tests/test_adr21_abp_per_line.py` FIRST — before any change to
+   `pfb_unbound.py` — with these scenarios:
 
    All tests use `build()` via its public call path — not `parse_abp()` directly.
    Pass a minimal synthetic manifest (a dict with `raw`, `feed`, `group`,
@@ -144,10 +142,21 @@ ACTION PLAN (ordered)
       option, not DNS-relevant).
       Then: `domain.com` NOT in the block DB.
 
-4. RUN `python -m pytest tests/test_adr21_abp_per_line.py -v` — all must be green.
-5. RUN `python -m pytest` (full suite) — no regressions.
-6. RUN `ruff check . && ruff format .` — clean.
-7. RUN `mypy tests/` — clean.
+3. RED RUN (mandatory — ADR §4.11, no coverage theater): run the new file against
+   the still-UNMODIFIED source:
+       python -m pytest tests/test_adr21_abp_per_line.py -v
+   Tests (a)–(d) MUST FAIL here — their `||`/`@@||` lines are dropped today, so a
+   pass would mean the test pins nothing; FIX THE TEST, not the expectation.
+   Tests (e)–(h) are deliberate regression pins and must already PASS pre-change.
+   Record the exact red output (which asserts failed) for the handoff.
+
+4. MAKE the change in `pfb_unbound.py`. Do NOT modify `parse_abp()`, `parse()`,
+   `reconcile()`, or `_dnsbl_parse_abp_line()`.
+
+5. RUN `python -m pytest tests/test_adr21_abp_per_line.py -v` — all must be green.
+6. RUN `python -m pytest` (full suite) — no regressions.
+7. RUN `ruff check . && ruff format .` — clean.
+8. RUN `mypy tests/` — clean.
 
 CONSTRAINTS
 - Modify only `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the `build()` function
@@ -167,6 +176,8 @@ CONSTRAINTS
   ONLY file added or changed in the test suite by this phase.
 
 VERIFICATION (must all pass before the phase is done)
+- Red run recorded: tests (a)–(d) failed against the unmodified source; (e)–(h)
+  passed pre-change (named as regression pins).
 - `python -m pytest tests/test_adr21_abp_per_line.py -v` → all N test cases green.
 - `python -m pytest` → unchanged (no regressions in test_adr07_* or any other suite).
 - `ruff check . && ruff format .` → 0 errors, 0 diffs.
@@ -189,5 +200,7 @@ Push to `adr/21-abp-header-agnostic-detection`; open a PR against `devel`.
 HANDOFF — write `.ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/01_Results.txt`
 (plain .txt)
 Record: the exact inserted code block (the 6-line guard); the test file name and
-list of test names; `python -m pytest` outcome (N passed); `ruff`/`mypy` outcome;
-any edge case discovered during implementation; go-ahead for Phase 2.
+list of test names; the RED-run output (which of tests a–d failed pre-change, and
+that e–h passed as regression pins); `python -m pytest` outcome (N passed);
+`ruff`/`mypy` outcome; any edge case discovered during implementation; go-ahead
+for Phase 2.

@@ -90,8 +90,11 @@ ACTION PLAN
    only touch if something is unclear or incorrect).
 
 4. RECORD DoD evidence in `RESULTS/03_Results.txt`:
-   - Phase 1: `python -m pytest` outcome; `ruff`/`mypy` outcome; test names.
-   - Phase 2: PHP diff summary; `php -l` outcome; PHPUnit outcome.
+   - Phase 1: `python -m pytest` outcome; `ruff`/`mypy` outcome; test names;
+     red→green evidence (ADR §4.11: which tests failed pre-change, regression
+     pins named).
+   - Phase 2: PHP diff summary; `php -l` outcome; PHPUnit outcome; red→green
+     evidence (sniff tests red pre-implementation; exempt simulations named).
    - Phase 3: smoke run ID; per-case PASS/FAIL; exact `drill` outputs confirming
      block/allow semantics.
    - All CI gates: PASS.
