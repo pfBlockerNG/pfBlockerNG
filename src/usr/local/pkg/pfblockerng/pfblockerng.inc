@@ -1791,6 +1791,22 @@ function pfb_wizard_suppress_autolaunch(?string $get_action, $wizard_skip_flag, 
 }
 
 /*
+ * ADR-23: the DNSBL sinkhole-VIP settings the setup wizard persists to the DNSBL config,
+ * given the Auto VIP choice. Auto on -> pfb_dnsvip_auto='on' and the manual selector ids
+ * are NOT written (ADR-13 provisions and owns the VIP at enable time); auto off -> the flag
+ * is '' and the operator's step3 lo0 VIP selections are persisted. step4_submitphpaction()
+ * merges the returned slice into the dnsbl settings config.
+ */
+function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
+	$settings = array('pfb_dnsvip_auto' => $auto ? 'on' : '');
+	if (!$auto) {
+		$settings['pfb_dnsvip4'] = $vip4;
+		$settings['pfb_dnsvip6'] = $vip6;
+	}
+	return $settings;
+}
+
+/*
  * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit

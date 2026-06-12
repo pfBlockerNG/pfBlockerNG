@@ -29,10 +29,13 @@ use PHPUnit\Framework\TestCase;
  * path. The falsey strings '' and '0' are pinned as OFF too (mirrors
  * WizardDecisionTest::testSuppressCheckboxFalseyValuesStaySkip).
  *
- * Part B (step4_submitphpaction persistence shape) is NOT unit-invoked here — see
- * the @todo on testStep4PersistenceShapeIsNotUnitInvokable for the concrete blocker.
+ * Part B (the persisted DNSBL-VIP settings shape) is covered directly via the pure
+ * helper pfb_wizard_dnsvip_settings() (ADR-23), which step4_submitphpaction() now
+ * calls to build the slice it merges into the DNSBL config — see
+ * testAutoVipToggleDecidesPersistedDnsvipSettings.
  */
 #[CoversFunction('step3_submitphpaction')]
+#[CoversFunction('pfb_wizard_dnsvip_settings')]
 final class WizardVipAutoTest extends TestCase
 {
 	/**
@@ -153,34 +156,46 @@ final class WizardVipAutoTest extends TestCase
 	}
 
 	/**
-	 * Part B (step4_submitphpaction persistence shape) — FALLBACK, documented.
+	 * Part B — the persisted DNSBL-VIP settings shape, on the pure helper
+	 * step4_submitphpaction() now calls (pfb_wizard_dnsvip_settings). The controller
+	 * itself can't be unit-invoked (it ends in header()+exit), so ADR-23 extracts the
+	 * VIP-settings decision into this helper and the controller merges the returned
+	 * slice into the DNSBL config — so testing the helper pins exactly what is written.
 	 *
-	 * @todo step4_submitphpaction() cannot be unit-invoked under the tests/php/
-	 *   doubles without a src/ refactor, so its persistence shape (writing
-	 *   pfb_dnsvip_auto and guarding the pfb_dnsvip4/6 id writes) is NOT covered here.
-	 *   Reading the shipped function end-to-end, three hard blockers stand before any
-	 *   assertable persistence:
-	 *     1. It ends in `header("Location: .../pfblockerng_update.php?wizard=reload"); exit;`
-	 *        — `exit` would terminate the PHPUnit process.
-	 *     2. It early-returns with an input_error unless `json_decode(@file_get_contents(
-	 *        $pfb['feeds']))` yields a feeds array — i.e. it requires a live feeds DB
-	 *        fixture before reaching the config-mutation block.
-	 *     3. Before the exit it calls undoubled pfSense services —
-	 *        services_unbound_configure(), system_resolvconf_generate(),
-	 *        system_dhcpleases_configure() — with live side effects.
-	 *   Exercising it cleanly needs the config-mutation block (the auto gate + the
-	 *   $new_config[...]['pfblockerngdnsblsettings'][0][...] writes) extracted into a
-	 *   pure helper returning the array — a src/-touching change, hence its own
-	 *   ADR-23 phase/PR, out of scope for this tests-only phase. The step3 direct
-	 *   invocation above already pins the SAME inlined auto-gate predicate on shipped
-	 *   code, and DnsblMarkedVipTest pins the ADR-13 engine that step4's flag drives.
+	 * Scenario: the Auto VIP choice decides which DNSBL-VIP keys are persisted.
+	 *
+	 *   Background:
+	 *     Given step3 selected the manual lo0 VIP ids pfb_dnsvip4='_vip1', pfb_dnsvip6='_vip2'
+	 *
+	 *   When auto is OFF
+	 *   Then pfb_dnsvip_auto persists as '' AND both manual ids are written through
+	 *
+	 *   --- the OFF before-state above is asserted FIRST ---
+	 *
+	 *   When auto is ON (same step3 ids passed)
+	 *   Then pfb_dnsvip_auto persists as 'on' AND neither manual id is written
+	 *        (ADR-13 owns/provisions the VIP, so the wizard must not pin a manual id)
+	 *
+	 * Passing the SAME ids to both calls proves the auto flag — not the id values —
+	 * decides whether the manual ids are persisted.
 	 */
-	public function testStep4PersistenceShapeIsNotUnitInvokable(): void
+	public function testAutoVipToggleDecidesPersistedDnsvipSettings(): void
 	{
-		$this->markTestSkipped(
-			'step4_submitphpaction() ends in header()+exit, requires a feeds-DB fixture, '
-			. 'and calls undoubled pfSense services — its persistence shape needs a src/ '
-			. 'refactor to a pure helper (own ADR-23 phase). See the @todo above.'
-		);
+		// Given: step3's manual VIP selections.
+		$vip4 = '_vip1';
+		$vip6 = '_vip2';
+
+		// When/Then (before-state): auto OFF persists the flag '' and BOTH manual ids.
+		$off = pfb_wizard_dnsvip_settings(false, $vip4, $vip6);
+		$this->assertSame('', $off['pfb_dnsvip_auto'], 'auto OFF must persist pfb_dnsvip_auto as empty');
+		$this->assertSame('_vip1', $off['pfb_dnsvip4'], 'auto OFF must persist the manual IPv4 VIP id');
+		$this->assertSame('_vip2', $off['pfb_dnsvip6'], 'auto OFF must persist the manual IPv6 VIP id');
+
+		// When/Then (after-state): auto ON persists the flag 'on' and OMITS the manual
+		// ids — the same ids are passed, so green here proves the flag drove the change.
+		$on = pfb_wizard_dnsvip_settings(true, $vip4, $vip6);
+		$this->assertSame('on', $on['pfb_dnsvip_auto'], 'auto ON must persist pfb_dnsvip_auto as on');
+		$this->assertArrayNotHasKey('pfb_dnsvip4', $on, 'auto ON must NOT pin a manual IPv4 VIP id (ADR-13 owns it)');
+		$this->assertArrayNotHasKey('pfb_dnsvip6', $on, 'auto ON must NOT pin a manual IPv6 VIP id (ADR-13 owns it)');
 	}
 }
