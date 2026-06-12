@@ -226,6 +226,30 @@ export PROXMOX_SSH_HOST=pve.lan PROXMOX_SSH_USER=root
 ./scripts/image-publish.sh 2.8.1
 ```
 
+### pfSense Plus images (private — licensed)
+
+Plus images publish with the same scripts, with these deltas:
+
+- **Image name is all-lowercase** — an OCI/GHCR repository name MUST be lowercase:
+  `ghcr.io/pfblockerng/pfsense-plus`. Tags use the Plus version scheme `YY.MM`
+  (e.g. `26.03`). Select it with `SMOKE_IMAGE_NAME=pfsense-plus` (or `--image`).
+- **Keep the GHCR package PRIVATE.** The Plus image is Netgate-licensed; verify the
+  package's visibility is private after the first push and never make it public.
+  Plus stays out of CI regardless (`ci: false` in the version matrix — no licensed
+  CI image).
+- **MAC pinning (license-critical).** The qcow2 carries no MAC — the MAC lives in the
+  VM/QEMU config, so publishing is unaffected — but **every boot of the Plus image
+  must reuse the Plus source-VM's MAC**: pfSense matches interface assignment by MAC,
+  and the Plus license/NDI registration is keyed to it too. It is NOT the CE pin
+  (`BC:24:11:37:9C:AC`, hardcoded in `tests/smoke/boot_vm.sh` and defaulted by
+  `image-upgrade.sh --mac`). Read it off the source VM (`qm config <vmid>`, the
+  `net0` line) and pass it explicitly: `image-upgrade.sh --mac <plus-mac>`;
+  `boot_vm.sh` hardcodes the CE MAC and needs parameterizing before any Plus run.
+- `image-publish.sh`'s artifact-type/description annotations say "CE" — cosmetic
+  only; every consumer locates the layer by a `*.qcow2` glob. Pass
+  `--out /tmp/pfSense-Plus-<tag>.qcow2` so the stored filename is labelled
+  correctly (the default is `pfSense-CE-<tag>.qcow2`).
+
 ## Two install paths: CI/local vs release
 
 | | `install-from-repo.sh` (rsync + hook) | Real `.pkg` (`pkg add`) |
