@@ -53,6 +53,11 @@ jobs:
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          # This gate has no checkout, so gh can't infer the repo from a git remote.
+          # A runner-image gh bump (~2026-06) dropped the GITHUB_REPOSITORY fallback,
+          # so `gh run list` started failing ("failed to determine base repo"). Pin the
+          # repo explicitly to keep the gate checkout-free.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -eu
           if [ "${{ github.event_name }}" != "schedule" ]; then
