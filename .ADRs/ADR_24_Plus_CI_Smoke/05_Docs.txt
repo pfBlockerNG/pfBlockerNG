@@ -1,0 +1,57 @@
+================================================================================
+PHASE 5 PROMPT — Docs reconciliation (CLAUDE.md, scripts/README.md)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_24_Plus_CI_Smoke/ADR.md   (read §2.1 last row, §2.3, §7 first)
+================================================================================
+
+ROLE
+You are performing Phase 5 (final) of ADR-24. Documentation-only — per CLAUDE.md
+this commits directly to devel (no PR), still from a worktree. One commit.
+
+WHY THIS PHASE EXISTS
+Several docs assert the pre-ADR-24 reality ("Plus is never run in CI",
+"ci: false for Plus — no licensed CI image"). Leaving them contradicts the live
+system and will mislead the next agent.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_24_Plus_CI_Smoke/RESULTS/04_Results.txt — confirm the
+  live fan-out is green with both channels. If missing: STOP and report.
+- CLAUDE.md — "Updating documentation" step 3 ("Never Plus"), the version-matrix
+  bullet ("CE gets … Plus gets builds only (ci: false …)").
+- scripts/README.md — §"Supported-version matrix" lines re ci_matrix/Plus;
+  §"pfSense Plus images (private — licensed)".
+
+ACTION PLAN (ordered)
+1. CLAUDE.md: update the Build-vs-CI-split sentence (Plus now runs CI smoke from
+   a private licensed image) and the smoke-fan-out bullet ("all ci:true entries,
+   CE and Plus"); note Plus image refresh stays MANUAL (image-refresh.yml is
+   CE-only).
+2. scripts/README.md: update the ci_matrix description + lifecycle notes; in the
+   Plus-images section, replace "Plus stays out of CI regardless" with the new
+   state (CI pulls the private image; MAC BC:24:11:9C:FE:85 rides the matrix
+   entry; manual refresh).
+3. Sweep for stragglers:
+       grep -rn "never Plus\|Never Plus\|ci: false" CLAUDE.md scripts/ docs/ README.md
+   Update what describes CI reality; leave historical ADR texts (ADR-04/09/20
+   RESULTS etc.) untouched — they are records, not living docs.
+4. npx markdownlint-cli2 → 0 errors.
+
+CONSTRAINTS
+- Markdown/docs only. No code, no workflow files.
+- Do not rewrite history in .ADRs/ (older ADRs keep their original statements).
+
+VERIFICATION (must all pass before the phase is done)
+- markdownlint clean; pre-commit hook green; grep sweep shows no stale CI claims
+  outside .ADRs/.
+
+EXPECTED RESULT
+Docs match the live two-channel CI.
+
+COMMIT (single)
+    docs: Plus joins the CI smoke fan-out (ADR-24 P5)
+Push directly to devel (docs carve-out; fetch + rebase first).
+
+HANDOFF — write `.ADRs/ADR_24_Plus_CI_Smoke/RESULTS/05_Results.txt` (plain .txt)
+Record: files touched; the grep-sweep result; the full ADR-24 DoD evidence
+roll-up (per §7) — this is the final handoff; flip ADR Status to Accepted on
+maintainer sign-off.

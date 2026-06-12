@@ -1,0 +1,69 @@
+================================================================================
+PHASE 1 PROMPT — Harness parameterization: SMOKE_VM_MAC override (CE default)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_24_Plus_CI_Smoke/ADR.md   (read §1.2, §2.1, §2.2 items 1+4 first)
+================================================================================
+
+ROLE
+You are on `adr/24-pfsense-plus-in-the-ci-smoke` performing Phase 1 of ADR-24.
+Strictly behaviour-preserving: with SMOKE_VM_MAC unset, everything is
+byte-identical to today. Inline on the branch, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+boot_vm.sh hardcodes the CE source-VM MAC (BC:24:11:37:9C:AC). The pfSense Plus
+image (ADR-24) must boot with ITS source-VM MAC (BC:24:11:9C:FE:85) — pfSense
+matches interface assignment by MAC AND the Plus license/NDI registration is
+keyed to it. conftest.py boots exclusively via boot_vm.sh, so one env override
+parameterizes the whole harness.
+
+REQUIRED READING
+- .ADRs/ADR_24_Plus_CI_Smoke/ADR.md — §1.2, §2.1, §2.2.
+- tests/smoke/boot_vm.sh — VM_MAC at ~line 37; the hardware-profile comment block
+  (~lines 16–23).
+- tests/smoke/conftest.py — how boot_vm.sh is invoked (~lines 60, 213–230); the
+  env it passes to the subprocess.
+- scripts/README.md § "pfSense Plus images" — the documented MAC facts (keep
+  consistent).
+- CLAUDE.md — Shell standards (POSIX sh, quote expansions), Test coverage.
+
+ACTION PLAN (ordered)
+1. WRITE the pin test first (red where possible): add a small typed test (e.g.
+   tests/test_smoke_harness_defaults.py or extend an existing harness-side test
+   file — NOT under tests/smoke/) that reads tests/smoke/boot_vm.sh and asserts:
+   a. the CE default MAC string BC:24:11:37:9C:AC is present exactly once, AND
+   b. the assignment line is the override form `${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}`.
+   Pre-change, (b) FAILS (red); (a) passes (regression pin). Record both.
+2. CHANGE tests/smoke/boot_vm.sh:
+       VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
+   Extend the header comment: MAC is per-image; CE default; Plus images MUST set
+   SMOKE_VM_MAC to the Plus source-VM MAC (license/NDI-keyed — see ADR-24 /
+   scripts/README.md). Do NOT change any other QEMU argument.
+3. CHECK conftest.py: if it passes a filtered/constructed env to the boot_vm.sh
+   subprocess, ensure SMOKE_VM_MAC propagates (inherit os.environ or add the key);
+   if it already inherits the full env, change NOTHING and note that in the
+   handoff.
+4. RUN: python -m pytest; ruff check . && ruff format .; mypy tests/;
+   sh -n tests/smoke/boot_vm.sh; shellcheck tests/smoke/boot_vm.sh (if installed).
+
+CONSTRAINTS
+- Touch ONLY tests/smoke/boot_vm.sh, (possibly) tests/smoke/conftest.py, and the
+  new test file. POSIX sh; no bash-isms; quote expansions.
+- Do NOT change image-upgrade.sh (its --mac default stays the CE pin).
+- Default behaviour byte-identical with SMOKE_VM_MAC unset (§2.2.1).
+
+VERIFICATION (must all pass before the phase is done)
+- Red recorded for assertion (b) pre-change; green after.
+- python -m pytest → green; ruff/mypy → clean; sh -n/shellcheck → clean.
+- git diff origin/devel...HEAD → only the three files above.
+
+EXPECTED RESULT
+boot_vm.sh boots with SMOKE_VM_MAC when set, CE pin otherwise; harness env
+propagates it; default path unchanged.
+
+COMMIT (single)
+    tests: parameterize smoke VM MAC via SMOKE_VM_MAC (ADR-24 P1)
+Push directly to `adr/24-pfsense-plus-in-the-ci-smoke`.
+
+HANDOFF — write `.ADRs/ADR_24_Plus_CI_Smoke/RESULTS/01_Results.txt` (plain .txt)
+Record: the exact new assignment line; whether conftest.py needed a change (and
+why/why not); red→green evidence; verification outputs; go-ahead for Phase 2.
