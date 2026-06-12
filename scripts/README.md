@@ -14,9 +14,20 @@ the **`ci-metadata` orphan branch** (its own history, off `main`/`devel`) as
 | [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD matrix and CI matrix. |
 
 The `read-version-matrix.sh` reader is also exposed as a composite GH Actions action
-(`.github/actions/read-version-matrix/`) that emits two outputs: `build_matrix` (all
-entries → one `.pkg` per distinct FreeBSD major) and `ci_matrix` (`ci: true` CE
-entries → the smoke-fan-out set, never Plus).
+(`.github/actions/read-version-matrix/`) that emits these outputs:
+
+- `build_matrix` — all entries → one `.pkg` per distinct FreeBSD major.
+- `ci_matrix` — `ci: true` CE entries → the smoke-fan-out set, never Plus.
+- `python_versions` — the DISTINCT python versions derived from each entry's `py_flavor`
+  (`pyN` + `MM` → `N.MM`; e.g. `py311` → `3.11`, `py39` → `3.9`), sorted + deduped.
+- `php_versions` — the DISTINCT `php_version` values across the entries, sorted + deduped.
+
+`python_versions` / `php_versions` are the **supported-only** test matrices (only the
+versions the matrix actually ships): `test.yml`'s `read-matrix` job feeds them into the
+pytest job (`strategy.matrix.python-version`) and the four PHP jobs
+(`strategy.matrix.php-version`) via `fromJSON`, so the test gates fan out over exactly the
+supported set — no hardcoded version list. The reader also has a `--print-test` mode that
+prints both to stdout (mirroring `--print-build` / `--print-ci`).
 
 ### Schema
 

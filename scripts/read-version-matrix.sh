@@ -4,7 +4,7 @@
 #
 # Usage:
 #   read-version-matrix.sh [--ref <git-ref>] [--file <path>] [--github-output]
-#                          [--print-build | --print-ci | --print-all]
+#                          [--print-build | --print-ci | --print-test | --print-all]
 #                          [--variant CE|Plus]
 #
 # Options:
@@ -12,10 +12,13 @@
 #                        Must be reachable in the current git repo.
 #   --file <path>        Matrix file path on the ref
 #                        (default: supported-versions.json).
-#   --github-output      Write build_matrix and ci_matrix to $GITHUB_OUTPUT
-#                        (GitHub Actions step outputs format).
+#   --github-output      Write build_matrix, ci_matrix, variant, python_versions,
+#                        and php_versions to $GITHUB_OUTPUT (GitHub Actions step
+#                        outputs format).
 #   --print-build        Print BUILD matrix JSON to stdout.
 #   --print-ci           Print CI matrix JSON to stdout.
+#   --print-test         Print the derived test matrices (python_versions +
+#                        php_versions) to stdout (labelled).
 #   --print-all          Print both matrices to stdout (labelled).
 #   --variant CE|Plus    Filter both matrices to entries whose `variant` field
 #                        matches the given value (case-insensitive). Returns ALL
@@ -24,10 +27,16 @@
 #                        this flag all entries are returned (backward-compatible).
 #
 # Outputs:
-#   BUILD matrix — all entries from supported-versions.json, each carrying:
+#   BUILD matrix     — all entries from supported-versions.json, each carrying:
 #     pfsense_version, channel, freebsd_version, freebsd_major,
 #     php_version, py_flavor, variant, status, ci
-#   CI matrix    — the ci:true CE entries only (subset of BUILD matrix).
+#   CI matrix        — the ci:true CE entries only (subset of BUILD matrix).
+#   python_versions  — DISTINCT python versions derived from each BUILD-matrix
+#     entry's py_flavor (`pyN` + `MM` => `N.MM`, e.g. py311 => 3.11; py39 => 3.9),
+#     sorted + deduped. test.yml's pytest matrix (supported-only — only the
+#     pythons the matrix actually ships).
+#   php_versions     — DISTINCT php_version across the BUILD-matrix entries,
+#     sorted + deduped. test.yml's PHP-jobs matrix (supported-only).
 #
 # Requirements: git, jq (both available on ubuntu-latest GH runners).
 # Pure read — no writes anywhere; exits non-zero on any error.
@@ -44,6 +53,7 @@ MATRIX_FILE="${MATRIX_FILE:-supported-versions.json}"
 DO_GITHUB_OUTPUT=0
 DO_PRINT_BUILD=0
 DO_PRINT_CI=0
+DO_PRINT_TEST=0
 VARIANT_FILTER=""
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -55,13 +65,15 @@ while [ $# -gt 0 ]; do
     --github-output) DO_GITHUB_OUTPUT=1; shift ;;
     --print-build)   DO_PRINT_BUILD=1;   shift ;;
     --print-ci)      DO_PRINT_CI=1;      shift ;;
+    --print-test)    DO_PRINT_TEST=1;    shift ;;
     --print-all)     DO_PRINT_BUILD=1; DO_PRINT_CI=1; shift ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
 
-# Default: print both when running standalone with no print flags and no GH output.
-if [ "$DO_GITHUB_OUTPUT" -eq 0 ] && [ "$DO_PRINT_BUILD" -eq 0 ] && [ "$DO_PRINT_CI" -eq 0 ]; then
+# Default: print both matrices when running standalone with no print flags and no
+# GH output. (--print-test alone is an explicit request — don't add build/ci to it.)
+if [ "$DO_GITHUB_OUTPUT" -eq 0 ] && [ "$DO_PRINT_BUILD" -eq 0 ] && [ "$DO_PRINT_CI" -eq 0 ] && [ "$DO_PRINT_TEST" -eq 0 ]; then
   DO_PRINT_BUILD=1
   DO_PRINT_CI=1
 fi
@@ -124,6 +136,33 @@ fi
 # Variant JSON array: distinct variant values present in the BUILD matrix.
 VARIANT_ARRAY="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].variant // empty] | unique')"
 
+# ── Derived test matrices (test.yml — supported-only) ─────────────────────────
+# python_versions: map each entry's py_flavor ("pyN" + "MM") to "N.MM"
+#   (py311 => 3.11, py39 => 3.9), then dedup + sort. The regex captures the
+#   single major digit and the remaining minor digits, joined with a dot.
+# php_versions: distinct php_version values, deduped + sorted.
+# Both feed test.yml's strategy.matrix unfiltered (CE + Plus) so the pytest /
+# PHP gates only ever run a version the matrix actually ships.
+PYTHON_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+  [ .[].py_flavor
+    | capture("^py(?<maj>[0-9])(?<min>[0-9]+)$")
+    | "\(.maj).\(.min)"
+  ] | unique')"
+PHP_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].php_version] | unique')"
+
+# Fail-closed: a non-empty BUILD matrix must derive at least one python + php
+# version. An empty derive means a malformed py_flavor / missing php_version.
+if [ "$(printf '%s' "$BUILD_MATRIX" | jq 'length')" -gt 0 ]; then
+  if [ "$(printf '%s' "$PYTHON_VERSIONS" | jq 'length')" -eq 0 ]; then
+    printf '::error::no python versions derived from py_flavor in %s (malformed py_flavor?)\n' "$MATRIX_FILE" >&2
+    exit 1
+  fi
+  if [ "$(printf '%s' "$PHP_VERSIONS" | jq 'length')" -eq 0 ]; then
+    printf '::error::no php versions found (missing php_version?) in %s\n' "$MATRIX_FILE" >&2
+    exit 1
+  fi
+fi
+
 if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
   if [ -z "${GITHUB_OUTPUT:-}" ]; then
     printf '::error::GITHUB_OUTPUT is not set — cannot write step outputs\n' >&2
@@ -134,6 +173,8 @@ if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
     printf 'build_matrix<<__EOF_BUILD_MATRIX__\n%s\n__EOF_BUILD_MATRIX__\n' "$BUILD_MATRIX"
     printf 'ci_matrix<<__EOF_CI_MATRIX__\n%s\n__EOF_CI_MATRIX__\n' "$CI_MATRIX"
     printf 'variant<<__EOF_VARIANT__\n%s\n__EOF_VARIANT__\n' "$VARIANT_ARRAY"
+    printf 'python_versions<<__EOF_PYTHON_VERSIONS__\n%s\n__EOF_PYTHON_VERSIONS__\n' "$PYTHON_VERSIONS"
+    printf 'php_versions<<__EOF_PHP_VERSIONS__\n%s\n__EOF_PHP_VERSIONS__\n' "$PHP_VERSIONS"
   } >> "$GITHUB_OUTPUT"
 fi
 
@@ -149,4 +190,11 @@ if [ "$DO_PRINT_CI" -eq 1 ]; then
     printf '\nCI matrix:\n'
   fi
   printf '%s' "$CI_MATRIX" | jq .
+fi
+
+if [ "$DO_PRINT_TEST" -eq 1 ]; then
+  printf 'python_versions:\n'
+  printf '%s' "$PYTHON_VERSIONS" | jq .
+  printf '\nphp_versions:\n'
+  printf '%s' "$PHP_VERSIONS" | jq .
 fi

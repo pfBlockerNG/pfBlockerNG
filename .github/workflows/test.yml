@@ -55,16 +55,43 @@ permissions:
   packages: read
 
 jobs:
+  # Derive the pytest + PHP test matrices from the single-source-of-truth
+  # supported-versions matrix (ci-metadata orphan branch). The pytest matrix is
+  # the distinct python versions (from each entry's py_flavor) and the PHP matrix
+  # the distinct php_version values, across ALL entries (CE + Plus) — supported-only
+  # (only versions the matrix actually ships; nothing hardcoded). Adding/dropping a
+  # version on ci-metadata changes these legs automatically — no YAML edit here.
+  read-matrix:
+    name: Read supported-version matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python_versions: ${{ steps.matrix.outputs.python_versions }}
+      php_versions: ${{ steps.matrix.outputs.php_versions }}
+    steps:
+      - name: Checkout (for scripts/read-version-matrix.sh + the action)
+        uses: actions/checkout@v6
+
+      - name: Fetch the ci-metadata orphan ref
+        # The reader reads origin/ci-metadata; checkout doesn't bring orphan refs.
+        run: git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+
+      - name: Read derived test matrices
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
   test:
     name: pytest / Python ${{ matrix.python-version }}
+    needs: read-matrix
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 is the minimum (pfSense CE 2.8 / FreeBSD 15 baseline).
-        # Also test against the current stable and latest releases.
-        python-version: ['3.11', '3.12', '3.13']
+        # Matrix-derived (supported-only) from supported-versions.json — the
+        # distinct pythons across all entries' py_flavor. Today: ["3.11"]. This
+        # intentionally tracks only shipped pythons (no speculative 3.12/3.13 leg).
+        python-version: ${{ fromJSON(needs.read-matrix.outputs.python_versions) }}
 
     steps:
       - name: Checkout
@@ -222,34 +249,49 @@ jobs:
           if-no-files-found: ignore
 
   php-syntax:
-    name: PHP syntax check (php -l)
+    name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
+    needs: read-matrix
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — the distinct php_version values across
+        # all supported-versions.json entries (CE + Plus). Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up PHP 8.3
+      - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php-version }}
           tools: none
 
       - name: Syntax-check all PHP and .inc files
         run: find src -name '*.php' -o -name '*.inc' | sort | xargs -n1 php -l
 
   php-static-analysis:
-    name: PHPStan static analysis
+    name: PHPStan static analysis / PHP ${{ matrix.php-version }}
+    needs: read-matrix
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — see php-syntax. Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up PHP 8.3
+      - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php-version }}
           tools: composer
 
       - name: Install PHPStan
@@ -262,17 +304,24 @@ jobs:
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
   php-codesniffer:
-    name: PHPCS PFBL-01 RequirePfbFilter sniff
+    name: PHPCS PFBL-01 RequirePfbFilter sniff / PHP ${{ matrix.php-version }}
+    needs: read-matrix
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — see php-syntax. Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up PHP 8.3
+      - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php-version }}
           tools: composer
 
       - name: Install dependencies
@@ -285,18 +334,26 @@ jobs:
         run: vendor/bin/phpcs
 
   php-unit:
-    name: PHPUnit unit tests
+    name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
+    needs: read-matrix
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — the distinct php_version values across
+        # all supported-versions.json entries (CE + Plus). Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up PHP 8.3
+      - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
         with:
-          # Target CE 2.8 (PHP 8.3). pcov drives informational coverage.
-          php-version: '8.3'
+          # pcov drives informational coverage.
+          php-version: ${{ matrix.php-version }}
           extensions: curl, intl, mbstring, ctype, filter
           coverage: pcov
           tools: composer
@@ -403,11 +460,15 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, ui-suite]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, ui-suite]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
         run: |
+          if [ "${{ needs.read-matrix.result }}" != "success" ]; then
+            echo "Reading the supported-version matrix failed or was cancelled."
+            exit 1
+          fi
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "One or more Python test jobs failed or were cancelled."
             exit 1
