@@ -8,7 +8,7 @@ config). Two files changed; ADR-13 engine in pfblockerng.inc untouched.
 
 ### src/usr/local/www/wizards/pfblockerng_wizard.inc
 - step3_submitphpaction(): lines ~114–126
-  VIP-validation block now gated on `$pfb_auto = isset($_POST['pfb_dnsvip_auto']) && == 'on'`;
+  VIP-validation block now gated on `$pfb_auto = isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on'`;
   pfb_validate_vips() + the 'none'->'' normalisation run ONLY when auto is OFF.
 - step4_submitphpaction(): lines ~168–173
   Persists `pfb_dnsvip_auto` (=> 'on' | '') always; writes pfb_dnsvip4/pfb_dnsvip6 from
