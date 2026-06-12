@@ -72,6 +72,9 @@ if (!function_exists('step3_submitphpaction')) {
 	$pfb_wizard_src = file_get_contents(
 		dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc'
 	);
+	if ($pfb_wizard_src === false) {
+		throw new RuntimeException('test bootstrap: failed to read pfblockerng_wizard.inc for the wizard-function load');
+	}
 	// Drop the top-of-file require_once() statements (shims/real include already
 	// satisfy them); keep everything else byte-for-byte.
 	$pfb_wizard_src = preg_replace('/^\s*require_once\(.*\);\s*$/m', '', $pfb_wizard_src);
