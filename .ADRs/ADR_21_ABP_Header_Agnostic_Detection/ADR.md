@@ -1,6 +1,7 @@
 # ADR-21: ABP Header-Agnostic Detection
 
-- **Status:** **Proposed** (2026-06-09)
+- **Status:** **Proposed** (2026-06-09; amended 2026-06-12 — per-feed `auto`/`abp` format
+  selector dropped in favour of a broadened header sniff, see §2.4)
 - **Date:** 2026-06-09
 - **Branch:** `adr/21-abp-header-agnostic-detection` (off `devel`)
 - **Component(s):**
@@ -52,12 +53,25 @@ The result: a list that mixes plain domains with `||domain^` (e.g., `@@||allow.m
 discards the ABP entries and never applies their semantics (block, allow, `$important`,
 `$badfilter`).
 
+A second face of the same gap is the header sniff itself: it matches only four magic strings
+(the `[Adblock Plus` prefix / `[Adblock Plus]` / `[uBlock Origin` / `! Title: AdGuard`, scanned only in
+the leading `!`-comment block — `pfblockerng.inc:9506–9521`). A conventionally-authored ABP
+list led by any *other* `! Title:` (e.g. HaGeZi's ABP-format DNS lists) is not detected and
+falls to the plain path, where today its `||` entries are dropped (item 2 above), its regex
+rules are dropped, and any cosmetic rule (`x.com##.ad`) is mangled by the `#`-fragment strip
+into a false plain-domain block of `x.com`.
+
 ### 1.4 Load-bearing constraints
 
 - `pfb_unbound.py` runs inside Unbound's chroot — stdlib only, no new deps.
 - PHP download loop runs at feed-refresh time on the pfSense appliance.
-- The ABP-header path (whole-feed `$easylist = TRUE`) is **unchanged** — this ADR adds
-  per-line detection inside the existing non-ABP path only.
+- The ABP-header *path* (whole-feed `$easylist = TRUE`) is **unchanged** — only its
+  *trigger* broadens (the header sniff, §2.4). The per-line detection is added inside the
+  existing non-ABP path only.
+- `parse_abp()` is a **superset** parser: besides `||`/`@@||`/regex it KEEPS hosts lines
+  (`<ip> domain`) and bare plain domains as blocks (`pfb_unbound.py:3011–3016`). A feed
+  flipped to whole-feed ABP therefore still blocks its plain-domain entries — this is what
+  makes broadening the sniff safe.
 - `parse_abp()` (`pfb_unbound.py:2997`) is already the authoritative ABP parser with full
   `@@`, `$important`, `$badfilter`, regex support. It is NOT modified in this ADR.
 - `_dnsbl_parse_abp_line()` (`pfb_unbound.py:2873`) is the old basic-ABP token-strip (block
@@ -82,7 +96,7 @@ decision in `build()`, not a feed-mode switch.
 | PHP download loop (non-ABP feed) | `\|\|domain^` → dropped at `pfb_filter()` (line 9757) | `startswith("\|\|")` or `startswith("@@\|\|")` before `pfb_filter()` → write verbatim to `.txt`; `continue` |
 | PHP manifest builder (plain path) | reads col 1 from CSV | detect `startswith("\|\|")` / `startswith("@@\|\|")` → write verbatim to `.raw`; else CSV col-1 as before |
 | Python `build()` (non-ABP loop) | `parse(fmt, raw_line)` for every line | if `raw_line.startswith("\|\|")` or `raw_line.startswith("@@\|\|")` → `parse_abp(raw_line, ...)` → append to `abp_rules` and `continue`; else unchanged |
-| Per-feed format selector (`'abp'`) | N/A (new) | download loop: `$easylist = TRUE` (skip header scan); manifest: `format_hint = 'abp'` |
+| Header sniff (download loop, leading `!`-block only) | 4 magic strings (`[Adblock Plus` prefix, `[Adblock Plus]`, `[uBlock Origin`, `! Title: AdGuard`) | generic prefixes: line starts with `[Adblock`, `[uBlock`, or `! Title:` → `$easylist = TRUE`; scan window unchanged |
 | ABP-header feed | `fmt == "abp"` → `parse_abp()` for every line | **unchanged** |
 | `parse_abp()` | unchanged | **unchanged** |
 | `_dnsbl_parse_abp_line()` | called by `parse()` for `format_hint="abp"` | **unchanged** (not used by the new per-line path) |
@@ -110,27 +124,57 @@ decision in `build()`, not a feed-mode switch.
    IP-valued anchors (ADR-06 no-leak contract); the IP goes to the firewall path via the
    PHP `pfb_dnsbl_abp_extract_ip()` in the ABP block — but since this is a non-ABP feed
    the IP is already handled by PHP's IP collection at lines 9710–9731. No double-handling.
+9. **The four legacy magic strings stay detected:** every feed flipped to ABP by today's
+   sniff is still flipped after broadening (the generic prefixes are a superset of the
+   four strings). The scan window is unchanged — only the leading `!`-comment block is
+   sniffed; a `! Title:`-like token after the first data line does NOT flip the feed.
 
-### 2.4 Explicit format selector (per-feed)
+### 2.4 Broadened header detection (no per-feed selector, no new config key)
 
-An optional per-feed **Format** selector (values: `'auto'` / `'abp'`) lets the user
-declare that a feed is ABP format without relying on header detection.
+There is **no per-feed format selector and no new configuration key**. An earlier draft
+proposed a per-feed `'auto'`/`'abp'` selector; it was dropped — the residual case it
+covered is near-empty (see below) and a config key is forever. Instead the existing header
+sniff is broadened from four magic strings to the generic ABP header convention:
 
-- **`'auto'` (default):** existing behavior — detect the ABP header; if absent, use
-  per-line detection (ADR-21 Phase 1).
-- **`'abp'`:** skip header detection entirely; set `$easylist = TRUE` immediately for the
-  download loop; set `format_hint = 'abp'` in the manifest row so Python's `build()` routes
-  the entire feed to `parse_abp()`.
+- A line in the leading `!`-comment block starting with **`[Adblock`**, **`[uBlock`**, or
+  **`! Title:`** sets `$easylist = TRUE`. The three prefixes cover all four legacy magic
+  strings. The scan window is exactly today's (`$validate_header` flips on the first
+  non-`!`, non-header line and sniffing stops); the check is a **prefix** match
+  (`str_starts_with`), not today's mid-line `strpos`, so a `! Title:` token inside a data
+  line cannot flip the feed.
 
-This is implemented in Phase 2 alongside the download loop and manifest builder changes.
-The selector covers feeds that are known ABP feeds but ship without a recognizable header.
+Why this is safe and sufficient:
+
+- Every conventionally-authored ABP list ships a `[Adblock …]` and/or `! Title:` header —
+  the four magic strings were the brittle part, not the convention.
+- `parse_abp()` is a superset parser (§1.4): a false-positive flip on a mixed or
+  mostly-plain list still blocks its bare-domain entries correctly. The only line shapes
+  whole-feed ABP handles *worse* than the plain path are URL/CSV-decorated lines
+  (`http://x/path`, 6-col CSV) — and those do not co-occur with `! Title:` headers in
+  practice.
+- **Residual uncovered case:** a headerless, title-less ABP feed containing regex or
+  cosmetic rules. Accepted gap — anchored `||`/`@@||` entries in such a feed are still
+  caught by per-line detection (§2.1); a per-feed selector can be revisited later on real
+  demand.
+
+One behavioural delta vs today worth naming: the legacy check used `strpos(...) !== FALSE`
+(mid-line match anywhere in a header-window line); the new check is a leading-whitespace-
+tolerant prefix match. Within the `!`-comment window this is equivalent for real feeds
+(headers start their line); the prefix form is strictly safer.
 
 ### 2.5 Explicitly kept / out of scope
 
 - `_dnsbl_parse_abp_line()` is NOT modified or removed (still used by `parse()` for
   `format_hint="abp"` feeds).
-- Regex ABP rules (`/re/`, `@@/re/`) in non-ABP feeds: supported by `parse_abp()` and will
-  work correctly once the per-line routing is in place.
+- Regex ABP rules (`/re/`, `@@/re/`) in **undetected** (headerless, title-less) feeds are
+  **deliberately dropped**, exactly as today. The per-line guard matches only `||`/`@@||`:
+  a leading `/` is ambiguous in a plain feed (a path-like line `/ads/` must NOT become a
+  regex rule blocking every name containing "ads"), and PHP's `pfb_filter()` rejects such
+  lines before Python ever sees them. Regex rules work only in feeds detected as whole-feed
+  ABP (magic string, `[Adblock`, or `! Title:`).
+- Cosmetic rules (`x.com##.ad`) in undetected feeds keep today's behaviour (the
+  `#`-fragment strip yields a plain block for `x.com`). The broadened sniff shrinks this
+  pre-existing hazard to title-less feeds; a per-line cosmetic guard is out of scope.
 - The `$liteparser` PHP variable and lite/non-lite path are NOT changed.
 - PHP DNSBL-IP extraction for non-ABP feeds (lines 9710–9731) is NOT changed.
 - **Existing `test_adr07_*` tests are a frozen regression oracle:** no existing test
@@ -148,7 +192,9 @@ The selector covers feeds that are known ABP feeds but ship without a recognizab
 - ABP entries in untagged/mixed feeds are no longer silently discarded.
 - `@@||allow.me^` allow-rules work as expected in mixed feeds.
 - `$important` and `$badfilter` modifiers are honoured in mixed feeds.
-- No new feed format or configuration key is needed.
+- `! Title:`-led ABP lists (HaGeZi-class) are whole-feed detected with zero configuration —
+  regex + cosmetic rules in them handled correctly by `parse_abp()` instead of mangled.
+- No new feed format, per-feed selector, UI field, or configuration key is needed.
 - `parse_abp()` is reused unchanged — no risk of parser drift.
 
 **Negative / risks**
@@ -159,6 +205,14 @@ The selector covers feeds that are known ABP feeds but ship without a recognizab
   observable outcome as today (dropped) but via a different code path.
 - Slight per-line overhead in `build()` for non-ABP feeds: one `startswith` check per line.
   Negligible given feeds are processed offline, not per-query.
+- The broadened sniff flips any feed whose leading `!`-comment block carries `! Title:`
+  (or `[Adblock`) to whole-feed ABP. For a genuinely plain list with such a header the
+  outcome is equivalent (`parse_abp()` keeps bare domains); only URL/CSV-decorated lines
+  in such a feed would regress — judged not to occur in practice (`!` headers are an ABP
+  convention; hosts/URL feeds comment with `#`).
+- A headerless, title-less ABP feed with regex/cosmetic rules remains imperfect (regex
+  dropped, cosmetics mangled — pre-existing behaviour). Accepted; revisit a per-feed
+  selector only on real demand.
 
 ## 4. Requirements (acceptance)
 
@@ -171,11 +225,13 @@ The selector covers feeds that are known ABP feeds but ship without a recognizab
 6. ABP-header feeds produce identical results before and after this change (no regression).
 7. PHP: `||domain^` in a non-ABP feed's `.txt` file is written verbatim (no leading comma).
 8. PHP manifest builder: verbatim `||domain^` in `.txt` is passed verbatim to `.raw`.
-9. Per-feed format selector `'abp'`: download loop sets `$easylist = TRUE` without reading
-   the feed header; manifest row gets `format_hint = 'abp'`; Python routes all lines to
-   `parse_abp()` — identical outcome to a header-detected ABP feed.
-10. Per-feed format selector `'auto'` (default): existing behavior unchanged — header
-    detection runs first; per-line detection is the fallback.
+9. Broadened header sniff: a feed whose leading `!`-comment block contains a line starting
+   `! Title:` (any title), `[Adblock`, or `[uBlock` → `$easylist = TRUE`, manifest
+   `format_hint = 'abp'` — identical outcome to a magic-string-detected ABP feed today.
+   All four legacy magic strings still detect (regression).
+10. Sniff scope unchanged: a `! Title:`-like token appearing only AFTER the first
+    non-comment line does NOT flip the feed; a feed with no recognizable header stays
+    `'plain'` and gets per-line detection only.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -205,7 +261,7 @@ Prompt: `01_Python_Per_Line_Detection.txt`
   acceptance requirements; before-state assertions (plain feed without `||` lines →
   no such block in the result).
 
-### Phase 2 — PHP companion: download loop + manifest builder + format selector
+### Phase 2 — PHP companion: download loop + manifest builder + broadened header sniff
 
 Prompt: `02_PHP_Companion.txt`
 
@@ -213,12 +269,13 @@ Prompt: `02_PHP_Companion.txt`
   before `pfb_filter()` domain validation; write verbatim to `.txt`; `continue`.
 - `pfblockerng.inc` manifest builder (~line 3600): insert same guard before CSV col-1
   extraction; write verbatim to `.raw`; `continue`.
-- **Format selector:** add a `pfb_dnsbl_format` per-feed setting (`'auto'` / `'abp'`);
-  in the download loop, if `$feed['pfb_dnsbl_format'] === 'abp'`, set `$easylist = TRUE`
-  before the header-detection scan; in the manifest builder, emit `format_hint = 'abp'`
-  for forced-ABP feeds.
-- PHPUnit/Python tests: verbatim pass-through to `.txt` and `.raw`; format selector forces
-  ABP mode without a header; `'auto'` feed with a header still works unchanged.
+- **Broadened header sniff:** replace the four magic-string tests (~lines 9508–9511) with
+  generic prefix checks (`[Adblock`, `[uBlock`, `! Title:`) inside the same
+  `$validate_header` window. No manifest change needed — `format_hint` already follows
+  `$easylist`.
+- PHPUnit/Python tests: verbatim pass-through to `.txt` and `.raw`; `! Title:` feed flips
+  to whole-feed ABP; each legacy magic string still flips; a `! Title:` after the first
+  data line does NOT flip; headerless plain feed unchanged.
 
 ### Phase 3 — Smoke + DoD
 
@@ -254,10 +311,13 @@ All criteria must be met and evidence recorded in `RESULTS/03_Results.txt`:
 5. `drill @127.0.0.1 plain-block.com` → NOERROR + real IP (allow overrides plain block).
 6. Add `||block-me-abp.com^$important` to a second Custom_List entry; run update; confirm
    `block-me-abp.com` is still blocked (important flag preserved, no regression).
+7. Point a DNSBL feed at a `! Title:`-led ABP list carrying none of the four legacy magic
+   strings (e.g. a HaGeZi ABP-format list); run update; verify the feed is detected as ABP
+   (no parse errors, `||` entries block).
 
 **Reject criteria:**
 
-- Any of requirements §4.1–§4.8 fails in tests after Phase 1 or Phase 2.
+- Any of requirements §4.1–§4.10 fails in tests after Phase 1 or Phase 2.
 - The ABP-header feed regression test fails (§4.6).
 - Smoke checklist items 3–5 fail on a live CE box.
 - `pfb_filter()` drop-rate on legitimate domains increases (parse-error count in

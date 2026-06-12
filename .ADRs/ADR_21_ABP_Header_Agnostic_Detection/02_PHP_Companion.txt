@@ -1,16 +1,18 @@
 ================================================================================
-PHASE 2 PROMPT — PHP companion: download loop + manifest builder
+PHASE 2 PROMPT — PHP companion: download loop + manifest builder + header sniff
 Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md
-     (read §1 Context, §2 Decision table, §2.3 Contract, §6 Phase 2 FIRST)
+     (read §1 Context, §2 Decision table, §2.3 Contract, §2.4, §6 Phase 2 FIRST)
 ================================================================================
 
 ROLE
 You are on the `adr/21-abp-header-agnostic-detection` branch performing Phase 2
-of ADR-21. This phase modifies `pfblockerng.inc` at two call sites: the download
-loop and the manifest builder. It completes the pipeline so that PHP correctly
-feeds `||`/`@@||` lines from non-ABP feeds through to the Python `.raw` file
-where Phase 1's detection can pick them up. One commit, push directly.
+of ADR-21. This phase modifies `pfblockerng.inc` at three call sites: the
+download loop guard, the manifest builder guard, and the header sniff. It
+completes the pipeline so that PHP correctly feeds `||`/`@@||` lines from
+non-ABP feeds through to the Python `.raw` file where Phase 1's detection can
+pick them up, and broadens whole-feed ABP detection to the generic header
+convention. One commit, push directly.
 
 WHY THIS PHASE EXISTS
 Phase 1 wired Python's `build()` to detect `||`/`@@||` lines in `.raw` files.
@@ -27,7 +29,8 @@ REQUIRED READING
   Phase 1 is complete and all Python tests pass. If missing, Phase 1 is not
   complete; STOP and report.
 - .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md — §1.3 (the gap), §2.2
-  (decision table for PHP), §2.3 (contract items 7 and 8), §2.4 (out of scope).
+  (decision table for PHP), §2.3 (contract items 7–9), §2.4 (broadened header
+  sniff — NO per-feed selector), §2.5 (out of scope).
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc:
   • Download loop insertion point: after `$line = trim(trim($line), '.');` at
     ~line 9754 and BEFORE `if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, ...)))`.
@@ -115,35 +118,58 @@ ACTION PLAN (ordered)
    - Do NOT touch the manifest row builder (lines 3618–3625) — `format_hint` stays
      `'plain'`.
 
-3. ADD per-feed format selector:
+3. BROADEN the header sniff (ADR §2.4 — replaces the dropped per-feed selector):
 
-   a. In the DNSBL feed UI page (wherever individual feed settings are configured), add a
-      `pfb_dnsbl_format` select field with two options:
-      - `''` or `'auto'` (default): "Auto-detect (header or per-line)"
-      - `'abp'`: "Force ABP"
-      Match the naming convention and UI style of adjacent per-feed settings.
+   Current code (`pfblockerng.inc:9507–9514`):
+   ```php
+   if (!$validate_header) {
+   	if (strpos($line, '[Adblock Plus ') !== FALSE ||
+   	    strpos($line, '[Adblock Plus]') !== FALSE ||
+   	    strpos($line, '[uBlock Origin') !== FALSE ||
+   	    strpos($line, '! Title: AdGuard') !== FALSE) {
+   		$easylist = $validate_header = TRUE;
+   		continue;
+   	}
+   ```
 
-   b. In `pfblockerng.inc`, at the start of each feed's download processing — BEFORE the
-      header-detection loop — add:
-      ```php
-      // Force ABP mode if the feed is explicitly configured as ABP (ADR-21).
-      if (isset($feed_config['pfb_dnsbl_format']) && $feed_config['pfb_dnsbl_format'] === 'abp') {
-          $easylist = TRUE;
-      }
-      ```
-      (Adapt `$feed_config` to the actual variable holding the feed's config row — read
-      the download loop to find the correct variable name. Tabs for indent.)
-
-   c. In the manifest builder, where the manifest row is assembled (~line 3618–3625),
-      emit `format_hint = 'abp'` when the feed's `pfb_dnsbl_format` is `'abp'` (or when
-      `$easylist` is `TRUE` — whichever is the cleanest hook given the code structure).
-      Read the manifest builder to find where `format_hint` is set and follow the same
-      pattern.
+   Replace the four magic-string tests with three generic prefix checks:
+   ```php
+   if (!$validate_header) {
+   	// ADR-21: generic ABP header convention -- any '[Adblock'/'[uBlock'
+   	// variant or any '! Title:' (not only AdGuard) flags the feed as
+   	// whole-feed ABP. Safe: parse_abp() is a superset parser (keeps bare
+   	// domains + hosts lines).
+   	$hline = ltrim($line);
+   	if (str_starts_with($hline, '[Adblock') ||
+   	    str_starts_with($hline, '[uBlock') ||
+   	    str_starts_with($hline, '! Title:')) {
+   		$easylist = $validate_header = TRUE;
+   		continue;
+   	}
+   ```
 
    Notes:
-   - A forced-ABP feed skips the per-line `||`/`@@||` guard (step 1 above) — the entire
-     feed is already going through `parse_abp()` via the `$easylist = TRUE` path.
-   - `'auto'` feeds are unchanged: header detection runs first, then per-line detection.
+   - PREFIX check (`str_starts_with`), not `strpos(...) !== FALSE` — a '! Title:'
+     token mid-line in a data line must not flip the feed. The `ltrim()` tolerates
+     leading whitespace only.
+   - The scan WINDOW is untouched: the `elseif (substr($line, 0, 1) === '!')` /
+     `else { $validate_header = TRUE; }` arms below stay exactly as they are, so
+     sniffing still stops at the first non-`!` non-header line.
+   - The three prefixes cover all four legacy strings ('[Adblock Plus ' /
+     '[Adblock Plus]' → '[Adblock'; '[uBlock Origin' → '[uBlock';
+     '! Title: AdGuard' → '! Title:'). Pin all four legacy strings in tests.
+   - No manifest-builder change: `format_hint` already follows `$easylist`
+     ('format' => $easylist ? 'abp' : 'plain', ~line 9991).
+   - NO new config key, NO UI field, NO per-feed selector — explicitly dropped
+     (ADR §2.4).
+   - TESTABILITY: extract the predicate into a small pure helper in
+     `pfblockerng.inc` — `pfb_dnsbl_is_abp_header(string $line): bool` — and call
+     it from the sniff. The download loop itself is not unit-testable
+     off-appliance, but the helper is: add PHPUnit cases to `tests/php/` (loads
+     the real pfblockerng.inc via the bootstrap shims) pinning: all FOUR legacy
+     magic strings → TRUE; '! Title: HaGeZi ...' → TRUE; '[uBlock Origin' →
+     TRUE; 'x.com' / '0.0.0.0 x.com' / '||x^' / '! plain comment' / a data line
+     CONTAINING '! Title:' mid-line → FALSE.
 
 4. RUN `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` — must show no syntax
    errors.
@@ -170,15 +196,18 @@ ACTION PLAN (ordered)
 9. RUN `mypy tests/` — clean.
 
 CONSTRAINTS
-- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, the DNSBL feed UI page,
-  and (optionally) `tests/test_adr21_abp_per_line.py` (adding `test_manifest_builder_mixed_feed`).
+- Modify only `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and (optionally)
+  `tests/test_adr21_abp_per_line.py` (adding `test_manifest_builder_mixed_feed`).
+- NO new config key, NO UI field, NO per-feed format selector (ADR §2.4 dropped it).
 - Do NOT modify `pfb_unbound.py`.
 - Do NOT touch the `if ($easylist)` block (ABP-header path) — it is correct and must
-  remain unchanged. The format selector sets `$easylist = TRUE` BEFORE that block; the
-  block itself is not modified.
+  remain unchanged. Only the sniff that SETS `$easylist` changes (step 3); the block
+  itself is not modified.
+- Do NOT widen the sniff scan window: the `elseif`/`else` arms of the
+  `!$validate_header` block stay byte-identical.
 - Tabs for PHP indent; match the surrounding code style exactly.
-- `format_hint` stays `'plain'` for `'auto'` feeds; it is set to `'abp'` only for
-  feeds with `pfb_dnsbl_format === 'abp'`.
+- `format_hint` keeps following `$easylist` ('abp' iff sniffed); undetected feeds stay
+  `'plain'` and rely on per-line detection.
 - IP anchors (`||1.2.3.4^`) are handled correctly by `parse_abp()` returning `None` —
   no additional PHP guard is needed.
 
@@ -189,13 +218,16 @@ VERIFICATION (must all pass before the phase is done)
 - `ruff check . && ruff format .` → 0 errors.
 - `mypy tests/` → 0 errors.
 - `git diff origin/devel...HEAD` shows ONLY:
-  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and (optionally)
-  `tests/test_adr21_abp_per_line.py`. Plus Phase 1's files. Nothing else.
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, the new PHPUnit test file under
+  `tests/php/`, and (optionally) `tests/test_adr21_abp_per_line.py`. Plus Phase 1's
+  files. Nothing else.
 
 EXPECTED RESULT
 Non-ABP feed lines starting with `||` or `@@||` flow through the entire pipeline:
 PHP download loop → verbatim in `.txt` → manifest builder → verbatim in `.raw` →
 Python `build()` Phase-1 routing → `parse_abp()` → `abp_rules` → `reconcile()`.
+Whole-feed ABP detection now triggers on any `[Adblock` / `[uBlock` / `! Title:`
+header prefix (pfb_dnsbl_is_abp_header()), pinned by PHPUnit; no config key added.
 
 COMMIT (single)
     pfblockerng: PHP companion for per-line ABP detection (ADR-21 P2)
@@ -204,6 +236,7 @@ or open a second PR (whichever is cleaner given Phase 1's PR state).
 
 HANDOFF — write `.ADRs/ADR_21_ABP_Header_Agnostic_Detection/RESULTS/02_Results.txt`
 (plain .txt)
-Record: the exact diff for each of the two insertion points (download loop and
-manifest builder); the `php -l` / PHPUnit outcome; `python -m pytest` pass count;
-any edge case or deviation from the plan; go-ahead for Phase 3.
+Record: the exact diff for each of the three change sites (download-loop guard,
+manifest-builder guard, header sniff + pfb_dnsbl_is_abp_header()); the `php -l` /
+PHPUnit outcome; `python -m pytest` pass count; any edge case or deviation from
+the plan; go-ahead for Phase 3.
