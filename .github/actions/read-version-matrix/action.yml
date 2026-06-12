@@ -1,9 +1,11 @@
 name: Read version matrix
 description: >
   Read supported-versions.json from the ci-metadata orphan ref and emit
-  two workflow output matrices: the BUILD matrix (all entries with their
-  (freebsd_version, php_version) pair) and the CI matrix (ci:true CE
-  entries only). Pure read — no writes anywhere.
+  the workflow output matrices: the BUILD matrix (all entries with their
+  (freebsd_version, php_version) pair), the CI matrix (ci:true CE entries
+  only), and the derived test matrices python_versions / php_versions
+  (the distinct, supported-only python + php versions test.yml fans out
+  over). Pure read — no writes anywhere.
 
 inputs:
   ref:
@@ -47,6 +49,17 @@ outputs:
       output (e.g. ["CE"] or ["CE","Plus"]). Useful for downstream jobs
       that need to know which variants are present.
     value: ${{ steps.read.outputs.variant }}
+  python_versions:
+    description: >
+      JSON array of the distinct python versions derived from each entry's
+      py_flavor (py311 => "3.11"), sorted + deduped. test.yml's pytest
+      matrix — supported-only (only the pythons the matrix ships).
+    value: ${{ steps.read.outputs.python_versions }}
+  php_versions:
+    description: >
+      JSON array of the distinct php_version values, sorted + deduped.
+      test.yml's PHP-jobs matrix — supported-only.
+    value: ${{ steps.read.outputs.php_versions }}
 
 runs:
   using: composite
