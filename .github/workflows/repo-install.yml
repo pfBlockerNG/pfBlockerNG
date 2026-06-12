@@ -70,15 +70,22 @@ jobs:
           # out unvalidated, since the anchor only advances when a run actually
           # succeeded. (A skip-run also "succeeds", but harmlessly — it only happens
           # when nothing changed.) No prior success (first run) -> run unconditionally.
+          # Fail-open: any gh hiccup (a transient API error, a future CLI change like the
+          # 2026-06 base-repo regression) yields an empty value, which the next check
+          # treats as "run" — a skip-optimisation gate must never be the thing that reds
+          # the nightly.
           since="$(gh run list --workflow=repo-install.yml --branch="${{ github.ref_name }}" \
-                     --status=success --limit 1 --json createdAt --jq '.[0].createdAt // ""')"
+                     --status=success --limit 1 --json createdAt --jq '.[0].createdAt // ""' 2>/dev/null || true)"
           if [ -z "$since" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "No prior successful run — running (bootstrap)."
+            echo "No prior successful run (or gh unavailable) — running."
             exit 0
           fi
-          n="$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.ref_name }}&since=${since}" --jq 'length')"
-          if [ "${n:-0}" -gt 0 ]; then
+          n="$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.ref_name }}&since=${since}" --jq 'length' 2>/dev/null || true)"
+          if [ -z "$n" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not count commits since ${since} (gh api failed) — running to be safe."
+          elif [ "$n" -gt 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "${n} commit(s) to ${{ github.ref_name }} since the last successful run (${since}) — running."
           else
