@@ -56,6 +56,18 @@ on:
         description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). Used for CE only; a non-CE (Plus) image takes its license/NDI-keyed MAC from the SMOKE_PLUS_MAC secret, never this input."
         required: false
         default: "BC:24:11:37:9C:AC"
+      abi:
+        description: "Target ABI for the .pkg the smoke leg installs — MUST match the image's pfSense base (CE 2.8 = FreeBSD:15:amd64; Plus 26.03 = FreeBSD:16:amd64). pkg add refuses a cross-major-ABI .pkg. The fan-out passes FreeBSD:<matrix.freebsd_major>:amd64."
+        required: false
+        default: "FreeBSD:15:amd64"
+      php_version:
+        description: "PHP version for the .pkg's dep names (CE 2.8 = 8.3; Plus 26.03 = 8.5). The fan-out passes matrix.php_version."
+        required: false
+        default: "8.3"
+      py_flavor:
+        description: "Python flavor for the .pkg's dep names (CE/Plus = py311). The fan-out passes matrix.py_flavor."
+        required: false
+        default: "py311"
       pytest_marker:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
@@ -86,6 +98,21 @@ on:
         required: false
         type: string
         default: "BC:24:11:37:9C:AC"
+      abi:
+        description: "Target ABI for the .pkg the smoke leg installs — MUST match the image's pfSense base (CE 2.8 = FreeBSD:15:amd64; Plus 26.03 = FreeBSD:16:amd64). pkg add refuses a cross-major-ABI .pkg. The fan-out passes FreeBSD:<matrix.freebsd_major>:amd64."
+        required: false
+        type: string
+        default: "FreeBSD:15:amd64"
+      php_version:
+        description: "PHP version for the .pkg's dep names (CE 2.8 = 8.3; Plus 26.03 = 8.5). The fan-out passes matrix.php_version."
+        required: false
+        type: string
+        default: "8.3"
+      py_flavor:
+        description: "Python flavor for the .pkg's dep names (CE/Plus = py311). The fan-out passes matrix.py_flavor."
+        required: false
+        type: string
+        default: "py311"
       pytest_marker:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
@@ -117,7 +144,17 @@ jobs:
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-    # abi/py_flavor/php_version default to CE 2.8 (FreeBSD:15:amd64 / py311 / 8.3).
+      # Build a .pkg whose ABI + dep names match THIS leg's image. A bare dispatch
+      # keeps the CE 2.8 defaults (FreeBSD:15:amd64 / 8.3 / py311) — byte-identical
+      # to before; the fan-out passes per-leg values so the Plus leg gets a
+      # FreeBSD:16 / php85 .pkg (a FreeBSD:15 .pkg is refused on the Plus base).
+      abi: ${{ inputs.abi }}
+      php_version: ${{ inputs.php_version }}
+      py_flavor: ${{ inputs.py_flavor }}
+      # Per-leg artifact name: the fan-out builds a CE and a Plus .pkg in ONE run,
+      # so a shared name would collide / cross-feed. Keying on image_name keeps each
+      # leg's artifact distinct (and the download below follows build-pkg.outputs.artifact).
+      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)

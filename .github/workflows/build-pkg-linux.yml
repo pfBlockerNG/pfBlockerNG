@@ -54,6 +54,10 @@ on:
         description: "FreeBSD-ports branch"
         required: false
         default: "pfblockerng/use-github"
+      artifact_name:
+        description: "Name of the uploaded .pkg artifact. Override to keep per-leg builds distinct in one run (the smoke fan-out builds a CE + a Plus .pkg in the same workflow run)."
+        required: false
+        default: "pfBlockerNG-pkg"
   workflow_call:
     inputs:
       channel:
@@ -84,10 +88,14 @@ on:
         required: false
         type: string
         default: "pfblockerng/use-github"
+      artifact_name:
+        required: false
+        type: string
+        default: "pfBlockerNG-pkg"
     outputs:
       artifact:
         description: "Name of the uploaded package artifact"
-        value: "pfBlockerNG-pkg"
+        value: ${{ inputs.artifact_name }}
 
 permissions:
   contents: read
@@ -146,7 +154,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-pkg
+          name: ${{ inputs.artifact_name }}
           path: out/*.pkg
           if-no-files-found: error
           retention-days: 7

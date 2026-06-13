@@ -110,12 +110,16 @@ jobs:
   # `fail-fast: false` ensures EVERY leg runs to completion regardless of
   # whether another leg has already failed.
   #
-  # IMAGE REF RESOLUTION:
+  # IMAGE REF RESOLUTION + PER-LEG .pkg ABI:
   # Each CI matrix entry carries pfsense_version (the GHCR floating tag, e.g. "2.8"
-  # / "26.03"), image_name (e.g. "pfsense-ce" / "pfsense-plus"), and mac. We pass
-  # all three to smoke.yml: it composes the GHCR ref from the SMOKE_IMAGE_REPO repo
-  # variable + the image_name input + the pfsense_version tag (each input overriding
-  # its repo-variable default), and exports mac as SMOKE_VM_MAC for the boot.
+  # / "26.03"), image_name (e.g. "pfsense-ce" / "pfsense-plus"), mac, and the build
+  # target (freebsd_major, php_version, py_flavor). We pass them all to smoke.yml: it
+  # composes the GHCR ref from the SMOKE_IMAGE_REPO repo variable + the image_name
+  # input + the pfsense_version tag (each input overriding its repo-variable default),
+  # exports mac as SMOKE_VM_MAC for the boot, AND builds the leg's .pkg for the
+  # matching ABI (FreeBSD:<major>:amd64) + dep flavors. The ABI step is essential:
+  # pkg add refuses a cross-major .pkg, so a CE FreeBSD:15 .pkg cannot install on the
+  # Plus FreeBSD:16 base — each leg must build its own ABI-matched package.
   smoke:
     name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }})
     needs: prepare
@@ -133,6 +137,12 @@ jobs:
       pfsense_version: ${{ matrix.pfsense_version }}
       image_name: ${{ matrix.image_name }}
       mac: ${{ matrix.mac }}
+      # Per-leg .pkg target so the built package matches the image's pfSense base:
+      # the ABI tag is keyed on the matrix freebsd_major (CE=15, Plus=16) — pkg add
+      # refuses a cross-major-ABI .pkg — and the dep names track php_version/py_flavor.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────
