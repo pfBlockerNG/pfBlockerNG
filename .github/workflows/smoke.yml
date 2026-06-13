@@ -341,7 +341,7 @@ jobs:
           mkdir -p out-nightly
           python3 scripts/build-pkg-portable.py \
             --ports "${{ runner.temp }}/ports-nightly" --channel nightly \
-            --local-src . --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 \
+            --local-src . --abi ${{ inputs.abi }} --py-flavor ${{ inputs.py_flavor }} --php ${{ inputs.php_version }} \
             --pkgversion 3.2.16.20260606.2 --annotate commit=${{ github.sha }} \
             --out out-nightly
           echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"
