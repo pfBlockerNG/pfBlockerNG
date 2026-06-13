@@ -102,8 +102,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      freebsd_version: ${{ steps.lookup.outputs.freebsd_version }}
+      freebsd_major: ${{ steps.lookup.outputs.freebsd_major }}
       php_version: ${{ steps.lookup.outputs.php_version }}
+      py_flavor: ${{ steps.lookup.outputs.py_flavor }}
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)
         uses: actions/checkout@v6
@@ -134,13 +135,16 @@ jobs:
           fi
 
           FREEBSD_VERSION="$(printf '%s' "$MATCH" | jq -r '.freebsd_version')"
+          FREEBSD_MAJOR="$(printf '%s' "$MATCH" | jq -r '.freebsd_major')"
           PHP_VERSION="$(printf '%s' "$MATCH" | jq -r '.php_version')"
+          PY_FLAVOR="$(printf '%s' "$MATCH" | jq -r '.py_flavor')"
           {
-            printf 'freebsd_version=%s\n' "$FREEBSD_VERSION"
+            printf 'freebsd_major=%s\n' "$FREEBSD_MAJOR"
             printf 'php_version=%s\n' "$PHP_VERSION"
+            printf 'py_flavor=%s\n' "$PY_FLAVOR"
           } >> "$GITHUB_OUTPUT"
-          printf 'CE %s -> FreeBSD %s, PHP %s (from ci-metadata matrix)\n' \
-            "$CE_VERSION" "$FREEBSD_VERSION" "$PHP_VERSION"
+          printf 'CE %s -> FreeBSD %s (major %s), PHP %s, %s (from ci-metadata matrix)\n' \
+            "$CE_VERSION" "$FREEBSD_VERSION" "$FREEBSD_MAJOR" "$PHP_VERSION" "$PY_FLAVOR"
 
   # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
   publish-image:
@@ -168,7 +172,7 @@ jobs:
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
         # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. The
-        # canonical fix (same as build-pkg.yml / smoke-spike.yml): a udev rule
+        # canonical fix (same as smoke.yml's KVM jobs): a udev rule
         # making /dev/kvm world-RW, applied in-job.
         run: |
           set -eu
@@ -259,17 +263,20 @@ jobs:
 
   # ── 2. Build the branch .pkg (for the verify round-trip) ─────────────────
   # Verification installs the branch-under-test onto the freshly published image
-  # exactly as the smoke spike does, so it needs the .pkg.
+  # exactly as the smoke spike does, so it needs the .pkg. Built by the portable
+  # Linux builder (the sole .pkg builder; pfBlockerNG is NO_BUILD so it reproduces
+  # `make package` and pkg add checks dep PRESENCE, not version).
   build-pkg:
-    name: Build branch .pkg (FreeBSD)
+    name: Build branch .pkg (portable Linux)
     needs: [resolve-version, publish-image]
-    uses: ./.github/workflows/build-pkg.yml
+    uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-      # Pass the CE-version-derived base EXPLICITLY (issue #22) — never rely on
-      # build-pkg.yml's defaults, which match CE 2.8.1 only.
-      freebsd_version: ${{ needs.resolve-version.outputs.freebsd_version }}
+      # Pass the CE-version-derived target EXPLICITLY (issue #22) — never rely on
+      # the builder's defaults, which match the min CE only.
+      abi: FreeBSD:${{ needs.resolve-version.outputs.freebsd_major }}:amd64
       php_version: ${{ needs.resolve-version.outputs.php_version }}
+      py_flavor: ${{ needs.resolve-version.outputs.py_flavor }}
 
   # ── 3. Verify the published image passes the Phase-1 round-trip ──────────
   verify-image:

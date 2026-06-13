@@ -313,7 +313,7 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     ``pkg add`` registers the package in pkg's DB, resolves RUN_DEPENDS from the
     repos, and runs POST-INSTALL (menus, services, Unbound wiring) — fidelity
     the rsync overlay (``deploy.sh``) does not give. The .pkg is produced by the
-    FreeBSD build job (build-pkg.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
+    portable Linux build job (build-pkg-linux.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
     install-pkg.sh polls ``unbound-control status`` after POST-INSTALL, so on
     return Unbound is ready.
     """
