@@ -55,6 +55,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .conftest import mask_page_identity
+
 # Tier-B dep: guard the import so collecting this module without Playwright
 # installed (this dev venv, or any host that skips the browser tier) does not
 # hard-error. Everything below references `expect` from the imported module.
@@ -104,7 +106,12 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
 
 
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
-    """Write a full-page screenshot artifact ``<screenshot_dir>/<name>.png``."""
+    """Write a full-page screenshot artifact ``<screenshot_dir>/<name>.png``.
+
+    Value-redacts the Plus VM identity from the DOM first (ADR-24 ``mask_page_identity``);
+    a strict no-op on a CE leg (empty redaction set), so CE shots are unchanged.
+    """
+    mask_page_identity(page)
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
 
 
