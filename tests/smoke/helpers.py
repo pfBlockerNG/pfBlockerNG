@@ -47,7 +47,7 @@ import shlex
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -2317,6 +2317,91 @@ def sensitive_tag_sed_program() -> str:
     return "s#(<[a-z0-9_:-]*(" + _SENSITIVE_TAG_ALTERNATION + ")s?>)[^<]*#\\1" + REDACTED + "#g"
 
 
+# --------------------------------------------------------------------------- #
+# ADR-24 — value-based redaction of the pfSense Plus secret VM identity
+# --------------------------------------------------------------------------- #
+# The Plus source-VM MAC + SMBIOS uuid (and, if supplied, the Netgate Device ID)
+# are LICENSE/NDI-keyed secrets — they come from the SMOKE_PLUS_MAC /
+# SMOKE_PLUS_SMBIOS_UUID (/ SMOKE_PLUS_NDI) GitHub secrets, NEVER the public
+# ci-metadata matrix. Booting the licensed Plus image in CI puts those values into
+# the diagnostics bundle (the MAC lands in ifconfig.txt, the uuid in dmesg.txt,
+# both can surface in /var/log), so a live Plus run would otherwise LEAK them in an
+# uploaded artifact. The set is supplied newline-/comma-joined via
+# SMOKE_REDACT_VALUES (smoke.yml builds it for the Plus leg only) plus the live
+# in-guest serial; a CE leg sets it empty -> the parsed set is empty -> every
+# redactor below is a strict no-op and the CE bundle stays byte-identical.
+
+# Generic SMBIOS placeholders that are NOT secrets — `kenv smbios.system.serial`
+# returns one of these on hardware/VMs without a real serial. Redacting them would
+# scrub harmless ubiquitous strings out of the logs (and could even no-op-mangle
+# unrelated text), so they are dropped from the redaction set.
+_SMBIOS_PLACEHOLDERS = frozenset(
+    {
+        "not specified",
+        "to be filled by o.e.m.",
+        "0",
+        "none",
+        "default string",
+    }
+)
+
+
+def _sed_escape_literal(value: str) -> str:
+    """Escape ``value`` so it is safe as the PATTERN of a ``sed`` BRE ``s###``
+    substitution (the in-guest/runner shell redactor).
+
+    The substitution uses ``#`` as the delimiter and a constant replacement
+    (``REDACTED``), so only the PATTERN side needs escaping. In a POSIX BRE the
+    active metacharacters are ``\\ . * [ ] ^ $`` (``^``/``$`` only as anchors, but
+    escaping them unconditionally is safe and simpler); the chosen delimiter ``#``
+    must also be escaped so a value containing it cannot terminate the pattern.
+    Backslash is escaped FIRST so the escapes we add are not themselves re-escaped.
+    """
+    out = value.replace("\\", "\\\\")
+    for ch in (".", "*", "[", "]", "^", "$", "#"):
+        out = out.replace(ch, "\\" + ch)
+    return out
+
+
+def redact_values(text: str, values: Iterable[str]) -> str:
+    """Replace every non-empty ``value`` (matched LITERALLY, not as a regex) in
+    ``text`` with ``REDACTED``.
+
+    Pure Python — pinned in the unit suite against the shell ``sed`` redactor
+    (:func:`_sed_escape_literal` parity). Empty / whitespace-only values are ignored
+    (an empty needle would otherwise match everywhere). With an empty ``values`` this
+    is the identity function — the load-bearing CE no-op.
+    """
+    out = text
+    for value in values:
+        if value and value.strip():
+            out = out.replace(value, REDACTED)
+    return out
+
+
+def parse_redact_values(raw: str | None) -> list[str]:
+    """Parse ``SMOKE_REDACT_VALUES`` into the de-duplicated literal redaction set.
+
+    The raw env value is newline- and/or comma-separated. Each token is stripped;
+    empties and obviously-generic SMBIOS placeholders (``Not Specified``,
+    ``To Be Filled By O.E.M.``, ``0``, ``None``, ``Default string``,
+    case-insensitive) are dropped — they are not secrets and redacting them would
+    mangle unrelated diagnostics. ``None`` / empty -> ``[]`` (the CE no-op).
+    """
+    if not raw:
+        return []
+    seen: set[str] = set()
+    values: list[str] = []
+    for token in raw.replace(",", "\n").split("\n"):
+        value = token.strip()
+        if not value or value.lower() in _SMBIOS_PLACEHOLDERS:
+            continue
+        if value not in seen:
+            seen.add(value)
+            values.append(value)
+    return values
+
+
 def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeout: float = 240.0) -> None:
     """Tar a COMPREHENSIVE pfSense-GUEST snapshot and pull it to ``dest_dir/`` on
     the runner, for the workflow to upload as an artifact.
@@ -2334,6 +2419,12 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
     cert private keys, authorized keys redacted before it leaves the box).
     """
     remote_tar = "/tmp/pfb_smoke_diag.tgz"
+    # ADR-24: value-based redaction of the Plus secret VM identity. Active IFF
+    # SMOKE_REDACT_VALUES parses to a non-empty set; CE legs (no secret) -> empty
+    # -> redaction is a strict no-op and the emitted script below is byte-identical
+    # to before (the CE bundle is unchanged).
+    redact_values_set = parse_redact_values(os.environ.get("SMOKE_REDACT_VALUES"))
+
     # config.xml secret scrub. The explicit credential substitutions
     # (bcrypt/prv/authorizedkeys/tls_certificate) stay belt-and-suspenders — they are
     # NOT name-matched by the sensitive-tag pass. ADR-24: the Actuator-style
@@ -2347,10 +2438,62 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         '/conf/config.xml > "$D/config.scrubbed.xml" 2>/dev/null; '
     )
 
+    # /var/log: tarred directly when value-redaction is OFF; when ON it is STAGED
+    # (cp -a) so the per-bundle redaction pass below can scrub the log text in place
+    # before the stage is tarred — the secret MAC/uuid can surface in /var/log too.
+    var_log_capture = 'tar czf "$D/var_log.tgz" -C /var log 2>/dev/null; '
+
+    # Value-redaction pass (Plus only). The MAC lives in ifconfig.txt, the SMBIOS
+    # uuid in dmesg.txt, and either can land in the staged /var/log — so the WHOLE
+    # bundle (config.scrubbed.xml, the var_log stage, ifconfig/dmesg/ps/sockstat/
+    # netstat, the unbound *.conf copies, …) is scrubbed, not just config + logs.
+    # A redact.sed program (one literal s###REDACTED### per maintainer value, BRE-
+    # escaped) is emitted once, the live in-guest serial appended (escaped the same
+    # way), then run over every TEXT file in $D (grep -Iq . detects text).
+    build_redact_sed = ""
+    redact_bundle = ""
+    if redact_values_set:
+        sed_prog = "".join(f"s#{_sed_escape_literal(v)}#{REDACTED}#g;" for v in redact_values_set)
+        # In-guest BRE-escape of the live serial — SAME metachar set + order as
+        # _sed_escape_literal (`\` first, then `. * [ ] ^ $ #`), one `-e` per
+        # metachar (NOT a bracket-class: a class like `[\.*[]^$#]` closes early at
+        # the first `]` and escapes nothing) — so the shell and Python redactors
+        # agree (pinned by the parity test).
+        serial_esc = (
+            "sed -e 's/\\\\/\\\\\\\\/g' -e 's/\\./\\\\./g' -e 's/\\*/\\\\*/g' "
+            "-e 's/\\[/\\\\[/g' -e 's/\\]/\\\\]/g' -e 's/\\^/\\\\^/g' "
+            "-e 's/\\$/\\\\$/g' -e 's/#/\\\\#/g'"
+        )
+        build_redact_sed = (
+            f"printf '%s' {shlex.quote(sed_prog)} > \"$D/redact.sed\"; "
+            "S=$(kenv -q smbios.system.serial 2>/dev/null); "
+            # Drop generic SMBIOS placeholders case-insensitively (mirror parse_redact_values).
+            "SL=$(printf '%s' \"$S\" | tr '[:upper:]' '[:lower:]'); "
+            "case \"$SL\" in 'not specified'|'to be filled by o.e.m.'|'0'|'none'|'default string'|'') S='' ;; esac; "
+            'if [ -n "$S" ]; then '
+            f"ES=$(printf '%s' \"$S\" | {serial_esc}); "
+            'printf \'s#%s#REDACTED#g;\' "$ES" >> "$D/redact.sed"; '
+            "fi; "
+        )
+        var_log_capture = 'cp -a /var/log "$D/var_log_stage" 2>/dev/null; '
+        # Run AFTER every file is collected (so it also catches the var_log stage,
+        # ifconfig.txt, dmesg.txt, the unbound confs, …) and BEFORE the final tar.
+        # redact.sed itself is removed so the program (which embeds the literals) is
+        # never shipped in the bundle. Then the staged /var/log is tarred + dropped.
+        redact_bundle = (
+            'find "$D" -type f ! -name redact.sed 2>/dev/null | while IFS= read -r f; do '
+            'LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i \'\' -f "$D/redact.sed" "$f" 2>/dev/null; '
+            "done; "
+            'rm -f "$D/redact.sed" 2>/dev/null; '
+            'tar czf "$D/var_log.tgz" -C "$D" var_log_stage 2>/dev/null; '
+            'rm -rf "$D/var_log_stage" 2>/dev/null; '
+        )
+
     script = (
         'set +e; D=/tmp/pfb_smoke_diag; rm -rf "$D"; mkdir -p "$D/unbound"; '
-        'tar czf "$D/var_log.tgz" -C /var log 2>/dev/null; '
-        '/sbin/dmesg > "$D/dmesg.txt" 2>&1; cp /var/run/dmesg.boot "$D/dmesg.boot" 2>/dev/null; '
+        + build_redact_sed
+        + var_log_capture
+        + '/sbin/dmesg > "$D/dmesg.txt" 2>&1; cp /var/run/dmesg.boot "$D/dmesg.boot" 2>/dev/null; '
         '/sbin/pfctl -sa > "$D/pfctl_sa.txt" 2>&1; '
         '/sbin/ifconfig -a > "$D/ifconfig.txt" 2>&1; '
         '/usr/bin/sockstat > "$D/sockstat.txt" 2>&1; /usr/bin/netstat -rn > "$D/netstat_rn.txt" 2>&1; '
@@ -2363,6 +2506,9 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         '/bin/ps auxww > "$D/ps.txt" 2>&1; '
         # Scrub secrets from config.xml BEFORE it leaves the box.
         + config_scrub
+        # ADR-24: value-redact the Plus secret identity across the WHOLE bundle
+        # (no-op for CE — redact_bundle is empty), then tar.
+        + redact_bundle
         + f"tar czf {remote_tar} -C /tmp pfb_smoke_diag 2>/dev/null; true"
     )
     try:

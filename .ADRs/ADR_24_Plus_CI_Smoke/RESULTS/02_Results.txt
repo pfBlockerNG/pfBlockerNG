@@ -39,7 +39,9 @@ WHAT CHANGED
    c. test_ci_matrix_entries_default_image_name_and_mac  — CE entry omitting the
       fields resolves image_name=pfsense-ce, mac=BC:24:11:37:9C:AC. RED today.
    d. test_ci_matrix_entries_pass_through_explicit_image_name_and_mac — explicit
-      pfsense-plus / REDACTED_PLUS_MAC emitted verbatim. RED today.
+      pfsense-plus / a fake documentation MAC emitted verbatim. RED today.
+      (ADR-24 step 3 superseded the real Plus MAC out of the fixture: the Plus
+      identity is now a secret, never the matrix — the test uses a fake doc MAC.)
    e. test_build_and_test_matrices_unchanged_by_new_fields — BUILD matrix is the
       verbatim versions array (no image_name/mac injected on the CE build entry),
       python_versions==["3.11"], php_versions==["8.3","8.5"] (§2.2.6). Pin.

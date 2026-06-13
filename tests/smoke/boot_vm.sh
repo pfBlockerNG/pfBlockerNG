@@ -22,6 +22,11 @@
 #     image MUST set SMOKE_VM_MAC to its OWN source-VM MAC: the Plus license/NDI
 #     registration is keyed to it, so the CE pin would deregister/reassign it
 #     (see ADR-24 and scripts/README.md § "pfSense Plus images").
+#   - SMBIOS type-1 uuid pinned, per-image. The Plus Netgate Device ID (NDI) is
+#     derived from the source VM's MAC + this SMBIOS uuid, so the uuid is as
+#     license-keyed as the MAC. CE defaults to the public CE source-VM uuid;
+#     a Plus image MUST set SMOKE_VM_SMBIOS_UUID to its OWN source-VM uuid (held
+#     in a secret, NOT the public ci-metadata matrix — license/NDI-keyed).
 #   - VirtIO-SCSI disk (guest sees da0)
 #   - machine type pc (i440fx; Proxmox pc+pve0), -cpu host, 2 vCPU, 4 GB RAM
 #
@@ -38,9 +43,11 @@ QEMU=/usr/bin/qemu-system-x86_64
 QEMU_IMG=/usr/bin/qemu-img
 
 # Source-VM hardware profile (mirror — do not change without re-baking image).
-# MAC is per-image: CE pin by default, SMOKE_VM_MAC overrides (Plus MUST set it).
+# MAC + SMBIOS uuid are per-image: CE pins by default, SMOKE_VM_MAC /
+# SMOKE_VM_SMBIOS_UUID override (Plus MUST set both — its NDI is derived from
+# MAC + uuid, so both are license-keyed and come from secrets, not the matrix).
 VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
-VM_SMBIOS_UUID="58fd7964-c40c-4f47-bf02-3fdad18f8b00"
+VM_SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-58fd7964-c40c-4f47-bf02-3fdad18f8b00}"
 VM_SMP="2,sockets=1,cores=2"
 VM_MEM="4096"
 

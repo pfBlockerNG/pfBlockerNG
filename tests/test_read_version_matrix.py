@@ -53,6 +53,11 @@ def _clean_git_env() -> dict[str, str]:
 
 CE_DEFAULT_IMAGE_NAME = "pfsense-ce"
 CE_DEFAULT_MAC = "BC:24:11:37:9C:AC"
+# A clearly-fake DOCUMENTATION MAC for the explicit-pass-through fixture. The real
+# Plus source-VM MAC is a license/NDI-keyed SECRET (SMOKE_PLUS_MAC) and must NEVER
+# appear in the repo (ADR-24); this test only proves the reader emits an explicit
+# `mac` field verbatim, so any non-default value exercises that branch.
+FAKE_DOC_MAC = "02:00:00:00:00:01"
 
 # Skip the whole module if git or jq is missing — the script hard-requires both,
 # and a missing tool is an environment gap, not a behaviour regression.
@@ -219,13 +224,13 @@ def test_ci_matrix_entries_pass_through_explicit_image_name_and_mac(tmp_path: Pa
     """Explicit image_name/mac in the JSON are emitted verbatim — no default override."""
     repo = _make_matrix_ref(
         tmp_path,
-        [_plus_entry(ci=True, image_name="pfsense-plus", mac="REDACTED_PLUS_MAC")],
+        [_plus_entry(ci=True, image_name="pfsense-plus", mac=FAKE_DOC_MAC)],
     )
     ci = _ci_matrix(repo)
     assert len(ci) == 1
     entry = ci[0]
     assert entry["image_name"] == "pfsense-plus"
-    assert entry["mac"] == "REDACTED_PLUS_MAC"
+    assert entry["mac"] == FAKE_DOC_MAC
 
 
 # --------------------------------------------------------------------------- #
@@ -249,7 +254,7 @@ def test_ci_matrix_empty_string_image_name_and_mac_normalize_to_defaults(tmp_pat
 # --------------------------------------------------------------------------- #
 def test_build_and_test_matrices_unchanged_by_new_fields(tmp_path: Path) -> None:
     """The new CI-matrix fields do not perturb build_matrix / python_versions / php_versions."""
-    versions = [_ce_entry(), _plus_entry(ci=True, image_name="pfsense-plus", mac="REDACTED_PLUS_MAC")]
+    versions = [_ce_entry(), _plus_entry(ci=True, image_name="pfsense-plus", mac=FAKE_DOC_MAC)]
     repo = _make_matrix_ref(tmp_path, versions)
 
     build = _build_matrix(repo)

@@ -28,8 +28,9 @@ ACTION PLAN (ordered)
    CE-only).
 2. scripts/README.md: update the ci_matrix description + lifecycle notes; in the
    Plus-images section, replace "Plus stays out of CI regardless" with the new
-   state (CI pulls the private image; MAC REDACTED_PLUS_MAC rides the matrix
-   entry; manual refresh).
+   state (CI pulls the private image; the VM identity — MAC + SMBIOS uuid — comes
+   from the SMOKE_PLUS_MAC/SMOKE_PLUS_SMBIOS_UUID secrets, never the matrix;
+   manual refresh).
 3. Sweep for stragglers:
        grep -rn "never Plus\|Never Plus\|ci: false" CLAUDE.md scripts/ docs/ README.md
    Update what describes CI reality; leave historical ADR texts (ADR-04/09/20
