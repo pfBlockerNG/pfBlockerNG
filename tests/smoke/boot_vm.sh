@@ -17,7 +17,11 @@
 # published qcow2 boots without pfSense re-detecting hardware and dropping
 # to the interface-reassignment console prompt:
 #   - single virtio-net-pci NIC, MAC pinned to BC:24:11:37:9C:AC
-#     (the source VM's MAC; a MAC is not sensitive, so it is hardcoded)
+#     (the CE source VM's MAC; a MAC is not sensitive). The MAC is per-image
+#     and defaults to the CE pin; override it with SMOKE_VM_MAC. A pfSense Plus
+#     image MUST set SMOKE_VM_MAC to its OWN source-VM MAC: the Plus license/NDI
+#     registration is keyed to it, so the CE pin would deregister/reassign it
+#     (see ADR-24 and scripts/README.md § "pfSense Plus images").
 #   - VirtIO-SCSI disk (guest sees da0)
 #   - machine type pc (i440fx; Proxmox pc+pve0), -cpu host, 2 vCPU, 4 GB RAM
 #
@@ -34,7 +38,8 @@ QEMU=/usr/bin/qemu-system-x86_64
 QEMU_IMG=/usr/bin/qemu-img
 
 # Source-VM hardware profile (mirror — do not change without re-baking image).
-VM_MAC="BC:24:11:37:9C:AC"
+# MAC is per-image: CE pin by default, SMOKE_VM_MAC overrides (Plus MUST set it).
+VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
 VM_SMBIOS_UUID="58fd7964-c40c-4f47-bf02-3fdad18f8b00"
 VM_SMP="2,sockets=1,cores=2"
 VM_MEM="4096"
