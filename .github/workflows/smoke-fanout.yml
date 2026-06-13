@@ -68,9 +68,11 @@ jobs:
         uses: ./.github/actions/read-version-matrix
 
       - name: Log CI matrix
+        env:
+          CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
         run: |
           echo "=== CI matrix (ci:true entries, CE + Plus — fed to smoke strategy.matrix) ==="
-          printf '%s\n' '${{ steps.read.outputs.ci_matrix }}' | jq .
+          printf '%s\n' "$CI_MATRIX" | jq .
 
       - name: Count legs + assert every leg is ci:true
         id: count

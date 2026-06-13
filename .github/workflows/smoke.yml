@@ -309,6 +309,22 @@ jobs:
             --out out-nightly
           echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"
 
+      # ADR-24 §2.2.4: a non-CE image (Plus) is license/NDI-keyed to its OWN
+      # source-VM MAC and must NEVER boot with the CE pin. Fail fast if a caller
+      # selects a non-CE image_name but leaves mac at the CE default — booting
+      # Plus with the wrong VM identity would invalidate its registration.
+      - name: Validate image/MAC contract
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_MAC: ${{ inputs.mac }}
+        run: |
+          set -eu
+          if [ "${INPUT_IMAGE_NAME:-pfsense-ce}" != "pfsense-ce" ] && \
+             [ "${INPUT_MAC:-}" = "BC:24:11:37:9C:AC" ]; then
+            echo "::error::Image '${INPUT_IMAGE_NAME}' must boot with its own source-VM MAC (license/NDI-keyed); inputs.mac is still the CE pin. Set inputs.mac explicitly."
+            exit 1
+          fi
+
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
       # assertions (helpers.block_egress, gated by SMOKE_BLOCK_EGRESS=1 below;
