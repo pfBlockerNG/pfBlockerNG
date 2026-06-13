@@ -547,11 +547,14 @@ When the min CE version changes, also:
    **`ci-metadata` orphan branch** via a PR against `ci-metadata`. Single source of truth for
    supported versions + their `(freebsd_version, php_version)` build pair; workflows read it
    at runtime via `scripts/read-version-matrix.sh` + `.github/actions/read-version-matrix/`
-   (see `scripts/README.md`). Build vs CI split: CE gets `.pkg` builds + live-VM smoke
-   (`ci: true`); Plus gets builds only (`ci: false`, no licensed CI image). Adding the entry +
-   letting **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
-   `build-pkg-linux.yml`, `image-refresh.yml`, `smoke-fanout.yml` automatically — **no
-   workflow YAML edit needed**.
+   (see `scripts/README.md`). Build + CI: every `ci: true` entry — **CE and Plus** (ADR-24) —
+   gets `.pkg` builds **and** live-VM smoke. Plus runs from a **PRIVATE, licensed** GHCR image
+   (`pfsense-plus`); its VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed
+   to) comes from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` (+ optional `SMOKE_PLUS_NDI`)
+   secrets — **never** the matrix — and the harness redacts it from the uploaded diagnostics.
+   Adding the entry + letting **version-tracker** (`version-tracker.yml`) run (or dispatching it)
+   triggers `build-pkg-linux.yml`, `image-refresh.yml` (CE only — Plus image refresh is manual,
+   see step 2), `smoke-fanout.yml` automatically — **no workflow YAML edit needed**.
 2. **Refresh the CE smoke image** (ADR-04 + ADR-09) — dispatch `image-refresh.yml` with
    `pfsense_version` + `freebsd_version` from the new entry. It runs
    `scripts/image-upgrade.sh --upgrade-pkgs`: pulls the current GHCR tag, conditionally
@@ -561,14 +564,17 @@ When the min CE version changes, also:
    publishes the tag only when healthy — fail-closed. A non-blocking post-publish smoke
    (`continue-on-error`) runs on a discarded overlay (informational only — authoritative
    validation is the fan-out, step 3). Manual seed via `scripts/image-publish.sh` is the
-   fallback when the gate fails. See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`. (ADR-09
+   fallback when the gate fails. **`image-refresh.yml` is CE-only** — the **Plus** image is
+   refreshed **manually** with `scripts/image-publish.sh` (re-export + push the licensed qcow2;
+   the MAC/SMBIOS uuid must stay constant — ADR-24). See `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`. (ADR-09
    supersedes ADR-04 §2's "re-baseline on a major jump": `image-refresh.yml` handles all jumps
    via upgrade-in-place; a fresh re-seed is triggered only by a gate failure. Reconciling the
    ADR-04 §2 text is a tracked follow-up.)
 3. **Run the smoke fan-out** — dispatch `smoke-fanout.yml` (no inputs; it reads the CI
-   matrix). Runs the ADR-04 suite against **all** `ci: true` CE images in parallel
-   (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if any CE leg fails. Never
-   Plus. version-tracker triggers it daily; dispatch manually to verify a new image.
+   matrix). Runs the ADR-04 suite against **all** `ci: true` entries — **CE and Plus** (ADR-24) —
+   in parallel (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if **any** leg fails.
+   version-tracker triggers it daily; dispatch manually to verify a new image. (The Plus image
+   itself is refreshed **manually** — `image-refresh.yml` is CE-only — see step 2.)
 
 ---
 

@@ -17,7 +17,8 @@ The `read-version-matrix.sh` reader is also exposed as a composite GH Actions ac
 (`.github/actions/read-version-matrix/`) that emits these outputs:
 
 - `build_matrix` — all entries → one `.pkg` per distinct FreeBSD major.
-- `ci_matrix` — `ci: true` CE entries → the smoke-fan-out set, never Plus.
+- `ci_matrix` — every `ci: true` entry (CE **and** Plus, ADR-24) → the smoke-fan-out set,
+  each carrying its resolved `image_name` (default `pfsense-ce`) + `mac`.
 - `python_versions` — the DISTINCT python versions derived from each entry's `py_flavor`
   (`pyN` + `MM` → `N.MM`; e.g. `py311` → `3.11`, `py39` → `3.9`), sorted + deduped.
 - `php_versions` — the DISTINCT `php_version` values across the entries, sorted + deduped.
@@ -40,7 +41,7 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
   "status":          "GA",           # beta | GA
-  "ci":              true            # include in smoke CI matrix (false for Plus for now — no licensed CI image)
+  "ci":              true            # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
 }
 ```
 
@@ -51,7 +52,9 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
   the status field distinguishes beta from GA.
 - **Drop** the oldest CE entry only when the newest CE goes GA (the window is *previous
   major + current major*, transiently `+1` during a beta).
-- **Plus** entries are always `ci: false` — build-only (no licensed CI image is available).
+- **Plus** entries set `ci: true` to run the smoke fan-out from a **PRIVATE, licensed** GHCR
+  image (`pfsense-plus`, ADR-24); their VM identity comes from the `SMOKE_PLUS_*` secrets,
+  never the matrix, and is redacted from the uploaded diagnostics.
 
 **No workflow YAML change is needed when adding or dropping a version** — the
 `resolve-version` job in `build-image.yml` and every other consumer reads from
@@ -62,7 +65,7 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
 | Channel | `.pkg` build | Live-VM smoke CI |
 | --- | --- | --- |
 | CE | yes (portable Linux builder) | yes (`ci: true`) |
-| Plus | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | no (no licensed Plus image) |
+| Plus | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | yes (`ci: true`, from a private licensed image — ADR-24) |
 
 **Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
 **sole** `.pkg` builder for both CI and releases: it runs on a plain Linux runner and
@@ -95,12 +98,13 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
    the new tag to GHCR **only on gate pass** (fail-closed — a bad image is never
    published). One dispatch per `ci: true` CE entry.
 3. **`smoke-fanout.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
-   CE images in parallel (`fail-fast: false`). The **`all-smoke-passed` AND-gate** fails
-   if any single leg fails — one failed leg makes the whole gate red, no partial pass.
-   Never Plus.
+   entries — **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The
+   **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
+   whole gate red, no partial pass.
 
-The tracker dispatches steps 2 and 3 only for CE entries (`ci: true`). Plus is
-build-only: step 1 runs for Plus, steps 2–3 never do.
+The tracker dispatches step 1 (build) and step 3 (smoke) for every `ci: true` entry,
+CE and Plus. Step 2 (`image-refresh.yml`) is **CE-only** — the Plus image is refreshed
+**manually** with `scripts/image-publish.sh` (re-export + push the licensed qcow2).
 
 ### ADR-04 §2 reconciliation (flagged — not edited here)
 
@@ -235,16 +239,18 @@ Plus images publish with the same scripts, with these deltas:
   (e.g. `26.03`). Select it with `SMOKE_IMAGE_NAME=pfsense-plus` (or `--image`).
 - **Keep the GHCR package PRIVATE.** The Plus image is Netgate-licensed; verify the
   package's visibility is private after the first push and never make it public.
-  Plus stays out of CI regardless (`ci: false` in the version matrix — no licensed
-  CI image).
+  CI **pulls** this private image (never publishes it) — the smoke fan-out runs Plus
+  from it (`ci: true`, ADR-24), authenticating with the `SMOKE_GHCR_*` creds.
 - **MAC pinning (license-critical).** The qcow2 carries no MAC — the MAC lives in the
   VM/QEMU config, so publishing is unaffected — but **every boot of the Plus image
   must reuse the Plus source-VM's MAC**: pfSense matches interface assignment by MAC,
   and the Plus license/NDI registration is keyed to it too. It is NOT the CE pin
-  (`BC:24:11:37:9C:AC`, hardcoded in `tests/smoke/boot_vm.sh` and defaulted by
-  `image-upgrade.sh --mac`). Read it off the source VM (`qm config <vmid>`, the
-  `net0` line) and pass it explicitly: `image-upgrade.sh --mac <plus-mac>`;
-  `boot_vm.sh` hardcodes the CE MAC and needs parameterizing before any Plus run.
+  (`BC:24:11:37:9C:AC`, the public default of `tests/smoke/boot_vm.sh`'s `SMOKE_VM_MAC`
+  and of `image-upgrade.sh --mac`). For a manual publish/upgrade, read it off the source
+  VM (`qm config <vmid>`, the `net0` line) and pass it explicitly: `image-upgrade.sh --mac
+  <plus-mac>`. In CI it is **never** hardcoded or in the matrix — `boot_vm.sh` takes it
+  from `SMOKE_VM_MAC`, which the smoke/UI workflows set from the `SMOKE_PLUS_MAC` secret
+  (with `SMOKE_PLUS_SMBIOS_UUID`) and redact from diagnostics (ADR-24).
 - `image-publish.sh`'s artifact-type/description annotations say "CE" — cosmetic
   only; every consumer locates the layer by a `*.qcow2` glob. Pass
   `--out /tmp/pfSense-Plus-<tag>.qcow2` so the stored filename is labelled
@@ -279,8 +285,8 @@ set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
 - `NO_ARCH` would wildcard the **arch**, not the OS major — it does not make the
   package cross-major.
 - pfSense **Plus** artifacts build fine without a Plus license (you only need the
-  right FreeBSD-major build env); Plus is **build-only** — it can't be tested in CI
-  (no licensed image).
+  right FreeBSD-major build env); Plus is also **smoke-tested in CI** from a private,
+  licensed GHCR image (ADR-24).
 
 ### Support matrix → builds
 
@@ -288,7 +294,7 @@ set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
 | --- | --- | --- | --- |
 | Previous CE major (e.g. 2.7.x) | 14 | yes | yes |
 | Current CE major (e.g. 2.8.x) | 15 | yes | yes |
-| Current Plus major | 15 (today) | only if its major diverges | no (licensing) |
+| Current Plus major | 16 (today) | only if its major diverges | yes (private licensed image) |
 
-Artifacts = **one per distinct FreeBSD major**; CI = one image per CE minor, never Plus.
+Artifacts = **one per distinct FreeBSD major**; CI smoke = every `ci: true` image, CE **and** Plus.
 The scheduled version-tracking + release-automation design is its own ADR.

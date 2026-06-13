@@ -831,14 +831,16 @@ Dispatch `.github/workflows/image-refresh.yml` with `pfsense_version` and
 If the gate fails, use `scripts/image-publish.sh` to produce a fresh seed from a
 clean manual install (manual fallback — see
 [`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)).
-**CE only** (Plus is build-only; no licensed CI image). The seed and every version
+The automated image refresh (`image-refresh.yml`) is **CE-only**; the **Plus** image is
+refreshed **manually** with `scripts/image-publish.sh` (re-export + push the licensed,
+private qcow2 — the MAC/SMBIOS uuid must stay constant, ADR-24). The seed and every version
 snapshot are retained as immutable GHCR tags; the GHCR package is **private**.
 
 **Step 3 — Run the smoke fan-out.**
 Dispatch `.github/workflows/smoke-fanout.yml` (no inputs — it reads the CI matrix
-itself). The fan-out runs the ADR-04 smoke suite across **all** `ci: true` CE images
-in parallel (`fail-fast: false`). The `all-smoke-passed` AND-gate fails if any single
-leg fails — one red CE leg makes the whole gate red, no partial pass. Never Plus.
+itself). The fan-out runs the ADR-04 smoke suite across **all** `ci: true` images —
+**CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The `all-smoke-passed`
+AND-gate fails if any single leg fails — one red leg makes the whole gate red, no partial pass.
 
 ### Adding a matrix case
 

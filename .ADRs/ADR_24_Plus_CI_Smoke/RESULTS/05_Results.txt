@@ -1,0 +1,66 @@
+================================================================================
+PHASE 5 RESULTS — Docs reconciliation (Plus joins the CI smoke fan-out)
+ADR-24 · final phase · docs-only, committed directly to devel (no PR)
+================================================================================
+
+OUTCOME
+Docs now match the live two-channel CI: every `ci: true` entry (CE AND Plus)
+builds + runs the live-VM smoke fan-out; the Plus image is private/licensed,
+pulled never published; the Plus VM identity comes from the SMOKE_PLUS_* secrets
+(never the matrix) and is redacted from diagnostics; image refresh stays CE-only
+(image-refresh.yml), Plus refreshed manually via scripts/image-publish.sh.
+
+FILES TOUCHED (living docs only; .ADRs history left intact)
+- CLAUDE.md — "Updating documentation" step 1 (build+CI: CE and Plus; Plus from a
+  private licensed image, identity from SMOKE_PLUS_* secrets, redacted); step 2
+  (image-refresh.yml CE-only, Plus manual); step 3 (fan-out = all ci:true entries,
+  CE and Plus; gate fails if ANY leg fails — dropped "Never Plus").
+- scripts/README.md — ci_matrix output desc; schema `ci` comment; lifecycle "Plus"
+  bullet; Build-vs-CI table (Plus smoke cell → yes); "what happens after a matrix
+  edit" steps 2/3 + tracker note; Plus-images section (CI pulls the private image;
+  MAC pinning reworded — boot_vm.sh now takes SMOKE_VM_MAC, CI sources it from the
+  SMOKE_PLUS_MAC secret, never hardcoded/in-matrix); ABI section + support matrix
+  (Plus → smoke-tested in CI; FreeBSD major 16; "never Plus" removed).
+- CONTRIBUTING.md — image-pipeline maintainer steps: image refresh CE-only / Plus
+  manual; fan-out across all ci:true images (CE and Plus); dropped "Never Plus".
+
+The Plus MAC value is NOT written anywhere (sourced from the SMOKE_PLUS_MAC secret).
+Only the PUBLIC CE pin (BC:24:11:37:9C:AC) remains, as before.
+
+GATES
+- grep sweep (never plus | ci:false | out of CI | build-only…CI | "no licensed CI
+  image") over CLAUDE.md / scripts / docs / README.md / CONTRIBUTING.md, excluding
+  .ADRs → NONE remaining.
+- markdownlint-cli2 (full repo, 48 files) → 0 errors.
+- pre-commit hook green (ruff / pytest 1528 / mypy / markdownlint / sh -n / php -l).
+
+================================================================================
+ADR-24 DEFINITION OF DONE — roll-up (§7)
+================================================================================
+- pytest / ruff / mypy / ShellCheck → green/clean (per-phase + this phase).
+- §4.6 pre-flip pin (CE-only behaviour identical to pre-ADR): Phase 3 evidence
+  (RESULTS/03_Results.txt).
+- Fan-out CE + Plus legs green + all-smoke-passed green: smoke fan-out run
+  27479029471 — Read-matrix + CE build-pkg + Plus build-pkg + CE smoke + Plus
+  smoke + AND-gate all success (Plus leg ran the full `pytest -m smoke` suite on
+  the live FreeBSD:16 Plus VM). Web-UI fan-out run 27480496938 — all 3 tiers
+  (render/functional/browser) green on BOTH CE and Plus (9/9 jobs).
+- Plus-leg diagnostics: NDI/MAC/SMBIOS-uuid redaction active (SMOKE_PLUS_NDI set;
+  runner-side scrub step ran; console screenshots dropped for non-CE; UI shots
+  DOM-masked) — no license/NDI token in the uploaded artifacts (§4.7).
+- Matrix flip merged on ci-metadata (Plus 26.03 → ci:true, image_name pfsense-plus,
+  freebsd_major 16, php 8.5, py311); docs reconciled (this phase).
+
+ESSENTIAL FIXES SURFACED BY THE LIVE FLIP (Phase 4), landed via PR:
+- #197 — per-leg ABI-matched .pkg in the smoke fan-out: the first live flip failed
+  on the Plus leg at `pkg add` (`wrong architecture: FreeBSD:15 instead of
+  FreeBSD:16`) because one CE-ABI .pkg fed every leg. smoke.yml/smoke-fanout.yml now
+  build each leg's package for its own base (FreeBSD:<major>/php).
+- #200 — same fix for the Web-UI matrix (build-pkg matrixed by version; each ui leg
+  downloads its own pfBlockerNG-pkg-<version>).
+
+NOTES / DEVIATIONS
+- RESULTS/04_Results.txt was not written as a separate file by the Phase-4 run; the
+  live fan-out evidence is captured above (run ids verified green this session).
+- Status: ready to flip ADR-24 to Accepted on maintainer sign-off (the §7 manual
+  smoke checklist is the maintainer's to run against the live Plus appliance).
