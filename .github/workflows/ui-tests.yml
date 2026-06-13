@@ -109,8 +109,13 @@ permissions:
   packages: read
 
 jobs:
-  # Build the branch's .pkg on a plain Linux runner (same builder + artifact the
-  # smoke gate consumes). One build feeds every matrix leg.
+  # Build the branch's .pkg on a plain Linux runner (same builder the smoke gate
+  # consumes). ONE build PER ci:true leg (version/ABI), not one global build:
+  # pkg add refuses a cross-major-ABI .pkg, so a CE FreeBSD:15 package cannot
+  # install on the Plus FreeBSD:16 base — each leg needs its own ABI-matched
+  # package. The build matrix is the distinct legs (prepare.build_matrix); each
+  # leg's artifact is named pfBlockerNG-pkg-<version> and the ui leg downloads the
+  # one matching its own version.
   #
   # Gated on the nightly guard too: when `prepare` sets run=false (an idle
   # scheduled night, no commits in 24h) the `ui` legs are skipped, so building
@@ -119,10 +124,20 @@ jobs:
   build-pkg:
     needs: prepare
     if: needs.prepare.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-    # abi/py_flavor/php_version default to CE 2.8 (FreeBSD:15:amd64 / py311 / 8.3).
+      # Build the leg's .pkg for its own pfSense base (CE=FreeBSD:15/php83,
+      # Plus=FreeBSD:16/php85). A CE-only run keeps the prior defaults.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # Per-version artifact name so the CE + Plus builds in one run don't collide;
+      # the ui leg downloads pfBlockerNG-pkg-<its version>.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.version }}
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
@@ -131,6 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
+      build_matrix: ${{ steps.gen.outputs.build_matrix }}
       run: ${{ steps.gen.outputs.run }}
     steps:
       - name: Checkout
@@ -195,11 +211,19 @@ jobs:
           LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c \
             --arg v "${VERSION_INPUT:-}" \
             '[ .[] | select($v == "" or .pfsense_version == $v)
-               | {pfsense_version, image_name, channel} ]')"
+               | {pfsense_version, image_name, channel, freebsd_major, php_version, py_flavor} ]')"
           LEG_COUNT="$(printf '%s\n' "$LEGS" | jq 'length')"
           if [ "${VERSION_INPUT:-}" != "" ] && [ "$LEG_COUNT" -eq 0 ]; then
             echo "::error::version filter '${VERSION_INPUT}' matched no ci:true leg"; exit 1
           fi
+
+          # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
+          # the tier axis — the tiers for a version all install the SAME package.
+          # Each carries the build target (freebsd_major -> ABI, php_version,
+          # py_flavor) and `version` (= pfsense_version) for the artifact name.
+          BUILD_INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
+            '[ .[] | {version: .pfsense_version, image_name, freebsd_major, php_version, py_flavor} ]')"
+          printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
 
           # Cross the tier set with the legs: one matrix item per (tier × leg),
           # each carrying tier + version (= pfsense_version) + image_name + channel.
@@ -406,7 +430,9 @@ jobs:
       - name: Download the built pfBlockerNG package
         uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.build-pkg.outputs.artifact }}
+          # The per-version artifact built for THIS leg's ABI (build-pkg is matrixed
+          # by version; this leg installs the package matching its own pfSense base).
+          name: pfBlockerNG-pkg-${{ matrix.version }}
           path: pkg
 
       - name: Locate the .pkg + the pulled .qcow2
