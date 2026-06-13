@@ -1,0 +1,152 @@
+ADR-24 — Phase 2 Results
+========================
+Matrix reader: CI filter -> ci-only (any channel) + per-entry image_name/mac.
+Behaviour-preserving for the live matrix (Plus is still ci:false -> excluded).
+
+Branch: adr/24-pfsense-plus-in-the-ci-smoke
+
+WHAT CHANGED
+------------
+1. scripts/read-version-matrix.sh
+   - CI-matrix jq filter: channel no longer filters; each ci:true entry gains
+     resolved image_name + mac. New jq (the operative change):
+
+         CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+           [ .[]
+             | select(.ci == true)
+             | . + { image_name: (.image_name // "pfsense-ce"), mac: (.mac // "BC:24:11:37:9C:AC") }
+           ]')"
+
+     Old filter was: [.[] | select(.ci == true and .channel == "CE")]
+   - Header "Outputs" comment for the CI matrix rewritten: "the ci:true entries
+     (ANY channel)", documenting the image_name (default pfsense-ce) + mac
+     (default the CE pin BC:24:11:37:9C:AC) resolution and that an entry omitting
+     them keeps the CE image+MAC while a Plus entry carries its own.
+   - The empty-CI guard's skip-on-plus comment reworded for the new reality (the
+     skip still fires only for --variant plus; logic unchanged — a Plus-only
+     filtered set may legitimately be empty while live Plus is ci:false).
+   - jq is `. + {…}` MERGE: an explicit image_name/mac in the JSON wins (the //
+     default only fills a null/absent field), so explicit values pass through
+     verbatim. BUILD-matrix jq + python_versions/php_versions jq UNTOUCHED.
+
+2. tests/test_read_version_matrix.py (NEW — script-driving, subprocess, temp git
+   repo fixture; module-skips if git/jq absent)
+   Scenarios:
+   a. test_ci_matrix_excludes_plus_entry_with_ci_false   — ci:false Plus EXCLUDED
+      (§2.2.3). Passes today (regression pin).
+   b. test_ci_matrix_includes_plus_entry_with_ci_true    — ci:true Plus INCLUDED
+      (channel no longer filters). RED today.
+   c. test_ci_matrix_entries_default_image_name_and_mac  — CE entry omitting the
+      fields resolves image_name=pfsense-ce, mac=BC:24:11:37:9C:AC. RED today.
+   d. test_ci_matrix_entries_pass_through_explicit_image_name_and_mac — explicit
+      pfsense-plus / BC:24:11:9C:FE:85 emitted verbatim. RED today.
+   e. test_build_and_test_matrices_unchanged_by_new_fields — BUILD matrix is the
+      verbatim versions array (no image_name/mac injected on the CE build entry),
+      python_versions==["3.11"], php_versions==["8.3","8.5"] (§2.2.6). Pin.
+
+COMPOSITE ACTION — NO CHANGE NEEDED (and why)
+---------------------------------------------
+.github/actions/read-version-matrix/action.yml invokes the script with
+--github-output and passes ci_matrix THROUGH OPAQUELY as a heredoc-delimited JSON
+string ($GITHUB_OUTPUT). It does not enumerate or name per-entry fields — the new
+image_name/mac ride inside the same JSON blob untouched. Its `outputs.ci_matrix`
+description still says "ci:true CE entries only"; that wording reconciliation is
+Phase 5 (docs), out of scope here. No functional change required -> left untouched.
+
+RED -> GREEN EVIDENCE
+---------------------
+RED (unmodified script, new test file):
+    test_ci_matrix_excludes_plus_entry_with_ci_false              PASSED
+    test_ci_matrix_includes_plus_entry_with_ci_true               FAILED
+    test_ci_matrix_entries_default_image_name_and_mac             FAILED
+    test_ci_matrix_entries_pass_through_explicit_image_name_and_mac FAILED
+    test_build_and_test_matrices_unchanged_by_new_fields          PASSED
+    => 3 failed, 2 passed
+  Failure shapes:
+    - b: ci_matrix had channels=={"CE"} only (old `.channel=="CE"` dropped Plus).
+    - c: KeyError/assert — entry had no image_name/mac key.
+    - d: script EXITED rc=1 "CI matrix is empty — no ci:true CE entries" (the
+      Plus-only fixture's sole entry was dropped by the CE filter -> empty CI
+      matrix -> the non-empty guard fired). Proves the channel filter was the gate.
+
+GREEN (modified script):
+    all 5 PASSED.
+
+So green proves the filter/merge change caused each flip; the two pins (a, e) held
+in both states -> the ci:false exclusion and the build/test matrices are untouched.
+
+LIVE-MATRIX BEFORE/AFTER (real origin/ci-metadata, default ref)
+---------------------------------------------------------------
+`git fetch origin ci-metadata` then `sh scripts/read-version-matrix.sh --print-ci`.
+Live Plus entry is still ci:false -> excluded both before and after. The CI-matrix
+LEG SET is unchanged (the single CE 2.8 entry); AFTER additionally carries the
+resolved image_name/mac, which for CE are exactly today's CE values (§2.2.1).
+
+BEFORE (unmodified script — script stashed, real matrix):
+    [
+      {
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "active",
+        "ci": true
+      }
+    ]
+
+AFTER (modified script, real matrix):
+    [
+      {
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "active",
+        "ci": true,
+        "image_name": "pfsense-ce",
+        "mac": "BC:24:11:37:9C:AC"
+      }
+    ]
+
+Same single CE leg; the only delta is the two resolved fields holding the CE
+defaults (image pfsense-ce, CE MAC pin). No Plus leg appears because live Plus is
+ci:false — the §2.2.3 exclusion still holds. When Phase 4 flips Plus to ci:true on
+ci-metadata, this same script will then emit a second (Plus) leg with its own
+image_name/mac; today it does not.
+
+VERIFICATION GATES (all green/clean)
+------------------------------------
+- python -m pytest          -> 1487 passed
+- ruff check .              -> All checks passed!
+- ruff format --check .     -> 90 files already formatted (test file formatted)
+- mypy tests/               -> Success: no issues found in 33 source files
+- sh -n scripts/read-version-matrix.sh -> OK
+- shellcheck                -> NOT installed in this environment (reported-and-
+                               skipped; CI is the hard gate). sh -n passed.
+- git diff scope: ONLY scripts/read-version-matrix.sh + the new test file.
+  Composite action untouched. README untouched (Phase 5).
+
+CONTRACT CHECK (§2.2)
+---------------------
+- §2.2.1 CE bit-identical: the CE leg SET is unchanged; the added image_name/mac
+  resolve to the CE defaults — no composed-ref/QEMU input changes for a CE entry
+  that omits the fields. (Workflow consumption of the fields is Phase 3.)
+- §2.2.3 ci:false still excludes: scenario a + the live before/after both confirm
+  the ci:false Plus entry never enters the CI matrix.
+- §2.2.6 build matrix untouched: scenario e + the BUILD-matrix jq is byte-for-byte
+  unchanged; python_versions/php_versions jq unchanged.
+
+GO-AHEAD FOR PHASE 3
+--------------------
+Cleared. CI matrix now = all ci:true entries, each with resolved image_name/mac;
+live output's leg set unchanged. Phase 3 = smoke.yml gains image_name/mac inputs
+(ref composition + SMOKE_VM_MAC export) and smoke-fanout.yml's PLUS GUARD becomes a
+CI GUARD (ci != true only), passing matrix.image_name/matrix.mac + channel-named
+legs. No blockers from Phase 2. The composite action's ci_matrix output description
+("CE entries only") is a Phase 5 doc reconciliation, not a code gap.
