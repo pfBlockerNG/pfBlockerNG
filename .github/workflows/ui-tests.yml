@@ -30,9 +30,20 @@ name: UI tests (pfSense VM, ADR-14)
 # boot/readiness, which the smoke conftest already polls (wait_ready.sh), never
 # a fixed sleep.
 #
-# MATRIX AXIS (B1): `version` is built parametric but runs the single existing CE
-# image now. Adding a second image later is a ONE-LINE change — append to the
-# DEFAULT_VERSIONS list in the `prepare` job (and wire its image ref).
+# MATRIX AXIS (ADR-24): the version axis is now read from the ci-metadata CI
+# matrix (read-version-matrix action — the SAME source smoke-fanout.yml fans out
+# over), so the UI tiers run across EVERY ci:true leg (CE + Plus), not a hardcoded
+# CE label. Each leg carries its pfsense_version (the GHCR floating tag),
+# image_name (pfsense-ce / pfsense-plus) and channel; the matrix include is
+# (selected tier set) × (each ci:true leg). The `version` dispatch input narrows
+# to a single pfsense_version (blank = all ci:true legs).
+#
+# PLUS IDENTITY + REDACTION (ADR-24): a non-CE (Plus) leg is LICENSE/NDI-keyed to a
+# SECRET source-VM identity (SMOKE_PLUS_MAC / SMOKE_PLUS_SMBIOS_UUID [/ NDI]); the
+# `ui` job resolves it exactly like smoke.yml (fail-closed, masked), feeds it to
+# pytest, and scrubs the diagnostics before upload. A CE leg uses the public pin
+# and an empty redaction set, so its `ui-diagnostics` artifact is byte-identical to
+# today.
 #
 # Required config (Actions secrets/variables) — same set as smoke.yml, plus the
 # baked admin password the UI tier needs to log in:
@@ -58,7 +69,7 @@ on:
         type: string
         default: ""
       version:
-        description: "Version label for the matrix leg / screenshot dir (blank = the default CE version)."
+        description: "Optional narrow-to-one filter: when set, fan out only over the ci:true matrix leg whose pfsense_version matches (e.g. \"2.8\"). Blank = ALL ci:true legs (CE + Plus)."
         required: false
         type: string
         default: ""
@@ -74,7 +85,7 @@ on:
         required: false
         default: ""
       version:
-        description: "Version label for the matrix leg / screenshot dir AND the image tag (blank = the default CE version)."
+        description: "Optional narrow-to-one filter: when set, fan out only over the ci:true matrix leg whose pfsense_version matches (e.g. \"2.8\"). Blank = ALL ci:true legs (CE + Plus)."
         required: false
         default: ""
       tier:
@@ -127,6 +138,13 @@ jobs:
         with:
           fetch-depth: 0   # need history to detect "commits in the last day" for the schedule guard
 
+      # Read the ci:true legs (CE + Plus) from the ci-metadata CI matrix — the
+      # SAME source smoke-fanout.yml fans out over (ADR-24). Each leg carries
+      # pfsense_version, channel, image_name, mac, ci.
+      - name: Read CI matrix from ci-metadata
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
       - name: Build the matrix include + the nightly guard
         id: gen
         env:
@@ -134,23 +152,17 @@ jobs:
           # For a dispatch/call the tier input narrows the matrix; the schedule
           # ignores it and always runs the daily Tier-B set.
           TIER_INPUT: ${{ inputs.tier }}
+          # Optional narrow-to-one filter: a pfsense_version (e.g. "2.8"). Blank =
+          # ALL ci:true legs (CE + Plus).
           VERSION_INPUT: ${{ inputs.version }}
+          # The ci:true legs (CE + Plus) read from ci-metadata.
+          CI_MATRIX: ${{ steps.matrix.outputs.ci_matrix }}
         run: |
           set -eu
 
-          # The version axis (B1): single CE image today. To add an image, append
-          # one label here and wire its ref in the smoke job's image resolution.
-          DEFAULT_VERSIONS="ce"
           # Tier set the daily schedule runs (Tier B). DROP `browser` here to
           # disable the nightly browser leg (§7 demote/drop one-liner).
           DEFAULT_SCHEDULE_TIERS="functional browser"
-
-          # Decide the version label(s).
-          if [ -n "${VERSION_INPUT:-}" ]; then
-            VERSIONS="${VERSION_INPUT}"
-          else
-            VERSIONS="${DEFAULT_VERSIONS}"
-          fi
 
           # Decide the tier set.
           if [ "${EVENT_NAME}" = "schedule" ]; then
@@ -177,21 +189,28 @@ jobs:
           fi
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
 
-          # Map a tier name to its pytest marker (kept here for documentation; the
-          # smoke job re-derives it so the matrix stays a plain {tier,version}).
-          INCLUDES=""
-          for v in ${VERSIONS}; do
-            for t in ${TIERS}; do
-              ITEM="{\"tier\":\"${t}\",\"version\":\"${v}\"}"
-              if [ -z "${INCLUDES}" ]; then
-                INCLUDES="${ITEM}"
-              else
-                INCLUDES="${INCLUDES},${ITEM}"
-              fi
-            done
-          done
-          echo "matrix={\"include\":[${INCLUDES}]}" >> "$GITHUB_OUTPUT"
-          echo "tiers=[${TIERS}] versions=[${VERSIONS}] run=${RUN}"
+          # The legs: every ci:true entry (CE + Plus), optionally narrowed to one
+          # pfsense_version by the `version` input. jq emits one
+          # {pfsense_version,image_name,channel} object per surviving leg.
+          LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c \
+            --arg v "${VERSION_INPUT:-}" \
+            '[ .[] | select($v == "" or .pfsense_version == $v)
+               | {pfsense_version, image_name, channel} ]')"
+          LEG_COUNT="$(printf '%s\n' "$LEGS" | jq 'length')"
+          if [ "${VERSION_INPUT:-}" != "" ] && [ "$LEG_COUNT" -eq 0 ]; then
+            echo "::error::version filter '${VERSION_INPUT}' matched no ci:true leg"; exit 1
+          fi
+
+          # Cross the tier set with the legs: one matrix item per (tier × leg),
+          # each carrying tier + version (= pfsense_version) + image_name + channel.
+          # jq builds the include array directly from $LEGS and the tier list.
+          INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
+            --arg tiers "${TIERS}" \
+            '($tiers | split(" ")) as $ts
+             | [ $ts[] as $t | .[]
+                 | {tier: $t, version: .pfsense_version, image_name: .image_name, channel: .channel} ]')"
+          printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
+          echo "tiers=[${TIERS}] legs=${LEGS} run=${RUN}"
 
   ui:
     name: ${{ matrix.tier }} / ${{ matrix.version }} (live pfSense VM)
@@ -248,11 +267,13 @@ jobs:
       - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
         id: ref
         env:
-          # image_ref input (full ref) wins; else compose from the
-          # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars, with the `version` input
-          # overriding the TAG. Same resolution as smoke.yml.
+          # image_ref input (full ref) wins. Otherwise compose from the
+          # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars; the per-leg matrix.image_name
+          # (pfsense-ce / pfsense-plus) overrides the NAME var and matrix.version
+          # (= pfsense_version) overrides the TAG. Same resolution as smoke.yml.
           INPUT_REF: ${{ inputs.image_ref }}
-          INPUT_VERSION: ${{ inputs.version }}
+          MATRIX_VERSION: ${{ matrix.version }}
+          MATRIX_IMAGE_NAME: ${{ matrix.image_name }}
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
           SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
           SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
@@ -263,12 +284,56 @@ jobs:
           else
             # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
             REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-            NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
-            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
+            # NAME: the per-leg matrix.image_name wins over the repo variable; both
+            # default to pfsense-ce, so a CE leg is unchanged. TAG: the per-leg
+            # matrix.version wins over the repo variable.
+            NAME="${MATRIX_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
+            TAG="${MATRIX_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
             REF="${REPO%/}/${NAME}:${TAG}"
           fi
           echo "ref=${REF}" >> "$GITHUB_OUTPUT"
           echo "resolved image ref: ${REF}"
+
+      # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
+      # uses the public pin (the CE source-VM MAC + uuid). A non-CE (Plus) image is
+      # LICENSE/NDI-keyed to its OWN source-VM identity, which is SECRET — it comes
+      # from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID secrets, NEVER the public
+      # ci-metadata matrix (the NDI is derived from MAC + uuid, so both are as
+      # license-keyed as the MAC). This resolves the effective identity and, for
+      # Plus, masks it + emits the diagnostics redaction set. Fail closed if a
+      # non-CE image is selected without those secrets. Mirrors smoke.yml exactly.
+      - name: Resolve VM identity (MAC + SMBIOS uuid)
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
+          PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
+        run: |
+          set -eu
+          # Resolve the EXACT image name (strip ghcr path, @digest, :tag) — a substring
+          # match could misclassify a non-CE image as CE and skip the secret + redaction.
+          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
+          if [ -n "${IMAGE_REF:-}" ]; then
+            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
+          fi
+          case "$IMG_NAME" in
+            pfsense-ce)
+              # CE: the public pin. No identity is secret -> nothing to redact.
+              echo "RESOLVED_VM_MAC=BC:24:11:37:9C:AC" >> "$GITHUB_ENV"
+              echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
+              echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
+            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix
+              if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
+                echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
+              fi
+              # Mask before anything echoes them; NDI optional.
+              printf '::add-mask::%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
+              echo "RESOLVED_VM_MAC=$PLUS_MAC" >> "$GITHUB_ENV"
+              echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
+              # newline-joined redaction set for the diagnostics scrub (MAC + uuid [+ NDI])
+              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
+          esac
 
       - name: Install oras
         uses: oras-project/setup-oras@v2
@@ -386,6 +451,15 @@ jobs:
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
+          # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
+          # identity" step — the CE pin for a CE image (byte-identical to today),
+          # the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES is the
+          # (masked) Plus identity the DOM/diagnostics scrubs value-redact; EMPTY
+          # for CE -> the scrub is a strict no-op (CE bundle/screenshots unchanged).
+          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
+          SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
           # The Phase-1 gap closed: the UI tier logs into the webConfigurator over
           # the CSRF form, so the baked admin password MUST reach pytest. Without
           # it the ui fixtures SKIP (never fail).
@@ -407,6 +481,63 @@ jobs:
           python3 -m pytest tests/smoke/ui -m "${{ steps.tier.outputs.marker }}" \
             --override-ini="addopts=" --override-ini="timeout_func_only=true" \
             --timeout=300 --timeout-method=signal -v
+
+      # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
+      # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE
+      # screenshots (screen-*.png/.ppm) — boot-banner framebuffer PIXELS that no
+      # text redaction can reach; the Playwright UI shots under
+      # test-results/ui-screenshots/ are KEPT (masked in-browser at capture time,
+      # see test_browser.py _shot). Then literal-redact each secret value (MAC +
+      # uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text file under
+      # smoke-diag/ AND test-results/. CE: RESOLVED_REDACT is empty -> no screenshots
+      # dropped, no redaction (the artifact is byte-identical to today). The literal
+      # escape mirrors smoke.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
+      # so a regex-special value is matched literally; the `I` flag is case-insensitive.
+      - name: Scrub Plus secret identity from diagnostics (runner side)
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+        run: |
+          set -eu
+          # Exact image-name match (strip ghcr path, @digest, :tag), not a substring.
+          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
+          if [ -n "${IMAGE_REF:-}" ]; then
+            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
+          fi
+          # Non-CE: drop the QEMU console screenshots (banner pixels can leak the
+          # NDI/serial). KEEP test-results/ui-screenshots/ (the Playwright UI shots,
+          # DOM-masked at capture).
+          case "$IMG_NAME" in
+            pfsense-ce) : ;;
+            *) find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) -delete 2>/dev/null || true ;;
+          esac
+          # Value-redaction is a strict no-op when RESOLVED_REDACT is empty (CE).
+          [ -n "${SMOKE_REDACT_VALUES:-}" ] || { echo "no redaction values (CE leg) — runner-side scrub is a no-op"; exit 0; }
+          # Build a redact.sed of literal s###REDACTED### per value. BRE-escape each
+          # value with one -e per metachar (\ first, then . * [ ] ^ $ #).
+          esc() {
+            printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/\./\\./g' -e 's/\*/\\*/g' \
+              -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' -e 's/\$/\\$/g' -e 's/#/\\#/g'
+          }
+          : > redact.sed
+          # `I` flag = case-insensitive (GNU + FreeBSD sed) so an upper-case secret
+          # scrubs the lower-case MAC/uuid that logs/ifconfig emit.
+          printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r v; do
+            [ -n "$v" ] || continue
+            printf 's#%s#REDACTED#gI;\n' "$(esc "$v")" >> redact.sed
+          done
+          # GNU sed on the runner: -i with no backup-suffix arg. Redact every vm*.log
+          # and every TEXT file under the diag dirs (smoke-diag/ + test-results/, the
+          # latter where the UI tier writes logs alongside the kept screenshots).
+          find . -type f -name 'vm*.log' 2>/dev/null | while IFS= read -r f; do
+            sed -i -f redact.sed "$f" 2>/dev/null || true
+          done
+          find smoke-diag test-results -type f 2>/dev/null | while IFS= read -r f; do
+            LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i -f redact.sed "$f" 2>/dev/null || true
+          done
+          rm -f redact.sed
 
       - name: Upload UI diagnostics
         if: always()

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ..conftest import SmokeVM
+from ..helpers import REDACTED, parse_redact_values
 from .webui import SESSION_COOKIE, WebUI
 
 if TYPE_CHECKING:
@@ -57,6 +58,90 @@ SCREENSHOT_DIR_ENV = "SMOKE_UI_SCREENSHOT_DIR"
 SCREENSHOT_VERSION_ENV = "SMOKE_UI_VERSION"
 DEFAULT_SCREENSHOT_ROOT = "test-results/ui-screenshots"
 DEFAULT_SCREENSHOT_VERSION = "unknown"
+
+# Env var carrying the (masked) Plus VM identity the browser tier value-redacts
+# from the DOM before every screenshot (ADR-24). Same var the runner-side
+# diagnostics scrub reads; EMPTY for a CE leg -> the DOM mask is a strict no-op so
+# CE screenshots are byte-identical to today.
+REDACT_VALUES_ENV = "SMOKE_REDACT_VALUES"
+
+# DOM redaction JS (ADR-24): walks the whole document and replaces every
+# case-insensitive occurrence of each supplied value with REDACTED — in text
+# nodes, the live `.value` of input/textarea elements, and the listed attributes
+# (title, alt, value, placeholder). The Plus identity is NOT expected on a
+# pfBlockerNG page, so this is defensive blanking before the screenshot is taken
+# (the screenshot is captured AFTER each test's assertions, so mutating the DOM
+# for the shot never affects an assertion). Pure DOM/string work, no deps. Args:
+# (values) — the list of literal strings to redact.
+_DOM_MASK_JS = r"""
+(values) => {
+  const REDACTED = "REDACTED";
+  if (!values || !values.length) { return; }
+  const ATTRS = ["title", "alt", "value", "placeholder"];
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const res = values
+    .filter((v) => v && v.length)
+    .map((v) => new RegExp(esc(v), "gi"));
+  if (!res.length) { return; }
+  const scrub = (s) => {
+    let out = s;
+    for (const re of res) { out = out.replace(re, REDACTED); }
+    return out;
+  };
+  // Text nodes.
+  const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeValue) {
+      const next = scrub(node.nodeValue);
+      if (next !== node.nodeValue) { node.nodeValue = next; }
+    }
+  }
+  // input/textarea live .value, then the listed attributes on every element.
+  for (const el of document.querySelectorAll("input, textarea")) {
+    if (typeof el.value === "string") { el.value = scrub(el.value); }
+  }
+  for (const el of document.querySelectorAll("*")) {
+    for (const a of ATTRS) {
+      const cur = el.getAttribute && el.getAttribute(a);
+      if (cur) {
+        const next = scrub(cur);
+        if (next !== cur) { el.setAttribute(a, next); }
+      }
+    }
+  }
+}
+"""
+
+
+def _redact_values_from_env() -> list[str]:
+    """The literal redaction set for the DOM mask, from ``SMOKE_REDACT_VALUES``.
+
+    Reuses :func:`tests.smoke.helpers.parse_redact_values` (the same parser the
+    diagnostics scrub uses): empty/unset env -> ``[]`` (the CE no-op); a set env ->
+    the de-duplicated, placeholder-filtered list. Extracted so it is importable +
+    unit-testable without a browser.
+    """
+    return parse_redact_values(os.environ.get(REDACT_VALUES_ENV))
+
+
+def mask_page_identity(page: Page) -> None:
+    """Value-redact the Plus identity from ``page``'s DOM before a screenshot (ADR-24).
+
+    Reads the redaction set from the environment; when EMPTY (a CE leg) this is a
+    strict no-op (the ``page.evaluate`` is not even called), so CE screenshots are
+    byte-identical to today. When non-empty, runs :data:`_DOM_MASK_JS` to blank
+    every case-insensitive occurrence of each value (text + the listed attributes +
+    input/textarea ``.value``) with :data:`~tests.smoke.helpers.REDACTED`.
+    """
+    values = _redact_values_from_env()
+    if not values:
+        return
+    page.evaluate(_DOM_MASK_JS, values)
+
+
+# Re-export so the browser test modules import REDACTED from one place.
+__all__ = ["REDACTED", "mask_page_identity"]
 
 
 @pytest.fixture(scope="session")
