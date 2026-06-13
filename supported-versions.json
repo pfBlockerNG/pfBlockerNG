@@ -4,7 +4,7 @@
   "lifecycle_policy": {
     "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
     "drop_ce": "Drop the oldest CE entry only when the newest CE goes GA. The supported window is always (previous GA CE + current GA CE), transiently +1 during an active beta.",
-    "plus": "Plus entries are always ci=false (build-only: we track the version and build .pkg artifacts, but never run Plus in CI — licensing).",
+    "plus": "Plus runs in CI from a PRIVATE, licensed GHCR image (ghcr.io/pfblockerng/pfsense-plus). To enable: set ci=true + image_name=pfsense-plus. The VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed to) comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets, NEVER this matrix; the smoke harness redacts that identity from the uploaded diagnostics. Image refresh is MANUAL (image-refresh.yml is CE-only) — republish via scripts/image-publish.sh (ADR-24).",
     "ci_metadata_pr": "Changes to this file should be made via a PR against ci-metadata (branch-protected) so there is a git audit trail (diff/blame/rollback) without touching main/devel.",
     "future_migration": "If CI infrastructure grows, this file can move to a dedicated public pfBlockerNG-ci-infra repo (read via raw URL, no token) — a mechanical swap."
   },
@@ -29,7 +29,8 @@
       "py_flavor": "py311",
       "variant": "Plus",
       "status": "active",
-      "ci": false
+      "ci": true,
+      "image_name": "pfsense-plus"
     }
   ]
 }
