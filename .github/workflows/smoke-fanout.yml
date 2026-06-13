@@ -1,8 +1,10 @@
-name: Smoke Fan-out (all CE, ADR-09 P6)
+name: Smoke Fan-out (all ci:true legs, ADR-09 P6 / ADR-24)
 
-# Fan the ADR-04 smoke suite across every ci:true CE image in parallel.
-# NEVER runs Plus images (ci:false entries are excluded by the CI matrix filter;
-# an additional guard below aborts any leg that carries channel != CE or ci != true).
+# Fan the ADR-04 smoke suite across every ci:true image in parallel — CE and
+# Plus alike (ADR-24). Each leg carries its own image_name + mac from the matrix;
+# the Plus image is private (Netgate-licensed) — CI pulls it, never publishes it.
+# ci:false entries are excluded by the CI matrix filter; a CI GUARD below aborts
+# any leg that carries ci != true (a schema-change fail-safe).
 #
 # Workflow name + no-version-input dispatch contract (Phase 4 / RESULTS/04):
 #   Workflow file name:  .github/workflows/smoke-fanout.yml
@@ -22,8 +24,10 @@ name: Smoke Fan-out (all CE, ADR-09 P6)
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │ INVARIANT: this workflow NEVER commits to or writes any branch.     │
-# │ Plus is NEVER run (ci:false entries are excluded at the matrix     │
-# │ read step and double-guarded in the smoke job itself).             │
+# │ Runs every ci:true entry, CE and Plus; the Plus image is private — │
+# │ pulled, never published (no push/re-tag/attach of the qcow2).      │
+# │ ci:false entries are excluded at the matrix read step and the CI   │
+# │ GUARD below hard-fails any ci != true leak.                        │
 # └─────────────────────────────────────────────────────────────────────┘
 
 on:
@@ -43,11 +47,11 @@ permissions:
   packages: read
 
 jobs:
-  # ── 1. Read CI matrix (ci:true CE entries only) ──────────────────────────────
+  # ── 1. Read CI matrix (every ci:true entry, CE and Plus) ─────────────────────
   #
   # Emits `ci_matrix` (JSON array) as the `include` list for the smoke job's
-  # strategy.matrix.  The reader already filters to ci:true CE entries; Plus
-  # entries (ci:false) are NEVER present in ci_matrix.
+  # strategy.matrix.  The reader filters to ci:true entries of ANY channel, each
+  # carrying its resolved image_name + mac; ci:false entries are NEVER present.
   prepare:
     name: Read CI matrix
     runs-on: ubuntu-latest
@@ -65,10 +69,10 @@ jobs:
 
       - name: Log CI matrix
         run: |
-          echo "=== CI matrix (ci:true CE entries — fed to smoke strategy.matrix) ==="
+          echo "=== CI matrix (ci:true entries, CE + Plus — fed to smoke strategy.matrix) ==="
           printf '%s\n' '${{ steps.read.outputs.ci_matrix }}' | jq .
 
-      - name: Count legs + assert no Plus entries
+      - name: Count legs + assert every leg is ci:true
         id: count
         env:
           CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
@@ -78,21 +82,23 @@ jobs:
           echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
           echo "Legs in CI matrix: ${COUNT}"
 
-          # PLUS GUARD: assert that every entry in the CI matrix is a CE entry
-          # with ci=true.  The matrix reader already filters to these; this step
-          # is a hard fail-safe so a schema change can never silently let Plus in.
-          PLUS_COUNT=$(printf '%s\n' "$CI_MATRIX" \
-            | jq '[.[] | select(.channel != "CE" or .ci != true)] | length')
-          if [ "$PLUS_COUNT" -ne 0 ]; then
-            echo "::error::PLUS GUARD: CI matrix contains ${PLUS_COUNT} non-CE or ci:false entries — aborting."
+          # CI GUARD: assert that every entry in the CI matrix has ci=true (ADR-24).
+          # The channel is no longer asserted — Plus runs in CI from its private
+          # licensed image. The matrix reader already filters to ci:true; this step
+          # is a hard fail-safe so a schema change can never silently admit a
+          # ci:false (e.g. retired/unlicensed) entry.
+          BAD_COUNT=$(printf '%s\n' "$CI_MATRIX" \
+            | jq '[.[] | select(.ci != true)] | length')
+          if [ "$BAD_COUNT" -ne 0 ]; then
+            echo "::error::CI GUARD: CI matrix contains ${BAD_COUNT} ci:false entries — aborting."
             printf '%s\n' "$CI_MATRIX" \
-              | jq '.[] | select(.channel != "CE" or .ci != true)'
+              | jq '.[] | select(.ci != true)'
             exit 1
           fi
-          echo "Plus guard: OK — all ${COUNT} leg(s) are CE ci:true."
+          echo "CI guard: OK — all ${COUNT} leg(s) are ci:true."
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "::warning::CI matrix is empty — no CE images to smoke-test."
+            echo "::warning::CI matrix is empty — no images to smoke-test."
           fi
 
   # ── 2. Per-CE smoke run (parallel, fail-fast: false) ─────────────────────────
@@ -103,12 +109,13 @@ jobs:
   # whether another leg has already failed.
   #
   # IMAGE REF RESOLUTION:
-  # The CI matrix entry carries pfsense_version (e.g. "2.8"). We pass it to
-  # smoke.yml as `pfsense_version`; smoke.yml composes the GHCR ref from the
-  # SMOKE_IMAGE_REPO / SMOKE_IMAGE_NAME / SMOKE_IMAGE_TAG repo variables, with
-  # pfsense_version overriding the tag.
+  # Each CI matrix entry carries pfsense_version (the GHCR floating tag, e.g. "2.8"
+  # / "26.03"), image_name (e.g. "pfsense-ce" / "pfsense-plus"), and mac. We pass
+  # all three to smoke.yml: it composes the GHCR ref from the SMOKE_IMAGE_REPO repo
+  # variable + the image_name input + the pfsense_version tag (each input overriding
+  # its repo-variable default), and exports mac as SMOKE_VM_MAC for the boot.
   smoke:
-    name: Smoke (${{ matrix.pfsense_version }})
+    name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }})
     needs: prepare
     # Run even if prepare had warnings; skip only if prepare hard-failed.
     if: needs.prepare.outputs.leg_count != '0'
@@ -118,10 +125,12 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
     uses: ./.github/workflows/smoke.yml
     with:
-      # Pass the per-leg version directly — pfsense_version IS the GHCR floating tag
-      # (e.g. "2.8"), so no transformation needed. smoke.yml uses it to override the
-      # SMOKE_IMAGE_TAG repo variable.
+      # Pass the per-leg version/name/mac directly — pfsense_version IS the GHCR
+      # floating tag (e.g. "2.8"), so no transformation needed. image_name selects
+      # the image (Plus = pfsense-plus); mac is the license-keyed boot MAC.
       pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────
