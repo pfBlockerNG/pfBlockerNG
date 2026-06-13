@@ -48,6 +48,14 @@ on:
         description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
         required: false
         default: ""
+      image_name:
+        description: "Image name in the GHCR ref (default pfsense-ce). The fan-out passes the per-leg matrix.image_name (Plus = pfsense-plus). Ignored when image_ref is set."
+        required: false
+        default: "pfsense-ce"
+      mac:
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). The fan-out passes the per-leg matrix.mac; Plus is license-keyed to REDACTED_PLUS_MAC."
+        required: false
+        default: "BC:24:11:37:9C:AC"
       pytest_marker:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
@@ -68,6 +76,16 @@ on:
         required: false
         type: string
         default: ""
+      image_name:
+        description: "Image name in the GHCR ref (default pfsense-ce). The fan-out passes the per-leg matrix.image_name (Plus = pfsense-plus). Ignored when image_ref is set."
+        required: false
+        type: string
+        default: "pfsense-ce"
+      mac:
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). The fan-out passes the per-leg matrix.mac; Plus is license-keyed to REDACTED_PLUS_MAC."
+        required: false
+        type: string
+        default: "BC:24:11:37:9C:AC"
       pytest_marker:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
@@ -139,10 +157,13 @@ jobs:
         env:
           # image_ref input (full ref) wins. Otherwise compose from the
           # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars; the pfsense_version input (the
-          # per-version caller, e.g. smoke-fanout) overrides the TAG. None are
-          # sensitive, so they are variables, not secrets.
+          # per-version caller, e.g. smoke-fanout) overrides the TAG, and the
+          # image_name input (the per-leg matrix.image_name) overrides the NAME var
+          # (Plus = pfsense-plus). None are sensitive, so they are variables, not
+          # secrets.
           INPUT_REF: ${{ inputs.image_ref }}
           INPUT_VERSION: ${{ inputs.pfsense_version }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
           SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
           SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
@@ -153,7 +174,9 @@ jobs:
           else
             # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
             REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-            NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
+            # NAME: the per-leg image_name input wins over the repo variable; both
+            # default to pfsense-ce, so a bare dispatch is unchanged.
+            NAME="${INPUT_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
             TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
             REF="${REPO%/}/${NAME}:${TAG}"
           fi
@@ -307,6 +330,11 @@ jobs:
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          # QEMU NIC MAC for the VM boot (ADR-24): conftest passes this through to
+          # boot_vm.sh. Defaults to the CE pin so a bare dispatch is byte-identical;
+          # the fan-out passes the per-leg matrix.mac (Plus = REDACTED_PLUS_MAC,
+          # license-keyed). boot_vm.sh keeps the same CE default if this is unset.
+          SMOKE_VM_MAC: ${{ inputs.mac }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
           # The builder-produced -nightly .pkg (set above for the `repo` marker; the

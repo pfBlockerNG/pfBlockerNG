@@ -1,0 +1,199 @@
+ADR-24 — Phase 3 Results
+========================
+Workflows: route per-leg image_name + MAC through smoke.yml / smoke-fanout.yml.
+Behaviour-preserving pre-flip: with the live matrix (Plus ci:false → excluded)
+and default inputs, every resolved GHCR ref and QEMU MAC is byte-identical to
+today.
+
+Branch: adr/24-pfsense-plus-in-the-ci-smoke
+
+NOTE ON WORKING STATE
+---------------------
+On pick-up the two workflow files already carried the Phase-3 edits in the
+worktree (uncommitted — a prior session applied them but did not commit). They
+were verified line-by-line against the ACTION PLAN (all correct, no deviation),
+the gates were re-run, and this phase committed them together with this handoff.
+No further edits to the YAML were required.
+
+WHAT CHANGED (only the two workflow files)
+------------------------------------------
+1. .github/workflows/smoke.yml
+   - INPUTS (added to BOTH workflow_dispatch AND workflow_call):
+       image_name  (string, default "pfsense-ce")
+       mac         (string, default "BC:24:11:37:9C:AC")  ← the CE pin
+     Each carries a help description noting the fan-out passes the per-leg
+     matrix.image_name / matrix.mac (Plus = pfsense-plus / REDACTED_PLUS_MAC),
+     and that image_name is ignored when image_ref is set.
+   - RESOLVE-REF step ("Resolve the pfSense image ref"):
+       new env  INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+       NAME line changed from
+           NAME="${SMOKE_IMAGE_NAME:-pfsense-ce}"
+       to
+           NAME="${INPUT_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
+       → the per-leg input wins over the repo variable; both default to
+         pfsense-ce, so a bare dispatch is unchanged. image_ref override path
+         untouched; TAG line untouched.
+   - PYTEST step env: added
+           SMOKE_VM_MAC: ${{ inputs.mac }}
+     This is the point where the MAC joins the harness (conftest → boot_vm.sh,
+     Phase 1). Default = the CE pin, so a bare dispatch is byte-identical;
+     boot_vm.sh keeps the same CE default if SMOKE_VM_MAC is unset.
+
+2. .github/workflows/smoke-fanout.yml
+   - HEADER + INVARIANT box rewritten: now "runs every ci:true entry, CE and
+     Plus; the Plus image is private (Netgate-licensed) — pulled, never
+     published"; the "NEVER runs Plus" / "channel != CE" language removed.
+     Workflow `name:` updated to "Smoke Fan-out (all ci:true legs, ADR-09 P6 /
+     ADR-24)". The NEVER-commits-to-a-branch invariant is preserved verbatim.
+   - prepare job, "Count legs" step: PLUS GUARD → CI GUARD.
+       Old: select(.channel != "CE" or .ci != true)   → PLUS_COUNT, abort if !=0
+       New: select(.ci != true)                        → BAD_COUNT,  abort if !=0
+     The CHANNEL ASSERTION IS REMOVED; only ci != true now aborts. Still a hard
+     fail-safe (matrix reader already filters to ci:true; this catches a schema
+     change leaking a ci:false entry). Log/echo strings reworded accordingly.
+   - smoke job:
+       name: "Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }})"
+       with: + image_name: ${{ matrix.image_name }}
+             + mac:        ${{ matrix.mac }}
+       (pfsense_version pass-through + secrets: inherit unchanged.)
+   - AND-gate (all-smoke-passed) untouched.
+
+CONSTRAINTS HONOURED
+--------------------
+- Touched ONLY smoke.yml + smoke-fanout.yml (git diff scope confirmed below).
+- image-refresh.yml / build-image.yml / repo-install.yml NOT touched (CE-only by
+  design, ADR §2.3).
+- secrets: inherit retained; no new secret introduced (GHCR auth still falls back
+  to GITHUB_TOKEN via the existing SMOKE_GHCR_* expression).
+- Default-path behaviour byte-identical (§2.2.1) — see the CE trace below.
+
+YAML VALIDATION
+---------------
+actionlint: NOT installed in this environment.
+yamllint:   NOT installed.
+Fallback (per orchestrator note): python3 -c "import yaml; yaml.safe_load(open(f))"
+on each changed workflow.
+  OK: .github/workflows/smoke.yml
+  OK: .github/workflows/smoke-fanout.yml
+Both parse cleanly. (actionlint remains the CI-side gate; static structural parse
+is the strongest check available locally.)
+
+REF + MAC RESOLUTION TRACE (on paper — §4.6 evidence in lieu of a live dispatch)
+--------------------------------------------------------------------------------
+Live-dispatch deferred (see DEFERRED below); the composition is traced by hand.
+Assume the repo variable SMOKE_IMAGE_REPO = ghcr.io/pfblockerng (its current
+value), SMOKE_IMAGE_NAME unset, SMOKE_IMAGE_TAG unset (defaults), image_ref blank.
+
+A) CE matrix entry (today's live entry — Phase 2 AFTER output):
+     pfsense_version="2.8", image_name="pfsense-ce", mac="BC:24:11:37:9C:AC"
+   fan-out passes to smoke.yml:
+     pfsense_version=2.8  image_name=pfsense-ce  mac=BC:24:11:37:9C:AC
+   smoke.yml resolve-ref:
+     image_ref blank → compose branch
+     REPO = ghcr.io/pfblockerng
+     NAME = INPUT_IMAGE_NAME("pfsense-ce") wins → "pfsense-ce"
+     TAG  = INPUT_VERSION("2.8")                → "2.8"
+     REF  = ghcr.io/pfblockerng/pfsense-ce:2.8
+   pytest env: SMOKE_VM_MAC = BC:24:11:37:9C:AC  → boot_vm.sh -netdev … mac=BC:24:11:37:9C:AC
+   ⇒ IDENTICAL to today (pre-change: NAME defaulted to pfsense-ce, SMOKE_VM_MAC
+     was unset → boot_vm.sh fell back to the same CE pin). Byte-identical. ✔
+
+A') Bare smoke.yml dispatch (no inputs at all):
+     image_name input default = "pfsense-ce", mac input default = "BC:24:11:37:9C:AC"
+     NAME = pfsense-ce, TAG = 2.8 → REF = ghcr.io/pfblockerng/pfsense-ce:2.8
+     SMOKE_VM_MAC = BC:24:11:37:9C:AC
+   ⇒ Same ref + same MAC as a pre-change bare dispatch. ✔ (§2.2.1)
+
+B) Plus matrix entry (Phase 4 will introduce this on ci-metadata; NOT live today):
+     pfsense_version="26.03", image_name="pfsense-plus", mac="REDACTED_PLUS_MAC",
+     channel="Plus", ci=true
+   fan-out passes to smoke.yml:
+     pfsense_version=26.03  image_name=pfsense-plus  mac=REDACTED_PLUS_MAC
+   smoke.yml resolve-ref:
+     REPO = ghcr.io/pfblockerng
+     NAME = pfsense-plus
+     TAG  = 26.03
+     REF  = ghcr.io/pfblockerng/pfsense-plus:26.03   (private, pulled not published)
+   pytest env: SMOKE_VM_MAC = REDACTED_PLUS_MAC → boot_vm.sh boots the Plus VM with
+     its license-keyed NIC MAC.
+   leg name in the UI: "Smoke (Plus 26.03)".
+   ⇒ A Plus entry, once ci:true, routes its own private image + license MAC
+     end-to-end. Does NOT appear today (live Plus is ci:false → excluded by the
+     matrix reader, and the CI GUARD would also catch a ci:false leak).
+
+GUARD DIFF (PLUS GUARD → CI GUARD)
+----------------------------------
+- jq select  : `.channel != "CE" or .ci != true`   →   `.ci != true`
+- var name    : PLUS_COUNT → BAD_COUNT
+- error msg   : "PLUS GUARD: … non-CE or ci:false …" → "CI GUARD: … ci:false …"
+- pass msg    : "all … CE ci:true." → "all … ci:true."
+Net: the channel half of the predicate is gone; the ci:true requirement is the
+sole gate. A Plus entry (channel="Plus", ci=true) now PASSES the guard (it would
+have aborted under the old PLUS GUARD); a ci:false entry of any channel still
+aborts. This is the behavioural flip that lets Plus into the fan-out once Phase 4
+sets its ci:true on ci-metadata.
+
+VERIFICATION GATES (all green)
+------------------------------
+- python -m pytest      → 1487 passed in ~9.5s
+- ruff check .          → All checks passed!
+- ruff format --check . → 90 files already formatted
+- mypy tests/           → Success: no issues found in 33 source files
+- YAML safe_load        → both workflows OK
+- git diff origin/devel...HEAD scope: ONLY the two workflow files beyond the
+  prior-phase artifacts (read-version-matrix.sh, boot_vm.sh, conftest passthrough,
+  the new tests, and the RESULTS files). No src/ touched. No other workflow touched.
+  (The Python gates are unaffected by this YAML-only phase — they run as a sanity
+  pin, exactly as the prompt requires.)
+
+DEFERRED — live CE-only fan-out dispatch (§4.6 acceptance pin)
+--------------------------------------------------------------
+The §4.6 "live CE-only fan-out run, refs identical to a pre-change run (record
+both run ids)" and the bare smoke.yml dispatch CANNOT run in this environment: no
+gh / workflow-dispatch credentials, and the YAML changes live on the feature
+branch (workflow_dispatch is only dispatchable from the default branch / once the
+branch is on devel). Per the orchestrator note this is a known constraint, not a
+phase failure. It is replaced here by static YAML validation + the on-paper ref/
+MAC trace above (CE byte-identical; Plus routes its own image+MAC).
+
+  DEFERRED MAINTAINER STEP (do once the branch reaches devel, BEFORE the Phase-4
+  flip lands Plus ci:true):
+    1. Dispatch smoke-fanout.yml (matrix still CE-only — Plus still ci:false).
+       Expect: one leg "Smoke (CE 2.8)", resolved ref
+       ghcr.io/pfblockerng/pfsense-ce:2.8, AND-gate green. Record the run id.
+    2. Dispatch a bare smoke.yml (no inputs). Expect the identical ref. Record id.
+    3. Compare the resolved-ref log lines to a pre-ADR-24 fan-out run — they MUST
+       be identical (this is the live regression pin the trace stands in for).
+
+COMMIT
+------
+Single commit (the two workflow files + this handoff):
+    ci: route per-leg image_name + MAC through smoke fan-out (ADR-24 P3)
+Pushed directly to adr/24-pfsense-plus-in-the-ci-smoke.
+
+GO-AHEAD FOR PHASE 4
+--------------------
+Cleared. The harness (P1) + matrix reader (P2) + workflows (P3) now carry
+image_name/mac end-to-end; the guard is keyed purely on ci:true. Flipping the
+live Plus entry to ci:true on ci-metadata is now sufficient to add the Plus leg —
+no further workflow YAML edits needed.
+
+Phase-4 PRECONDITION CHECKLIST (maintainer/manual — ADR §6 Phase 4). State as
+observable from THIS environment: NONE can be verified here (no GHCR/registry
+access, no Proxmox access, no gh). These are for the orchestrator/maintainer to
+confirm before dispatching the live flip:
+  [ ] ghcr.io/pfblockerng/pfsense-plus:26.03 published (from Proxmox VM 104) and
+      marked PRIVATE.                                            — UNVERIFIED here
+  [ ] The package grants THIS repo read access (so the fan-out's GITHUB_TOKEN /
+      SMOKE_GHCR_* can pull it).                                 — UNVERIFIED here
+  [ ] Plus image has baked deps (FreeBSD-16 RUN_DEPENDS) + the smoke SSH public
+      key in root authorized_keys.                               — UNVERIFIED here
+  [ ] Diagnostics scrub verified for the Plus license (no NDI / license
+      identifier in the smoke-diagnostics artifact — §4.7).      — UNVERIFIED here
+Once all four hold, Phase 4 opens a PR against ci-metadata (Plus entry ci:true +
+image_name: pfsense-plus + mac: REDACTED_PLUS_MAC; schema gains the two optional
+fields; lifecycle_policy.plus text rewritten), then dispatches smoke-fanout.yml
+and verifies both legs + the AND-gate green and the Plus-leg diagnostics carry no
+license identifier.
+
+NO DEVIATIONS. NO STOP CONDITIONS HIT.
