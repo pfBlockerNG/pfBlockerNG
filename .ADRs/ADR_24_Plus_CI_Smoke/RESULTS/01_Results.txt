@@ -1,0 +1,88 @@
+ADR-24 — Phase 1 Results
+========================
+Harness parameterization: SMOKE_VM_MAC override (CE default), behaviour-preserving.
+
+Branch: adr/24-pfsense-plus-in-the-ci-smoke
+
+WHAT CHANGED
+------------
+1. tests/smoke/boot_vm.sh
+   - VM_MAC assignment is now the env-override form (exact new line):
+
+         VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
+
+     With SMOKE_VM_MAC unset the expansion yields the CE pin BC:24:11:37:9C:AC,
+     so the default path is byte-identical to pre-ADR-24 (contract §2.2.1).
+   - Header hardware-profile comment block extended: MAC is per-image, CE pin by
+     default, SMOKE_VM_MAC overrides; a pfSense Plus image MUST set SMOKE_VM_MAC
+     to its OWN source-VM MAC because the Plus license/NDI registration is keyed
+     to it (the CE pin would deregister/reassign). Cross-ref ADR-24 +
+     scripts/README.md § "pfSense Plus images".
+   - No other QEMU argument changed; the MAC still feeds the single plumb point
+     -device virtio-net-pci,mac=${VM_MAC},...
+
+2. tests/test_smoke_harness_defaults.py  (NEW — harness-side, NOT under tests/smoke/)
+   - test_ce_default_mac_pin_present: regression pin — the CE source-VM MAC
+     string is present in boot_vm.sh (guards against drift; it legitimately
+     appears twice — header comment + assignment default — so asserts presence,
+     not a count).
+   - test_vm_mac_is_env_override_with_ce_default: asserts the assignment is the
+     override form VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}" exactly.
+   - Both override branches are covered: CE (env unset -> pin) by the default
+     string assertion; Plus (env set -> override) by the override-form assertion.
+   - Fully typed (-> None), mypy clean under disallow_untyped_defs.
+
+conftest.py — NO CHANGE NEEDED (and why)
+----------------------------------------
+boot_vm.sh is invoked at tests/smoke/conftest.py:226 via
+    subprocess.Popen(["sh", str(BOOT_VM_SH), str(base_image)], stdout=..., stderr=...)
+with NO env= keyword. subprocess.Popen with env=None inherits the parent's full
+os.environ, so SMOKE_VM_MAC already propagates from the pytest process into the
+boot_vm.sh subprocess unchanged. No filtered/constructed env is built for that
+call. Per the Phase-1 plan step 3, changed nothing in conftest.py and recorded it
+here.
+
+RED -> GREEN EVIDENCE
+---------------------
+Method: temporarily reverted the boot_vm.sh assignment line to the pre-change
+hardcoded form (VM_MAC="BC:24:11:37:9C:AC"), ran the new tests, then restored.
+
+RED (pre-change assignment, header comment already updated):
+    test_vm_mac_is_env_override_with_ce_default  FAILED  (assertion b — override form absent)
+    test_ce_default_mac_pin_present              PASSED  (assertion a — pin still present)
+    => 1 failed, 1 passed
+
+GREEN (assignment restored to the override form):
+    test_ce_default_mac_pin_present              PASSED
+    test_vm_mac_is_env_override_with_ce_default  PASSED
+    => 2 passed
+
+So green proves the override-form change caused the flip; the regression-pin
+assertion (a) passed in both states, confirming the CE pin is never dropped.
+
+VERIFICATION GATES (all green/clean)
+------------------------------------
+- python -m pytest          -> 1482 passed
+- ruff check .              -> All checks passed!
+- ruff format --check .     -> 89 files already formatted
+- mypy tests/               -> Success: no issues found in 32 source files
+- sh -n tests/smoke/boot_vm.sh   -> OK
+- shellcheck                -> NOT installed in this environment (reported-and-
+                               skipped; CI is the hard gate). sh -n passed.
+- git diff origin/devel...HEAD scope: ONLY the two files above
+  (tests/smoke/boot_vm.sh, tests/test_smoke_harness_defaults.py) — conftest.py
+  untouched, image-upgrade.sh untouched.
+
+CONTRACT CHECK (§2.2)
+---------------------
+- §2.2.1 CE bit-identical with SMOKE_VM_MAC unset: YES — expansion default is the
+  CE pin; no other QEMU arg touched.
+- §4.1 acceptance (boot_vm.sh boots with SMOKE_VM_MAC when set, CE pin otherwise):
+  satisfied by the override form + verified env propagation.
+- image-upgrade.sh --mac default unchanged (out of scope this phase): untouched.
+
+GO-AHEAD FOR PHASE 2
+--------------------
+Cleared. Phase 2 = read-version-matrix.sh CI filter -> select(.ci == true),
+emit image_name (default pfsense-ce) + mac (default BC:24:11:37:9C:AC) per
+CI-matrix entry, with red-first fixture tests. No blockers from Phase 1.
