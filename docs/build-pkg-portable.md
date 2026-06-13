@@ -1,9 +1,9 @@
 # `build-pkg-portable.py` — off-FreeBSD `.pkg` builder
 
 Build a pfSense-installable FreeBSD package (`.pkg`) for the pfBlockerNG port on
-**Linux or macOS, with no FreeBSD host and no ports framework**. It is the
-off-box counterpart to [`scripts/build-pkg.sh`](../scripts/build-pkg.sh), which
-runs the port's real `make package` on an ABI-matched FreeBSD VM.
+**Linux or macOS, with no FreeBSD host and no ports framework**. It is the **sole**
+`.pkg` builder for both CI and releases — it reproduces the port's `make package`
+off-box, so the FreeBSD VM build it once cross-checked against has been retired.
 
 It exists because pfBlockerNG is a `NO_BUILD` port: nothing is compiled.
 "Building" the package is just (a) laying the production files out at their
