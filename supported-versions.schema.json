@@ -27,7 +27,7 @@
           "channel": {
             "type": "string",
             "enum": ["CE", "Plus"],
-            "description": "CE = Community Edition; Plus = pfSense Plus (build-only, ci must be false)."
+            "description": "CE = Community Edition; Plus = pfSense Plus (runs in CI from a private licensed image when ci=true + image_name=pfsense-plus)."
           },
           "freebsd_version": {
             "type": "string",
@@ -57,7 +57,11 @@
           },
           "ci": {
             "type": "boolean",
-            "description": "true = include in the CI smoke matrix (CE only). false = build-only (false for Plus for now — no licensed/redistributable CI image; use for beta CE if no image is available yet)."
+            "description": "true = include in the CI smoke matrix (CE, or Plus from its private licensed image). false = build-only (use for a beta with no CI image yet)."
+          },
+          "image_name": {
+            "type": "string",
+            "description": "GHCR image name for the smoke leg, e.g. 'pfsense-ce' (default if omitted) or 'pfsense-plus'. For a Plus leg the VM identity (MAC + SMBIOS uuid) is NOT carried here — it comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets (ADR-24)."
           }
         },
         "additionalProperties": false
