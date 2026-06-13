@@ -30,7 +30,11 @@
 #   BUILD matrix     — all entries from supported-versions.json, each carrying:
 #     pfsense_version, channel, freebsd_version, freebsd_major,
 #     php_version, py_flavor, variant, status, ci
-#   CI matrix        — the ci:true CE entries only (subset of BUILD matrix).
+#   CI matrix        — the ci:true entries (ANY channel), subset of BUILD matrix.
+#     Each emitted entry additionally carries a resolved image_name (default
+#     "pfsense-ce") and mac (default the CE pin "BC:24:11:37:9C:AC"), so an entry
+#     that omits them — every CE entry today — keeps the CE image + MAC, while a
+#     ci:true Plus entry can carry its own image_name/mac (ADR-24).
 #   python_versions  — DISTINCT python versions derived from each BUILD-matrix
 #     entry's py_flavor (`pyN` + `MM` => `N.MM`, e.g. py311 => 3.11; py39 => 3.9),
 #     sorted + deduped. test.yml's pytest matrix (supported-only — only the
@@ -119,11 +123,20 @@ else
   BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
 fi
 
-# ── CI matrix: ci:true CE entries only (within the variant-filtered set) ──────
-CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[] | select(.ci == true and .channel == "CE")]')"
+# ── CI matrix: the ci:true entries (ANY channel) within the variant-filtered set ──
+# The channel no longer filters (ADR-24): a ci:true Plus entry is a first-class CI
+# leg. Each entry gains a resolved image_name (default "pfsense-ce") and mac (default
+# the CE pin) — an entry that omits them keeps the CE image + MAC, while a Plus entry
+# carries its own. The MAC is load-bearing for a Plus image (license/NDI keyed to it).
+CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+  [ .[]
+    | select(.ci == true)
+    | . + { image_name: (.image_name // "pfsense-ce"), mac: (.mac // "BC:24:11:37:9C:AC") }
+  ]')"
 
 # ── Sanity: CI matrix must not be empty ───────────────────────────────────────
-# Skip when --variant filters to a non-CE variant (Plus has ci=false by policy).
+# Skip when --variant filters to a non-CE variant (a Plus-only filtered set may have
+# no ci:true entry while Plus is still ci=false on the live matrix).
 if [ "${_VF_LOWER:-}" != "plus" ]; then
   CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
   if [ "$CI_COUNT" -eq 0 ]; then
