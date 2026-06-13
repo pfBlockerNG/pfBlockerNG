@@ -229,6 +229,22 @@ def test_ci_matrix_entries_pass_through_explicit_image_name_and_mac(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------- #
+# Scenario d2 — EMPTY-STRING image_name/mac normalize to the defaults.
+# `//` alone treats only null/missing as absent, so a literal "" would flow
+# through and later be read as a CE fallback by downstream workflows — silently
+# mis-routing a Plus leg. The reader must coerce "" to the default too.
+# --------------------------------------------------------------------------- #
+def test_ci_matrix_empty_string_image_name_and_mac_normalize_to_defaults(tmp_path: Path) -> None:
+    """An empty-string image_name/mac is treated as absent → CE image + pin (not "")."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry(image_name="", mac="")])
+    ci = _ci_matrix(repo)
+    assert len(ci) == 1
+    entry = ci[0]
+    assert entry["image_name"] == CE_DEFAULT_IMAGE_NAME, f"empty image_name must default; got {entry['image_name']!r}"
+    assert entry["mac"] == CE_DEFAULT_MAC, f"empty mac must default; got {entry['mac']!r}"
+
+
+# --------------------------------------------------------------------------- #
 # Scenario e — BUILD matrix + derived test matrices unaffected (§2.2.6 regression).
 # --------------------------------------------------------------------------- #
 def test_build_and_test_matrices_unchanged_by_new_fields(tmp_path: Path) -> None:

@@ -131,7 +131,10 @@ fi
 CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
   [ .[]
     | select(.ci == true)
-    | . + { image_name: (.image_name // "pfsense-ce"), mac: (.mac // "BC:24:11:37:9C:AC") }
+    | . + {
+        image_name: (if ((.image_name // "") == "") then "pfsense-ce" else .image_name end),
+        mac: (if ((.mac // "") == "") then "BC:24:11:37:9C:AC" else .mac end)
+      }
   ]')"
 
 # ── Sanity: CI matrix must not be empty ───────────────────────────────────────
