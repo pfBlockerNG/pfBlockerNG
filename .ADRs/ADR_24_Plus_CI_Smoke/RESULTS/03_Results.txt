@@ -22,8 +22,12 @@ WHAT CHANGED (only the two workflow files)
        image_name  (string, default "pfsense-ce")
        mac         (string, default "BC:24:11:37:9C:AC")  ← the CE pin
      Each carries a help description noting the fan-out passes the per-leg
-     matrix.image_name / matrix.mac (Plus = pfsense-plus / REDACTED_PLUS_MAC),
-     and that image_name is ignored when image_ref is set.
+     matrix.image_name (Plus = pfsense-plus), and that image_name is ignored
+     when image_ref is set.
+     (NOTE: ADR-24 step 3 superseded the mac-via-matrix design — the Plus VM
+     identity, MAC + SMBIOS uuid, now comes from the SMOKE_PLUS_* secrets, and
+     smoke.yml gained a "Resolve VM identity" step. The mac input remains a
+     CE-public default placeholder only.)
    - RESOLVE-REF step ("Resolve the pfSense image ref"):
        new env  INPUT_IMAGE_NAME: ${{ inputs.image_name }}
        NAME line changed from
@@ -105,19 +109,24 @@ A') Bare smoke.yml dispatch (no inputs at all):
    ⇒ Same ref + same MAC as a pre-change bare dispatch. ✔ (§2.2.1)
 
 B) Plus matrix entry (Phase 4 will introduce this on ci-metadata; NOT live today):
-     pfsense_version="26.03", image_name="pfsense-plus", mac="REDACTED_PLUS_MAC",
-     channel="Plus", ci=true
+     pfsense_version="26.03", image_name="pfsense-plus", channel="Plus", ci=true
+     (NOTE: ADR-24 step 3 superseded the mac-via-matrix design — the Plus VM
+     identity, MAC + SMBIOS uuid, now comes from the SMOKE_PLUS_MAC +
+     SMOKE_PLUS_SMBIOS_UUID secrets, never the matrix entry.)
    fan-out passes to smoke.yml:
-     pfsense_version=26.03  image_name=pfsense-plus  mac=REDACTED_PLUS_MAC
+     pfsense_version=26.03  image_name=pfsense-plus  (+ secrets: inherit)
    smoke.yml resolve-ref:
      REPO = ghcr.io/pfblockerng
      NAME = pfsense-plus
      TAG  = 26.03
      REF  = ghcr.io/pfblockerng/pfsense-plus:26.03   (private, pulled not published)
-   pytest env: SMOKE_VM_MAC = REDACTED_PLUS_MAC → boot_vm.sh boots the Plus VM with
-     its license-keyed NIC MAC.
+   smoke.yml "Resolve VM identity" step (non-CE branch): reads SMOKE_PLUS_MAC +
+     SMOKE_PLUS_SMBIOS_UUID secrets → SMOKE_VM_MAC / SMOKE_VM_SMBIOS_UUID for pytest
+     (+ SMOKE_REDACT_VALUES for the diagnostics scrub); fails closed if absent.
+   pytest env: SMOKE_VM_MAC / SMOKE_VM_SMBIOS_UUID → boot_vm.sh boots the Plus VM
+     with its license-keyed NIC MAC + SMBIOS uuid.
    leg name in the UI: "Smoke (Plus 26.03)".
-   ⇒ A Plus entry, once ci:true, routes its own private image + license MAC
+   ⇒ A Plus entry, once ci:true, routes its own private image + secret identity
      end-to-end. Does NOT appear today (live Plus is ci:false → excluded by the
      matrix reader, and the CI GUARD would also catch a ci:false leak).
 
@@ -190,9 +199,11 @@ confirm before dispatching the live flip:
       key in root authorized_keys.                               — UNVERIFIED here
   [ ] Diagnostics scrub verified for the Plus license (no NDI / license
       identifier in the smoke-diagnostics artifact — §4.7).      — UNVERIFIED here
-Once all four hold, Phase 4 opens a PR against ci-metadata (Plus entry ci:true +
-image_name: pfsense-plus + mac: REDACTED_PLUS_MAC; schema gains the two optional
-fields; lifecycle_policy.plus text rewritten), then dispatches smoke-fanout.yml
+Once all four hold, Phase 4 sets the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID
+secrets and opens a PR against ci-metadata (Plus entry ci:true +
+image_name: pfsense-plus; the MAC/uuid are secrets, not matrix fields; schema
+gains the optional image_name field; lifecycle_policy.plus text rewritten), then
+dispatches smoke-fanout.yml
 and verifies both legs + the AND-gate green and the Plus-leg diagnostics carry no
 license identifier.
 

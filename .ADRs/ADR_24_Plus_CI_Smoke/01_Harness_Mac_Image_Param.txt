@@ -11,7 +11,7 @@ byte-identical to today. Inline on the branch, one commit, push directly.
 
 WHY THIS PHASE EXISTS
 boot_vm.sh hardcodes the CE source-VM MAC (BC:24:11:37:9C:AC). The pfSense Plus
-image (ADR-24) must boot with ITS source-VM MAC (REDACTED_PLUS_MAC) — pfSense
+image (ADR-24) must boot with ITS source-VM MAC (held in the SMOKE_PLUS_MAC secret) — pfSense
 matches interface assignment by MAC AND the Plus license/NDI registration is
 keyed to it. conftest.py boots exclusively via boot_vm.sh, so one env override
 parameterizes the whole harness.

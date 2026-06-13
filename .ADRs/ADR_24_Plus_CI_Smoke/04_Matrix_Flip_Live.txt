@@ -26,15 +26,19 @@ Read RESULTS/03_Results.txt FIRST (if missing: STOP). It must confirm:
 If ANY precondition is unmet: STOP and report which.
 
 ACTION PLAN (ordered)
+0. Set the GitHub Actions secrets (maintainer): SMOKE_PLUS_MAC +
+   SMOKE_PLUS_SMBIOS_UUID (optionally SMOKE_PLUS_NDI) = the Plus source-VM
+   identity. These are license/NDI-keyed and live ONLY in secrets — never the
+   public matrix.
 1. Branch off origin/ci-metadata (worktree); edit supported-versions.json:
    the Plus 26.03 entry gets:
        "ci": true,
-       "image_name": "pfsense-plus",
-       "mac": "REDACTED_PLUS_MAC"
-   Update supported-versions.schema.json: optional string fields image_name
-   (lowercase OCI name pattern) and mac (MAC pattern). Rewrite
-   lifecycle_policy.plus: Plus runs in CI from a private licensed image; the MAC
-   is license/NDI-keyed and MUST equal the source VM's; image refresh is manual.
+       "image_name": "pfsense-plus"
+   (the MAC/uuid are NOT in the matrix — they are the SMOKE_PLUS_* secrets).
+   Update supported-versions.schema.json: optional string field image_name
+   (lowercase OCI name pattern). Rewrite lifecycle_policy.plus: Plus runs in CI
+   from a private licensed image; the VM identity (MAC + SMBIOS uuid) is
+   license/NDI-keyed and comes from secrets; image refresh is manual.
 2. PR against ci-metadata; land it per repo flow.
 3. Dispatch smoke-fanout.yml. Required outcome: CE leg(s) green, Plus leg green,
    all-smoke-passed green. On a Plus-leg failure: read the smoke-diagnostics
@@ -59,7 +63,8 @@ VERIFICATION (must all pass before the phase is done)
 
 EXPECTED RESULT
 CI fans out to every supported version, CE and Plus; Plus leg pulls the private
-image, boots with REDACTED_PLUS_MAC, passes the ADR-04 suite.
+image, boots with the secret source-VM identity (SMOKE_PLUS_MAC +
+SMOKE_PLUS_SMBIOS_UUID), passes the ADR-04 suite.
 
 COMMIT
   (on ci-metadata, via PR)  ci-metadata: enable Plus 26.03 in CI (ADR-24 P4)

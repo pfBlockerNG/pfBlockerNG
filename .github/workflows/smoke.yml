@@ -53,7 +53,7 @@ on:
         required: false
         default: "pfsense-ce"
       mac:
-        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). The fan-out passes the per-leg matrix.mac; Plus is license-keyed to REDACTED_PLUS_MAC."
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). Used for CE only; a non-CE (Plus) image takes its license/NDI-keyed MAC from the SMOKE_PLUS_MAC secret, never this input."
         required: false
         default: "BC:24:11:37:9C:AC"
       pytest_marker:
@@ -82,7 +82,7 @@ on:
         type: string
         default: "pfsense-ce"
       mac:
-        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). The fan-out passes the per-leg matrix.mac; Plus is license-keyed to REDACTED_PLUS_MAC."
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). Used for CE only; a non-CE (Plus) image takes its license/NDI-keyed MAC from the SMOKE_PLUS_MAC secret, never this input."
         required: false
         type: string
         default: "BC:24:11:37:9C:AC"
@@ -309,21 +309,42 @@ jobs:
             --out out-nightly
           echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"
 
-      # ADR-24 §2.2.4: a non-CE image (Plus) is license/NDI-keyed to its OWN
-      # source-VM MAC and must NEVER boot with the CE pin. Fail fast if a caller
-      # selects a non-CE image_name but leaves mac at the CE default — booting
-      # Plus with the wrong VM identity would invalidate its registration.
-      - name: Validate image/MAC contract
+      # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
+      # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE
+      # (Plus) image is LICENSE/NDI-keyed to its OWN source-VM identity, which is
+      # SECRET — it comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID secrets,
+      # NEVER the public ci-metadata matrix (the NDI is derived from MAC + uuid, so
+      # both are as license-keyed as the MAC). This resolves the effective identity
+      # and, for Plus, masks it + emits the diagnostics redaction set. Fail closed
+      # if a non-CE image is selected without those secrets.
+      - name: Resolve VM identity (MAC + SMBIOS uuid)
         env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
           INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           INPUT_MAC: ${{ inputs.mac }}
+          PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
         run: |
           set -eu
-          if [ "${INPUT_IMAGE_NAME:-pfsense-ce}" != "pfsense-ce" ] && \
-             [ "${INPUT_MAC:-}" = "BC:24:11:37:9C:AC" ]; then
-            echo "::error::Image '${INPUT_IMAGE_NAME}' must boot with its own source-VM MAC (license/NDI-keyed); inputs.mac is still the CE pin. Set inputs.mac explicitly."
-            exit 1
-          fi
+          IMG="${IMAGE_REF:-${INPUT_IMAGE_NAME:-pfsense-ce}}"
+          case "$IMG" in
+            *pfsense-ce*)
+              # CE: the public pin. No identity is secret -> nothing to redact.
+              echo "RESOLVED_VM_MAC=${INPUT_MAC:-BC:24:11:37:9C:AC}" >> "$GITHUB_ENV"
+              echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
+              echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
+            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix
+              if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
+                echo "::error::non-CE image '$IMG' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
+              fi
+              # Mask before anything echoes them; NDI optional.
+              printf '::add-mask::%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
+              echo "RESOLVED_VM_MAC=$PLUS_MAC" >> "$GITHUB_ENV"
+              echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
+              # newline-joined redaction set for the diagnostics scrub (MAC + uuid [+ NDI])
+              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
+          esac
 
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
@@ -346,11 +367,15 @@ jobs:
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
-          # QEMU NIC MAC for the VM boot (ADR-24): conftest passes this through to
-          # boot_vm.sh. Defaults to the CE pin so a bare dispatch is byte-identical;
-          # the fan-out passes the per-leg matrix.mac (Plus = REDACTED_PLUS_MAC,
-          # license-keyed). boot_vm.sh keeps the same CE default if this is unset.
-          SMOKE_VM_MAC: ${{ inputs.mac }}
+          # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
+          # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
+          # identity" step — the CE pin for a CE image (byte-identical to a bare
+          # dispatch), the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES
+          # is the (masked) Plus identity the diagnostics scrub value-redacts; EMPTY
+          # for CE -> the scrub is a strict no-op (CE bundle unchanged).
+          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
+          SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
           # The builder-produced -nightly .pkg (set above for the `repo` marker; the
@@ -391,6 +416,52 @@ jobs:
           python3 -m pytest tests/smoke -m "${PYTEST_MARKER}" \
             --override-ini="addopts=" --override-ini="timeout_func_only=true" \
             --timeout=30 --timeout-method=signal -v
+
+      # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
+      # BEFORE upload. For a non-CE (Plus) image: drop the console screenshots
+      # (screen-*.png/.ppm) — a banner screenshot shows the NDI/serial as PIXELS
+      # that no text redaction can reach — and literal-redact each secret value
+      # (MAC + uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text
+      # file under the diag dir. CE: RESOLVED_REDACT is empty -> no-op (the artifact
+      # is byte-identical to today). The literal escape mirrors helpers.py's
+      # _sed_escape_literal (one -e per BRE metachar, NOT a bracket-class) so a
+      # regex-special value is matched literally.
+      - name: Scrub Plus secret identity from diagnostics (runner side)
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+        run: |
+          set -eu
+          IMG="${IMAGE_REF:-${INPUT_IMAGE_NAME:-pfsense-ce}}"
+          # Non-CE: drop console screenshots (pixels can leak NDI/serial).
+          case "$IMG" in
+            *pfsense-ce*) : ;;
+            *) find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) -delete 2>/dev/null || true ;;
+          esac
+          # Value-redaction is a strict no-op when RESOLVED_REDACT is empty (CE).
+          [ -n "${SMOKE_REDACT_VALUES:-}" ] || { echo "no redaction values (CE leg) — runner-side scrub is a no-op"; exit 0; }
+          # Build a redact.sed of literal s###REDACTED### per value. BRE-escape each
+          # value with one -e per metachar (\ first, then . * [ ] ^ $ #).
+          esc() {
+            printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/\./\\./g' -e 's/\*/\\*/g' \
+              -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' -e 's/\$/\\$/g' -e 's/#/\\#/g'
+          }
+          : > redact.sed
+          printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r v; do
+            [ -n "$v" ] || continue
+            printf 's#%s#REDACTED#g;\n' "$(esc "$v")" >> redact.sed
+          done
+          # GNU sed on the runner: -i with no backup-suffix arg. Redact every vm*.log
+          # and every TEXT file under the diag dirs.
+          find . -type f -name 'vm*.log' 2>/dev/null | while IFS= read -r f; do
+            sed -i -f redact.sed "$f" 2>/dev/null || true
+          done
+          find smoke-diag -type f 2>/dev/null | while IFS= read -r f; do
+            LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i -f redact.sed "$f" 2>/dev/null || true
+          done
+          rm -f redact.sed
 
       - name: Upload smoke diagnostics
         if: always()
