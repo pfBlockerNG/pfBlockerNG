@@ -6,17 +6,12 @@ name: Release
 # on pfsense/FreeBSD-ports to update the corresponding port's GH_TAGNAME.
 #
 # workflow_dispatch allows a dry-run (point at an existing tag via
-# workflow_dispatch + the tag ref) and to select the .pkg builder.
+# workflow_dispatch + the tag ref).
 on:
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
-    inputs:
-      builder:
-        description: "Builder for .pkg artifacts: 'portable' (Linux, fast, default) or 'freebsd' (FreeBSD VM, fidelity oracle)"
-        required: false
-        default: "portable"
 
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; verify-checks: checks:read to read the
@@ -98,10 +93,6 @@ jobs:
     outputs:
       build_matrix: ${{ steps.dedupe.outputs.build_matrix }}
       pkg_channel: ${{ steps.channel.outputs.pkg_channel }}
-      first_freebsd_version: ${{ steps.dedupe.outputs.first_freebsd_version }}
-      first_freebsd_major: ${{ steps.dedupe.outputs.first_freebsd_major }}
-      first_php_version: ${{ steps.dedupe.outputs.first_php_version }}
-      first_py_flavor: ${{ steps.dedupe.outputs.first_py_flavor }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -128,14 +119,8 @@ jobs:
         id: dedupe
         # For each distinct freebsd_major, select the first CE entry (preferred);
         # if no CE entry exists for that major, fall back to the first Plus entry.
-        # Result: one build entry per distinct FreeBSD major.
-        #
-        # Also emits first_* scalar outputs for the FreeBSD-builder reusable-workflow
-        # call (which cannot use strategy.matrix alongside uses:) — these are the
-        # first deduped entry's fields. Today there is exactly one deduped entry
-        # (both CE 2.8 and Plus 26.03 share FreeBSD 15); when a second major is
-        # added, build-pkgs-portable's inline loop handles all of them, and the
-        # FreeBSD-builder path would need extending to multiple calls.
+        # Result: one build entry per distinct FreeBSD major, fed to the portable
+        # builder's inline per-major loop (build-pkgs-portable).
         run: |
           DEDUPED=$(printf '%s' '${{ steps.matrices.outputs.build_matrix }}' \
             | jq -c '
@@ -147,14 +132,6 @@ jobs:
               ')
           printf 'build_matrix=%s\n' "$DEDUPED" >> "$GITHUB_OUTPUT"
           echo "Deduped build matrix: $DEDUPED"
-
-          # Scalar outputs for the first (currently only) deduped entry
-          printf '%s\n' "$DEDUPED" | jq -r '
-            "first_freebsd_version=\(.[0].freebsd_version)",
-            "first_freebsd_major=\(.[0].freebsd_major)",
-            "first_php_version=\(.[0].php_version)",
-            "first_py_flavor=\(.[0].py_flavor)"
-          ' >> "$GITHUB_OUTPUT"
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
@@ -281,10 +258,13 @@ jobs:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           files: ${{ env.ARCHIVE }}
 
-  # ── 2b. Build .pkg artifacts (portable Linux builder — DEFAULT) ──────────
+  # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
   # Builds one .pkg per distinct FreeBSD major from the deduped matrix.
   # Runs the portable Linux builder steps inline (no FreeBSD VM, ~3 min/entry).
-  # Runs unless `builder: freebsd` is explicitly selected on workflow_dispatch.
+  # This is the SOLE release .pkg builder: pfBlockerNG is a NO_BUILD port, so the
+  # portable builder reproduces `make package` byte-for-byte (validated against it
+  # over every smoke + Web-UI run on CE and Plus) and `pkg add` checks a dep is
+  # PRESENT, not its version — so the portable artifact installs identically.
   #
   # GitHub Actions does not allow strategy.matrix on a job that uses a
   # reusable workflow (uses:), so we run each entry sequentially in one job,
@@ -298,9 +278,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [verify-checks, read-matrix]
     timeout-minutes: 30
-    # Default path: run unless the operator explicitly selected the FreeBSD builder.
-    # On tag push, github.event.inputs.builder is empty — defaults to portable.
-    if: github.event.inputs.builder != 'freebsd'
 
     steps:
       - name: Checkout the tagged source
@@ -373,33 +350,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # ── 2b′. Build .pkg artifacts (FreeBSD make-package builder — FALLBACK) ──
-  # Calls build-pkg.yml (the FreeBSD make-package VM builder, ~25 min).
-  # Runs only when `builder: freebsd` is selected on workflow_dispatch.
-  # "Linux by default, FreeBSD if we fuck up."
-  #
-  # One of build-pkgs-portable / build-pkgs-freebsd always runs, never both.
-  # build-pkgs-portable uploads "pfBlockerNG-release-pkgs"; build-pkgs-freebsd
-  # (via build-pkg.yml) uploads "pfBlockerNG-pkg". attach-pkgs downloads both
-  # artifact names (continue-on-error) and takes whichever one is present.
-  # A skipped job satisfies its `needs` entry just like a successful one, so
-  # attach-pkgs is never blocked by the one that didn't run.
-  #
-  # NOTE: GitHub Actions does not allow strategy.matrix alongside uses: for
-  # reusable workflows. Today's deduped matrix has exactly one entry (FreeBSD 15);
-  # first_* scalar outputs from read-matrix are used directly. When a second
-  # FreeBSD major is added, extend this to multiple jobs or use the inline approach
-  # of build-pkgs-portable.
-  build-pkgs-freebsd:
-    name: build .pkg artifacts (FreeBSD VM)
-    needs: [verify-checks, read-matrix]
-    if: github.event.inputs.builder == 'freebsd'
-    uses: ./.github/workflows/build-pkg.yml
-    with:
-      freebsd_version: ${{ needs.read-matrix.outputs.first_freebsd_version }}
-      channel: ${{ needs.read-matrix.outputs.pkg_channel }}
-      php_version: ${{ needs.read-matrix.outputs.first_php_version }}
-
   # ── 2c. Attach .pkg artifacts to the GitHub Release ──────────────────────
   # Downloads the .pkg from every build-pkgs leg (even failed ones — we
   # skip missing downloads), renames each to embed the FreeBSD major for
@@ -416,13 +366,10 @@ jobs:
   attach-pkgs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
-    needs: [release, build-pkgs-portable, build-pkgs-freebsd, read-matrix]
-    # Run whenever release succeeded, regardless of build outcome.
-    # One of build-pkgs-portable / build-pkgs-freebsd will always be skipped
-    # (they are mutually exclusive on the `builder` input); a skipped job
-    # satisfies `needs` just as a success does. Build failures surface as red
-    # legs but do not prevent attach-pkgs from appending whatever artifacts
-    # did build — or from completing with a warning if nothing built.
+    needs: [release, build-pkgs-portable, read-matrix]
+    # Run whenever release succeeded, regardless of the build outcome. A
+    # build-pkgs-portable failure surfaces as a red leg but does not prevent
+    # attach-pkgs from completing with a warning if nothing built.
     if: always() && needs.release.result == 'success'
     permissions:
       contents: write
@@ -431,52 +378,13 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download .pkg artifacts from portable builder
-        # The portable builder uploads as "pfBlockerNG-release-pkgs"; artifacts
-        # already have -FreeBSD-<major> in the filename (renamed before upload).
+        # The portable builder uploads as "pfBlockerNG-release-pkgs"; each artifact
+        # already has -FreeBSD-<major> in the filename (renamed before upload).
         uses: actions/download-artifact@v4
         with:
           name: pfBlockerNG-release-pkgs
           path: pkgs/
         continue-on-error: true
-
-      - name: Download .pkg artifacts from FreeBSD builder
-        # The FreeBSD reusable workflow (build-pkg.yml) uploads as "pfBlockerNG-pkg";
-        # filename does NOT yet have -FreeBSD-<major> (renamed in the next step).
-        uses: actions/download-artifact@v4
-        with:
-          name: pfBlockerNG-pkg
-          path: pkgs/
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Rename untagged .pkg files to embed FreeBSD major
-        id: rename
-        # The portable builder already renames files before uploading
-        # (pfSense-pkg-pfBlockerNG-devel-3.2.16-FreeBSD-15.pkg). The FreeBSD
-        # reusable workflow emits an untagged name (pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg).
-        # Rename any untagged .pkg using the first_freebsd_major from the matrix.
-        # Today there is only one FreeBSD major (15), so this is always a 1:1 rename.
-        run: |
-          set -eu
-          FIRST_MAJOR="${{ needs.read-matrix.outputs.first_freebsd_major }}"
-
-          if ! ls pkgs/*.pkg 2>/dev/null | head -1 | grep -q .; then
-            echo "No .pkg artifacts to rename"
-            exit 0
-          fi
-
-          for f in pkgs/*.pkg; do
-            [ -f "$f" ] || continue
-            BASE=$(basename "$f" .pkg)
-            case "$BASE" in
-              *-FreeBSD-*) echo "Already tagged: $(basename "$f")"; continue ;;
-            esac
-            DEST="pkgs/${BASE}-FreeBSD-${FIRST_MAJOR}.pkg"
-            mv "$f" "$DEST"
-            echo "Renamed: $(basename "$f") -> $(basename "$DEST")"
-          done
-
-          ls -l pkgs/ || echo "No .pkg files found"
 
       - name: Append .pkg files to the GitHub Release
         # Upload the renamed .pkg files to the already-published release using
@@ -491,8 +399,8 @@ jobs:
 
           PKGS=$(find pkgs -name "*.pkg" 2>/dev/null | head -20)
           if [ -z "$PKGS" ]; then
-            echo "::warning::No .pkg artifacts to attach — all build-pkgs legs may have failed."
-            echo "Check the build-pkgs-portable / build-pkgs-freebsd job logs for details."
+            echo "::warning::No .pkg artifacts to attach — the build-pkgs-portable leg may have failed."
+            echo "Check the build-pkgs-portable job logs for details."
             exit 0
           fi
 

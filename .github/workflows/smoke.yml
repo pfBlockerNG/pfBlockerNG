@@ -138,8 +138,8 @@ jobs:
   # the smoke gate — same artifact, but no KVM/image-cache/SSH setup, so it's far
   # faster. `pkg add` on the baked-deps image checks deps are PRESENT (not their
   # version), so the portable .pkg installs identically to a `make package` one.
-  # The FreeBSD build (build-pkg.yml) is retained as a dispatch-only fidelity
-  # oracle; switch back here with a one-line `uses:` change if ever needed.
+  # The portable builder is the SOLE .pkg builder (the FreeBSD make-package path
+  # was retired — pfBlockerNG is NO_BUILD, so there is nothing to compile).
   build-pkg:
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
@@ -170,7 +170,7 @@ jobs:
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
         # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
         # rule making /dev/kvm world-RW fixes it in the same login session (no
-        # group-membership re-login needed). Same fix as build-pkg.yml.
+        # group-membership re-login needed). Same fix as the other KVM jobs.
         run: |
           set -eu
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \

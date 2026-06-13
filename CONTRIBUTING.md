@@ -773,7 +773,7 @@ gh workflow run smoke.yml                        # uses the SMOKE_IMAGE_REF secr
 gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
 ```
 
-The workflow builds the `.pkg` (`build-pkg.yml`, FreeBSD VM), pulls the pfSense
+The workflow builds the `.pkg` (`build-pkg-linux.yml`, portable Linux builder), pulls the pfSense
 image from private GHCR, then runs `pytest -m smoke`. The test fixture **blocks
 the runner's egress after `deploy()`** so the run is hermetic — feeds come from
 an in-runner mock server reached over the SLIRP host alias `10.0.2.2`. Required

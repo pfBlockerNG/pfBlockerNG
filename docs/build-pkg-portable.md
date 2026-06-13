@@ -325,17 +325,14 @@ It publishes the same `pfBlockerNG-pkg` artifact (`out/*.pkg`) that `smoke.yml`
 installs, with no FreeBSD VM / KVM / image cache — so it is far faster than the
 FreeBSD build it replaced. Because `pkg add` checks a dependency is *present* (not
 its version), the portable `.pkg` installs on the baked-deps smoke image
-identically to a `make package` one. The FreeBSD path (`build-pkg.yml`, real
-`make package`) is retained as a **dispatch-only fidelity oracle** — dispatch it to
-cross-check this tool's output, or repoint `smoke.yml`'s `build-pkg` job to it if
-the portable path ever diverges.
+identically to a `make package` one. This tool is the **sole** `.pkg` builder for
+both CI and releases — the FreeBSD `make package` workflow (`build-pkg.yml` /
+`scripts/build-pkg.sh`) was retired, since a `NO_BUILD` port has nothing to compile.
 
 ## See also
 
 - [`.github/workflows/build-pkg-linux.yml`](../.github/workflows/build-pkg-linux.yml)
-  — the Linux smoke build that drives this tool.
-- [`scripts/build-pkg.sh`](../scripts/build-pkg.sh) — the on-FreeBSD builder
-  (real `make package`), the fidelity oracle (`build-pkg.yml`, dispatch-only).
+  — the Linux build that drives this tool (smoke, UI, and release artifacts).
 - [`scripts/README.md`](../scripts/README.md) — overview of the dev scripts and
   the two install paths (rsync overlay vs `.pkg`).
 - [`misc/pfSense_versions.md`](misc/pfSense_versions.md) — per-version base facts

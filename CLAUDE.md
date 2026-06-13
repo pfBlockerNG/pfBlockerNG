@@ -314,8 +314,9 @@ cost real debugging — internalise them first:
   `scripts/build-pkg-portable.py`), NOT a FreeBSD VM: pfBlockerNG is a `NO_BUILD` port, so
   the portable builder reproduces `make package` from the Makefile + pkg-plist. `pkg add`
   checks a dep is PRESENT, not its version, so the portable `.pkg` installs identically on
-  the baked-deps image. The real FreeBSD `make package` path (`build-pkg.yml`) is retained as
-  a dispatch-only fidelity oracle — not in the smoke gate.
+  the baked-deps image. The portable builder is the **sole** `.pkg` builder for both CI and
+  releases — the FreeBSD `make package` workflow (`build-pkg.yml` / `scripts/build-pkg.sh`)
+  was retired (nothing to compile for a `NO_BUILD` port).
 - **Every run uploads a full guest snapshot** (`smoke-diagnostics`: all `/var/log`, `dmesg`,
   `pfctl -sa`, unbound + pfBlockerNG state, `/var/db/pfblockerng`, `/var/db/aliastables`,
   scrubbed `config.xml`). On any failure, read it first.

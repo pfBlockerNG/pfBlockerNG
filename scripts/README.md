@@ -61,14 +61,15 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
 
 | Channel | `.pkg` build | Live-VM smoke CI |
 | --- | --- | --- |
-| CE | yes (portable Linux builder by default; FreeBSD `make package` as oracle/fallback) | yes (`ci: true`) |
-| Plus | yes (same builders; build needs only the right FreeBSD-major env, no license) | no (no licensed Plus image) |
+| CE | yes (portable Linux builder) | yes (`ci: true`) |
+| Plus | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | no (no licensed Plus image) |
 
 **Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
-**default**: it runs on a plain Linux runner and reproduces `make package` from the port's
-Makefile + pkg-plist off-FreeBSD. **FreeBSD `make package`** (`build-pkg.yml`) is retained
-as the **fidelity oracle / fallback** — selectable per entry; used when the portable
-builder diverges from the real package in a way that affects install/behaviour.
+**sole** `.pkg` builder for both CI and releases: it runs on a plain Linux runner and
+reproduces `make package` from the port's Makefile + pkg-plist off-FreeBSD. Because
+pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a dependency is
+*present* (not its version), the portable `.pkg` installs identically to a real
+`make package` one — so the FreeBSD `make package` workflow was retired.
 
 ### Where `.pkg` artifacts land
 
@@ -135,11 +136,10 @@ It is **all local: no internet, no Netgate pkg**, so it works even with egress b
 
 ## Build the `.pkg`
 
-Two ways to produce the installable FreeBSD package:
+Produce the installable FreeBSD package:
 
 | Script | Runs on | How |
 | --- | --- | --- |
-| [`build-pkg.sh`](build-pkg.sh) | a FreeBSD VM (ABI-matched) | the port's real `make package` (pins `GH_TAGNAME` to the commit under test). |
 | [`build-pkg-portable.py`](build-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | reads the port files and emits the libpkg archive directly. |
 
 `build-pkg-portable.py` exploits the fact that pfBlockerNG is a `NO_BUILD` port:

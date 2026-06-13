@@ -2,8 +2,8 @@
 # install-pkg.sh — install a locally-built pfBlockerNG .pkg onto a pfSense box
 # over SSH. Unlike the rsync overlay, `pkg add` registers the package in pkg's
 # database and runs its POST-INSTALL hooks (menus, services, Unbound wiring).
-# The .pkg is produced by the FreeBSD build job (scripts/build-pkg.sh) for the
-# exact branch commit.
+# The .pkg is produced by the portable Linux builder (scripts/build-pkg-portable.py,
+# driven by build-pkg-linux.yml) for the exact branch commit.
 #
 # RUN_DEPENDS: NOT fetched here. By convention the pre-baked smoke image ships
 # pfBlockerNG's runtime dependencies, so `pkg add` of the local .pkg resolves
