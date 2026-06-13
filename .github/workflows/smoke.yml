@@ -327,16 +327,21 @@ jobs:
           PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
         run: |
           set -eu
-          IMG="${IMAGE_REF:-${INPUT_IMAGE_NAME:-pfsense-ce}}"
-          case "$IMG" in
-            *pfsense-ce*)
+          # Resolve the EXACT image name (strip ghcr path, @digest, :tag) — a substring
+          # match could misclassify a non-CE image as CE and skip the secret + redaction.
+          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
+          if [ -n "${IMAGE_REF:-}" ]; then
+            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
+          fi
+          case "$IMG_NAME" in
+            pfsense-ce)
               # CE: the public pin. No identity is secret -> nothing to redact.
               echo "RESOLVED_VM_MAC=${INPUT_MAC:-BC:24:11:37:9C:AC}" >> "$GITHUB_ENV"
               echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
               echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
             *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix
               if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
-                echo "::error::non-CE image '$IMG' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
+                echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
               fi
               # Mask before anything echoes them; NDI optional.
               printf '::add-mask::%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
@@ -434,10 +439,14 @@ jobs:
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
         run: |
           set -eu
-          IMG="${IMAGE_REF:-${INPUT_IMAGE_NAME:-pfsense-ce}}"
+          # Exact image-name match (strip ghcr path, @digest, :tag), not a substring.
+          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
+          if [ -n "${IMAGE_REF:-}" ]; then
+            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
+          fi
           # Non-CE: drop console screenshots (pixels can leak NDI/serial).
-          case "$IMG" in
-            *pfsense-ce*) : ;;
+          case "$IMG_NAME" in
+            pfsense-ce) : ;;
             *) find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) -delete 2>/dev/null || true ;;
           esac
           # Value-redaction is a strict no-op when RESOLVED_REDACT is empty (CE).
@@ -449,9 +458,11 @@ jobs:
               -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' -e 's/\$/\\$/g' -e 's/#/\\#/g'
           }
           : > redact.sed
+          # `I` flag = case-insensitive (GNU + FreeBSD sed) so an upper-case secret
+          # scrubs the lower-case MAC/uuid that logs/ifconfig emit.
           printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r v; do
             [ -n "$v" ] || continue
-            printf 's#%s#REDACTED#g;\n' "$(esc "$v")" >> redact.sed
+            printf 's#%s#REDACTED#gI;\n' "$(esc "$v")" >> redact.sed
           done
           # GNU sed on the runner: -i with no backup-suffix arg. Redact every vm*.log
           # and every TEXT file under the diag dirs.

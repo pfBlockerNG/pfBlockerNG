@@ -236,6 +236,41 @@ def test_redact_values_present_value_is_replaced() -> None:
     assert out == f"nic0 ether {REDACTED} (active); peer {REDACTED}"
 
 
+def test_redact_values_is_case_insensitive() -> None:
+    """LOAD-BEARING: a secret stored UPPER-case must scrub its lower-case rendering.
+
+    Given an upper-case MAC in the redaction set but the lower-case form in the text
+         (ifconfig/dmesg/logs emit lower-case)
+    When redact_values runs
+    Then the lower-case rendering is gone — without this, an upper-case secret would
+         leak through. Mirrors the `s###REDACTED###gI` sed flag the shell paths use.
+    """
+    upper = "02:AB:CD:EF:12:34"  # fake doc MAC; letters differ by case
+    text = f"nic0 ether {upper.lower()} (active)"
+    assert upper not in text and upper.lower() in text and REDACTED not in text
+    out = redact_values(text, [upper])
+    assert upper.lower() not in out
+    assert out == f"nic0 ether {REDACTED} (active)"
+
+
+@pytest.mark.skipif(shutil.which("sed") is None, reason="sed not on PATH")
+def test_value_sed_program_gI_flag_is_case_insensitive() -> None:
+    """The in-guest `s###REDACTED###gI` program scrubs a case-mismatched value.
+
+    Given the sed program built from an upper-case secret (as the in-guest scrub
+         emits it, with the `I` flag) and a sample carrying the lower-case rendering
+    When run through `sed`
+    Then the value is scrubbed — proving the `I` (case-insensitive) flag the harness
+         relies on actually works on the available sed (GNU here; FreeBSD in-guest).
+    """
+    upper = "02:AB:CD:EF:12:34"
+    sample = f"ether {upper.lower()}"
+    sed_prog = f"s#{_sed_escape_literal(upper)}#{REDACTED}#gI;"
+    out = subprocess.run(["sed", sed_prog], input=sample, capture_output=True, text=True, check=True).stdout
+    assert upper.lower() not in out
+    assert out == f"ether {REDACTED}"
+
+
 def test_redact_values_regex_special_value_matched_literally() -> None:
     """Given a value packed with regex/BRE metacharacters (`. * [ ] ^ $ #` + `\\`)
     When redact_values runs

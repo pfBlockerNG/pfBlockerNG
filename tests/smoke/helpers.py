@@ -2364,9 +2364,11 @@ def _sed_escape_literal(value: str) -> str:
 
 
 def redact_values(text: str, values: Iterable[str]) -> str:
-    """Replace every non-empty ``value`` (matched LITERALLY, not as a regex) in
-    ``text`` with ``REDACTED``.
+    """Replace every non-empty ``value`` (matched LITERALLY, not as a regex, and
+    CASE-INSENSITIVELY) in ``text`` with ``REDACTED``.
 
+    Case-insensitive to mirror the ``s###REDACTED###gI`` sed flag the shell paths
+    use, so an upper-case MAC/uuid secret still scrubs its lower-case rendering.
     Pure Python — pinned in the unit suite against the shell ``sed`` redactor
     (:func:`_sed_escape_literal` parity). Empty / whitespace-only values are ignored
     (an empty needle would otherwise match everywhere). With an empty ``values`` this
@@ -2375,7 +2377,9 @@ def redact_values(text: str, values: Iterable[str]) -> str:
     out = text
     for value in values:
         if value and value.strip():
-            out = out.replace(value, REDACTED)
+            # Case-insensitive (mirrors the `s###gI` sed flag) so an upper-case secret
+            # still matches the lower-case MAC/uuid that ifconfig/dmesg/logs emit.
+            out = re.sub(re.escape(value), REDACTED, out, flags=re.IGNORECASE)
     return out
 
 
@@ -2453,7 +2457,10 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
     build_redact_sed = ""
     redact_bundle = ""
     if redact_values_set:
-        sed_prog = "".join(f"s#{_sed_escape_literal(v)}#{REDACTED}#g;" for v in redact_values_set)
+        # `I` flag = case-insensitive (supported by both FreeBSD sed in-guest and GNU
+        # sed on the runner), so an upper-case secret still matches the lower-case
+        # MAC/uuid that ifconfig/dmesg/logs emit.
+        sed_prog = "".join(f"s#{_sed_escape_literal(v)}#{REDACTED}#gI;" for v in redact_values_set)
         # In-guest BRE-escape of the live serial — SAME metachar set + order as
         # _sed_escape_literal (`\` first, then `. * [ ] ^ $ #`), one `-e` per
         # metachar (NOT a bracket-class: a class like `[\.*[]^$#]` closes early at
@@ -2472,7 +2479,8 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
             "case \"$SL\" in 'not specified'|'to be filled by o.e.m.'|'0'|'none'|'default string'|'') S='' ;; esac; "
             'if [ -n "$S" ]; then '
             f"ES=$(printf '%s' \"$S\" | {serial_esc}); "
-            'printf \'s#%s#REDACTED#g;\' "$ES" >> "$D/redact.sed"; '
+            # `I` flag → case-insensitive, so a differently-cased serial rendering scrubs too.
+            'printf \'s#%s#REDACTED#gI;\' "$ES" >> "$D/redact.sed"; '
             "fi; "
         )
         var_log_capture = 'cp -a /var/log "$D/var_log_stage" 2>/dev/null; '
