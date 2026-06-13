@@ -2279,7 +2279,7 @@ _SENSITIVE_TAG_WORDS: tuple[str, ...] = (
 # the exact same alternation and can never drift. A tag name is `[a-z0-9_:-]*`
 # ending in one of the words, optionally followed by a single plural `s`.
 _SENSITIVE_TAG_ALTERNATION = "|".join(_SENSITIVE_TAG_WORDS)
-_SENSITIVE_TAG_PATTERN = re.compile(r"(<[a-z0-9_:-]*(?:" + _SENSITIVE_TAG_ALTERNATION + r")s?>)[^<]*")
+_SENSITIVE_TAG_PATTERN = re.compile(r"(<[a-z0-9_:-]*(?:" + _SENSITIVE_TAG_ALTERNATION + r")s?>)[^<]*", re.IGNORECASE)
 
 
 def redact_sensitive_xml_tags(text: str) -> str:
@@ -2294,27 +2294,27 @@ def redact_sensitive_xml_tags(text: str) -> str:
     (``<name>…``) match — never closing tags (``</name>``, excluded because the name
     charset omits ``/``) — so element structure is never corrupted.
 
-    Match is case-sensitive lowercase: pfSense ``config.xml`` tag names are
-    machine-generated lowercase, so a lowercase-only pattern is sufficient and keeps
-    the BSD-``sed`` counterpart (no portable ``I`` flag) identical.
+    Match is CASE-INSENSITIVE (``re.IGNORECASE`` here, the ``I`` sed flag in the
+    counterpart): pfSense ``config.xml`` tag names are machine-generated lowercase,
+    but matching any case is strictly safer (a stray ``<TOKEN>`` is still scrubbed)
+    and costs nothing.
 
-    Pure Python — the in-guest scrub uses the equivalent BSD-``sed`` program from
+    Pure Python — the in-guest scrub uses the equivalent ``sed`` program from
     :func:`sensitive_tag_sed_program`; the two are pinned together by a parity test.
     """
     return _SENSITIVE_TAG_PATTERN.sub(r"\1" + REDACTED, text)
 
 
 def sensitive_tag_sed_program() -> str:
-    """Return the BSD-``sed -E`` substitution that performs the SAME redaction as
+    """Return the ``sed -E`` substitution that performs the SAME redaction as
     :func:`redact_sensitive_xml_tags`.
 
     Delimiter ``#``, constant replacement ``REDACTED``, alternation built from
     :data:`_SENSITIVE_TAG_WORDS` (so the shell and Python redactors cannot drift).
-    Portable ERE only — no GNU-only constructs, no case-insensitive ``I`` flag (BSD
-    ``sed`` lacks it; the lowercase-only match is sufficient for machine-generated
-    config.xml tag names).
+    The ``I`` flag makes it case-insensitive — supported by both FreeBSD ``sed``
+    (in-guest) and GNU ``sed`` — mirroring the Python pattern's ``re.IGNORECASE``.
     """
-    return "s#(<[a-z0-9_:-]*(" + _SENSITIVE_TAG_ALTERNATION + ")s?>)[^<]*#\\1" + REDACTED + "#g"
+    return "s#(<[a-z0-9_:-]*(" + _SENSITIVE_TAG_ALTERNATION + ")s?>)[^<]*#\\1" + REDACTED + "#gI"
 
 
 # --------------------------------------------------------------------------- #

@@ -83,6 +83,16 @@ def test_redact_sensitive_xml_tags_scrubs_plural_tag() -> None:
     assert redact_sensitive_xml_tags("<tokens>a b c</tokens>") == f"<tokens>{REDACTED}</tokens>"
 
 
+def test_redact_sensitive_xml_tags_is_case_insensitive() -> None:
+    """Given an UPPER/mixed-case sensitive tag (`<API_TOKEN>`, `<Secret>`)
+    When redact_sensitive_xml_tags runs
+    Then it is still scrubbed — the match is case-insensitive (`re.IGNORECASE` /
+         the `I` sed flag), not lowercase-only. Pre-state asserted (value present).
+    """
+    assert redact_sensitive_xml_tags("<API_TOKEN>abc123</API_TOKEN>") == f"<API_TOKEN>{REDACTED}</API_TOKEN>"
+    assert redact_sensitive_xml_tags("<Secret>s3kr3t</Secret>") == f"<Secret>{REDACTED}</Secret>"
+
+
 @pytest.mark.parametrize(
     "element",
     [
@@ -174,6 +184,7 @@ def test_sensitive_tag_sed_program_agrees_with_python() -> None:
         "  <some_credential>c</some_credential>\n"
         "  <key>KK</key>\n"
         "  <token></token>\n"
+        "  <API_TOKEN>UPPER</API_TOKEN>\n"
         "</system>\n"
     )
 
