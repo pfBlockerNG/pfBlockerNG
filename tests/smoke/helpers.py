@@ -2251,6 +2251,71 @@ def member_covers(members: list[str], ip: str) -> bool:
 # Diagnostics — dump live box state on a failed case (printed to the CI log)
 # --------------------------------------------------------------------------- #
 
+REDACTED = "REDACTED"
+
+# ADR-24: Spring-Boot-Actuator-style sensitive-KEY redaction. Scrubs the inner text
+# of any config.xml element whose TAG NAME looks sensitive — auto-catching unknown
+# Plus license/token/secret tags by name, without enumerating them. Mirrors Spring
+# Boot Actuator's default keys-to-sanitize
+# (password / secret / key / token / *credentials* — suffix/regex match on the key
+# name, value -> placeholder). Lowercase; the lone `key` entry is a deliberately
+# broad Actuator-style suffix that may over-redact (e.g. `<monkey>`): over-redaction
+# in diagnostics is safe, under-redaction of a secret is not.
+_SENSITIVE_TAG_WORDS: tuple[str, ...] = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "apikey",
+    "authkey",
+    "privatekey",
+    "passphrase",
+    "psk",
+    "credential",
+    "key",
+)
+
+# Built ONCE from _SENSITIVE_TAG_WORDS so the Python and `sed` redactors below share
+# the exact same alternation and can never drift. A tag name is `[a-z0-9_:-]*`
+# ending in one of the words, optionally followed by a single plural `s`.
+_SENSITIVE_TAG_ALTERNATION = "|".join(_SENSITIVE_TAG_WORDS)
+_SENSITIVE_TAG_PATTERN = re.compile(r"(<[a-z0-9_:-]*(?:" + _SENSITIVE_TAG_ALTERNATION + r")s?>)[^<]*")
+
+
+def redact_sensitive_xml_tags(text: str) -> str:
+    """Replace the inner text of every config.xml element whose OPENING tag name
+    looks sensitive (Spring-Boot-Actuator style) with ``REDACTED``.
+
+    A tag name is matched when it is composed of ``[a-z0-9_:-]`` and ENDS WITH one
+    of :data:`_SENSITIVE_TAG_WORDS`, optionally followed by a single plural ``s``
+    (so ``<token>`` and ``<tokens>`` both match, as do compound names like
+    ``<api_token>`` / ``<wg_privatekey>``). The opening tag is preserved verbatim;
+    only the inner text up to the next ``<`` is replaced. Only OPENING tags
+    (``<name>…``) match — never closing tags (``</name>``, excluded because the name
+    charset omits ``/``) — so element structure is never corrupted.
+
+    Match is case-sensitive lowercase: pfSense ``config.xml`` tag names are
+    machine-generated lowercase, so a lowercase-only pattern is sufficient and keeps
+    the BSD-``sed`` counterpart (no portable ``I`` flag) identical.
+
+    Pure Python — the in-guest scrub uses the equivalent BSD-``sed`` program from
+    :func:`sensitive_tag_sed_program`; the two are pinned together by a parity test.
+    """
+    return _SENSITIVE_TAG_PATTERN.sub(r"\1" + REDACTED, text)
+
+
+def sensitive_tag_sed_program() -> str:
+    """Return the BSD-``sed -E`` substitution that performs the SAME redaction as
+    :func:`redact_sensitive_xml_tags`.
+
+    Delimiter ``#``, constant replacement ``REDACTED``, alternation built from
+    :data:`_SENSITIVE_TAG_WORDS` (so the shell and Python redactors cannot drift).
+    Portable ERE only — no GNU-only constructs, no case-insensitive ``I`` flag (BSD
+    ``sed`` lacks it; the lowercase-only match is sufficient for machine-generated
+    config.xml tag names).
+    """
+    return "s#(<[a-z0-9_:-]*(" + _SENSITIVE_TAG_ALTERNATION + ")s?>)[^<]*#\\1" + REDACTED + "#g"
+
 
 def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeout: float = 240.0) -> None:
     """Tar a COMPREHENSIVE pfSense-GUEST snapshot and pull it to ``dest_dir/`` on
@@ -2269,6 +2334,19 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
     cert private keys, authorized keys redacted before it leaves the box).
     """
     remote_tar = "/tmp/pfb_smoke_diag.tgz"
+    # config.xml secret scrub. The explicit credential substitutions
+    # (bcrypt/prv/authorizedkeys/tls_certificate) stay belt-and-suspenders — they are
+    # NOT name-matched by the sensitive-tag pass. ADR-24: the Actuator-style
+    # sensitive-TAG pass (sensitive_tag_sed_program) is APPENDED to the SAME single
+    # sed invocation, after the explicit ones, so it runs for EVERY leg.
+    config_scrub = (
+        "sed -E 's#(<bcrypt-hash>)[^<]*#\\1REDACTED#g; s#(<prv>)[^<]*#\\1REDACTED#g; "
+        "s#(<authorizedkeys>)[^<]*#\\1REDACTED#g; s#(<tls_certificate>)[^<]*#\\1REDACTED#g; "
+        + sensitive_tag_sed_program()
+        + "' "
+        '/conf/config.xml > "$D/config.scrubbed.xml" 2>/dev/null; '
+    )
+
     script = (
         'set +e; D=/tmp/pfb_smoke_diag; rm -rf "$D"; mkdir -p "$D/unbound"; '
         'tar czf "$D/var_log.tgz" -C /var log 2>/dev/null; '
@@ -2284,10 +2362,8 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         'tar czf "$D/var_db_aliastables.tgz" -C /var/db aliastables 2>/dev/null; '
         '/bin/ps auxww > "$D/ps.txt" 2>&1; '
         # Scrub secrets from config.xml BEFORE it leaves the box.
-        "sed -E 's#(<bcrypt-hash>)[^<]*#\\1REDACTED#g; s#(<prv>)[^<]*#\\1REDACTED#g; "
-        "s#(<authorizedkeys>)[^<]*#\\1REDACTED#g; s#(<tls_certificate>)[^<]*#\\1REDACTED#g' "
-        '/conf/config.xml > "$D/config.scrubbed.xml" 2>/dev/null; '
-        f"tar czf {remote_tar} -C /tmp pfb_smoke_diag 2>/dev/null; true"
+        + config_scrub
+        + f"tar czf {remote_tar} -C /tmp pfb_smoke_diag 2>/dev/null; true"
     )
     try:
         vm.ssh("/bin/sh", "-c", script, timeout=timeout)
