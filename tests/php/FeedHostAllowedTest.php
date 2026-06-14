@@ -175,6 +175,20 @@ final class FeedHostAllowedTest extends TestCase
 		$this->assertSame('feed host resolves to a non-permitted address', $reason);
 	}
 
+	public function testCnameWithInternalIpLiteralIsRejected(): void
+	{
+		// A CNAME record whose 'data' is itself an IP literal (the IP-literal branch
+		// of the CNAME handling) is taken directly as an address: when that literal
+		// is internal it must be rejected without a further resolution step.
+		$GLOBALS['pfb_test_resolve_map']['alias.example.'] = [
+			['type' => 'CNAME', 'data' => '10.0.0.7'],
+		];
+		[$allowed, $reason, $pinned] = $this->guard('alias.example');
+		$this->assertFalse($allowed);
+		$this->assertSame('feed host resolves to a non-permitted address', $reason);
+		$this->assertSame('', $pinned);
+	}
+
 	// --- Fail-closed --------------------------------------------------------------
 
 	public function testUnresolvableHostIsRejected(): void
