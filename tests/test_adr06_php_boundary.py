@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from typing import Any
 
 import pfb_unbound
@@ -100,10 +101,14 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
             }
         )
 
+    # tld_master must resolve UNDER the manifest dir (the build confines manifest
+    # paths to their base dir) -- copy it alongside the feeds and reference by name.
+    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+
     manifest = {
         "version": 1,
         "config": {
-            "tld_master": os.path.join(FIXTURES, "tld_master.txt"),
+            "tld_master": "tld_master.txt",
             "tld_blacklist": src_config.get("tld_blacklist", []),
             "tld_exclusion": src_config.get("tld_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),

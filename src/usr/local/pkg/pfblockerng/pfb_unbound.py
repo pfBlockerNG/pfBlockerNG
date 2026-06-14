@@ -4054,6 +4054,22 @@ def build(
     )
 
 
+def _dnsbl_path_within_base(path: str, base_dir: str) -> bool:
+    """Containment check: is the resolved real path of ``path`` inside ``base_dir``?
+
+    The manifest is published next to its raw feeds, so every ``raw`` / ``tld_master``
+    file a row references must resolve under the manifest's own directory. A row whose
+    resolved path escapes that directory (e.g. via ``..`` or an absolute path pointing
+    elsewhere) is rejected by the caller -- never opened. Symlinks are resolved
+    (``os.path.realpath``) so a link inside ``base_dir`` cannot point outside it. The
+    base itself resolves the same way; containment is a prefix match on
+    ``base_dir + os.sep`` (the equal-to-base case never holds for a file path).
+    """
+    real_base = os.path.realpath(base_dir)
+    real_path = os.path.realpath(path)
+    return real_path == real_base or real_path.startswith(real_base + os.sep)
+
+
 def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
     """A file-backed ``line_reader`` for build(): map a feed_row["raw"] reference to
     its raw lines, streamed lazily so peak RAM stays at the dict floor (RESULTS/01).
@@ -4065,6 +4081,10 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
 
     def reader(raw: str) -> Iterable[str]:
         path = raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
+        if not _dnsbl_path_within_base(path, base_dir):
+            # The feed path escapes the manifest directory -- skip it (do not open).
+            sys.stderr.write("[pfBlockerNG]: Refusing DNSBL feed outside base dir: '{}'".format(path))
+            return
         try:
             fh = open(path, encoding="utf-8", errors="replace")
         except OSError as e:
@@ -4096,11 +4116,15 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         tld_master_lines = list(tld_master)
     elif isinstance(tld_master, str) and tld_master:
         path = tld_master if os.path.isabs(tld_master) else os.path.join(base_dir, tld_master)
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                tld_master_lines = fh.read().splitlines()
-        except OSError as e:
-            sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
+        if not _dnsbl_path_within_base(path, base_dir):
+            # The tld_master path escapes the manifest directory -- skip it (do not open).
+            sys.stderr.write("[pfBlockerNG]: Refusing tld_master outside base dir: '{}'".format(path))
+        else:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    tld_master_lines = fh.read().splitlines()
+            except OSError as e:
+                sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
 
     # ADR-07 P7: the static-cap flag reaches build() via the ini-derived pfb setting
     # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest

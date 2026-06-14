@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from typing import Any
 
 import pytest
@@ -63,20 +64,29 @@ from tests.test_adr06_golden_oracle import (
 
 
 def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
-    """Write a single manifest JSON (feeds + config) next to the fixture raw feeds.
+    """Write a single manifest JSON (feeds + config) with its raw files copied under
+    the manifest directory.
 
-    The manifest is written INTO the fixtures dir is avoided -- instead the feed
-    ``raw`` / ``tld_master`` are made ABSOLUTE (pointing at the committed fixtures)
-    so the manifest can live in a tmp dir without copying the feeds.
+    This mirrors the PRODUCTION shape (pfblockerng.inc): the manifest lives at the
+    chroot root and every feed ``raw`` / ``tld_master`` it references resolves UNDER
+    that directory (the build now confines manifest paths to the manifest's base dir,
+    so an out-of-base reference is skipped). The committed fixtures are copied into a
+    ``pfb_py_raw/`` subdir of tmp_path and referenced RELATIVELY, and ``tld_master``
+    is copied alongside and referenced by name -- the build reads it as a PATH.
     """
     src_manifest = _load_json("manifest.json")
     src_config = _load_json("config.json")
 
+    raw_dir = os.path.join(str(tmp_path), "pfb_py_raw")
+    os.makedirs(raw_dir, exist_ok=True)
+
     feeds = []
     for row in src_manifest["feeds"]:
+        rel = os.path.join("pfb_py_raw", os.path.basename(row["raw"]))
+        shutil.copyfile(os.path.join(FIXTURES, row["raw"]), os.path.join(str(tmp_path), rel))
         feeds.append(
             {
-                "raw": os.path.join(FIXTURES, row["raw"]),  # absolute -> reader resolves
+                "raw": rel,  # relative -> reader resolves under the manifest dir
                 "feed": row["feed"],
                 "group": row["group"],
                 "format_hint": row["format_hint"],
@@ -84,10 +94,12 @@ def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
             }
         )
 
+    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+
     manifest = {
         "version": 1,
         "config": {
-            "tld_master": os.path.join(FIXTURES, "tld_master.txt"),  # PATH, read on build
+            "tld_master": "tld_master.txt",  # PATH (in-base), read on build
             "tld_blacklist": src_config.get("tld_blacklist", []),
             "tld_exclusion": src_config.get("tld_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),
@@ -281,21 +293,24 @@ class TestManifestFallback:
 
     def test_missing_feed_file_is_skipped_not_fatal(self, tmp_path: Any) -> None:
         # One feed references a non-existent raw file; the build must still load the
-        # OTHER feeds rather than aborting (the bad feed is logged + skipped).
+        # OTHER feeds rather than aborting (the bad feed is logged + skipped). All
+        # referenced paths live UNDER the manifest dir (the production/confined shape).
         path = os.path.join(str(tmp_path), "m.json")
+        shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+        shutil.copyfile(os.path.join(FIXTURES, "feed_plain.txt"), os.path.join(str(tmp_path), "feed_plain.txt"))
         manifest = {
             "version": 1,
-            "config": {"tld_master": os.path.join(FIXTURES, "tld_master.txt")},
+            "config": {"tld_master": "tld_master.txt"},
             "feeds": [
                 {
-                    "raw": os.path.join(str(tmp_path), "does_not_exist.txt"),
+                    "raw": "does_not_exist.txt",
                     "feed": "Gone",
                     "group": "Gone",
                     "format_hint": "plain",
                     "log_flag": "1",
                 },
                 {
-                    "raw": os.path.join(FIXTURES, "feed_plain.txt"),
+                    "raw": "feed_plain.txt",
                     "feed": "PlainFeed",
                     "group": "Malware",
                     "format_hint": "plain",
