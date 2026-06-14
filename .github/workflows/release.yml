@@ -499,11 +499,25 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump PORTVERSION + GH_TAGNAME and push to use-github
+        # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
+        # template-inject into this shell.
+        env:
+          BRANCH: ${{ needs.release.outputs.branch }}
+          VERSION: ${{ needs.release.outputs.version }}   # e.g. 3.2.16-devel | 3.2.16
         run: |
           set -eu
-          BRANCH="${{ needs.release.outputs.branch }}"
-          VERSION="${{ needs.release.outputs.version }}"   # e.g. 3.2.16-devel | 3.2.16
           TAG="v${VERSION}"
+          # Strict branch-aware version shape: devel = X.Y.Z-devel, stable = X.Y.Z.
+          # Fail fast on any other shape (e.g. -rc1/-alpha) so PORTVERSION below can
+          # never keep a '-' (an invalid pkg version). Belt-and-braces with release's
+          # meta gate, which only checks the -devel suffix, not the rest of the string.
+          if [ "$BRANCH" = "devel" ]; then
+            printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-devel$' || {
+              echo "::error::invalid devel version/tag: ${TAG}"; exit 1; }
+          else
+            printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid stable version/tag: ${TAG}"; exit 1; }
+          fi
           # PORTVERSION must be pkg-safe (no '-'): the channel lives in the port's
           # PKGNAMESUFFIX, not the version. Strip a trailing -devel.
           PORTVERSION="${VERSION%-devel}"
