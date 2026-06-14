@@ -69,8 +69,9 @@ set -eu
 #                     positive value (add-repo.sh may recompute it live, +100 over the
 #                     effective pfSense priority, the way the Phase-1 smoke does).
 #   * enabled: yes.
-# `pfblockerng-devel` matches the channel-named conf Phase 4 writes
-# (/usr/local/etc/pkg/repos/pfblockerng-devel.conf).
+# `pfblockerng` matches the shared release conf Phase 4 writes
+# (/usr/local/etc/pkg/repos/pfblockerng.conf) — the one repo that carries BOTH the
+# stable and devel packages (Netgate-style); only nightly gets its own conf.
 # The published GitHub Pages base — the repo's standard project Pages URL
 # (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
 # we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg and the conf
@@ -82,8 +83,9 @@ set -eu
 # requests to the correct versioned dir based on the pfSense User-Agent.
 # add-repo.sh (Phase 4) writes the Worker URL as the canonical conf URL — written
 # once, never needs updating on a pfSense OS upgrade (Worker re-routes automatically).
-# This --print-conf template is kept in sync with add-repo.sh (byte-identical devel
-# stanza). Override with --base-url for forks/staging.
+# This --print-conf template is kept in sync with add-repo.sh (byte-identical release
+# stanza — what `add-repo.sh stable` and `add-repo.sh devel` both write). Override with
+# --base-url for forks/staging.
 DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
 CONF_PRIORITY=100
 
@@ -93,12 +95,12 @@ print_conf() {
     # so neither this shell nor the URL-encoding gate sees a live expansion.
     base="$1"
     cat <<EOF
-# pfBlockerNG (devel channel) — self-hosted pkg repository (ADR-17).
+# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The \${ABI}
 # variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.
-pfblockerng-devel: {
+pfblockerng: {
   url: "${base}/\${ABI}",
   mirror_type: none,
   signature_type: none,

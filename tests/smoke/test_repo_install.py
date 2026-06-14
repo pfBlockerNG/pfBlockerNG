@@ -45,9 +45,10 @@ NOT built here):
     Pages-style HTTP catalog is accepted is Phase 2/3's concern; the premise (does
     pfSense honor a NONE-signed third-party repo for install + precedence) is
     orthogonal to the transport.
-  * A repo conf at `/usr/local/etc/pkg/repos/pfblockerng-devel.conf`
-    (`signature_type: none`, `enabled: yes`, `priority:` above/below the pfSense
-    repo per case), then `pkg update` + `pkg install -y` with NO `-f`.
+  * A repo conf at `/usr/local/etc/pkg/repos/pfblockerng.conf` (the shared release
+    repo `pfblockerng` — stable + devel; `signature_type: none`, `enabled: yes`,
+    `priority:` above/below the pfSense repo per case), then `pkg update` +
+    `pkg install -y` with NO `-f`.
 
 WHAT IS ASSERTED (transition + branch coverage, via EFFECTIVE state — never an
 exit code alone): the package is ABSENT before; AFTER a from-our-repo install it is
@@ -95,16 +96,16 @@ PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
 
 # Our repo conf on the guest + the served catalog root. The conf name follows the
 # CLAUDE.md "match the surrounding pattern" rule: pfSense's own conf is
-# `pfSense.conf` under the SAME dir; ours is the channel-named sibling Phase 4 will
-# write for real (`add-repo.sh`).
-REPO_CONF = "/usr/local/etc/pkg/repos/pfblockerng-devel.conf"
+# `pfSense.conf` under the SAME dir; ours is the shared release sibling Phase 4 will
+# write for real (`add-repo.sh` — `pfblockerng.conf`, carrying stable + devel).
+REPO_CONF = "/usr/local/etc/pkg/repos/pfblockerng.conf"
 GUEST_SPIKE_DIR = "/tmp/pfb_repo_spike"
 OURS_REPO_DIR = f"{GUEST_SPIKE_DIR}/ours"
 DECOY_REPO_DIR = f"{GUEST_SPIKE_DIR}/decoy"
 # The upgrade test rebuilds ONE repo dir in place (lower build -> higher build) so a
 # `pkg upgrade` moves the box across versions WITHIN our repo (not across repos).
 UPGRADE_REPO_DIR = f"{GUEST_SPIKE_DIR}/upgrade"
-OURS_REPO_NAME = "pfblockerng-devel"  # the %R origin a from-our-repo install reports
+OURS_REPO_NAME = "pfblockerng"  # the %R origin a from-our-repo install reports (shared release repo)
 DECOY_REPO_NAME = "netgate-decoy"  # a controlled file:// stand-in for a competing repo
 NETGATE_REPO_NAME = "pfSense"  # the real base-system Netgate repo (left enabled; loses on priority)
 GUEST_FILE_LIST = f"{GUEST_SPIKE_DIR}/installed_files.txt"
@@ -330,7 +331,7 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
     """Stage the SHIPPED ``scripts/add-repo.sh`` and run it (devel) against ``base_url``.
 
     Drives the real client bootstrap on the box: it writes the production conf to
-    ``/usr/local/etc/pkg/repos/pfblockerng-devel.conf`` (here pointed at a local
+    ``/usr/local/etc/pkg/repos/pfblockerng.conf`` (here pointed at a local
     ``file://`` catalog via the script's own ``--base-url`` override — the github.io
     default and a live HTTPS add-repo.sh run are a post-deploy note), runs ``pkg
     update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
@@ -462,7 +463,7 @@ def write_repo_conf(
 ) -> None:
     """Write our NONE-signed repo conf on the guest (ours, plus an optional decoy).
 
-    Declares OUR repo (`pfblockerng-devel`) and — for the precedence cases — a
+    Declares OUR repo (`pfblockerng`) and — for the precedence cases — a
     controlled `file://` `netgate-decoy` repo serving the SAME package, so the
     priority outcome between two genuine providers is deterministic. The base-system
     Netgate repos (`pfSense` / `pfSense-core`) are LEFT ENABLED and untouched (this
@@ -674,7 +675,7 @@ def test_install_from_our_repo_lands_all_files(repo_vm: SmokeVM) -> None:
 
     Given the package ABSENT (``pkg query %v`` fails),
     When ``pkg install -y pfSense-pkg-pfBlockerNG-devel`` runs (NO ``-r``, NO ``-f``),
-    Then it installs from OUR repo (``pkg query %R`` == ``pfblockerng-devel``), with
+    Then it installs from OUR repo (``pkg query %R`` == ``pfblockerng``), with
       no "Missing dependency" (RUN_DEPENDS resolved), AND every file the package
       registers (``pkg info -l``) is present on-box (> 50) — the install really wrote
       the payload. Runtime behaviour is the smoke suite's job, not re-probed here.
@@ -718,11 +719,11 @@ def test_pkg_upgrade_moves_to_our_newer_build(repo_vm: SmokeVM, tmp_path: Path) 
     Given the package ABSENT, and our repo carries ONLY the LOWER build ``<V>_1``,
       When ``pkg install -y`` runs (NO -r, NO -f),
       Then the box is at ``<V>_1`` from OUR repo (``%v`` == ``<V>_1``, ``%R`` ==
-        ``pfblockerng-devel``) — the asserted BEFORE state.
+        ``pfblockerng``) — the asserted BEFORE state.
     When our repo is REBUILT in place with the HIGHER build ``<V>_9``, ``pkg update
       -f`` re-reads the catalog, and ``pkg upgrade -y`` runs,
       Then the box MOVES to ``<V>_9`` from OUR repo (``%v`` == ``<V>_9``, ``%R`` ==
-        ``pfblockerng-devel``) — a real before != after transition, not a final-state
+        ``pfblockerng``) — a real before != after transition, not a final-state
         snapshot. (Runtime behaviour is the smoke suite's job, not re-probed here.)
     """
     pkg = os.environ.get("SMOKE_PKG")
@@ -789,7 +790,7 @@ def test_precedence_ours_higher_priority_wins(repo_vm: SmokeVM) -> None:
 
     Given the package ABSENT and BOTH file:// repos enabled, ours at the HIGHER priority,
     When ``pkg install -y`` resolves across all enabled repos,
-    Then ours wins (``pkg query %R`` == ``pfblockerng-devel``).
+    Then ours wins (``pkg query %R`` == ``pfblockerng``).
     """
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
 
@@ -868,7 +869,7 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
       enabled via a NONE-signed ``file://`` repo above the pfSense repo,
     When ``pkg update`` reads it and ``pkg install -y`` runs (NO ``-r``, NO ``-f``),
     Then ``pkg update`` accepts the script-generated catalog AND the install comes
-      from OUR repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved —
+      from OUR repo (``pkg query %R`` == ``pfblockerng``) with deps resolved —
       the build tool's output is real and VM-consumable.
     """
     pkg = os.environ.get("SMOKE_PKG")
@@ -911,8 +912,8 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     When ``add-repo.sh --base-url file://<root> devel`` runs (writes the conf, ``pkg
       update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
     Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
-      the production conf to ``pfblockerng-devel.conf``, and the install comes from
-      OUR repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved.
+      the production conf to ``pfblockerng.conf``, and the install comes from
+      OUR repo (``pkg query %R`` == ``pfblockerng``) with deps resolved.
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
@@ -928,7 +929,7 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     proc = run_add_repo_sh(repo_vm, f"file://{SCRIPT_REPO_ROOT}")
 
     # THEN: add-repo.sh wrote the production conf and its verify confirmed our package.
-    assert "available from 'pfblockerng-devel'" in proc.stdout, (
+    assert "available from 'pfblockerng'" in proc.stdout, (
         f"add-repo.sh did not report the package from our repo:\n{proc.stdout}"
     )
     conf_present = repo_vm.ssh("/bin/test", "-f", REPO_CONF)
@@ -962,7 +963,7 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
     When ``pkg update`` reads the pure-Python catalog and ``pkg install -y`` runs
       (NO ``-r``, NO ``-f``),
     Then ``pkg update`` accepts it AND the install comes from OUR repo
-      (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved and the ``.pkg``
+      (``pkg query %R`` == ``pfblockerng``) with deps resolved and the ``.pkg``
       checksum validated — the pure-Python generator's output is real + VM-consumable.
     """
     pkg = os.environ.get("SMOKE_PKG")
@@ -1164,7 +1165,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
       NO ``-f``),
     Then ``pkg update`` accepts the deployed catalog AND the install comes from OUR
-      repo (``pkg query %R`` == ``pfblockerng-devel``) with deps resolved and the .pkg
+      repo (``pkg query %R`` == ``pfblockerng``) with deps resolved and the .pkg
       checksum validated — the deployed Pages repo is real + installable over HTTPS.
     """
     base_url = _live_base_url()
@@ -1644,9 +1645,9 @@ def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
       Background: conf with url: https://pkg.pfblockerng.workers.dev.
 
     Given a CE VM with the conf pointing at the Worker URL (``${ABI}`` suffix added
-      by pkg), ``pkg update -r pfblockerng-devel`` fetches from the Worker.
+      by pkg), ``pkg update -r pfblockerng`` fetches from the Worker.
     Then the fetched catalog contains the CE package (not Plus) — confirmed by
-      ``pkg rquery -r pfblockerng-devel '%dn %dv' <pkgname>`` showing ``php83`` dep.
+      ``pkg rquery -r pfblockerng '%dn %dv' <pkgname>`` showing ``php83`` dep.
 
     XFAIL: the Cloudflare Worker is live but routing.json has not yet been deployed
     to Pages (Phase 5 RESULTS: Worker returns 502 when routing.json absent).  Once

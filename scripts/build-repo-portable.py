@@ -484,12 +484,12 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
 def print_conf(base_url: str) -> None:
     base = base_url.rstrip("/")
     sys.stdout.write(
-        "# pfBlockerNG (devel channel) — self-hosted pkg repository (ADR-17).\n"
+        "# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The ${ABI}\n"
         "# variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects our build.\n"
-        "pfblockerng-devel: {\n"
+        "pfblockerng: {\n"
         f'  url: "{base}/${{ABI}}",\n'
         "  mirror_type: none,\n"
         "  signature_type: none,\n"

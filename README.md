@@ -63,6 +63,11 @@ opt-in package available **only** from this fork's self-hosted repository (Optio
 The three packages are mutually exclusive — install **one**. Choose **stable** unless
 you specifically want to track development builds.
 
+In the self-hosted repository the **stable** and **development** packages are served
+from a single repo (`pfblockerng`) — exactly as Netgate ships `pfSense-pkg-pfBlockerNG`
+and `-devel` from its one `pfSense` repo — so one bootstrap exposes both; you pick which
+to `pkg install`. **Nightly** sits on its own catalog path and so has its own repo conf.
+
 ## Installation
 
 ### Option 1 — pfSense Package Manager
@@ -81,16 +86,18 @@ catalog — add our self-hosted FreeBSD `pkg` repository
 normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
 
 ```sh
-./scripts/add-repo.sh devel        # or: stable
+./scripts/add-repo.sh devel        # or: stable — both set up the same `pfblockerng` repo
 pkg install pfSense-pkg-pfBlockerNG-devel
 ```
 
-`add-repo.sh` writes `/usr/local/etc/pkg/repos/pfblockerng-<channel>.conf`, runs
-`pkg update`, and verifies the package is visible. No variant argument is needed — the
-script auto-detects CE vs Plus via the routing layer. The configuration it writes is:
+`add-repo.sh devel` and `add-repo.sh stable` both write the shared
+`/usr/local/etc/pkg/repos/pfblockerng.conf` (only **nightly** gets its own
+`pfblockerng-nightly.conf`), run `pkg update`, and verify the package is visible. No
+variant argument is needed — the script auto-detects CE vs Plus via the routing layer.
+The configuration it writes is:
 
 ```sh
-pfblockerng-devel: {
+pfblockerng: {
   url: "https://pkg.pfblockerng.workers.dev/${ABI}",
   mirror_type: none,
   signature_type: none,

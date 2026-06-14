@@ -86,21 +86,24 @@ def _field(conf: str, key: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def test_add_repo_devel_conf_is_byte_identical_to_build_repo() -> None:
-    """The devel conf from add-repo.sh == build-repo.sh --print-conf, byte-for-byte.
+def test_release_conf_byte_identical_across_stable_devel_and_build_repo() -> None:
+    """stable and devel emit the SAME release conf, == build-repo.sh --print-conf.
 
-    build-repo.sh --print-conf is the published single source (Phase 2/3). If
-    add-repo.sh's devel stanza diverges by even a byte (url, priority, comment),
-    the client would write a conf that disagrees with what CI publishes — this
-    pins them together.
+    The stable and devel packages share ONE repo/catalog (`pfblockerng`, Netgate-style),
+    so `add-repo.sh stable` and `add-repo.sh devel` must write byte-identical confs — and
+    both must match build-repo.sh --print-conf, the published single source (Phase 2/3).
+    A one-byte divergence (url, priority, repo name, comment) would split what is meant to
+    be one repo, so this pins all three generators together.
     """
-    add = _print_conf(_ADD_REPO, "devel")
+    stable = _print_conf(_ADD_REPO, "stable")
+    devel = _print_conf(_ADD_REPO, "devel")
     build = _print_conf(_BUILD_REPO)
-    assert add == build
+    assert stable == devel  # collapsed: stable + devel are one shared `pfblockerng` repo
+    assert stable == build  # == the published single-source template
 
 
-def test_add_repo_devel_conf_default_channel_matches_explicit() -> None:
-    """No channel arg defaults to devel (the documented default)."""
+def test_add_repo_default_channel_matches_devel() -> None:
+    """No channel arg defaults to devel (the documented default; the release conf)."""
     assert _print_conf(_ADD_REPO) == _print_conf(_ADD_REPO, "devel")
 
 
@@ -112,7 +115,8 @@ def test_add_repo_devel_conf_default_channel_matches_explicit() -> None:
 @pytest.mark.parametrize(
     ("channel", "repo_name", "url"),
     [
-        ("devel", "pfblockerng-devel", f'url: "{_WORKER_URL}/${{ABI}}"'),
+        # stable + devel collapse onto the ONE shared `pfblockerng` release repo.
+        ("devel", "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
         ("stable", "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
         # nightly is served from a DISTINCT `nightly/` catalog subtree (so it never
         # collides with the release tree on Pages) — its url carries the extra path.
@@ -120,21 +124,20 @@ def test_add_repo_devel_conf_default_channel_matches_explicit() -> None:
     ],
 )
 def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str) -> None:
-    """Each channel names its repo distinctly but shares the precedence-bearing fields.
+    """stable/devel name the shared release repo; nightly its own — all share the rest.
 
-    devel -> `pfblockerng-devel`; stable -> `pfblockerng`; nightly ->
-    `pfblockerng-nightly` (and a `nightly/${ABI}` url subtree). All carry priority 100
-    (above Netgate's 0) and none/none (NONE-signed). The repo NAME (and, for nightly,
-    the url subpath) is the only channel-varying field — a conf that reused another
-    channel's repo name would collide on a box.
+    stable + devel -> `pfblockerng` (one shared repo); nightly -> `pfblockerng-nightly`
+    (and a `nightly/${ABI}` url subtree). All carry priority 100 (above Netgate's 0) and
+    none/none (NONE-signed). The repo NAME (and, for nightly, the url subpath) is the only
+    varying field — and nightly's name must never collide with the release repo on a box.
     """
     conf = _print_conf(_ADD_REPO, channel)
 
-    # The stanza is keyed by the channel-specific repo name (and ONLY that name).
+    # The stanza is keyed by the expected repo name (and ONLY that name).
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), conf
-    # No OTHER channel's repo name appears as a stanza key (each conf names exactly one;
-    # the anchored `:` keeps `pfblockerng:` from matching `pfblockerng-devel:` etc.).
-    for other in {"pfblockerng", "pfblockerng-devel", "pfblockerng-nightly"} - {repo_name}:
+    # The OTHER repo name does not appear as a stanza key (the anchored `:` keeps
+    # `pfblockerng:` from matching `pfblockerng-nightly:`).
+    for other in {"pfblockerng", "pfblockerng-nightly"} - {repo_name}:
         assert not re.search(rf"^{re.escape(other)}:\s*\{{", conf, re.MULTILINE), conf
 
     # The literal ${ABI} survives (single-quoted on emission — pkg expands it, not the shell).
@@ -180,12 +183,12 @@ def test_primary_url_is_worker_url() -> None:
     (confirmed absent here — fresh tmpdir).
     """
     with tempfile.TemporaryDirectory() as root:
-        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-devel.conf"
+        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
 
         # Given: conf does not exist yet (before-state)
         assert not conf_path.exists(), "conf should not exist before first run"
 
-        # When: run add-repo.sh devel
+        # When: run add-repo.sh devel (writes the shared release conf)
         _run_add_repo("devel", root)
 
         # Then: conf written with Worker URL
@@ -234,7 +237,7 @@ def test_conf_written_once_invariant() -> None:
     Then  the URL is unchanged — the conf is rewritten with the same Worker URL.
     """
     with tempfile.TemporaryDirectory() as root:
-        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-devel.conf"
+        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
 
         # Given: first run writes the conf
         _run_add_repo("devel", root)
@@ -250,3 +253,33 @@ def test_conf_written_once_invariant() -> None:
         assert content_first == content_second, (
             f"Second run must produce identical conf (idempotent):\nFirst:\n{content_first}\nSecond:\n{content_second}"
         )
+
+
+def test_stable_and_devel_collapse_onto_one_shared_conf_file() -> None:
+    """stable and devel write the SAME on-box file — no separate per-channel conf.
+
+    Scenario: the stable + devel packages share one repo, so both channels target
+              /usr/local/etc/pkg/repos/pfblockerng.conf (never a `pfblockerng-devel.conf`).
+    Given stable is bootstrapped first (writes the shared release conf),
+    When  devel is bootstrapped into the same root,
+    Then  it rewrites the SAME file with identical bytes, and no `pfblockerng-devel.conf`
+          is ever created — proving the collapse (a regression that re-split the channels
+          would leave two distinct files here).
+    """
+    with tempfile.TemporaryDirectory() as root:
+        repos = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
+        shared = repos / "pfblockerng.conf"
+        legacy_split = repos / "pfblockerng-devel.conf"
+
+        # Given: stable writes the shared release conf (before-state)
+        _run_add_repo("stable", root)
+        assert shared.exists(), "stable must write the shared pfblockerng.conf"
+        stable_bytes = shared.read_text()
+        assert not legacy_split.exists(), "stable must not write a split pfblockerng-devel.conf"
+
+        # When: devel is bootstrapped into the same root
+        _run_add_repo("devel", root)
+
+        # Then: same file, identical bytes, and still no split conf
+        assert shared.read_text() == stable_bytes, "devel must rewrite the SAME shared conf, byte-identical"
+        assert not legacy_split.exists(), "devel must NOT create a separate pfblockerng-devel.conf"

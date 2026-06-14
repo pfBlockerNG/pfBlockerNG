@@ -506,7 +506,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     rc = brp.main(["--print-conf"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "pfblockerng-devel: {" in out
+    assert "pfblockerng: {" in out  # the shared release repo (stable + devel)
     assert 'url: "https://pfblockerng.github.io/pkg/${ABI}"' in out
     assert "signature_type: none," in out
     assert "priority: 100," in out
