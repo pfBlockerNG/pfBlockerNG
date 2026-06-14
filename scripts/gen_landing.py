@@ -206,8 +206,9 @@ td.num{font-variant-numeric:tabular-nums;color:var(--mut)}
 .badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
   border:1px solid var(--bd);color:var(--mut)}
 details summary{cursor:pointer;color:var(--mut);font-size:.85rem;margin-top:.5rem}
-ul.trees{columns:2;list-style:none;padding:0;margin:0}
-ul.trees li{margin:.15rem 0}
+ul.trees{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));
+  gap:.15rem 1rem;list-style:none;padding:0;margin:0}
+ul.trees li{margin:.15rem 0;overflow-wrap:anywhere}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
 .empty{color:var(--mut);font-style:italic}
 """
