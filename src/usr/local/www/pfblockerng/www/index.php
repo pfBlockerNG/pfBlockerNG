@@ -87,7 +87,10 @@ if (pathinfo($ptype['REQUEST_URI'], PATHINFO_EXTENSION) == 'js') {
 	$type = 'DNSBL-JS';
 	?>
 	<script type="text/javascript">
-		var dnsbl = "DNSBL : <?=$ptype['HTTP_HOST'];?> (JS)";
+		// JS-context-correct encoding of the host: json_encode() emits a
+		// properly-escaped JS string literal, so a host value cannot break out
+		// of the string into script context regardless of its contents.
+		var dnsbl = <?=json_encode('DNSBL : ' . $ptype['HTTP_HOST'] . ' (JS)');?>;
 	</script>
 	<?php
 }
