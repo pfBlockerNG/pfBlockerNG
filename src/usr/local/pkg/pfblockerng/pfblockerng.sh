@@ -120,6 +120,48 @@ exitnow() {
 }
 
 
+# Token-shape guards for feed-derived list data. The list-processing functions
+# iterate values that ultimately originate from downloaded feeds and splice them
+# into `grep` patterns (anchored octet-prefix matches such as `^10\.0\.0\.`).
+# Previously only the literal dot was escaped, so any other regex metacharacter
+# in a token stayed live and `grep` interpreted it as a pattern -- yielding an
+# over-broad / incorrect match set, or an expensive pattern.
+#
+# Each guard returns success only when the token is built solely from the
+# characters that shape allows (digits, dots, and -- for CIDR -- a slash). A
+# token that fails is dropped by its caller (`continue`), never matched. Because
+# the surviving tokens contain only digits/dots/slashes, the existing dot-escape
+# + `^` anchor that follows is then exact and safe.
+#
+# Reject the empty string explicitly: `case ''` would match the `*[!set]*`
+# negation as "no disallowed char present" and pass.
+
+# An octet prefix: one or more dot-separated decimal octets, digits and dots
+# only (e.g. '10' or '10.0.0'). No anchors, no slash.
+pfb_is_octet_prefix() {
+	case "${1}" in
+		''|*[!0-9.]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# A CIDR-ish token: digits, dots and slashes only (e.g. '10.0.0.1/32').
+pfb_is_cidr_token() {
+	case "${1}" in
+		''|*[!0-9./]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+# Escape every '.' in $1 for use as a literal in a grep BRE, and emit the result
+# anchored at line start ('^'). The caller MUST validate the token shape first
+# (pfb_is_octet_prefix) so only digits/dots reach here; this then yields an exact
+# '^10\.0\.0\.'-style prefix pattern with no live regex metacharacter.
+pfb_anchor_octet_pattern() {
+	printf '^%s' "${1}" | sed 's/\./\\./g'
+}
+
+
 # Function to restore IP aliastables and DNSBL database from archive on reboot. ( Ramdisk installations only )
 aliastables() {
 	if [ "${USE_MFS_TMPVAR}" -gt 0 ] || [ "${DISK_TYPE}" = 'md' ]; then
@@ -180,13 +222,24 @@ process255() {
 	if [ -n "${data255}" ]; then
 		cp "${pfbdeny}${alias}.txt" "${tempfile}"
 
-		for ip in ${data255}; do
-			ii="$(echo "^${ip}." | sed 's/\./\\\./g')"
+		# Iterate the octet prefixes safely (no IFS re-splitting) and validate each
+		# to digits/dots before building the anchored '^10\.0\.0\.' grep pattern, so
+		# a malformed token cannot reach grep as a live regex.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			ii="$(pfb_anchor_octet_pattern "${ip}.")"
 			grep "${ii}" "${tempfile}" >> "${dedupfile}"
-		done
+		done <<EOF
+${data255}
+EOF
 
 		awk 'FNR==NR{a[$0];next}!($0 in a)' "${dedupfile}" "${tempfile}" > "${pfbdeny}${alias}.txt"
-		for ip in ${data255}; do echo "${ip}.0/24" >> "${pfbdeny}${alias}.txt"; done
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			echo "${ip}.0/24" >> "${pfbdeny}${alias}.txt"
+		done <<EOF
+${data255}
+EOF
 	fi
 }
 
@@ -216,18 +269,28 @@ suppress() {
 				countg="$(grep -c ^ "${pfbfolder}${alias}.txt")"
 				cp "${pfbfolder}${alias}.txt" "${tempfile}"
 
-				for ip in ${data}; do
+				# Iterate the suppression entries safely (no IFS re-splitting) via a
+				# here-doc so the loop body stays in THIS shell -- it accumulates
+				# ${counter} and appends to ${dupfile}/${tempfile}, which a `while|read`
+				# subshell would discard. Validate each token to a CIDR shape
+				# (digits/dots/slashes) and skip a malformed one, so only literal
+				# octet text reaches the fixed-string greps below.
+				while IFS= read -r ip; do
+					pfb_is_cidr_token "${ip}" || continue
 					found=''; dcheck='';
 					mask="${ip##*/}"
 					iptrim="${ip%.*}"
 					ip="${ip%%/*}"
-					found="$(grep -m1 "${iptrim}.0/24" "${tempfile}")"
+					# Fixed-string match: '${iptrim}.0/24' is a literal whole token,
+					# no anchor needed, so grep -F matches it exactly (the '.' is a
+					# literal dot, not a regex 'any char').
+					found="$(grep -F -m1 "${iptrim}.0/24" "${tempfile}")"
 
 					# If a suppression is '/32' and a blocklist has a full '/24' block, execute the following.
 					if [ -n "${found}" ] && [ "${mask}" -eq 32 ]; then
 						echo " Suppression ${alias}: ${iptrim}.0/24 (Excluding: ${ip}/32)"
 						octet4="${ip##*.}"
-						dcheck="$(grep "${iptrim}.0/24" "${dupfile}")"
+						dcheck="$(grep -F "${iptrim}.0/24" "${dupfile}")"
 
 						if [ -z "${dcheck}" ]; then
 							echo "${iptrim}.0/24" >> "${dupfile}"
@@ -242,7 +305,9 @@ suppress() {
 							done
 						fi
 					fi
-				done
+				done <<EOF
+${data}
+EOF
 
 				if [ -s "${dupfile}" ]; then
 					# Remove '/24' suppressed ranges
@@ -493,7 +558,10 @@ duplicate() {
 whoisconvert() {
 
 	vtype="${max}"
-	custom_list="$(echo "${dedup}" | tr ',' ' ')"
+	# One entry per line so the loop below can iterate via a here-doc + `read`
+	# instead of an unquoted `for` over the value (which would re-split each
+	# entry on IFS).
+	custom_list="$(echo "${dedup}" | tr ',' '\n')"
 
 	if [ "${vtype}" = '_v4' ]; then
 		_type=A
@@ -509,7 +577,10 @@ whoisconvert() {
 	echo
 	found=false
 
-	for host in ${custom_list}; do
+	# Iterate via a here-doc so the loop body stays in THIS shell (it sets the
+	# ${found} flag the restore logic below reads); skip blank entries.
+	while IFS= read -r host; do
+		[ -z "${host}" ] && continue
 		# Determine if host is a Domain or an AS
 		host_check="$(echo "${host}" | grep '\.')"
 		if [ -n "${host_check}" ]; then
@@ -533,7 +604,17 @@ whoisconvert() {
 			else
 				asn="$(echo "${host}" | tr -d 'AaSs')"
 				printf '  Collecting ASN: AS%s' "${asn}"
-				grep ",AS${asn}," "${pathasncsv}" | cut -d ',' -f1-2 | tr ',' '-' > "${pfborig}${alias}.wk"
+				# An AS number is digits only; drop anything else so the value
+				# spliced into the grep below is a literal, not a live pattern.
+				case "${asn}" in
+					''|*[!0-9]*)
+						printf "... Invalid ASN [ %s ]" "${host}"
+						touch "${pfborig}${alias}.fail"
+						found=false
+						continue
+						;;
+				esac
+				grep -F ",AS${asn}," "${pathasncsv}" | cut -d ',' -f1-2 | tr ',' '-' > "${pfborig}${alias}.wk"
 
 				# Collect only IPv4 or IPv6
 				if [ "${vtype}" = '_v4' ]; then
@@ -552,7 +633,9 @@ whoisconvert() {
 			fi
 			rm -f "${pfborig}${alias}.wk"
 		fi
-	done
+	done <<EOF
+${custom_list}
+EOF
 
 	# Restore previous orig file
 	if [ "${found}" = false ]; then
@@ -651,7 +734,12 @@ reputation_max() {
 
 	# Classify repeat offenders by Country code
 	if [ -n "${data}" ]; then
-		for ip in ${data}; do
+		# Iterate the octet prefixes via a here-doc (no IFS re-splitting) so the
+		# loop body stays in THIS shell -- it accumulates ${count}/${countr} and
+		# appends to ${dupfile}/${matchfile}. Validate each to digits/dots and
+		# skip a malformed token.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
 			ccheck="$(${pathgeoip} -f "${pathgeoipdat}" -i "${ip}.1" country iso_code 2>&1 | grep -v 'Could\|Got\|^$' | cut -d '"' -f2)"
 			# A failed GeoIP lookup yields an empty ${ccheck}; an unquoted *${ccheck}*
 			# case pattern would collapse to '**' and match every ${cc}, wrongly
@@ -674,17 +762,23 @@ reputation_max() {
 					echo "${ip}." >> "${dupfile}"
 					;;
 			esac
-		done
+		done <<EOF
+${data}
+EOF
 	else
 		countr=0; count=0
 	fi
 
 	# Collect match file details
 	if [ -s "${matchfile}" ] && [ "${dedup}" != 'on' ] && [ "${ccwhite}" = 'match' ]; then
-		mon="$(sed -e 's/^/^/' -e 's/\./\\\./g' "${matchfile}")"
-		for ip in ${mon}; do
-			grep "${ip}" "${tempfile}" >> "${tempfile2}"
-		done
+		# Each matchfile line is a '10.0.0.'-style octet prefix. Read them
+		# directly (no sed pre-escape, no IFS re-split), validate to digits/dots,
+		# and build the anchored '^10\.0\.0\.' pattern via the shared helper so
+		# only a literal prefix reaches grep.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			grep "$(pfb_anchor_octet_pattern "${ip}")" "${tempfile}" >> "${tempfile2}"
+		done < "${matchfile}"
 		counts="$(grep -c ^ "${tempfile2}")"
 		if [ "${ccwhite}" = 'match' ]; then
 			sed 's/$/0\/24/' "${matchfile}" >> "${tempmatchfile}"
@@ -705,10 +799,14 @@ reputation_max() {
 	# Find repeat offenders in each individual blocklist outfile
 	if [ -s "${dupfile}" ]; then
 		: > "${tempfile2}"
-		dup="$(sed -e 's/^/^/' -e 's/\./\\\./g' "${dupfile}")"
-		for ip in ${dup}; do
-			grep "${ip}" "${tempfile}" >> "${tempfile2}"
-		done
+		# Each dupfile line is a '10.0.0.'-style octet prefix. Read them directly
+		# (no sed pre-escape, no IFS re-split), validate to digits/dots, and build
+		# the anchored '^10\.0\.0\.' pattern via the shared helper so only a
+		# literal prefix reaches grep.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			grep "$(pfb_anchor_octet_pattern "${ip}")" "${tempfile}" >> "${tempfile2}"
+		done < "${dupfile}"
 		countb="$(grep -c ^ "${tempfile2}")"
 
 		if [ "${ccblack}" = 'block' ]; then
@@ -750,7 +848,12 @@ reputation_dmax() {
 	# Classify repeat offenders by Country code
 	if [ -n "${data}" ]; then
 		echo '  Classifying repeat offenders by GeoIP'
-		for ip in ${data}; do
+		# Iterate the octet prefixes via a here-doc (no IFS re-splitting) so the
+		# loop body stays in THIS shell -- it accumulates ${count}/${countr} and
+		# appends to ${dupfile}/${matchfile}. Validate each to digits/dots and
+		# skip a malformed token.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
 			ccheck="$(${pathgeoip} -f "${pathgeoipdat}" -i "${ip}.1" country iso_code 2>&1 | grep -v 'Could\|Got\|^$' | cut -d '"' -f2)"
 			# A failed GeoIP lookup yields an empty ${ccheck}; an unquoted *${ccheck}*
 			# case pattern would collapse to '**' and match every ${cc}, wrongly
@@ -773,18 +876,23 @@ reputation_dmax() {
 					echo "${ip}." >> "${dupfile}"
 					;;
 			esac
-		done
+		done <<EOF
+${data}
+EOF
 	else
 		countr=0; count=0
 	fi
 
 	if [ "${ccwhite}" = 'match' ] && [ -s "${matchfile}" ]; then
 		echo '  Processing [ Match ] IPs'
-		match="$(sed -e 's/^/^/' -e 's/\./\\\./g' "${matchfile}")"
-
-		for mfile in ${match}; do
-			grep "${mfile}" "${pfbdeny}"*.txt >> "${tempfile}"
-		done
+		# Each matchfile line is a '10.0.0.'-style octet prefix. Read them
+		# directly (no sed pre-escape, no IFS re-split), validate to digits/dots,
+		# and build the anchored '^10\.0\.0\.' pattern via the shared helper so
+		# only a literal prefix reaches grep.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			grep "$(pfb_anchor_octet_pattern "${ip}")" "${pfbdeny}"*.txt >> "${tempfile}"
+		done < "${matchfile}"
 
 		sed 's/$/0\/24/' "${matchfile}" >> "${tempmatchfile}"
 		sed -e 's/.*://' -e 's/^/\!/' "${tempfile}" >> "${tempmatchfile}"
@@ -796,13 +904,21 @@ reputation_dmax() {
 	# Find repeat offenders in each individual blocklist outfile
 	if [ "${count}" -gt 0 ]; then
 		echo '  Processing [ Block ] IPs'
-		dup="$(cat "${dupfile}")"
 
-		for ip in ${dup}; do
-			runonce=0; ii="$(echo "^${ip}" | sed 's/\./\\\./g')"
+		# Each dupfile line is a '10.0.0.'-style octet prefix. Read them directly
+		# from the file (no IFS re-split) so the body stays in THIS shell -- it
+		# sets ${runonce} and appends to ${dedupfile}/${addfile}. Validate each to
+		# digits/dots, then build the anchored '^10\.0\.0\.' pattern via the shared
+		# helper so only a literal prefix reaches grep.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
+			runonce=0; ii="$(pfb_anchor_octet_pattern "${ip}")"
 			list="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs grep -al "${ii}")"
 
-			for blfile in ${list}; do
+			# Iterate the matched blocklist files via a here-doc (no IFS re-split)
+			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
+			while IFS= read -r blfile; do
+				[ -z "${blfile}" ] && continue
 				header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
 				grep "${ii}" "${blfile}" > "${tempfile}"
 
@@ -826,14 +942,20 @@ reputation_dmax() {
 						runonce=1
 					fi
 				fi
-			done
-		done
+			done <<EOF
+${list}
+EOF
+		done < "${dupfile}"
 
 		# Remove repeat offenders in masterfiles
 		echo '  Removing   [ Block ] IPs'
-		: > "${tempfile}"; : > "${tempfile2}"
-		sed 's/\./\\\./g' "${dedupfile}" > "${tempfile2}"
-		while IFS=' ' read -r ips; do grep "${ips}" "${masterfile}" >> "${tempfile}"; done < "${tempfile2}"
+		: > "${tempfile}"
+		# Each dedupfile line is 'header 10.0.0.[0/24]' -- a literal whole token,
+		# no anchor needed, so match it with grep -F (the '.' is a literal dot).
+		while IFS= read -r ips; do
+			[ -z "${ips}" ] && continue
+			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
+		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
 		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
 		cat "${addfile}" >> "${masterfile}"
@@ -870,12 +992,21 @@ reputation_pmax(){
 		echo '  Processing [ Block ] IPs'
 		count=0
 
-		for ip in ${data}; do
+		# Iterate the octet prefixes via a here-doc (no IFS re-splitting) so the
+		# loop body stays in THIS shell -- it accumulates ${count} and appends to
+		# ${dedupfile}/${addfile}. Validate each to digits/dots, then build the
+		# anchored '^10\.0\.0\.' pattern via the shared helper so only a literal
+		# prefix reaches grep.
+		while IFS= read -r ip; do
+			pfb_is_octet_prefix "${ip}" || continue
 			count="$((count + 1))"
-			runonce=0; ii="$(echo "^${ip}." | sed 's/\./\\\./g')"
+			runonce=0; ii="$(pfb_anchor_octet_pattern "${ip}.")"
 			list="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs grep -al "${ii}")"
 
-			for blfile in ${list}; do
+			# Iterate the matched blocklist files via a here-doc (no IFS re-split)
+			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
+			while IFS= read -r blfile; do
+				[ -z "${blfile}" ] && continue
 				header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
 				grep "${ii}" "${blfile}" > "${tempfile}"
 				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${blfile}"
@@ -888,14 +1019,22 @@ reputation_pmax(){
 				else
 					echo "${header}" "${ip}." >> "${dedupfile}"
 				fi
-			done
-		done
+			done <<EOF
+${list}
+EOF
+		done <<EOF
+${data}
+EOF
 
 		# Remove repeat offenders in masterfile
 		echo '  Removing   [ Block ] IPs'
-		: > "${tempfile}"; : > "${tempfile2}"
-		sed 's/\./\\\./g' "${dedupfile}" > "${tempfile2}"
-		while IFS=' ' read -r ips; do grep "${ips}" "${masterfile}" >> "${tempfile}"; done < "${tempfile2}"
+		: > "${tempfile}"
+		# Each dedupfile line is 'header 10.0.0.' -- a literal whole token, no
+		# anchor needed, so match it with grep -F (the '.' is a literal dot).
+		while IFS= read -r ips; do
+			[ -z "${ips}" ] && continue
+			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
+		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
 		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
 		cat "${addfile}" >> "${masterfile}"
