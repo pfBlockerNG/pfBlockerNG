@@ -36,6 +36,8 @@ CHANNELS: dict[str, tuple[str, str]] = {
 }
 CH_ORDER: list[str] = ["stable", "devel", "nightly"]
 RAW_ADDREPO = "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/devel/scripts/add-repo.sh"
+# The source repo a .pkg is built from — base for the per-artifact commit link.
+SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 
 # pkg(8) catalog files that live in a catalog dir but are NOT packages — excluded
 # from the human listing and the package table.
@@ -93,6 +95,20 @@ def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     return artifact_datetime(mtime_epoch)
 
 
+def commit_cell(sha: str) -> str:
+    """Render the source-commit cell: a short SHA linking to the commit on GitHub.
+
+    The full SHA rides the .pkg's `commit` build annotation (stamped per channel at
+    build time). A missing annotation — e.g. an older release asset built before
+    commit stamping — or a non-hex value renders an em dash, never a broken/unsafe
+    link (the hex guard also keeps untrusted annotation text out of the URL/markup).
+    """
+    sha = (sha or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+        return '<span class="empty">&mdash;</span>'
+    return f'<a href="{SOURCE_REPO_URL}/commit/{_esc(sha)}"><code>{_esc(sha[:7])}</code></a>'
+
+
 def read_manifest_zstd(path: str) -> dict:
     """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
     if shutil.which("zstd") is None:
@@ -125,6 +141,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "abi": abi,
                     "size": os.path.getsize(path),
                     "published": published_datetime(man, os.path.getmtime(path)),
+                    "commit": (man.get("annotations") or {}).get("commit", ""),
                     "rel": os.path.relpath(path, site),
                 }
             )
@@ -217,13 +234,14 @@ def _table_html(rows: list[dict]) -> str:
         f"<tr><td>{_esc(r['channel'])}</td><td>{_esc(r['name'])}</td>"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
         f'<td class="num">{_esc(r.get("published", ""))}</td>'
+        f"<td>{commit_cell(r.get('commit', ''))}</td>"
         f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
         for r in rows
     )
     return (
         "<table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>"
-        f"<th>Published</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
+        f"<th>Published</th><th>Commit</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
     )
 
 

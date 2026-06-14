@@ -94,6 +94,25 @@ def test_published_datetime_prefers_created_annotation() -> None:
     )
 
 
+def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:
+    """The Commit column links a short SHA to GitHub, and degrades safely.
+
+    Every input class is covered: a real SHA renders a 7-char link to the commit on
+    the source repo; an absent annotation (older asset) and a non-hex value both
+    render an em dash, never a broken or unsafe link.
+    """
+    full = "9d4b0b4556edca49b856c093838ccd0e2e91736b"
+    cell = gl.commit_cell(full)
+    assert f'href="{gl.SOURCE_REPO_URL}/commit/{full}"' in cell  # full SHA in the URL
+    assert ">9d4b0b4<" in cell  # 7-char short SHA shown
+    # Missing / blank annotation -> em dash, no link.
+    for missing in ("", "   ", None):
+        assert gl.commit_cell(missing) == '<span class="empty">&mdash;</span>'  # type: ignore[arg-type]
+    # Non-hex / junk -> em dash (the hex guard keeps untrusted text out of the URL).
+    assert "href" not in gl.commit_cell("not-a-sha")
+    assert "href" not in gl.commit_cell("../../evil")
+
+
 def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
     """A clear error (not a generic FileNotFoundError) when the zstd binary is absent."""
     monkeypatch.setattr(gl.shutil, "which", lambda _name: None)
@@ -131,9 +150,9 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
         _touch(site / rel / "data.pkg")
         (site / rel / "meta.conf").write_text("version = 2;\n")
 
-    def fake_read(path: str) -> dict[str, str]:
+    def fake_read(path: str) -> dict[str, Any]:
         name, ver = layout[os.path.relpath(path, site)]
-        return {"name": name, "version": ver, "abi": Path(path).parent.name}
+        return {"name": name, "version": ver, "abi": Path(path).parent.name, "annotations": {"commit": "cafe1234"}}
 
     # When
     pkgs = gl.collect_packages(str(site), read_manifest=fake_read)
@@ -143,6 +162,8 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
     assert {p["channel"] for p in pkgs} == {"devel", "nightly"}
     assert all(p["rel"].endswith(".pkg") for p in pkgs)
     assert not any("packagesite" in p["rel"] or "data.pkg" in p["rel"] for p in pkgs)
+    # The source-commit annotation is carried onto each row (drives the Commit column).
+    assert {p["commit"] for p in pkgs} == {"cafe1234"}
 
 
 # ── build_table: newest version per (channel, ABI) ────────────────────────────
@@ -157,6 +178,7 @@ def _pkg(channel: str, name: str, version: str, abi: str, rel: str, size: int = 
         "rel": rel,
         "size": size,
         "published": "2026-06-14 09:38 UTC",
+        "commit": "9d4b0b4556edca49b856c093838ccd0e2e91736b",
     }
 
 
@@ -215,6 +237,10 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # The package table carries a Published datetime column (UTC, minute precision).
     assert "<th>Published</th>" in page
     assert "2026-06-14 09:38 UTC" in page
+    # …and a Commit column linking the short SHA to the source commit on GitHub.
+    assert "<th>Commit</th>" in page
+    assert f'href="{gl.SOURCE_REPO_URL}/commit/9d4b0b4556edca49b856c093838ccd0e2e91736b"' in page
+    assert ">9d4b0b4<" in page
     # Stable has no package -> empty state, NOT a bogus version.
     assert "not yet published" in page
     # Install one-liner pins this repo's base URL (the working Pages mirror).
