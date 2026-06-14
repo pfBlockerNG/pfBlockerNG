@@ -150,6 +150,7 @@ jobs:
             MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
             PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
             PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
+            ARCH=$(printf '%s\n' "$ENTRY" | jq -r '.arch')
 
             # Filter to target version if specified
             if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
@@ -157,7 +158,10 @@ jobs:
               continue
             fi
 
-            ABI="FreeBSD:${MAJOR}:amd64"
+            # The reader resolves arch (default amd64) on every build entry, so an
+            # aarch64 entry (Plus-only, issue #199) dispatches a FreeBSD:N:aarch64
+            # build; every existing amd64 entry is unchanged.
+            ABI="FreeBSD:${MAJOR}:${ARCH}"
             # Channel maps to pkg channel: CE on devel branch -> devel, main -> stable
             # For standalone tracker runs we use 'devel' as the pkg channel by default.
             # A real release tag push always uses release.yml; this is a build smoke-check.
@@ -165,10 +169,10 @@ jobs:
 
             if [ "$DRY_RUN" = "true" ]; then
               echo "  [DRY-RUN] WOULD dispatch build-pkg-linux.yml:"
-              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}"
+              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}  arch=${ARCH}"
               echo "    abi=${ABI}  php=${PHP}  py_flavor=${PY}  pkg_channel=${PKG_CHANNEL}"
             else
-              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}"
+              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}/${ARCH}"
               # Dispatch the portable Linux builder for this matrix entry.
               # build-pkg-linux.yml expects: channel, abi, php_version, py_flavor.
               # INVARIANT: we dispatch a build-only workflow — no commits, no pushes.
