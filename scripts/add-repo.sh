@@ -99,7 +99,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --nightly)      CHANNEL="nightly"; shift ;;
         --print-conf)   PRINT_CONF=1; shift ;;
-        --base-url)     BASE_URL="$2"; shift 2 ;;
+        --base-url)
+            [ $# -ge 2 ] || { echo "add-repo: --base-url requires a value" >&2; exit 2; }
+            BASE_URL="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         -*) echo "add-repo: unknown option: $1 (see --help)" >&2; exit 2 ;;
         *)  echo "add-repo: unexpected argument '$1' — the channel is a flag (--nightly); the release repo is the default. See --help." >&2; exit 2 ;;

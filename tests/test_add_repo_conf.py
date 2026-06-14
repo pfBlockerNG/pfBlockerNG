@@ -172,6 +172,18 @@ def test_add_repo_rejects_positional_argument() -> None:
         assert "unexpected argument" in proc.stderr.lower(), proc.stderr
 
 
+def test_add_repo_base_url_requires_a_value() -> None:
+    """`--base-url` with no following value errors cleanly (not a cryptic `set -u` crash)."""
+    proc = subprocess.run(
+        ["sh", str(_ADD_REPO), "--print-conf", "--base-url"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "--base-url requires a value" in proc.stderr, proc.stderr
+
+
 # --------------------------------------------------------------------------- #
 # ADR-20 Phase 4: Worker URL tests
 # --------------------------------------------------------------------------- #

@@ -120,7 +120,8 @@ pfblockerng: {
   resolution (and the webConfigurator's **Install** button) picks our build.
 
 > **Transition note (ADR-20):** If you configured the repo before 2026-06-10, re-run
-> `sh scripts/add-repo.sh devel` (or `stable`) to refresh the conf to the Worker URL.
+> `sh scripts/add-repo.sh` (or `sh scripts/add-repo.sh --nightly` for the nightly repo) to
+> refresh the conf to the Worker URL.
 > The legacy `pfblockerng.github.io/pkg/${ABI}/` path continues to serve CE packages
 > during the transition window.
 > Installs and updates work via the **Install** button or `pkg upgrade`,
@@ -133,13 +134,14 @@ channel — a distinct package `pfSense-pkg-pfBlockerNG-nightly` served from a
 `nightly/` catalog subtree:
 
 ```sh
-./scripts/add-repo.sh nightly
+./scripts/add-repo.sh --nightly
 pkg install pfSense-pkg-pfBlockerNG-nightly
 ```
 
 It **conflicts with the stable and `-devel` packages** (they install the same files),
-so it replaces whichever you had; switch back any time with `./scripts/add-repo.sh devel`
-(or `stable`) and `pkg install` the release package. Nightly versions order as
+so it replaces whichever you had; switch back any time with `./scripts/add-repo.sh`
+and `pkg install` the release package you want (`pfSense-pkg-pfBlockerNG` or `-devel`).
+Nightly versions order as
 `<target>.YYYYMMDD.N`, so `pkg upgrade` always moves to the newest build, and the
 source commit rides the package — `pkg info -A pfSense-pkg-pfBlockerNG-nightly` shows it.
 The **last 14 builds** are kept, so you can roll back by installing an older version
