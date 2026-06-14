@@ -45,12 +45,31 @@ Describe 'feed-token shape guards'
       When call pfb_is_cidr_token '10.0.0.1/32'
       The status should be success
     End
+    It 'accepts a network/prefix CIDR token'
+      When call pfb_is_cidr_token '10.0.0.0/24'
+      The status should be success
+    End
     It 'rejects a token carrying a regex metacharacter'
       When call pfb_is_cidr_token '10.0.0.*'
       The status should be failure
     End
     It 'rejects the empty string'
       When call pfb_is_cidr_token ''
+      The status should be failure
+    End
+    # The mask is required: suppress() splits on '/' and compares it with -eq, so a
+    # token with no slash, an empty mask, or a double slash must be dropped here
+    # rather than reaching that numeric compare.
+    It 'rejects a bare IP with no slash (no mask to compare)'
+      When call pfb_is_cidr_token '10.0.0.1'
+      The status should be failure
+    End
+    It 'rejects an empty mask (trailing slash)'
+      When call pfb_is_cidr_token '10.0.0.1/'
+      The status should be failure
+    End
+    It 'rejects a double slash'
+      When call pfb_is_cidr_token '10.0.0.1//32'
       The status should be failure
     End
   End
