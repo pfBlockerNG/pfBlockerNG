@@ -53,6 +53,17 @@ def test_ver_key_orders_nightly_after_release() -> None:
     assert gl.ver_key("3.2.16.20260614.20") > gl.ver_key("3.2.16.20260614.7")
 
 
+def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
+    """A clear error (not a generic FileNotFoundError) when the zstd binary is absent."""
+    monkeypatch.setattr(gl.shutil, "which", lambda _name: None)
+    try:
+        gl.read_manifest_zstd("whatever.pkg")
+    except RuntimeError as exc:
+        assert "zstd" in str(exc)
+    else:  # pragma: no cover - the guard must fire
+        raise AssertionError("expected RuntimeError when zstd is missing")
+
+
 # ── collect_packages: walk + classify + exclude plumbing ──────────────────────
 
 

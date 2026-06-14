@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 from collections.abc import Callable, Iterable
@@ -70,6 +71,8 @@ def ver_key(v: str) -> list[int]:
 
 def read_manifest_zstd(path: str) -> dict:
     """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
+    if shutil.which("zstd") is None:
+        raise RuntimeError("gen_landing.py needs the zstd binary to read .pkg manifests (e.g. pkg/apt install zstd)")
     raw = subprocess.run(["zstd", "-dc", path], capture_output=True, check=True).stdout
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
         member = tar.extractfile("+COMPACT_MANIFEST")
