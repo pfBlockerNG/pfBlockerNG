@@ -298,6 +298,11 @@ define('PFB_FILTER_ATYPE', 19);
 define('PFB_FILTER_HEX_COLOR', 20);
 define('PFB_FILTER_ON_OFF', 21);
 
+// Maximum number of HTTP redirects pfb_download() follows manually (each hop's
+// host is re-vetted by the feed-host guard before it is dialled). Matches the
+// previous cURL CURLOPT_MAXREDIRS auto-follow cap.
+define('PFB_DOWNLOAD_MAXREDIRS', 10);
+
 // Machine-detectable markers (the VIP 'descr') stamped on DNSBL sinkhole VIPs that
 // pfBlockerNG auto-creates and therefore owns (ADR-13). ONLY VIPs carrying one of
 // these markers are ever managed/deleted by the package; a manually-created VIP is
@@ -5464,6 +5469,157 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 }
 
 
+// Resolve a (possibly relative) HTTP redirect Location against the URL it was
+// returned from, then re-run the feed-host guard on the redirect target so a
+// redirect cannot send the fetch to a non-permitted address. Returns FALSE when
+// the target host is not permitted (or the Location cannot be resolved to an
+// absolute http(s) URL); $reason carries a neutral skip reason. On success it
+// returns array('url' => <absolute target URL>, 'host' => <host>, 'scheme' =>
+// <scheme>, 'port' => <int port>) and $pinned receives the vetted IP the caller
+// re-pins the connection to. The curl mechanics stay in pfb_download(); this
+// holds only the per-hop decision so it is unit-testable off-appliance.
+function pfb_feed_redirect_target($location, $current_url, &$reason, &$pinned) {
+
+	$reason = '';
+	$pinned = '';
+
+	if (!is_string($location) || trim($location) === '') {
+		$reason = 'feed redirect has no target';
+		return FALSE;
+	}
+	$location = trim($location);
+
+	// Resolve a possibly-relative Location against the current absolute URL.
+	$target = pfb_resolve_relative_url($location, (string) $current_url);
+	if ($target === '') {
+		$reason = 'feed redirect target could not be resolved';
+		return FALSE;
+	}
+
+	$parts	= parse_url($target);
+	$host	= $parts['host'] ?? '';
+	$scheme	= strtolower($parts['scheme'] ?? '');
+	if ($host === '' || ($scheme !== 'http' && $scheme !== 'https')) {
+		$reason = 'feed redirect target is not an http(s) URL';
+		return FALSE;
+	}
+
+	if (!pfb_feed_host_allowed($host, $reason, $pinned)) {
+		// $reason already carries the neutral guard reason.
+		return FALSE;
+	}
+
+	$scheme_ports	= array('http' => 80, 'https' => 443);
+	$port		= (int) ($parts['port'] ?? ($scheme_ports[$scheme] ?? 0));
+
+	return array(
+		'url'    => $target,
+		'host'   => $host,
+		'scheme' => $scheme,
+		'port'   => $port,
+	);
+}
+
+
+// Resolve a possibly-relative URL reference ($ref) against an absolute base URL
+// ($base), returning an absolute URL string (or '' on failure). Handles an
+// already-absolute reference, a scheme-relative '//host/path', an absolute-path
+// '/path', and a relative-path reference (resolved against the base directory).
+// A minimal RFC 3986-style resolver, sufficient for following HTTP redirects.
+function pfb_resolve_relative_url($ref, $base) {
+
+	if (!is_string($ref) || $ref === '') {
+		return '';
+	}
+
+	// Already absolute (has a scheme).
+	if (preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*://#', $ref)) {
+		return $ref;
+	}
+
+	$bparts = parse_url((string) $base);
+	$bscheme = strtolower($bparts['scheme'] ?? '');
+	$bhost   = $bparts['host'] ?? '';
+	if ($bscheme === '' || $bhost === '') {
+		return '';
+	}
+	$bauth = $bhost . (isset($bparts['port']) ? ':' . $bparts['port'] : '');
+
+	// Scheme-relative reference: //host/path
+	if (strncmp($ref, '//', 2) === 0) {
+		return "{$bscheme}:{$ref}";
+	}
+
+	// Absolute-path reference: /path
+	if ($ref[0] === '/') {
+		return "{$bscheme}://{$bauth}{$ref}";
+	}
+
+	// Relative-path reference: resolve against the base path's directory.
+	$bpath = $bparts['path'] ?? '/';
+	$dir   = (strpos($bpath, '/') !== FALSE) ? substr($bpath, 0, strrpos($bpath, '/') + 1) : '/';
+	if ($dir === '' || $dir[0] !== '/') {
+		$dir = '/' . $dir;
+	}
+	return "{$bscheme}://{$bauth}{$dir}{$ref}";
+}
+
+
+// Rebuild an rsync feed source so it connects to the vetted IP instead of the
+// hostname (the guard's pinned address), keeping the module/path intact. Accepts
+// both rsync forms: 'host::module/path' -> 'IP::module/path', and
+// 'rsync://host/path' -> 'rsync://IP/path' (preserving an explicit port and any
+// user@ prefix). Returns '' when the form cannot be parsed to substitute the host
+// (caller fails closed). $ip must be a vetted IP literal.
+function pfb_rsync_pin_url($list_url, $ip) {
+
+	if (!is_string($list_url) || $list_url === '' || !is_string($ip) || $ip === '') {
+		return '';
+	}
+
+	// Bracket an IPv6 literal for the rsync:// (URL) form.
+	$ip_url = (strpos($ip, ':') !== FALSE) ? "[{$ip}]" : $ip;
+
+	// rsync://[user@]host[:port]/path
+	if (stripos($list_url, 'rsync://') === 0) {
+		$rest = substr($list_url, strlen('rsync://'));
+		// Split off the path (everything from the first '/').
+		$slash = strpos($rest, '/');
+		$authority = ($slash === FALSE) ? $rest : substr($rest, 0, $slash);
+		$path = ($slash === FALSE) ? '' : substr($rest, $slash);
+		if ($authority === '') {
+			return '';
+		}
+		// Preserve a 'user@' prefix; drop the host[:port], substitute the IP.
+		$at = strrpos($authority, '@');
+		$userpart = ($at === FALSE) ? '' : substr($authority, 0, $at + 1);
+		$hostport = ($at === FALSE) ? $authority : substr($authority, $at + 1);
+		// Carry over an explicit ':port' (last colon, but not inside an IPv6 [..]).
+		$port = '';
+		if ($hostport !== '' && $hostport[0] !== '[') {
+			$colon = strrpos($hostport, ':');
+			if ($colon !== FALSE) {
+				$port = substr($hostport, $colon);
+			}
+		}
+		return "rsync://{$userpart}{$ip_url}{$port}{$path}";
+	}
+
+	// [user@]host::module/path
+	if (strpos($list_url, '::') !== FALSE) {
+		list($hostpart, $module) = explode('::', $list_url, 2);
+		if ($hostpart === '') {
+			return '';
+		}
+		$at = strrpos($hostpart, '@');
+		$userpart = ($at === FALSE) ? '' : substr($hostpart, 0, $at + 1);
+		return "{$userpart}{$ip}::{$module}";
+	}
+
+	return '';
+}
+
+
 // Function to download feeds
 function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE) {
 	global $pfb;
@@ -5518,12 +5674,16 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	if ($format == 'rsync') {
 
 		// Apply the same resolve+reject guard before rsync (fail-closed; opt-out
-		// in General settings). rsync runs via exec, not cURL, so the vetted IP
-		// cannot be pinned for the connection here — the guard rejects an
-		// internal-resolving host, but a sub-second re-resolution between check
-		// and connect is not closed off for this scheme as it is for cURL.
+		// in General settings), then connect to the vetted IP rather than the
+		// hostname so the exec cannot re-resolve to a different address between
+		// the check and the connect.
 		if (strpos($list_url, '::') !== FALSE) {
 			$rsync_host = explode('::', $list_url, 2)[0];	// host::module form
+			// Strip an optional 'user@' prefix from the host component.
+			$at = strrpos($rsync_host, '@');
+			if ($at !== FALSE) {
+				$rsync_host = substr($rsync_host, $at + 1);
+			}
 		} else {
 			$rsync_host = parse_url($list_url, PHP_URL_HOST) ?: '';	// rsync://host/path form
 		}
@@ -5535,7 +5695,17 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			return FALSE;
 		}
 
-		$result	= exec("/usr/local/bin/rsync --timeout=5 {$list_url_esc} {$file_dwn_esc}");
+		// Pin the connection to the vetted IP (substitute it for the host in the
+		// rsync source). Fail closed if the source form can't be parsed to do so.
+		$rsync_src = pfb_rsync_pin_url($list_url, $rsync_pinned);
+		if ($rsync_src === '') {
+			$log = "\n[ {$header} ] feed host could not be pinned \xe2\x80\x94 skipped\n";
+			pfb_logger("{$log}", "{$logtype}");
+			return FALSE;
+		}
+		$rsync_src_esc = escapeshellarg("{$rsync_src}");
+
+		$result	= exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}");
 		if ($result == 0) {
 			$http_status = '200';
 		} else {
@@ -5601,6 +5771,29 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout
 				curl_setopt($ch, CURLOPT_ENCODING, 'gzip');	// Request 'gzip' encoding from server if available
+
+				// Do NOT let cURL auto-follow redirects: a 3xx is followed manually
+				// below so every hop's host is re-vetted by the feed-host guard and
+				// re-pinned before it is dialled (an auto-followed redirect would be
+				// re-resolved by cURL, bypassing the guard + the IP pin).
+				curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+				curl_setopt($ch, CURLOPT_MAXREDIRS, 0);
+
+				// Capture the response 'Location' header for the manual redirect
+				// follow. Reset per hop ($redirect_location is cleared before each
+				// curl_exec). Bodies are written to $fhandle; a redirect hop's body
+				// is truncated away before the next hop so only the final 2xx body
+				// survives.
+				$redirect_location = '';
+				curl_setopt($ch, CURLOPT_HEADERFUNCTION,
+					function ($curl_handle, $hdr_line) use (&$redirect_location) {
+						$trimmed = trim($hdr_line);
+						if (stripos($trimmed, 'Location:') === 0) {
+							$redirect_location = trim(substr($trimmed, strlen('Location:')));
+						}
+						return strlen($hdr_line);
+					}
+				);
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
@@ -5610,12 +5803,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// host header/SNI stay the original host; only the address cURL
 				// dials is forced to the one vetted above. Coexists with
 				// CURLOPT_INTERFACE (the source interface is independent of the
-				// destination address) and follow-redirect settings (CURLOPT_RESOLVE
-				// only pins this host:port, so a redirect to another host is still
-				// resolved normally). The destination port is derived from the URL
+				// destination address). The destination port is derived from the URL
 				// or its scheme when implicit.
+				$scheme_ports	= array('http' => 80, 'https' => 443, 'ftp' => 21, 'rsync' => 873);
 				if ($feed_pinned !== '' && $feed_host !== '' && !empty($feed_scheme)) {
-					$scheme_ports	= array('http' => 80, 'https' => 443, 'ftp' => 21, 'rsync' => 873);
 					$feed_port	= $url_parts['port'] ?? ($scheme_ports[$feed_scheme] ?? 0);
 					if ($feed_port > 0) {
 						curl_setopt($ch, CURLOPT_RESOLVE, array("{$feed_host}:{$feed_port}:{$feed_pinned}"));
@@ -5627,52 +5818,118 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 				}
 
-				// Attempt 3 Downloads before failing.
-				for ($retries = 1; $retries <= 3; $retries++) {
-					if (curl_exec($ch)) {
-						// Collect remote timestamp.
-						$raw_filetime = curl_getinfo($ch, CURLINFO_FILETIME);
-						if ($raw_filetime == -1) {
-							$remote_stamp = -1;
-						} elseif (!empty(pfb_filter($raw_filetime, PFB_FILTER_NUM, 'pfb_download - remote timestamp'))) {
-							$remote_stamp = $raw_filetime;
+				// Manually follow validated redirects. Each hop's body is written to
+				// $fhandle, truncated before the next hop so only the final response
+				// body survives. The hop cap (PFB_DOWNLOAD_MAXREDIRS, 10) matches the
+				// previous CURLOPT_MAXREDIRS. The common (non-redirecting) feed exits
+				// on the first iteration with the body intact, behaving exactly as
+				// before.
+				$current_url	= $list_download;
+				$http_status	= '';
+				for ($hop = 0; $hop <= PFB_DOWNLOAD_MAXREDIRS; $hop++) {
+					$redirect_location = '';
+
+					// Attempt 3 Downloads before failing.
+					$hop_ok = FALSE;
+					for ($retries = 1; $retries <= 3; $retries++) {
+						if (curl_exec($ch)) {
+							// Collect remote timestamp.
+							$raw_filetime = curl_getinfo($ch, CURLINFO_FILETIME);
+							if ($raw_filetime == -1) {
+								$remote_stamp = -1;
+							} elseif (!empty(pfb_filter($raw_filetime, PFB_FILTER_NUM, 'pfb_download - remote timestamp'))) {
+								$remote_stamp = $raw_filetime;
+							}
+							$hop_ok = TRUE;
+							break;	// Break on success
 						}
-						break;	// Break on success
-					}
 
-					$curl_error = curl_errno($ch);
-					if ($logtype != 3) {
-						pfb_logger(" cURL Error: {$curl_error} [ NOW ]\n", 1);
-					} else {
-						pfb_logger(" {$header}\t\tcURL Error: {$curl_error} [ NOW ]\n\n", 3);
-					}
-
-					/* 'Flex' Downgrade cURL errors -	[ 35 - GET_SERVER_HELLO:sslv3		]
-										[ 51 - NO alternative certificate	]
-										[ 60 - Local Issuer Certificate Subject	]	*/
-
-					// Allow downgrade of cURL settings 'Flex' after 1st failure, if user configured.
-					if ($retries == 1 && $pflex && in_array($curl_error, array( '35', '51', '60'))) {
-						curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-						curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-						curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3');
-						$log = "\n  Downgrading SSL settings (Flex)";
-						pfb_logger("{$log}", "{$logtype}");
-					}
-					else {
-						if ($retries == 3) {
-							$log = curl_error($ch) . " |{$head_download}|{$list_download}| Retry [{$retries}] in 5 seconds...\n";
+						$curl_error = curl_errno($ch);
+						if ($logtype != 3) {
+							pfb_logger(" cURL Error: {$curl_error} [ NOW ]\n", 1);
 						} else {
-							$log = curl_error($ch) . " Retry [{$retries}] in 5 seconds...\n";
+							pfb_logger(" {$header}\t\tcURL Error: {$curl_error} [ NOW ]\n\n", 3);
 						}
+
+						/* 'Flex' Downgrade cURL errors -	[ 35 - GET_SERVER_HELLO:sslv3		]
+											[ 51 - NO alternative certificate	]
+											[ 60 - Local Issuer Certificate Subject	]	*/
+
+						// Allow downgrade of cURL settings 'Flex' after 1st failure, if user configured.
+						if ($retries == 1 && $pflex && in_array($curl_error, array( '35', '51', '60'))) {
+							curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+							curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+							curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3');
+							$log = "\n  Downgrading SSL settings (Flex)";
+							pfb_logger("{$log}", "{$logtype}");
+						}
+						else {
+							if ($retries == 3) {
+								$log = curl_error($ch) . " |{$head_download}|{$list_download}| Retry [{$retries}] in 5 seconds...\n";
+							} else {
+								$log = curl_error($ch) . " Retry [{$retries}] in 5 seconds...\n";
+							}
+							pfb_logger("{$log}", "{$logtype}");
+							sleep(5);
+							pfb_logger('.', "{$logtype}");
+						}
+					}
+
+					// Collect RFC7231 http status code for this hop
+					$http_status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+					// Not a redirect (or the request failed) -> this is the final
+					// response; stop and treat what was written as the download.
+					if (!$hop_ok || $http_status < 300 || $http_status >= 400 || $redirect_location === '') {
+						break;
+					}
+
+					// A redirect: validate the target host before following it.
+					if ($hop >= PFB_DOWNLOAD_MAXREDIRS) {
+						$log = "\n[ {$header} ] too many redirects \xe2\x80\x94 skipped\n";
 						pfb_logger("{$log}", "{$logtype}");
-						sleep(5);
-						pfb_logger('.', "{$logtype}");
+						if ($ch) {
+							curl_close($ch);
+						}
+						if ($fhandle) {
+							@fclose($fhandle);
+						}
+						return FALSE;
+					}
+
+					$rdr_reason	= '';
+					$rdr_pinned	= '';
+					$next = pfb_feed_redirect_target($redirect_location, $current_url, $rdr_reason, $rdr_pinned);
+					if ($next === FALSE) {
+						$log = "\n[ {$header} ] {$rdr_reason} \xe2\x80\x94 skipped\n";
+						pfb_logger("{$log}", "{$logtype}");
+						if ($ch) {
+							curl_close($ch);
+						}
+						if ($fhandle) {
+							@fclose($fhandle);
+						}
+						return FALSE;
+					}
+
+					// Discard the redirect-page body so only the final hop's body
+					// remains in the feed file.
+					ftruncate($fhandle, 0);
+					rewind($fhandle);
+
+					// Re-point cURL at the vetted target and re-pin its address. The
+					// '-host:port' entry removes any prior pin for the same host:port
+					// (e.g. a same-host relative redirect) so the add is not a
+					// duplicate.
+					$current_url = $next['url'];
+					curl_setopt($ch, CURLOPT_URL, $next['url']);
+					if ($rdr_pinned !== '' && $next['port'] > 0) {
+						curl_setopt($ch, CURLOPT_RESOLVE, array(
+							"-{$next['host']}:{$next['port']}",
+							"{$next['host']}:{$next['port']}:{$rdr_pinned}",
+						));
 					}
 				}
-
-				// Collect RFC7231 http status code
-				$http_status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 
 				if (isset($pfb['rfc7231'][$http_status])) {
 					if ($logtype < 3) {
