@@ -199,7 +199,8 @@ pre{background:var(--code);border:1px solid var(--bd);border-radius:8px;padding:
 code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   background:#1f2630;padding:.1em .35em;border-radius:5px}
 table{width:100%;border-collapse:collapse;font-size:.92rem}
-th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--bd)}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--bd);white-space:nowrap}
 th{color:var(--mut);font-weight:600}
 td.num{font-variant-numeric:tabular-nums;color:var(--mut)}
 .badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
@@ -239,9 +240,11 @@ def _table_html(rows: list[dict]) -> str:
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
         for r in rows
     )
+    # Wrapped in an overflow-x container so a narrow (mobile) viewport scrolls the
+    # table horizontally instead of widening the whole page past the screen.
     return (
-        "<table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>"
-        f"<th>Published</th><th>Commit</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
+        '<div class="tablewrap"><table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>'
+        f"<th>Published</th><th>Commit</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table></div>"
     )
 
 

@@ -241,6 +241,10 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert "<th>Commit</th>" in page
     assert f'href="{gl.SOURCE_REPO_URL}/commit/9d4b0b4556edca49b856c093838ccd0e2e91736b"' in page
     assert ">9d4b0b4<" in page
+    # The table sits in an overflow-x wrapper so a mobile viewport scrolls the table,
+    # not the whole page (the .tablewrap rule is what makes that scroll possible).
+    assert '<div class="tablewrap"><table>' in page
+    assert ".tablewrap{overflow-x:auto" in page
     # Stable has no package -> empty state, NOT a bogus version.
     assert "not yet published" in page
     # Install one-liner pins this repo's base URL (the working Pages mirror).
