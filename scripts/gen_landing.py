@@ -30,9 +30,12 @@ from datetime import datetime, timezone
 # Channel identity (mirrors add-repo.sh): package name + one-line blurb, in
 # display order. The channel of a package is read from its name suffix.
 CHANNELS: dict[str, tuple[str, str]] = {
-    "stable": ("pfSense-pkg-pfBlockerNG", "Tagged stable releases."),
-    "devel": ("pfSense-pkg-pfBlockerNG-devel", "The development channel — current devel tree."),
-    "nightly": ("pfSense-pkg-pfBlockerNG-nightly", "Bleeding edge — the devel tip, rebuilt daily."),
+    "stable": ("pfSense-pkg-pfBlockerNG", "Tagged stable releases — from the shared pfblockerng repo."),
+    "devel": (
+        "pfSense-pkg-pfBlockerNG-devel",
+        "The development tree — the same pfblockerng repo as stable; pick the package.",
+    ),
+    "nightly": ("pfSense-pkg-pfBlockerNG-nightly", "Bleeding edge — the devel tip, rebuilt daily (its own repo)."),
 }
 CH_ORDER: list[str] = ["stable", "devel", "nightly"]
 RAW_ADDREPO = "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/devel/scripts/add-repo.sh"
@@ -419,6 +422,10 @@ def render_page(
         "so it sits above the Netgate repo and the stock webConfigurator <strong>Install</strong> button pulls "
         "this build too. Catalogs are NONE-signed (trust anchor = HTTPS to this host) and ABI-keyed, so a box "
         "keeps resolving the right package across a pfSense OS upgrade.</p>"
+        "<p><strong>stable</strong> and <strong>devel</strong> are served from one shared <code>pfblockerng</code> "
+        "repo (one bootstrap exposes both &mdash; just <code>pkg install</code> the package you want, exactly as "
+        "Netgate ships both from its single <code>pfSense</code> repo); <strong>nightly</strong> sits on its own "
+        "catalog path with its own conf.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}{_older_nightlies_html(pkgs)}"
         "<h2>Catalog trees</h2>"

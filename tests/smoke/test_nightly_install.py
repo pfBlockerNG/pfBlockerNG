@@ -60,7 +60,7 @@ pytestmark = pytest.mark.repo
 NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
 DEVEL_NAME = "pfSense-pkg-pfBlockerNG-devel"
 NIGHTLY_REPO = "pfblockerng-nightly"  # the %R origin a nightly install reports
-DEVEL_REPO = "pfblockerng-devel"  # the %R origin the controlled -devel install reports
+DEVEL_REPO = "pfblockerng"  # %R origin of the controlled -devel install (the shared release repo)
 
 SPIKE = "/tmp/pfb_nightly_spike"
 NIGHTLY_DIR = f"{SPIKE}/nightly"  # the file:// nightly catalog

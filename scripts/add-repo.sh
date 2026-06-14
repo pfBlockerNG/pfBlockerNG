@@ -8,9 +8,15 @@
 # pulls it too via cross-repo resolution (ADR §2; install is not repo-locked).
 #
 # CHANNELS
-#   devel  (default) -> conf /usr/local/etc/pkg/repos/pfblockerng-devel.conf
-#                       repo name `pfblockerng-devel`, pkg pfSense-pkg-pfBlockerNG-devel
-#   stable           -> conf /usr/local/etc/pkg/repos/pfblockerng.conf
+#   The stable and devel packages share ONE repo/catalog — the `pfblockerng` repo,
+#   exactly like Netgate ships `pfSense-pkg-pfBlockerNG` and `-devel` from its single
+#   `pfSense` repo (the two packages CONFLICT — install one). So `stable` and `devel`
+#   write the SAME conf (byte-identical); they differ only in which package the verify
+#   step checks + the install hint printed. Nightly lives on its own catalog path and
+#   so needs its own conf.
+#   devel  (default) -> conf /usr/local/etc/pkg/repos/pfblockerng.conf
+#                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG-devel
+#   stable           -> conf /usr/local/etc/pkg/repos/pfblockerng.conf  (SAME file)
 #                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG
 #   nightly          -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf
 #                       repo name `pfblockerng-nightly`, pkg ...-nightly (bleeding edge)
@@ -81,15 +87,21 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# devel  -> repo `pfblockerng-devel`,   conf pfblockerng-devel.conf,   pkg ...-devel
+# devel  -> repo `pfblockerng`,         conf pfblockerng.conf,         pkg ...-devel
 # stable -> repo `pfblockerng`,         conf pfblockerng.conf,         pkg pfSense-pkg-pfBlockerNG
 # nightly-> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, pkg ...-nightly
+# stable + devel deliberately resolve to the SAME repo/conf (one shared `pfblockerng`
+# catalog carries both packages); only PKG_NAME (verify target + install hint) differs.
 # URL_SUBPATH: nightly is served from the `nightly/` catalog subtree; the release
 # channels from the Pages root. The literal ${ABI} pkg(8) variable follows it.
+# CONF_LABEL names the REPO (not the channel) in the conf comment, so the stable and
+# devel confs stay byte-identical (both "release"); CHANNEL_LABEL stays per-channel for
+# the user-facing progress/verify messages only.
 case "$CHANNEL" in
     devel)
-        REPO_NAME="pfblockerng-devel"
-        CONF_NAME="pfblockerng-devel.conf"
+        REPO_NAME="pfblockerng"
+        CONF_NAME="pfblockerng.conf"
+        CONF_LABEL="release"
         PKG_NAME="pfSense-pkg-pfBlockerNG-devel"
         CHANNEL_LABEL="devel"
         URL_SUBPATH=""
@@ -97,6 +109,7 @@ case "$CHANNEL" in
     stable)
         REPO_NAME="pfblockerng"
         CONF_NAME="pfblockerng.conf"
+        CONF_LABEL="release"
         PKG_NAME="pfSense-pkg-pfBlockerNG"
         CHANNEL_LABEL="stable"
         URL_SUBPATH=""
@@ -104,6 +117,7 @@ case "$CHANNEL" in
     nightly)
         REPO_NAME="pfblockerng-nightly"
         CONF_NAME="pfblockerng-nightly.conf"
+        CONF_LABEL="nightly"
         PKG_NAME="pfSense-pkg-pfBlockerNG-nightly"
         CHANNEL_LABEL="nightly"
         URL_SUBPATH="nightly/"
@@ -118,7 +132,7 @@ CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
 print_conf() {
     base="${1%/}"
     cat <<EOF
-# pfBlockerNG (${CHANNEL_LABEL} channel) — self-hosted pkg repository (ADR-17).
+# pfBlockerNG (${CONF_LABEL} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The \${ABI}
 # variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
