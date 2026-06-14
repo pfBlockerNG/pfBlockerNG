@@ -1,0 +1,67 @@
+================================================================================
+PHASE 6 PROMPT — Web UI: policy-group management
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2, SS4 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 6 adds the Web UI for
+managing policy-groups. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 4-5 made the engine config-driven. Admins need a page to define groups (CIDRs, alias
+subscriptions, tier, allow/deny) and to see that the legacy bypass migrated. Must render
+cleanly (ADR-14 Tier A is the PR gate).
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/05_Results.txt AND RESULTS/04_Results.txt
+  — the config.xml keys + group shape the page reads/writes. If missing, STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md
+- src/usr/local/www/pfblockerng/ — pfblockerng_dnsbl.php (the legacy pfb_gp / bypass textarea
+  to replace/link), pfblockerng_category_edit.php and a list+edit page pair for the add/edit
+  pattern; the menu/tab wiring; pfblockerng.inc page deciders (pfb_wizard_* style) for any
+  extractable pure logic.
+- tests/smoke/ui/ — test_render_smoke.py (ADR-14 Tier A pattern); tests/php/ for an extracted
+  page decider test.
+- CLAUDE.md — Naming (pfb_*/gp* page element ids), PHP standards, Web UI help text rules,
+  Smoke tests (ui_render gate).
+
+ACTION PLAN (ordered)
+1. Add a policy-group LIST page + an ADD/EDIT page (or a section within the DNSBL settings,
+   matching the existing alias/category UI pattern): fields = name, enabled, client CIDRs,
+   subscribed DNSBL_ aliases (multiselect of existing aliases), action tier (Block|Warn),
+   allow-domains, deny-domains. Validate inputs server-side via the Phase-4 validators.
+2. Replace the legacy single bypass textarea with the migrated Bypass group (or clearly link
+   to the new page), preserving the migration from Phase 4. Help text matches neighbours;
+   document the allow>block>warn precedence + union semantics briefly.
+3. Wire the menu/tab + privileges (etc/inc/priv if a new page needs an ACL entry, following
+   existing pfBlockerNG .priv.inc entries).
+4. Extract any non-trivial save/validate logic into a pure decider in pfblockerng.inc
+   (testable off-appliance) rather than inline in the page controller.
+5. Tests: ADR-14 Tier A ui_render case for the new page (GET -> 200, body free of
+   Fatal/Parse/Warning/Notice/Uncaught, a page-specific marker present, no new php_error.log
+   line); PHPUnit for the extracted decider (valid/invalid group; before/after).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
+- New input-handling save fn -> PFBL-01 validator + add to PHPCS scopeFunctions.
+- ui_render asserts MORE than HTTP 200 (marker + no new php_error.log) — never 200 alone.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l changed files; PHPStan + phpcs clean.
+- python -m pytest -> green.
+- ADR-14 ui_render for the new page green (run with SMOKE_ADMIN_PASSWORD set; else it SKIPs).
+- diff-read: page renders; legacy bypass path migrated/linked, not orphaned.
+
+EXPECTED RESULT
+An admin can create/edit policy-groups in the UI; the page renders clean under ui_render; the
+legacy bypass is surfaced as the migrated group.
+
+COMMIT (single)
+    pfblockerng: add DNSBL group-policy management UI (ADR-25 P6)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/06_Results.txt (plain .txt)
+Record: the new page file(s) + element ids; the extracted decider name/signature; the privilege
+entry; the ui_render marker used; how the legacy bypass is surfaced; verification numbers;
+go-ahead for Phase 7.

@@ -1,0 +1,83 @@
+================================================================================
+PHASE 1 PROMPT — SPIKE: cross-client cache-bleed reproduction + scheme selection
+Target model: Claude Opus 4.x (research/judgement-heavy)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1.5, SS2.2, SS7 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl (off devel; create off the
+latest devel if absent). This is Phase 1: a RESEARCH SPIKE. It ships NO production code — a
+throwaway harness/notes only. One commit (the RESULTS handoff + any throwaway harness under
+tests/smoke or a scratch dir), pushed directly to the branch. This phase can RECOMMEND
+REDUCING OR REJECTING the ADR.
+
+WHY THIS PHASE EXISTS
+Per-client DNSBL verdicts have one genuine architectural hazard: Unbound's C message cache.
+When a pass/warn client resolves a listed name, Unbound caches the REAL answer; a later
+block client served from that C-cache never re-enters operate() and SILENTLY ESCAPES the
+block. The whole feature is unsound unless this is solved with acceptable cost. Prove the
+problem, pick a scheme on evidence, set a kill-threshold — BEFORE any code is built on top
+(the ADR-01 lesson: validate the premise first).
+
+REQUIRED READING
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md  (esp. SS2.1 resolution model, SS2.2 spike, SS7).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~5001), get_q_ip() (~1637),
+  the legacy bypass path (~5201-5210), the block path + qstate.no_cache_store usage
+  (search "no_cache_store"), inplace_cb_reply* (~2476-2529).
+- docs/misc/architecture-notes.md — ADR-10 (zero-downtime swap), ADR-15 (decision cache).
+- .ADRs/ADR_15_Unified_Decision_Cache/ADR.md and .ADRs/ADR_04_VM_Smoke_Tests/ — how the
+  live VM smoke works (probe on-box from 127.0.0.1; how to set/inject config).
+- CLAUDE.md — "Investigating the live system" (unbound-control, chroot), Smoke tests.
+- Pi-Hole group management as prior art: https://docs.pi-hole.net/group_management/example/
+  (FTL is open source — read how it resolves client->group and caches per client).
+
+ACTION PLAN (ordered)
+1. REPRODUCE the bleed on a live VM (use the ADR-04 smoke VM): configure the LEGACY bypass
+   (pfb_gp + pfb_gp_bypass_list) for one source IP; from a BYPASS source resolve a listed
+   uuid-*.com name (warms the C-cache with the real answer); then from a NON-bypass source
+   query the SAME name and observe whether it is (wrongly) served the real answer instead of
+   the block shape. Drive distinct source IPs (drill -I <src>, a second interface, or source
+   binding). Record the exact reproduction (commands + observed responses + unbound-control
+   cache dump).
+2. EVALUATE candidate schemes from ADR SS2.2, each with a short written argument + a measured
+   number where feasible:
+   (a) no_cache_store on every policy-relevant name when group policy is on (listed names
+       re-enter operate() per query; non-listed cache normally).
+   (b) per-group-mask keying / selective store so identical group-masks share cache.
+   (c) Unbound `views` + `access-control-view` (client CIDR -> view, per-view local data) —
+       check feasibility AND memory at blocklist scale (this is why pfBlockerNG left
+       local-zones); most likely reject WITH measured/estimated evidence.
+3. BENCHMARK the viable candidate(s): warn/pass-client query latency on listed vs unlisted
+   names, and memory vs #groups/#aliases. Define METHODOLOGY (what is measured, how, sample
+   size) and a KILL-THRESHOLD (e.g. "median added latency on listed names > X ms, or memory
+   > Y MB at N groups => reduce/reject").
+4. DECIDE: pick the scheme Phases 3-7 will adopt, or recommend reducing scope (action-tier
+   only, no per-feed subsetting) or rejecting the ADR. State the decision and the numbers.
+
+CONSTRAINTS
+- No production code changes to src/ in this phase (a throwaway harness is fine; mark it
+  clearly and keep it out of the shipped package / pkg-plist).
+- stdlib-only if any python is written; POSIX sh for any shell.
+- Do not weaken ADR-10/ADR-15 invariants in any proposed scheme — note how each composes
+  with the atomic swap + decisionDB clear.
+
+VERIFICATION (must all pass before the phase is done)
+- The bleed is reproduced and captured (commands + outputs) OR proven not to occur (with
+  evidence) — either way, documented.
+- Each candidate scheme has a written verdict; the chosen one has supporting numbers.
+- python -m pytest stays green (no suite change expected; if a throwaway harness adds a
+  test, it must pass and be marked non-shipping).
+
+EXPECTED RESULT
+A decision: the cache scheme Phases 3-7 will implement (or a reduce/reject recommendation),
+backed by a live reproduction and benchmark numbers with a kill-threshold.
+
+COMMIT (single)
+    pfblockerng: ADR-25 P1 cache-strategy spike (research)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/01_Results.txt (plain .txt)
+Record: the reproduction (exact commands + observed block-escape, or proof of absence); the
+per-scheme verdicts; the CHOSEN scheme with its benchmark numbers + kill-threshold; how it
+composes with ADR-10 swap and ADR-15 decisionDB clear; any reduce/reject recommendation; and
+an explicit go-ahead for Phase 2 with the scheme name Phase 5 must implement.

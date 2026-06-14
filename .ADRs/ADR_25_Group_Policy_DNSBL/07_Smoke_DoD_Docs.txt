@@ -1,0 +1,72 @@
+================================================================================
+PHASE 7 PROMPT — Smoke (multi-source) + Definition of Done + docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS7 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 7 proves the feature
+end-to-end on a live VM (the part CI can do), codifies the maintainer manual smoke for the
+multi-source behaviour CI can't, and updates docs. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Per-client behaviour needs DISTINCT client source IPs — the smoke harness probes on-box from
+127.0.0.1 and has no built-in multi-source client simulation. This phase extends the harness
+where feasible and writes the manual checklist for the rest, then closes the ADR's DoD.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/06_Results.txt AND 05_/04_/01_. If
+  missing, STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS7 DoD + reject criteria).
+- tests/smoke/ — conftest.py (smoke_vm fixture), helpers.py (unique_domain, drill probe,
+  ensure_dnsbl_vip, config injection), test_smoke*.py for the journey pattern.
+- RESULTS/01_Results.txt — the cache scheme to verify live (cache-bleed must NOT escape).
+- docs/misc/architecture-notes.md — DNSBL pipeline section to extend.
+- CLAUDE.md — Smoke tests (on-box probe, unique_domain, block shapes, no localhost exemption),
+  Updating documentation.
+
+ACTION PLAN (ordered)
+1. Extend the smoke harness for SOURCE-BOUND queries: drive distinct client source IPs
+   (drill -I <src>, a second interface/alias on the VM, or source binding) so a query appears
+   to originate from a given group's CIDR. If a clean multi-source path is infeasible in CI,
+   document why and push that case to the manual checklist.
+2. Add smoke case(s) asserting (before-state with policy OFF -> both resolve; THEN after):
+   - alias subscribed by group 1 not group 2: name BLOCKED for client 1, RESOLVES for client 2.
+   - Warn group: name RESOLVES for its clients AND a DNSBL report/log line is written.
+   - allow>block precedence for a group's clients only.
+   - union across two groups.
+   - default group (unmatched IP) = all-aliases Block.
+   - legacy migration: pre-set pfb_gp/pfb_gp_bypass_list -> Bypass group; those IPs skip DNSBL.
+   - cache-bleed: a pass/warn client warming a listed name does NOT let a block client escape.
+   Use helpers.unique_domain() (uuid-*.com); never RFC 6761 TLDs or HSTS-preload names.
+3. Write the maintainer MANUAL smoke checklist (in RESULTS + reflected in ADR SS7) for any
+   case CI cannot cover.
+4. Docs: extend docs/misc/architecture-notes.md with the group-policy section (bitmask model,
+   gpClientDB, cache scheme, precedence); update README.md if workflow changed; add stubs for
+   any new pfSense fns; confirm the PFBL-01 scopeFunctions list is current.
+5. Re-confirm the DoD + reject criteria against the Phase-1 numbers: if the live cache scheme
+   misses the kill-threshold, record it and recommend reduce/reject per ADR SS7.
+
+CONSTRAINTS
+- Smoke probes ON-BOX; first response after reload is authoritative (assert it, don't loop).
+- stdlib-only python; POSIX sh; tests must validate correctness (no coverage theater).
+- Markdown lint clean.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (non-smoke suite).
+- The smoke case(s) pass on a live VM run (dispatch smoke.yml) OR are clearly gated/SKIPped
+  with the manual checklist covering the gap; diagnostics reviewed on any failure.
+- ruff / mypy tests/ / markdownlint -> clean; php -l / phpcs as relevant.
+
+EXPECTED RESULT
+End-to-end per-client DNSBL policy verified on a live VM (or via the documented manual smoke),
+docs updated, DoD + reject criteria resolved.
+
+COMMIT (single)
+    pfblockerng: add group-policy smoke + docs; close ADR-25 DoD (ADR-25 P7)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/07_Results.txt (plain .txt)
+Record: which DoD items are CI-covered vs manual; the multi-source mechanism used (or why
+not); the live cache-scheme result vs the kill-threshold; doc/stub updates; the final
+accept/reduce/reject recommendation for the ADR.

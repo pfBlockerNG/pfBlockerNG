@@ -1,0 +1,73 @@
+================================================================================
+PHASE 4 PROMPT — Config schema + manifest extension + legacy migration (PHP)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1.3, SS1.4, SS2.1, SS2.3, SS2.4)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 4 is the PHP side:
+config.xml schema, manifest extension, and legacy migration. Migration MUST be idempotent
+and a no-op when no legacy keys exist (backward compatible). One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The Python decision layer (Phase 5) reads policy-groups from the manifest. This phase defines
+how groups are stored (config.xml), how the legacy single-bypass migrates into the new model,
+and how groups + the alias->bit map + per-group subscribed bitmask + client-CIDR->group map +
+allow/deny lists + default-group policy are published into the manifest the chroot reads.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/03_Results.txt — confirm the alias->bit
+  rule + bitmask field the manifest must mirror. If missing, STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md
+- pfblockerng.inc: the manifest writer pfb_unbound_python_sources* (~3653-3815, the
+  $manifest array at ~3783 and feed rows at ~3744); legacy GP read $pfb['dnsbl_gp'] /
+  $pfb['dnsbl_gp_bypass_list'] (~1273) and ini write (~4133-4148); pfb_filter / sanitize_ipaddr
+  usage; pfb_unbound_py_atomic_write (atomic publish).
+- tests/php/ — bootstrap.php, pfsense_doubles.php, an existing manifest/config test
+  (e.g. the DNSBL settings or wizard tests) for style.
+- CLAUDE.md — PHP standards; PFBL-01 sniff (add new in-scope input-handling fn to
+  scopeFunctions); "Resolving pfSense-provided PHP functions" (stub real fns).
+
+ACTION PLAN (ordered)
+1. config.xml schema: define a policy-groups section (follow existing pfblockerng config
+   nesting + pfb_*/gp* naming). Each group: name, enabled, client CIDR list, subscribed
+   DNSBL_ aliases, action tier (Block|Warn), allow-domain list, deny-domain list. Define the
+   DEFAULT group policy (all aliases, Block) for unmatched clients.
+2. Migration: convert legacy pfb_gp + pfb_gp_bypass_list into a Bypass policy-group (empty
+   alias subscription, no deny rules => PASS for its CIDRs). Idempotent; absent legacy keys
+   => no group created, output byte-identical to today. Keep the legacy keys readable for one
+   release if needed (decide + document).
+3. Manifest extension: add to the $manifest the groups, the alias->bit map (mirroring Phase 3
+   exactly), per-group subscribed bitmask, client-CIDR->group map, per-group allow/deny lists,
+   and the default-group policy. Validate every CIDR (sanitize_ipaddr / pfb_filter) and every
+   domain rule before it enters the manifest (PFBL-01). With no groups configured, the
+   manifest must be byte-identical to today (no new keys, or keys that the OFF path ignores).
+4. Tests (PHPUnit, in tests/php/): schema decode; migration (legacy present -> Bypass group;
+   ASSERT before-state then after-state; absent -> no-op); manifest shape before/after a group
+   exists; the alias->bit map matches Phase 3; invalid CIDR/domain rejected.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
+- All new exec/json_encode/path-build inside an in-scope fn MUST be preceded by a validator
+  (PFBL-01) and the fn added to the PHPCS scopeFunctions allow-list.
+- Manifest stays chroot-relative; atomic publish via the existing writer.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (new manifest/migration tests).
+- php -l on changed files; PHPStan clean; vendor/bin/phpcs clean (PFBL-01).
+- python -m pytest -> still green.
+- diff-read: with no groups configured, the emitted manifest is unchanged vs base.
+
+EXPECTED RESULT
+config.xml carries policy-groups; legacy bypass migrates to a Bypass group; the manifest
+exposes groups + alias->bit map + masks + CIDR map + allow/deny + default policy; OFF-state
+manifest unchanged.
+
+COMMIT (single)
+    pfblockerng: add DNSBL group-policy config + manifest + migration (ADR-25 P4)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/04_Results.txt (plain .txt)
+Record: the config.xml keys + nesting; the migration rule + legacy-key disposition; the exact
+manifest keys/shape the Python layer must read (groups, alias->bit, subscribed mask, CIDR map,
+allow/deny, default policy); the validators used; verification numbers; go-ahead for Phase 5.

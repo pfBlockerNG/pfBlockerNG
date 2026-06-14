@@ -1,0 +1,68 @@
+================================================================================
+PHASE 2 PROMPT — Prep: extract + pin current behaviour; CIDR resolver (behaviour-preserving)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1, SS2.1, SS2.3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 2 is
+BEHAVIOUR-PRESERVING: it adds tests + extracts/adds pure functions but changes NO observable
+behaviour. One commit, push directly to the branch.
+
+WHY THIS PHASE EXISTS
+Before any client-aware change, freeze today's decisions as an oracle and pin the legacy
+bypass, so later phases cannot silently regress them. Add (but do NOT wire) the CIDR
+client->group-mask resolver the decision layer will use. These artifacts retain value even if
+Phase 1 reduced/rejected the ADR (the ADR-01 prep-has-standalone-value precedent).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/01_Results.txt — confirm the chosen cache scheme
+  (or reduce/reject). If it recommends REJECT, STOP and report. If it is missing, Phase 1 is
+  not complete; STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — evaluate_domain (~4608), DnsblDecision
+  (~4293), operate() (~5001), get_q_ip (~1637), legacy bypass gpListDB load (~1042) + use
+  (~5201) + python_control add/removebypass (~5125).
+- tests/ — existing ADR-06/07 golden/oracle tests (the style to mirror); tests/conftest.py
+  (Unbound symbol injection).
+- CLAUDE.md — Python standards, Test coverage (branch + before/after + BDD).
+
+ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
+1. ORACLE: add golden tests freezing current evaluate_domain decisions for a representative
+   corpus (block VIP, block NULL, allow/whitelist, no-match, CNAME-chain, TLD). Reuse the
+   ADR-06/07 oracle pattern; this is the regression net for Phases 3 & 5.
+2. EXTRACT the group-agnostic base match into a named pure function (e.g. the part that maps
+   a name -> matched alias/feed attribution) WITHOUT changing what evaluate_domain returns.
+   Keep decisions byte-identical (oracle from step 1 stays green).
+3. PIN the legacy bypass: tests asserting (off-state THEN on-state) that an IP in gpListDB
+   bypasses DNSBL while an IP not in it is blocked; and that python_control addbypass /
+   removebypass / addbypass-with-duration mutate gpListDB as today.
+4. ADD a pure CIDR resolver: client IP -> set/mask of matching policy-groups, UNION semantics
+   over CIDRs (IPv4 + IPv6; longest-prefix/interval structure, stdlib `ipaddress`). NOT wired
+   into operate() yet. Unit-test: single match, multi-match union, no match (-> default),
+   v4/v6, overlapping CIDRs, malformed input rejected.
+
+CONSTRAINTS
+- stdlib-only; 4-space; type-hint new functions; no bare except.
+- Do NOT change any decision output, manifest, or config in this phase.
+- Do NOT wire the CIDR resolver into the query path (Phase 5 does that).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (oracle + bypass + CIDR resolver tests added).
+- ruff check . / ruff format --check . -> clean; mypy tests/ -> clean.
+- diff-read: confirm evaluate_domain's returned decisions are unchanged (only an internal
+  extraction).
+
+EXPECTED RESULT
+A frozen decision oracle, pinned legacy-bypass tests, and a tested-but-unwired CIDR
+client->group resolver. No behaviour change.
+
+COMMIT (single)
+    pfblockerng: extract DNSBL base match + add CIDR group resolver (ADR-25 P2)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/02_Results.txt (plain .txt)
+Record: the extracted function name/signature; the oracle test file + corpus; the CIDR
+resolver function name/signature + its union/precedence semantics and how a no-match maps to
+the default group; verification numbers; go-ahead for Phase 3.

@@ -1,0 +1,81 @@
+================================================================================
+PHASE 5 PROMPT — Python per-client decision layer + Phase-1 cache scheme
+Target model: Claude Sonnet 4.6 (or Opus if the cache scheme is intricate)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2.1, SS2.2, SS2.3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 5 is the CORE
+behaviour change: per-client DNSBL verdicts. NOT behaviour-preserving (by design) WHEN group
+policy is ON; MUST stay byte-identical when OFF. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+This wires the pieces: client IP -> unioned group mask (Phase 2 resolver), domain alias
+bitmask (Phase 3), manifest groups (Phase 4), into the operate() decision with the SS2.3
+precedence and the Phase-1 cache scheme. This is where correctness across the C-cache, ADR-10
+swaps, and CNAME chains must hold.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/04_Results.txt (manifest keys to read)
+  AND RESULTS/01_Results.txt (the CHOSEN cache scheme + kill-threshold) AND RESULTS/02_/03_.
+  If any is missing, STOP and report. If 01 recommended REJECT, STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS2.1 resolution, SS2.3 contract).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~5001), get_q_ip (~1637), legacy
+  bypass (~5201), the block path + no_cache_store, decisionDB + the ADR-10 swap/clear
+  (search "decisionDB.clear"), inplace_cb_reply* logging.
+- tests/ Phase 2 oracle + CIDR resolver + bypass tests; tests/conftest.py.
+- CLAUDE.md — Test coverage (branch + before/after + BDD), Python standards.
+
+ACTION PLAN (ordered — tests alongside)
+1. Load policy-groups + alias->bit + CIDR map + allow/deny + default policy from the manifest
+   (Phase 4 shape) at build/reload; expose them on the live snapshot like other matcher data.
+2. Build gpClientDB: client IP -> (unioned subscribed mask, allow set ref, deny set ref,
+   strictest tier) using the Phase-2 CIDR resolver; cache per IP; an unmatched IP -> default
+   group. Clear gpClientDB on the ADR-10 atomic swap alongside decisionDB.
+3. In operate(): after the group-agnostic base match (domain alias bitmask + allow/deny
+   membership), apply SS2.3 precedence per the client's gpClientDB entry:
+   allow-hit -> PASS; else deny-hit -> BLOCK; else (domain_mask & client_mask) -> BLOCK or
+   WARN (strictest tier); else PASS. WARN = let Unbound resolve normally AND emit the DNSBL
+   log/report line (would-be block), reusing the existing logging path with pfb_addr.
+4. Apply the Phase-1 cache scheme so a pass/warn client cannot let a block client escape
+   (e.g. no_cache_store on policy-relevant names when group policy is on). Keep decisionDB
+   storing the GROUP-AGNOSTIC base match (domain-keyed) — only the per-client action layer is
+   client-dependent.
+5. Preserve OFF-state: group policy disabled -> the new layer is bypassed entirely; legacy
+   gpListDB bypass continues to work (now expressible as a migrated Bypass group, but the old
+   path must remain correct for un-migrated runtime state / python_control).
+6. Tests (every branch; assert before THEN after per CLAUDE.md):
+   - OFF-state parity (oracle byte-identical).
+   - allow-wins; deny-block; subscribed-alias BLOCK; subscribed-alias WARN (resolves + logs);
+     no-match PASS; default group (unmatched IP) = all-aliases Block.
+   - union across two groups (subscriptions OR'd; allow>block>warn merge).
+   - migrated legacy bypass = PASS for its IPs.
+   - CNAME-chain decided against the single snapshot; gpClientDB + decisionDB cleared on swap
+     (stale verdict not re-served).
+   - the cache-scheme invariant: model the C-cache hazard at unit level (a pass client's
+     resolution does not change the block client's verdict).
+
+CONSTRAINTS
+- stdlib-only; 4-space; type-hint new fns; no bare except; new injected Unbound symbols (if
+  any) declared in stubs/python/unboundmodule.py.
+- Do NOT re-key decisionDB per client (that defeats SS2.1). Per-client state lives in
+  gpClientDB only.
+- Keep block shapes unchanged; WARN invents no new shape.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (all branch + transition + swap/CNAME + cache-invariant tests).
+- ruff / mypy tests/ -> clean.
+- diff-read: OFF-state decision path unchanged; the per-client layer is cleanly gated.
+
+EXPECTED RESULT
+Per-client DNSBL verdicts per SS2.1/SS2.3, correct across the C-cache, swaps, and CNAMEs;
+OFF-state identical to today.
+
+COMMIT (single)
+    pfblockerng: per-client DNSBL group-policy decision layer (ADR-25 P5)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/05_Results.txt (plain .txt)
+Record: gpClientDB shape + eviction/clear points; the operate() precedence wiring; the cache
+scheme as implemented + how the C-cache hazard is closed; which tests cover which branch; any
+deviation from Phase 1's chosen scheme (with reason); verification numbers; go-ahead Phase 6.
