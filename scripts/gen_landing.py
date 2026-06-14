@@ -88,8 +88,8 @@ def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     if created is not None:
         try:
             return artifact_datetime(float(created))
-        except (TypeError, ValueError):
-            pass  # malformed annotation — fall back to mtime
+        except (TypeError, ValueError, OverflowError, OSError):
+            pass  # malformed or out-of-range annotation — fall back to mtime
     return artifact_datetime(mtime_epoch)
 
 

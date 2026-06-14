@@ -85,6 +85,13 @@ def test_published_datetime_prefers_created_annotation() -> None:
     assert gl.published_datetime({}, republish_mtime) == "2026-06-14 09:38 UTC"
     # Malformed annotation -> mtime fallback, not a crash.
     assert gl.published_datetime({"annotations": {"created": "nope"}}, republish_mtime) == "2026-06-14 09:38 UTC"
+    # Numeric-but-out-of-range epoch (inf / huge) -> mtime fallback, not a crash on the
+    # whole page (datetime.fromtimestamp raises OverflowError/OSError, not ValueError).
+    assert gl.published_datetime({"annotations": {"created": "1e309"}}, republish_mtime) == "2026-06-14 09:38 UTC"
+    assert (
+        gl.published_datetime({"annotations": {"created": "999999999999999999"}}, republish_mtime)
+        == "2026-06-14 09:38 UTC"
+    )
 
 
 def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
