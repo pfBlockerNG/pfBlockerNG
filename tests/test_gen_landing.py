@@ -254,6 +254,9 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert "devel-conf-snippet" in page
     # Catalog-tree link to the colon-ABI dir is './'-prefixed (browser scheme guard).
     assert 'href="./FreeBSD:16:aarch64/"' in page
+    # The catalog-tree list is a responsive auto-fill grid (column count follows the
+    # viewport — one column on a phone), not a fixed 2-column layout that hugs the edge.
+    assert "ul.trees{display:grid;grid-template-columns:repeat(auto-fill" in page
 
 
 def test_render_page_table_empty_when_no_packages() -> None:
