@@ -109,6 +109,42 @@ def commit_cell(sha: str) -> str:
     return f'<a href="{SOURCE_REPO_URL}/commit/{_esc(sha)}"><code>{_esc(sha[:7])}</code></a>'
 
 
+# pfSense edition display order + labels (the matrix `variant` field: CE / Plus).
+# A build whose ABI the matrix doesn't cover lands in a trailing "Other" section.
+EDITION_ORDER: list[str] = ["CE", "Plus"]
+EDITION_LABELS: dict[str, str] = {"CE": "pfSense CE", "Plus": "pfSense Plus", "Other": "Other builds"}
+
+
+def _dotted_ver(token: str) -> str:
+    """A php/python flavor token -> dotted version: php85->8.5, py311/python311->3.11.
+
+    Returns "" when the token carries no trailing digit run.
+    """
+    m = re.search(r"(\d+)$", token or "")
+    if not m:
+        return ""
+    d = m.group(1)
+    return f"{d[0]}.{d[1:]}" if len(d) > 1 else d
+
+
+def _dep_flavor(deps: Iterable[str], names: tuple[str, ...]) -> str:
+    """Dotted version of the first dep named exactly <name><digits> (e.g. php85, py311).
+
+    Matches the runtime flavor package, not its sub-packages (php85-intl, py311-sqlite3),
+    so the manifest yields the PHP/Python a build targets when no matrix row is joined.
+    """
+    for dep in deps:
+        for nm in names:
+            if re.fullmatch(rf"{nm}\d+", dep):
+                return _dotted_ver(dep)
+    return ""
+
+
+def _or_dash(value: str) -> str:
+    """An escaped cell value, or an em dash when it's empty (keeps columns aligned)."""
+    return _esc(value) if value else '<span class="empty">&mdash;</span>'
+
+
 def read_manifest_zstd(path: str) -> dict:
     """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
     if shutil.which("zstd") is None:
@@ -133,6 +169,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
             path = os.path.join(dirpath, fname)
             man = read_manifest(path)
             name, ver, abi = man.get("name", ""), man.get("version", ""), man.get("abi", "")
+            deps = man.get("deps") or {}
             pkgs.append(
                 {
                     "channel": channel_of(name),
@@ -142,6 +179,10 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "size": os.path.getsize(path),
                     "published": published_datetime(man, os.path.getmtime(path)),
                     "commit": (man.get("annotations") or {}).get("commit", ""),
+                    # PHP/Python the build targets, read from its RUN_DEPENDS — the fallback
+                    # for an ABI the matrix doesn't cover (the matrix value wins when joined).
+                    "php": _dep_flavor(deps, ("php",)),
+                    "py": _dep_flavor(deps, ("py", "python")),
                     "rel": os.path.relpath(path, site),
                 }
             )
@@ -189,6 +230,7 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 header h1{margin:0 0 .25rem;font-size:2rem}
 header p{margin:0;color:var(--mut)}
 h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);padding-bottom:.4rem}
+h3{margin:1.6rem 0 .5rem;font-size:1.05rem}
 .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
 .card h3{margin:0 0 .15rem;font-size:1.1rem;text-transform:capitalize}
@@ -229,27 +271,138 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
     )
 
 
-def _table_html(rows: list[dict]) -> str:
-    if not rows:
-        return '<p class="empty">No packages published yet.</p>'
+def matrix_index(matrix: list[dict] | None) -> dict[str, list[dict]]:
+    """Map each ABI to its matrix entries (edition / pfSense version / php / py).
+
+    An ABI shared by two pfSense versions maps to BOTH — the same .pkg installs on
+    each (pkg resolves on ABI alone), so it is shown under each. The join is needed
+    because the manifest itself names no pfSense edition/version, only its ABI.
+    """
+    idx: dict[str, list[dict]] = {}
+    for e in matrix or []:
+        abi = e.get("abi", "")
+        if abi:
+            idx.setdefault(abi, []).append(e)
+    return idx
+
+
+def _edition_key(variant: str) -> str:
+    """Normalise the matrix `variant` to an edition key (CE / Plus / passthrough)."""
+    low = (variant or "").strip().lower()
+    if low == "ce":
+        return "CE"
+    if low == "plus":
+        return "Plus"
+    return variant.strip() or "Other"
+
+
+def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str, list[dict]]]:
+    """Group the current installables into per-edition row lists, display-ordered.
+
+    Each row is the newest version per (channel, ABI) (build_table), enriched with the
+    pfSense version + PHP/Python from the matrix join. A build whose ABI has no matrix
+    entry falls into a trailing "Other" section using its manifest-derived php/py, so
+    nothing published is ever hidden. Editions sort CE, then Plus, then the rest.
+    """
+    idx = matrix_index(matrix)
+    sections: dict[str, list[dict]] = {}
+    for r in build_table(pkgs):
+        entries = idx.get(r["abi"], [])
+        if entries:
+            for e in entries:
+                row = dict(r)
+                row["pfsense_version"] = e.get("pfsense_version", "")
+                row["php"] = e.get("php_version") or e.get("php") or r.get("php", "")
+                row["py"] = _dotted_ver(e.get("py_flavor", "")) or r.get("py", "")
+                sections.setdefault(_edition_key(e.get("variant", "")), []).append(row)
+        else:
+            row = dict(r)
+            row["pfsense_version"] = ""
+            sections.setdefault("Other", []).append(row)
+    keys = [k for k in EDITION_ORDER if k in sections]
+    keys += [k for k in sorted(sections) if k not in EDITION_ORDER and k != "Other"]
+    if "Other" in sections:
+        keys.append("Other")
+    out: list[tuple[str, list[dict]]] = []
+    for k in keys:
+        rows = sections[k]
+        rows.sort(key=lambda p: (ver_key(p.get("pfsense_version", "")), CH_ORDER.index(p["channel"]), p["abi"]))
+        out.append((k, rows))
+    return out
+
+
+def _edition_table_html(rows: list[dict]) -> str:
     body = "".join(
-        f"<tr><td>{_esc(r['channel'])}</td><td>{_esc(r['name'])}</td>"
+        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
+        f"<td>{_esc(r['channel'])}</td>"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
+        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
         f'<td class="num">{_esc(r.get("published", ""))}</td>'
         f"<td>{commit_cell(r.get('commit', ''))}</td>"
-        f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
         for r in rows
     )
-    # Wrapped in an overflow-x container so a narrow (mobile) viewport scrolls the
-    # table horizontally instead of widening the whole page past the screen.
+    # overflow-x wrapper: a narrow (mobile) viewport scrolls the table, not the page.
     return (
-        '<div class="tablewrap"><table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>'
-        f"<th>Published</th><th>Commit</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table></div>"
+        '<div class="tablewrap"><table><thead><tr>'
+        "<th>pfSense</th><th>Channel</th><th>Version</th><th>ABI</th>"
+        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
     )
 
 
-def render_page(base: str, pkgs: list[dict], trees: list[str], conf_fn: Callable[[str], str]) -> str:
+def _packages_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
+    """The Published-packages block: one titled table per pfSense edition."""
+    sections = [(k, rows) for k, rows in build_edition_sections(pkgs, matrix) if rows]
+    if not sections:
+        return '<p class="empty">No packages published yet.</p>'
+    return "".join(f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>{_edition_table_html(rows)}" for k, rows in sections)
+
+
+def older_nightlies(pkgs: list[dict]) -> list[dict]:
+    """The retained nightly builds OTHER than the newest (newest-first, ABI-grouped).
+
+    The per-edition tables surface only the latest nightly (the "install now" view);
+    retention (ADR-18) keeps several older nightlies in the catalog, reachable here
+    rather than only via the raw catalog-tree links. Empty when none are retained.
+    """
+    latest = latest_versions(pkgs).get("nightly")
+    rows = [p for p in pkgs if p["channel"] == "nightly" and p["version"] != latest]
+    rows.sort(key=lambda p: p["abi"])
+    rows.sort(key=lambda p: ver_key(p["version"]), reverse=True)
+    return rows
+
+
+def _older_nightlies_html(pkgs: list[dict]) -> str:
+    """A collapsed disclosure listing the retained older nightlies; "" when there are none."""
+    rows = older_nightlies(pkgs)
+    if not rows:
+        return ""
+    body = "".join(
+        f'<tr><td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_esc(r.get("published", ""))}</td>'
+        f"<td>{commit_cell(r.get('commit', ''))}</td>"
+        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
+        for r in rows
+    )
+    return (
+        f"<details><summary>Older nightlies ({len(rows)})</summary>"
+        '<div class="tablewrap"><table><thead><tr>'
+        "<th>Version</th><th>ABI</th><th>Published</th><th>Commit</th><th>Size</th>"
+        f"</tr></thead><tbody>{body}</tbody></table></div></details>"
+    )
+
+
+def render_page(
+    base: str,
+    pkgs: list[dict],
+    trees: list[str],
+    conf_fn: Callable[[str], str],
+    matrix: list[dict] | None = None,
+) -> str:
     """Render the root landing page."""
     latest = latest_versions(pkgs)
     cards = "".join(_channel_card(c, base, latest, conf_fn) for c in CH_ORDER)
@@ -267,7 +420,7 @@ def render_page(base: str, pkgs: list[dict], trees: list[str], conf_fn: Callable
         "this build too. Catalogs are NONE-signed (trust anchor = HTTPS to this host) and ABI-keyed, so a box "
         "keeps resolving the right package across a pfSense OS upgrade.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"<h2>Published packages</h2>{_table_html(build_table(pkgs))}"
+        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}{_older_nightlies_html(pkgs)}"
         "<h2>Catalog trees</h2>"
         '<p class="blurb">The raw pkg(8) catalogs (what your firewall fetches). <code>${ABI}</code> is filled '
         "in by pkg automatically, e.g. <code>FreeBSD:16:aarch64</code> on a Netgate ARM box.</p>"
@@ -306,7 +459,7 @@ def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
     return out.stdout.rstrip("\n")
 
 
-def write_site(site: str, base: str, addrepo: str) -> int:
+def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = None) -> int:
     """Generate index.html at the root and in every catalog dir. Returns package count."""
     base = base.rstrip("/")
     pkgs = collect_packages(site)
@@ -316,7 +469,7 @@ def write_site(site: str, base: str, addrepo: str) -> int:
         return _conf_via_addrepo(addrepo, base, channel)
 
     with open(os.path.join(site, "index.html"), "w") as fh:
-        fh.write(render_page(base, pkgs, trees, conf_fn))
+        fh.write(render_page(base, pkgs, trees, conf_fn, matrix))
     for rel in trees:
         d = os.path.join(site, rel)
         with open(os.path.join(d, "index.html"), "w") as fh:
@@ -329,8 +482,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("site", help="the built catalog tree (output of build-repo-portable.py)")
     ap.add_argument("base_url", help="the Pages base URL, e.g. https://pfblockerng.github.io/pkg")
     ap.add_argument("add_repo", help="path to add-repo.sh (for the per-channel conf snippets)")
+    ap.add_argument(
+        "--matrix",
+        help="supported-versions build matrix JSON (list of {abi, pfsense_version, variant, "
+        "php_version, py_flavor}) — splits the packages table by pfSense edition. Omitted -> "
+        "a single 'Other builds' table from manifest data.",
+    )
     args = ap.parse_args(argv)
-    n = write_site(args.site, args.base_url, args.add_repo)
+    matrix = None
+    if args.matrix:
+        with open(args.matrix) as fh:
+            matrix = json.load(fh)
+    n = write_site(args.site, args.base_url, args.add_repo, matrix)
     print(f"landing page + {len(catalog_dirs(args.site))} dir index(es) written; {n} package(s) indexed")
     return 0
 
