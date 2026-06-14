@@ -62,6 +62,11 @@
           "image_name": {
             "type": "string",
             "description": "GHCR image name for the smoke leg, e.g. 'pfsense-ce' (default if omitted) or 'pfsense-plus'. For a Plus leg the VM identity (MAC + SMBIOS uuid) is NOT carried here — it comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets (ADR-24)."
+          },
+          "arch": {
+            "type": "string",
+            "enum": ["amd64", "aarch64"],
+            "description": "Target ABI architecture. Omit (or 'amd64') for the standard amd64 build; the reader resolves missing/empty to 'amd64'. 'aarch64' = Netgate ARM appliances (Plus-only); the build keys on (freebsd_major, arch) so an aarch64 entry yields a FreeBSD:<major>:aarch64 .pkg. No ARM CI image exists yet, so an aarch64 entry must be build-only (ci=false)."
           }
         },
         "additionalProperties": false
