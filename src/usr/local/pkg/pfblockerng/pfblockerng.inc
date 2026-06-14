@@ -5768,6 +5768,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				}
 
 				curl_setopt_array($ch, $pfb['curl_defaults']);	// Load curl default settings
+
+				// Constrain libcurl to the schemes pfBlockerNG fetches feeds over (http/https/ftp;
+				// rsync uses exec separately). An independent backstop to the PFB_FILTER_URL scheme
+				// allowlist — the two parsers (PHP parse_url vs libcurl) can disagree on crafted
+				// input, so enforce the allowlist at libcurl's own layer too.
+				curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP);
+
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout
 				curl_setopt($ch, CURLOPT_ENCODING, 'gzip');	// Request 'gzip' encoding from server if available
