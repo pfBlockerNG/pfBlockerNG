@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+# gen_landing.py — generate the human-navigable landing page + per-directory
+# indexes for the self-hosted pkg repository (ADR-17). Run by pfBlockerNG/pkg's
+# publish.yml AFTER the per-ABI catalog trees are built under <site>/.
+#
+# It is the human-facing sibling of build-repo-portable.py: that tool emits the
+# machine catalog pkg(8) fetches; this one renders a styled index over it —
+# channel install cards (stable / devel / nightly), a Version x ABI table read
+# from each .pkg's own manifest, and a clean per-directory listing that shows the
+# package(s) but not the pkg(8) catalog plumbing (meta.conf/packagesite.pkg/...).
+#
+# Stdlib only + the `zstd` binary (to read a .pkg's +COMPACT_MANIFEST). Dev-only
+# tooling — not shipped in release archives (those contain only src/).
+#
+# Usage: gen_landing.py <site-dir> <pages-base-url> <add-repo.sh path>
+from __future__ import annotations
+
+import argparse
+import html
+import io
+import json
+import os
+import re
+import subprocess
+import tarfile
+from collections.abc import Callable, Iterable
+
+# Channel identity (mirrors add-repo.sh): package name + one-line blurb, in
+# display order. The channel of a package is read from its name suffix.
+CHANNELS: dict[str, tuple[str, str]] = {
+    "stable": ("pfSense-pkg-pfBlockerNG", "Tagged stable releases."),
+    "devel": ("pfSense-pkg-pfBlockerNG-devel", "The development channel — current devel tree."),
+    "nightly": ("pfSense-pkg-pfBlockerNG-nightly", "Bleeding edge — the devel tip, rebuilt daily."),
+}
+CH_ORDER: list[str] = ["stable", "devel", "nightly"]
+RAW_ADDREPO = "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/devel/scripts/add-repo.sh"
+
+# pkg(8) catalog files that live in a catalog dir but are NOT packages — excluded
+# from the human listing and the package table.
+CATALOG_META = ("packagesite.pkg", "data.pkg")
+
+
+def channel_of(name: str) -> str:
+    """Map a package NAME to its channel by suffix (-nightly / -devel / stable)."""
+    if name.endswith("-nightly"):
+        return "nightly"
+    if name.endswith("-devel"):
+        return "devel"
+    return "stable"
+
+
+def is_package_file(fname: str) -> bool:
+    """True for a real package .pkg, False for catalog plumbing / non-.pkg."""
+    return fname.endswith(".pkg") and fname not in CATALOG_META
+
+
+def human_size(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if f < 1024 or unit == "GiB":
+            return f"{f:.0f} {unit}" if unit == "B" else f"{f:.1f} {unit}"
+        f /= 1024
+    return f"{f:.1f} GiB"
+
+
+def ver_key(v: str) -> list[int]:
+    """A coarse version sort key (numeric runs) — enough to pick the newest build."""
+    return [int(x) for x in re.findall(r"\d+", v)]
+
+
+def read_manifest_zstd(path: str) -> dict:
+    """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
+    raw = subprocess.run(["zstd", "-dc", path], capture_output=True, check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
+        member = tar.extractfile("+COMPACT_MANIFEST")
+        if member is None:
+            raise ValueError(f"{path}: no +COMPACT_MANIFEST member")
+        return json.loads(member.read())
+
+
+def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = None) -> list[dict]:
+    """Walk <site>/, returning one row per published package (channel/name/version/abi/size/rel)."""
+    if read_manifest is None:
+        read_manifest = read_manifest_zstd
+    pkgs: list[dict] = []
+    for dirpath, _dirs, files in os.walk(site):
+        for fname in sorted(files):
+            if not is_package_file(fname):
+                continue
+            path = os.path.join(dirpath, fname)
+            man = read_manifest(path)
+            name, ver, abi = man.get("name", ""), man.get("version", ""), man.get("abi", "")
+            pkgs.append(
+                {
+                    "channel": channel_of(name),
+                    "name": name,
+                    "version": ver,
+                    "abi": abi,
+                    "size": os.path.getsize(path),
+                    "rel": os.path.relpath(path, site),
+                }
+            )
+    return pkgs
+
+
+def latest_versions(pkgs: Iterable[dict]) -> dict[str, str]:
+    """Newest version present per channel (by numeric key)."""
+    latest: dict[str, str] = {}
+    for p in pkgs:
+        ch = p["channel"]
+        if ch not in latest or ver_key(p["version"]) > ver_key(latest[ch]):
+            latest[ch] = p["version"]
+    return latest
+
+
+def build_table(pkgs: list[dict]) -> list[dict]:
+    """The table rows: the newest version's package per (channel, ABI), display-sorted.
+
+    Older nightly builds stay reachable via the catalog-tree links — the table
+    surfaces only what a human would install right now.
+    """
+    latest = latest_versions(pkgs)
+    rows = [p for p in pkgs if p["version"] == latest.get(p["channel"])]
+    rows.sort(key=lambda p: (CH_ORDER.index(p["channel"]), p["abi"], p["name"]))
+    return rows
+
+
+def catalog_dirs(site: str) -> list[str]:
+    """Relative paths of dirs holding a real package (a catalog tree)."""
+    return sorted(os.path.relpath(d, site) for d, _x, files in os.walk(site) if any(is_package_file(f) for f in files))
+
+
+def _esc(s: object) -> str:
+    return html.escape(str(s))
+
+
+_CSS = """
+:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--code:#0b0f14}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:980px;margin:0 auto;padding:2rem 1.25rem 4rem}
+header h1{margin:0 0 .25rem;font-size:2rem}
+header p{margin:0;color:var(--mut)}
+h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);padding-bottom:.4rem}
+.cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
+.card h3{margin:0 0 .15rem;font-size:1.1rem;text-transform:capitalize}
+.card .ver{color:var(--mut);font-size:.9rem;margin:0 0 .6rem}
+.card .blurb{color:var(--mut);font-size:.92rem;margin:.15rem 0 .8rem}
+pre{background:var(--code);border:1px solid var(--bd);border-radius:8px;padding:.7rem .8rem;overflow:auto;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg)}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:#1f2630;padding:.1em .35em;border-radius:5px}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--bd)}
+th{color:var(--mut);font-weight:600}
+td.num{font-variant-numeric:tabular-nums;color:var(--mut)}
+.badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
+  border:1px solid var(--bd);color:var(--mut)}
+details summary{cursor:pointer;color:var(--mut);font-size:.85rem;margin-top:.5rem}
+ul.trees{columns:2;list-style:none;padding:0;margin:0}
+ul.trees li{margin:.15rem 0}
+footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
+.empty{color:var(--mut);font-style:italic}
+"""
+
+
+def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    pkg, blurb = CHANNELS[channel]
+    lv = latest.get(channel)
+    ver_line = f"Latest: <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
+    one_liner = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base} {channel}\npkg install {pkg}"
+    return (
+        f'<div class="card"><h3>{_esc(channel)} <span class="badge">{_esc(pkg)}</span></h3>'
+        f'<p class="ver">{ver_line}</p>'
+        f'<p class="blurb">{_esc(blurb)}</p>'
+        f"<pre>{_esc(one_liner)}</pre>"
+        f"<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
+        f"<pre>{_esc(conf_fn(channel))}</pre></details></div>"
+    )
+
+
+def _table_html(rows: list[dict]) -> str:
+    if not rows:
+        return '<p class="empty">No packages published yet.</p>'
+    body = "".join(
+        f"<tr><td>{_esc(r['channel'])}</td><td>{_esc(r['name'])}</td>"
+        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
+        for r in rows
+    )
+    return (
+        "<table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>"
+        f"<th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def render_page(base: str, pkgs: list[dict], trees: list[str], conf_fn: Callable[[str], str]) -> str:
+    """Render the root landing page."""
+    latest = latest_versions(pkgs)
+    cards = "".join(_channel_card(c, base, latest, conf_fn) for c in CH_ORDER)
+    tree_items = "".join(f'<li><a href="./{_esc(d)}/">{_esc(d)}</a></li>' for d in trees)
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>pfBlockerNG — self-hosted pkg repository</title>"
+        f'<style>{_CSS}</style></head><body><div class="wrap">'
+        "<header><h1>pfBlockerNG</h1>"
+        "<p>Self-hosted FreeBSD <code>pkg</code> repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus.</p></header>"
+        "<p>Install pfBlockerNG straight from this repository. Pick a channel, run the bootstrap on your "
+        "firewall (as <code>root</code>), then <code>pkg install</code>. The conf pins <code>priority: 100</code> "
+        "so it sits above the Netgate repo and the stock webConfigurator <strong>Install</strong> button pulls "
+        "this build too. Catalogs are NONE-signed (trust anchor = HTTPS to this host) and ABI-keyed, so a box "
+        "keeps resolving the right package across a pfSense OS upgrade.</p>"
+        f'<h2>Channels</h2><div class="cards">{cards}</div>'
+        f"<h2>Published packages</h2>{_table_html(build_table(pkgs))}"
+        "<h2>Catalog trees</h2>"
+        '<p class="blurb">The raw pkg(8) catalogs (what your firewall fetches). <code>${ABI}</code> is filled '
+        "in by pkg automatically, e.g. <code>FreeBSD:16:aarch64</code> on a Netgate ARM box.</p>"
+        f'<ul class="trees">{tree_items}</ul>'
+        '<footer><a href="https://github.com/pfBlockerNG/pfBlockerNG">Source</a> &middot; '
+        '<a href="https://github.com/pfBlockerNG/pfBlockerNG/releases">Releases</a> &middot; '
+        '<a href="https://github.com/pfBlockerNG/pkg">This repository</a></footer>'
+        "</div></body></html>\n"
+    )
+
+
+def render_dir_index(rel: str, files: Iterable[str]) -> str:
+    """Render a per-catalog-dir index listing only the real package file(s)."""
+    items = sorted(f for f in files if is_package_file(f))
+    li = "".join(f'<li><a href="{_esc(f)}">{_esc(f)}</a></li>' for f in items)
+    back = "../" * (rel.count("/") + 1)
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>pfBlockerNG pkg — {_esc(rel)}</title><style>{_CSS}</style></head>"
+        f'<body><div class="wrap"><header><h1>{_esc(rel)}</h1>'
+        f'<p><a href="{_esc(back)}">&larr; back to the repository</a></p></header>'
+        f"<ul>{li}</ul>"
+        "<footer>pkg(8) catalog metadata (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) "
+        "is served from this directory too.</footer></div></body></html>\n"
+    )
+
+
+def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
+    out = subprocess.run(
+        ["sh", addrepo, "--print-conf", "--base-url", base, channel],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.rstrip("\n")
+
+
+def write_site(site: str, base: str, addrepo: str) -> int:
+    """Generate index.html at the root and in every catalog dir. Returns package count."""
+    base = base.rstrip("/")
+    pkgs = collect_packages(site)
+    trees = catalog_dirs(site)
+
+    def conf_fn(channel: str) -> str:
+        return _conf_via_addrepo(addrepo, base, channel)
+
+    with open(os.path.join(site, "index.html"), "w") as fh:
+        fh.write(render_page(base, pkgs, trees, conf_fn))
+    for rel in trees:
+        d = os.path.join(site, rel)
+        with open(os.path.join(d, "index.html"), "w") as fh:
+            fh.write(render_dir_index(rel, os.listdir(d)))
+    return len(pkgs)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Generate the pkg-repo landing page + per-dir indexes.")
+    ap.add_argument("site", help="the built catalog tree (output of build-repo-portable.py)")
+    ap.add_argument("base_url", help="the Pages base URL, e.g. https://pfblockerng.github.io/pkg")
+    ap.add_argument("add_repo", help="path to add-repo.sh (for the per-channel conf snippets)")
+    args = ap.parse_args(argv)
+    n = write_site(args.site, args.base_url, args.add_repo)
+    print(f"landing page + {len(catalog_dirs(args.site))} dir index(es) written; {n} package(s) indexed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
