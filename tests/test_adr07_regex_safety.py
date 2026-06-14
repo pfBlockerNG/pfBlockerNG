@@ -153,6 +153,20 @@ class TestCatastrophicShapeHeuristic:
         over_budget = "".join(f"a{i}*|" for i in range(pfb_unbound._REGEX_BUDGET_MAX + 2))
         assert _regex_is_catastrophic_shape(over_budget) is True
 
+    def test_complexity_budget_at_threshold_not_flagged(self) -> None:
+        # The budget comparison is strictly `>` _REGEX_BUDGET_MAX, so a pattern whose budget
+        # equals MAX exactly is the last admissible value (off-by-one guard: a `>=` regression
+        # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
+        # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
+        # nested/adjacent quantified group, no stacked bounded repeat).
+        at_budget = "a*" * pfb_unbound._REGEX_BUDGET_MAX
+        # Compute the budget the SAME way the code does and pin it to MAX before asserting.
+        budget = len(pfb_unbound._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
+            pfb_unbound._REGEX_ALTERNATION.findall(at_budget)
+        )
+        assert budget == pfb_unbound._REGEX_BUDGET_MAX
+        assert _regex_is_catastrophic_shape(at_budget) is False
+
     # --- false-positive guard: realistic benign feed regex must NOT be flagged ----- #
     def test_benign_feed_patterns_not_flagged(self) -> None:
         for pat in (
