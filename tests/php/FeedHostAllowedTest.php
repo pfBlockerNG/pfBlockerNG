@@ -23,13 +23,16 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_feed_host_allowed')]
 #[CoversFunction('pfb_ip_is_internal')]
 #[CoversFunction('pfb_ip_in_cidr')]
+#[CoversFunction('pfb_ip_is_self')]
 final class FeedHostAllowedTest extends TestCase
 {
 	protected function setUp(): void
 	{
-		// Secure default: allowlist empty (no internal exemptions).
+		// Secure default: allowlist empty (no internal exemptions), and no IP
+		// configured on the box (the self-exemption never fires unless seeded).
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
+		$GLOBALS['pfb_test_configured_ips'] = [];
 	}
 
 	/** Set the internal-address allowlist config value the guard reads. */
@@ -40,7 +43,7 @@ final class FeedHostAllowedTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		unset($GLOBALS['config'], $GLOBALS['pfb_test_resolve_map']);
+		unset($GLOBALS['config'], $GLOBALS['pfb_test_resolve_map'], $GLOBALS['pfb_test_configured_ips']);
 	}
 
 	/** Drive the guard for a host, returning [allowed, reason, pinned]. */
@@ -297,6 +300,107 @@ final class FeedHostAllowedTest extends TestCase
 		$this->assertTrue($allowed);
 		$this->assertSame('', $reason);
 		$this->assertSame('203.0.113.20', $pinned);
+	}
+
+	// --- Self-host exemption: a feed served by the box itself -------------------
+	//
+	// The firewall's own LAN address is RFC1918, but a self-hosted feed
+	// (http://127.0.0.1/…, http://[::1]/…, http://<box-IP>/…) is a long-supported
+	// pfBlockerNG case. A resolved candidate that is the box itself is allowed even
+	// with an empty allowlist; the same RFC1918 IP NOT configured on the box is
+	// rejected — proving self-ownership, not the address shape, is the cause.
+
+	public function testSelfConfiguredInternalIpFlipsRejectedHostToAllowed(): void
+	{
+		// Given a host resolving to an RFC1918 address
+		$GLOBALS['pfb_test_resolve_map']['selfhost.example.'] = [
+			['type' => 'A', 'data' => '192.168.1.1'],
+		];
+
+		// When that IP is NOT configured on the box -> rejected (before-state).
+		[$allowedOff, $reasonOff, $pinnedOff] = $this->guard('selfhost.example');
+		$this->assertFalse($allowedOff);
+		$this->assertSame('feed host resolves to a non-permitted address', $reasonOff);
+		$this->assertSame('', $pinnedOff);
+
+		// When the SAME IP is the box's own configured address -> allowed, pinning it.
+		$GLOBALS['pfb_test_configured_ips'] = ['192.168.1.1'];
+		[$allowedOn, $reasonOn, $pinnedOn] = $this->guard('selfhost.example');
+		$this->assertTrue($allowedOn);
+		$this->assertSame('', $reasonOn);
+		$this->assertSame('192.168.1.1', $pinnedOn);
+	}
+
+	public function testLoopbackLiteralHostsAreAllowed(): void
+	{
+		// 127.0.0.1 / ::1 as bare host literals are self (loopback) -> allowed, with
+		// no box-configured IPs seeded (loopback is recognised unconditionally).
+		[$allowed4, , $pinned4] = $this->guard('127.0.0.1');
+		$this->assertTrue($allowed4);
+		$this->assertSame('127.0.0.1', $pinned4);
+
+		[$allowed6, , $pinned6] = $this->guard('::1');
+		$this->assertTrue($allowed6);
+		$this->assertSame('::1', $pinned6);
+	}
+
+	public function testSelfExemptionDoesNotBlanketAllowAMixedSet(): void
+	{
+		// A host resolving to [box-self, foreign-internal-not-self-not-allowlisted]
+		// still REJECTS on the foreign-internal address: the self-exemption is
+		// per-candidate, never a blanket allow once one candidate is self.
+		$GLOBALS['pfb_test_resolve_map']['mixedself.example.'] = [
+			['type' => 'A', 'data' => '192.168.1.1'],	// the box itself
+			['type' => 'A', 'data' => '10.0.0.5'],		// foreign internal
+		];
+		$GLOBALS['pfb_test_configured_ips'] = ['192.168.1.1'];
+
+		[$allowed, $reason] = $this->guard('mixedself.example');
+		$this->assertFalse($allowed);
+		$this->assertSame('feed host resolves to a non-permitted address', $reason);
+	}
+
+	public function testHostResolvingOnlyToBoxSelfIsAllowed(): void
+	{
+		// The complement of the mixed-set case: a host resolving ONLY to the box's own
+		// (RFC1918) address is allowed and pins that address.
+		$GLOBALS['pfb_test_resolve_map']['onlyself.example.'] = [
+			['type' => 'A', 'data' => '192.168.1.1'],
+		];
+		$GLOBALS['pfb_test_configured_ips'] = ['192.168.1.1'];
+
+		[$allowed, $reason, $pinned] = $this->guard('onlyself.example');
+		$this->assertTrue($allowed);
+		$this->assertSame('', $reason);
+		$this->assertSame('192.168.1.1', $pinned);
+	}
+
+	public function testPublicForeignHostRejectedWhenAllCandidatesNonSelfInternal(): void
+	{
+		// A host resolving to [public, foreign-internal] (neither self nor allowlisted)
+		// is rejected on the foreign-internal record (fail-closed preserved).
+		$GLOBALS['pfb_test_resolve_map']['pubint.example.'] = [
+			['type' => 'A', 'data' => '203.0.113.50'],
+			['type' => 'A', 'data' => '10.0.0.5'],
+		];
+		[$allowed, $reason] = $this->guard('pubint.example');
+		$this->assertFalse($allowed);
+		$this->assertSame('feed host resolves to a non-permitted address', $reason);
+	}
+
+	// --- pfb_ip_is_self(): the self-ownership predicate -------------------------
+
+	public function testIpIsSelfPredicate(): void
+	{
+		// Loopback is self unconditionally; a configured box IP is self; anything else
+		// (incl. a non-configured RFC1918 address and a public address) is not.
+		$GLOBALS['pfb_test_configured_ips'] = ['192.168.1.1'];
+		$this->assertTrue(pfb_ip_is_self('127.0.0.1'));
+		$this->assertTrue(pfb_ip_is_self('::1'));
+		$this->assertTrue(pfb_ip_is_self('192.168.1.1'));
+		$this->assertFalse(pfb_ip_is_self('10.0.0.5'));		// RFC1918 but not configured
+		$this->assertFalse(pfb_ip_is_self('203.0.113.7'));	// public, not configured
+		$this->assertFalse(pfb_ip_is_self(''));
 	}
 
 	// --- pfb_ip_in_cidr(): the shared binary-containment helper -----------------

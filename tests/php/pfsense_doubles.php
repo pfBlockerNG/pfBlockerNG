@@ -176,10 +176,13 @@ if (!function_exists('resolve_host_addresses')) {
 }
 
 if (!function_exists('is_ipaddr_configured')) {
-	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise. Fail
-	// fast rather than return a guessed false that could hide a missing real double.
+	// pfSense interfaces.inc: TRUE when $ipaddr is an address configured on the box.
+	// The feed-host self-exemption (pfb_ip_is_self) drives this — a test declares the
+	// firewall's own addresses by seeding $GLOBALS['pfb_test_configured_ips'] (a list
+	// of IP literals it returns TRUE for; absent/empty => no configured IPs).
 	function is_ipaddr_configured($ipaddr, $ignore_if = '', $check_localip = false, $check_subnets = false, $cidrprefix = '') {
-		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path');
+		$configured = $GLOBALS['pfb_test_configured_ips'] ?? [];
+		return is_array($configured) && in_array($ipaddr, $configured, true);
 	}
 }
 

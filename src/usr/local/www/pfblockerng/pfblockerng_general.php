@@ -56,6 +56,11 @@ $pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
 // Default to 'on' for new installation only
 $pconfig['pfb_keep']			= isset($pfb['gconfig']['pfb_keep'])			? $pfb['gconfig']['pfb_keep'] : 'on';
 
+// Master toggle for the internal-address feed-host filter. Default 'on' for a new,
+// unconfigured install (key absent); pinned 'off' once on an existing install by the
+// upgrade migration in pfblockerng_install.inc so configured feeds are never dropped.
+$pconfig['pfb_feed_internal_filter']	= isset($pfb['gconfig']['pfb_feed_internal_filter'])	? $pfb['gconfig']['pfb_feed_internal_filter'] : 'on';
+
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
 $pconfig['pfb_feed_internal_allowlist']	= $pfb['gconfig']['pfb_feed_internal_allowlist']	?: '';
@@ -152,7 +157,19 @@ if ($_POST) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
 			$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'], PFB_FILTER_ON_OFF, 'general', '');
-			$pfb['gconfig']['pfb_feed_internal_allowlist']	= str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? ''));
+
+			// Store the master feed-host filter toggle as an explicit 'on'/'off' (a
+			// checkbox submits 'on' when checked, nothing when unchecked) so the
+			// runtime reader can tell an unchecked save (off) from a never-configured
+			// install (key absent => default on).
+			$pfb['gconfig']['pfb_feed_internal_filter']	= (($_POST['pfb_feed_internal_filter'] ?? '') === 'on') ? 'on' : 'off';
+
+			// The allowlist textarea is greyed (disabled) when the filter is off, so the
+			// browser does not submit it. Preserve the previously stored value in that
+			// case rather than overwriting it with the absent POST field.
+			if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
+				$pfb['gconfig']['pfb_feed_internal_allowlist']	= str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? ''));
+			}
 			$pfb['gconfig']['pfb_interval']			= $_POST['pfb_interval']			?: 1;
 			$pfb['gconfig']['pfb_min']			= $_POST['pfb_min']				?: 0;
 			$pfb['gconfig']['pfb_hour']			= $_POST['pfb_hour']				?: 0;
@@ -257,6 +274,16 @@ $section->addInput(new Form_Checkbox(
 		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br /><br />'
 		. '<span class="text-danger">Note: </span>'
 		. ' To clear all downloaded lists, uncheck these two checkboxes and \'Save\'. Re-check both boxes and run a \'Force Update|Reload\''
+);
+
+$section->addInput(new Form_Checkbox(
+	'pfb_feed_internal_filter',
+	'Internal Feed Host Filter',
+	gettext('Enable'),
+	$pconfig['pfb_feed_internal_filter'] === 'on' ? true:false,
+	'on'
+))->setHelp('Restrict feeds from being fetched from non-public/internal addresses. '
+		. 'The exemptions list below allows specific IP/CIDRs through.'
 );
 
 $section->addInput(new Form_Textarea(
@@ -440,4 +467,22 @@ $form->add($section);
 print($form);
 print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
 ?>
+
+<script type="text/javascript">
+//<![CDATA[
+events.push(function() {
+
+	// Grey out the internal-feed-host exemption list when the master filter is off.
+	// The value is left intact (disabled, not cleared); the POST handler preserves the
+	// stored exemptions across an off-toggle save, since a disabled field is not sent.
+	function pfb_sync_internal_filter() {
+		disableInput('pfb_feed_internal_allowlist', !$('#pfb_feed_internal_filter').prop('checked'));
+	}
+
+	$('#pfb_feed_internal_filter').click(pfb_sync_internal_filter);
+	pfb_sync_internal_filter();
+});
+//]]>
+</script>
+
 <?php include('foot.inc');?>

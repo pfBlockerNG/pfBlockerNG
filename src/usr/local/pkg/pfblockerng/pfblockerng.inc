@@ -5387,6 +5387,48 @@ function pfb_ip_in_allowlist($ip, array $allowlist) {
 }
 
 
+// Grandfather decision for the feed-host filter at install/upgrade. $gconfig is the
+// existing General-settings 'config/0' node (null on a fresh, never-configured install).
+// Returns 'off' only for an already-configured install that has not yet seen the toggle
+// (so its existing feeds are never silently dropped); otherwise NULL — meaning leave the
+// key unset, which the runtime reader (pfb_feed_filter_enabled) interprets as the ON
+// default. Run-once + idempotent: once the key is set (either value) it returns NULL,
+// never re-disabling an operator who opted back in.
+function pfb_feed_filter_install_default($gconfig) {
+
+	if (is_array($gconfig) && !isset($gconfig['pfb_feed_internal_filter'])) {
+		return 'off';
+	}
+	return NULL;
+}
+
+
+// Whether the feed-host internal-address filter is enabled. Reads the General-settings
+// 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
+// fresh install ships the filter active; the install-time migration pins it OFF on an
+// already-configured box so existing feeds are never silently dropped). Any value other
+// than the literal 'off' is treated as ON.
+function pfb_feed_filter_enabled() {
+
+	$value = config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_filter');
+	return ($value !== 'off');
+}
+
+
+// Whether a resolved candidate IP is the firewall itself — its own configured address,
+// or the IPv4/IPv6 loopback. A self-hosted feed (served by the box) is a long-supported
+// pfBlockerNG case (see PFB_FILTER_URL), so a self IP is treated as allowed even though
+// it is non-public; it is never the internal-pivot case the filter guards against.
+function pfb_ip_is_self($ip) {
+
+	if (!is_string($ip) || $ip === '') {
+		return FALSE;
+	}
+
+	return ($ip === '127.0.0.1' || $ip === '::1' || is_ipaddr_configured($ip));
+}
+
+
 // Verify a feed host does not resolve to a non-public/reserved address before any
 // connection is made. Fail-closed: an unresolvable host, or any resolved address
 // that is non-public AND not covered by the operator's internal-address allowlist,
@@ -5394,10 +5436,11 @@ function pfb_ip_in_allowlist($ip, array $allowlist) {
 // connection to (so the fetch cannot rebind to another address); $reason carries a
 // neutral skip reason on rejection.
 //
-// A resolved address that is internal is permitted ONLY when it is covered by an
-// allowlist entry (exact IP, or containment in an allowlisted CIDR — General
+// A resolved address is permitted when it is public, when it is the firewall itself
+// (its own configured address / loopback — a self-hosted feed), or when it is covered
+// by an allowlist entry (exact IP, or containment in an allowlisted CIDR — General
 // settings: 'internal-address exemptions'). An empty allowlist (the default) blocks
-// every feed that resolves to an internal/private address.
+// every other feed that resolves to an internal/private address.
 function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 
 	$reason = '';
@@ -5450,12 +5493,15 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 
 	$allowlist = pfb_feed_internal_allowlist();
 
-	// Reject if ANY resolved address is internal and not allowlisted (fail-closed).
-	// Pin the first vetted address for the connection — by the time the loop
-	// completes every candidate is public or allowlisted, so pinning the first is
-	// safe (and lets an allowlisted internal mirror's IP become the pinned target).
+	// Reject if ANY resolved address is internal and neither the firewall itself nor
+	// allowlisted (fail-closed). The self-exemption is per-candidate: a host resolving
+	// to [box-self, foreign-internal] still rejects on the foreign-internal address.
+	// Pin the first vetted address for the connection — by the time the loop completes
+	// every candidate is public, self, or allowlisted, so pinning the first is safe
+	// (and lets a self / allowlisted internal mirror's IP become the pinned target).
 	foreach ($candidates as $candidate) {
 		if (pfb_ip_is_internal($candidate) !== FALSE &&
+		    !pfb_ip_is_self($candidate) &&
 		    !pfb_ip_in_allowlist($candidate, $allowlist)) {
 			$reason = 'feed host resolves to a non-permitted address';
 			return FALSE;
@@ -5674,34 +5720,38 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	if ($format == 'rsync') {
 
 		// Apply the same resolve+reject guard before rsync (fail-closed; opt-out
-		// in General settings), then connect to the vetted IP rather than the
-		// hostname so the exec cannot re-resolve to a different address between
-		// the check and the connect.
-		if (strpos($list_url, '::') !== FALSE) {
-			$rsync_host = explode('::', $list_url, 2)[0];	// host::module form
-			// Strip an optional 'user@' prefix from the host component.
-			$at = strrpos($rsync_host, '@');
-			if ($at !== FALSE) {
-				$rsync_host = substr($rsync_host, $at + 1);
+		// in General settings via 'pfb_feed_internal_filter'), then connect to the
+		// vetted IP rather than the hostname so the exec cannot re-resolve to a
+		// different address between the check and the connect. When the filter is
+		// disabled, skip the guard and pin entirely (pre-filter fetch behaviour).
+		$rsync_src = $list_url;
+		if (pfb_feed_filter_enabled()) {
+			if (strpos($list_url, '::') !== FALSE) {
+				$rsync_host = explode('::', $list_url, 2)[0];	// host::module form
+				// Strip an optional 'user@' prefix from the host component.
+				$at = strrpos($rsync_host, '@');
+				if ($at !== FALSE) {
+					$rsync_host = substr($rsync_host, $at + 1);
+				}
+			} else {
+				$rsync_host = parse_url($list_url, PHP_URL_HOST) ?: '';	// rsync://host/path form
 			}
-		} else {
-			$rsync_host = parse_url($list_url, PHP_URL_HOST) ?: '';	// rsync://host/path form
-		}
-		$rsync_reason	= '';
-		$rsync_pinned	= '';
-		if (!pfb_feed_host_allowed($rsync_host, $rsync_reason, $rsync_pinned)) {
-			$log = "\n[ {$header} ] {$rsync_reason} \xe2\x80\x94 skipped\n";
-			pfb_logger("{$log}", "{$logtype}");
-			return FALSE;
-		}
+			$rsync_reason	= '';
+			$rsync_pinned	= '';
+			if (!pfb_feed_host_allowed($rsync_host, $rsync_reason, $rsync_pinned)) {
+				$log = "\n[ {$header} ] {$rsync_reason} \xe2\x80\x94 skipped\n";
+				pfb_logger("{$log}", "{$logtype}");
+				return FALSE;
+			}
 
-		// Pin the connection to the vetted IP (substitute it for the host in the
-		// rsync source). Fail closed if the source form can't be parsed to do so.
-		$rsync_src = pfb_rsync_pin_url($list_url, $rsync_pinned);
-		if ($rsync_src === '') {
-			$log = "\n[ {$header} ] feed host could not be pinned \xe2\x80\x94 skipped\n";
-			pfb_logger("{$log}", "{$logtype}");
-			return FALSE;
+			// Pin the connection to the vetted IP (substitute it for the host in the
+			// rsync source). Fail closed if the source form can't be parsed to do so.
+			$rsync_src = pfb_rsync_pin_url($list_url, $rsync_pinned);
+			if ($rsync_src === '') {
+				$log = "\n[ {$header} ] feed host could not be pinned \xe2\x80\x94 skipped\n";
+				pfb_logger("{$log}", "{$logtype}");
+				return FALSE;
+			}
 		}
 		$rsync_src_esc = escapeshellarg("{$rsync_src}");
 
@@ -5747,14 +5797,19 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 			// Verify the feed host does not resolve to a non-public/reserved
 			// address before opening any connection (fail-closed; opt-out in
-			// General settings). Pin the connection to the vetted IP so it cannot
-			// rebind to a different address between this check and the fetch.
+			// General settings via 'pfb_feed_internal_filter'). Pin the connection
+			// to the vetted IP so it cannot rebind to a different address between
+			// this check and the fetch. When the filter is disabled, skip the guard
+			// and the IP pin entirely (pre-filter fetch behaviour); $feed_filter
+			// also selects manual (re-vetted) vs cURL-native redirect following.
+			$feed_filter	= pfb_feed_filter_enabled();
 			$url_parts	= parse_url($list_download);
 			$feed_host	= $url_parts['host'] ?? '';
 			$feed_scheme	= strtolower($url_parts['scheme'] ?? '');
 			$feed_reason	= '';
 			$feed_pinned	= '';
-			if (!pfb_feed_host_allowed($feed_host, $feed_reason, $feed_pinned)) {
+			if ($feed_filter &&
+			    !pfb_feed_host_allowed($feed_host, $feed_reason, $feed_pinned)) {
 				$log = "\n[ {$header} ] {$feed_reason} \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
 				return FALSE;
@@ -5779,12 +5834,14 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout
 				curl_setopt($ch, CURLOPT_ENCODING, 'gzip');	// Request 'gzip' encoding from server if available
 
-				// Do NOT let cURL auto-follow redirects: a 3xx is followed manually
-				// below so every hop's host is re-vetted by the feed-host guard and
-				// re-pinned before it is dialled (an auto-followed redirect would be
-				// re-resolved by cURL, bypassing the guard + the IP pin).
-				curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
-				curl_setopt($ch, CURLOPT_MAXREDIRS, 0);
+				// With the filter ON, do NOT let cURL auto-follow redirects: a 3xx
+				// is followed manually below so every hop's host is re-vetted by the
+				// feed-host guard and re-pinned before it is dialled (an auto-followed
+				// redirect would be re-resolved by cURL, bypassing the guard + the IP
+				// pin). With the filter OFF, restore cURL-native following (the
+				// pre-filter behaviour) so the manual revalidation loop is bypassed.
+				curl_setopt($ch, CURLOPT_FOLLOWLOCATION, !$feed_filter);
+				curl_setopt($ch, CURLOPT_MAXREDIRS, $feed_filter ? 0 : PFB_DOWNLOAD_MAXREDIRS);
 
 				// Capture the response 'Location' header for the manual redirect
 				// follow. Reset per hop ($redirect_location is cleared before each
