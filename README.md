@@ -40,7 +40,7 @@ the **Apache License 2.0**.
   (`pfB_<Type>_Aggregated_v4`/`_v6`) holding the combined, CIDR-aggregated set of a
   whole action type, for reference by your own rules or an external service such as
   HAProxy ([ADR-11](.ADRs/ADR_11_Uber_Aliases/ADR.md)).
-- **Update Hooks** — run your own `pre`/`post` shell commands on each update pass
+- **Update Hooks** — run your own `pre`/`post` scripts on each update pass
   (e.g. a graceful HAProxy reload), with a documented environment contract
   ([ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md)).
 - **Automatic DNSBL sinkhole VIP** — pfBlockerNG can own the sinkhole Virtual IP
@@ -168,11 +168,15 @@ is the general reference. A couple of this fork's additions are worth calling ou
 
 ### Update Hooks
 
-The **Update Hooks** tab runs your own shell commands at the start (`pre`) and end
-(`post`) of every update pass — for example to reload a downstream service when the
-blocklist changes. Each enabled hook runs as root via `/bin/sh -c` (the same trust
-class as pfSense's `shellcmd`/cron) under a timeout; a hook's failure is logged and
-never aborts the update, and with no enabled hooks the pass is unchanged.
+The **Update Hooks** tab runs your own script at the start (`pre`) and end (`post`)
+of every update pass — for example to reload a downstream service when the blocklist
+changes. For security the hook is a **script file you place on the firewall**, not a
+command typed into the GUI: author it over SSH/console (root shell) in
+`/usr/local/pkg/pfblockerng/list_scripts/`, name it `hook_pre_<name>.sh` or
+`hook_post_<name>.sh` (`.sh` or `.py`), and make it executable (`chmod +x`, with a
+`#!` shebang) — then the tab's picker selects it. Each enabled hook runs as root (the
+same trust class as pfSense's `shellcmd`/cron) under a timeout; a hook's failure is
+logged and never aborts the update, and with no enabled hooks the pass is unchanged.
 
 A `post` hook receives this environment:
 
@@ -192,17 +196,25 @@ A `post` hook receives this environment:
 
 **Reload HAProxy after an IP update** — the motivating use case: block a
 Cloudflare-fronted real client IP via an aggregate alias, refreshed by a graceful
-HAProxy reload. Add a `post` hook with:
+HAProxy reload. Save this as
+`/usr/local/pkg/pfblockerng/list_scripts/hook_post_haproxy.sh` (`chmod +x`), then
+pick it as a `post` hook:
 
 ```sh
+#!/bin/sh
+# hook_post_haproxy.sh — reload HAProxy after an IP update
 [ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
 ```
 
 **Notify a webhook of what changed** — fires on any blocklist-data change (including
 content-only refreshes). Each field rides its own `--data-urlencode` so the
-space-separated lists are encoded correctly:
+space-separated lists are encoded correctly. Save as
+`/usr/local/pkg/pfblockerng/list_scripts/hook_post_webhook.sh` (`chmod +x`), then pick
+it as a `post` hook:
 
 ```sh
+#!/bin/sh
+# hook_post_webhook.sh — notify a webhook of what changed
 [ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
   --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
   --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
@@ -211,7 +223,7 @@ space-separated lists are encoded correctly:
 
 The full trust model, the complete HAProxy frontend ACL setup, and the URL-encoding
 rules are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
-[CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-commands-adr-12).
+[CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
 
 ## Documentation
 

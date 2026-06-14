@@ -4,7 +4,7 @@ pfBlockerNG runs admin-configured commands once per update pass: a ``pre`` hook 
 the TOP of ``sync_package_pfblockerng`` (``pfblockerng.inc:7388``) and a ``post``
 hook at the closing tail (``:11227``), via ``pfb_run_hooks($when, $ctx)``. Each
 enabled hook runs AS ROOT in the HOST context (NOT chrooted) under
-``PFB_<K>=<v> … /usr/bin/timeout -s TERM -k 5 <timeout> /bin/sh -c <command> 2>&1``.
+``PFB_<K>=<v> … /usr/bin/timeout -s TERM -k 5 <timeout> <script> 2>&1``.
 A non-zero exit OR a timeout (rc 124) is logged and the update CONTINUES — a hook
 can never abort or stall the pass; with no enabled hooks the pass is byte-identical.
 
@@ -383,7 +383,8 @@ def test_hooks_failing_hook_does_not_abort_update(deployed_vm: SmokeVM) -> None:
     pre_marker = h.hook_marker_path(token, "pre")
     post_marker = h.hook_marker_path(token, "post")
     pre_hook = {
-        "command": f"/bin/echo RAN > {pre_marker}; exit 7",
+        "script": f"hook_pre_{token}_fail.sh",
+        "_body": f"#!/bin/sh\n/bin/echo RAN > {pre_marker}\nexit 7\n",
         "when": "pre",
         "enabled": "on",
         "description": f"smoke {token} pre non-zero",
@@ -398,7 +399,7 @@ def test_hooks_failing_hook_does_not_abort_update(deployed_vm: SmokeVM) -> None:
 
     assert h.hook_marker_exists(deployed_vm, pre_marker), "the non-zero pre hook did not run (no marker)"
     pre_body = deployed_vm.ssh("cat", pre_marker).stdout
-    assert "RAN" in pre_body, f"the non-zero pre hook's command did not actually execute: {pre_body!r}"
+    assert "RAN" in pre_body, f"the non-zero pre hook's script did not actually execute: {pre_body!r}"
     assert h.hook_marker_exists(deployed_vm, post_marker), (
         "post hook did not run — the non-zero pre hook ABORTED the update (contract violated)"
     )
@@ -427,7 +428,8 @@ def test_hooks_timeout_killed_update_continues(deployed_vm: SmokeVM) -> None:
     post_marker = h.hook_marker_path(token, "post")
     pre_hook = {
         # START, then a sleep that overruns the 2s timeout, then DONE (never reached).
-        "command": f"/bin/echo START > {pre_marker}; /bin/sleep 30; /bin/echo DONE >> {pre_marker}",
+        "script": f"hook_pre_{token}_slow.sh",
+        "_body": f"#!/bin/sh\n/bin/echo START > {pre_marker}\n/bin/sleep 30\n/bin/echo DONE >> {pre_marker}\n",
         "when": "pre",
         "enabled": "on",
         "description": f"smoke {token} pre timeout",
@@ -608,7 +610,7 @@ def test_hooks_webhook_fires_on_ip_change(
     ip_spec = h.IpCase(aliasname="smokehookwhip", feed_url=ip_feed, header="smokehookwhip")
     on_disk_header = f"{ip_spec.header}_{ip_spec.family}"  # IP feed file is {header}{vtype} (inc:10126)
     h.inject(deployed_vm, ip_spec)
-    h.set_update_hooks(deployed_vm, [h.webhook_hook(webhook_sink.guest_url("/ip"), guard="IP")])
+    h.set_update_hooks(deployed_vm, [h.webhook_hook(webhook_sink.guest_url("/ip"), "whip", guard="IP")])
 
     # Settle: a first full update processes the IP feed (its alias IS updated here, so
     # this pass WOULD fire the hook — clear the sink afterwards so the no-op assertion
@@ -703,7 +705,7 @@ def test_hooks_webhook_dnsbl_guard_branch(
     dnsbl_url = webhook_sink.guest_url("/dnsbl")
     h.set_update_hooks(
         deployed_vm,
-        [h.webhook_hook(ip_url, guard="IP"), h.webhook_hook(dnsbl_url, guard="DNSBL")],
+        [h.webhook_hook(ip_url, "whgd", guard="IP"), h.webhook_hook(dnsbl_url, "whgd", guard="DNSBL")],
     )
 
     # Settle: a first full update processes both feeds (both WOULD fire here); clear the
