@@ -27,16 +27,9 @@ import tarfile
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 
-# Channel identity (mirrors add-repo.sh): package name + one-line blurb, in
-# display order. The channel of a package is read from its name suffix.
-CHANNELS: dict[str, tuple[str, str]] = {
-    "stable": ("pfSense-pkg-pfBlockerNG", "Tagged stable releases — from the shared pfblockerng repo."),
-    "devel": (
-        "pfSense-pkg-pfBlockerNG-devel",
-        "The development tree — the same pfblockerng repo as stable; pick the package.",
-    ),
-    "nightly": ("pfSense-pkg-pfBlockerNG-nightly", "Bleeding edge — the devel tip, rebuilt daily (its own repo)."),
-}
+# Display order for the published-packages table (newest per channel). The channel of a
+# package is read from its name suffix (channel_of); the install CARDS are rendered
+# separately (release vs nightly) since stable + devel share one repo.
 CH_ORDER: list[str] = ["stable", "devel", "nightly"]
 RAW_ADDREPO = "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/devel/scripts/add-repo.sh"
 # The source repo a .pkg is built from — base for the per-artifact commit link.
@@ -236,7 +229,7 @@ h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);paddi
 h3{margin:1.6rem 0 .5rem;font-size:1.05rem}
 .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
-.card h3{margin:0 0 .15rem;font-size:1.1rem;text-transform:capitalize}
+.card h3{margin:0 0 .15rem;font-size:1.1rem}
 .card .ver{color:var(--mut);font-size:.9rem;margin:0 0 .6rem}
 .card .blurb{color:var(--mut);font-size:.92rem;margin:.15rem 0 .8rem}
 pre{background:var(--code);border:1px solid var(--bd);border-radius:8px;padding:.7rem .8rem;overflow:auto;
@@ -256,21 +249,59 @@ ul.trees{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));
 ul.trees li{margin:.15rem 0;overflow-wrap:anywhere}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
 .empty{color:var(--mut);font-style:italic}
+.card ul.pkgs{margin:.3rem 0 .7rem;padding-left:0;list-style:none}
+.card ul.pkgs li{margin:.45rem 0}
+.card ul.pkgs .lbl{font-weight:600}
+.card.nightly{border-color:var(--acc)}
+.warn{color:var(--acc)}
 """
 
+# The release repo carries both packages (the channel picks the package, not the repo).
+_PKG_STABLE = "pfSense-pkg-pfBlockerNG"
+_PKG_DEVEL = "pfSense-pkg-pfBlockerNG-devel"
+_PKG_NIGHTLY = "pfSense-pkg-pfBlockerNG-nightly"
 
-def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    pkg, blurb = CHANNELS[channel]
+
+def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
+    """The `Latest: <ver>` fragment for a channel, or an italic 'not yet published'."""
     lv = latest.get(channel)
-    ver_line = f"Latest: <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
-    one_liner = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base} {channel}\npkg install {pkg}"
+    return f"Latest <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
+
+
+def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    """The unified stable+devel card: ONE bootstrap (the shared `pfblockerng` repo), then
+    install whichever package you want — the channels differ only in the package name."""
+    setup = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base}"
+    items = (
+        f'<li><span class="lbl">Stable</span> — {_ver_or_empty(latest, "stable")}'
+        f"<pre>pkg install {_esc(_PKG_STABLE)}</pre></li>"
+        f'<li><span class="lbl">Development</span> — {_ver_or_empty(latest, "devel")}'
+        f"<pre>pkg install {_esc(_PKG_DEVEL)}</pre></li>"
+    )
     return (
-        f'<div class="card"><h3>{_esc(channel)} <span class="badge">{_esc(pkg)}</span></h3>'
-        f'<p class="ver">{ver_line}</p>'
-        f'<p class="blurb">{_esc(blurb)}</p>'
+        '<div class="card"><h3>Stable &amp; development</h3>'
+        '<p class="blurb">One bootstrap adds the shared <code>pfblockerng</code> repo, which carries '
+        "both packages (they conflict &mdash; install one):</p>"
+        f"<pre>{_esc(setup)}</pre>"
+        f'<ul class="pkgs">{items}</ul>'
+        "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
+        f"<pre>{_esc(conf_fn('release'))}</pre></details></div>"
+    )
+
+
+def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    """The nightly card — deliberately set apart: its own repo + a stability caveat."""
+    one_liner = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base} --nightly\npkg install {_PKG_NIGHTLY}"
+    return (
+        '<div class="card nightly"><h3>Nightly <span class="badge">not for daily use</span></h3>'
+        f'<p class="ver">{_ver_or_empty(latest, "nightly")}</p>'
+        '<p class="blurb">The <code>devel</code> tip rebuilt every night on its own separate '
+        '<code>pfblockerng-nightly</code> repo. <span class="warn">Bleeding edge</span> &mdash; the only '
+        "guarantee is that CI passed; unlike <code>devel</code> it carries no stability target. Use it to "
+        "track the very latest, not on a production firewall.</p>"
         f"<pre>{_esc(one_liner)}</pre>"
-        f"<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
-        f"<pre>{_esc(conf_fn(channel))}</pre></details></div>"
+        "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
+        f"<pre>{_esc(conf_fn('nightly'))}</pre></details></div>"
     )
 
 
@@ -408,7 +439,7 @@ def render_page(
 ) -> str:
     """Render the root landing page."""
     latest = latest_versions(pkgs)
-    cards = "".join(_channel_card(c, base, latest, conf_fn) for c in CH_ORDER)
+    cards = _release_card(base, latest, conf_fn) + _nightly_card(base, latest, conf_fn)
     tree_items = "".join(f'<li><a href="./{_esc(d)}/">{_esc(d)}</a></li>' for d in trees)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -457,8 +488,11 @@ def render_dir_index(rel: str, files: Iterable[str]) -> str:
 
 
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
+    # add-repo.sh selects the channel by FLAG: the release repo is the default (no arg),
+    # --nightly picks the nightly repo. Anything other than "nightly" => the release conf.
+    extra = ["--nightly"] if channel == "nightly" else []
     out = subprocess.run(
-        ["sh", addrepo, "--print-conf", "--base-url", base, channel],
+        ["sh", addrepo, "--print-conf", "--base-url", base, *extra],
         capture_output=True,
         text=True,
         check=True,

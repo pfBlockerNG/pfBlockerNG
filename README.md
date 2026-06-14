@@ -86,15 +86,17 @@ catalog — add our self-hosted FreeBSD `pkg` repository
 normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
 
 ```sh
-./scripts/add-repo.sh devel        # or: stable — both set up the same `pfblockerng` repo
-pkg install pfSense-pkg-pfBlockerNG-devel
+./scripts/add-repo.sh                       # adds the shared `pfblockerng` repo (stable + devel)
+pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
 ```
 
-`add-repo.sh devel` and `add-repo.sh stable` both write the shared
-`/usr/local/etc/pkg/repos/pfblockerng.conf` (only **nightly** gets its own
-`pfblockerng-nightly.conf`), run `pkg update`, and verify the package is visible. No
-variant argument is needed — the script auto-detects CE vs Plus via the routing layer.
-The configuration it writes is:
+`add-repo.sh` with no argument writes the shared
+`/usr/local/etc/pkg/repos/pfblockerng.conf` (which carries **both** the stable and devel
+packages — pick one at `pkg install`), runs `pkg update`, and verifies a package is
+visible. The **nightly** repo is opt-in — `./scripts/add-repo.sh --nightly` writes its
+own `pfblockerng-nightly.conf` (bleeding edge, not for daily use). No variant argument is
+needed — the script auto-detects CE vs Plus via the routing layer. The configuration the
+default run writes is:
 
 ```sh
 pfblockerng: {

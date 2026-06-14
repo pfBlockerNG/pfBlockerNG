@@ -620,10 +620,11 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   (`scripts/build-repo.sh`) is retained as a script only.
 - **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
   `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
-  `scripts/add-repo.sh` (client bootstrap — `devel|stable|nightly` channel arg, `priority: 100`,
-  `pkg update` + verify). `devel`/`stable` write the SAME shared release conf
-  `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng` carries BOTH packages,
-  Netgate-style); only `nightly` gets its own `pfblockerng-nightly.conf`. The
+  `scripts/add-repo.sh` (client bootstrap — channel is a FLAG: no-arg = release repo,
+  `--nightly` = nightly repo; `priority: 100`, `pkg update` + verify). The default writes the
+  shared release conf `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng` carries
+  BOTH the stable and devel packages, Netgate-style — pick the package at install time); only
+  `--nightly` writes its own `pfblockerng-nightly.conf`. The
   emitted conf is byte-identical across all three (drift-pinned in
   `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
 - **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`**

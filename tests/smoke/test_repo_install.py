@@ -328,7 +328,7 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
 
 
 def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> subprocess.CompletedProcess[str]:
-    """Stage the SHIPPED ``scripts/add-repo.sh`` and run it (devel) against ``base_url``.
+    """Stage the SHIPPED ``scripts/add-repo.sh`` and run it (default release repo) against ``base_url``.
 
     Drives the real client bootstrap on the box: it writes the production conf to
     ``/usr/local/etc/pkg/repos/pfblockerng.conf`` (here pointed at a local
@@ -341,7 +341,7 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
     """
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
     _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
-    result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, "devel", timeout=timeout)
+    result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             f"add-repo.sh --base-url {base_url} failed: rc={result.returncode}\n"
@@ -909,8 +909,8 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     install picks ours — exactly the production mechanism.
 
     Given the package ABSENT and a ``build-repo.sh`` catalog under ``<root>/<ABI>/``,
-    When ``add-repo.sh --base-url file://<root> devel`` runs (writes the conf, ``pkg
-      update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
+    When ``add-repo.sh --base-url file://<root>`` runs (default release repo: writes the
+      conf, ``pkg update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
     Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
       the production conf to ``pfblockerng.conf``, and the install comes from
       OUR repo (``pkg query %R`` == ``pfblockerng``) with deps resolved.
