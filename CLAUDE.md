@@ -585,8 +585,10 @@ When the min CE version changes, also:
 | `main` | Stable  | `net/pfSense-pkg-pfBlockerNG` |
 | `devel` | Development | `net/pfSense-pkg-pfBlockerNG-devel` |
 
-New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub Release → PR
-on `pfsense/FreeBSD-ports`. Tags from `devel` become pre-releases; from `main`, stable releases.
+New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub Release →
+bump the matching port on **our own `pfBlockerNG/FreeBSD-ports` fork** (`pfblockerng/use-github`,
+the build-input branch) — self-hosted distribution, **no upstream `pfsense/FreeBSD-ports` PR**.
+Tags from `devel` become pre-releases; from `main`, stable releases.
 
 ### Self-hosted `pkg` repository (ADR-17)
 
@@ -614,7 +616,7 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   `actions/create-github-app-token@v3`, secrets **`PKG_GITHUB_APP_ID`** +
   **`PKG_GITHUB_APP_PRIVATE_KEY`** — `Actions:write` on `pfBlockerNG/pkg` only) so a release publishes
   within seconds; additive + isolated (only `needs: [release]`), so its failure never
-  breaks `release`/`ports-pr`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
+  breaks `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
   (`scripts/build-repo.sh`) is retained as a script only.
 - **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
   `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
