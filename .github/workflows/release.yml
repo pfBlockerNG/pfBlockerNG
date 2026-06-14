@@ -308,6 +308,9 @@ jobs:
           # Baked into each .pkg as the `created` annotation so the landing page shows
           # when the code was created, not when the catalog was last republished.
           CREATED="$(git show -s --format=%ct HEAD)"
+          # The source commit the artifact was built from — surfaced as a linked
+          # short SHA in the landing page's Commit column.
+          COMMIT="$(git rev-parse HEAD)"
 
           printf '%s\n' "$BUILD_MATRIX" \
             | jq -c '.[]' \
@@ -336,6 +339,7 @@ jobs:
                   --py-flavor "$PY" \
                   --php "$PHP" \
                   --annotate "created=${CREATED}" \
+                  --annotate "commit=${COMMIT}" \
                   --out "$PKG_OUT"
 
                 echo "Built for FreeBSD ${MAJOR}/${ARCH}:"
