@@ -484,6 +484,16 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
+// Feed-host filter defaults ON for new installs; pin OFF once on an already-configured
+// install so existing feeds are never silently dropped (operator can re-enable). The
+// run-once decision is pfb_feed_filter_install_default() (NULL => leave unset => default
+// ON); the !isset guard there makes this idempotent across repeated installs/upgrades.
+$pfb_gcfg = config_get_path('installedpackages/pfblockerng/config/0');
+$pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
+if ($pfb_feed_default !== null) {
+	config_set_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_filter', $pfb_feed_default);
+}
+
 // Convert dnsbl_info CSV file to SQLite3 database format
 if (file_exists('/var/db/pfblockerng/dnsbl_info') &&
     !file_exists('/var/db/pfblockerng/dnsbl.sqlite') &&
