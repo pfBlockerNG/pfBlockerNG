@@ -1,13 +1,20 @@
-"""ADR-07 Phase 7 -- regex safety: opt-in static cap + always-on runtime warn/evict.
+"""ADR-07 Phase 7 -- regex safety: always-on catastrophic-shape gate + opt-in length
+cap + always-on runtime warn/evict.
 
 `re` does not release the GIL during a match and a Python thread cannot be killed
 (ADR.md fact 2), so a query-time timeout CANNOT interrupt a catastrophic match. The
 accepted design is a bounded residual: a pathological pattern's FIRST match may block
-one query, but it is then EVICTED so it cannot hang again. Two layers, both stdlib +
-in-process, applied to FEED *and* user regex:
+one query, but it is then EVICTED so it cannot hang again. The LOAD-time gate is split
+into two DECOUPLED concerns, both stdlib + in-process, applied to FEED *and* user regex:
 
-  (1) opt-in STATIC CAP -- drop over-long / nested-quantifier patterns at LOAD (no
-      execution) when "Limit long/complex regex" is enabled;
+  (1a) always-on catastrophic-SHAPE gate -- a structurally pathological pattern (nested /
+       adjacent / overlapping unbounded quantifier, stacked bounded repeat, or over the
+       complexity budget) is dropped at LOAD UNCONDITIONALLY -- independent of any
+       setting -- because such a shape drives catastrophic backtracking in `re`. Pure
+       static string analysis, NO execution of the candidate;
+  (1b) opt-in LENGTH ceiling -- a long-but-safe pattern is dropped at LOAD only when the
+       "Limit long/complex regex" setting is enabled; length alone is a tunable
+       convenience cap, NOT a safety gate, so it stays behind the flag;
   (2) always-on RUNTIME timing -- over a warn ceiling log, over a higher evict ceiling
       log + remove the pattern from the live regexDB/allowRegexDB (snapshot-iterate,
       evict-after-loop -- never mutate mid-iteration; dict.pop is atomic under the GIL).
@@ -32,6 +39,7 @@ from pfb_unbound import (
     RegexRule,
     _dnsbl_compile_regex_rules,
     _regex_exceeds_static_cap,
+    _regex_is_catastrophic_shape,
     _scan_allow_regex_band,
     evaluate_domain,
 )
@@ -90,6 +98,16 @@ class _FakeClock:
         return self._ticks.pop(0)
 
 
+def _long_benign_pattern() -> str:
+    """A pattern over the length ceiling but STRUCTURALLY safe: a long concatenation of
+    literal labels with a single optional group -- no nested/overlapping quantifier, no
+    stacked repeat, and a complexity budget well under the threshold. Used to prove the
+    LENGTH ceiling is decoupled from (and gated independently of) the shape gate."""
+    pat = r"^(sub)?" + "verylongsubdomainlabel" * 10 + r"\.example\.com$"
+    assert len(pat) > pfb_unbound.REGEX_STATIC_LEN_CAP
+    return pat
+
+
 def _install_clock(monkeypatch: Any, elapsed_ms_per_match: list[float]) -> None:
     """Make every match report a fixed elapsed time (ms). Forces the thread_time path
     so the warn/evict policy is deterministic (no perf-fallback 2-strike interplay)."""
@@ -101,7 +119,64 @@ def _install_clock(monkeypatch: Any, elapsed_ms_per_match: list[float]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# (1) STATIC CAP -- pure heuristic
+# (1a) CATASTROPHIC-SHAPE gate -- pure, ALWAYS-ON (length-independent)
+# --------------------------------------------------------------------------- #
+class TestCatastrophicShapeHeuristic:
+    """``_regex_is_catastrophic_shape`` is the always-on SAFETY half: it flags the
+    structurally dangerous shapes and is independent of pattern LENGTH."""
+
+    def test_single_group_nested_quantifier_flagged(self) -> None:
+        for pat in (r"(a+)+$", r"(a*)*", r"(\w+\.)+\w+$", r"([a-z]+)*\.example$", r"(.*a){20}$"):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_single_group_alternation_overlap_flagged(self) -> None:
+        # A quantified group whose body contains `|` backtracks catastrophically yet
+        # has no INNER quantifier, so the nested-quantifier heuristic alone misses it.
+        for pat in (r"^(a|a)+$", r"(a|ab)*", r"(foo|foobar)+", r"(x|y|x){10}"):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_multi_group_adjacent_quantifier_flagged(self) -> None:
+        # The dangerous shape the single-group heuristics MISS: two back-to-back groups
+        # where the second is quantified -- the first group's unbounded body and the
+        # quantified sibling share input, an exponential partition of the matched span.
+        for pat in (r"(a+)(a+)+", r"(a+)(b+)*", r"(\w+)(\d+)+$", r"^(x+)(y+)*\.example$"):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_stacked_bounded_repeat_flagged(self) -> None:
+        # Two consecutive {m}/{m,n} repeats multiply -> a tiny source string explodes.
+        for pat in (r"a{500}{500}", r"(x){500}{500}", r"[a-z]{50}{50}", r"\w{20}{20}$"):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_complexity_budget_backstop_flagged(self) -> None:
+        # A pattern with no single matching structural template but a large combined
+        # count of unbounded quantifiers + alternations is caught by the budget backstop.
+        over_budget = "".join(f"a{i}*|" for i in range(pfb_unbound._REGEX_BUDGET_MAX + 2))
+        assert _regex_is_catastrophic_shape(over_budget) is True
+
+    # --- false-positive guard: realistic benign feed regex must NOT be flagged ----- #
+    def test_benign_feed_patterns_not_flagged(self) -> None:
+        for pat in (
+            r"ads\.",
+            r"ad[0-9]\.example\.com$",
+            r"^x[0-9]+\.example\.com$",
+            r"\.doubleclick\.net$",
+            r"^(.+\.)?doubleclick\.net$",
+            r"^(www\.)?ad-?serv(er|ice)\.example$",
+            r"^(foo|bar)\.example$",
+            r"^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_shape_gate_independent_of_length(self) -> None:
+        # A long-but-structurally-safe pattern is NOT a catastrophic shape: the shape
+        # gate must ignore length entirely (length is the separate opt-in ceiling).
+        assert _regex_is_catastrophic_shape(_long_benign_pattern()) is False
+        # And a SHORT catastrophic shape IS flagged regardless of being well under length.
+        assert _regex_is_catastrophic_shape(r"(a+)+") is True
+
+
+# --------------------------------------------------------------------------- #
+# (1b) STATIC LENGTH CAP -- combined length-OR-shape helper (gated path)
 # --------------------------------------------------------------------------- #
 class TestStaticCapHeuristic:
     def test_normal_pattern_passes(self) -> None:
@@ -114,22 +189,10 @@ class TestStaticCapHeuristic:
         # Exactly at the cap is allowed (strictly greater is the cap).
         assert _regex_exceeds_static_cap("a" * pfb_unbound.REGEX_STATIC_LEN_CAP) is False
 
-    def test_nested_quantifier_flagged(self) -> None:
-        for pat in (r"(a+)+$", r"(a*)*", r"(\w+\.)+\w+$", r"([a-z]+)*\.example$", r"(.*a){20}$"):
+    def test_catastrophic_shape_also_flagged(self) -> None:
+        # The combined helper folds in the shape gate too (used only on the gated path).
+        for pat in (r"(a+)+$", r"^(a|a)+$", r"(a+)(a+)+", r"a{500}{500}"):
             assert _regex_exceeds_static_cap(pat) is True, pat
-
-    def test_alternation_overlap_flagged(self) -> None:
-        # A quantified group whose body contains `|` backtracks catastrophically yet
-        # has no INNER quantifier, so the nested-quantifier heuristic misses it. These
-        # PASSED the old static cap (the gap the corrected ReDoS probe exposed).
-        for pat in (r"^(a|a)+$", r"(a|ab)*", r"(foo|foobar)+", r"(x|y|x){10}"):
-            assert _regex_exceeds_static_cap(pat) is True, pat
-
-    def test_benign_alternation_not_flagged(self) -> None:
-        # An UNquantified alternation group is fine -- it is the quantifier on an
-        # overlapping alternation that is dangerous, not `|` alone.
-        assert _regex_exceeds_static_cap(r"^(www\.)?ad-?serv(er|ice)\.example$") is False
-        assert _regex_exceeds_static_cap(r"^(foo|bar)\.example$") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -149,41 +212,62 @@ def _block_rule(pattern: str, feed: str = "F") -> RegexRule:
 
 
 class TestStaticCapAtLoad:
-    def test_cap_off_keeps_nested_quantifier(self) -> None:
+    def test_shape_gate_drops_catastrophic_even_with_cap_off(self) -> None:
+        # DECOUPLING (the key change): a catastrophic SHAPE is dropped at load even when
+        # the opt-in length cap is OFF -- the safety gate is unconditional. The benign
+        # sibling is admitted, proving it is the SHAPE, not a blanket drop.
         rules = [_block_rule(r"(a+)+$"), _block_rule(r"^safe\.example$")]
+        db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=False)
+        assert admitted == 1
+        assert len(db) == 1
+        compiled = next(iter(db.values()))["re"]
+        assert compiled.search("safe.example")
+
+    def test_shape_gate_drops_multi_group_and_stacked_repeat_cap_off(self) -> None:
+        # The newly-broadened shapes (missed by the old single-group heuristics) are also
+        # dropped with the cap OFF: multi-group adjacent quantifier + stacked repeat.
+        rules = [
+            _block_rule(r"(a+)(a+)+"),
+            _block_rule(r"a{500}{500}"),
+            _block_rule(r"^keep\.example$"),
+        ]
+        db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=False)
+        assert admitted == 1
+        assert next(iter(db.values()))["re"].search("keep.example")
+
+    def test_cap_off_keeps_long_but_benign(self) -> None:
+        # BEFORE-state for the length-cap gating test: a long-but-structurally-safe
+        # pattern is ADMITTED when the cap is OFF (length is not enforced by default).
+        rules = [_block_rule(_long_benign_pattern()), _block_rule(r"^safe\.example$")]
         db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=False)
         assert admitted == 2
         assert len(db) == 2
 
-    def test_cap_on_drops_nested_quantifier(self) -> None:
-        rules = [_block_rule(r"(a+)+$"), _block_rule(r"safe\.example$")]
-        db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=True)
-        # Only the safe pattern survives.
-        assert admitted == 1
-        assert len(db) == 1
-        compiled = next(iter(db.values()))["re"]
-        assert compiled.search("x.safe.example")
-
-    def test_cap_on_drops_over_length(self) -> None:
-        long_pat = "a" * (pfb_unbound.REGEX_STATIC_LEN_CAP + 5)
-        rules = [_block_rule(long_pat), _block_rule(r"keep\.example$")]
+    def test_cap_on_drops_long_but_benign(self) -> None:
+        # AFTER-state: the SAME long-but-benign pattern is dropped once the cap is ON,
+        # proving the length ceiling stays GATED (only the length cap differs between
+        # this and the previous test -- the pattern is structurally safe in both).
+        rules = [_block_rule(_long_benign_pattern()), _block_rule(r"^safe\.example$")]
         db, admitted = _dnsbl_compile_regex_rules(rules, static_cap=True)
         assert admitted == 1
+        assert next(iter(db.values()))["re"].search("safe.example")
 
     def test_build_threads_regex_cap_from_config(self) -> None:
-        # build() reads config["regex_cap"] and forwards it to the compile helper.
+        # build() reads config["regex_cap"] and forwards it to the compile helper. The
+        # length cap (not the shape gate) is what the flag toggles, so use a long-but-
+        # benign irreducible pattern to prove the flag is threaded.
         manifest = {
             "feeds": [{"feed": "F", "group": "G", "format_hint": "abp", "log_flag": "1", "raw": "F"}],
             "config": {},
         }
-        lines = ["/(a+)+x/", "/^irreducible-[0-9]+\\.example$/"]
+        lines = ["/" + _long_benign_pattern() + "/", "/^irreducible-[0-9]+\\.example$/"]
 
         def reader(_ref: str) -> list[str]:
             return lines
 
         cap_on = pfb_unbound.build(manifest, {"regex_cap": True}, line_reader=reader)
         cap_off = pfb_unbound.build(manifest, {"regex_cap": False}, line_reader=reader)
-        # The nested-quantifier irreducible regex is dropped only when the cap is on.
+        # The long-but-benign irreducible regex is dropped only when the length cap is on.
         assert cap_on.regex_count < cap_off.regex_count
 
 
@@ -324,24 +408,23 @@ class TestFastPathUnchanged:
 
 
 # --------------------------------------------------------------------------- #
-# Real catastrophic pattern + static cap (end-to-end, BOUNDED so it can't hang)
+# Real catastrophic pattern dropped UNCONDITIONALLY (end-to-end, BOUNDED so it
+# can't hang -- the pattern is never executed against any input)
 # --------------------------------------------------------------------------- #
 class TestRealCatastrophicCapped:
-    def test_static_cap_drops_real_redos_pattern(self) -> None:
-        # The static cap catches the genuinely catastrophic shape WITHOUT executing it.
+    def test_shape_gate_drops_real_redos_pattern_cap_off(self) -> None:
+        # The shape gate catches the genuinely catastrophic shape WITHOUT executing it,
+        # and does so with the length cap OFF (the always-on safety gate).
         rule = _block_rule(r"([a-z]+)*\.example$")
-        db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=True)
+        db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=False)
         assert admitted == 0
         assert db == {}
 
-    def test_static_cap_drops_alternation_overlap_pattern(self) -> None:
-        # ^(a|a)+$ PASSES the old cap but backtracks catastrophically; the broadened
-        # cap drops it at load WITHOUT executing it (cap ON).
+    def test_shape_gate_drops_alternation_overlap_cap_off(self) -> None:
+        # ^(a|a)+$ PASSES a naive length cap but backtracks catastrophically; the shape
+        # gate drops it at load WITHOUT executing it -- regardless of the length cap.
         rule = _block_rule(r"^(a|a)+$")
-        db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=True)
-        assert admitted == 0
-        assert db == {}
-        # With the cap OFF the un-vetted pattern is still admitted (opt-in only).
-        db_off, admitted_off = _dnsbl_compile_regex_rules([rule], static_cap=False)
-        assert admitted_off == 1
-        assert len(db_off) == 1
+        for cap in (False, True):
+            db, admitted = _dnsbl_compile_regex_rules([rule], static_cap=cap)
+            assert admitted == 0, cap
+            assert db == {}, cap
