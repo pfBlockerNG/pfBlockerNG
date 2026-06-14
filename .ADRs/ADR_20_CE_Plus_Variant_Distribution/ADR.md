@@ -1,5 +1,11 @@
 # ADR-20: CE/Plus variant-aware pkg distribution
 
+> **Amendment (2026-06-14, PR #216):** `add-repo.sh devel` and `add-repo.sh stable` now both
+> write the shared `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng`) — one
+> catalog carrying both packages, Netgate-style — superseding the `pfblockerng-devel.conf`
+> references below; only `nightly` keeps its own conf. The single-Worker-URL decision (one
+> conf, written once, User-Agent routing) is unchanged — only the repo/conf **name** collapsed.
+
 - **Status:** **Accepted** (2026-06-10)
 - **Date:** 2026-06-09
 - **Branch:** `adr/20-ce-plus-variant-distribution` (off **`devel`**; `{slug}` =

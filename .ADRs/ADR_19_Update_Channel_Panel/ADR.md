@@ -1,5 +1,13 @@
 # ADR-19: A pfBlockerNG-owned "Software" update/channel panel + new-version notice
 
+> **Amendment (2026-06-14, PR #216):** This (Proposed) design below assumes the per-channel
+> conf section name is unchanged — `pfblockerng-devel` for devel, `pfblockerng` for stable.
+> That no longer holds: `scripts/add-repo.sh` now writes ONE shared `pfblockerng` repo
+> (`pfblockerng.conf`) for **both** stable and devel; only `nightly` is separate
+> (`pfblockerng-nightly`). When this ADR is implemented, `pfb_pkg_repo_name_for_channel()`
+> must map **both** stable and devel to `pfblockerng` (the channel selects the *package* —
+> `pfSense-pkg-pfBlockerNG` vs `-devel` — not a per-channel repo name).
+
 - **Status:** **Proposed** (2026-06-06)
 - **Date:** 2026-06-06
 - **Branch:** `adr/19-update-channel-panel` (off **`devel`**; `{slug}` = sanitised

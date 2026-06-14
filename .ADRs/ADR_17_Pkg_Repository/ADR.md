@@ -1,5 +1,14 @@
 # ADR-17: Self-hosted pfSense `pkg` repository on GitHub Pages
 
+> **Amendment (2026-06-14, PR #216):** The client bootstrap no longer writes a separate
+> `pfblockerng-devel.conf` / `pfblockerng-devel` repo. `scripts/add-repo.sh` now writes a
+> single shared `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng`) for **both**
+> the stable and devel packages — Netgate-style, one catalog carrying both (they conflict;
+> install one) — superseding the `pfblockerng-devel.conf` references throughout this record.
+> Only `nightly` keeps its own conf (`pfblockerng-nightly.conf`, ADR-18). `build-repo.sh` and
+> `build-repo-portable.py` `--print-conf` emit the same `pfblockerng` stanza. The historical
+> `RESULTS/*.txt` logs predate this and still name `pfblockerng-devel` as observed at the time.
+
 - **Status:** **Accepted** (2026-06-06; implemented 2026-06-05). The §7 affected-flow smoke
   (install / cross-repo precedence / `pkg upgrade`) is **GREEN on the live VM**, and the
   public Pages deploy is **live + verified**: `repo-publish.yml` (dispatched on `devel`)
