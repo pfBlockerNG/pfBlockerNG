@@ -145,12 +145,19 @@ pfb_is_octet_prefix() {
 	esac
 }
 
-# A CIDR-ish token: digits, dots and slashes only (e.g. '10.0.0.1/32').
+# A CIDR token: digits/dots, then EXACTLY one '/', then a non-empty numeric mask
+# (e.g. '10.0.0.1/32'). The suppress() caller splits on '/' and compares the mask
+# with -eq, so a bare IP, an empty mask ('10.0.0.1/'), or a double slash
+# ('10.0.0.1//32') is rejected here and skipped rather than reaching that compare.
 pfb_is_cidr_token() {
 	case "${1}" in
-		''|*[!0-9./]*) return 1 ;;
-		*) return 0 ;;
+		''|*[!0-9./]*|*/*/*|/*|*/) return 1 ;;
 	esac
+	[ "${1#*/}" = "${1}" ] && return 1   # must contain a slash
+	case "${1##*/}" in
+		''|*[!0-9]*) return 1 ;;          # mask must be non-empty digits
+	esac
+	return 0
 }
 
 # Escape every '.' in $1 for use as a literal in a grep BRE, and emit the result
