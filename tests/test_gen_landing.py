@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,19 @@ def test_ver_key_orders_nightly_after_release() -> None:
     """The dated nightly version sorts above the bare PORTVERSION."""
     assert gl.ver_key("3.2.16.20260614.20") > gl.ver_key("3.2.16")
     assert gl.ver_key("3.2.16.20260614.20") > gl.ver_key("3.2.16.20260614.7")
+
+
+def test_artifact_datetime_is_utc_minute_precision() -> None:
+    """The publish datetime is the artifact's real mtime in UTC, to the minute.
+
+    Two nightlies built on the same day differ by build time, so the column must
+    carry the time-of-day — not just the date.
+    """
+    morning = datetime(2026, 6, 14, 3, 5, 40, tzinfo=timezone.utc).timestamp()
+    evening = datetime(2026, 6, 14, 21, 47, 0, tzinfo=timezone.utc).timestamp()
+    assert gl.artifact_datetime(morning) == "2026-06-14 03:05 UTC"
+    assert gl.artifact_datetime(evening) == "2026-06-14 21:47 UTC"
+    assert gl.artifact_datetime(morning) != gl.artifact_datetime(evening)  # same day, distinct
 
 
 def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
@@ -108,7 +122,15 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
 
 
 def _pkg(channel: str, name: str, version: str, abi: str, rel: str, size: int = 10) -> dict[str, Any]:
-    return {"channel": channel, "name": name, "version": version, "abi": abi, "rel": rel, "size": size}
+    return {
+        "channel": channel,
+        "name": name,
+        "version": version,
+        "abi": abi,
+        "rel": rel,
+        "size": size,
+        "published": "2026-06-14 09:38 UTC",
+    }
 
 
 def test_build_table_keeps_only_latest_nightly_per_abi() -> None:
@@ -163,6 +185,9 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
 
     # Latest versions surfaced for the present channels.
     assert "3.2.16.20260614.9" in page
+    # The package table carries a Published datetime column (UTC, minute precision).
+    assert "<th>Published</th>" in page
+    assert "2026-06-14 09:38 UTC" in page
     # Stable has no package -> empty state, NOT a bogus version.
     assert "not yet published" in page
     # Install one-liner pins this repo's base URL (the working Pages mirror).

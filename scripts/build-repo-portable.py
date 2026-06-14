@@ -87,6 +87,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -455,6 +456,12 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
             pkg_bytes = path.read_bytes()
             dest = bucket / canonical
             dest.write_bytes(pkg_bytes)
+            # Preserve the source .pkg's mtime so the published artifact reflects its
+            # real build time — a cache-restored nightly keeps its original datetime
+            # instead of jumping to this catalog-regeneration run. The landing page
+            # reads this mtime as the artifact's publish date.
+            src_mtime = path.stat().st_mtime
+            os.utime(dest, (src_mtime, src_mtime))
             obj = catalog_object(
                 manifest,
                 pkg_name=canonical,
