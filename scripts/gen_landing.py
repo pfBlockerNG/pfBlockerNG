@@ -217,7 +217,7 @@ def _esc(s: object) -> str:
 
 
 _CSS = """
-:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--code:#0b0f14}
+:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--code:#0b0f14}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
@@ -252,8 +252,10 @@ footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid va
 .card ul.pkgs{margin:.3rem 0 .7rem;padding-left:0;list-style:none}
 .card ul.pkgs li{margin:.45rem 0}
 .card ul.pkgs .lbl{font-weight:600}
-.card.nightly{border-color:var(--acc)}
-.warn{color:var(--acc)}
+.card.release{border-color:var(--acc)}
+.card.nightly{border-color:var(--warn)}
+.card.nightly .badge{border-color:var(--warn);color:var(--warn)}
+.warn{color:var(--warn)}
 """
 
 # The release repo carries both packages (the channel picks the package, not the repo).
@@ -279,7 +281,7 @@ def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         f"<pre>pkg install {_esc(_PKG_DEVEL)}</pre></li>"
     )
     return (
-        '<div class="card"><h3>Stable &amp; development</h3>'
+        '<div class="card release"><h3>Stable &amp; development</h3>'
         '<p class="blurb">One bootstrap adds the shared <code>pfblockerng</code> repo, which carries '
         "both packages (they conflict &mdash; install one):</p>"
         f"<pre>{_esc(setup)}</pre>"

@@ -379,6 +379,13 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert "nightly-conf-snippet" in page
     # The badge/title casing fix: no CSS capitalize that would mangle `pfSense-pkg-...`.
     assert "text-transform:capitalize" not in page
+    # Accent grammar: the release card is the primary (blue --acc); nightly is cautioned
+    # (amber --warn), never the other way round (blue would read as "recommended").
+    assert '<div class="card release">' in page
+    assert '<div class="card nightly">' in page
+    assert "--warn:#d29922" in page
+    assert ".card.release{border-color:var(--acc)}" in page
+    assert ".card.nightly{border-color:var(--warn)}" in page
     # Catalog-tree link to the colon-ABI dir is './'-prefixed (browser scheme guard).
     assert 'href="./FreeBSD:16:aarch64/"' in page
     # The catalog-tree list is a responsive auto-fill grid (column count follows the
