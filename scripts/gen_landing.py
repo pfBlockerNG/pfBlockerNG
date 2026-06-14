@@ -70,14 +70,27 @@ def ver_key(v: str) -> list[int]:
     return [int(x) for x in re.findall(r"\d+", v)]
 
 
-def artifact_datetime(mtime_epoch: float) -> str:
-    """The artifact's actual publish datetime (UTC, minute precision) from its mtime.
+def artifact_datetime(epoch: float) -> str:
+    """Format a Unix epoch as a UTC, minute-precision datetime string."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    The .pkg keeps its real build time end-to-end: build-pkg-portable writes it then,
-    the nightly retention cache preserves it, and build-repo-portable copies it onto
-    the published file (os.utime). So this distinguishes several nightlies built on
-    the same day (they differ by build time, not just the version's date)."""
-    return datetime.fromtimestamp(mtime_epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+def published_datetime(manifest: dict, mtime_epoch: float) -> str:
+    """The artifact's creation datetime (UTC, minute precision).
+
+    Prefer the ``created`` build annotation — the source commit's committer epoch,
+    baked into the .pkg at build time, so it reflects when the artifact's CODE was
+    created and survives every daily republish/re-download (devel is rebuilt and a
+    release asset re-downloaded each run, which would otherwise reset the mtime to
+    'today'). Fall back to the .pkg's mtime only when the annotation is absent.
+    """
+    created = (manifest.get("annotations") or {}).get("created")
+    if created is not None:
+        try:
+            return artifact_datetime(float(created))
+        except (TypeError, ValueError):
+            pass  # malformed annotation — fall back to mtime
+    return artifact_datetime(mtime_epoch)
 
 
 def read_manifest_zstd(path: str) -> dict:
@@ -111,7 +124,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "version": ver,
                     "abi": abi,
                     "size": os.path.getsize(path),
-                    "published": artifact_datetime(os.path.getmtime(path)),
+                    "published": published_datetime(man, os.path.getmtime(path)),
                     "rel": os.path.relpath(path, site),
                 }
             )

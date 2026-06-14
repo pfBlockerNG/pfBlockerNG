@@ -55,16 +55,36 @@ def test_ver_key_orders_nightly_after_release() -> None:
 
 
 def test_artifact_datetime_is_utc_minute_precision() -> None:
-    """The publish datetime is the artifact's real mtime in UTC, to the minute.
+    """A Unix epoch formats to a UTC, minute-precision datetime.
 
-    Two nightlies built on the same day differ by build time, so the column must
-    carry the time-of-day — not just the date.
+    Two artifacts created on the same day differ by time, so the column must carry
+    the time-of-day — not just the date.
     """
     morning = datetime(2026, 6, 14, 3, 5, 40, tzinfo=timezone.utc).timestamp()
     evening = datetime(2026, 6, 14, 21, 47, 0, tzinfo=timezone.utc).timestamp()
     assert gl.artifact_datetime(morning) == "2026-06-14 03:05 UTC"
     assert gl.artifact_datetime(evening) == "2026-06-14 21:47 UTC"
     assert gl.artifact_datetime(morning) != gl.artifact_datetime(evening)  # same day, distinct
+
+
+def test_published_datetime_prefers_created_annotation() -> None:
+    """Scenario: a daily republish must NOT reset an artifact's shown creation time.
+
+    Given a .pkg whose manifest carries a `created` build annotation (the source
+    commit epoch) AND a much-later mtime (a re-download/rebuild 'today'),
+    When the published datetime is computed,
+    Then the annotation wins — so devel/release stop showing the republish date.
+    And with no annotation, it falls back to the mtime.
+    """
+    commit_epoch = datetime(2026, 6, 10, 5, 52, tzinfo=timezone.utc).timestamp()
+    republish_mtime = datetime(2026, 6, 14, 9, 38, tzinfo=timezone.utc).timestamp()
+    manifest_with = {"annotations": {"commit": "deadbeef", "created": str(int(commit_epoch))}}
+    assert gl.published_datetime(manifest_with, republish_mtime) == "2026-06-10 05:52 UTC"
+    # No annotation -> mtime fallback.
+    assert gl.published_datetime({"annotations": {}}, republish_mtime) == "2026-06-14 09:38 UTC"
+    assert gl.published_datetime({}, republish_mtime) == "2026-06-14 09:38 UTC"
+    # Malformed annotation -> mtime fallback, not a crash.
+    assert gl.published_datetime({"annotations": {"created": "nope"}}, republish_mtime) == "2026-06-14 09:38 UTC"
 
 
 def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
