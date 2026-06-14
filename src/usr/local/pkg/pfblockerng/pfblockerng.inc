@@ -310,6 +310,14 @@ define('PFB_DOWNLOAD_MAXREDIRS', 10);
 define('PFB_AUTO_VIP_DESCR_V4', 'pfB_AUTO_VIP_v4');
 define('PFB_AUTO_VIP_DESCR_V6', 'pfB_AUTO_VIP_v6');
 
+// Allowlist the alias-type suffix ($vtype) before it is interpolated into an
+// alias name or filesystem path. The only legitimate values are '_v4' and '_v6';
+// any other value is rejected so a stray/unexpected suffix can never reach a
+// path/alias build. Returns TRUE only for an exact-match allowed suffix.
+function pfb_valid_vtype($vtype) {
+	return ($vtype === '_v4' || $vtype === '_v6');
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -582,7 +590,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			break;
 		case PFB_FILTER_FILE_MIME:
 			// Validate File Mime-types
-			// $input [0] path/file escaped, [1] path/file [2] URL
+			// $input [0] path/file (legacy, unused), [1] path/file [2] URL
+			// The probed path ($input[1]) is escapeshellarg()'d at the sink below,
+			// so callers need not pre-escape it.
 
 			if (isset($retval)) {
 				unset($retval);
@@ -594,7 +604,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
 				return FALSE;
 			}
-			exec("/usr/bin/file -b --mime-type {$input[0]} 2>&1", $output, $retval);
+			exec("/usr/bin/file -b --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
 			if ($retval != 0 || empty($output[0]) || !isset($pfb['mime_types'][$output[0]])) {
 
 				// Exceptions
@@ -616,7 +626,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			break;
 		case PFB_FILTER_FILE_MIME_COMPRESSED:
 			// Validate File Mime-types in compressed files
-			// $input [0] path/file escaped, [1] path/file [2] URL
+			// $input [0] path/file (legacy, unused), [1] path/file [2] URL
+			// The probed path ($input[1]) is escapeshellarg()'d at the sink below,
+			// so callers need not pre-escape it.
 			if (isset($retval)) {
 				unset($retval);
 			}
@@ -627,7 +639,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
 				return FALSE;
 			}
-			exec("/usr/bin/file -bZ --mime-type {$input[0]} 2>&1", $output, $retval);
+			exec("/usr/bin/file -bZ --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
 			if ($retval != 0 || empty($output[0]) || !isset($pfb['mime_types'][$output[0]])) {
 				pfb_logger("{$header} Failed or invalid Mime Type Compressed: [" .  htmlspecialchars($output[0]) . "|" . htmlspecialchars($retval) . "]", 2);
 				unlink_if_exists($input[1]);
@@ -11083,6 +11095,11 @@ function sync_package_pfblockerng($cron='') {
 				// Determine if Continent lists require action (IPv4 and IPv6)
 				foreach ($cont_types as $c_type => $vtype) {
 
+					// Only the '_v4'/'_v6' suffix may build an alias/path
+					if (!pfb_valid_vtype($vtype)) {
+						continue;
+					}
+
 					$cc_alias = "{$pfb_alias}{$vtype}";
 
 					// Determine 'list' details (return array $pfbarr)
@@ -11261,6 +11278,12 @@ function sync_package_pfblockerng($cron='') {
 
 		// Collect lists and custom list configuration and format into one array ($lists).
 		foreach	($ip_types as $ip_type	=> $vtype) {
+
+			// Only the '_v4'/'_v6' suffix may build an alias/path
+			if (!pfb_valid_vtype($vtype)) {
+				continue;
+			}
+
 			foreach (config_get_path("installedpackages/{$ip_type}/config", []) as $key => $list) {
 				if (!is_array($list)) {
 					$list = array();
@@ -11890,6 +11913,12 @@ function sync_package_pfblockerng($cron='') {
 	#################################################
 
 	foreach ($ip_types as $ip_type => $vtype) {
+
+		// Only the '_v4'/'_v6' suffix may build an alias/path
+		if (!pfb_valid_vtype($vtype)) {
+			continue;
+		}
+
 		$lists = config_get_path("installedpackages/{$ip_type}/config");
 
 		// Add DNSBLIP, if configured (IPv4 + IPv6)
