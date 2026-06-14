@@ -250,24 +250,33 @@ def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
 
 
 def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """The DNSBL_Regex count reflects ADMITTED regex, and the static cap shrinks it.
+    """The DNSBL_Regex count reflects ADMITTED regex; the length cap (opt-in) shrinks it.
 
-    Two USER regex patterns — one benign (``ads[0-9]+``), one nested-quantifier
-    (``(a+)+evil``, which ``_regex_exceeds_static_cap`` flags). With the cap OFF both
-    are admitted (count 2); with the cap ON the over-cap pattern is dropped at load
-    (count 1). A minimal plain feed is present so the DNSBL build runs and emits the
-    count file. (allowRegexDB is empty here, so the count is purely regexDB.)
+    Two USER regex patterns — one short benign (``ads[0-9]+``), one long-but-benign
+    (a >200-char literal alternation, structurally safe). With the opt-in length cap
+    OFF both are admitted (count 2); with it ON the over-length pattern is dropped at
+    load (count 1). A catastrophic SHAPE would be dropped regardless of the cap — that
+    UNCONDITIONAL gate is asserted separately in ``test_abp_catastrophic_regex_dropped``;
+    here the long-but-benign pattern proves the LENGTH ceiling stays gated. A minimal
+    plain feed is present so the DNSBL build runs and emits the count file. (allowRegexDB
+    is empty here, so the count is purely regexDB.)
     """
     domain = h.unique_domain("abpcnt")
     feed_url = h.write_local_feed(deployed_vm, "smoke_abp_cnt.txt", f"{domain}\n")
-    patterns = [r"ads[0-9]+", r"(a+)+evil"]
+    # A long-but-structurally-safe pattern: a long concatenation of literal labels with a
+    # single optional group, over the 200-char length ceiling but with no catastrophic
+    # shape (no nested/overlapping quantifier, no stacked repeat, budget well under
+    # threshold) -- so only the opt-in LENGTH cap can drop it.
+    long_benign = r"^(sub)?" + "verylongsubdomainlabel" * 10 + r"\.example\.com$"
+    assert len(long_benign) > 200
+    patterns = [r"ads[0-9]+", long_benign]
 
     spec_off = h.DnsblCase(
         aliasname="smokeabpcnt", feed_url=feed_url, header="smokeabpcnt", mode=h.DnsblMode.VIP, user_regex=patterns
     )
     with h.CaseContext(deployed_vm, spec_off):
         n_off = h.regex_admitted_count(deployed_vm)
-    assert n_off == 2, f"cap OFF: both user regex admitted, expected 2, got {n_off!r}"
+    assert n_off == 2, f"cap OFF: both user regex admitted (length cap not enforced), expected 2, got {n_off!r}"
 
     spec_on = h.DnsblCase(
         aliasname="smokeabpcnt",
@@ -279,8 +288,29 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     )
     with h.CaseContext(deployed_vm, spec_on):
         n_on = h.regex_admitted_count(deployed_vm)
-    assert n_on == 1, f"cap ON: nested-quantifier dropped at load, expected admitted 1, got {n_on!r}"
+    assert n_on == 1, f"cap ON: over-length pattern dropped at load, expected admitted 1, got {n_on!r}"
     assert n_on < n_off, f"cap must shrink the admitted count: off={n_off} on={n_on}"
+
+
+def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A catastrophic-SHAPE user regex is dropped at load with the length cap OFF.
+
+    The always-on shape gate is independent of the opt-in "Limit long/complex regex"
+    setting: a nested-quantifier pattern (``(a+)+evil``) is never compiled into the
+    regexDB even when ``regex_cap`` is OFF, while a benign sibling (``ads[0-9]+``) is
+    admitted. Proves the SHAPE half of the decoupled gate is unconditional (the key
+    behaviour change) on the live box, not just in the unit suite.
+    """
+    domain = h.unique_domain("abpcat")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_abp_cat.txt", f"{domain}\n")
+    patterns = [r"ads[0-9]+", r"(a+)+evil"]
+
+    spec = h.DnsblCase(
+        aliasname="smokeabpcat", feed_url=feed_url, header="smokeabpcat", mode=h.DnsblMode.VIP, user_regex=patterns
+    )
+    with h.CaseContext(deployed_vm, spec):
+        n = h.regex_admitted_count(deployed_vm)
+    assert n == 1, f"cap OFF: catastrophic shape dropped unconditionally, only benign admitted, expected 1, got {n!r}"
 
 
 # --------------------------------------------------------------------------- #

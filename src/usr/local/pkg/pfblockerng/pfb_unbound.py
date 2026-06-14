@@ -397,10 +397,17 @@ def _build_swap_snapshot() -> Snapshot | None:
             if config.has_section("REGEX"):
                 r_count = 1
                 for name, pattern in config.items("REGEX"):
-                    if pfb["regex_cap"] and _regex_exceeds_static_cap(pattern):
+                    if _regex_is_catastrophic_shape(pattern):
                         sys.stderr.write(
-                            "[pfBlockerNG]: dropping long/complex user regex [ {} ] pattern [ {} ] "
-                            "on line #{} (static cap)".format(name, pattern, r_count)
+                            "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
+                            "on line #{} (catastrophic shape)".format(name, pattern, r_count)
+                        )
+                        r_count += 1
+                        continue
+                    if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
+                        sys.stderr.write(
+                            "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
+                            "on line #{} (static length cap)".format(name, pattern, r_count)
                         )
                         r_count += 1
                         continue
@@ -979,14 +986,22 @@ def init_standard(id: int, env: module_env) -> bool:
                 if regex_config:
                     r_count = 1
                     for name, pattern in regex_config:
-                        # ADR-07 P7: the opt-in static cap also covers the un-vetted
-                        # USER regex list -- an over-long / nested-quantifier user
-                        # pattern is dropped at load (logged, not compiled) when the
-                        # "Limit long/complex regex" setting is enabled.
-                        if pfb["regex_cap"] and _regex_exceeds_static_cap(pattern):
+                        # ADR-07 P7: a catastrophic SHAPE in the un-vetted USER regex
+                        # list is dropped at load UNCONDITIONALLY (logged, not compiled)
+                        # -- the always-on safety gate. The opt-in length ceiling (the
+                        # "Limit long/complex regex" setting) is the separate tunable
+                        # half: it drops over-length-but-safe user patterns only when on.
+                        if _regex_is_catastrophic_shape(pattern):
                             sys.stderr.write(
-                                "[pfBlockerNG]: dropping long/complex user regex [ {} ] pattern [ {} ] "
-                                "on line #{} (static cap)".format(name, pattern, r_count)
+                                "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
+                                "on line #{} (catastrophic shape)".format(name, pattern, r_count)
+                            )
+                            r_count += 1
+                            continue
+                        if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
+                            sys.stderr.write(
+                                "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
+                                "on line #{} (static length cap)".format(name, pattern, r_count)
                             )
                             r_count += 1
                             continue
@@ -3609,9 +3624,10 @@ def _dnsbl_normalise_whitelist(
 #       pattern from the live regexDB/allowRegexDB (snapshot-iterate, evict-after-
 #       loop -- never mutate mid-iteration; dict.pop is atomic under the GIL).
 
-# Static-cap defaults (Phase-1 RESULTS/01 SS3c heuristic): a pattern over this
-# many characters, OR carrying a nested/overlapping unbounded quantifier, is the
-# genuinely catastrophic shape and is dropped at load when the cap is enabled.
+# Length ceiling (Phase-1 RESULTS/01 SS3c heuristic): a pattern over this many
+# characters is dropped at load ONLY when the opt-in "Limit long/complex regex"
+# setting is enabled. Length alone is a tunable convenience cap, NOT a safety gate --
+# a long pattern is not inherently pathological -- so it stays behind the flag.
 REGEX_STATIC_LEN_CAP = 200
 
 # A quantified group that itself sits inside a quantifier: (a+)+, (a*)*, (\w+\.)+,
@@ -3625,6 +3641,32 @@ _REGEX_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
 # nested-quantifier shape above does not catch them (no inner quantifier). Kept
 # conservative: a single `(...)` (no inner parens) with a `|`, then a quantifier.
 _REGEX_ALTERNATION_OVERLAP = re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]")
+
+# Multi-group adjacent quantified groups: (a+)(a+)+, (a+)(b+)*, (...)(...)+ -- two
+# back-to-back groups where the SECOND carries a trailing quantifier. The first
+# group's unbounded body and the quantified second group share input, so the engine
+# explores an exponential partition of the matched span. The single-group
+# _REGEX_NESTED_QUANTIFIER above misses this (the outer quantifier sits on a sibling
+# group, not the enclosing one). Each group body is paren-free (kept conservative).
+_REGEX_ADJACENT_GROUP_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]")
+
+# Stacked bounded repeats: a{1000}{1000}, (x){500}{500}, [a-z]{50}{50} -- a `{m}`/`{m,n}`
+# repeat immediately followed by another `{...}`. Python's re multiplies the bounds, so a
+# pair of large counts is a polynomial/exponential blow-up with a tiny source string. A
+# group/atom (optionally already quantified) then two consecutive brace quantifiers.
+_REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}")
+
+# Complexity-budget backstop: cap the combined count of unbounded quantifiers (`+`/`*`,
+# unescaped) and alternations (`|`, unescaped) in one pattern. The structural regexes
+# above catch KNOWN bad shapes; this catches novel compositions of many quantifiers /
+# alternatives that together create a large backtracking surface even when no single
+# pair matches a structural template. The threshold (12) is generous: realistic ABP/DNS
+# feed regex carries a handful of anchors + one or two trailing quantifiers (a domain
+# pattern like `^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$` counts ~5), so 12 clears
+# every benign pattern in the Phase-1 corpus while still bounding adversarial stacking.
+_REGEX_BUDGET_MAX = 12
+_REGEX_UNBOUNDED_QUANTIFIER = re.compile(r"(?<!\\)[+*]")
+_REGEX_ALTERNATION = re.compile(r"(?<!\\)\|")
 
 # Runtime warn/evict ceilings (milliseconds of per-match thread CPU; Phase-1
 # defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
@@ -3648,17 +3690,39 @@ _regex_warned: set[str] = set()
 _regex_perf_strikes: dict[str, int] = {}
 
 
-def _regex_exceeds_static_cap(pattern: str) -> bool:
-    """Pure static-cap check (NO execution): True if ``pattern`` is over the length
-    ceiling OR matches the nested-quantifier heuristic OR the alternation-overlap
-    heuristic. Used at LOAD time, gated by the opt-in "Limit long/complex regex"
-    setting -- when the setting is OFF nothing is dropped. Catches the catastrophic
-    shapes cheaply without running the regex."""
-    if len(pattern) > REGEX_STATIC_LEN_CAP:
-        return True
+def _regex_is_catastrophic_shape(pattern: str) -> bool:
+    """Pure static analysis (NO execution): True when ``pattern`` carries a structurally
+    catastrophic shape -- a nested / adjacent / overlapping unbounded quantifier, a
+    stacked bounded repeat, or so many unbounded quantifiers + alternations combined that
+    its backtracking surface is unsafe. This is the SAFETY gate: it is applied to FEED and
+    user regex UNCONDITIONALLY at load (independent of the opt-in length cap) because these
+    shapes drive catastrophic backtracking in the `re` engine. It only inspects the pattern
+    STRING -- it never runs the candidate against any input -- so it is itself cheap and
+    safe. Length is deliberately NOT part of this gate (a long pattern is not inherently
+    catastrophic; the length ceiling is the separate opt-in convenience cap)."""
     if _REGEX_NESTED_QUANTIFIER.search(pattern) is not None:
         return True
-    return _REGEX_ALTERNATION_OVERLAP.search(pattern) is not None
+    if _REGEX_ALTERNATION_OVERLAP.search(pattern) is not None:
+        return True
+    if _REGEX_ADJACENT_GROUP_QUANTIFIER.search(pattern) is not None:
+        return True
+    if _REGEX_STACKED_BOUNDED_REPEAT.search(pattern) is not None:
+        return True
+    # Budget backstop: total unbounded quantifiers + alternations over the threshold.
+    budget = len(_REGEX_UNBOUNDED_QUANTIFIER.findall(pattern)) + len(_REGEX_ALTERNATION.findall(pattern))
+    return budget > _REGEX_BUDGET_MAX
+
+
+def _regex_exceeds_static_cap(pattern: str) -> bool:
+    """Pure static-cap check (NO execution): True if ``pattern`` is over the length
+    ceiling OR carries a catastrophic shape. Used at LOAD time for the opt-in "Limit
+    long/complex regex" setting -- when the setting is OFF the length ceiling is NOT
+    enforced (long-but-safe patterns load). The catastrophic-shape half is also enforced
+    UNCONDITIONALLY via ``_regex_is_catastrophic_shape`` regardless of this setting; this
+    wrapper folds in the additional length ceiling for the gated path."""
+    if len(pattern) > REGEX_STATIC_LEN_CAP:
+        return True
+    return _regex_is_catastrophic_shape(pattern)
 
 
 def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:
@@ -3743,18 +3807,29 @@ def _dnsbl_compile_regex_rules(
     load) -- it never aborts the build. Names are unique per pattern occurrence so two
     feeds carrying the same pattern both load.
 
-    ADR-07 P7: when ``static_cap`` is True (the opt-in "Limit long/complex regex"
-    setting) an over-length / nested-quantifier pattern is DROPPED at load (logged,
-    not compiled, not counted) -- the cheap no-execution pre-filter. The always-on
-    runtime warn/evict guard lives in the matcher (it is what bounds the residual).
+    ADR-07 P7: a pattern carrying a catastrophic SHAPE (nested / adjacent / overlapping
+    unbounded quantifier, stacked bounded repeat, or over the complexity budget) is
+    DROPPED at load UNCONDITIONALLY -- independent of ``static_cap`` -- because such a
+    shape drives catastrophic backtracking in the `re` engine. The opt-in length ceiling
+    (the "Limit long/complex regex" setting, ``static_cap``) is the SEPARATE tunable half:
+    when True it ALSO drops over-length-but-safe patterns. All checks are pure static
+    string analysis (no execution); the always-on runtime warn/evict guard lives in the
+    matcher (it is what bounds the residual of anything that slips through).
     """
     db: dict[str, dict[str, Any]] = {}
     admitted = 0
     seq = 0
     for rule in regex_rules:
-        if static_cap and _regex_exceeds_static_cap(rule.pattern):
+        if _regex_is_catastrophic_shape(rule.pattern):
             sys.stderr.write(
-                "[pfBlockerNG]: dropping long/complex {} regex feed [ {} ] pattern [ {} ] (static cap)".format(
+                "[pfBlockerNG]: dropping pathological {} regex feed [ {} ] pattern [ {} ] (catastrophic shape)".format(
+                    rule.kind, rule.feed, rule.pattern
+                )
+            )
+            continue
+        if static_cap and len(rule.pattern) > REGEX_STATIC_LEN_CAP:
+            sys.stderr.write(
+                "[pfBlockerNG]: dropping over-length {} regex feed [ {} ] pattern [ {} ] (static length cap)".format(
                     rule.kind, rule.feed, rule.pattern
                 )
             )
