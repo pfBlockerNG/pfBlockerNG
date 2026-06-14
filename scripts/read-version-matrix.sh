@@ -29,12 +29,17 @@
 # Outputs:
 #   BUILD matrix     — all entries from supported-versions.json, each carrying:
 #     pfsense_version, channel, freebsd_version, freebsd_major,
-#     php_version, py_flavor, variant, status, ci
+#     php_version, py_flavor, variant, status, ci, arch. `arch` is resolved
+#     (default "amd64"), so the build fans out version × arch — an entry that
+#     omits arch (every entry today) stays amd64, while an aarch64 entry
+#     (Plus-only, Netgate ARM appliances) builds a FreeBSD:N:aarch64 .pkg
+#     (issue #199).
 #   CI matrix        — the ci:true entries (ANY channel), subset of BUILD matrix.
-#     Each emitted entry additionally carries a resolved image_name (default
-#     "pfsense-ce") and mac (default the CE pin "BC:24:11:37:9C:AC"), so an entry
-#     that omits them — every CE entry today — keeps the CE image + MAC, while a
-#     ci:true Plus entry can carry its own image_name/mac (ADR-24).
+#     Inherits the resolved `arch` from the BUILD matrix, and additionally carries
+#     a resolved image_name (default "pfsense-ce") and mac (default the CE pin
+#     "BC:24:11:37:9C:AC"), so an entry that omits them — every CE entry today —
+#     keeps the CE image + MAC, while a ci:true Plus entry can carry its own
+#     image_name/mac (ADR-24).
 #   python_versions  — DISTINCT python versions derived from each BUILD-matrix
 #     entry's py_flavor (`pyN` + `MM` => `N.MM`, e.g. py311 => 3.11; py39 => 3.9),
 #     sorted + deduped. test.yml's pytest matrix (supported-only — only the
@@ -122,6 +127,16 @@ if [ -n "$VARIANT_FILTER" ]; then
 else
   BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
 fi
+
+# ── Normalise: each BUILD-matrix entry carries a resolved `arch` (default amd64) ──
+# So the build fans out version × arch (issue #199 — aarch64 Netgate appliances).
+# An entry that omits arch — or sets it to "" — stays amd64; an aarch64 entry
+# (Plus-only) builds a FreeBSD:N:aarch64 .pkg. The empty-string coercion mirrors
+# the image_name/mac handling below: `//` alone treats only null/missing as absent,
+# so a literal "" would flow through and a downstream ABI build would emit
+# `FreeBSD:N:` (no arch). The CI matrix inherits this resolved arch verbatim.
+BUILD_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+  [ .[] | . + { arch: (if ((.arch // "") == "") then "amd64" else .arch end) } ]')"
 
 # ── CI matrix: the ci:true entries (ANY channel) within the variant-filtered set ──
 # The channel no longer filters (ADR-24): a ci:true Plus entry is a first-class CI

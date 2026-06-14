@@ -40,10 +40,17 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
   "freebsd_major":   "15",           # FreeBSD major (ABI dedup key; artifact suffix)
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
+  "arch":            "amd64",        # OPTIONAL; ABI arch (amd64 | aarch64). Omit => amd64. aarch64 = Netgate ARM appliances, Plus-only (issue #199)
   "status":          "GA",           # beta | GA
   "ci":              true            # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
 }
 ```
+
+The reader resolves `arch` to `amd64` when omitted (or empty), so a pre-#199 matrix
+builds exactly as before. The build path keys on `(freebsd_major, arch)`, so an
+`aarch64` entry produces its own `FreeBSD:N:aarch64` `.pkg` alongside the amd64 one.
+ARM is **Plus-only** (pfSense CE is amd64-only). Live-VM smoke stays amd64 — no ARM
+image yet, so an `aarch64` entry should set `ci: false` (build + distribute only).
 
 ### Lifecycle policy
 
@@ -78,8 +85,8 @@ pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a depen
 
 A tag push (`vX.Y.Z[-devel]`) triggers `release.yml`, which reads `build_matrix` and
 builds one `.pkg` per entry against its `(freebsd_version, php_version)` pair. Artifacts
-are attached to the **GitHub Release**, deduplicated by FreeBSD major — one `.pkg` per
-distinct major covers every pfSense version on that major. A build failure surfaces in CI
+are attached to the **GitHub Release**, deduplicated by FreeBSD major × arch — one `.pkg`
+per distinct `(major, arch)` covers every pfSense version on that major. A build failure surfaces in CI
 but must **not** block the `ports-pr` step (the ports PR is the real distribution path).
 
 The daily **version-tracker** (`version-tracker.yml`, `0 6 * * *`) also triggers

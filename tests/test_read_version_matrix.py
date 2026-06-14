@@ -267,3 +267,55 @@ def test_build_and_test_matrices_unchanged_by_new_fields(tmp_path: Path) -> None
     py, php = _test_matrices(repo)
     assert py == ["3.11"]  # both entries are py311
     assert php == ["8.3", "8.5"]  # distinct, sorted
+
+
+# --------------------------------------------------------------------------- #
+# Scenario f — arch defaults to amd64 when omitted (issue #199).
+# A pre-#199 matrix has no `arch` field; every entry must resolve to amd64 so the
+# build path emits the unchanged FreeBSD:N:amd64 ABI. RED before the reader injects
+# arch (the field would simply be absent).
+# --------------------------------------------------------------------------- #
+def test_build_matrix_defaults_arch_to_amd64_when_omitted(tmp_path: Path) -> None:
+    """An entry without an `arch` field resolves to amd64 in the BUILD matrix (and CI inherits it)."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry()])  # omits arch
+    build = _build_matrix(repo)
+    assert len(build) == 1
+    assert build[0]["arch"] == "amd64", f"omitted arch must default to amd64; got {build[0].get('arch')!r}"
+    # CI matrix inherits the resolved arch (no separate injection).
+    ci = _ci_matrix(repo)
+    assert len(ci) == 1 and ci[0]["arch"] == "amd64"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario g — explicit aarch64 passes through verbatim (issue #199 — the point).
+# An aarch64 Plus entry (Netgate ARM appliances) must carry arch=aarch64 into both
+# the BUILD and CI matrices so release.yml/version-tracker build a FreeBSD:N:aarch64
+# .pkg. RED before #199 (no arch field is propagated at all).
+# --------------------------------------------------------------------------- #
+def test_build_matrix_passes_through_explicit_aarch64(tmp_path: Path) -> None:
+    """An explicit arch=aarch64 is emitted verbatim in the BUILD matrix and inherited by CI."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [_ce_entry(), _plus_entry(ci=True, arch="aarch64", image_name="pfsense-plus", mac=FAKE_DOC_MAC)],
+    )
+    build = _build_matrix(repo)
+    arches = {e["pfsense_version"]: e["arch"] for e in build}
+    assert arches == {"2.8": "amd64", "26.03": "aarch64"}, f"explicit aarch64 must pass through; got {arches!r}"
+    # The ci:true aarch64 Plus entry carries aarch64 into the CI matrix too.
+    ci = _ci_matrix(repo)
+    plus = [e for e in ci if e["channel"] == "Plus"]
+    assert len(plus) == 1 and plus[0]["arch"] == "aarch64"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario h — empty-string arch normalizes to amd64 (the other invalid input).
+# `//` alone treats only null/missing as absent, so a literal "" would otherwise
+# flow through and a downstream ABI build would emit `FreeBSD:N:` (no arch) — the
+# same trap guarded for image_name/mac. The reader must coerce "" to amd64.
+# --------------------------------------------------------------------------- #
+def test_build_matrix_empty_string_arch_normalizes_to_amd64(tmp_path: Path) -> None:
+    """An empty-string arch is treated as absent → amd64 (never a bare `FreeBSD:N:` ABI)."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry(arch="")])
+    build = _build_matrix(repo)
+    assert len(build) == 1
+    assert build[0]["arch"] == "amd64", f"empty arch must default to amd64; got {build[0]['arch']!r}"

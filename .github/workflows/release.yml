@@ -115,16 +115,19 @@ jobs:
         id: matrices
         uses: ./.github/actions/read-version-matrix
 
-      - name: Dedupe build matrix by freebsd_major
+      - name: Dedupe build matrix by freebsd_major + arch
         id: dedupe
-        # For each distinct freebsd_major, select the first CE entry (preferred);
-        # if no CE entry exists for that major, fall back to the first Plus entry.
-        # Result: one build entry per distinct FreeBSD major, fed to the portable
-        # builder's inline per-major loop (build-pkgs-portable).
+        # For each distinct (freebsd_major, arch), select the first CE entry
+        # (preferred); if no CE entry exists for that pair, fall back to the first
+        # Plus entry. Result: one build entry per distinct FreeBSD major × arch — so
+        # an aarch64 entry (Plus-only, issue #199) produces its own .pkg alongside
+        # the amd64 build — fed to the portable builder's inline loop
+        # (build-pkgs-portable). The reader resolves `arch` (default amd64) on every
+        # entry, so a matrix with no aarch64 entry dedupes exactly as before.
         run: |
           DEDUPED=$(printf '%s' '${{ steps.matrices.outputs.build_matrix }}' \
             | jq -c '
-                group_by(.freebsd_major)
+                group_by([.freebsd_major, .arch])
                 | map(
                     (map(select(.channel == "CE")) | first)
                     // first
@@ -306,16 +309,17 @@ jobs:
                 FREEBSD_VERSION=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_version')
                 PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
                 PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
-                ABI="FreeBSD:${MAJOR}:amd64"
+                ARCH=$(printf '%s\n' "$ENTRY" | jq -r '.arch')
+                ABI="FreeBSD:${MAJOR}:${ARCH}"
 
-                echo "--- Building .pkg for FreeBSD ${MAJOR} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
+                echo "--- Building .pkg for FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
 
-                PORTS_DIR="${RUNNER_TEMP}/ports-${MAJOR}"
+                PORTS_DIR="${RUNNER_TEMP}/ports-${MAJOR}-${ARCH}"
                 git clone --depth 1 -b pfblockerng/use-github \
                   "https://github.com/pfBlockerNG/FreeBSD-ports" \
                   "$PORTS_DIR"
 
-                PKG_OUT="out/major-${MAJOR}"
+                PKG_OUT="out/major-${MAJOR}-${ARCH}"
                 mkdir -p "$PKG_OUT"
                 python3 scripts/build-pkg-portable.py \
                   --ports "$PORTS_DIR" \
@@ -326,15 +330,16 @@ jobs:
                   --php "$PHP" \
                   --out "$PKG_OUT"
 
-                echo "Built for FreeBSD ${MAJOR}:"
+                echo "Built for FreeBSD ${MAJOR}/${ARCH}:"
                 ls -l "${PKG_OUT}"/*.pkg
 
-                # Rename to embed FreeBSD major before upload
+                # Rename to embed FreeBSD major + arch before upload (two arches of
+                # one major must not collide on a shared -FreeBSD-<major>.pkg name).
                 for f in "${PKG_OUT}"/*.pkg; do
                   [ -f "$f" ] || continue
                   BASE=$(basename "$f" .pkg)
-                  mv "$f" "${PKG_OUT}/${BASE}-FreeBSD-${MAJOR}.pkg"
-                  echo "Renamed: $(basename "$f") -> ${BASE}-FreeBSD-${MAJOR}.pkg"
+                  mv "$f" "${PKG_OUT}/${BASE}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+                  echo "Renamed: $(basename "$f") -> ${BASE}-FreeBSD-${MAJOR}-${ARCH}.pkg"
                 done
               done
 
