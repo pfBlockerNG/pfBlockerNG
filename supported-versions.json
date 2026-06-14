@@ -5,6 +5,7 @@
     "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
     "drop_ce": "Drop the oldest CE entry only when the newest CE goes GA. The supported window is always (previous GA CE + current GA CE), transiently +1 during an active beta.",
     "plus": "Plus runs in CI from a PRIVATE, licensed GHCR image (ghcr.io/pfblockerng/pfsense-plus). To enable: set ci=true + image_name=pfsense-plus. The VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed to) comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets, NEVER this matrix; the smoke harness redacts that identity from the uploaded diagnostics. Image refresh is MANUAL (image-refresh.yml is CE-only) — republish via scripts/image-publish.sh (ADR-24).",
+    "arm": "ARM (aarch64) is Plus-only (Netgate ARM appliances; pfSense CE is amd64-only). Add an entry with arch='aarch64' to produce a FreeBSD:<major>:aarch64 .pkg alongside the amd64 build (the build keys on (freebsd_major, arch)). There is no aarch64 CI image yet, so an aarch64 entry MUST be build-only (ci=false); promote to ci=true only once a licensed aarch64 Plus smoke image is baked (issue #199).",
     "ci_metadata_pr": "Changes to this file should be made via a PR against ci-metadata (branch-protected) so there is a git audit trail (diff/blame/rollback) without touching main/devel.",
     "future_migration": "If CI infrastructure grows, this file can move to a dedicated public pfBlockerNG-ci-infra repo (read via raw URL, no token) — a mechanical swap."
   },
@@ -31,6 +32,18 @@
       "status": "active",
       "ci": true,
       "image_name": "pfsense-plus"
+    },
+    {
+      "pfsense_version": "26.03",
+      "channel": "Plus",
+      "freebsd_version": "16.0-RELEASE",
+      "freebsd_major": "16",
+      "php_version": "8.5",
+      "py_flavor": "py311",
+      "variant": "Plus",
+      "status": "active",
+      "ci": false,
+      "arch": "aarch64"
     }
   ]
 }
