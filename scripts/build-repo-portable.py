@@ -116,10 +116,11 @@ META_CONF = (
 # upgrade; priority 100 sits above the base Netgate `pfSense` repo (priority 0) —
 # Phase 1 proved priority dominates version, so this is the precedence lever.
 # The published GitHub Pages base — the repo's standard project Pages URL
-# (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
-# we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg. Kept identical
-# to scripts/build-repo.sh DEFAULT_BASE_URL so the two generators stay byte-equal.
-DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
+# The canonical client conf URL is the Cloudflare Worker (ADR-20 Phase 4), which routes
+# by pfSense User-Agent — written once, never needs updating on an OS upgrade. Kept
+# identical to scripts/build-repo.sh / add-repo.sh DEFAULT_BASE_URL so all three
+# generators emit a byte-equal --print-conf.
+DEFAULT_BASE_URL = "https://pkg.pfblockerng.workers.dev"
 CONF_PRIORITY = 100
 
 # A safe single path segment: an ABI is used UNVALIDATED from manifest data as a

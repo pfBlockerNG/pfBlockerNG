@@ -79,7 +79,7 @@ while [ $# -gt 0 ]; do
         --base-url)     BASE_URL="$2"; shift 2 ;;
         devel|stable|nightly)   CHANNEL="$1"; shift ;;
         -h|--help)
-            sed -n '34,39p' "$0"   # the Usage block from the header
+            sed -n '41,44p' "$0"   # the Usage block from the header
             exit 0 ;;
         -*) echo "add-repo: unknown option: $1" >&2; exit 2 ;;
         *)  echo "add-repo: unknown channel '$1' (expected devel|stable|nightly)" >&2; exit 2 ;;

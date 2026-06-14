@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -30,9 +31,21 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 _ADD_REPO = _SCRIPTS / "add-repo.sh"
 _BUILD_REPO = _SCRIPTS / "build-repo.sh"
+_BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
 
 _WORKER_URL = "https://pkg.pfblockerng.workers.dev"
 _OLD_PAGES_URL = "https://pfblockerng.github.io/pkg"
+
+
+def _print_conf_portable() -> str:
+    """Run `build-repo-portable.py --print-conf` (the Python generator) and return stdout."""
+    proc = subprocess.run(
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout
 
 
 def _print_conf(script: Path, *args: str) -> str:
@@ -98,8 +111,10 @@ def test_release_conf_byte_identical_across_stable_devel_and_build_repo() -> Non
     stable = _print_conf(_ADD_REPO, "stable")
     devel = _print_conf(_ADD_REPO, "devel")
     build = _print_conf(_BUILD_REPO)
+    portable = _print_conf_portable()
     assert stable == devel  # collapsed: stable + devel are one shared `pfblockerng` repo
-    assert stable == build  # == the published single-source template
+    assert stable == build  # == the published single-source template (build-repo.sh)
+    assert stable == portable  # == the portable Python generator — all THREE byte-equal
 
 
 def test_add_repo_default_channel_matches_devel() -> None:

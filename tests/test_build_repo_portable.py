@@ -507,7 +507,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng: {" in out  # the shared release repo (stable + devel)
-    assert 'url: "https://pfblockerng.github.io/pkg/${ABI}"' in out
+    assert 'url: "https://pkg.pfblockerng.workers.dev/${ABI}"' in out  # canonical Worker URL (ADR-20)
     assert "signature_type: none," in out
     assert "priority: 100," in out
     assert "enabled: yes" in out
