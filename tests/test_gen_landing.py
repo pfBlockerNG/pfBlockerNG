@@ -152,7 +152,13 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
 
     def fake_read(path: str) -> dict[str, Any]:
         name, ver = layout[os.path.relpath(path, site)]
-        return {"name": name, "version": ver, "abi": Path(path).parent.name, "annotations": {"commit": "cafe1234"}}
+        return {
+            "name": name,
+            "version": ver,
+            "abi": Path(path).parent.name,
+            "annotations": {"commit": "cafe1234"},
+            "deps": {"php85": {}, "php85-intl": {}, "py311": {}, "py311-sqlite3": {}, "python311": {}},
+        }
 
     # When
     pkgs = gl.collect_packages(str(site), read_manifest=fake_read)
@@ -164,6 +170,9 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
     assert not any("packagesite" in p["rel"] or "data.pkg" in p["rel"] for p in pkgs)
     # The source-commit annotation is carried onto each row (drives the Commit column).
     assert {p["commit"] for p in pkgs} == {"cafe1234"}
+    # PHP/Python come from the manifest deps — the runtime flavor pkg, not its sub-packages.
+    assert {p["php"] for p in pkgs} == {"8.5"}
+    assert {p["py"] for p in pkgs} == {"3.11"}
 
 
 # ── build_table: newest version per (channel, ABI) ────────────────────────────
@@ -210,6 +219,102 @@ def test_latest_versions_per_channel() -> None:
     assert gl.latest_versions(pkgs) == {"nightly": "3.2.16.20260614.9", "devel": "3.2.16"}
 
 
+# ── Edition split: matrix join → per-edition sections ─────────────────────────
+
+
+def _mx(abi: str, ver: str, variant: str, php: str, py: str) -> dict[str, str]:
+    """A supported-versions matrix entry, as read-version-matrix.sh --print-build emits."""
+    return {"abi": abi, "pfsense_version": ver, "variant": variant, "php_version": php, "py_flavor": py}
+
+
+def test_dotted_and_dep_flavor_formatting() -> None:
+    """A flavor token / dep name formats to a dotted version; sub-packages don't match."""
+    assert gl._dotted_ver("py311") == "3.11"
+    assert gl._dotted_ver("php85") == "8.5"
+    assert gl._dotted_ver("python314") == "3.14"
+    assert gl._dotted_ver("nodigits") == ""
+    # The runtime flavor pkg matches; its sub-packages (php85-intl, py311-sqlite3) do not.
+    assert gl._dep_flavor(["php85-intl", "php85"], ("php",)) == "8.5"
+    assert gl._dep_flavor(["py311-sqlite3", "python311"], ("py", "python")) == "3.11"
+    assert gl._dep_flavor(["lighttpd", "jq"], ("php",)) == ""
+
+
+def test_build_edition_sections_splits_and_shares_abi_across_versions() -> None:
+    """Scenario: organize installables by pfSense edition, sharing a build across versions.
+
+    Given devel builds for two ABIs, and a matrix where one ABI serves TWO pfSense
+      versions (a CE and a Plus),
+    When the edition sections are built,
+    Then CE sorts before Plus; each row carries the matrix pfSense version + PHP/Python;
+      and the shared-ABI build appears under BOTH editions (it installs on each, since
+      pkg resolves on ABI alone).
+    """
+    p_ce = _pkg("devel", "d", "3.2.16", "FreeBSD:15:amd64", "a.pkg")
+    p_shared = _pkg("devel", "d", "3.2.16", "FreeBSD:16:amd64", "b.pkg")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:16:amd64", "2.9", "CE", "8.4", "py311"),
+        _mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py312"),
+    ]
+
+    sections = dict(gl.build_edition_sections([p_ce, p_shared], matrix))
+
+    assert [k for k, _ in gl.build_edition_sections([p_ce, p_shared], matrix)] == ["CE", "Plus"]
+    # The shared ABI build appears under BOTH editions.
+    assert any(r["abi"] == "FreeBSD:16:amd64" for r in sections["CE"])
+    assert any(r["abi"] == "FreeBSD:16:amd64" for r in sections["Plus"])
+    # Matrix php/py/version win per edition — proving the join, not a fixed value.
+    plus = next(r for r in sections["Plus"] if r["abi"] == "FreeBSD:16:amd64")
+    assert (plus["pfsense_version"], plus["php"], plus["py"]) == ("26.03", "8.5", "3.12")
+    ce_29 = next(r for r in sections["CE"] if r["abi"] == "FreeBSD:16:amd64")
+    assert (ce_29["pfsense_version"], ce_29["php"], ce_29["py"]) == ("2.9", "8.4", "3.11")
+
+
+def test_older_nightlies_lists_retained_excludes_latest() -> None:
+    """Scenario: surface the retained older nightlies, never the current one.
+
+    Given three nightly builds for one ABI (two old + the newest) plus a devel build,
+    When the older-nightlies list is built,
+    Then the NEWEST nightly is excluded (it's already in the edition table) and the two
+      older ones remain, newest-first; devel/stable are never included.
+    """
+    new = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n9.pkg")
+    mid = _pkg("nightly", "n", "3.2.16.20260613.4", "FreeBSD:16:amd64", "n4.pkg")
+    old = _pkg("nightly", "n", "3.2.16.20260601.1", "FreeBSD:16:amd64", "n1.pkg")
+    dev = _pkg("devel", "d", "3.2.16", "FreeBSD:16:amd64", "d.pkg")
+
+    rows = gl.older_nightlies([new, mid, old, dev])
+
+    versions = [r["version"] for r in rows]
+    assert versions == ["3.2.16.20260613.4", "3.2.16.20260601.1"]  # newest excluded, rest newest-first
+    assert all(r["channel"] == "nightly" for r in rows)  # devel never listed
+    # The page renders the two retained nightlies in a collapsed disclosure, never the latest.
+    html = gl._older_nightlies_html([new, mid, old, dev])
+    assert "<details><summary>Older nightlies (2)</summary>" in html
+    assert "3.2.16.20260613.4" in html and "3.2.16.20260601.1" in html
+    assert "3.2.16.20260614.9" not in html  # the current nightly stays out of the 'older' list
+
+
+def test_older_nightlies_empty_when_only_latest() -> None:
+    """With a single nightly version present there is nothing 'older' to disclose."""
+    only = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
+    assert gl.older_nightlies([only, _pkg("devel", "d", "3.2.16", "FreeBSD:16:amd64", "d.pkg")]) == []
+    # …and the page omits the disclosure entirely (no empty 'Older nightlies' affordance).
+    assert "Older nightlies" not in gl._older_nightlies_html([only])
+
+
+def test_build_edition_sections_unmatched_abi_falls_to_other() -> None:
+    """A build whose ABI the matrix doesn't cover lands in 'Other' (manifest php/py), not hidden."""
+    p = _pkg("devel", "d", "3.2.16", "FreeBSD:14:amd64", "x.pkg")
+    p["php"], p["py"] = "8.2", "3.9"  # manifest-derived fallback (no matrix row)
+
+    sections = dict(gl.build_edition_sections([p], matrix=[]))
+
+    assert list(sections) == ["Other"]
+    row = sections["Other"][0]
+    assert row["pfsense_version"] == "" and (row["php"], row["py"]) == ("8.2", "3.9")
+
+
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
 
@@ -218,8 +323,9 @@ def _stub_conf(channel: str) -> str:
 
 
 def test_render_page_shows_latest_and_empty_stable() -> None:
-    """The page shows devel+nightly latest and the install URL; stable (absent) is empty-stated."""
+    """The page splits packages into per-edition tables; stable (absent) is empty-stated."""
     pkgs = [
+        _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "FreeBSD:15:amd64/d.pkg"),
         _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:16:aarch64", "FreeBSD:16:aarch64/d.pkg"),
         _pkg(
             "nightly",
@@ -229,19 +335,31 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
             "nightly/FreeBSD:16:aarch64/n.pkg",
         ),
     ]
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
+    ]
     base = "https://pfblockerng.github.io/pkg"
-    page = gl.render_page(base, pkgs, ["FreeBSD:16:aarch64", "nightly/FreeBSD:16:aarch64"], _stub_conf)
+    page = gl.render_page(base, pkgs, ["FreeBSD:16:aarch64", "nightly/FreeBSD:16:aarch64"], _stub_conf, matrix)
 
     # Latest versions surfaced for the present channels.
     assert "3.2.16.20260614.9" in page
-    # The package table carries a Published datetime column (UTC, minute precision).
-    assert "<th>Published</th>" in page
+    # One table per pfSense edition, CE before Plus.
+    assert "<h3>pfSense CE</h3>" in page
+    assert "<h3>pfSense Plus</h3>" in page
+    assert page.index("pfSense CE") < page.index("pfSense Plus")
+    # Each table carries the informative pfSense version + PHP + Python columns (joined
+    # from the matrix), plus Published and Commit.
+    for header in ("<th>pfSense</th>", "<th>PHP</th>", "<th>Python</th>", "<th>Published</th>", "<th>Commit</th>"):
+        assert header in page
+    assert ">2.8<" in page and ">26.03<" in page  # pfSense versions, per edition
+    assert ">8.3<" in page and ">8.5<" in page  # PHP, per edition
+    assert ">3.11<" in page  # Python
     assert "2026-06-14 09:38 UTC" in page
-    # …and a Commit column linking the short SHA to the source commit on GitHub.
-    assert "<th>Commit</th>" in page
+    # The Commit column links the short SHA to the source commit on GitHub.
     assert f'href="{gl.SOURCE_REPO_URL}/commit/9d4b0b4556edca49b856c093838ccd0e2e91736b"' in page
     assert ">9d4b0b4<" in page
-    # The table sits in an overflow-x wrapper so a mobile viewport scrolls the table,
+    # Each table sits in an overflow-x wrapper so a mobile viewport scrolls the table,
     # not the whole page (the .tablewrap rule is what makes that scroll possible).
     assert '<div class="tablewrap"><table>' in page
     assert ".tablewrap{overflow-x:auto" in page
