@@ -5225,6 +5225,245 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 }
 
 
+// Test whether a single IP literal is contained within a CIDR range. Both the IP
+// and the network of the CIDR are compared in their packed (inet_pton) binary form,
+// byte-for-byte over the whole bytes of the prefix plus a masked compare of the
+// remainder bit. Returns TRUE when $ip lies inside $cidr, FALSE otherwise (including
+// a parse failure or a family mismatch between $ip and $cidr). Single source of the
+// binary-containment math, shared by pfb_ip_is_internal() and the feed-host
+// allowlist check.
+function pfb_ip_in_cidr($ip, $cidr) {
+
+	if (!is_string($ip) || $ip === '' || !is_string($cidr) || strpos($cidr, '/') === FALSE) {
+		return FALSE;
+	}
+
+	$bin = @inet_pton($ip);
+	if ($bin === FALSE) {
+		return FALSE;
+	}
+
+	list($net, $bits) = explode('/', $cidr, 2);
+	$net_bin = @inet_pton($net);
+	if ($net_bin === FALSE || strlen($net_bin) !== strlen($bin)) {
+		// A parse failure or a family mismatch (v4 ip vs v6 cidr or vice versa).
+		return FALSE;
+	}
+
+	$bits = (int) $bits;
+	$full = intdiv($bits, 8);		// whole bytes that must match exactly
+	$rem  = $bits % 8;			// remaining bits in the next byte
+
+	if ($full > 0 && substr($bin, 0, $full) !== substr($net_bin, 0, $full)) {
+		return FALSE;
+	}
+	if ($rem !== 0) {
+		$mask = (~0 << (8 - $rem)) & 0xFF;
+		if ((ord($bin[$full]) & $mask) !== (ord($net_bin[$full]) & $mask)) {
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+// Test whether a single IP literal falls inside one of the non-public/reserved
+// ranges feeds may not be fetched from. Returns the matched CIDR (string) when
+// the address is non-permitted, or FALSE when it is a routable public address.
+// IPv4-mapped IPv6 (::ffff:0:0/96) is unwrapped and re-checked as IPv4 so a
+// mapped form can't slip a private v4 address past the v6 ranges.
+function pfb_ip_is_internal($ip) {
+
+	// Non-permitted v4 / v6 ranges (CIDR). The exact set is explicit (rather than
+	// the pfSense range helpers) so it is identical across releases.
+	static $ranges_v4 = array(
+		'0.0.0.0/8',		// 'this' network (RFC 1122)
+		'10.0.0.0/8',		// private (RFC 1918)
+		'100.64.0.0/10',	// CGNAT shared address space (RFC 6598)
+		'127.0.0.0/8',		// loopback
+		'169.254.0.0/16',	// link-local (RFC 3927)
+		'172.16.0.0/12',	// private (RFC 1918)
+		'192.168.0.0/16',	// private (RFC 1918)
+	);
+	static $ranges_v6 = array(
+		'::1/128',		// loopback
+		'fc00::/7',		// unique-local (RFC 4193)
+		'fe80::/10',		// link-local (RFC 4291)
+	);
+
+	if (!is_string($ip) || $ip === '') {
+		return FALSE;
+	}
+
+	$bin = @inet_pton($ip);
+	if ($bin === FALSE) {
+		return FALSE;
+	}
+
+	// Unwrap an IPv4-mapped IPv6 address (::ffff:0:0/96) to its IPv4 form so it is
+	// vetted against the IPv4 ranges, not skipped by the v6 set.
+	if (strlen($bin) === 16 && substr($bin, 0, 12) === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
+		$ip = inet_ntop(substr($bin, 12));
+		$bin = substr($bin, 12);
+	}
+
+	if (strlen($bin) === 4) {
+		$ranges = $ranges_v4;
+	} elseif (strlen($bin) === 16) {
+		$ranges = $ranges_v6;
+	} else {
+		return FALSE;
+	}
+
+	foreach ($ranges as $cidr) {
+		if (pfb_ip_in_cidr($ip, $cidr)) {
+			return $cidr;
+		}
+	}
+
+	return FALSE;
+}
+
+
+// Parse the General-settings 'internal-address exemption' allowlist into a list of
+// valid IP/CIDR entries. The stored value is one entry per line (also accepting
+// comma/space separators); blank and invalid entries are silently dropped (only a
+// valid is_ipaddr() literal or an is_subnet() CIDR survives). $ignored receives the
+// count of non-blank entries that were rejected as invalid (for a neutral log line).
+function pfb_feed_internal_allowlist($ignored = NULL) {
+
+	$ignored = 0;
+	$raw = config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist');
+	if (!is_string($raw) || $raw === '') {
+		return array();
+	}
+
+	$entries = array();
+	foreach (preg_split('/[\s,]+/', $raw) as $entry) {
+		$entry = trim($entry);
+		if ($entry === '') {
+			continue;
+		}
+		if (is_ipaddr($entry) || is_subnet($entry)) {
+			$entries[] = $entry;
+		} else {
+			$ignored++;
+		}
+	}
+
+	return $entries;
+}
+
+
+// Test whether a single IP literal is exempted by the allowlist: covered when it
+// equals an allowlisted IP literal (by value) or is contained within an allowlisted
+// CIDR. Returns TRUE when exempt, FALSE otherwise.
+function pfb_ip_in_allowlist($ip, array $allowlist) {
+
+	if (!is_string($ip) || $ip === '') {
+		return FALSE;
+	}
+
+	$bin = @inet_pton($ip);
+
+	foreach ($allowlist as $entry) {
+		if (strpos($entry, '/') !== FALSE) {
+			if (pfb_ip_in_cidr($ip, $entry)) {
+				return TRUE;
+			}
+		} elseif ($bin !== FALSE && @inet_pton($entry) === $bin) {
+			// IP-literal equality by packed value (so '::1' == '::0:1' etc.).
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+
+// Verify a feed host does not resolve to a non-public/reserved address before any
+// connection is made. Fail-closed: an unresolvable host, or any resolved address
+// that is non-public AND not covered by the operator's internal-address allowlist,
+// is rejected. On success $pinned receives the vetted IP the caller pins the
+// connection to (so the fetch cannot rebind to another address); $reason carries a
+// neutral skip reason on rejection.
+//
+// A resolved address that is internal is permitted ONLY when it is covered by an
+// allowlist entry (exact IP, or containment in an allowlisted CIDR — General
+// settings: 'internal-address exemptions'). An empty allowlist (the default) blocks
+// every feed that resolves to an internal/private address.
+function pfb_feed_host_allowed($host, &$reason, &$pinned) {
+
+	$reason = '';
+	$pinned = '';
+
+	if (!is_string($host) || $host === '') {
+		$reason = 'feed host is empty';
+		return FALSE;
+	}
+
+	// Build the candidate IP list. A host that is already an IP literal is checked
+	// directly; otherwise it is resolved (A/AAAA, following CNAMEs as the URL
+	// validator does) into its address set.
+	$candidates = array();
+	if (is_ipaddr($host)) {
+		$candidates[] = $host;
+	} else {
+		$records = resolve_host_addresses("{$host}.");
+		if (empty($records) || !is_array($records)) {
+			$reason = 'feed host did not resolve';
+			return FALSE;
+		}
+		foreach ($records as $record) {
+			if (empty($record['data'])) {
+				continue;
+			}
+			if ($record['type'] == 'CNAME') {
+				$cname = is_ipaddr($record['data'])
+				    ? array(array('type' => 'A', 'data' => $record['data']))
+				    : resolve_host_addresses("{$record['data']}.");
+				if (!empty($cname) && is_array($cname)) {
+					foreach ($cname as $centry) {
+						if (!empty($centry['data']) && is_ipaddr($centry['data'])) {
+							$candidates[] = $centry['data'];
+						}
+					}
+				}
+				continue;
+			}
+			if (is_ipaddr($record['data'])) {
+				$candidates[] = $record['data'];
+			}
+		}
+	}
+
+	if (empty($candidates)) {
+		$reason = 'feed host did not resolve to a valid address';
+		return FALSE;
+	}
+
+	$allowlist = pfb_feed_internal_allowlist();
+
+	// Reject if ANY resolved address is internal and not allowlisted (fail-closed).
+	// Pin the first vetted address for the connection — by the time the loop
+	// completes every candidate is public or allowlisted, so pinning the first is
+	// safe (and lets an allowlisted internal mirror's IP become the pinned target).
+	foreach ($candidates as $candidate) {
+		if (pfb_ip_is_internal($candidate) !== FALSE &&
+		    !pfb_ip_in_allowlist($candidate, $allowlist)) {
+			$reason = 'feed host resolves to a non-permitted address';
+			return FALSE;
+		}
+		if ($pinned === '') {
+			$pinned = $candidate;
+		}
+	}
+
+	return TRUE;
+}
+
+
 // Function to download feeds
 function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE) {
 	global $pfb;
@@ -5277,6 +5516,25 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 	// Download RSYNC format
 	if ($format == 'rsync') {
+
+		// Apply the same resolve+reject guard before rsync (fail-closed; opt-out
+		// in General settings). rsync runs via exec, not cURL, so the vetted IP
+		// cannot be pinned for the connection here — the guard rejects an
+		// internal-resolving host, but a sub-second re-resolution between check
+		// and connect is not closed off for this scheme as it is for cURL.
+		if (strpos($list_url, '::') !== FALSE) {
+			$rsync_host = explode('::', $list_url, 2)[0];	// host::module form
+		} else {
+			$rsync_host = parse_url($list_url, PHP_URL_HOST) ?: '';	// rsync://host/path form
+		}
+		$rsync_reason	= '';
+		$rsync_pinned	= '';
+		if (!pfb_feed_host_allowed($rsync_host, $rsync_reason, $rsync_pinned)) {
+			$log = "\n[ {$header} ] {$rsync_reason} \xe2\x80\x94 skipped\n";
+			pfb_logger("{$log}", "{$logtype}");
+			return FALSE;
+		}
+
 		$result	= exec("/usr/local/bin/rsync --timeout=5 {$list_url_esc} {$file_dwn_esc}");
 		if ($result == 0) {
 			$http_status = '200';
@@ -5316,6 +5574,22 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		// Download using cURL
 		else {
 			$remote_stamp = -1;
+
+			// Verify the feed host does not resolve to a non-public/reserved
+			// address before opening any connection (fail-closed; opt-out in
+			// General settings). Pin the connection to the vetted IP so it cannot
+			// rebind to a different address between this check and the fetch.
+			$url_parts	= parse_url($list_download);
+			$feed_host	= $url_parts['host'] ?? '';
+			$feed_scheme	= strtolower($url_parts['scheme'] ?? '');
+			$feed_reason	= '';
+			$feed_pinned	= '';
+			if (!pfb_feed_host_allowed($feed_host, $feed_reason, $feed_pinned)) {
+				$log = "\n[ {$header} ] {$feed_reason} \xe2\x80\x94 skipped\n";
+				pfb_logger("{$log}", "{$logtype}");
+				return FALSE;
+			}
+
 			if (($fhandle = @fopen("{$file_download}", 'w')) !== FALSE) {
 				if (!($ch = curl_init("{$list_download}"))) {
 					$log = "\nFailed to create cURL resource... Exiting...\n";
@@ -5330,6 +5604,22 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
+				}
+
+				// Pin the resolved IP for this connection (DNS-rebind close). The
+				// host header/SNI stay the original host; only the address cURL
+				// dials is forced to the one vetted above. Coexists with
+				// CURLOPT_INTERFACE (the source interface is independent of the
+				// destination address) and follow-redirect settings (CURLOPT_RESOLVE
+				// only pins this host:port, so a redirect to another host is still
+				// resolved normally). The destination port is derived from the URL
+				// or its scheme when implicit.
+				if ($feed_pinned !== '' && $feed_host !== '' && !empty($feed_scheme)) {
+					$scheme_ports	= array('http' => 80, 'https' => 443, 'ftp' => 21, 'rsync' => 873);
+					$feed_port	= $url_parts['port'] ?? ($scheme_ports[$feed_scheme] ?? 0);
+					if ($feed_port > 0) {
+						curl_setopt($ch, CURLOPT_RESOLVE, array("{$feed_host}:{$feed_port}:{$feed_pinned}"));
+					}
 				}
 
 				if (!empty($username) && !empty($password)) {
