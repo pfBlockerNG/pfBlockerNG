@@ -2,8 +2,10 @@ name: Release
 
 # Triggered when a versioned tag (v*) is pushed to any branch.
 # Tags pushed from 'devel' become pre-releases; tags from 'main' become
-# full releases.  After publishing the GitHub Release, a PR is opened
-# on pfsense/FreeBSD-ports to update the corresponding port's GH_TAGNAME.
+# full releases.  After publishing the GitHub Release, the matching port's
+# PORTVERSION + GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
+# (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github) — the build-input branch.
+# Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
 #
 # workflow_dispatch allows a dry-run (point at an existing tag via
 # workflow_dispatch + the tag ref).
@@ -16,8 +18,8 @@ on:
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; verify-checks: checks:read to read the
 # tagged commit's check runs; ui-suite: packages:read to pull the pfSense image
-# from private GHCR). ports-pr operates on the FreeBSD-ports fork via PORTS_TOKEN,
-# not GITHUB_TOKEN.
+# from private GHCR). sync-ports-fork operates on the FreeBSD-ports fork via
+# PORTS_TOKEN, not GITHUB_TOKEN.
 permissions:
   contents: read
   packages: read
@@ -54,7 +56,7 @@ jobs:
   # (tier × version) leg — render / functional / browser × each image — and
   # `fail-fast: false` keeps every leg independent. Because each leg is its own
   # job, GitHub's "Re-run failed jobs" re-runs ONLY a flaky leg; `release` and
-  # `ports-pr` do NOT re-run until all legs are green again (they only run once
+  # `sync-ports-fork` do NOT re-run until all legs are green again (they only run once
   # their `needs:` are all `success`), so a not-our-fault browser flake costs a
   # single-leg re-run, never a republish.
   #
@@ -274,7 +276,7 @@ jobs:
   # uploading one artifact per entry with a unique name (pfBlockerNG-pkg-<major>).
   #
   # A build failure surfaces clearly (the job goes red) but MUST NOT break
-  # ports-pr: ports-pr needs only `release`, never build-pkgs-*.
+  # sync-ports-fork: it needs only `release`, never build-pkgs-*.
   # attach-pkgs absorbs the failure with `if: always() && ...` (below).
   build-pkgs-portable:
     name: build .pkg artifacts (portable Linux)
@@ -360,12 +362,12 @@ jobs:
   # skip missing downloads), renames each to embed the FreeBSD major for
   # unambiguity, and appends them to the already-published GitHub Release.
   #
-  # DEPENDENCY EDGES — WHY ports-pr IS INTACT:
-  #   ports-pr  needs: [release]              ← never needs build-pkgs
+  # DEPENDENCY EDGES — WHY sync-ports-fork IS INTACT:
+  #   sync-ports-fork needs: [release]         ← never needs build-pkgs
   #   attach-pkgs needs: [release, build-pkgs] ← waits for both, if: always()
   #
   # A build-pkgs failure makes attach-pkgs skip that leg's artifact but
-  # attach the rest (or skip entirely if release also failed). ports-pr is
+  # attach the rest (or skip entirely if release also failed). sync-ports-fork is
   # completely unblocked by any build outcome — it runs as soon as `release`
   # succeeds, in parallel with attach-pkgs.
   attach-pkgs:
@@ -425,9 +427,9 @@ jobs:
   # same-repo OIDC — no cross-repo deploy key. On a release we just trigger it so
   # the new Release appears at pfblockerng.github.io/pkg within seconds (its daily
   # schedule is the backstop).
-  # ADDITIVE + ISOLATED — wired like attach-pkgs: ports-pr / attach-pkgs do NOT
-  # `needs:` this, and this only `needs: [release]`, so a failure here can NEVER
-  # gate or break release / ports-pr / attach-pkgs.
+  # ADDITIVE + ISOLATED — wired like attach-pkgs: sync-ports-fork / attach-pkgs do
+  # NOT `needs:` this, and this only `needs: [release]`, so a failure here can NEVER
+  # gate or break release / sync-ports-fork / attach-pkgs.
   repo-publish:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
@@ -458,7 +460,7 @@ jobs:
   # The Worker reads routing.json from Pages and 302-redirects pkg to the
   # correct variant catalog.  Redeployed on every release so the live Worker
   # always matches the current wrangler.toml / source.  ADDITIVE + ISOLATED —
-  # same pattern as repo-publish: only needs: [release], never blocks ports-pr.
+  # same pattern as repo-publish: only needs: [release], never blocks sync-ports-fork.
   deploy-worker:
     name: Deploy Cloudflare routing Worker
     needs: [release]
@@ -468,86 +470,77 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-  # ── 3. Open PR on pfsense/FreeBSD-ports ──────────────────────────────────
-  ports-pr:
-    name: Open FreeBSD ports PR
+  # ── 3. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ─────
+  # Self-hosted distribution (ADR-17): we do NOT PR the upstream pfsense ports
+  # tree. Bump the matching port's PORTVERSION + GH_TAGNAME directly on our own
+  # fork's build-input branch (pfblockerng/use-github) — the SAME branch every
+  # build reads (release.yml build-pkgs-portable, pfBlockerNG/pkg publish.yml) —
+  # so the fork's port stays in lockstep with each release. Direct push: it's our
+  # branch, no PR. A no-op bump (version unchanged) just exits.
+  sync-ports-fork:
+    name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
     needs: release
     permissions:
       contents: read
 
     steps:
-      - name: Checkout FreeBSD-ports fork
+      - name: Checkout the FreeBSD-ports fork (use-github branch)
         uses: actions/checkout@v6
         with:
           repository: pfBlockerNG/FreeBSD-ports
+          ref: pfblockerng/use-github
           token: ${{ secrets.PORTS_TOKEN }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Configure git
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Determine port path and branch
-        id: port
+      - name: Bump PORTVERSION + GH_TAGNAME and push to use-github
         run: |
+          set -eu
           BRANCH="${{ needs.release.outputs.branch }}"
-          VERSION="${{ needs.release.outputs.version }}"
+          VERSION="${{ needs.release.outputs.version }}"   # e.g. 3.2.16-devel | 3.2.16
           TAG="v${VERSION}"
+          # PORTVERSION must be pkg-safe (no '-'): the channel lives in the port's
+          # PKGNAMESUFFIX, not the version. Strip a trailing -devel.
+          PORTVERSION="${VERSION%-devel}"
 
           if [ "$BRANCH" = "devel" ]; then
             PORT_PATH="net/pfSense-pkg-pfBlockerNG-devel"
           else
             PORT_PATH="net/pfSense-pkg-pfBlockerNG"
           fi
+          MAKEFILE="${PORT_PATH}/Makefile"
 
-          PR_BRANCH="pfblockerng/bump-${TAG}-$(date +%Y%m%d%H%M%S)"
-
-          echo "port_path=${PORT_PATH}" >> "$GITHUB_OUTPUT"
-          echo "pr_branch=${PR_BRANCH}"  >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}"              >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}"      >> "$GITHUB_OUTPUT"
-
-      - name: Update GH_TAGNAME and PORTVERSION in Makefile
-        run: |
-          MAKEFILE="${{ steps.port.outputs.port_path }}/Makefile"
-          VERSION="${{ steps.port.outputs.version }}"
-          TAG="${{ steps.port.outputs.tag }}"
-
-          # Update PORTVERSION and GH_TAGNAME; reset PORTREVISION to 0
+          # PORTVERSION = the numeric version; GH_TAGNAME = the actual release tag
+          # (so a real `make package` fetch resolves it); drop PORTREVISION.
           sed -i \
-            -e "s/^PORTVERSION=.*/PORTVERSION=\t${VERSION}/" \
-            -e "s/^GH_TAGNAME=.*/GH_TAGNAME=\tv${VERSION}/" \
+            -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+            -e "s|^GH_TAGNAME=.*|GH_TAGNAME=\t${TAG}|" \
             -e "/^PORTREVISION=/d" \
             "$MAKEFILE"
 
-          git checkout -b "${{ steps.port.outputs.pr_branch }}"
-          git add "$MAKEFILE"
-          git commit -m "$(printf '%s: update to %s\n\nPoints GH_TAGNAME to %s in pfBlockerNG/pfBlockerNG.' \
-            "${{ steps.port.outputs.port_path }}" "$VERSION" "$TAG")"
-          git push origin "${{ steps.port.outputs.pr_branch }}"
-
-      - name: Create pull request on pfsense/FreeBSD-ports
-        env:
-          GH_TOKEN: ${{ secrets.PORTS_TOKEN }}
-        run: |
-          PRERELEASE="${{ needs.release.outputs.prerelease }}"
-          VERSION="${{ steps.port.outputs.version }}"
-          PORT="${{ steps.port.outputs.port_path }}"
-          TAG="${{ steps.port.outputs.tag }}"
-
-          if [ "$PRERELEASE" = "true" ]; then
-            CHANNEL_NOTE=" (devel / pre-release)"
-          else
-            CHANNEL_NOTE=""
+          if git diff --quiet -- "$MAKEFILE"; then
+            echo "${PORT_PATH} already at ${PORTVERSION} (${TAG}) — nothing to push."
+            exit 0
           fi
+          git add "$MAKEFILE"
+          git commit -m "$(printf '%s: update to %s\n\nGH_TAGNAME=%s — pfBlockerNG/pfBlockerNG release.' \
+            "$PORT_PATH" "$PORTVERSION" "$TAG")"
 
-          gh pr create \
-            --repo pfsense/FreeBSD-ports \
-            --base devel \
-            --head "pfBlockerNG:${{ steps.port.outputs.pr_branch }}" \
-            --title "${PORT}: update to ${VERSION}${CHANNEL_NOTE}" \
-            --body "$(printf \
-              'Bump \`GH_TAGNAME\` to \`%s\` in \`%s\`.\n\nSource: https://github.com/pfBlockerNG/pfBlockerNG/releases/tag/%s' \
-              "$TAG" "$PORT" "$TAG")"
+          # use-github only advances via releases; push directly, rebasing once on a
+          # racing update.
+          n=0
+          until git push origin HEAD:pfblockerng/use-github; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::could not push the port bump to use-github after ${n} attempts"
+              exit 1
+            fi
+            echo "push rejected — rebasing on the latest use-github (attempt ${n})"
+            git pull --rebase origin pfblockerng/use-github
+          done
+          echo "Pushed ${PORT_PATH} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"
