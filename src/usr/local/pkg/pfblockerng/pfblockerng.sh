@@ -194,8 +194,28 @@ emptyfiles() {
 # Function to remove lists from masterfiles and delete associated files.
 remove() {
 	echo; echo
+
+	# Self-defence: a path separator or traversal sequence in the alias must
+	# never reach the "rm -f ...${header}*" globs below. Reject it at entry so
+	# the script does not rely solely on the PHP caller having sanitised it.
+	case "${alias}" in
+		*/*|*..*)
+			echo "Invalid alias [ ${alias} ], *aborting remove*"
+			return 1
+			;;
+	esac
+
 	for i in ${cc}; do
 		header="${i%*,}"
+
+		# Same guard for each per-entry header before it builds an rm glob.
+		case "${header}" in
+			*/*|*..*)
+				echo "Invalid header [ ${header} ], *skipping*"
+				continue
+				;;
+		esac
+
 		if [ -n "${header}" ]; then
 			# Make sure that alias exists in masterfile before removal.
 			query="${header} "
