@@ -56,6 +56,10 @@ $pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
 // Default to 'on' for new installation only
 $pconfig['pfb_keep']			= isset($pfb['gconfig']['pfb_keep'])			? $pfb['gconfig']['pfb_keep'] : 'on';
 
+// Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
+// (one per line) whose feeds are allowed even when they resolve internally.
+$pconfig['pfb_feed_internal_allowlist']	= $pfb['gconfig']['pfb_feed_internal_allowlist']	?: '';
+
 $pconfig['pfb_interval']		= $pfb['gconfig']['pfb_interval']			?: 1;
 
 // ADR-11: opt-in per-type aggregate ("Uber") Native aliases. CSV scalar (like
@@ -148,6 +152,7 @@ if ($_POST) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
 			$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'], PFB_FILTER_ON_OFF, 'general', '');
+			$pfb['gconfig']['pfb_feed_internal_allowlist']	= str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? ''));
 			$pfb['gconfig']['pfb_interval']			= $_POST['pfb_interval']			?: 1;
 			$pfb['gconfig']['pfb_min']			= $_POST['pfb_min']				?: 0;
 			$pfb['gconfig']['pfb_hour']			= $_POST['pfb_hour']				?: 0;
@@ -252,6 +257,15 @@ $section->addInput(new Form_Checkbox(
 		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br /><br />'
 		. '<span class="text-danger">Note: </span>'
 		. ' To clear all downloaded lists, uncheck these two checkboxes and \'Save\'. Re-check both boxes and run a \'Force Update|Reload\''
+);
+
+$section->addInput(new Form_Textarea(
+	'pfb_feed_internal_allowlist',
+	'Internal Feed Host Exemptions',
+	$pconfig['pfb_feed_internal_allowlist']
+))->setHelp('IP addresses or CIDR ranges (one per line) that are exempt from the '
+		. 'internal-address check &mdash; e.g. an internal mirror. '
+		. 'Leave empty to block all feeds that resolve to an internal/private address.'
 );
 
 $group = new Form_Group('CRON Settings');

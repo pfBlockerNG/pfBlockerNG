@@ -55,6 +55,35 @@ if (!function_exists('is_ipaddr')) {
 	}
 }
 
+if (!function_exists('is_subnetv4')) {
+	// pfSense util.inc: 'ipv4/bits' with a 0-32 prefix and a valid v4 network part.
+	function is_subnetv4($subnet) {
+		if (!is_string($subnet) || strpos($subnet, '/') === false) {
+			return false;
+		}
+		list($ip, $bits) = explode('/', $subnet, 2);
+		return (is_ipaddrv4($ip) && ctype_digit($bits) && (int) $bits >= 0 && (int) $bits <= 32);
+	}
+}
+
+if (!function_exists('is_subnetv6')) {
+	// pfSense util.inc: 'ipv6/bits' with a 0-128 prefix and a valid v6 network part.
+	function is_subnetv6($subnet) {
+		if (!is_string($subnet) || strpos($subnet, '/') === false) {
+			return false;
+		}
+		list($ip, $bits) = explode('/', $subnet, 2);
+		return (is_ipaddrv6($ip) && ctype_digit($bits) && (int) $bits >= 0 && (int) $bits <= 128);
+	}
+}
+
+if (!function_exists('is_subnet')) {
+	// pfSense util.inc: v4 OR v6 subnet.
+	function is_subnet($subnet) {
+		return (is_subnetv4($subnet) || is_subnetv6($subnet));
+	}
+}
+
 if (!function_exists('is_hostname')) {
 	// Reached only by PFB_FILTER_HOSTNAME, which the seed suite does not exercise.
 	// Fail fast rather than guess pfSense's semantics (a guessed double could let a
@@ -131,10 +160,18 @@ if (!function_exists('unlink_if_exists')) {
 }
 
 if (!function_exists('resolve_host_addresses')) {
-	// Only reached by PFB_FILTER_URL, which the seed suite does not exercise. Fail
-	// fast rather than return a guessed [] that could hide a missing real double.
+	// pfSense util.inc returns a list of ['type'=>'A'|'AAAA'|'CNAME','data'=>...]
+	// records (or [] when a host does not resolve). FeedHostAllowedTest drives the
+	// guard by seeding $GLOBALS['pfb_test_resolve_map'] (host => records | false).
+	// A host absent from the map keeps the original fail-fast, so an unrelated path
+	// reaching this double still surfaces as a missing double, not a silent [].
 	function resolve_host_addresses($host, $records = [], $dnscache = false) {
-		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path');
+		$map = $GLOBALS['pfb_test_resolve_map'] ?? null;
+		if (is_array($map) && array_key_exists($host, $map)) {
+			$result = $map[$host];
+			return $result === false ? [] : $result;
+		}
+		throw new LogicException(__FUNCTION__ . '() double not implemented — add a real one before testing this path (host: ' . (string) $host . ')');
 	}
 }
 
