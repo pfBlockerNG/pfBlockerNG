@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tarfile
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 
 # Channel identity (mirrors add-repo.sh): package name + one-line blurb, in
 # display order. The channel of a package is read from its name suffix.
@@ -69,6 +70,16 @@ def ver_key(v: str) -> list[int]:
     return [int(x) for x in re.findall(r"\d+", v)]
 
 
+def artifact_datetime(mtime_epoch: float) -> str:
+    """The artifact's actual publish datetime (UTC, minute precision) from its mtime.
+
+    The .pkg keeps its real build time end-to-end: build-pkg-portable writes it then,
+    the nightly retention cache preserves it, and build-repo-portable copies it onto
+    the published file (os.utime). So this distinguishes several nightlies built on
+    the same day (they differ by build time, not just the version's date)."""
+    return datetime.fromtimestamp(mtime_epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def read_manifest_zstd(path: str) -> dict:
     """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
     if shutil.which("zstd") is None:
@@ -100,6 +111,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "version": ver,
                     "abi": abi,
                     "size": os.path.getsize(path),
+                    "published": artifact_datetime(os.path.getmtime(path)),
                     "rel": os.path.relpath(path, site),
                 }
             )
@@ -191,13 +203,14 @@ def _table_html(rows: list[dict]) -> str:
     body = "".join(
         f"<tr><td>{_esc(r['channel'])}</td><td>{_esc(r['name'])}</td>"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f'<td class="num">{_esc(r.get("published", ""))}</td>'
         f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
         for r in rows
     )
     return (
         "<table><thead><tr><th>Channel</th><th>Package</th><th>Version</th>"
-        f"<th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
+        f"<th>Published</th><th>ABI</th><th>Size</th></tr></thead><tbody>{body}</tbody></table>"
     )
 
 

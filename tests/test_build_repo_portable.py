@@ -33,6 +33,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -198,6 +199,29 @@ def test_meta_conf_is_byte_exact(tmp_path: Path) -> None:
     )
     assert (bucket / "meta.conf").read_text() == expected
     assert (bucket / "meta").read_text() == expected
+
+
+def test_published_pkg_preserves_source_mtime(tmp_path: Path) -> None:
+    """The published .pkg keeps the SOURCE artifact's mtime (its real build time).
+
+    The landing page reads this mtime as the publish datetime, so it must survive
+    catalog generation — otherwise a cache-restored nightly would wrongly show the
+    regeneration run's time. Set a fixed past mtime on the input and assert it rides
+    through to the published copy.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    src = in_dir / "demo-1.0_1.pkg"
+    make_pkg(src)
+    build_mtime = 1700000000  # 2023-11-14, clearly before "now"
+    os.utime(src, (build_mtime, build_mtime))
+
+    out = tmp_path / "out"
+    brp.build_repo(in_dir, out)
+
+    dest = out / "FreeBSD:15:amd64" / "demo-1.0_1.pkg"
+    assert dest.is_file()
+    assert int(dest.stat().st_mtime) == build_mtime
 
 
 # --------------------------------------------------------------------------- #
