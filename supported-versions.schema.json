@@ -35,7 +35,7 @@
           },
           "freebsd_major": {
             "type": "string",
-            "description": "FreeBSD major version digit only, e.g. '15'. Used to construct the ABI tag FreeBSD:<major>:amd64 for build-pkg-linux.yml and for artifact dedup (one .pkg per distinct major)."
+            "description": "FreeBSD major version digit only, e.g. '15'. Used to construct the ABI tag FreeBSD:<major>:<arch> for build-pkg-linux.yml and for artifact dedup (one .pkg per distinct (major, arch) pair)."
           },
           "php_version": {
             "type": "string",
@@ -57,7 +57,7 @@
           },
           "ci": {
             "type": "boolean",
-            "description": "true = include in the CI smoke matrix (CE, or Plus from its private licensed image). false = build-only (use for a beta with no CI image yet)."
+            "description": "true = include in the CI smoke matrix (CE, or Plus from its private licensed image). false = build-only (use for a beta, or an arch/platform with no CI image yet, e.g. aarch64)."
           },
           "image_name": {
             "type": "string",
@@ -66,6 +66,7 @@
           "arch": {
             "type": "string",
             "enum": ["amd64", "aarch64"],
+            "default": "amd64",
             "description": "Target ABI architecture. Omit (or 'amd64') for the standard amd64 build; the reader resolves missing/empty to 'amd64'. 'aarch64' = Netgate ARM appliances (Plus-only); the build keys on (freebsd_major, arch) so an aarch64 entry yields a FreeBSD:<major>:aarch64 .pkg. No ARM CI image exists yet, so an aarch64 entry must be build-only (ci=false)."
           }
         },
