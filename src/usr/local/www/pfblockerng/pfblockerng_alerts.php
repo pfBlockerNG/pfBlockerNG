@@ -1908,6 +1908,15 @@ if ($alert_summary) {
 }
 
 
+// HTML-encode a log/host-derived data token before it is folded into the
+// Alerts/Reports table markup. Every value that originates from a parsed log
+// line, a resolved/DHCP hostname, or an IDN conversion must pass through this
+// at the point it enters cell markup, so HTML metacharacters render as text
+// (the intentional static markup around it stays unencoded).
+function pfb_hsc($value) {
+	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+}
+
 // Function to Filter Alerts report on user defined input
 function pfb_match_filter_field($flent, $fields) {
 
@@ -1965,7 +1974,7 @@ function dnsbl_log_details($fields) {
 	}
 	if (strpos($fields[5], 'Python') !== FALSE) {
 		$isPython	= TRUE;
-		$pfb_python	= "&nbsp;<i class=\"fa-solid fa-bolt\" title=\"{$fields[5]}\"></i>";
+		$pfb_python	= "&nbsp;<i class=\"fa-solid fa-bolt\" title=\"" . pfb_hsc($fields[5]) . "\"></i>";
 	}
 
 	// Select blocked Domain or Evaluated Domain
@@ -1990,45 +1999,54 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 
 	$isWhitelist_found = FALSE;
 
+	// HTML-encoded copies of the log-derived tokens that get folded into the
+	// title/id/href markup below (the raw values are still used for lookups).
+	$h_f2		= pfb_hsc($fields[2]);
+	$h_f6		= pfb_hsc($fields[6]);
+	$h_f7		= pfb_hsc($fields[7]);
+	$h_f8		= pfb_hsc($fields[8]);
+	$h_qdomain	= pfb_hsc($qdomain);
+
 	$ex_dom = $s_txt = '';
 	if ($isExclusion) {
 		$wt_line = rtrim(array_get_path($clists, "tldexclusion/data/{$fields[7]}", ''), "\x00..\x1F");
+		$h_wt_line = pfb_hsc($wt_line);
 		$s_txt  = "Note:&emsp;The following Domain is in the TLD Exclusion customlist:\n\n"
-			. "TLD Exclusion:&emsp;[ {$wt_line} ]\n\n"
+			. "TLD Exclusion:&emsp;[ {$h_wt_line} ]\n\n"
 			. "&#8226; TLD Exclusions require a Force Reload when a Domain is initially added.\n"
 			. "&#8226; To remove this Domain from the TLD Exclusion customlist, Click 'OK'";
 
 		$ex_dom = '&nbsp;<i class="fa-regular fa-trash-can no-confirm icon-pointer" id="DNSBLWT|'
-			. 'delete_exclusion|' . $fields[7] . '" title="' . $s_txt . '"></i>';
+			. 'delete_exclusion|' . $h_f7 . '" title="' . $s_txt . '"></i>';
 	}
 
 	$supp_dom = $s_txt = '';
 	// Default Whitelist text for DNSBL/TLD domains
 	if ($isTLD) {
 		$s_txt  = "Note:&emsp;The following Domain was Wildcard blocked via TLD.\n\n"
-			. "Blocked Domain:&emsp;&emsp;[ {$fields[2]} ]\n"
-			. "Evaluated Domain:&emsp;&nbsp;[ {$fields[7]} ]\n\n"
-			. "DNSBL Groupname:&emsp;[ {$fields[6]} ]\n"
-			. "DNSBL Feedname:&emsp;&nbsp;&nbsp;[ {$fields[8]} ]\n\n";
+			. "Blocked Domain:&emsp;&emsp;[ {$h_f2} ]\n"
+			. "Evaluated Domain:&emsp;&nbsp;[ {$h_f7} ]\n\n"
+			. "DNSBL Groupname:&emsp;[ {$h_f6} ]\n"
+			. "DNSBL Feedname:&emsp;&nbsp;&nbsp;[ {$h_f8} ]\n\n";
 
-		$s_txt .= "Whitelist [ {$fields[2]} ]\n\n"
-			. "Note:&emsp;This will immediately remove the blocked Domain\n"
-			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n" 
-			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
-			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
-			. "Whitelisting Options:\n\n"
-			. "1) Wildcard whitelist [ .{$fields[2]} ]\n"
-			. "2) Whitelist only [ {$fields[2]} ]\n";
-	}
-	else {
-		$s_txt = "Whitelist [ {$fields[2]} ]\n\n"
+		$s_txt .= "Whitelist [ {$h_f2} ]\n\n"
 			. "Note:&emsp;This will immediately remove the blocked Domain\n"
 			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n"
 			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
 			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
 			. "Whitelisting Options:\n\n"
-			. "1) Wildcard whitelist [ .{$fields[2]} ]\n"
-			. "2) Whitelist only [ {$fields[2]} ]\n";
+			. "1) Wildcard whitelist [ .{$h_f2} ]\n"
+			. "2) Whitelist only [ {$h_f2} ]\n";
+	}
+	else {
+		$s_txt = "Whitelist [ {$h_f2} ]\n\n"
+			. "Note:&emsp;This will immediately remove the blocked Domain\n"
+			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n"
+			. "&emsp;&emsp;&emsp;&nbsp;(CNAMES: Define the external DNS server in Alert settings\n"
+			. "&emsp;&emsp;&emsp;&nbsp;&nbsp;and ensure that the Resolver has access to the External DNS server.)\n\n"
+			. "Whitelisting Options:\n\n"
+			. "1) Wildcard whitelist [ .{$h_f2} ]\n"
+			. "2) Whitelist only [ {$h_f2} ]\n";
 	}
 
 	// Determine if Domain is blocked via TLD Blacklist
@@ -2039,29 +2057,30 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		
 			// Default - Domain not in Whitelist
 			$supp_dom = '<i class="fa-solid fa-plus icon-pointer" id="DNSBLWT|' . 'add|'
-					. $fields[7] . '|' . $fields[8] . '" title="' . $s_txt . '"></i>';
+					. $h_f7 . '|' . $h_f8 . '" title="' . $s_txt . '"></i>';
 		}
 
 		// Determine if Blocked Domain is in DNSBL Whitelist
 		if (isset($clists['dnsblwhitelist']['data'][$fields[2]])) {
 			$w_line = rtrim($clists['dnsblwhitelist']['data'][$fields[2]], "\x00..\x1F");
+			$h_w_line = pfb_hsc($w_line);
 			$isWhitelist_found = TRUE;
 
 			// Verify if the Whitelisted Domain matches the Evaluated Domain
 			if ($fields[2] == $qdomain || $fields[6] == 'Unknown') {
 				$s_txt = "Note:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-					. "Whitelisted:&emsp;[ {$w_line} ]\n\n"
+					. "Whitelisted:&emsp;[ {$h_w_line} ]\n\n"
 					. "To remove this Domain from the DNSBL Whitelist, press 'OK'";
 			} else {
 				$s_txt = "Note:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-					. "Whitelisted:&emsp;[ {$w_line} ]\n\n"
+					. "Whitelisted:&emsp;[ {$h_w_line} ]\n\n"
 					. "However it is still being Wildcard blocked by the following Domain:\n"
-					. "Whitelisted:&emsp;[ {$qdomain} ]\n\n"
-					. "To remove this Domain [ {$fields[2]} ] from the DNSBL Whitelist"
+					. "Whitelisted:&emsp;[ {$h_qdomain} ]\n\n"
+					. "To remove this Domain [ {$h_f2} ] from the DNSBL Whitelist"
 					. ", Click 'OK'";
 			}
 			$supp_dom = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|'
-					. 'delete_domain|' . $fields[2] . '" title="' . $s_txt . '"></i>';
+					. 'delete_domain|' . $h_f2 . '" title="' . $s_txt . '"></i>';
 		}
 
 		// Determine if Blocked Domain is in DNSBL Whitelist (prefixed by a "dot" )
@@ -2075,26 +2094,28 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 				$d_query = implode('.', array_slice($dparts, -$i, $i, TRUE));
 				if (isset($clists['dnsblwhitelist']['data']['.' . $d_query])) {
 					$w_line = rtrim($clists['dnsblwhitelist']['data']['.' . $d_query], "\x00..\x1F");
+					$h_w_line = pfb_hsc($w_line);
+					$h_d_query = pfb_hsc($d_query);
 					$isWhitelist_found = TRUE;
 
 					if ($d_query == $qdomain || $fields[6] == 'Unknown') {
 						$s_txt = "Note:&emsp;The following Domain exists"
 							. " in the DNSBL Whitelist:\n\n"
-							. "Whitelisted:&emsp;[ {$w_line} ]\n\n"
+							. "Whitelisted:&emsp;[ {$h_w_line} ]\n\n"
 							. "To remove this Domain from the DNSBL Whitelist,"
 							. " press 'OK'";
 					} else {
 						$s_txt = "Note:&emsp;The following Domain exists in the"
 							. " DNSBL Whitelist:\n\n"
-							. "Whitelisted:&emsp;[ {$w_line} ]\n\n"
+							. "Whitelisted:&emsp;[ {$h_w_line} ]\n\n"
 							. "However it is still being Wildcard blocked"
 							. " by the following Domain:\n"
-							. "Whitelisted:&emsp;[ {$qdomain} ]\n\n"
-							. "To remove this Domain [ {$d_query} ]"
+							. "Whitelisted:&emsp;[ {$h_qdomain} ]\n\n"
+							. "To remove this Domain [ {$h_d_query} ]"
 							. "from the DNSBL Whitelist, Click 'OK'";
 					}
 					$supp_dom = '<i class="fa-solid fa-trash-can no-confirm icon-pointer"'
-							. ' id="DNSBLWT|' . "delete_domainwildcard|" . $d_query
+							. ' id="DNSBLWT|' . "delete_domainwildcard|" . $h_d_query
 							. '" title="' . $s_txt . '"></i>';
 					break;
 				}
@@ -2104,19 +2125,19 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		// Root Domain blocking all Sub-Domains and is not in whitelist and not in TLD Exclusion
 		if ($isTLD && !$isWhitelist_found && !$isExclusion) {
 			$supp_dom = '<i class="fa-solid fa-plus-circle icon-pointer" id="DNSBLWT|' . 'add|'
-				. $fields[7] . '|' . $fields[8] . '|' . $fields[5] . '" title="' . $s_txt . '"></i>';
+				. $h_f7 . '|' . $h_f8 . '|' . pfb_hsc($fields[5]) . '" title="' . $s_txt . '"></i>';
 		}
 	}
 
 	// Whole TLD is blocked
 	else {
 		$s_txt  = "Note:&emsp;The following Domain was blocked via 'DNSBL TLD' (TLD Blacklist):\n\n"
-			. "Blocked Domain:&emsp;&emsp;[ {$fields[2]} ]\n"
-			. "Evaluated Domain:&emsp;&nbsp;[ {$fields[7]} ]\n\n"
-			. "Add [ {$fields[2]} ] to the TLD Whitelist?";
+			. "Blocked Domain:&emsp;&emsp;[ {$h_f2} ]\n"
+			. "Evaluated Domain:&emsp;&nbsp;[ {$h_f7} ]\n\n"
+			. "Add [ {$h_f2} ] to the TLD Whitelist?";
 
 		$supp_dom = '<i class="fa-regular fa-hand icon-pointer" id="DNSBLWT|' . 'tld|'
-			. $fields[2] . '|' . $fields[7] . '" title="' . $s_txt . '"></i>';
+			. $h_f2 . '|' . $h_f7 . '" title="' . $s_txt . '"></i>';
 	}
 
 	return array ($supp_dom, $ex_dom, $isWhitelist_found);
@@ -2233,7 +2254,7 @@ function convert_dnsbl_log($mode, $fields) {
 				$pfbalertdnsbl[2] = 'Unknown';
 				break;
 			} elseif (ip_in_subnet($fields[3], $subnet[0])) {
-				$pfbalertdnsbl[2] = "{$subnet[1]}";
+				$pfbalertdnsbl[2] = pfb_hsc($subnet[1]);
 				break;
 			}
 		}
@@ -2244,14 +2265,16 @@ function convert_dnsbl_log($mode, $fields) {
 	if (!empty($hostname)) {
 		$h_title		= '';
 		if (strlen($hostname) >= 25) {
-			$h_title	= $hostname;
-			$hostname	= substr($hostname, 0, 24) . "<small>...</small>";
+			$h_title	= pfb_hsc($hostname);
+			$hostname	= pfb_hsc(substr($hostname, 0, 24)) . "<small>...</small>";
+		} else {
+			$hostname	= pfb_hsc($hostname);
 		}
 
-		$pfbalertdnsbl[7]	= $fields[3];
+		$pfbalertdnsbl[7]	= pfb_hsc($fields[3]);
 		$pfbalertdnsbl[17]	= "<span title=\"{$h_title}\">{$hostname}</span>";
 	} else {
-		$pfbalertdnsbl[7]	= $fields[3];
+		$pfbalertdnsbl[7]	= pfb_hsc($fields[3]);
 		$pfbalertdnsbl[17]	= '';
 	}
 
@@ -2260,11 +2283,13 @@ function convert_dnsbl_log($mode, $fields) {
 			$p_domain = "{$p_domain} [" . idn_to_utf8($p_domain) . "]";
 		}
 
+		$p_domain_title = pfb_hsc($p_domain);
 		if (strlen($p_domain) >= ($mode != 'unified' ? 60 : 40)) {
-			$p_domain = "<s title=\"Previous Domain: {$p_domain}\">" . substr($p_domain, 0, ($mode != 'unified' ? 59 : 39))
+			$p_domain = "<s title=\"Previous Domain: {$p_domain_title}\">"
+					. pfb_hsc(substr($p_domain, 0, ($mode != 'unified' ? 59 : 39)))
 					. "</s><small>...</small><br />";
 		} else {
-			$p_domain = "<s title=\"Previous Domain: {$p_domain}\">{$p_domain}</s><br />";
+			$p_domain = "<s title=\"Previous Domain: {$p_domain_title}\">" . pfb_hsc($p_domain) . "</s><br />";
 		}
 	}
 
@@ -2273,7 +2298,9 @@ function convert_dnsbl_log($mode, $fields) {
 		$f2 = "{$f2} [" . idn_to_utf8($f2) . "]";
 	}
 	if (strlen($f2) >= ($mode != 'unified' ? 60 : 40)) {
-		$f2 = substr($f2, 0, ($mode != 'unified' ? 59 : 39)) . "<small>...</small>";
+		$f2 = pfb_hsc(substr($f2, 0, ($mode != 'unified' ? 59 : 39))) . "<small>...</small>";
+	} else {
+		$f2 = pfb_hsc($f2);
 	}
 
 	if ($isCNAME) {
@@ -2282,7 +2309,9 @@ function convert_dnsbl_log($mode, $fields) {
 			$f7		= "{$f7} [" . idn_to_utf8($f7) . "]";
 		}
 		if (strlen($f7) >= ($mode != 'unified' ? 52 : 32)) {
-			$f7		= substr($f7, 0, ($mode != 'unified' ? 51 : 31)) . "<small>...</small>";
+			$f7		= pfb_hsc(substr($f7, 0, ($mode != 'unified' ? 51 : 31))) . "<small>...</small>";
+		} else {
+			$f7		= pfb_hsc($f7);
 		}
 		$pfbalertdnsbl[8]	= "{$p_domain}Domain: {$f2}<br />CNAME: {$f7}";
 	} else {
@@ -2294,7 +2323,7 @@ function convert_dnsbl_log($mode, $fields) {
 	// Add Title - Header line to Feed/Group
 	if ($fields[6] == 'Unknown') {
 		if ($isTLD) {
-			$f_g_title = "The domain: [ {$fields[7]} ] is not currently listed in DNSBL as a TLD wildcard blocked domain.";
+			$f_g_title = "The domain: [ " . pfb_hsc($fields[7]) . " ] is not currently listed in DNSBL as a TLD wildcard blocked domain.";
 		} else {
 			$f_g_title = 'The domain is not currently listed in DNSBL!';
 		}
@@ -2304,28 +2333,32 @@ function convert_dnsbl_log($mode, $fields) {
 	}
 
 	if (!empty($p_feed)) {
-		$f_g_title .= "&#013;Previous Feed: {$p_feed}";
+		$f_g_title .= "&#013;Previous Feed: " . pfb_hsc($p_feed);
 		if (strlen($p_feed) >= 25) {
-			$p_feed	= substr($p_feed, 0, 24) . "<small>...</small>";
+			$p_feed	= pfb_hsc(substr($p_feed, 0, 24)) . "<small>...</small>";
+		} else {
+			$p_feed	= pfb_hsc($p_feed);
 		}
 		$p_feed	= "<s>{$p_feed}</s><br />";
 	}
 	if (!empty($fields[8])) {
-		$f_g_title .= "&#013;Feed: {$fields[8]}";
+		$f_g_title .= "&#013;Feed: " . pfb_hsc($fields[8]);
 	}
 	if (!empty($p_group)) {
-		$f_g_title .= "&#013;Previous Group: {$p_group}";
+		$f_g_title .= "&#013;Previous Group: " . pfb_hsc($p_group);
 		if (strlen($p_group) >= 25) {
-			$p_group = substr($p_group, 0, 24) . "<small>...</small>";
+			$p_group = pfb_hsc(substr($p_group, 0, 24)) . "<small>...</small>";
+		} else {
+			$p_group = pfb_hsc($p_group);
 		}
 		$p_group = "<s>{$p_group}</s><br />";
 	}
 	if (!empty($fields[6])) {
-		$f_g_title .= "&#013;Group: {$fields[6]}";
+		$f_g_title .= "&#013;Group: " . pfb_hsc($fields[6]);
 	}
 
-	$pfbalertdnsbl[13]	= "{$p_group}{$fields[6]}";
-	$pfbalertdnsbl[15]	= "{$p_feed}{$fields[8]}";
+	$pfbalertdnsbl[13]	= "{$p_group}" . pfb_hsc($fields[6]);
+	$pfbalertdnsbl[15]	= "{$p_feed}" . pfb_hsc($fields[8]);
 
 	// Query type suffix (Python mode logs the record type as field [10]; older
 	// Unbound-mode lines carry it in the b_type suffix [5] and lack field [10]).
@@ -2333,26 +2366,28 @@ function convert_dnsbl_log($mode, $fields) {
 	if (isset($fields[10])) {
 		$qtype = trim($fields[10]);
 		if ($qtype != '' && $qtype != 'Unknown') {
-			$qtype_sfx = " | {$qtype}";
+			$qtype_sfx = " | " . pfb_hsc($qtype);
 		}
 	}
 
 	if (!empty($fields[4])) {
 		if (strlen($fields[4]) >= 25) {
-			$f4 = substr($fields[4], 0, 24) . "<small>...</small>";
-			$fields[4] = "<span title=\"{$fields[4]}\">{$f4}</span>";
+			$f4 = pfb_hsc(substr($fields[4], 0, 24)) . "<small>...</small>";
+			$fields[4] = "<span title=\"" . pfb_hsc($fields[4]) . "\">{$f4}</span>";
+		} else {
+			$fields[4] = pfb_hsc($fields[4]);
 		}
-		$pfbalertdnsbl[19] = "{$fields[0]} | {$fields[4]}{$qtype_sfx}";
+		$pfbalertdnsbl[19] = pfb_hsc($fields[0]) . " | {$fields[4]}{$qtype_sfx}";
 	} else {
-		$pfbalertdnsbl[19] = "{$fields[0]}{$qtype_sfx}";
+		$pfbalertdnsbl[19] = pfb_hsc($fields[0]) . "{$qtype_sfx}";
 	}
 
 	if (!empty($p_mode)) {
-		$p_mode = "<s title=\"Previous Blocking Mode\">{$p_mode}</s> | ";
+		$p_mode = "<s title=\"Previous Blocking Mode\">" . pfb_hsc($p_mode) . "</s> | ";
 	}
-	$pfbalertdnsbl[20]	= "{$p_mode}{$fields[5]}";
+	$pfbalertdnsbl[20]	= "{$p_mode}" . pfb_hsc($fields[5]);
 
-	$pfbalertdnsbl[99]	= $fields[1];	// Timestamp
+	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
 	// If alerts filtering is selected, process filters as required.
 	if ($pfb['filterlogentries']) {
@@ -2394,34 +2429,37 @@ function convert_dnsbl_log($mode, $fields) {
 		$unlock_type = $fields[5];
 	}
 
+	$h_qdomain	= pfb_hsc($qdomain);
+	$h_unlock_type	= pfb_hsc($unlock_type);
+
 	if (!isset($dnsbl_unlock[$qdomain])) {
 		if ($isWhitelist_found) {
 			$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-				. "Whitelisted:&emsp;[ {$qdomain} ]\n\n"
+				. "Whitelisted:&emsp;[ {$h_qdomain} ]\n\n"
 				. "This Domain can be temporarily Relocked into DNSBL\n"
 				. "by selecting the Unlock Icon!";
 
 			$unlock_dom = '<i class="fa-solid fa-unlock text-warning" id="DNSBL_RELCK|'
-					. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
+					. $h_qdomain . '|' . $h_unlock_type . '" title="' . $s_txt . '"></i>';
 		}
 		else {
 			$unlock_dom = '<i class="fa-solid fa-lock text-danger" id="DNSBL_ULCK|'
-					. $qdomain . '|' . $unlock_type
-					. '" title="Unlock Domain: [ ' . $qdomain . '] from DNSBL?' . $tnote . '" ></i>';
+					. $h_qdomain . '|' . $h_unlock_type
+					. '" title="Unlock Domain: [ ' . $h_qdomain . '] from DNSBL?' . $tnote . '" ></i>';
 		}
 	} else {
 		if ($isWhitelist_found) {
 			$s_txt = "\n\nNote:&emsp;The following Domain exists in the DNSBL Whitelist:\n\n"
-				. "Whitelisted:&emsp;[ {$wt_line} ]\n\n"
+				. "Whitelisted:&emsp;[ " . pfb_hsc($wt_line) . " ]\n\n"
 				. "Unlock this Domain by selecting the Unlock Icon!";
 
 			$unlock_dom = '<i class="fa-solid fa-lock text-warning" id="DNSBL_REULCK|'
-				. $qdomain . '|' . $unlock_type . '" title="' . $s_txt . '"></i>';
+				. $h_qdomain . '|' . $h_unlock_type . '" title="' . $s_txt . '"></i>';
 		}
 		else {
 			$unlock_dom = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|'
-				. $qdomain . '|' . $unlock_type . '" title="Re-Lock Domain: ['
-				. $qdomain . ' ] back into DNSBL?' . $tnote . '" ></i>';
+				. $h_qdomain . '|' . $h_unlock_type . '" title="Re-Lock Domain: ['
+				. $h_qdomain . ' ] back into DNSBL?' . $tnote . '" ></i>';
 		}
 	}
 
@@ -2435,7 +2473,7 @@ function convert_dnsbl_log($mode, $fields) {
 	$alert_dom = '';
 	if ($fields[6] != 'Unknown') {
 		$alert_dom = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" ' .
-				'href="/pfblockerng/pfblockerng_threats.php?domain=' . $qdomain . '"></a>';
+				'href="/pfblockerng/pfblockerng_threats.php?domain=' . pfb_hsc($qdomain) . '"></a>';
 	}
 
 	$dup_cnt = '';
@@ -2518,9 +2556,12 @@ function convert_dns_reply_log($mode, $fields) {
 	$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNS']++;
 
 	$hostname = $local_hosts[$fields[7]] ?: '';
+	$title_hostname = '';
 	if (!empty($hostname) && strlen($hostname) >= 25) {
-		$title_hostname = $hostname;
-		$hostname	= substr($hostname, 0, 24) . "<small>...</small>";
+		$title_hostname = pfb_hsc($hostname);
+		$hostname	= pfb_hsc(substr($hostname, 0, 24)) . "<small>...</small>";
+	} else {
+		$hostname	= pfb_hsc($hostname);
 	}
 
 	// Determine if Domain is a TLD Exclusion
@@ -2546,7 +2587,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 		// Threat Lookup Icon
 		$icons = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" ' .
-				'href="/pfblockerng/pfblockerng_threats.php?domain=' . $fields[6] . '"></a>';
+				'href="/pfblockerng/pfblockerng_threats.php?domain=' . pfb_hsc($fields[6]) . '"></a>';
 
 		if (!empty($supp_dom)) {
 			$icons .= "&nbsp;{$supp_dom}";
@@ -2554,9 +2595,10 @@ function convert_dns_reply_log($mode, $fields) {
 
 		// Default - Add to Blacklist
 		else {
+			$h_f6 = pfb_hsc($fields[6]);
 			$icons .= '&nbsp;<i class="fa-solid fa-plus icon-pointer" id="DNSBLWT|' . 'dnsbl_add|'
-				. $fields[6] . '|' . implode('|', $clists['dnsbl']['options']) . '" title="'
-				. "Add Domain [ {$fields[6]} ] to DNSBL" . '"></i>';
+				. $h_f6 . '|' . implode('|', $clists['dnsbl']['options']) . '" title="'
+				. "Add Domain [ {$h_f6} ] to DNSBL" . '"></i>';
 		}
 
 		if (!empty($ex_dom)) {
@@ -2564,25 +2606,39 @@ function convert_dns_reply_log($mode, $fields) {
 		}
 	}
 
+	// Timestamp / Type / Orig Type / Final Type / SRC IP / GeoIP printed verbatim
+	$fields[1]	= pfb_hsc($fields[1]);
+	$fields[2]	= pfb_hsc($fields[2]);
+	$fields[3]	= pfb_hsc($fields[3]);
+	$fields[4]	= pfb_hsc($fields[4]);
+	$fields[7]	= pfb_hsc($fields[7]);
+	$fields[9]	= pfb_hsc($fields[9]);
+
 	// Truncate long TTLs
 	$pfb_title5 = '';
 	if (strlen($fields[5]) >= 6) {
-		$pfb_title5	= $fields[5];
-		$fields[5]	= substr($fields[5], 0, 5) . "<small>...</small>";
+		$pfb_title5	= pfb_hsc($fields[5]);
+		$fields[5]	= pfb_hsc(substr($fields[5], 0, 5)) . "<small>...</small>";
+	} else {
+		$fields[5]	= pfb_hsc($fields[5]);
 	}
 
 	// Truncate long Domain names
 	$pfb_title6 = '';
 	if (strlen($fields[6]) >= ($mode != 'unified' ? 45 : 30)) {
-		$pfb_title6	= $fields[6];
-		$fields[6]	= substr($fields[6], 0, ($mode != 'unified' ? 44 : 29)) . "<small>...</small>";
+		$pfb_title6	= pfb_hsc($fields[6]);
+		$fields[6]	= pfb_hsc(substr($fields[6], 0, ($mode != 'unified' ? 44 : 29))) . "<small>...</small>";
+	} else {
+		$fields[6]	= pfb_hsc($fields[6]);
 	}
 
 	// Truncate long Resolved names
 	$pfb_title8 = '';
 	if (strlen($fields[8]) >= 17) {
-		$pfb_title8	= $fields[8];
-		$fields[8]	= substr($fields[8], 0, 16) . "<small>...</small>";
+		$pfb_title8	= pfb_hsc($fields[8]);
+		$fields[8]	= pfb_hsc(substr($fields[8], 0, 16)) . "<small>...</small>";
+	} else {
+		$fields[8]	= pfb_hsc($fields[8]);
 	}
 
 	if ($mode != 'Unified') {
@@ -2693,8 +2749,8 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	if ($fields[6] == 'ICMP' || $fields[6] == 'ICMPV6') {
 		$srcport = '';
 	} else {
-		$srcport = ":{$fields[9]}";
-		$dstport = ":{$fields[10]}";
+		$srcport = ":" . pfb_hsc($fields[9]);
+		$dstport = ":" . pfb_hsc($fields[10]);
 	}
 
 	// IPv4 or IPv6 event
@@ -2730,6 +2786,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$host		= $fields[8];
 		$hostname	= array( 'src' => $fields[17], 'dst' => $fields[16] );
 	}
+
+	// HTML-encode the resolved/DHCP hostnames before they are printed as cell text.
+	$hostname['src'] = pfb_hsc($hostname['src']);
+	$hostname['dst'] = pfb_hsc($hostname['dst']);
 
 	// Determine folder type
 	$query_prefix	= "|";
@@ -2775,7 +2835,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		if (strpos($fields[18], '|') !== FALSE) {
 			$fields[18]	= str_replace('ASN:', '', $fields[18]);
 			$asn		= explode('|', $fields[18], 3);
-			$fields[18] = "<span title=\"|" . htmlspecialchars($asn[2]) . "\">" . htmlspecialchars($asn[1]) . "</span>";
+			$fields[18] = "<span title=\"|" . pfb_hsc($asn[2]) . "\">" . pfb_hsc($asn[1]) . "</span>";
 		} else {
 			$fields[18] = '';
 		}
@@ -2838,8 +2898,14 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$eval_ip = $eval_new;
 	}
 
+	// HTML-encoded copies of the IP/alias tokens that get folded into the icon
+	// id/title/href markup below (the raw values stay for lookups + exec paths).
+	$h_host		= pfb_hsc($host);
+	$h_eval_ip	= pfb_hsc($eval_ip);
+	$h_table	= pfb_hsc($table);
+
 	$alert_ip = '<a class="fa-solid fa-info icon-pointer" target="_blank" href="/pfblockerng/pfblockerng_threats.php?host=' .
-			$host . '" title="Click for Threat source IP Lookup for [ ' . $host . ' ]"></a>';
+			$h_host . '" title="Click for Threat source IP Lookup for [ ' . $h_host . ' ]"></a>';
 
 	// Suppression Icon
 	$supp_ip = $unlock_ip = '&nbsp;&nbsp;&nbsp;';
@@ -2876,14 +2942,14 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 				// Host found in a Permit Whitelist Alias
 				if ($pfb_found) {
 					$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a Permit Alias:\n\n"
-							. "Permitted IP:&emsp;[ {$w_line} ]\n"
-							. "Evaluated IP:&emsp;[ {$eval_ip} ]\n"
-							. "IP Aliasname:&emsp;[ {$atype} ]\n\n"
+							. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
+							. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
+							. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
 
 							. "To remove this IP from the Whitelist, press 'OK'";
 
-					$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $host
-							. '|' . $atype . '" title="' . $supp_ip_txt . '"></i>';
+					$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $h_host
+							. '|' . pfb_hsc($atype) . '" title="' . $supp_ip_txt . '"></i>';
 				}
 			}
 
@@ -2895,11 +2961,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 				}
 
 				$supp_ip_txt  = "Note:&emsp;The following IPv{$vtype} was blocked:\n\n"
-						. "Blocked IP:&emsp;&emsp;[ {$host} ]\n"
-						. "Evaluated IP:&emsp;&nbsp;[ {$eval_ip} ]\n\n"
-						. "IP Aliasname:&emsp;[ {$table} ]\n"
+						. "Blocked IP:&emsp;&emsp;[ {$h_host} ]\n"
+						. "Evaluated IP:&emsp;&nbsp;[ {$h_eval_ip} ]\n\n"
+						. "IP Aliasname:&emsp;[ {$h_table} ]\n"
 						. "IP Feedname:&emsp;&nbsp;[ "
-						. (!empty($feed_new) ? $feed_new : $fields[15]) . " ]\n\n"
+						. pfb_hsc(!empty($feed_new) ? $feed_new : $fields[15]) . " ]\n\n"
 
 						. "Whitelisting Options:\n\n"
 						. "1) Suppress the IP. This will immediately remove the IP\n"
@@ -2910,20 +2976,20 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "&emsp;A Force Update is required to add the associated Firewall Permit Rule!\n\n"
 						. "Click 'OK' to continue";
 
-				$supp_ip = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $host
-						. '|' . $table . $permit_option
+				$supp_ip = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $h_host
+						. '|' . $h_table . $permit_option
 						. '" title="' . $supp_ip_txt . '"></i>';
 			}
 		}
 		else {
 			$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a IP Suppression list:\n\n"
-					. "Suppressed IP:&emsp;[ {$w_line} ]\n"
-					. "Evaluated IP:&emsp;[ {$eval_ip} ]\n\n"
+					. "Suppressed IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
+					. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n\n"
 
 					. "To remove this IP from the Suppression list, press 'OK'";
 
-			$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ip|' . $host
-					. '|' . $table . '" title="' . $supp_ip_txt . '"></i>&emsp;';
+			$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ip|' . $h_host
+					. '|' . $h_table . '" title="' . $supp_ip_txt . '"></i>&emsp;';
 		}
 	}
 
@@ -2934,12 +3000,12 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
 		if (!isset($ip_unlock[$eval_ip])) {
-			$unlock_ip = '<i class="fa-solid fa-lock text-danger" id="IPULCK|' . $eval_ip . '|'  . $table
-					. '" title="Unlock IP: [ ' . $eval_ip . ' ] from Aliastable [ ' . $table . ' ]?'
+			$unlock_ip = '<i class="fa-solid fa-lock text-danger" id="IPULCK|' . $h_eval_ip . '|'  . $h_table
+					. '" title="Unlock IP: [ ' . $h_eval_ip . ' ] from Aliastable [ ' . $h_table . ' ]?'
 					. $tnote . '" ></i>';
 		} else {
-			$unlock_ip = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . $eval_ip . '|' . $table
-					. '" title="Re-Lock IP: [ ' . $eval_ip . ' ] back into Aliastable [ ' . $table . ' ]?'
+			$unlock_ip = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . $h_eval_ip . '|' . $h_table
+					. '" title="Re-Lock IP: [ ' . $h_eval_ip . ' ] back into Aliastable [ ' . $h_table . ' ]?'
 					. $tnote . '" ></i>';
 		}
 	}
@@ -2959,22 +3025,22 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 			if ($pfb_found) {
 				$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a Permit Alias:\n\n"
-						. "Permitted IP:&emsp;[ {$w_line} ]\n"
-						. "Evaluated IP:&emsp;[ {$eval_ip} ]\n"
-						. "IP Aliasname:&emsp;[ {$atype} ]\n\n"
+						. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
+						. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
+						. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
 
 						. "To remove this IP from the Whitelist, press 'OK'";
 
-				$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $host
-						. '|' . $atype . '" title="' . $supp_ip_txt . '"></i>';
+				$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $h_host
+						. '|' . pfb_hsc($atype) . '" title="' . $supp_ip_txt . '"></i>';
 			}
 			else {
 				$supp_ip_txt  = "Note:&emsp;The following IPv{$vtype} was blocked:\n\n"
-						. "Blocked IP:&emsp;&emsp;[ {$host} ]\n"
-						. "Evaluated IP:&emsp;&nbsp;[ {$eval_ip} ]\n\n"
-						. "IP Aliasname:&emsp;[ {$table} ]\n"
+						. "Blocked IP:&emsp;&emsp;[ {$h_host} ]\n"
+						. "Evaluated IP:&emsp;&nbsp;[ {$h_eval_ip} ]\n\n"
+						. "IP Aliasname:&emsp;[ {$h_table} ]\n"
 						. "IP Feedname:&emsp;&nbsp;[ "
-						. (!empty($feed_new) ? $feed_new : $fields[15]) . " ]\n\n"
+						. pfb_hsc(!empty($feed_new) ? $feed_new : $fields[15]) . " ]\n\n"
 
 						. "Whitelisting details:\n\n"
 						. "&#8226; To permit access to this Blocked IP, you can add it to any\n"
@@ -2985,7 +3051,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "Block/Reject rules\n&emsp;(Rule Order option)\n\n"
 						. "Click 'OK' to continue";
 
-				$supp_ip = '<i class="fa-solid fa-plus-circle icon-pointer" id="PFBIPWHITE|' . $host
+				$supp_ip = '<i class="fa-solid fa-plus-circle icon-pointer" id="PFBIPWHITE|' . $h_host
 						. '|' . implode('|', $clists['ipwhitelist' . $vtype]['options'])
 						. '" title="' . $supp_ip_txt . '"></i>';
 			}
@@ -3000,9 +3066,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// Threat port lookup
 	$query_port = '';
 	if ($p_query_port != $fields[10]) {
+		$h_dstport_q = pfb_hsc($fields[10]);
 		$query_port = '<a class="fa-solid fa-search icon-pointer" target="_blank" '
-				. 'href="/pfblockerng/pfblockerng_threats.php?port=' . $fields[10]
-				. '" title="Click for Threat Port Lookup [ ' . $fields[10] . ' ]"></a>';
+				. 'href="/pfblockerng/pfblockerng_threats.php?port=' . $h_dstport_q
+				. '" title="Click for Threat Port Lookup [ ' . $h_dstport_q . ' ]"></a>';
 	}
 
 	// Inbound event
@@ -3026,48 +3093,61 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 	// Add []'s to IPv6 addresses and add a zero-width space as soft-break opportunity after each colon if we have an IPv6 address (from Snort)
 	if ($fields[4] == 6) {
-		$fields[97] = '[' . str_replace(':', ':&#8203;', $fields[7]) . ']';
-		$fields[98] = '[' . str_replace(':', ':&#8203;', $fields[8]) . ']';
+		$fields[97] = '[' . str_replace(':', ':&#8203;', pfb_hsc($fields[7])) . ']';
+		$fields[98] = '[' . str_replace(':', ':&#8203;', pfb_hsc($fields[8])) . ']';
 	}
 	else {
-		$fields[97] = $fields[7];
-		$fields[98] = $fields[8];
+		$fields[97] = pfb_hsc($fields[7]);
+		$fields[98] = pfb_hsc($fields[8]);
 	}
 
 	if (strlen($fields[15]) >= 17) {
 		if (!empty($pfb_matchtitle)) {
 			$pfb_matchtitle .= '&#013;';
 		}
-		$pfb_matchtitle .= "Feed: {$fields[15]}";
-		$fields[15]	= substr($fields[15], 0, 16) . "<small>...</small>";
+		$pfb_matchtitle .= "Feed: " . pfb_hsc($fields[15]);
+		$fields[15]	= pfb_hsc(substr($fields[15], 0, 16)) . "<small>...</small>";
+	} else {
+		$fields[15]	= pfb_hsc($fields[15]);
 	}
 	if (strlen($feed_new) >= 17) {
 		if (!empty($pfb_matchtitle)) {
 			$pfb_matchtitle .= '&#013;';
 		}
-		$pfb_matchtitle .= "Feed new: {$feed_new}";
-		$feed_new	= substr($feed_new, 0, 16) . "<small>...</small>";
+		$pfb_matchtitle .= "Feed new: " . pfb_hsc($feed_new);
+		$feed_new	= pfb_hsc(substr($feed_new, 0, 16)) . "<small>...</small>";
+	} else {
+		$feed_new	= pfb_hsc($feed_new);
 	}
 
 	if (!empty($feed_new)) {
 		$fields[15]	= "<s>{$fields[15]}</s><br />{$feed_new}";
 	}
 
+	$fields[14]	= pfb_hsc($fields[14]);
 	if (!empty($eval_new)) {
-		$fields[14]	= "<s>{$fields[14]}</s><br />{$eval_new}";
+		$fields[14]	= "<s>{$fields[14]}</s><br />" . pfb_hsc($eval_new);
 	}
 
 	if (empty($fields[16])) {
 		$fields[16] = 'Unknown';
 	}
 	elseif (strlen($fields[16]) >= 22) {
-		$fields[16] = "<span title=\"{$fields[16]}\">" . substr($fields[16], 0, 21) . "<small>...</small></span>";
+		$fields[16] = "<span title=\"" . pfb_hsc($fields[16]) . "\">" . pfb_hsc(substr($fields[16], 0, 21)) . "<small>...</small></span>";
 	}
 
+	// Interface / Protocol / GeoIP code / Timestamp printed verbatim
+	$fields[2]	= pfb_hsc($fields[2]);
+	$fields[6]	= pfb_hsc($fields[6]);
+	$fields[12]	= pfb_hsc($fields[12]);
+	$fields[99]	= pfb_hsc($fields[99]);
+
+	$h_rule_alias	= pfb_hsc($fields[13]);
+	$h_rule_num	= pfb_hsc($fields[0]);
 	if (!empty($alias_new)) {
-		$rule = "<s>{$fields[13]}</s><br />{$alias_new}<br /><small>({$fields[0]})</small>";
+		$rule = "<s>{$h_rule_alias}</s><br />" . pfb_hsc($alias_new) . "<br /><small>({$h_rule_num})</small>";
 	} else {
-		$rule = "{$fields[13]}<br /><small>({$fields[0]})</small>";
+		$rule = "{$h_rule_alias}<br /><small>({$h_rule_num})</small>";
 	}
 
 	$dup_cnt = '';
