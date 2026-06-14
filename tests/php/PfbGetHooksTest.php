@@ -10,8 +10,13 @@ use PHPUnit\Framework\TestCase;
  * pre/post update hook runner. pfb_run_hooks() itself execs as root + logs (deep
  * runtime, ADR-04 live smoke), but the entry-selection + timeout-resolution it
  * delegates to are pure and pinned here. Branch coverage: pre/post, enabled
- * on/off, when mismatch, blank command, malformed entries, list order, and the
+ * on/off, when mismatch, blank script, malformed entries, list order, and the
  * timeout fallback (set vs unset vs invalid).
+ *
+ * A hook entry references a SCRIPT FILE (basename, the security model — see
+ * pfb_get_hooks()/pfb_run_hooks()), not a free-text command; the getter is pure and
+ * does NOT touch the filesystem (the file's existence/allow-list is the runner's
+ * run-time gate, pinned in PfbHookScriptsTest), so any non-empty string selects here.
  */
 #[CoversFunction('pfb_get_hooks')]
 #[CoversFunction('pfb_hook_timeout')]
@@ -26,11 +31,11 @@ final class PfbGetHooksTest extends TestCase
 	{
 		return [
 			'hooks' => ['row' => [
-				['command' => 'echo pre1',  'when' => 'pre',  'enabled' => 'on'],
-				['command' => 'echo post1', 'when' => 'post', 'enabled' => 'on'],
-				['command' => 'echo pre2',  'when' => 'pre',  'enabled' => ''],	// disabled
-				['command' => 'echo pre3',  'when' => 'pre',  'enabled' => 'on'],
-				['command' => 'echo post2', 'when' => 'post', 'enabled' => 'on'],
+				['script' => 'hook_pre_1.sh',  'when' => 'pre',  'enabled' => 'on'],
+				['script' => 'hook_post_1.sh', 'when' => 'post', 'enabled' => 'on'],
+				['script' => 'hook_pre_2.sh',  'when' => 'pre',  'enabled' => ''],	// disabled
+				['script' => 'hook_pre_3.sh',  'when' => 'pre',  'enabled' => 'on'],
+				['script' => 'hook_post_2.sh', 'when' => 'post', 'enabled' => 'on'],
 			]],
 		];
 	}
@@ -40,22 +45,22 @@ final class PfbGetHooksTest extends TestCase
 		$hooks = pfb_get_hooks(self::sampleConfig(), 'pre');
 		// pre2 is disabled and must be skipped; pre1 then pre3 in list order.
 		$this->assertCount(2, $hooks);
-		$this->assertSame('echo pre1', $hooks[0]['command']);
-		$this->assertSame('echo pre3', $hooks[1]['command']);
+		$this->assertSame('hook_pre_1.sh', $hooks[0]['script']);
+		$this->assertSame('hook_pre_3.sh', $hooks[1]['script']);
 	}
 
 	public function testSelectsEnabledPostHooksInListOrder(): void
 	{
 		$hooks = pfb_get_hooks(self::sampleConfig(), 'post');
 		$this->assertCount(2, $hooks);
-		$this->assertSame('echo post1', $hooks[0]['command']);
-		$this->assertSame('echo post2', $hooks[1]['command']);
+		$this->assertSame('hook_post_1.sh', $hooks[0]['script']);
+		$this->assertSame('hook_post_2.sh', $hooks[1]['script']);
 	}
 
 	public function testDisabledHookIsSkipped(): void
 	{
 		// Before: enabled => the hook is returned.
-		$cfg = ['hooks' => ['row' => [['command' => 'c', 'when' => 'pre', 'enabled' => 'on']]]];
+		$cfg = ['hooks' => ['row' => [['script' => 'hook_pre_x.sh', 'when' => 'pre', 'enabled' => 'on']]]];
 		$this->assertCount(1, pfb_get_hooks($cfg, 'pre'));
 
 		// After: disable it (any non-'on' value) => skipped.
@@ -65,16 +70,16 @@ final class PfbGetHooksTest extends TestCase
 
 	public function testWhenMismatchIsSkipped(): void
 	{
-		$cfg = ['hooks' => ['row' => [['command' => 'c', 'when' => 'post', 'enabled' => 'on']]]];
+		$cfg = ['hooks' => ['row' => [['script' => 'hook_post_x.sh', 'when' => 'post', 'enabled' => 'on']]]];
 		$this->assertSame([], pfb_get_hooks($cfg, 'pre'));
 		$this->assertCount(1, pfb_get_hooks($cfg, 'post'));
 	}
 
-	public function testBlankOrMissingCommandIsSkipped(): void
+	public function testBlankOrMissingScriptIsSkipped(): void
 	{
 		$cfg = ['hooks' => ['row' => [
-			['command' => '   ', 'when' => 'pre', 'enabled' => 'on'],	// whitespace only
-			['when' => 'pre', 'enabled' => 'on'],				// no command key
+			['script' => '   ', 'when' => 'pre', 'enabled' => 'on'],	// whitespace only
+			['when' => 'pre', 'enabled' => 'on'],			// no script key
 		]]];
 		$this->assertSame([], pfb_get_hooks($cfg, 'pre'));
 	}
@@ -101,23 +106,23 @@ final class PfbGetHooksTest extends TestCase
 		// are stored under the 'row' listtag instead, which round-trips for any
 		// count. A SINGLE row (a lone <row>) stays a 1-element list because 'row'
 		// IS a listtag; this is the case a real user with exactly one hook hits.
-		$single = ['hooks' => ['row' => [['command' => 'echo solo', 'when' => 'post', 'enabled' => 'on']]]];
+		$single = ['hooks' => ['row' => [['script' => 'hook_post_solo.sh', 'when' => 'post', 'enabled' => 'on']]]];
 		$got = pfb_get_hooks($single, 'post');
 		$this->assertCount(1, $got);
-		$this->assertSame('echo solo', $got[0]['command']);
+		$this->assertSame('hook_post_solo.sh', $got[0]['script']);
 		// The per-hook gate still applies under 'row': a when mismatch selects nothing.
 		$this->assertSame([], pfb_get_hooks($single, 'pre'));
 
 		// Multiple rows preserve list order and the enabled/when gates.
 		$multi = ['hooks' => ['row' => [
-			['command' => 'echo a', 'when' => 'post', 'enabled' => 'on'],
-			['command' => 'echo b', 'when' => 'post', 'enabled' => ''],	// disabled
-			['command' => 'echo c', 'when' => 'post', 'enabled' => 'on'],
+			['script' => 'hook_post_a.sh', 'when' => 'post', 'enabled' => 'on'],
+			['script' => 'hook_post_b.sh', 'when' => 'post', 'enabled' => ''],	// disabled
+			['script' => 'hook_post_c.sh', 'when' => 'post', 'enabled' => 'on'],
 		]]];
 		$got = pfb_get_hooks($multi, 'post');
 		$this->assertCount(2, $got);
-		$this->assertSame('echo a', $got[0]['command']);
-		$this->assertSame('echo c', $got[1]['command']);
+		$this->assertSame('hook_post_a.sh', $got[0]['script']);
+		$this->assertSame('hook_post_c.sh', $got[1]['script']);
 	}
 
 	public function testBareListAndFlatAssocFallbackShapesStillSelect(): void
@@ -127,18 +132,18 @@ final class PfbGetHooksTest extends TestCase
 		//  (b) a single hook as a flat associative array (a lone-element collapse,
 		//      what a non-listtag <hooks> would yield if a hook were ever stored
 		//      directly). Both must select identically to the canonical row shape.
-		$bareList = ['hooks' => [['command' => 'echo bl', 'when' => 'post', 'enabled' => 'on']]];
+		$bareList = ['hooks' => [['script' => 'hook_post_bl.sh', 'when' => 'post', 'enabled' => 'on']]];
 		$got = pfb_get_hooks($bareList, 'post');
 		$this->assertCount(1, $got);
-		$this->assertSame('echo bl', $got[0]['command']);
+		$this->assertSame('hook_post_bl.sh', $got[0]['script']);
 
-		$flatAssoc = ['hooks' => ['command' => 'echo fa', 'when' => 'post', 'enabled' => 'on']];
+		$flatAssoc = ['hooks' => ['script' => 'hook_post_fa.sh', 'when' => 'post', 'enabled' => 'on']];
 		$got = pfb_get_hooks($flatAssoc, 'post');
 		$this->assertCount(1, $got);
-		$this->assertSame('echo fa', $got[0]['command']);
+		$this->assertSame('hook_post_fa.sh', $got[0]['script']);
 		// Gates apply to the flat-assoc shape too.
 		$this->assertSame([], pfb_get_hooks($flatAssoc, 'pre'));
-		$disabled = ['hooks' => ['command' => 'echo fa', 'when' => 'post', 'enabled' => '']];
+		$disabled = ['hooks' => ['script' => 'hook_post_fa.sh', 'when' => 'post', 'enabled' => '']];
 		$this->assertSame([], pfb_get_hooks($disabled, 'post'));
 	}
 
@@ -146,11 +151,11 @@ final class PfbGetHooksTest extends TestCase
 	{
 		$cfg = ['hooks' => ['row' => [
 			'garbage',	// non-array entry must not fatal
-			['command' => 'good', 'when' => 'pre', 'enabled' => 'on'],
+			['script' => 'hook_pre_good.sh', 'when' => 'pre', 'enabled' => 'on'],
 		]]];
 		$hooks = pfb_get_hooks($cfg, 'pre');
 		$this->assertCount(1, $hooks);
-		$this->assertSame('good', $hooks[0]['command']);
+		$this->assertSame('hook_pre_good.sh', $hooks[0]['script']);
 	}
 
 	public function testTimeoutHonoursValidOverride(): void

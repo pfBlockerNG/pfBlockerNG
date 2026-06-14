@@ -83,7 +83,7 @@ WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 # The ADR-12 Update Hooks page: a `.repeatable` hook-row list (pfSense's
 # client-side row helper) with an Add button (#addrow) and per-row fields
-# (hook_command-<id>, ...).
+# (hook_script-<id>, ...).
 HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
 
 # A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
@@ -331,7 +331,7 @@ def test_update_hooks_section_renders_and_adds_a_row(
 
     Screenshots the section, asserts its key controls render, then clicks Add
     (pfSense's client-side `.repeatable` row helper) and asserts a new hook row
-    appears. Each row carries exactly one ``hook_command-<id>`` input, so the count
+    appears. Each row carries exactly one ``hook_script-<id>`` select, so the count
     of those inputs is the row count (before+after is the transition). The Add /
     Delete buttons skip server validation, so this never persists or errors.
     """
@@ -342,12 +342,12 @@ def test_update_hooks_section_renders_and_adds_a_row(
     expect(page.get_by_text("Hook Entries").first).to_be_visible(timeout=JS_TIMEOUT_MS)
     add_btn = page.locator("#addrow")
     expect(add_btn).to_be_visible(timeout=JS_TIMEOUT_MS)
-    rows = page.locator('input[name^="hook_command-"]')
+    rows = page.locator('select[name^="hook_script-"]')
     expect(rows.first).to_be_attached(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "update_hooks")
 
     # BEFORE -> exercise the client-side row clone -> AFTER (one more row).
     before = rows.count()
     add_btn.click()
-    expect(page.locator('input[name^="hook_command-"]')).to_have_count(before + 1, timeout=JS_TIMEOUT_MS)
+    expect(page.locator('select[name^="hook_script-"]')).to_have_count(before + 1, timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "update_hooks_added")

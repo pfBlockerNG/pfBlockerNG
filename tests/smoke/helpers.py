@@ -919,25 +919,55 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
 
 
 # --------------------------------------------------------------------------- #
-# Update hooks (ADR-12) — pre/post command hooks fired from the update pass
+# Update hooks (ADR-12) — pre/post script hooks fired from the update pass
 # --------------------------------------------------------------------------- #
-# pfBlockerNG runs admin-configured pre/post commands once per update pass from
+# pfBlockerNG runs admin-VETTED pre/post SCRIPTS once per update pass from
 # sync_package_pfblockerng (inc:7388 pre, inc:11227 post). The hooks live as a
 # PLAIN NUMERIC array under the 'row' listtag at CFG_GLOBAL/hooks/row (NOT a bare
 # list under <hooks>: 'hooks' is not a pfSense listtag, so a bare list serializes
 # to invalid <0> XML and never reloads — see pfb_get_hooks()). pfb_get_hooks()
 # reads ``$pfbconfig['hooks']['row']`` and runs ONLY entries with enabled==='on'
-# whose ``when`` matches the fire point and whose ``command`` is non-empty. Each
-# hook runs AS ROOT in the HOST context (NOT
-# chrooted) via ``PFB_<K>=<v> … /usr/bin/timeout … /bin/sh -c <command>`` — so a
-# hook that writes /tmp/<file> on the guest is plainly readable back over SSH,
-# which is exactly how these smoke tests observe a hook's environment and that it
-# ran. The env carries PFB_WHEN plus one PFB_<UPPER(key)> per ctx entry
-# (inc:1797): pre ⇒ {WHEN, TRIGGER}; post ⇒ {WHEN, TRIGGER, IP_CHANGED,
-# DNSBL_CHANGED, STATUS, CHANGED_IP_ALIASES, CHANGED_DNSBL_GROUPS}. reload(vm, scope) fires the hooks
+# whose ``when`` matches the fire point and whose ``script`` is non-empty; the
+# runner additionally requires that ``script`` be a hook_<when>_*.{sh,py} file
+# present in HOOK_SCRIPT_DIR (ADR-12 security model: a hook runs an on-box script,
+# never a GUI-typed command). Each hook runs AS ROOT in the HOST context (NOT
+# chrooted) via ``PFB_<K>=<v> … /usr/bin/timeout … <script>`` — so a hook that
+# writes /tmp/<file> on the guest is plainly readable back over SSH, which is
+# exactly how these smoke tests observe a hook's environment and that it ran. The
+# env carries PFB_WHEN plus one PFB_<UPPER(key)> per ctx entry (inc:1797): pre ⇒
+# {WHEN, TRIGGER}; post ⇒ {WHEN, TRIGGER, IP_CHANGED, DNSBL_CHANGED, STATUS,
+# CHANGED_IP_ALIASES, CHANGED_DNSBL_GROUPS}. reload(vm, scope) fires the hooks
 # because it runs the same ``pfblockerng.php <scope>`` CLI the GUI/cron use.
 
 HOOK_MARKER_DIR = "/tmp"
+
+# On-box dir holding the admin-authored hook scripts (PFB_HOOK_SCRIPT_DIR in the
+# inc). The picker/runner accept ONLY hook_<when>_*.{sh,py} files that live here, so
+# a smoke hook installs its script here before referencing it (see install_hook_script).
+HOOK_SCRIPT_DIR = "/usr/local/pkg/pfblockerng/list_scripts"
+
+
+def install_hook_script(vm: SmokeVM, name: str, body: str, *, timeout: float = 60.0) -> str:
+    """Write an executable hook script ``name`` into the on-box hook-script dir; return ``name``.
+
+    The runner and GUI picker accept ONLY scripts that live in ``HOOK_SCRIPT_DIR`` and
+    match ``hook_<when>_*.{sh,py}`` (the ADR-12 allow-list), so a smoke hook must
+    install its script before set_update_hooks() references it. Writes via ``tee`` (the
+    same file-write pattern used elsewhere) and ``chmod 0755`` so the script runs via
+    its shebang (the list_scripts convention).
+    """
+    path = f"{HOOK_SCRIPT_DIR}/{name}"
+    res = subprocess.run(
+        vm.ssh_argv("tee", path), input=body, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"install_hook_script({name}): tee failed: rc={res.returncode} {res.stderr!r}")
+    chmod = subprocess.run(
+        vm.ssh_argv("/bin/chmod", "0755", path), capture_output=True, text=True, timeout=timeout, check=False
+    )
+    if chmod.returncode != 0:
+        raise RuntimeError(f"install_hook_script({name}): chmod failed: rc={chmod.returncode} {chmod.stderr!r}")
+    return name
 
 
 def hook_marker_path(token: str, when: str) -> str:
@@ -954,16 +984,19 @@ def hook_marker_path(token: str, when: str) -> str:
 def env_dump_hook(
     token: str, when: str, *, enabled: str = "on", timeout: str = "60", description: str = ""
 ) -> dict[str, str]:
-    """A hook entry whose command dumps the env to this test's ``when`` marker.
+    """A hook whose installed SCRIPT dumps the env to this test's ``when`` marker.
 
-    The command is ``/usr/bin/env > <marker>`` (absolute ``env``; the redirect runs
-    inside the hook's ``/bin/sh -c``). read_hook_env() then parses the PFB_* lines
-    back. Matches the exact config shape pfb_get_hooks() reads — a flat
-    ``{command, when, enabled, description, timeout}`` assoc array — so the entry
-    runs (or is skipped) by the real production gate.
+    Returns the config entry referencing a ``hook_<when>_<token>.sh`` script plus a
+    transient ``_body`` (the script source) that set_update_hooks() writes into the
+    on-box hook-script dir before persisting (so the runner finds + execs it). The
+    script runs ``/usr/bin/env > <marker>``; read_hook_env() then parses the PFB_*
+    lines back. The persisted shape == what pfb_get_hooks() reads (a flat
+    ``{script, when, enabled, description, timeout}`` assoc array), so the entry runs
+    (or is skipped) by the real production gate.
     """
     return {
-        "command": f"/usr/bin/env > {hook_marker_path(token, when)}",
+        "script": f"hook_{when}_{token}.sh",
+        "_body": f"#!/bin/sh\n/usr/bin/env > {hook_marker_path(token, when)}\n",
         "when": when,
         "enabled": enabled,
         "description": description or f"smoke {token} {when}",
@@ -979,6 +1012,7 @@ GUEST_CURL = "/usr/local/bin/curl"
 
 def webhook_hook(
     url: str,
+    token: str,
     *,
     when: str = "post",
     guard: str = "IP",
@@ -986,7 +1020,7 @@ def webhook_hook(
     timeout: str = "60",
     description: str = "",
 ) -> dict[str, str]:
-    """A recipe-shaped ``post`` hook that POSTs the changed-alias context to ``url``.
+    """A recipe-shaped ``post`` hook SCRIPT that POSTs the changed-alias context to ``url``.
 
     Mirrors the README webhook recipe's SHAPE (minus HAProxy): a guard on the
     NON-EMPTY ``PFB_CHANGED_*`` list for the side (``guard='IP'`` ⇒
@@ -1007,10 +1041,11 @@ def webhook_hook(
     keys off the non-empty changed-list, which tracks the genuinely-updated set on both
     sides. ``PFB_IP_CHANGED`` / ``PFB_DNSBL_CHANGED`` are still forwarded as payload.
 
-    The command is POSIX-sh-safe (``[ … ] && curl …``): when the changed list is empty
+    The script is POSIX-sh-safe (``[ … ] && curl …``): when the changed list is empty
     the ``&&`` short-circuits and ``curl`` never runs (so the sink gets no callback —
     the OFF branch). ``-sS`` keeps it quiet but surfaces errors; ``-m 5`` bounds it well
-    under the per-hook ``timeout``.
+    under the per-hook ``timeout``. The body is installed (via the ``_body`` key that
+    set_update_hooks() writes to the hook-script dir) as ``hook_<when>_<token>_webhook_<guard>.sh``.
     """
     guard_var = "PFB_CHANGED_IP_ALIASES" if guard == "IP" else "PFB_CHANGED_DNSBL_GROUPS"
     command = (
@@ -1022,7 +1057,8 @@ def webhook_hook(
         f"{url}"
     )
     return {
-        "command": command,
+        "script": f"hook_{when}_{token}_webhook_{guard.lower()}.sh",
+        "_body": f"#!/bin/sh\n{command}\n",
         "when": when,
         "enabled": enabled,
         "description": description or f"smoke webhook {guard} {when}",
@@ -1050,7 +1086,7 @@ def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float
     digit) and silently fail to reload — that was the live-smoke failure. ``row`` is a
     listtag, so ``<hooks><row>...</row>...</hooks>`` round-trips for 1..N rows. Each
     dict is emitted as a PHP assoc via _php_kv_array and the rows as a PLAIN NUMERIC
-    array; only enabled==='on' + matching ``when`` + non-empty ``command`` entries
+    array; only enabled==='on' + matching ``when`` + non-empty ``script`` entries (and a vetted script file)
     actually run (inc gate).
 
     READ-BACK GUARD: after writing, reads ``hooks/row`` back and computes the effective
@@ -1063,7 +1099,17 @@ def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float
     if not hooks:
         clear_update_hooks(vm, timeout=timeout)
         return
-    hooks_php = "array(" + ", ".join(_php_kv_array(h) for h in hooks) + ")"
+    # Install each hook's script file FIRST (the transient ``_body`` key carries the
+    # source; the runner only execs a hook_<when>_*.{sh,py} present in HOOK_SCRIPT_DIR),
+    # then persist the entry WITHOUT ``_body`` (config stores only {script, when, ...}).
+    persist: list[dict[str, str]] = []
+    for hook in hooks:
+        entry = dict(hook)
+        body = entry.pop("_body", None)
+        if body is not None:
+            install_hook_script(vm, entry["script"], body, timeout=timeout)
+        persist.append(entry)
+    hooks_php = "array(" + ", ".join(_php_kv_array(h) for h in persist) + ")"
     snippet = (
         f"config_set_path({_php_str(CFG_HOOKS_ROW)}, {hooks_php});\n"
         "write_config('pfBlockerNG smoke: set update hooks');\n"
@@ -1077,7 +1123,7 @@ def set_update_hooks(vm: SmokeVM, hooks: list[dict[str, str]], *, timeout: float
     # single-assoc-collapse tolerance the inc applies defensively).
     pre = (
         f"$r = config_get_path({_php_str(CFG_HOOKS_ROW)}, array());\n"
-        "if (isset($r['command']) || isset($r['when']) || isset($r['enabled'])) { $r = array($r); }\n"
+        "if (isset($r['script']) || isset($r['when']) || isset($r['enabled'])) { $r = array($r); }\n"
         "$n = is_array($r) ? count($r) : -1;"
     )
     count = _php_read_scalar(vm, pre, "$n", timeout=timeout)

@@ -27,11 +27,13 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-// ADR-12: pre/post Update Hooks. Admin-configurable commands run as root at the
-// start ('pre') and end ('post') of the pfBlockerNG update pass. The runner
+// ADR-12: pre/post Update Hooks. At the start ('pre') and end ('post') of the
+// pfBlockerNG update pass the runner executes admin-VETTED script files as root.
+// The script is NOT typed here: a shell-access admin authors it in the hook-script
+// dir (named hook_pre_*/hook_post_*); this page only PICKS one. The runner
 // (pfb_run_hooks/pfb_get_hooks) reads these entries from:
 //   installedpackages/pfblockerng/config/0/hooks/row   (a list)
-// with the per-entry shape { command, when, enabled, description, timeout }.
+// with the per-entry shape { script, when, enabled, description, timeout }.
 // Entries are nested under the 'row' listtag (not directly under <hooks>): a list
 // stored straight under the non-listtag <hooks> serializes to invalid numeric
 // child tags (<hooks><0>...) that never round-trip; 'row' is a pfSense listtag, so
@@ -41,6 +43,16 @@ $pfb['gconfig'] = config_get_path('installedpackages/pfblockerng/config/0', []);
 
 // Select field options
 $options_when = [ 'pre' => 'Pre', 'post' => 'Post' ];
+
+// Hook scripts are admin-authored files in the hook-script dir, named
+// hook_pre_*/hook_post_* (.sh/.py). The picker offers ONLY these (ADR-12 security
+// model: a hook runs a vetted on-box script, never a GUI-entered command), and the
+// save handler / runner accept ONLY these. Build the per-'when' option maps (with a
+// leading 'None'); the runner re-validates against the same list at run time.
+$options_script = [
+	'pre'  => array_merge([ '' => gettext('None') ], pfb_hook_scripts('pre')),
+	'post' => array_merge([ '' => gettext('None') ], pfb_hook_scripts('post')),
+];
 
 // $input_errors is read unconditionally in the render section below, so it must be
 // defined on every request path. Initialise it once.
@@ -64,11 +76,11 @@ if ($_POST) {
 			$rowid   = $k_field[1];
 
 			// Only handle this page's hook fields.
-			if (!in_array($field, array('hook_enabled', 'hook_when', 'hook_command', 'hook_timeout', 'hook_description'), true)) {
+			if (!in_array($field, array('hook_enabled', 'hook_when', 'hook_script', 'hook_timeout', 'hook_description'), true)) {
 				continue;
 			}
 
-			// A crafted POST (e.g. hook_command-0[]=x) makes $value an array; the
+			// A crafted POST (e.g. hook_script-0[]=x) makes $value an array; the
 			// scalar validators below (array_key_exists/preg_match) would throw a
 			// PHP 8 TypeError and break the save. Reject non-scalars up front.
 			if (!is_scalar($value)) {
@@ -90,17 +102,19 @@ if ($_POST) {
 						$input_errors[] = gettext('The hook \'When\' value must be Pre or Post.');
 					}
 					break;
-				case 'hook_command':
-					// The command line is passed verbatim to /bin/sh -c by the
-					// runner (escapeshellarg'd there), so shell metacharacters are
-					// intentionally allowed; only reject control characters and an
-					// empty command (an empty command is silently skipped at run
-					// time, so treat it as a user error here).
-					if (preg_match('/[\p{C}]+/u', $value)) {
-						$input_errors[] = gettext('The hook command contains invalid control characters.');
-					}
-					if (trim($value) === '') {
-						$input_errors[] = gettext('The hook command cannot be empty.');
+				case 'hook_script':
+					// The ADR-12 security gate: the selected script must be one the
+					// box will actually run for THIS row's Pre/Post -- a
+					// hook_<when>_*.{sh,py} present in the hook-script dir. A stale
+					// pick, a crafted POST (path/traversal), or a Pre/Post mismatch
+					// is rejected, so the config never stores -- and the runner never
+					// execs -- an unvetted value. ('when' is validated on its own key;
+					// if it is bad, skip this cross-check to avoid a duplicate error.)
+					$row_when = (string) ($_POST["hook_when-{$rowid}"] ?? '');
+					if (array_key_exists($row_when, $options_when) &&
+					    !pfb_hook_script_valid($value, $row_when)) {
+						$input_errors[] = gettext('Select a valid hook script for this row\'s Pre/Post. ' .
+							'Author it in the scripts folder first (see the help above).');
 					}
 					break;
 				case 'hook_timeout':
@@ -126,7 +140,7 @@ if ($_POST) {
 			$hooks = array();
 			foreach (array_keys($rowhelper_exist) as $rowid) {
 				$hook = array(
-					'command'	=> trim((string) ($_POST["hook_command-{$rowid}"] ?? '')),
+					'script'	=> (string) ($_POST["hook_script-{$rowid}"] ?? ''),
 					'when'		=> (string) ($_POST["hook_when-{$rowid}"] ?? 'pre'),
 					'enabled'	=> (isset($_POST["hook_enabled-{$rowid}"]) && $_POST["hook_enabled-{$rowid}"] === 'on') ? 'on' : '',
 					'description'	=> trim((string) ($_POST["hook_description-{$rowid}"] ?? '')),
@@ -176,11 +190,11 @@ display_top_tabs($tab_array, true);
 
 $form = new Form('Save');
 
-$section = new Form_Section('Update Hooks (Pre/Post Update Commands)');
+$section = new Form_Section('Update Hooks (Pre/Post Update Scripts)');
 $section->addInput(new Form_StaticText(
 	'About',
 	'<small>'
-	. gettext('Update Hooks are admin-defined commands that pfBlockerNG runs <strong>once per update pass</strong> '
+	. gettext('Update Hooks run an admin-authored <strong>script</strong> <strong>once per update pass</strong> '
 		. '&mdash; a <strong>Pre</strong> hook at the start of the update (before any feed is processed) and a '
 		. '<strong>Post</strong> hook at the end (after all IP/DNSBL reloads). They are <strong>not</strong> the '
 		. 'per-feed <em>ip_pre_*.sh</em> list pre-scripts (which transform a single downloaded feed); these run once '
@@ -189,15 +203,28 @@ $section->addInput(new Form_StaticText(
 ));
 
 $section->addInput(new Form_StaticText(
+	'Script source',
+	'<small>'
+	. sprintf(gettext('For security, a hook runs a script <strong>file you place on the firewall</strong>, not a command '
+		. 'typed here &mdash; this picker only selects from that folder. Create the script over SSH/console (root '
+		. 'shell) in <code>%1$s</code>, name it <code>hook_pre_<em>name</em>.sh</code> or '
+		. '<code>hook_post_<em>name</em>.sh</code> (<code>.sh</code> or <code>.py</code>), and make it executable '
+		. '(<code>chmod +x</code>, with a <code>#!</code> shebang). Only files matching that naming appear in the '
+		. 'list below for the matching Pre/Post. (Same model as the per-feed list scripts.)'), PFB_HOOK_SCRIPT_DIR)
+	. '</small>'
+));
+
+$section->addInput(new Form_StaticText(
 	'Run as root',
 	'<span class="text-danger">' . gettext('Warning: ') . '</span>'
 	. '<small>'
-	. gettext('Each command runs <strong>as root</strong> via <code>/bin/sh -c</code> &mdash; the same trust class as '
-		. 'pfSense Shellcmd / cron. Only an administrator can edit this page. A command runs under '
-		. '<code>/usr/bin/timeout</code>; if it exceeds its timeout it is killed (SIGTERM, then SIGKILL after a short '
-		. 'grace period). A hook\'s non-zero exit <strong>or</strong> timeout is logged to the pfBlockerNG log and the '
-		. 'update <strong>continues</strong> &mdash; a hook can never abort or stall an update. Hooks run in the order '
-		. 'listed: all Pre hooks before processing, all Post hooks after everything.')
+	. gettext('The selected script runs <strong>as root</strong> &mdash; the same trust class as pfSense Shellcmd / '
+		. 'cron. Only an administrator can edit this page, and only a user with shell access can add a script to the '
+		. 'folder. The script runs under <code>/usr/bin/timeout</code>; if it exceeds its timeout it is killed '
+		. '(SIGTERM, then SIGKILL after a short grace period). A hook\'s non-zero exit <strong>or</strong> timeout is '
+		. 'logged to the pfBlockerNG log and the update <strong>continues</strong> &mdash; a hook can never abort or '
+		. 'stall an update. Hooks run in the order listed: all Pre hooks before processing, all Post hooks after '
+		. 'everything.')
 	. '</small>'
 ));
 
@@ -242,7 +269,7 @@ $rowdata = $pfb['gconfig']['hooks']['row'] ?? ($pfb['gconfig']['hooks'] ?? array
 
 // Add an empty row placeholder if no hooks are defined.
 if (!is_array($rowdata) || empty($rowdata)) {
-	$rowdata = array( array(	'command'	=> '',
+	$rowdata = array( array(	'script'	=> '',
 					'when'		=> 'post',
 					'enabled'	=> '',
 					'description'	=> '',
@@ -276,13 +303,16 @@ foreach ($rowdata as $r_id => $row) {
 	  ->setAttribute('style', 'width: auto')
 	  ->setWidth(1);
 
-	$group->add(new Form_Input(
-		'hook_command-' . $r_id,
+	// Script picker, filtered to the row's Pre/Post (the file prefix). The options
+	// rendered server-side already match $row['when']; client JS re-filters them
+	// when the When select changes (and the save handler re-validates regardless).
+	$row_when = (($row['when'] ?? 'post') === 'pre') ? 'pre' : 'post';
+	$group->add(new Form_Select(
+		'hook_script-' . $r_id,
 		NULL,
-		'text',
-		htmlspecialchars($row['command'] ?? ''),
-		[ 'placeholder' => 'Command (run as root via /bin/sh -c)' ]
-	))->setHelp(($numrows == $rowcounter) ? 'Command' : NULL)
+		($row['script'] ?? ''),
+		$options_script[$row_when]
+	))->setHelp(($numrows == $rowcounter) ? 'Script' : NULL)
 	  ->setWidth(4);
 
 	$group->add(new Form_Input(
@@ -335,5 +365,83 @@ $form->add($section);
 print($form);
 print_callout('<strong>' . gettext('Hooks run on the next CRON update or \'Force Update|Reload\'.') . '</strong>');
 
+// Client-side convenience: keep each row's Script picker in sync with its Pre/Post
+// selection (the file prefix decides which scripts apply). Pure progressive
+// enhancement -- the server renders the correct options per row and the save handler
+// re-validates the choice, so this is not a trust boundary. The option lists come
+// from the same pfb_hook_scripts() the picker and validator use.
+$pfb_hook_scripts_json = json_encode($options_script, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+?>
+<script type="text/javascript">
+//<![CDATA[
+(function () {
+	var HOOK_SCRIPTS = <?=$pfb_hook_scripts_json?>;
+
+	function rowidOf(id) {
+		var i = id.lastIndexOf('-');
+		return (i < 0) ? '' : id.slice(i + 1);
+	}
+
+	// Repopulate a Script <select> with the options for $when, preserving the current
+	// selection when it is still valid (else falling back to the leading 'None').
+	function repopulate(sel, when) {
+		var opts = HOOK_SCRIPTS[when] || {};
+		var keep = sel.value;
+		var matched = false;
+		while (sel.options.length) {
+			sel.remove(0);
+		}
+		Object.keys(opts).forEach(function (val) {
+			var o = document.createElement('option');
+			o.value = val;
+			o.text = opts[val];
+			if (val === keep) {
+				o.selected = true;
+				matched = true;
+			}
+			sel.appendChild(o);
+		});
+		if (!matched) {
+			sel.value = '';
+		}
+	}
+
+	function syncRow(rowid) {
+		var when = document.getElementById('hook_when-' + rowid);
+		var script = document.getElementById('hook_script-' + rowid);
+		if (when && script) {
+			repopulate(script, when.value);
+		}
+	}
+
+	function syncAll() {
+		var whens = document.querySelectorAll('select[id^="hook_when-"]');
+		for (var i = 0; i < whens.length; i++) {
+			syncRow(rowidOf(whens[i].id));
+		}
+	}
+
+	// A When change re-filters that row's Script picker (event delegation also covers
+	// rows the rowhelper clones in later).
+	document.addEventListener('change', function (e) {
+		var t = e.target;
+		if (t && t.id && t.id.indexOf('hook_when-') === 0) {
+			syncRow(rowidOf(t.id));
+		}
+	});
+
+	document.addEventListener('DOMContentLoaded', function () {
+		syncAll();
+		// After the rowhelper clones a new row (it copies row 0's options/value),
+		// re-sync so the new row reflects its own When and resets a stale selection.
+		var add = document.getElementById('addrow');
+		if (add) {
+			add.addEventListener('click', function () { setTimeout(syncAll, 0); });
+		}
+	});
+})();
+//]]>
+</script>
+<?php
 include('foot.inc');
 ?>

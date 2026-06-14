@@ -73,14 +73,17 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 
 ### ADR-12 — update hooks (PHP/shell, no Python)
 
-Admin-configurable `pre`/`post` commands run once per update pass from
+Admin-VETTED `pre`/`post` **scripts** run once per update pass from
 `sync_package_pfblockerng` in `pfblockerng.inc` — `pfb_run_hooks($when, $ctx)` reads enabled
-hooks from `installedpackages/pfblockerng/config/0/hooks` (`{command, when, enabled,
-description, timeout}`), runs each **as root** via `/usr/bin/timeout … /bin/sh -c
-<escapeshellarg>` in list order, captures output to the pfBlockerNG log, and **non-zero/timeout
-→ log + continue** (a hook can never abort/stall an update; no enabled hooks ⇒ byte-identical
-pass). Admin-only **Update Hooks** settings tab (`www/pfblockerng/pfblockerng_hooks.php`, same
-WebCfg priv as the other settings).
+hooks from `installedpackages/pfblockerng/config/0/hooks` (`{script, when, enabled,
+description, timeout}`), runs each **as root** via `/usr/bin/timeout … <script>` in list order,
+captures output to the pfBlockerNG log, and **non-zero/timeout → log + continue** (a hook can
+never abort/stall an update; no enabled hooks ⇒ byte-identical pass). Security model: `script` is
+NOT a GUI-typed command — it is a `hook_<when>_*.{sh,py}` file a shell-access admin places in
+`list_scripts/` (`PFB_HOOK_SCRIPT_DIR`); the picker/save/runner all gate on the same allow-list
+(`pfb_hook_script_valid()`), so a GUI user can only *select* a vetted file, never inject shell.
+Admin-only **Update Hooks** settings tab (`www/pfblockerng/pfblockerng_hooks.php`, same WebCfg
+priv as the other settings).
 
 Exported env (only these are promised):
 

@@ -1723,17 +1723,21 @@ function pfb_logger($log, $logtype) {
 
 
 /*
- * ADR-12: Pre/Post update command hooks (unwired in Phase 1).
+ * ADR-12: Pre/Post update hooks.
  *
- * Admin-configurable commands run as root at the start ('pre') and end ('post')
- * of the pfBlockerNG update pass. Same root-command trust class as pfSense
- * 'shellcmd'. Each hook entry lives in the pfBlockerNG config under the 'row'
- * listtag at installedpackages/pfblockerng/config/0/hooks/row (see pfb_get_hooks()
- * for why 'row' and not a bare list under <hooks>) and has the shape:
+ * At the start ('pre') and end ('post') of the pfBlockerNG update pass, the runner
+ * executes admin-VETTED script files as root. The script is NOT typed into the GUI:
+ * a shell-access admin authors it in the hook-script dir (PFB_HOOK_SCRIPT_DIR),
+ * named hook_pre_* / hook_post_* (.sh/.py), and the GUI only PICKS it from that folder
+ * (mirrors the per-feed list pre/post-script picker). This is the security model:
+ * a GUI-only user can never inject a shell command, only select a file an admin
+ * already placed on the box. Each hook entry lives in the pfBlockerNG config under
+ * the 'row' listtag at installedpackages/pfblockerng/config/0/hooks/row (see
+ * pfb_get_hooks() for why 'row' and not a bare list under <hooks>) and has the shape:
  *
  *   array(
- *     'command'     => '<sh command line>',     // run via /bin/sh -c
- *     'when'        => 'pre' | 'post',          // fire point
+ *     'script'      => 'hook_<when>_<name>.sh', // basename in PFB_HOOK_SCRIPT_DIR
+ *     'when'        => 'pre' | 'post',          // fire point (also the script prefix)
  *     'enabled'     => 'on' | '' ,              // pfSense checkbox convention
  *     'description' => '<free text>',           // optional, for logs/UI
  *     'timeout'     => '<seconds>',             // optional, per-hook override
@@ -1752,6 +1756,14 @@ if (!defined('PFB_HOOK_TIMEOUT_DEFAULT')) {
 // Grace period (seconds) after SIGTERM before timeout(1) sends SIGKILL.
 if (!defined('PFB_HOOK_KILL_GRACE')) {
 	define('PFB_HOOK_KILL_GRACE', 5);
+}
+
+// Directory holding the admin-authored hook scripts the picker offers and the
+// runner executes (ADR-12 security model: a hook runs a vetted on-box script
+// file, never a GUI-entered command). Shared with the per-feed list pre/post
+// scripts; hook scripts are named hook_pre_*/hook_post_* (.sh/.py).
+if (!defined('PFB_HOOK_SCRIPT_DIR')) {
+	define('PFB_HOOK_SCRIPT_DIR', '/usr/local/pkg/pfblockerng/list_scripts');
 }
 
 /*
@@ -1816,7 +1828,7 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
  * tested without a live config. pfb_run_hooks() reads the live config and feeds
- * it here. Malformed entries (missing command/when, disabled) are skipped.
+ * it here. Malformed entries (missing script/when, disabled) are skipped.
  */
 function pfb_get_hooks($pfbconfig, $when) {
 
@@ -1849,7 +1861,7 @@ function pfb_get_hooks($pfbconfig, $when) {
 	} else {
 		$list = $pfbconfig['hooks'];
 	}
-	if (isset($list['command']) || isset($list['when']) || isset($list['enabled'])) {
+	if (isset($list['script']) || isset($list['when']) || isset($list['enabled'])) {
 		$list = array($list);
 	}
 	if (!is_array($list)) {
@@ -1867,7 +1879,7 @@ function pfb_get_hooks($pfbconfig, $when) {
 		if (($hook['when'] ?? '') !== $when) {
 			continue;
 		}
-		if (trim((string) ($hook['command'] ?? '')) === '') {
+		if (trim((string) ($hook['script'] ?? '')) === '') {
 			continue;
 		}
 		$hooks[] = $hook;
@@ -1889,11 +1901,55 @@ function pfb_hook_timeout($hook) {
 }
 
 /*
+ * Enumerate the admin-authored hook scripts available for $when ('pre'|'post'):
+ * the basenames of hook_<when>_*.{sh,py} in the hook-script dir, keyed by basename
+ * (sorted), shape { basename => basename } for direct use as Form_Select options.
+ *
+ * These are the ONLY values the hook picker offers, the save handler accepts, and
+ * the runner executes (ADR-12 security model: a hook runs a vetted on-box script
+ * file authored by a shell-access admin, never a command typed into the GUI). $dir
+ * is overridable so the off-appliance unit tests can point at a fixture directory.
+ */
+function pfb_hook_scripts($when, $dir = null) {
+	if ($when !== 'pre' && $when !== 'post') {
+		return array();
+	}
+	if ($dir === null) {
+		$dir = PFB_HOOK_SCRIPT_DIR;
+	}
+	$out = array();
+	foreach (glob("{$dir}/hook_{$when}_*.{sh,py}", GLOB_BRACE) ?: array() as $path) {
+		$base = basename($path);
+		$out[$base] = $base;
+	}
+	ksort($out);
+	return $out;
+}
+
+/*
+ * TRUE if $script is a hook script the box will actually run for $when: a bare
+ * basename (no path separator / traversal), named hook_<when>_*.{sh,py}, that
+ * EXISTS in the hook-script dir. This is the allow-list gate shared by the save
+ * handler (reject on POST) and the runner (skip at run time): the picker can only
+ * offer these, and a crafted or stale config value that is not one of them never
+ * executes. $dir matches pfb_hook_scripts() for testing.
+ */
+function pfb_hook_script_valid($script, $when, $dir = null) {
+	$script = (string) $script;
+	// Reject anything that is not a plain basename BEFORE touching the filesystem
+	// (defence against ../ traversal and absolute paths in a hand-edited config).
+	if ($script === '' || basename($script) !== $script) {
+		return false;
+	}
+	return array_key_exists($script, pfb_hook_scripts($when, $dir));
+}
+
+/*
  * Run every enabled hook matching $when, in list order, as root.
  *
  * $ctx is a flat name => value map exported to each hook as PFB_* environment
  * variables (e.g. ['TRIGGER' => 'cron'] => PFB_TRIGGER=cron). PFB_WHEN is always
- * set to $when. Each command runs under /usr/bin/timeout so a hung child is
+ * set to $when. Each script runs under /usr/bin/timeout so a hung child is
  * killed (SIGTERM, then SIGKILL after PFB_HOOK_KILL_GRACE seconds); stdout+stderr
  * are captured and written to the pfBlockerNG log under a per-hook header.
  *
@@ -1925,23 +1981,35 @@ function pfb_run_hooks($when, $ctx = array()) {
 
 	foreach ($hooks as $idx => $hook) {
 		$desc    = trim((string) ($hook['description'] ?? ''));
-		$command = (string) $hook['command'];
+		$script  = (string) ($hook['script'] ?? '');
 		$timeout = pfb_hook_timeout($hook);
 		$label   = ($desc !== '') ? $desc : "#{$idx}";
 
-		// Do NOT log the raw $command: an admin hook command line can carry
-		// inline credentials/tokens, and the pfBlockerNG log is persistent (and
-		// collected wholesale by the smoke diagnostics), so logging it would be an
-		// avoidable secret leak even on success. The label (description, else
-		// "#idx") identifies the hook; the command itself lives in config.xml.
-		$header = "\n[ pfB Hook ] {$when} {$label} (timeout {$timeout}s)\n";
+		// Security model (ADR-12): a hook runs a VETTED on-box script file, never a
+		// GUI-entered command. Re-check the allow-list at run time (defence in depth
+		// vs a hand-edited config.xml): the script must be a hook_<when>_*.{sh,py}
+		// basename present in the hook-script dir. Anything else is logged + skipped,
+		// never executed.
+		if (!pfb_hook_script_valid($script, $when)) {
+			$missing = ($script !== '') ? "'{$script}' " : '';
+			pfb_logger("[ pfB Hook ] {$when} {$label} script {$missing}not a valid file in " .
+				PFB_HOOK_SCRIPT_DIR . "; skipping\n", 2);
+			continue;
+		}
+		$path = PFB_HOOK_SCRIPT_DIR . '/' . basename($script);
+
+		// The script basename is safe to log (a filename, not a command line that
+		// could carry inline secrets); it aids correlating the log to the file.
+		$header = "\n[ pfB Hook ] {$when} {$label} ({$script}, timeout {$timeout}s)\n";
 		pfb_logger($header, 1);
 
-		// Run as root under timeout(1): SIGTERM at $timeout, SIGKILL after the
-		// grace period. /bin/sh -c runs the user command line; 2>&1 folds stderr
+		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
+		// SIGKILL after the grace period. The PFB_* context rides the env prefix
+		// (the script reads it from the environment). The script runs via its own
+		// shebang + execute bit (the list_scripts convention); 2>&1 folds stderr
 		// into the captured stdout for the log.
 		$cmd = "{$envprefix} /usr/bin/timeout -s TERM -k " . PFB_HOOK_KILL_GRACE .
-			" {$timeout} /bin/sh -c " . escapeshellarg($command) . " 2>&1";
+			" {$timeout} " . escapeshellarg($path) . " 2>&1";
 
 		$output = array();
 		$retval = 0;

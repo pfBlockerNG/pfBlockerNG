@@ -424,7 +424,7 @@ push — see the HAProxy recipe under **Update Hooks** below.
 See [ADR-11](.ADRs/ADR_11_Uber_Aliases/ADR.md) for the full design, the union-cost
 benchmark, and the maintainer smoke checklist.
 
-### Update Hooks (pre/post update commands, ADR-12)
+### Update Hooks (pre/post update scripts, ADR-12)
 
 > The practical recipes (the environment table, the HAProxy reload, and the webhook)
 > are summarized for users in the [README Usage section](README.md#usage). This
@@ -432,20 +432,35 @@ benchmark, and the maintainer smoke checklist.
 > and the rule-vs-data distinction.
 
 The **Update Hooks** settings tab (after **Update**) lets an admin run their own
-shell commands at the **start** (`pre`) and **end** (`post`) of every pfBlockerNG
-update pass — to nudge a downstream consumer (the worked HAProxy recipe below),
-restart a service, push to an API, sync, or notify. It is a thin, safe command
-runner, not an event system. These are distinct from the per-feed `ip_pre_*.sh`
-list pre-scripts: an Update Hook runs **once per update pass**, not once per feed.
+**script** at the **start** (`pre`) and **end** (`post`) of every pfBlockerNG update
+pass — to nudge a downstream consumer (the worked HAProxy recipe below), restart a
+service, push to an API, sync, or notify. It is a thin, safe **script** runner, not
+an event system. These are distinct from the per-feed `ip_pre_*.sh` list pre-scripts:
+an Update Hook runs **once per update pass**, not once per feed.
+
+**Security model — pick a file, don't type a command.** A hook does **not** run a
+command typed into the GUI (any WebCfg admin could then inject arbitrary root shell).
+It runs a **script FILE a shell-access admin places on the box**, in the hook-script
+dir `/usr/local/pkg/pfblockerng/list_scripts/` (`PFB_HOOK_SCRIPT_DIR`), named
+`hook_pre_*` / `hook_post_*` (`.sh`/`.py`); the GUI only **picks** one from that folder
+(the same model as the per-feed list pre/post-script picker). The picker, the save
+handler, and the runner all gate on the same allow-list (`pfb_hook_script_valid()`):
+a value that is not a `hook_<when>_*.{sh,py}` basename present in the folder is
+rejected on save and skipped at run time — so a crafted/stale config value never runs.
+This bounds the GUI's power to *selecting* an admin-vetted file; it does **not**
+constrain what that script then does (its egress/side-effects are the author's
+responsibility — there is no remote-domain sandbox).
 
 **Model.** A list of hook entries in the pfBlockerNG config
 (`installedpackages/pfblockerng/config/0/hooks`), each
-`{ command, when: pre|post, enabled, description, timeout? }`, run in **list
-order** (all `pre` before any processing, all `post` after everything).
+`{ script, when: pre|post, enabled, description, timeout? }` (`script` = a basename in
+the hook-script dir), run in **list order** (all `pre` before any processing, all
+`post` after everything).
 
-**Trust + execution.** Each enabled hook's `command` runs **as root** via
-`/bin/sh -c` — the **same trust class as pfSense `shellcmd`/cron**, and the tab
-sits behind the existing admin-only pfBlockerNG WebCfg privilege. Each hook is
+**Trust + execution.** Each enabled hook's selected `script` runs **as root** via its
+own shebang + execute bit (the `list_scripts/` convention) — the **same trust class as
+pfSense `shellcmd`/cron**, and the tab sits behind the existing admin-only pfBlockerNG
+WebCfg privilege. Each hook is
 run under `/usr/bin/timeout` (SIGTERM at the per-hook timeout, then SIGKILL after
 a grace period; per-hook seconds, blank = the 60 s default). stdout+stderr are
 captured to the pfBlockerNG log under a per-hook header. A hook's **non-zero exit
@@ -453,7 +468,7 @@ or timeout is logged and the update CONTINUES** — `pre` and `post` alike: a
 bad/hung/typo'd hook can never abort or stall an update. With **no enabled
 hooks** the update pass is byte-identical to before.
 
-**Environment variables** (exported to the hook command; document only these —
+**Environment variables** (exported to the hook script; document only these —
 no other value is promised):
 
 | Var | When | Value |
@@ -526,11 +541,15 @@ Because ADR-11 ships a **never-empty** `pfB_Deny_Aggregated_*` consumer file, an
 aggregate still validates and reloads — **no `/../../` path trick or dummy-IP hack**
 is needed (the old workarounds are gone).
 
-**2. The post hook.** On the **Update Hooks** tab add one entry — `when=post`,
-enabled — with this command (POSIX-sh-safe; guards on the accurate flag so it only
-reloads when IP data actually changed):
+**2. The post hook.** Save this as
+`/usr/local/pkg/pfblockerng/list_scripts/hook_post_haproxy.sh` (`chmod +x`), then on
+the **Update Hooks** tab add one entry — `when=post`, enabled — and pick it. The
+script is POSIX-sh-safe and guards on the accurate flag so it only reloads when IP
+data actually changed:
 
 ```sh
+#!/bin/sh
+# hook_post_haproxy.sh — reload HAProxy after a pfBlockerNG IP update
 [ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
 ```
 
@@ -549,12 +568,16 @@ maintainer smoke checklist.
 
 #### Forwarding changed aliases to a webhook
 
-To notify an external service of what a pass updated, add a `post` hook, enabled,
-that `POST`s the changed-alias context to your endpoint. Guard on a **non-empty
-changed list** so the hook fires whenever the blocklist **data** changed — including
-content-only refreshes that leave `PFB_IP_CHANGED=0` (see the note above):
+To notify an external service of what a pass updated, save a `post` hook script that
+`POST`s the changed-alias context to your endpoint (e.g.
+`/usr/local/pkg/pfblockerng/list_scripts/hook_post_webhook.sh`, `chmod +x`), then pick
+it on the tab. Guard on a **non-empty changed list** so the hook fires whenever the
+blocklist **data** changed — including content-only refreshes that leave
+`PFB_IP_CHANGED=0` (see the note above):
 
 ```sh
+#!/bin/sh
+# hook_post_webhook.sh — forward the changed-alias context to a webhook
 [ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
   --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
   --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \

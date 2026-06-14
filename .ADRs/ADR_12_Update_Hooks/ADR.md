@@ -1,5 +1,20 @@
 # ADR-12: Generic pre/post update command hooks
 
+> **Amendment (2026-06-14, issue #220):** The hook is no longer a free-text **command**
+> typed into the GUI (a WebCfg admin could inject arbitrary root shell). It is now a
+> **vetted script FILE** a shell-access admin places in the hook-script dir
+> (`PFB_HOOK_SCRIPT_DIR` = `/usr/local/pkg/pfblockerng/list_scripts/`, named
+> `hook_pre_*`/`hook_post_*`, `.sh`/`.py`); the GUI is a **picker** over that folder
+> (the per-feed list pre/post-script model). The per-entry config key `command` →
+> `script` (a basename); the picker, the save handler, and the runner all gate on the
+> same allow-list (`pfb_hook_scripts()` / `pfb_hook_script_valid()`), so a crafted/stale
+> value is rejected on save and skipped at run time. The runner execs the file directly
+> under `timeout(1)` (no `/bin/sh -c <command>`). Everything else below — the fire
+> points, env context, failure semantics, HA replication — is unchanged. The hooks
+> feature shipped only on `devel` (no release), so there is no legacy `command` config to
+> migrate. (The "remote domain" caveat: this bounds the GUI to *selecting* a vetted file;
+> it does not sandbox what the script then contacts — that is the author's responsibility.)
+
 - **Status:** **Implemented (pending smoke test)** (2026-06-02; **status corrected 2026-06-05** — the line previously read "Proposed" but all phases had merged). Phases 1-6 merged to `devel` (#75 / #114 / #107 / #120). The live-VM smoke `tests/smoke/test_smoke_hooks.py` (no-op, disabled/enabled gate, pre/post fire + full context, trigger values, IP/DNSBL-changed, timeout/non-zero safety, **and** the webhook-callback shape) ran **green** (branch run `27008143527`); the Update Hooks UI tiers (#107) are green on `devel`. **Flips to Accepted** only after the maintainer confirms the two items the smoke image cannot host (§7): the real **HAProxy** reload recipe end-to-end and **HA/CARP** sync.
 - **Date:** 2026-06-02
 - **Branch:** `adr/12` (off **`devel`** — update-flow/PHP side, no Python/DNSBL coupling; independent of the ADR-07/10 chain. Pairs with ADR-11 (`devel`) but does not require it to land first) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (a `pfb_run_hooks()` runner + the pre/post fire points in `sync_package_pfblockerng`, config read), `src/usr/local/www/pfblockerng/*` + the settings schema (the hooks table UI), `README.md`/`CLAUDE.md` (docs + the HAProxy recipe).
