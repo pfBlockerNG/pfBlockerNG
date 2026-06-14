@@ -8,18 +8,20 @@
 # pulls it too via cross-repo resolution (ADR §2; install is not repo-locked).
 #
 # CHANNELS
-#   The stable and devel packages share ONE repo/catalog — the `pfblockerng` repo,
-#   exactly like Netgate ships `pfSense-pkg-pfBlockerNG` and `-devel` from its single
-#   `pfSense` repo (the two packages CONFLICT — install one). So `stable` and `devel`
-#   write the SAME conf (byte-identical); they differ only in which package the verify
-#   step checks + the install hint printed. Nightly lives on its own catalog path and
-#   so needs its own conf.
-#   devel  (default) -> conf /usr/local/etc/pkg/repos/pfblockerng.conf
-#                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG-devel
-#   stable           -> conf /usr/local/etc/pkg/repos/pfblockerng.conf  (SAME file)
-#                       repo name `pfblockerng`,       pkg pfSense-pkg-pfBlockerNG
-#   nightly          -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf
-#                       repo name `pfblockerng-nightly`, pkg ...-nightly (bleeding edge)
+#   Default (NO argument) sets up the RELEASE repo `pfblockerng` — one shared catalog
+#   carrying BOTH the stable and devel packages, exactly like Netgate ships
+#   `pfSense-pkg-pfBlockerNG` and `-devel` from its single `pfSense` repo (the two
+#   packages CONFLICT — install one). After the bootstrap, pick the package:
+#       pkg install pfSense-pkg-pfBlockerNG          # stable
+#       pkg install pfSense-pkg-pfBlockerNG-devel    # development tree
+#
+#   --nightly sets up the SEPARATE `pfblockerng-nightly` repo instead (its own
+#   `nightly/` catalog path). Bleeding edge — NOT for daily use: the only guarantee is
+#   that CI passed (devel still carries a stability target; nightly does not):
+#       pkg install pfSense-pkg-pfBlockerNG-nightly
+#
+#   default     -> conf /usr/local/etc/pkg/repos/pfblockerng.conf,         repo `pfblockerng`
+#   --nightly   -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf, repo `pfblockerng-nightly`
 #
 # THE CONF (single source of truth — matches `build-repo.sh --print-conf`):
 #   url:            Cloudflare Worker URL (ADR-20). The Worker routes requests to
@@ -39,9 +41,10 @@
 # IDEMPOTENT: re-running rewrites the conf (safe to run again at any time).
 #
 # Usage:
-#   add-repo.sh [devel|stable|nightly]      # write the conf, pkg update, verify (default: devel)
-#   add-repo.sh --print-conf [devel|stable|nightly]   # print the conf to stdout and exit (no writes)
-#   add-repo.sh --base-url <url> [devel|stable|nightly]   # override the base (forks/staging)
+#   add-repo.sh                       # set up the release repo (stable + devel), pkg update, verify
+#   add-repo.sh --nightly             # set up the nightly repo instead (bleeding edge)
+#   add-repo.sh --print-conf [--nightly]       # print the conf to stdout and exit (no writes)
+#   add-repo.sh --base-url <url> [--nightly]   # override the catalog base (forks/staging)
 #
 # POSIX sh; quoted expansions; absolute path for the privileged `pkg` binary.
 # Env:
@@ -68,59 +71,61 @@ REPOS_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/etc/pkg/repos"
 DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
 CONF_PRIORITY=100
 
-CHANNEL="devel"
+CHANNEL="release"
 PRINT_CONF=0
 BASE_URL="$DEFAULT_BASE_URL"
 
+usage() {
+    cat <<'USAGE'
+add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository (run ON the pfSense box).
+
+Usage:
+  add-repo.sh                                set up the release repo (stable + devel), pkg update, verify
+  add-repo.sh --nightly                      set up the nightly repo instead (bleeding edge; not for daily use)
+  add-repo.sh --print-conf [--nightly]       print the repo conf to stdout and exit (no writes)
+  add-repo.sh --base-url <url> [--nightly]   override the catalog base (forks/staging)
+
+After the release bootstrap, install ONE of (the packages conflict):
+  pkg install pfSense-pkg-pfBlockerNG          # stable
+  pkg install pfSense-pkg-pfBlockerNG-devel    # development tree
+USAGE
+}
+
 # ── Arg parsing ────────────────────────────────────────────────────────────────
+# The channel is a FLAG, not a positional: default is the release repo; --nightly
+# selects the separate nightly repo. (There is no stable/devel switch — both live in
+# the one release repo; you pick the package at `pkg install` time.)
 while [ $# -gt 0 ]; do
     case "$1" in
+        --nightly)      CHANNEL="nightly"; shift ;;
         --print-conf)   PRINT_CONF=1; shift ;;
         --base-url)     BASE_URL="$2"; shift 2 ;;
-        devel|stable|nightly)   CHANNEL="$1"; shift ;;
-        -h|--help)
-            sed -n '41,44p' "$0"   # the Usage block from the header
-            exit 0 ;;
-        -*) echo "add-repo: unknown option: $1" >&2; exit 2 ;;
-        *)  echo "add-repo: unknown channel '$1' (expected devel|stable|nightly)" >&2; exit 2 ;;
+        -h|--help)      usage; exit 0 ;;
+        -*) echo "add-repo: unknown option: $1 (see --help)" >&2; exit 2 ;;
+        *)  echo "add-repo: unexpected argument '$1' — the channel is a flag (--nightly); the release repo is the default. See --help." >&2; exit 2 ;;
     esac
 done
 
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# devel  -> repo `pfblockerng`,         conf pfblockerng.conf,         pkg ...-devel
-# stable -> repo `pfblockerng`,         conf pfblockerng.conf,         pkg pfSense-pkg-pfBlockerNG
-# nightly-> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, pkg ...-nightly
-# stable + devel deliberately resolve to the SAME repo/conf (one shared `pfblockerng`
-# catalog carries both packages); only PKG_NAME (verify target + install hint) differs.
-# URL_SUBPATH: nightly is served from the `nightly/` catalog subtree; the release
-# channels from the Pages root. The literal ${ABI} pkg(8) variable follows it.
-# CONF_LABEL names the REPO (not the channel) in the conf comment, so the stable and
-# devel confs stay byte-identical (both "release"); CHANNEL_LABEL stays per-channel for
-# the user-facing progress/verify messages only.
+# release (default) -> repo `pfblockerng`,        conf pfblockerng.conf,        Pages root
+#                      carries BOTH pfSense-pkg-pfBlockerNG (stable) and ...-devel
+# nightly           -> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, `nightly/` subtree
+# URL_SUBPATH: nightly is served from the `nightly/` catalog subtree; the release repo
+# from the Pages root. The literal ${ABI} pkg(8) variable follows it.
+# PKG_NAMES: the package(s) the verify step checks + the install hints printed (the
+# release repo carries two; nightly one).
 case "$CHANNEL" in
-    devel)
+    release)
         REPO_NAME="pfblockerng"
         CONF_NAME="pfblockerng.conf"
-        CONF_LABEL="release"
-        PKG_NAME="pfSense-pkg-pfBlockerNG-devel"
-        CHANNEL_LABEL="devel"
         URL_SUBPATH=""
-        ;;
-    stable)
-        REPO_NAME="pfblockerng"
-        CONF_NAME="pfblockerng.conf"
-        CONF_LABEL="release"
-        PKG_NAME="pfSense-pkg-pfBlockerNG"
-        CHANNEL_LABEL="stable"
-        URL_SUBPATH=""
+        PKG_NAMES="pfSense-pkg-pfBlockerNG pfSense-pkg-pfBlockerNG-devel"
         ;;
     nightly)
         REPO_NAME="pfblockerng-nightly"
         CONF_NAME="pfblockerng-nightly.conf"
-        CONF_LABEL="nightly"
-        PKG_NAME="pfSense-pkg-pfBlockerNG-nightly"
-        CHANNEL_LABEL="nightly"
         URL_SUBPATH="nightly/"
+        PKG_NAMES="pfSense-pkg-pfBlockerNG-nightly"
         ;;
 esac
 CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
@@ -132,7 +137,7 @@ CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
 print_conf() {
     base="${1%/}"
     cat <<EOF
-# pfBlockerNG (${CONF_LABEL} channel) — self-hosted pkg repository (ADR-17).
+# pfBlockerNG (${CHANNEL} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The \${ABI}
 # variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
@@ -159,7 +164,7 @@ command -v "$PKG_BIN" >/dev/null 2>&1 || {
     exit 1
 }
 
-echo "==> Writing ${CHANNEL_LABEL} repo conf to ${CONF_PATH}"
+echo "==> Writing ${CHANNEL} repo conf to ${CONF_PATH}"
 mkdir -p "$REPOS_DIR"
 # Rewrite unconditionally => idempotent (a re-run refreshes the conf in place).
 print_conf "$BASE_URL" > "$CONF_PATH"
@@ -167,19 +172,28 @@ print_conf "$BASE_URL" > "$CONF_PATH"
 echo "==> pkg update (refreshing catalogs, including our repo)"
 env ASSUME_ALWAYS_YES=yes "$PKG_BIN" update -f >/dev/null
 
-# VERIFY our package is visible FROM OUR repo (not merely that pkg update ran).
-# `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit means our catalog
-# loaded and carries the package. Exit non-zero (fail loud) if it is absent.
-echo "==> Verifying ${PKG_NAME} is visible from repo '${REPO_NAME}'"
-if "$PKG_BIN" rquery -r "$REPO_NAME" '%n %v' "$PKG_NAME" 2>/dev/null | grep -q .; then
-    found="$("$PKG_BIN" rquery -r "$REPO_NAME" '%n-%v' "$PKG_NAME" 2>/dev/null | head -n1)"
-    echo "==> OK: ${found} available from '${REPO_NAME}' (${CONF_PATH})"
-    echo "    Install:  ${PKG_BIN} install ${PKG_NAME}"
-    echo "    Upgrade:  ${PKG_BIN} upgrade ${PKG_NAME}"
-else
-    echo "add-repo: ${PKG_NAME} is NOT visible from repo '${REPO_NAME}' after pkg update." >&2
+# VERIFY a pfBlockerNG package is visible FROM OUR repo (not merely that pkg update
+# ran). `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit means our catalog
+# loaded and carries the package. The release repo carries two packages (stable may not
+# be published yet) — finding EITHER proves the repo loaded; nightly carries one. Exit
+# non-zero (fail loud) only if NONE is present.
+echo "==> Verifying pfBlockerNG package(s) are visible from repo '${REPO_NAME}'"
+found_any=0
+# Word-splitting the space-separated package list is intentional.
+# shellcheck disable=SC2086
+for pkg_name in $PKG_NAMES; do
+    if "$PKG_BIN" rquery -r "$REPO_NAME" '%n %v' "$pkg_name" 2>/dev/null | grep -q .; then
+        found="$("$PKG_BIN" rquery -r "$REPO_NAME" '%n-%v' "$pkg_name" 2>/dev/null | head -n1)"
+        echo "==> OK: ${found} available from '${REPO_NAME}'"
+        echo "    Install:  ${PKG_BIN} install ${pkg_name}"
+        found_any=1
+    fi
+done
+if [ "$found_any" -eq 0 ]; then
+    echo "add-repo: no pfBlockerNG package visible from repo '${REPO_NAME}' after pkg update." >&2
     echo "  Checked conf: ${CONF_PATH}" >&2
     echo "  The catalog may not be published yet for this box's ABI, or the URL is unreachable." >&2
     echo "  Inspect with: ${PKG_BIN} -d update   (traces the catalog fetch)" >&2
     exit 1
 fi
+echo "==> Done — conf at ${CONF_PATH}"

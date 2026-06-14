@@ -363,13 +363,22 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # not the whole page (the .tablewrap rule is what makes that scroll possible).
     assert '<div class="tablewrap"><table>' in page
     assert ".tablewrap{overflow-x:auto" in page
-    # Stable has no package -> empty state, NOT a bogus version.
+    # Stable has no package -> empty state, NOT a bogus version (its line in the unified
+    # release card).
     assert "not yet published" in page
-    # Install one-liner pins this repo's base URL (the working Pages mirror).
-    assert f"--base-url {base} devel" in page
+    # The unified release card: ONE bootstrap (no channel arg), then both install targets.
+    assert f"sh -s -- --base-url {base}" in page
+    assert "pkg install pfSense-pkg-pfBlockerNG<" in page  # stable (exact, not -devel)
+    assert "pkg install pfSense-pkg-pfBlockerNG-devel" in page  # development
+    # Nightly is its own card with the --nightly flag and its own package.
+    assert f"--base-url {base} --nightly" in page
     assert "pkg install pfSense-pkg-pfBlockerNG-nightly" in page
-    # The manual conf came from the injected conf function.
-    assert "devel-conf-snippet" in page
+    # The manual conf came from the injected conf function — release + nightly, keyed by
+    # the logical channel the cards pass.
+    assert "release-conf-snippet" in page
+    assert "nightly-conf-snippet" in page
+    # The badge/title casing fix: no CSS capitalize that would mangle `pfSense-pkg-...`.
+    assert "text-transform:capitalize" not in page
     # Catalog-tree link to the colon-ABI dir is './'-prefixed (browser scheme guard).
     assert 'href="./FreeBSD:16:aarch64/"' in page
     # The catalog-tree list is a responsive auto-fill grid (column count follows the

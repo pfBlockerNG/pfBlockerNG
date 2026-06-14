@@ -59,8 +59,8 @@ def _print_conf(script: Path, *args: str) -> str:
     return proc.stdout
 
 
-def _run_add_repo(channel: str, root: str) -> None:
-    """Run add-repo.sh <channel> with PFBLOCKERNG_ROOT=root.
+def _run_add_repo(root: str, *, nightly: bool = False) -> None:
+    """Run add-repo.sh with PFBLOCKERNG_ROOT=root (default = release repo; --nightly opt-in).
 
     PKG_BIN is overridden to a stub that satisfies `command -v` (it exists and
     is executable) and exits 0 for every subcommand — enough for the script to
@@ -78,13 +78,8 @@ def _run_add_repo(channel: str, root: str) -> None:
     os.chmod(fake_pkg, 0o755)
 
     env = {**os.environ, "PFBLOCKERNG_ROOT": root, "PKG_BIN": fake_pkg}
-    subprocess.run(
-        ["sh", str(_ADD_REPO), channel],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else [])]
+    subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
 
 def _field(conf: str, key: str) -> str:
@@ -95,58 +90,51 @@ def _field(conf: str, key: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Devel: add-repo.sh must emit the EXACT bytes build-repo.sh publishes.
+# The default (release) conf must be the EXACT bytes build-repo.sh publishes.
 # --------------------------------------------------------------------------- #
 
 
-def test_release_conf_byte_identical_across_stable_devel_and_build_repo() -> None:
-    """stable and devel emit the SAME release conf, == build-repo.sh --print-conf.
+def test_release_conf_byte_identical_across_all_three_generators() -> None:
+    """The default (release) conf == build-repo.sh == build-repo-portable.py, byte-for-byte.
 
-    The stable and devel packages share ONE repo/catalog (`pfblockerng`, Netgate-style),
-    so `add-repo.sh stable` and `add-repo.sh devel` must write byte-identical confs — and
-    both must match build-repo.sh --print-conf, the published single source (Phase 2/3).
-    A one-byte divergence (url, priority, repo name, comment) would split what is meant to
+    The release repo (`pfblockerng`) is what `add-repo.sh` writes by default (no argument);
+    it carries both the stable and devel packages (Netgate-style). It must match the two
+    catalog generators' `--print-conf` (the published single source, Phase 2/3) to the byte
+    — a one-byte divergence (url, priority, repo name, comment) would split what is meant to
     be one repo, so this pins all three generators together.
     """
-    stable = _print_conf(_ADD_REPO, "stable")
-    devel = _print_conf(_ADD_REPO, "devel")
+    add = _print_conf(_ADD_REPO)  # default = release (no channel argument)
     build = _print_conf(_BUILD_REPO)
     portable = _print_conf_portable()
-    assert stable == devel  # collapsed: stable + devel are one shared `pfblockerng` repo
-    assert stable == build  # == the published single-source template (build-repo.sh)
-    assert stable == portable  # == the portable Python generator — all THREE byte-equal
-
-
-def test_add_repo_default_channel_matches_devel() -> None:
-    """No channel arg defaults to devel (the documented default; the release conf)."""
-    assert _print_conf(_ADD_REPO) == _print_conf(_ADD_REPO, "devel")
+    assert add == build  # == the published single-source template (build-repo.sh)
+    assert add == portable  # == the portable Python generator — all THREE byte-equal
 
 
 # --------------------------------------------------------------------------- #
-# The load-bearing fields hold for BOTH channels (branch coverage).
+# The load-bearing fields hold for BOTH channels (branch coverage): the default
+# release repo and the --nightly flag.
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
-    ("channel", "repo_name", "url"),
+    ("args", "repo_name", "url"),
     [
-        # stable + devel collapse onto the ONE shared `pfblockerng` release repo.
-        ("devel", "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
-        ("stable", "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
-        # nightly is served from a DISTINCT `nightly/` catalog subtree (so it never
-        # collides with the release tree on Pages) — its url carries the extra path.
-        ("nightly", "pfblockerng-nightly", f'url: "{_WORKER_URL}/nightly/${{ABI}}"'),
+        # Default (no argument) -> the shared `pfblockerng` release repo.
+        ((), "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
+        # --nightly -> a DISTINCT `pfblockerng-nightly` repo on a `nightly/` catalog
+        # subtree (so it never collides with the release tree on Pages).
+        (("--nightly",), "pfblockerng-nightly", f'url: "{_WORKER_URL}/nightly/${{ABI}}"'),
     ],
 )
-def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str) -> None:
-    """stable/devel name the shared release repo; nightly its own — all share the rest.
+def test_add_repo_conf_fields_per_channel(args: tuple[str, ...], repo_name: str, url: str) -> None:
+    """The default names the shared release repo; --nightly its own — all share the rest.
 
-    stable + devel -> `pfblockerng` (one shared repo); nightly -> `pfblockerng-nightly`
-    (and a `nightly/${ABI}` url subtree). All carry priority 100 (above Netgate's 0) and
-    none/none (NONE-signed). The repo NAME (and, for nightly, the url subpath) is the only
-    varying field — and nightly's name must never collide with the release repo on a box.
+    Default (no arg) -> `pfblockerng` (the shared repo carrying stable + devel); --nightly ->
+    `pfblockerng-nightly` (and a `nightly/${ABI}` url subtree). Both carry priority 100 (above
+    Netgate's 0) and none/none (NONE-signed). The repo NAME (and, for nightly, the url subpath)
+    is the only varying field — and nightly's name must never collide with the release repo.
     """
-    conf = _print_conf(_ADD_REPO, channel)
+    conf = _print_conf(_ADD_REPO, *args)
 
     # The stanza is keyed by the expected repo name (and ONLY that name).
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), conf
@@ -166,19 +154,22 @@ def test_add_repo_conf_fields_per_channel(channel: str, repo_name: str, url: str
     assert _field(conf, "enabled") == "yes"
 
 
-def test_add_repo_rejects_unknown_channel() -> None:
-    """An unknown channel arg fails loud (exit != 0), never silently writing a conf.
+def test_add_repo_rejects_positional_argument() -> None:
+    """A positional argument fails loud (exit != 0) — the channel is a flag, not a word.
 
-    (devel/stable/nightly are the three valid channels; anything else is rejected.)
+    The old `devel`/`stable`/`nightly` positionals are gone: the release repo is the default
+    and `--nightly` selects the nightly repo. A leftover `add-repo.sh devel` (or any word)
+    must error rather than silently do the wrong thing.
     """
-    proc = subprocess.run(
-        ["sh", str(_ADD_REPO), "--print-conf", "bogus"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode != 0
-    assert "channel" in proc.stderr.lower()
+    for bad in ("devel", "stable", "nightly", "bogus"):
+        proc = subprocess.run(
+            ["sh", str(_ADD_REPO), "--print-conf", bad],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode != 0, f"{bad!r} should be rejected"
+        assert "unexpected argument" in proc.stderr.lower(), proc.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +181,7 @@ def test_primary_url_is_worker_url() -> None:
     """add-repo.sh writes the Cloudflare Worker URL, not the old GitHub Pages URL.
 
     Scenario: Given the conf does not exist (or exists with the old GitHub Pages URL),
-    When  add-repo.sh devel is run,
+    When  add-repo.sh is run (default = release repo),
     Then  the written conf URL contains pkg.pfblockerng.workers.dev and does NOT
           contain pfblockerng.github.io.
 
@@ -203,8 +194,8 @@ def test_primary_url_is_worker_url() -> None:
         # Given: conf does not exist yet (before-state)
         assert not conf_path.exists(), "conf should not exist before first run"
 
-        # When: run add-repo.sh devel (writes the shared release conf)
-        _run_add_repo("devel", root)
+        # When: run add-repo.sh with no argument (writes the shared release conf)
+        _run_add_repo(root)
 
         # Then: conf written with Worker URL
         assert conf_path.exists(), "conf should be written by add-repo.sh"
@@ -221,7 +212,7 @@ def test_worker_url_has_no_abi_placeholder() -> None:
     The ${ABI} placeholder appears only in the full url: line (appended after
     the base), not embedded in the Worker hostname or path prefix.
     """
-    conf = _print_conf(_ADD_REPO, "devel")
+    conf = _print_conf(_ADD_REPO)
     url_line = _field(conf, "url").strip('"')
     # The Worker base itself must not contain ${ABI}
     base = url_line.split("${ABI}")[0]
@@ -231,37 +222,37 @@ def test_worker_url_has_no_abi_placeholder() -> None:
 
 
 def test_worker_url_unchanged_regardless_of_channel() -> None:
-    """All three channels write the same Worker base URL; only repo section name differs.
+    """Both channels write the same Worker base URL; only the repo name / subpath differs.
 
     The Worker handles routing for all channels uniformly — the variant/version
     routing is User-Agent-based, not channel-based. The nightly channel adds the
-    `nightly/` subpath prefix, but the Worker hostname is identical across all three.
+    `nightly/` subpath prefix, but the Worker hostname is identical for both.
     """
-    for channel in ("devel", "stable", "nightly"):
-        conf = _print_conf(_ADD_REPO, channel)
+    for args in ((), ("--nightly",)):
+        conf = _print_conf(_ADD_REPO, *args)
         url_line = _field(conf, "url")
-        assert _WORKER_URL in url_line, f"Channel {channel!r}: Worker URL not in url field: {url_line!r}"
-        assert _OLD_PAGES_URL not in url_line, f"Channel {channel!r}: old Pages URL must not appear: {url_line!r}"
+        assert _WORKER_URL in url_line, f"args {args!r}: Worker URL not in url field: {url_line!r}"
+        assert _OLD_PAGES_URL not in url_line, f"args {args!r}: old Pages URL must not appear: {url_line!r}"
 
 
 def test_conf_written_once_invariant() -> None:
-    """Running add-repo.sh devel twice produces the same URL (idempotent).
+    """Running add-repo.sh twice produces the same URL (idempotent).
 
     Scenario: Given the conf is written by a first run (Worker URL present),
-    When  add-repo.sh devel is run again,
+    When  add-repo.sh is run again,
     Then  the URL is unchanged — the conf is rewritten with the same Worker URL.
     """
     with tempfile.TemporaryDirectory() as root:
         conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
 
         # Given: first run writes the conf
-        _run_add_repo("devel", root)
+        _run_add_repo(root)
         assert conf_path.exists()
         content_first = conf_path.read_text()
         assert _WORKER_URL in content_first  # before-state: Worker URL present
 
         # When: run again
-        _run_add_repo("devel", root)
+        _run_add_repo(root)
 
         # Then: URL unchanged
         content_second = conf_path.read_text()
@@ -270,31 +261,34 @@ def test_conf_written_once_invariant() -> None:
         )
 
 
-def test_stable_and_devel_collapse_onto_one_shared_conf_file() -> None:
-    """stable and devel write the SAME on-box file — no separate per-channel conf.
+def test_default_writes_release_conf_and_nightly_writes_its_own() -> None:
+    """The default writes ONLY the shared release conf; --nightly writes ONLY the nightly one.
 
-    Scenario: the stable + devel packages share one repo, so both channels target
-              /usr/local/etc/pkg/repos/pfblockerng.conf (never a `pfblockerng-devel.conf`).
-    Given stable is bootstrapped first (writes the shared release conf),
-    When  devel is bootstrapped into the same root,
-    Then  it rewrites the SAME file with identical bytes, and no `pfblockerng-devel.conf`
-          is ever created — proving the collapse (a regression that re-split the channels
-          would leave two distinct files here).
+    Scenario: stable + devel share one repo (`pfblockerng.conf`); nightly is separate
+              (`pfblockerng-nightly.conf`). The default bootstrap must never create a
+              per-channel `pfblockerng-devel.conf`, and the two channels must not clobber
+              each other's file.
+    Given a fresh root,
+    When  add-repo.sh runs with no argument,
+    Then  only `pfblockerng.conf` exists (no `pfblockerng-devel.conf`, no nightly conf);
+    When  add-repo.sh --nightly then runs into the same root,
+    Then  `pfblockerng-nightly.conf` is added alongside, and the release conf is untouched.
     """
     with tempfile.TemporaryDirectory() as root:
         repos = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
-        shared = repos / "pfblockerng.conf"
+        release = repos / "pfblockerng.conf"
+        nightly = repos / "pfblockerng-nightly.conf"
         legacy_split = repos / "pfblockerng-devel.conf"
 
-        # Given: stable writes the shared release conf (before-state)
-        _run_add_repo("stable", root)
-        assert shared.exists(), "stable must write the shared pfblockerng.conf"
-        stable_bytes = shared.read_text()
-        assert not legacy_split.exists(), "stable must not write a split pfblockerng-devel.conf"
+        # When: default (no arg) → only the shared release conf
+        _run_add_repo(root)
+        assert release.exists(), "default must write the shared pfblockerng.conf"
+        assert not legacy_split.exists(), "default must NOT write a split pfblockerng-devel.conf"
+        assert not nightly.exists(), "default must NOT write the nightly conf"
+        release_bytes = release.read_text()
 
-        # When: devel is bootstrapped into the same root
-        _run_add_repo("devel", root)
-
-        # Then: same file, identical bytes, and still no split conf
-        assert shared.read_text() == stable_bytes, "devel must rewrite the SAME shared conf, byte-identical"
-        assert not legacy_split.exists(), "devel must NOT create a separate pfblockerng-devel.conf"
+        # When: --nightly → adds its own conf, leaves the release conf untouched
+        _run_add_repo(root, nightly=True)
+        assert nightly.exists(), "--nightly must write pfblockerng-nightly.conf"
+        assert release.read_text() == release_bytes, "--nightly must not touch the release conf"
+        assert not legacy_split.exists(), "no pfblockerng-devel.conf is ever created"
