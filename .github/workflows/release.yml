@@ -304,6 +304,11 @@ jobs:
           set -eu
           mkdir -p out
 
+          # The artifact's creation time = the tagged commit's committer date (epoch).
+          # Baked into each .pkg as the `created` annotation so the landing page shows
+          # when the code was created, not when the catalog was last republished.
+          CREATED="$(git show -s --format=%ct HEAD)"
+
           printf '%s\n' "$BUILD_MATRIX" \
             | jq -c '.[]' \
             | while IFS= read -r ENTRY; do
@@ -330,6 +335,7 @@ jobs:
                   --abi "$ABI" \
                   --py-flavor "$PY" \
                   --php "$PHP" \
+                  --annotate "created=${CREATED}" \
                   --out "$PKG_OUT"
 
                 echo "Built for FreeBSD ${MAJOR}/${ARCH}:"
