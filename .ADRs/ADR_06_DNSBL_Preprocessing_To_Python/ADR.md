@@ -1,6 +1,6 @@
 # ADR-06: Move DNSBL list preprocessing out of shell/PHP into the Python plugin
 
-- **Status:** **Implemented — pending live smoke** (2026-06-01) — Phases 1–6 landed on `adr/06`; CI gates green and the init/memory kill-gate is met (see §7 build evidence). Flips to **Accepted** only after the maintainer runs the live manual smoke (§7).
+- **Status:** **Accepted** (2026-06-15; implemented 2026-06-01) — decision-equivalence + the init/memory kill-gate are proven (§7 build evidence), and the live block/resolve/whitelist/zone build path is exercised end-to-end by the ADR-04 `-m smoke` matrix, green on **CE 2.8 + Plus 26.03** (fanout run 27547011086). Phases 1–6 on `adr/06`. (Originally Implemented — pending live smoke, 2026-06-01.)
 - **Date:** 2026-06-01
 - **Branch:** `adr/06` (off **`next`** — depends on ADR-02 "Python-only DNSBL" having landed) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (new build/parse layer + load path), `pfblockerng.inc` (`tld_analysis`, the download/parse loop, `pfb_unbound_python_whitelist`), `pfblockerng.sh` (`:470-523` finalize/dedup/count), `pfblockerng_dnsbl.php` / `pfblockerng_alerts.php` (UI reads of counts; whitelist entry points — preserved).
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only**; PHP 8.3; POSIX `sh`.
