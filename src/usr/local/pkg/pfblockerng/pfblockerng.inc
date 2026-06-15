@@ -5462,6 +5462,11 @@ function pfb_feed_internal_allowlist($ignored = NULL) {
 		return array();
 	}
 
+	// The allowlist is stored base64-encoded, like every other pfBlockerNG textarea
+	// (suppression / whitelist / custom; see pfbng_text_area_decode). Decode before
+	// parsing; an undecodable value yields no entries, so the filter stays fail-closed.
+	$raw = (string) base64_decode($raw);
+
 	$entries = array();
 	foreach (preg_split('/[\s,]+/', $raw) as $entry) {
 		$entry = trim($entry);

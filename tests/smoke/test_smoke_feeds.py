@@ -73,6 +73,12 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
+    # The mock feed server is the SLIRP host alias 10.0.2.2 (RFC1918) — the default-ON
+    # feed-host internal-address filter (SSRF guard, pfb_feed_internal_filter) would reject
+    # every HTTP mock fetch as an internal-resolving host. Allowlist the SLIRP test network
+    # so the filter stays ON yet the mock is reachable (the fix for the regression these
+    # HTTP-feed tests hit after the filter landed default-on).
+    h.set_feed_internal_allowlist(smoke_vm, "10.0.2.0/24")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
@@ -178,6 +184,58 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
         passed = h.dns_probe(deployed_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
         assert not h.is_vip(passed), f"non-member {non_member} wrongly VIP-blocked: {passed}"
+
+
+# --------------------------------------------------------------------------- #
+# Feed-host internal-address filter (SSRF guard) — BOTH branches over the live box.
+# --------------------------------------------------------------------------- #
+
+
+def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """The default-ON feed-host filter BLOCKS an internal-resolving feed; the allowlist EXEMPTS it.
+
+    The mock feed server is the SLIRP host alias 10.0.2.2 (RFC1918) — exactly the
+    internal-pivot the filter (``pfb_feed_internal_filter``, default ON) guards against.
+    This pins BOTH branches end to end over the live box (the module fixture allowlists
+    10.0.2.0/24 so the other HTTP-feed cases load at all; this test brackets it).
+
+    Scenario:
+      Given the filter ON and the allowlist EMPTY (so 10.0.2.2 is not exempt),
+      When  the mock IP feed is Force-Updated,
+      Then  the download is REFUSED and the pf table is never built (the block branch).
+      When  the SLIRP net 10.0.2.0/24 is then allowlisted and re-updated,
+      Then  the SAME feed downloads and its pf table IS built (the exempt branch).
+    """
+    feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
+    spec = h.IpCase(aliasname="smokefiltergate", feed_url=feed_url, header="smokefiltergate", family="v4")
+    # The mock fetch must be reachable across both updates (the SSRF filter, not egress,
+    # is what we are exercising).
+    h.unblock_egress()
+    try:
+        h.inject(deployed_vm, spec)
+        # BLOCK branch: empty allowlist => the internal mock host is not exempt.
+        # An IpCase settles its pf table + rule only after the full Force Update
+        # FOLLOWED BY the targeted updateip (see CaseContext) — mirror that here so
+        # the "table not built" assertion reflects a fully settled reload, not a race.
+        h.set_feed_internal_allowlist(deployed_vm, "")
+        assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before any load"
+        h.reload(deployed_vm, "update")
+        h.reload(deployed_vm, "updateip")
+        assert spec.alias not in h.pfctl_tables(deployed_vm), (
+            "filter ON + empty allowlist must BLOCK the internal mock feed (pf table not built)"
+        )
+
+        # EXEMPT branch: allowlist the SLIRP net => the SAME feed now downloads + loads.
+        h.set_feed_internal_allowlist(deployed_vm, "10.0.2.0/24")
+        h.reload(deployed_vm, "update")
+        h.reload(deployed_vm, "updateip")
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        assert members, "allowlisting the SLIRP CIDR must EXEMPT the feed (pf table built)"
+        assert h.member_present(members, "203.0.113.5"), f"listed host missing after exemption: {members}"
+    finally:
+        # Restore the module-default allowlist (siblings rely on it) and baseline the box.
+        h.set_feed_internal_allowlist(deployed_vm, "10.0.2.0/24")
+        h.reset(deployed_vm)
 
 
 # --------------------------------------------------------------------------- #

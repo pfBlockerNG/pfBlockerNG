@@ -809,6 +809,32 @@ def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float =
     return False
 
 
+def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
+    """Set the General-settings feed-host internal-address ALLOWLIST (``pfb_feed_internal_allowlist``).
+
+    The feed-host filter (``pfb_feed_internal_filter``, default-ON SSRF guard) rejects a feed
+    whose host resolves to an internal/private address — but EXEMPTS any IP covered by this
+    allowlist (IPs/CIDRs, whitespace/comma-separated, stored base64-encoded; ``pfb_feed_internal_allowlist()``
+    parses it, ``pfb_ip_in_allowlist()`` matches by CIDR). The smoke mock feed server is the SLIRP
+    host alias ``10.0.2.2`` (RFC1918, and NOT the box's own IP, so the self-exemption does not
+    apply), so the HTTP-feed smoke allowlists the SLIRP test network ``10.0.2.0/24`` — keeping the
+    filter ON while letting the mock fetch through.
+
+    The field is stored base64-encoded (the pfBlockerNG textarea convention; the reader
+    base64_decodes it), so ``value`` is encoded here before it is written.
+    """
+    encoded = base64.b64encode(value.encode()).decode()
+    snippet = (
+        f"config_set_path({_php_str(CFG_GLOBAL + '/pfb_feed_internal_allowlist')}, {_php_str(encoded)});\n"
+        "write_config('pfBlockerNG smoke: set feed internal allowlist');\necho 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_feed_internal_allowlist failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
