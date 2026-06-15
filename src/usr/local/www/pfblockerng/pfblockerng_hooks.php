@@ -169,8 +169,8 @@ if ($_POST) {
 	}
 }
 
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update Hooks'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'), gettext('Hooks'));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_update.php', '@self');
 include_once('head.inc');
 
 if ($input_errors) {
@@ -184,14 +184,20 @@ $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Update Hooks'),true,	'/pfblockerng/pfblockerng_hooks.php');
+$tab_array[]	= array(gettext('Update'),	true,	'/pfblockerng/pfblockerng_update.php');
 $tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
 $tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
 $tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
 $tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, true);
+
+// Update sub-tabs: Run (update page) and Hooks (this page).
+// Second display_top_tabs row, matching the Feeds page IPv4/IPv6/DNSBL sub-tab idiom.
+$tab_array_sub	= array();
+$tab_array_sub[]	= array(gettext('Run'),		false,	'/pfblockerng/pfblockerng_update.php');
+$tab_array_sub[]	= array(gettext('Hooks'),	true,	'/pfblockerng/pfblockerng_hooks.php');
+display_top_tabs($tab_array_sub, true);
 
 $form = new Form('Save');
 
