@@ -380,6 +380,21 @@ mechanics. All three required:
   cache, smoke journeys) gets a **Scenario / Background + Given–When–Then** spec next to the
   test, the body split into explicit **Given** (arrange) / **When** (act) / **Then** (assert).
 
+### ADR acceptance — automated tests, not a manual maintainer sign-off
+
+An ADR flips to **Accepted** on **green automated coverage alone — no manual maintainer
+validation step is required** — *provided* its smoke and/or UI tests (ADR-04 live-VM /
+ADR-14 Web-UI) are **properly implemented**: they **prove the solution works** (assert the
+real behaviour, every branch, before-and-after — per the mandate above) **and guard against
+regression**, green on the live-VM **fan-out (CE + Plus** — the default validation; see
+"Smoke fan-out"). Coverage theater does not qualify, so this never lowers the real bar — it
+just removes a redundant human gate once the machine genuinely proves the behaviour. A §7
+item that **cannot** be exercised in CI (e.g. HA/CARP sync, a real HAProxy reload, a
+continuous-traffic load profile, the smallest-box RAM gate, true *visual* correctness) is
+recorded as a **documented out-of-CI limitation**, **not** an acceptance blocker. This
+**supersedes** the older per-ADR "manual smoke (owner: maintainer) — required before Accept"
+gate wherever a §7 checklist still says so.
+
 ---
 
 ## Linting
