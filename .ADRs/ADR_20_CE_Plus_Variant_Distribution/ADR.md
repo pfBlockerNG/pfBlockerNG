@@ -16,9 +16,12 @@
 > variant into manifests (#242) → generator variant bucketing → `publish.yml` routing.json +
 > variant catalogs → Worker nightly-prefix fix + `wrangler deploy`, then un-`xfail` Case 4.
 
-- **Status:** **Accepted (code) — routing NOT yet live** (code accepted 2026-06-10; corrected
-  2026-06-15, see the amendment above). §4/§7's *"routing.json live with active CE+Plus
-  routes"* is unmet until the routing-completion PRs land.
+- **Status:** **Accepted (code) — routing rework landed, awaiting live deploy** (code accepted
+  2026-06-10; routing rework B1–B3 landed 2026-06-15, see the amendment + the routing-completion
+  handoff). The matrix-driven builder/tree/`routing.json` (B1), the matrix-driven `publish.yml`
+  (B2), and the Worker rewrite (B3) are implemented + unit-tested. §4/§7's *"routing.json live with
+  active CE+Plus routes"* is unmet until the maintainer runs `publish.yml` (publishes the variant
+  tree + `routing.json` to Pages) and `wrangler deploy`s the Worker, then un-`xfail`s Case 4.
 - **Date:** 2026-06-09
 - **Branch:** `adr/20-ce-plus-variant-distribution` (off **`devel`**; `{slug}` =
   sanitised ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):**
