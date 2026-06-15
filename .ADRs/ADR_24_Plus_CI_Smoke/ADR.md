@@ -1,6 +1,12 @@
 # ADR-24: pfSense Plus in the CI smoke fan-out
 
-- **Status:** **Proposed** (2026-06-12)
+- **Status:** **Accepted** (2026-06-15; proposed 2026-06-12). All phases are live on `devel`
+  and `ci-metadata`: the matrix carries the Plus entry (`channel: "Plus"`, `ci: true`,
+  `image_name: "pfsense-plus"`); `smoke.yml` / `smoke-fanout.yml` / `build-pkg-linux.yml` are
+  Plus-aware (per-leg `image_name` + ABI/PHP, `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID`
+  secrets), and the Plus-leg diagnostics redaction shipped (`RESULTS/diag_redaction_Results.txt`).
+  The maintainer confirms the Plus leg runs in the CI fan-out; the §7 manual checklist is
+  retained as reference and any deviation is handled as a **bug**, not an Accept blocker.
 - **Date:** 2026-06-12
 - **Branch:** `adr/24-pfsense-plus-in-the-ci-smoke` (off `devel`); matrix flip via PR
   against `ci-metadata`
