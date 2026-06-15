@@ -377,3 +377,93 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
         ans_non = h.dns_probe(deployed_vm, non_member, "A")
         assert h.resolves_to(ans_non, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {ans_non}"
         assert not h.is_vip(ans_non), f"non-member {non_member} wrongly VIP-blocked: {ans_non}"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-21 — per-line ABP detection inside a NON-ABP (header-less) feed.
+# The kill-gate/expand cases above feed a WHOLE-FEED ABP body (it STARTS with
+# ``[Adblock Plus 2.0]`` -> ``format_hint='abp'`` -> every line to ``parse_abp``).
+# This case proves the orthogonal ADR-21 path: a feed with NO ABP header (it stays
+# ``format_hint='plain'``) whose individual lines still carry ``||``/``@@||`` anchors
+# is routed line-by-line to the ABP parser (PHP download loop + manifest builder write
+# the anchors verbatim; Python ``build()`` routes them to ``parse_abp`` -> ``abp_rules``)
+# WHILE its plain-domain lines keep the plain pipeline.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-21: ``||block^`` / ``@@||allow^`` in a HEADER-LESS feed resolve correctly.
+
+    Scenario: a header-less DNSBL feed row (NOT whole-feed ABP — ``format_hint='plain'``)
+    mixes ABP-anchored entries with a plain-domain block. Per-line detection (ADR-21 §2.1)
+    must route the anchors to ``parse_abp`` while the plain line keeps the plain pipeline.
+
+    Delivery note — the entries ride a normal FEED row, not the GUI Custom_List field. A
+    Custom_List entry is tagged provenance='user' (band-5 SOVEREIGN user block) by the
+    manifest, which would beat a feed ``@@`` allow and defeat the §4.2 override under test.
+    Feed-level ABP semantics (where a feed ``@@`` allow band 2 beats a feed block band 1)
+    are exactly what per-line detection must reproduce, so the feed row is the faithful
+    mechanism. The body carries runtime ``unique_domain()`` uuids, so it is a LOCAL feed
+    (``write_local_feed``), as the ABP matrix (test_smoke_abp.py) delivers its feeds.
+
+    Background — the feed body (no ``[Adblock`` / ``! Title:`` header) contains:
+      * ``||<block>^``                      -> block the domain (§4.1)
+      * ``@@||<allow>^`` AND a plain ``<allow>`` line
+                                            -> the same-feed plain block of ``<allow>``
+                                               is OVERRIDDEN by its ``@@`` allow (§4.2)
+      * ``<plain>``                         -> a plain-domain block, unaffected (§4.5)
+
+    Given (before the feed is loaded) all three names RESOLVE via the controlled stub
+      upstream (``STUB_DNS_A``) — the real, observable before-state of the transition.
+    When the case injects the header-less feed + runs a Force Update (Unbound reloads),
+    Then:
+      * ``<block>`` returns the VIP block shape and no longer resolves
+        (``||block^`` reached ``parse_abp`` from a NON-ABP feed — the ADR-21 win);
+      * ``<allow>`` RESOLVES via the stub (its ``@@`` allow beat the SAME-FEED plain
+        block — proving per-line ``@@||`` parsed and won, not merely that nothing
+        blocked: a regression would leave it VIP-blocked by the plain entry);
+      * ``<plain>`` returns the VIP block shape (the plain pipeline is untouched).
+
+    The two "resolves" assertions reach the stub via the matcher's allow/non-block
+    path (no host override — an override is served as ``local-data`` ahead of the
+    matcher and would resolve the name regardless, a false-green; see this module's
+    RESOLVE-PROOF NOTE). Resolving through the matcher is the load-bearing branch.
+    """
+    block_name = h.unique_domain("adr21blk")  # ||block^ -> must BLOCK
+    allow_name = h.unique_domain("adr21allow")  # plain block + @@||allow^ -> must RESOLVE
+    plain_name = h.unique_domain("adr21plain")  # plain block -> must BLOCK (unaffected)
+    # A HEADER-LESS body: no [Adblock / ! Title: line, so the feed stays format_hint='plain'
+    # and only per-line detection can catch the anchors. The plain ``allow_name`` line is
+    # placed alongside its ``@@`` to prove @@ overrides a plain block in the SAME feed.
+    body = "\n".join([f"||{block_name}^", f"@@||{allow_name}^", allow_name, plain_name]) + "\n"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_perline.txt", body)
+    spec = h.DnsblCase(aliasname="smokeadr21", feed_url=feed_url, header="smokeadr21", mode=h.DnsblMode.VIP)
+
+    # BEFORE: none of the three names is on any feed yet -> each resolves via the stub.
+    for name in (block_name, allow_name, plain_name):
+        before = h.dns_probe(deployed_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        # The "resolves" probe (the @@ allow) must reach the controlled stub: leave egress
+        # OPEN. A VIP block returns locally regardless of egress, so this is no false-green.
+        h.unblock_egress()
+        # The before-probes warmed the C-cache; a feed allow->block swap is TTL-bounded BY
+        # DESIGN (ADR-10) and does not flush the cache -> flush each name, then poll the
+        # blocked ones until the async swap's VIP lands.
+        for name in (block_name, allow_name, plain_name):
+            h.flush_unbound_name(deployed_vm, name)
+
+        ans_block = h.dns_probe_until(deployed_vm, block_name, h.is_vip)
+        assert not h.resolves_to(ans_block, STUB_DNS_A), f"{block_name} still resolving after ||block^: {ans_block}"
+
+        ans_plain = h.dns_probe_until(deployed_vm, plain_name, h.is_vip)
+        assert not h.resolves_to(ans_plain, STUB_DNS_A), f"{plain_name} still resolving after plain block: {ans_plain}"
+
+        ans_allow = h.dns_probe(deployed_vm, allow_name, "A")
+        assert h.resolves_to(ans_allow, STUB_DNS_A), (
+            f"@@||{allow_name}^ must RESOLVE via the stub (its @@ allow beats the same-feed plain block): {ans_allow}"
+        )
+        assert not h.is_vip(ans_allow), f"{allow_name} wrongly VIP-blocked despite its @@ allow: {ans_allow}"
