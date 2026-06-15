@@ -3539,6 +3539,22 @@ function pfb_strip_trailing_port($line) {
 }
 
 
+// ADR-21: whole-feed ABP header sniff. A line in a feed's leading '!'-comment block
+// that starts (leading whitespace tolerated) with '[Adblock', '[uBlock', or '! Title:'
+// flags the feed as whole-feed ABP ($easylist = TRUE). The three generic prefixes are a
+// SUPERSET of the four legacy magic strings ('[Adblock Plus '/'[Adblock Plus]' -> '[Adblock';
+// '[uBlock Origin' -> '[uBlock'; '! Title: AdGuard' -> '! Title:'), so every feed detected
+// before is still detected. PREFIX match (str_starts_with), NOT the legacy mid-line strpos:
+// a '! Title:' token inside a data line cannot flip the feed. Safe because parse_abp() is a
+// superset parser that still blocks the feed's bare-domain entries (ADR §1.4 / §2.4).
+function pfb_dnsbl_is_abp_header($line) {
+	$hline = ltrim($line);
+	return (str_starts_with($hline, '[Adblock') ||
+		str_starts_with($hline, '[uBlock') ||
+		str_starts_with($hline, '! Title:'));
+}
+
+
 // ADR-10 P5: atomically publish a file to the chroot (/var/unbound). Stage into a
 // temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
 // fix ownership -> atomic rename() over the final path. The plugin only ever reads
@@ -3817,6 +3833,15 @@ function pfb_unbound_python_sources($feeds) {
 					if ($line !== '') {
 						@fwrite($raw_h, "{$line}\n");
 					}
+					continue;
+				}
+				// ADR-21: ABP-anchored verbatim line from a non-ABP feed (the
+				// download loop wrote '||'/'@@||' lines through untouched, NOT as
+				// 6-col CSV) -- pass it straight to the '.raw' without CSV
+				// extraction. Python's build() routes it to parse_abp().
+				$rawline = rtrim($line, "\r\n");
+				if (str_starts_with($rawline, '||') || str_starts_with($rawline, '@@||')) {
+					@fwrite($raw_h, "{$rawline}\n");
 					continue;
 				}
 				// 'plain': extract bare domains (col1) from the 6-col CSV; this is
@@ -10237,12 +10262,12 @@ function sync_package_pfblockerng($cron='') {
 											// Collect original line
 											$oline = $line;
 
-											// Validate EasyList/AdBlock/uBlock/ADGuard Feeds
+											// Validate EasyList/AdBlock/uBlock/ADGuard Feeds.
+											// ADR-21: broadened to the generic ABP header
+											// convention ('[Adblock'/'[uBlock'/'! Title:'),
+											// a superset of the four legacy magic strings.
 											if (!$validate_header) {
-												if (strpos($line, '[Adblock Plus ') !== FALSE ||
-												    strpos($line, '[Adblock Plus]') !== FALSE ||
-												    strpos($line, '[uBlock Origin') !== FALSE ||
-												    strpos($line, '! Title: AdGuard') !== FALSE) {
+												if (pfb_dnsbl_is_abp_header($line)) {
 													$easylist = $validate_header = TRUE;
 													continue;
 												}
@@ -10612,6 +10637,20 @@ function sync_package_pfblockerng($cron='') {
 
 											// Remove leading/trailing dots
 											$line = trim(trim($line), '.');
+
+											// ADR-21: ABP-anchored line in a non-ABP feed.
+											// '||'/'@@||' are invalid in every plain dialect
+											// (pfb_filter() would drop them below), so write
+											// them VERBATIM to the '.bk'/'.txt' staging file;
+											// the manifest builder passes them through to the
+											// '.raw' and Python's build() routes them to
+											// parse_abp(). parse_abp() returns None for IP /
+											// path / wildcard anchors -> silently skipped.
+											if (str_starts_with($line, '||') || str_starts_with($line, '@@||')) {
+												$domain_data = "{$line}\n";
+												@fwrite($dhandle, $domain_data);
+												continue;
+											}
 
 											// Domain Validation
 											if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {
