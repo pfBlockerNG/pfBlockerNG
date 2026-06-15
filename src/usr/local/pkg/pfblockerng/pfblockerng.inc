@@ -3549,6 +3549,12 @@ function pfb_strip_trailing_port($line) {
 // superset parser that still blocks the feed's bare-domain entries (ADR §1.4 / §2.4).
 function pfb_dnsbl_is_abp_header($line) {
 	$hline = ltrim($line);
+	// A UTF-8 BOM on the feed's first line sits before the prefix; ltrim()
+	// does not strip it, so peel it off (the legacy mid-line strpos() matched
+	// regardless of a BOM -- without this a BOM-led header would regress).
+	if (str_starts_with($hline, "\xEF\xBB\xBF")) {
+		$hline = ltrim(substr($hline, 3));
+	}
 	return (str_starts_with($hline, '[Adblock') ||
 		str_starts_with($hline, '[uBlock') ||
 		str_starts_with($hline, '! Title:'));
@@ -10287,6 +10293,26 @@ function sync_package_pfblockerng($cron='') {
 											// Remove invalid charaters
 											$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");
 
+											// ADR-21: ABP-anchored line in a non-ABP feed.
+											// Captured BEFORE CSV autodetection and the
+											// URL/path/'?'-query stripping below, which would
+											// otherwise truncate '||domain/path^' or misparse a
+											// comma-bearing ABP option line as CSV. '||'/'@@||'
+											// are invalid in every plain dialect (pfb_filter()
+											// would drop them), so write them VERBATIM to the
+											// '.bk'/'.txt' staging file; the manifest builder
+											// copies them to the '.raw' and Python's build()
+											// routes them to parse_abp() (which returns None for
+											// IP / path / wildcard anchors -> silently skipped).
+											// $easylist feeds already pass ABP lines through
+											// verbatim below, so this is for plain feeds only.
+											if (!$easylist &&
+											    (str_starts_with($line, '||') || str_starts_with($line, '@@||'))) {
+												$domain_data = "{$line}\n";
+												@fwrite($dhandle, $domain_data);
+												continue;
+											}
+
 											if ($easylist) {
 												// ADR-07 P8: the PHP $easylist lite parser is
 												// DELETED. ABP feeds are tagged format_hint='abp'
@@ -10637,20 +10663,6 @@ function sync_package_pfblockerng($cron='') {
 
 											// Remove leading/trailing dots
 											$line = trim(trim($line), '.');
-
-											// ADR-21: ABP-anchored line in a non-ABP feed.
-											// '||'/'@@||' are invalid in every plain dialect
-											// (pfb_filter() would drop them below), so write
-											// them VERBATIM to the '.bk'/'.txt' staging file;
-											// the manifest builder passes them through to the
-											// '.raw' and Python's build() routes them to
-											// parse_abp(). parse_abp() returns None for IP /
-											// path / wildcard anchors -> silently skipped.
-											if (str_starts_with($line, '||') || str_starts_with($line, '@@||')) {
-												$domain_data = "{$line}\n";
-												@fwrite($dhandle, $domain_data);
-												continue;
-											}
 
 											// Domain Validation
 											if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {

@@ -41,6 +41,12 @@ final class DnsblIsAbpHeaderTest extends TestCase
 			'leading whitespace tolerated'     => ['   ! Title: Something', true],
 			'leading tab tolerated'            => ["\t[Adblock Plus]", true],
 
+			// --- UTF-8 BOM on the first line must not mask the header (legacy
+			//     strpos() matched through it; the prefix sniff must too). ---
+			'BOM + [Adblock'                   => ["\xEF\xBB\xBF[Adblock Plus 2.0]", true],
+			'BOM + ! Title:'                   => ["\xEF\xBB\xBF! Title: HaGeZi", true],
+			'BOM + whitespace + [uBlock'       => ["\xEF\xBB\xBF  [uBlock Origin]", true],
+
 			// --- Non-headers / data lines must NOT flip. ---
 			'plain bare domain'                => ['x.com', false],
 			'hosts-format line'                => ['0.0.0.0 x.com', false],
@@ -50,6 +56,7 @@ final class DnsblIsAbpHeaderTest extends TestCase
 			'! Title: not at line start'       => ['data ! Title: AdGuard', false],
 			'empty line'                       => ['', false],
 			'hash comment'                     => ['# comment', false],
+			'BOM + non-header data line'       => ["\xEF\xBB\xBFx.com", false],
 		];
 	}
 
