@@ -35,10 +35,14 @@ final class FeedHostAllowedTest extends TestCase
 		$GLOBALS['pfb_test_configured_ips'] = [];
 	}
 
-	/** Set the internal-address allowlist config value the guard reads. */
+	/** Set the internal-address allowlist config value the guard reads.
+	 *
+	 * Stored base64-encoded (the pfBlockerNG textarea convention; pfb_feed_internal_allowlist()
+	 * base64_decodes it), so encode the plain IP/CIDR list the caller passes.
+	 */
 	private function setAllowlist(string $value): void
 	{
-		config_set_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist', $value);
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist', base64_encode($value));
 	}
 
 	protected function tearDown(): void

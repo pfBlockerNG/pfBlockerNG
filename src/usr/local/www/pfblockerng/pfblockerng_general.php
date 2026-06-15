@@ -63,7 +63,7 @@ $pconfig['pfb_feed_internal_filter']	= isset($pfb['gconfig']['pfb_feed_internal_
 
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
-$pconfig['pfb_feed_internal_allowlist']	= $pfb['gconfig']['pfb_feed_internal_allowlist']	?: '';
+$pconfig['pfb_feed_internal_allowlist']	= (string) base64_decode($pfb['gconfig']['pfb_feed_internal_allowlist'] ?? '');
 
 $pconfig['pfb_interval']		= $pfb['gconfig']['pfb_interval']			?: 1;
 
@@ -168,7 +168,7 @@ if ($_POST) {
 			// browser does not submit it. Preserve the previously stored value in that
 			// case rather than overwriting it with the absent POST field.
 			if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
-				$pfb['gconfig']['pfb_feed_internal_allowlist']	= str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? ''));
+				$pfb['gconfig']['pfb_feed_internal_allowlist']	= base64_encode(str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? '')));
 			}
 			$pfb['gconfig']['pfb_interval']			= $_POST['pfb_interval']			?: 1;
 			$pfb['gconfig']['pfb_min']			= $_POST['pfb_min']				?: 0;
