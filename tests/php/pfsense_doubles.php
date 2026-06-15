@@ -331,3 +331,41 @@ if (!function_exists('pkg_version_compare')) {
 		return '=';
 	}
 }
+
+// --- ADR-19 Phase 3 doubles (cron software-update check) ---
+//
+// The orchestrator pfb_software_update_check() is unit-tested with the pkg IO injected
+// via its $io override (so no real `pkg` shells off-appliance). These three pfSense
+// functions it still reaches are doubled here, test-driveable via $GLOBALS:
+//   * file_notice()        -> appended to $GLOBALS['pfb_test_file_notices'] so a test can
+//                             assert a notice fired exactly when (and as often as) expected.
+//   * is_subsystem_dirty() -> reads $GLOBALS['pfb_test_pkg_locked'] for the 'pkg' subsystem
+//                             (default false) so the pkg-lock short-circuit can be exercised.
+//   * get_dnsavailable()   -> reads $GLOBALS['pfb_test_dns_available'] (default true).
+
+if (!function_exists('file_notice')) {
+	function file_notice($id, $notice, $category = 'General', $url = '', $local_only = 0) {
+		$GLOBALS['pfb_test_file_notices'][] = array(
+			'id'         => $id,
+			'notice'     => $notice,
+			'category'   => $category,
+			'url'        => $url,
+			'local_only' => $local_only,
+		);
+	}
+}
+
+if (!function_exists('is_subsystem_dirty')) {
+	function is_subsystem_dirty($subsystem = '') {
+		if ($subsystem === 'pkg') {
+			return (bool) ($GLOBALS['pfb_test_pkg_locked'] ?? false);
+		}
+		return false;
+	}
+}
+
+if (!function_exists('get_dnsavailable')) {
+	function get_dnsavailable($ipproto = 'inet') {
+		return (bool) ($GLOBALS['pfb_test_dns_available'] ?? true);
+	}
+}

@@ -2044,6 +2044,204 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
 }
 
 /*
+ * ADR-19 Phase 3 — pkg IO wrapper + cron-driven update check (consumes the pure core).
+ *
+ * The pfb_pkg_*() functions below are the ONLY new code that shells to `pkg`; isolating
+ * the shellout in thin wrappers keeps pfb_software_update_check() unit-testable (the
+ * tests inject the installed/latest/installed-repo via its $io override rather than run
+ * `pkg`). The base `pkg` binary lives at /usr/sbin/pkg on every supported target.
+ */
+define('PFB_PKG_BIN', '/usr/sbin/pkg');
+
+/*
+ * The installed pfBlockerNG package NAME (e.g. 'pfSense-pkg-pfBlockerNG-devel'), read
+ * from `pkg query '%n'` filtered to our prefix; '' when not installed via pkg or the
+ * query fails. Feeds pfb_channel_from_pkgname().
+ */
+function pfb_pkg_installed_name(): string {
+	$out = array();
+	$ret = -1;
+	exec(escapeshellarg(PFB_PKG_BIN) . " query '%n' " . escapeshellarg('pfSense-pkg-pfBlockerNG*') . ' 2>/dev/null', $out, $ret);
+	if ($ret !== 0) {
+		return '';
+	}
+	foreach ($out as $line) {
+		$line = trim($line);
+		if (pfb_channel_from_pkgname($line) !== null) {
+			return $line;
+		}
+	}
+	return '';
+}
+
+/*
+ * The installed version of $pkgname via `pkg query '%v'`; '' when absent/failed.
+ */
+function pfb_pkg_installed_version(string $pkgname): string {
+	if ($pkgname === '') {
+		return '';
+	}
+	$out = array();
+	$ret = -1;
+	exec(escapeshellarg(PFB_PKG_BIN) . " query '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
+}
+
+/*
+ * The repo $pkgname was installed FROM via `pkg query '%R'` (the provenance signal the
+ * 2026-06-15 gate keys on); '' when absent/failed. Fed to pfb_software_is_our_build().
+ */
+function pfb_pkg_installed_repo(string $pkgname): string {
+	if ($pkgname === '') {
+		return '';
+	}
+	$out = array();
+	$ret = -1;
+	exec(escapeshellarg(PFB_PKG_BIN) . " query '%R' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
+}
+
+/*
+ * OUR repo's latest version of $pkgname: `pkg update -r <repo>` (best-effort refresh of
+ * just our catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY our repo
+ * ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read latest"). Returns ''
+ * (the caller then serves cache) when:
+ *   - $pkgname/$reponame is empty;
+ *   - the pkg subsystem is locked (is_subsystem_dirty('pkg')) — never fight a base update;
+ *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
+ *   - the rquery yields nothing (repo/conf absent).
+ */
+function pfb_pkg_latest(string $pkgname, string $reponame): string {
+	if ($pkgname === '' || $reponame === '') {
+		return '';
+	}
+	if (is_subsystem_dirty('pkg')) {
+		return '';
+	}
+	if (function_exists('get_dnsavailable') && !get_dnsavailable()) {
+		return '';
+	}
+	$bin = escapeshellarg(PFB_PKG_BIN);
+	$repo = escapeshellarg($reponame);
+	// Best-effort catalog refresh of our repo only; ignore failures (stale DB still reads).
+	exec("{$bin} update -r {$repo} 2>/dev/null");
+	$out = array();
+	$ret = -1;
+	exec("{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
+}
+
+/*
+ * Absolute path of the software-update cache (the page reads it; the cron writes it).
+ */
+function pfb_software_cache_file(): string {
+	global $pfb;
+	$dbdir = $pfb['dbdir'] ?? '/var/db/pfblockerng';
+	return "{$dbdir}/software_update.json";
+}
+
+/*
+ * Read the cache file as an assoc array (channel, installed, latest, last_checked,
+ * last_notified); [] when absent/unreadable/corrupt.
+ */
+function pfb_software_read_cache(): array {
+	$file = pfb_software_cache_file();
+	if (!is_file($file)) {
+		return array();
+	}
+	$raw = @file_get_contents($file);
+	if ($raw === FALSE || $raw === '') {
+		return array();
+	}
+	$data = json_decode($raw, true);
+	return is_array($data) ? $data : array();
+}
+
+/*
+ * Persist the cache atomically (encode -> write). Best-effort; a write failure is
+ * swallowed (the next tick retries) so it can never throw into the cron pass.
+ */
+function pfb_software_write_cache(array $cache): void {
+	$json = json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	if ($json !== FALSE) {
+		@file_put_contents(pfb_software_cache_file(), $json . "\n", LOCK_EX);
+	}
+}
+
+/*
+ * The cron-driven software-update check (ADR-19 §2 "Background check").
+ *
+ * Order is deliberate:
+ *   1. Resolve installed name + version + the repo it came FROM. The repo can be
+ *      injected for unit tests via $io ['installed_name','installed','installed_repo',
+ *      'latest']; absent keys fall through to the live pfb_pkg_*() shellout.
+ *   2. PROVENANCE GATE FIRST (2026-06-15 amendment): pfb_software_is_our_build() on the
+ *      installed repo. A Netgate-installed build (repo 'pfSense'/unknown/empty) is a
+ *      complete no-op — NO catalog read, NO cache write, NO file_notice — Netgate's own
+ *      badge serves those users.
+ *   3. Read our-repo latest for the channel's repo (guarded inside pfb_pkg_latest()).
+ *      An empty latest (pkg locked / no DNS / repo absent) preserves the cached latest so
+ *      the page keeps showing the last-known value rather than regressing to ''.
+ *   4. Refresh the cache (channel/installed/latest/last_checked) and, when
+ *      pfb_should_notify() says so, raise a DE-DUPED file_notice and persist
+ *      last_notified = latest (so repeated ticks at the same latest do not renotify).
+ *
+ * Best-effort throughout: it returns the cache array and never throws, so wiring it into
+ * the cron pass can never break a feed update. $force is accepted for the Phase-4 "Check
+ * now" button (there is no freshness short-circuit yet, so it is presently a no-op flag).
+ */
+function pfb_software_update_check(bool $force = false, ?array $io = null): array {
+	$io = is_array($io) ? $io : array();
+
+	$pkgname = array_key_exists('installed_name', $io)
+		? (string) $io['installed_name']
+		: pfb_pkg_installed_name();
+	$installed = array_key_exists('installed', $io)
+		? (string) $io['installed']
+		: pfb_pkg_installed_version($pkgname);
+	$installed_repo = array_key_exists('installed_repo', $io)
+		? (string) $io['installed_repo']
+		: pfb_pkg_installed_repo($pkgname);
+
+	// 2. Provenance gate FIRST — a Netgate-installed build does nothing at all.
+	if (!pfb_software_is_our_build($installed_repo)) {
+		return pfb_software_read_cache();
+	}
+
+	$channel = pfb_channel_from_pkgname($pkgname);
+	$repo    = pfb_pkg_repo_name_for_channel($channel);
+
+	$cache = pfb_software_read_cache();
+
+	// 3. Read our-repo latest; keep the cached value when the live read is unavailable.
+	if (array_key_exists('latest', $io)) {
+		$latest = (string) $io['latest'];
+	} else {
+		$latest = pfb_pkg_latest($pkgname, (string) $repo);
+	}
+	if ($latest === '') {
+		$latest = (string) ($cache['latest'] ?? '');
+	}
+
+	$last_notified = (string) ($cache['last_notified'] ?? '');
+	$knob = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_software_notify', 'default');
+
+	// 4. Refresh the cache.
+	$cache['channel']      = $channel;
+	$cache['installed']    = $installed;
+	$cache['latest']       = $latest;
+	$cache['last_checked'] = time();
+
+	if (pfb_should_notify($installed, $latest, $last_notified, $knob, $channel)) {
+		file_notice('pfBlockerNG', "pfBlockerNG {$latest} available ({$channel})", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);
+		$cache['last_notified'] = $latest;
+	}
+
+	pfb_software_write_cache($cache);
+	return $cache;
+}
+
+/*
  * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit
