@@ -114,8 +114,15 @@ decision in `build()`, not a feed-mode switch.
    the same or another feed.
 4. **`||domain^$important` escalates to band 3:** `parse_abp()` returns `important=True`;
    `reconcile()` assigns `band=PRIO_IMPORTANT`.
-5. **`||domain^$badfilter` cancels an existing block:** `reconcile()` removes the matching
-   block from `data_db`/`zone_db`.
+5. **`||domain^$badfilter` cancels a matching SAME-STREAM ABP block:** `$badfilter` is a
+   feed-only, signature-matched prune performed inside `reconcile()` over the `abp_rules`
+   stream (ADR-07 Stage-B step 1). It cancels a matching ABP `Rule` — a `||domain^` block
+   that was also routed to the stream (whether from a whole-feed ABP feed or, post-ADR-21,
+   from a per-line-detected `||domain^` in a non-ABP feed). It does NOT prune a plain-path
+   block: a bare-domain line is materialised straight into `data_db`/`zone_db` and is never
+   a `Rule`, so `reconcile()` has no signature to match against it. Cross-pipeline
+   cancellation (a plain block pruned by an ABP `$badfilter`) is out of scope — it would
+   require modifying the frozen `reconcile()`/`build()`.
 6. **`||domain.com^` yields `domain.com` blocked (wildcard=True):** the anchor is stripped
    by `parse_abp()` and the domain passes `normalise()`.
 7. **Lines starting with `||` but containing `/` or `*` are skipped:** `parse_abp()` returns
@@ -244,7 +251,9 @@ contract (CSV dialects, IP extraction, IDN) — out of ADR-21's scope; a candida
 2. A non-ABP feed `.raw` containing `@@||domain.com^` produces an allow that overrides a
    block for `domain.com` from a plain entry in the same feed.
 3. `||domain.com^$important` → `important=True` in the reconciled result (band 3).
-4. `||domain.com^$badfilter` alongside a block for `domain.com` → the block is cancelled.
+4. `||domain.com^$badfilter` alongside a SAME-STREAM ABP block `||domain.com^` (both routed
+   to `abp_rules`) → the ABP block is cancelled. (A plain-path block of `domain.com` is NOT
+   cancelled — `$badfilter` prunes only matching `abp_rules`; see §2.3.5.)
 5. Plain domain lines in the same feed continue to be blocked normally (no regression).
 6. ABP-header feeds produce identical results before and after this change (no regression).
 7. PHP: `||domain^` in a non-ABP feed's `.txt` file is written verbatim (no leading comma).
