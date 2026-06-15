@@ -1,7 +1,10 @@
 # ADR-21: ABP Header-Agnostic Detection
 
-- **Status:** **Proposed** (2026-06-09; amended 2026-06-12 — per-feed `auto`/`abp` format
-  selector dropped in favour of a broadened header sniff, see §2.4)
+- **Status:** **Accepted** (2026-06-15 — validated end-to-end on live pfSense CE 2.8 and
+  Plus 26.03 VMs by the §6 smoke cases `test_abp_perline_detection_in_plain_feed`,
+  `test_abp_bom_header_still_detected`, `test_abp_perline_path_anchor_not_overblocked`;
+  2026-06-09 proposed; amended 2026-06-12 — per-feed `auto`/`abp` format selector dropped in
+  favour of a broadened header sniff, see §2.4)
 - **Date:** 2026-06-09
 - **Branch:** `adr/21-abp-header-agnostic-detection` (off `devel`)
 - **Component(s):**
