@@ -11583,6 +11583,7 @@ function sync_package_pfblockerng($cron='') {
 							}
 
 							$ip_data = '';		// IPs collected from feed
+							$ip_suppressed = FALSE;	// TRUE when suppression dropped otherwise-valid IPv6 entries
 							$parse_fail = 0;	// Failed parsed lines from feed
 							pfb_logger('.', 1);
 
@@ -11749,6 +11750,9 @@ function sync_package_pfblockerng($cron='') {
 													if (!empty($parsed)) {
 														$ip_data .= $parsed . "\n";
 													}
+													else {
+														$ip_suppressed = TRUE;
+													}
 													continue;
 												}
 											}
@@ -11766,6 +11770,9 @@ function sync_package_pfblockerng($cron='') {
 																$parsed = sanitize_ipaddr_v6($cidr, $custom);
 																if (!empty($parsed)) {
 																	$ip_data .= $parsed . "\n";
+																}
+																else {
+																	$ip_suppressed = TRUE;
 																}
 															}
 															else {
@@ -11799,6 +11806,9 @@ function sync_package_pfblockerng($cron='') {
 														$parsed = sanitize_ipaddr_v6($match, $custom);
 														if (!empty($parsed)) {
 															$ip_data .= $parsed . "\n";
+														}
+														else {
+															$ip_suppressed = TRUE;
 														}
 													}
 												}
@@ -11846,6 +11856,14 @@ function sync_package_pfblockerng($cron='') {
 									$log		= "  Empty file, Adding '{$p_ip}' to avoid download failure.\n";
 									pfb_logger("{$log}", 1);
 								}
+							}
+
+							// All parsed IPv6 entries were suppressed; replace the list with the IPv6
+							// placeholder so stale (previously-loaded) entries are not left in the alias.
+							if (empty($ip_data) && $ip_suppressed && $list['vtype'] == '_v6') {
+								$p_ip     = "::{$pfb['ip_ph']}";
+								$ip_data  = "{$p_ip}\n";
+								pfb_logger("  All IPv6 entries suppressed, adding '{$p_ip}' to avoid stale alias contents.\n", 1);
 							}
 
 							if (!empty($ip_data)) {
