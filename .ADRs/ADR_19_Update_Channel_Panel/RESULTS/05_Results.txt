@@ -1,0 +1,160 @@
+================================================================================
+ADR-19 — PHASE 5 RESULTS: POSITIVE end-to-end repo-install journey (Software page +
+                          de-duped channel-correct notice + same-channel Update) + docs
+Branch: adr/19-update-channel-panel   Phase: 5 (final)   Status: GREEN (off-box gates)
+================================================================================
+
+SCOPE
+-----
+The POSITIVE side of every gate Phase 4 proved hidden, on a VM where pfBlockerNG is
+installed FROM our repo (pkg %R == pfblockerng) — the only place the provenance gate
+OPENS. Two new `repo`-marked cases extend tests/smoke/test_software_update.py (reusing
+Phase-1's repo_vm + hermetic-catalog machinery + the notice helpers), plus user docs
+(README) and ADR §7 DoD. NO src/ change this phase.
+
+Predicate: Phase 4 GO (HEAD 9f9619f — provenance-gated page + tab + ui_render NEGATIVE
+gate + ports_ref CI plumbing). Phase 5 consumes the shipped Phase-3/4 surfaces verbatim.
+
+
+WHY pfSsh.php (not a webui GET) IS THE LIVE PAGE ORACLE HERE
+-----------------------------------------------------------
+The ADR-14 `webui` fixture (tests/smoke/ui/conftest.py) depends on `deployed_vm` — a
+`pkg add -f` (offline) install whose %R is NOT our repo, so on that box the provenance
+gate HIDES the page (that is exactly Phase 4's negative ui_render proof). The `repo`
+harness has no authenticated webui client, and an our-repo install only exists in this
+`repo` flow. So the POSITIVE page assertion is driven via pfSsh.php (the bootstrapped,
+config-locked pfSense env the cron uses):
+  * pfb_software_provenance_ok() evaluated on-box reads TRUE (the live inverse of Phase
+    4's negative gate) — the exact predicate the page top-of-file guard + the tab append
+    key on;
+  * `php -l` of the SHIPPED page /usr/local/www/pfblockerng/pfblockerng_software.php
+    parses clean (no Fatal/Parse);
+  * the page FILE contains the `pfb-software-panel` marker — proving the built .pkg
+    actually carried Phase-4's page (the FreeBSD-ports plist entry took effect because
+    the build ran with ports_ref=adr/19-update-channel-panel).
+This is the most robust live assertion the `repo` harness supports; no false-greens (a
+broken/absent page fails php -l or the marker grep; a broken gate fails provenance_ok).
+
+
+NEW `repo`-MARKED TEST IDS + WHAT EACH PROVES LIVE
+--------------------------------------------------
+File: tests/smoke/test_software_update.py  (marker `repo`, fixture repo_vm)
+
+1. test_software_positive_journey_on_our_repo_install   (@timeout 900)
+   GIVEN build <V>_1 installed FROM our repo (%v==<V>_1, %R==pfblockerng):
+     - pfb_software_provenance_ok() == TRUE on-box (page/tab WOULD be shown);
+     - the shipped page parses (php -l) AND carries the `pfb-software-panel` marker;
+     - BEFORE: empty cache, no notice for <V>_9.
+   WHEN the first check runs at installed==latest==<V>_1:
+     THEN cache {installed,latest}==<V>_1, channel=='devel', NO notice (up to date).
+   WHEN <V>_9 is published to the SAME repo and the check runs:
+     THEN cache.latest advances to <V>_9 AND exactly ONE notice mentioning <V>_9;
+     a SECOND check at the same latest -> still ONE notice (per-version de-dupe).
+   WHEN `pkg upgrade` (Update now) runs and the check runs again:
+     THEN %v moved <V>_1 -> <V>_9, %R still pfblockerng, deps resolved, cache
+     installed==latest==<V>_9, and NO new notice (no newer version).
+   Every before/after asserted BY VALUE. Channel here is devel (default OFF) so the
+   knob is forced `on` for the notice legs (the channel-default branches are case 2).
+
+2. test_software_notify_default_is_channel_correct      (@timeout 600)
+   The notify DEFAULT is driven by the CHANNEL, not an always-path (knob unset/'default'):
+   GIVEN our-repo install (gate OPEN), knob='default', clean notices, a newer <V>_9
+     published (BEFORE: 0 devel notices, 0 nightly notices):
+   WHEN a live check runs as the DEVEL channel  -> NO notice (devel default OFF).
+   WHEN a check runs as the NIGHTLY channel under the IDENTICAL newer-build condition
+     -> exactly ONE notice (nightly default ON).
+   Same condition, opposite outcome => the channel default is the only difference.
+
+   NIGHTLY SIMULATION (noted as required): the nightly repo/package
+   (pfSense-pkg-pfBlockerNG-NIGHTLY / pfblockerng-nightly) is NOT built into the
+   hermetic CE image (ADR-18 not live here). The nightly CHANNEL is simulated via the
+   orchestrator's documented $io seam — injecting installed_name
+   'pfSense-pkg-pfBlockerNG-NIGHTLY' (-> channel nightly), installed_repo
+   'pfblockerng' (so the provenance gate still OPENS), and the installed/latest gap.
+   Because latest is injected, pfb_pkg_latest() never shells to the (absent) nightly
+   repo. What is proven end to end is the CHANNEL-DEFAULT decision through the REAL
+   orchestrator -> REAL file_notice -> get_notices, not a nightly pkg install. When
+   ADR-18's nightly repo lands, this can be upgraded to a real nightly install.
+
+Both cases CLOSE every notice raised, clear the cache + knob, delete the package, and
+remove UPGRADE_REPO_DIR in `finally` — the VM is left clean.
+
+Reused verbatim from Phase 1 / test_repo_install: repo_vm, build_guest_repo,
+reversion_pkg, write_repo_conf, pkg_install_from_repo, pkg_upgrade, pkg_update,
+pkg_installed_version, pkg_repo_origin, read_compact_version, repo_priority,
+NETGATE_REPO_NAME/OURS_REPO_NAME/UPGRADE_REPO_DIR/PKG_NAME, _pfssh,
+count_matching_notices, close_all_notices, _php_str.
+New on-box helpers (this file): provenance_ok_on_box, run_update_check_on_box,
+read_software_cache, clear_software_state, set_notify_knob/clear_notify_knob,
+php_lint_ok, install_our_build_at, _pfssh_scalar.
+
+
+DISPATCH (the orchestrator MUST use ports_ref so the .pkg carries the page)
+--------------------------------------------------------------------------
+    gh workflow run smoke.yml \
+        -f pytest_marker=repo \
+        -f ports_ref=adr/19-update-channel-panel
+
+ports_ref=adr/19-update-channel-panel points build-pkg-linux at the FreeBSD-ports
+branch carrying the new pkg-plist line `www/pfblockerng/pfblockerng_software.php`, so
+the built .pkg actually ships pfblockerng_software.php (installed at
+/usr/local/www/pfblockerng/pfblockerng_software.php — the marker/lint asserts depend on
+it). ports_repo defaults to pfBlockerNG/FreeBSD-ports; a blank ports_ref falls back to
+pfblockerng/use-github (which does NOT yet carry the plist line) -> the page-file legs
+would fail, so ports_ref is REQUIRED for this `repo` run until the plist line lands on
+use-github. (smoke.yml/ui-tests.yml ports_ref plumbing was added in Phase 4 — RESULTS/04 C.)
+
+CAPTURED RUN ID: <fill on first green dispatch — not run by this off-box agent>
+
+
+DOCS UPDATED
+------------
+README.md:
+  * New "Usage -> Software tab — version + update notice for self-hosted builds":
+    documents the tab (channel + installed-vs-latest + last-checked), the three buttons
+    (Check now / Update now same-channel / Bootstrap repo), the PROVENANCE GATE (present
+    only on an our-repo build; entirely absent on a Netgate-ports install), the daily
+    de-duped notice (bell + configured remote channels, once per new version), and the
+    pfb_software_notify knob with the channel-correct default table (stable/devel OFF,
+    nightly ON) + override.
+  * Option-2 transition note: the stale "GUI won't show an update badge" line now points
+    at the Software tab (the stock badge stays Netgate-bound; ours tracks our builds).
+docs/misc/architecture-notes.md: left unchanged — it scopes DNSBL/ABP + UI-tier
+  internals, not the ADR-17/18/19 distribution/awareness surface (which lives in README
+  for users + each ADR for design); adding an unrelated section there was off-topic.
+ADR.md §7: DoD status/evidence filled (Phase-1 GO, Phase-2 pure core, Phase-4 negative
+  ui_render GREEN, Phase-5 positive `repo` journey), the dispatch command, docs, and the
+  CLAUDE.md "automated acceptance" framing (manual checklist retained as out-of-CI, not a
+  blocker).
+
+
+OFF-BOX GATE RESULTS (this agent, in the worktree)
+--------------------------------------------------
+  ruff check .                                            -> All checks passed!
+  ruff format --check .                                   -> 99 files already formatted
+  python -m pytest -q                                     -> 1575 passed (UNCHANGED)
+  pytest tests/smoke -m repo --collect-only (addopts="")  -> both new cases collected
+  pytest tests/smoke -m repo --setup-plan   (addopts="")  -> repo_vm resolves for both
+  vendor/bin/phpunit                                      -> OK (487 tests, 933 assertions)
+  npx markdownlint-cli2 README.md ADR.md                  -> 0 error(s)
+  scripts/check_url_encoding.py                           -> exit 0 (no violations)
+
+
+DoD STATE / GO
+--------------
+Automated coverage is complete and validating (not coverage theater): PHPUnit branch
+coverage of the pure core + the de-dupe machine; the ui_render NEGATIVE gate (page/tab
+hidden on a non-our build); and this `repo` POSITIVE journey (provenance OPEN + cache +
+de-duped channel-correct notice + same-channel Update, all before/after by value). Under
+the CLAUDE.md "ADR acceptance — automated tests, not a manual maintainer sign-off" rule,
+ADR-19 is READY to move Proposed -> Accepted once the `repo` fan-out leg is GREEN on CI
+(dispatch above; capture the run id here). The §7 manual checklist (real remote-channel
+delivery, a live channel switch, a live nightly repo) is recorded as out-of-CI
+confirmation, NOT an acceptance blocker.
+
+REMAINING (out of CI / follow-on, all pre-decided/deferred in the ADR):
+  * Real nightly install once ADR-18's nightly repo is live (upgrade case 2's $io
+    simulation to a true install).
+  * Cross-channel SWITCHING (explicitly deferred, §2; the selector is read-only).
+  * Capture the green `repo`-fanout run id into this file after the first dispatch.
+================================================================================
