@@ -1299,7 +1299,7 @@ def opposite_variant() -> Variant:
     return others[0]
 
 
-# Routing Worker URL (Phase 5).  Case 4 is xfail until routing.json is live on Pages.
+# Routing Worker URL (Phase 5). routing.json is live on Pages, so Case 4 is a hard gate.
 WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
 
 
@@ -1738,7 +1738,6 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
 
 
 @pytest.mark.timeout(300)
-@pytest.mark.xfail(reason="routing.json not yet deployed to Pages (ADR-20 Phase 6 prerequisite)", strict=False)
 def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     """ADR-20 P6 CASE 4 — pkg fetch via Worker URL gets THIS box's variant catalog.
 
@@ -1751,10 +1750,9 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
       confirmed by ``pkg rquery -r pfblockerng '%dn %dv' <pkgname>`` showing the box's own
       php dep (php83 on CE / php85 on Plus, from the matrix).
 
-    XFAIL: the Cloudflare Worker is live but routing.json has not yet been deployed
-    to Pages (Phase 5 RESULTS: Worker returns 502 when routing.json absent).  Once
-    routing.json is deployed this test will pass; ``strict=False`` allows it to be
-    un-xfailed without a code change.
+    The Cloudflare Worker is live and routing.json is deployed to Pages (the matrix-
+    driven publish), so this is a HARD gate: a failed ``pkg update`` (e.g. a 502 from a
+    missing routing.json, or the wrong-variant catalog) fails the test.
     """
     _ensure_egress_open()
 
@@ -1779,27 +1777,23 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     if written.returncode != 0:
         raise RuntimeError(f"write Worker conf failed: rc={written.returncode} {written.stderr!r}")
 
-    # Attempt pkg update — expected to fail with a 502 until routing.json is live;
-    # this is what triggers the xfail.
+    # pkg update via the Worker must succeed (routing.json is live on Pages).
     update_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-r", OURS_REPO_NAME, timeout=120.0)
-
-    # If pkg update succeeded (routing.json live), assert the catalog contains the box's
-    # OWN variant package (own php dep present, opposite absent) — variant from the matrix.
-    if update_result.returncode == 0:
-        own = own_variant()
-        opp = opposite_variant()
-        rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
-        rquery_out = rquery.stdout.strip()
-        assert own.php in rquery_out, (
-            f"Worker URL catalog does not contain the box's {own.php} dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
-        )
-        assert opp.php not in rquery_out, (
-            f"Worker URL returned the {opp.abi} ({opp.php}) catalog to a {own.abi} box; "
-            f"pkg rquery output:\n{rquery_out}"
-        )
-    else:
-        # Routing layer not yet live — trigger the xfail.
+    if update_result.returncode != 0:
         update_out = update_result.stdout + update_result.stderr
-        pytest.xfail(
-            f"Worker pkg update returned rc={update_result.returncode} (routing.json not yet live):\n{update_out}"
+        pytest.fail(
+            f"Worker pkg update failed (rc={update_result.returncode}); routing.json should be live:\n{update_out}"
         )
+
+    # The fetched catalog must contain the box's OWN variant package (own php dep
+    # present, opposite absent) — variant from the matrix.
+    own = own_variant()
+    opp = opposite_variant()
+    rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
+    rquery_out = rquery.stdout.strip()
+    assert own.php in rquery_out, (
+        f"Worker URL catalog does not contain the box's {own.php} dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
+    )
+    assert opp.php not in rquery_out, (
+        f"Worker URL returned the {opp.abi} ({opp.php}) catalog to a {own.abi} box; pkg rquery output:\n{rquery_out}"
+    )
