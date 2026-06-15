@@ -1356,6 +1356,15 @@ def run_build(args: argparse.Namespace) -> Build:
         b.annotations = {"FreeBSD_version": args.freebsd_version}
     # `--annotate K=V` merges on top (e.g. commit=<sha>); release build adds nothing.
     b.annotations.update(extra_annotations)
+    # Stamp the pfSense variant (+ version) so build-repo-portable.py can bucket each
+    # .pkg into its variant-keyed catalog dir (ce-2.8 / plus-26.03) from the manifest
+    # alone — independent of ABI, which stops being a variant discriminator once CE and
+    # Plus converge on the same FreeBSD ABI (ADR-20 §1.2). Only when --variant is given;
+    # a plain (no-variant) release build is byte-identical to before.
+    if args.variant:
+        b.annotations["pfb_variant"] = args.variant
+        if args.pfsense_version:
+            b.annotations["pfb_pfsense_version"] = args.pfsense_version
     return b
 
 
@@ -1414,6 +1423,17 @@ def main(argv: list[str]) -> int:
             "entries derived from --php and --py-flavor (e.g. php83 + py311 for CE 2.8). "
             "Prevents wrong-variant packages from silently installing. "
             "Without this flag behaviour is unchanged (backward-compatible)."
+        ),
+    )
+    g_target.add_argument(
+        "--pfsense-version",
+        default="",
+        metavar="X.Y",
+        help=(
+            "pfSense target version (e.g. 2.8 / 26.03). When set with --variant, records "
+            "pfb_variant + pfb_pfsense_version manifest annotations so build-repo-portable.py "
+            "can bucket the .pkg into its variant-keyed catalog dir (ce-2.8 / plus-26.03) "
+            "from the manifest alone, independent of ABI (ADR-20)."
         ),
     )
 

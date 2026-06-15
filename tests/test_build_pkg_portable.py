@@ -721,6 +721,75 @@ def test_no_variant_flag_unchanged(tmp_path: Path) -> None:
     assert not any(n.startswith("py3") for n in dep_names)
 
 
+def test_variant_stamp_in_manifest_annotations(tmp_path: Path) -> None:
+    """`--variant` + `--pfsense-version` stamp pfb_variant / pfb_pfsense_version into
+    BOTH manifests, so build-repo-portable.py can bucket the .pkg into its variant-keyed
+    catalog dir (ce-2.8 / plus-26.03) from the manifest alone — needed once CE and Plus
+    converge on the same FreeBSD ABI, where ABI stops discriminating them (ADR-20 §1.2).
+
+    Before-state: a no-variant build carries no pfb_* annotation.
+    After-state CE: pfb_variant=CE, pfb_pfsense_version=2.8.
+    After-state Plus: pfb_variant=Plus, pfb_pfsense_version=26.03 (the opposite branch).
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+
+    def _annotations(extra_args: list[str], out_name: str) -> dict:
+        out = tmp_path / out_name
+        rc = bpp.main(
+            [
+                "--ports", str(ports),
+                "--port-dir", str(portdir),
+                "--abi", "FreeBSD:15:amd64",
+                "--py-flavor", "py311",
+                "--compression", "xz",
+                "--out", str(out),
+                *extra_args,
+            ]
+        )  # fmt: skip
+        assert rc == 0
+        full, compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+        # The stamp must ride BOTH manifests (the catalog reads compact, install reads full).
+        assert full.get("annotations", {}) == compact.get("annotations", {})
+        return full.get("annotations", {})
+
+    # Before: no --variant -> no stamp (proves the stamp is what adds the keys).
+    before = _annotations([], "plain")
+    assert "pfb_variant" not in before
+    assert "pfb_pfsense_version" not in before
+
+    # After CE.
+    ce = _annotations(["--variant", "CE", "--pfsense-version", "2.8", "--php", "8.3"], "ce")
+    assert ce["pfb_variant"] == "CE"
+    assert ce["pfb_pfsense_version"] == "2.8"
+
+    # After Plus (the opposite branch).
+    plus = _annotations(["--variant", "Plus", "--pfsense-version", "26.03", "--php", "8.5"], "plus")
+    assert plus["pfb_variant"] == "Plus"
+    assert plus["pfb_pfsense_version"] == "26.03"
+
+
+def test_variant_stamp_requires_variant_flag(tmp_path: Path) -> None:
+    """`--pfsense-version` alone (no --variant) does NOT stamp — the stamp is gated on
+    --variant, so a plain release build stays byte-identical."""
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--pfsense-version", "2.8",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    assert "pfb_variant" not in full.get("annotations", {})
+    assert "pfb_pfsense_version" not in full.get("annotations", {})
+
+
 def test_two_simultaneous_ce_entries() -> None:
     """Transition window: two CE entries with different PHP versions.
 
