@@ -60,6 +60,7 @@ and the smoke deps; without them they skip cleanly.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -985,3 +986,67 @@ def test_false_green_guard_vm(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         answer = h.dns_probe(deployed_vm, domain, "A")
         # WRONG on purpose: a VIP block does not resolve to a pass IP.
         assert h.resolves_to(answer, "198.51.100.250"), "expected (wrongly) to resolve — must fail"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-03 — persistent log handle: a VIP block reaches dnsbl.log under real Unbound.
+# The off-box golden harness pins byte-identical log CONTENT; this pins that the
+# persistent WatchedFileHandler/QueueListener path actually WRITES the line live —
+# the one thing the off-box harness cannot prove (the chrooted Python loader's file IO).
+# --------------------------------------------------------------------------- #
+
+
+def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
+    """Count ``dnsbl.log`` lines containing ``needle`` on the guest (host + chroot paths).
+
+    ``pfb_unbound.py`` runs chrooted at ``/var/unbound``, so its
+    ``/var/log/pfblockerng/dnsbl.log`` open resolves inside the chroot; grep BOTH the host
+    and the chroot path so the assertion is independent of which one the line lands in.
+    ``grep -hcF`` prints one integer per file (filename suppressed); a missing file is
+    skipped (its error goes to stderr), so summing the integer tokens is robust.
+    """
+    res = vm.ssh(
+        "grep",
+        "-hcF",
+        "--",
+        needle,
+        "/var/log/pfblockerng/dnsbl.log",
+        "/var/unbound/var/log/pfblockerng/dnsbl.log",
+        timeout=timeout,
+    )
+    return sum(int(tok) for tok in res.stdout.split() if tok.isdigit())
+
+
+def test_dnsbl_block_writes_persistent_log_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-03: a VIP (``log_type='1'``) block is written to ``dnsbl.log`` via the persistent handle.
+
+    Scenario: ADR-03 replaced per-call open/close with a persistent ``WatchedFileHandler``
+    behind a ``QueueListener``. The off-box golden harness pins byte-identical log content;
+    this pins that — under REAL Unbound (the chrooted python loader) — a block decision
+    actually reaches ``dnsbl.log`` through that persistent path.
+
+    Given a unique domain not yet listed, ``dnsbl.log`` names it zero times (before-state).
+    When it is listed VIP (per-list logging enabled -> ``log_type='1'``) and queried once,
+    Then a ``dnsbl.log`` line naming it appears (the persistent logging IO path wrote it). A
+      NULL / non-logged block (``log_type`` ``'2'``/``'4'``) writes nothing, so the line is
+      real evidence of the ``log_type='1'`` write path, not mere execution.
+    """
+    domain = h.unique_domain("adr03log")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_adr03_log.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokeadr03", feed_url=feed_url, header="smokeadr03", mode=h.DnsblMode.VIP)
+
+    # BEFORE: the unique domain has never been blocked -> no dnsbl.log line names it.
+    assert _dnsbl_log_hits(deployed_vm, domain) == 0, f"{domain} already in dnsbl.log before listing"
+
+    with h.CaseContext(deployed_vm, spec):
+        blocked = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
+        # The log write rides the async QueueListener -> poll briefly for the line.
+        deadline = time.monotonic() + 20.0
+        hits = 0
+        while time.monotonic() < deadline:
+            hits = _dnsbl_log_hits(deployed_vm, domain)
+            if hits >= 1:
+                break
+            time.sleep(1.0)
+        assert hits >= 1, f"no dnsbl.log line for {domain} after a VIP block (ADR-03 persistent log handle)"
