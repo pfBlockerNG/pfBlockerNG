@@ -4734,6 +4734,14 @@ function pfb_unbound_python($mode) {
 			$python_control = 'on';
 		}
 
+		// PFBL-03: deprecated legacy DNS-TXT control transport. OFF unless the operator
+		// explicitly opted back in (and the parent DNSBL Control toggle is enabled).
+		// DNSBL control is CLI-driven; this path is slated for removal next release.
+		$python_control_legacy = 'off';
+		if ($pfb['dnsbl_control'] == 'on' && $pfb['dnsbl_control_legacy'] == 'on') {
+			$python_control_legacy = 'on';
+		}
+
 		$python_noaaaa = 'off';
 		if ($pfb['dnsbl_noaaaa'] == 'on') {
 			$python_noaaaa = 'on';
@@ -4802,6 +4810,7 @@ python_tlds	= {$python_tlds}
 python_nolog	= {$python_nolog}
 python_cname	= {$python_cname}
 python_control	= {$python_control}
+python_control_legacy	= {$python_control_legacy}
 regex_cap	= {$regex_cap}
 
 EOF;
@@ -6151,6 +6160,32 @@ function pfb_feed_filter_install_default($gconfig) {
 		return 'off';
 	}
 	return NULL;
+}
+
+
+// PFBL-03: one-time upgrade seed for the deprecated legacy DNS-TXT control sub-toggle.
+// $dconfig is the existing DNSBL-settings 'config/0' node. DNSBL control is CLI-driven and
+// the DNS-TXT transport is OFF by default; to avoid breaking an operator already driving
+// control over DNS TXT, the legacy sub-toggle is seeded ON IFF the pre-existing config
+// already had DNSBL Control enabled ('pfb_control' == 'on') at this upgrade. A one-shot
+// marker ('pfb_control_legacy_seeded') makes this run EXACTLY ONCE: once set, the function
+// returns NULL (no change), so a later save never re-seeds and never re-enables a toggle
+// the operator deliberately turned back off. Returns the updated config array to persist,
+// or NULL when nothing should change (empty config, or the seed already ran). Slated for
+// removal next release with the rest of the legacy DNS-TXT path.
+function pfb_control_legacy_seed($dconfig) {
+
+	if (!is_array($dconfig) || empty($dconfig)) {
+		return NULL;
+	}
+	if (($dconfig['pfb_control_legacy_seeded'] ?? '') === 'on') {
+		return NULL;
+	}
+	if (($dconfig['pfb_control'] ?? '') == 'on') {
+		$dconfig['pfb_control_legacy'] = 'on';
+	}
+	$dconfig['pfb_control_legacy_seeded'] = 'on';
+	return $dconfig;
 }
 
 
@@ -9711,6 +9746,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['dnsbl_alexa_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
+	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?: '';	// PFBL-03: deprecated legacy DNS-TXT control transport
 
 	// Validate pfB Script variable
 	$pfb['dnsbl_alexa_inc'] = pfb_filter($pfb['dnsbl_alexa_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');

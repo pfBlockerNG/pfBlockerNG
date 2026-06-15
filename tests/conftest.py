@@ -41,6 +41,7 @@ def reset_pfb_globals() -> None:
         "python_nolog": False,
         "python_cname": False,
         "python_control": False,
+        "python_control_legacy": False,
         "python_hsts": False,
         "python_idn": False,
         "python_tld": False,

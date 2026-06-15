@@ -42,6 +42,7 @@ $pconfig = array();
 $pconfig['pfb_dnsbl']		= $pfb['dconfig']['pfb_dnsbl']				?: '';
 $pconfig['pfb_tld']		= $pfb['dconfig']['pfb_tld']				?: '';
 $pconfig['pfb_control']		= $pfb['dconfig']['pfb_control']			?: '';
+$pconfig['pfb_control_legacy']	= $pfb['dconfig']['pfb_control_legacy']			?: '';
 $pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
 $pconfig['pfb_dnsvip6'] = $pfb['dconfig']['pfb_dnsvip6'] ?: 'none';
 $pconfig['pfb_dnsvip_auto']	= $pfb['dconfig']['pfb_dnsvip_auto']			?: '';
@@ -526,6 +527,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_tld']		= pfb_filter($_POST['pfb_tld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// [ ADR-13 ] Persist the auto-create decision. When ON, leave the stored
 			// pfb_dnsvip4/6 ids untouched here (the manual dropdowns are disabled): the
@@ -767,10 +769,10 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_control'] === 'on' ? true:false,
 	'on'
-))->setHelp('Enabling this option will allow sending python_control commands (via DNS TXT) to DNSBL.'
+))->setHelp('Enabling this option will allow sending DNSBL control commands via the local CLI.'
 	. '<div class="infoblock" style="width: 90%;">'
-	. 'The python_control feature is limited to DNS TXT records sent from pfSense localhost (127.0.0.1) only!<br />'
-	. 'This is a temporary intervention, and will be reset on a restart of the Resolver<br />'
+	. 'Commands are run on pfSense as root via the <strong>pfblockerng dnsbl-control</strong> CLI<br />'
+	. 'A disable is a temporary intervention, and will be reset on a restart of the Resolver<br />'
 	. 'These commands can be incorporated in CRON/Scheduler tasks or run manually as required<br />'
 	. 'All events are logged to the Reports Tab (Gear icon)<br /><br />'
 	. '<strong>Command Syntax:</strong><br />'
@@ -783,14 +785,27 @@ $section->addInput(new Form_Checkbox(
 	. '		</tr>'
 	. '	</thead>'
 	. '	<tbody>'
-	. '		<tr><td>Enable DNSBL</td><td>drill TXT python_control.enable</td><td></td></tr>'
-	. '		<tr><td>Disable DNSBL</td><td>drill TXT python_control.disable</td><td></td></tr>'
-	. '		<tr><td>Disable DNSBL for duration</td><td>drill TXT python_control.disable.seconds</td><td>Seconds: 1-3600</td></tr>'
-	. '		<tr><td>Add a Global bypass IP</td><td>drill TXT python_control.addbypass.1-2-3-4</td><td>Use "-" in place of "."</td></tr>'
-	. '		<tr><td>Add a Global bypass IP for duration</td><td>drill TXT python_control.addbypass.1-2-3-4.seconds</td><td>Seconds: 1-3600</td></tr>'
-	. '		<tr><td>Remove a Global bypass IP</td><td>;drill TXT python_control.removebypass.1-2-3-4</td><td>Use "-" in place of "."</td></tr>'
+	. '		<tr><td>Enable DNSBL</td><td>pfblockerng dnsbl-control enable</td><td></td></tr>'
+	. '		<tr><td>Disable DNSBL</td><td>pfblockerng dnsbl-control disable</td><td></td></tr>'
+	. '		<tr><td>Disable DNSBL for duration</td><td>pfblockerng dnsbl-control disable seconds</td><td>Seconds: 1-3600</td></tr>'
+	. '		<tr><td>Add a Global bypass IP</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4</td><td></td></tr>'
+	. '		<tr><td>Add a Global bypass IP for duration</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4 seconds</td><td>Seconds: 1-3600</td></tr>'
+	. '		<tr><td>Remove a Global bypass IP</td><td>pfblockerng dnsbl-control removebypass 1.2.3.4</td><td></td></tr>'
 	. '	</tbody>'
 	. '</table>'
+	. '</div>');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_control_legacy',
+	gettext('DNSBL Control (legacy DNS TXT)'),
+	'Enable',
+	$pconfig['pfb_control_legacy'] === 'on' ? true:false,
+	'on'
+))->setHelp('<span class="text-danger">Deprecated</span> - re-enable the legacy DNS TXT control transport (drill TXT python_control.*).'
+	. '<div class="infoblock" style="width: 90%;">'
+	. 'This option is <strong>deprecated</strong>, <strong>less secure</strong>, and will be <strong>removed next release</strong>.<br />'
+	. 'It only takes effect when <strong>DNSBL Control</strong> above is enabled. Leave it off and use the CLI instead.<br />'
+	. 'Migrate any CRON/Scheduler tasks from drill TXT python_control.* to the pfblockerng dnsbl-control CLI shown above.'
 	. '</div>');
 
 $section->addInput(new Form_Checkbox(
