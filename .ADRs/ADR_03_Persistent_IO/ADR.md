@@ -1,6 +1,6 @@
 # ADR-03: Persistent sqlite connection + persistent log handles (eliminate per-call open/close)
 
-- **Status:** **IMPLEMENTED (pending smoke test)** (2026-05-31) — Phases 1–3 complete on branch `adr/03`. Persistent WAL connection + batched relative-increment writes (DB worker) and stdlib `QueueListener` + `WatchedFileHandler` logging are in; PHP coexists under WAL. Acceptance is blocked on the manual smoke test (§7 / `RESULTS/03_Results.txt`) — no live Unbound in CI.
+- **Status:** **Accepted** (2026-06-15; implemented 2026-05-31) — persistent WAL connection + batched relative-increment writes (DB worker) and stdlib `QueueListener` + `WatchedFileHandler` logging. Log/DB CONTENT is pinned byte-identical off-box by the golden harness; the live persistent-logging IO path is now exercised on a real pfSense VM by `tests/smoke/test_smoke_matrix.py::test_dnsbl_block_writes_persistent_log_line` (a VIP block reaches `dnsbl.log` under the chrooted Unbound python loader), green on **CE 2.8 + Plus 26.03**. The old "no live Unbound in CI" blocker is void (ADR-04). (Originally IMPLEMENTED — pending smoke test, 2026-05-31.)
 - **Date:** 2026-05-31
 - **Branch:** `adr/03` (off `devel`)
 - **Components:**
