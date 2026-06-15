@@ -2,7 +2,7 @@
 PHASE 1 PROMPT — Extract pfb_dnsbl_strip_scheme() helper + oracle tests
 Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
-     (read §1 Context, §2.3 Contract, §6 Phase 1, §7 reject criteria FIRST)
+     (read §1 Context, §2.6 Contract, §6 Phase 1, §7 reject criteria FIRST)
 ================================================================================
 
 ROLE
@@ -28,7 +28,7 @@ phase is safe to land independently: the behavior of every feed line is byte-ide
 
 REQUIRED READING
 - .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §1.1 (the exact code
-  being extracted), §2.3 (contract items 1–5), §5 constraints, §7 reject criteria.
+  being extracted), §2.6 (contract items 1–5), §5 constraints, §7 reject criteria.
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc:
   • Lines 9671–9707: the full non-lite block — read every line. The helper covers
     ONLY the scheme strip (lines 9675–9676). Lines 9679–9706 stay inline.
