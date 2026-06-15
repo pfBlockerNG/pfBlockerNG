@@ -1,6 +1,10 @@
 # ADR-22: DNSBL Parser Scheme-Validated Host Extraction
 
-- **Status:** **Proposed** (2026-06-09; design revised 2026-06-15 — single global toggle)
+- **Status:** **Accepted** (2026-06-15) — design revised 2026-06-15 (single global toggle);
+  implemented on `adr/22-dnsbl-parser-scheme-anchored-host` and rebase-merged via PR #240.
+  Validated by the off-box gates (PHPUnit incl. strip-scheme/migration/skip-log, ui_render for
+  the toggle field) and the live-VM **CE+Plus smoke fan-out** (run 29, both legs green) — no
+  separate manual sign-off per the CLAUDE.md "ADR acceptance — automated tests" directive.
 - **Date:** 2026-06-09
 - **Branch:** `adr/22-dnsbl-parser-scheme-anchored-host` (off `devel`; depends on ADR-21)
 - **Tracks:** GitHub issue [#46](https://github.com/pfBlockerNG/pfBlockerNG/issues/46)
