@@ -521,6 +521,13 @@ is a smell even when it works.
 - AWS region pre-scripts live in `list_scripts/`: 25 thin `ip_pre_AWS_*.sh` wrappers
   (UI-selectable) pass a `jq` region filter to the shared `list_scripts/aws_region_prefixes.sh`
   — change that one, not 25.
+- **Locale (ADR-26):** set locale **explicitly + per-command**; **never** `export LC_ALL`/`LANG`
+  script-wide (it poisons every child + risks mixed-collation pipelines). Every `sort -u`/`uniq`/
+  `comm`/`join` (and any `sort` whose order feeds a later compare) over machine data (IPs,
+  punycode) carries an inline **`LC_ALL=C`** — a UTF-8/language `LC_COLLATE` can merge distinct
+  strings and silently drop a blocklist entry. A *future* raw-Unicode text path splits the knobs
+  (`LC_COLLATE=C` + a runtime-resolved `LC_CTYPE=<*.UTF-8>`), never bare `C`. Full policy + the
+  deferred resolver snippet: `docs/misc/architecture-notes.md` ("Locale policy (ADR-26)").
 
 ---
 

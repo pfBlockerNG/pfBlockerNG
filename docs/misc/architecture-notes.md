@@ -202,3 +202,64 @@ are authored; the live CI run (the `ui-tests`-labeled PR suite) decides GO vs DE
 clean, `test_smoke_feeds.py` is demoted to dispatch-only (Part A still ships; the local-file load
 coverage in `test_smoke_matrix.py` / `test_smoke_abp.py` remains). The final decision is recorded
 in `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`.
+
+## Locale policy (ADR-26)
+
+`pfblockerng.sh` (and any shell added here) sets locale **explicitly, per-command, never
+exported process-wide**. Three rules:
+
+1. **Byte-exact machine-data set ops → inline `LC_ALL=C`.** Every `sort -u` / `uniq` / `comm` /
+   `join` (and any plain `sort` whose order feeds a downstream compare/diff) over machine data
+   (IPs, punycode domains) carries an inline `LC_ALL=C` on that command — e.g.
+   `LC_ALL=C sort -u "$f"`. Under a UTF-8/language `LC_COLLATE`, distinct strings can share a
+   collation weight, so `sort -u`/`uniq` silently drop one as a "duplicate" — for a blocklist that
+   is a silent hole in the block set, with no error. `C` makes uniqueness byte-exact and identical
+   on FreeBSD and Linux. The data reaching the shell is already ASCII (IPv4/IPv6 + punycode; the
+   ADR-08 IDN work is done in Python), so byte semantics are exactly right here.
+2. **Never `export LC_ALL=C` / `LANG=C` script-wide.** A global export poisons every child the
+   script spawns (`php`, `host`/`drill`, `mmdblookup`, list pre/post scripts) — ASCII-crippling
+   tools that are legitimately UTF-8-aware and changing error-message language, date, and number
+   formatting. It also creates a partial-adoption hazard: `comm`/`join`/`diff`/`uniq` need **all**
+   inputs in the **same** collation, so a global default silently mismatches any pipeline mixing a
+   `C`-sorted file with a locale-sorted one. Keep locale surgical and inline.
+3. **Future raw-Unicode text → split the knobs, resolve `LC_CTYPE` at runtime.** No shell path
+   today classifies or case-folds raw (un-punycode'd) Unicode — that work lives in Python. **If**
+   one ever appears it does **not** use bare `C` (which silently misses non-ASCII); it splits the
+   two concerns: `LC_COLLATE=C` on any sort/set op (deterministic order + byte-exact uniqueness)
+   and `LC_CTYPE=<UTF-8 locale>` for the classify/case-fold step, where the UTF-8 locale is
+   **resolved at runtime** — never hardcoded (`C.UTF-8` is not universal; see the table).
+
+**`C.UTF-8` availability** (why the `LC_CTYPE` value must be resolved, not assumed):
+
+| Platform | `C.UTF-8`? | Note |
+| -------- | ---------- | ---- |
+| FreeBSD 15 / pfSense CE 2.8 | yes | present |
+| glibc Linux | yes (>= 2.35, 2022) | older/minimal images may lack it |
+| musl / Alpine | n/a | the `C` locale is already UTF-8 |
+| macOS (BSD libc) | **no** | only `en_US.UTF-8` & friends — the main off-appliance dev/CI hole |
+
+**Deferred — resolver is a copy-ready snippet, not shipped code (ADR-26 Phase 2).** There is **no
+caller today** (no raw-Unicode shell path), so the runtime resolver is kept here as a snippet
+rather than an unused function in `pfblockerng.sh` — that would ship to users (release archives
+carry `src/`) as dead code and trip "unused" lints. Drop it in (naming per the `pfb_*` convention)
+the day the first `LC_CTYPE` caller lands (space-indented here for Markdown — reindent to tabs
+when pasting into `pfblockerng.sh`):
+
+```sh
+# Resolve the best available UTF-8 ctype locale ONCE, with a fallback chain. Prefer C.UTF-8;
+# else the first *.UTF-8 from `locale -a`; else C (degraded ASCII ctype, never wrong-silently).
+# Read by future LC_CTYPE call sites; NEVER exported.
+pfb_resolve_utf8_ctype() {
+    _avail=$(locale -a 2>/dev/null)
+    if printf '%s\n' "${_avail}" | grep -qiE '^C\.(UTF-8|utf8)$'; then
+        printf 'C.UTF-8\n'
+    elif _u=$(printf '%s\n' "${_avail}" | grep -iE '\.(UTF-8|utf8)$' | head -n 1) && [ -n "${_u}" ]; then
+        printf '%s\n' "${_u}"
+    else
+        printf 'C\n'
+    fi
+}
+# Usage at a (future) raw-Unicode site — split the knobs, never export:
+#   _ctype=$(pfb_resolve_utf8_ctype)
+#   LC_COLLATE=C LC_CTYPE="${_ctype}" awk '...Unicode-aware...'
+```

@@ -1,0 +1,49 @@
+ADR-26 — Phase 2 Results: Locale policy of record + deferred resolver
+
+DECISION
+Ship the UTF-8 LC_CTYPE resolver as a copy-ready DOC SNIPPET, not as a function in
+pfblockerng.sh. This is the Phase-2 prompt's explicit fallback ("if a no-caller helper would
+trip shellcheck/CI 'unused' gates, instead land the resolution as a documented, copy-ready
+snippet in the docs rather than dead code").
+
+WHY DEFER (no live caller today)
+- No shell path classifies/case-folds raw (un-punycode'd) Unicode. All machine data reaching
+  pfblockerng.sh is ASCII (IPv4/IPv6 + punycode domains); the ADR-08 IDN/homoglyph work is done
+  in Python (unicodedata). So LC_CTYPE has nothing to do at the shell today.
+- The Phase-1 sinks (sort -u / uniq / comm / join) are COLLATION sinks: they want byte ctype
+  AND byte collation, i.e. LC_ALL=C. Feeding them a *.UTF-8 LC_CTYPE would be a regression, not
+  future-proofing — arbitrary feed bytes (malformed UTF-8) can trigger "illegal byte sequence"
+  under a UTF-8 ctype, which LC_ALL=C eliminates by treating every byte as a valid 1-byte char.
+  And it buys nothing: dedup uniqueness is byte-identity under LC_COLLATE=C, no classification
+  happens. So the resolver is for a DIFFERENT, currently nonexistent operation.
+- A shipped-but-unused function would be dead code in the user-facing release archive (carries
+  src/) and an "unused" lint risk, for zero present benefit.
+
+DELIVERED (this commit — all docs/text, documentation-only, skips CI)
+1. docs/misc/architecture-notes.md — new "## Locale policy (ADR-26)" section:
+   - the three rules (inline LC_ALL=C on machine-data set ops; never export LC_ALL/LANG
+     script-wide; future raw-Unicode = split LC_COLLATE=C + runtime-resolved LC_CTYPE);
+   - the C.UTF-8 availability table (FreeBSD / glibc / musl / macOS) from ADR §1.5;
+   - the copy-ready pfb_resolve_utf8_ctype() snippet (prefer C.UTF-8; else first *.UTF-8 from
+     `locale -a`; else C) + the split-knobs usage example. POSIX sh, never exported.
+2. CLAUDE.md "Code standards > Shell" — added the locale rule bullet citing ADR-26, pointing at
+   the architecture-notes section for the full policy + snippet.
+3. ADR.md — §2.3 gains the "Deferred — no caller today" paragraph; §5 Phase 2 reworded to
+   "Locale policy of record + deferred resolver".
+
+PROMOTION TRIGGER
+The day a shell path must classify/case-fold raw Unicode, paste pfb_resolve_utf8_ctype() into
+pfblockerng.sh (naming per pfb_* convention), call it at that site with
+`LC_COLLATE=C LC_CTYPE="$(pfb_resolve_utf8_ctype)" <cmd>`, and add a shell/smoke test for the
+fallback chain. The collation sinks of §2.1 never adopt it — they keep LC_ALL=C.
+
+STILL OUTSTANDING IN ADR-26 (not this phase)
+- Phase 1 (§2.1): inline LC_ALL=C is NOT yet applied to the HIGH+MEDIUM sinks in §1.3
+  (lines 282/531/543/759/853/1158/1180 on devel) — only the pre-existing reference at 479.
+- Phase 3 (§2.4): the ls-column parses (1226/1230) and jot (327) portability rewrites.
+- Phase 4: DoD (shellcheck/sh -n clean, smoke green, diff minimal).
+
+VALIDATION
+- markdownlint-cli2 clean on the edited Markdown.
+- scripts/check_url_encoding.py clean (the snippet has no curl/wget/fetch URL).
+- No code touched → CI paths-ignore applies (documentation-only).

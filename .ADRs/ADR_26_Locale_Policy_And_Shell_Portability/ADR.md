@@ -142,6 +142,16 @@ The resolution is centralised in one helper (a `pfb_*` locale resolver, naming p
 established `pfB_*`/`pfb_*` convention) so call sites stay one-liners and the fallback logic
 lives in exactly one place.
 
+**Deferred — no caller today (Phase 2 decision).** Since no raw-Unicode shell path exists yet,
+shipping the resolver now would land an **unused** function in `pfblockerng.sh` — dead code in
+the user-facing release archive (which carries `src/`) and an "unused" lint risk — that buys
+nothing the byte-exact sinks of §2.1 don't already have. So the resolver is recorded as a
+**copy-ready snippet** in `docs/misc/architecture-notes.md` ("Locale policy (ADR-26)"), and is
+promoted to a real `pfb_*` helper in `pfblockerng.sh` the day the **first `LC_CTYPE` caller**
+lands. The policy itself (when/how to split the knobs) is in force now; only the function body is
+deferred. Note the two knobs pull opposite ways at a collation sink — the sinks of §2.1 want byte
+ctype too, so they keep `LC_ALL=C` and never adopt this resolver.
+
 ### 2.4 Adjacent portability fixes (same cross-platform driver)
 
 - Replace both `ls -lahtr … | sed | awk` column-parses with a metadata API that is neither
@@ -192,8 +202,10 @@ lives in exactly one place.
 ## 5. Scope / phases
 
 1. **Inline `LC_ALL=C` on the dedup/order sinks** (§2.1) — the HIGH + MEDIUM sinks in §1.3.
-2. **Locale helper + policy of record** (§2.2, §2.3) — the runtime UTF-8 resolver + the
-   documented rule in `CLAUDE.md` / `architecture-notes.md`.
+2. **Locale policy of record + deferred resolver** (§2.2, §2.3) — the documented rule in
+   `CLAUDE.md` / `architecture-notes.md`, plus the runtime UTF-8 resolver kept as a copy-ready doc
+   snippet (no caller today → not shipped as a function; promoted to a `pfb_*` helper when the
+   first `LC_CTYPE` site lands).
 3. **Adjacent portability fixes** (§2.4) — the `ls`-column parses and `jot`.
 4. **Definition of Done** — shellcheck/`sh -n` clean, smoke green, docs landed, diff minimal.
 
