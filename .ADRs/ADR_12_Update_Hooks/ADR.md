@@ -14,6 +14,9 @@
 > feature shipped only on `devel` (no release), so there is no legacy `command` config to
 > migrate. (The "remote domain" caveat: this bounds the GUI to *selecting* a vetted file;
 > it does not sandbox what the script then contacts — that is the author's responsibility.)
+> The canonical schema below is updated to `script`; the §7 manual-smoke snippets that
+> still show `command='…'` are the original phase records (the automated smoke was migrated
+> to install-and-pick script files in the same PR).
 
 - **Status:** **Implemented (pending smoke test)** (2026-06-02; **status corrected 2026-06-05** — the line previously read "Proposed" but all phases had merged). Phases 1-6 merged to `devel` (#75 / #114 / #107 / #120). The live-VM smoke `tests/smoke/test_smoke_hooks.py` (no-op, disabled/enabled gate, pre/post fire + full context, trigger values, IP/DNSBL-changed, timeout/non-zero safety, **and** the webhook-callback shape) ran **green** (branch run `27008143527`); the Update Hooks UI tiers (#107) are green on `devel`. **Flips to Accepted** only after the maintainer confirms the two items the smoke image cannot host (§7): the real **HAProxy** reload recipe end-to-end and **HA/CARP** sync.
 - **Date:** 2026-06-02
@@ -58,7 +61,7 @@ Add **admin-configurable pre/post update command hooks**: a list of hook entries
 
 | Area | Decision |
 | --- | --- |
-| **Hook model** | A **list of hook entries** in the pfBlockerNG config: `{ command, when: pre\|post, enabled: bool, description, timeout? }`. Mirrors pfSense `shellcmd`'s `{cmd, cmdtype}` shape; supports multiple hooks, ordering (list order), and enable/disable. |
+| **Hook model** | A **list of hook entries** in the pfBlockerNG config: `{ script, when: pre\|post, enabled: bool, description, timeout? }` (`script` = a vetted `hook_<when>_*.{sh,py}` basename in `list_scripts/`, picked from the folder — not a free-text command). Supports multiple hooks, ordering (list order), and enable/disable. |
 | **Fire points (whole-cycle)** | **`pre`** runs at the **top** of `sync_package_pfblockerng` (before any feed processing); **`post`** runs at the **end** (after IP/DNSBL reloads + `filter_configure`, at the closing tail `:10293`). **Two points only** — granularity beyond this is out of scope (the context flags make per-type points unnecessary). Fire on **every** trigger (cron, manual Update, Force Update/Reload); `PFB_TRIGGER` distinguishes them. |
 | **Context (env vars)** | Hooks receive env vars. **pre:** `PFB_TRIGGER` (cron\|update\|force-update\|force-reload), `PFB_WHEN=pre`. **post:** the above plus `PFB_IP_CHANGED`, `PFB_DNSBL_CHANGED` (0\|1, from `$pfbupdate`/`$pfbpython`), `PFB_STATUS` (ok\|partial\|error), and the split changed lists `PFB_CHANGED_IP_ALIASES` (space-separated `pfB_*`) + `PFB_CHANGED_DNSBL_GROUPS` (space-separated `DNSBL_*` — DNSBL groups are not firewall aliases). Documented + stable. (pre can't know what changed yet — nothing downloaded.) **`PFB_IP_CHANGED` is a RULE-change signal** (`$pfb['filter_configure']` — a filter reload ran), **not** a data-change signal: a content-only alias refresh (`pfctl -T replace`, no rule change) leaves it `0` while `PFB_CHANGED_IP_ALIASES` IS populated. So a "blocklist data changed" recipe guards on a **non-empty** `PFB_CHANGED_IP_ALIASES` (resp. `PFB_CHANGED_DNSBL_GROUPS`), not on `PFB_IP_CHANGED=1` (which would miss content-only updates); the HAProxy recipe is the exception — it deliberately keys on `PFB_IP_CHANGED` because it only needs to reload when *rules* changed. `PFB_CHANGED_DNSBL_GROUPS` carries only groups whose feed was genuinely (re)parsed this pass (the per-group `$pfb['aliasupdate']` signal); the always-rebuilt specials `DNSBL_Regex`/`DNSBL_IDN`/`DNSBL_TLD_Allow` are **excluded**. |
 | **Execution** | Run as **root** via `mwexec` **synchronously with a per-hook timeout** (sane default, e.g. 60 s, overridable); stdout/stderr captured to the pfBlockerNG log with a clear header. Synchronous + timeout (not detached) so failures are logged in order and a quick reload completes before the pass returns. |
@@ -135,7 +138,7 @@ Each phase = one commit, leaves the tree lint-clean (`php -l`/PHPStan/ShellCheck
 
 Prompt: `01_Hook_Runner_Prep.txt`
 
-- Define the config schema (a list of `{command, when, enabled, description, timeout}` under the pfBlockerNG config). Implement `pfb_run_hooks(string $when, array $ctx)`: read enabled hooks matching `$when` in list order, build the env from `$ctx`, run each via `mwexec` with a per-hook timeout, capture output to the pfBlockerNG log with a header, **non-zero/timeout → log + continue**. **Not called from the pass yet.** Add a tiny CLI/manual invocation path for testing. PHPStan/ShellCheck clean; no behaviour change.
+- Define the config schema (a list of `{script, when, enabled, description, timeout}` under the pfBlockerNG config). Implement `pfb_run_hooks(string $when, array $ctx)`: read enabled hooks matching `$when` in list order, build the env from `$ctx`, run each via `mwexec` with a per-hook timeout, capture output to the pfBlockerNG log with a header, **non-zero/timeout → log + continue**. **Not called from the pass yet.** Add a tiny CLI/manual invocation path for testing. PHPStan/ShellCheck clean; no behaviour change.
 
 ### Phase 2 — Wire pre + post fire points + context builder
 

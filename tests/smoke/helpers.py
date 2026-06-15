@@ -956,6 +956,10 @@ def install_hook_script(vm: SmokeVM, name: str, body: str, *, timeout: float = 6
     same file-write pattern used elsewhere) and ``chmod 0755`` so the script runs via
     its shebang (the list_scripts convention).
     """
+    # A bare basename only -- never let a caller's ``name`` (``..``/``/``) escape
+    # HOOK_SCRIPT_DIR and write elsewhere on the guest.
+    if name != os.path.basename(name) or name in ("", ".", ".."):
+        raise ValueError(f"install_hook_script: unsafe script name {name!r}")
     path = f"{HOOK_SCRIPT_DIR}/{name}"
     res = subprocess.run(
         vm.ssh_argv("tee", path), input=body, capture_output=True, text=True, timeout=timeout, check=False

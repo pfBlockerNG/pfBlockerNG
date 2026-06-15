@@ -40,6 +40,7 @@ class RequirePfbFilterSniff implements Sniff
 		'pfb_sanitise_feed_header',
 		'pfb_unbound_python_sources',
 		'pfb_unbound_py_ccache_flush_cmds',
+		'pfb_run_hooks',
 	];
 
 	/**
@@ -53,6 +54,7 @@ class RequirePfbFilterSniff implements Sniff
 		'pfb_filter',
 		'pfb_sanitise_feed_header',
 		'sanitize_ipaddr',
+		'pfb_hook_script_valid',
 	];
 
 	/**

@@ -215,7 +215,7 @@ it as a `post` hook:
 ```sh
 #!/bin/sh
 # hook_post_webhook.sh — notify a webhook of what changed
-[ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
+{ [ -n "$PFB_CHANGED_IP_ALIASES" ] || [ -n "$PFB_CHANGED_DNSBL_GROUPS" ]; } && /usr/local/bin/curl -sS -m 5 \
   --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
   --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
   https://example.invalid/pfblockerng-update
