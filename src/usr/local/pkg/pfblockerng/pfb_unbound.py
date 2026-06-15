@@ -133,6 +133,13 @@ pfb_loggers: dict[str, Any] = {}
 pfb_reload_watcher_thread: Any
 pfb_reload_stop: Any
 
+# PFBL-03: the DNSBL-control command-channel reader daemon + its stop handle. The
+# watcher waits on the control file's DIRECTORY (mirroring the reload watcher) and routes
+# a fresh command through pfb_apply_control_command() OFF the query threads. Declared
+# here; created in init_standard (gated on pfb["mod_threading"]) and joined in deinit.
+pfb_control_watcher_thread: Any
+pfb_control_stop: Any
+
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
     # unconditionally so static checkers treat them as always bound (the runtime
@@ -607,6 +614,166 @@ class _ReloadKqueueWaiter:
             self._fd = -1
 
 
+# --------------------------------------------------------------------------- #
+# PFBL-03 -- the local privileged DNSBL-control command channel (reader daemon).
+#
+# A daemon thread mirrors the ADR-10 reload watcher: it waits on the control file's
+# DIRECTORY (kqueue EVFILT_VNODE where available, mtime-poll fallback) and, on a change,
+# reads the JSON record. The record carries a monotonically-advancing SEQUENCE; the
+# watcher tracks the last-applied seq and IGNORES any record with seq <= last_applied
+# (exactly-once + replay safety, exactly as the reload watcher compares generations).
+# A FRESH record is re-validated and routed through the SHARED pfb_apply_control_command()
+# handler -- the same implementation the legacy DNS-TXT branch uses -- then the applied
+# seq is published so the writer can confirm execution. Correctness rides on the atomic
+# publish + the seq COMPARE, NOT on notify latency: a missed event only delays.
+#
+# The reader runs OFF the query threads (its own daemon, blocking only on the kqueue/poll
+# wait), so it never blocks DNS response processing.
+# --------------------------------------------------------------------------- #
+
+
+def _control_read_record(path: str) -> dict[str, Any] | None:
+    """Read + parse the control channel's JSON record, or ``None`` if absent/unreadable/
+    malformed. Best-effort: any read or JSON error yields ``None`` (treated as "no
+    command")."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        record = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    return record
+
+
+def _control_write_applied(seq: int) -> None:
+    """Publish ``seq`` as the APPLIED-sequence marker (atomic temp + ``os.replace``).
+
+    Written by the watcher after it consumes a record so the writer can confirm the
+    command ran. Best-effort: a write failure is logged and the command still stands."""
+    path = pfb.get("pfb_py_control_applied")
+    if not path:
+        return
+    tmp = "{}.tmp".format(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("{}\n".format(int(seq)))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: failed to write control applied marker [ {} ]: {}\n".format(path, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _control_record_to_command(record: dict[str, Any]) -> list[str] | None:
+    """Translate a control JSON record into the dot-split token list the shared handler
+    consumes (mirroring the DNS-TXT q_name split), or ``None`` when the command is
+    unknown / the required fields are absent. The shared handler re-validates the IP and
+    duration; this only assembles the tokens.
+
+    Record shape: ``{"seq": int, "cmd": "disable|enable|addbypass|removebypass",
+    "ip": "<v4/v6>", "duration": <int>, "ts": <epoch>}`` -- ``ip``/``duration`` present
+    only for the commands that take them."""
+    cmd = record.get("cmd")
+    if cmd not in ("disable", "enable", "addbypass", "removebypass"):
+        return None
+
+    command = ["python_control", cmd]
+    if cmd in ("addbypass", "removebypass"):
+        ip = record.get("ip")
+        if not isinstance(ip, str) or ip == "":
+            return None
+        # The shared handler un-maps '-' to '.' (the DNS-TXT transport encoding); the
+        # channel carries the IP verbatim, so a dotted IPv4 passes through unchanged.
+        command.append(ip)
+    elif cmd == "disable":
+        # disable carries an optional duration as the 3rd token (validated downstream).
+        if "duration" in record:
+            command.append("{}".format(record.get("duration")))
+        return command
+
+    # addbypass takes an optional duration as the 4th token.
+    if cmd == "addbypass" and "duration" in record:
+        command.append("{}".format(record.get("duration")))
+
+    return command
+
+
+def pfb_control_watcher() -> None:
+    """Daemon body: wait on the control channel and apply each FRESH command (seq advance)
+    until the stop Event is set.
+
+    Adopts the current seq at startup WITHOUT applying (a record already on disk from a
+    prior run is not replayed), publishes it as the applied baseline, then on every change
+    reads the record, applies it iff its seq strictly advances, and republishes the
+    applied seq. Single-flight by construction (one record at a time, latest seq wins)."""
+    channel = pfb["pfb_py_control"]
+    watch_dir = os.path.dirname(os.path.abspath(channel)) or "."
+
+    # Baseline: adopt the seq of any record already present WITHOUT applying it -- the
+    # watcher only acts on a FUTURE advance (mirrors the reload watcher's baseline).
+    last_seq = 0
+    record = _control_read_record(channel)
+    if record is not None:
+        seq = record.get("seq")
+        if isinstance(seq, int):
+            last_seq = seq
+    _control_write_applied(last_seq)
+
+    def drain_and_apply() -> None:
+        nonlocal last_seq
+        while not pfb_control_stop.is_set():
+            rec = _control_read_record(channel)
+            if rec is None:
+                return
+            seq = rec.get("seq")
+            if not isinstance(seq, int) or seq <= last_seq:
+                return
+            last_seq = seq
+            command = _control_record_to_command(rec)
+            if command is not None:
+                applied, msg = pfb_apply_control_command(command)
+                if msg:
+                    log_info("[pfBlockerNG]: {}".format(msg))
+            # Advance the applied marker on every consumed record (advance or rejection),
+            # so the writer's wait never blocks on a record the reader already saw.
+            _control_write_applied(seq)
+
+    waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
+    if waiter is not None and not waiter.is_active():
+        waiter.close()
+        waiter = None
+    try:
+        while not pfb_control_stop.is_set():
+            drain_and_apply()
+            if pfb_control_stop.is_set():
+                break
+            if waiter is not None:
+                waiter.wait(RELOAD_POLL_INTERVAL)
+            else:
+                pfb_control_stop.wait(RELOAD_POLL_INTERVAL)
+    except Exception as e:
+        err = sys.__stderr__
+        if err is not None:
+            try:
+                err.write("[pfBlockerNG]: control watcher error: {}\n".format(e))
+            except Exception:
+                pass
+    finally:
+        if waiter is not None:
+            waiter.close()
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -629,7 +796,9 @@ def init_standard(id: int, env: module_env) -> bool:
         pfb_db_queue, \
         pfb_db_worker_thread, \
         pfb_reload_watcher_thread, \
-        pfb_reload_stop
+        pfb_reload_stop, \
+        pfb_control_watcher_thread, \
+        pfb_control_stop
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
@@ -759,6 +928,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["sqlite3_resolver_con"] = False
     pfb["async_worker"] = False
     pfb["reload_watcher"] = False
+    pfb["control_watcher"] = False
 
     # DNSBL Python files
     pfb["pfb_unbound.ini"] = "pfb_unbound.ini"
@@ -790,6 +960,19 @@ def init_standard(id: int, env: module_env) -> bool:
     # hook + the #51 alert page + the smoke suite then observe the new state, not a
     # pending swap). Host path /var/unbound/pfb_py_reload.applied; chroot-relative here.
     pfb["pfb_py_reload_applied"] = "pfb_py_reload.applied"
+    # PFBL-03: the local privileged DNSBL-control command channel. PHP/shell (root only)
+    # atomically publishes a small JSON record carrying a monotonically-advancing
+    # sequence + the command; the control-watcher thread wakes on the directory change,
+    # ignores any record whose seq <= the last applied (exactly-once + replay safety),
+    # and routes a fresh one through pfb_apply_control_command(). Chroot-relative
+    # (Unbound's CWD is /var/unbound) -> host path /var/unbound/pfb_py_control. The
+    # writer keeps owner root, group unbound, mode 0640: root WRITES, unbound READS via
+    # group -- authorization is "only root may write" (no group/other write).
+    pfb["pfb_py_control"] = "pfb_py_control"
+    # PFBL-03: the APPLIED-sequence marker (mirrors pfb_py_reload.applied). After the
+    # control-watcher applies a record with seq N it writes N here (atomic temp+rename),
+    # so the writer can confirm execution. Host path /var/unbound/pfb_py_control.applied.
+    pfb["pfb_py_control_applied"] = "pfb_py_control.applied"
     pfb["pfb_py_count"] = "pfb_py_count"
     # ADR-07 P8: the ADMITTED (cap-filtered) feed+user regex total -- the count the
     # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
@@ -1369,6 +1552,22 @@ def init_standard(id: int, env: module_env) -> bool:
         except Exception as e:
             pfb["reload_watcher"] = False
             sys.stderr.write("[pfBlockerNG]: Failed to start reload watcher: {}".format(e))
+
+    # PFBL-03: start the DNSBL-control command-channel reader (daemon) when the feature is
+    # enabled. It waits on the control channel and routes a fresh command through the
+    # shared handler off the query threads -- the local privileged transport that replaces
+    # the DNS-TXT path.
+    if pfb["mod_threading"] and pfb["python_control"] and not pfb.get("control_watcher"):
+        try:
+            pfb_control_stop = threading.Event()
+            pfb_control_watcher_thread = threading.Thread(
+                name="pfb_control_watcher", target=pfb_control_watcher, daemon=True
+            )
+            pfb_control_watcher_thread.start()
+            pfb["control_watcher"] = True
+        except Exception as e:
+            pfb["control_watcher"] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start control watcher: {}".format(e))
 
     pfb_setup_logging()
 
@@ -2488,6 +2687,113 @@ def python_control_addbypass(duration: int, b_ip: str) -> bool:
     return False
 
 
+# PFBL-03: the SINGLE DNSBL-control command handler. Both transports route here -- the
+# legacy DNS-TXT branch (operate(), retired in a later phase) and the local privileged
+# command channel consumed by pfb_control_watcher() -- so the command grammar and its
+# side effects have exactly one implementation.
+#
+# ``control_command`` is the dot-split token list exactly as the DNS-TXT path builds it
+# (q_name "python_control.disable.60" -> ["python_control", "disable", "60"]); the file
+# reader builds the identical list from its JSON record. Validation contract (re-checked
+# here, never trusting the transport): a bypass IP must parse via ipaddress.ip_address()
+# and a duration must pass python_control_duration() (1-3600) before any side effect.
+#
+# Returns ``(applied, message)`` -- ``applied`` is the DNS-TXT branch's control_rcd
+# (True only when the command took effect), ``message`` its human-readable status. The
+# behaviour is BYTE-FOR-BYTE the prior DNS-TXT branch (disable/enable toggle
+# python_blacklist; addbypass/removebypass mutate gpListDB; durations spawn the same
+# timed re-enable/remove threads).
+def pfb_apply_control_command(control_command: list[str]) -> tuple[bool, str]:
+    global pfb, gpListDB
+
+    control_rcd = False
+    control_msg = ""
+
+    if len(control_command) >= 2:
+        if control_command[1] == "disable":
+            control_rcd = True
+            control_msg = "Python_control: DNSBL disabled"
+            pfb["python_blacklist"] = False
+
+            # If duration specified, disable DNSBL Blocking for specified time in seconds
+            if pfb["mod_threading"] and len(control_command) == 3 and control_command[2] != "":
+                # Validate Duration argument
+                duration = python_control_duration(control_command[2])
+                if duration:
+                    # Ensure thread is not active
+                    if not python_control_thread("sleep"):
+                        # Start Thread
+                        if not python_control_start_thread("sleep", python_control_sleep, duration, None):
+                            control_rcd = False
+                            control_msg = "Python_control: DNSBL disabled: Thread failed"
+                        else:
+                            control_msg = "{} for {} second(s)".format(control_msg, duration)
+                    else:
+                        control_rcd = False
+                        control_msg = "Python_control: DNSBL disabled: Previous call still in progress"
+                else:
+                    control_rcd = False
+                    control_msg = "Python_control: DNSBL disabled: duration [ {} ] out of range (1-3600sec)".format(
+                        control_command[2]
+                    )
+
+        elif control_command[1] == "enable":
+            control_rcd = True
+            control_msg = "Python_control: DNSBL enabled"
+            pfb["python_blacklist"] = True
+
+        elif control_command[1] == "addbypass" or control_command[1] == "removebypass":
+            b_ip = (control_command[2]).replace("-", ".")
+            isIPValid = ipaddress.ip_address(b_ip)
+
+            if isIPValid:
+                if not pfb["gpListDB"]:
+                    pfb["gpListDB"] = True
+
+                control_rcd = True
+                if control_command[1] == "addbypass":
+                    control_msg = "Python_control: Add bypass for IP: [ {} ]".format(b_ip)
+
+                    # If duration specified, disable DNSBL Blocking for specified time in seconds
+                    if pfb["mod_threading"] and len(control_command) == 4 and control_command[3] != "":
+                        # Validate Duration argument
+                        duration = python_control_duration(control_command[3])
+                        if duration:
+                            # Ensure thread is not active
+                            if not python_control_thread("addbypass" + b_ip):
+                                # Start Thread
+                                if not python_control_start_thread(
+                                    "addbypass" + b_ip, python_control_addbypass, duration, b_ip
+                                ):
+                                    control_rcd = False
+                                    control_msg = "Python_control: Add bypass for IP: [ {} ] thread failed".format(b_ip)
+                                else:
+                                    control_msg = "{} for {} second(s)".format(control_msg, duration)
+                            else:
+                                control_rcd = False
+                                control_msg = (
+                                    "Python_control: Add bypass for IP: [ {} ]: Previous call still in progress"
+                                ).format(b_ip)
+                        else:
+                            control_rcd = False
+                            control_msg = (
+                                "Python_control: Add bypass for IP: [ {} ]: duration [ {} ] out of range (1-3600sec)"
+                            ).format(b_ip, control_command[3])
+                    else:
+                        # Add bypass called without duration
+                        if control_rcd:
+                            gpListDB[b_ip] = 0
+
+                elif control_command[1] == "removebypass":
+                    if gpListDB.get(b_ip) is not None:
+                        control_msg = "Python_control: Remove bypass for IP: [ {} ]".format(b_ip)
+                        gpListDB.pop(b_ip)
+                    else:
+                        control_msg = "Python_control: IP not in Group Policy: [ {} ]".format(b_ip)
+
+    return control_rcd, control_msg
+
+
 def inplace_cb_reply(
     qinfo: query_info,
     qstate: module_qstate,
@@ -2553,7 +2859,9 @@ def deinit(id: int) -> bool:
         pfb_db_queue, \
         pfb_db_worker_thread, \
         pfb_reload_watcher_thread, \
-        pfb_reload_stop
+        pfb_reload_stop, \
+        pfb_control_watcher_thread, \
+        pfb_control_stop
 
     if pfb["python_maxmind"]:
         maxmindReader.close()
@@ -2569,6 +2877,16 @@ def deinit(id: int) -> bool:
         except Exception:
             pass
         pfb["reload_watcher"] = False
+
+    # PFBL-03: stop the control-channel reader cleanly (same pattern as the reload
+    # watcher -- set the stop Event to wake the kqueue/poll wait, then a bounded join).
+    if pfb.get("control_watcher"):
+        try:
+            pfb_control_stop.set()
+            pfb_control_watcher_thread.join(timeout=5)
+        except Exception:
+            pass
+        pfb["control_watcher"] = False
 
     # Drain and stop the background DB-write worker, then close connections
     if pfb.get("db_worker"):
@@ -5200,95 +5518,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             control_msg = ""
             if pfb["python_control"] and q_ip == "127.0.0.1":
                 control_command = q_name_original.split(".")
-                if len(control_command) >= 2:
-                    if control_command[1] == "disable":
-                        control_rcd = True
-                        control_msg = "Python_control: DNSBL disabled"
-                        pfb["python_blacklist"] = False
-
-                        # If duration specified, disable DNSBL Blocking for specified time in seconds
-                        if pfb["mod_threading"] and len(control_command) == 3 and control_command[2] != "":
-                            # Validate Duration argument
-                            duration = python_control_duration(control_command[2])
-                            if duration:
-                                # Ensure thread is not active
-                                if not python_control_thread("sleep"):
-                                    # Start Thread
-                                    if not python_control_start_thread("sleep", python_control_sleep, duration, None):
-                                        control_rcd = False
-                                        control_msg = "Python_control: DNSBL disabled: Thread failed"
-                                    else:
-                                        control_msg = "{} for {} second(s)".format(control_msg, duration)
-                                else:
-                                    control_rcd = False
-                                    control_msg = "Python_control: DNSBL disabled: Previous call still in progress"
-                            else:
-                                control_rcd = False
-                                control_msg = (
-                                    "Python_control: DNSBL disabled: duration [ {} ] out of range (1-3600sec)".format(
-                                        control_command[2]
-                                    )
-                                )
-
-                    elif control_command[1] == "enable":
-                        control_rcd = True
-                        control_msg = "Python_control: DNSBL enabled"
-                        pfb["python_blacklist"] = True
-
-                    elif control_command[1] == "addbypass" or control_command[1] == "removebypass":
-                        b_ip = (control_command[2]).replace("-", ".")
-                        isIPValid = ipaddress.ip_address(b_ip)
-
-                        if isIPValid:
-                            if not pfb["gpListDB"]:
-                                pfb["gpListDB"] = True
-
-                            control_rcd = True
-                            if control_command[1] == "addbypass":
-                                control_msg = "Python_control: Add bypass for IP: [ {} ]".format(b_ip)
-
-                                # If duration specified, disable DNSBL Blocking for specified time in seconds
-                                if pfb["mod_threading"] and len(control_command) == 4 and control_command[3] != "":
-                                    # Validate Duration argument
-                                    duration = python_control_duration(control_command[3])
-                                    if duration:
-                                        # Ensure thread is not active
-                                        if not python_control_thread("addbypass" + b_ip):
-                                            # Start Thread
-                                            if not python_control_start_thread(
-                                                "addbypass" + b_ip, python_control_addbypass, duration, b_ip
-                                            ):
-                                                control_rcd = False
-                                                control_msg = (
-                                                    "Python_control: Add bypass for IP: [ {} ] thread failed".format(
-                                                        b_ip
-                                                    )
-                                                )
-                                            else:
-                                                control_msg = "{} for {} second(s)".format(control_msg, duration)
-                                        else:
-                                            control_rcd = False
-                                            control_msg = (
-                                                "Python_control: Add bypass for IP:"
-                                                " [ {} ]: Previous call still in progress"
-                                            ).format(b_ip)
-                                    else:
-                                        control_rcd = False
-                                        control_msg = (
-                                            "Python_control: Add bypass for IP:"
-                                            " [ {} ]: duration [ {} ] out of range (1-3600sec)"
-                                        ).format(b_ip, control_command[3])
-                                else:
-                                    # Add bypass called without duration
-                                    if control_rcd:
-                                        gpListDB[b_ip] = 0
-
-                            elif control_command[1] == "removebypass":
-                                if gpListDB.get(b_ip) is not None:
-                                    control_msg = "Python_control: Remove bypass for IP: [ {} ]".format(b_ip)
-                                    gpListDB.pop(b_ip)
-                                else:
-                                    control_msg = "Python_control: IP not in Group Policy: [ {} ]".format(b_ip)
+                # PFBL-03: route to the SINGLE shared handler (also used by the local
+                # privileged command channel) -- one implementation of the grammar.
+                control_rcd, control_msg = pfb_apply_control_command(control_command)
 
                 if control_rcd:
                     q_reply = "python_control"
