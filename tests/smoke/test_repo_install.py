@@ -1790,6 +1790,10 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     own = own_variant()
     opp = opposite_variant()
     rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
+    if rquery.returncode != 0:
+        pytest.fail(
+            f"Worker pkg rquery failed (rc={rquery.returncode})\nstdout:\n{rquery.stdout}\nstderr:\n{rquery.stderr}"
+        )
     rquery_out = rquery.stdout.strip()
     assert own.php in rquery_out, (
         f"Worker URL catalog does not contain the box's {own.php} dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
