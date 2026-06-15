@@ -28,6 +28,21 @@ from typing import Any
 
 import pfb_unbound as P
 
+
+def _await_control_thread_stopped(name: str, timeout: float = 2.0) -> None:
+    """Wait (bounded) for a spawned control timer thread to stop.
+
+    The duration commands start a real background timer thread; without awaiting it the
+    async state leaks into later tests. Poll the module's own predicate until the thread
+    is no longer active or the timeout elapses.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not P.python_control_thread(name):
+            return
+        time.sleep(0.01)
+
+
 # --------------------------------------------------------------------------- #
 # The shared handler -- exercised INDEPENDENT of transport (a plain token list).
 # Both the DNS-TXT branch and the file reader build the SAME ["python_control", ...]
@@ -67,6 +82,9 @@ class TestSharedHandlerDisableEnable:
         assert P.pfb["python_blacklist"] is False
         assert "second" in msg
         assert P.python_control_thread("sleep") is True
+
+        # Cleanup: await the spawned timer thread so its async state does not leak.
+        _await_control_thread_stopped("sleep")
 
     def test_disable_with_out_of_range_duration_rejected(self) -> None:
         # The toggle still flips (semantics preserved) but the command is NOT marked
@@ -118,6 +136,9 @@ class TestSharedHandlerBypass:
         assert "second" in msg
         assert P.python_control_thread("addbypass192.0.2.10") is True
 
+        # Cleanup: await the spawned timer thread so its async state does not leak.
+        _await_control_thread_stopped("addbypass192.0.2.10")
+
     def test_addbypass_dash_encoded_ipv4_is_unmapped(self) -> None:
         # The DNS-TXT transport encodes the dotted IPv4 with '-'; the shared handler
         # un-maps it. Proves the legacy encoding still resolves to the real IP.
@@ -125,13 +146,26 @@ class TestSharedHandlerBypass:
         assert applied is True
         assert P.gpListDB.get("192.0.2.10") == 0
 
-    def test_addbypass_invalid_ip_raises(self) -> None:
-        # ipaddress.ip_address() rejects a non-IP -- the shared handler re-validates the
-        # bypass IP (the reader also screens it, but the handler is the last gate).
-        import pytest
+    def test_malformed_bypass_rejected_without_raising(self) -> None:
+        # PFBL-03: a malformed bypass command must be REJECTED (returned), never RAISED --
+        # a missing IP (IndexError) or a non-IP (ValueError) would otherwise crash the
+        # control watcher thread. Both classes return (False, <message>) and leave the
+        # bypass DB untouched.
+        # Given: the would-be IP is NOT in the bypass DB (BEFORE).
+        assert P.gpListDB.get("not-an-ip") is None
 
-        with pytest.raises(ValueError):
-            P.pfb_apply_control_command(["python_control", "addbypass", "not-an-ip"])
+        # When: a 2-token command (missing IP) is applied. Then: rejected, no raise.
+        applied, msg = P.pfb_apply_control_command(["python_control", "addbypass"])
+        assert applied is False
+        assert "Missing bypass IP" in msg
+
+        # When: a command with a non-IP token is applied. Then: rejected, no raise.
+        applied, msg = P.pfb_apply_control_command(["python_control", "addbypass", "not-an-ip"])
+        assert applied is False
+        assert "Invalid IP" in msg
+
+        # Then: neither malformed command mutated the bypass DB.
+        assert P.gpListDB.get("not-an-ip") is None
 
     def test_unknown_command_is_noop(self) -> None:
         applied, msg = P.pfb_apply_control_command(["python_control", "frobnicate"])

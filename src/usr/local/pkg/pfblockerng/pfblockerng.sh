@@ -115,8 +115,9 @@ fi
 
 # Remove the private per-run temp directory before exiting (issue #30).
 exitnow() {
+	rc="${1:-0}"
 	rm -rf "${tmpdir}"
-	exit
+	exit "${rc}"
 }
 
 
@@ -1326,6 +1327,7 @@ case "${1}" in
 		#        addbypass <ip> [sec] | removebypass <ip>
 		shift
 		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dnsbl-control "$@"
+		exitnow "$?"
 		;;
 	closing)
 		emptyfiles

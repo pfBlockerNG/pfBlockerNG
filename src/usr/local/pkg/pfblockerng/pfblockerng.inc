@@ -4177,12 +4177,15 @@ function pfb_unbound_py_atomic_write_root($path, $content) {
 		return FALSE;
 	}
 
-	$ok = (@fwrite($fh, $content) !== FALSE);
+	// Require the FULL content to land (fwrite returns the byte count, not just
+	// TRUE/FALSE) and that the durability barrier itself succeeds, so a truncated or
+	// unflushed command record is never published as success.
+	$written = @fwrite($fh, $content);
+	$ok = ($written === strlen($content));
 	if ($ok) {
-		@fflush($fh);
 		// Durably persist the staged bytes before the rename so a crash cannot
 		// expose a half-written command record.
-		@fsync($fh);
+		$ok = (@fflush($fh) && @fsync($fh));
 	}
 	@fclose($fh);
 
@@ -9746,7 +9749,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['dnsbl_alexa_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
-	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?: '';	// PFBL-03: deprecated legacy DNS-TXT control transport
+	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?? '';	// PFBL-03: deprecated legacy DNS-TXT control transport
 
 	// Validate pfB Script variable
 	$pfb['dnsbl_alexa_inc'] = pfb_filter($pfb['dnsbl_alexa_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');

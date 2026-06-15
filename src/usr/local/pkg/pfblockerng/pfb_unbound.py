@@ -2751,8 +2751,14 @@ def pfb_apply_control_command(control_command: list[str]) -> tuple[bool, str]:
             pfb["python_blacklist"] = True
 
         elif control_command[1] == "addbypass" or control_command[1] == "removebypass":
+            # PFBL-03: reject a malformed bypass command instead of raising
+            if len(control_command) < 3 or control_command[2] == "":
+                return False, "Python_control: Missing bypass IP"
             b_ip = (control_command[2]).replace("-", ".")
-            isIPValid = ipaddress.ip_address(b_ip)
+            try:
+                isIPValid = ipaddress.ip_address(b_ip)
+            except ValueError:
+                return False, "Python_control: Invalid IP: [ {} ]".format(b_ip)
 
             if isIPValid:
                 if not pfb["gpListDB"]:
