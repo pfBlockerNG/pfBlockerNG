@@ -77,6 +77,16 @@ included — uses the full worktree + rebase-only-PR flow.
   this branch's worktree (e.g. an ADR mid-implementation), work there. `/adr-all` and
   `/adr-phase` reuse the per-ADR `adr/{NN}-{slug}` worktree across all phases; create it
   (off the latest `devel`) only when absent.
+- **Reuse a branch for a follow-up ONLY when no other session owns its PR.** Reusing a branch
+  across an ADR's phases or for a follow-up commit is fine — but **only when no other session
+  is actively handling that branch's PR**. Before reusing, `git fetch` and check for foreign
+  activity: a commit/force-push you didn't make, or the branch's open PR showing activity that
+  isn't yours (recent pushes, running CI, review replies, a `WIP`/`Waiting PR` label) ⇒
+  **another session owns it**. In that case do exactly ONE of: (1) **wait** for that session to
+  finish; (2) **cooperate** with it on the same branch; or (3) **wait for the merge, then start
+  a NEW branch** for the follow-up. **Never force-push over another session's in-flight PR** —
+  it can clobber their work, or (when the rewrite leaves the head with nothing ahead of base)
+  silently auto-close their PR.
 - **Name the branch for its work item** — `adr/{NN}-{slug}` / `issue/{NN}-{slug}` (see
   "Branch naming (ADRs and issues)").
 - Gotchas: `git worktree remove` fails from *inside* the tree being removed — run from the
