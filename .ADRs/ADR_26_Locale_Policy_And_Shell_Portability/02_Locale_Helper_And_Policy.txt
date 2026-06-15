@@ -1,0 +1,42 @@
+ADR-26 — Phase 2: Locale helper for future Unicode-aware text + policy of record
+
+GOAL
+Encode ADR §2.2 + §2.3 so future shell additions follow the locale rule mechanically:
+(a) never export LC_ALL/LANG globally; (b) machine-data set ops use inline LC_ALL=C;
+(c) any FUTURE raw-Unicode (un-punycode'd) text path splits the knobs — LC_COLLATE=C for
+order/uniqueness, LC_CTYPE=<UTF-8 locale resolved at runtime> for classification/case-fold.
+
+DELIVERABLES
+1. A single locale-resolver helper in pfblockerng.sh (naming per the established pfB_*/pfb_*
+   convention — check neighbours before coining a name). It resolves, ONCE, the best
+   available UTF-8 ctype locale with a fallback chain and no hard assumption that C.UTF-8
+   exists:
+     - prefer `C.UTF-8` (FreeBSD 15 / glibc >= 2.35 / musl);
+     - else the first `*.UTF-8` from `locale -a` (e.g. en_US.UTF-8) — covers macOS / older glibc;
+     - else `C` (last resort: ASCII-only ctype — correct-but-degraded, never wrong-silently).
+   Detection via `locale -a` (guard for its absence). Expose the chosen value as a variable
+   the (future) call sites read; do NOT export it. The helper is defined but may have no live
+   caller yet — that is intentional (policy scaffolding); keep it tiny and shellcheck-clean.
+   If a no-caller helper would trip shellcheck/CI "unused" gates, instead land the resolution
+   as a documented, copy-ready snippet in the docs (below) rather than dead code — implementer's
+   call; prefer the helper if it stays clean.
+2. Policy of record:
+   - CLAUDE.md "Code standards > Shell": add the rule — inline LC_ALL=C on every
+     sort/uniq/comm/join over machine data; split LC_COLLATE=C + runtime-resolved LC_CTYPE for
+     raw-Unicode text; NEVER `export LC_ALL`/`LANG` script-wide; cite ADR-26.
+   - docs/misc/architecture-notes.md: a short "Locale policy (ADR-26)" subsection with the
+     three rules + the C-vs-C.UTF-8 availability table (FreeBSD/glibc/musl/macOS) from ADR §1.5.
+
+RULES
+- POSIX sh; no bash-isms; quote expansions.
+- This phase adds NO new collation behaviour to existing paths (Phase 1 already covered them).
+  It is policy + scaffolding for the day a raw-Unicode shell path appears.
+
+VALIDATION
+- shellcheck + `sh -n` clean; markdownlint clean on the docs.
+- Documentation-only portions skip CI by paths-ignore, but the helper (if added to the .sh)
+  makes this a code change — full CI applies. Plan the PR accordingly.
+
+HANDOFF
+RESULTS/ADR26_Phase2_Results.txt: the helper (or the decision to ship it as a doc snippet +
+why), and the exact CLAUDE.md / architecture-notes edits.
