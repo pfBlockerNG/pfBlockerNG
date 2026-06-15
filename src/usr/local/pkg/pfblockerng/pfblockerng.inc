@@ -357,7 +357,31 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			$result = htmlspecialchars(trim($input));
 			break;
 		case PFB_FILTER_URL:
-			// Validate URL input
+			// PFB_FILTER_URL is the single validation gate for feed URLs and local
+			// feed paths. Composition order: the control-char filter above, then the
+			// scheme allow-list (http/https/rsync/ftp), then a self/local branch, then
+			// — for a non-self remote host — the shared feed-host check.
+			//
+			// The $escape flag selects the context:
+			//   $escape = TRUE  -> pfSense-local / Alerts-tab refresh: a URL is accepted
+			//                      only when its host is the firewall itself (own
+			//                      configured address / loopback) AND the path is the
+			//                      root '/'. Everything else is rejected.
+			//   $escape = FALSE -> feed-remote: the firewall's own host (root path)
+			//                      stays exempt; any other host is routed through
+			//                      pfb_feed_host_allowed() (the shared host check) when
+			//                      the feed-host filter is enabled (pfb_feed_filter_enabled()),
+			//                      so a non-self, non-allowlisted internal address is
+			//                      rejected. With the filter off the host check is skipped.
+			//
+			// A non-URL input is treated as a local file path: it is canonicalised with
+			// realpath() and accepted only when it sits directly under one of the allowed
+			// directories (see the else branch below).
+			//
+			// The fetch path (pfb_download) re-runs the SAME pfb_feed_host_allowed()
+			// before dialling, so the host this gate accepts is the host the fetch will
+			// permit — the validation-time and fetch-time verdicts agree (pinned by
+			// FeedFilterParityTest).
 			$is_RSYNC = FALSE;
 			if (strpos($input, '::') !== FALSE && !$escape) {
 				$rsync = explode('::', $input);
