@@ -105,6 +105,15 @@ final class FeedFilterParityTest extends TestCase
 				'feed.parity.mirror', [['type' => 'A', 'data' => '172.16.5.5']],
 				[], '172.16.5.5', '/list.txt', true,
 			],
+			// Host resolving to BOTH the firewall itself AND a foreign internal address
+			// (self listed first). Self-hosted requires EVERY address to be self, so the
+			// validator must not short-circuit on the leading self address: both reject
+			// on the foreign-internal address, even at the firewall root.
+			'mixed self + foreign-internal host rejected by both' => [
+				'feed.parity.mixed',
+				[['type' => 'A', 'data' => '192.168.10.5'], ['type' => 'A', 'data' => '10.20.30.40']],
+				['192.168.10.5'], '', '/', false,
+			],
 		];
 	}
 
@@ -163,5 +172,41 @@ final class FeedFilterParityTest extends TestCase
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_filter', 'off');
 		$this->assertTrue($this->validatorVerdict($url), 'validator accepts once the filter is OFF (gate bypassed)');
 		$this->assertFalse($this->guardVerdict('internal.parity'), 'the guard still rejects — only the gate moved');
+	}
+
+	/**
+	 * A host is self-hosted only when EVERY resolved address is the firewall itself.
+	 * The validator must not short-circuit on the FIRST self address and skip the guard:
+	 * a host resolving to [self, foreign-internal] is a parity case the guard rejects
+	 * (it fails closed per-candidate), so the validator must reject it too — even at the
+	 * firewall root, where a PURELY self-hosted host is accepted. Asserting the pure-self
+	 * accept first proves the reject is caused by the added foreign-internal address, not
+	 * a blanket reject of the host.
+	 *
+	 * Scenario: multi-address self-hosted detection stays in parity with the guard.
+	 *   Given the firewall's own address is 192.168.10.5
+	 *   And the feed-host filter is enabled (default)
+	 */
+	public function testMixedSelfAndForeignInternalHostRejectedByBoth(): void
+	{
+		$GLOBALS['pfb_test_configured_ips'] = ['192.168.10.5'];
+		$rootUrl = 'https://mixed.parity/';
+
+		// Given a host that resolves ONLY to the firewall itself: both accept at root.
+		$GLOBALS['pfb_test_resolve_map']['mixed.parity.'] = [['type' => 'A', 'data' => '192.168.10.5']];
+		$this->assertTrue($this->guardVerdict('mixed.parity'), 'guard accepts a purely self-hosted host');
+		$this->assertTrue($this->validatorVerdict($rootUrl), 'validator accepts a purely self-hosted host at root');
+
+		// When the same host ALSO resolves to a foreign internal address (self listed
+		// first, so the old first-match short-circuit would have wrongly accepted it).
+		$GLOBALS['pfb_test_resolve_map']['mixed.parity.'] = [
+			['type' => 'A', 'data' => '192.168.10.5'],   // the firewall itself
+			['type' => 'A', 'data' => '10.20.30.40'],    // a foreign internal address
+		];
+
+		// Then both REJECT — the validator falls through to the guard instead of
+		// short-circuiting on the leading self address, keeping the verdicts in parity.
+		$this->assertFalse($this->guardVerdict('mixed.parity'), 'guard rejects on the foreign-internal address');
+		$this->assertFalse($this->validatorVerdict($rootUrl), 'validator must also reject — no self short-circuit');
 	}
 }

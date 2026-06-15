@@ -362,13 +362,19 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// scheme allow-list (http/https/rsync/ftp), then a self/local branch, then
 			// — for a non-self remote host — the shared feed-host check.
 			//
+			// A host counts as self-hosted only when EVERY resolved address is the
+			// firewall itself (own configured address / loopback). A host that also
+			// resolves to a non-self address is not self-hosted and defers to the
+			// shared host check, so the gate's verdict matches the fetch's.
+			//
 			// The $escape flag selects the context:
 			//   $escape = TRUE  -> pfSense-local / Alerts-tab refresh: a URL is accepted
-			//                      only when its host is the firewall itself (own
-			//                      configured address / loopback) AND the path is the
-			//                      root '/'. Everything else is rejected.
-			//   $escape = FALSE -> feed-remote: the firewall's own host (root path)
-			//                      stays exempt; any other host is routed through
+			//                      only when its host is self-hosted AND it points at the
+			//                      web root — a file directly under '/' (pathinfo() dirname
+			//                      '/'), not a nested path. Everything else is rejected.
+			//   $escape = FALSE -> feed-remote: a self-hosted host stays exempt at the web
+			//                      root; any other host — including one resolving to both
+			//                      self and a non-self address — is routed through
 			//                      pfb_feed_host_allowed() (the shared host check) when
 			//                      the feed-host filter is enabled (pfb_feed_filter_enabled()),
 			//                      so a non-self, non-allowlisted internal address is
@@ -414,7 +420,16 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					$validate_list = resolve_host_addresses("{$data['host']}.");
 				}
 
+				// Classify every resolved address. $pfsense_configured records that
+				// at least one address is the firewall itself; $self_only stays TRUE
+				// only while EVERY resolved address is the firewall itself. A host
+				// that also resolves to a non-self address (foreign-internal or
+				// public) is not a self-hosted URL: it must defer to the shared
+				// pfb_feed_host_allowed() check so the validation-time verdict matches
+				// the fetch-time verdict (parity). Hence no early break — every
+				// candidate is examined.
 				$pfsense_configured = FALSE;
+				$self_only          = TRUE;
 				if (!empty($validate_list) && is_array($validate_list)) {
 					foreach ($validate_list as $validate) {
 						if ($validate['type'] == 'CNAME' && !empty($validate['data'])) {
@@ -427,16 +442,22 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 
 							if (!empty($cname_list) && is_array($cname_list)) {
 								foreach ($cname_list as $cname) {
-									if (!empty($cname['data']) && is_ipaddr_configured($cname['data'])) {
-										$pfsense_configured = TRUE;
-										break 2;
+									if (!empty($cname['data']) && is_ipaddr($cname['data'])) {
+										if (pfb_ip_is_self($cname['data'])) {
+											$pfsense_configured = TRUE;
+										} else {
+											$self_only = FALSE;
+										}
 									}
 								}
 							}
 						}
-						if (!empty($validate['data']) && is_ipaddr_configured($validate['data'])) {
-							$pfsense_configured = TRUE;
-							break;
+						if (!empty($validate['data']) && is_ipaddr($validate['data'])) {
+							if (pfb_ip_is_self($validate['data'])) {
+								$pfsense_configured = TRUE;
+							} else {
+								$self_only = FALSE;
+							}
 						}
 					}
 				}
@@ -450,11 +471,15 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 
 				// Validate only pfSense URLS (localfile check and Alerts Tab refresh)
 				if ($escape) {
-					if ($pfsense_configured ||
+					// Self-hosted only: every resolved address must be the firewall
+					// itself. A host that also resolves to a non-self address is not
+					// accepted on this pfSense-local path.
+					if (($pfsense_configured && $self_only) ||
 					    ($data['host'] == '127.0.0.1') ||
 					    ($data['host'] == '::1')) {
 
-						// Only a root-path URL on the firewall itself is allowed.
+						// Allowed only when the URL points at the web root — a file
+						// directly under '/' (pathinfo() dirname '/'), not a nested path.
 						if ($path == '/') {
 							return TRUE;
 						}
@@ -466,12 +491,15 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					return FALSE;
 				}
 
-				// pfSense URL
-				if (($pfsense_configured) ||
+				// Self-hosted feed URL: every resolved address is the firewall
+				// itself. Allowed only at the web root (pathinfo() dirname '/'). A
+				// host that also resolves to any non-self address is NOT handled
+				// here — it falls through to the shared feed-host check below so the
+				// validation-time and fetch-time verdicts stay in parity.
+				if (($pfsense_configured && $self_only) ||
 				    ($data['host'] == '127.0.0.1') ||
 				    ($data['host'] == '::1')) {
 
-					// Only a root-path URL on the firewall itself is allowed.
 					if ($path == '/') {
 						return TRUE;
 					}
