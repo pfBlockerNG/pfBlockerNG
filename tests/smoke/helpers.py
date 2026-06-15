@@ -2206,6 +2206,144 @@ def resolve_control(vm: SmokeVM, name: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
+# DNSBL Control channel (PFBL-03) — CLI driver + applied-marker observation
+# --------------------------------------------------------------------------- #
+# PFBL-03 moved DNSBL runtime control (disable/enable/addbypass/removebypass) off
+# in-band DNS-TXT queries onto a local privileged command channel + a CLI. The
+# operator CLI is the ``dnsbl-control`` action of the package shell script
+# (``pfblockerng.sh dnsbl-control …``), which forwards to ``pfblockerng.php
+# dnsbl-control …`` — the PHP writer validates the command and atomically publishes
+# a JSON record to the chroot channel ``/var/unbound/pfb_py_control``; the in-module
+# reader thread (``pfb_control_watcher``) applies it and writes the applied sequence
+# to ``/var/unbound/pfb_py_control.applied``. The reader thread starts only when the
+# DNSBL Control toggle (``pfb_control`` -> ini ``python_control``) is on.
+
+PFB_SH = "/usr/local/pkg/pfblockerng/pfblockerng.sh"
+# Host paths of the in-chroot channel + applied-sequence marker (Unbound's CWD is
+# /var/unbound, so the module's relative names live here on the host).
+UNBOUND_CONTROL_FILE = "/var/unbound/pfb_py_control"
+UNBOUND_CONTROL_APPLIED_FILE = "/var/unbound/pfb_py_control.applied"
+
+
+def set_dnsbl_control(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle the DNSBL Control feature (``pfb_control`` -> ini ``python_control``).
+
+    On: the next reload writes ``python_control = on`` to pfb_unbound.ini and the
+    reader thread (``pfb_control_watcher``) starts, so CLI commands take effect.
+    Off: the thread never starts and the channel is ignored.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_control'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: toggle pfb_control');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_control({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def set_dnsbl_control_legacy(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle the deprecated DNS-TXT control sub-path (``pfb_control_legacy`` -> ini
+    ``python_control_legacy``).
+
+    The ini key is written ``on`` only when BOTH ``pfb_control`` and
+    ``pfb_control_legacy`` are on (inc:4744); with it off (default) the in-band
+    ``python_control.*`` DNS-TXT branch in ``operate()`` is inert.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_control_legacy'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: toggle pfb_control_legacy');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_control_legacy({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def assert_control_ini(vm: SmokeVM, *, control: bool, legacy: bool, timeout: float = 30.0) -> None:
+    """Precondition guard: the generated ini matches the expected control flags.
+
+    Confirms ``python_control`` / ``python_control_legacy`` are ``on``/``off`` in
+    ``pfb_unbound.ini`` so a control assertion can be attributed to the feature gate
+    (not a config-write miss). The reader thread keys on ``python_control``; the
+    DNS-TXT branch keys on ``python_control_legacy``.
+    """
+    ini = vm.ssh("cat", UNBOUND_PFB_INI, timeout=timeout)
+    want_control = "on" if control else "off"
+    want_legacy = "on" if legacy else "off"
+    if not re.search(rf"(?im)^\s*python_control\s*=\s*{want_control}\b", ini.stdout):
+        raise AssertionError(f"python_control != {want_control} in {UNBOUND_PFB_INI}:\n{ini.stdout}")
+    if not re.search(rf"(?im)^\s*python_control_legacy\s*=\s*{want_legacy}\b", ini.stdout):
+        raise AssertionError(f"python_control_legacy != {want_legacy} in {UNBOUND_PFB_INI}:\n{ini.stdout}")
+
+
+def dnsbl_control_cli(vm: SmokeVM, *args: str, timeout: float = 30.0) -> int:
+    """Run the operator CLI ``pfblockerng.sh dnsbl-control <args…>`` ON the guest as root.
+
+    This is the REAL operator entry point: the shell action forwards the positional
+    args to ``pfblockerng.php dnsbl-control``, whose writer validates and publishes the
+    command record to the control channel. Returns the published sequence number parsed
+    from the CLI's ``queued (seq N)`` line. Raises on a non-zero exit or unparsable output
+    so an invalid/rejected command is a hard failure, never a silent pass.
+    """
+    result = vm.ssh("/bin/sh", PFB_SH, "dnsbl-control", *args, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"dnsbl-control {args} failed: rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    m = re.search(r"\(seq\s+(\d+)\)", result.stdout)
+    if not m:
+        raise RuntimeError(f"dnsbl-control {args}: no '(seq N)' in CLI output: {result.stdout!r}")
+    return int(m.group(1))
+
+
+def read_control_applied(vm: SmokeVM, *, timeout: float = 30.0) -> int | None:
+    """The applied-sequence marker the reader publishes, or ``None`` if absent/empty."""
+    return read_py_int(vm, UNBOUND_CONTROL_APPLIED_FILE, timeout=timeout)
+
+
+def wait_control_applied(vm: SmokeVM, seq: int, *, timeout: float = 30.0, interval: float = 1.0) -> int:
+    """Poll the applied marker until it has advanced to (at least) ``seq``; raise on timeout.
+
+    The reader applies the command then republishes the consumed sequence — so the
+    marker reaching ``seq`` proves the command was CONSUMED. A bounded poll (no fixed
+    sleep) mirrors the other async-settle primitives; raising on timeout surfaces "the
+    command was never applied" rather than masking it.
+    """
+    deadline = time.monotonic() + timeout
+    last: int | None = None
+    while time.monotonic() < deadline:
+        last = read_control_applied(vm, timeout=timeout)
+        if last is not None and last >= seq:
+            return last
+        time.sleep(interval)
+    raise RuntimeError(
+        f"wait_control_applied: applied marker never reached seq {seq} within {timeout}s "
+        f"(last seen {last}) — the control reader did not consume the command"
+    )
+
+
+def drill_txt(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+    """Issue a TXT query for ``name`` against the on-box resolver (``drill <name> TXT @127.0.0.1``).
+
+    Used to drive the deprecated in-band ``python_control.<cmd>`` DNS-TXT path: the side
+    effect (whether DNSBL blocking changes) is what the test asserts via a follow-up
+    A-record probe, NOT the TXT answer — so this returns the raw process for diagnostics.
+    """
+    return vm.ssh(f"{DRILL_BIN} {shlex.quote(name)} TXT @127.0.0.1", timeout=timeout)
+
+
+# --------------------------------------------------------------------------- #
 # Python-emitted counts (ADR-06/07) — the values the DNSBL UI aliases read.
 # pfb_unbound.py writes these as BARE relative names ("pfb_py_count",
 # "pfb_py_regex_count"), which resolve against Unbound's chroot CWD (/var/unbound),
