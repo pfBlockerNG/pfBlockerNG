@@ -1,9 +1,11 @@
 {
   "name": "pfblockerng-pkg-router",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test": "node --test"
   },
   "devDependencies": {
     "wrangler": "^3"
