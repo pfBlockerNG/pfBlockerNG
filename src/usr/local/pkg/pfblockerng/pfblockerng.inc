@@ -5189,6 +5189,30 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 }
 
 
+// IPv6 sibling of sanitize_ipaddr(): exclude private/reserved/loopback IPv6
+// addresses from loaded block lists when Suppression is enabled. Returns the
+// entry unchanged when kept; returns nothing (drops it) when excluded.
+function sanitize_ipaddr_v6($ipaddr, $custom) {
+	global $pfb;
+
+	// Exclude private/reserved IPs (bypass exclusion for custom lists)
+	if ($pfb['supp'] == 'on' && !$custom) {
+
+		// Extract the address part (before '/' for a CIDR like 'fc00::/7')
+		$s_ip = explode('/', $ipaddr)[0];
+
+		// Drop ULA (fc00::/7), link-local (fe80::/10), loopback (::1),
+		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
+		if (!filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) ||
+		    !filter_var($s_ip, FILTER_CALLBACK, array('options' => 'FILTER_FLAG_NO_LOOPBACK_RANGE'))) {
+			return;
+		}
+	}
+
+	return $ipaddr;
+}
+
+
 // Validate IPv4 IP addresses
 function validate_ipv4($ipaddr) {
 	if (strpos($ipaddr, '/') !== FALSE) {
@@ -11721,7 +11745,10 @@ function sync_package_pfblockerng($cron='') {
 												}
 
 												if (validate_ipv6($line)) {
-													$ip_data .= $line . "\n";
+													$parsed = sanitize_ipaddr_v6($line, $custom);
+													if (!empty($parsed)) {
+														$ip_data .= $parsed . "\n";
+													}
 													continue;
 												}
 											}
@@ -11736,7 +11763,10 @@ function sync_package_pfblockerng($cron='') {
 													foreach ($a_cidr as $cidr) {
 														if (!empty($cidr)) {
 															if (validate_ipv6($cidr)) {
-																$ip_data .= $cidr . "\n";
+																$parsed = sanitize_ipaddr_v6($cidr, $custom);
+																if (!empty($parsed)) {
+																	$ip_data .= $parsed . "\n";
+																}
 															}
 															else {
 																$parse_error = TRUE;
@@ -11766,7 +11796,10 @@ function sync_package_pfblockerng($cron='') {
 												// Workaround to skip cloudflare error pages
 												if (strpos($oline, 'cf-footer-item') === FALSE) {
 													if (validate_ipv6($match)) {
-														$ip_data .= $match . "\n";
+														$parsed = sanitize_ipaddr_v6($match, $custom);
+														if (!empty($parsed)) {
+															$ip_data .= $parsed . "\n";
+														}
 													}
 												}
 											}
