@@ -467,3 +467,102 @@ def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _
             f"@@||{allow_name}^ must RESOLVE via the stub (its @@ allow beats the same-feed plain block): {ans_allow}"
         )
         assert not h.is_vip(ans_allow), f"{allow_name} wrongly VIP-blocked despite its @@ allow: {ans_allow}"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-21 hardening — two review fixes, each pinned by a DISTINGUISHING live
+# transition (the pre-fix behaviour would flip the asserted result, so neither is
+# mere execution): (1) the whole-feed ABP header sniff peels a leading UTF-8 BOM;
+# (2) per-line ABP capture is VERBATIM (a path anchor is skipped, never truncated
+# into a domain-wide over-block).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-21: a UTF-8 BOM before ``[Adblock Plus 2.0]`` must not mask ABP detection.
+
+    Scenario: a feed whose first bytes are a UTF-8 BOM (``EF BB BF``) followed by the
+    ``[Adblock Plus 2.0]`` header and a single feed regex ``/badword/``. Whole-feed ABP
+    detection is the ONLY path that compiles a feed ``/regex/``: it is not a
+    ``||``/``@@||`` line, so ADR-21 per-line routing does not catch it, and the plain
+    pipeline drops it as an invalid domain. So a VIP block on a ``badword``-bearing name
+    proves the BOM was peeled and the header recognised.
+
+    Given (before the feed loads) the regex-target name RESOLVES via the controlled stub
+      upstream (``STUB_DNS_A``) — the observable before-state.
+    When the BOM-led ABP feed loads (Force Update),
+    Then the ``badword``-bearing name returns the VIP block shape and no longer resolves.
+      A regression (BOM masks the header -> feed stays ``plain`` -> the regex line is
+      dropped) would leave it resolving, failing this assertion.
+    """
+    uid = h.unique_domain("adr21bom").split(".", 1)[0]  # the unique label only
+    blocked = f"xbadwordx-{uid}.com"
+    body = h.abp_feed_bom("/badword/")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_bom.txt", body)
+    spec = h.DnsblCase(aliasname="smokeadr21bom", feed_url=feed_url, header="smokeadr21bom", mode=h.DnsblMode.VIP)
+
+    # BEFORE: the name is on no feed yet -> it resolves via the stub sentinel.
+    before = h.dns_probe(deployed_vm, blocked, "A")
+    assert h.resolves_to(before, STUB_DNS_A), f"{blocked} should resolve via stub BEFORE listing, got {before}"
+    assert not h.is_vip(before), f"{blocked} unexpectedly VIP-blocked before any feed: {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        # The block returns the VIP locally; egress stays OPEN so the before/after stub
+        # contrast is real (a would-be resolve still reaches the stub, no false-green).
+        h.unblock_egress()
+        h.flush_unbound_name(deployed_vm, blocked)
+        ans = h.dns_probe_until(deployed_vm, blocked, h.is_vip)
+        assert not h.resolves_to(ans, STUB_DNS_A), (
+            f"{blocked} still resolving after a BOM-led ABP feed regex block "
+            f"(a BOM-masked header would leave the feed 'plain' and drop the regex): {ans}"
+        )
+
+
+@pytest.mark.timeout(300)
+def test_abp_perline_path_anchor_not_overblocked(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-21: a path-anchored ``||domain/path^`` in a plain feed must NOT block the domain.
+
+    Per-line ABP capture writes the anchor VERBATIM ahead of the plain pipeline's
+    URL/path stripping. ``parse_abp`` then SKIPS a path anchor (``/`` in the host ->
+    returns None), so the domain is not blocked. The pre-fix code stripped ``/path^``
+    FIRST, truncating the line to ``||domain`` -> ``parse_abp`` would block ``domain`` (a
+    spurious wildcard over-block). A sibling clean ``||<blk>^`` proves the feed actually
+    loaded and per-line routing is live (else the path-resolves assertion is vacuous).
+
+    Given (before the feed loads) BOTH names RESOLVE via the controlled stub upstream.
+    When the header-less feed (``||<blk>^`` + ``||<path>/ads^``) loads (Force Update),
+    Then ``<blk>`` is VIP-blocked (per-line ``||`` reached parse_abp), while ``<path>``
+      STILL RESOLVES via the stub (its path anchor was skipped, not truncated into a
+      block). The pre-fix truncation would VIP-block ``<path>`` too, failing this.
+    """
+    blk = h.unique_domain("adr21pblk")  # clean ||blk^ -> must BLOCK (feed-loaded proof)
+    path_dom = h.unique_domain("adr21ppath")  # ||path/ads^ -> path anchor -> must RESOLVE
+    body = "\n".join([f"||{blk}^", f"||{path_dom}/ads^"]) + "\n"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_path.txt", body)
+    spec = h.DnsblCase(aliasname="smokeadr21pth", feed_url=feed_url, header="smokeadr21pth", mode=h.DnsblMode.VIP)
+
+    # BEFORE: neither name is on any feed yet -> each resolves via the stub sentinel.
+    for name in (blk, path_dom):
+        before = h.dns_probe(deployed_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        # The clean || block returns the VIP locally; egress stays OPEN so the path
+        # anchor's continued resolution reaches the stub (a real non-block, no false-green).
+        h.unblock_egress()
+        for name in (blk, path_dom):
+            h.flush_unbound_name(deployed_vm, name)
+
+        ans_blk = h.dns_probe_until(deployed_vm, blk, h.is_vip)
+        assert not h.resolves_to(ans_blk, STUB_DNS_A), f"{blk} still resolving after ||{blk}^: {ans_blk}"
+
+        ans_path = h.dns_probe(deployed_vm, path_dom, "A")
+        assert h.resolves_to(ans_path, STUB_DNS_A), (
+            f"||{path_dom}/ads^ is a PATH anchor -> parse_abp must skip it, so {path_dom} must RESOLVE "
+            f"(pre-fix truncation to ||{path_dom} would over-block it): {ans_path}"
+        )
+        assert not h.is_vip(ans_path), (
+            f"{path_dom} wrongly VIP-blocked (path anchor truncated into a block): {ans_path}"
+        )

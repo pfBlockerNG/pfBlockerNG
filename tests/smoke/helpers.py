@@ -146,6 +146,19 @@ def abp_feed(*lines: str) -> str:
     return ABP_HEADER + "\n" + "\n".join(lines) + "\n"
 
 
+# UTF-8 BOM (EF BB BF). Real-world feeds occasionally emit it before the first line;
+# the header sniff (pfb_dnsbl_is_abp_header) must look THROUGH it (ADR-21 hardening).
+ABP_BOM = "\ufeff"
+
+
+def abp_feed_bom(*lines: str) -> str:
+    """:func:`abp_feed` with a leading UTF-8 BOM before the ``[Adblock Plus 2.0]``
+    header. A BOM that masked the header would leave the feed tagged ``plain``, so a
+    non-anchor ABP rule (e.g. a feed ``/regex/``) would be DROPPED instead of compiled
+    — the live distinguisher for the header sniff's BOM tolerance."""
+    return ABP_BOM + abp_feed(*lines)
+
+
 # --------------------------------------------------------------------------- #
 # Case specification (declarative input the matrix fills in)
 # --------------------------------------------------------------------------- #
