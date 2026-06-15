@@ -39,6 +39,13 @@ export function parseArch(abiSegment) {
   return m ? m[1] : null;
 }
 
+// Normalize the parsed routing.json to a routes array, or null when the manifest
+// has an unexpected shape — so a malformed manifest fails closed (502) instead of
+// throwing past the explicit error handling on routes.find().
+export function normalizeRoutes(data) {
+  return Array.isArray(data?.routes) ? data.routes : null;
+}
+
 // Resolve the Pages target URL for a request path + matched route.
 // Returns the absolute Pages URL, or null when the path has no valid ABI segment.
 export function resolveTarget(pathname, route) {
@@ -101,5 +108,5 @@ async function getRoutes(ctx) {
     resp = ttlResp;
   }
   const data = await resp.clone().json();
-  return data.routes ?? null;
+  return normalizeRoutes(data);
 }

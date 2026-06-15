@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseArch, resolveTarget } from "../src/index.js";
+import { normalizeRoutes, parseArch, resolveTarget } from "../src/index.js";
 
 const PAGES = "https://pfblockerng.github.io/pkg";
 const CE = { pattern: "pfSense/2.8", catalog: "ce-2.8", status: "active" };
@@ -48,6 +48,19 @@ test("Plus aarch64 request maps to its own arch leaf", () => {
 test("a package download path (after the ABI segment) is preserved verbatim", () => {
   const target = resolveTarget("/FreeBSD:15:amd64/pfBlockerNG-devel-3.2.16.pkg", CE);
   assert.equal(target, `${PAGES}/release/ce-2.8/amd64/pfBlockerNG-devel-3.2.16.pkg`);
+});
+
+test("normalizeRoutes returns the array for a well-formed manifest", () => {
+  assert.deepEqual(normalizeRoutes({ routes: [CE] }), [CE]);
+});
+
+test("normalizeRoutes returns null for a malformed manifest (fail-closed 502 branch)", () => {
+  // A non-array routes (or missing / non-object data) must NOT reach routes.find()
+  // — returning null makes the Worker answer 502, never throw an unhandled 500.
+  assert.equal(normalizeRoutes({ routes: { pattern: "x" } }), null);
+  assert.equal(normalizeRoutes({}), null);
+  assert.equal(normalizeRoutes(null), null);
+  assert.equal(normalizeRoutes("nope"), null);
 });
 
 test("a request with no ABI segment resolves to null (the 404 branch)", () => {
