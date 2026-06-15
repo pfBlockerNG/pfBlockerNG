@@ -7,6 +7,27 @@
 > (`pfblockerng-nightly`). When this ADR is implemented, `pfb_pkg_repo_name_for_channel()`
 > must map **both** stable and devel to `pfblockerng` (the channel selects the *package* —
 > `pfSense-pkg-pfBlockerNG` vs `-devel` — not a per-channel repo name).
+>
+> **Amendment (2026-06-15, maintainer directive) — two hard constraints:**
+>
+> 1. **Provenance gate: the Software tab, the `pfblockerng_software.php` page, AND the cron
+>    update `file_notice` are present ONLY on a build installed from one of OUR repos.**
+>    When pfBlockerNG was installed from the **Netgate ports channel** (the stock `pfSense`
+>    repo), the tab, the page, and the notice are **ENTIRELY ABSENT** — a Netgate-installed
+>    add-on shows no update page and raises no update notification (Netgate's own
+>    repo-bound badge already serves those users; ours would be redundant and is unwanted
+>    there). Provenance is read from **`pkg query '%R' <pkgname>`** (the repo a package was
+>    installed FROM); a **pure** `pfb_software_is_our_build($installed_repo)` returns true
+>    only for `pfblockerng` / `pfblockerng-nightly`. The tab append, the page's top-of-file
+>    guard, the `match[]` priv line, AND the cron notice all gate on it. Pinned both ways in
+>    PHPUnit (ours → present; `pfSense` / empty / unknown → absent) and by a `repo`-smoke
+>    case: a Netgate-decoy-installed box shows **no** Software tab and raises **no** notice;
+>    an our-repo-installed box shows both.
+> 2. **Nightly is the only separate channel.** stable + devel share ONE repo (`pfblockerng`)
+>    and differ only by package name (`pfSense-pkg-pfBlockerNG` vs `-devel`); **nightly**
+>    (`pfSense-pkg-pfBlockerNG-NIGHTLY`, repo `pfblockerng-nightly`) is the sole separately-
+>    channelled build. "Read latest" maps channel -> repo: stable/devel -> `-r pfblockerng`,
+>    nightly -> `-r pfblockerng-nightly`.
 
 - **Status:** **Proposed** (2026-06-06)
 - **Date:** 2026-06-06
@@ -157,6 +178,7 @@ Netgate-bound by design (the ceiling, §1.3).
 | --- | --- |
 | **Read latest (our repo)** | `pkg update -r <ourrepo>` + `pkg rquery -r <ourrepo> '%v' <pkgname>`; installed = `pkg query '%v' <pkgname>`. **Never** `get_pkg_info`/`-r pfSense`. Respect `is_subsystem_dirty('pkg')` (skip + reuse cache when pkg is locked). |
 | **Channel detection** | From the **installed package name**: `pfSense-pkg-pfBlockerNG` → stable, `…-devel` → devel, `…-NIGHTLY` → nightly (ADR-18). The installed name is authoritative for "what channel am I on". |
+| **Provenance gate (2026-06-15)** | The whole feature is present ONLY when `pkg query '%R' <pkgname>` is one of OUR repos (`pfblockerng`/`pfblockerng-nightly`) — pure `pfb_software_is_our_build()`. A Netgate-installed add-on (repo `pfSense`/unknown) shows **no** Software tab, **no** page (top-of-file guard `header(Location: /index.php)` + 403 via the absent `match[]`), and raises **no** cron notice. |
 | **Version compare** | pfSense `pkg_version_compare()` (or `pkg version -t`) — never string compare; nightly's dated versions are only ever compared nightly-to-nightly (ADR-18 §1.5). |
 | **Notice** | `file_notice('pfBlockerNG', "pfBlockerNG <ver> available (<channel>)", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1)` when `latest > installed`. **De-duped** by persisting the last-notified version (notice fires once per new version, not per cron tick). Local bell + the admin's configured remote channels. |
 | **Notify default** | One knob `pfb_software_notify` ∈ {`default`,`on`,`off`}. Unset/`default` resolves **per channel**: **nightly → ON, stable/devel → OFF**. Explicit `on`/`off` overrides. Quiet for release users; opt-out for nightly trackers (they opted into the tip). |
@@ -256,6 +278,8 @@ Netgate-bound by design (the ceiling, §1.3).
 - The page passes the ADR-14 `ui_render` gate; a `repo`-marked live-VM journey proves
   "publish newer build → notice raised + cache updated → Update now pulls it".
 - No base-system file changed; `python -m pytest` unchanged.
+- **Provenance-gated:** on a Netgate-installed build the Software tab/page are absent and the
+  cron raises no notice; only an our-repo build (`pfblockerng`/`pfblockerng-nightly`) shows them.
 
 ## 5. Constraints (from CLAUDE.md)
 
