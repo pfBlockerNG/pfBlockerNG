@@ -1417,6 +1417,7 @@ def main(argv: list[str]) -> int:
     g_target.add_argument(
         "--variant",
         default="",
+        choices=("CE", "Plus", ""),
         metavar="CE|Plus",
         help=(
             "pfSense variant (CE or Plus). When set, injects variant-specific RUN_DEPENDS "
@@ -1481,6 +1482,11 @@ def main(argv: list[str]) -> int:
     g_out.add_argument("--dry-run", action="store_true", help="print the build plan; do not write a .pkg")
 
     args = ap.parse_args(argv)
+    # Guard the manifest stamp contract: a malformed version would stamp a non-canonical
+    # pfb_pfsense_version and drift catalog bucketing downstream (ADR-20). --variant is
+    # already restricted to CE|Plus by `choices`.
+    if args.pfsense_version and not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", args.pfsense_version):
+        ap.error("--pfsense-version must be a dotted numeric version like 2.8 or 26.03")
 
     try:
         b = run_build(args)

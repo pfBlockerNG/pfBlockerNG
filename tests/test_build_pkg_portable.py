@@ -762,6 +762,12 @@ def test_variant_stamp_in_manifest_annotations(tmp_path: Path) -> None:
     assert ce["pfb_variant"] == "CE"
     assert ce["pfb_pfsense_version"] == "2.8"
 
+    # After variant-only (no --pfsense-version): variant is stamped, version is NOT
+    # (the `if args.pfsense_version` branch inside the stamp).
+    variant_only = _annotations(["--variant", "CE", "--php", "8.3"], "variant_only")
+    assert variant_only["pfb_variant"] == "CE"
+    assert "pfb_pfsense_version" not in variant_only
+
     # After Plus (the opposite branch).
     plus = _annotations(["--variant", "Plus", "--pfsense-version", "26.03", "--php", "8.5"], "plus")
     assert plus["pfb_variant"] == "Plus"
@@ -785,9 +791,37 @@ def test_variant_stamp_requires_variant_flag(tmp_path: Path) -> None:
         ]
     )  # fmt: skip
     assert rc == 0
-    full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
-    assert "pfb_variant" not in full.get("annotations", {})
-    assert "pfb_pfsense_version" not in full.get("annotations", {})
+    full, compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    # Neither manifest carries the stamp (the catalog reads compact, install reads full).
+    for manifest in (full, compact):
+        assert "pfb_variant" not in manifest.get("annotations", {})
+        assert "pfb_pfsense_version" not in manifest.get("annotations", {})
+
+
+@pytest.mark.parametrize(
+    "bad_args",
+    [
+        ["--variant", "CE", "--pfsense-version", "bad"],  # non-numeric version
+        ["--variant", "CE", "--pfsense-version", "2"],  # no dotted component
+        ["--variant", "ce"],  # off-canon variant casing — rejected by choices
+    ],
+)
+def test_variant_inputs_rejected_at_parse(tmp_path: Path, bad_args: list[str]) -> None:
+    """Malformed --variant / --pfsense-version are rejected at parse time, so a typo can't
+    stamp a non-canonical annotation and drift catalog bucketing (ADR-20)."""
+    ports, portdir = _make_classic_port(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        bpp.main(
+            [
+                "--ports", str(ports),
+                "--port-dir", str(portdir),
+                "--abi", "FreeBSD:15:amd64",
+                "--py-flavor", "py311",
+                "--out", str(tmp_path / "o"),
+                *bad_args,
+            ]
+        )  # fmt: skip
+    assert exc.value.code == 2
 
 
 def test_two_simultaneous_ce_entries() -> None:
