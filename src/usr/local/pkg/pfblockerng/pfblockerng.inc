@@ -2130,11 +2130,14 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	}
 	$bin = escapeshellarg(PFB_PKG_BIN);
 	$repo = escapeshellarg($reponame);
+	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
+	// hung mirror can never stall the cron pass or the page's forced "Check now".
+	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
 	// Best-effort catalog refresh of our repo only; ignore failures (stale DB still reads).
-	exec("{$bin} update -r {$repo} 2>/dev/null");
+	exec("{$tmo}{$bin} update -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;
-	exec("{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
 }
 
@@ -2170,8 +2173,19 @@ function pfb_software_read_cache(): array {
  */
 function pfb_software_write_cache(array $cache): void {
 	$json = json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-	if ($json !== FALSE) {
-		@file_put_contents(pfb_software_cache_file(), $json . "\n", LOCK_EX);
+	if ($json === FALSE) {
+		return;
+	}
+	// Stage to a temp file then rename() into place: a concurrent reader (which takes no
+	// shared lock) then sees either the old or the new complete file, never a truncated one
+	// that would decode to [] and drop last_notified (re-emitting a notice).
+	$file = pfb_software_cache_file();
+	$tmp = @tempnam(dirname($file), '.pfbsw_');
+	if ($tmp === FALSE) {
+		return;
+	}
+	if (@file_put_contents($tmp, $json . "\n", LOCK_EX) === FALSE || !@rename($tmp, $file)) {
+		@unlink($tmp);
 	}
 }
 
@@ -2226,18 +2240,25 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
 	} else {
 		$latest = pfb_pkg_latest($pkgname, (string) $repo);
 	}
-	if ($latest === '') {
+	// Only reuse cached latest/last_notified when the cache belongs to the SAME installed
+	// package — after a channel switch (stable<->devel<->nightly) a stale value must not
+	// drive a wrong notice or suppress the first valid one for the new package.
+	$cache_matches_pkg = (($cache['pkgname'] ?? '') === $pkgname);
+	if ($latest === '' && $cache_matches_pkg) {
 		$latest = (string) ($cache['latest'] ?? '');
 	}
 
-	$last_notified = (string) ($cache['last_notified'] ?? '');
+	$last_notified = $cache_matches_pkg ? (string) ($cache['last_notified'] ?? '') : '';
 	$knob = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_software_notify', 'default');
 
-	// 4. Refresh the cache.
-	$cache['channel']      = $channel;
-	$cache['installed']    = $installed;
-	$cache['latest']       = $latest;
-	$cache['last_checked'] = time();
+	// 4. Refresh the cache. last_notified is written from the scoped value so a cache left
+	// by a different package (channel switch) is reset rather than carried forward.
+	$cache['pkgname']       = $pkgname;
+	$cache['channel']       = $channel;
+	$cache['installed']     = $installed;
+	$cache['latest']        = $latest;
+	$cache['last_notified'] = $last_notified;
+	$cache['last_checked']  = time();
 
 	if (pfb_should_notify($installed, $latest, $last_notified, $knob, $channel)) {
 		file_notice('pfBlockerNG', "pfBlockerNG {$latest} available ({$channel})", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);

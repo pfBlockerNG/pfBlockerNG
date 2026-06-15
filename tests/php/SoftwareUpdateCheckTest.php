@@ -188,9 +188,11 @@ final class SoftwareUpdateCheckTest extends TestCase
 	 */
 	public function testPkgLockedServesCacheNoNetworkNoNotice(): void
 	{
-		// Given: seed a cache as if a prior tick already notified for 3.2.0_9.
+		// Given: seed a cache as if a prior tick already notified for 3.2.0_9 (a real prior
+		// tick records the pkgname it was for, so the same-package reuse path is taken).
 		$this->setKnob('on');
 		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
 			'channel'       => 'devel',
 			'installed'     => '3.2.0_1',
 			'latest'        => '3.2.0_9',
@@ -226,6 +228,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	{
 		$this->setKnob('on');
 		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
 			'channel'       => 'devel',
 			'installed'     => '3.2.0_1',
 			'latest'        => '3.2.0_9',
@@ -243,6 +246,45 @@ final class SoftwareUpdateCheckTest extends TestCase
 
 		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when no DNS');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice without DNS');
+	}
+
+	/**
+	 * Given a cache left by a DIFFERENT installed package (a prior nightly build) and a
+	 * live read that comes back empty (pkg locked) for the now-installed devel build,
+	 * When the check runs,
+	 * Then the stale nightly latest/last_notified are NOT reused — latest regresses to ''
+	 * and last_notified resets — so a channel switch can neither show a wrong version nor
+	 * suppress the first valid notice for the new package. Paired with the pkg-locked test
+	 * above (same-package reuse) so the pkgname-match branch is proven both ways.
+	 */
+	public function testChannelSwitchDoesNotReuseStaleCache(): void
+	{
+		// Given: a cache from a nightly build that had announced a nightly version.
+		$this->setKnob('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-nightly',
+			'channel'       => 'nightly',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_99',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_99',
+		]);
+		$this->assertSame('3.2.0_99', $this->readCache()['latest'], 'before: stale nightly latest present');
+
+		// When: now a DEVEL build is installed and the live read is unavailable (pkg locked).
+		$GLOBALS['pfb_test_pkg_locked'] = true;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng',
+			// no 'latest' -> guarded live read returns '' (pkg locked).
+		]);
+
+		// Then: the stale nightly values are discarded, not carried into the devel cache.
+		$this->assertSame('devel', $cache['channel'], 'after: cache rekeyed to the devel build');
+		$this->assertSame('', (string) ($cache['latest'] ?? ''), 'after: stale nightly latest NOT reused');
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: stale last_notified reset');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice (no known latest yet)');
 	}
 
 	/*
