@@ -42,10 +42,6 @@ on:
         description: "PHP version for dep names (CE 2.8 = 8.3)"
         required: false
         default: "8.3"
-      variant:
-        description: "pfSense variant (CE or Plus). Injects variant-specific RUN_DEPENDS. Omit for legacy behaviour."
-        required: false
-        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework"
         required: false
@@ -76,10 +72,6 @@ on:
         required: false
         type: string
         default: "8.3"
-      variant:
-        required: false
-        type: string
-        default: ""
       ports_repo:
         required: false
         type: string
@@ -129,16 +121,11 @@ jobs:
             "https://github.com/${{ inputs.ports_repo }}" "${{ runner.temp }}/ports"
 
       - name: Build the .pkg (portable, from the local tree)
-        env:
-          BUILD_VARIANT: ${{ inputs.variant }}
         run: |
           set -eu
           mkdir -p out
-          VARIANT_ARG=""
-          if [ -n "$BUILD_VARIANT" ]; then
-            VARIANT_ARG="--variant $BUILD_VARIANT"
-          fi
-          # shellcheck disable=SC2086
+          # The variant guard deps (versioned php*/py*) are injected automatically
+          # from --php / --py-flavor (ADR-20); the builder stamps no variant itself.
           python3 scripts/build-pkg-portable.py \
             --ports "${{ runner.temp }}/ports" \
             --channel '${{ inputs.channel }}' \
@@ -146,7 +133,6 @@ jobs:
             --abi '${{ inputs.abi }}' \
             --py-flavor '${{ inputs.py_flavor }}' \
             --php '${{ inputs.php_version }}' \
-            $VARIANT_ARG \
             --out out
           ls -l out
 

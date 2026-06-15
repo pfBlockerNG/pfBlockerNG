@@ -844,3 +844,285 @@ def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
     plus_names = {json.loads(ln)["name"] for ln in plus_raw.splitlines() if ln}
     assert "pfBlockerNG-nightly-plus" in plus_names
     assert "pfBlockerNG-nightly-ce" not in plus_names
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 routing rework: the matrix-driven brain (build_repo_matrix + helpers)
+#
+# These pin the LITERAL 1:1 projection of the version matrix onto the tree
+# (release/<varver>/<arch>/ + nightly/<varver>/<arch>/, arch leaf — NOT full ABI),
+# the routing.json contents, the release channel-group (devel + stable in one
+# catalog), full-matrix/no-dedup placement, and nightly retention. The DUMB pkg
+# builder is stubbed so the tests exercise the BRAIN (arrangement) without a ports
+# tree — build-pkg-portable.py's own behaviour is covered by its own suite.
+# --------------------------------------------------------------------------- #
+
+# The live matrix shape (subset of fields build_repo_matrix consumes).
+_CE = {
+    "pfsense_version": "2.8",
+    "variant": "CE",
+    "freebsd_major": "15",
+    "php_version": "8.3",
+    "py_flavor": "py311",
+    "status": "active",
+    "arch": "amd64",
+}
+_PLUS = {
+    "pfsense_version": "26.03",
+    "variant": "Plus",
+    "freebsd_major": "16",
+    "php_version": "8.5",
+    "py_flavor": "py311",
+    "status": "active",
+    "arch": "amd64",
+}
+_PLUS_ARM = {**_PLUS, "arch": "aarch64", "status": "active"}
+
+_CHANNEL_NAME = {"devel": "pfBlockerNG-devel", "stable": "pfBlockerNG", "nightly": "pfBlockerNG-nightly"}
+
+
+def _stub_builder(
+    channel: str,
+    *,
+    abi: str,
+    php: str,
+    py_flavor: str,
+    out_dir: Path,
+    varver: str,
+    arch: str,
+    pkgversion: str | None = None,
+    **_kw: Any,
+) -> Path:
+    """Stand-in for build-pkg-portable.py: drop a libpkg-shaped .pkg, return its path.
+
+    The package NAME encodes the channel (so a subtree's catalog reveals which channels
+    landed there); the manifest carries the requested ABI + a versioned php guard dep
+    (so a wrong-flavor mix would trip the collision guard, as in a real build).
+    """
+    name = _CHANNEL_NAME[channel]
+    version = pkgversion or "1.0_1"
+    php_dep = "php" + php.replace(".", "")
+    deps = {
+        php_dep: {"origin": f"lang/{php_dep}", "version": "0"},
+        py_flavor: {"origin": f"lang/{py_flavor}", "version": "0"},
+    }
+    # Distinct on-disk filename per (channel, varver, arch) so concurrent staging never clashes;
+    # the catalog copies it CANONICALLY as <name>-<version>.pkg regardless.
+    out = out_dir / f"{name}-{version}-{varver}-{arch}-{channel}.pkg"
+    make_pkg(out, name=name, version=version, abi=abi, deps=deps)
+    return out
+
+
+def _names_in(catalog_pkg: Path) -> set[str]:
+    raw = _read_member(catalog_pkg, "packagesite.yaml").decode()
+    return {json.loads(ln)["name"] for ln in raw.splitlines() if ln}
+
+
+def test_ua_pattern_ce_vs_plus() -> None:
+    """_ua_pattern: CE -> 'pfSense/<mm>'; Plus -> 'Netgate pfSense Plus/<mm>'."""
+    assert brp._ua_pattern("CE", "2.8") == "pfSense/2.8"
+    assert brp._ua_pattern("CE", "2.8.1") == "pfSense/2.8"
+    assert brp._ua_pattern("Plus", "26.03") == "Netgate pfSense Plus/26.03"
+    assert brp._ua_pattern("Plus", "26.03.1") == "Netgate pfSense Plus/26.03"
+
+
+def test_pkg_version_key_orders_nightlies_chronologically() -> None:
+    """_pkg_version_key sorts nightly <target>.YYYYMMDD.N so a later build ranks higher."""
+    older = brp._pkg_version_key("3.2.16.20260606.2")
+    newer_day = brp._pkg_version_key("3.2.16.20260607.1")
+    newer_counter = brp._pkg_version_key("3.2.16.20260606.3")
+    # A later date outranks an earlier date even with a lower counter.
+    assert newer_day > older
+    # Same date, higher counter outranks (the bug a naive lexicographic compare hits at .10 vs .2).
+    assert newer_counter > older
+    assert brp._pkg_version_key("3.2.16.20260606.10") > brp._pkg_version_key("3.2.16.20260606.2")
+
+
+def test_dedup_routes_collapses_and_orders_most_specific_first() -> None:
+    """_dedup_routes collapses identical (pattern,catalog,status) and longest-pattern-first.
+
+    Two Plus entries (amd64 + aarch64) share the same UA pattern/catalog/status -> ONE route.
+    The longer Plus pattern precedes the shorter CE pattern (Worker first-match-wins).
+    """
+    routes = [
+        {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"},
+        {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"},
+        {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"},
+    ]
+    out = brp._dedup_routes(routes)
+    assert len(out) == 2  # the duplicate Plus route collapsed
+    assert out[0]["pattern"] == "Netgate pfSense Plus/26.03"  # most specific first
+    assert out[1]["pattern"] == "pfSense/2.8"
+
+
+def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
+    """build_repo_matrix projects the matrix 1:1 with the bare ARCH as the leaf.
+
+    Scenario: a CE + a Plus entry
+      Given an empty output root
+      When build_repo_matrix runs over [CE, Plus]
+      Then release/ce-2.8/amd64/ and release/plus-26.03/amd64/ catalogs exist
+       And the leaf is the bare arch — NOT the full ABI (no FreeBSD:NN:amd64 dir)
+       And the matching nightly subtrees exist
+    """
+    out = tmp_path / "site"
+    # Before-state: nothing built.
+    assert not out.exists()
+
+    brp.build_repo_matrix([_CE, _PLUS], out, builder=_stub_builder)
+
+    # Arch leaf, version segment implies the FreeBSD major.
+    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "release" / "plus-26.03" / "amd64" / "meta.conf").is_file()
+    assert (out / "nightly" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "nightly" / "plus-26.03" / "amd64" / "meta.conf").is_file()
+    # The full ABI must NOT appear as a path segment (this is the arch-leaf reconciliation).
+    assert not (out / "release" / "ce-2.8" / "FreeBSD:15:amd64").exists()
+    assert not (out / "release" / "plus-26.03" / "FreeBSD:16:amd64").exists()
+
+
+def test_build_matrix_routing_json(tmp_path: Path) -> None:
+    """routing.json carries one deduped route per variant, catalog=varver, with status.
+
+    Scenario: CE + Plus(amd64) + Plus(aarch64)
+      When build_repo_matrix runs
+      Then routing.json has TWO routes (the two Plus arches collapse to one),
+           each {pattern: UA, catalog: varver, status}, most specific first.
+    """
+    out = tmp_path / "site"
+    brp.build_repo_matrix([_CE, _PLUS, _PLUS_ARM], out, builder=_stub_builder)
+
+    routing = json.loads((out / "routing.json").read_text())
+    routes = routing["routes"]
+    assert len(routes) == 2  # Plus amd64 + aarch64 collapsed to one route
+    # Most-specific (Plus) first.
+    assert routes[0] == {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"}
+    assert routes[1] == {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"}
+
+
+def test_build_matrix_routing_status_passthrough(tmp_path: Path) -> None:
+    """A legacy entry's status flows into its route verbatim (not dropped, not rewritten)."""
+    legacy_ce = {**_CE, "status": "legacy"}
+    out = tmp_path / "site"
+    brp.build_repo_matrix([legacy_ce], out, builder=_stub_builder)
+    routes = json.loads((out / "routing.json").read_text())["routes"]
+    assert routes == [{"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "legacy"}]
+
+
+def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
+    """The release channel-group is devel-only without a stable tag, devel+stable with one.
+
+    Scenario: stable tag absent -> present (the branch + the before/after)
+      Given build_repo_matrix([CE]) with NO stable_tag
+      Then release/ce-2.8/amd64 holds ONLY the devel package
+      When re-run WITH stable_tag set
+      Then the release catalog holds BOTH the devel and the stable package
+    """
+    out = tmp_path / "site"
+
+    # Off branch: no stable tag -> devel only.
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder)
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert _names_in(rel) == {"pfBlockerNG-devel"}
+
+    # On branch: a stable tag -> devel + stable coexist in ONE catalog.
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder, stable_tag="v3.2.15")
+    assert _names_in(rel) == {"pfBlockerNG-devel", "pfBlockerNG"}
+
+
+def test_build_matrix_full_matrix_no_dedup(tmp_path: Path) -> None:
+    """Two versions sharing ABI+php+py still get their OWN subtree (full matrix, no dedup)."""
+    ce_28 = _CE
+    ce_29 = {**_CE, "pfsense_version": "2.9"}  # same FreeBSD major/php/py as 2.8
+    out = tmp_path / "site"
+    brp.build_repo_matrix([ce_28, ce_29], out, builder=_stub_builder)
+    # Distinct version segments, each populated independently.
+    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "release" / "ce-2.9" / "amd64" / "meta.conf").is_file()
+
+
+def test_build_matrix_aarch64_distinct_leaf(tmp_path: Path) -> None:
+    """An aarch64 Plus entry lands under its own arch leaf, separate from amd64."""
+    out = tmp_path / "site"
+    brp.build_repo_matrix([_PLUS, _PLUS_ARM], out, builder=_stub_builder)
+    assert (out / "release" / "plus-26.03" / "amd64" / "meta.conf").is_file()
+    assert (out / "release" / "plus-26.03" / "aarch64" / "meta.conf").is_file()
+
+
+def test_build_matrix_no_nightly(tmp_path: Path) -> None:
+    """build_nightly=False builds the release subtree + routing but NO nightly/ tree."""
+    out = tmp_path / "site"
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder, build_nightly=False)
+    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "routing.json").is_file()
+    assert not (out / "nightly").exists()
+
+
+def test_build_matrix_nightly_retention(tmp_path: Path) -> None:
+    """Nightly subtree retains only the N newest builds across runs (a later build supersedes).
+
+    Scenario: nightly_keep=2, three successive nightly versions
+      Given build #1 (.1) -> the subtree holds 1 nightly
+       When build #2 (.2) lands -> it holds 2
+       When build #3 (.3) lands -> it is pruned back to 2, keeping the 2 NEWEST (.2, .3)
+    """
+    out = tmp_path / "site"
+    nl = out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg"
+
+    def run(counter: int) -> None:
+        brp.build_repo_matrix(
+            [_CE],
+            out,
+            builder=_stub_builder,
+            nightly_keep=2,
+            nightly_pkgversion=lambda _e: f"3.2.16.2026060{counter}.{counter}",
+        )
+
+    run(1)
+    assert _versions_in_nightly(nl) == {"3.2.16.20260601.1"}
+    run(2)
+    assert _versions_in_nightly(nl) == {"3.2.16.20260601.1", "3.2.16.20260602.2"}
+    run(3)
+    # Pruned to the 2 NEWEST; the oldest (.1) dropped.
+    assert _versions_in_nightly(nl) == {"3.2.16.20260602.2", "3.2.16.20260603.3"}
+
+
+def _versions_in_nightly(catalog_pkg: Path) -> set[str]:
+    raw = _read_member(catalog_pkg, "packagesite.yaml").decode()
+    return {json.loads(ln)["version"] for ln in raw.splitlines() if ln}
+
+
+def test_retain_newest_dedups_and_truncates(tmp_path: Path) -> None:
+    """_retain_newest keeps the N highest versions, deduping (name,version)."""
+    paths = []
+    for i in (1, 2, 3, 4):
+        p = tmp_path / f"n{i}.pkg"
+        make_pkg(p, name="pfBlockerNG-nightly", version=f"3.2.16.2026060{i}.{i}", abi="FreeBSD:15:amd64")
+        paths.append(p)
+    kept = brp._retain_newest(paths, 2)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+    assert kept_versions == {"3.2.16.20260603.3", "3.2.16.20260604.4"}
+
+
+def test_cli_build_matrix_requires_matrix_and_out(capsys: pytest.CaptureFixture[str]) -> None:
+    """--build-matrix without --matrix-json/--out is a usage error."""
+    with pytest.raises(SystemExit):
+        brp.main(["--build-matrix", "--out", "/tmp/x"])  # missing --matrix-json
+
+
+def test_cli_build_matrix_unwraps_versions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI accepts a {versions:[...]} matrix file and forwards the array to the brain."""
+    captured: dict[str, Any] = {}
+
+    def fake_brain(matrix: list[dict], out_dir: Path, **kw: Any) -> dict:
+        captured["matrix"] = matrix
+        captured["kw"] = kw
+        return {"routes": [], "built": []}
+
+    monkeypatch.setattr(brp, "build_repo_matrix", fake_brain)
+    mfile = tmp_path / "m.json"
+    mfile.write_text(json.dumps({"versions": [_CE, _PLUS]}))
+    rc = brp.main(["--build-matrix", "--matrix-json", str(mfile), "--out", str(tmp_path / "site"), "--no-nightly"])
+    assert rc == 0
+    assert captured["matrix"] == [_CE, _PLUS]  # unwrapped from {versions:[...]}
+    assert captured["kw"]["build_nightly"] is False
