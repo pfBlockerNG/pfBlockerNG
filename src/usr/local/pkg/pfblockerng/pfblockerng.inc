@@ -1922,6 +1922,128 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
 }
 
 /*
+ * ADR-19 software-update decision core (pure; pinned by tests/php/SoftwareUpdateDecisionTest.php).
+ *
+ * These are the branchy "do we have a newer build, and should we notify about it"
+ * deciders behind the Software tab + the cron new-version notice. They take strings
+ * (installed/latest version, the installed package name + the repo it came from, the
+ * notify knob) and return decisions ONLY — no GUI, no cron, no `pkg` IO/file_notice
+ * (the thin pfb_pkg_*() shellout wrapper + the cache/notice wiring live in later
+ * phases). Keeping the risky logic pure lets the fast PHPUnit tier prove every branch
+ * off-appliance.
+ */
+
+/*
+ * Channel a build is on, from its installed package NAME:
+ *   pfSense-pkg-pfBlockerNG         -> 'stable'
+ *   pfSense-pkg-pfBlockerNG-devel   -> 'devel'
+ *   pfSense-pkg-pfBlockerNG-NIGHTLY -> 'nightly' (ADR-18)
+ * Anything unrecognised/empty -> NULL. The installed name is authoritative for "what
+ * channel am I on" (ADR-19 §2 channel detection). Suffix match is case-insensitive so
+ * the NIGHTLY/devel spellings are tolerant.
+ */
+function pfb_channel_from_pkgname(?string $name): ?string {
+	if (!is_string($name) || $name === '') {
+		return null;
+	}
+	$lname = strtolower($name);
+	if (!str_starts_with($lname, 'pfsense-pkg-pfblockerng')) {
+		return null;
+	}
+	$suffix = substr($lname, strlen('pfsense-pkg-pfblockerng'));
+	switch ($suffix) {
+		case '':
+			return 'stable';
+		case '-devel':
+			return 'devel';
+		case '-nightly':
+			return 'nightly';
+		default:
+			return null;
+	}
+}
+
+/*
+ * The pkg repo "read latest" maps to, for a given channel (2026-06-14 + 2026-06-15
+ * amendments): stable AND devel share ONE repo 'pfblockerng' (the channel selects the
+ * package, not a per-channel repo); 'nightly' is the sole separately-channelled build,
+ * repo 'pfblockerng-nightly'. An unrecognised channel -> NULL (no repo to read from).
+ */
+function pfb_pkg_repo_name_for_channel(?string $channel): ?string {
+	switch ($channel) {
+		case 'stable':
+		case 'devel':
+			return 'pfblockerng';
+		case 'nightly':
+			return 'pfblockerng-nightly';
+		default:
+			return null;
+	}
+}
+
+/*
+ * Provenance gate (2026-06-15 amendment): TRUE only when the build was installed FROM
+ * one of OUR repos — 'pfblockerng' (stable+devel) or 'pfblockerng-nightly'. The repo is
+ * read from `pkg query '%R' <pkgname>`. A Netgate-installed add-on (repo 'pfSense'),
+ * an empty/'unknown' origin, or anything else -> FALSE: the Software tab, the page, the
+ * priv match[] line, AND the cron notice all gate on this so a stock build shows none of
+ * them.
+ */
+function pfb_software_is_our_build(?string $installed_repo): bool {
+	return in_array($installed_repo, array('pfblockerng', 'pfblockerng-nightly'), true);
+}
+
+/*
+ * TRUE when $latest is strictly newer than $installed, via pfSense pkg_version_compare()
+ * (never a string compare — it returns '<' | '=' | '>'). Empty/invalid inputs -> FALSE
+ * (no update): a missing installed or latest version is never "an update is available".
+ * Nightly's dated versions are only ever compared nightly-to-nightly (ADR-18 §1.5).
+ */
+function pfb_update_available(?string $installed, ?string $latest): bool {
+	if (!is_string($installed) || $installed === '' || !is_string($latest) || $latest === '') {
+		return false;
+	}
+	return pkg_version_compare($installed, $latest) === '<';
+}
+
+/*
+ * The channel-aware default for the notify knob when it is unset/'default': nightly
+ * defaults ON (trackers opted into the tip), stable/devel (and any other) default OFF
+ * (quiet for release users). Overridden by an explicit 'on'/'off' in pfb_should_notify().
+ */
+function pfb_notify_default_for_channel(?string $channel): bool {
+	return $channel === 'nightly';
+}
+
+/*
+ * The notify state machine: TRUE iff a `file_notice` should fire THIS tick.
+ *
+ * Resolve effective-notify from the knob — 'on' => true, 'off' => false, anything else
+ * ('default'/unset) => pfb_notify_default_for_channel($channel) — then notify ONLY when
+ * effective-notify AND an update is available (latest > installed) AND we have not
+ * already notified for this exact latest ($latest !== $last_notified). The last clause
+ * is the per-version de-dupe (ADR-19 §2 "persist last-notified"): a daily cron at the
+ * same latest does NOT renotify; a newer latest does.
+ */
+function pfb_should_notify(?string $installed, ?string $latest, ?string $last_notified, ?string $knob, ?string $channel): bool {
+	if ($knob === 'on') {
+		$effective = true;
+	} elseif ($knob === 'off') {
+		$effective = false;
+	} else {
+		$effective = pfb_notify_default_for_channel($channel);
+	}
+
+	if (!$effective) {
+		return false;
+	}
+	if (!pfb_update_available($installed, $latest)) {
+		return false;
+	}
+	return $latest !== $last_notified;
+}
+
+/*
  * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit

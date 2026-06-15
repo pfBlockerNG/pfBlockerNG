@@ -312,3 +312,22 @@ if (!function_exists('convert_friendly_interface_to_friendly_descr')) {
 		return $interface;
 	}
 }
+
+if (!function_exists('pkg_version_compare')) {
+	// pfSense pkg.inc / pkg-utils.inc: compare two package versions, returning the
+	// FreeBSD pkg(8) symbol '<' | '=' | '>' for ($v1 <=> $v2). The real function shells
+	// to `pkg version -t <v1> <v2>`; off-appliance we reproduce that ordering with PHP's
+	// version_compare (which orders the pkg-style versions the decision core sees —
+	// semver, the `_N` port revision the catalog uses for upgrade legs, and nightly's
+	// dated `YYYYMMDD` versions). pfb_update_available() keys on the '<' result.
+	function pkg_version_compare($v1, $v2) {
+		$cmp = version_compare((string) $v1, (string) $v2);
+		if ($cmp < 0) {
+			return '<';
+		}
+		if ($cmp > 0) {
+			return '>';
+		}
+		return '=';
+	}
+}
