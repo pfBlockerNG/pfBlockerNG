@@ -18,12 +18,59 @@ use PHPUnit\Framework\TestCase;
  *     - pfb_dnsbl_scheme_skip_warn($skipped, $header): one main-log WARNING when $skipped>0.
  *
  * Real pfb_parsed_fail()/pfb_logger() are exercised (the shipped code), pointed at temp
- * files so the side-effects are asserted -- not coverage theater.
+ * files so the side-effects are asserted -- not coverage theater. File I/O results are
+ * asserted (no '@' suppression) so a setup/teardown failure cannot mask a false green, and
+ * $GLOBALS['pfb']['log'] is saved/restored per test so the suite stays order-independent.
  */
 #[CoversFunction('pfb_dnsbl_scheme_line')]
 #[CoversFunction('pfb_dnsbl_scheme_skip_warn')]
 final class PfbDnsblSchemeSkipLogTest extends TestCase
 {
+	/** @var string[] temp files to remove in tearDown */
+	private array $tmpfiles = [];
+
+	/** original $GLOBALS['pfb']['log'] (sentinel FALSE = was unset) */
+	private mixed $prevLog = false;
+
+	protected function setUp(): void
+	{
+		$this->prevLog = array_key_exists('log', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['log'] : false;
+	}
+
+	protected function tearDown(): void
+	{
+		// Restore the shared global so a test that points pfb_logger() at a temp file does
+		// not leak that path into later tests.
+		if ($this->prevLog === false) {
+			unset($GLOBALS['pfb']['log']);
+		} else {
+			$GLOBALS['pfb']['log'] = $this->prevLog;
+		}
+		foreach ($this->tmpfiles as $f) {
+			if (is_file($f)) {
+				$this->assertTrue(unlink($f), "failed to remove temp file {$f}");
+			}
+		}
+		$this->tmpfiles = [];
+	}
+
+	/** Create an empty temp file, registered for teardown removal, with its result asserted. */
+	private function mktemp(string $prefix): string
+	{
+		$path = tempnam(sys_get_temp_dir(), $prefix);
+		$this->assertNotFalse($path, "tempnam({$prefix}) failed");
+		$this->tmpfiles[] = $path;
+		$this->assertNotFalse(file_put_contents($path, ''), "could not truncate {$path}");
+		return $path;
+	}
+
+	private function readFile(string $path): string
+	{
+		$raw = file_get_contents($path);
+		$this->assertNotFalse($raw, "could not read {$path}");
+		return (string) $raw;
+	}
+
 	// --- Toggle resolution: strict = lenient !== 'on' (ADR §2.1). Both branches. ---
 
 	public function testStrictResolvesTrueWhenLenientOff(): void
@@ -44,9 +91,7 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 
 	public function testStrictSkipIsLogged(): void
 	{
-		$logfile = tempnam(sys_get_temp_dir(), 'pfb_parse_err_');
-		$this->assertNotFalse($logfile);
-		@file_put_contents($logfile, '');	// Given: an empty parse-error log.
+		$logfile = $this->mktemp('pfb_parse_err_');	// Given: an empty parse-error log.
 		$skipped = 0;
 
 		// When: a malformed line ('123://evil.com') is parsed in STRICT mode.
@@ -55,18 +100,14 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		// Then: the line is rejected, the counter bumped, and a CSV parse-error row written.
 		$this->assertFalse($result);
 		$this->assertSame(1, $skipped);
-		$logged = (string)@file_get_contents($logfile);
+		$logged = $this->readFile($logfile);
 		$this->assertStringContainsString('TestFeed', $logged);
 		$this->assertStringContainsString('123://evil.com', $logged);
-
-		@unlink($logfile);
 	}
 
 	public function testLenientEmitsNoNewLog(): void
 	{
-		$logfile = tempnam(sys_get_temp_dir(), 'pfb_parse_err_');
-		$this->assertNotFalse($logfile);
-		@file_put_contents($logfile, '');	// Given: an empty parse-error log.
+		$logfile = $this->mktemp('pfb_parse_err_');	// Given: an empty parse-error log.
 		$skipped = 0;
 
 		// When: the SAME malformed line is parsed in LENIENT mode.
@@ -76,61 +117,49 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		// -- byte-identical to today.
 		$this->assertSame('evil.com', $result);
 		$this->assertSame(0, $skipped);
-		$this->assertSame('', (string)@file_get_contents($logfile));
-
-		@unlink($logfile);
+		$this->assertSame('', $this->readFile($logfile));
 	}
 
 	public function testValidSchemeLineKeptInStrictWithoutLogging(): void
 	{
 		// A valid scheme, no path: kept in strict too, nothing logged/counted (regression
 		// guard -- strict must not skip legitimate lines).
-		$logfile = tempnam(sys_get_temp_dir(), 'pfb_parse_err_');
-		@file_put_contents($logfile, '');
+		$logfile = $this->mktemp('pfb_parse_err_');
 		$skipped = 0;
 
 		$result = pfb_dnsbl_scheme_line('evil://evil.com', true, 'TestFeed', 'evil://evil.com', $logfile, $skipped);
 
 		$this->assertSame('evil.com', $result);
 		$this->assertSame(0, $skipped);
-		$this->assertSame('', (string)@file_get_contents($logfile));
-
-		@unlink($logfile);
+		$this->assertSame('', $this->readFile($logfile));
 	}
 
 	// --- Per-feed summary WARNING: once per feed, only when something was skipped. ---
 
 	public function testPerFeedWarningEmittedOnceWhenSkipped(): void
 	{
-		$mainlog = tempnam(sys_get_temp_dir(), 'pfb_main_log_');
-		$this->assertNotFalse($mainlog);
-		@file_put_contents($mainlog, '');
-		$GLOBALS['pfb']['log'] = $mainlog;	// pfb_logger() writes here (logtype 2).
+		$mainlog = $this->mktemp('pfb_main_log_');
+		$GLOBALS['pfb']['log'] = $mainlog;	// pfb_logger() writes here (logtype 1; restored in tearDown).
 
 		// When: the per-feed summary fires for a feed that skipped 3 lines.
 		pfb_dnsbl_scheme_skip_warn(3, 'TestFeed');
 
 		// Then: exactly ONE WARNING line, naming the feed + the count (not one per line).
-		$logged = (string)@file_get_contents($mainlog);
+		$logged = $this->readFile($mainlog);
 		$this->assertStringContainsString('TestFeed', $logged);
 		$this->assertStringContainsString('3 line(s) skipped', $logged);
 		$this->assertSame(1, substr_count($logged, 'line(s) skipped'));
-
-		@unlink($mainlog);
 	}
 
 	public function testPerFeedWarningSilentWhenNothingSkipped(): void
 	{
 		// Before: empty log. Lenient mode never increments the counter, so the summary must
 		// stay silent (byte-identical to today).
-		$mainlog = tempnam(sys_get_temp_dir(), 'pfb_main_log_');
-		@file_put_contents($mainlog, '');
+		$mainlog = $this->mktemp('pfb_main_log_');
 		$GLOBALS['pfb']['log'] = $mainlog;
 
 		pfb_dnsbl_scheme_skip_warn(0, 'TestFeed');
 
-		$this->assertSame('', (string)@file_get_contents($mainlog));
-
-		@unlink($mainlog);
+		$this->assertSame('', $this->readFile($mainlog));
 	}
 }
