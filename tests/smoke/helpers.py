@@ -757,6 +757,40 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         )
 
 
+def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Set the ADR-22 ``pfb_dnsbl_lenient`` toggle in the DNSBL-settings section.
+
+    ``on`` -> lenient (today's permissive scheme strip; nothing skipped, no new log).
+    ``off`` -> strict: ``pfb_dnsbl_strip_scheme`` validates the scheme against RFC 3986
+    and rejects URL paths, recording each rejected line in the DNSBL parse-error log and
+    emitting one per-feed WARNING. Written via ``array_merge`` so it never clobbers the
+    rest of the DNSBL settings ``inject()`` already wrote. Set BEFORE the reload that
+    rebuilds the feed (``pfb_global`` reads it once per run)."""
+    val = "on" if on else "off"
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsbl_lenient'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: set pfb_dnsbl_lenient');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_lenient({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def read_log_file(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> str:
+    """Return the full text of a guest log file (empty string if absent).
+
+    Used to assert ADR-22 strict-mode skips landed in the DNSBL parse-error log:
+    a rejected line's original text (its ``uuid-*`` label) appears in the CSV record
+    pfb_parsed_fail() appended. ``cat`` a missing file -> '' (never raises)."""
+    result = vm.ssh("cat", path, timeout=timeout)
+    return result.stdout if result.returncode == 0 else ""
+
+
 CFG_SAFESEARCH_ENABLE = "installedpackages/pfblockerngsafesearch/safesearch_enable"
 
 
@@ -1829,6 +1863,11 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # bare phrase "the zero-downtime swap", so matching the unbracketed substring would
 # false-positive on a fallback (restart) as if the swap had been taken.
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
+# The DNSBL per-line parse-error log: pfb_parsed_fail() appends one CSV record
+# ({date},{header},{line},{oline}) here for every rejected line — including an ADR-22
+# strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:88,
+# "{$pfb['logdir']}/dnsbl_parsed_error.log"), the established per-line failure sink.
+DNSBL_PARSE_ERR_LOG = f"{PFB_LOGDIR}/dnsbl_parsed_error.log"
 
 
 def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
