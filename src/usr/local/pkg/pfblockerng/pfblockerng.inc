@@ -2242,6 +2242,35 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
 }
 
 /*
+ * ADR-19 Phase 4 — provenance gate for the shipped GUI surfaces.
+ *
+ * Live wrapper over the pure pfb_software_is_our_build() (ADR-19 2026-06-15
+ * amendment): reads the installed package's provenance from `pkg query '%R'`
+ * and returns true ONLY when pfBlockerNG was installed from one of OUR repos
+ * (`pfblockerng` / `pfblockerng-nightly`). A Netgate-ports install (repo
+ * 'pfSense'/unknown/'') returns false.
+ *
+ * The Software tab append, the pfblockerng_software.php top-of-file guard, and
+ * the priv match line all gate on this single predicate so a Netgate-installed
+ * add-on shows no Software page anywhere.
+ */
+function pfb_software_provenance_ok(): bool {
+	return pfb_software_is_our_build(pfb_pkg_installed_repo(pfb_pkg_installed_name()));
+}
+
+/*
+ * Append the "Software" tab to a page's $tab_array — ONLY on an our-repo build
+ * (pfb_software_provenance_ok()). Shared by every pfBlockerNG page so the tab is
+ * consistently present (our build) or absent (Netgate build) across the GUI.
+ * Call immediately before display_top_tabs(); $active marks it the current tab.
+ */
+function pfb_software_add_tab(array &$tab_array, bool $active = false): void {
+	if (pfb_software_provenance_ok()) {
+		$tab_array[] = array(gettext('Software'), $active, '/pfblockerng/pfblockerng_software.php');
+	}
+}
+
+/*
  * Return the enabled hook entries matching $when ('pre'|'post'), in list order.
  *
  * Pure helper: takes the pfBlockerNG config array (config/0) so it can be unit

@@ -78,6 +78,16 @@ on:
         required: false
         type: string
         default: "all"
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       image_ref:
@@ -98,6 +108,14 @@ on:
           - functional
           - browser
           - all
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default). Point a pre-merge run at a ports branch carrying a new plist entry."
+        required: false
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
+        required: false
+        default: ""
   # Daily Tier-B run (functional + browser). Non-PR-blocking by construction.
   # The `prepare` job guards it to SKIP when there were no commits in the last
   # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
@@ -138,6 +156,11 @@ jobs:
       # Per-version artifact name so the CE + Plus builds in one run don't collide;
       # the ui leg downloads pfBlockerNG-pkg-<its version>.
       artifact_name: pfBlockerNG-pkg-${{ matrix.version }}
+      # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
+      # carrying a new plist entry. Blank -> build-pkg-linux's own defaults, so a
+      # normal run is byte-identical.
+      ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+      ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
