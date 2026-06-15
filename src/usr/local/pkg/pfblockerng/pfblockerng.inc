@@ -4065,12 +4065,12 @@ function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $log
 
 
 // ADR-22: the once-per-feed strict-parsing skip summary. A WARNING to the main pfBlockerNG
-// log (and error log -- logtype 2) naming the feed + the count, so a feed with many
-// malformed lines summarises in one line (per-line detail stays in the parse-error log).
-// Silent when nothing was skipped (lenient mode never increments the counter).
+// log only (logtype 1) naming the feed + the count, so a feed with many malformed lines
+// summarises in one line (per-line detail stays in the DNSBL parse-error log; the summary
+// is not error-log noise). Silent when nothing was skipped (lenient never bumps the counter).
 function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
 	if ($skipped > 0) {
-		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 2);
+		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 1);
 	}
 }
 

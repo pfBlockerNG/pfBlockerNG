@@ -741,6 +741,10 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM) -> None:
         # Any per-feed strict-skip WARNING for THIS feed (1 or 2 lines) must NOT appear.
         warn_marker_any = f"{header}: "
         warn_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "line(s) skipped - strict parsing")
+        # Baseline the feed-specific count too: the log persists across cases, so assert it is
+        # UNCHANGED by this reload rather than absolutely zero (transition, not absolute state).
+        feed_warn_before = h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "1 line(s) skipped")
+        feed_warn_before += h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "2 line(s) skipped")
         h.reload(deployed_vm, "update")
 
         # THEN (DNS shapes): both malformed lines are now BLOCKED (today's behaviour).
@@ -762,9 +766,12 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM) -> None:
             f"lenient mode must emit NO strict-skip WARNING, but the count rose "
             f"(before={warn_before}, after={warn_after})"
         )
-        feed_warn = h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "1 line(s) skipped")
-        feed_warn += h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "2 line(s) skipped")
-        assert feed_warn == 0, f"lenient mode wrongly emitted a per-feed strict-skip WARNING for {header}"
+        feed_warn_after = h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "1 line(s) skipped")
+        feed_warn_after += h.count_log_marker(deployed_vm, h.PFB_LOG, warn_marker_any + "2 line(s) skipped")
+        assert feed_warn_after == feed_warn_before, (
+            f"lenient mode wrongly emitted a per-feed strict-skip WARNING for {header} "
+            f"(before={feed_warn_before}, after={feed_warn_after})"
+        )
     finally:
         h.reset(deployed_vm)
         h.set_dnsbl_lenient(deployed_vm, True)
