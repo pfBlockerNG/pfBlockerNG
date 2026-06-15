@@ -485,8 +485,32 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 									'/var/db/pfblockerng/shallalist/',
 									'/usr/local/www/',
 									'/usr/local/share/GeoIP/',
-									'/usr/local/share/GeoIP/cc/' ));
-				if (isset($allowed_path[$path])) {
+									'/usr/local/share/GeoIP/cc/' );
+
+				// Canonicalize before any membership test so a relative
+				// ('..') or redundant-separator path cannot escape an allowed
+				// directory. realpath() returns FALSE for a path that does not
+				// exist (or cannot be resolved) — reject it.
+				$real = realpath($input);
+				if ($real === FALSE) {
+					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (cannot resolve path) [ " . htmlspecialchars($input) . " ]", 6);
+					return FALSE;
+				}
+
+				// The basename must be a plain filename — no directory
+				// separators or '..' surviving canonicalization.
+				$base = basename($real);
+				if ($base === '' || $base === '.' || $base === '..' ||
+				    strpbrk($base, '/\\') !== FALSE) {
+					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (not allowed2) [ " . htmlspecialchars($input) . " ]", 6);
+					return FALSE;
+				}
+
+				// Strict containment: the canonical file must sit DIRECTLY in
+				// one of the allowed directories (no subfolder support), and be
+				// a regular file.
+				$real_dir = rtrim(dirname($real), '/') . '/';
+				if (in_array($real_dir, $allowed_path, TRUE) && is_file($real)) {
 					return TRUE;
 				}
 			}
