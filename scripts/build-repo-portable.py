@@ -860,6 +860,13 @@ def main(argv: list[str]) -> int:
         help="full pkg-safe nightly version <target>.YYYYMMDD.N applied to every entry's nightly build",
     )
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
+    g_matrix.add_argument(
+        "--annotate",
+        action="append",
+        default=[],
+        metavar="K=V",
+        help="manifest annotation K=V applied to EVERY build (repeatable; e.g. commit=<sha> created=<epoch>)",
+    )
     args = ap.parse_args(argv)
 
     if args.print_conf:
@@ -895,6 +902,12 @@ def main(argv: list[str]) -> int:
             sys.stderr.write("build-repo-portable: matrix must be a JSON array (or {versions:[...]})\n")
             return 1
         pkgver = args.nightly_pkgversion
+        annotate: dict[str, str] = {}
+        for item in args.annotate:
+            if "=" not in item:
+                ap.error(f"--annotate must be K=V (got {item!r})")
+            k, v = item.split("=", 1)
+            annotate[k] = v
         try:
             build_repo_matrix(
                 matrix,
@@ -906,6 +919,7 @@ def main(argv: list[str]) -> int:
                 nightly_keep=args.nightly_keep,
                 nightly_pkgversion=(lambda _e: pkgver) if pkgver else None,
                 build_nightly=not args.no_nightly,
+                annotate=annotate or None,
             )
         except (BuildRepoError, subprocess.CalledProcessError) as e:
             sys.stderr.write(f"build-repo-portable: {e}\n")
