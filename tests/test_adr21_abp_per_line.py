@@ -284,3 +284,66 @@ def test_page_context_option_skipped() -> None:
     """
     result = _run_build(["||domain.com^$third-party"])
     assert not _blocked(result, "domain.com")
+
+
+# --------------------------------------------------------------------------- #
+# (i) PHP manifest-builder pass-through  (§4.7 / §4.8 PHP; exempt simulation)
+# --------------------------------------------------------------------------- #
+
+
+def _simulate_php_manifest_builder(txt_lines: list[str]) -> list[str]:
+    """Re-implement the PHP manifest-builder 'plain' path (ADR-21 site 2).
+
+    Mirrors ``pfblockerng.inc`` (~line 3841): for each ``.txt`` line in a non-ABP
+    ('plain') feed the builder writes either the verbatim ABP-anchored line (when it
+    starts ``||`` / ``@@||``) or CSV column 1 (the bare domain) to the ``.raw``. This
+    is a faithful Python transcription of that small rule, NOT a PHP invocation -- it
+    is an off-appliance SIMULATION (ADR §5 red->green exemption) and proves the SHAPE
+    of the PHP change, not that the live PHP runs (Phase 3 smoke is the live proof).
+    """
+    raw: list[str] = []
+    for line in txt_lines:
+        rawline = line.rstrip("\r\n")
+        if rawline.startswith("||") or rawline.startswith("@@||"):
+            raw.append(rawline)
+            continue
+        cols = rawline.split(",", 2)
+        if len(cols) > 1 and cols[1] != "":
+            raw.append(cols[1])
+    return raw
+
+
+def test_manifest_builder_mixed_feed() -> None:
+    """Scenario (exempt PHP simulation): a non-ABP feed's ``.txt`` mixes the 6-col CSV
+    plain rows the download loop writes with the verbatim ``||``/``@@||`` lines the
+    ADR-21 download-loop guard writes through. The manifest builder must emit BOTH the
+    bare domains (from CSV col-1) AND the verbatim ABP anchors into the ``.raw`` --
+    so the Phase-1 ``build()`` routing (proven above) actually receives them.
+
+    Given a mixed ``.txt`` (plain CSV rows + verbatim ABP lines),
+    When the manifest builder's plain path processes it,
+    Then the ``.raw`` carries each CSV col-1 domain AND each ABP anchor verbatim,
+    and never the leading comma / other CSV columns of a plain row.
+    """
+    # Given: download-loop output -- plain rows are ',domain,,log,header,alias'
+    # 6-col CSV (col-1 = the bare domain); ABP anchors were written verbatim.
+    txt_lines = [
+        ",plain-a.com,,1,HEADER,ALIAS\n",
+        "||block-abp.com^\n",
+        ",plain-b.com,,1,HEADER,ALIAS\n",
+        "@@||allow-abp.com^\n",
+        "||important.com^$important\n",
+    ]
+
+    # When
+    raw = _simulate_php_manifest_builder(txt_lines)
+
+    # Then: both shapes survive; the ABP anchors are byte-verbatim; the CSV decoration
+    # (leading comma, trailing columns) of plain rows does NOT leak into the .raw.
+    assert raw == [
+        "plain-a.com",
+        "||block-abp.com^",
+        "plain-b.com",
+        "@@||allow-abp.com^",
+        "||important.com^$important",
+    ]
