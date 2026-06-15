@@ -443,6 +443,15 @@ jobs:
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # Matrix-derived build target (ADR-24): the per-leg ABI / PHP / Python flavor
+          # the .pkg was built for, straight from the ci-metadata matrix (the fan-out
+          # passes them as inputs; a bare dispatch defaults to the CE values). The ADR-20
+          # variant repo-install cases assert the box's php dep / ABI against THESE rather
+          # than hardcoding php83 / FreeBSD:15, so the CE and Plus legs each assert their
+          # own flavor.
+          SMOKE_ABI: ${{ inputs.abi }}
+          SMOKE_PHP_VERSION: ${{ inputs.php_version }}
+          SMOKE_PY_FLAVOR: ${{ inputs.py_flavor }}
           # The builder-produced -nightly .pkg (set above for the `repo` marker; the
           # nightly cases SKIP when unset). Propagated via $GITHUB_ENV from that step.
           SMOKE_NIGHTLY_PKG: ${{ env.SMOKE_NIGHTLY_PKG }}

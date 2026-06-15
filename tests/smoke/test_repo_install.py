@@ -83,6 +83,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -1223,6 +1224,81 @@ CE_REPO_DIR = f"{VARIANT_REPO_ROOT}/{CE_CATALOG_NAME}"
 PLUS_REPO_DIR = f"{VARIANT_REPO_ROOT}/{PLUS_CATALOG_NAME}"
 LEGACY_REPO_DIR = f"{VARIANT_REPO_ROOT}/legacy"
 
+
+# --------------------------------------------------------------------------- #
+# Per-leg variant — derived from the ci-metadata matrix (surfaced by smoke.yml) #
+# --------------------------------------------------------------------------- #
+#
+# The fan-out (smoke-fanout.yml / repo-install.yml) passes each leg's build target
+# — ABI / PHP / Python flavor — straight from the ci-metadata matrix into smoke.yml,
+# which exports them as SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR. The ADR-20
+# variant cases assert the box's OWN php dep / ABI against THESE (matrix = single
+# source of truth) instead of hardcoding php83 / FreeBSD:15 — so the CE leg asserts
+# php83 / FreeBSD:15 and the Plus leg asserts php85 / FreeBSD:16, automatically. A
+# bare smoke.yml dispatch (no inputs) defaults to the CE values, keeping the
+# single-CE run byte-identical.
+
+
+@dataclass(frozen=True)
+class Variant:
+    """A distributed pfSense variant: its pkg ``php`` dependency, ABI, and catalog dir."""
+
+    php: str
+    abi: str
+    catalog: str
+
+
+# The two variants ADR-20 distributes, keyed by ABI (the binary CE<->Plus topology
+# the wrong-variant guard flips between): own_variant() picks THIS leg's entry from
+# the matrix; opposite_variant() returns the other for the guard's forged package.
+_VARIANTS = (
+    Variant(php="php83", abi=CE_ABI, catalog=CE_CATALOG_NAME),
+    Variant(php="php85", abi=PLUS_ABI, catalog=PLUS_CATALOG_NAME),
+)
+
+
+def matrix_php_dep() -> str:
+    """The pkg PHP dependency name for THIS leg from the matrix ``php_version``
+    (``SMOKE_PHP_VERSION``, e.g. ``8.3`` -> ``php83`` / ``8.5`` -> ``php85``).
+    Defaults to the CE flavor when unset (a bare smoke.yml dispatch)."""
+    ver = os.environ.get("SMOKE_PHP_VERSION") or "8.3"
+    return "php" + ver.replace(".", "")
+
+
+def matrix_abi() -> str:
+    """This leg's target ABI from the matrix (``SMOKE_ABI``); CE default when unset."""
+    return os.environ.get("SMOKE_ABI") or CE_ABI
+
+
+def matrix_py_flavor() -> str:
+    """This leg's Python flavor from the matrix (``SMOKE_PY_FLAVOR``, e.g. ``py311``);
+    CE default when unset."""
+    return os.environ.get("SMOKE_PY_FLAVOR") or "py311"
+
+
+def own_variant() -> Variant:
+    """The variant THIS leg runs, matched from the matrix ABI. Asserts the matrix
+    ``php_version`` agrees with the variant's php dep — the two matrix fields must be
+    consistent; a mismatch is a CI-wiring bug, not a silent pass."""
+    abi = matrix_abi()
+    for v in _VARIANTS:
+        if v.abi == abi:
+            assert v.php == matrix_php_dep(), (
+                f"matrix inconsistency: ABI {abi} maps to {v.php} but SMOKE_PHP_VERSION says {matrix_php_dep()}"
+            )
+            return v
+    raise RuntimeError(f"no known ADR-20 variant for matrix ABI {abi!r} (known: {[v.abi for v in _VARIANTS]})")
+
+
+def opposite_variant() -> Variant:
+    """The OTHER variant — the 'wrong' one for this box (the forged package the
+    wrong-variant guard must reject)."""
+    own = own_variant()
+    others = [v for v in _VARIANTS if v.abi != own.abi]
+    assert len(others) == 1, f"expected exactly one opposite variant, got {others}"
+    return others[0]
+
+
 # Routing Worker URL (Phase 5).  Case 4 is xfail until routing.json is live on Pages.
 WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
 
@@ -1294,13 +1370,15 @@ def build_repo_via_portable_named(
     return guest_abi_dir
 
 
-def forge_plus_pkg(src_pkg: Path, out_dir: Path) -> Path:
-    """Forge a fake Plus .pkg from the branch .pkg with ``php85`` dep + Plus ABI.
+def forge_variant_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_abi: str) -> Path:
+    """Forge a fake .pkg for a DIFFERENT variant from the branch .pkg.
 
     Re-reads the +COMPACT_MANIFEST, replaces every ``php8N`` dep key with
-    ``php85``, sets the ``abi`` to ``FreeBSD:16:amd64``, and repacks.  No
-    payload change — the dep-mismatch guard fires before pkg ever checks the
-    files.  The returned .pkg is placed in ``out_dir``.
+    ``target_php``, sets the ``abi`` to ``target_abi``, and repacks. No payload
+    change — the dep/ABI-mismatch guard fires before pkg ever checks the files.
+    Used by the wrong-variant guard to fabricate the OPPOSITE variant for this
+    box (CE box -> Plus pkg; Plus box -> CE pkg). The returned .pkg is placed in
+    ``out_dir``.
     """
     tar_bytes = _zstd_decompress(src_pkg.read_bytes())
     repacked = io.BytesIO()
@@ -1314,20 +1392,20 @@ def forge_plus_pkg(src_pkg: Path, out_dir: Path) -> Path:
             data = extracted.read() if extracted is not None else b""
             if member.name in _PKG_MANIFEST_MEMBERS:
                 obj = json.loads(data)
-                # Swap every php8N dep for php85 (CE manifest has php83).
+                # Swap every php8N dep for the target variant's php (CE manifest has
+                # php83; forging a Plus pkg makes it php85, and vice-versa).
                 if "deps" in obj:
                     old_deps: dict[str, object] = obj["deps"]
                     new_deps: dict[str, object] = {}
                     for key, val in old_deps.items():
                         if re.match(r"php8\d", key):
                             # Replace the key; keep the value dict unchanged (origin/version are fictional).
-                            new_key = "php85"
-                            new_deps[new_key] = val
+                            new_deps[target_php] = val
                         else:
                             new_deps[key] = val
                     obj["deps"] = new_deps
-                # Set the Plus ABI so the portable generator buckets it correctly.
-                obj["abi"] = PLUS_ABI
+                # Set the target ABI so the portable generator buckets it correctly.
+                obj["abi"] = target_abi
                 pkg_name = obj.get("name", pkg_name)
                 data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
                 ti = tarfile.TarInfo(name=member.name)
@@ -1343,7 +1421,7 @@ def forge_plus_pkg(src_pkg: Path, out_dir: Path) -> Path:
     if not pkg_name:
         raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST with a name — not a libpkg .pkg?")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{pkg_name}-plus.pkg"
+    out_path = out_dir / f"{pkg_name}-{target_php}.pkg"
     out_path.write_bytes(_zstd_compress(repacked.getvalue()))
     return out_path
 
@@ -1360,36 +1438,44 @@ def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-20 Case 1 — CE install from ce/${ABI} catalog                           #
+# ADR-20 Case 1 — install from the box's variant-keyed catalog                 #
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.timeout(600)
-def test_ce_install_from_variant_ce_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """ADR-20 P6 CASE 1 — CE package installs from variant-keyed ``ce-2.8/${ABI}``
-    catalog; ``php83`` dep is satisfied; package origin is our repo.
+def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 1 — the box's package installs from its variant-keyed
+    ``<variant>/${ABI}`` catalog; its own php + Python deps resolve; origin is our repo.
 
-    Scenario: CE package installed from variant-correct ce/{ABI} catalog.
-      Background: hermetic file:// CE catalog at ce-2.8/FreeBSD:15:amd64/.
+    Scenario: package installed from the variant-correct catalog for THIS box.
+      Background: hermetic file:// catalog at ``<own.catalog>/<own.abi>/``. The variant
+      (ABI / php / Python flavor) comes from the ci-metadata matrix (SMOKE_ABI /
+      SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR), so the CE leg asserts php83/FreeBSD:15 and the
+      Plus leg asserts php85/FreeBSD:16 — no hardcoded flavor.
 
-    Given the package ABSENT and a variant-keyed catalog under ``ce-2.8/${ABI}/``
+    Given the package ABSENT and a variant-keyed catalog under ``<variant>/${ABI}/``
       built from the branch .pkg by the pure-Python generator,
-    When ``pkg install -y <pkgname>`` resolves from this CE catalog,
-    Then ``pkg query '%dn %dv' <pkgname>`` shows ``php83`` in the dep list (CE dep
-      satisfied), the version matches the branch .pkg, and the origin is our repo.
+    When ``pkg install -y <pkgname>`` resolves from this catalog,
+    Then ``pkg query '%dn %dv' <pkgname>`` shows the box's OWN php dep AND the matrix
+      Python flavor, the OPPOSITE variant's php dep is ABSENT, the version matches the
+      branch .pkg, and the origin is our repo.
     Assert BEFORE: ``pkg query '%n' <pkgname>`` returns empty (package absent).
-    Assert AFTER: dep list contains ``php83``; version and origin correct.
+    Assert AFTER: dep list contains own php + Python flavor; opposite php absent; version
+      and origin correct.
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
 
-    # GIVEN: build the CE catalog with the variant-keyed dir on the runner,
+    own = own_variant()
+    opp = opposite_variant()
+
+    # GIVEN: build the box's variant catalog with the variant-keyed dir on the runner,
     # ship to guest, write a NONE-signed file:// repo conf above pfSense.
     abi_dir = build_repo_via_portable_named(
         repo_vm,
         [Path(pkg)],
         tmp_path,
-        catalog_name=CE_CATALOG_NAME,
+        catalog_name=own.catalog,
         guest_root=VARIANT_REPO_ROOT,
     )
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
@@ -1399,25 +1485,30 @@ def test_ce_install_from_variant_ce_catalog(repo_vm: SmokeVM, tmp_path: Path) ->
     # Before-state: package absent.
     pkg_update(repo_vm)
     before_name = vm_pkg_query_name(repo_vm)
-    assert before_name == "", f"package unexpectedly present before CE variant install: {before_name!r}"
+    assert before_name == "", f"package unexpectedly present before variant install: {before_name!r}"
 
-    # WHEN: install from the CE variant catalog (no -r, no -f).
+    # WHEN: install from the box's variant catalog (no -r, no -f).
     proc = pkg_install_from_repo(repo_vm)
     combined = proc.stdout + proc.stderr
-    assert "Missing dependency" not in combined, f"CE variant catalog: RUN_DEPENDS did not resolve:\n{combined}"
+    assert "Missing dependency" not in combined, f"variant catalog: RUN_DEPENDS did not resolve:\n{combined}"
 
-    # THEN: dep list contains php83 (CE dep), origin is ours.
+    # THEN: dep list carries the box's OWN php + the matrix Python flavor, NOT the opposite php.
     deps_out = pkg_query_deps(repo_vm)
-    assert "php83" in deps_out, (
-        f"php83 dep not satisfied after CE variant install; pkg query '%dn %dv' output:\n{deps_out}"
+    assert own.php in deps_out, (
+        f"{own.php} dep not satisfied after {own.abi} variant install; pkg query '%dn %dv' output:\n{deps_out}"
     )
-    assert "php85" not in deps_out, (
-        f"Plus dep php85 should not appear in CE install; pkg query '%dn %dv' output:\n{deps_out}"
+    assert opp.php not in deps_out, (
+        f"opposite-variant dep {opp.php} should not appear in a {own.abi} install; "
+        f"pkg query '%dn %dv' output:\n{deps_out}"
+    )
+    py_flavor = matrix_py_flavor()
+    assert py_flavor in deps_out, (
+        f"matrix Python flavor {py_flavor} not in deps after variant install; pkg query '%dn %dv' output:\n{deps_out}"
     )
     origin = pkg_repo_origin(repo_vm)
-    assert origin == OURS_REPO_NAME, f"CE variant install: came from {origin!r}, expected {OURS_REPO_NAME!r}"
+    assert origin == OURS_REPO_NAME, f"variant install: came from {origin!r}, expected {OURS_REPO_NAME!r}"
     version = pkg_installed_version(repo_vm)
-    assert version is not None, "CE variant install: pkg query %v returned empty after install"
+    assert version is not None, "variant install: pkg query %v returned empty after install"
 
 
 def vm_pkg_query_name(vm: SmokeVM, *, timeout: float = 60.0) -> str:
@@ -1427,79 +1518,89 @@ def vm_pkg_query_name(vm: SmokeVM, *, timeout: float = 60.0) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-20 Case 2 — wrong-variant guard: CE VM + Plus catalog                   #
+# ADR-20 Case 2 — wrong-variant guard: box rejects the OPPOSITE variant        #
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.timeout(900)
-def test_wrong_variant_plus_catalog_fails_on_ce_vm(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """ADR-20 P6 CASE 2 — Installing a Plus package on a CE VM fails; ``php85``
-    dep is unsatisfied; package is NOT installed after the attempt.
+def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 2 — Installing the OPPOSITE variant's package on this box fails;
+    that variant's php dep is unsatisfied; the package is NOT installed after the attempt.
 
-    Scenario: Installing a Plus package on CE VM fails with unsatisfied dep.
-      Background: hermetic file:// Plus catalog at plus-26.03/FreeBSD:16:amd64/.
+    The box's own variant and the wrong (opposite) variant both come from the ci-metadata
+    matrix (SMOKE_ABI / SMOKE_PHP_VERSION), so this runs symmetrically: a CE box rejects a
+    forged Plus (php85/FreeBSD:16) package, and a Plus box rejects a forged CE
+    (php83/FreeBSD:15) package — no hardcoded direction.
 
-    Before-state ASSERT: CE package from ``ce-2.8/${ABI}`` installs CLEANLY (``php83``
-      dep satisfied) — proves the CE path is correct and the AFTER failure is caused
-      by the variant mismatch, not an unrelated setup issue.
-    Given the CE package uninstalled and the repo conf pointing to the Plus catalog
-      (ABI mismatch — CE VM has FreeBSD:15),
-    When ``pkg install -y <pkgname>`` from the Plus catalog,
-    Then exit code is non-zero OR the error output mentions ``php85`` / ABI mismatch,
+    Scenario: installing the opposite-variant package fails with an unsatisfied dep.
+      Background: hermetic file:// catalog at ``<opp.catalog>/<opp.abi>/``.
+
+    Before-state ASSERT: the box's OWN package (``<own.catalog>/${ABI}``) installs CLEANLY
+      (own php dep satisfied) — proves the own path is correct and the AFTER failure is
+      caused by the variant mismatch, not an unrelated setup issue.
+    Given the own package uninstalled and the repo conf pointing at the opposite-variant
+      catalog (ABI mismatch),
+    When ``pkg install -y <pkgname>`` from the opposite catalog,
+    Then exit code is non-zero OR the error output mentions the opposite php / ABI mismatch,
       AND ``pkg query '%n' <pkgname>`` confirms the package is NOT installed.
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
     src = Path(pkg)
 
-    # ---- Before-state: prove the CE path works (the guard control) ----
-    ce_abi_dir = build_repo_via_portable_named(
+    own = own_variant()
+    opp = opposite_variant()
+
+    # ---- Before-state: prove the box's OWN path works (the guard control) ----
+    own_abi_dir = build_repo_via_portable_named(
         repo_vm,
         [src],
         tmp_path,
-        catalog_name=CE_CATALOG_NAME,
+        catalog_name=own.catalog,
         guest_root=VARIANT_REPO_ROOT,
     )
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, ce_abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, own_abi_dir, ours_priority=pfsense_prio + 100)
     pkg_update(repo_vm)
 
-    # Assert before-state: absent before CE install.
-    assert vm_pkg_query_name(repo_vm) == "", "package unexpectedly present before CE control install"
+    # Assert before-state: absent before the own-variant control install.
+    assert vm_pkg_query_name(repo_vm) == "", "package unexpectedly present before own-variant control install"
 
-    ce_install = pkg_install_from_repo(repo_vm)
-    ce_combined = ce_install.stdout + ce_install.stderr
-    assert "Missing dependency" not in ce_combined, f"Control (CE) install: RUN_DEPENDS did not resolve:\n{ce_combined}"
-    ce_deps = pkg_query_deps(repo_vm)
-    assert "php83" in ce_deps, f"Control (CE) install: php83 not in deps; pkg query '%dn %dv':\n{ce_deps}"
-    # CE install succeeded — this is the before-state anchor.
+    own_install = pkg_install_from_repo(repo_vm)
+    own_combined = own_install.stdout + own_install.stderr
+    assert "Missing dependency" not in own_combined, (
+        f"Control ({own.abi}) install: RUN_DEPENDS did not resolve:\n{own_combined}"
+    )
+    own_deps = pkg_query_deps(repo_vm)
+    assert own.php in own_deps, f"Control ({own.abi}) install: {own.php} not in deps; pkg query '%dn %dv':\n{own_deps}"
+    # Own install succeeded — this is the before-state anchor.
 
-    # ---- Forge Plus .pkg (php85 dep, FreeBSD:16 ABI) ----
-    plus_pkg = forge_plus_pkg(src, tmp_path / "plus_forge")
+    # ---- Forge the OPPOSITE variant's .pkg (opp.php dep, opp.abi ABI) ----
+    opp_pkg = forge_variant_pkg(src, tmp_path / "opp_forge", target_php=opp.php, target_abi=opp.abi)
 
-    # ---- Build Plus catalog in plus-26.03/FreeBSD:16:amd64/ ----
-    plus_abi_dir = build_repo_via_portable_named(
+    # ---- Build the opposite-variant catalog in <opp.catalog>/<opp.abi>/ ----
+    opp_abi_dir = build_repo_via_portable_named(
         repo_vm,
-        [plus_pkg],
+        [opp_pkg],
         tmp_path,
-        catalog_name=PLUS_CATALOG_NAME,
+        catalog_name=opp.catalog,
         guest_root=VARIANT_REPO_ROOT,
     )
 
-    # Remove the CE install; point conf at Plus catalog.
+    # Remove the own install; point conf at the opposite-variant catalog.
     pkg_delete(repo_vm)
     assert vm_pkg_query_name(repo_vm) == "", "package still present after pkg_delete"
-    write_repo_conf(repo_vm, plus_abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, opp_abi_dir, ours_priority=pfsense_prio + 100)
 
     try:
         pkg_update(repo_vm)
     except RuntimeError:
-        # pkg update may fail on ABI mismatch (CE vm, FreeBSD:16 catalog) — that
+        # pkg update may fail on ABI mismatch (this box vs the opposite ABI) — that
         # is itself evidence the guard fired; treat as acceptable.
         pass
 
-    # WHEN: attempt install from the Plus catalog on a CE VM.
+    # WHEN: attempt install of the opposite variant on this box.
     install_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=300.0)
 
     # THEN: either the install failed non-zero, or it "succeeded" but the dep was
@@ -1510,16 +1611,16 @@ def test_wrong_variant_plus_catalog_fails_on_ce_vm(repo_vm: SmokeVM, tmp_path: P
 
     # The guard must fire: either the install returned non-zero, or the package is absent.
     assert install_failed or not package_installed, (
-        "Wrong-variant guard did NOT fire: Plus package installed successfully on a CE VM.\n"
+        f"Wrong-variant guard did NOT fire: {opp.abi} package installed successfully on a {own.abi} box.\n"
         f"pkg install rc={install_result.returncode}\n"
         f"pkg install output:\n{install_output}\n"
         f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
     )
-    # The error output should mention php85 or ABI mismatch (informational assert — soft).
-    has_php85_error = "php85" in install_output
+    # The error output should mention the opposite php or an ABI mismatch (informational — soft).
+    has_opp_php_error = opp.php in install_output
     has_abi_error = any(kw in install_output.lower() for kw in ("abi", "mismatch", "incompatible", "not found"))
-    assert has_php85_error or has_abi_error or install_failed, (
-        "Wrong-variant install: expected php85/ABI error or non-zero exit; got:\n"
+    assert has_opp_php_error or has_abi_error or install_failed, (
+        f"Wrong-variant install: expected {opp.php}/ABI error or non-zero exit; got:\n"
         f"rc={install_result.returncode}\n{install_output}"
     )
     # Package must NOT be installed after the failed attempt.
@@ -1638,16 +1739,17 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
 
 @pytest.mark.timeout(300)
 @pytest.mark.xfail(reason="routing.json not yet deployed to Pages (ADR-20 Phase 6 prerequisite)", strict=False)
-def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
-    """ADR-20 P6 CASE 4 — pkg fetch via Worker URL gets the CE variant catalog.
+def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
+    """ADR-20 P6 CASE 4 — pkg fetch via Worker URL gets THIS box's variant catalog.
 
-    Scenario: pkg fetch via Worker URL gets CE meta.conf.
+    Scenario: pkg fetch via Worker URL gets the box's variant meta.conf.
       Background: conf with url: https://pkg.pfblockerng.workers.dev.
 
-    Given a CE VM with the conf pointing at the Worker URL (``${ABI}`` suffix added
+    Given a box with the conf pointing at the Worker URL (``${ABI}`` suffix added
       by pkg), ``pkg update -r pfblockerng`` fetches from the Worker.
-    Then the fetched catalog contains the CE package (not Plus) — confirmed by
-      ``pkg rquery -r pfblockerng '%dn %dv' <pkgname>`` showing ``php83`` dep.
+    Then the fetched catalog contains the box's OWN variant package (not the opposite) —
+      confirmed by ``pkg rquery -r pfblockerng '%dn %dv' <pkgname>`` showing the box's own
+      php dep (php83 on CE / php85 on Plus, from the matrix).
 
     XFAIL: the Cloudflare Worker is live but routing.json has not yet been deployed
     to Pages (Phase 5 RESULTS: Worker returns 502 when routing.json absent).  Once
@@ -1681,15 +1783,19 @@ def test_routing_url_delivers_ce_catalog(repo_vm: SmokeVM) -> None:
     # this is what triggers the xfail.
     update_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-r", OURS_REPO_NAME, timeout=120.0)
 
-    # If pkg update succeeded (routing.json live), assert the catalog contains the CE package.
+    # If pkg update succeeded (routing.json live), assert the catalog contains the box's
+    # OWN variant package (own php dep present, opposite absent) — variant from the matrix.
     if update_result.returncode == 0:
+        own = own_variant()
+        opp = opposite_variant()
         rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
         rquery_out = rquery.stdout.strip()
-        assert "php83" in rquery_out, (
-            f"Worker URL catalog does not contain CE php83 dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
+        assert own.php in rquery_out, (
+            f"Worker URL catalog does not contain the box's {own.php} dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
         )
-        assert "php85" not in rquery_out, (
-            f"Worker URL returned Plus (php85) catalog to a CE box; pkg rquery output:\n{rquery_out}"
+        assert opp.php not in rquery_out, (
+            f"Worker URL returned the {opp.abi} ({opp.php}) catalog to a {own.abi} box; "
+            f"pkg rquery output:\n{rquery_out}"
         )
     else:
         # Routing layer not yet live — trigger the xfail.
