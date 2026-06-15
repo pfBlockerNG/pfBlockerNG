@@ -1353,6 +1353,10 @@ function pfb_global() {
 	$pfb['dnsbl_alexatype'] = isset($pfb['dnsblconfig']['alexa_type'])	? $pfb['dnsblconfig']['alexa_type'] 	 : 'tranco';	// TOP1M type (Tranco, Alexa or Cisco)
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];									// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_global_log']= isset($pfb['dnsblconfig']['global_log']) 	? $pfb['dnsblconfig']['global_log']	 : '';		// Global Logging/Blocking mode
+	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
+	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
+	// (strict); existing installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
+	$pfb['dnsbl_lenient']	= (($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '') === 'on') ? 'on' : 'off';			// DNSBL scheme-parsing leniency
 
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
 	$pfb['dnsbl_hsts']	= $pfb['dnsblconfig']['pfb_hsts'];			// DNSBL Resolver python block HSTS via Null Blocking mode
@@ -4002,18 +4006,72 @@ function pfb_strip_trailing_port($line) {
 }
 
 
-// ADR-22 Phase 1: extract the non-lite scheme strip into a named, testable helper.
-// If a '<scheme>://' is present, strip everything up to and including the first '://'
-// and return the remainder; otherwise return the line unchanged. Behaviour-preserving
-// extraction of the former inline logic -- strpos() finds the FIRST '://' anywhere in the
-// token, so today's permissive cases ('123://evil.com', '://evil.com', mid-token schemes)
-// are kept byte-identical. Phase 2 adds a $strict toggle (RFC 3986 scheme validation +
-// path rejection) returning string|false; Phase 1 returns string only.
-function pfb_dnsbl_strip_scheme(string $line): string {
-	if (strpos($line, '://') !== FALSE) {
-		return substr($line, strpos($line, '://') + 3);
+// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle.
+//
+// No '://' present  -> return the line unchanged (no scheme to strip).
+//
+// $strict === FALSE (lenient -- today's behaviour, byte-identical): strip everything up to
+// and including the FIRST '://' and return the remainder (paths/query/port handled
+// downstream). strpos() finds the first '://' anywhere, so the permissive cases
+// ('123://evil.com', '://evil.com', mid-token schemes) are accepted exactly as before. The
+// $strict parameter DEFAULTS to FALSE so callers (and the Phase-1 oracle tests) that pass no
+// second argument observe this unchanged behaviour.
+//
+// $strict === TRUE (lenient OFF): validate the text before '://' against the RFC 3986 scheme
+// grammar (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )); an invalid scheme returns FALSE.
+// A single trailing '/' (root path) is normalised away; any remaining '/' is an actual path
+// and returns FALSE. A FALSE return tells the caller to skip + log the line (ADR §2.3/§2.4).
+function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
+	$pos = strpos($line, '://');
+	if ($pos === FALSE) {
+		return $line;
 	}
-	return $line;
+	if ($strict) {
+		$scheme = substr($line, 0, $pos);
+		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
+			return FALSE;
+		}
+	}
+	$remainder = substr($line, $pos + 3);
+	if ($strict) {
+		// A single trailing '/' is the root path -- normalise it away.
+		if (str_ends_with($remainder, '/')) {
+			$remainder = substr($remainder, 0, -1);
+		}
+		// Any remaining '/' means an actual path is present -- reject.
+		if (strpos($remainder, '/') !== FALSE) {
+			return FALSE;
+		}
+	}
+	return $remainder;
+}
+
+
+// ADR-22: per-line scheme parse for the non-lite download path. Returns the parsed host
+// string to keep, or FALSE when strict parsing rejected the line (invalid scheme or a URL
+// path). On rejection it records the line in the DNSBL parse-error log (the established
+// per-line sink) and increments the per-feed skip counter so the caller can emit one summary
+// WARNING (pfb_dnsbl_scheme_skip_warn) after the feed. In lenient mode it never rejects, so
+// the counter is untouched and no parse-error line is written -- byte-identical to today.
+function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $logfile, &$skipped): string|false {
+	$stripped = pfb_dnsbl_strip_scheme($line, $strict);
+	if ($stripped === FALSE) {
+		pfb_parsed_fail($header, $line, $oline, $logfile);
+		$skipped++;
+		return FALSE;
+	}
+	return $stripped;
+}
+
+
+// ADR-22: the once-per-feed strict-parsing skip summary. A WARNING to the main pfBlockerNG
+// log (and error log -- logtype 2) naming the feed + the count, so a feed with many
+// malformed lines summarises in one line (per-line detail stays in the parse-error log).
+// Silent when nothing was skipped (lenient mode never increments the counter).
+function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
+	if ($skipped > 0) {
+		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 2);
+	}
 }
 
 
@@ -6203,6 +6261,29 @@ function pfb_control_legacy_seed($dconfig) {
 		$dconfig['pfb_control_legacy'] = 'on';
 	}
 	$dconfig['pfb_control_legacy_seeded'] = 'on';
+	return $dconfig;
+}
+
+
+// ADR-22: one-time upgrade migration for the 'pfb_dnsbl_lenient' DNSBL scheme-parsing
+// toggle. $dconfig is the existing DNSBL-settings 'config/0' node. New installs default to
+// OFF (strict RFC 3986 parsing); an EXISTING install (a non-empty config section) that
+// predates this key is migrated to 'on' (lenient) to preserve the permissive behaviour it
+// already relies on -- malformed-scheme lines were silently accepted/blocked before. Keying
+// on a non-empty $dconfig distinguishes an upgrade from a first-ever install (which has no
+// prior config section, so the new-install strict default stands). Migration ONLY sets a
+// missing key -- an existing 'on'/'off' value is never overwritten. Returns the updated
+// config array to persist, or NULL when nothing should change (fresh install, or the key
+// already present).
+function pfb_dnsbl_lenient_migrate($dconfig) {
+
+	if (!is_array($dconfig) || empty($dconfig)) {
+		return NULL;
+	}
+	if (isset($dconfig['pfb_dnsbl_lenient'])) {
+		return NULL;
+	}
+	$dconfig['pfb_dnsbl_lenient'] = 'on';
 	return $dconfig;
 }
 
@@ -10910,6 +10991,7 @@ function sync_package_pfblockerng($cron='') {
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
 								$ipcount = $ip_cnt = $ip_cnt6 = 0;
+								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
@@ -11233,8 +11315,18 @@ function sync_package_pfblockerng($cron='') {
 
 											if (!$lite) {
 
-												// If 'http|https|telnet|ftp://' found, remove (ADR-22)
-												$line = pfb_dnsbl_strip_scheme($line);
+												// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON,
+												// the migrated/legacy default) keeps today's permissive strip;
+												// strict (toggle OFF, the new-install default) validates the
+												// scheme against RFC 3986 and rejects URL paths -- a rejected
+												// line is skipped, recorded per-line in the parse-error log, and
+												// counted for the once-per-feed summary WARNING below.
+												$strict = ($pfb['dnsbl_lenient'] !== 'on');
+												$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline,
+													$pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
+												if ($line === FALSE) {
+													continue;
+												}
 
 												// If '/' character found, remove characters after '/'
 												if (strpos($line, '/') !== FALSE) {
@@ -11344,6 +11436,11 @@ function sync_package_pfblockerng($cron='') {
 								if ($fhandle) {
 									@fclose($fhandle);
 								}
+
+								// ADR-22: one WARNING per feed summarising strict-mode skips (silent
+								// when none -- lenient never increments the counter).
+								pfb_dnsbl_scheme_skip_warn($pfb_scheme_skipped, $header);
+
 								if (isset($csvline)) {
 									unset($csvline);
 								}

@@ -1,0 +1,264 @@
+================================================================================
+ADR-22 Phase 2 — RESULTS
+Lenient DNSBL parsing toggle + RFC 3986 validation + migration + skip logging
+================================================================================
+
+PREREQUISITE — Phase 1 handoff (01_Results.txt) confirmed: pfb_dnsbl_strip_scheme()
+extracted, 10 oracle tests green, helper + call-site located. GO recorded for Phase 2.
+
+--------------------------------------------------------------------------------
+1. HELPER pfb_dnsbl_strip_scheme() — final signature + body
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc (def follows pfb_strip_trailing_port).
+
+    function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
+        $pos = strpos($line, '://');
+        if ($pos === FALSE) {
+            return $line;
+        }
+        if ($strict) {
+            $scheme = substr($line, 0, $pos);
+            if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
+                return FALSE;
+            }
+        }
+        $remainder = substr($line, $pos + 3);
+        if ($strict) {
+            // A single trailing '/' is the root path -- normalise it away.
+            if (str_ends_with($remainder, '/')) {
+                $remainder = substr($remainder, 0, -1);
+            }
+            // Any remaining '/' means an actual path is present -- reject.
+            if (strpos($remainder, '/') !== FALSE) {
+                return FALSE;
+            }
+        }
+        return $remainder;
+    }
+
+$strict DEFAULTS to FALSE -> Phase-1 oracle tests (no 2nd arg) still pass unmodified.
+return type widened string -> string|false (FALSE = skip+log). Matches ADR §2.4 exactly.
+
+Two NEW sibling helpers (same region) provide the testable call-site seam:
+
+    // per-line: strip + on-reject record parse-error + bump per-feed counter; returns
+    //           kept host string OR FALSE.
+    function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline,
+                                   $logfile, &$skipped): string|false {
+        $stripped = pfb_dnsbl_strip_scheme($line, $strict);
+        if ($stripped === FALSE) {
+            pfb_parsed_fail($header, $line, $oline, $logfile);
+            $skipped++;
+            return FALSE;
+        }
+        return $stripped;
+    }
+
+    // per-feed: one WARNING when something was skipped (silent otherwise).
+    function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
+        if ($skipped > 0) {
+            pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict "
+                . "parsing rejected an invalid scheme or URL path (see DNSBL "
+                . "parse-error log)\n", 2);
+        }
+    }
+(single-line in source; wrapped here for readability.)
+
+--------------------------------------------------------------------------------
+2. CONFIG KEY + exact read path
+--------------------------------------------------------------------------------
+Config key:  pfb_dnsbl_lenient
+Stored in:   installedpackages/pfblockerngdnsblsettings/config/0  (the DNSBL-settings
+             section, read into $pfb['dnsblconfig'] at pfblockerng.inc:1287 and into
+             $pfb['dconfig'] in the UI page).
+
+Read (in pfb_global(), pfblockerng.inc, right after $pfb['dnsbl_global_log']):
+
+    $pfb['dnsbl_lenient'] =
+        (($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '') === 'on') ? 'on' : 'off';
+
+Null-coalesced source (a config predating the key reads '' -> 'off' = strict; no
+undefined-key warning), matching the pfb_idn idiom nearby. Anything but 'on' => 'off'.
+
+--------------------------------------------------------------------------------
+3. UI FIELD — name + help text
+--------------------------------------------------------------------------------
+File: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php   (the actual DNSBL-tab page;
+      the prompt/ADR named pfblockerng_general.php, but the DNSBL config section + all
+      sibling DNSBL toggles — pfb_cname, pfb_hsts, pfb_idn, … — live HERE, keyed to
+      pfblockerngdnsblsettings. Followed CLAUDE.md "read the file, don't guess paths":
+      a checkbox in pfblockerng_general.php would not persist to the DNSBL section the
+      parser reads. Placed in the "DNSBL Python Configuration" section after pfb_cname.)
+
+Field id:   pfb_dnsbl_lenient   (Form_Checkbox, value 'on'; checked iff pconfig === 'on')
+Label:      "Lenient feed parsing"
+Help:       'Parse DNSBL feed lines permissively: any <scheme://> is stripped and URL
+             paths are removed.
+             When disabled (strict), lines with an invalid scheme (e.g. 123://) or a
+             URL path are skipped and logged.
+             New installs default to disabled (strict); upgraded installs keep the
+             permissive behaviour.'
+            (<strong>-marked tokens in source; brief, matches neighbour help length.)
+
+$pconfig read:  $pconfig['pfb_dnsbl_lenient'] = $pfb['dconfig']['pfb_dnsbl_lenient'] ?: '';
+                (absent => '' => unchecked = strict for NEW installs.)
+Save:           $pfb['dconfig']['pfb_dnsbl_lenient'] =
+                    pfb_filter($_POST['pfb_dnsbl_lenient'], PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+                (identical idiom to every sibling on/off DNSBL toggle.)
+
+--------------------------------------------------------------------------------
+4. CALL-SITE wiring (resolution + skip + counter)
+--------------------------------------------------------------------------------
+sync_package_pfblockerng(), the non-lite block (`if (!$lite) {`):
+
+    $strict = ($pfb['dnsbl_lenient'] !== 'on');
+    $line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline,
+        $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
+    if ($line === FALSE) {
+        continue;
+    }
+
+Counter init:  $pfb_scheme_skipped = 0;  placed with the other per-feed resets
+               ($ipcount = $ip_cnt = $ip_cnt6 = 0;) BEFORE the per-line while loop,
+               so it resets once per feed.
+
+Per-feed WARNING: emitted AFTER the per-line loop closes (right after the $fhandle
+               fclose), still inside the per-feed `foreach ($list['row'] ...)` iteration:
+
+    pfb_dnsbl_scheme_skip_warn($pfb_scheme_skipped, $header);
+
+=> ONE summary line per feed, never per skipped line. Lenient mode never increments
+   $pfb_scheme_skipped, so the warning stays silent => byte-identical to today.
+
+The old `// If 'http|https|telnet|ftp://' found, remove (ADR-22)` comment is replaced by a
+comment stating the ADR-22 behaviour. Downstream path/query/fragment/port strips
+(unchanged) still run when lenient (only valid, path-free hosts reach them under strict).
+
+--------------------------------------------------------------------------------
+5. MAIN-LOG function / level for the WARNING
+--------------------------------------------------------------------------------
+pfb_logger($log, 2)  — logtype 2 = "Print to pfBlockerNG log AND Error log" (same level
+the sibling "Header Field cannot be empty. *Skipping*" feed warning uses). Per-line sink
+is the existing pfb_parsed_fail(..., $pfb['dnsbl_parse_err']) CSV parse-error log.
+
+--------------------------------------------------------------------------------
+6. MIGRATION — location + existing-vs-fresh detection
+--------------------------------------------------------------------------------
+Pure decision fn (pfblockerng.inc, after pfb_control_legacy_seed):
+
+    function pfb_dnsbl_lenient_migrate($dconfig) {
+        if (!is_array($dconfig) || empty($dconfig)) { return NULL; }   // fresh install
+        if (isset($dconfig['pfb_dnsbl_lenient']))   { return NULL; }   // never overwrite
+        $dconfig['pfb_dnsbl_lenient'] = 'on';
+        return $dconfig;
+    }
+
+Existing-vs-fresh detection: a NON-EMPTY $dconfig (a populated DNSBL config/0 section) =
+an UPGRADE; an empty/absent section = a first-ever install => NULL => no write => the
+new-install strict default (unchecked, 'off') stands. This is the SAME predicate the
+adjacent ADR-02 migration block uses (`!empty($cfg)`), so it is consistent in-file.
+
+Call site (pfblockerng_install.inc, after the PFBL-03 seed block):
+
+    $cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+    $cfg_lenient = pfb_dnsbl_lenient_migrate($cfg);
+    if ($cfg_lenient !== NULL) {
+        config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg_lenient);
+        write_config('pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)');
+    }
+    unset($cfg, $cfg_lenient);
+
+Extracted as a pure fn (mirrors pfb_control_legacy_seed) precisely so it is unit-testable
+off-appliance; the top-level install.inc code is procedural and not directly testable.
+
+--------------------------------------------------------------------------------
+7. PHPUNIT — test classes + method names
+--------------------------------------------------------------------------------
+tests/php/PfbDnsblStripSchemeTest.php  (Phase-1 oracles UNMODIFIED + Phase-2 toggle cases):
+  Phase-1 (unchanged): testHttpSchemeStripped, testHttpsSchemeStripped,
+    testFtpSchemeStripped, testTelnetSchemeStripped, testCustomValidSchemeStripped,
+    testCompoundSchemeStripped, testNoSchemeUnchanged, testDigitStartSchemeCurrentBehavior,
+    testEmptySchemeCurrentBehavior, testMidTokenValidSchemeCurrentBehavior
+  Phase-2 lenient (strict=false passthrough):
+    testInvalidSchemePassthroughWhenLenient, testEmptySchemePassthroughWhenLenient,
+    testPathPassthroughWhenLenient
+  Phase-2 strict (strict=true, before-state lenient asserted first on each transition):
+    testInvalidSchemeRejectedWhenStrict, testEmptySchemeRejectedWhenStrict,
+    testSpecialCharsSchemeRejectedWhenStrict, testPathRejectedWhenStrict,
+    testTrailingSlashNormalisedWhenStrict, testPathAfterRootSlashRejectedWhenStrict
+  Regression guards (valid scheme accepted in BOTH states):
+    testValidSchemeAcceptedWhenLenient, testValidSchemeAcceptedWhenStrict,
+    testCompoundSchemeWhenStrict, testNoSchemeWhenStrict
+
+tests/php/PfbDnsblLenientMigrateTest.php  (#[CoversFunction pfb_dnsbl_lenient_migrate]):
+    testMigrationSkipsFreshInstall (empty + null -> NULL),
+    testMigrationSetsLenientOnForExistingInstallMissingKey (before: no key; after: 'on';
+      siblings preserved),
+    testMigrationDoesNotOverwriteExistingValue ('off' stays -> NULL),
+    testMigrationDoesNotOverwriteExistingOnValue ('on' stays -> NULL)
+
+tests/php/PfbDnsblSchemeSkipLogTest.php  (#[CoversFunction pfb_dnsbl_scheme_line,
+    pfb_dnsbl_scheme_skip_warn]):
+    testStrictResolvesTrueWhenLenientOff, testStrictResolvesFalseWhenLenientOn
+      (the `strict = lenient !== 'on'` predicate, both branches),
+    testStrictSkipIsLogged (FALSE returned, counter=1, parse-error CSV written w/ header+line),
+    testLenientEmitsNoNewLog (same input lenient -> kept 'evil.com', counter=0, log empty),
+    testValidSchemeLineKeptInStrictWithoutLogging (strict must not skip a valid line),
+    testPerFeedWarningEmittedOnceWhenSkipped (one WARNING, names feed + count;
+      substr_count('line(s) skipped')==1),
+    testPerFeedWarningSilentWhenNothingSkipped (count 0 -> log empty)
+
+Skip-log tests exercise the REAL pfb_parsed_fail()/pfb_logger() (shipped code), pointed at
+tempnam() files (parse-error log via the $logfile param; main log via $GLOBALS['pfb']['log']),
+then read the file back and assert the contents — not coverage theater.
+
+--------------------------------------------------------------------------------
+8. VERIFICATION GATE OUTCOMES
+--------------------------------------------------------------------------------
+php -l pfblockerng.inc            => No syntax errors detected.
+php -l pfblockerng_install.inc    => No syntax errors detected.
+php -l pfblockerng_dnsbl.php      => No syntax errors detected.
+vendor/bin/phpunit               => OK (549 tests, 1088 assertions). +24 over Phase 1's 525.
+                                    (incidental "/usr/bin/drill: not found" line is the
+                                     pre-existing unrelated test noise noted in Phase 1.)
+vendor/bin/phpstan analyse       => [OK] No errors.
+vendor/bin/phpcs                 => clean (PFBL-01 RequirePfbFilter sniff passes; the new
+                                    helpers are not in-scope sinks).
+python -m pytest                 => 1611 passed. Unchanged (no Python touched).
+ruff check . && ruff format .    => All checks passed! / 101 files left unchanged.
+
+Diff scope (git diff origin/devel...HEAD, Phase-2 working set) — ONLY:
+    M src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    M src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+    M src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+    M tests/php/PfbDnsblStripSchemeTest.php
+    A tests/php/PfbDnsblLenientMigrateTest.php
+    A tests/php/PfbDnsblSchemeSkipLogTest.php
+Matches the Phase-2 CONSTRAINTS exactly. No log double needed in pfsense_doubles.php —
+the real pfb_parsed_fail/pfb_logger write to test-controlled temp paths.
+
+--------------------------------------------------------------------------------
+9. EDGE CASES / NOTES
+--------------------------------------------------------------------------------
+- 'http://evil.com/path/' (trailing slash AFTER a path): strict normalises the single
+  trailing '/', but a '/' remains -> FALSE. Guards a "strip the last slash" bypass
+  (testPathAfterRootSlashRejectedWhenStrict).
+- 'ftp://ftp.evil.com/' (root-slash only): strict returns 'ftp.evil.com' (ADR §2.6.5).
+- pfb_filter() remains the unconditional domain gate downstream (untouched).
+- ADR-21 ||/@@|| guard, lite path, ABP path: untouched.
+- UI file is pfblockerng_dnsbl.php, NOT pfblockerng_general.php (the ADR/prompt named the
+  latter; the DNSBL config section actually lives in the former — see §3). This is the
+  single intentional deviation, forced by reading the source; it makes the checkbox
+  persist to the section pfb_global() reads.
+
+--------------------------------------------------------------------------------
+10. GO-AHEAD FOR PHASE 3 (DoD smoke)
+--------------------------------------------------------------------------------
+GO. The toggle, RFC 3986 validation, migration, and per-line + per-feed skip logging are
+implemented and unit-proven (both states, before+after, migration 3 ways, log fires/silent,
+warning once-per-feed). Phase 3 may now stand up the live-VM smoke: lenient OFF (strict) ->
+123:// + http://host/path skipped (parse-error log + per-feed WARNING), evil://host +
+http://host blocked; lenient ON -> 123:// + http://host/path blocked; migration: an existing
+install upgraded -> pfb_dnsbl_lenient = 'on'. The UI checkbox is on the DNSBL tab
+(pfblockerng_dnsbl.php), field id 'pfb_dnsbl_lenient'.
+================================================================================

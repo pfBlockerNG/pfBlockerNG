@@ -72,6 +72,9 @@ $pconfig['pfb_idn_escalate_suspicious']	= $pfb['dconfig']['pfb_idn_escalate_susp
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
 $pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
 $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
+// ADR-22: lenient scheme parsing. Absent = unchecked (strict) for new installs; existing
+// installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
+$pconfig['pfb_dnsbl_lenient']	= $pfb['dconfig']['pfb_dnsbl_lenient']			?: '';
 $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
 $pconfig['pfb_pytld']		= $pfb['dconfig']['pfb_pytld']				?: '';
@@ -560,6 +563,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['pfb_dnsbl_lenient']	= pfb_filter($_POST['pfb_dnsbl_lenient'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_noaaaa']		= pfb_filter($_POST['pfb_noaaaa'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 
@@ -2514,6 +2518,16 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Enable the CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
 		. 'Events are logged with a "_CNAME" suffix in the DNSBL Log.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dnsbl_lenient',
+	gettext('Lenient feed parsing'),
+	'Enable',
+	$pconfig['pfb_dnsbl_lenient'] === 'on' ? true:false,
+	'on'
+))->setHelp('Parse DNSBL feed lines permissively: any <strong>scheme://</strong> is stripped and URL paths are removed.<br />'
+		. 'When disabled (strict), lines with an invalid scheme (e.g. <strong>123://</strong>) or a URL path are skipped and logged.<br />'
+		. 'New installs default to disabled (strict); upgraded installs keep the permissive behaviour.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_noaaaa',
