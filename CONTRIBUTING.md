@@ -784,17 +784,36 @@ so the normal unit run is unaffected.
 
 ### Running it in CI
 
-`.github/workflows/smoke.yml` runs the matrix on GitHub-hosted KVM. It is
-**gated** — `workflow_dispatch` + `workflow_call` only (a nightly `schedule` is
-provided, commented) — **not** every-PR yet, because the per-run wall-time has
-not been measured against §7's ~20 min/job budget. Once a dispatched run
-confirms it fits, add a `pull_request` trigger to move it to every-PR. Trigger a
-run with:
+The **default full run is the fan-out**: `.github/workflows/smoke-fanout.yml`
+runs the ADR-04 suite across **every `ci:true` image — CE *and* Plus** (ADR-24) —
+in parallel (`fail-fast: false`), gated by the `all-smoke-passed` AND-check. It
+takes **no inputs** (it reads the CI matrix from the `ci-metadata` branch), is the
+validation an ADR is accepted against, and is what `version-tracker` dispatches on
+a version bump (plus a nightly `schedule`). This is the canonical "run the smoke
+suite" command:
 
 ```sh
-gh workflow run smoke.yml                        # uses the SMOKE_IMAGE_REF secret/variable
-gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+gh workflow run smoke-fanout.yml                  # all ci:true legs (CE + Plus) — the default
 ```
+
+Both it and the single-leg callee are **gated** — `workflow_dispatch` +
+`workflow_call` (the fan-out also runs nightly) — **not** every-PR yet, because the
+per-run wall-time has not been measured against §7's ~20 min/job budget.
+
+For a **narrow, single-leg run** — one image, or a non-default `pytest_marker` the
+fan-out can't select (e.g. the ADR-17 `repo` flow) — drive the reusable callee
+`.github/workflows/smoke.yml` directly (it is also what the fan-out invokes per leg):
+
+```sh
+gh workflow run smoke.yml                          # single CE leg (composes the ref from the SMOKE_IMAGE_* vars)
+gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+gh workflow run smoke.yml -f pytest_marker=repo    # ADR-17 repo-install flow (single leg)
+```
+
+The ADR-17 repository-install flow has its **own** fan-out too —
+`.github/workflows/repo-install.yml` runs the `repo` marker across **every `ci:true`
+leg (CE + Plus)** on a nightly `schedule` + `workflow_dispatch`, so the self-hosted
+`pkg` repo is proven to install on Plus as well as CE.
 
 The workflow builds the `.pkg` (`build-pkg-linux.yml`, portable Linux builder), pulls the pfSense
 image from private GHCR, then runs `pytest -m smoke`. The test fixture **blocks

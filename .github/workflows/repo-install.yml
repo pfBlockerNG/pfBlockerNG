@@ -1,36 +1,34 @@
 name: Repo install (ADR-17, live pfSense VM)
 
 # ADR-17 — the release -> repository -> install flow, validated on the live ADR-04
-# pfSense CE VM. This is DISTINCT from the smoke suite (Smoke / ADR-04): the smoke
+# pfSense VM. This is DISTINCT from the smoke suite (Smoke / ADR-04): the smoke
 # matrix validates pfBlockerNG's *runtime behaviour* (DNSBL blocking, etc.), while
 # this validates *distribution* — that a box installs our package from a
 # self-hosted, NONE-signed third-party `pkg` repository, lands every file, and that
 # cross-repo version precedence favours our build.
 #
-# REUSE, NOT DUPLICATION: it calls the smoke harness (smoke.yml as a reusable
+# FANS OUT OVER EVERY ci:true LEG, CE AND PLUS (ADR-24): the self-hosted repo must
+# install on Plus exactly as on CE, so — like smoke-fanout.yml — this reads the
+# ci-metadata CI matrix and runs one repo-install leg per ci:true entry in parallel
+# (fail-fast: false), with an AND-gate that is green only if every leg passed.
+#
+# REUSE, NOT DUPLICATION: each leg calls the smoke harness (smoke.yml as a reusable
 # workflow) so the VM boot / image pull / branch-.pkg build / SSH wiring are shared,
 # but selects the `repo` pytest marker (tests/smoke/test_repo_install.py) instead of
 # `smoke`. The `repo` tests are deselected from `-m smoke`, so the smoke gate never
-# runs them and this never runs the smoke matrix.
+# runs them and this never runs the smoke matrix. Each leg builds its own ABI-matched
+# .pkg (CE FreeBSD:15 / Plus FreeBSD:16 — pkg add refuses a cross-major-ABI package).
 #
 # TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
 # is GATED — it only proceeds when `devel` actually moved since the previous nightly
-# (no point rebuilding the branch .pkg + booting a VM to re-test unchanged code; the
+# (no point rebuilding the branch .pkg + booting VMs to re-test unchanged code; the
 # real version push, repo-publish, runs only on release tags). Not an every-PR gate (a
-# live VM under KVM is ~15 min). Secrets + required config are smoke.yml's
-# (SMOKE_IMAGE_REF / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY); `secrets: inherit` forwards them.
+# live VM under KVM is ~15 min/leg). Secrets + required config are smoke.yml's
+# (SMOKE_IMAGE_* / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY, plus the Plus-leg SMOKE_PLUS_*
+# identity secrets); `secrets: inherit` forwards them.
 
 on:
   workflow_dispatch:
-    inputs:
-      image_ref:
-        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars). Pin by @sha256:<digest>."
-        required: false
-        default: ""
-      pfsense_version:
-        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
-        required: false
-        default: ""
   schedule:
     # 08:00 UTC nightly — staggered after ui-tests (05), version-tracker (06) and
     # smoke-fanout (07) so the KVM runs don't pile up. Gated on `devel` having changed.
@@ -42,8 +40,8 @@ permissions:
 
 jobs:
   # On a `schedule`, run only if `devel` got a commit since the last SUCCESSFUL run of
-  # this workflow — skip an otherwise-wasted ~15-min VM run when nothing changed, while
-  # a failed/missed nightly's commits stay in scope next time. A manual dispatch always runs.
+  # this workflow — skip an otherwise-wasted VM run when nothing changed, while a
+  # failed/missed nightly's commits stay in scope next time. A manual dispatch always runs.
   gate:
     name: Gate (skip nightly if devel unchanged)
     runs-on: ubuntu-latest
@@ -93,12 +91,137 @@ jobs:
             echo "::notice::No commits to ${{ github.ref_name }} since the last successful run (${since}) — skipping."
           fi
 
-  repo-install:
+  # Read the ci:true legs (CE + Plus) from the ci-metadata CI matrix — the SAME source
+  # smoke-fanout.yml fans out over (ADR-24). Emits `ci_matrix` (JSON array) as the
+  # `include` list for the repo-install job's strategy.matrix. ci:false entries are
+  # NEVER present; the CI GUARD below hard-fails any ci != true leak (schema fail-safe).
+  prepare:
+    name: Read CI matrix
     needs: gate
     if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      ci_matrix: ${{ steps.read.outputs.ci_matrix }}
+      leg_count: ${{ steps.count.outputs.leg_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # reach the ci-metadata orphan ref
+
+      - name: Read CI matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Count legs + assert every leg is ci:true
+        id: count
+        env:
+          CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
+        run: |
+          set -eu
+          COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Legs in CI matrix: ${COUNT}"
+
+          # CI GUARD: assert every entry is ci=true (ADR-24). The matrix reader already
+          # filters to ci:true; this is a hard fail-safe so a schema change can never
+          # silently admit a ci:false (e.g. retired/unlicensed) entry.
+          BAD_COUNT=$(printf '%s\n' "$CI_MATRIX" \
+            | jq '[.[] | select(.ci != true)] | length')
+          if [ "$BAD_COUNT" -ne 0 ]; then
+            echo "::error::CI GUARD: CI matrix contains ${BAD_COUNT} ci:false entries — aborting."
+            printf '%s\n' "$CI_MATRIX" | jq '.[] | select(.ci != true)'
+            exit 1
+          fi
+          echo "CI guard: OK — all ${COUNT} leg(s) are ci:true."
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::CI matrix is empty — no images to repo-install-test."
+          fi
+
+  # One repo-install leg per ci:true entry (CE + Plus), in parallel. Each calls the
+  # ADR-04 smoke workflow (smoke.yml) as a reusable callee with pytest_marker=repo,
+  # passing the per-leg image ref + ABI/dep target. `fail-fast: false` ensures EVERY
+  # leg runs to completion regardless of whether another leg has already failed.
+  repo-install:
+    name: Repo install (${{ matrix.channel }} ${{ matrix.pfsense_version }})
+    needs: prepare
+    # Run even if prepare had warnings; skip only when there are zero legs.
+    if: needs.prepare.outputs.leg_count != '0'
+    strategy:
+      fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
     uses: ./.github/workflows/smoke.yml
     with:
-      image_ref: ${{ inputs.image_ref }}
-      pfsense_version: ${{ inputs.pfsense_version }}
+      # Per-leg version/name/mac — pfsense_version IS the GHCR floating tag (e.g. "2.8"),
+      # image_name selects the image (Plus = pfsense-plus), mac is the boot MAC (smoke.yml
+      # ignores it for a Plus leg and uses the SMOKE_PLUS_MAC secret instead).
+      pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
+      # Per-leg .pkg target so the built package matches the image's pfSense base: the
+      # ABI tag is keyed on the matrix freebsd_major (CE=15, Plus=16) — pkg add refuses
+      # a cross-major-ABI .pkg — and the dep names track php_version/py_flavor.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # The distribution flow — not the runtime smoke matrix.
       pytest_marker: repo
     secrets: inherit
+
+  # AND-gate: green only if ALL legs passed. Runs regardless of the matrix outcome
+  # (if: always()) and hard-fails unless every leg passed — EXCEPT when the nightly
+  # gate intentionally skipped the run (devel unchanged), which is a legitimate PASS.
+  all-repo-install-passed:
+    name: All repo-install legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [gate, prepare, repo-install]
+    if: always()   # run even if repo-install failed/skipped/cancelled
+    steps:
+      - name: Assert every repo-install leg passed
+        env:
+          GATE_RUN: ${{ needs.gate.outputs.run }}
+          REPO_RESULT: ${{ needs.repo-install.result }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+        run: |
+          set -eu
+          echo "Nightly gate run    : ${GATE_RUN}"
+          echo "Repo-install result : ${REPO_RESULT}"
+          echo "CI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          # An intentional nightly skip (devel unchanged) is a PASS — nothing to test.
+          if [ "${GATE_RUN}" != "true" ]; then
+            echo "AND gate PASS — nightly gate skipped the run (devel unchanged); nothing to test."
+            exit 0
+          fi
+
+          # Zero-leg guard: an empty matrix skips the repo-install job (result='skipped').
+          # Treat this as a gate failure — the matrix should always carry at least one entry.
+          if [ "${LEG_COUNT:-0}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — CI matrix was empty (zero legs); nothing was tested."
+            exit 1
+          fi
+
+          # Main gate: the repo-install job result must be 'success'.
+          case "$REPO_RESULT" in
+            success)
+              echo "AND gate PASS — all ${LEG_COUNT} repo-install leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more repo-install legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — repo-install job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — repo-install job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected repo-install result '${REPO_RESULT}'."
+              exit 1
+              ;;
+          esac
