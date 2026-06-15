@@ -195,6 +195,22 @@ ctype too, so they keep `LC_ALL=C` and never adopt this resolver.
   sinks that matter are enumerable.
 - **Global `LC_ALL=C.UTF-8`.** Rejected for now: not universally available (macOS, old glibc,
   minimal images), still a global export, and buys nothing for today's ASCII data.
+- **Use `LANG=C` instead of `LC_ALL=C` at the sinks.** Rejected — `LANG=C` is both weaker and
+  redundant here, never a substitute. The locale precedence is **`LC_ALL` > each `LC_*` (e.g.
+  `LC_COLLATE`) > `LANG`**: `LC_ALL`, when set, forces **every** category and overrides all
+  `LC_*` and `LANG`; `LANG` is only the **fallback default** consulted for a category that no
+  `LC_ALL`/specific `LC_*` set. So:
+  - **`LANG=C` alone is unsafe.** An inherited `LC_COLLATE` (or `LC_ALL`) in the caller's
+    environment outranks `LANG` — `sort -u` would still collate UTF-8 and silently drop a
+    blocklist entry, the exact bug this ADR closes. `LC_ALL=C` cannot be defeated that way.
+  - **`LANG=C` *added alongside* `LC_ALL=C` is pure noise.** `LC_ALL` already pins all
+    categories, so `LANG` is never consulted; it only bloats the diff and breaks the
+    line-479 reference idiom's uniformity.
+  - The two are equivalent only in the degenerate case where no `LC_*` is set anywhere — a
+    fragile assumption that `LC_ALL=C` removes outright. Hence the inline prefix is `LC_ALL=C`,
+    and the "never export" rule in §2.2 covers **both** `LC_ALL` and `LANG` (exporting `LANG=C`
+    process-wide would, symmetrically, weakly-and-globally pollute children while still losing
+    to any child's own `LC_*`).
 - **Do nothing (rely on pfSense's ambient locale).** Rejected: works only because pfSense
   happens to run an effectively byte-collating default; the moment any of this runs on a
   Linux host with a UTF-8 default, `sort -u` can drop entries with no diagnostic.
