@@ -692,11 +692,11 @@ def test_wrong_variant_dep_absent() -> None:
     assert len(plus_deps) > 0
 
 
-def test_no_variant_flag_unchanged(tmp_path: Path) -> None:
-    """Without --variant, the dep list is identical to the current baseline.
+def test_no_php_no_guard_injected(tmp_path: Path) -> None:
+    """Without --php, no variant guard dep is injected (ADR-20: guard is gated on --php).
 
     Given the synthetic classic port (no USES=php / USES=python),
-    When built without --variant,
+    When built with --py-flavor but NO --php,
     Then the deps dict contains only the RUN_DEPENDS from the Makefile
     and none of the versioned php*/py* variant guards.
     """
@@ -715,10 +715,43 @@ def test_no_variant_flag_unchanged(tmp_path: Path) -> None:
     assert rc == 0
     full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
     dep_names = set(full.get("deps", {}).keys())
-    # foo comes from RUN_DEPENDS; no php* / py* variant guard added (no --variant)
+    # foo comes from RUN_DEPENDS; no php* / py* variant guard added (no --php)
     assert "foo" in dep_names
     assert not any(n.startswith("php8") for n in dep_names)
     assert not any(n.startswith("py3") for n in dep_names)
+
+
+def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
+    """With --php, the versioned php*/py* guard deps ARE injected (the on branch).
+
+    Paired with test_no_php_no_guard_injected (the off branch) this proves the guard
+    is a real branch keyed on --php, not an always-present or always-absent dep.
+
+    Given the synthetic classic port,
+    When built with --php 8.3 + --py-flavor py311 (CE values),
+    Then deps gain php83 + py311 (alongside the Makefile RUN_DEPENDS), and the
+    Plus discriminator php85 is absent.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--php", "8.3",
+            "--compression", "xz",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    dep_names = set(full.get("deps", {}).keys())
+    assert "foo" in dep_names  # Makefile RUN_DEPENDS still present
+    assert "php83" in dep_names  # CE PHP guard injected
+    assert "py311" in dep_names  # Python guard injected
+    assert "php85" not in dep_names  # the Plus discriminator stays absent
 
 
 def test_two_simultaneous_ce_entries() -> None:

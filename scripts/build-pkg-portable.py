@@ -741,11 +741,18 @@ def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]:
     versions differ between CE and Plus — this is the variant guard that
     prevents a wrong-variant package from silently installing.
 
+    Each side is emitted only when its source value is non-empty, so a build
+    that supplies only one of ``--php`` / ``--py-flavor`` still yields a
+    well-formed dep list (no bare ``"py"`` / ``"php"``).
+
     Pure function: no I/O, no side effects.  Testable without a ports tree.
     """
-    php_dep = "php" + php_version.replace(".", "")
-    py_dep = py_flavor if py_flavor.startswith("py") else f"py{py_flavor}"
-    return [php_dep, py_dep]
+    deps: list[str] = []
+    if php_version:
+        deps.append("php" + php_version.replace(".", ""))
+    if py_flavor:
+        deps.append(py_flavor if py_flavor.startswith("py") else f"py{py_flavor}")
+    return deps
 
 
 def apply_repo_catalogue(deps: list[Dep], source: str, abi: str) -> None:
@@ -1336,14 +1343,17 @@ def run_build(args: argparse.Namespace) -> Build:
     deps: dict[str, Dep] = {}
     for d in resolve_deps(mk, ports_root, seed) + synthesize_uses_deps(mk, ports_root, php_ver, py_flavor, seed):
         deps.setdefault(d.name, d)
-    # When --variant is given, inject variant-specific RUN_DEPENDS entries derived
-    # from --php and --py-flavor. These are the variant guard: they ensure `pkg add`
-    # rejects a wrong-variant .pkg (CE php83 won't satisfy a Plus php85 dep).
-    # The dep names are derived — not hardcoded — so updating ci-metadata is the
-    # only change needed when CE/Plus bumps their PHP or Python version.
-    if args.variant:
-        for dep_name in _resolve_variant_deps(php_ver, py_flavor):
-            # Variant deps augment (never override) USES-synthesised deps.
+    # Inject the variant guard RUN_DEPENDS derived from --php and --py-flavor
+    # whenever --php is supplied. These ensure `pkg add` rejects a wrong-variant
+    # .pkg (CE php83 won't satisfy a Plus php85 dep). The dep names are derived —
+    # not hardcoded — so a CE/Plus PHP or Python bump is just a ci-metadata edit.
+    # (ADR-20: the builder is dumb — it stamps no variant; the guard is purely the
+    # versioned php/py deps the requested --php/--py-flavor imply.) Keyed on the CLI
+    # args, NOT the USES-derived php_ver: the guard is independent of whether the port
+    # itself USES=php (php_ver is "" for a non-php port, but the guard must still land).
+    if args.php:
+        for dep_name in _resolve_variant_deps(args.php, args.py_flavor):
+            # Variant guard deps augment (never override) USES-synthesised deps.
             deps.setdefault(dep_name, Dep(name=dep_name, origin="", version="0"))
     b.deps = list(deps.values())
     # Best-effort dep versions come from the ports tree; the version make package
@@ -1404,17 +1414,6 @@ def main(argv: list[str]) -> int:
     )
     g_target.add_argument(
         "--freebsd-version", default="", help="build host __FreeBSD_version for annotations, e.g. 1500068 (optional)"
-    )
-    g_target.add_argument(
-        "--variant",
-        default="",
-        metavar="CE|Plus",
-        help=(
-            "pfSense variant (CE or Plus). When set, injects variant-specific RUN_DEPENDS "
-            "entries derived from --php and --py-flavor (e.g. php83 + py311 for CE 2.8). "
-            "Prevents wrong-variant packages from silently installing. "
-            "Without this flag behaviour is unchanged (backward-compatible)."
-        ),
     )
 
     g_snap = ap.add_argument_group("nightly overrides (ADR-18; default off — release build byte-identical)")
