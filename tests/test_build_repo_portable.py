@@ -1126,3 +1126,25 @@ def test_cli_build_matrix_unwraps_versions(tmp_path: Path, monkeypatch: pytest.M
     assert rc == 0
     assert captured["matrix"] == [_CE, _PLUS]  # unwrapped from {versions:[...]}
     assert captured["kw"]["build_nightly"] is False
+
+
+def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
+    """annotate kwargs reach every builder call (so publish.yml's commit/created stamp lands).
+
+    Given a recording builder,
+      When build_repo_matrix runs with annotate={commit, created},
+      Then every build (devel + nightly) receives that exact annotate dict.
+    """
+    seen: list[dict] = []
+
+    def recording_builder(channel: str, *, annotate: dict | None = None, **kw: Any) -> Path:
+        seen.append({"channel": channel, "annotate": annotate})
+        return _stub_builder(channel, **kw)
+
+    brp.build_repo_matrix(
+        [_CE], tmp_path / "site", builder=recording_builder, annotate={"commit": "deadbeef", "created": "123"}
+    )
+    assert seen, "builder was never called"
+    for call in seen:
+        assert call["annotate"] == {"commit": "deadbeef", "created": "123"}
+    assert {c["channel"] for c in seen} == {"devel", "nightly"}
