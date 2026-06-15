@@ -4059,15 +4059,16 @@ def _dnsbl_path_within_base(path: str, base_dir: str) -> bool:
 
     The manifest is published next to its raw feeds, so every ``raw`` / ``tld_master``
     file a row references must resolve under the manifest's own directory. A row whose
-    resolved path escapes that directory (e.g. via ``..`` or an absolute path pointing
-    elsewhere) is rejected by the caller -- never opened. Symlinks are resolved
-    (``os.path.realpath``) so a link inside ``base_dir`` cannot point outside it. The
-    base itself resolves the same way; containment is a prefix match on
-    ``base_dir + os.sep`` (the equal-to-base case never holds for a file path).
+    resolved path escapes that directory (via ``..`` or an absolute path elsewhere) is
+    rejected by the caller -- never opened. Symlinks are resolved (``os.path.realpath``)
+    so a link inside ``base_dir`` cannot point outside it.
     """
     real_base = os.path.realpath(base_dir)
     real_path = os.path.realpath(path)
-    return real_path == real_base or real_path.startswith(real_base + os.sep)
+    try:
+        return os.path.commonpath([real_base, real_path]) == real_base
+    except ValueError:
+        return False
 
 
 def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
