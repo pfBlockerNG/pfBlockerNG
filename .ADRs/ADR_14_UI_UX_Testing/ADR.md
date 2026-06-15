@@ -1,12 +1,6 @@
 # ADR-14: Web UI/UX testing on the live pfSense VM (tiered render + functional + browser)
 
-- **Status:** **Implemented (pending smoke test)** (2026-06-04) — all six phases
-  landed on `adr/14`; the harness, the three tiers, the reusable matrix workflow,
-  the PR gate, and the release gate are in place and statically validated. The
-  flip to **Accepted** is the **maintainer's** call after the live-box manual
-  smoke + screenshot review in §7 (the live VM exists only in CI; this dev box
-  cannot boot/reach it, so the live-run + the §7 reliability numbers are
-  CI-pending — see the outstanding Accept criteria in §7).
+- **Status:** **Accepted** (2026-06-15; implemented 2026-06-04) — all six phases on `adr/14`; the harness, the three tiers, the PR gate, and the release gate are live. Tier A (`ui_render`), Tier B `ui_e2e` (functional), and `ui_browser` all ran green on **CE 2.8 + Plus 26.03** (ui-tests run 27552709387). Residual is the maintainer's **visual** screenshot review (CI asserts render/state, not pixel correctness). (Originally Implemented — pending smoke test, 2026-06-04.)
 - **Date:** 2026-06-03 (proposed) / 2026-06-04 (implemented)
 - **Branch:** `adr/14` (off **`devel`** — this is **dev-only test/CI infra** that builds on the ADR-04 smoke harness (`tests/smoke/conftest.py` `smoke_vm`, `helpers.py` diagnostics), the portable Linux `.pkg` builder (`build-pkg-linux.yml`), and `smoke.yml`, all of which live on `devel`. (`next` was retired 2026-06-04 into a two-tier `main←devel` model; devel is the default/integration branch.) Nothing here ships in the release archive — `src/` is untouched.) / **Component(s):** `tests/smoke/` (new `ui/` subpackage reusing the `smoke_vm` fixture), `tests/smoke/requirements.txt` (add `requests` + Playwright), `.github/workflows/` (new reusable `ui-tests.yml`; wiring into `test.yml`, `smoke.yml`-style triggers, and `release.yml`), `README.md`/`CLAUDE.md` (docs).
 - **Target runtime:** **dev/CI only.** Python 3.11+ (pytest) on a GitHub `ubuntu-latest` runner, driving a live **pfSense CE** WebUI inside QEMU/KVM (the ADR-04 image). Non-stdlib test deps (`requests`, `playwright`) live in `tests/smoke/requirements.txt` — **not** shipped, same discipline as the existing smoke deps. **No `src/` change**; the Unbound plugin, PHP package, and shipped JS are untouched.

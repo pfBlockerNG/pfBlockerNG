@@ -1,6 +1,6 @@
 # ADR-23: DNSBL Wizard VIP Auto-Toggle
 
-**Status:** Implemented (pending smoke test)
+**Status:** Accepted (2026-06-15) — the automated §7 items are green on **CE 2.8 + Plus 26.03** (ADR-14 ui-tests run 27552709387): the wizard step renders the `pfb_dnsvip_auto` checkbox (`ui_render`) and the DNSBL settings page persists it through a real CSRF POST (`ui_e2e`). Residual (full wizard-completion VIP provisioning, back-nav, HA/CARP disclaimer visual) is maintainer-attested. (Originally Implemented — pending smoke test.)
 **Issue:** [#178](https://github.com/pfBlockerNG/pfBlockerNG/issues/178)
 **Slack:** [thread](https://pfblockerng.slack.com/archives/C0B9QBZBEQG/p1781160111017199?thread_ts=1781008355.595609&cid=C0B9QBZBEQG)
 
