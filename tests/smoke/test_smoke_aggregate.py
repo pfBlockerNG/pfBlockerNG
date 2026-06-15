@@ -411,9 +411,13 @@ def test_aggregate_post_hook_sees_fresh_table_and_changed_alias(deployed_vm: Smo
     h.inject(deployed_vm, spec)
     h.set_aggregate_types(deployed_vm, ["Deny"])
 
-    # The post hook: record the LIVE aggregate table, then the env (one /bin/sh -c command).
+    # The post hook records the LIVE aggregate table, then the env. Under the ADR-12
+    # security model a hook runs a VETTED script file (not a typed command), so install
+    # the script via the transient ``_body`` key that set_update_hooks() writes into the
+    # on-box hook-script dir before persisting the entry.
     post_hook = {
-        "command": f"/sbin/pfctl -t {agg} -T show > {table_marker}; /usr/bin/env > {env_marker}",
+        "script": f"hook_post_{token}.sh",
+        "_body": f"#!/bin/sh\n/sbin/pfctl -t {agg} -T show > {table_marker}\n/usr/bin/env > {env_marker}\n",
         "when": "post",
         "enabled": "on",
         "description": f"smoke {token} aggregate post",
