@@ -279,7 +279,7 @@ suppress() {
 	fi
 
 	if [ -e "${pfbsuppression}" ] && [ -s "${pfbsuppression}" ]; then
-		data="$(sort -u "${pfbsuppression}")"
+		data="$(LC_ALL=C sort -u "${pfbsuppression}")"
 
 		if [ -n "${data}" ] && [ -n "${alias}" ]; then
 			if [ "${alias}" = 'suppressheader' ]; then
@@ -528,7 +528,7 @@ duplicate() {
 	# Check if alias exists in masterfile
 	lcheck="$(grep -m1 "${alias}" "${masterfile}")"; if [ -z "${lcheck}" ]; then dupcheck=0; fi
 	# Check for single alias in masterfile
-	aliaslist="$(cut -d ' ' -f1 "${masterfile}" | sort -u)"; if [ "${alias}" = "${aliaslist}" ]; then hcheck=0; fi
+	aliaslist="$(cut -d ' ' -f1 "${masterfile}" | LC_ALL=C sort -u)"; if [ "${alias}" = "${aliaslist}" ]; then hcheck=0; fi
 
 	# Only execute if 'Alias' exists in masterfile
 	if [ "${dupcheck}" -eq 1 ]; then
@@ -540,7 +540,7 @@ duplicate() {
 
 	# Don't execute when only a single 'Alias' exists in masterfile
 	if [ ! "${hcheck}" -eq 0 ]; then
-		sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
+		LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
 		"${pathgrepcidr}" -vf "${mastercat}" "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
 	fi
 
@@ -756,7 +756,7 @@ reputation_depends() {
 
 # Reputation function to condense an IP range if a 'Max' amount of IP addresses are found in a /24 range per individual list.
 reputation_max() {
-	sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"
+	LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"
 	data="$(cut -d '.' -f 1-3 "${tempfile}" | awk -v max="${max}" '{a[$0]++}END{for(i in a){if(a[i] > max){print i}}}')" 
 
 	# Classify repeat offenders by Country code
@@ -850,7 +850,7 @@ EOF
 	if [ "${count}" -gt 0 ]; then
 		echo; echo "  Reputation (Max=${max}) - Range(s)"
 		tr '\n' '|' < "${dupfile}"; echo
-		sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
+		LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
 	fi
 
 	if [ "${count}" -gt 0 ] || [ "${countr}" -gt 0 ]; then
@@ -1155,7 +1155,7 @@ processxlsx() {
 	if [ -s "${pfborig}${alias}.raw" ]; then
 		"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}"
 		"${pathtar}" -xOf "${tmpxlsx}"*.[xX][lL][sS][xX] "xl/sharedStrings.xml" | \
-			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" | sort -u > "${pfborig}${alias}.orig"
+			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" | LC_ALL=C sort -u > "${pfborig}${alias}.orig"
 		rm -r "${tmpxlsx}"*
 
 		countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
@@ -1177,7 +1177,7 @@ closingprocess() {
 
 	# Execute when 'de-duplication' is enabled
 	if [ "${alias}" = 'on' ]; then
-		sort -o "${masterfile}" "${masterfile}"
+		LC_ALL=C sort -o "${masterfile}" "${masterfile}"
 		sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n "${mastercat}" > "${tempfile}"; mv -f "${tempfile}" "${mastercat}"
 
 		echo "   [ Original IP count   ]  [ ${counto} ]"
