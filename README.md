@@ -124,8 +124,9 @@ pfblockerng: {
 > refresh the conf to the Worker URL.
 > The legacy `pfblockerng.github.io/pkg/${ABI}/` path continues to serve CE packages
 > during the transition window.
-> Installs and updates work via the **Install** button or `pkg upgrade`,
-> but pfSense's GUI won't show an "update available" badge for our builds.
+> Installs and updates work via the **Install** button or `pkg upgrade`. pfSense's stock
+> "update available" badge stays Netgate-bound and won't track our builds, but
+> pfBlockerNG's own **Software** tab does (see [Usage](#software-tab--version--update-notice-for-self-hosted-builds)).
 
 #### Nightly channel (bleeding edge)
 
@@ -224,6 +225,43 @@ it as a `post` hook:
 The full trust model, the complete HAProxy frontend ACL setup, and the URL-encoding
 rules are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
+
+### Software tab — version + update notice for self-hosted builds
+
+When pfBlockerNG was installed from **this fork's self-hosted repository** (Option 2
+above), a **Software** tab appears on every pfBlockerNG page
+([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)). It is the substitute for the stock
+GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
+our builds. The tab shows your current **channel** (stable / devel / nightly) and
+**installed version** against **our repository's latest**, plus the last-checked time, and
+offers three buttons:
+
+- **Check now** — refresh the comparison from our repo (reads `pkg … -r <ourrepo>`, never
+  the Netgate repo).
+- **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
+  (it never switches channels).
+- **Bootstrap repo** — (re)write the repo conf for your current channel, the in-GUI
+  equivalent of `add-repo.sh`.
+
+> The Software tab, the page, and the update notice are present **only on a build installed
+> from one of our repos** (`pfblockerng` / `pfblockerng-nightly`). On a stock
+> **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound badge
+> already serves those users, so ours would be redundant.
+
+A daily background check (riding the existing pfBlockerNG cron) compares installed vs our
+latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
+plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
+fires **once per new version**, not once per day. Whether it notifies is governed by one
+knob on the Software tab, **`pfb_software_notify`** (Default / On / Off):
+
+| Channel | Default (knob unset) |
+| --- | --- |
+| stable / devel | **Off** — quiet; check the tab when you choose |
+| nightly | **On** — you opted into the tip, so you are told when it moves |
+
+Set the knob to **On** or **Off** to override the per-channel default either way.
+Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
+channels with `add-repo.sh` + `pkg install` as in Option 2 above.
 
 ## Documentation
 

@@ -49,6 +49,7 @@ the ``zstd`` runner host-tool (for the re-versioned builds); without them it ski
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -106,6 +107,44 @@ LAST_NOTIFIED_FILE = "/var/db/pfblockerng/pfb_software_last_notified"
 NOTICE_ID = "pfBlockerNG"
 NOTICE_CATEGORY = "pfBlockerNG"
 NOTICE_URL = "/pfblockerng/pfblockerng_software.php"
+
+# --------------------------------------------------------------------------- #
+# Phase-5 POSITIVE journey constants — the SHIPPED Phase-4 src/ surfaces, now on a
+# box installed FROM our repo (``%R`` == ``pfblockerng``), so the provenance gate is
+# SATISFIED. (Phase 4 proved the NEGATIVE side live: the ADR-04 ``ui_render`` harness
+# installs with ``pkg add -f``, ``%R`` is NOT our repo, so the page + tab are HIDDEN.
+# An our-repo install — only reachable in this ``repo`` flow — is the only place the
+# POSITIVE side can be proven.)
+# --------------------------------------------------------------------------- #
+
+# The Phase-3 orchestrator's cache file (ADR §2 "Background check"). The page reads it;
+# the cron (pfb_software_update_check) writes it. Cleared between cases for clean befores.
+SOFTWARE_CACHE_FILE = "/var/db/pfblockerng/software_update.json"
+
+# The installed pfBlockerNG include + the Phase-4 page, at their on-box install paths.
+# The page is shipped under www/ (NOT chroot-copied); the inc holds the orchestrator +
+# the provenance helper the page guards on. ``pfb_software_provenance_ok()`` and
+# ``pfb_software_update_check()`` are driven live by loading this inc in pfSsh.php.
+PFB_INC_PATH = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+SOFTWARE_PAGE_FILE = "/usr/local/www/pfblockerng/pfblockerng_software.php"
+
+# The page's ui_render content marker (Phase 4): the element id on the Channel
+# StaticText. Asserting it inside the SHIPPED page file proves the .pkg actually
+# carried pfblockerng_software.php (the FreeBSD-ports plist entry took effect when the
+# build ran with ports_ref=adr/19-update-channel-panel).
+SOFTWARE_PANEL_MARKER = "pfb-software-panel"
+
+# The notify config knob the page writes + the orchestrator reads (Phase 3). Driving it
+# off the installed channel (devel) proves the channel-default OFF branch; injecting a
+# nightly channel proves the channel-default ON branch (the nightly repo/package is not
+# in this hermetic CE image, so the nightly CHANNEL is simulated via the orchestrator's
+# documented $io seam — noted in the handoff).
+NOTIFY_KNOB_PATH = "installedpackages/pfblockerng/config/0/pfb_software_notify"
+
+# Delimiters for reading a single scalar back out of pfSsh.php (its startup banner
+# otherwise pollutes stdout — same pattern as count_matching_notices above).
+_VAL_OPEN = "<<<PFBVAL>>>"
+_VAL_CLOSE = "<<<PFBEND>>>"
 
 
 # --------------------------------------------------------------------------- #
@@ -546,3 +585,327 @@ def test_provenance_repo_origin_distinguishes_our_build_from_decoy(repo_vm: Smok
         assert decoy_origin != our_origin, "provenance %R did not change between our-repo and decoy installs"
     finally:
         pkg_delete(repo_vm)
+
+
+# =========================================================================== #
+# PHASE 5 — the POSITIVE end-to-end journey on an OUR-REPO install
+# =========================================================================== #
+# Phases 1-3 proved the pkg/notice/upgrade MECHANICS and the pure decision core; Phase 4
+# proved the page's NEGATIVE (hidden-on-Netgate) side live. This phase proves the
+# POSITIVE side that only an our-repo install (``%R`` == ``pfblockerng``) can exercise:
+# the provenance gate OPENS, the SHIPPED orchestrator (pfb_software_update_check) writes
+# the cache + raises the de-duped channel-correct file_notice, and same-channel
+# ``pkg upgrade`` advances the box from OUR repo. The page itself is asserted live via
+# pfSsh.php (provenance_ok TRUE + ``php -l`` of the shipped page + its content marker
+# present in the installed file) — the ``repo`` harness has no authenticated webui client
+# (the ADR-14 ``webui`` fixture depends on ``deployed_vm``, a ``pkg add -f`` install whose
+# ``%R`` is NOT our repo), so pfSsh.php is the robust live oracle here.
+
+
+def _pfssh_scalar(vm: SmokeVM, snippet: str, *, timeout: float = 120.0) -> str:
+    """Run a PHP snippet through pfSsh.php and return the value it prints between the
+    ``_VAL_OPEN``/``_VAL_CLOSE`` delimiters (pfSsh.php's startup banner is stripped)."""
+    out = _pfssh(vm, snippet, timeout=timeout)
+    start = out.find(_VAL_OPEN)
+    end = out.find(_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"_pfssh_scalar: no delimited value in pfSsh.php output: {out!r}")
+    return out[start + len(_VAL_OPEN) : end]
+
+
+def provenance_ok_on_box(vm: SmokeVM, *, timeout: float = 120.0) -> bool:
+    """The SHIPPED ``pfb_software_provenance_ok()`` evaluated on the live box.
+
+    Loads the installed ``pfblockerng.inc`` in the bootstrapped pfSsh.php env and calls the
+    real gate — the exact predicate the page's top-of-file guard + the tab append key on.
+    On an our-repo install it must read TRUE (``%R`` == ``pfblockerng``); on a Netgate /
+    decoy install FALSE. This is the live inverse of Phase 4's negative ``ui_render`` gate.
+    """
+    snippet = (
+        f"require_once({_php_str(PFB_INC_PATH)});\n"
+        f"echo {_php_str(_VAL_OPEN)} . (pfb_software_provenance_ok() ? '1' : '0') . {_php_str(_VAL_CLOSE)};"
+    )
+    return _pfssh_scalar(vm, snippet, timeout=timeout) == "1"
+
+
+def run_update_check_on_box(
+    vm: SmokeVM,
+    *,
+    force: bool = True,
+    io_overrides: dict[str, str] | None = None,
+    timeout: float = 240.0,
+) -> None:
+    """Drive the SHIPPED ``pfb_software_update_check()`` once, the way the cron tick does.
+
+    With no ``io_overrides`` it runs fully live (reads ``pkg`` for installed/latest/repo) —
+    the real journey. ``io_overrides`` exercises the documented ``$io`` seam to inject a
+    channel/version (used ONLY to simulate the *nightly* channel, which has no repo/package
+    in this hermetic CE image — noted in the handoff). Raises on a non-zero pfSsh.php exit.
+    """
+    if io_overrides:
+        pairs = ", ".join(f"{_php_str(k)} => {_php_str(v)}" for k, v in io_overrides.items())
+        io_arg = f"array({pairs})"
+    else:
+        io_arg = "null"
+    snippet = (
+        f"require_once({_php_str(PFB_INC_PATH)});\n"
+        f"global $pfb; pfb_global();\n"
+        f"pfb_software_update_check({'true' if force else 'false'}, {io_arg});\n"
+        "echo 'OK';"
+    )
+    out = _pfssh(vm, snippet, timeout=timeout)
+    if "OK" not in out:
+        raise RuntimeError(f"pfb_software_update_check did not confirm: {out!r}")
+
+
+def read_software_cache(vm: SmokeVM, *, timeout: float = 30.0) -> dict[str, object]:
+    """The orchestrator's cache file decoded, or ``{}`` when absent (the before/after oracle)."""
+    result = vm.ssh("cat", SOFTWARE_CACHE_FILE, timeout=timeout)
+    if result.returncode != 0:
+        return {}
+    raw = result.stdout.strip()
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {}
+
+
+def clear_software_state(vm: SmokeVM, *, timeout: float = 30.0) -> None:
+    """Remove the cache + close our notices — a clean BEFORE state for each case."""
+    vm.ssh("/bin/rm", "-f", SOFTWARE_CACHE_FILE, timeout=timeout)
+    close_all_notices(vm, timeout=120.0)
+
+
+def set_notify_knob(vm: SmokeVM, value: str, *, timeout: float = 120.0) -> None:
+    """Persist ``pfb_software_notify`` (default|on|off) via the real config API.
+
+    Mirrors what the page's save POST does — config_set_path + write_config in the
+    config-locked pfSsh.php env — so the orchestrator reads the same value the GUI would.
+    """
+    snippet = (
+        f"config_set_path({_php_str(NOTIFY_KNOB_PATH)}, {_php_str(value)});\n"
+        "write_config('ADR-19 phase-5 smoke: set pfb_software_notify');\necho 'OK';"
+    )
+    out = _pfssh(vm, snippet, timeout=timeout)
+    if "OK" not in out:
+        raise RuntimeError(f"set_notify_knob did not confirm: {out!r}")
+
+
+def clear_notify_knob(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Reset the notify knob to its unset/'default' value (the channel-default branch)."""
+    set_notify_knob(vm, "default", timeout=timeout)
+
+
+def php_lint_ok(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> bool:
+    """``php -l <path>`` on the box — the shipped page parses cleanly (no Fatal/Parse)."""
+    result = vm.ssh("php", "-l", path, timeout=timeout)
+    return result.returncode == 0 and "No syntax errors detected" in result.stdout
+
+
+def install_our_build_at(vm: SmokeVM, version: str, src: Path, tmp_path: Path, tag: str) -> None:
+    """Install ``version`` of our package FROM our (re-versioned) repo (``%R`` == ours).
+
+    Builds a single-build catalog in ``UPGRADE_REPO_DIR`` at ``version`` and installs it
+    above the Netgate repo by priority, so the install provenance is OUR repo — the
+    precondition for the provenance gate to OPEN.
+    """
+    forged = reversion_pkg(src, version, tmp_path / tag)
+    pfsense_prio = repo_priority(vm, NETGATE_REPO_NAME)
+    pkg_delete(vm)
+    build_guest_repo(vm, UPGRADE_REPO_DIR, [forged])
+    write_repo_conf(vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+    pkg_update(vm)
+    pkg_install_from_repo(vm)
+
+
+# --------------------------------------------------------------------------- #
+# (e) The POSITIVE page-gate + cache + de-duped-notice + Update-now journey
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)  # 2 forged builds + install + 2 checks + a real pkg upgrade > the 30s cap.
+def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """The POSITIVE end-to-end Software journey on an OUR-REPO install (``%R`` == ours).
+
+    Proves every gate Phase 4 showed HIDDEN is now OPEN, and the publish-newer ->
+    de-duped notice + cache + same-channel Update chain works live. Channel here is
+    ``devel`` (the installed ``-devel`` package), whose notify default is OFF — so the
+    knob is forced ``on`` for the notice legs (the channel-default OFF/ON branches are
+    pinned separately in ``test_software_notify_default_is_channel_correct``).
+
+    Scenario: an our-repo box sees the Software page, gets one notice for a newer build,
+    and Update-now pulls it.
+      Background: our NONE-signed file:// repo above the Netgate repo; egress open.
+
+    Given build ``<V>_1`` installed FROM our repo (the asserted BEFORE: provenance OPEN,
+      page parses + carries its marker, knob=on, NO cache, NO notice),
+    When the first check runs at installed==latest==``<V>_1``,
+    Then the cache records installed==latest==``<V>_1`` and NO notice is raised (up to date).
+    When ``<V>_9`` is published to the SAME repo and the check runs,
+    Then the cache ``latest`` advances to ``<V>_9`` and EXACTLY ONE notice mentioning
+      ``<V>_9`` appears; a SECOND check at the same latest raises NO second notice (de-dupe).
+    When ``pkg upgrade`` runs and the check runs again,
+    Then the box moved to ``<V>_9`` still from OUR repo, the cache shows installed==latest,
+      and NO new notice is raised — each before/after asserted by value.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    src = Path(pkg)
+    base_version = read_compact_version(src)
+    low = f"{base_version}_1"
+    high = f"{base_version}_9"
+    assert low != high
+
+    try:
+        # GIVEN: the LOWER build installed FROM our repo -> provenance gate OPENS.
+        install_our_build_at(repo_vm, low, src, tmp_path, "low")
+        got = pkg_installed_version(repo_vm)
+        assert got == low, f"expected {low!r} installed, got {got!r}"
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "lower build did not come from our repo"
+
+        # GIVEN (the Phase-4 NEGATIVE inverse, now POSITIVE): the gate reads TRUE, the
+        # SHIPPED page parses, and the .pkg actually carried it (marker in the file).
+        assert provenance_ok_on_box(repo_vm) is True, (
+            "pfb_software_provenance_ok() is FALSE on an our-repo install — the page/tab would be wrongly HIDDEN"
+        )
+        assert php_lint_ok(repo_vm, SOFTWARE_PAGE_FILE), (
+            f"{SOFTWARE_PAGE_FILE} failed php -l (or is absent — was the .pkg built with the ports plist entry?)"
+        )
+        marker_grep = repo_vm.ssh("grep", "-q", SOFTWARE_PANEL_MARKER, SOFTWARE_PAGE_FILE, timeout=30.0)
+        assert marker_grep.returncode == 0, (
+            f"the {SOFTWARE_PANEL_MARKER!r} marker is absent from the shipped page — "
+            f"the .pkg did not carry Phase-4's page"
+        )
+
+        # GIVEN: a clean state + knob ON; assert the BEFORE (no cache, no notice for high).
+        clear_software_state(repo_vm)
+        set_notify_knob(repo_vm, "on")
+        assert read_software_cache(repo_vm) == {}, "software cache unexpectedly present before the first check"
+        assert count_matching_notices(repo_vm, high) == 0, f"a notice for {high} existed before any check"
+
+        # WHEN/THEN (first check, installed==latest): cache says up to date; NO notice.
+        run_update_check_on_box(repo_vm)
+        cache = read_software_cache(repo_vm)
+        assert cache.get("installed") == low, f"cache installed {cache.get('installed')!r} != {low!r}"
+        assert cache.get("latest") == low, f"cache latest {cache.get('latest')!r} != {low!r} (should equal installed)"
+        assert cache.get("channel") == "devel", f"cache channel {cache.get('channel')!r} != 'devel'"
+        assert count_matching_notices(repo_vm, high) == 0, "a notice fired while installed == latest (no update)"
+
+        # WHEN: publish the HIGHER build into the SAME repo; the check sees a newer latest.
+        high_pkg = reversion_pkg(src, high, tmp_path / "high")
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+        run_update_check_on_box(repo_vm)
+
+        # THEN: cache latest advances; EXACTLY ONE notice for the new version.
+        cache = read_software_cache(repo_vm)
+        assert cache.get("installed") == low, f"installed moved unexpectedly to {cache.get('installed')!r}"
+        assert cache.get("latest") == high, f"cache latest did not advance to {high!r}: {cache.get('latest')!r}"
+        assert count_matching_notices(repo_vm, high) == 1, "the newer build did not raise exactly one notice"
+
+        # WHEN/THEN (de-dupe): a second check at the SAME latest raises NO second notice.
+        run_update_check_on_box(repo_vm)
+        assert count_matching_notices(repo_vm, high) == 1, (
+            "a second check at the same latest re-notified (de-dupe failed)"
+        )
+
+        # WHEN: Update now -> same-channel pkg upgrade pulls the newer build from OUR repo.
+        proc = pkg_upgrade(repo_vm)
+        combined = proc.stdout + proc.stderr
+        assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve on upgrade:\n{combined}"
+
+        # THEN: moved to HIGH, still from our repo; re-check shows up-to-date + NO new notice.
+        assert pkg_installed_version(repo_vm) == high, (
+            f"pkg upgrade did not move {low!r} -> {high!r}; now {pkg_installed_version(repo_vm)!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "upgraded build did not come from our repo"
+        run_update_check_on_box(repo_vm)
+        cache = read_software_cache(repo_vm)
+        assert cache.get("installed") == high, f"post-upgrade cache installed {cache.get('installed')!r} != {high!r}"
+        assert cache.get("latest") == high, f"post-upgrade cache latest {cache.get('latest')!r} != {high!r}"
+        assert count_matching_notices(repo_vm, high) == 1, (
+            "a notice re-fired after upgrading to the latest (no new version)"
+        )
+    finally:
+        clear_software_state(repo_vm)
+        clear_notify_knob(repo_vm)
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
+# --------------------------------------------------------------------------- #
+# (f) Channel-correct notify DEFAULT — the OFF (devel) vs ON (nightly) branch, live
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(600)  # install + 2 forged builds + several live checks > the 30s cap.
+def test_software_notify_default_is_channel_correct(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """The notify DEFAULT is driven by the CHANNEL, not an always-path (knob unset/'default').
+
+    Pairs the two channel branches so green proves the channel drives the default:
+    ``devel`` (the installed channel) defaults OFF -> a newer build raises NO notice;
+    ``nightly`` defaults ON -> the same newer-build condition raises ONE notice. The
+    nightly *channel* is simulated via the orchestrator's documented ``$io`` seam (a
+    nightly ``installed_name`` + an our-repo ``installed_repo`` so the gate still OPENS):
+    the nightly repo/package is not built into this hermetic CE image (ADR-18), so the
+    CHANNEL-default decision is what is proven end to end (real orchestrator -> real
+    file_notice), not a nightly pkg install. Noted as a simulation in the handoff.
+
+    Scenario: a newer build notifies by default ONLY on the nightly channel.
+      Background: our build installed from our repo; the notify knob UNSET ('default').
+
+    Given build ``<V>_1`` installed from our repo, knob='default', a clean notice state,
+      and a published newer ``<V>_9`` (the asserted BEFORE: no notice for ``<V>_9``),
+    When a check runs as the DEVEL channel (the real installed one),
+    Then NO notice is raised (devel default is OFF).
+    When a check runs as the NIGHTLY channel (same newer-build condition, $io-simulated),
+    Then EXACTLY ONE notice is raised (nightly default is ON) — the same condition, the
+      opposite outcome, so the difference is the channel default and nothing else.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+    src = Path(pkg)
+    base_version = read_compact_version(src)
+    low = f"{base_version}_1"
+    high = f"{base_version}_9"
+    devel_msg = "available (devel)"
+    nightly_msg = "available (nightly)"
+
+    try:
+        # GIVEN: our-repo install, knob 'default', clean notices, a newer build published.
+        install_our_build_at(repo_vm, low, src, tmp_path, "low")
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "build did not come from our repo (gate would be closed)"
+        high_pkg = reversion_pkg(src, high, tmp_path / "high")
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+        clear_software_state(repo_vm)
+        clear_notify_knob(repo_vm)
+        assert count_matching_notices(repo_vm, devel_msg) == 0, "a devel notice existed before the devel check"
+        assert count_matching_notices(repo_vm, nightly_msg) == 0, "a nightly notice existed before the nightly check"
+
+        # WHEN/THEN (devel, default OFF): a newer build raises NO notice.
+        run_update_check_on_box(repo_vm)
+        assert count_matching_notices(repo_vm, devel_msg) == 0, (
+            "the devel channel notified by default (its default must be OFF)"
+        )
+
+        # WHEN/THEN (nightly, default ON): the SAME newer-build condition raises ONE notice.
+        # $io supplies a nightly installed_name (-> channel nightly) + an our-repo
+        # installed_repo (gate OPENS) + the installed/latest version gap; the channel
+        # default (ON) is the only thing that differs from the devel leg above.
+        run_update_check_on_box(
+            repo_vm,
+            io_overrides={
+                "installed_name": "pfSense-pkg-pfBlockerNG-NIGHTLY",
+                "installed_repo": OURS_REPO_NAME,
+                "installed": low,
+                "latest": high,
+            },
+        )
+        assert count_matching_notices(repo_vm, nightly_msg) == 1, (
+            "the nightly channel did NOT notify by default (its default must be ON) — "
+            "the channel does not drive the default"
+        )
+    finally:
+        clear_software_state(repo_vm)
+        clear_notify_knob(repo_vm)
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
