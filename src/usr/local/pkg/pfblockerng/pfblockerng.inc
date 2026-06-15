@@ -430,7 +430,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					    ($data['host'] == '127.0.0.1') ||
 					    ($data['host'] == '::1')) {
 
-						// Allow '/usr/local/www'
+						// Only a root-path URL on the firewall itself is allowed.
 						if ($path == '/') {
 							return TRUE;
 						}
@@ -447,7 +447,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				    ($data['host'] == '127.0.0.1') ||
 				    ($data['host'] == '::1')) {
 
-					// Allow '/usr/local/www'
+					// Only a root-path URL on the firewall itself is allowed.
 					if ($path == '/') {
 						return TRUE;
 					}
@@ -455,14 +455,24 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					return FALSE;
 				}
 
-				// all other remote URLs no path validation
+				// All other remote feed URLs: route through the shared feed-host
+				// check so a non-self, non-allowlisted internal address is rejected
+				// when the feed-host filter is enabled. Self and allowlisted hosts
+				// are exempted inside the helper, so this preserves the prior allow
+				// for self/public; it only adds the reject the helper defines.
+				$reason	= '';
+				$pinned	= '';
+				if (pfb_feed_filter_enabled() &&
+				    !pfb_feed_host_allowed($data['host'], $reason, $pinned)) {
+					pfb_logger("{$header} Invalid URL ({$reason}) [ " . htmlspecialchars($input) . " ]", 6);
+					return FALSE;
+				}
 				return TRUE;
 			}
 
 			// Local file path validation
 			else {
-				$path		= pathinfo($input, PATHINFO_DIRNAME) . '/';
-				$allowed_path	= array_flip(array(	'/var/db/pfblockerng/',
+				$allowed_path	= array(	'/var/db/pfblockerng/',
 									'/var/db/pfblockerng/deny/',
 									'/var/db/pfblockerng/permit/',
 									'/var/db/pfblockerng/match/',

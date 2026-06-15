@@ -21,11 +21,9 @@ use PHPUnit\Framework\TestCase;
  * dial. A public host, a self-hosted host, and an allowlisted-internal host are
  * accepted by both.
  *
- * Status: SKIPPED. The validator does not yet route its remote-host decision through
- * pfb_feed_host_allowed(), so the two verdicts diverge for a non-self internal host
- * (the validator accepts it; the guard rejects it). PFBL-02 Phase 2 routes the
- * validator through the guard, after which this parity holds — at which point the
- * skip is removed and the assertions below stand unchanged.
+ * PFBL-02 Phase 2 routes PFB_FILTER_URL's remote-feed decision through
+ * pfb_feed_host_allowed(), so the two verdicts now agree: a non-self internal host
+ * the guard rejects is rejected by the validator too.
  *
  * Scenario: the URL a feed-config validation accepts is exactly the URL the fetch
  * guard will permit dialling.
@@ -94,10 +92,6 @@ final class FeedFilterParityTest extends TestCase
 	#[DataProvider('parityHostProvider')]
 	public function testValidatorAndGuardAgree(string $host, array $records, bool $expected): void
 	{
-		$this->markTestSkipped(
-			'parity holds after PFBL-02 Phase 2 routes PFB_FILTER_URL through pfb_feed_host_allowed'
-		);
-
 		// Given the host resolves to the seeded record set (same double for both).
 		$GLOBALS['pfb_test_resolve_map']["{$host}."] = $records;
 
@@ -118,10 +112,6 @@ final class FeedFilterParityTest extends TestCase
 	 */
 	public function testNonSelfInternalHostRejectedByValidatorMatchesGuard(): void
 	{
-		$this->markTestSkipped(
-			'parity holds after PFBL-02 Phase 2 routes PFB_FILTER_URL through pfb_feed_host_allowed'
-		);
-
 		// Given a host resolving to an RFC1918 address, not the firewall's own.
 		$GLOBALS['pfb_test_resolve_map']['internal.parity.'] = [
 			['type' => 'A', 'data' => '192.168.50.50'],
