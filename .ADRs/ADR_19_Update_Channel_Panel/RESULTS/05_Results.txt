@@ -107,6 +107,53 @@ use-github. (smoke.yml/ui-tests.yml ports_ref plumbing was added in Phase 4 — 
 CAPTURED RUN ID: <fill on first green dispatch — not run by this off-box agent>
 
 
+FIRST LIVE `repo` RUN — FAILURE + FIX (root cause B: production defect)
+----------------------------------------------------------------------
+First live dispatch: 1 failed / 20 passed. FAILED
+test_software_positive_journey_on_our_repo_install:
+  "pfb_software_provenance_ok() is FALSE on an our-repo install — the page/tab would
+   be wrongly HIDDEN"  (assert False is True)
+The sibling test_software_notify_default_is_channel_correct PASSED (it injects
+installed_repo via the $io seam, so it never shells to pkg for %R).
+
+ROOT CAUSE = B (real ADR-19 production bug in src/, not a test-setup bug):
+  pfblockerng.inc hardcoded  define('PFB_PKG_BIN', '/usr/sbin/pkg')  — the FreeBSD
+  base pkg(7) BOOTSTRAP STUB. The package is installed by the pfSense port libpkg at
+  /usr/local/sbin/pkg, which records the repository-origin annotation read back as
+  '%R'. The /usr/sbin/pkg stub does NOT report '%R' the same way (it returned empty /
+  not 'pfblockerng'), so on a genuine our-repo install:
+    pfb_pkg_installed_repo(PKG_NAME) -> ''  (via the stub)
+    pfb_software_is_our_build('')    -> FALSE
+    pfb_software_provenance_ok()     -> FALSE  => the Software page + tab + priv +
+                                                  cron notice are ALL wrongly hidden
+                                                  on real self-hosted-repo installs.
+  Why the test's own preconditions passed while the gate failed: the precondition read
+  %R via BARE `pkg` (pfSense PATH -> /usr/local/sbin/pkg, the port libpkg) = correct
+  'pfblockerng'; and %n/%v are INTRINSIC pkg fields the stub resolves fine. Only %R
+  (the repo-origin annotation) diverges between the two binaries — exactly the field
+  the provenance chain keys on. Our own scripts/add-repo.sh + build-repo.sh already use
+  /usr/local/sbin/pkg as the canonical binary; pfblockerng.inc was the outlier.
+
+FIX:
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    PFB_PKG_BIN '/usr/sbin/pkg' -> '/usr/local/sbin/pkg' (the port libpkg pfSense and
+    our repo scripts shell to), + corrected the define's comment.
+  tests/smoke/test_software_update.py: added installed_repo_on_box() (evaluates the
+    SHIPPED pfb_pkg_installed_repo() live) and a THIRD precondition asserting the
+    helper's own %R equals the ground-truth bare-pkg %R — so a future binary-path
+    regression fails at the precondition with the raw values echoed (self-diagnosing),
+    not at the opaque final gate. The positive-journey assertion now echoes both the
+    shipped %R and the ground-truth %R.
+  No PHPUnit case added: the pfb_pkg_*() helpers shell to real pkg against a real pkg
+  DB (no off-appliance %R to read) — the live `repo` precondition IS their correct
+  guard; a mocked-exec unit test would be coverage theater.
+
+RE-RUN OFF-BOX GATES (this fix): ruff check / ruff format --check clean;
+  python -m pytest -q -> 1575 passed (unchanged); pytest tests/smoke -m repo
+  --collect-only / --setup-plan -> both cases collected, repo_vm resolves; php -l clean;
+  vendor/bin/phpunit -> OK (487 tests, 933 assertions); phpstan -> No errors; phpcs clean.
+
+
 DOCS UPDATED
 ------------
 README.md:

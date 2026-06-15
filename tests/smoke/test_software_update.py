@@ -628,6 +628,41 @@ def provenance_ok_on_box(vm: SmokeVM, *, timeout: float = 120.0) -> bool:
     return _pfssh_scalar(vm, snippet, timeout=timeout) == "1"
 
 
+def installed_name_on_box(vm: SmokeVM, *, timeout: float = 120.0) -> str:
+    """The SHIPPED ``pfb_pkg_installed_name()`` evaluated on the live box.
+
+    This is the FIRST link of the provenance chain (``pfb_software_provenance_ok()`` =
+    ``is_our_build(installed_repo(installed_name()))``): the glob query that resolves the
+    installed pfBlockerNG package name. An empty string here means the name glob matched
+    nothing -> ``installed_repo('')`` -> ``''`` -> the gate reads FALSE on an our-repo
+    install. Surfaced so the precondition can prove the chain's input is non-empty and the
+    failure message can echo the raw value that broke it.
+    """
+    snippet = (
+        f"require_once({_php_str(PFB_INC_PATH)});\n"
+        f"echo {_php_str(_VAL_OPEN)} . pfb_pkg_installed_name() . {_php_str(_VAL_CLOSE)};"
+    )
+    return _pfssh_scalar(vm, snippet, timeout=timeout)
+
+
+def installed_repo_on_box(vm: SmokeVM, pkgname: str, *, timeout: float = 120.0) -> str:
+    """The SHIPPED ``pfb_pkg_installed_repo($pkgname)`` evaluated on the live box.
+
+    The SECOND link of the provenance chain (``pfb_software_provenance_ok()`` =
+    ``is_our_build(installed_repo(installed_name()))``): the ``pkg query '%R'`` read
+    of the repo a package was installed FROM. It must match a direct ``pkg query
+    '%R'`` (``pkg_repo_origin``) — a mismatch means the helper shells to a pkg binary
+    that resolves ``%R`` differently (the /usr/sbin bootstrap-stub vs the
+    /usr/local/sbin port libpkg). Surfaced so the precondition proves the gate's own
+    input is ``pfblockerng`` and a re-failure echoes the raw value the gate saw.
+    """
+    snippet = (
+        f"require_once({_php_str(PFB_INC_PATH)});\n"
+        f"echo {_php_str(_VAL_OPEN)} . pfb_pkg_installed_repo({_php_str(pkgname)}) . {_php_str(_VAL_CLOSE)};"
+    )
+    return _pfssh_scalar(vm, snippet, timeout=timeout)
+
+
 def run_update_check_on_box(
     vm: SmokeVM,
     *,
@@ -761,12 +796,39 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
         install_our_build_at(repo_vm, low, src, tmp_path, "low")
         got = pkg_installed_version(repo_vm)
         assert got == low, f"expected {low!r} installed, got {got!r}"
-        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "lower build did not come from our repo"
+
+        # PRECONDITION: the provenance chain's three live inputs are correct, asserted
+        # SEPARATELY so a gate failure is self-diagnosing. pfb_software_provenance_ok()
+        # is is_our_build(installed_repo(installed_name())); prove (1) the package's %R is
+        # 'pfblockerng' read DIRECTLY (the ground-truth repo signal), (2) the shipped
+        # pfb_pkg_installed_name() actually resolves the package (its glob query must match
+        # the installed name) — an empty name silently collapses the chain to FALSE even
+        # when %R is correct — AND (3) the shipped pfb_pkg_installed_repo() reads the SAME
+        # %R the ground truth does. A (1)-vs-(3) mismatch means the helper shells to a pkg
+        # binary that resolves %R differently from the port libpkg the install used (the
+        # /usr/sbin bootstrap-stub vs /usr/local/sbin) — the exact bug the gate trips on.
+        repo_origin = pkg_repo_origin(repo_vm)
+        assert repo_origin == OURS_REPO_NAME, (
+            f"%R for the install is {repo_origin!r}, expected {OURS_REPO_NAME!r} (build is not from our repo)"
+        )
+        resolved_name = installed_name_on_box(repo_vm)
+        assert resolved_name == PKG_NAME, (
+            f"pfb_pkg_installed_name() resolved {resolved_name!r}, expected {PKG_NAME!r} — "
+            f"the name glob matched nothing, so installed_repo('') -> '' -> the gate reads FALSE"
+        )
+        shipped_repo = installed_repo_on_box(repo_vm, resolved_name)
+        assert shipped_repo == repo_origin, (
+            f"pfb_pkg_installed_repo({resolved_name!r}) read {shipped_repo!r} but `pkg query %R` reads "
+            f"{repo_origin!r} — the helper's pkg binary resolves %R differently from the install's "
+            f"(PFB_PKG_BIN must be the port libpkg /usr/local/sbin/pkg, not the /usr/sbin bootstrap stub)"
+        )
 
         # GIVEN (the Phase-4 NEGATIVE inverse, now POSITIVE): the gate reads TRUE, the
         # SHIPPED page parses, and the .pkg actually carried it (marker in the file).
         assert provenance_ok_on_box(repo_vm) is True, (
-            "pfb_software_provenance_ok() is FALSE on an our-repo install — the page/tab would be wrongly HIDDEN"
+            f"pfb_software_provenance_ok() is FALSE on an our-repo install — the page/tab would be "
+            f"wrongly HIDDEN (installed_name={resolved_name!r}, shipped %R={shipped_repo!r}, "
+            f"ground-truth %R={repo_origin!r})"
         )
         assert php_lint_ok(repo_vm, SOFTWARE_PAGE_FILE), (
             f"{SOFTWARE_PAGE_FILE} failed php -l (or is absent — was the .pkg built with the ports plist entry?)"

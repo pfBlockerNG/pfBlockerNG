@@ -2049,9 +2049,13 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * The pfb_pkg_*() functions below are the ONLY new code that shells to `pkg`; isolating
  * the shellout in thin wrappers keeps pfb_software_update_check() unit-testable (the
  * tests inject the installed/latest/installed-repo via its $io override rather than run
- * `pkg`). The base `pkg` binary lives at /usr/sbin/pkg on every supported target.
+ * `pkg`). The pkg(8) port binary (libpkg) lives at /usr/local/sbin/pkg on every supported
+ * target — this is the binary pfSense itself and our add-repo.sh/build-repo.sh shell to.
+ * The base /usr/sbin/pkg bootstrap stub does NOT report the repository origin ('%R') the
+ * same way, so the provenance gate read FALSE on a genuine our-repo install when it was
+ * used; the port binary returns the recorded repo name ('pfblockerng').
  */
-define('PFB_PKG_BIN', '/usr/sbin/pkg');
+define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
 /*
  * The installed pfBlockerNG package NAME (e.g. 'pfSense-pkg-pfBlockerNG-devel'), read
@@ -2061,7 +2065,10 @@ define('PFB_PKG_BIN', '/usr/sbin/pkg');
 function pfb_pkg_installed_name(): string {
 	$out = array();
 	$ret = -1;
-	exec(escapeshellarg(PFB_PKG_BIN) . " query '%n' " . escapeshellarg('pfSense-pkg-pfBlockerNG*') . ' 2>/dev/null', $out, $ret);
+	// -g: match the trailing '*' as a glob. pkg query treats the pattern as an EXACT
+	// pkg-name without it, so 'pfSense-pkg-pfBlockerNG*' would match nothing and the
+	// provenance gate would wrongly read the package as not-our-build on every install.
+	exec(escapeshellarg(PFB_PKG_BIN) . " query -g '%n' " . escapeshellarg('pfSense-pkg-pfBlockerNG*') . ' 2>/dev/null', $out, $ret);
 	if ($ret !== 0) {
 		return '';
 	}
