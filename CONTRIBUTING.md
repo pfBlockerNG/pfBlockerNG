@@ -578,7 +578,7 @@ blocklist **data** changed — including content-only refreshes that leave
 ```sh
 #!/bin/sh
 # hook_post_webhook.sh — forward the changed-alias context to a webhook
-[ -n "$PFB_CHANGED_IP_ALIASES" ] && /usr/local/bin/curl -sS -m 5 \
+{ [ -n "$PFB_CHANGED_IP_ALIASES" ] || [ -n "$PFB_CHANGED_DNSBL_GROUPS" ]; } && /usr/local/bin/curl -sS -m 5 \
   --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
   --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
   --data-urlencode "ip_changed=$PFB_IP_CHANGED" \
@@ -586,9 +586,9 @@ blocklist **data** changed — including content-only refreshes that leave
   https://example.invalid/pfblockerng-update
 ```
 
-`curl` lives at `/usr/local/bin/curl` on pfSense. Guard on
-`[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]` instead (or run two hooks) to notify on
-DNSBL-group changes.
+`curl` lives at `/usr/local/bin/curl` on pfSense. The guard above fires on **either**
+side; to narrow to one, drop the other `[ -n … ]` test (e.g. keep only
+`[ -n "$PFB_CHANGED_DNSBL_GROUPS" ]` for DNSBL-only notifications).
 
 > **Guard on the changed-list, not `PFB_IP_CHANGED`.** `PFB_IP_CHANGED=1` means a
 > firewall **rule** changed — it stays `0` on a pure alias-content refresh (the table

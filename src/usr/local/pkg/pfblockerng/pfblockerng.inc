@@ -1919,6 +1919,13 @@ function pfb_hook_scripts($when, $dir = null) {
 	}
 	$out = array();
 	foreach (glob("{$dir}/hook_{$when}_*.{sh,py}", GLOB_BRACE) ?: array() as $path) {
+		// Only offer files the runner can actually exec: a regular, executable file
+		// (the runner runs it via its own shebang + execute bit). A directory or a
+		// non-executable file matching the glob would otherwise validate but fail
+		// at run time -- keep the picker, validator, and runner in agreement.
+		if (!is_file($path) || !is_executable($path)) {
+			continue;
+		}
 		$base = basename($path);
 		$out[$base] = $base;
 	}
@@ -1972,10 +1979,17 @@ function pfb_run_hooks($when, $ctx = array()) {
 	$ctx['WHEN'] = $when;
 	$env = array();
 	foreach ($ctx as $name => $value) {
-		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...);
-		// values are escaped. A shell var-assignment prefix (VAR=val cmd ...) is
-		// inherited by timeout(1) and exported to the hook's /bin/sh child only.
-		$env[] = 'PFB_' . strtoupper((string) $name) . '=' . escapeshellarg((string) $value);
+		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...); values
+		// are escaped. Defence in depth: a name is a shell var-assignment LHS (it
+		// cannot be quoted), so drop any key that is not a bare word -- so a future
+		// caller can never turn a $ctx key into shell syntax. Values ride
+		// escapeshellarg; the prefix (VAR=val cmd ...) is inherited by timeout(1) and
+		// exported to the hook's child only.
+		$pfbvar = strtoupper((string) $name);
+		if (!preg_match('/^[A-Z0-9_]+$/', $pfbvar)) {
+			continue;
+		}
+		$env[] = 'PFB_' . $pfbvar . '=' . escapeshellarg((string) $value);
 	}
 	$envprefix = implode(' ', $env);
 

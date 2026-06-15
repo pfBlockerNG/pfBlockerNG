@@ -108,11 +108,15 @@ if ($_POST) {
 					// hook_<when>_*.{sh,py} present in the hook-script dir. A stale
 					// pick, a crafted POST (path/traversal), or a Pre/Post mismatch
 					// is rejected, so the config never stores -- and the runner never
-					// execs -- an unvetted value. ('when' is validated on its own key;
-					// if it is bad, skip this cross-check to avoid a duplicate error.)
+					// execs -- an unvetted value. The row's 'when' decides which
+					// scripts are valid, so reject the script when 'when' is missing
+					// or out of range too -- otherwise a crafted POST that OMITS
+					// hook_when-N (its own validator case never fires) would slip an
+					// unvetted script past this gate.
 					$row_when = (string) ($_POST["hook_when-{$rowid}"] ?? '');
-					if (array_key_exists($row_when, $options_when) &&
-					    !pfb_hook_script_valid($value, $row_when)) {
+					if (!array_key_exists($row_when, $options_when)) {
+						$input_errors[] = gettext('The hook row is missing a valid Pre/Post selection.');
+					} elseif (!pfb_hook_script_valid($value, $row_when)) {
 						$input_errors[] = gettext('Select a valid hook script for this row\'s Pre/Post. ' .
 							'Author it in the scripts folder first (see the help above).');
 					}
