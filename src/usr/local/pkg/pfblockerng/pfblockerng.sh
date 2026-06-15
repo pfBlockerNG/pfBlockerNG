@@ -1317,6 +1317,16 @@ case "${1}" in
 	aliastables)
 		aliastables
 		;;
+	dnsbl-control)
+		# PFBL-03: root-only DNSBL-control CLI. Forwards the operator's command to the
+		# PHP writer, which validates it and writes it to the local privileged command
+		# channel consumed by pfb_unbound.py. The arguments ride as their own positional
+		# parameters (no URL/shell interpolation); the writer re-validates each.
+		# Usage: pfblockerng dnsbl-control disable [sec] | enable |
+		#        addbypass <ip> [sec] | removebypass <ip>
+		shift
+		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dnsbl-control "$@"
+		;;
 	closing)
 		emptyfiles
 		closingprocess

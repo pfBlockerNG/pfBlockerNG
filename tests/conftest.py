@@ -87,6 +87,12 @@ def reset_pfb_globals() -> None:
         "pfb_py_dnsbl": ":memory:",
         "pfb_py_resolver": ":memory:",
         "pfb_py_cache": ":memory:",
+        # PFBL-03: the local privileged control channel + its applied-seq marker
+        # (chroot-relative, exactly as init_standard sets them). Tests that drive the
+        # reader thread override these to a temp path; the keys exist here so a unit
+        # test can read the stable names without spinning up the watcher.
+        "pfb_py_control": "pfb_py_control",
+        "pfb_py_control_applied": "pfb_py_control.applied",
     }
     pfb_unbound.dataDB = defaultdict(list)
     pfb_unbound.zoneDB = defaultdict(list)

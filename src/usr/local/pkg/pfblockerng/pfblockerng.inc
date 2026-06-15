@@ -4153,6 +4153,140 @@ function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
 }
 
 
+// PFBL-03: atomically publish the DNSBL-control command channel to the chroot
+// (/var/unbound/pfb_py_control). Mirrors pfb_unbound_py_atomic_write (stage -> fwrite ->
+// fflush -> fsync -> rename) but uses a COMMAND-CHANNEL permission model rather than the
+// data model: the published file keeps owner ROOT, group unbound, mode 0640 -- root
+// WRITES, unbound READS via its group, no write for group/other, no access for other.
+// The authorization is therefore purely "only root may write": the channel is unwritable
+// by the unbound user that consumes it (and by everyone else). This is why the data
+// publisher (which chowns to owner unbound) is NOT reused here. Returns TRUE on success;
+// no die()/exit() -- a failure is logged + returned FALSE.
+function pfb_unbound_py_atomic_write_root($path, $content) {
+	$dir = dirname($path);
+	$tmp = @tempnam($dir, '.pfbctl_');
+	if ($tmp === FALSE) {
+		pfb_logger("\nPFBL-03: failed to stage control write for [ {$path} ]", 2);
+		return FALSE;
+	}
+
+	$fh = @fopen($tmp, 'wb');
+	if ($fh === FALSE) {
+		@unlink($tmp);
+		pfb_logger("\nPFBL-03: failed to open control staging file [ {$tmp} ]", 2);
+		return FALSE;
+	}
+
+	$ok = (@fwrite($fh, $content) !== FALSE);
+	if ($ok) {
+		@fflush($fh);
+		// Durably persist the staged bytes before the rename so a crash cannot
+		// expose a half-written command record.
+		@fsync($fh);
+	}
+	@fclose($fh);
+
+	if (!$ok) {
+		@unlink($tmp);
+		pfb_logger("\nPFBL-03: failed to write control staging file [ {$tmp} ]", 2);
+		return FALSE;
+	}
+
+	// Command-channel permission model: owner root, group unbound, mode 0640. Set it on
+	// the staging inode so the rename publishes the correctly-owned/permissioned file
+	// atomically. root is the staging file's owner already (the package runs as root);
+	// set the group explicitly so the consuming (chrooted) unbound user can READ it, and
+	// the mode so only the owner may write.
+	@chown($tmp, 'root');
+	@chgrp($tmp, 'unbound');
+	@chmod($tmp, 0640);
+
+	if (!@rename($tmp, $path)) {
+		@unlink($tmp);
+		pfb_logger("\nPFBL-03: failed to publish control channel [ {$path} ]", 2);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// PFBL-03: root-only DNSBL-control writer. Validates the command + its argument (the
+// SEMANTIC layer -- a bypass IP through pfb_filter(PFB_FILTER_IP), a duration through
+// pfb_filter(PFB_FILTER_NUM) clamped to 1-3600), assembles a small JSON record carrying a
+// monotonically-advancing SEQUENCE, and atomically publishes it to the local privileged
+// command channel with the root:unbound 0640 permission model (pfb_unbound_py_atomic_write_root).
+// The control-watcher in pfb_unbound.py consumes a record only when its seq advances
+// (exactly-once + replay safety) and re-validates every argument again before any side
+// effect, so this writer and the reader form a dual-validation boundary.
+//
+//   $cmd      one of disable|enable|addbypass|removebypass
+//   $ip       required for addbypass/removebypass (a v4/v6 literal); ignored otherwise
+//   $duration optional seconds (1-3600) for disable/addbypass; ignored otherwise
+//
+// Returns the published sequence (>= 1) on success, or FALSE on an invalid command /
+// invalid argument / write failure. No die()/exit().
+function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '') {
+	global $pfb;
+
+	$valid_cmds = array('disable', 'enable', 'addbypass', 'removebypass');
+	if (!in_array($cmd, $valid_cmds, TRUE)) {
+		pfb_logger("\nPFBL-03: control command not authorized [ " . htmlspecialchars((string) $cmd) . " ]", 2);
+		return FALSE;
+	}
+
+	$record = array('cmd' => $cmd);
+
+	// Validate the bypass IP for the commands that take one (the semantic layer).
+	if ($cmd == 'addbypass' || $cmd == 'removebypass') {
+		$clean_ip = pfb_filter($ip, PFB_FILTER_IP, 'pfb_unbound_py_write_control');
+		if (empty($clean_ip)) {
+			pfb_logger("\nPFBL-03: control command [ {$cmd} ] rejected: invalid IP", 2);
+			return FALSE;
+		}
+		$record['ip'] = $clean_ip;
+	}
+
+	// Validate the optional duration for the commands that take one (1-3600 seconds).
+	if (($cmd == 'disable' || $cmd == 'addbypass') && $duration !== '' && $duration !== NULL) {
+		$clean_dur = pfb_filter($duration, PFB_FILTER_NUM, 'pfb_unbound_py_write_control');
+		if (empty($clean_dur) || (int) $clean_dur < 1 || (int) $clean_dur > 3600) {
+			pfb_logger("\nPFBL-03: control command [ {$cmd} ] rejected: duration out of range (1-3600)", 2);
+			return FALSE;
+		}
+		$record['duration'] = (int) $clean_dur;
+	}
+
+	// Read the current sequence from the channel (first line is no longer used; the seq
+	// rides INSIDE the JSON record) and advance it. A missing/unparseable record -> 1.
+	$channel = "{$pfb['dnsbldir']}/pfb_py_control";
+	$cur = 0;
+	if (file_exists($channel)) {
+		$raw = @file_get_contents($channel);
+		if ($raw !== FALSE && $raw !== '') {
+			$prev = @json_decode($raw, TRUE);
+			if (is_array($prev) && isset($prev['seq']) && is_int($prev['seq'])) {
+				$cur = $prev['seq'];
+			}
+		}
+	}
+	$record['seq'] = $cur + 1;
+	$record['ts']  = time();
+
+	$payload = json_encode($record);
+	if ($payload === FALSE) {
+		pfb_logger("\nPFBL-03: control command [ {$cmd} ] rejected: encode failure", 2);
+		return FALSE;
+	}
+
+	if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
+		return FALSE;
+	}
+
+	return $record['seq'];
+}
+
+
 // ADR-10 P5: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks
 // it as a safety net -- RESULTS/04 SS3). The background rebuild holds the OLD and NEW
 // matcher structures resident at once (~2x transient); on a constrained box that bust

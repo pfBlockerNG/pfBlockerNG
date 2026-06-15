@@ -107,6 +107,30 @@ if (isset($argv[1])) {
 		pfblockerng_ss_refresh();
 		exit;
 	}
+	// PFBL-03: root-only DNSBL-control entrypoint. Writes a validated command to the
+	// local privileged command channel consumed by pfb_unbound.py.
+	// Usage: pfblockerng.php dnsbl-control <disable [sec] | enable |
+	//        addbypass <ip> [sec] | removebypass <ip>>
+	// The writer (pfb_unbound_py_write_control) re-validates the command + argument and
+	// the reader re-validates again, so an invalid command prints an error and exits 1.
+	elseif ($argv[1] == 'dnsbl-control') {
+		$cmd = $argv[2] ?? '';
+		$ip  = '';
+		$dur = '';
+		if ($cmd == 'addbypass' || $cmd == 'removebypass') {
+			$ip  = $argv[3] ?? '';
+			$dur = $argv[4] ?? '';	// only addbypass honours it; writer ignores it for removebypass
+		} else {
+			$dur = $argv[3] ?? '';	// disable [sec]; enable ignores it
+		}
+		$seq = pfb_unbound_py_write_control($cmd, $ip, $dur);
+		if ($seq === FALSE) {
+			echo "DNSBL control command failed (invalid command/argument or write error)\n";
+			exit(1);
+		}
+		echo "DNSBL control command [ {$cmd} ] queued (seq {$seq})\n";
+		exit;
+	}
 }
 
 // Extras - MaxMind/TOP1M Download URLs/filenames/settings
