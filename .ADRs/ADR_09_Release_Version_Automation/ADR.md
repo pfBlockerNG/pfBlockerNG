@@ -1,6 +1,12 @@
 # ADR-09: Scheduled version tracking & release automation
 
-- **Status:** **Proposed** (2026-06-02; **amended 2026-06-05**; **amended 2026-06-09**). The amendment reconciles
+- **Status:** **Accepted** (2026-06-15; proposed 2026-06-02; **amended 2026-06-05**; **amended 2026-06-09**).
+  All seven phases + Amendment 2 (Netgate-page probe) are live on `devel`: the off-branch matrix
+  (`ci-metadata:supported-versions.json`), `read-version-matrix.sh` / `check-pfsense-versions.py`,
+  and the `version-tracker` / `image-refresh` / `smoke-fanout` / `build-pkg-linux` / `release.yml`
+  wiring. The maintainer confirms the pipeline runs in production (the version-tracker nudge issues
+  fire correctly); any remaining §7-checklist behaviour is now handled as a **bug** against the live
+  workflows, not an Accept blocker. The earlier amendment reconciles
   the ADR with three facts that landed after it was authored: (1) the **portable Linux
   `.pkg` builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) now exists and
   is the **default** build path (the FreeBSD `make package` VM build is retained as a
@@ -191,7 +197,10 @@ All seven phases are complete (ADR-04 Accepted ⇒ Phases 5–6 are not gated):
 Linting: workflows/YAML lint-clean; any new `sh` ShellCheck-clean; markdown clean;
 `python -m pytest` (default) green and unchanged throughout.
 
-Status → **Accepted** only after the maintainer confirms the manual checklist below.
+Status → **Accepted** (2026-06-15): the maintainer confirms the pipeline runs in production
+(version-tracker nudge issues fire correctly). The manual checklist below is retained as a
+reference; any deviation surfaced on the live workflows is now handled as a **bug**, not an
+Accept blocker.
 
 ### Reject criteria
 
