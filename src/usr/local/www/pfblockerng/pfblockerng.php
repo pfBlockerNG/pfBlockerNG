@@ -735,6 +735,12 @@ function pfblockerng_sync_cron() {
 		pfb_logger("{$log}", 1);
 	}
 
+	// ADR-19: once-per-cron-tick software-update check. Best-effort + fully guarded
+	// (provenance gate, pkg-lock + DNS guards inside) — it can never throw, so it does
+	// not affect the feed cron timing/outcome. Provenance-gated: a no-op on a
+	// Netgate-installed build.
+	pfb_software_update_check();
+
 	// Call log mgmt function
 	// If Update GUI 'Manual view' is selected. Last output will be missed. So sleep for 5 secs.
 	sleep(5);

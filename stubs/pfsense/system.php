@@ -16,6 +16,9 @@
 
 // @codingStandardsIgnoreFile
 
+/** @return bool */
+function get_dnsavailable($ipproto = "inet") {}
+
 /** @return mixed */
 function filter_antilockout_tracker() {}
 
