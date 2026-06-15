@@ -72,6 +72,22 @@ class TestFeedPathConfinement:
         assert "Refusing DNSBL feed outside base dir" in capsys.readouterr().err
 
 
+class TestPathWithinBaseHelper:
+    """The containment helper ``_dnsbl_path_within_base`` itself: in-base -> True,
+    out-of-base -> False, and the root-base edge case (``base_dir`` resolving to ``/``)
+    where a child must still be accepted (the old ``startswith(real_base + os.sep)`` form
+    built ``//`` and falsely rejected every child of ``/``).
+    """
+
+    def test_root_base_accepts_child(self) -> None:
+        # Given base_dir resolving to "/", a child path is contained (True), not rejected.
+        assert pfb_unbound._dnsbl_path_within_base("/var/unbound/x/y", "/") is True
+
+    def test_out_of_base_is_rejected(self) -> None:
+        # A path outside the base dir is not contained (containment still enforced).
+        assert pfb_unbound._dnsbl_path_within_base("/etc/passwd", "/var/unbound/pfb") is False
+
+
 class TestTldMasterPathConfinement:
     def test_in_base_tld_master_is_read(self, tmp_path: Any) -> None:
         # Given a tld_master file inside the base dir, referenced by name.
