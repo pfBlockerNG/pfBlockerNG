@@ -1,0 +1,144 @@
+================================================================================
+ADR-21 Phase 1 RESULTS — Python per-line ABP detection in build() + unit tests
+Branch: adr/21-abp-header-agnostic-detection
+================================================================================
+
+SUMMARY
+-------
+build()'s non-ABP feed loop now routes any line that anchors with `||` (block) or
+`@@||` (allow) to the full ABP Stage-A parser parse_abp() -> the abp_rules stream
+(Stage-B reconcile), before the plain parse() call, with the SAME
+provenance/feed/group/log plumbing as the whole-feed ABP branch. Every other line
+stays on the existing plain pipeline. ABP-header feeds (format_hint='abp') are
+untouched — the guard lives inside the non-ABP loop only.
+
+Behaviour-preserving for ABP-header feeds (byte-identical); additive for non-ABP
+feeds (they only gain the `||` / `@@||` routing). parse_abp(), parse(),
+reconcile(), _dnsbl_parse_abp_line() are NOT modified.
+
+
+INSERTED CODE (the guard, in build() non-ABP for-loop, ~line 3974)
+------------------------------------------------------------------
+        for raw_line in line_reader(feed_row["raw"]):
+            # ADR-21: per-line ABP detection in a non-ABP feed. A line that anchors
+            # with ``||`` (block) or ``@@||`` (allow) is a self-identifying ABP entry
+            # (invalid in every plain dialect, so it would otherwise be dropped by the
+            # plain validator). Route it to the full parse_abp() Stage-A parser -> the
+            # abp_rules stream (Stage-B reconcile), with the SAME provenance/feed/group/
+            # log plumbing as the whole-feed ABP path above. parse_abp() returns None
+            # for path/wildcard/IP anchors and non-DNS $options -> silently skipped.
+            stripped = raw_line.strip()
+            if stripped.startswith("||") or stripped.startswith("@@||"):
+                rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag)
+                if rule is not None:
+                    abp_rules.append(rule)
+                continue
+            entry = parse(fmt, raw_line)
+            if entry is None:
+                continue
+            ...  # unchanged plain path
+
+
+TEST FILE
+---------
+tests/test_adr21_abp_per_line.py (NEW — the ONLY test file added/changed).
+All tests drive build() via its public call path with a synthetic in-memory
+manifest + injected line_reader; none call parse_abp() directly (they pin the
+ROUTING decision, not the frozen parser). Test functions:
+
+  (a) test_plain_feed_abp_anchor_block                     §4.1  red->green
+  (b) test_plain_feed_abp_anchor_allow_overrides_plain_block §4.2 red->green
+  (c) test_plain_feed_important_modifier                   §4.3  red->green
+  (d) test_plain_feed_badfilter_cancels_block              §4.4  red->green
+  (e) test_plain_path_unchanged_no_abp_lines               §4.5  regression pin
+  (f) test_abp_header_feed_unchanged                       §4.6  regression pin
+  (g) test_wildcard_and_path_anchors_skipped               §4.7  regression pin
+  (h) test_page_context_option_skipped                     §4.8  regression pin
+
+Every transition test (a)-(d) asserts the BEFORE state (the ABP line absent / the
+unmodified outcome) so green proves the routing CAUSED the change (ADR §4.11,
+no coverage theater).
+
+
+RED RUN (against UNMODIFIED source — pfb_unbound.py change stashed)
+------------------------------------------------------------------
+  python -m pytest tests/test_adr21_abp_per_line.py
+  => 4 failed, 4 passed
+
+  FAILED (a) test_plain_feed_abp_anchor_block
+  FAILED (b) test_plain_feed_abp_anchor_allow_overrides_plain_block
+  FAILED (c) test_plain_feed_important_modifier
+  FAILED (d) test_plain_feed_badfilter_cancels_block
+  PASSED (e) test_plain_path_unchanged_no_abp_lines       (regression pin)
+  PASSED (f) test_abp_header_feed_unchanged               (regression pin)
+  PASSED (g) test_wildcard_and_path_anchors_skipped       (regression pin)
+  PASSED (h) test_page_context_option_skipped             (regression pin)
+
+  The (a)-(d) failures are because the `||` / `@@||` lines are dropped by the
+  unmodified plain path (`|`/`^` are not valid domain chars). (e)-(h) freeze
+  unchanged behaviour and pass on both sides by design.
+
+
+GREEN RUN (with the build() change)
+-----------------------------------
+  python -m pytest tests/test_adr21_abp_per_line.py   => 8 passed
+  python -m pytest (full suite)                        => 1574 passed
+     (baseline 1566 + 8 new; no regression in test_adr07_* or any other suite)
+  ruff check .                                          => All checks passed!
+  ruff format --check .                                 => 98 files already formatted
+  mypy tests/                                           => Success: no issues found
+
+  ABP test-suite freeze verified:
+  git diff origin/devel...HEAD -- tests/test_adr07_*.py => EMPTY (frozen).
+
+  Diff scope verified — exactly two files:
+    src/usr/local/pkg/pfblockerng/pfb_unbound.py  (+13)
+    tests/test_adr21_abp_per_line.py              (new)
+
+
+EDGE CASE DISCOVERED (important for Phase 2/3 + ADR text)
+---------------------------------------------------------
+$badfilter is a FEED-only, SIGNATURE-MATCHED prune performed INSIDE the frozen
+reconcile() over the ABP Rule stream (ADR-07 Stage-B step 1). It cancels a
+matching `Rule`, NOT a plain-path block written straight to dataDB/zoneDB — a
+plain bare-domain block is never materialised as a `Rule`, so reconcile() has
+nothing to match its signature against.
+
+  Verified live:
+    `||domain.com^` + `||domain.com^$badfilter`  (both routed to the stream)
+        => domain.com block CANCELLED      (works)
+    `domain.com` (plain) + `||domain.com^$badfilter`
+        => domain.com STILL BLOCKED        (plain block is not a Rule)
+
+Consequence: ADR §2.3.5 / §4.4 ("reconcile removes the matching block from
+data_db/zone_db") holds for an ABP-stream block. A cross-pipeline cancel (plain
+block pruned by an ABP `$badfilter`) is NOT achievable WITHOUT modifying
+reconcile() — which the Phase-1 constraints (and the ADR-07 freeze) forbid.
+
+Therefore test (d) pins the achievable, constraint-faithful semantic: both the
+block anchor (`||cancel-me.com^`) and the `$badfilter` anchor are routed to the
+stream by the ADR-21 guard, so the prune fires; a sibling plain line
+(`keep.com`) confirms the plain path is untouched. The original prompt wording
+for (d) ("plain block + ABP badfilter") describes a cross-pipeline cancel that
+the frozen reconcile() cannot perform; the test was adjusted to the real
+architecture (the §RED-run rule: fix the test, not the implementation).
+
+  RECOMMENDATION FOR ADR TEXT (non-blocking, follow-up): reword §2.3.5/§4.4 to
+  state badfilter cancels a same-stream ABP block (a routed `||domain^` block),
+  not a plain-path block — or, if true cross-pipeline cancellation is desired,
+  scope a future change that lets reconcile()/build() prune plain blocks by a
+  surfaced badfilter key (out of ADR-21 Phase-1 scope).
+
+  Smoke note for Phase 3: the §7 manual checklist item 1 uses `@@||plain-block.com^`
+  (an ALLOW) to override a plain block — that path works as written (test (b)
+  proves the allow-overrides-plain mechanism). Only the badfilter-vs-plain combo
+  is the unsupported one.
+
+
+GO / NO-GO FOR PHASE 2
+----------------------
+GO. The Python per-line routing is in place, fully tested (red->green proven),
+and behaviour-preserving for ABP-header feeds. Phase 2 (PHP download loop +
+manifest builder verbatim pass-through + broadened header sniff) can proceed:
+once PHP writes `||` / `@@||` lines verbatim into a non-ABP feed's `.txt`/`.raw`,
+this Python guard already consumes them correctly.
