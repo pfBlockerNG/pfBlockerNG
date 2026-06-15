@@ -5,8 +5,20 @@
 > catalog carrying both packages, Netgate-style — superseding the `pfblockerng-devel.conf`
 > references below; only `nightly` keeps its own conf. The single-Worker-URL decision (one
 > conf, written once, User-Agent routing) is unchanged — only the repo/conf **name** collapsed.
+>
+> **Amendment (2026-06-15) — routing layer NOT live; §4/§7 acceptance unmet.** The
+> catalog/Worker/test *code* (Phases 2–5) landed and unit-tested, but `pfBlockerNG/pkg`'s
+> `publish.yml` was never wired to build the variant-keyed catalogs or to generate/deploy
+> `routing.json`. So `pfblockerng.github.io/pkg/routing.json` 404s and the Worker returns
+> `502 "Routing manifest unavailable"` — the self-hosted **Worker install path is
+> non-functional** (the Netgate ports channel is unaffected). The proving smoke (Case 4) was
+> left a non-failing `xfail`, which masked the gap in CI. Tracked completion: stamp the
+> variant into manifests (#242) → generator variant bucketing → `publish.yml` routing.json +
+> variant catalogs → Worker nightly-prefix fix + `wrangler deploy`, then un-`xfail` Case 4.
 
-- **Status:** **Accepted** (2026-06-10)
+- **Status:** **Accepted (code) — routing NOT yet live** (code accepted 2026-06-10; corrected
+  2026-06-15, see the amendment above). §4/§7's *"routing.json live with active CE+Plus
+  routes"* is unmet until the routing-completion PRs land.
 - **Date:** 2026-06-09
 - **Branch:** `adr/20-ce-plus-variant-distribution` (off **`devel`**; `{slug}` =
   sanitised ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):**
