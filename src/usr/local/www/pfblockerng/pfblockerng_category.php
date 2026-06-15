@@ -344,6 +344,7 @@ $tab_array[]	= array(gettext('Reports'),	false,			"/pfblockerng/pfblockerng_aler
 $tab_array[]	= array(gettext('Feeds'),	false,			'/pfblockerng/pfblockerng_feeds.php');
 $tab_array[]	= array(gettext('Logs'),	false,			'/pfblockerng/pfblockerng_log.php');
 $tab_array[]	= array(gettext('Sync'),	false,			'/pfblockerng/pfblockerng_sync.php');
+pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, true);
 
 $tab_array = array();

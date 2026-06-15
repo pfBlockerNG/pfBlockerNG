@@ -76,6 +76,14 @@ on:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pfblockerng.github.io/pkg/nightly). Blank -> SKIP."
         required: false
         default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default pfBlockerNG/FreeBSD-ports). Point a pre-merge run at a ports branch carrying a new plist entry."
+        required: false
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
+        required: false
+        default: ""
   workflow_call:
     inputs:
       image_ref:
@@ -123,6 +131,16 @@ on:
         required: false
         type: string
         default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -155,6 +173,11 @@ jobs:
       # so a shared name would collide / cross-feed. Keying on image_name keeps each
       # leg's artifact distinct (and the download below follows build-pkg.outputs.artifact).
       artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}
+      # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
+      # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
+      # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
+      ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+      ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)

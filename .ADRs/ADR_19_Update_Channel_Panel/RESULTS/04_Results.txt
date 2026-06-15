@@ -1,0 +1,180 @@
+================================================================================
+ADR-19 — PHASE 4 RESULTS: provenance-gated Software page + tab + ui_render negative
+                          gate + ports_ref CI plumbing
+Branch: adr/19-update-channel-panel   Phase: 4   Status: GREEN (off-box gates)
+================================================================================
+
+SCOPE
+-----
+First shipped src/ GUI for ADR-19: a new pfblockerng_software.php page (display +
+POST-guarded Check/Update/Bootstrap actions + the notify knob), the "Software" tab
+appended to EVERY pfBlockerNG page (provenance-gated), the priv match[] line, the
+ui_render NEGATIVE gate (the hide-path is the one this Tier-A deploy can prove live),
+and the optional ports_ref/ports_repo CI plumbing for Option-A validation.
+
+Predicate: Phase 3 GO (cache + orchestrator + cron + de-duped notice landed; HEAD
+322da60). Phase-4 consumes the Phase-2/3 helpers verbatim.
+
+
+A. THE PAGE — src/usr/local/www/pfblockerng/pfblockerng_software.php
+-------------------------------------------------------------------
+PROVENANCE GUARD is the FIRST executable thing (after require_once + pfb_global(),
+which must run to define $pfb):
+    if (!pfb_software_provenance_ok()) { header('Location: /index.php'); exit; }
+pfb_software_provenance_ok() = pfb_software_is_our_build(pfb_pkg_installed_repo(
+pfb_pkg_installed_name())) — a Netgate/sideloaded install (repo pfSense/unknown/'')
+is redirected away before any render or action handler runs.
+
+DISPLAY (from pfb_software_read_cache(), /var/db/pfblockerng/software_update.json):
+  channel, installed version, latest (our repo), status (Update available / Up to
+  date / Not checked yet via pfb_update_available()), last_checked. An empty/unknown
+  cache renders a clean "not checked yet" / "never" state — NO warning (so the first
+  GET passes ui_render before any check has run).
+
+NOTIFY KNOB: Form_Select pfb_software_notify (default|on|off), saved via the standard
+pfSense CSRF POST (isset($_POST['save'])) to
+installedpackages/pfblockerng/config/0/pfb_software_notify, then redirect-back.
+
+ACTIONS (POST-only, never on GET — so the ui_render GET cannot fire pkg; the three
+action buttons preventDefault + JS-submit a hidden pfb_sw_action; Update/Bootstrap
+confirm() first):
+  * Check now  -> pfb_software_update_check(true) then redirect-back (cache refresh).
+  * Update now -> SAME-CHANNEL `pkg upgrade -y <currentpkg>` (escapeshellarg'd
+    pkg-derived name; NO cross-channel install), streamed via the _update.php live-
+    terminal mechanic (pfb_software_output/_status, X-Accel-Buffering: no).
+  * Bootstrap repo -> reproduces add-repo.sh's effect for the CURRENT channel inline
+    (the dev-only script is NOT shipped in src/): writes the repo conf
+    (/usr/local/etc/pkg/repos/pfblockerng.conf for stable/devel; ...-nightly.conf +
+    `nightly/` subpath for nightly; url pkg.pfblockerng.workers.dev/${ABI}, priority
+    100, NONE-signed — byte-matching add-repo.sh) then `pkg update -r <repo>`,
+    streamed. stable+devel share repo `pfblockerng`; nightly -> `pfblockerng-nightly`
+    (ADR-19 amendment 2).
+
+CONTENT MARKER (ui_render oracle): element id="pfb-software-panel" (on the Channel
+StaticText in the "Software Status" Form_Section). Page title crumb: Firewall >
+pfBlockerNG > Software.
+
+
+B. TAB + PRIV (both provenance-gated)
+-------------------------------------
+TAB-GATE HELPER (src/usr/local/pkg/pfblockerng/pfblockerng.inc, after the Phase-3
+orchestrator):
+  pfb_software_provenance_ok(): bool   — live wrapper over the pure
+        pfb_software_is_our_build() (reads pkg %R via the Phase-3 IO).
+  pfb_software_add_tab(array &$tab_array, bool $active=false): void
+        — appends array(gettext('Software'), $active, '/pfblockerng/
+          pfblockerng_software.php') ONLY when pfb_software_provenance_ok(). Called
+          immediately before display_top_tabs() on EVERY page, so the tab is present
+          (our build) or absent (Netgate build) consistently across the GUI.
+
+Wired into all 14 pages' MAIN tab row (the row ending in the Sync tab — NOT the
+secondary IPv4/IPv6/GeoIP sub-row): pfblockerng.php (2 main rows), _general.php
+(before the Wizard tab), _ip, _dnsbl, _update, _hooks, _alerts, _feeds, _log, _sync,
+_safesearch, _blacklist, _category, _category_edit. The new page sets $active=true
+for its own tab.
+
+PRIV LINE (src/etc/inc/priv/pfblockerng.priv.inc, after the _update.php match, in
+$priv_list['page-firewall-pfblockerng']['match']):
+  $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_software.php";
+(Operator-gated like the sibling pages. The RUNTIME hide is the page's own top-of-
+file guard + the gated tab append; the priv match makes the page reachable for an
+operator on an our-build box.)
+
+
+C. CI PLUMBING — ports_ref / ports_repo (Option-A validation)
+-------------------------------------------------------------
+Added an OPTIONAL ports_repo + ports_ref input to BOTH .github/workflows/smoke.yml
+and .github/workflows/ui-tests.yml (workflow_dispatch AND workflow_call), forwarded
+to the build-pkg-linux.yml job's with::
+    ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+    ports_ref:  ${{ inputs.ports_ref  || 'pfblockerng/use-github' }}
+Blank input -> build-pkg-linux's own defaults, so a NORMAL run is byte-identical.
+A maintainer can now point a pre-merge smoke/ui run at a FreeBSD-ports branch
+carrying the new plist entry (build-pkg-linux already accepts ports_ref/ports_repo
+and clones that tree for the portable .pkg build). YAML parse: confirmed for both +
+build-pkg-linux.yml.
+
+
+D. ui_render TEST — the NEGATIVE side (tests/smoke/ui/test_render_smoke.py)
+--------------------------------------------------------------------------
+The ADR-04 UI harness installs the branch .pkg with `pkg add -f` (offline) -> the
+installed package's repo (pkg %R) is NOT one of our repos -> the provenance gate
+HIDES the page AND the tab. That hide-path is what THIS deploy can prove live (the
+POSITIVE render is Phase 5). Two new tests (both enrolled in the module-level
+php_error_log_guard no-growth sweep):
+
+  test_software_page_provenance_gate_hides_on_nonour_build
+      GET /pfblockerng/pfblockerng_software.php with allow_redirects=False ->
+      asserts a 3xx whose Location ends in /index.php AND the 'pfb-software-panel'
+      marker is ABSENT from the body (a broken guard that 200-renders the panel
+      can't pass by following the redirect). No new php_error.log line (the guard is
+      a clean redirect+exit, not a fatal).
+
+  test_software_tab_absent_on_nonour_build
+      GET the General page -> passes the clean-render oracle AND the Software tab
+      href '/pfblockerng/pfblockerng_software.php' is ABSENT from the tab bar
+      (pfb_software_add_tab() appended nothing). Pairs with the page-gate test so
+      BOTH gated surfaces are proven hidden.
+
+Test ids:
+  tests/smoke/ui/test_render_smoke.py::test_software_page_provenance_gate_hides_on_nonour_build
+  tests/smoke/ui/test_render_smoke.py::test_software_tab_absent_on_nonour_build
+Collection + fixture resolution confirmed (--collect-only + --setup-plan: fixtures
+webui, php_error_log_guard, deployed_vm, smoke_vm all resolve).
+
+
+PLIST — the EXACT install path the orchestrator must add to FreeBSD-ports
+------------------------------------------------------------------------
+pkg-plist entries are PREFIX-relative (PREFIX=/usr/local), matching the sibling www
+pages (e.g. `www/pfblockerng/pfblockerng_update.php`). Add this line to the
+pfBlockerNG[-devel/-nightly] port's pkg-plist (alongside the other
+www/pfblockerng/*.php entries):
+
+    www/pfblockerng/pfblockerng_software.php
+
+It installs to /usr/local/www/pfblockerng/pfblockerng_software.php. www/ pages are
+NOT chroot-copied (only the Unbound module is) — plist ONLY, no chroot/deploy wiring.
+The FreeBSD-ports repo is SEPARATE (pfBlockerNG/FreeBSD-ports, branch
+pfblockerng/use-github) — the orchestrator adds the plist line there; the ports_ref
+input (C above) lets a pre-merge run validate the .pkg built from that branch. PR CI
+does not build the .pkg, so this stays green locally.
+
+NO src/ stub additions were needed beyond Phase 3: the page calls already-stubbed
+pfSense fns (safe_mkdir, display_top_tabs, config_set_path, write_config,
+pfb_alerts_default_page, the Form_* classes in stubs/pfsense/forms.php). PHPStan
+clean at level 1 (the page is in `src`, which PHPStan scans).
+
+
+OFF-BOX GATE RESULTS (this agent, in the worktree)
+--------------------------------------------------
+  php -l (the new page + the inc + the priv + all 14 edited www pages) -> clean
+      (sync.php's pre-existing "continue targeting switch" warnings are unrelated)
+  vendor/bin/phpstan analyse --no-progress  -> [OK] No errors
+  vendor/bin/phpcs                          -> clean (no PFBL-01 violations)
+  vendor/bin/phpunit                        -> OK (487 tests, 933 assertions)
+  ruff check .                              -> All checks passed!
+  python -m pytest -q                       -> 1575 passed (UNCHANGED)
+  ui_render collect (--collect-only)        -> both new tests collected
+  ui_render --setup-plan                    -> fixtures resolve for both new tests
+  YAML parse smoke.yml + ui-tests.yml (+ build-pkg-linux.yml) -> OK
+
+
+GO-AHEAD FOR PHASE 5 — the repo-install POSITIVE journey
+--------------------------------------------------------
+Phase 5 is the ADR-17 `repo`-marker live journey on a VM where the package is
+installed FROM our repo (pkg %R == pfblockerng / pfblockerng-nightly). It must
+assert the POSITIVE side of every gate Phase 4 proved hidden:
+  * GET /pfblockerng/pfblockerng_software.php -> HTTP 200 (no redirect), the
+    'pfb-software-panel' marker PRESENT, the Check/Update/Bootstrap buttons + the
+    pfb_software_notify select rendered, body free of PHP diagnostics, no new
+    php_error.log line.
+  * The "Software" tab PRESENT (href /pfblockerng/pfblockerng_software.php) on a
+    normal pfBlockerNG page (e.g. general).
+  * The end-to-end notice journey: publish a newer our-repo build -> cron
+    pfb_software_update_check() raises ONE de-duped file_notice -> the page shows
+    "Update available" -> "Update now" (same-channel pkg upgrade) clears it.
+  * A Netgate-decoy-installed box (the existing repo-smoke cross-repo decoy) shows
+    NO Software tab + raises NO notice (the negative, on the live box).
+Use the ports_ref input (C) to point the pre-merge build at the FreeBSD-ports branch
+carrying the new plist line, so the .pkg actually ships pfblockerng_software.php.
+================================================================================

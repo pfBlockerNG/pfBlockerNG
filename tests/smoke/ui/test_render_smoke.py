@@ -351,6 +351,66 @@ def test_threats_rejects_malformed_lookup(name: str, query: str, message: str, w
     assert not present, f"{name}: reject path unexpectedly rendered lookup chrome {present}"
 
 
+# ADR-19: the "Software" page + tab are PROVENANCE-GATED — present ONLY on a build
+# installed from one of OUR repos (pkg %R == pfblockerng / pfblockerng-nightly). The
+# ADR-04 UI harness installs the branch .pkg with `pkg add -f` (offline), so its %R is
+# NOT one of our repos -> the provenance gate HIDES the page and the tab. This is the
+# NEGATIVE side of the gate, and it is the one this Tier-A deploy can prove live: the
+# page's top-of-file guard `header('Location: /index.php'); exit;` fires, and
+# pfb_software_add_tab() appends nothing. The POSITIVE render (200 + the
+# 'pfb-software-panel' marker + the action buttons) belongs to Phase 5's `repo`-install
+# journey, where the package IS installed from our repo so %R == pfblockerng.
+_SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
+_SOFTWARE_PANEL_MARKER = "pfb-software-panel"
+_SOFTWARE_TAB_HREF = "/pfblockerng/pfblockerng_software.php"
+
+
+def test_software_page_provenance_gate_hides_on_nonour_build(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Software page's provenance guard hides it on a non-our-repo install.
+
+    Scenario: pfBlockerNG installed via `pkg add -f` (the UI harness), so the
+    installed package's repo (`pkg query %R`) is NOT one of our repos.
+      Given the standard Tier-A deploy (offline `pkg add -f`),
+      When the Software page is GET (redirects NOT followed),
+      Then the top-of-file provenance guard redirects to /index.php (a 3xx, not a
+           200 panel body), the page-specific 'pfb-software-panel' marker is absent
+           from the body, AND no new php_error.log line is produced (the guard is a
+           clean redirect+exit, NOT a fatal). The enrolled php_error_log_guard pins
+           the no-new-error-line condition over the sweep.
+    """
+    # Do NOT follow the redirect: assert the guard's 3xx -> /index.php directly, so a
+    # broken guard that 200-renders the panel can't pass by following to a clean page.
+    resp = webui.get(_SOFTWARE_PAGE, allow_redirects=False)
+    assert resp.status_code in (301, 302, 303, 307, 308), (
+        f"Software page expected a provenance-guard redirect, got HTTP {resp.status_code}"
+    )
+    location = resp.headers.get("Location", "")
+    assert location.endswith("/index.php"), f"provenance guard should redirect to /index.php, got Location={location!r}"
+    assert _SOFTWARE_PANEL_MARKER not in resp.text, (
+        "provenance guard must NOT render the Software panel on a non-our-build"
+    )
+
+
+def test_software_tab_absent_on_nonour_build(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The 'Software' tab is absent from a normal pfBlockerNG page on a non-our-build.
+
+    Given the same offline `pkg add -f` deploy (non-our-repo provenance),
+    When the General page is GET,
+    Then pfb_software_add_tab() appended nothing: the Software tab href is NOT in the
+         tab bar. Pairs with the page-gate test above to prove BOTH gated surfaces
+         (page + tab) are hidden. The positive (tab PRESENT) state is Phase 5's
+         repo-install journey. php_error_log_guard enrolls this GET in the sweep.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, resp.text, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+    assert _SOFTWARE_TAB_HREF not in resp.text, (
+        "the Software tab must be ABSENT on a non-our-build (provenance gate hides it everywhere)"
+    )
+
+
 def test_page_table_covers_every_pfblockerng_page() -> None:
     """Guard: the table (plus the recorded exclusions) covers the on-disk page set.
 
