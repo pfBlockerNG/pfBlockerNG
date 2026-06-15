@@ -29,7 +29,10 @@
 >    channelled build. "Read latest" maps channel -> repo: stable/devel -> `-r pfblockerng`,
 >    nightly -> `-r pfblockerng-nightly`.
 
-- **Status:** **Proposed** (2026-06-06)
+- **Status:** **Accepted** (2026-06-15) — landed on `devel` (PR #232, rebase-merged);
+  validated by the off-box gates + the live-VM `repo` positive journey and the `ui_render`
+  negative gate. No separate manual maintainer sign-off is required per the CLAUDE.md
+  "ADR acceptance — automated tests, not a manual maintainer sign-off" directive.
 - **Date:** 2026-06-06
 - **Branch:** `adr/19-update-channel-panel` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming") / **Component(s):** shipped `src/`
@@ -389,7 +392,14 @@ logic is pinned by oracle tests first.
   `pkg upgrade` from our repo, and `%R` discriminating our build from a decoy. (`RESULTS/01`.)
 - **Phase 2 pure core — DONE.** `tests/php/SoftwareUpdateCheckTest.php` + the pure-helper
   tests pin every branch (each channel, available/not, default/on/off, de-dupe lifecycle)
-  with before-state asserts. PHPUnit green (487 tests). (`RESULTS/02`, `RESULTS/03`.)
+  with before-state asserts. PHPUnit green (488 tests after the post-review hardening).
+  (`RESULTS/02`, `RESULTS/03`.)
+- **Post-review hardening (PR #232 / CodeRabbit, 2026-06-15).** Three quick-win findings
+  applied + pinned: `pfb_pkg_latest()` wraps both networked `pkg` calls in `timeout(1)`;
+  `pfb_software_write_cache()` is now genuinely atomic (`tempnam()` + `rename()`); and the
+  cron check scopes cached `latest`/`last_notified` to the installed `pkgname` so a channel
+  switch cannot surface a stale version or suppress the first valid notice
+  (`testChannelSwitchDoesNotReuseStaleCache`).
 - **Phase 4 page — DONE; NEGATIVE side GREEN live.** The ADR-14 Tier-A `ui_render` PR gate
   asserts the provenance gate **hides** the page + tab on the harness's `pkg add -f` install
   (non-our `%R`):
