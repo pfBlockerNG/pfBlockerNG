@@ -4002,6 +4002,21 @@ function pfb_strip_trailing_port($line) {
 }
 
 
+// ADR-22 Phase 1: extract the non-lite scheme strip into a named, testable helper.
+// If a '<scheme>://' is present, strip everything up to and including the first '://'
+// and return the remainder; otherwise return the line unchanged. Behaviour-preserving
+// extraction of the former inline logic -- strpos() finds the FIRST '://' anywhere in the
+// token, so today's permissive cases ('123://evil.com', '://evil.com', mid-token schemes)
+// are kept byte-identical. Phase 2 adds a $strict toggle (RFC 3986 scheme validation +
+// path rejection) returning string|false; Phase 1 returns string only.
+function pfb_dnsbl_strip_scheme(string $line): string {
+	if (strpos($line, '://') !== FALSE) {
+		return substr($line, strpos($line, '://') + 3);
+	}
+	return $line;
+}
+
+
 // ADR-21: whole-feed ABP header sniff. A line in a feed's leading '!'-comment block
 // that starts (leading whitespace tolerated) with '[Adblock', '[uBlock', or '! Title:'
 // flags the feed as whole-feed ABP ($easylist = TRUE). The three generic prefixes are a
@@ -11218,10 +11233,8 @@ function sync_package_pfblockerng($cron='') {
 
 											if (!$lite) {
 
-												// If 'http|https|telnet|ftp://' found, remove
-												if (strpos($line, '://') !== FALSE) {
-													$line = substr($line, strpos($line, '://') + 3);
-												}
+												// If 'http|https|telnet|ftp://' found, remove (ADR-22)
+												$line = pfb_dnsbl_strip_scheme($line);
 
 												// If '/' character found, remove characters after '/'
 												if (strpos($line, '/') !== FALSE) {
