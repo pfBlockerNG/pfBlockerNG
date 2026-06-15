@@ -1,0 +1,68 @@
+ADR-26 — Phase 3 Results: Replace the FreeBSD-only / locale-fragile shell constructs
+
+CHANGE
+src/usr/local/pkg/pfblockerng/pfblockerng.sh — removed the two cross-platform hazards adjacent
+to the locale work (ADR §1.4 / §2.4): the `ls -l` column parse and the `jot` call.
+
+ITEM A — ls-column parse (was L1226 + L1230; now the two diagnostic dumps in closingprocess())
+BEFORE (both lines, differing only in the dir var):
+  ls -lahtr "${pfborig}"*.orig       | sed -e 's/\/.*\// /' -e 's/.orig//' | awk -v OFS='\t' '{print $6" "$7,$8,$9}'
+  ls -lahtr "${pfbdomainorig}"*.orig | sed ...                            | awk ...
+AFTER:
+  pfb_list_orig_by_mtime "${pfborig}"
+  pfb_list_orig_by_mtime "${pfbdomainorig}"
+
+New helper pfb_list_orig_by_mtime() added beside the other pfb_* helpers (after
+pfb_anchor_octet_pattern). It lists the dir's '*.orig' files OLDEST-FIRST (matching the old
+`ls -lahtr`, i.e. -t reverse) and emits, per file, "<Mon> <Day><TAB><HH:MM><TAB><name>"
+(path stripped, '.orig' removed) — byte-for-byte the same columns the old awk produced.
+
+PORTABLE FORM CHOSEN + WHY
+- mtime via stat(1), not ls: locale-independent and not column-position-bound.
+- stat AND date flag-differ BSD vs GNU, so the helper detects ONCE with `stat --version`
+  (GNU-only; BSD stat has no --version → non-zero → BSD branch) and selects:
+    GNU: stat -c '%Y'  +  date -d "@<epoch>"
+    BSD: stat -f '%m'  +  date -r <epoch>
+  A naive "try BSD `stat -f` then `|| GNU`" was REJECTED: GNU's `-f` means "filesystem status"
+  (not "format"), so it succeeds with garbage on stdout instead of erroring — the `||` would
+  never fire and the captured value would be polluted. `stat --version` detection avoids that.
+- Date formatting is `LC_ALL=C date ... '+%b %e%t%H:%M'` (per ADR §2.3 inline-locale policy):
+  LC_ALL=C pins the month abbreviation to deterministic English (as the old ls effectively was)
+  and %t emits the literal tab, reproducing the "<Mon> <Day><TAB><HH:MM>" layout.
+- The intermediate `... | LC_ALL=C sort -n | ...` byte-sorts the "epoch<TAB>path" lines
+  numerically (Phase-1 idiom) for the oldest-first order.
+- find -printf was NOT used: it is GNU-only (FreeBSD find lacks it) and the project target today
+  is FreeBSD; the stat/date detection is FreeBSD-correct AND Linux-friendly, the stated bar.
+
+OUTPUT FORMAT — CONFIRMED UNCHANGED
+Functional check on GNU (this dev box) with three fixture *.orig files at distinct mtimes:
+  Jun 10<TAB>08:05<TAB>pfB_Alpha
+  Jun 12<TAB>14:30<TAB>pfB_Bravo
+  Jun 15<TAB>23:59<TAB>pfB_Charlie
+Oldest-first ordering preserved; columns identical to the old `ls|sed|awk`. Empty-dir safe (the
+unmatched-glob case is guarded by `[ -e "${_f}" ] || continue`, so no literal '*.orig' line).
+The BSD branch (stat -f / date -r) is symmetric and is exercised live by the ADR-04 smoke
+(Phase 4) on the FreeBSD VM.
+
+ITEM B — jot (was L327; now L354)
+BEFORE: for i in $(/usr/bin/jot 255); do
+AFTER:  for i in $(seq 255); do
+`jot(1)` is BSD-only and was hardcoded to /usr/bin/jot; `seq` is in base on FreeBSD, Linux, and
+macOS and is the ADR §2.4 primary suggestion. `seq 255` and `jot 255` both emit 1..255, so the
+loop body is unchanged. The hardcoded path is dropped (bare base-utility invocation, per the
+repo's shell conventions). The unrelated `jot` mention at L18 is a comment about temp-dir
+entropy (mktemp), not a call — left as-is per ADR §1.4.
+
+NOT TOUCHED (out of scope — ADR §1.4 / phase prompt)
+- The `ls -A "${dir}"` emptiness checks (the `[ "$(ls -A dir)" ]` guards) — portable, unchanged.
+
+VALIDATION
+- `sh -n` — OK; `shellcheck` — clean (exit 0).
+- No extractable-helper pytest: the mtime listing is inherently a filesystem/stat/date shell
+  path (not an extractable pfBlockerNG pure helper), and `seq 255` is trivial; a Python test
+  would exercise the OS, not our code. Behavioural validation is the ADR-04 smoke (Phase 4),
+  plus the off-box functional check recorded above.
+
+STILL OUTSTANDING IN ADR-26
+- Phase 4: Definition of Done — shellcheck/sh -n clean (done for this file), ADR-04 smoke green,
+  final minimal-diff review.

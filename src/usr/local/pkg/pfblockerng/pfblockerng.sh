@@ -169,6 +169,33 @@ pfb_anchor_octet_pattern() {
 	printf '^%s' "${1}" | sed 's/\./\\./g'
 }
 
+# List the '*.orig' files in directory $1 oldest-first, one line per file:
+# "<Mon> <Day><TAB><HH:MM><TAB><name>" (path stripped, '.orig' removed) — the same
+# columns the old `ls -lahtr | sed | awk` produced, but locale- and ls-layout-
+# independent. mtime comes from stat(1) and is formatted by date(1); both flag-differ
+# between BSD and GNU, so detect once via `stat --version` (GNU-only) and branch.
+pfb_list_orig_by_mtime() {
+	if stat --version >/dev/null 2>&1; then _gnu=1; else _gnu=0; fi
+	for _f in "${1}"*.orig; do
+		[ -e "${_f}" ] || continue
+		if [ "${_gnu}" -eq 1 ]; then
+			_m="$(stat -c '%Y' "${_f}" 2>/dev/null)"
+		else
+			_m="$(stat -f '%m' "${_f}" 2>/dev/null)"
+		fi
+		[ -n "${_m}" ] || continue
+		printf '%s\t%s\n' "${_m}" "${_f}"
+	done | LC_ALL=C sort -n | while IFS="$(printf '\t')" read -r _m _f; do
+		_name="$(printf '%s' "${_f}" | sed -e 's#.*/##' -e 's/\.orig$//')"
+		if [ "${_gnu:-0}" -eq 1 ]; then
+			_ts="$(LC_ALL=C date -d "@${_m}" '+%b %e%t%H:%M' 2>/dev/null)"
+		else
+			_ts="$(LC_ALL=C date -r "${_m}" '+%b %e%t%H:%M' 2>/dev/null)"
+		fi
+		printf '%s\t%s\n' "${_ts}" "${_name}"
+	done
+}
+
 
 # Function to restore IP aliastables and DNSBL database from archive on reboot. ( Ramdisk installations only )
 aliastables() {
@@ -325,7 +352,7 @@ suppress() {
 							counter="$((counter + 1))"
 
 							# Add individual IP addresses from range excluding suppressed IP
-							for i in $(/usr/bin/jot 255); do
+							for i in $(seq 255); do
 								if [ "${i}" != "${octet4}" ]; then
 									echo "${iptrim}.${i}" >> "${tempfile}"
 									counter="$((counter + 1))"
@@ -1224,11 +1251,11 @@ closingprocess() {
 	fi
 	if [ -d "${pfborig}" ] && [ "$(ls -A "${pfborig}")" ]; then
 		echo; echo '====================[ IPv4/6 Last Updated List Summary ]=============='; echo
-		ls -lahtr "${pfborig}"*.orig | sed -e 's/\/.*\// /' -e 's/.orig//' | awk -v OFS='\t' '{print $6" "$7,$8,$9}'
+		pfb_list_orig_by_mtime "${pfborig}"
 	fi
 	if [ -d "${pfbdomainorig}" ] && [ "$(ls -A "${pfbdomainorig}")" ]; then
 		echo; echo '====================[ DNSBL Last Updated List Summary ]=============='; echo
-		ls -lahtr "${pfbdomainorig}"*.orig | sed -e 's/\/.*\// /' -e 's/.orig//' | awk -v OFS='\t' '{print $6" "$7,$8,$9}'
+		pfb_list_orig_by_mtime "${pfbdomainorig}"
 	fi
 
 	# Execute when 'de-duplication' is enabled
