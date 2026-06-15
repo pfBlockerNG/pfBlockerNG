@@ -280,9 +280,9 @@ are logged to the Reports tab.
 
 > **Migration:** the older `drill TXT python_control.*` DNS-TXT transport is
 > **deprecated** and **off by default**. Switch any CRON/Scheduler task to the
-> `pfblockerng dnsbl-control` CLI above. A one-release **DNSBL Control (legacy DNS TXT)**
-> sub-toggle re-enables the old path for migration only — it will be **removed next
-> release**.
+> `pfblockerng dnsbl-control` CLI above. The **DNSBL Control (legacy DNS TXT)** sub-toggle
+> re-enables the old path for migration; it is **deprecated**, **less secure**, and will be
+> **removed in a future release**.
 
 ## Documentation
 
