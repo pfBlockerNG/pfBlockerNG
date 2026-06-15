@@ -120,7 +120,10 @@ PAGE_TABLE: tuple[Page, ...] = (
         "threats_host", "/pfblockerng/pfblockerng_threats.php?host=203.0.113.5", ("Threat Source IP", "Threat Lookups")
     ),
     Page("threats_port", "/pfblockerng/pfblockerng_threats.php?port=8443", ("Threat Port",)),
-    # ADR-12 Update Hooks (pre/post update-command list). $pgtitle + the section titles are stable.
+    # ADR-12 Update Hooks (pre/post update-command list). Reached as the Update -> Hooks sub-tab;
+    # the markers are the Form_Section titles ('Update Hooks (Pre/Post Update Scripts)' + 'Hook
+    # Entries'), stable regardless of the tab restructure. The sub-tab nav itself is pinned by
+    # test_update_hooks_subtab_relocation.
     Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
@@ -247,6 +250,58 @@ def test_general_page_renders_aggregate_select(webui: WebUI) -> None:
     assert _AGG_HELP_CAVEAT in body, (
         f"pfb_agg_types help caveat {_AGG_HELP_CAVEAT!r} (the Native/no-rule wording) not rendered on the General page"
     )
+
+
+_UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
+_HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
+
+
+def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
+    """Update Hooks moved from a top-level tab to an Update sub-tab (Run | Hooks).
+
+    The standalone 'Update Hooks' top tab was replaced by a second display_top_tabs
+    row under Update — Run -> the update page, Hooks -> the hooks page (the same
+    sub-tab idiom the Feeds page uses). Assert the new shape AND that the old
+    top-level tab is gone (hermetic — all three pages render from local config).
+
+    Given the restructured tabs,
+    When GET pfblockerng_update.php and pfblockerng_hooks.php,
+    Then each renders the sub-tab row: a 'Run' anchor and a 'Hooks' anchor, with the
+      Hooks one linking the hooks page and the Run one linking the update page (both
+      anchors are NEW — neither page exposed a 'Run' or bare 'Hooks' tab before).
+    And the old standalone 'Update Hooks' tab is gone: it is ABSENT from the update
+      page entirely, and from the General witness page (a page that is neither Update
+      nor Hooks) — while that page keeps its 'Update' top tab. The absence is the
+      before/after guard: 'Update Hooks' was present as a top tab on every page before
+      this change, so these assertions would have FAILED then and pass only after the
+      move. (The hooks page itself still contains the literal 'Update Hooks' in its
+      Form_Section title, so absence is asserted on the update + witness pages, not it.)
+
+    The active-tab-tracks-the-page branch (Run active on the update page, Hooks active
+    on the hooks page) is the Tier-B browser half (test_browser_hooks.py).
+    """
+    # --- Run page (pfblockerng_update.php): both sub-tabs render; old top tab gone. ---
+    body = webui.get(_UPDATE_PAGE).text
+    assert ">Run</a>" in body, "update page is missing the 'Run' sub-tab anchor"
+    assert ">Hooks</a>" in body, "update page is missing the 'Hooks' sub-tab anchor"
+    assert _HOOKS_PAGE in body, "update page 'Hooks' sub-tab does not link the hooks page"
+    # "Update Hooks" is a tab-nav guard: the removed top tab was the ONLY occurrence of
+    # that literal on the update page, so its absence proves the tab is gone. (If future
+    # help text on this page ever references the hooks page by that name, narrow this to
+    # the nav element rather than the whole body.)
+    assert "Update Hooks" not in body, "stale 'Update Hooks' top-level tab still rendered on the update page"
+
+    # --- Hooks page (pfblockerng_hooks.php): both sub-tabs render. ---
+    body = webui.get(_HOOKS_PAGE).text
+    assert ">Run</a>" in body, "hooks page is missing the 'Run' sub-tab anchor"
+    assert ">Hooks</a>" in body, "hooks page is missing the 'Hooks' sub-tab anchor"
+    assert _UPDATE_PAGE in body, "hooks page 'Run' sub-tab does not link the update page"
+
+    # --- Witness page (General): the 'Update Hooks' top tab is gone; 'Update' remains. ---
+    body = webui.get(_GENERAL_PAGE).text
+    assert "Update Hooks" not in body, "'Update Hooks' top-level tab is still present on the General page"
+    assert ">Update</a>" in body, "the 'Update' top-level tab was wrongly removed from the General page"
+    assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
 
 
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
