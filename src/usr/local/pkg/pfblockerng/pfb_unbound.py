@@ -921,6 +921,12 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_enable"] = False
     pfb["python_nolog"] = False
     pfb["python_control"] = False
+    # PFBL-03: the legacy DNS-TXT control transport is OFF by default and gated behind
+    # this separate opt-in. DNSBL control is CLI-driven (pfblockerng dnsbl-control ...) via
+    # the local privileged command file; the DNS-TXT path is deprecated and slated for
+    # removal next release. NEXT RELEASE (PFBL-03): drop python_control_legacy + the
+    # DNS-TXT branch in operate() + the IPv4-only ``::1`` quirk entirely.
+    pfb["python_control_legacy"] = False
     pfb["python_maxmind"] = False
     pfb["python_blocking"] = False
     pfb["python_blacklist"] = False
@@ -1106,6 +1112,8 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_cname"] = config.getboolean("MAIN", "python_cname")
             if config.has_option("MAIN", "python_control"):
                 pfb["python_control"] = config.getboolean("MAIN", "python_control")
+            if config.has_option("MAIN", "python_control_legacy"):
+                pfb["python_control_legacy"] = config.getboolean("MAIN", "python_control_legacy")
 
             # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
             # long/complex regex" static pre-filter (drops over-long/nested-quantifier
@@ -5513,7 +5521,17 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     return True
 
         # Python_control - Receive TXT commands from pfSense local IP
-        if qstate_valid and q_type == RR_TYPE_TXT and q_name_original.startswith("python_control."):
+        # PFBL-03: DEPRECATED legacy DNS-TXT control transport. Inert unless the operator
+        # explicitly opts back in via ``python_control_legacy``; OFF by default, no DNSBL
+        # control command is honoured over DNS-TXT. DNSBL control is CLI-driven
+        # (pfblockerng dnsbl-control ...) over the local privileged command file. This whole
+        # branch is slated for removal next release.
+        if (
+            pfb["python_control_legacy"]
+            and qstate_valid
+            and q_type == RR_TYPE_TXT
+            and q_name_original.startswith("python_control.")
+        ):
             control_rcd = False
             control_msg = ""
             if pfb["python_control"] and q_ip == "127.0.0.1":

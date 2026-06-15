@@ -263,6 +263,27 @@ Set the knob to **On** or **Off** to override the per-channel default either way
 Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
 channels with `add-repo.sh` + `pkg install` as in Option 2 above.
 
+### DNSBL Control (CLI)
+
+When **DNSBL Control** is enabled (DNSBL settings), DNSBL can be driven at runtime
+through the local root CLI:
+
+```sh
+pfblockerng dnsbl-control disable [seconds]   # seconds: 1-3600
+pfblockerng dnsbl-control enable
+pfblockerng dnsbl-control addbypass <ip> [seconds]
+pfblockerng dnsbl-control removebypass <ip>
+```
+
+These commands can be incorporated in CRON/Scheduler tasks or run manually; all events
+are logged to the Reports tab.
+
+> **Migration:** the older `drill TXT python_control.*` DNS-TXT transport is
+> **deprecated** and **off by default**. Switch any CRON/Scheduler task to the
+> `pfblockerng dnsbl-control` CLI above. A one-release **DNSBL Control (legacy DNS TXT)**
+> sub-toggle re-enables the old path for migration only — it will be **removed next
+> release**.
+
 ## Documentation
 
 - **Using pfBlockerNG:**

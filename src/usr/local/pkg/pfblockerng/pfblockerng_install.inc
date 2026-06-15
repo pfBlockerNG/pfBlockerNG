@@ -116,6 +116,19 @@ if (!empty($cfg) && (($cfg['dnsbl_mode'] ?? '') !== 'dnsbl_python' || ($cfg['pfb
 }
 unset($cfg);
 
+// PFBL-03: one-time seed of the deprecated legacy DNS-TXT control sub-toggle. DNSBL
+// control is now CLI-driven; the DNS-TXT transport is OFF by default. The run-once,
+// iff-grandfather decision is pfb_control_legacy_seed() (NULL => leave unchanged); it seeds
+// 'pfb_control_legacy' ON only when the pre-existing config already had DNSBL Control
+// enabled, and a one-shot marker keeps it from re-seeding on later saves.
+$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+$cfg_seeded = pfb_control_legacy_seed($cfg);
+if ($cfg_seeded !== NULL) {
+	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg_seeded);
+	write_config('pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)');
+}
+unset($cfg, $cfg_seeded);
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
