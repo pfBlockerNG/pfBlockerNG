@@ -129,6 +129,19 @@ if ($cfg_seeded !== NULL) {
 }
 unset($cfg, $cfg_seeded);
 
+// ADR-22: preserve permissive DNSBL scheme parsing for EXISTING installs on upgrade.
+// pfb_dnsbl_lenient_migrate() sets the missing key to 'on' (lenient) only on an
+// already-populated DNSBL config section; a fresh install has no prior section, so it
+// returns NULL and the new-install strict default (OFF) stands. An existing value is
+// never overwritten.
+$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+$cfg_lenient = pfb_dnsbl_lenient_migrate($cfg);
+if ($cfg_lenient !== NULL) {
+	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg_lenient);
+	write_config('pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)');
+}
+unset($cfg, $cfg_lenient);
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");

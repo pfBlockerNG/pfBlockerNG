@@ -84,4 +84,111 @@ final class PfbDnsblStripSchemeTest extends TestCase
 		// valid); pfb_filter() downstream rejects 'junk' (no '.'). Documents the edge case.
 		$this->assertSame('junk', pfb_dnsbl_strip_scheme('evil.com://junk'));
 	}
+
+	// ------------------------------------------------------------------
+	// ADR-22 Phase 2 -- the $strict toggle (ADR §2.4 / §2.5 decision table).
+	//
+	// Scenario: scheme validation behind a single global lenient/strict toggle.
+	//   Background: pfb_dnsbl_strip_scheme($line, $strict) -- $strict resolved at the
+	//   call site from `lenient !== 'on'`. Lenient (false) is today's permissive strip;
+	//   strict (true) validates the RFC 3986 scheme + rejects URL paths, returning FALSE.
+	// ------------------------------------------------------------------
+
+	// --- Lenient (strict=false): current behaviour preserved (the malformed cases that
+	//     strict flips to FALSE; each pinned at strict=false BEFORE the strict assertion
+	//     in the paired strict test, so green proves the toggle CAUSED the change). ---
+
+	public function testInvalidSchemePassthroughWhenLenient(): void
+	{
+		// Given a digit-start (invalid RFC 3986) scheme, When lenient, Then the
+		// permissive strip still yields the host (today's behaviour).
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('123://evil.com', false));
+	}
+
+	public function testEmptySchemePassthroughWhenLenient(): void
+	{
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('://evil.com', false));
+	}
+
+	public function testPathPassthroughWhenLenient(): void
+	{
+		// Lenient keeps the path on the remainder (stripped downstream); not rejected.
+		$this->assertSame('evil.com/path', pfb_dnsbl_strip_scheme('http://evil.com/path', false));
+	}
+
+	// --- Strict (strict=true): new behaviour. Each transition test first asserts the
+	//     lenient (before) result, then the strict (after) result, so the change is
+	//     attributable to the toggle, not an always-FALSE path. ---
+
+	public function testInvalidSchemeRejectedWhenStrict(): void
+	{
+		// BEFORE (lenient): '123://evil.com' -> 'evil.com'.
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('123://evil.com', false));
+		// AFTER (strict): digit-start scheme is not RFC 3986 valid -> FALSE (skip + log).
+		$this->assertFalse(pfb_dnsbl_strip_scheme('123://evil.com', true));
+	}
+
+	public function testEmptySchemeRejectedWhenStrict(): void
+	{
+		// BEFORE (lenient): '://evil.com' -> 'evil.com'.
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('://evil.com', false));
+		// AFTER (strict): empty scheme prefix -> FALSE.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('://evil.com', true));
+	}
+
+	public function testSpecialCharsSchemeRejectedWhenStrict(): void
+	{
+		// BEFORE (lenient): a non-alpha-start scheme still strips to the host.
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('!!bad://evil.com', false));
+		// AFTER (strict): '!!bad' is not a valid scheme (non-alpha start) -> FALSE.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('!!bad://evil.com', true));
+	}
+
+	public function testPathRejectedWhenStrict(): void
+	{
+		// BEFORE (lenient): the path rides through on the remainder.
+		$this->assertSame('evil.com/path', pfb_dnsbl_strip_scheme('http://evil.com/path', false));
+		// AFTER (strict): a real URL path is present -> FALSE (skip + log).
+		$this->assertFalse(pfb_dnsbl_strip_scheme('http://evil.com/path', true));
+	}
+
+	public function testTrailingSlashNormalisedWhenStrict(): void
+	{
+		// A single trailing '/' is the root path -- normalised away, NOT a rejection.
+		$this->assertSame('ftp.evil.com', pfb_dnsbl_strip_scheme('ftp://ftp.evil.com/', true));
+	}
+
+	public function testPathAfterRootSlashRejectedWhenStrict(): void
+	{
+		// BEFORE (lenient): remainder keeps 'evil.com/path/'.
+		$this->assertSame('evil.com/path/', pfb_dnsbl_strip_scheme('http://evil.com/path/', false));
+		// AFTER (strict): one trailing '/' is normalised, but a '/' remains (the real
+		// path) -> FALSE. Guards against a naive "strip the last slash" bypass.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('http://evil.com/path/', true));
+	}
+
+	// --- Regression guards: a valid RFC 3986 scheme (no path) is accepted in BOTH
+	//     toggle states (ADR §2.6.1). ---
+
+	public function testValidSchemeAcceptedWhenLenient(): void
+	{
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil://evil.com', false));
+	}
+
+	public function testValidSchemeAcceptedWhenStrict(): void
+	{
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil://evil.com', true));
+	}
+
+	public function testCompoundSchemeWhenStrict(): void
+	{
+		// '+' is valid inside a scheme; accepted under strict too.
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('pkg+https://evil.com', true));
+	}
+
+	public function testNoSchemeWhenStrict(): void
+	{
+		// No '://' -> returned unchanged regardless of toggle state.
+		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil.com', true));
+	}
 }
