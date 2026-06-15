@@ -807,7 +807,7 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('<span class="text-danger">Deprecated</span> - re-enable the legacy DNS TXT control transport (drill TXT python_control.*).'
 	. '<div class="infoblock" style="width: 90%;">'
-	. 'This option is <strong>deprecated</strong>, <strong>less secure</strong>, and will be <strong>removed next release</strong>.<br />'
+	. 'This option is <strong>deprecated</strong>, <strong>less secure</strong>, and will be <strong>removed in a future release</strong>.<br />'
 	. 'It only takes effect when <strong>DNSBL Control</strong> above is enabled. Leave it off and use the CLI instead.<br />'
 	. 'Migrate any CRON/Scheduler tasks from drill TXT python_control.* to the pfblockerng dnsbl-control CLI shown above.'
 	. '</div>');

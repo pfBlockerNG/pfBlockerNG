@@ -69,6 +69,7 @@ if TYPE_CHECKING:
         invalidateQueryInCache,
         log_err,
         log_info,
+        log_warn,
         module_env,
         module_qstate,
         query_info,
@@ -774,6 +775,18 @@ def pfb_control_watcher() -> None:
             waiter.close()
 
 
+def warn_if_legacy_control_enabled(enabled: bool) -> None:
+    """PFBL-03: log a one-time deprecation warning at module load when the legacy
+    DNS-TXT control transport is enabled. Neutral wording -- the path is deprecated
+    and less secure than the CLI, and will be removed in a future release."""
+    if enabled:
+        log_warn(
+            "[pfBlockerNG]: DNSBL Control legacy DNS-TXT transport is enabled. It is "
+            "deprecated and less secure than the CLI and will be removed in a future "
+            "release; migrate CRON/Scheduler tasks to the 'pfblockerng dnsbl-control' CLI."
+        )
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -923,9 +936,9 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_control"] = False
     # PFBL-03: the legacy DNS-TXT control transport is OFF by default and gated behind
     # this separate opt-in. DNSBL control is CLI-driven (pfblockerng dnsbl-control ...) via
-    # the local privileged command file; the DNS-TXT path is deprecated and slated for
-    # removal next release. NEXT RELEASE (PFBL-03): drop python_control_legacy + the
-    # DNS-TXT branch in operate() + the IPv4-only ``::1`` quirk entirely.
+    # the local privileged command file; the DNS-TXT path is deprecated and less secure,
+    # and will be removed in a future release (no fixed version). A startup warning is
+    # logged when it is enabled (see the config ingest in init_standard).
     pfb["python_control_legacy"] = False
     pfb["python_maxmind"] = False
     pfb["python_blocking"] = False
@@ -1114,6 +1127,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_control"] = config.getboolean("MAIN", "python_control")
             if config.has_option("MAIN", "python_control_legacy"):
                 pfb["python_control_legacy"] = config.getboolean("MAIN", "python_control_legacy")
+            warn_if_legacy_control_enabled(pfb["python_control_legacy"])
 
             # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
             # long/complex regex" static pre-filter (drops over-long/nested-quantifier
@@ -5531,7 +5545,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         # explicitly opts back in via ``python_control_legacy``; OFF by default, no DNSBL
         # control command is honoured over DNS-TXT. DNSBL control is CLI-driven
         # (pfblockerng dnsbl-control ...) over the local privileged command file. This whole
-        # branch is slated for removal next release.
+        # branch is deprecated and will be removed in a future release.
         if (
             pfb["python_control_legacy"]
             and qstate_valid
@@ -5540,7 +5554,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         ):
             control_rcd = False
             control_msg = ""
-            if pfb["python_control"] and q_ip == "127.0.0.1":
+            # PFBL-03: accept the loopback address over either family (the old check was IPv4-only).
+            if pfb["python_control"] and q_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
                 control_command = q_name_original.split(".")
                 # PFBL-03: route to the SINGLE shared handler (also used by the local
                 # privileged command channel) -- one implementation of the grammar.
