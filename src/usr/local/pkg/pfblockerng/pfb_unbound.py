@@ -3972,6 +3972,19 @@ def build(
                     abp_rules.append(rule)
             continue
         for raw_line in line_reader(feed_row["raw"]):
+            # ADR-21: per-line ABP detection in a non-ABP feed. A line that anchors
+            # with ``||`` (block) or ``@@||`` (allow) is a self-identifying ABP entry
+            # (invalid in every plain dialect, so it would otherwise be dropped by the
+            # plain validator). Route it to the full parse_abp() Stage-A parser -> the
+            # abp_rules stream (Stage-B reconcile), with the SAME provenance/feed/group/
+            # log plumbing as the whole-feed ABP path above. parse_abp() returns None
+            # for path/wildcard/IP anchors and non-DNS $options -> silently skipped.
+            stripped = raw_line.strip()
+            if stripped.startswith("||") or stripped.startswith("@@||"):
+                rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag)
+                if rule is not None:
+                    abp_rules.append(rule)
+                continue
             entry = parse(fmt, raw_line)
             if entry is None:
                 continue
