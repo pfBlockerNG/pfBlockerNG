@@ -101,7 +101,7 @@ print_conf() {
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.
 pfblockerng: {
-  url: "${base}/\${ABI}",
+  url: "${base}/release/\${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: ${CONF_PRIORITY},
