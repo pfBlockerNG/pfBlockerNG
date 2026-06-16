@@ -288,26 +288,61 @@ def test_older_nightlies_lists_retained_excludes_latest() -> None:
     versions = [r["version"] for r in rows]
     assert versions == ["3.2.16.20260613.4", "3.2.16.20260601.1"]  # newest excluded, rest newest-first
     assert all(r["channel"] == "nightly" for r in rows)  # devel never listed
-    # The page renders the two retained nightlies in a collapsed disclosure, never the latest.
+    # The packages block folds the two retained nightlies into a disclosure UNDER the edition
+    # table, never the latest (which lives in the edition table itself).
     matrix = [_mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py311")]
-    html = gl._older_nightlies_html([new, mid, old, dev], matrix)
+    html = gl._packages_html([new, mid, old, dev], matrix)
+    assert "<h3>pfSense Plus</h3>" in html
     assert "<details><summary>Older nightlies (2)</summary>" in html
-    assert "3.2.16.20260613.4" in html and "3.2.16.20260601.1" in html
-    assert "3.2.16.20260614.9" not in html  # the current nightly stays out of the 'older' list
-    # Same columns as the per-edition tables, minus Channel (every row here is a nightly).
-    for header in ("<th>pfSense</th>", "<th>Version</th>", "<th>ABI</th>", "<th>PHP</th>", "<th>Python</th>"):
-        assert header in html
-    assert "<th>Channel</th>" not in html  # the one column deliberately dropped
-    # …and the matrix-joined pfSense version / PHP / Python land in the cells.
-    assert ">26.03<" in html and ">8.5<" in html and ">3.11<" in html
+    # The disclosure sits AFTER the edition's main table (folded under it).
+    assert html.index("<h3>pfSense Plus</h3>") < html.index("Older nightlies (2)")
+    details = html[html.index("Older nightlies (2)") :]
+    assert "3.2.16.20260613.4" in details and "3.2.16.20260601.1" in details
+    assert "3.2.16.20260614.9" not in details  # the current nightly stays out of the 'older' disclosure
+    # The disclosure's table carries the same columns as the edition table, minus Channel.
+    assert "<th>Channel</th>" not in details and "<th>pfSense</th>" in details
+    assert ">26.03<" in details and ">8.5<" in details and ">3.11<" in details
 
 
 def test_older_nightlies_empty_when_only_latest() -> None:
     """With a single nightly version present there is nothing 'older' to disclose."""
     only = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
     assert gl.older_nightlies([only, _pkg("devel", "d", "3.2.16", "FreeBSD:16:amd64", "d.pkg")]) == []
-    # …and the page omits the disclosure entirely (no empty 'Older nightlies' affordance).
-    assert "Older nightlies" not in gl._older_nightlies_html([only])
+    # …and the packages block omits the disclosure entirely (no empty 'Older nightlies' affordance).
+    assert "Older nightlies" not in gl._packages_html([only], None)
+
+
+def test_older_nightlies_fold_under_each_edition() -> None:
+    """Scenario: each edition's older nightlies fold UNDER that edition's own table.
+
+    Given retained older nightlies for BOTH a CE ABI and a Plus ABI,
+    When the packages block is rendered with a matrix covering both ABIs,
+    Then the CE older-nightlies disclosure sits inside the CE section (after the CE table,
+      before the Plus heading) carrying only CE rows, and the Plus one sits in the Plus
+      section carrying only Plus rows — CE section first.
+    """
+    ce_new = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:15:amd64", "ce9.pkg")
+    ce_old = _pkg("nightly", "n", "3.2.16.20260601.1", "FreeBSD:15:amd64", "ce1.pkg")
+    plus_new = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:16:aarch64", "p9.pkg")
+    plus_old = _pkg("nightly", "n", "3.2.16.20260601.1", "FreeBSD:16:aarch64", "p1.pkg")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
+    ]
+
+    html = gl._packages_html([ce_new, ce_old, plus_new, plus_old], matrix)
+
+    # CE section before Plus section; each has its own folded older-nightlies disclosure.
+    assert html.index("<h3>pfSense CE</h3>") < html.index("<h3>pfSense Plus</h3>")
+    assert html.count("<summary>Older nightlies (1)</summary>") == 2  # one per edition (each ABI: 1 older)
+    # The CE section spans from its heading to the Plus heading; the Plus section follows.
+    ce_section = html[html.index("<h3>pfSense CE</h3>") : html.index("<h3>pfSense Plus</h3>")]
+    plus_section = html[html.index("<h3>pfSense Plus</h3>") :]
+    # Each edition's disclosure folds in its OWN ABI's older nightly, never the other's.
+    assert "Older nightlies (1)" in ce_section and "FreeBSD:15:amd64" in ce_section
+    assert "FreeBSD:16:aarch64" not in ce_section and ">2.8<" in ce_section and ">8.3<" in ce_section
+    assert "Older nightlies (1)" in plus_section and "FreeBSD:16:aarch64" in plus_section
+    assert "FreeBSD:15:amd64" not in plus_section and ">26.03<" in plus_section and ">8.5<" in plus_section
 
 
 def test_build_edition_sections_unmatched_abi_falls_to_other() -> None:

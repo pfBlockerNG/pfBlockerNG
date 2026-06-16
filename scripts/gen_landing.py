@@ -358,6 +358,16 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     return out
 
 
+def _order_edition_keys(sections: dict[str, list[dict]]) -> list[str]:
+    """Edition display order: CE, then Plus, then any other variant alphabetically,
+    with "Other" (unmatched ABIs) always last."""
+    keys = [k for k in EDITION_ORDER if k in sections]
+    keys += [k for k in sorted(sections) if k not in EDITION_ORDER and k != "Other"]
+    if "Other" in sections:
+        keys.append("Other")
+    return keys
+
+
 def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str, list[dict]]]:
     """Group the current installables into per-edition row lists, display-ordered.
 
@@ -369,12 +379,8 @@ def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[
     sections: dict[str, list[dict]] = {}
     for ekey, row in _join_matrix(build_table(pkgs), matrix):
         sections.setdefault(ekey, []).append(row)
-    keys = [k for k in EDITION_ORDER if k in sections]
-    keys += [k for k in sorted(sections) if k not in EDITION_ORDER and k != "Other"]
-    if "Other" in sections:
-        keys.append("Other")
     out: list[tuple[str, list[dict]]] = []
-    for k in keys:
+    for k in _order_edition_keys(sections):
         rows = sections[k]
         rows.sort(key=lambda p: (ver_key(p.get("pfsense_version", "")), CH_ORDER.index(p["channel"]), p["abi"]))
         out.append((k, rows))
@@ -404,11 +410,17 @@ def _edition_table_html(rows: list[dict]) -> str:
 
 
 def _packages_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
-    """The Published-packages block: one titled table per pfSense edition."""
+    """The Published-packages block: one titled table per pfSense edition, each followed by
+    that edition's retained older nightlies folded into a collapsed disclosure."""
     sections = [(k, rows) for k, rows in build_edition_sections(pkgs, matrix) if rows]
     if not sections:
         return '<p class="empty">No packages published yet.</p>'
-    return "".join(f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>{_edition_table_html(rows)}" for k, rows in sections)
+    older_by_edition = _older_nightlies_by_edition(pkgs, matrix)
+    return "".join(
+        f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>"
+        f"{_edition_table_html(rows)}{_older_nightlies_details(older_by_edition.get(k, []))}"
+        for k, rows in sections
+    )
 
 
 def older_nightlies(pkgs: list[dict]) -> list[dict]:
@@ -425,16 +437,10 @@ def older_nightlies(pkgs: list[dict]) -> list[dict]:
     return rows
 
 
-def _older_nightlies_html(pkgs: list[dict], matrix: list[dict] | None = None) -> str:
-    """A collapsed disclosure listing the retained older nightlies; "" when there are none.
-
-    Carries the same columns as the per-edition tables (matrix-joined pfSense version +
-    PHP/Python), minus Channel — every row here is, by construction, a nightly.
-    """
-    older = older_nightlies(pkgs)
-    if not older:
-        return ""
-    rows = [row for _ekey, row in _join_matrix(older, matrix)]
+def _older_nightlies_table_html(rows: list[dict]) -> str:
+    """One older-nightlies table for a single edition: the same columns as the per-edition
+    tables (matrix-joined pfSense version + PHP/Python), minus Channel — every row here is,
+    by construction, a nightly."""
     body = "".join(
         f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
@@ -447,12 +453,28 @@ def _older_nightlies_html(pkgs: list[dict], matrix: list[dict] | None = None) ->
         for r in rows
     )
     return (
-        f"<details><summary>Older nightlies ({len(older)})</summary>"
         '<div class="tablewrap"><table><thead><tr>'
         "<th>pfSense</th><th>Version</th><th>ABI</th>"
         "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
-        f"</tr></thead><tbody>{body}</tbody></table></div></details>"
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
     )
+
+
+def _older_nightlies_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
+    """The retained older nightlies grouped by edition key (matrix-joined by ABI), so each
+    edition's disclosure folds in directly under that edition's table. Empty when none."""
+    by_edition: dict[str, list[dict]] = {}
+    for ekey, row in _join_matrix(older_nightlies(pkgs), matrix):
+        by_edition.setdefault(ekey, []).append(row)
+    return by_edition
+
+
+def _older_nightlies_details(rows: list[dict]) -> str:
+    """One edition's retained older nightlies, folded into a collapsed disclosure; "" when
+    that edition has none. Same columns as the edition table, minus Channel (all nightlies)."""
+    if not rows:
+        return ""
+    return f"<details><summary>Older nightlies ({len(rows)})</summary>{_older_nightlies_table_html(rows)}</details>"
 
 
 def render_page(
@@ -478,7 +500,7 @@ def render_page(
         "<strong>devel</strong> share one repo &mdash; pick the package; <strong>nightly</strong> is a "
         "separate, opt-in repo.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}{_older_nightlies_html(pkgs, matrix)}"
+        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
         "<h2>Catalog trees</h2>"
         '<p class="blurb">The raw pkg(8) catalogs (what your firewall fetches). <code>${ABI}</code> is filled '
         "in by pkg automatically, e.g. <code>FreeBSD:16:aarch64</code> on a Netgate ARM box.</p>"
