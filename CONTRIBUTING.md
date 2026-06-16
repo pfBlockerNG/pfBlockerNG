@@ -5,6 +5,22 @@ installation and a feature overview, see the [README](README.md); the per-featur
 design records (one Architecture Decision Record per subsystem) live under
 [`.ADRs/`](.ADRs/).
 
+## Principles & standards (read first)
+
+Before changing code, read **[`CLAUDE.md`](CLAUDE.md)** — the operating contract for this
+repo. This guide is the *how-to* (setup, subsystems, build, test, release); `CLAUDE.md` is the
+*rules*, and wins where they overlap. Key sections to internalise:
+
+- **Working principles — don't guess.** Investigate the source of truth and the live state
+  (never infer from one generated artifact); resolve pfSense-provided functions from the real
+  upstream source rather than guessing a workaround; confirm a genuinely ambiguous or
+  architecturally significant choice before building.
+- **Code standards.** Naming follows the surrounding pattern; per-language rules (PHP tabs /
+  8.3; Python 4-space / 3.11+ / stdlib-only in `pfb_unbound.py`; POSIX `sh` with inline
+  `LC_ALL=C` on collation sinks).
+- **Test coverage (mandatory).** Cover every branch, assert before-and-after, no coverage
+  theater — the suites and how to run them are below.
+
 ## Development workflow
 
 ### Prerequisites
@@ -30,21 +46,19 @@ palette).  The workspace ships with a full configuration in `.vscode/`:
 
 #### PHP stubs
 
-`stubs/pfsense/` contains PHP function and global-variable declarations for the
-pfSense API.  Intelephense discovers these automatically and uses them for
-autocomplete and type-checking instead of reporting every pfSense call as
-"undefined".
+`stubs/pfsense/` holds PHP function + global-variable declarations for the pfSense API;
+Intelephense discovers them automatically for autocomplete and type-checking instead of
+flagging every pfSense call "undefined".
 
-To regenerate the stubs after a pfSense CE version bump, run:
+Regenerate after a pfSense CE bump:
 
 ```sh
 python scripts/update-pfsense-stubs.py --version X.Y.Z
 ```
 
-The default version is the minimum pfSense CE release supported by this package
-(`MIN_PFSENSE_VERSION` at the top of the script).  The script fetches the
-relevant pfSense source files from GitHub and rewrites all stub files except
-`stubs/pfsense/globals.php`, which is manually maintained.
+Default version is the minimum CE this package supports (`MIN_PFSENSE_VERSION` at the script
+top). It fetches the pfSense source from GitHub and rewrites all stub files except the
+hand-maintained `stubs/pfsense/globals.php`.
 
 A CE version bump also requires updating the **supported-version matrix** and
 refreshing the CI smoke image. See
@@ -83,22 +97,20 @@ Actions.
 
 ### Shell setup (macOS, optional)
 
-On macOS, Homebrew's `bin` is on `PATH` only for **login** shells (`brew shellenv`
-lives in `~/.zprofile`), so the pre-commit hook's tools (`node`/`npx` for
-markdownlint, `php`, `shellcheck`) can go missing in the non-login shells that
-editors and agents spawn. The hook self-bootstraps Homebrew's `PATH` regardless,
-but to make the same tools resolve in your own interactive/manual shells — and to
-upgrade Apple's ancient `/bin/bash` 3.2 to Homebrew's bash — run once:
+On macOS, Homebrew's `bin` is on `PATH` only for **login** shells (`brew shellenv` lives in
+`~/.zprofile`), so the pre-commit hook's tools (`node`/`npx`, `php`, `shellcheck`) can go
+missing in the non-login shells editors and agents spawn. The hook self-bootstraps Homebrew's
+`PATH` anyway; to make the same tools resolve in your own interactive shells — and upgrade
+Apple's ancient `/bin/bash` 3.2 to Homebrew's — run once:
 
 ```sh
 sh scripts/setup-dev-shell.sh
 ```
 
-It writes a small idempotent managed block into `~/.brew_path.sh`, `~/.zshenv`,
-`~/.bashrc`, `~/.bash_profile`, and `~/.profile`. It's macOS-only (it exits doing
-nothing on other systems); if Homebrew isn't installed it prints an install hint and
-exits **without changing any dotfiles**. It does not change your login shell or
-`/etc/shells` — it only prints the optional `sudo` commands for those.
+It writes a small idempotent managed block into `~/.brew_path.sh`, `~/.zshenv`, `~/.bashrc`,
+`~/.bash_profile`, `~/.profile`. macOS-only (no-ops elsewhere); with no Homebrew it prints an
+install hint and **changes no dotfiles**. It never changes your login shell or `/etc/shells` —
+it only prints the optional `sudo` commands for those.
 
 ### Running the test suite locally
 
@@ -720,9 +732,8 @@ The resulting `.pkg` file is in `work/pkg/`.
 
 ### Deploying to a pfSense box for testing
 
-Use the helper script to push files directly to a running pfSense box
-over SSH. The script copies changed source files to the correct system
-paths and restarts the relevant services.
+Push files directly to a running pfSense box over SSH — the script copies changed source
+files to their system paths and restarts the relevant services:
 
 ```sh
 ./scripts/deploy.sh <pfsense-host> [--channel devel|stable]
@@ -735,10 +746,8 @@ Example:
 ./scripts/deploy.sh root@192.168.1.1 --channel stable
 ```
 
-The script defaults to the **devel** channel (files from this branch).
-Pass `--channel stable` when deploying from the `main` branch.
-
-See [`scripts/deploy.sh`](scripts/deploy.sh) for full options.
+Defaults to the **devel** channel (this branch's files); pass `--channel stable` from `main`.
+Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
 
 ### How the `pkg` repository is published (GitHub Pages)
 
