@@ -241,12 +241,14 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
 
     Stages the real ``build-repo.sh`` and the input ``.pkg`` to the guest, runs
     ``build-repo.sh --in <pkg_in> --out <script_catalog>`` with the guest's own
-    libpkg, then returns the single per-ABI catalog directory it produced
-    (``<out>/<ABI>/``) — the dir a ``file://`` repo conf points at.
+    libpkg, then returns the single per-ABI catalog directory it produced. The
+    script lays the release channel under ``<out>/release/<ABI>/`` (ADR-20, symmetric
+    with nightly), so ``<out>`` is the base a ``file://`` repo conf points at and the
+    conf's ``release/${ABI}`` url resolves to the returned dir.
 
-    This validates the SCRIPT's output (the bucketed ``<ABI>/`` tree + the catalog
-    triple ``pkg repo`` emits) is accepted by a real pfSense box, the live half of
-    the build-side premise. The branch ``.pkg`` is a single ABI
+    This validates the SCRIPT's output (the bucketed ``release/<ABI>/`` tree + the
+    catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the live
+    half of the build-side premise. The branch ``.pkg`` is a single ABI
     (``FreeBSD:15:amd64``), so exactly one ``<ABI>/`` dir is expected.
     """
     _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
@@ -268,10 +270,12 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
         SCRIPT_REPO_ROOT,
         timeout=240.0,
     )
-    # The script buckets by ABI; the branch .pkg is one ABI -> one <ABI>/ subdir.
-    listing = _ssh_check(vm, "/bin/ls", "-1", SCRIPT_REPO_ROOT).stdout.split()
-    assert len(listing) == 1, f"build-repo.sh produced {listing!r} ABI buckets, expected exactly 1"
-    abi_dir = f"{SCRIPT_REPO_ROOT}/{listing[0]}"
+    # The script nests the release channel under release/, then buckets by ABI; the
+    # branch .pkg is one ABI -> one release/<ABI>/ subdir.
+    release_root = f"{SCRIPT_REPO_ROOT}/release"
+    listing = _ssh_check(vm, "/bin/ls", "-1", release_root).stdout.split()
+    assert len(listing) == 1, f"build-repo.sh produced {listing!r} ABI buckets under release/, expected exactly 1"
+    abi_dir = f"{release_root}/{listing[0]}"
     # The catalog triple must be present (what `pkg update` consumes).
     for fname in ("meta.conf", "packagesite.pkg", "data.pkg"):
         present = vm.ssh("/bin/test", "-f", f"{abi_dir}/{fname}")
@@ -284,12 +288,14 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
 
     This is the Phase-3a proof: the catalog is generated in PURE PYTHON on the runner
     (no libpkg, no guest involvement) exactly as the Phase-3b publish job will, then
-    only the produced ``<out>/<ABI>/`` tree is copied to the guest. A real pfSense
+    only the produced ``release/<ABI>/`` tree is copied to the guest. A real pfSense
     ``pkg update``/``install`` then has to accept it — the fidelity gate that the
-    pure-Python catalog is byte-compatible with what real ``pkg repo`` emits.
+    pure-Python catalog is byte-compatible with what real ``pkg repo`` emits. The
+    generator is driven with ``--catalog-name release`` so it nests the release channel
+    under ``release/<ABI>/`` (ADR-20, symmetric with nightly).
 
-    Returns the on-guest path of the single ``<ABI>/`` directory (the branch ``.pkg``
-    is one ABI, ``FreeBSD:15:amd64``), which the ``file://`` repo conf points at.
+    Returns the on-guest path of the single ``release/<ABI>/`` directory (the branch
+    ``.pkg`` is one ABI, ``FreeBSD:15:amd64``), which the ``file://`` repo conf points at.
     """
     in_dir = tmp_path / "portable_in"
     out_dir = tmp_path / "portable_out"
@@ -299,8 +305,18 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
         (in_dir / pkg.name).write_bytes(pkg.read_bytes())
 
     # Run the pure-Python generator with THIS process's interpreter — no `pkg`/libpkg.
+    # --catalog-name release nests the channel under out/release/<ABI>/ (literal /release).
     proc = subprocess.run(
-        [sys.executable, str(BUILD_REPO_PORTABLE), "--in", str(in_dir), "--out", str(out_dir)],
+        [
+            sys.executable,
+            str(BUILD_REPO_PORTABLE),
+            "--in",
+            str(in_dir),
+            "--out",
+            str(out_dir),
+            "--catalog-name",
+            "release",
+        ],
         capture_output=True,
         text=True,
         timeout=180.0,
@@ -311,7 +327,8 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
             f"build-repo-portable.py failed on the runner: rc={proc.returncode}\n"
             f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
-    abi_buckets = sorted(p for p in out_dir.iterdir() if p.is_dir())
+    release_root = out_dir / "release"
+    abi_buckets = sorted(p for p in release_root.iterdir() if p.is_dir()) if release_root.is_dir() else []
     assert len(abi_buckets) == 1, f"portable generator produced {[p.name for p in abi_buckets]} ABI buckets, expected 1"
     local_abi_dir = abi_buckets[0]
     # The catalog triple must be present locally before shipping.
@@ -904,12 +921,15 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
 
     add-repo.sh is run hermetically against a LOCAL ``file://`` catalog via its own
     ``--base-url`` override; the github.io default + a live HTTPS add-repo.sh run are
-    the post-deploy/Phase-6 note. The catalog is laid out by ``build-repo.sh`` under
-    ``<root>/<ABI>/`` so add-repo.sh's literal ``${ABI}`` url resolves to it. The
-    script ships priority 100, above the Netgate ``pfSense`` repo (0), so cross-repo
-    install picks ours — exactly the production mechanism.
+    the post-deploy/Phase-6 note. The shipped release conf carries the explicit
+    ``release/`` channel prefix (ADR-20, symmetric with ``nightly/``), so the catalog
+    is laid out by ``build-repo.sh`` under ``<root>/release/<ABI>/`` — mirroring the
+    Worker's release subtree — and ``--base-url file://<root>`` makes add-repo.sh's
+    ``release/${ABI}`` url resolve to it. The script ships priority 100, above the
+    Netgate ``pfSense`` repo (0), so cross-repo install picks ours — the production
+    mechanism.
 
-    Given the package ABSENT and a ``build-repo.sh`` catalog under ``<root>/<ABI>/``,
+    Given the package ABSENT and a ``build-repo.sh`` catalog under ``<root>/release/<ABI>/``,
     When ``add-repo.sh --base-url file://<root>`` runs (default release repo: writes the
       conf, ``pkg update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
     Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
@@ -919,10 +939,11 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
-    # GIVEN: a catalog under <SCRIPT_REPO_ROOT>/<ABI>/ (build-repo.sh lays it out so),
-    # package absent. The dir add-repo.sh's ${ABI} url will resolve to.
+    # GIVEN: a catalog under <SCRIPT_REPO_ROOT>/release/<ABI>/ (build-repo.sh nests the release
+    # channel there, matching the shipped conf's explicit prefix), package absent. add-repo.sh's
+    # release/${ABI} url resolves here.
     abi_dir = build_repo_via_script(repo_vm, [Path(pkg)])
-    assert abi_dir.startswith(f"{SCRIPT_REPO_ROOT}/"), f"unexpected catalog dir {abi_dir!r}"
+    assert abi_dir.startswith(f"{SCRIPT_REPO_ROOT}/release/"), f"unexpected catalog dir {abi_dir!r}"
     pkg_delete(repo_vm)
 
     # WHEN: run the SHIPPED bootstrap against the local catalog root. Its verify step
@@ -1777,10 +1798,12 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     if written.returncode != 0:
         raise RuntimeError(f"write Worker conf failed: rc={written.returncode} {written.stderr!r}")
 
-    # pkg update via the Worker must succeed (routing.json is live on Pages). Force a full
-    # catalogue refresh (-f): earlier cases in this VM built the `pfblockerng` repo DB from a
-    # different (Pages/add-repo) URL, so swapping the conf to the Worker URL otherwise trips
-    # pkg's "wrong packagesite, need to re-create database" staleness guard.
+    # pkg update via the Worker must succeed (routing.json is live on Pages). Earlier cases in
+    # this VM built the `pfblockerng` repo DB from a different (Pages/add-repo) URL; pkg keys its
+    # cached catalogue DB to the packagesite and otherwise refuses with "wrong packagesite, need
+    # to re-create database" (a forced `-f` refresh does not clear it). Drop the cached per-repo
+    # DB so this fetch re-creates it cleanly from the Worker URL.
+    _ssh_check(repo_vm, "/bin/rm", "-rf", f"/var/db/pkg/repos/{OURS_REPO_NAME}", timeout=60.0)
     update_result = repo_vm.ssh(
         "env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", "-r", OURS_REPO_NAME, timeout=120.0
     )
