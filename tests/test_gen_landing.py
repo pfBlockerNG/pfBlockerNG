@@ -289,10 +289,17 @@ def test_older_nightlies_lists_retained_excludes_latest() -> None:
     assert versions == ["3.2.16.20260613.4", "3.2.16.20260601.1"]  # newest excluded, rest newest-first
     assert all(r["channel"] == "nightly" for r in rows)  # devel never listed
     # The page renders the two retained nightlies in a collapsed disclosure, never the latest.
-    html = gl._older_nightlies_html([new, mid, old, dev])
+    matrix = [_mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py311")]
+    html = gl._older_nightlies_html([new, mid, old, dev], matrix)
     assert "<details><summary>Older nightlies (2)</summary>" in html
     assert "3.2.16.20260613.4" in html and "3.2.16.20260601.1" in html
     assert "3.2.16.20260614.9" not in html  # the current nightly stays out of the 'older' list
+    # Same columns as the per-edition tables, minus Channel (every row here is a nightly).
+    for header in ("<th>pfSense</th>", "<th>Version</th>", "<th>ABI</th>", "<th>PHP</th>", "<th>Python</th>"):
+        assert header in html
+    assert "<th>Channel</th>" not in html  # the one column deliberately dropped
+    # …and the matrix-joined pfSense version / PHP / Python land in the cells.
+    assert ">26.03<" in html and ">8.5<" in html and ">3.11<" in html
 
 
 def test_older_nightlies_empty_when_only_latest() -> None:
