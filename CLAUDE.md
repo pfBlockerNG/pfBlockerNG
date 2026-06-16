@@ -1,5 +1,27 @@
 # CLAUDE.md — pfBlockerNG
 
+## Scope — the pfBlockerNG-org default
+
+These rules, **plus** the project + user `.claude/settings.json` (the `SessionStart` hooks),
+are the **default way of working for every repository in the `pfBlockerNG` GitHub
+organization** — not only `pfBlockerNG/pfBlockerNG`. Any pfBlockerNG-org repo inherits them
+**unless that repo explicitly overrides a rule in its own `CLAUDE.md`** (a repo-local rule wins
+for that repo, and only there).
+
+**Carries over — the general way of working:** communication (caveman + its exceptions), the
+[Working principles](#working-principles--dont-guess) (don't-guess / investigate / confirm
+ambiguity), worktrees + the rebase-only landing flow + `/pr-merge-flow`, branch naming, the
+**test-coverage mandate** (the principle: every branch, before-and-after, no coverage theater),
+linting discipline, GitHub-issue handling + the label lifecycle, and commit style.
+
+**Excluded — the obviously `pfBlockerNG/pfBlockerNG`-only parts** do **not** carry over: how to
+work with pfBlockerNG itself (the DNSBL/ABP pipeline, the smoke/UI suites, the self-hosted `pkg`
+repo, the ports/release plumbing) and the language/runtime specifics tied to this package (the
+per-language code-standard details, `stubs/`, PHPUnit/PHPCS, pfSense internals). When in doubt,
+a rule about *this package's mechanics* is local; a rule about *how we work* is org-wide.
+
+---
+
 ## Communication
 
 **Mandatory: activate the `/caveman` skill at the start of every session** — terse, no
