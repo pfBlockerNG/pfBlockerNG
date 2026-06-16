@@ -42,9 +42,9 @@ from pathlib import Path
 import pytest
 
 from . import helpers as h
+from ._matrix import matrix_abi
 from .conftest import SmokeVM
 from .test_repo_install import (
-    GUEST_ABI,
     _ensure_egress_open,
     _ssh_check,
     build_guest_repo,
@@ -372,7 +372,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
 
     # BACKSTOP: prove the deploy actually serves the nightly catalog from the runner
     # first (independent of the guest) — polls through first-deploy / DNS / cert lag.
-    poll_catalog_served(base_url, GUEST_ABI)
+    poll_catalog_served(base_url, matrix_abi())
 
     _ensure_egress_open()
 
