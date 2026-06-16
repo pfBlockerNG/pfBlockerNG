@@ -73,6 +73,14 @@ export default {
     const ua = request.headers.get("User-Agent") ?? "";
     const url = new URL(request.url);
 
+    // A human opening the bare base URL in a browser has no pfSense UA and no ABI path —
+    // send them to the human landing page instead of a bare "unsupported version" 404.
+    // pkg(8) never requests "/": it always fetches /<ABI>/<file>, so this only catches
+    // people, not clients.
+    if (url.pathname === "/" || url.pathname === "") {
+      return Response.redirect(`${PAGES_BASE}/`, 302);
+    }
+
     const routes = await getRoutes(ctx);
     if (!routes) {
       return new Response("Routing manifest unavailable", { status: 502 });
