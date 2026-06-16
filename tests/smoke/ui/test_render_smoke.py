@@ -470,12 +470,18 @@ _SOFTWARE_OVERRIDE_FILE = "/var/db/pfblockerng/.pfb_software_panel"
 def software_panel_forced(vm: SmokeVM, state: str) -> Iterator[None]:
     """Force the Software-page gate ``on``/``off`` for the block via the hidden sentinel, then
     remove it so subsequent tests see the default auto-detect. ``state`` is a fixed 'on'/'off'
-    literal (never user input)."""
-    vm.ssh("/bin/sh", "-c", f"mkdir -p /var/db/pfblockerng && printf '%s' {state} > {_SOFTWARE_OVERRIDE_FILE}")
+    literal (never user input). Both the write and the cleanup are checked so a silently failed
+    write can't let the forced-off case pass on the default-hidden path, and a failed cleanup
+    can't leak override state into a later test."""
+    write = vm.ssh(
+        "/bin/sh", "-c", f"mkdir -p /var/db/pfblockerng && printf '%s' '{state}' > '{_SOFTWARE_OVERRIDE_FILE}'"
+    )
+    assert write.returncode == 0, f"failed to set software override to {state!r}: {write.stderr.strip()}"
     try:
         yield
     finally:
-        vm.ssh("/bin/rm", "-f", _SOFTWARE_OVERRIDE_FILE)
+        clear = vm.ssh("/bin/rm", "-f", _SOFTWARE_OVERRIDE_FILE)
+        assert clear.returncode == 0, f"failed to clear software override sentinel: {clear.stderr.strip()}"
 
 
 def test_software_page_provenance_gate_hides_on_nonour_build(
