@@ -499,3 +499,59 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
     assert "packagesite.pkg" in leaf  # the catalog files ARE shown in a directory listing
     # The generated index pages themselves are hidden from listings (not repository content).
     assert "browse.html" not in browse.split("<tbody>")[1]
+
+
+def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any) -> None:
+    """Scenario: the browse view is derived purely by walking the tree — no hardcoded layout.
+
+    Given a deliberately NOVEL tree (a brand-new top-level channel, an `_archive/` subtree, deeper
+    nesting than today, and an exotic ABI no current matrix entry covers),
+    When write_site runs,
+    Then an autoindex index.html appears at EVERY level (whatever the names/depth), browse.html lists
+    the new top-level entries, packages are discovered wherever they live, and the deepest dir's
+    autoindex still climbs correctly — proving a future folder restructure needs NO code change.
+    """
+    site = tmp_path / "site"
+    # A structure we do NOT use today: a future channel, an archive subtree, +1 nesting level, an
+    # ABI/varver the matrix doesn't know, and a stray top-level file.
+    novel = [
+        "experimental/ce-2.9/FreeBSD:16:riscv64/extra/pfSense-pkg-pfBlockerNG-devel-9.9.9.pkg",
+        "release/_archive/plus-99.03/FreeBSD:99:powerpc64/pfSense-pkg-pfBlockerNG-9.9.9.pkg",
+    ]
+    for rel in novel:
+        _touch(site / rel)
+    _touch(site / "CHECKSUMS.txt")
+
+    # The manifest is read from each .pkg wherever it sits (path-agnostic); derive it from the path.
+    def fake_manifest(path: str) -> dict:
+        name = "pfSense-pkg-pfBlockerNG-devel" if "experimental" in path else "pfSense-pkg-pfBlockerNG"
+        abi = "FreeBSD:16:riscv64" if "experimental" in path else "FreeBSD:99:powerpc64"
+        return {"name": name, "version": "9.9.9", "abi": abi}
+
+    monkeypatch.setattr(gl, "read_manifest_zstd", fake_manifest)
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+
+    n = gl.write_site(str(site), "https://x/pkg/", "add-repo.sh")
+
+    # Packages found wherever they live (both novel locations), not by an assumed path.
+    assert n == 2
+    # browse.html lists the NEW top-level entries (a channel we've never used + a stray file).
+    browse = (site / "browse.html").read_text()
+    assert '<a href="./experimental/">experimental/</a>' in browse
+    assert '<a href="./release/">release/</a>' in browse
+    assert '<a href="./CHECKSUMS.txt">CHECKSUMS.txt</a>' in browse
+    # An autoindex exists at EVERY directory of the novel tree — arbitrary names + extra depth.
+    for rel in (
+        "experimental",
+        "experimental/ce-2.9",
+        "experimental/ce-2.9/FreeBSD:16:riscv64",
+        "experimental/ce-2.9/FreeBSD:16:riscv64/extra",
+        "release/_archive",
+        "release/_archive/plus-99.03",
+        "release/_archive/plus-99.03/FreeBSD:99:powerpc64",
+    ):
+        assert (site / rel / "index.html").is_file(), f"no autoindex generated at {rel}"
+    # The deepest dir lists its package and climbs to the repository root (depth-correct home link).
+    deep = (site / "experimental/ce-2.9/FreeBSD:16:riscv64/extra" / "index.html").read_text()
+    assert "pfSense-pkg-pfBlockerNG-devel-9.9.9.pkg" in deep
+    assert 'href="../../../../"' in deep  # 4 levels deep -> 4 hops to the site root

@@ -198,8 +198,8 @@ def latest_versions(pkgs: Iterable[dict]) -> dict[str, str]:
 def build_table(pkgs: list[dict]) -> list[dict]:
     """The table rows: the newest version's package per (channel, ABI), display-sorted.
 
-    Older nightly builds stay reachable via the catalog-tree links — the table
-    surfaces only what a human would install right now.
+    Older builds stay reachable via the directory-browse page — the table surfaces
+    only what a human would install right now.
     """
     latest = latest_versions(pkgs)
     rows = [p for p in pkgs if p["version"] == latest.get(p["channel"])]
