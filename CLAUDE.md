@@ -662,7 +662,15 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
 - **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`**
   (a distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`),
   cross-repo precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and
-  the catalog accepted from both generators. Dispatch:
+  the catalog accepted from both generators. The ADR-20 **variant topology** (each leg's ABI /
+  PHP / Python / catalog, and the opposite-edition guard) is **derived entirely from the version
+  matrix** — never hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by
+  `tests/test_smoke_matrix.py`) reads `SMOKE_MATRIX_JSON` (smoke.yml injects
+  `read-version-matrix.sh --print-build` at job start, while egress is open), falling back to
+  running that script, and SKIPs the topology cases when neither is available. Per-leg
+  `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` still select within it; adding a pfSense
+  version needs no edit here. (`scripts/install-from-repo.sh` likewise derives its `py3xx-*`
+  deps from the matrix via the box's ABI.) Dispatch:
   `gh workflow run smoke.yml -f pytest_marker=repo` (or `repo-install.yml` once it lands on
   `devel`). The gated `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the
   real `pfblockerng.github.io` URL — post-merge (a new `workflow_dispatch` workflow is only

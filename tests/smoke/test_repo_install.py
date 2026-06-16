@@ -83,12 +83,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from . import helpers as h
+from ._matrix import (
+    matrix_abi,
+    matrix_py_flavor,
+    opposite_variant,
+    own_variant,
+)
 from .conftest import SmokeVM
 
 pytestmark = pytest.mark.repo
@@ -158,10 +163,6 @@ DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg"
 # CDN-propagated, which a PR/dispatch can't guarantee — so it is opt-in post-deploy
 # verification, not a hard CI gate (it would red the suite on a deploy/propagation race).
 WORKER_LIVE_ENV = "SMOKE_WORKER_LIVE"
-# The ABI of the repo-smoke guest (the live Pages-URL check, poll_catalog_served, runs on
-# the CE 2.8 box). NOT the only supported ABI — the build matrix now spans CE FreeBSD:15:amd64
-# plus Plus FreeBSD:16:amd64 / FreeBSD:16:aarch64 (see the routing.json catalogs).
-GUEST_ABI = "FreeBSD:15:amd64"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
@@ -1209,8 +1210,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     assert host, f"could not parse a host from {base_url!r}"
 
     # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
-    # (independent of the guest) — polls through first-deploy / DNS / cert lag.
-    poll_catalog_served(base_url, GUEST_ABI)
+    # (independent of the guest) — polls through first-deploy / DNS / cert lag. The ABI to
+    # poll is this leg's own, derived from the matrix (the CE box for the live-pages check).
+    poll_catalog_served(base_url, matrix_abi())
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
     # the LIVE url above pfSense.
@@ -1241,96 +1243,12 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 #     gh workflow run smoke.yml -f pytest_marker=repo                          #
 # =========================================================================== #
 
-# CE smoke image uses FreeBSD 15; Plus uses FreeBSD 16.
-CE_ABI = "FreeBSD:15:amd64"
-PLUS_ABI = "FreeBSD:16:amd64"
-
-# Catalog names for the variant-keyed subtrees (ADR-20 §2 decision).
-CE_CATALOG_NAME = "ce-2.8"
-PLUS_CATALOG_NAME = "plus-26.03"
-
 # Base dir for ADR-20 variant catalogs on the guest (isolated from the ADR-17 spike dir).
 VARIANT_REPO_ROOT = "/tmp/pfb_variant_repo"
-CE_REPO_DIR = f"{VARIANT_REPO_ROOT}/{CE_CATALOG_NAME}"
-PLUS_REPO_DIR = f"{VARIANT_REPO_ROOT}/{PLUS_CATALOG_NAME}"
-LEGACY_REPO_DIR = f"{VARIANT_REPO_ROOT}/legacy"
 
 
-# --------------------------------------------------------------------------- #
-# Per-leg variant — derived from the ci-metadata matrix (surfaced by smoke.yml) #
-# --------------------------------------------------------------------------- #
-#
-# The fan-out (smoke-fanout.yml / repo-install.yml) passes each leg's build target
-# — ABI / PHP / Python flavor — straight from the ci-metadata matrix into smoke.yml,
-# which exports them as SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR. The ADR-20
-# variant cases assert the box's OWN php dep / ABI against THESE (matrix = single
-# source of truth) instead of hardcoding php83 / FreeBSD:15 — so the CE leg asserts
-# php83 / FreeBSD:15 and the Plus leg asserts php85 / FreeBSD:16, automatically. A
-# bare smoke.yml dispatch (no inputs) defaults to the CE values, keeping the
-# single-CE run byte-identical.
-
-
-@dataclass(frozen=True)
-class Variant:
-    """A distributed pfSense variant: its pkg ``php`` dependency, ABI, and catalog dir."""
-
-    php: str
-    abi: str
-    catalog: str
-
-
-# The two variants ADR-20 distributes, keyed by ABI (the binary CE<->Plus topology
-# the wrong-variant guard flips between): own_variant() picks THIS leg's entry from
-# the matrix; opposite_variant() returns the other for the guard's forged package.
-_VARIANTS = (
-    Variant(php="php83", abi=CE_ABI, catalog=CE_CATALOG_NAME),
-    Variant(php="php85", abi=PLUS_ABI, catalog=PLUS_CATALOG_NAME),
-)
-
-
-def matrix_php_dep() -> str:
-    """The pkg PHP dependency name for THIS leg from the matrix ``php_version``
-    (``SMOKE_PHP_VERSION``, e.g. ``8.3`` -> ``php83`` / ``8.5`` -> ``php85``).
-    Defaults to the CE flavor when unset (a bare smoke.yml dispatch)."""
-    ver = os.environ.get("SMOKE_PHP_VERSION") or "8.3"
-    return "php" + ver.replace(".", "")
-
-
-def matrix_abi() -> str:
-    """This leg's target ABI from the matrix (``SMOKE_ABI``); CE default when unset."""
-    return os.environ.get("SMOKE_ABI") or CE_ABI
-
-
-def matrix_py_flavor() -> str:
-    """This leg's Python flavor from the matrix (``SMOKE_PY_FLAVOR``, e.g. ``py311``);
-    CE default when unset."""
-    return os.environ.get("SMOKE_PY_FLAVOR") or "py311"
-
-
-def own_variant() -> Variant:
-    """The variant THIS leg runs, matched from the matrix ABI. Asserts the matrix
-    ``php_version`` agrees with the variant's php dep — the two matrix fields must be
-    consistent; a mismatch is a CI-wiring bug, not a silent pass."""
-    abi = matrix_abi()
-    for v in _VARIANTS:
-        if v.abi == abi:
-            assert v.php == matrix_php_dep(), (
-                f"matrix inconsistency: ABI {abi} maps to {v.php} but SMOKE_PHP_VERSION says {matrix_php_dep()}"
-            )
-            return v
-    raise RuntimeError(f"no known ADR-20 variant for matrix ABI {abi!r} (known: {[v.abi for v in _VARIANTS]})")
-
-
-def opposite_variant() -> Variant:
-    """The OTHER variant — the 'wrong' one for this box (the forged package the
-    wrong-variant guard must reject)."""
-    own = own_variant()
-    others = [v for v in _VARIANTS if v.abi != own.abi]
-    assert len(others) == 1, f"expected exactly one opposite variant, got {others}"
-    return others[0]
-
-
-# Routing Worker URL (Phase 5). routing.json is live on Pages, so Case 4 is a hard gate.
+# Routing Worker URL (Phase 5). The live Case 4 leg is gated on SMOKE_WORKER_LIVE (the
+# deterministic routing proof is the offline scripts/worker/test/ suite).
 WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
 
 
