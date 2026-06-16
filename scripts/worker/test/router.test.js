@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeRoutes, parseArch, resolveTarget } from "../src/index.js";
+import worker, { normalizeRoutes, parseArch, resolveTarget } from "../src/index.js";
 
 const PAGES = "https://pfblockerng.github.io/pkg";
 const CE = { pattern: "pfSense/2.8", catalog: "ce-2.8", status: "active" };
@@ -68,4 +68,11 @@ test("a request with no ABI segment resolves to null (the 404 branch)", () => {
   assert.equal(resolveTarget("/notanabi/meta.conf", CE), null);
   // A /nightly/ prefix followed by no ABI is still malformed.
   assert.equal(resolveTarget("/nightly/", CE), null);
+});
+
+test("bare base URL redirects a browser to the human landing page (not a 404)", async () => {
+  // A browser hitting "/" has no pfSense UA — it must land on the Pages page, not 404.
+  const res = await worker.fetch(new Request("https://pkg.pfblockerng.workers.dev/"), {}, { waitUntil() {} });
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("location"), `${PAGES}/`);
 });
