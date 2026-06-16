@@ -7,9 +7,11 @@
 # WHAT IT DOES
 #   1. Reads each input .pkg's ABI FROM THE PACKAGE (`pkg query -F <f> '%q'`) —
 #      never guessed from the filename.
-#   2. Buckets each .pkg under  <out>/<ABI>/  (one catalog per ABI, e.g.
-#      <out>/FreeBSD:15:amd64/) and copies the .pkg there.
-#   3. Runs `pkg repo <out>/<ABI>` per bucket with NO signing key, emitting the
+#   2. Buckets each .pkg under  <out>/release/<ABI>/  (the release channel subtree,
+#      one catalog per ABI, e.g. <out>/release/FreeBSD:15:amd64/) and copies the
+#      .pkg there — symmetric with the nightly/ subtree and the Worker's release tree
+#      (ADR-20), so a conf url with the explicit `release/${ABI}` prefix resolves.
+#   3. Runs `pkg repo <out>/release/<ABI>` per bucket with NO signing key, emitting the
 #      catalog triple (meta.conf / packagesite.pkg / data.pkg) a client
 #      `pkg update` consumes. NONE-signed by construction (the ADR trust model:
 #      TLS to the host, no CI key — ADR §2 "Trust model").
@@ -41,7 +43,7 @@
 #
 # Options:
 #   --in DIR          directory holding the input .pkg files (searched, non-recursive)
-#   --out DIR         output root; one <ABI>/ catalog subtree is created per ABI
+#   --out DIR         output root; one release/<ABI>/ catalog subtree is created per ABI
 #   --print-conf      print the client repo-conf template to stdout and exit
 #   --base-url URL    base URL for --print-conf (default: the ADR Pages base);
 #                     the conf appends the literal ${ABI} pkg variable to it
@@ -226,14 +228,18 @@ validate_abi() {
 }
 
 # ── Lay out per-ABI buckets + run `pkg repo` ───────────────────────────────────
-mkdir -p "$OUT"
+# The release channel is nested under <out>/release/<ABI>/ (ADR-20, symmetric with the
+# nightly/ subtree and the Worker's release subtree), so a client conf whose url carries
+# the explicit `release/${ABI}` prefix resolves against <out> as the base.
+CHANNEL_ROOT="${OUT}/release"
+mkdir -p "$CHANNEL_ROOT"
 # Track which ABI buckets we (re)built, so each is wiped exactly once for
 # determinism even when several .pkg share an ABI.
 built=""
 for f in "$@"; do
     abi="$(pkg_abi "$f")"
     validate_abi "$abi"
-    dir="${OUT}/${abi}"
+    dir="${CHANNEL_ROOT}/${abi}"
     case " $built " in
         *" $abi "*) : ;;                 # already wiped this run
         *) rm -rf "$dir"; mkdir -p "$dir"; built="$built $abi" ;;
@@ -247,11 +253,11 @@ for f in "$@"; do
 done
 
 for abi in $built; do
-    dir="${OUT}/${abi}"
+    dir="${CHANNEL_ROOT}/${abi}"
     echo "==> pkg repo ${dir}" >&2
     # No key argument => an unsigned (NONE-signed) catalog. ASSUME_ALWAYS_YES so
     # pkg never prompts in CI.
     env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir"
 done
 
-echo "==> built catalogs for ABI:${built}" >&2
+echo "==> built catalogs (release channel) for ABI:${built}" >&2
