@@ -639,38 +639,54 @@ def test_parse_annotations_rejects_malformed(bad: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Variant-aware manifest deps (ADR-20 Phase 2) — _resolve_variant_deps
+# Variant-aware manifest deps (ADR-20) — _resolve_variant_deps
 #
-# Dep-name derivation rule: php_version "X.Y" → strip dot → "phpXY"
-# py_flavor is used verbatim (e.g. "py311").
+# This is a pure DERIVATION, not a record of today's matrix: php "X.Y" → phpXY /
+# lang/phpXY; py "pyNNN" → pythonNNN / lang/pythonNNN. The tests therefore pin the
+# RULE (expected computed from the input), not the specific CE=php83 / Plus=php85
+# values — those are matrix-driven and will drift. 8.3/8.5 are just two of several
+# inputs; 8.4/8.10 prove it is the transform, not a hardcode.
 # --------------------------------------------------------------------------- #
 
 
-def test_ce_manifest_has_php83_dep() -> None:
-    """CE entry (php 8.3, py311) → guard contains php83/lang/php83, NOT php85."""
-    # Given the CE matrix values from supported-versions.json
-    deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
-    # Then php83 is present (CE dep guard) with a REAL origin (libpkg requires one)
-    assert deps.get("php83") == "lang/php83"
-    # And the Plus PHP dep is absent (mutual exclusion)
-    assert "php85" not in deps
-    # The Python guard uses the real package name (python311), not the flavor "py311"
-    assert deps.get("python311") == "lang/python311"
-    assert "py311" not in deps
+@pytest.mark.parametrize("php_version", ["8.3", "8.5", "8.4", "8.10"])
+def test_php_guard_is_derived_from_php_version(php_version: str) -> None:
+    """The PHP guard is DERIVED from --php (strip the dot → phpXY / lang/phpXY).
+
+    Whatever the matrix carries, exactly ONE php* dep appears and it is the derived
+    one — so no other edition's php token can leak in (the CE-vs-Plus discrimination).
+    """
+    expected = "php" + php_version.replace(".", "")
+    deps = dict(bpp._resolve_variant_deps(php_version=php_version, py_flavor="py311"))
+    # The derived php dep is present with its real origin (libpkg requires a non-empty one).
+    assert deps.get(expected) == f"lang/{expected}"
+    # Exactly one php* dep, and it IS the derived one (no other edition's php leaks in).
+    assert [n for n in deps if n.startswith("php")] == [expected]
 
 
-def test_plus_manifest_has_php85_dep() -> None:
-    """Plus entry (php 8.5, py311) → guard contains php85/lang/php85, NOT php83."""
-    # Given the Plus matrix values from supported-versions.json
-    deps = dict(bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311"))
-    # Then php85 is present (Plus dep guard) with a real origin
-    assert deps.get("php85") == "lang/php85"
-    # And the CE PHP dep is absent (mutual exclusion)
-    assert "php83" not in deps
+@pytest.mark.parametrize(
+    "py_flavor,expected",
+    [("py311", "python311"), ("py39", "python39"), ("py312", "python312")],
+)
+def test_python_guard_is_derived_from_py_flavor(py_flavor: str, expected: str) -> None:
+    """The Python guard is DERIVED from --py-flavor (pyNNN → pythonNNN / lang/pythonNNN).
+
+    Symmetric with the PHP guard, and asserted for BOTH editions: Python does not differ
+    by edition today, but the guard is still emitted + derived, and uses the real package
+    name (pythonNNN), never the bare flavor token (pyNNN — which is not installable).
+    """
+    # Asserted with a CE php (8.3) and a Plus php (8.5) so the Python guard is covered
+    # on both editions, not just one.
+    for php_version in ("8.3", "8.5"):
+        deps = dict(bpp._resolve_variant_deps(php_version=php_version, py_flavor=py_flavor))
+        assert deps.get(expected) == f"lang/{expected}"
+        # Exactly one python* dep, and the bare flavor token is never a dep name.
+        assert [n for n in deps if n.startswith("python")] == [expected]
+        assert py_flavor not in deps
 
 
 def test_variant_dep_origin_is_non_empty() -> None:
-    """Every guard dep carries a non-empty origin — libpkg's `pkg repo` aborts without one.
+    """Every guard dep carries a non-empty <category>/<port> origin.
 
     Regression guard: an empty origin reached real FreeBSD `pkg repo` and tripped
     `Assertion failed: origin != NULL && origin[0] != '\\0'` (pkg_adddep_chain).
@@ -678,25 +694,6 @@ def test_variant_dep_origin_is_non_empty() -> None:
     for name, origin in bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"):
         assert origin, f"guard dep {name!r} has an empty origin"
         assert "/" in origin, f"guard dep {name!r} origin {origin!r} is not a <category>/<port>"
-
-
-def test_wrong_variant_dep_absent() -> None:
-    """Each variant carries only its own PHP dep — the other side's is absent.
-
-    After-state CE: php83 present, php85 absent.
-    After-state Plus: php85 present, php83 absent.
-    """
-    # The pure helper is enough: assert the CE result lacks php85 and Plus lacks php83.
-    ce_deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
-    plus_deps = dict(bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311"))
-
-    # CE lacks the Plus PHP dep
-    assert "php85" not in ce_deps
-    # Plus lacks the CE PHP dep
-    assert "php83" not in plus_deps
-    # Neither set is empty
-    assert len(ce_deps) > 0
-    assert len(plus_deps) > 0
 
 
 def test_no_php_no_guard_injected(tmp_path: Path) -> None:
@@ -760,34 +757,3 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
     assert deps.get("python311", {}).get("origin") == "lang/python311"  # Python guard, real origin
     assert "php85" not in deps  # the Plus discriminator stays absent
     assert "py311" not in deps  # the flavor token is NOT a dep name (would be unsatisfiable)
-
-
-def test_two_simultaneous_ce_entries() -> None:
-    """Transition window: two CE entries with different PHP versions.
-
-    Scenario: matrix carries CE 2.8.x (FreeBSD 15, php83) AND CE 2.9.x
-    (FreeBSD 16, php84) simultaneously. _resolve_variant_deps called for each
-    returns the correct php dep for that entry; they are distinct.
-
-    Given two CE matrix entries (php 8.3 and php 8.4),
-    When _resolve_variant_deps is called for each,
-    Then each returns its own correct php dep and the results are distinct.
-    """
-    # Given: two CE entries with different PHP versions
-    ce_15_deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
-    ce_16_deps = dict(bpp._resolve_variant_deps(php_version="8.4", py_flavor="py311"))
-
-    # Then: each has the correct versioned PHP dep
-    assert "php83" in ce_15_deps, "FreeBSD 15 CE entry must have php83"
-    assert "php84" in ce_16_deps, "FreeBSD 16 CE entry must have php84"
-
-    # And: each lacks the other's PHP dep
-    assert "php84" not in ce_15_deps
-    assert "php83" not in ce_16_deps
-
-    # And: both carry the python311 guard
-    assert "python311" in ce_15_deps
-    assert "python311" in ce_16_deps
-
-    # And: the two dep maps are distinct (not identical)
-    assert ce_15_deps != ce_16_deps
