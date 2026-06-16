@@ -51,10 +51,13 @@ export function normalizeRoutes(data) {
 export function resolveTarget(pathname, route) {
   const segments = pathname.split("/").filter((s) => s.length > 0);
 
-  // A leading /nightly/ selects the nightly channel tree; otherwise release.
+  // A leading /nightly/ or /release/ selects the channel tree; a bare /<ABI>/ (no
+  // channel prefix) defaults to release for back-compat with older client confs.
   let channel = "release";
   if (segments[0] === "nightly") {
     channel = "nightly";
+    segments.shift();
+  } else if (segments[0] === "release") {
     segments.shift();
   }
 

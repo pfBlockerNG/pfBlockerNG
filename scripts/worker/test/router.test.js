@@ -32,6 +32,18 @@ test("release request maps to the release/<varver>/<arch>/ tree", () => {
   assert.equal(target, `${PAGES}/release/ce-2.8/amd64/meta.conf`);
 });
 
+test("explicit /release/ prefix maps to the release tree (symmetric with /nightly/)", () => {
+  // The client conf may carry an explicit /release/ prefix; it maps to the same release tree
+  // as the bare path — the prefix segment is consumed, not treated as the ABI.
+  const target = resolveTarget("/release/FreeBSD:15:amd64/meta.conf", CE);
+  assert.equal(target, `${PAGES}/release/ce-2.8/amd64/meta.conf`);
+});
+
+test("explicit /release/ for Plus aarch64 maps correctly", () => {
+  const target = resolveTarget("/release/FreeBSD:16:aarch64/packagesite.pkg", PLUS);
+  assert.equal(target, `${PAGES}/release/plus-26.03/aarch64/packagesite.pkg`);
+});
+
 test("nightly request maps to the nightly/<varver>/<arch>/ tree", () => {
   // The /nightly/ prefix flips the channel dir; everything else is identical.
   // Before: the same path WITHOUT the prefix would be release/ (proven above);
