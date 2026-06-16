@@ -982,7 +982,8 @@ on **image-ref/version** and tier-selectable, building the branch `.pkg` via
 (tier × version)** with `fail-fast: false`, so GitHub's "Re-run failed jobs"
 re-runs only the flaky leg (no auto-retry on assertions; bounded readiness retry
 only on boot/login). Diagnostics (screenshots + VM/boot logs + the smoke state
-snapshot) upload `if: always()` as `ui-diagnostics-<tier>-<version>`. Wiring:
+snapshot) upload `if: always()` as `ui-diagnostics-<tier>-<variant>-<version>`
+(variant = ce/plus, e.g. `ui-diagnostics-browser-ce-2.8`). Wiring:
 
 - **Tier A** runs per-PR (`test.yml`) on PRs touching `src/**/*.php`, `**/*.inc`,
   `src/**/*.js`, folded into the **"All tests passed"** aggregate (blocking).
