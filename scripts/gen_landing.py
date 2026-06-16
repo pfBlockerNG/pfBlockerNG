@@ -332,6 +332,32 @@ def _edition_key(variant: str) -> str:
     return variant.strip() or "Other"
 
 
+def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str, dict]]:
+    """Enrich each row with the pfSense version + PHP/Python from the matrix join.
+
+    Returns ``(edition_key, row)`` pairs. An ABI shared by two pfSense versions yields
+    one row per match (the same .pkg installs on each); an ABI with no matrix entry
+    yields a single ("Other") row with a blank pfSense version + manifest-derived
+    php/py, so nothing published is ever hidden. Input order is preserved.
+    """
+    idx = matrix_index(matrix)
+    out: list[tuple[str, dict]] = []
+    for r in rows:
+        entries = idx.get(r["abi"], [])
+        if entries:
+            for e in entries:
+                row = dict(r)
+                row["pfsense_version"] = e.get("pfsense_version", "")
+                row["php"] = e.get("php_version") or e.get("php") or r.get("php", "")
+                row["py"] = _dotted_ver(e.get("py_flavor", "")) or r.get("py", "")
+                out.append((_edition_key(e.get("variant", "")), row))
+        else:
+            row = dict(r)
+            row["pfsense_version"] = ""
+            out.append(("Other", row))
+    return out
+
+
 def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str, list[dict]]]:
     """Group the current installables into per-edition row lists, display-ordered.
 
@@ -340,21 +366,9 @@ def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[
     entry falls into a trailing "Other" section using its manifest-derived php/py, so
     nothing published is ever hidden. Editions sort CE, then Plus, then the rest.
     """
-    idx = matrix_index(matrix)
     sections: dict[str, list[dict]] = {}
-    for r in build_table(pkgs):
-        entries = idx.get(r["abi"], [])
-        if entries:
-            for e in entries:
-                row = dict(r)
-                row["pfsense_version"] = e.get("pfsense_version", "")
-                row["php"] = e.get("php_version") or e.get("php") or r.get("php", "")
-                row["py"] = _dotted_ver(e.get("py_flavor", "")) or r.get("py", "")
-                sections.setdefault(_edition_key(e.get("variant", "")), []).append(row)
-        else:
-            row = dict(r)
-            row["pfsense_version"] = ""
-            sections.setdefault("Other", []).append(row)
+    for ekey, row in _join_matrix(build_table(pkgs), matrix):
+        sections.setdefault(ekey, []).append(row)
     keys = [k for k in EDITION_ORDER if k in sections]
     keys += [k for k in sorted(sections) if k not in EDITION_ORDER and k != "Other"]
     if "Other" in sections:
@@ -411,23 +425,32 @@ def older_nightlies(pkgs: list[dict]) -> list[dict]:
     return rows
 
 
-def _older_nightlies_html(pkgs: list[dict]) -> str:
-    """A collapsed disclosure listing the retained older nightlies; "" when there are none."""
-    rows = older_nightlies(pkgs)
-    if not rows:
+def _older_nightlies_html(pkgs: list[dict], matrix: list[dict] | None = None) -> str:
+    """A collapsed disclosure listing the retained older nightlies; "" when there are none.
+
+    Carries the same columns as the per-edition tables (matrix-joined pfSense version +
+    PHP/Python), minus Channel — every row here is, by construction, a nightly.
+    """
+    older = older_nightlies(pkgs)
+    if not older:
         return ""
+    rows = [row for _ekey, row in _join_matrix(older, matrix)]
     body = "".join(
-        f'<tr><td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
+        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
         f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
+        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
         f'<td class="num">{_esc(r.get("published", ""))}</td>'
         f"<td>{commit_cell(r.get('commit', ''))}</td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
         for r in rows
     )
     return (
-        f"<details><summary>Older nightlies ({len(rows)})</summary>"
+        f"<details><summary>Older nightlies ({len(older)})</summary>"
         '<div class="tablewrap"><table><thead><tr>'
-        "<th>Version</th><th>ABI</th><th>Published</th><th>Commit</th><th>Size</th>"
+        "<th>pfSense</th><th>Version</th><th>ABI</th>"
+        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
         f"</tr></thead><tbody>{body}</tbody></table></div></details>"
     )
 
@@ -455,7 +478,7 @@ def render_page(
         "<strong>devel</strong> share one repo &mdash; pick the package; <strong>nightly</strong> is a "
         "separate, opt-in repo.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}{_older_nightlies_html(pkgs)}"
+        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}{_older_nightlies_html(pkgs, matrix)}"
         "<h2>Catalog trees</h2>"
         '<p class="blurb">The raw pkg(8) catalogs (what your firewall fetches). <code>${ABI}</code> is filled '
         "in by pkg automatically, e.g. <code>FreeBSD:16:aarch64</code> on a Netgate ARM box.</p>"
