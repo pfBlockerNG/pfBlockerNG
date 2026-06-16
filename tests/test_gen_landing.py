@@ -382,7 +382,7 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
         _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
     ]
     base = "https://pfblockerng.github.io/pkg"
-    page = gl.render_page(base, pkgs, ["FreeBSD:16:aarch64", "nightly/FreeBSD:16:aarch64"], _stub_conf, matrix)
+    page = gl.render_page(base, pkgs, _stub_conf, matrix)
 
     # Latest versions surfaced for the present channels.
     assert "3.2.16.20260614.9" in page
@@ -428,46 +428,74 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert "--warn:#d29922" in page
     assert ".card.release{border-color:var(--acc)}" in page
     assert ".card.nightly{border-color:var(--warn)}" in page
-    # Catalog-tree link to the colon-ABI dir is './'-prefixed (browser scheme guard).
-    assert 'href="./FreeBSD:16:aarch64/"' in page
-    # The catalog-tree list is a responsive auto-fill grid (column count follows the
-    # viewport — one column on a phone), not a fixed 2-column layout that hugs the edge.
-    assert "ul.trees{display:grid;grid-template-columns:repeat(auto-fill" in page
+    # The catalog-trees list is replaced by a SINGLE link to the folder-navigable browse page.
+    assert '<a class="browse" href="./browse.html">' in page
+    assert "Browse the repository" in page
+    # The old flat tree list is gone (no per-leaf-dir <ul> on the landing page).
+    assert "ul.trees" not in page
+    assert 'href="./FreeBSD:16:aarch64/"' not in page
 
 
 def test_render_page_table_empty_when_no_packages() -> None:
-    page = gl.render_page("https://x/pkg", [], [], _stub_conf)
+    page = gl.render_page("https://x/pkg", [], _stub_conf)
     assert "No packages published yet." in page
+    assert '<a class="browse" href="./browse.html">' in page  # browse link present even when empty
 
 
-def test_render_dir_index_lists_package_hides_plumbing() -> None:
-    """A per-dir index links the package(s) but not meta.conf/packagesite.pkg/data.pkg."""
-    files = ["pfSense-pkg-pfBlockerNG-nightly-3.2.16.20260614.9.pkg", "packagesite.pkg", "data.pkg", "meta.conf"]
-    out = gl.render_dir_index("nightly/FreeBSD:16:aarch64", files)
-    assert 'href="pfSense-pkg-pfBlockerNG-nightly-3.2.16.20260614.9.pkg"' in out
-    assert "packagesite.pkg</a>" not in out
-    assert 'href="data.pkg"' not in out
-    assert 'href="meta.conf"' not in out
-    # Two path segments deep -> back link climbs two levels.
-    assert 'href="../../"' in out
+def test_render_autoindex_lists_dirs_files_and_parent() -> None:
+    """A non-root autoindex shows a Parent Directory row, subdirs (name/), and files (name+size),
+    with './'-prefixed hrefs so a colon-bearing ABI segment stays a relative path."""
+    out = gl.render_autoindex(
+        "release/ce-2.8",
+        ["amd64"],
+        [("notes.txt", 12, 1_700_000_000.0)],
+    )
+    assert "Index of /release/ce-2.8" in out
+    assert '<a href="../">../</a>' in out  # Parent Directory row
+    assert '<a href="./amd64/">amd64/</a>' in out  # subdir, trailing slash
+    assert '<a href="./notes.txt">notes.txt</a>' in out  # file
+    assert "12 B" in out  # size column rendered
 
 
-def test_write_site_end_to_end(tmp_path: Path, monkeypatch: Any) -> None:
-    """write_site emits a root index + one per catalog dir, package count returned."""
+def test_render_autoindex_root_has_no_parent_and_is_colon_safe() -> None:
+    """The browse root omits Parent Directory; an ABI dir with ':' links via './' (RFC 3986 §4.2)."""
+    out = gl.render_autoindex("", ["release", "nightly"], [("routing.json", 99, 1_700_000_000.0)], is_root=True)
+    assert "Index of /" in out
+    assert "Parent Directory" not in out and 'href="../"' not in out
+    assert '<a href="./release/">release/</a>' in out and '<a href="./nightly/">nightly/</a>' in out
+    # A colon-ABI subdir would link with the scheme-safe './' prefix.
+    deep = gl.render_autoindex("release", ["FreeBSD:16:aarch64"], [])
+    assert 'href="./FreeBSD:16:aarch64/"' in deep
+
+
+def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, monkeypatch: Any) -> None:
+    """write_site emits the landing page, browse.html, and an autoindex index.html at EVERY
+    directory level (intermediate dirs too) so the whole tree is folder-navigable."""
     site = tmp_path / "site"
-    _touch(site / "FreeBSD:16:amd64" / "pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg")
-    _touch(site / "FreeBSD:16:amd64" / "packagesite.pkg")
+    _touch(site / "release" / "ce-2.8" / "FreeBSD:15:amd64" / "pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg")
+    _touch(site / "release" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg")
+    _touch(site / "routing.json")
 
-    manifest = {"name": "pfSense-pkg-pfBlockerNG-devel", "version": "3.2.16", "abi": "FreeBSD:16:amd64"}
+    manifest = {"name": "pfSense-pkg-pfBlockerNG-devel", "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
     monkeypatch.setattr(gl, "read_manifest_zstd", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
 
     n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", "add-repo.sh")
 
     assert n == 1
+    # Landing page (root) links to the browse entry; browse.html exists and lists the top dirs.
     assert (site / "index.html").is_file()
-    assert (site / "FreeBSD:16:amd64" / "index.html").is_file()
-    # The dir index links the package, not the catalog plumbing.
-    dir_index = (site / "FreeBSD:16:amd64" / "index.html").read_text()
-    assert "pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg" in dir_index
-    assert 'href="packagesite.pkg"' not in dir_index
+    assert '<a class="browse" href="./browse.html">' in (site / "index.html").read_text()
+    browse = (site / "browse.html").read_text()
+    assert '<a href="./release/">release/</a>' in browse
+    # An autoindex index.html exists at EVERY level — intermediate dirs too, not just the leaf.
+    for rel in ("release", "release/ce-2.8", "release/ce-2.8/FreeBSD:15:amd64"):
+        assert (site / rel / "index.html").is_file(), f"missing autoindex at {rel}"
+    # Intermediate dir lists its subdir; leaf lists the package + the catalog plumbing (a real
+    # directory listing, unlike the old package-only view).
+    assert '<a href="./ce-2.8/">ce-2.8/</a>' in (site / "release" / "index.html").read_text()
+    leaf = (site / "release" / "ce-2.8" / "FreeBSD:15:amd64" / "index.html").read_text()
+    assert "pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg" in leaf
+    assert "packagesite.pkg" in leaf  # the catalog files ARE shown in a directory listing
+    # The generated index pages themselves are hidden from listings (not repository content).
+    assert "browse.html" not in browse.split("<tbody>")[1]
