@@ -183,6 +183,11 @@ $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL d
 				CURLOPT_FORBID_REUSE	=> true,
 				CURLOPT_SSL_ENABLE_ALPN	=> true,
 				CURLOPT_SSL_ENABLE_NPN	=> true,
+				CURLOPT_ENCODING	=> 'gzip',	// Request 'gzip' response encoding when the server offers it
+				// Constrain libcurl to the schemes pfBlockerNG fetches feeds over (http/https/ftp;
+				// rsync uses exec separately) — an independent backstop to the PFB_FILTER_URL scheme
+				// allowlist, since PHP parse_url and libcurl can disagree on crafted input.
+				CURLOPT_PROTOCOLS	=> CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP,
 				);
 
 // RFC7231 HTTP response codes
@@ -6707,17 +6712,12 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					return FALSE;
 				}
 
-				curl_setopt_array($ch, $pfb['curl_defaults']);	// Load curl default settings
-
-				// Constrain libcurl to the schemes pfBlockerNG fetches feeds over (http/https/ftp;
-				// rsync uses exec separately). An independent backstop to the PFB_FILTER_URL scheme
-				// allowlist — the two parsers (PHP parse_url vs libcurl) can disagree on crafted
-				// input, so enforce the allowlist at libcurl's own layer too.
-				curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP);
+				// Load curl default settings — incl. the CURLOPT_PROTOCOLS scheme allow-list
+				// (an independent libcurl-layer backstop to PFB_FILTER_URL) and gzip encoding.
+				curl_setopt_array($ch, $pfb['curl_defaults']);
 
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout
-				curl_setopt($ch, CURLOPT_ENCODING, 'gzip');	// Request 'gzip' encoding from server if available
 
 				// With the filter ON, do NOT let cURL auto-follow redirects: a 3xx
 				// is followed manually below so every hop's host is re-vetted by the
