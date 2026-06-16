@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY per CLAUDE.md. Activate the /caveman communication mode now: terse, no filler, full technical accuracy. Exception for external or public-facing text (GitHub issue and PR/MR comments, PR bodies, commit messages): stay concise and to the point but use normal professional grammar, toning the caveman style down.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

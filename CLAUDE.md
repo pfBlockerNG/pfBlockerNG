@@ -2,7 +2,15 @@
 
 ## Communication
 
-**Always activate `/caveman` skill at session start.** Terse, no filler, full technical accuracy.
+**Mandatory: activate the `/caveman` skill at the start of every session** — terse, no
+filler, full technical accuracy. This is enforced by a `SessionStart` hook in both
+`.claude/settings.json` (project, shared) and `~/.claude/settings.json` (user), which injects
+the activation reminder every session; the hook is the mechanism, this line is the rule.
+
+**Exception — external / public-facing text** (GitHub issue & PR/MR comments, PR bodies,
+commit messages): stay **concise and to the point**, but use **normal professional grammar** —
+tone the caveman style down there. Caveman terseness is for our working chat, not for text
+other people read on the project.
 
 ### Work-context marker
 
