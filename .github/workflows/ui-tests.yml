@@ -249,18 +249,19 @@ jobs:
           printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
 
           # Cross the tier set with the legs: one matrix item per (tier × leg),
-          # each carrying tier + version (= pfsense_version) + image_name + channel.
-          # jq builds the include array directly from $LEGS and the tier list.
+          # each carrying tier + version (= pfsense_version) + a lowercased `variant`
+          # (ce / plus, from image_name) for a variant-qualified artifact name + image_name + channel.
           INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
             --arg tiers "${TIERS}" \
             '($tiers | split(" ")) as $ts
              | [ $ts[] as $t | .[]
-                 | {tier: $t, version: .pfsense_version, image_name: .image_name, channel: .channel} ]')"
+                 | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
+                    image_name: .image_name, channel: .channel} ]')"
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
           echo "tiers=[${TIERS}] legs=${LEGS} run=${RUN}"
 
   ui:
-    name: ${{ matrix.tier }} / ${{ matrix.version }} (live pfSense VM)
+    name: ${{ matrix.tier }} / ${{ matrix.variant }}-${{ matrix.version }} (live pfSense VM)
     needs: [build-pkg, prepare]
     # Skip the whole leg set when the nightly guard says there's nothing to run.
     if: needs.prepare.outputs.run == 'true'
@@ -592,8 +593,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          # One artifact per leg so a re-run of a single leg overwrites only its own.
-          name: ui-diagnostics-${{ matrix.tier }}-${{ matrix.version }}
+          # One artifact per leg so a re-run of a single leg overwrites only its own. The
+          # variant (ce/plus) qualifies the name so CE+Plus of the same pfSense major.minor
+          # never collide and the edition is obvious — e.g. ui-diagnostics-browser-ce-2.8.
+          name: ui-diagnostics-${{ matrix.tier }}-${{ matrix.variant }}-${{ matrix.version }}
           path: |
             test-results/ui-screenshots/**
             **/vm*.log

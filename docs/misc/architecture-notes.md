@@ -152,7 +152,8 @@ matrix-parametric on image-ref/version and tier-selectable, **one GH job per (ti
 leg re-runnable in isolation. The version axis is parametric but runs the **single CE image**
 today (B1) — adding one is a one-line `DEFAULT_VERSIONS` append + image-ref wire (IMAGE_RUNBOOK).
 Diagnostics (screenshots + VM logs + smoke snapshot) upload `if: always()` as
-`ui-diagnostics-<tier>-<version>`. The §7 browser reliability numbers are **CI-pending**; the
+`ui-diagnostics-<tier>-<variant>-<version>` (variant = ce/plus, e.g. `ui-diagnostics-browser-ce-2.8`).
+The §7 browser reliability numbers are **CI-pending**; the
 browser leg has a one-line demote/drop switch (drop `browser` from `DEFAULT_SCHEDULE_TIERS` +
 run release `ui-suite` as `tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
 
