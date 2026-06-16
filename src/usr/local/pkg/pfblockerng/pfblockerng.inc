@@ -2016,34 +2016,26 @@ function pfb_update_available(?string $installed, ?string $latest): bool {
 }
 
 /*
- * The channel-aware default for the notify knob when it is unset/'default': nightly
- * defaults ON (trackers opted into the tip), stable/devel (and any other) default OFF
- * (quiet for release users). Overridden by an explicit 'on'/'off' in pfb_should_notify().
+ * Whether the "Check for new versions" setting (pfb_software_check) is enabled. Default
+ * ENABLED: an our-repo install checks for and notifies of new versions out of the box. Only
+ * an explicit 'off' (the user un-ticking the box, persisted by the Software page) disables it;
+ * an unset value (never saved) or 'on' reads as enabled.
  */
-function pfb_notify_default_for_channel(?string $channel): bool {
-	return $channel === 'nightly';
+function pfb_software_check_enabled(?string $raw): bool {
+	return $raw !== 'off';
 }
 
 /*
  * The notify state machine: TRUE iff a `file_notice` should fire THIS tick.
  *
- * Resolve effective-notify from the knob — 'on' => true, 'off' => false, anything else
- * ('default'/unset) => pfb_notify_default_for_channel($channel) — then notify ONLY when
- * effective-notify AND an update is available (latest > installed) AND we have not
- * already notified for this exact latest ($latest !== $last_notified). The last clause
- * is the per-version de-dupe (ADR-19 §2 "persist last-notified"): a daily cron at the
- * same latest does NOT renotify; a newer latest does.
+ * The single "Check for new versions" boolean ($enabled) gates notifications equally on every
+ * channel: a notice fires ONLY when checking is enabled AND an update is available (latest >
+ * installed) AND we have not already notified for this exact latest ($latest !== $last_notified).
+ * The last clause is the per-version de-dupe (ADR-19 §2 "persist last-notified"): a daily cron at
+ * the same latest does NOT renotify; a newer latest does.
  */
-function pfb_should_notify(?string $installed, ?string $latest, ?string $last_notified, ?string $knob, ?string $channel): bool {
-	if ($knob === 'on') {
-		$effective = true;
-	} elseif ($knob === 'off') {
-		$effective = false;
-	} else {
-		$effective = pfb_notify_default_for_channel($channel);
-	}
-
-	if (!$effective) {
+function pfb_should_notify(?string $installed, ?string $latest, ?string $last_notified, bool $enabled): bool {
+	if (!$enabled) {
 		return false;
 	}
 	if (!pfb_update_available($installed, $latest)) {
@@ -2217,8 +2209,9 @@ function pfb_software_write_cache(array $cache): void {
  *      last_notified = latest (so repeated ticks at the same latest do not renotify).
  *
  * Best-effort throughout: it returns the cache array and never throws, so wiring it into
- * the cron pass can never break a feed update. $force is accepted for the Phase-4 "Check
- * now" button (there is no freshness short-circuit yet, so it is presently a no-op flag).
+ * the cron pass can never break a feed update. $force (the page's "Check now" button) bypasses
+ * the "Check for new versions" enable-gate so a manual check always runs; it never bypasses the
+ * provenance gate, and notifications still require the setting enabled.
  */
 function pfb_software_update_check(bool $force = false, ?array $io = null): array {
 	$io = is_array($io) ? $io : array();
@@ -2235,6 +2228,15 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
 
 	// 2. Provenance gate FIRST — a Netgate-installed build does nothing at all.
 	if (!pfb_software_is_our_build($installed_repo)) {
+		return pfb_software_read_cache();
+	}
+
+	// The single "Check for new versions" setting (default ENABLED) gates the BACKGROUND
+	// (cron) check + notifications. A manual "Check now" ($force) always runs, so a user can
+	// do a one-off check without leaving background checking enabled.
+	$check_raw = config_get_path('installedpackages/pfblockerng/config/0/pfb_software_check', null);
+	$enabled = pfb_software_check_enabled(is_string($check_raw) ? $check_raw : null);
+	if (!$enabled && !$force) {
 		return pfb_software_read_cache();
 	}
 
@@ -2258,7 +2260,6 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
 	}
 
 	$last_notified = $cache_matches_pkg ? (string) ($cache['last_notified'] ?? '') : '';
-	$knob = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_software_notify', 'default');
 
 	// 4. Refresh the cache. last_notified is written from the scoped value so a cache left
 	// by a different package (channel switch) is reset rather than carried forward.
@@ -2269,7 +2270,7 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
 	$cache['last_notified'] = $last_notified;
 	$cache['last_checked']  = time();
 
-	if (pfb_should_notify($installed, $latest, $last_notified, $knob, $channel)) {
+	if (pfb_should_notify($installed, $latest, $last_notified, $enabled)) {
 		file_notice('pfBlockerNG', "pfBlockerNG {$latest} available ({$channel})", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);
 		$cache['last_notified'] = $latest;
 	}

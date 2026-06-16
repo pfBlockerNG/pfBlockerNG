@@ -30,6 +30,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_software_read_cache')]
 #[CoversFunction('pfb_software_write_cache')]
 #[CoversFunction('pfb_pkg_latest')]
+#[CoversFunction('pfb_software_check_enabled')]
 final class SoftwareUpdateCheckTest extends TestCase
 {
 	private string $dbdir = '';
@@ -47,8 +48,8 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$GLOBALS['pfb_test_pkg_locked']   = false;
 		$GLOBALS['pfb_test_dns_available'] = true;
 
-		// Quiet default knob unless a test overrides it — exercise the channel-aware
-		// default rather than a forced on/off.
+		// No saved setting unless a test overrides it — exercises the DEFAULT (enabled)
+		// state of "Check for new versions" (pfb_software_check unset => enabled).
 		$GLOBALS['config'] = [];
 	}
 
@@ -85,10 +86,10 @@ final class SoftwareUpdateCheckTest extends TestCase
 		return is_array($data) ? $data : null;
 	}
 
-	private function setKnob(string $value): void
+	private function setCheck(string $value): void
 	{
 		$GLOBALS['config'] = [
-			'installedpackages' => ['pfblockerng' => ['config' => [0 => ['pfb_software_notify' => $value]]]],
+			'installedpackages' => ['pfblockerng' => ['config' => [0 => ['pfb_software_check' => $value]]]],
 		];
 	}
 
@@ -115,7 +116,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	public function testOurBuildRunsCheckWritesCacheAndCanNotify(): void
 	{
 		// Given: no cache yet, no notice yet (before-state).
-		$this->setKnob('on');
+		$this->setCheck('on');
 		$this->assertNull($this->readCache(), 'before: no cache file should exist');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice raised');
 
@@ -147,7 +148,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	public function testNetgateBuildIsCompleteNoOp(string $repo): void
 	{
 		// Given: ON knob (would notify if the gate let it through), clean before-state.
-		$this->setKnob('on');
+		$this->setCheck('on');
 		$this->assertNull($this->readCache(), 'before: no cache file');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
 
@@ -190,7 +191,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	{
 		// Given: seed a cache as if a prior tick already notified for 3.2.0_9 (a real prior
 		// tick records the pkgname it was for, so the same-package reuse path is taken).
-		$this->setKnob('on');
+		$this->setCheck('on');
 		pfb_software_write_cache([
 			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
 			'channel'       => 'devel',
@@ -226,7 +227,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	 */
 	public function testNoDnsServesCacheNoNetworkNoNotice(): void
 	{
-		$this->setKnob('on');
+		$this->setCheck('on');
 		pfb_software_write_cache([
 			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
 			'channel'       => 'devel',
@@ -260,7 +261,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	public function testChannelSwitchDoesNotReuseStaleCache(): void
 	{
 		// Given: a cache from a nightly build that had announced a nightly version.
-		$this->setKnob('on');
+		$this->setCheck('on');
 		pfb_software_write_cache([
 			'pkgname'       => 'pfSense-pkg-pfBlockerNG-nightly',
 			'channel'       => 'nightly',
@@ -288,35 +289,80 @@ final class SoftwareUpdateCheckTest extends TestCase
 	}
 
 	/*
-	 * ---- Knob gating — notice fires exactly when pfb_should_notify says so ----
+	 * ---- "Check for new versions" gating: enabled vs disabled, background vs manual ----
 	 */
 
 	/**
-	 * Given an our-repo build with an update available but the notify knob OFF,
-	 * When the check runs,
-	 * Then the cache is still refreshed (the page always shows latest) but NO notice fires.
-	 * Paired with testOurBuildRunsCheckWritesCacheAndCanNotify (knob on) so the branch is real.
+	 * Given an our-repo build with an update available but the setting DISABLED ('off'),
+	 * When the BACKGROUND check runs (force=false, the cron path),
+	 * Then it is a COMPLETE no-op: no cache is written and no notice fires — the disabled
+	 * setting stops background checking entirely. Paired with the default-enabled and the
+	 * manual-force tests so the gate is proven a real branch, not an always-run path.
 	 */
-	public function testKnobOffRefreshesCacheButSuppressesNotice(): void
+	public function testDisabledBackgroundCheckIsNoOp(): void
 	{
-		$this->setKnob('off');
+		// Given: disabled, clean before-state (no cache, no notice).
+		$this->setCheck('off');
+		$this->assertNull($this->readCache(), 'before: no cache file');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
 
-		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+		// When: a background (non-forced) check with an update nominally available.
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
 
-		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cache refreshed to latest');
-		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: last_notified NOT advanced');
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: knob off suppresses the notice');
+		// Then: nothing happened — no cache write, no notice.
+		$this->assertNull($this->readCache(), 'after: disabled background check writes NO cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: disabled background check raises NO notice');
 	}
 
 	/**
-	 * Given an our-repo build already at the latest (no update),
-	 * When the check runs with the knob ON,
+	 * Given the same disabled setting but a MANUAL "Check now" (force=true),
+	 * When the check runs,
+	 * Then the cache IS refreshed (the explicit one-off check always runs) but NO notice fires
+	 * (notifications still require the setting enabled). Pairs with the background no-op above
+	 * to prove force bypasses ONLY the enable-gate, not the notify gate.
+	 */
+	public function testDisabledManualForceRefreshesCacheButSuppressesNotice(): void
+	{
+		$this->setCheck('off');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+
+		$cache = pfb_software_update_check(true, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		$this->assertNotNull($this->readCache(), 'after: a forced manual check writes the cache');
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cache refreshed to latest');
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: last_notified NOT advanced');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: disabled setting suppresses the notice');
+	}
+
+	/**
+	 * Given an our-repo build with the setting UNSET (never saved) and an update available,
+	 * When the background check runs,
+	 * Then it behaves as ENABLED by default: the cache is refreshed AND a notice fires. Proves
+	 * the default-enabled path (no explicit 'on' needed) is the real out-of-the-box behaviour.
+	 */
+	public function testDefaultUnsetIsEnabledAndNotifies(): void
+	{
+		// Given: no setting at all (setUp left config empty), clean before-state.
+		$this->assertNull($this->readCache(), 'before: no cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When.
+		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		// Then: default-enabled => cache written and a notice raised.
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: default-enabled refreshes the cache');
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'after: default-enabled advances last_notified');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: default-enabled raises the notice');
+	}
+
+	/**
+	 * Given an our-repo build already at the latest (no update) with checking enabled,
+	 * When the check runs,
 	 * Then the cache is refreshed but no notice fires (nothing newer to announce).
 	 */
 	public function testNoUpdateAvailableRefreshesCacheNoNotice(): void
 	{
-		$this->setKnob('on');
+		$this->setCheck('on');
 
 		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_9', '3.2.0_9'));
 
@@ -339,7 +385,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	 */
 	public function testNoticeDeDupesPerVersionAcrossTicks(): void
 	{
-		$this->setKnob('on');
+		$this->setCheck('on');
 
 		// Tick 1: first sight of 3.2.0_9 -> one notice, last_notified advanced.
 		$this->assertNull($this->readCache(), 'before tick 1: no cache');

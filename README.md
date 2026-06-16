@@ -251,15 +251,12 @@ offers three buttons:
 A daily background check (riding the existing pfBlockerNG cron) compares installed vs our
 latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
 plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
-fires **once per new version**, not once per day. Whether it notifies is governed by one
-knob on the Software tab, **`pfb_software_notify`** (Default / On / Off):
+fires **once per new version**, not once per day. It is governed by a single checkbox on the
+Software tab, **Check for new versions** (`pfb_software_check`), **enabled by default** and
+applied equally on every channel: when enabled, pfBlockerNG checks our repository and notifies
+you of a newer build; untick it to stop the background checks and notifications. The page's
+**Check now** button always runs a one-off check regardless of the setting.
 
-| Channel | Default (knob unset) |
-| --- | --- |
-| stable / devel | **Off** — quiet; check the tab when you choose |
-| nightly | **On** — you opted into the tip, so you are told when it moves |
-
-Set the knob to **On** or **Off** to override the per-channel default either way.
 Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
 channels with `add-repo.sh` + `pkg install` as in Option 2 above.
 
