@@ -156,6 +156,27 @@ commits are the reliable handle. **Prefer stubbing the real function over an exc
 stubs encode reality and keep PHPStan/Intelephense honest. By-hand counterpart to the bulk
 generator under "Updating documentation".
 
+### Plan with a higher model, implement with Sonnet
+
+Substantial coding work is **planned and gated by a higher model** (Opus / Fable) and
+**implemented by Sonnet** sub-agents: the planner splits the task into steps, a Sonnet
+implementer executes each, and the planner **independently checks every step** before the next
+— that per-step gating is what makes a cheaper implementer safe. The skills already wire this
+(`/adr-phase` and `/gh-issue --fix` spawn `model: sonnet` implementers under orchestrator
+gates); for ad-hoc coding, follow the same shape. The higher model may still make **trivial
+one-line edits** and handle **docs / config / settings / skills** directly — delegation is for
+non-trivial `src/`/`tests/`/CI work.
+
+- **The planner's brief to Sonnet must be self-contained, accurate, and well-referenced** — the
+  exact objective, the files/symbols to read and change (paths, `file:line`), the constraints,
+  the verification gates, and the prior step's handoff. A vague or wrong brief is a planner bug.
+- **Sonnet follows every directive in this file** — communication, the working principles
+  (investigate / "don't assume, read" / confirm ambiguity), code standards (style, naming,
+  per-language rules), the test-coverage mandate, and how to work with the specific
+  codes/frameworks/tests. The implementer is cheaper, not exempt.
+- **Run at effort High or better** when available — set as the session default in
+  `.claude/settings.json` (`effortLevel`).
+
 ---
 
 ## Code standards

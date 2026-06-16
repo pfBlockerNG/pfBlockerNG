@@ -137,10 +137,13 @@ to Step 7.
 For every phase `M` to run (the loop body in `all`):
 
 **6a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
-general-purpose`) — **without** `isolation: "worktree"`, since the worktree
-already exists. Give it a **self-contained** brief — no carry-over from this
-conversation, though it has the full worktree (the whole codebase) to read and
-edit:
+general-purpose`, **`model: sonnet`**) — **without** `isolation: "worktree"`, since
+the worktree already exists. Per CLAUDE.md "Plan with a higher model, implement with
+Sonnet", **you are the higher-model planner/gater and the implementer runs on Sonnet**;
+your brief must be self-contained, accurate, and well-referenced (the cheaper implementer
+is only safe because you gate every step). Give it a **self-contained** brief — no
+carry-over from this conversation, though it has the full worktree (the whole codebase) to
+read and edit:
 
 - The **full text** of the phase prompt `{ADR_DIR}/{MM}_*.txt`.
 - "Work **entirely inside** the worktree at `<path>` — all edits and all git

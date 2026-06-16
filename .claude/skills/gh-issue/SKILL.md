@@ -197,8 +197,12 @@ one per step.
 For each plan step `M`, in order:
 
 **7a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
-general-purpose`, no `isolation` — the worktree already exists) with a
-self-contained brief: the **full step prompt** from Step 5, the instruction to work
+general-purpose`, **`model: sonnet`**, no `isolation` — the worktree already exists)
+with a self-contained brief. Per CLAUDE.md "Plan with a higher model, implement with
+Sonnet", **you are the higher-model planner/gater and the implementer runs on Sonnet** —
+the brief must be self-contained, accurate, and well-referenced, since the cheaper
+implementer is only safe because you independently gate every step (7b). The brief: the
+**full step prompt** from Step 5, the instruction to work
 **entirely inside `<path>`** (`git -C <path> …`, never the main checkout), to do its
 required reading including `CLAUDE.md` and **the prior step's handoff** (paste the
 previous agent's handoff text into the brief — that IS the inter-step interface), to
