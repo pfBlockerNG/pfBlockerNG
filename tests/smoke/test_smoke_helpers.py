@@ -315,6 +315,85 @@ def test_stub_cname_chain_is_two_rrsets_and_consistent() -> None:
         server.stop()
 
 
+def test_stub_dns_bind_is_race_free_under_ephemeral_churn() -> None:
+    """Repeatedly spinning the stub up/down, even amid heavy ephemeral-port churn,
+    binds cleanly every time — the issue #243 race (OSError [Errno 98]) is gone.
+
+    The old order bound an ephemeral UDP port first, then forced that number onto TCP;
+    a foreign TCP/TIME_WAIT socket holding it between the two binds lost the race. This
+    pins the fix (TCP-first, so the shared number is proven free for TCP): under churn
+    that would frequently have occupied the forced number, every construction must now
+    succeed.
+
+    Background:
+      Given background threads that rapidly grab and release ephemeral TCP ports on
+        127.0.0.1 (so the ephemeral range is churning with live + TIME_WAIT sockets),
+    When the stub DNS server is constructed (port=0) and stopped many times back-to-back,
+    Then every construction binds its UDP+TCP pair without raising, and each server
+      reports a valid non-zero ephemeral port (a regression to the old order would raise
+      OSError [Errno 98] here under this churn).
+    """
+    import socket
+    import threading
+
+    stop = threading.Event()
+
+    def _churn() -> None:
+        # Open a batch of ephemeral TCP sockets, then release them (-> TIME_WAIT), on a
+        # tight loop — the ephemeral-port pressure the old forced-TCP bind raced against.
+        while not stop.is_set():
+            socks: list[socket.socket] = []
+            try:
+                for _ in range(64):
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.bind(("127.0.0.1", 0))
+                    socks.append(s)
+            except OSError:
+                pass  # ran out of ephemeral ports — fine, the churn is the point
+            finally:
+                for s in socks:
+                    s.close()
+
+    churners = [threading.Thread(target=_churn, daemon=True) for _ in range(4)]
+    for t in churners:
+        t.start()
+    try:
+        for _ in range(200):
+            server = _StubDnsServer(port=0)
+            try:
+                assert isinstance(server.port, int) and server.port > 0, "stub must bind a real ephemeral port"
+            finally:
+                server.stop()
+    finally:
+        stop.set()
+        for t in churners:
+            t.join(timeout=5)
+
+
+def test_stub_dns_fixed_port_conflict_raises_immediately() -> None:
+    """A FIXED (non-zero) port already in use raises at once — no silent retry.
+
+    Complements the port=0 retry path: ``_bind_udp_tcp`` re-draws a fresh ephemeral
+    port only when ``port == 0``; a fixed port (the session mock's ``:53``) cannot be
+    re-drawn, so a conflict must surface immediately. Pins that ``port != 0`` branch so
+    a regression that made it loop/swallow the error goes RED.
+    """
+    import socket
+
+    # Occupy a port (same addr the stub will bind) with a live listening socket, then
+    # demand the stub bind that exact fixed port — it must raise, not spin.
+    addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or "127.0.0.1"
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.bind((addr, 0))
+    occupied.listen(1)
+    taken = occupied.getsockname()[1]
+    try:
+        with pytest.raises(OSError):
+            _StubDnsServer(port=taken)
+    finally:
+        occupied.close()
+
+
 def test_stub_unregistered_name_is_plain_sentinel() -> None:
     """An UNregistered name (and a cleared registration) gets the single-rrset sentinel."""
     import dns.rdatatype
