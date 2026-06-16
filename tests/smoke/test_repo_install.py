@@ -1777,8 +1777,13 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     if written.returncode != 0:
         raise RuntimeError(f"write Worker conf failed: rc={written.returncode} {written.stderr!r}")
 
-    # pkg update via the Worker must succeed (routing.json is live on Pages).
-    update_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-r", OURS_REPO_NAME, timeout=120.0)
+    # pkg update via the Worker must succeed (routing.json is live on Pages). Force a full
+    # catalogue refresh (-f): earlier cases in this VM built the `pfblockerng` repo DB from a
+    # different (Pages/add-repo) URL, so swapping the conf to the Worker URL otherwise trips
+    # pkg's "wrong packagesite, need to re-create database" staleness guard.
+    update_result = repo_vm.ssh(
+        "env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", "-r", OURS_REPO_NAME, timeout=120.0
+    )
     if update_result.returncode != 0:
         update_out = update_result.stdout + update_result.stderr
         pytest.fail(
