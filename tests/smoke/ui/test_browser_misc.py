@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .conftest import mask_page_identity
+from .test_render_smoke import software_panel_forced
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -59,7 +60,12 @@ expect = sync_api.expect
 if TYPE_CHECKING:
     from playwright.sync_api import Page
 
+    from ..conftest import SmokeVM
     from .webui import WebUI
+
+# The provenance-gated Software (version/upgrades) page + its panel marker (ADR-19).
+SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
+SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 
 pytestmark = pytest.mark.ui_browser
 
@@ -320,3 +326,22 @@ def test_feeds_alt_radio_submit_wiring(
     assert page.evaluate("window.__pfb_alt_submitted") is True, (
         "clicking an Alternate-URL radio did not trigger the #save submit handler"
     )
+
+
+def test_software_panel_screenshot_when_enabled(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Capture the Software (version/upgrades) panel in its ENABLED state.
+
+    The default Tier-A/B sideload deploy hides the page (provenance gate, %R empty), so it never
+    appears in a normal browser run. Forcing the hidden override 'on' (software_panel_forced)
+    renders the panel deterministically; assert its marker is in the DOM and write a full-page
+    screenshot artifact for human review. Captures the state the always-on tiers otherwise can't.
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        _open(browser_page, webui, SOFTWARE_PAGE)
+        assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
+        _shot(browser_page, screenshot_dir, "software_panel_enabled")

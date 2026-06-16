@@ -2291,7 +2291,40 @@ function pfb_software_update_check(bool $force = false, ?array $io = null): arra
  * the priv match line all gate on this single predicate so a Netgate-installed
  * add-on shows no Software page anywhere.
  */
+// Hidden test/support override for the Software-page provenance gate (ADR-19). A file
+// containing 'on' or 'off' FORCES the gate (case-insensitive, trimmed); absent or any other
+// content => fall through to the auto-detect below. NOT a GUI knob: the webConfigurator never
+// writes it. It lets CI render BOTH the enabled and disabled states deterministically (the
+// Tier-A UI deploy is a sideloaded `pkg add`, whose %R is empty, so auto-detect alone could
+// only ever show the hidden state), and gives support a force-on/off escape-hatch on a real box.
+define('PFB_SOFTWARE_PANEL_OVERRIDE', '/var/db/pfblockerng/.pfb_software_panel');
+
+/*
+ * The forced Software-gate state, or NULL when not forced. Reads the hidden override sentinel
+ * (PFB_SOFTWARE_PANEL_OVERRIDE; $path is injectable for off-box tests): 'on' => true,
+ * 'off' => false, absent / any other content => NULL (the auto-detect applies).
+ */
+function pfb_software_panel_override(?string $path = null): ?bool {
+	$path = $path ?? PFB_SOFTWARE_PANEL_OVERRIDE;
+	if (!is_file($path)) {
+		return null;
+	}
+	$v = strtolower(trim((string) @file_get_contents($path)));
+	if ($v === 'on') {
+		return true;
+	}
+	if ($v === 'off') {
+		return false;
+	}
+	return null;
+}
+
 function pfb_software_provenance_ok(): bool {
+	// A hidden override (CI / support) wins; otherwise auto-detect from the install's repo (%R).
+	$forced = pfb_software_panel_override();
+	if ($forced !== null) {
+		return $forced;
+	}
 	return pfb_software_is_our_build(pfb_pkg_installed_repo(pfb_pkg_installed_name()));
 }
 
