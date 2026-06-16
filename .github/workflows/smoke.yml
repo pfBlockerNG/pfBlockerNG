@@ -212,6 +212,22 @@ jobs:
           # Harmless for the default `smoke` marker (the helper just isn't called).
           sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv zstd
 
+      - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the ADR-20 variant topology)
+        # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
+        # ci-metadata version matrix (no hardcoded CE/Plus). Resolve it HERE — at job start,
+        # while egress is open — and export it. The test reads SMOKE_MATRIX_JSON; without it
+        # the test falls back to running this script itself, which needs network the pytest
+        # phase may not have. Best-effort: on failure the topology cases SKIP, never fail the
+        # whole smoke job. (read-version-matrix.sh self-fetches the ci-metadata orphan ref.)
+        run: |
+          set -u
+          if matrix="$(sh scripts/read-version-matrix.sh --print-build 2>/dev/null)" && [ -n "$matrix" ]; then
+            printf 'SMOKE_MATRIX_JSON=%s\n' "$matrix" >> "$GITHUB_ENV"
+            echo "Resolved $(printf '%s' "$matrix" | jq 'length') build-matrix entries for the smoke topology."
+          else
+            echo "::warning::could not resolve the version matrix — ADR-20 variant-topology cases will SKIP"
+          fi
+
       - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
         id: ref
         env:

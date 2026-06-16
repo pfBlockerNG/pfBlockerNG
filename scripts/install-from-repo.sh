@@ -78,6 +78,25 @@ if ! ssh_t 'command -v rsync >/dev/null 2>&1'; then
         || { echo "Error: failed to install rsync on $SSH_TARGET" >&2; exit 1; }
 fi
 
+# The Python flavor for the py3xx-* RUN_DEPENDS is DERIVED FROM THE VERSION MATRIX (no
+# hardcoded py311): match the box's ABI (FreeBSD:major:arch) to its matrix entry's py_flavor.
+# Fallbacks keep the installer working when the matrix/jq is unavailable: the box's OWN
+# installed py3xx flavor, then py311. (read-version-matrix.sh self-fetches the ci-metadata ref.)
+PY_FLAVOR=""
+BOX_ABI="$(ssh_t 'pkg config ABI 2>/dev/null' | tr -d '\r')"
+if [ -n "$BOX_ABI" ] && command -v jq >/dev/null 2>&1; then
+    PY_FLAVOR="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
+        | jq -r --arg abi "$BOX_ABI" \
+            '[ .[] | select("FreeBSD:\(.freebsd_major):\(.arch // "amd64")" == $abi) ][0].py_flavor // empty' \
+        2>/dev/null || true)"
+fi
+if [ -z "$PY_FLAVOR" ]; then
+    # The box knows its own python: the py3xx that owns its py-sqlite3, if already present.
+    PY_FLAVOR="$(ssh_t "pkg query %n 2>/dev/null | grep -E '^py3[0-9]+-sqlite3\$' | sed 's/-sqlite3//' | head -1" | tr -d '\r' || true)"
+fi
+[ -n "$PY_FLAVOR" ] || PY_FLAVOR="py311"
+echo "==> Python dep flavor for ${BOX_ABI:-unknown ABI}: ${PY_FLAVOR}"
+
 # 0b) Install the package's other RUN_DEPENDS — what `pkg install
 #     pfSense-pkg-pfBlockerNG[-devel]` pulls per the port Makefile — so the
 #     installed package is actually functional (jq/grepcidr/iprange for the IP
@@ -85,7 +104,7 @@ fi
 #     lighttpd for the sinkhole webserver; rsync is handled in 0a). Best-effort:
 #     a renamed/absent dep shouldn't block the smoke install, so warn not abort.
 echo "==> Installing pfBlockerNG runtime dependencies (mirrors port RUN_DEPENDS)"
-ssh_t 'env ASSUME_ALWAYS_YES=yes pkg install -y libmaxminddb gnugrep grepcidr iprange jq lighttpd py311-sqlite3 py311-maxminddb' \
+ssh_t "env ASSUME_ALWAYS_YES=yes pkg install -y libmaxminddb gnugrep grepcidr iprange jq lighttpd ${PY_FLAVOR}-sqlite3 ${PY_FLAVOR}-maxminddb" \
     || echo "WARN: some pfBlockerNG runtime deps failed to install (continuing)" >&2
 
 # 1) Sync the package files. src/ mirrors the filesystem root, so src/usr/local/
