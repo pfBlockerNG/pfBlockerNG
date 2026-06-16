@@ -119,8 +119,9 @@ def test_release_conf_byte_identical_across_all_three_generators() -> None:
 @pytest.mark.parametrize(
     ("args", "repo_name", "url"),
     [
-        # Default (no argument) -> the shared `pfblockerng` release repo.
-        ((), "pfblockerng", f'url: "{_WORKER_URL}/${{ABI}}"'),
+        # Default (no argument) -> the shared `pfblockerng` release repo on the explicit
+        # `release/` catalog subtree (symmetric with nightly; ADR-20).
+        ((), "pfblockerng", f'url: "{_WORKER_URL}/release/${{ABI}}"'),
         # --nightly -> a DISTINCT `pfblockerng-nightly` repo on a `nightly/` catalog
         # subtree (so it never collides with the release tree on Pages).
         (("--nightly",), "pfblockerng-nightly", f'url: "{_WORKER_URL}/nightly/${{ABI}}"'),

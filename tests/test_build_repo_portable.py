@@ -507,7 +507,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng: {" in out  # the shared release repo (stable + devel)
-    assert 'url: "https://pkg.pfblockerng.workers.dev/${ABI}"' in out  # canonical Worker URL (ADR-20)
+    assert 'url: "https://pkg.pfblockerng.workers.dev/release/${ABI}"' in out  # Worker URL + release prefix (ADR-20)
     assert "signature_type: none," in out
     assert "priority: 100," in out
     assert "enabled: yes" in out
@@ -518,7 +518,7 @@ def test_print_conf_base_url_override(capsys: pytest.CaptureFixture[str]) -> Non
     rc = brp.main(["--print-conf", "--base-url", "https://fork.example.io/p/"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert 'url: "https://fork.example.io/p/${ABI}"' in out  # trailing slash trimmed
+    assert 'url: "https://fork.example.io/p/release/${ABI}"' in out  # trailing slash trimmed + release prefix
 
 
 def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:

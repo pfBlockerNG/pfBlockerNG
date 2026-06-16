@@ -756,7 +756,7 @@ def print_conf(base_url: str) -> None:
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects our build.\n"
         "pfblockerng: {\n"
-        f'  url: "{base}/${{ABI}}",\n'
+        f'  url: "{base}/release/${{ABI}}",\n'
         "  mirror_type: none,\n"
         "  signature_type: none,\n"
         f"  priority: {CONF_PRIORITY},\n"

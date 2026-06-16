@@ -112,15 +112,16 @@ done
 # release (default) -> repo `pfblockerng`,        conf pfblockerng.conf,        Pages root
 #                      carries BOTH pfSense-pkg-pfBlockerNG (stable) and ...-devel
 # nightly           -> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, `nightly/` subtree
-# URL_SUBPATH: nightly is served from the `nightly/` catalog subtree; the release repo
-# from the Pages root. The literal ${ABI} pkg(8) variable follows it.
+# URL_SUBPATH: each channel carries an explicit, symmetric prefix — `release/` and
+# `nightly/` — that the Cloudflare Worker (ADR-20) maps to the variant catalog tree.
+# The literal ${ABI} pkg(8) variable follows it.
 # PKG_NAMES: the package(s) the verify step checks + the install hints printed (the
 # release repo carries two; nightly one).
 case "$CHANNEL" in
     release)
         REPO_NAME="pfblockerng"
         CONF_NAME="pfblockerng.conf"
-        URL_SUBPATH=""
+        URL_SUBPATH="release/"
         PKG_NAMES="pfSense-pkg-pfBlockerNG pfSense-pkg-pfBlockerNG-devel"
         ;;
     nightly)
