@@ -463,20 +463,24 @@ _SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
 _SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 _SOFTWARE_TAB_HREF = "/pfblockerng/pfblockerng_software.php"
 # Mirrors PFB_SOFTWARE_PANEL_OVERRIDE in pfblockerng.inc (the hidden test/support sentinel).
-_SOFTWARE_OVERRIDE_FILE = "/var/db/pfblockerng/.pfb_software_panel"
+_SOFTWARE_OVERRIDE_NAME = ".pfb_software_panel"
+_SOFTWARE_OVERRIDE_FILE = f"{helpers.PFB_DBDIR}/{_SOFTWARE_OVERRIDE_NAME}"
 
 
 @contextmanager
 def software_panel_forced(vm: SmokeVM, state: str) -> Iterator[None]:
     """Force the Software-page gate ``on``/``off`` for the block via the hidden sentinel, then
     remove it so subsequent tests see the default auto-detect. ``state`` is a fixed 'on'/'off'
-    literal (never user input). Both the write and the cleanup are checked so a silently failed
-    write can't let the forced-off case pass on the default-hidden path, and a failed cleanup
-    can't leak override state into a later test."""
-    write = vm.ssh(
-        "/bin/sh", "-c", f"mkdir -p /var/db/pfblockerng && printf '%s' '{state}' > '{_SOFTWARE_OVERRIDE_FILE}'"
-    )
-    assert write.returncode == 0, f"failed to set software override to {state!r}: {write.stderr.strip()}"
+    literal (never user input).
+
+    The write goes through ``helpers.write_local_feed`` (bare ``mkdir -p`` argv + ``tee`` over
+    stdin), NOT ``ssh "/bin/sh -c 'mkdir … && printf … > file'"``: ssh space-joins the remote
+    argv and the pfSense root LOGIN shell (tcsh) re-parses it, so the compound ``sh -c`` form
+    silently mis-runs (``mkdir`` gets no operand). ``write_local_feed`` already raises on a
+    failed write, so a silent failure can't let the forced-off case pass on the default-hidden
+    path; the cleanup ``rm`` is checked too so a failure can't leak override state into a later
+    test."""
+    helpers.write_local_feed(vm, _SOFTWARE_OVERRIDE_NAME, state)
     try:
         yield
     finally:
