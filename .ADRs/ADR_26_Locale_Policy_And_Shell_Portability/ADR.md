@@ -1,6 +1,6 @@
 # ADR-26: Locale Policy and Cross-Platform Shell Portability
 
-- **Status:** **Proposed** (2026-06-15)
+- **Status:** **Accepted** (2026-06-16)
 - **Date:** 2026-06-15
 - **Branch:** `adr/26-locale-policy-and-shell-po` (off `devel`)
 - **Component(s):**
