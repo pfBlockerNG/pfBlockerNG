@@ -1358,7 +1358,9 @@ def run_build(args: argparse.Namespace) -> Build:
     # args, NOT the USES-derived php_ver: the guard is independent of whether the port
     # itself USES=php (php_ver is "" for a non-php port, but the guard must still land).
     if args.php:
-        for dep_name, dep_origin in _resolve_variant_deps(args.php, args.py_flavor):
+        # Use the RESOLVED py_flavor (prompt-filled when --py-flavor is omitted), not the
+        # raw arg — otherwise an interactive build would silently drop the Python guard.
+        for dep_name, dep_origin in _resolve_variant_deps(args.php, py_flavor):
             # Variant guard deps augment (never override) USES-synthesised deps. A real
             # origin is mandatory — libpkg's `pkg repo` aborts on an empty dep origin.
             deps.setdefault(dep_name, Dep(name=dep_name, origin=dep_origin, version="0"))
