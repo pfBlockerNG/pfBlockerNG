@@ -647,41 +647,48 @@ def test_parse_annotations_rejects_malformed(bad: str) -> None:
 
 
 def test_ce_manifest_has_php83_dep() -> None:
-    """CE entry (php 8.3, py311) → dep list contains 'php83', NOT 'php85'."""
+    """CE entry (php 8.3, py311) → guard contains php83/lang/php83, NOT php85."""
     # Given the CE matrix values from supported-versions.json
-    deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
-    # Then php83 is present (CE dep guard)
-    assert "php83" in deps
+    deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
+    # Then php83 is present (CE dep guard) with a REAL origin (libpkg requires one)
+    assert deps.get("php83") == "lang/php83"
     # And the Plus PHP dep is absent (mutual exclusion)
     assert "php85" not in deps
+    # The Python guard uses the real package name (python311), not the flavor "py311"
+    assert deps.get("python311") == "lang/python311"
+    assert "py311" not in deps
 
 
 def test_plus_manifest_has_php85_dep() -> None:
-    """Plus entry (php 8.5, py311) → dep list contains 'php85', NOT 'php83'."""
+    """Plus entry (php 8.5, py311) → guard contains php85/lang/php85, NOT php83."""
     # Given the Plus matrix values from supported-versions.json
-    deps = bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311")
-    # Then php85 is present (Plus dep guard)
-    assert "php85" in deps
+    deps = dict(bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311"))
+    # Then php85 is present (Plus dep guard) with a real origin
+    assert deps.get("php85") == "lang/php85"
     # And the CE PHP dep is absent (mutual exclusion)
     assert "php83" not in deps
+
+
+def test_variant_dep_origin_is_non_empty() -> None:
+    """Every guard dep carries a non-empty origin — libpkg's `pkg repo` aborts without one.
+
+    Regression guard: an empty origin reached real FreeBSD `pkg repo` and tripped
+    `Assertion failed: origin != NULL && origin[0] != '\\0'` (pkg_adddep_chain).
+    """
+    for name, origin in bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"):
+        assert origin, f"guard dep {name!r} has an empty origin"
+        assert "/" in origin, f"guard dep {name!r} origin {origin!r} is not a <category>/<port>"
 
 
 def test_wrong_variant_dep_absent() -> None:
     """Each variant carries only its own PHP dep — the other side's is absent.
 
-    Before-state (no variant): neither versioned name appears.
     After-state CE: php83 present, php85 absent.
     After-state Plus: php85 present, php83 absent.
     """
-    # Given: before any variant call, a plain dep-list has no versioned php names.
-    # (Simulate: call with a hypothetical neutral php_version "8.x" not matching
-    # either real entry — confirms the derivation is purely from php_version, not
-    # hardcoded for "8.3" or "8.5".)
-    # The real before-state check: verify an unversioned invocation produces neither.
-    # We cannot call synthesize_uses_deps without a ports tree, but the pure helper
-    # is enough: assert the CE result lacks php85 and Plus lacks php83.
-    ce_deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
-    plus_deps = bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311")
+    # The pure helper is enough: assert the CE result lacks php85 and Plus lacks php83.
+    ce_deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
+    plus_deps = dict(bpp._resolve_variant_deps(php_version="8.5", py_flavor="py311"))
 
     # CE lacks the Plus PHP dep
     assert "php85" not in ce_deps
@@ -729,8 +736,8 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
 
     Given the synthetic classic port,
     When built with --php 8.3 + --py-flavor py311 (CE values),
-    Then deps gain php83 + py311 (alongside the Makefile RUN_DEPENDS), and the
-    Plus discriminator php85 is absent.
+    Then deps gain php83 + python311 (alongside the Makefile RUN_DEPENDS), each with a
+    real origin, and the Plus discriminator php85 is absent.
     """
     ports, portdir = _make_classic_port(tmp_path)
     out = tmp_path / "out"
@@ -747,11 +754,12 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
     )  # fmt: skip
     assert rc == 0
     full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
-    dep_names = set(full.get("deps", {}).keys())
-    assert "foo" in dep_names  # Makefile RUN_DEPENDS still present
-    assert "php83" in dep_names  # CE PHP guard injected
-    assert "py311" in dep_names  # Python guard injected
-    assert "php85" not in dep_names  # the Plus discriminator stays absent
+    deps = full.get("deps", {})
+    assert "foo" in deps  # Makefile RUN_DEPENDS still present
+    assert deps.get("php83", {}).get("origin") == "lang/php83"  # CE PHP guard, real origin
+    assert deps.get("python311", {}).get("origin") == "lang/python311"  # Python guard, real origin
+    assert "php85" not in deps  # the Plus discriminator stays absent
+    assert "py311" not in deps  # the flavor token is NOT a dep name (would be unsatisfiable)
 
 
 def test_two_simultaneous_ce_entries() -> None:
@@ -766,8 +774,8 @@ def test_two_simultaneous_ce_entries() -> None:
     Then each returns its own correct php dep and the results are distinct.
     """
     # Given: two CE entries with different PHP versions
-    ce_15_deps = bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311")
-    ce_16_deps = bpp._resolve_variant_deps(php_version="8.4", py_flavor="py311")
+    ce_15_deps = dict(bpp._resolve_variant_deps(php_version="8.3", py_flavor="py311"))
+    ce_16_deps = dict(bpp._resolve_variant_deps(php_version="8.4", py_flavor="py311"))
 
     # Then: each has the correct versioned PHP dep
     assert "php83" in ce_15_deps, "FreeBSD 15 CE entry must have php83"
@@ -777,9 +785,9 @@ def test_two_simultaneous_ce_entries() -> None:
     assert "php84" not in ce_15_deps
     assert "php83" not in ce_16_deps
 
-    # And: both carry py311
-    assert "py311" in ce_15_deps
-    assert "py311" in ce_16_deps
+    # And: both carry the python311 guard
+    assert "python311" in ce_15_deps
+    assert "python311" in ce_16_deps
 
-    # And: the two dep lists are distinct (not identical)
-    assert sorted(ce_15_deps) != sorted(ce_16_deps)
+    # And: the two dep maps are distinct (not identical)
+    assert ce_15_deps != ce_16_deps

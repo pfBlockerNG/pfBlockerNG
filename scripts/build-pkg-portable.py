@@ -732,26 +732,32 @@ def _glob_origin(ports_root: Path, pkgdir: str) -> str:
     return ""
 
 
-def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]:
-    """Return the RUN_DEPENDS package names for a specific pfSense variant.
+def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[tuple[str, str]]:
+    """Return the variant guard RUN_DEPENDS as ``(name, origin)`` pairs.
 
-    Derives the PHP dep name by stripping the dot from ``php_version``
-    (e.g. ``"8.3"`` → ``"php83"``); uses ``py_flavor`` directly as the
-    Python dep name (e.g. ``"py311"``).  Both are needed because the exact
-    versions differ between CE and Plus — this is the variant guard that
-    prevents a wrong-variant package from silently installing.
+    Derives the PHP dep from ``php_version`` (``"8.3"`` → ``php83`` / ``lang/php83``)
+    and the Python dep from ``py_flavor`` (``"py311"`` → ``python311`` /
+    ``lang/python311``) — the SAME names + origins ``make package`` records for a
+    ``USES=php``/``USES=python`` port, so when the port already synthesises them the
+    guard de-dups cleanly (it never introduces a second, conflicting dep). Both are
+    needed because the exact PHP version differs between CE and Plus — this is the
+    variant guard that prevents a wrong-variant package from silently installing.
 
-    Each side is emitted only when its source value is non-empty, so a build
-    that supplies only one of ``--php`` / ``--py-flavor`` still yields a
-    well-formed dep list (no bare ``"py"`` / ``"php"``).
+    A non-empty ``origin`` is REQUIRED: libpkg's ``pkg repo`` asserts every dep has
+    one (``pkg_adddep_chain``), so an empty origin aborts a real FreeBSD catalog build.
+
+    Each side is emitted only when its source value is non-empty, so a build that
+    supplies only one of ``--php`` / ``--py-flavor`` still yields a well-formed list.
 
     Pure function: no I/O, no side effects.  Testable without a ports tree.
     """
-    deps: list[str] = []
+    deps: list[tuple[str, str]] = []
     if php_version:
-        deps.append("php" + php_version.replace(".", ""))
+        phpv = php_version.replace(".", "")
+        deps.append((f"php{phpv}", f"lang/php{phpv}"))
     if py_flavor:
-        deps.append(py_flavor if py_flavor.startswith("py") else f"py{py_flavor}")
+        pyv = py_flavor[2:] if py_flavor.startswith("py") else py_flavor
+        deps.append((f"python{pyv}", f"lang/python{pyv}"))
     return deps
 
 
@@ -1352,9 +1358,10 @@ def run_build(args: argparse.Namespace) -> Build:
     # args, NOT the USES-derived php_ver: the guard is independent of whether the port
     # itself USES=php (php_ver is "" for a non-php port, but the guard must still land).
     if args.php:
-        for dep_name in _resolve_variant_deps(args.php, args.py_flavor):
-            # Variant guard deps augment (never override) USES-synthesised deps.
-            deps.setdefault(dep_name, Dep(name=dep_name, origin="", version="0"))
+        for dep_name, dep_origin in _resolve_variant_deps(args.php, args.py_flavor):
+            # Variant guard deps augment (never override) USES-synthesised deps. A real
+            # origin is mandatory — libpkg's `pkg repo` aborts on an empty dep origin.
+            deps.setdefault(dep_name, Dep(name=dep_name, origin=dep_origin, version="0"))
     b.deps = list(deps.values())
     # Best-effort dep versions come from the ports tree; the version make package
     # actually records is the INSTALLED binary package's. Pin those exactly from
