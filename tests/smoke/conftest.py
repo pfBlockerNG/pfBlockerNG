@@ -579,6 +579,45 @@ class _StubDnsServer:
     :meth:`queries` are the query log.
     """
 
+    @staticmethod
+    def _bind_udp_tcp(addr: str, port: int, *, attempts: int = 10) -> tuple[int, socket.socket, socket.socket]:
+        """Bind a UDP+TCP listener pair sharing ONE port, race-free (issue #243).
+
+        Bind the TCP socket FIRST: with ``port == 0`` the kernel's ephemeral pick is
+        guaranteed free for TCP (it cannot collide with another live/``TIME_WAIT`` TCP
+        socket), then UDP reuses that number — a separate namespace, so safe. The old
+        order (ephemeral UDP first, its number forced onto TCP) lost the race when that
+        number was already held by an unrelated TCP/``TIME_WAIT`` socket ->
+        ``OSError: [Errno 98] Address already in use`` (``SO_REUSEADDR`` does not help: the
+        conflict is a foreign socket, not this process re-binding its own). With
+        ``port == 0`` each attempt re-draws a fresh ephemeral port, so a rare UDP-side
+        collision is retried away; a fixed port (the session mock's ``:53``) cannot be
+        re-drawn, so a conflict there surfaces immediately.
+        """
+        import errno
+
+        last_exc: OSError | None = None
+        for _ in range(attempts):
+            tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                tcp.bind((addr, port))
+                chosen = tcp.getsockname()[1]
+                udp.bind((addr, chosen))
+            except OSError as exc:
+                last_exc = exc
+                tcp.close()
+                udp.close()
+                # A fixed port cannot be re-drawn, and only an address-in-use collision is
+                # worth retrying — any other error (EACCES, EADDRNOTAVAIL, ...) surfaces now.
+                if port != 0 or exc.errno != errno.EADDRINUSE:
+                    raise
+                continue
+            tcp.listen(16)
+            return chosen, udp, tcp
+        raise last_exc if last_exc is not None else OSError("stub DNS: could not bind a UDP/TCP port pair")
+
     def __init__(self, *, port: int | None = None) -> None:
         # Bind address/port are env-overridable so the smoke workflow can put the session
         # mock on the runner's loopback :53 — the System-DNS host-alias path: pfSense
@@ -592,13 +631,8 @@ class _StubDnsServer:
         addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or "127.0.0.1"
         if port is None:
             port = int(os.environ.get("SMOKE_STUB_DNS_PORT") or "0")
-        self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._udp.bind((addr, port))
-        self._port = self._udp.getsockname()[1]
-        self._tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._tcp.bind((addr, self._port))
-        self._tcp.listen(16)
+        # Bind TCP first so the shared port number is proven free for both (issue #243).
+        self._port, self._udp, self._tcp = self._bind_udp_tcp(addr, port)
         self._stop = threading.Event()
         self._lock = threading.Lock()
         # fqdn (lowercased, trailing dot) -> a record dict, one of:
