@@ -207,11 +207,6 @@ def build_table(pkgs: list[dict]) -> list[dict]:
     return rows
 
 
-def catalog_dirs(site: str) -> list[str]:
-    """Relative paths of dirs holding a real package (a catalog tree)."""
-    return sorted(os.path.relpath(d, site) for d, _x, files in os.walk(site) if any(is_package_file(f) for f in files))
-
-
 def _esc(s: object) -> str:
     return html.escape(str(s))
 
@@ -244,9 +239,9 @@ td.num{font-variant-numeric:tabular-nums;color:var(--mut)}
 .badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
   border:1px solid var(--bd);color:var(--mut)}
 details summary{cursor:pointer;color:var(--mut);font-size:.85rem;margin-top:.5rem}
-ul.trees{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));
-  gap:.15rem 1rem;list-style:none;padding:0;margin:0}
-ul.trees li{margin:.15rem 0;overflow-wrap:anywhere}
+a.browse{display:inline-block;padding:.5rem .9rem;border:1px solid var(--acc);border-radius:8px;font-weight:600}
+table.autoindex td:first-child{white-space:normal;overflow-wrap:anywhere}
+table.autoindex td.num{white-space:nowrap}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
 .empty{color:var(--mut);font-style:italic}
 .card ul.pkgs{margin:.3rem 0 .7rem;padding-left:0;list-style:none}
@@ -480,14 +475,12 @@ def _older_nightlies_details(rows: list[dict]) -> str:
 def render_page(
     base: str,
     pkgs: list[dict],
-    trees: list[str],
     conf_fn: Callable[[str], str],
     matrix: list[dict] | None = None,
 ) -> str:
     """Render the root landing page."""
     latest = latest_versions(pkgs)
     cards = _release_card(base, latest, conf_fn) + _nightly_card(base, latest, conf_fn)
-    tree_items = "".join(f'<li><a href="./{_esc(d)}/">{_esc(d)}</a></li>' for d in trees)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -501,10 +494,10 @@ def render_page(
         "separate, opt-in repo.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
-        "<h2>Catalog trees</h2>"
-        '<p class="blurb">The raw pkg(8) catalogs (what your firewall fetches). <code>${ABI}</code> is filled '
-        "in by pkg automatically, e.g. <code>FreeBSD:16:aarch64</code> on a Netgate ARM box.</p>"
-        f'<ul class="trees">{tree_items}</ul>'
+        "<h2>Repository files</h2>"
+        '<p class="blurb">Browse every channel, version and ABI &mdash; and the raw pkg(8) catalogs your '
+        "firewall fetches &mdash; in a directory-style listing.</p>"
+        '<p><a class="browse" href="./browse.html">&#128193; Browse the repository &rarr;</a></p>'
         '<footer><a href="https://github.com/pfBlockerNG/pfBlockerNG">Source</a> &middot; '
         '<a href="https://github.com/pfBlockerNG/pfBlockerNG/releases">Releases</a> &middot; '
         '<a href="https://github.com/pfBlockerNG/pkg">This repository</a></footer>'
@@ -512,20 +505,74 @@ def render_page(
     )
 
 
-def render_dir_index(rel: str, files: Iterable[str]) -> str:
-    """Render a per-catalog-dir index listing only the real package file(s)."""
-    items = sorted(f for f in files if is_package_file(f))
-    li = "".join(f'<li><a href="{_esc(f)}">{_esc(f)}</a></li>' for f in items)
-    back = "../" * (rel.count("/") + 1)
+def all_dirs(site: str) -> list[str]:
+    """Every directory under ``site`` (relative path, "/"-separated), excluding the site root,
+    sorted. Used to emit a browsable autoindex at EVERY level (GitHub Pages has no autoindex)."""
+    out = [os.path.relpath(d, site) for d, _x, _f in os.walk(site) if os.path.relpath(d, site) != "."]
+    return sorted(out)
+
+
+# Generated HTML + Pages plumbing that an autoindex listing hides (it is not repository content).
+_INDEX_HIDDEN = frozenset({"index.html", "browse.html", ".nojekyll"})
+
+
+def _dir_entries(site: str, rel: str) -> tuple[list[str], list[tuple[str, int, float]]]:
+    """The immediate children of ``site/rel``: (subdir names, file (name, size, mtime) tuples),
+    each sorted, with the generated index pages + Pages plumbing hidden."""
+    d = os.path.join(site, rel) if rel else site
+    subdirs: list[str] = []
+    files: list[tuple[str, int, float]] = []
+    for name in sorted(os.listdir(d)):
+        if name in _INDEX_HIDDEN:
+            continue
+        p = os.path.join(d, name)
+        if os.path.isdir(p):
+            subdirs.append(name)
+        else:
+            st = os.stat(p)
+            files.append((name, st.st_size, st.st_mtime))
+    return subdirs, files
+
+
+def render_autoindex(
+    rel: str, subdirs: list[str], files: list[tuple[str, int, float]], *, is_root: bool = False
+) -> str:
+    """A FreeBSD/Debian-style directory listing for ``rel`` (the browse root when ``is_root``).
+
+    Subdirs link to ``./<name>/`` and files to ``./<name>`` (the ``./`` prefix keeps a colon-bearing
+    ABI segment like ``FreeBSD:15:amd64`` a relative path, not a URI scheme — RFC 3986 §4.2). A
+    "Parent Directory" row (``../``) is shown except at the browse root."""
+    title = f"/{rel}" if rel else "/"
+    rows = []
+    if not is_root:
+        rows.append(
+            '<tr><td><a href="../">../</a></td><td class="num">&mdash;</td><td class="num">Parent Directory</td></tr>'
+        )
+    for name in subdirs:
+        rows.append(
+            f'<tr><td><a href="./{_esc(name)}/">{_esc(name)}/</a></td>'
+            '<td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
+        )
+    for name, size, mtime in files:
+        rows.append(
+            f'<tr><td><a href="./{_esc(name)}">{_esc(name)}</a></td>'
+            f'<td class="num">{_esc(artifact_datetime(mtime))}</td>'
+            f'<td class="num">{_esc(human_size(size))}</td></tr>'
+        )
+    # "repository home" climbs to the site root (which serves the human landing page).
+    home = "./" if is_root else "../" * (rel.count("/") + 1)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>pfBlockerNG pkg — {_esc(rel)}</title><style>{_CSS}</style></head>"
-        f'<body><div class="wrap"><header><h1>{_esc(rel)}</h1>'
-        f'<p><a href="{_esc(back)}">&larr; back to the repository</a></p></header>'
-        f"<ul>{li}</ul>"
-        "<footer>pkg(8) catalog metadata (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) "
-        "is served from this directory too.</footer></div></body></html>\n"
+        f"<title>pfBlockerNG pkg — Index of {_esc(title)}</title><style>{_CSS}</style></head>"
+        f'<body><div class="wrap"><header><h1>Index of {_esc(title)}</h1>'
+        f'<p><a href="{_esc(home)}">&larr; pfBlockerNG repository home</a></p></header>'
+        '<div class="tablewrap"><table class="autoindex"><thead><tr>'
+        "<th>Name</th><th>Last modified</th><th>Size</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+        "<footer>Directory listing of the self-hosted pfBlockerNG pkg repository. "
+        "pkg(8) fetches the catalog files (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) directly.</footer>"
+        "</div></body></html>\n"
     )
 
 
@@ -543,20 +590,27 @@ def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
 
 
 def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = None) -> int:
-    """Generate index.html at the root and in every catalog dir. Returns package count."""
+    """Generate the human landing page (root index.html), a browsable autoindex at EVERY
+    directory level (so the whole tree is folder-navigable on GitHub Pages, which has no
+    autoindex), and a root ``browse.html`` entry point the landing page links to. Returns the
+    package count."""
     base = base.rstrip("/")
     pkgs = collect_packages(site)
-    trees = catalog_dirs(site)
 
     def conf_fn(channel: str) -> str:
         return _conf_via_addrepo(addrepo, base, channel)
 
+    # The human landing page stays the site root; browse.html is the directory-style entry.
     with open(os.path.join(site, "index.html"), "w") as fh:
-        fh.write(render_page(base, pkgs, trees, conf_fn, matrix))
-    for rel in trees:
-        d = os.path.join(site, rel)
-        with open(os.path.join(d, "index.html"), "w") as fh:
-            fh.write(render_dir_index(rel, os.listdir(d)))
+        fh.write(render_page(base, pkgs, conf_fn, matrix))
+    root_subdirs, root_files = _dir_entries(site, "")
+    with open(os.path.join(site, "browse.html"), "w") as fh:
+        fh.write(render_autoindex("", root_subdirs, root_files, is_root=True))
+    # An autoindex index.html in every directory (intermediate + leaf), so each level is browsable.
+    for rel in all_dirs(site):
+        subdirs, files = _dir_entries(site, rel)
+        with open(os.path.join(site, rel, "index.html"), "w") as fh:
+            fh.write(render_autoindex(rel, subdirs, files))
     return len(pkgs)
 
 
@@ -577,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.matrix) as fh:
             matrix = json.load(fh)
     n = write_site(args.site, args.base_url, args.add_repo, matrix)
-    print(f"landing page + {len(catalog_dirs(args.site))} dir index(es) written; {n} package(s) indexed")
+    print(f"landing page + browse.html + {len(all_dirs(args.site))} dir index(es) written; {n} package(s) indexed")
     return 0
 
 
