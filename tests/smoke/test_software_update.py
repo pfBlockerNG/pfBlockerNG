@@ -956,6 +956,7 @@ def test_software_check_setting_gates_background_check(repo_vm: SmokeVM, tmp_pat
         clear_software_state(repo_vm)
         close_all_notices(repo_vm)
         set_software_check(repo_vm, "off")
+        assert read_software_cache(repo_vm) == {}, "cache survived reset before the forced check"
         assert count_matching_notices(repo_vm, msg) == 0, "a notice survived the reset before the forced check"
         run_update_check_on_box(repo_vm, force=True)
         cache = read_software_cache(repo_vm)
