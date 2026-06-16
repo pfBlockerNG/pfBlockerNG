@@ -34,6 +34,13 @@ GitHub access is via the `gh` CLI where available, otherwise the `mcp__github__*
 tools (read the issue, its comments, labels, linked PRs; edit labels; comment). Use
 whichever this environment provides; the steps below name `gh` for brevity.
 
+**Status marker (CLAUDE.md "Work-context marker").** This skill works a GitHub issue,
+so begin every reply with the one-line marker, advancing the emoji with the stage:
+**🤔** during triage (Steps 2–5), **🛠️** once executing the fix (Steps 6–7), **👀/⏳**
+while the PR is in review / awaiting CI, **🏁** on merge + cleanup. Format
+`<emoji> ***#NN***: ***Title***`; once a PR exists, carry its number —
+`<emoji> ***#NN***(***#PR***): ***Title***` — trimming the title to the ~28-char budget.
+
 ## Step 1 — Parse args
 
 Args string: `{{ args }}`
@@ -100,8 +107,11 @@ Size the defect so the plan is proportionate:
   touching those).
 - **Regression risk** of fixing it, and whether it interacts with an open ADR/PR.
 - **Security sensitivity** — if the analysis veers into vulnerability territory,
-  honour the `private` repo's disclosure rules (keep threat detail out of public
-  artifacts; reference only a `PFBL-NN` code if one applies).
+  honour the `private` repo's disclosure rules: the threat analysis / attack vector /
+  any `PFBL_*` detail stays in the `private` repo (a `PFBL-NN` ADR if the hardening
+  warrants one), and the public issue / PR / commit text stays neutral, referencing
+  only the bare `PFBL-NN` code. Consider running `/security-review` on the fix diff
+  before landing.
 
 ## Step 5 — Build the RESOLUTION PLAN (ordered steps + per-step delegate prompts)
 
@@ -115,7 +125,8 @@ resolved. Keep it minimal and proportionate to Step 4 — most bugs are
 2. **Implement the fix** so that test passes, matching the established patterns
    (CLAUDE.md "Code standards / Naming"), diff kept minimal.
 3. **Verify + harden**: full gate run, edge cases, docs/labels, self-review of the
-   diff against the issue.
+   diff against the issue (optionally `/code-review` the diff, `/security-review` if
+   security-adjacent).
 
 Split or merge steps to fit the actual defect; a one-line fix may be a single
 implement+test step. For **each** step write a **self-contained delegate prompt** —
@@ -124,11 +135,14 @@ the brief a fresh sub-agent could execute with no other context. Each prompt sta
 - **Objective** — the one outcome this step must achieve, tied to the issue.
 - **Required reading** — `CLAUDE.md`, the relevant source/tests, and **the previous
   step's handoff** (named explicitly).
-- **Scope / constraints** — exactly what to change and what NOT to (CLAUDE.md
-  standards, "clean the diff", worktree-only at `<path>`).
+- **Scope / constraints** — exactly what to change and what NOT to (CLAUDE.md "Code
+  standards" + "Naming"; "clean the diff"; worktree-only at `<path>`). A PHP fix obeys
+  the CLAUDE.md PHP rules — stub a new pfSense function from upstream rather than work
+  around it, and keep the PFBL-01 `RequirePfbFilter` sniff green.
 - **Verification gates** — the commands that must pass (`python -m pytest`,
-  `ruff check .`, `ruff format .`, `php -l` / `shellcheck` / `vendor/bin/phpunit`
-  as the touched languages dictate), plus the case that proves THIS step.
+  `ruff check .`, `ruff format .`, plus for PHP `php -l` + `vendor/bin/phpunit` +
+  `vendor/bin/phpstan` + `vendor/bin/phpcs`, and `shellcheck` for shell — as the
+  touched languages dictate), plus the case that proves THIS step.
 - **Expected result + handoff** — what the diff/tests should look like, and the
   instruction to **return a handoff document** (see format below).
 
@@ -148,7 +162,13 @@ forward — keep it as a scratch artifact, not a committed file):
 - **Carry-forward** — anything the next step must know (assumptions, follow-ups,
   surprises), or the blocker if BLOCKED.
 
-## Step 6 — (`--fix`) Set up the reused worktree on `issue/{NN}-{slug}`
+## Step 6 — (`--fix`) Confirm scope, then set up the reused worktree
+
+**Confirm before executing** — apply CLAUDE.md "Ambiguity — confirm before you build".
+`--fix` is autonomous, so gate on that rule before spawning any agent: a contested
+Step-3 verdict, more than one defensible approach, an architecturally-significant
+change, or unclear issue intent → **`AskUserQuestion` first** and proceed on the
+answer. A small, unambiguous, single-approach fix needs no prompt; act.
 
 Only with `--fix`, and only for an actionable verdict. Compute `{slug}` from the
 issue title via the CLAUDE.md sanitiser (lowercase; strip emoji/non-ASCII; `[a-z0-9-]`
@@ -205,17 +225,24 @@ completed step except on explicit user instruction.
 
 ## Step 8 — (`--fix`) Land the fix
 
-The change touches `src/`/`tests/`/CI, so it goes through the full PR flow (CLAUDE.md
-— only documentation/`CLAUDE.md`/ADR-text/skills skip the PR). Push the branch and
-land it with **`/pr-merge-flow`** (invoke the skill): review feedback first, then
-rebase-merge once CI is green. On merge, update labels (remove `WIP`, the merge
-removes `Waiting PR` per the lifecycle) and, if appropriate, confirm the issue closes
-(a `Fixes #N` in the PR body). For an **ALREADY-FIXED / INVALID / DUPLICATE** verdict
-reached under `--fix`, there is no PR: carry out the non-code action (a status comment then close, or the
-info request), per "Labels (lifecycle)".
+**Route by what the fix touched** (CLAUDE.md "Worktrees" carve-out):
+
+- **Code (`src/`/`tests/`/CI)** — the normal case → **full PR flow**. `git fetch
+  origin devel` and rebase the branch onto `origin/devel` before pushing (**`devel`
+  advances out of band**), push, then land with **`/pr-merge-flow`** (invoke the
+  skill): review feedback first, rebase-merge once CI is green, branch deleted.
+- **Dev-only (only docs/`*.md`, `CLAUDE.md`, ADR text, or a skill `SKILL.md`)** — no
+  PR: fetch + rebase onto `origin/devel`, then push **directly to `devel`**.
+
+**Labels (CLAUDE.md lifecycle), kept in sync at each transition:** on PR open →
+remove `WIP`, add `Waiting PR`; on merge → remove `Waiting PR`; put `Fixes #N` in the
+PR body so the merge auto-closes the issue. For an **ALREADY-FIXED / INVALID /
+DUPLICATE** verdict (no PR): remove `WIP`, post the rationale comment, and close
+(linking the canonical issue if duplicate). For **NEEDS-INFO**: leave the precise
+follow-up question, keep `WIP` only if you're holding it. Keep GitHub writes frugal.
 
 After landing, offer to remove the worktree (`git worktree remove <path>` from the
-main checkout) once the PR has merged.
+main checkout) once the PR has merged / the push has landed.
 
 ## Step 9 — Report back
 

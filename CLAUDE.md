@@ -49,6 +49,23 @@ Omit the marker on plain conversational turns.
 
 ---
 
+## Ambiguity — confirm before you build
+
+**Pick the obvious option and proceed when there is one; pause and ask
+(`AskUserQuestion`) when the choice is genuinely the user's to make.** Before
+implementing any non-trivial change — an ADR phase, an issue fix, a refactor —
+stop and confirm when: the requirement or the issue's intent is unclear; there is
+**more than one defensible approach** and they diverge in ways the user would care
+about; or the change is **architecturally significant** (touches the DNSBL/ABP
+pipeline, the manifest boundary, the zero-downtime swap/watcher, a `config.xml`
+schema / migration, a privilege/security surface, or public behaviour). Don't guess
+through that kind of fork, and don't surface a question you can answer from the code,
+the request, or a sensible default. This applies to autonomous flows too — a skill
+running unattended (e.g. `/gh-issue --fix`, `/adr-phase`) gates on the same test
+before it spawns work.
+
+---
+
 ## Worktrees (mandatory for AI agents)
 
 **Every AI agent (Claude included) MUST do all repository work in its own dedicated git
