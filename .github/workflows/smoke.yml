@@ -222,7 +222,10 @@ jobs:
         run: |
           set -u
           if matrix="$(sh scripts/read-version-matrix.sh --print-build 2>/dev/null)" && [ -n "$matrix" ]; then
-            printf 'SMOKE_MATRIX_JSON=%s\n' "$matrix" >> "$GITHUB_ENV"
+            # --print-build emits pretty (multi-line) JSON, so write it via the heredoc
+            # delimiter form (as RESOLVED_REDACT below does): a single-line KEY=value write
+            # of a multi-line value errors the step ("Invalid format") and drops the matrix.
+            { printf 'SMOKE_MATRIX_JSON<<__EOF__\n%s\n__EOF__\n' "$matrix"; } >> "$GITHUB_ENV"
             echo "Resolved $(printf '%s' "$matrix" | jq 'length') build-matrix entries for the smoke topology."
           else
             echo "::warning::could not resolve the version matrix — ADR-20 variant-topology cases will SKIP"
