@@ -23,6 +23,7 @@ with the reason and the access note for Phase 5, NOT silently dropped.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -449,18 +450,32 @@ def test_threats_rejects_malformed_lookup(name: str, query: str, message: str, w
     assert not present, f"{name}: reject path unexpectedly rendered lookup chrome {present}"
 
 
-# ADR-19: the "Software" page + tab are PROVENANCE-GATED — present ONLY on a build
-# installed from one of OUR repos (pkg %R == pfblockerng / pfblockerng-nightly). The
-# ADR-04 UI harness installs the branch .pkg with `pkg add -f` (offline), so its %R is
-# NOT one of our repos -> the provenance gate HIDES the page and the tab. This is the
-# NEGATIVE side of the gate, and it is the one this Tier-A deploy can prove live: the
-# page's top-of-file guard `header('Location: /index.php'); exit;` fires, and
-# pfb_software_add_tab() appends nothing. The POSITIVE render (200 + the
-# 'pfb-software-panel' marker + the action buttons) belongs to Phase 5's `repo`-install
-# journey, where the package IS installed from our repo so %R == pfblockerng.
+# ADR-19: the "Software" page + tab are PROVENANCE-GATED — present ONLY on a build installed
+# from one of OUR repos (pkg %R == pfblockerng / pfblockerng-nightly). The ADR-04 UI harness
+# sideloads the branch .pkg with `pkg add -f` (offline), so its %R is empty -> the auto-detect
+# HIDES the page and tab (the DEFAULT negative state, proven below). To exercise BOTH states
+# deterministically on this same sideload deploy, pfblockerng.inc honours a HIDDEN override
+# sentinel (PFB_SOFTWARE_PANEL_OVERRIDE, a file containing 'on'|'off'); software_panel_forced()
+# drops/clears it over SSH so we can render the page ENABLED (positive: 200 + the
+# 'pfb-software-panel' marker) and DISABLED (negative) without needing an our-repo install. The
+# REAL %R-driven behaviour is separately validated by the `repo` flow (test_software_update.py).
 _SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
 _SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 _SOFTWARE_TAB_HREF = "/pfblockerng/pfblockerng_software.php"
+# Mirrors PFB_SOFTWARE_PANEL_OVERRIDE in pfblockerng.inc (the hidden test/support sentinel).
+_SOFTWARE_OVERRIDE_FILE = "/var/db/pfblockerng/.pfb_software_panel"
+
+
+@contextmanager
+def software_panel_forced(vm: SmokeVM, state: str) -> Iterator[None]:
+    """Force the Software-page gate ``on``/``off`` for the block via the hidden sentinel, then
+    remove it so subsequent tests see the default auto-detect. ``state`` is a fixed 'on'/'off'
+    literal (never user input)."""
+    vm.ssh("/bin/sh", "-c", f"mkdir -p /var/db/pfblockerng && printf '%s' {state} > {_SOFTWARE_OVERRIDE_FILE}")
+    try:
+        yield
+    finally:
+        vm.ssh("/bin/rm", "-f", _SOFTWARE_OVERRIDE_FILE)
 
 
 def test_software_page_provenance_gate_hides_on_nonour_build(
@@ -507,6 +522,47 @@ def test_software_tab_absent_on_nonour_build(webui: WebUI, php_error_log_guard: 
     assert _SOFTWARE_TAB_HREF not in resp.text, (
         "the Software tab must be ABSENT on a non-our-build (provenance gate hides it everywhere)"
     )
+
+
+def test_software_page_renders_when_override_forces_on(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Forcing the hidden override 'on' renders the Software page POSITIVELY on this sideload deploy.
+
+    Scenario: the Tier-A deploy is a sideload (%R empty) — the page is hidden by default (the
+    provenance tests above). Forcing the override 'on' is the ONLY change.
+      Given the override sentinel set to 'on',
+      When the Software page is GET,
+      Then it renders clean (200, no Fatal/Warning/Notice/Uncaught, the 'pfb-software-panel'
+           marker present) AND the Software tab now appears on a normal page — proving the gate's
+           POSITIVE branch on the same deploy that otherwise hides it (before/after the flip).
+      And no new php_error.log line (php_error_log_guard sweeps).
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"forced-on Software page render failed: {result.detail}"
+        # The tab is injected everywhere on an enabled build — the positive of the tab-absent test.
+        general = webui.get(_GENERAL_PAGE)
+        assert _SOFTWARE_TAB_HREF in general.text, "the Software tab must be PRESENT when the gate is forced on"
+
+
+def test_software_page_hidden_when_override_forces_off(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Forcing the override 'off' hides the page DETERMINISTICALLY — independent of install %R.
+
+    The 'off' branch must win even on a box that WOULD auto-detect as our-build, so support can
+    force the page away. GET (redirects not followed) -> the guard's 3xx to /index.php, marker
+    absent — the explicit negative branch paired with the forced-on positive above.
+    """
+    with software_panel_forced(smoke_vm, "off"):
+        resp = webui.get(_SOFTWARE_PAGE, allow_redirects=False)
+        assert resp.status_code in (301, 302, 303, 307, 308), (
+            f"forced-off Software page expected a redirect, got HTTP {resp.status_code}"
+        )
+        assert resp.headers.get("Location", "").endswith("/index.php")
+        assert _SOFTWARE_PANEL_MARKER not in resp.text, "forced-off must NOT render the Software panel"
 
 
 def test_page_table_covers_every_pfblockerng_page() -> None:
