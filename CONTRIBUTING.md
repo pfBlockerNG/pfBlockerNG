@@ -26,8 +26,10 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `CLA
 ### Prerequisites
 
 - A running pfSense instance accessible via SSH
-- FreeBSD ports tree cloned at (e.g.) `~/git/FreeBSD-ports`
-  ([pfsense/FreeBSD-ports](https://github.com/pfsense/FreeBSD-ports))
+- Our FreeBSD-ports fork cloned at (e.g.) `~/git/FreeBSD-ports` —
+  [pfBlockerNG/FreeBSD-ports](https://github.com/pfBlockerNG/FreeBSD-ports), branch
+  `pfblockerng/use-github` (the build-input branch carrying our port; ADR-17 self-hosted
+  distribution — we do **not** use the upstream `pfsense/FreeBSD-ports`)
 - Python 3.11+ for running tests locally
 
 ### IDE setup (VS Code)
@@ -999,7 +1001,7 @@ snapshot) upload `if: always()` as `ui-diagnostics-<tier>-<variant>-<version>`
 - **Tier B** (functional + browser) runs on the daily `schedule` (skipped when no
   commit landed in 24 h) and on `workflow_dispatch` — **never** gating a PR.
 - **Release** (`release.yml`) `needs:` the full suite (`tier: all`) via the
-  `ui-suite` job before `release`/`ports-pr` — each leg re-runnable in isolation
+  `ui-suite` job before `release`/`sync-ports-fork` — each leg re-runnable in isolation
   (a flaky browser leg costs one re-run, not a republish).
 
 Dispatch a run with:
@@ -1082,18 +1084,22 @@ The release workflow will:
 
 1. Run the test suite.
 2. Publish a GitHub Release with a changelog.
-3. Open a PR on [pfsense/FreeBSD-ports](https://github.com/pfsense/FreeBSD-ports)
-   updating `GH_TAGNAME` in the corresponding port Makefile.
+3. Bump `PORTVERSION` + `GH_TAGNAME` on the matching port **directly on our own fork**
+   [pfBlockerNG/FreeBSD-ports](https://github.com/pfBlockerNG/FreeBSD-ports) (branch
+   `pfblockerng/use-github`, the build-input branch) — the `sync-ports-fork` job pushes it,
+   with **no upstream `pfsense/FreeBSD-ports` PR** (ADR-17 self-hosted distribution).
 4. Publish the self-hosted `pkg` repository to GitHub Pages (see
    [How the `pkg` repository is published](#how-the-pkg-repository-is-published-github-pages)).
 
 To update the ports tree manually instead:
 
 ```sh
-# In your FreeBSD-ports clone, edit the appropriate Makefile:
+# In our fork clone (pfBlockerNG/FreeBSD-ports, branch pfblockerng/use-github),
+# edit the matching port Makefile:
 # net/pfSense-pkg-pfBlockerNG/Makefile        (stable)
 # net/pfSense-pkg-pfBlockerNG-devel/Makefile  (devel)
 
 # Update GH_TAGNAME to the new tag, then bump PORTREVISION if the
 # PORTVERSION is unchanged, or update PORTVERSION to match the new tag.
+# Push to pfblockerng/use-github (the build-input branch) — no upstream PR.
 ```
