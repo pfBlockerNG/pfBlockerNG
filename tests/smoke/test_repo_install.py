@@ -158,7 +158,10 @@ DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg"
 # CDN-propagated, which a PR/dispatch can't guarantee — so it is opt-in post-deploy
 # verification, not a hard CI gate (it would red the suite on a deploy/propagation race).
 WORKER_LIVE_ENV = "SMOKE_WORKER_LIVE"
-GUEST_ABI = "FreeBSD:15:amd64"  # the single supported ABI (CE 2.8 + Plus 25.03)
+# The ABI of the repo-smoke guest (the live Pages-URL check, poll_catalog_served, runs on
+# the CE 2.8 box). NOT the only supported ABI — the build matrix now spans CE FreeBSD:15:amd64
+# plus Plus FreeBSD:16:amd64 / FreeBSD:16:aarch64 (see the routing.json catalogs).
+GUEST_ABI = "FreeBSD:15:amd64"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
