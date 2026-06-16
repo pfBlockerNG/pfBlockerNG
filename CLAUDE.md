@@ -666,7 +666,17 @@ update badge stay Netgate-bound; a GUI "Updates/Channel" panel is deferred (woul
   `gh workflow run smoke.yml -f pytest_marker=repo` (or `repo-install.yml` once it lands on
   `devel`). The gated `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the
   real `pfblockerng.github.io` URL — post-merge (a new `workflow_dispatch` workflow is only
-  dispatchable from the default branch).
+  dispatchable from the default branch). The Case-4 live-Worker leg
+  (`test_routing_url_delivers_variant_catalog`) is likewise gated (`SMOKE_WORKER_LIVE`,
+  unset → SKIP): it depends on a deployed + CDN-propagated Cloudflare Worker that a
+  PR/dispatch can't guarantee, so it is opt-in post-deploy verification, **not** a hard gate.
+- **Cloudflare routing Worker (ADR-20):** lives in `scripts/worker/` (`src/index.js` reads the
+  pfSense pkg User-Agent, matches `routing.json` from Pages, 302s to
+  `<channel>/<varver>/<arch>/`). Its routing logic — UA→catalog dispatch + path mapping — is
+  proven **offline + always-on** by `scripts/worker/test/router.test.js` (`node --test`, edge
+  stubbed, no network/wrangler), run in CI by the `worker-tests` job in `test.yml`. This is the
+  deterministic routing gate; the live Case-4 leg only adds end-to-end edge confidence.
+  `deploy-worker.yml` deploys the Worker (push to `scripts/worker/**`, dispatch, or post-release).
 
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or GitHub's "Rebase and merge");
 never a merge commit, never squash. History across `main` ← `devel` stays strictly linear
