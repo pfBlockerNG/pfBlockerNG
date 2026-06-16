@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_pkg_repo_name_for_channel')]
 #[CoversFunction('pfb_software_is_our_build')]
 #[CoversFunction('pfb_update_available')]
-#[CoversFunction('pfb_notify_default_for_channel')]
+#[CoversFunction('pfb_software_check_enabled')]
 #[CoversFunction('pfb_should_notify')]
 final class SoftwareUpdateDecisionTest extends TestCase
 {
@@ -133,60 +133,50 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * ---- pfb_notify_default_for_channel() — channel-aware notify default ----
-	 * nightly defaults ON (trackers opted into the tip); stable/devel (and any other)
-	 * default OFF (quiet for release users). Each side asserted so green proves it is a
-	 * real per-channel branch, not an always-value path.
+	 * ---- pfb_software_check_enabled() — the single "Check for new versions" boolean ----
+	 * Default ENABLED: only an explicit 'off' (the user un-ticking the box, persisted by the
+	 * page) disables it. An unset value (null, never saved), 'on', or any other string reads
+	 * as enabled. Both sides asserted so green proves 'off' is a real disabling branch, not an
+	 * always-enabled path.
 	 */
-	public static function notifyDefaultProvider(): array
+	public static function checkEnabledProvider(): array
 	{
 		return [
-			'nightly -> ON'      => ['nightly', true],
-			'stable -> OFF'      => ['stable', false],
-			'devel -> OFF'       => ['devel', false],
-			'unknown -> OFF'     => ['beta', false],
-			'null -> OFF'        => [null, false],
+			'unset (never saved) -> enabled' => [null, true],
+			'on -> enabled'                  => ['on', true],
+			'off -> disabled'                => ['off', false],
+			'empty string -> enabled'        => ['', true],
+			'legacy/other -> enabled'        => ['default', true],
 		];
 	}
 
-	#[DataProvider('notifyDefaultProvider')]
-	public function testNotifyDefaultForChannel(?string $channel, bool $expected): void
+	#[DataProvider('checkEnabledProvider')]
+	public function testCheckEnabled(?string $raw, bool $expected): void
 	{
-		$this->assertSame($expected, pfb_notify_default_for_channel($channel));
+		$this->assertSame($expected, pfb_software_check_enabled($raw));
 	}
 
 	/*
-	 * ---- pfb_should_notify() — the knob x channel-default x available matrix ----
-	 * Effective-notify resolves from the knob ('on' => true, 'off' => false, else the
-	 * channel default), then a notice fires ONLY when effective AND available AND not
-	 * already notified for this latest. This matrix pins the knob override on BOTH sides
-	 * AND the channel default on both sides:
-	 *   - knob 'on' notifies even on stable (default OFF) when available;
-	 *   - knob 'off' suppresses even on nightly (default ON) when available;
-	 *   - knob 'default' yields OFF on stable/devel but ON on nightly (the paired branch
-	 *     proving the default is real), and never notifies when no update is available.
-	 * Every row uses last_notified='' so the de-dupe clause is satisfied — the de-dupe
-	 * lifecycle itself is the dedicated BDD test below.
+	 * ---- pfb_should_notify() — the enabled x available x de-dupe matrix ----
+	 * A notice fires ONLY when checking is enabled AND an update is available AND it has not
+	 * already been notified for this exact latest. The matrix pins each clause on BOTH sides:
+	 *   - enabled true + available + new -> notify;
+	 *   - enabled false suppresses even when available + new (the gate);
+	 *   - enabled true but not available -> silent;
+	 *   - enabled true + available but already notified -> silent (de-dupe).
+	 * Notifications are channel-agnostic now (the single boolean gates every channel equally),
+	 * so there is no per-channel default to assert here.
 	 */
 	public static function shouldNotifyMatrixProvider(): array
 	{
-		// [installed, latest, last_notified, knob, channel, expected]
+		// [installed, latest, last_notified, enabled, expected]
 		return [
-			// knob 'on' overrides the OFF default -> notifies on stable when available.
-			'on + stable + available -> notify'        => ['1.0', '1.1', '', 'on', 'stable', true],
-			'on + stable + not available -> silent'    => ['1.0', '1.0', '', 'on', 'stable', false],
-			// knob 'off' overrides the ON default -> silent on nightly even when available.
-			'off + nightly + available -> silent'      => ['1.0', '1.1', '', 'off', 'nightly', false],
-			// default: OFF on stable/devel (paired) ...
-			'default + stable + available -> silent'   => ['1.0', '1.1', '', 'default', 'stable', false],
-			'default + devel + available -> silent'    => ['1.0', '1.1', '', 'default', 'devel', false],
-			// ... ON on nightly (proves the default is a real branch, not always-OFF) ...
-			'default + nightly + available -> notify'  => ['1.0', '1.1', '', 'default', 'nightly', true],
-			// ... and never when there is no update, regardless of the channel default.
-			'default + nightly + not available -> silent' => ['1.0', '1.0', '', 'default', 'nightly', false],
-			// an unset/foreign knob string resolves to the channel default too.
-			'unset knob + nightly + available -> notify'  => ['1.0', '1.1', '', '', 'nightly', true],
-			'unset knob + stable + available -> silent'   => ['1.0', '1.1', '', '', 'stable', false],
+			'enabled + available + new -> notify'        => ['1.0', '1.1', '', true, true],
+			'disabled + available + new -> silent'       => ['1.0', '1.1', '', false, false],
+			'enabled + not available -> silent'          => ['1.0', '1.0', '', true, false],
+			'disabled + not available -> silent'         => ['1.0', '1.0', '', false, false],
+			'enabled + available + already notified -> silent' => ['1.0', '1.1', '1.1', true, false],
+			'enabled + older latest -> silent'           => ['1.1', '1.0', '', true, false],
 		];
 	}
 
@@ -195,13 +185,12 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		?string $installed,
 		?string $latest,
 		?string $lastNotified,
-		?string $knob,
-		?string $channel,
+		bool $enabled,
 		bool $expected
 	): void {
 		$this->assertSame(
 			$expected,
-			pfb_should_notify($installed, $latest, $lastNotified, $knob, $channel)
+			pfb_should_notify($installed, $latest, $lastNotified, $enabled)
 		);
 	}
 
@@ -209,8 +198,8 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	 * ---- pfb_should_notify() — the per-version de-dupe lifecycle (BDD) ----
 	 *
 	 * Scenario: a daily cron must notify ONCE per new version, not once per tick.
-	 *   Background: knob 'on' (effective-notify true) so only the de-dupe clause varies.
-	 *               installed stays '1.0'; the catalog's latest advances over time.
+	 *   Background: checking ENABLED so only the de-dupe clause varies. installed stays '1.0';
+	 *               the catalog's latest advances over time.
 	 *
 	 *   GIVEN nothing has been notified yet (last_notified empty) and a newer latest 1.1
 	 *    THEN the first tick notifies (the before-state: no prior notice).
@@ -224,20 +213,19 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	public function testShouldNotifyDeDupeLifecycle(): void
 	{
 		$installed = '1.0';
-		$knob = 'on';
-		$channel = 'devel';
+		$enabled = true;
 
 		// GIVEN never-notified + a newer latest 1.1 -> first tick notifies.
 		$lastNotified = '';
 		$this->assertTrue(
-			pfb_should_notify($installed, '1.1', $lastNotified, $knob, $channel),
+			pfb_should_notify($installed, '1.1', $lastNotified, $enabled),
 			'first sighting of 1.1 must notify'
 		);
 
 		// WHEN 1.1 recorded as last_notified -> the SAME tick must not renotify.
 		$lastNotified = '1.1';
 		$this->assertFalse(
-			pfb_should_notify($installed, '1.1', $lastNotified, $knob, $channel),
+			pfb_should_notify($installed, '1.1', $lastNotified, $enabled),
 			'a repeat tick at the already-notified 1.1 must NOT renotify (de-dupe)'
 		);
 
@@ -245,18 +233,18 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		// Before-state: re-assert the 1.1 tick is still suppressed so the flip is caused
 		// by the newer version, not by time.
 		$this->assertFalse(
-			pfb_should_notify($installed, '1.1', $lastNotified, $knob, $channel),
+			pfb_should_notify($installed, '1.1', $lastNotified, $enabled),
 			'before the newer version, 1.1 is still de-duped'
 		);
 		$this->assertTrue(
-			pfb_should_notify($installed, '1.2', $lastNotified, $knob, $channel),
+			pfb_should_notify($installed, '1.2', $lastNotified, $enabled),
 			'a newer 1.2 (not yet notified) must notify again'
 		);
 
 		// WHEN 1.2 recorded -> its repeat tick is de-duped again.
 		$lastNotified = '1.2';
 		$this->assertFalse(
-			pfb_should_notify($installed, '1.2', $lastNotified, $knob, $channel),
+			pfb_should_notify($installed, '1.2', $lastNotified, $enabled),
 			'a repeat tick at the already-notified 1.2 must NOT renotify'
 		);
 	}

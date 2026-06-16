@@ -134,12 +134,11 @@ SOFTWARE_PAGE_FILE = "/usr/local/www/pfblockerng/pfblockerng_software.php"
 # build ran with ports_ref=adr/19-update-channel-panel).
 SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 
-# The notify config knob the page writes + the orchestrator reads (Phase 3). Driving it
-# off the installed channel (devel) proves the channel-default OFF branch; injecting a
-# nightly channel proves the channel-default ON branch (the nightly repo/package is not
-# in this hermetic CE image, so the nightly CHANNEL is simulated via the orchestrator's
-# documented $io seam — noted in the handoff).
-NOTIFY_KNOB_PATH = "installedpackages/pfblockerng/config/0/pfb_software_notify"
+# The single "Check for new versions" boolean the page writes + the orchestrator reads. It
+# gates the BACKGROUND (cron) check + notifications equally on every channel (default ENABLED);
+# a manual "Check now" (force) always runs. Persisted as 'on'/'off' ('off' = the user opting
+# out; unset reads as enabled).
+SOFTWARE_CHECK_PATH = "installedpackages/pfblockerng/config/0/pfb_software_check"
 
 # Delimiters for reading a single scalar back out of pfSsh.php (its startup banner
 # otherwise pollutes stdout — same pattern as count_matching_notices above).
@@ -711,24 +710,24 @@ def clear_software_state(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     close_all_notices(vm, timeout=120.0)
 
 
-def set_notify_knob(vm: SmokeVM, value: str, *, timeout: float = 120.0) -> None:
-    """Persist ``pfb_software_notify`` (default|on|off) via the real config API.
+def set_software_check(vm: SmokeVM, value: str, *, timeout: float = 120.0) -> None:
+    """Persist ``pfb_software_check`` ('on'|'off') via the real config API.
 
     Mirrors what the page's save POST does — config_set_path + write_config in the
     config-locked pfSsh.php env — so the orchestrator reads the same value the GUI would.
     """
     snippet = (
-        f"config_set_path({_php_str(NOTIFY_KNOB_PATH)}, {_php_str(value)});\n"
-        "write_config('ADR-19 phase-5 smoke: set pfb_software_notify');\necho 'OK';"
+        f"config_set_path({_php_str(SOFTWARE_CHECK_PATH)}, {_php_str(value)});\n"
+        "write_config('ADR-19 phase-5 smoke: set pfb_software_check');\necho 'OK';"
     )
     out = _pfssh(vm, snippet, timeout=timeout)
     if "OK" not in out:
-        raise RuntimeError(f"set_notify_knob did not confirm: {out!r}")
+        raise RuntimeError(f"set_software_check did not confirm: {out!r}")
 
 
-def clear_notify_knob(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Reset the notify knob to its unset/'default' value (the channel-default branch)."""
-    set_notify_knob(vm, "default", timeout=timeout)
+def clear_software_check(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Reset the setting to its unset value (which reads as the default ENABLED state)."""
+    set_software_check(vm, "", timeout=timeout)
 
 
 def php_lint_ok(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> bool:
@@ -764,16 +763,16 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
 
     Proves every gate Phase 4 showed HIDDEN is now OPEN, and the publish-newer ->
     de-duped notice + cache + same-channel Update chain works live. Channel here is
-    ``devel`` (the installed ``-devel`` package), whose notify default is OFF — so the
-    knob is forced ``on`` for the notice legs (the channel-default OFF/ON branches are
-    pinned separately in ``test_software_notify_default_is_channel_correct``).
+    ``devel`` (the installed ``-devel`` package); checking is ENABLED for the notice legs
+    (the enable/disable gate is pinned separately in
+    ``test_software_check_setting_gates_background_check``).
 
     Scenario: an our-repo box sees the Software page, gets one notice for a newer build,
     and Update-now pulls it.
       Background: our NONE-signed file:// repo above the Netgate repo; egress open.
 
     Given build ``<V>_1`` installed FROM our repo (the asserted BEFORE: provenance OPEN,
-      page parses + carries its marker, knob=on, NO cache, NO notice),
+      page parses + carries its marker, checking enabled, NO cache, NO notice),
     When the first check runs at installed==latest==``<V>_1``,
     Then the cache records installed==latest==``<V>_1`` and NO notice is raised (up to date).
     When ``<V>_9`` is published to the SAME repo and the check runs,
@@ -839,9 +838,9 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
             f"the .pkg did not carry Phase-4's page"
         )
 
-        # GIVEN: a clean state + knob ON; assert the BEFORE (no cache, no notice for high).
+        # GIVEN: a clean state + checking ENABLED; assert the BEFORE (no cache, no notice for high).
         clear_software_state(repo_vm)
-        set_notify_knob(repo_vm, "on")
+        set_software_check(repo_vm, "on")
         assert read_software_cache(repo_vm) == {}, "software cache unexpectedly present before the first check"
         assert count_matching_notices(repo_vm, high) == 0, f"a notice for {high} existed before any check"
 
@@ -889,39 +888,35 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
         )
     finally:
         clear_software_state(repo_vm)
-        clear_notify_knob(repo_vm)
+        clear_software_check(repo_vm)
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
 
 
 # --------------------------------------------------------------------------- #
-# (f) Channel-correct notify DEFAULT — the OFF (devel) vs ON (nightly) branch, live
+# (f) "Check for new versions" gating — disabled vs enabled, background vs manual, live
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.timeout(600)  # install + 2 forged builds + several live checks > the 30s cap.
-def test_software_notify_default_is_channel_correct(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """The notify DEFAULT is driven by the CHANNEL, not an always-path (knob unset/'default').
+@pytest.mark.timeout(600)  # install + 1 forged build + several live checks > the 30s cap.
+def test_software_check_setting_gates_background_check(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """The single "Check for new versions" boolean gates the BACKGROUND (cron) check + notify.
 
-    Pairs the two channel branches so green proves the channel drives the default:
-    ``devel`` (the installed channel) defaults OFF -> a newer build raises NO notice;
-    ``nightly`` defaults ON -> the same newer-build condition raises ONE notice. The
-    nightly *channel* is simulated via the orchestrator's documented ``$io`` seam (a
-    nightly ``installed_name`` + an our-repo ``installed_repo`` so the gate still OPENS):
-    the nightly repo/package is not built into this hermetic CE image (ADR-18), so the
-    CHANNEL-default decision is what is proven end to end (real orchestrator -> real
-    file_notice), not a nightly pkg install. Noted as a simulation in the handoff.
+    Three paired legs, each asserting the before-state, prove every branch is real:
+    disabled vs enabled (the gate), and manual force vs background (force bypasses ONLY the
+    enable-gate, never the notify gate). It is channel-agnostic now — the same boolean gates
+    every channel — so there is no per-channel default to simulate.
 
-    Scenario: a newer build notifies by default ONLY on the nightly channel.
-      Background: our build installed from our repo; the notify knob UNSET ('default').
+    Scenario: an our-repo box controls its own update checks with one switch.
+      Background: ``<V>_1`` installed from our repo, a newer ``<V>_9`` published to it.
 
-    Given build ``<V>_1`` installed from our repo, knob='default', a clean notice state,
-      and a published newer ``<V>_9`` (the asserted BEFORE: no notice for ``<V>_9``),
-    When a check runs as the DEVEL channel (the real installed one),
-    Then NO notice is raised (devel default is OFF).
-    When a check runs as the NIGHTLY channel (same newer-build condition, $io-simulated),
-    Then EXACTLY ONE notice is raised (nightly default is ON) — the same condition, the
-      opposite outcome, so the difference is the channel default and nothing else.
+    Given a clean state and the setting DISABLED ('off'),
+    When a BACKGROUND check (force=false, the cron path) runs,
+    Then it is a complete no-op: no cache is written and no notice fires.
+    When the setting is ENABLED ('on') and a BACKGROUND check runs,
+    Then the cache advances to ``<V>_9`` and EXACTLY ONE notice fires (the enable branch).
+    When the setting is DISABLED again and a MANUAL check (force=true) runs,
+    Then the cache still refreshes but NO additional notice fires (force bypasses only the gate).
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
@@ -929,45 +924,45 @@ def test_software_notify_default_is_channel_correct(repo_vm: SmokeVM, tmp_path: 
     base_version = read_compact_version(src)
     low = f"{base_version}_1"
     high = f"{base_version}_9"
-    devel_msg = "available (devel)"
-    nightly_msg = "available (nightly)"
+    msg = "available (devel)"
 
     try:
-        # GIVEN: our-repo install, knob 'default', clean notices, a newer build published.
+        # GIVEN: our-repo install + a newer build published into the same repo.
         install_our_build_at(repo_vm, low, src, tmp_path, "low")
         assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, "build did not come from our repo (gate would be closed)"
         high_pkg = reversion_pkg(src, high, tmp_path / "high")
         build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+
+        # DISABLED + BACKGROUND (force=false) -> complete no-op (before: clean).
         clear_software_state(repo_vm)
-        clear_notify_knob(repo_vm)
-        assert count_matching_notices(repo_vm, devel_msg) == 0, "a devel notice existed before the devel check"
-        assert count_matching_notices(repo_vm, nightly_msg) == 0, "a nightly notice existed before the nightly check"
+        set_software_check(repo_vm, "off")
+        assert read_software_cache(repo_vm) == {}, "cache present before the disabled background check"
+        assert count_matching_notices(repo_vm, msg) == 0, "a notice existed before the disabled background check"
+        run_update_check_on_box(repo_vm, force=False)
+        assert read_software_cache(repo_vm) == {}, "disabled background check wrote a cache (must be a no-op)"
+        assert count_matching_notices(repo_vm, msg) == 0, "disabled background check raised a notice"
 
-        # WHEN/THEN (devel, default OFF): a newer build raises NO notice.
-        run_update_check_on_box(repo_vm)
-        assert count_matching_notices(repo_vm, devel_msg) == 0, (
-            "the devel channel notified by default (its default must be OFF)"
+        # ENABLED + BACKGROUND -> cache advances + EXACTLY ONE notice (the paired branch).
+        set_software_check(repo_vm, "on")
+        run_update_check_on_box(repo_vm, force=False)
+        cache = read_software_cache(repo_vm)
+        assert cache.get("latest") == high, (
+            f"enabled background check did not advance latest to {high!r}: {cache.get('latest')!r}"
         )
+        assert count_matching_notices(repo_vm, msg) == 1, "enabled background check did not raise exactly one notice"
 
-        # WHEN/THEN (nightly, default ON): the SAME newer-build condition raises ONE notice.
-        # $io supplies a nightly installed_name (-> channel nightly) + an our-repo
-        # installed_repo (gate OPENS) + the installed/latest version gap; the channel
-        # default (ON) is the only thing that differs from the devel leg above.
-        run_update_check_on_box(
-            repo_vm,
-            io_overrides={
-                "installed_name": "pfSense-pkg-pfBlockerNG-NIGHTLY",
-                "installed_repo": OURS_REPO_NAME,
-                "installed": low,
-                "latest": high,
-            },
-        )
-        assert count_matching_notices(repo_vm, nightly_msg) == 1, (
-            "the nightly channel did NOT notify by default (its default must be ON) — "
-            "the channel does not drive the default"
-        )
+        # DISABLED again + MANUAL force -> cache refreshes, NO additional notice (force bypasses
+        # only the enable-gate). Reset the cache + notices first so each side is asserted clean.
+        clear_software_state(repo_vm)
+        close_all_notices(repo_vm)
+        set_software_check(repo_vm, "off")
+        assert count_matching_notices(repo_vm, msg) == 0, "a notice survived the reset before the forced check"
+        run_update_check_on_box(repo_vm, force=True)
+        cache = read_software_cache(repo_vm)
+        assert cache.get("latest") == high, "forced manual check did not refresh the cache while disabled"
+        assert count_matching_notices(repo_vm, msg) == 0, "forced check notified while the setting was disabled"
     finally:
         clear_software_state(repo_vm)
-        clear_notify_knob(repo_vm)
+        clear_software_check(repo_vm)
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
