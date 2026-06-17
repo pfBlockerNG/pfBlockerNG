@@ -268,7 +268,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_dup',
 	'De-Duplication',
 	'Enable',
-	$pconfig['enable_dup'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_dup']) === PfbToggle::On,
 	'on'
 ))->setHelp('Only used for IPv4 Deny Lists');
 
@@ -276,7 +276,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_agg',
 	'CIDR Aggregation',
 	'Enable',
-	$pconfig['enable_agg'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_agg']) === PfbToggle::On,
 	'on'
 ))->setHelp('Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
 
@@ -284,7 +284,7 @@ $section->addInput(new Form_Checkbox(
 	'suppression',
 	'Suppression',
 	'Enable',
-	$pconfig['suppression'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['suppression']) === PfbToggle::On,
 	'on'
 ))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. Only for IPv4 lists (/32 and /24).'
 	. '<div class="infoblock">'
@@ -299,7 +299,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_log',
 	'Force Global IP Logging',
 	'Enable',
-	$pconfig['enable_log'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_log']) === PfbToggle::On,
 	'on'
 ))->setHelp('The global logging option is only used to force logging for all IP Aliases, and not to disable the logging of all IP Aliases.<br />'
 		. 'This overrides any logging settings in the GeoIP/IPv4/v6 tabs.'
@@ -395,7 +395,7 @@ $section->addInput(new Form_Checkbox(
 	'database_cc',
 	'MaxMind CSV Updates',
 	'Check to disable MaxMind CSV updates',
-	$pconfig['database_cc'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['database_cc']) === PfbToggle::On,
 	'on'
 ))->setHelp('This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
 
@@ -480,7 +480,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_float',
 	'Floating Rules',
 	'Enable',
-	$pconfig['enable_float'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_float']) === PfbToggle::On,
 	'on'
 ))->setHelp('<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
 		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
@@ -513,7 +513,7 @@ $section->addInput(new Form_Checkbox(
 	'killstates',
 	'Kill States',
 	'Enable',
-	$pconfig['killstates'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['killstates']) === PfbToggle::On,
 	'on'
 ))->setHelp('When \'Enabled\', after a cron event or any \'Force\' commands, any blocked IPs found in the Firewall states will be cleared.');
 

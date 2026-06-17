@@ -299,7 +299,7 @@ foreach ($rowdata as $r_id => $row) {
 		'hook_enabled-' . $r_id,
 		NULL,
 		NULL,
-		(isset($row['enabled']) && $row['enabled'] === 'on') ? TRUE : FALSE,
+		isset($row['enabled']) && pfb_cfg_toggle_read($row['enabled']) === PfbToggle::On,
 		'on'
 	))->setHelp(($numrows == $rowcounter) ? 'Enabled' : NULL)
 	  ->setWidth(1);

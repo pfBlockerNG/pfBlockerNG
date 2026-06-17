@@ -162,7 +162,7 @@ $tab_array_sub[]	= array(gettext('Run'),		TRUE,	'/pfblockerng/pfblockerng_update
 $tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
 display_top_tabs($tab_array_sub, TRUE);
 
-if ($pfb['enable'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 	/* Legend - Time variables
 
 	$pfb['interval']	Hour interval setting	(1,2,3,4,6,8,12,24)
@@ -252,7 +252,7 @@ if ($pfb['interval'] == 1) {
 }
 
 // Determine if CRON job is missing
-if ($pfb['enable'] == 'on' && $pfb['interval'] != 'Disabled' &&
+if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && $pfb['interval'] != 'Disabled' &&
     !pfblockerng_cron_exists($pfb_cmd, $pfb['min'], $pfb_hour, '*', '*')) {
 	$cronreal = ' [ Missing cron task ]';
 	$nextcron = '--';
@@ -438,7 +438,7 @@ if (isset($pconfig['log_view'])) {
 	}
 }
 
-if ($pfb['enable'] == 'on' && isset($pconfig['run']) && !empty($pconfig['pfb_force'])) {
+if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) && !empty($pconfig['pfb_force'])) {
 	// Run appropriate 'Force command'
 	if ($pconfig['pfb_force'] == 'update') {
 		pfb_cron_update('update');

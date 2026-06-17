@@ -464,4 +464,40 @@ final class CfgAdaptersTest extends TestCase
 			$this->assertSame($expected, $result, "old ternary for input " . var_export($raw, TRUE));
 		}
 	}
+
+	public function testP5ReadBoundaryPatternMatchesOldCompare(): void
+	{
+		// Equivalence: pfb_cfg_toggle_read($v) === PfbToggle::On
+		// must produce the same bool as the old ($v == 'on') for all stored vocab.
+		// Before-state: old expression produces false for '', true for 'on'.
+		$this->assertFalse('' == 'on', 'before: empty string is not on');
+		$this->assertTrue('on' == 'on', 'before: on is on');
+		$this->assertFalse('off' == 'on', 'before: off is not on');
+		$this->assertFalse(null == 'on', 'before: null is not on');
+
+		// After-state: adapter produces same bool.
+		$this->assertFalse(pfb_cfg_toggle_read('') === PfbToggle::On, 'adapter: empty string -> Off != On');
+		$this->assertTrue(pfb_cfg_toggle_read('on') === PfbToggle::On, 'adapter: on -> On == On');
+		$this->assertFalse(pfb_cfg_toggle_read('off') === PfbToggle::On, 'adapter: off -> Off != On');
+		$this->assertFalse(pfb_cfg_toggle_read(null) === PfbToggle::On, 'adapter: null -> Off != On');
+		$this->assertFalse(pfb_cfg_toggle_read('yes') === PfbToggle::On, 'adapter: yes -> Off != On');
+
+		// Negation pattern: !== PfbToggle::On same as != 'on'
+		$this->assertTrue(pfb_cfg_toggle_read('') !== PfbToggle::On, 'negation: empty != on');
+		$this->assertFalse(pfb_cfg_toggle_read('on') !== PfbToggle::On, 'negation: on is on');
+	}
+
+	public function testP5FormCheckboxPatternMatchesOldTernary(): void
+	{
+		// Pattern: $pconfig['field'] === 'on' ? TRUE:FALSE
+		// vs:      pfb_cfg_toggle_read($pconfig['field']) === PfbToggle::On
+		// These must be identical for every stored vocab value.
+		$vocab = ['on', '', 'off', null];
+		foreach ($vocab as $v) {
+			$old  = ($v === 'on') ? true : false;
+			$new  = pfb_cfg_toggle_read($v) === PfbToggle::On;
+			$this->assertSame($old, $new,
+				"Form_Checkbox pattern mismatch for stored value: " . var_export($v, true));
+		}
+	}
 }
