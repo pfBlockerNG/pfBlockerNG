@@ -1751,16 +1751,39 @@ function pfb_log_mgmt() {
 				}
 
 				if (file_exists($final_log_file)) {
-					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp));
-					@chown($temp, 'unbound');
-					@chgrp($temp, 'unbound');
-					exec("/bin/mv -f " . escapeshellarg($temp) . " " . escapeshellarg($final_log_file));
+					// Truncate in place to preserve the inode (#264): mv replaces the
+					// inode, so a remote syslog shipper keyed on (inode, offset) treats
+					// it as a rotation and re-sends the whole log. cat over '>' keeps the
+					// same inode - the file just shrinks - and so keeps its ownership.
+					// Gate on each exit code: unlike the atomic mv, '>' truncates first,
+					// so a failed tail/cat must not be allowed to leave an empty/partial log.
+					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
+					if ($ret === 0) {
+						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($final_log_file), $out, $ret);
+						if ($ret === 0) {
+							@chown($final_log_file, 'unbound');
+							@chgrp($final_log_file, 'unbound');
+						} else {
+							pfb_logger("\npfb_log_mgmt: failed to overwrite {$final_log_file} during truncation", 2);
+						}
+					} else {
+						pfb_logger("\npfb_log_mgmt: failed to tail {$final_log_file} for truncation", 2);
+					}
 				}
 			}
 			else {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp));
-				exec("/bin/mv -f " . escapeshellarg($temp) . " {$pfb[$logtype]}");
+				// Truncate in place to preserve the inode (#264) - see above. Gate on
+				// each exit code so a failed tail/cat cannot truncate the live log.
+				exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
+				if ($ret === 0) {
+					exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
+					if ($ret !== 0) {
+						pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
+					}
+				} else {
+					pfb_logger("\npfb_log_mgmt: failed to tail {$pfb[$logtype]} for truncation", 2);
+				}
 			}
 			unlink_if_exists($temp);
 		}
