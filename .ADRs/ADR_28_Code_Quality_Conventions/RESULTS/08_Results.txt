@@ -1,0 +1,137 @@
+ADR-28 Phase 8 Results — Python conventions (enums/adapters inline, str-over-re, short-circuit)
+=================================================================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+ADR-RESUME: branch=claude/adr-28-review-xmodhb next-phase=9
+
+
+1. MANDATORY INLINE / DELETE / REPOINT (shipping-blocker resolved)
+-------------------------------------------------------------------
+
+pfb_cfg_adapters.py was a standalone shipped file absent from the FreeBSD-ports
+pkg-plist, breaking every .pkg build.  Resolution: inlined into pfb_unbound.py
+(the only consumer and the sole shipped file), then deleted.
+
+Actions taken:
+  - MOVED: IdnMode, PfbToggle, PfbLenient enums + _IDN_MODE_READ_MAP dict +
+    pfb_cfg_idn_mode_read/write, pfb_cfg_toggle_read/write,
+    pfb_cfg_lenient_read/write helpers INTO pfb_unbound.py, placed immediately
+    after the IDN_MODE_OFF/ALL/CONFUSABLE constants (~line 1614) with a block
+    comment explaining the inline rationale.  All docstrings preserved.
+  - ADDED: `from enum import Enum` to pfb_unbound.py stdlib imports (sorted
+    into the correct alphabetical position by ruff).
+  - DELETED: src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py (`git rm`).
+  - REPOINTED: tests/test_adr28_cfg_adapters.py — import changed from
+    `from pfb_cfg_adapters import (...)` to `from pfb_unbound import (...)`.
+    Dropped now-redundant sys.path/Path hacks (conftest.py already adds
+    src/usr/local/pkg/pfblockerng to sys.path and injects Unbound globals).
+    All 41 round-trip tests pass unchanged in intent and assertion.
+  - UPDATED: CLAUDE.md line citing Python adapter location:
+    pfb_cfg_adapters.py -> pfb_unbound.py.
+
+Confirmed: `git ls-files | grep pfb_cfg_adapters` is EMPTY.
+
+
+2. ENUM ADOPTION — sites adopted vs left
+-----------------------------------------
+
+Enums (IdnMode, PfbToggle, PfbLenient) are now defined in pfb_unbound.py and
+available for future phases to thread through internal call sites.
+
+This phase deliberately stops at DEFINITION + ADAPTER level only — no internal
+call site in pfb_unbound.py was changed to use IdnMode/PfbToggle/PfbLenient
+instead of the plain string constants (IDN_MODE_OFF/ALL/CONFUSABLE and the
+pfb["..."] comparisons).  Reason:
+
+  §2.4 boundary rule: the pfb dict and py_unbound.ini values are STRING
+  contracts with the PHP side.  Threading the enum through the main
+  evaluate_domain / idn_mode_decision / idn_confusable_action paths would
+  require converting at the ini-read boundary (pfb["idn_mode"] -> IdnMode)
+  AND converting back at any log/write site.  That is a non-trivial wiring
+  change with real regression risk in the ADR-08 Confusable/All arms, and
+  the idn_mode_decision / is_idn_domain hot paths already use cheap string
+  comparisons against the IDN_MODE_* constants.  The Phase-8 brief says
+  "adopt narrowly" and "leave it if threading risks the boundary or the
+  ADR-08 logic" — that applies here.
+
+  The enums are now IN the right file; a future phase can adopt them at the
+  read boundary (pfb_global/ini parsing) in a controlled way.  Phase 8 does
+  NOT do that.
+
+
+3. RE → STR SWAPS
+------------------
+
+Zero swaps made.  Same finding as the PHP Phase 7 audit:
+
+  pfb_unbound.py's `re` uses are all genuine patterns:
+  - _REGEX_* compiled constants (ReDoS detectors, feed validators) — character
+    classes, quantifiers, alternation; no str method equivalent.
+  - re.compile(pattern) for user rules — user-supplied patterns; cannot swap.
+  - re.match / re.search with anchors + classes in the evaluate_domain path
+    and ABP parser — genuine multi-feature patterns.
+  - No hot-path `re` use is a single literal prefix/suffix/substring test;
+    the is_idn_domain() function already uses str methods (startswith / `in`).
+
+  No str-over-re test added (none required with no swaps).
+
+
+4. SHORT-CIRCUIT REORDERS
+--------------------------
+
+Zero reorders made.  The IDN decision path already has the cheapest guard
+(is_idn_domain — two str operations) before the mode check in
+idn_mode_decision(), which is the only non-trivial branching in the per-query
+hot path.  No reorder was provably safe + side-effect-free + order-independent
+beyond what already exists.
+
+
+5. TESTS ADDED
+--------------
+
+No new tests added beyond the 41 repointed adapter tests (unchanged in
+assertion content; only the import line changed).
+
+No equivalence tests needed (no re->str swaps).
+No short-circuit tests needed (no reorders).
+No boundary-adoption tests needed (no enum wiring at read site).
+
+
+6. MANIFEST STRINGS + ADR-08 BEHAVIOUR
+----------------------------------------
+
+  - Manifest / py_unbound.ini / pfb dict values remain STRINGS throughout.
+    The enums are defined and available but no call site converts at the ini
+    boundary yet.  Boundary is intact.
+  - ADR-08 homoglyph analyzer (idn_confusable_action, decode_idn_label,
+    script_of, label_confusable_severity, idn_confusable_action) is completely
+    untouched.  All tests/test_adr08_* pass.
+
+
+7. VERIFICATION GATES
+----------------------
+
+  python -m pytest          1691 passed                        ✓
+  ruff check .              All checks passed                  ✓
+  ruff format --check .     106 files already formatted        ✓
+  mypy tests/               Success: no issues found (44 files) ✓
+  git ls-files | grep pfb_cfg_adapters   (empty)              ✓
+  npx markdownlint-cli2 CLAUDE.md        0 error(s)           ✓
+
+
+8. SELF-REVIEW VERDICT
+-----------------------
+
+  - Adapter fully inlined into pfb_unbound.py; standalone file deleted; test
+    repointed; CLAUDE.md updated.
+  - Manifest/ini values still strings — boundary intact.
+  - ADR-08 behaviour untouched — test_adr08_* green.
+  - No re→str swaps (none safe); no short-circuit reorders (none needed).
+  - stdlib only (enum is stdlib); 4-space indent; no bare except; no per-query
+    latency added.
+  - Minimal diff: only the inline/delete/repoint plus the CLAUDE.md line.
+  CLEAN.
+
+
+Go-ahead for Phase 9.

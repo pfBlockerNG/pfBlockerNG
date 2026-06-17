@@ -262,7 +262,7 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
 - PHP adapters: `pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
   `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`.
 - Python adapters: `pfb_cfg_idn_mode_read/write`, `pfb_cfg_toggle_read/write`,
-  `pfb_cfg_lenient_read/write` in `src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py`.
+  `pfb_cfg_lenient_read/write` in `src/usr/local/pkg/pfblockerng/pfb_unbound.py`.
 
 #### Explicitly out of scope (ADR-28 §2.4)
 

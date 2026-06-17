@@ -1,9 +1,13 @@
-"""ADR-28 Phase 1 — round-trip identity tests for pfb_cfg_adapters.py.
+"""ADR-28 Phase 1 — round-trip identity tests for the cfg adapters inlined in pfb_unbound.py.
 
 Rule (ADR-28 §2.2): for every adapted field, every existing stored value
 (incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v
 for canonical values, or must map to the documented canonical value for
 legacy migration values.
+
+The adapters (IdnMode, PfbToggle, PfbLenient, pfb_cfg_*_read/write) live in
+pfb_unbound.py (ADR-28 Phase 8 inline — pfb_cfg_adapters.py deleted; pfb_unbound.py
+is the only consumer and the sole shipped file, so no separate plist entry is needed).
 
 Scenario A — IdnMode: 'all' / 'confusable' / 'off' / '' / 'on' (legacy).
   Background: pfb_unbound.py reads the idn_mode ini key; pfb_global() (PHP)
@@ -30,19 +34,14 @@ Scenario C — PfbLenient: 'on' / 'off' / '' leniency flag.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import the adapter module from src/ (not installed as a package).
+# Adapters are inlined into pfb_unbound.py (ADR-28 Phase 8).
+# conftest.py already adds src/usr/local/pkg/pfblockerng to sys.path and
+# injects Unbound globals onto builtins, so a bare import resolves.
 # ---------------------------------------------------------------------------
-_SRC = Path(__file__).parent.parent / "src" / "usr" / "local" / "pkg" / "pfblockerng"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
-
-from pfb_cfg_adapters import (  # noqa: E402
+from pfb_unbound import (
     IdnMode,
     PfbLenient,
     PfbToggle,

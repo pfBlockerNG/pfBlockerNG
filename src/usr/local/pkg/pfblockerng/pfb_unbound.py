@@ -33,6 +33,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -1611,6 +1612,118 @@ def init_standard(id: int, env: module_env) -> bool:
 IDN_MODE_OFF = "off"
 IDN_MODE_ALL = "all"
 IDN_MODE_CONFUSABLE = "confusable"
+
+
+# ---------------------------------------------------------------------------
+# ADR-28 §2.2 — field-aware config adapters (inlined here; pfb_unbound.py is
+# the only consumer and the sole shipped file for this package — no separate
+# pfb_cfg_adapters.py is needed or present in the pkg-plist).
+#
+# Rule: config.xml / py_unbound.ini stored values NEVER change.  Enums are an
+# INTERNAL runtime representation only; conversion happens at the READ boundary
+# (where the ini value enters Python); every write adapter returns the exact
+# canonical stored string.  Round-trip identity: write(read(v)) == v for every
+# canonical stored value (ADR-28 §2.2).
+# ---------------------------------------------------------------------------
+
+
+class IdnMode(Enum):
+    """IDN-feature mode selector (ADR-08 §2.2, backed by canonical stored string)."""
+
+    All = "all"
+    Confusable = "confusable"
+    Off = "off"
+
+    @classmethod
+    def default(cls) -> IdnMode:
+        return cls.Off
+
+
+class PfbToggle(Enum):
+    """Two-state checkbox toggle ('on' / '')."""
+
+    On = "on"
+    Off = ""
+
+    @classmethod
+    def default(cls) -> PfbToggle:
+        return cls.Off
+
+
+class PfbLenient(Enum):
+    """ADR-22 scheme-parsing leniency ('on' = lenient, 'off' = strict)."""
+
+    On = "on"
+    Off = "off"
+
+    @classmethod
+    def default(cls) -> PfbLenient:
+        return cls.Off
+
+
+# Mapping for pfb_cfg_idn_mode_read — covers all stored values including legacy.
+_IDN_MODE_READ_MAP: dict[str, IdnMode] = {
+    "all": IdnMode.All,
+    "on": IdnMode.All,  # legacy: 'on' normalises to All (pfb_global() :1373)
+    "confusable": IdnMode.Confusable,
+    "off": IdnMode.Off,
+    "": IdnMode.Off,  # absent key / blank -> Off
+}
+
+
+def pfb_cfg_idn_mode_read(stored: str | None) -> IdnMode:
+    """Read a raw stored IDN-mode value into an IdnMode enum.
+
+    Replicates pfb_global() :1372-1373 normalisation:
+      'on'  -> All (legacy migration; canonical stored value is 'all')
+      'all' -> All
+      'confusable' -> Confusable
+      '' / None / anything else -> Off
+
+    Args:
+        stored: raw value from the ini / pfb dict (may be None if key absent).
+    """
+    return _IDN_MODE_READ_MAP.get(stored or "", IdnMode.default())
+
+
+def pfb_cfg_idn_mode_write(mode: IdnMode) -> str:
+    """Write an IdnMode back to its canonical stored string.
+
+    Returns 'all', 'confusable', or 'off'.  The legacy value 'on' is NEVER
+    re-emitted; it normalises to 'all' on read and is stored as 'all' on write.
+    """
+    return mode.value
+
+
+def pfb_cfg_toggle_read(stored: str | None) -> PfbToggle:
+    """Read a raw stored toggle value into a PfbToggle enum.
+
+    Maps 'on' -> On, anything else (incl. None / '') -> Off.
+    """
+    if stored == "on":
+        return PfbToggle.On
+    return PfbToggle.default()
+
+
+def pfb_cfg_toggle_write(toggle: PfbToggle) -> str:
+    """Write a PfbToggle back to its stored string ('on' or '')."""
+    return toggle.value
+
+
+def pfb_cfg_lenient_read(stored: str | None) -> PfbLenient:
+    """Read a raw stored leniency value into a PfbLenient enum.
+
+    Maps 'on' -> On, anything else (incl. None / '' / 'off') -> Off.
+    Replicates pfb_global() :1364 normalisation.
+    """
+    if stored == "on":
+        return PfbLenient.On
+    return PfbLenient.default()
+
+
+def pfb_cfg_lenient_write(lenient: PfbLenient) -> str:
+    """Write a PfbLenient back to its stored string ('on' or 'off')."""
+    return lenient.value
 
 
 def idn_mode_from_legacy(python_idn: bool) -> str:
