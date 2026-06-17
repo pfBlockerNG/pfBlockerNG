@@ -261,8 +261,11 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
   exception: it normalises to `'all'` on read (one-way migration, intentional).
 - PHP adapters: `pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
   `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`.
-- Python adapters: `pfb_cfg_idn_mode_read/write`, `pfb_cfg_toggle_read/write`,
-  `pfb_cfg_lenient_read/write` in `src/usr/local/pkg/pfblockerng/pfb_unbound.py`.
+- Python: `pfb_unbound.py` adopts the **`IdnMode` enum** internally. `pfb["idn_mode"]`
+  is converted from the ini string at the read boundary (preserving the legacy
+  `python_idn` fallback for absent/unrecognised keys; ini string contract unchanged).
+  Toggle/lenient enums have **no Python consumer** — `pfb_unbound.py` reads all
+  boolean toggles via `config.getboolean()` — so they are PHP-only adapters.
 
 #### Explicitly out of scope (ADR-28 §2.4)
 

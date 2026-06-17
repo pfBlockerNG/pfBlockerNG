@@ -29,6 +29,7 @@ from pfb_unbound import (
     IDN_MODE_ALL,
     IDN_MODE_CONFUSABLE,
     IDN_MODE_OFF,
+    IdnMode,
     evaluate_domain,
     idn_mode_decision,
     idn_mode_from_legacy,
@@ -108,18 +109,18 @@ class TestIdnModeDecisionUnit:
         # All-IDN: the on side -- each xn-- form returns True (block as IDN feed).
         for q in _IDN_QUERIES:
             assert is_idn_domain(q) is True, q
-            assert idn_mode_decision(q, IDN_MODE_ALL) is True, q
+            assert idn_mode_decision(q, IdnMode.All) is True, q
 
     def test_all_mode_ignores_non_idn_query(self) -> None:
         # All-IDN does NOT block a name without an xn-- label (the branch needs both).
         for q in _NON_IDN_QUERIES:
             assert is_idn_domain(q) is False, q
-            assert idn_mode_decision(q, IDN_MODE_ALL) is False, q
+            assert idn_mode_decision(q, IdnMode.All) is False, q
 
     def test_off_mode_never_blocks(self) -> None:
         # Off: the off side -- no IDN block even for an xn-- query.
         for q in _IDN_QUERIES + _NON_IDN_QUERIES:
-            assert idn_mode_decision(q, IDN_MODE_OFF) is False, q
+            assert idn_mode_decision(q, IdnMode.Off) is False, q
 
     def test_idn_mode_decision_is_the_all_gate_only(self) -> None:
         # ``idn_mode_decision`` is the All-IDN / Off gate ONLY: it blocks IFF All-IDN on an
@@ -128,8 +129,8 @@ class TestIdnModeDecisionUnit:
         for q in _IDN_QUERIES:
             # Sanity: All-IDN WOULD block these, so a green here proves the mode value is the
             # cause of the non-block, not an always-False input.
-            assert idn_mode_decision(q, IDN_MODE_ALL) is True, q
-            assert idn_mode_decision(q, IDN_MODE_CONFUSABLE) is False, q
+            assert idn_mode_decision(q, IdnMode.All) is True, q
+            assert idn_mode_decision(q, IdnMode.Confusable) is False, q
 
 
 class TestIdnModeFromLegacy:
@@ -137,10 +138,10 @@ class TestIdnModeFromLegacy:
 
     def test_legacy_on_maps_to_all_idn(self) -> None:
         # 'on' (python_idn True) must reproduce today's block-all-IDN behaviour.
-        assert idn_mode_from_legacy(True) == IDN_MODE_ALL
+        assert idn_mode_from_legacy(True) is IdnMode.All
 
     def test_legacy_off_maps_to_off(self) -> None:
-        assert idn_mode_from_legacy(False) == IDN_MODE_OFF
+        assert idn_mode_from_legacy(False) is IdnMode.Off
 
 
 # ---------------------------------------------------------------------------

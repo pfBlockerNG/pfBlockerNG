@@ -909,7 +909,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_idn"] = False
     # ADR-08: the IDN-feature mode, derived from python_idn (see idn_mode_from_legacy).
     # Default OFF; the ini load below recomputes it from the loaded python_idn.
-    pfb["idn_mode"] = IDN_MODE_OFF
+    pfb["idn_mode"] = IdnMode.Off
     # ADR-08 Phase 5: the two Confusable-mode sub-toggles. block_malicious is DEFAULT-ON
     # (a cross-script confusable homograph blocks unless the operator disables it);
     # escalate_suspicious is OPT-IN (a suspicious/flagged anomaly only alerts unless the
@@ -1093,9 +1093,9 @@ def init_standard(id: int, env: module_env) -> bool:
             # predates the key (only python_idn=on|off written), fall back to the legacy
             # derivation -- 'on'->All-IDN, off->Off -- byte-identical to today.
             if config.has_option("MAIN", "idn_mode"):
-                idn_mode = config.get("MAIN", "idn_mode").strip().lower()
-                if idn_mode in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
-                    pfb["idn_mode"] = idn_mode
+                _raw_idn = config.get("MAIN", "idn_mode").strip().lower()
+                if _raw_idn in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+                    pfb["idn_mode"] = IdnMode(_raw_idn)
                 else:
                     pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
             else:
@@ -1179,7 +1179,7 @@ def init_standard(id: int, env: module_env) -> bool:
             # Enable the Blacklist functions (IDN). ADR-08: ANY active IDN mode (All-IDN
             # via the legacy python_idn flag, OR Confusable) needs the blacklist machinery
             # (whitelist load + stats) -- the Confusable matcher feeds is_found like a feed.
-            if pfb["python_idn"] or pfb["idn_mode"] != IDN_MODE_OFF:
+            if pfb["python_idn"] or pfb["idn_mode"] is not IdnMode.Off:
                 pfb["python_blacklist"] = True
 
             # Enable the Blacklist functions (TLD Allow)
@@ -1615,15 +1615,13 @@ IDN_MODE_CONFUSABLE = "confusable"
 
 
 # ---------------------------------------------------------------------------
-# ADR-28 §2.2 — field-aware config adapters (inlined here; pfb_unbound.py is
-# the only consumer and the sole shipped file for this package — no separate
-# pfb_cfg_adapters.py is needed or present in the pkg-plist).
+# ADR-28 §2.2 — IdnMode enum (the only Python runtime enum; pfb_unbound reads
+# all toggles as bools via config.getboolean, so toggle/lenient enums have no
+# Python consumer and live in PHP only).
 #
-# Rule: config.xml / py_unbound.ini stored values NEVER change.  Enums are an
-# INTERNAL runtime representation only; conversion happens at the READ boundary
-# (where the ini value enters Python); every write adapter returns the exact
-# canonical stored string.  Round-trip identity: write(read(v)) == v for every
-# canonical stored value (ADR-28 §2.2).
+# Rule: py_unbound.ini stored values NEVER change.  IdnMode is an INTERNAL
+# runtime representation only; conversion at the READ boundary (pfb_global).
+# The backing value equals the canonical ini string — byte-identical on write.
 # ---------------------------------------------------------------------------
 
 
@@ -1639,119 +1637,32 @@ class IdnMode(Enum):
         return cls.Off
 
 
-class PfbToggle(Enum):
-    """Two-state checkbox toggle ('on' / '')."""
-
-    On = "on"
-    Off = ""
-
-    @classmethod
-    def default(cls) -> PfbToggle:
-        return cls.Off
-
-
-class PfbLenient(Enum):
-    """ADR-22 scheme-parsing leniency ('on' = lenient, 'off' = strict)."""
-
-    On = "on"
-    Off = "off"
-
-    @classmethod
-    def default(cls) -> PfbLenient:
-        return cls.Off
-
-
-# Mapping for pfb_cfg_idn_mode_read — covers all stored values including legacy.
-_IDN_MODE_READ_MAP: dict[str, IdnMode] = {
-    "all": IdnMode.All,
-    "on": IdnMode.All,  # legacy: 'on' normalises to All (pfb_global() :1373)
-    "confusable": IdnMode.Confusable,
-    "off": IdnMode.Off,
-    "": IdnMode.Off,  # absent key / blank -> Off
-}
-
-
-def pfb_cfg_idn_mode_read(stored: str | None) -> IdnMode:
-    """Read a raw stored IDN-mode value into an IdnMode enum.
-
-    Replicates pfb_global() :1372-1373 normalisation:
-      'on'  -> All (legacy migration; canonical stored value is 'all')
-      'all' -> All
-      'confusable' -> Confusable
-      '' / None / anything else -> Off
-
-    Args:
-        stored: raw value from the ini / pfb dict (may be None if key absent).
-    """
-    return _IDN_MODE_READ_MAP.get(stored or "", IdnMode.default())
-
-
-def pfb_cfg_idn_mode_write(mode: IdnMode) -> str:
-    """Write an IdnMode back to its canonical stored string.
-
-    Returns 'all', 'confusable', or 'off'.  The legacy value 'on' is NEVER
-    re-emitted; it normalises to 'all' on read and is stored as 'all' on write.
-    """
-    return mode.value
-
-
-def pfb_cfg_toggle_read(stored: str | None) -> PfbToggle:
-    """Read a raw stored toggle value into a PfbToggle enum.
-
-    Maps 'on' -> On, anything else (incl. None / '') -> Off.
-    """
-    if stored == "on":
-        return PfbToggle.On
-    return PfbToggle.default()
-
-
-def pfb_cfg_toggle_write(toggle: PfbToggle) -> str:
-    """Write a PfbToggle back to its stored string ('on' or '')."""
-    return toggle.value
-
-
-def pfb_cfg_lenient_read(stored: str | None) -> PfbLenient:
-    """Read a raw stored leniency value into a PfbLenient enum.
-
-    Maps 'on' -> On, anything else (incl. None / '' / 'off') -> Off.
-    Replicates pfb_global() :1364 normalisation.
-    """
-    if stored == "on":
-        return PfbLenient.On
-    return PfbLenient.default()
-
-
-def pfb_cfg_lenient_write(lenient: PfbLenient) -> str:
-    """Write a PfbLenient back to its stored string ('on' or 'off')."""
-    return lenient.value
-
-
-def idn_mode_from_legacy(python_idn: bool) -> str:
+def idn_mode_from_legacy(python_idn: bool) -> IdnMode:
     """Map the legacy on/off ``python_idn`` flag to an IDN mode (RESULTS/01 SS1).
 
-    True ('on') -> IDN_MODE_ALL (today's block-all-IDN behaviour); False -> IDN_MODE_OFF.
+    True ('on') -> IdnMode.All (today's block-all-IDN behaviour); False -> IdnMode.Off.
     The Confusable value cannot arise from the legacy flag -- it reaches Python only once
     the PHP UI emits it (Phase 6); until then this is the sole derivation of the mode.
     """
-    return IDN_MODE_ALL if python_idn else IDN_MODE_OFF
+    return IdnMode.All if python_idn else IdnMode.Off
 
 
 def is_idn_domain(q_name: str) -> bool:
     return q_name.startswith("xn--") or ".xn--" in q_name
 
 
-def idn_mode_decision(q_name: str, idn_mode: str) -> bool:
+def idn_mode_decision(q_name: str, idn_mode: IdnMode) -> bool:
     """Pure IDN feed decision: should this query be blocked by the All-IDN feed?
 
     Extracted verbatim from the evaluate_domain IDN branch so the contract can be
-    pinned (ADR-08 Phase 3). Returns True only in IDN_MODE_ALL on an xn-- query --
+    pinned (ADR-08 Phase 3). Returns True only in IdnMode.All on an xn-- query --
     the exact condition the inline ``cfg["python_idn"] and is_idn_domain(q_name)``
-    encoded. IDN_MODE_OFF and IDN_MODE_CONFUSABLE return False here -- Off never
+    encoded. IdnMode.Off and IdnMode.Confusable return False here -- Off never
     blocks, and the Confusable tier is decided by ``idn_confusable_action`` (Phase 5),
     NOT this gate. No punycode decode, no script work. The Off/All arms it governs
     stay byte-identical to today (the Phase-3 golden gate).
     """
-    return idn_mode == IDN_MODE_ALL and is_idn_domain(q_name)
+    return idn_mode is IdnMode.All and is_idn_domain(q_name)
 
 
 # --------------------------------------------------------------------------- #
@@ -5258,11 +5169,21 @@ def evaluate_domain(
             # so a disallowed-TLD query would resolve instead of being blocked.
             block_band = PRIO_FEED_BLOCK
 
-        # ADR-08: the IDN feed. ``idn_mode`` is the three-valued selector (off/all/
-        # confusable); derive it from the legacy cfg["python_idn"] when a cfg predates
-        # the key (legacy callers/tests still pass only python_idn -- True->All-IDN).
+        # ADR-08: the IDN feed. ``idn_mode`` is the three-valued selector (IdnMode enum
+        # internally); derive it from the legacy cfg["python_idn"] when a cfg predates the
+        # key (legacy callers/tests still pass only python_idn -- True->All-IDN).  The
+        # explicit None check is REQUIRED: IdnMode.Off is truthy so an ``or`` idiom would
+        # bypass the stored value whenever Off is present (ADR-28 P8 landmine fix).
         if not is_found:
-            idn_mode = cfg.get("idn_mode") or idn_mode_from_legacy(cfg.get("python_idn", False))
+            _raw = cfg.get("idn_mode")
+            if isinstance(_raw, IdnMode):
+                idn_mode = _raw
+            elif isinstance(_raw, str) and _raw in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+                idn_mode = IdnMode(_raw)
+            else:
+                # None (key absent) or unrecognised string -> legacy fallback preserving
+                # the pre-ADR-08 behaviour (python_idn=True -> All-IDN, False -> Off).
+                idn_mode = idn_mode_from_legacy(cfg.get("python_idn", False))
             # All-IDN / Off arm -- BYTE-IDENTICAL to today (the Phase-3 golden gate):
             # idn_mode_decision blocks IFF All-IDN on an xn-- query, as the old inline test.
             if idn_mode_decision(q_name, idn_mode):
@@ -5273,7 +5194,7 @@ def evaluate_domain(
                 # numeric important_rules path doesn't treat block_band=0 as already
                 # overridden (allow_band >= 0 is always true) and resolve it anyway.
                 block_band = PRIO_FEED_BLOCK
-            elif idn_mode == IDN_MODE_CONFUSABLE:
+            elif idn_mode is IdnMode.Confusable:
                 # Confusable arm (Phase 5): decode + TR39 mixed-script analysis, PER-LABEL,
                 # gated by is_idn_domain (a non-xn-- query pays nothing). classify_idn is
                 # decode-safe -- a malformed label is FLAGGED, never raised into the resolver.

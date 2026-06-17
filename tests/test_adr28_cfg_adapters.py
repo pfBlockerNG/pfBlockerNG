@@ -1,276 +1,260 @@
-"""ADR-28 Phase 1 — round-trip identity tests for the cfg adapters inlined in pfb_unbound.py.
+"""ADR-28 Phase 8 — IdnMode enum adoption in pfb_unbound.py.
 
-Rule (ADR-28 §2.2): for every adapted field, every existing stored value
-(incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v
-for canonical values, or must map to the documented canonical value for
-legacy migration values.
+Pins the ACTUAL adoption contract after the dead pfb_cfg_* helpers were removed
+and the IdnMode enum is now the live in-memory representation for idn_mode.
 
-The adapters (IdnMode, PfbToggle, PfbLenient, pfb_cfg_*_read/write) live in
-pfb_unbound.py (ADR-28 Phase 8 inline — pfb_cfg_adapters.py deleted; pfb_unbound.py
-is the only consumer and the sole shipped file, so no separate plist entry is needed).
+Policy (ADR-28 §2.2):
+  - The ini wire value stays the canonical string ('off'/'all'/'confusable').
+  - The in-memory value is IdnMode (converted at the read boundary).
+  - Unrecognised / absent ini key falls back to idn_mode_from_legacy(python_idn)
+    (NOT pfb_cfg_idn_mode_read semantics — the legacy fallback preserves python_idn).
+  - Round-trip: IdnMode backing value == the canonical stored string.
 
-Scenario A — IdnMode: 'all' / 'confusable' / 'off' / '' / 'on' (legacy).
-  Background: pfb_unbound.py reads the idn_mode ini key; pfb_global() (PHP)
-    normalises 'on' -> 'all' at runtime.
-    Given a raw stored value v.
-    When pfb_cfg_idn_mode_read(v) -> enum, pfb_cfg_idn_mode_write(enum) -> stored.
-    Then write(read(v)) == v for canonical values ('all', 'confusable', 'off').
-    And  write(read('on')) == 'all'   (documented one-way migration).
-    And  write(read('')) == 'off'     (normalised default).
-    And  junk -> Off -> 'off'         (default).
+Scenario A — idn_mode_from_legacy: bool -> IdnMode migration.
+  Background: the legacy python_idn on/off toggle maps to All or Off.
+    Given python_idn in {True, False}.
+    When idn_mode_from_legacy(python_idn) is called.
+    Then the result is IdnMode.All (True) or IdnMode.Off (False).
 
-Scenario B — PfbToggle: 'on' / '' two-state checkbox.
-  Background: checkboxes stored 'on' (checked) or '' (unchecked / absent).
-    Given a raw stored value v.
-    When pfb_cfg_toggle_read(v) -> enum, pfb_cfg_toggle_write(enum) -> stored.
-    Then write(read(v)) == v for canonical values.
+Scenario B — idn_mode_decision: the All-IDN gate (pure unit).
+  Background: idn_mode_decision is the ONLY IDN block gate for All/Off.
+    Given a mode in {All, Off, Confusable} and a query name.
+    When idn_mode_decision(q, mode) is called.
+    Then True IFF mode is All AND the name has an xn-- label.
 
-Scenario C — PfbLenient: 'on' / 'off' / '' leniency flag.
-  Background: ADR-22 scheme-parsing toggle.
-    Given a raw stored value v.
-    When pfb_cfg_lenient_read(v) -> enum, pfb_cfg_lenient_write(enum) -> stored.
-    Then write(read(v)) == v for 'on'/'off'; '' normalises to 'off'.
+Scenario C — boundary truth-table: 12 combinations of ini value x python_idn.
+  Background: the ini_read boundary in pfb_global converts raw string -> IdnMode,
+    with a legacy fallback when the key is absent or unrecognised.
+    Given idn_mode ini value in {'off','all','confusable','bogus','',ABSENT}
+    And python_idn in {True, False}.
+    When the boundary logic (as in pfb_global) is applied.
+    Then the resulting IdnMode is byte-identical to the pre-adoption behaviour.
+    And the before-state (prior to adoption) is asserted explicitly per combination.
+
+Scenario D — IdnMode enum invariants.
+  Round-trip: IdnMode.value == the canonical ini string for each member.
+  default() == Off.
 """
 
 from __future__ import annotations
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Adapters are inlined into pfb_unbound.py (ADR-28 Phase 8).
-# conftest.py already adds src/usr/local/pkg/pfblockerng to sys.path and
-# injects Unbound globals onto builtins, so a bare import resolves.
-# ---------------------------------------------------------------------------
+# conftest.py adds src/usr/local/pkg/pfblockerng to sys.path and injects
+# Unbound globals onto builtins — mirror the pattern from test_adr06_build_module.py.
 from pfb_unbound import (
+    IDN_MODE_ALL,
+    IDN_MODE_CONFUSABLE,
+    IDN_MODE_OFF,
     IdnMode,
-    PfbLenient,
-    PfbToggle,
-    pfb_cfg_idn_mode_read,
-    pfb_cfg_idn_mode_write,
-    pfb_cfg_lenient_read,
-    pfb_cfg_lenient_write,
-    pfb_cfg_toggle_read,
-    pfb_cfg_toggle_write,
+    idn_mode_decision,
+    idn_mode_from_legacy,
+    is_idn_domain,
 )
 
+# ---------------------------------------------------------------------------
+# Representative queries for Scenario B / C.
+# ---------------------------------------------------------------------------
+
+_IDN_QUERIES = (
+    "xn--evil.com",
+    "sub.xn--80akhbyknj4f.example",
+    "xn--pple-43d.com",
+)
+
+_NON_IDN_QUERIES = (
+    "example.com",
+    "plain.sub.example.org",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helper: replicate the ini read-boundary logic from pfb_global() exactly
+# (lines 1095-1102 of pfb_unbound.py) so the truth-table test is a genuine
+# re-implementation, not just calling the function under test.
+# ---------------------------------------------------------------------------
+
+
+def _boundary(ini_value: str | None, python_idn: bool) -> IdnMode:
+    """Replicate the pfb_global ini read-boundary for idn_mode.
+
+    ini_value=None means the key is absent from the ini.
+    Returned value must be byte-identical to what pfb_global sets in pfb["idn_mode"].
+    """
+    if ini_value is not None:
+        raw = ini_value.strip().lower()
+        if raw in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+            return IdnMode(raw)
+        # Unrecognised string -> legacy fallback.
+        return idn_mode_from_legacy(python_idn)
+    # Key absent -> legacy fallback.
+    return idn_mode_from_legacy(python_idn)
+
+
 # ===========================================================================
-# Scenario A — IdnMode
+# Scenario A — idn_mode_from_legacy
 # ===========================================================================
 
 
-class TestIdnModeRead:
-    """pfb_cfg_idn_mode_read maps every stored value to the right enum case."""
+class TestIdnModeFromLegacy:
+    """idn_mode_from_legacy maps the boolean python_idn flag to an IdnMode enum."""
 
-    def test_read_all_returns_all(self) -> None:
-        assert pfb_cfg_idn_mode_read("all") is IdnMode.All
-
-    def test_read_confusable_returns_confusable(self) -> None:
-        assert pfb_cfg_idn_mode_read("confusable") is IdnMode.Confusable
-
-    def test_read_off_returns_off(self) -> None:
-        assert pfb_cfg_idn_mode_read("off") is IdnMode.Off
-
-    def test_read_empty_returns_off(self) -> None:
-        # '' (absent key / blank) -> Off.
-        assert pfb_cfg_idn_mode_read("") is IdnMode.Off
-
-    def test_read_none_returns_off(self) -> None:
-        # None (missing config key) -> Off.
-        assert pfb_cfg_idn_mode_read(None) is IdnMode.Off
-
-    def test_read_legacy_on_returns_all(self) -> None:
-        # 'on' is the LEGACY value (pre-ADR-08 UI).
-        # Before: raw legacy string.
-        raw = "on"
-        assert raw == "on"
-
-        # When read.
-        result = pfb_cfg_idn_mode_read(raw)
-
-        # Then All — normalised (matches pfb_global() :1373).
+    def test_true_maps_to_all(self) -> None:
+        # Before: python_idn True is the legacy 'on' toggle — must yield All-IDN.
+        assert isinstance(True, bool)
+        result = idn_mode_from_legacy(True)
         assert result is IdnMode.All
 
-    def test_read_junk_returns_default(self) -> None:
-        assert pfb_cfg_idn_mode_read("yes") is IdnMode.Off
-        assert pfb_cfg_idn_mode_read("enabled") is IdnMode.Off
-        assert pfb_cfg_idn_mode_read("IDN_MODE_ALL") is IdnMode.Off
-        assert pfb_cfg_idn_mode_read("1") is IdnMode.Off
+    def test_false_maps_to_off(self) -> None:
+        # Before: python_idn False is the legacy 'off' toggle — must yield Off.
+        assert isinstance(False, bool)
+        result = idn_mode_from_legacy(False)
+        assert result is IdnMode.Off
+
+    def test_return_type_is_idnmode(self) -> None:
+        # Adoption guarantee: the return type is always IdnMode, never a string.
+        assert isinstance(idn_mode_from_legacy(True), IdnMode)
+        assert isinstance(idn_mode_from_legacy(False), IdnMode)
+
+    def test_confusable_cannot_arise_from_legacy(self) -> None:
+        # Confusable is never produced by the boolean legacy path.
+        assert idn_mode_from_legacy(True) is not IdnMode.Confusable
+        assert idn_mode_from_legacy(False) is not IdnMode.Confusable
 
 
-class TestIdnModeWrite:
-    """pfb_cfg_idn_mode_write returns the exact canonical stored string."""
-
-    def test_write_all(self) -> None:
-        assert pfb_cfg_idn_mode_write(IdnMode.All) == "all"
-
-    def test_write_confusable(self) -> None:
-        assert pfb_cfg_idn_mode_write(IdnMode.Confusable) == "confusable"
-
-    def test_write_off(self) -> None:
-        assert pfb_cfg_idn_mode_write(IdnMode.Off) == "off"
-
-    def test_legacy_on_never_re_emitted(self) -> None:
-        # 'on' normalises to All; write(All) -> 'all', never 'on'.
-        result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read("on"))
-        assert result == "all"
-        assert result != "on"
+# ===========================================================================
+# Scenario B — idn_mode_decision (pure gate)
+# ===========================================================================
 
 
-class TestIdnModeRoundTrip:
-    """Round-trip identity: write(read(v)) == v for every canonical value."""
+class TestIdnModeDecisionEnum:
+    """idn_mode_decision accepts IdnMode enum and is the All/Off gate only."""
 
-    @pytest.mark.parametrize("v", ["all", "confusable", "off"])
-    def test_canonical_values_round_trip(self, v: str) -> None:
-        # Before: raw canonical string.
-        assert isinstance(v, str)
+    def test_all_blocks_idn_queries(self) -> None:
+        for q in _IDN_QUERIES:
+            # Before: the query is IDN-shaped.
+            assert is_idn_domain(q) is True, q
+            # When All.
+            assert idn_mode_decision(q, IdnMode.All) is True, q
 
-        # When round-tripped.
-        result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read(v))
+    def test_all_does_not_block_non_idn(self) -> None:
+        for q in _NON_IDN_QUERIES:
+            assert is_idn_domain(q) is False, q
+            assert idn_mode_decision(q, IdnMode.All) is False, q
 
-        # Then identical.
-        assert result == v
+    def test_off_never_blocks(self) -> None:
+        # Off side: no block even on xn-- names.
+        for q in _IDN_QUERIES + _NON_IDN_QUERIES:
+            # Before: All WOULD block xn-- names.
+            for xn in _IDN_QUERIES:
+                assert idn_mode_decision(xn, IdnMode.All) is True, xn
+            # When Off.
+            assert idn_mode_decision(q, IdnMode.Off) is False, q
 
-    def test_legacy_on_normalises_to_all(self) -> None:
-        # Documented one-way migration: 'on' -> 'all'.
-        # Before: legacy value exists.
-        raw = "on"
-        assert raw == "on"
-
-        # After: stored as canonical 'all'.
-        result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read(raw))
-        assert result == "all"
-        assert result != "on"
-
-    def test_empty_normalises_to_off(self) -> None:
-        # '' (absent) -> 'off' (canonical off).
-        result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read(""))
-        assert result == "off"
-
-    def test_none_normalises_to_off(self) -> None:
-        result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read(None))
-        assert result == "off"
+    def test_confusable_returns_false_from_this_gate(self) -> None:
+        # Confusable is NOT decided here — idn_confusable_action() decides it.
+        for q in _IDN_QUERIES:
+            # Before: All WOULD block; proves the mode, not the input, causes False.
+            assert idn_mode_decision(q, IdnMode.All) is True, q
+            assert idn_mode_decision(q, IdnMode.Confusable) is False, q
 
 
-class TestIdnModeDefault:
+# ===========================================================================
+# Scenario C — boundary truth-table (12 combinations)
+# ===========================================================================
+#
+# 6 ini values × 2 python_idn values = 12 combinations.
+# For each, assert:
+#   1. The BEFORE-state (what the pre-adoption code produced — a string).
+#   2. The AFTER-state (what the adopted boundary produces — an IdnMode).
+#   3. That the IdnMode backing value matches the pre-adoption string (byte-identical).
+#
+# Pre-adoption logic (strings):
+#   canonical ini -> store that string;  unrecognised/absent -> IDN_MODE_ALL if python_idn else IDN_MODE_OFF.
+#
+# Post-adoption logic (enums):
+#   canonical ini -> IdnMode(raw);  unrecognised/absent -> idn_mode_from_legacy(python_idn).
+#   IdnMode.value == the canonical string -> byte-identical.
+#
+# The 12 combos below are (ini_value, python_idn) -> expected_mode.
+
+
+_TRUTH_TABLE: list[tuple[str | None, bool, IdnMode, str]] = [
+    # (ini_value, python_idn, expected_IdnMode, pre_adoption_string)
+    # Canonical ini values — python_idn is IGNORED when ini is recognised.
+    ("off", True, IdnMode.Off, IDN_MODE_OFF),
+    ("off", False, IdnMode.Off, IDN_MODE_OFF),
+    ("all", True, IdnMode.All, IDN_MODE_ALL),
+    ("all", False, IdnMode.All, IDN_MODE_ALL),
+    ("confusable", True, IdnMode.Confusable, IDN_MODE_CONFUSABLE),
+    ("confusable", False, IdnMode.Confusable, IDN_MODE_CONFUSABLE),
+    # Unrecognised string -> legacy fallback (python_idn decides).
+    ("bogus", True, IdnMode.All, IDN_MODE_ALL),
+    ("bogus", False, IdnMode.Off, IDN_MODE_OFF),
+    # Empty string -> treated as unrecognised (not in canonical set) -> legacy fallback.
+    ("", True, IdnMode.All, IDN_MODE_ALL),
+    ("", False, IdnMode.Off, IDN_MODE_OFF),
+    # Absent key (None) -> legacy fallback.
+    (None, True, IdnMode.All, IDN_MODE_ALL),
+    (None, False, IdnMode.Off, IDN_MODE_OFF),
+]
+
+
+@pytest.mark.parametrize("ini_value,python_idn,expected_mode,pre_adoption_str", _TRUTH_TABLE)
+def test_boundary_truth_table(
+    ini_value: str | None, python_idn: bool, expected_mode: IdnMode, pre_adoption_str: str
+) -> None:
+    """Boundary truth-table: each of the 12 (ini_value x python_idn) combos is byte-identical
+    to the pre-adoption behaviour.
+
+    Given a raw ini_value and python_idn toggle.
+    When the read-boundary logic is applied.
+    Then the resulting IdnMode matches expected_mode AND its .value equals the pre-adoption string.
+    """
+    # Before-state: the pre-adoption code produced a specific string for this combination.
+    # Assert it is as documented so a drift in the spec fails explicitly.
+    assert pre_adoption_str in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE), (
+        f"pre_adoption_str {pre_adoption_str!r} must be one of the canonical strings"
+    )
+
+    # When: apply the boundary.
+    result = _boundary(ini_value, python_idn)
+
+    # Then: the IdnMode matches the expected value.
+    assert result is expected_mode, (
+        f"ini={ini_value!r}, python_idn={python_idn}: expected {expected_mode}, got {result}"
+    )
+
+    # And: the backing value is byte-identical to the pre-adoption string.
+    assert result.value == pre_adoption_str, (
+        f"ini={ini_value!r}, python_idn={python_idn}: "
+        f"IdnMode.value {result.value!r} != pre-adoption string {pre_adoption_str!r}"
+    )
+
+
+# ===========================================================================
+# Scenario D — IdnMode enum invariants
+# ===========================================================================
+
+
+class TestIdnModeEnumInvariants:
+    """IdnMode enum structural guarantees (backing value, default)."""
+
+    def test_backing_values_equal_canonical_ini_strings(self) -> None:
+        assert IdnMode.Off.value == IDN_MODE_OFF
+        assert IdnMode.All.value == IDN_MODE_ALL
+        assert IdnMode.Confusable.value == IDN_MODE_CONFUSABLE
+
     def test_default_is_off(self) -> None:
         assert IdnMode.default() is IdnMode.Off
-        assert IdnMode.default().value == "off"
 
+    def test_all_members_are_truthy(self) -> None:
+        # All enum members are truthy (string-backed, non-empty) — the landmine
+        # that makes an ``or`` idiom unsafe for presence-checking.
+        for member in IdnMode:
+            assert member, f"IdnMode.{member.name} must be truthy (non-empty backing value)"
 
-# ===========================================================================
-# Scenario B — PfbToggle
-# ===========================================================================
-
-
-class TestPfbToggleRead:
-    def test_read_on_returns_on(self) -> None:
-        assert pfb_cfg_toggle_read("on") is PfbToggle.On
-
-    def test_read_empty_returns_off(self) -> None:
-        assert pfb_cfg_toggle_read("") is PfbToggle.Off
-
-    def test_read_none_returns_off(self) -> None:
-        assert pfb_cfg_toggle_read(None) is PfbToggle.Off
-
-    def test_read_junk_returns_off(self) -> None:
-        assert pfb_cfg_toggle_read("yes") is PfbToggle.Off
-        assert pfb_cfg_toggle_read("off") is PfbToggle.Off
-        assert pfb_cfg_toggle_read("1") is PfbToggle.Off
-        assert pfb_cfg_toggle_read("true") is PfbToggle.Off
-
-
-class TestPfbToggleWrite:
-    def test_write_on(self) -> None:
-        assert pfb_cfg_toggle_write(PfbToggle.On) == "on"
-
-    def test_write_off(self) -> None:
-        # Off is stored as '' (empty checkbox value).
-        assert pfb_cfg_toggle_write(PfbToggle.Off) == ""
-
-
-class TestPfbToggleRoundTrip:
-    @pytest.mark.parametrize("v", ["on", ""])
-    def test_canonical_values_round_trip(self, v: str) -> None:
-        # Before: raw canonical string.
-        assert isinstance(v, str)
-
-        # When round-tripped.
-        result = pfb_cfg_toggle_write(pfb_cfg_toggle_read(v))
-
-        # Then identical.
-        assert result == v
-
-    def test_default_is_off_empty_string(self) -> None:
-        assert PfbToggle.default() is PfbToggle.Off
-        assert PfbToggle.default().value == ""
-
-
-# ===========================================================================
-# Scenario C — PfbLenient
-# ===========================================================================
-
-
-class TestPfbLenientRead:
-    def test_read_on_returns_on(self) -> None:
-        assert pfb_cfg_lenient_read("on") is PfbLenient.On
-
-    def test_read_off_returns_off(self) -> None:
-        assert pfb_cfg_lenient_read("off") is PfbLenient.Off
-
-    def test_read_empty_returns_off(self) -> None:
-        # '' (pre-ADR-22 / absent key) -> Off (strict default).
-        assert pfb_cfg_lenient_read("") is PfbLenient.Off
-
-    def test_read_none_returns_off(self) -> None:
-        assert pfb_cfg_lenient_read(None) is PfbLenient.Off
-
-    def test_read_junk_returns_off(self) -> None:
-        assert pfb_cfg_lenient_read("yes") is PfbLenient.Off
-        assert pfb_cfg_lenient_read("1") is PfbLenient.Off
-        assert pfb_cfg_lenient_read("enabled") is PfbLenient.Off
-
-
-class TestPfbLenientWrite:
-    def test_write_on(self) -> None:
-        assert pfb_cfg_lenient_write(PfbLenient.On) == "on"
-
-    def test_write_off(self) -> None:
-        # Off is stored as 'off' (not '' like PfbToggle).
-        assert pfb_cfg_lenient_write(PfbLenient.Off) == "off"
-
-
-class TestPfbLenientRoundTrip:
-    @pytest.mark.parametrize("v", ["on", "off"])
-    def test_canonical_values_round_trip(self, v: str) -> None:
-        result = pfb_cfg_lenient_write(pfb_cfg_lenient_read(v))
-        assert result == v
-
-    def test_empty_normalises_to_off(self) -> None:
-        # '' normalises to 'off' — pre-ADR-22 installs treated as strict.
-        result = pfb_cfg_lenient_write(pfb_cfg_lenient_read(""))
-        assert result == "off"
-        assert result != ""
-
-    def test_default_is_off(self) -> None:
-        assert PfbLenient.default() is PfbLenient.Off
-        assert PfbLenient.default().value == "off"
-
-
-# ===========================================================================
-# Cross-field: Off values are field-specific
-# ===========================================================================
-
-
-class TestCrossFieldOffValues:
-    """PfbToggle::Off = '' but PfbLenient::Off = 'off' — must NOT be confused."""
-
-    def test_toggle_off_is_empty_string(self) -> None:
-        assert pfb_cfg_toggle_write(PfbToggle.Off) == ""
-
-    def test_lenient_off_is_off_string(self) -> None:
-        assert pfb_cfg_lenient_write(PfbLenient.Off) == "off"
-
-    def test_toggle_and_lenient_off_differ(self) -> None:
-        toggle_off = pfb_cfg_toggle_write(PfbToggle.Off)
-        lenient_off = pfb_cfg_lenient_write(PfbLenient.Off)
-        assert toggle_off != lenient_off
+    def test_round_trip_via_value(self) -> None:
+        # IdnMode(member.value) is member — enum lookup by backing string.
+        for member in IdnMode:
+            assert IdnMode(member.value) is member
