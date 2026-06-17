@@ -6679,11 +6679,15 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 		$rsync_src_esc = escapeshellarg("{$rsync_src}");
 
-		$result	= exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}");
-		if ($result == 0) {
+		// exec() returns the command's LAST output line, not its exit status; the
+		// real return code rides in the third argument. Test that, so a normal
+		// rsync transfer (which prints progress/stats) is not mistaken for a failure.
+		exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_output, $rsync_rc);
+		if ($rsync_rc === 0) {
 			$http_status = '200';
 		} else {
-			$log = "\n  RSYNC Failed...\n";
+			$rsync_msg = trim(implode(' ', $rsync_output));
+			$log = "\n  RSYNC Failed (exit {$rsync_rc})" . ($rsync_msg !== '' ? ": {$rsync_msg}" : '') . "...\n";
 			pfb_logger("{$log}", "{$logtype}");
 			return FALSE;
 		}
