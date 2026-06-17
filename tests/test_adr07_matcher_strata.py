@@ -274,6 +274,59 @@ class TestNumericBandResolution:
         assert self._decide(False, {}, {"r": r"benign"}) is False
 
 
+# --------------------------------------------------------------------------- #
+# TLD_Allow under the numeric (important_rules True) path.
+#
+# A disallowed-TLD hit is a feed-stratum BLOCK, so it must carry the feed band.
+# Regression guard: the TLD_Allow arm used to leave block_band at 0, and the
+# numeric resolution (blocked iff block_band > allow_band) then treated band 0 as
+# already overridden by any allow (allow_band >= 0 is always true) -- so a
+# disallowed-TLD query RESOLVED instead of being blocked once important_rules
+# engaged. With the band set, a no-allow case stays blocked.
+# --------------------------------------------------------------------------- #
+class TestTldAllowNumericBand:
+    """Scenario: a query whose TLD is not on the TLD-allow list stays blocked even
+    when the numeric ``important_rules`` resolution is engaged.
+
+    Background: ``python_tld`` on with allow-list ``{"com"}``; ``important_rules`` True
+    (an ABP ``@@`` / feed-regex / ``$important`` rule is loaded); no data/zone/regex hit.
+    """
+
+    def _decide(self, tld: str, allow_regex_db: dict) -> Any:
+        import re
+
+        cfg = _cfg(
+            python_tld=True,
+            python_tlds=["com"],
+            allowRegexDB=bool(allow_regex_db),
+            important_rules=True,
+        )
+        compiled = {k: (re.compile(v) if isinstance(v, str) else v) for k, v in allow_regex_db.items()}
+        containers = _containers(allowRegexDB=compiled)
+        return evaluate_domain(f"host.{tld}", f"host.{tld}", tld, False, cfg, containers)
+
+    def test_disallowed_tld_block_stands_with_no_allow(self) -> None:
+        # When: TLD "xyz" is not on the allow-list and NO allow rule matches.
+        dec = self._decide("xyz", {})
+        # Then: a real TLD_Allow block the numeric resolution lets STAND (in_whitelist
+        # False). This is the regression discriminator -- with block_band left at 0 the
+        # zero-allow case (allow_band 0 >= block_band 0) would mark it overridden -> resolve.
+        assert dec.is_found is True
+        assert dec.feed == "TLD_Allow"
+        assert dec.in_whitelist is False
+
+    def test_allowed_tld_is_not_a_block(self) -> None:
+        # Off side of the branch: a TLD on the allow-list is NOT a TLD_Allow hit.
+        dec = self._decide("com", {})
+        assert dec.is_found is False
+
+    def test_feed_allow_still_overrides_the_tld_block(self) -> None:
+        # Band ceiling: the TLD_Allow block is exactly the feed-block band (1), so a
+        # band-2 feed allow still wins -- the band is set, not over-promoted.
+        dec = self._decide("xyz", {"r": r"host"})
+        assert dec.in_whitelist is True
+
+
 class TestUserRegexSovereign:
     """A USER regex is band 5 (user block): it beats ANY feed allow (@@ band 2 /
     @@$important band 4) but still loses to the user whitelist (band 6).

@@ -5138,6 +5138,12 @@ def evaluate_domain(
             is_found = True
             feed = "TLD_Allow"
             group = "DNSBL_TLD_Allow"
+            # Feed-stratum block band (mirrors the IDN arms below): without it
+            # block_band stays 0, and the numeric important_rules resolution
+            # (_resolve_numeric_allow: blocked iff block_band > allow_band) would treat
+            # band 0 as already overridden by any allow (allow_band >= 0 is always true),
+            # so a disallowed-TLD query would resolve instead of being blocked.
+            block_band = PRIO_FEED_BLOCK
 
         # ADR-08: the IDN feed. ``idn_mode`` is the three-valued selector (off/all/
         # confusable); derive it from the legacy cfg["python_idn"] when a cfg predates
