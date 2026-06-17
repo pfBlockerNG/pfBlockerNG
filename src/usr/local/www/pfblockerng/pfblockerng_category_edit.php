@@ -33,14 +33,14 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
  */
 if (isAjax() && !empty($_GET['term']) && is_string($_GET['term']) && (mb_strlen($_GET['term']) > 2)) {
 	phpsession_begin();
-	$session_open = true;
+	$session_open = TRUE;
 	if (empty($_SESSION['pfb_asn_list_data']) && file_exists('/usr/local/www/pfblockerng/pfblockerng_asn.txt')) {
 		$_SESSION['pfb_asn_list_data'] = file(
 			'/usr/local/www/pfblockerng/pfblockerng_asn.txt',
 			FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES
 		);
-		phpsession_end(true);
-		$session_open = false;
+		phpsession_end(TRUE);
+		$session_open = FALSE;
 	}
 	if (!is_array($_SESSION['pfb_asn_list_data'])) {
 		$_SESSION['pfb_asn_list_data'] = [];
@@ -52,7 +52,7 @@ if (isAjax() && !empty($_GET['term']) && is_string($_GET['term']) && (mb_strlen(
 		if ($count >= 20) {
 			break;
 		}
-		if (mb_stripos($asn, $_GET['term']) !== false) {
+		if (mb_stripos($asn, $_GET['term']) !== FALSE) {
 			$count++;
 			$result[] = $asn;
 		}
@@ -68,7 +68,7 @@ phpsession_begin();
 if (isset($_SESSION['pfb_asn_list_data'])) {
 	unset($_SESSION['pfb_asn_list_data']);
 }
-phpsession_end(true);
+phpsession_end(TRUE);
 
 global $group, $pfb;
 pfb_global();
@@ -939,30 +939,30 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,			'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('General'),	FALSE,			'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		$active['ip'],		'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,			'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,			'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,			'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,			'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,			'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,			'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,			'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,			'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array 	= array();
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$tab_array[]	= array(gettext('IPv4'),	$active['ipv4'],	'/pfblockerng/pfblockerng_category.php?type=ipv4');
 	$tab_array[]	= array(gettext('IPv6'),	$active['ipv6'],	'/pfblockerng/pfblockerng_category.php?type=ipv6');
-	$tab_array[]	= array(gettext('GeoIP'),	false,			'/pfblockerng/pfblockerng_category.php?type=geoip');
-	$tab_array[]	= array(gettext('Reputation'),	false,			'/pfblockerng/pfblockerng_reputation.php');
+	$tab_array[]	= array(gettext('GeoIP'),	FALSE,			'/pfblockerng/pfblockerng_category.php?type=geoip');
+	$tab_array[]	= array(gettext('Reputation'),	FALSE,			'/pfblockerng/pfblockerng_reputation.php');
 }
 else {
 	$tab_array[]	= array(gettext('DNSBL Groups'),	$active['feeds'],	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
-	$tab_array[]	= array(gettext('DNSBL Category'),	false,			'/pfblockerng/pfblockerng_blacklist.php');
-	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	false,			'/pfblockerng/pfblockerng_safesearch.php');
+	$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,			'/pfblockerng/pfblockerng_blacklist.php');
+	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,			'/pfblockerng/pfblockerng_safesearch.php');
 }
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 if (empty($gtype)) {
 	print ('No Category type selected.');
@@ -1424,7 +1424,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoaddrnot_' . $advmode,
 			"Invert {$adv_type}",
 			NULL,
-			$pconfig['autoaddrnot_' . $advmode] === 'on' ? true:false,
+			$pconfig['autoaddrnot_' . $advmode] === 'on' ? TRUE:FALSE,
 			'on'
 		))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)");
 
@@ -1433,7 +1433,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoports_' . $advmode,
 			'Custom DST Port',
 			NULL,
-			$pconfig['autoports_' . $advmode] === 'on' ? true:false,
+			$pconfig['autoports_' . $advmode] === 'on' ? TRUE:FALSE,
 			'on'
 		))->setHelp('Enable')
 		  ->setWidth(2);
@@ -1459,7 +1459,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoaddr_' . $advmode,
 			"Custom {$custom_location}",
 			NULL,
-			$pconfig["autoaddr_{$advmode}"] === 'on' ? true:false,
+			$pconfig["autoaddr_{$advmode}"] === 'on' ? TRUE:FALSE,
 			'on'
 		))->setHelp('Enable')->setWidth(1);
 
@@ -1467,7 +1467,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autonot_' . $advmode,
 			NULL,
 			NULL,
-			$pconfig["autonot_{$advmode}"] === 'on' ? true:false,
+			$pconfig["autonot_{$advmode}"] === 'on' ? TRUE:FALSE,
 			'on'
 		))->setHelp('Invert')->setWidth(1);
 
@@ -1538,7 +1538,7 @@ if ($gtype == 'dnsbl') {
 		'filter_alexa',
 		'TOP1M Whitelist',
 		'Enable',
-		$pconfig['filter_alexa'] === 'on' ? true:false,
+		$pconfig['filter_alexa'] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Filter Group via TOP1M');
 
@@ -1626,7 +1626,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		'whois_convert',
 		'Enable Domain/AS',
 		NULL,
-		$pconfig['whois_convert'] === 'on' ? true:false,
+		$pconfig['whois_convert'] === 'on' ? TRUE:FALSE,
 		'on'
 	));
 

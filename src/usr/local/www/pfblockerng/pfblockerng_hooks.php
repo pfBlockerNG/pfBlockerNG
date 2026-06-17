@@ -76,7 +76,7 @@ if ($_POST) {
 			$rowid   = $k_field[1];
 
 			// Only handle this page's hook fields.
-			if (!in_array($field, array('hook_enabled', 'hook_when', 'hook_script', 'hook_timeout', 'hook_description'), true)) {
+			if (!in_array($field, array('hook_enabled', 'hook_when', 'hook_script', 'hook_timeout', 'hook_description'), TRUE)) {
 				continue;
 			}
 
@@ -181,23 +181,23 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	true,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	TRUE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 // Update sub-tabs: Run (update page) and Hooks (this page).
 // Second display_top_tabs row, matching the Feeds page IPv4/IPv6/DNSBL sub-tab idiom.
 $tab_array_sub	= array();
-$tab_array_sub[]	= array(gettext('Run'),		false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array_sub[]	= array(gettext('Hooks'),	true,	'/pfblockerng/pfblockerng_hooks.php');
-display_top_tabs($tab_array_sub, true);
+$tab_array_sub[]	= array(gettext('Run'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array_sub[]	= array(gettext('Hooks'),	TRUE,	'/pfblockerng/pfblockerng_hooks.php');
+display_top_tabs($tab_array_sub, TRUE);
 
 $form = new Form('Save');
 
@@ -299,7 +299,7 @@ foreach ($rowdata as $r_id => $row) {
 		'hook_enabled-' . $r_id,
 		NULL,
 		NULL,
-		(isset($row['enabled']) && $row['enabled'] === 'on') ? true : false,
+		(isset($row['enabled']) && $row['enabled'] === 'on') ? TRUE : FALSE,
 		'on'
 	))->setHelp(($numrows == $rowcounter) ? 'Enabled' : NULL)
 	  ->setWidth(1);

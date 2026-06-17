@@ -110,7 +110,7 @@ function pfb_cron_update($type) {
 	}
 
 	// Remove any existing pfBlockerNG CRON Jobs
-	install_cron_job('pfblockerng.php cron', false);
+	install_cron_job('pfblockerng.php cron', FALSE);
 
 	// Execute PHP process in the background
 	pfb_logger("\n [ Force Reload Task - {$pconfig['pfb_reload_option']} ]\n", 1);
@@ -144,23 +144,23 @@ if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	true,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	TRUE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 // Update sub-tabs: Run (this page) and Hooks (pre/post update scripts).
 // Second display_top_tabs row, matching the Feeds page IPv4/IPv6/DNSBL sub-tab idiom.
 $tab_array_sub	= array();
-$tab_array_sub[]	= array(gettext('Run'),		true,	'/pfblockerng/pfblockerng_update.php');
-$tab_array_sub[]	= array(gettext('Hooks'),	false,	'/pfblockerng/pfblockerng_hooks.php');
-display_top_tabs($tab_array_sub, true);
+$tab_array_sub[]	= array(gettext('Run'),		TRUE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
+display_top_tabs($tab_array_sub, TRUE);
 
 if ($pfb['enable'] == 'on') {
 	/* Legend - Time variables
@@ -285,7 +285,7 @@ $options = '<div class="infoblock"><dl class="dl-horizontal">'
 	. '</dl></div>';
 
 // Create Form
-$form = new Form(false);
+$form = new Form(FALSE);
 
 $section = new Form_Section('Update Settings');
 $section->addInput(new Form_StaticText(
@@ -432,7 +432,7 @@ if (isset($pconfig['log_view'])) {
 		pfb_livetail($pfb['log'], 'view');
 	} else {
 		// End the viewer output Window
-		clearstatcache(false, $pfb['log']);
+		clearstatcache(FALSE, $pfb['log']);
 		ob_flush();
 		flush();
 	}

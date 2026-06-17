@@ -667,22 +667,22 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	true,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	TRUE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('DNSBL Groups'),	false,		'/pfblockerng/pfblockerng_category.php?type=dnsbl');
-$tab_array[]	= array(gettext('DNSBL Category'),	false,		'/pfblockerng/pfblockerng_blacklist.php');
-$tab_array[]	= array(gettext('DNSBL SafeSearch'),	false,		'/pfblockerng/pfblockerng_safesearch.php');
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,		'/pfblockerng/pfblockerng_category.php?type=dnsbl');
+$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,		'/pfblockerng/pfblockerng_blacklist.php');
+$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,		'/pfblockerng/pfblockerng_safesearch.php');
+display_top_tabs($tab_array, TRUE);
 
 if (isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);
@@ -724,7 +724,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl',
 	gettext('DNSBL'),
 	'Enable DNSBL',
-	$pconfig['pfb_dnsbl'] === 'on' ? true:false,
+	$pconfig['pfb_dnsbl'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('This will enable DNS Block List for Malicious and/or unwanted Adverts Domains<br />'
 		. 'To Utilize, <strong>Unbound DNS Resolver</strong> must be enabled. Also ensure that pfBlockerNG is enabled.'
@@ -762,7 +762,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_tld',
 	gettext('Wildcard Blocking (TLD)'),
 	'Enable',
-	$pconfig['pfb_tld'] === 'on' ? true:false,
+	$pconfig['pfb_tld'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp($dnsbl_text);
 
@@ -770,7 +770,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_control',
 	gettext('DNSBL Control'),
 	'Enable',
-	$pconfig['pfb_control'] === 'on' ? true:false,
+	$pconfig['pfb_control'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enabling this option will allow sending DNSBL control commands via the local CLI.'
 	. '<div class="infoblock" style="width: 90%;">'
@@ -802,7 +802,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_control_legacy',
 	gettext('DNSBL Control (legacy DNS TXT)'),
 	'Enable',
-	$pconfig['pfb_control_legacy'] === 'on' ? true:false,
+	$pconfig['pfb_control_legacy'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('<span class="text-danger">Deprecated</span> - re-enable the legacy DNS TXT control transport (drill TXT python_control.*).'
 	. '<div class="infoblock" style="width: 90%;">'
@@ -815,7 +815,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',
 	gettext('DNS Reply Logging'),
 	'Enable',
-	$pconfig['pfb_py_reply'] === 'on' ? true:false,
+	$pconfig['pfb_py_reply'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
 
@@ -823,7 +823,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
 	gettext('HSTS mode'),
 	'Enable',
-	$pconfig['pfb_hsts'] === 'on' ? true:false,
+	$pconfig['pfb_hsts'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
@@ -2413,7 +2413,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_pytld',
 	gettext('TLD Allow'),
 	'Enable',
-	$pconfig['pfb_pytld'] === 'on' ? true:false,
+	$pconfig['pfb_pytld'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the TLD Allow feature (1,546 TLDs available). This will block all TLDs that are not specifically selected.'
 		. '<div id="dnsbl_python_tld_allow_text">'
@@ -2430,7 +2430,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_pytld_sort',
 	'',
 	'Enable',
-	$pconfig['pfb_pytld_sort'] === 'on' ? true:false,
+	$pconfig['pfb_pytld_sort'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable to sort TLDs alphabetically');
 
@@ -2480,7 +2480,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_idn_block_malicious',
 	gettext('Block clearly-malicious homoglyphs'),
 	'Enable',
-	$pconfig['pfb_idn_block_malicious'] === 'on' ? true:false,
+	$pconfig['pfb_idn_block_malicious'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Confusable mode: block names that mix confusable scripts in one label (clearly malicious). Disable to alert only.');
 
@@ -2488,7 +2488,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_idn_escalate_suspicious',
 	gettext('Block suspicious mixed-script'),
 	'Enable',
-	$pconfig['pfb_idn_escalate_suspicious'] === 'on' ? true:false,
+	$pconfig['pfb_idn_escalate_suspicious'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Confusable mode: escalate suspicious mixed-script names to a block. Default alerts only (no block).');
 
@@ -2496,7 +2496,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_regex',
 	gettext('Regex Blocking'),
 	'Enable',
-	$pconfig['pfb_regex'] === 'on' ? true:false,
+	$pconfig['pfb_regex'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the Regex blocking feature. Regex list below: [Regex List]');
 
@@ -2504,7 +2504,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_regex_cap',
 	gettext('Limit long/complex regex'),
 	'Enable',
-	$pconfig['pfb_regex_cap'] === 'on' ? true:false,
+	$pconfig['pfb_regex_cap'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Best-effort ReDoS safeguard (opt-in): over-long or catastrophic-backtracking regex patterns are dropped at load, before they run, from both feeds (ABP) and the Regex List above (each drop is logged). '
 		. 'An always-on runtime guard additionally warns on, then evicts, any pattern whose match runs too slow.');
@@ -2513,7 +2513,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_cname',
 	gettext('CNAME Validation'),
 	'Enable',
-	$pconfig['pfb_cname'] === 'on' ? true:false,
+	$pconfig['pfb_cname'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
 		. 'Events are logged with a "_CNAME" suffix in the DNSBL Log.');
@@ -2522,7 +2522,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_lenient',
 	gettext('Lenient feed parsing'),
 	'Enable',
-	$pconfig['pfb_dnsbl_lenient'] === 'on' ? true:false,
+	$pconfig['pfb_dnsbl_lenient'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Parse DNSBL feed lines permissively: any <strong>scheme://</strong> is stripped and URL paths are removed.<br />'
 		. 'When disabled (strict), lines with an invalid scheme (e.g. <strong>123://</strong>) or a URL path are skipped and logged.<br />'
@@ -2532,7 +2532,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_noaaaa',
 	gettext('no AAAA'),
 	'Enable',
-	$pconfig['pfb_noaaaa'] === 'on' ? true:false,
+	$pconfig['pfb_noaaaa'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no AAAA List below.');
 
@@ -2540,7 +2540,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_gp',
 	gettext('DNSBL Group Policy'),
 	'Enable',
-	$pconfig['pfb_gp'] === 'on' ? true:false,
+	$pconfig['pfb_gp'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL');
 
@@ -2709,7 +2709,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_py_nolog',
 	gettext('DNSBL Event Logging'),
 	'Enable',
-	$pconfig['pfb_py_nolog'] === 'on' ? true:false,
+	$pconfig['pfb_py_nolog'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Disable event logging in the DNS Resolver and utilize the DNSBL Webserver. Typically used when an upstream LAN DNS server is utilized.<br />'
 	. 'Null blocked events will still be logged.');
@@ -2723,7 +2723,7 @@ $group->add(new Form_Checkbox(
 	'pfb_dnsbl_rule',
 	NULL,
 	gettext('Enable'),
-	$pconfig['pfb_dnsbl_rule'] === 'on' ? true:false,
+	$pconfig['pfb_dnsbl_rule'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setWidth(7)
   ->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access<br />'
@@ -2764,7 +2764,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_cache',
 	gettext('Resolver cache'),
 	'Enable',
-	$pconfig['pfb_cache'] === 'on' ? true:false,
+	$pconfig['pfb_cache'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Default: <strong>Enabled</strong><br />Enable the backup and restore of the DNS Resolver Cache on DNSBL Update|Reload|Cron events');
 
@@ -2842,7 +2842,7 @@ $section->addInput(new Form_Checkbox(
 	'alexa_enable',
 	gettext('TOP1M'),
 	'Enable',
-	$pconfig['alexa_enable'] === 'on' ? true:false,
+	$pconfig['alexa_enable'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp($top1m_text);
 
@@ -2995,7 +2995,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddrnot_' . $advmode,
 		"Invert {$adv_type}",
 		NULL,
-		$pconfig['autoaddrnot_' . $advmode] === 'on' ? true:false,
+		$pconfig['autoaddrnot_' . $advmode] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)")
 	  ->addClass('dnsbl_ip');
@@ -3005,7 +3005,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoports_' . $advmode,
 		'Custom DST Port',
 		NULL,
-		$pconfig['autoports_' . $advmode] === 'on' ? true:false,
+		$pconfig['autoports_' . $advmode] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Enable')
 	  ->setWidth(2)
@@ -3033,7 +3033,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddr_' . $advmode,
 		"Custom {$custom_location}",
 		NULL,
-		$pconfig["autoaddr_{$advmode}"] === 'on' ? true:false,
+		$pconfig["autoaddr_{$advmode}"] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Enable')->setWidth(1)
 	  ->addClass('dnsbl_ip');
@@ -3042,7 +3042,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autonot_' . $advmode,
 		NULL,
 		NULL,
-		$pconfig["autonot_{$advmode}"] === 'on' ? true:false,
+		$pconfig["autonot_{$advmode}"] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Invert')->setWidth(1)
 	  ->addClass('dnsbl_ip');

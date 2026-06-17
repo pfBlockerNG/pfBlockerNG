@@ -96,7 +96,7 @@ if (pathinfo($ptype['REQUEST_URI'], PATHINFO_EXTENSION) == 'js') {
 }
 else {
 	header("Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0");
-	header("Cache-Control: post-check=0, pre-check=0", false);
+	header("Cache-Control: post-check=0, pre-check=0", FALSE);
 	header("Pragma: no-cache");
 	header("Expires: Sat, 26 Jul 2014 05:00:00 GMT");
 
