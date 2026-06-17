@@ -229,6 +229,50 @@ off-pattern name is a smell even when it works.
   path splits the knobs (`LC_COLLATE=C` + runtime-resolved `LC_CTYPE=<*.UTF-8>`), never bare
   `C`. Full policy + deferred resolver: `docs/misc/architecture-notes.md` ("Locale policy").
 
+### Code-quality conventions (ADR-28)
+
+Five conventions adopted as policy of record. Apply across the codebase in progressive phases
+(ADR-28 §6); each phase is one behaviour-preserving commit.
+
+#### Per-language convention table
+
+| Item | PHP 8.3 | Python 3.11+ | POSIX shell | `www/` JS |
+| ---- | ------- | ------------ | ----------- | --------- |
+| 1 — enums/bools over strings | backed `enum` for settings/mode values; genuine **predicates return `bool`** | `enum.Enum` / `typing.Literal`; predicates return `bool` | **N/A** — keep flag strings | `const` enums/booleans for new code |
+| 2 — short-circuit | cheap guard first in `&&`/`\|\|`; guard side-effect ordering | same | `&&`/`\|\|` order; `case` guard before `grep` | same |
+| 3 — `=` alignment | opportunistic, **touched blocks only** | same (respect `ruff format`) | opportunistic | same |
+| 4 — string-ops over regex | `str_*`/`strpos`/`str_contains` over `preg_*` where equivalent; **hot loops first** | `str` methods over `re` in per-query/per-line paths | parameter-expansion / `case` over `grep -E`/`sed` where equivalent | `String.prototype` methods over `RegExp` |
+| 5 — uppercase `TRUE`/`FALSE` | **uppercase** literals | `True`/`False` (already correct) | N/A | `true`/`false` (JS is lowercase) |
+
+#### Config storage hard-freeze + field-aware adapter rule (ADR-28 §2.2)
+
+- **`config.xml` stored values never change** — every checkbox `'on'`/`''` and every option
+  string stays byte-identical across upgrade. No migration routine exists in this package.
+- Enums/booleans are an **internal runtime representation only**. Conversion at the
+  **read-boundary** (`pfb_global()` and sibling read sites): stored string → enum on read;
+  enum → the **exact same legacy stored string** on write.
+- A **backed enum's backing value equals the stored string** (`case On = 'on'`) so
+  `Enum::tryFrom($stored) ?? Enum::default()` is the read adapter and `$e->value` is the
+  write adapter. Where a field's "off" is `''` vs `'off'` the adapter is **field-aware** of
+  that exact legacy vocabulary — no single global toggle.
+- **Round-trip identity mandatory and pinned by tests**: `write(read(v)) == v` for every
+  existing stored value. A field that cannot round-trip losslessly is **excluded** (kept as
+  a string, documented below). The legacy `'on'` value for `pfb_idn` is the only known
+  exception: it normalises to `'all'` on read (one-way migration, intentional).
+- PHP adapters: `pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
+  `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php`.
+- Python adapters: `pfb_cfg_idn_mode_read/write`, `pfb_cfg_toggle_read/write`,
+  `pfb_cfg_lenient_read/write` in `src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py`.
+
+#### Explicitly out of scope (ADR-28 §2.4)
+
+- `config.xml` storage format — frozen, never migrated.
+- `py_unbound.ini` and any manifest / serialized / wire value read by Python or shell.
+- ADR-26 shell locale prefixes (`LC_ALL=C`) — untouched by shell phase.
+- Genuine boolean predicates (yes/no functions) — return `bool`, not an enum.
+- Mass realignment of untouched lines — alignment is opportunistic within touched blocks only.
+- `stubs/`, generated artifacts, third-party vendored code.
+
 ---
 
 ## Test coverage (mandatory)
