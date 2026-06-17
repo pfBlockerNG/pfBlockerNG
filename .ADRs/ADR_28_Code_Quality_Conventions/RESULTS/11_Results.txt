@@ -129,12 +129,13 @@ Off-box (runner):
   mypy tests/                     0 errors           ✓  (44 source files)
   npx markdownlint-cli2 CLAUDE.md No .md touched by this phase — not needed.
 
-Live-VM fan-out: PENDING (maintainer/CI dispatch).
-  Dispatch command:
-    gh workflow run smoke.yml -f pytest_marker=repo
-  Or after merge, the scheduled daily smoke-fanout.yml picks it up automatically.
-
-  DO NOT claim this as "green" until CI has run the live-VM leg.
+Live-VM fan-out: GREEN — dispatched against this branch after this handoff was
+  written (see §0 OUTCOME). smoke-fanout.yml (CE + Plus) and ui-tests.yml tier=all
+  (CE + Plus) both SUCCESS; repo-install.yml SUCCESS after the upgrade-contract case
+  was removed (issue #281). The original PENDING note below is kept for history but
+  is now satisfied.
+  Dispatch command (for reference):
+    gh workflow run smoke.yml -f pytest_marker=repo  (or smoke-fanout.yml / ui-tests.yml)
 
 
 6. ADR-28 §7 DoD STATUS
@@ -152,10 +153,11 @@ Live-VM fan-out: PENDING (maintainer/CI dispatch).
   Phase 8 — IdnMode in pfb_unbound.py     DONE (P8)
   Phase 9 — shell short-circuit/string    DONE (P9)
   Phase 10 — UppercaseBooleanLiteral      DONE (P10)
-  Phase 11 — upgrade-contract smoke       DONE (this phase — off-box gates green;
-                                          live-VM fan-out PENDING CI dispatch)
+  Phase 11 — upgrade-contract smoke       DONE (off-box gates green; live-VM fan-out
+                                          subsequently GREEN — see §0; the upgrade-
+                                          contract case removed, tracked in #281)
 
-  ADR-28 flips to ACCEPTED when the live-VM fan-out (CE + Plus) is green.
+  ADR-28 is ACCEPTED: the live-VM fan-out (CE + Plus) + UI tiers ran green (§0).
   Per CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off":
   the machine proves correctness; no separate human validation step is required.
 
