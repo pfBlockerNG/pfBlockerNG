@@ -195,11 +195,10 @@ $form->add($section);
 $section = new Form_Section('Updates');
 $section->addInput(new Form_Checkbox(
 	'pfb_software_check',
-	'Check for new versions',
-	'Periodically check our repository for a newer pfBlockerNG build',
+	'New version check',
+	'Enabled',
 	$pfb_sw_check
-))->setHelp('When enabled, pfBlockerNG checks our repository for a newer build on your channel and raises a '
-		. 'notification when one is available. Disable to stop the background checks and notifications.');
+))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
 
 $section = new Form_Section('Actions');
@@ -214,7 +213,7 @@ $btn_check->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth
 // A button is a Form_Element, not a Form_Input — wrap each in a Form_StaticText (the
 // established pattern) so it gets its own labelled row + per-line help.
 $section->addInput(new Form_StaticText(null, $btn_check))
-	->setHelp('Refresh the latest-version information from our repository for your channel now.');
+	->setHelp('Check for a new version now.');
 
 $btn_update = new Form_Button(
 	'pfb_sw_update',
@@ -223,13 +222,12 @@ $btn_update = new Form_Button(
 	'fa-solid fa-download'
 );
 $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidth(2);
-// Enabled ONLY when an update is available (a same-channel upgrade has something to do).
+// Enabled ONLY when an update is available (there is something to install).
 if (!$update_available) {
 	$btn_update->setAttribute('disabled', 'disabled');
 }
 $section->addInput(new Form_StaticText(null, $btn_update))
-	->setHelp('Install the latest build on your current channel (same-channel upgrade only). '
-		. 'Enabled only when an update is available.');
+	->setHelp('Install the latest version. Available only when an update is found.');
 $form->add($section);
 
 // Live terminal window (shown when an Update is streaming).
@@ -256,7 +254,7 @@ if ($pfb_sw_action === 'update') {
 	if ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot update.'));
 	} else {
-		pfb_software_status(gettext('Running same-channel update...'));
+		pfb_software_status(gettext('Updating pfBlockerNG...'));
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
 		pfb_software_run_stream("{$bin} upgrade -y {$pkg}");
@@ -287,7 +285,7 @@ events.push(function() {
 	});
 	$('#pfb_sw_update').click(function(e) {
 		e.preventDefault();
-		if (confirm('Run a same-channel pfBlockerNG update now?')) {
+		if (confirm('Update pfBlockerNG to the latest version now?')) {
 			pfb_sw_submit('update');
 		}
 	});
