@@ -116,15 +116,17 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
    unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
    wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
-   pre-existing/orthogonal → its own branch+PR); mirror `pr-comments` Step 5 and reply
-   on every CodeRabbit thread. Honour the repo's lint config and `CLAUDE.md`.
+   pre-existing/orthogonal → **open a tracking GitHub Issue** per `pr-comments` Step 8,
+   in the same public repo; a confirmed-real finding is never just acknowledged);
+   mirror `pr-comments` Step 5 and reply on every CodeRabbit thread. Honour the repo's
+   lint config and `CLAUDE.md`.
 4. **Apply the valid fixes**, re-run the relevant gates (`php -l` / PHPUnit / PHPStan
    for PHP, `python -m pytest` / `ruff` / `mypy` for Python, ShellCheck for shell —
    whatever the change touches), commit (`<scope>: <imperative summary>`) and push to
    the PR head branch.
 5. **Record the review on the PR** — post one comment summarising the Sonnet substitute
    review (and noting CodeRabbit's, if it was folded in) plus the per-finding
-   resolution (applied + commit / skipped + reason / deferred + link), so there is an
+   resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
    audit trail. Use `gh pr comment N --body-file` and append the attribution footer
    (resolve `<gh-login>` once with `gh api user -q .login`):
 

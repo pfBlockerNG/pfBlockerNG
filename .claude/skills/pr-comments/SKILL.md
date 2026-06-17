@@ -207,7 +207,10 @@ For every finding, decide a verdict — do **not** auto-apply:
   not just the *problem*.
 - **Verdict:** **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
   wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
-  pre-existing/orthogonal → its own branch+PR).
+  pre-existing/orthogonal → **open a tracking GitHub Issue**, Step 8). DEFER is only
+  for findings you have confirmed **real** — so a deferred finding ALWAYS gets an
+  issue. A reply that just says "deferred" with no issue is wasted effort: either it
+  is real (→ issue) or it is not (→ SKIP with the reason).
 
 ## Step 6 — Apply the valid fixes
 
@@ -242,16 +245,29 @@ body file before posting.
   → one top-level PR comment: `gh pr comment N --body-file <file>`. Address
   `@coderabbitai` directly when you want it to re-check or acknowledge.
 - Each reply states the verdict plainly: **applied** (cite the commit),
-  **skipped** (the validated reason), or **deferred** (link the new PR).
+  **skipped** (the validated reason), or **deferred** (link the tracking issue).
 
-## Step 8 — Deferred findings → their own PR (optional)
+## Step 8 — Deferred findings → a tracking GitHub Issue (mandatory)
 
-For a valid-but-pre-existing finding, branch off the base, fix it there, and open
-a separate PR (`--body-file` for the body; push the branch first, PR only if
-direct push is blocked). Link that PR in the reply on the original thread.
+Every DEFER finding is real (Step 5 already confirmed it) — so it MUST land in a
+GitHub Issue, never just an acknowledgement. Acknowledging without a follow-up is
+wasted computation.
+
+- **Open the issue in the SAME (public) repo as the PR** — `gh issue create -R OWNER/REPO
+  --title <t> --body-file <f>` with descriptive label(s) (`bug`/`enhancement`/…). The
+  finding is **already public** on the PR, so do NOT route it to a private repo even when
+  it is security-flavoured — a comment CodeRabbit already posted discloses nothing new.
+  (A genuinely *undisclosed* vulnerability you found yourself still follows the private
+  disclosure rules — but a public review comment is not that.)
+- **The issue body is self-contained:** what the finding is, the `file:line`, why it is
+  out of scope for THIS PR, and a link back to the review comment/PR. Append the
+  attribution footer.
+- **Optionally** also fix it now in its own branch+PR (`--body-file`; push first, PR if
+  direct push is blocked) and link that too — but the issue is the required artifact.
+- **Link the issue** in the reply on the original thread (Step 7).
 
 ## Step 9 — Report back
 
 Summarize: findings by source (inline / nitpick / outside-diff-range), how many
-**applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ PR
-links); gate results; and any thread you could not resolve.
+**applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ tracking
+issue links, and any follow-up PR); gate results; and any thread you could not resolve.
