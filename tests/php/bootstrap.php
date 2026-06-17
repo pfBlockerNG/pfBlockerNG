@@ -68,6 +68,10 @@ error_reporting($pfb_prev_er);
 //    first function definition onward: the function bodies are the shipped code
 //    under test, defined verbatim; no production file is modified. Guarded so a
 //    real include path (on-appliance) never double-defines.
+// 6. Load the ADR-28 adapter helpers so tests can exercise them against the
+//    real bootstrap environment (enums + adapter fns; not yet wired into prod).
+require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php';
+
 if (!function_exists('step3_submitphpaction')) {
 	$pfb_wizard_src = file_get_contents(
 		dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc'
