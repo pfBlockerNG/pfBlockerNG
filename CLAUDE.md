@@ -257,15 +257,24 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
   that exact legacy vocabulary — no single global toggle.
 - **Round-trip identity mandatory and pinned by tests**: `write(read(v)) == v` for every
   existing stored value. A field that cannot round-trip losslessly is **excluded** (kept as
-  a string, documented below). The legacy `'on'` value for `pfb_idn` is the only known
-  exception: it normalises to `'all'` on read (one-way migration, intentional).
-- PHP adapters: `pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
-  `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`.
-- Python: `pfb_unbound.py` adopts the **`IdnMode` enum** internally. `pfb["idn_mode"]`
-  is converted from the ini string at the read boundary (preserving the legacy
-  `python_idn` fallback for absent/unrecognised keys; ini string contract unchanged).
-  Toggle/lenient enums have **no Python consumer** — `pfb_unbound.py` reads all
-  boolean toggles via `config.getboolean()` — so they are PHP-only adapters.
+  a string). The legacy `'on'` value for `pfb_idn` is the only known exception: it
+  normalises to `'all'` on read (one-way migration, intentional — `pfb_idn` is excluded from
+  enum adoption on the PHP side; see below).
+- **PHP adapters** (`pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
+  `pfb_cfg_idn_mode_read/write`) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
+  - **Adopted** (round-trip clean): `dnsbl_lenient` → `PfbLenient`; `dnsbl_vip_auto` and
+    ~76 other `'on'`/`''` checkbox fields read via `pfb_global()` → `PfbToggle`. Every
+    adapted field's full stored vocabulary passes `write(read(v)) == v`.
+  - **Excluded** (`pfb_idn` / config key `dnsbl_idn`): the stored vocabulary has a legacy
+    `'on'` value that cannot round-trip (it normalises to `'all'` on read); this field is
+    read/written as a plain string and **not** converted through `pfb_cfg_idn_mode_read/write`
+    on the PHP side. The `pfb_cfg_idn_mode_*` adapters exist but are not wired to this
+    config key to avoid the one-way migration.
+- **Python** (`pfb_unbound.py`): adopts the **`IdnMode` enum** internally — `pfb["idn_mode"]`
+  is converted from the ini string at the read boundary (preserving the legacy `python_idn`
+  fallback for absent/unrecognised keys; ini string contract unchanged). Toggle/lenient enums
+  have **no Python consumer** — `pfb_unbound.py` reads all boolean toggles via
+  `config.getboolean()` — so `PfbToggle`/`PfbLenient` are PHP-only adapters.
 
 #### Explicitly out of scope (ADR-28 §2.4)
 
@@ -346,17 +355,27 @@ gates (pulled by `composer install`, enforced in CI `test.yml` + the pre-commit 
 `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
 `tests/php/pfsense_doubles.php`).
 
-**PHPCS — the PFBL-01 RequirePfbFilter sniff.** A custom rule
-(`PfBlockerNG.Validation.RequirePfbFilter`, in `tests/phpcs/PfBlockerNG/`) enforces PFBL-01:
-inside an **in-scope (allow-listed) function** — the ADR-06/07/10/13 input-handling surfaces —
-no `exec`-family call, `json_encode` manifest write, or dynamic filesystem-path build may
-appear **without a preceding semantic-validation call** (`pfb_filter()` /
-`pfb_sanitise_feed_header()` / `sanitize_ipaddr()`) in the same scope — the *semantic* layer
-`escapeshellarg()` can't provide (both required). Scope is an explicit allow-list (the
-`scopeFunctions` property), so "legacy code is out of scope" is encoded by **not listing** a
-function; add a name there when a new in-scope surface lands. Run `vendor/bin/phpcs` (config
-from `phpcs.xml.dist`). Sniff behaviour pinned by `tests/php/RequirePfbFilterSniffTest.php`
-against `tests/phpcs/fixtures/`.
+**PHPCS — two targeted sniffs** (in `tests/phpcs/PfBlockerNG/`), both wired via `phpcs.xml.dist`,
+each with its own scope:
+
+- **PFBL-01 `RequirePfbFilter`** (`PfBlockerNG.Validation.RequirePfbFilter`, scoped to
+  `pfblockerng.inc` only): inside an **in-scope (allow-listed) function** — the
+  ADR-06/07/10/13 input-handling surfaces — no `exec`-family call, `json_encode` manifest
+  write, or dynamic filesystem-path build may appear **without a preceding semantic-validation
+  call** (`pfb_filter()` / `pfb_sanitise_feed_header()` / `sanitize_ipaddr()`) in the same
+  scope — the *semantic* layer `escapeshellarg()` can't provide (both required). Scope is an
+  explicit allow-list (the `scopeFunctions` property); add a function name there when a new
+  in-scope surface lands. Behaviour pinned by `tests/php/RequirePfbFilterSniffTest.php`.
+
+- **ADR-28 `UppercaseBooleanLiteral`** (`PfBlockerNG.CodeStyle.UppercaseBooleanLiteral`,
+  scoped to **all `src/` PHP** — all `.inc` files + `www/`): flags any `true`, `false`,
+  `True`, `False` (etc.) boolean **value** literal that is not exactly uppercase `TRUE`/`FALSE`.
+  Type-declaration positions (`string|false`, `?true`, `: false` return types, param types) are
+  **excluded** — PHPCS's tokenizer converts them to `T_STRING` before the sniff fires. Strings
+  (`'true'`/`"false"`), identifiers, and `null` are out of scope. Behaviour pinned by
+  `tests/php/UppercaseBooleanLiteralSniffTest.php` against `tests/phpcs/fixtures/`.
+
+Run `vendor/bin/phpcs --standard=phpcs.xml.dist src/` (config from `phpcs.xml.dist`).
 
 ### Shell
 
@@ -596,7 +615,7 @@ pfBlockerNG/
 ├── .markdownlint-cli2.jsonc  # markdownlint-cli2 globs + ignores
 ├── pyproject.toml         # pytest + ruff + mypy config
 ├── phpunit.xml            # PHPUnit config (PHP unit suite; tests/php/)
-├── phpcs.xml.dist         # PHPCS config (PFBL-01 RequirePfbFilter sniff over pfblockerng.inc)
+├── phpcs.xml.dist         # PHPCS config (PFBL-01 over pfblockerng.inc; ADR-28 UppercaseBooleanLiteral over all src/ PHP)
 ├── composer.json          # PHP dev deps: phpstan + phpunit + php_codesniffer
 └── README.md
 ```

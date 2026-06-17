@@ -11,4 +11,9 @@
          config entry. The directory layout PfBlockerNG/Sniffs/Validation/ encodes the
          sniff code PfBlockerNG.Validation.RequirePfbFilter. -->
     <rule ref="./Sniffs/Validation/RequirePfbFilterSniff.php"/>
+
+    <!-- ADR-28 item 5: uppercase PHP TRUE/FALSE value literals.
+         The directory layout PfBlockerNG/Sniffs/CodeStyle/ encodes the
+         sniff code PfBlockerNG.CodeStyle.UppercaseBooleanLiteral. -->
+    <rule ref="./Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php"/>
 </ruleset>
