@@ -113,6 +113,9 @@ enum PfbIdnMode: string
  */
 function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 {
+	if (!is_scalar($stored) && $stored !== null) {
+		return PfbToggle::default();
+	}
 	return PfbToggle::tryFrom((string) ($stored ?? '')) ?? PfbToggle::default();
 }
 
@@ -136,6 +139,9 @@ function pfb_cfg_toggle_write(PfbToggle $toggle): string
  */
 function pfb_cfg_lenient_read(mixed $stored): PfbLenient
 {
+	if (!is_scalar($stored) && $stored !== null) {
+		return PfbLenient::default();
+	}
 	if ((string) ($stored ?? '') === 'on') {
 		return PfbLenient::On;
 	}
@@ -165,6 +171,9 @@ function pfb_cfg_lenient_write(PfbLenient $lenient): string
  */
 function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 {
+	if (!is_scalar($stored) && $stored !== null) {
+		return PfbIdnMode::default();
+	}
 	$raw = (string) ($stored ?? '');
 	if ($raw === 'on') {
 		// Legacy: 'on' migrates to All at runtime; canonical stored value is 'all'.

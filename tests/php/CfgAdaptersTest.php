@@ -250,6 +250,32 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(PfbIdnMode::Off, pfb_cfg_idn_mode_read('IDN_MODE_ALL'));
 	}
 
+	// -----------------------------------------------------------------------
+	// Non-scalar guard (is_scalar branch) — all three read adapters
+	// -----------------------------------------------------------------------
+
+	public function testToggleReadNonScalarReturnsDefault(): void
+	{
+		// Non-scalar input (e.g. array from config_get_path returning a subtree) must
+		// return the field default WITHOUT emitting "Array to string conversion" warning.
+		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(['x']));
+		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(['on']));
+	}
+
+	public function testLenientReadNonScalarReturnsDefault(): void
+	{
+		// Non-scalar input returns Off (the field default) without casting.
+		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read(['x']));
+		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read(['on']));
+	}
+
+	public function testIdnModeReadNonScalarReturnsDefault(): void
+	{
+		// Non-scalar input returns Off (the field default) without casting.
+		$this->assertSame(PfbIdnMode::Off, pfb_cfg_idn_mode_read(['x']));
+		$this->assertSame(PfbIdnMode::Off, pfb_cfg_idn_mode_read(['all']));
+	}
+
 	public function testIdnModeRoundTripAll(): void
 	{
 		// Canonical 'all' round-trips losslessly.
