@@ -234,14 +234,12 @@ above), a **Software** tab appears on every pfBlockerNG page
 GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
 our builds. The tab shows your current **channel** (stable / devel / nightly) and
 **installed version** against **our repository's latest**, plus the last-checked time, and
-offers three buttons:
+offers two buttons:
 
 - **Check now** — refresh the comparison from our repo (reads `pkg … -r <ourrepo>`, never
   the Netgate repo).
 - **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
-  (it never switches channels).
-- **Bootstrap repo** — (re)write the repo conf for your current channel, the in-GUI
-  equivalent of `add-repo.sh`.
+  (it never switches channels). Enabled only when an update is available.
 
 > The Software tab, the page, and the update notice are present **only on a build installed
 > from one of our repos** (`pfblockerng` / `pfblockerng-nightly`). On a stock
