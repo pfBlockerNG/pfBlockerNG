@@ -12055,7 +12055,8 @@ function sync_package_pfblockerng($cron='') {
 
 						// Compare existing (original file) and new Continent data
 						if ($continent == $continent_ex && !empty($pfctlck)
-						    && file_exists("{$pfbfolder}/{$cc_alias}.txt") && $pfb['reuse'] == ''
+						    && $pfb['reuse'] == ''
+						    && file_exists("{$pfbfolder}/{$cc_alias}.txt")
 						    && !file_exists("{$pfb['dbdir']}/geoip.update")) {
 							if (!$pfb['save']) {
 								$log = "\n[ {$cc_alias} ]{$logtab} exists. [ NOW ]";

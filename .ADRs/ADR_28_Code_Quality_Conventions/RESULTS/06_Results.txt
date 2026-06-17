@@ -1,0 +1,149 @@
+ADR-28 Phase 6 Results — Short-circuit / cheap-test-first reordering (PHP)
+==========================================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+
+1. SCOPE
+---------
+
+Surveyed every && / || chain across the full PHP surface (src/usr/local/pkg/pfblockerng/*.inc,
+src/usr/local/www/**/*.php, src/usr/local/www/wizards/*.inc) for conditions where an EXPENSIVE
+operand (preg_match, file_exists, is_file, is_dir, filesize, or a function call) preceded a
+CHEAP guard (empty(), isset(), scalar string compare, bool variable, enum compare) with no
+dependency between them.
+
+Reorder criteria (all must hold):
+  (a) No operand performs assignment / mutation.
+  (b) No operand calls a function with side effects.
+  (c) No later operand depends on an earlier one having run.
+  (d) Only operand ORDER changes — no operand added, removed, or rewritten.
+
+
+2. REORDER DONE — 1 condition
+-------------------------------
+
+pfblockerng.inc ~:12034 (inside sync_package_pfblockerng):
+
+  Before:
+    if ($continent == $continent_ex && !empty($pfctlck)
+        && file_exists("{$pfbfolder}/{$cc_alias}.txt") && $pfb['reuse'] == ''
+        && !file_exists("{$pfb['dbdir']}/geoip.update")) {
+
+  After:
+    if ($continent == $continent_ex && !empty($pfctlck)
+        && $pfb['reuse'] == ''
+        && file_exists("{$pfbfolder}/{$cc_alias}.txt")
+        && !file_exists("{$pfb['dbdir']}/geoip.update")) {
+
+  Why safe:
+    - $pfb['reuse'] is a scalar string set by pfb_global() — cheap pure read.
+    - file_exists() is a pure filesystem read with no side effects.
+    - Neither operand depends on the other having run.
+    - No assignment, no capture groups, no array_shift.
+    - Only operands 3 and 4 swapped; 1, 2, 5 unchanged.
+
+  Why beneficial:
+    - When $pfb['reuse'] == 'on' (the "reuse lists" path), both file_exists()
+      calls are skipped entirely — saves two filesystem syscalls per continent
+      alias on every reuse pass.
+
+
+3. CONDITIONS EVALUATED AND LEFT — dominant reasons
+-----------------------------------------------------
+
+(a) Guard/access dependency — file_exists guards a dependent call:
+    - pfblockerng_dnsbl.php:404-406: file_exists(...) && filesize(...) — filesize
+      on a non-existent file is an error; file_exists is the required guard.
+    - pfblockerng.inc:2885: file_exists($aggout) && (filemtime($aggout) > ...) —
+      filemtime depends on the file existing.
+    - pfblockerng.inc:2902: same filemtime/filesize guard pattern.
+
+(b) Already optimal — cheap guard IS first:
+    - All pfb_cfg_toggle_read() / empty() / isset() guards that precede preg_match
+      or file_exists are already in the correct order (~30+ sites).
+    - pfblockerng.inc:5714-5716: $pfb['reuse_dnsbl'] == 'on' || file_exists(...)
+      — cheap string compare precedes filesystem call. Correct.
+    - pfblockerng.inc:5651: $cache && $pfb['dnsbl_res_cache'] == 'on' &&
+      file_exists(...) && filesize(...) — cheap guards first. Correct.
+    - pfblockerng.inc:1741: $logmax != 'nolimit' && file_exists(...) — correct.
+    - pfblockerng.inc:9998: !empty($pfb_suffix_match) && preg_match(...) — correct.
+    - pfblockerng.inc:12024: empty($pfctlck) && file_exists(...) — correct.
+    - pfblockerng.inc:12661: !empty($line) && !preg_match(...) — correct.
+    - pfb_unbound_include.inc:137: !empty($folder_remove) && is_dir(...) — correct.
+
+(c) Structural refactor, not a reorder:
+    - pfblockerng.inc:12931-12932: file_exists(...) && in_array(...) ||
+      file_exists(...) && empty($pfctlck) — correct reorder would require
+      deduplication and restructuring, not a pure operand swap. Left as-is.
+
+(d) pfblockerng_install.inc:157 — install-time code (runs rarely),
+    minimal gain; left as-is per conservative mandate.
+
+(e) enum/bool operands: pfb_cfg_toggle_read() calls are cheap (a tryFrom()
+    lookup, effectively a string compare) — no expensive op follows them
+    in && chains. No reorder opportunity there.
+
+(f) www/ pages: all && chains with file_exists or preg_match already have the
+    cheap guard (logtype/string compare/bool variable) first. No candidates.
+
+
+4. GOLDEN TEST ADDED
+---------------------
+
+tests/php/ShortCircuitGuardOrderTest.php
+
+  testBeforeFormReturnsTrueOnlyWhenAllInputsTrue()
+    — Pins the before-state: old ordering must be false when any input is false,
+      true only when all five are true. Asserts before-state per mandate.
+
+  testAfterFormMatchesBeforeFormForAllCombinations()
+    — Truth-table identity: iterates all 32 (2^5) input combinations, asserts
+      evalBefore() === evalAfter() for every combination. Proves boolean
+      equivalence of the reorder.
+
+  testAfterFormSkipsFileExistsWhenReuseIsNotEmpty()
+    — Short-circuit proof via spy counter: with the new ordering, when
+      $pfb['reuse'] != '' (reuse_empty=false), the spy for file_exists
+      is NOT called (counter stays 0). With the old ordering, the spy
+      IS called (counter becomes 1) even though the expression is false.
+      Directly proves the short-circuit benefit and correctness.
+
+The condition is not unit-reachable (inside the complex sync_package_pfblockerng
+runtime function); page-level proof defers to Phase 11 ui_render as documented.
+
+
+5. SELF-REVIEW
+---------------
+
+Read git diff HEAD -- src/ tests/:
+  - One hunk in pfblockerng.inc: operands 3 and 4 of a 5-operand && chain
+    swapped. No operand added, removed, merged, split, or rewritten.
+  - $pfb['reuse'] == '' not separated from anything it guards (it has no
+    access dependency with file_exists — they are fully independent reads).
+  - No side-effecting operand reordered.
+  - No new src/ file created.
+  - pfb_cfg_adapters.py untouched.
+  Verdict: CLEAN.
+
+
+6. VERIFICATION GATES
+----------------------
+
+    vendor/bin/phpunit        594 tests, 1282 assertions, OK    ✓
+    vendor/bin/phpstan        0 errors                           ✓
+    vendor/bin/phpcs          0 errors (PFBL-01 green)           ✓
+    php -l pfblockerng.inc    No syntax errors                   ✓
+    python -m pytest          1691 passed                        ✓
+    ruff check .              All checks passed                  ✓
+
+
+7. SUMMARY
+-----------
+
+  Conditions reordered:  1 (pfblockerng.inc:12034)
+  Conditions evaluated and left: ~40+ (dominant reasons: guard/access dependency,
+      already optimal, structural refactor needed, install-time code)
+  Golden tests added: 1 file, 3 test methods
+
+Go-ahead for Phase 7.
