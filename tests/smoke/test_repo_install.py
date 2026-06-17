@@ -298,15 +298,21 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     """Run ``scripts/build-repo-portable.py`` ON THE RUNNER, then ship its catalog to the guest.
 
     This is the Phase-3a proof: the catalog is generated in PURE PYTHON on the runner
-    (no libpkg, no guest involvement) exactly as the Phase-3b publish job will, then
-    only the produced ``release/<ABI>/`` tree is copied to the guest. A real pfSense
-    ``pkg update``/``install`` then has to accept it — the fidelity gate that the
-    pure-Python catalog is byte-compatible with what real ``pkg repo`` emits. The
-    generator is driven with ``--catalog-name release`` so it nests the release channel
-    under ``release/<ABI>/`` (ADR-20, symmetric with nightly).
+    (no libpkg, no guest involvement) exactly as the Phase-3b publish job will, then its
+    catalog files are copied to the guest. A real pfSense ``pkg update``/``install`` then
+    has to accept it — the fidelity gate that the pure-Python catalog is byte-compatible
+    with what real ``pkg repo`` emits. The generator is driven with ``--catalog-name
+    release`` so it produces ``out/release/<ABI>/`` locally.
 
-    Returns the on-guest path of the single ``release/<ABI>/`` directory (the branch
-    ``.pkg`` is one ABI, ``FreeBSD:15:amd64``), which the ``file://`` repo conf points at.
+    The catalog files are then staged to a FLAT on-guest path, ``PORTABLE_REPO_ROOT/<ABI>/``
+    — the ``release/`` segment is intentionally dropped. That flat ``<ABI>/`` layout is
+    also the legacy "no variant prefix" path that ``test_legacy_abi_path_still_upgrades``
+    (ADR-20 Case 3) reuses this helper to produce, so it must stay flat. The literal
+    ``/release`` end-to-end symmetry is exercised by ``build_repo_via_portable_named``
+    and the routing-Worker cases, not here.
+
+    Returns the on-guest flat ``<ABI>/`` directory (the branch ``.pkg`` is one ABI,
+    ``FreeBSD:15:amd64``) that the ``file://`` repo conf points at.
     """
     in_dir = tmp_path / "portable_in"
     out_dir = tmp_path / "portable_out"
@@ -346,7 +352,11 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
         assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
 
-    # Ship the <ABI>/ tree to the guest (fresh dir per run).
+    # Ship the catalog files to a FLAT on-guest <ABI>/ path (fresh dir per run). The
+    # release/ segment is intentionally dropped so this doubles as the legacy "no variant
+    # prefix" ${ABI}/ layout that test_legacy_abi_path_still_upgrades (ADR-20 Case 3)
+    # reuses this helper to produce; the /release symmetry is covered by
+    # build_repo_via_portable_named + the routing-Worker cases.
     guest_abi_dir = f"{PORTABLE_REPO_ROOT}/{local_abi_dir.name}"
     _ssh_check(vm, "/bin/rm", "-rf", PORTABLE_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
