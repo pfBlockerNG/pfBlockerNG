@@ -636,15 +636,16 @@ whoisconvert() {
 	# ${found} flag the restore logic below reads); skip blank entries.
 	while IFS= read -r host; do
 		[ -z "${host}" ] && continue
-		# Determine if host is a Domain or an AS
-		host_check="$(echo "${host}" | grep '\.')"
-		if [ -n "${host_check}" ]; then
+		# Determine if host is a Domain or an AS: a domain contains a dot.
+		case "${host}" in
+		*.*)
 			found=true
 			printf '  Collecting host IP: %s' "${host}"
 			echo "### Domain: ${host} ###" >> "${pfborig}${alias}.orig"
 			"${pathhost}" -t "${_type}" "${host}" | sed 's/^.* //' >> "${pfborig}${alias}.orig"
 			echo "... completed"
-		else
+			;;
+		*)
 			# Download IPinfo asn databases on first use.
 			if [ ! -f "${pathasncsv}" ]; then
 				printf 'Downloading [ IPinfo databases ] [ %s ]' "${now}"
@@ -687,7 +688,8 @@ whoisconvert() {
 				found=false
 			fi
 			rm -f "${pfborig}${alias}.wk"
-		fi
+			;;
+		esac
 	done <<EOF
 ${custom_list}
 EOF
@@ -845,7 +847,7 @@ EOF
 	# Derive header from $alias (in scope), matching reputation_dmax/pmax; do not
 	# rely on a stale $header global, and operate on the absolute ${pfbmatch}
 	# path rather than a relative one (issue #27).
-	header="$(echo "${alias##*/}" | cut -d '.' -f1)"
+	header="${alias##*/}"; header="${header%%.*}"
 	matchoutfile="match${header}.txt"
 	if [ ! -s "${tempmatchfile}" ] && [ -f "${pfbmatch}${matchoutfile}" ]; then rm -f "${pfbmatch}${matchoutfile}"; fi
 	# Move match file to the match folder by individual blocklist name
@@ -974,7 +976,7 @@ EOF
 			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
 			while IFS= read -r blfile; do
 				[ -z "${blfile}" ] && continue
-				header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
+				header="${blfile##*/}"; header="${header%%.*}"
 				grep "${ii}" "${blfile}" > "${tempfile}"
 
 				if [ "${ccblack}" = 'block' ]; then
@@ -1062,7 +1064,7 @@ reputation_pmax(){
 			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
 			while IFS= read -r blfile; do
 				[ -z "${blfile}" ] && continue
-				header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
+				header="${blfile##*/}"; header="${header%%.*}"
 				grep "${ii}" "${blfile}" > "${tempfile}"
 				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${blfile}"
 
@@ -1297,10 +1299,10 @@ closingprocess() {
 # Call appropriate processes using script argument $1.
 case "${1}" in
 	_*)
-		if [ "$(echo "${1}" | grep -c '_255')" -gt 0 ]; then process255; fi
-		if [ "$(echo "${1}" | grep -c '_agg')" -gt 0 ]; then cidr_aggregate; fi
-		if [ "$(echo "${1}" | grep -c '_rep')" -gt 0 ]; then reputation_depends; reputation_max; fi
-		if [ "$(echo "${1}" | grep -c '_dup')" -gt 0 ]; then duplicate; fi
+		case "${1}" in *_255*) process255 ;; esac
+		case "${1}" in *_agg*) cidr_aggregate ;; esac
+		case "${1}" in *_rep*) reputation_depends; reputation_max ;; esac
+		case "${1}" in *_dup*) duplicate ;; esac
 		;;
 	continent)
 		duplicate
