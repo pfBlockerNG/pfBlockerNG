@@ -31,7 +31,7 @@
  * limitations under the License.
  */
 
-$nocsrf = true;
+$nocsrf = TRUE;
 @require_once('/usr/local/www/widgets/include/widget-pfblockerng.inc');
 @require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 @require_once('guiconfig.inc');
@@ -125,28 +125,28 @@ if ($_POST) {
 					// Remove unreferenced 'daily' or 'weekly' cron job
 					$pfb_other = ($pfb_day == '*') ? '7' : '*';
 					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_other)) {
-						install_cron_job("pfblockerng.php {$type}", false);
+						install_cron_job("pfblockerng.php {$type}", FALSE);
 					}
 
 					if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
-						install_cron_job($pfb_cmd, true, '0', '0', '*', '*', $pfb_day, 'root');
+						install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
 					}
 				}
 				else {
 					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-						install_cron_job("pfblockerng.php {$type}", false);
+						install_cron_job("pfblockerng.php {$type}", FALSE);
 					}
 					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-						install_cron_job("pfblockerng.php {$type}", false);
+						install_cron_job("pfblockerng.php {$type}", FALSE);
 					}
 				}
 			}
 			else {
 				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-					install_cron_job("pfblockerng.php {$type}", false);
+					install_cron_job("pfblockerng.php {$type}", FALSE);
 				}
 				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-					install_cron_job("pfblockerng.php {$type}", false);
+					install_cron_job("pfblockerng.php {$type}", FALSE);
 				}
 			}
 		}

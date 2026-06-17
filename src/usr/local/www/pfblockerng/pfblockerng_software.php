@@ -91,7 +91,7 @@ function pfb_software_run_stream($cmd) {
 		pfb_software_output(gettext('Failed to start the task.'));
 		return;
 	}
-	while (($line = fgets($fh)) !== false) {
+	while (($line = fgets($fh)) !== FALSE) {
 		pfb_software_output(rtrim($line, "\r\n"));
 	}
 	pclose($fh);
@@ -122,7 +122,7 @@ if ($_POST && isset($_POST['save'])) {
 // "Check now" — a manual, explicit cache refresh from our repo, then redisplay. $force=true
 // bypasses the "Check for new versions" enable-gate so a one-off check always works.
 if ($pfb_sw_action === 'check') {
-	pfb_software_update_check(true);
+	pfb_software_update_check(TRUE);
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;
 }
@@ -133,16 +133,16 @@ include_once('head.inc');
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
-pfb_software_add_tab($tab_array, true);
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
+pfb_software_add_tab($tab_array, TRUE);
+display_top_tabs($tab_array, TRUE);
 
 // Channel + installed version are read LIVE (local `pkg query`, no network) so they are
 // always known on an installed box. Only the our-repo "latest" + status + last-checked come

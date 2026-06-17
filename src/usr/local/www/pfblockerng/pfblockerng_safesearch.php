@@ -251,22 +251,22 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),		false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),			false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),		true,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),		false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),		false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),		false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),		false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),		false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),		FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),			FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),		TRUE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),		FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),		FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),		FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),		FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('DNSBL Groups'),	false,	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
-$tab_array[]	= array(gettext('DNSBL Category'),	false,	'/pfblockerng/pfblockerng_blacklist.php');
-$tab_array[]	= array(gettext('DNSBL SafeSearch'),	true,	'/pfblockerng/pfblockerng_safesearch.php');
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
+$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,	'/pfblockerng/pfblockerng_blacklist.php');
+$tab_array[]	= array(gettext('DNSBL SafeSearch'),	TRUE,	'/pfblockerng/pfblockerng_safesearch.php');
+display_top_tabs($tab_array, TRUE);
 
 if (isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);

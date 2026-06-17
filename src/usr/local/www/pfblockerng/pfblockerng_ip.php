@@ -112,7 +112,7 @@ if ($_POST) {
 			$input_errors[] = 'Placeholder IP: A valid IPv4 address must be specified.';
 		}
 		else {
-			$ip_validate = where_is_ipaddr_configured($_POST['ip_placeholder'], '' , true, true, '');
+			$ip_validate = where_is_ipaddr_configured($_POST['ip_placeholder'], '' , TRUE, TRUE, '');
 			if (count($ip_validate)) {
 				$input_errors[] = 'Placeholder IP: Address must be in an isolated Range that is not used in your Network.';
 			}
@@ -230,23 +230,23 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		true,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		TRUE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('IPv4'),	false,	'/pfblockerng/pfblockerng_category.php?type=ipv4');
-$tab_array[]	= array(gettext('IPv6'),	false,	'/pfblockerng/pfblockerng_category.php?type=ipv6');
-$tab_array[]	= array(gettext('GeoIP'),	false,	'/pfblockerng/pfblockerng_category.php?type=geoip');
-$tab_array[]	= array(gettext('Reputation'),	false,	'/pfblockerng/pfblockerng_reputation.php');
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('IPv4'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=ipv4');
+$tab_array[]	= array(gettext('IPv6'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=ipv6');
+$tab_array[]	= array(gettext('GeoIP'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=geoip');
+$tab_array[]	= array(gettext('Reputation'),	FALSE,	'/pfblockerng/pfblockerng_reputation.php');
+display_top_tabs($tab_array, TRUE);
 
 if (!$input_errors && isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);
@@ -268,7 +268,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_dup',
 	'De-Duplication',
 	'Enable',
-	$pconfig['enable_dup'] === 'on' ? true:false,
+	$pconfig['enable_dup'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Only used for IPv4 Deny Lists');
 
@@ -276,7 +276,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_agg',
 	'CIDR Aggregation',
 	'Enable',
-	$pconfig['enable_agg'] === 'on' ? true:false,
+	$pconfig['enable_agg'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
 
@@ -284,7 +284,7 @@ $section->addInput(new Form_Checkbox(
 	'suppression',
 	'Suppression',
 	'Enable',
-	$pconfig['suppression'] === 'on' ? true:false,
+	$pconfig['suppression'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. Only for IPv4 lists (/32 and /24).'
 	. '<div class="infoblock">'
@@ -299,7 +299,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_log',
 	'Force Global IP Logging',
 	'Enable',
-	$pconfig['enable_log'] === 'on' ? true:false,
+	$pconfig['enable_log'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('The global logging option is only used to force logging for all IP Aliases, and not to disable the logging of all IP Aliases.<br />'
 		. 'This overrides any logging settings in the GeoIP/IPv4/v6 tabs.'
@@ -395,7 +395,7 @@ $section->addInput(new Form_Checkbox(
 	'database_cc',
 	'MaxMind CSV Updates',
 	'Check to disable MaxMind CSV updates',
-	$pconfig['database_cc'] === 'on' ? true:false,
+	$pconfig['database_cc'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
 
@@ -480,7 +480,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_float',
 	'Floating Rules',
 	'Enable',
-	$pconfig['enable_float'] === 'on' ? true:false,
+	$pconfig['enable_float'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
 		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
@@ -513,7 +513,7 @@ $section->addInput(new Form_Checkbox(
 	'killstates',
 	'Kill States',
 	'Enable',
-	$pconfig['killstates'] === 'on' ? true:false,
+	$pconfig['killstates'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('When \'Enabled\', after a cron event or any \'Force\' commands, any blocked IPs found in the Firewall states will be cleared.');
 

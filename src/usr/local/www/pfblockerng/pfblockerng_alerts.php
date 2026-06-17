@@ -585,7 +585,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		config_set_path("installedpackages/pfblockerngglobal", $pfb['aglobal']);
-		write_config('pfBlockerNG: Update ALERT tab settings.', false);
+		write_config('pfBlockerNG: Update ALERT tab settings.', FALSE);
 		header("Location: /pfblockerng/pfblockerng_alerts.php?view={$pageview}");
 		exit;
 	}
@@ -837,7 +837,7 @@ if (isset($_POST) && !empty($_POST)) {
 			$data .= "{$v4suppression_dat}\r\n";
 			$clists['ipsuppression']['base64'] = base64_encode($data);
 			config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', $clists['ipsuppression']['base64']);
-			write_config("pfBlockerNG: Added {$ip} to the IPv4 Suppression customlist", false);
+			write_config("pfBlockerNG: Added {$ip} to the IPv4 Suppression customlist", FALSE);
 			pfb_create_suppression_file();	// Create pfbsuppression.txt
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -894,7 +894,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$clists['dnsblwhitelist']['base64'] = base64_encode($data);
 			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression', $clists['dnsblwhitelist']['base64']);
-			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", false);
+			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", FALSE);
 
 			// Refresh the query-time whiteDB so the domain is no longer allowed.
 			pfb_unbound_python_whitelist('alerts');
@@ -920,7 +920,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$clists['dnsbl'][$list]['base64'] = base64_encode($data);
 			config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$list]['base64_idx']}/custom", $clists['dnsbl'][$list]['base64']);
-			write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Group [ {$list} ] customlist", false);
+			write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Group [ {$list} ] customlist", FALSE);
 			$cl_added = TRUE;
 		}
 		else {
@@ -1058,7 +1058,7 @@ if (isset($_POST) && !empty($_POST)) {
 				$data .= "{$whitelist}\r\n";
 				$clists['dnsblwhitelist']['base64'] = base64_encode($data);
 				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/suppression", $clists['dnsblwhitelist']['base64']);
-				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", false);
+				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", FALSE);
 			}
 
 			// Issue #37: reconcile the two user stores. Whitelisting a domain is the
@@ -1095,7 +1095,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$clists['dnsbl'][$lname]['base64'] = base64_encode($data);
 				config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$lname]['base64_idx']}/custom", $clists['dnsbl'][$lname]['base64']);
-				write_config("pfBlockerNG: Removed [ {$domain} ] from DNSBL Group [ {$lname} ] customlist (whitelisted)", false);
+				write_config("pfBlockerNG: Removed [ {$domain} ] from DNSBL Group [ {$lname} ] customlist (whitelisted)", FALSE);
 			}
 			if (!empty($cl_changed)) {
 				$savemsg .= gettext(' Also removed from DNSBL Group customlist(s): ') . implode(', ', array_keys($cl_changed)) . '.';
@@ -1173,7 +1173,7 @@ if (isset($_POST) && !empty($_POST)) {
 				$data .= "{$exclude_string}\r\n";
 				$clists['tldexclusion']['base64'] = base64_encode($data);
 				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion", $clists['tldexclusion']['base64']);
-				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", false);
+				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -1359,7 +1359,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		if ($pfb_found) {
-			write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", false);
+			write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE);
 			if ($dnsbl_py_changes) {
 				pfb_unbound_python_whitelist('alerts');
 				pfb_unbound_python_sources_whitelist();
@@ -1553,7 +1553,7 @@ if (isset($_POST) && !empty($_POST)) {
 
 			$clists['ipwhitelist' . $vtype][$table]['base64'] = base64_encode($data);
 			config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table]['base64']);
-			write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", false);
+			write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
 
 			$aname = substr(substr($table, 4),0, -3);					// Remove 'pfB_' and '_v4'
 			touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
@@ -3225,16 +3225,16 @@ if (isset($_REQUEST['savemsg'])) {
 
 
 $tab_array   = array();
-$tab_array[] = array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[] = array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[] = array(gettext('DNSBL'),		false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[] = array(gettext('Update'),		false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[] = array(gettext('Reports'),	true,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[] = array(gettext('Feeds'),		false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[] = array(gettext('Logs'),		false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[] = array(gettext('Sync'),		false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[] = array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[] = array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[] = array(gettext('DNSBL'),		FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[] = array(gettext('Update'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[] = array(gettext('Reports'),	TRUE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[] = array(gettext('Feeds'),		FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[] = array(gettext('Logs'),		FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[] = array(gettext('Sync'),		FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array   = array();
 $tab_array[] = array(gettext('Unified'),		$active['unified'],	'/pfblockerng/pfblockerng_alerts.php?view=unified');
@@ -3246,10 +3246,10 @@ $tab_array[] = array(gettext('IP Match Stats'),		$active['ip_match'],	'/pfblocke
 $tab_array[] = array(gettext('DNS Reply'),		$active['reply'],		'/pfblockerng/pfblockerng_alerts.php?view=reply');
 $tab_array[] = array(gettext('DNS Reply Stats'),	$active['dnsbl_reply_stat'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_reply_stat');
 $tab_array[] = array(gettext('DNSBL Block Stats'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat');
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 // Create Form
-$form = new Form(false);
+$form = new Form(FALSE);
 $form->setAction('/pfblockerng/pfblockerng_alerts.php');
 
 if ($alert_summary && strpos($alert_view, 'ip_') !== FALSE) {

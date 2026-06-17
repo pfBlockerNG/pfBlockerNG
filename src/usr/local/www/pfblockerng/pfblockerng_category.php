@@ -149,7 +149,7 @@ if (isset($rowdata[0]) && empty($rowdata[0])) {
 	if (isset($rowdata_path)) {
 		config_set_path($rowdata_path, $rowdata);
 	}
-	write_config("pfBlockerNG: Removed empty rowdata", false);
+	write_config("pfBlockerNG: Removed empty rowdata", FALSE);
 }
 
 if (!empty($action) && isset($gtype) && isset($rowid)) {
@@ -163,7 +163,7 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 				if (isset($rowdata_path)) {
 					config_del_path("{$rowdata_path}/{$rowid}");
 				}
-				write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", false);
+				write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
 				$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
 			} else {
 				$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
@@ -308,7 +308,7 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 
 				// Save postdata and Table re-ordering
 				if (!$input_errors) {
-					write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", false);
+					write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
 				} else {
 					// return errors to AJAX request
 					print(json_encode($input_errors));
@@ -335,16 +335,16 @@ include_once('head.inc');
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,			'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('General'),	FALSE,			'/pfblockerng/pfblockerng_general.php');
 $tab_array[]	= array(gettext('IP'),		$active['ip'],		'/pfblockerng/pfblockerng_ip.php');
 $tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,			'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,			'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,			'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,			'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,			'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,			"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,			'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,			'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,			'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array = array();
 
@@ -352,14 +352,14 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6' || $gtype == 'geoip') {
 	$tab_array[]	= array(gettext('IPv4'),	$active['ipv4'],	'/pfblockerng/pfblockerng_category.php?type=ipv4');
 	$tab_array[]	= array(gettext('IPv6'),	$active['ipv6'],	'/pfblockerng/pfblockerng_category.php?type=ipv6');
 	$tab_array[]	= array(gettext('GeoIP'),	$active['geoip'],	'/pfblockerng/pfblockerng_category.php?type=geoip');
-	$tab_array[]	= array(gettext('Reputation'),	false,			'/pfblockerng/pfblockerng_reputation.php');
+	$tab_array[]	= array(gettext('Reputation'),	FALSE,			'/pfblockerng/pfblockerng_reputation.php');
 }
 else {
 	$tab_array[]	= array(gettext('DNSBL Groups'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
-	$tab_array[]	= array(gettext('DNSBL Category'),	false,			'/pfblockerng/pfblockerng_blacklist.php');
-	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	false,			'/pfblockerng/pfblockerng_safesearch.php');
+	$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,			'/pfblockerng/pfblockerng_blacklist.php');
+	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,			'/pfblockerng/pfblockerng_safesearch.php');
 }
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 if (isset($savemsg)) {
 	print_info_box($savemsg, 'success');

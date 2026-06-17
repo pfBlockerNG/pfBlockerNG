@@ -478,15 +478,15 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// Download URL headers and compare previously downloaded file with remote timestamp
 			if (($ch = curl_init("{$list_download}"))) {
 				curl_setopt_array($ch, $pfb['curl_defaults']);		// Load curl default settings
-				curl_setopt($ch, CURLOPT_NOBODY, true);			// Exclude the body from the output
+				curl_setopt($ch, CURLOPT_NOBODY, TRUE);			// Exclude the body from the output
 				curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 				curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
 				curl_setopt($ch, CURLOPT_HEADER, 1);
 
 				// Allow downgrade of cURL settings if user configured
 				if ($pflex == 'Flex') {
-					curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-					curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+					curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
+					curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, FALSE);
 					curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'TLSv1.2, TLSv1, SSLv3');
 				}
 
@@ -1822,29 +1822,29 @@ if ($input_errors) {
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),		false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),			true,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),		false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),		false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),		false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),		false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),		false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),		false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),		FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),			TRUE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),		FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),		FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),		FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),		FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),		FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('GeoIP'),		false,						'/pfblockerng/pfblockerng_category.php?type=geoip');
-$tab_array[]	= array(gettext('Top Spammers'),	$active['Top Spammers']		?: false,	'/pfblockerng/pfblockerng_Top_Spammers.php');
-$tab_array[]	= array(gettext('Africa'),		$active['Africa']		?: false,	'/pfblockerng/pfblockerng_Africa.php');
-$tab_array[]	= array(gettext('Antarctica'),		$active['Antarctica']		?: false,	'/pfblockerng/pfblockerng_Antarctica.php');
-$tab_array[]	= array(gettext('Asia'),		$active['Asia']			?: false,	'/pfblockerng/pfblockerng_Asia.php');
-$tab_array[]	= array(gettext('Europe'),		$active['Europe']		?: false,	'/pfblockerng/pfblockerng_Europe.php');
-$tab_array[]	= array(gettext('North America'),	$active['North America']	?: false,	'/pfblockerng/pfblockerng_North_America.php');
-$tab_array[]	= array(gettext('Oceania'),		$active['Oceania']		?: false,	'/pfblockerng/pfblockerng_Oceania.php');
-$tab_array[]	= array(gettext('South America'),	$active['South America']	?: false,	'/pfblockerng/pfblockerng_South_America.php');
-$tab_array[]	= array(gettext('Proxy and Satellite'),	$active['Proxy and Satellite']	?: false,	'/pfblockerng/pfblockerng_Proxy_and_Satellite.php');
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('GeoIP'),		FALSE,						'/pfblockerng/pfblockerng_category.php?type=geoip');
+$tab_array[]	= array(gettext('Top Spammers'),	$active['Top Spammers']		?: FALSE,	'/pfblockerng/pfblockerng_Top_Spammers.php');
+$tab_array[]	= array(gettext('Africa'),		$active['Africa']		?: FALSE,	'/pfblockerng/pfblockerng_Africa.php');
+$tab_array[]	= array(gettext('Antarctica'),		$active['Antarctica']		?: FALSE,	'/pfblockerng/pfblockerng_Antarctica.php');
+$tab_array[]	= array(gettext('Asia'),		$active['Asia']			?: FALSE,	'/pfblockerng/pfblockerng_Asia.php');
+$tab_array[]	= array(gettext('Europe'),		$active['Europe']		?: FALSE,	'/pfblockerng/pfblockerng_Europe.php');
+$tab_array[]	= array(gettext('North America'),	$active['North America']	?: FALSE,	'/pfblockerng/pfblockerng_North_America.php');
+$tab_array[]	= array(gettext('Oceania'),		$active['Oceania']		?: FALSE,	'/pfblockerng/pfblockerng_Oceania.php');
+$tab_array[]	= array(gettext('South America'),	$active['South America']	?: FALSE,	'/pfblockerng/pfblockerng_South_America.php');
+$tab_array[]	= array(gettext('Proxy and Satellite'),	$active['Proxy and Satellite']	?: FALSE,	'/pfblockerng/pfblockerng_Proxy_and_Satellite.php');
+display_top_tabs($tab_array, TRUE);
 
 $form = new Form('Save');
 
@@ -2005,7 +2005,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddrnot_' . $advmode,
 		"Invert {$adv_type}",
 		NULL,
-		$pconfig['autoaddrnot_' . $advmode] === 'on' ? true:false,
+		$pconfig['autoaddrnot_' . $advmode] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)");
 
@@ -2014,7 +2014,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoports_' . $advmode,
 		'Custom DST Port',
 		NULL,
-		$pconfig['autoports_' . $advmode] === 'on' ? true:false,
+		$pconfig['autoports_' . $advmode] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Enable')
 	  ->setWidth(2);
@@ -2040,7 +2040,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddr_' . $advmode,
 		"Custom {$custom_location}",
 		NULL,
-		$pconfig["autoaddr_{$advmode}"] === 'on' ? true:false,
+		$pconfig["autoaddr_{$advmode}"] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Enable')->setWidth(1);
 
@@ -2048,7 +2048,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autonot_' . $advmode,
 		NULL,
 		NULL,
-		$pconfig["autonot_{$advmode}"] === 'on' ? true:false,
+		$pconfig["autonot_{$advmode}"] === 'on' ? TRUE:FALSE,
 		'on'
 	))->setHelp('Invert')->setWidth(1);
 
@@ -2364,23 +2364,23 @@ include_once('head.inc');
 $get_req = pfb_alerts_default_page();
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('General'),	false,	'/pfblockerng/pfblockerng_general.php');
-$tab_array[]	= array(gettext('IP'),		true,	'/pfblockerng/pfblockerng_ip.php');
-$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		TRUE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
-display_top_tabs($tab_array, true);
+display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
-$tab_array[]	= array(gettext('IPv4'),	false,	'/pfblockerng/pfblockerng_category.php?type=ipv4');
-$tab_array[]	= array(gettext('IPv6'),	false,	'/pfblockerng/pfblockerng_category.php?type=ipv6');
-$tab_array[]	= array(gettext('GeoIP'),       false,	'/pfblockerng/pfblockerng_category.php?type=geoip');
-$tab_array[]	= array(gettext('Reputation'),  true,	'/pfblockerng/pfblockerng_reputation.php');
-display_top_tabs($tab_array, true);
+$tab_array[]	= array(gettext('IPv4'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=ipv4');
+$tab_array[]	= array(gettext('IPv6'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=ipv6');
+$tab_array[]	= array(gettext('GeoIP'),       FALSE,	'/pfblockerng/pfblockerng_category.php?type=geoip');
+$tab_array[]	= array(gettext('Reputation'),  TRUE,	'/pfblockerng/pfblockerng_reputation.php');
+display_top_tabs($tab_array, TRUE);
 
 $form = new Form('Save');
 
@@ -2416,7 +2416,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_rep',
 	'Max',
 	'Enable',
-	$pconfig['enable_rep'] === 'on' ? true:false,
+	$pconfig['enable_rep'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enables search for repeat offenders in a /24 range on <strong>Each individual Blocklist</strong>');
 
@@ -2448,7 +2448,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_pdup',
 	'pMAX',
 	'Enable',
-	$pconfig['enable_pdup'] === 'on' ? true:false,
+	$pconfig['enable_pdup'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enables search for repeat offenders in All BlockLists, <strong>without</strong> Country Code Exclusion');
 
@@ -2463,7 +2463,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_dedup',
 	'dMAX',
 	'Enable',
-	$pconfig['enable_dedup'] === 'on' ? true:false,
+	$pconfig['enable_dedup'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Enables search for repeat offenders in All blocklists <strong>using</strong> Country Code Exclusion');
 

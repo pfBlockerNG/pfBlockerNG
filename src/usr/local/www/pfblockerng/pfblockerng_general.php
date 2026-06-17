@@ -228,17 +228,17 @@ else {
 	$get_req = pfb_alerts_default_page();
 
 	$tab_array	= array();
-	$tab_array[]	= array(gettext('General'),	true,	'/pfblockerng/pfblockerng_general.php');
-	$tab_array[]	= array(gettext('IP'),		false,	'/pfblockerng/pfblockerng_ip.php');
-	$tab_array[]	= array(gettext('DNSBL'),	false,	'/pfblockerng/pfblockerng_dnsbl.php');
-	$tab_array[]	= array(gettext('Update'),	false,	'/pfblockerng/pfblockerng_update.php');
-	$tab_array[]	= array(gettext('Reports'),	false,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
-	$tab_array[]	= array(gettext('Feeds'),	false,	'/pfblockerng/pfblockerng_feeds.php');
-	$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
-	$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
+	$tab_array[]	= array(gettext('General'),	TRUE,	'/pfblockerng/pfblockerng_general.php');
+	$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+	$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+	$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+	$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+	$tab_array[]	= array(gettext('Feeds'),	FALSE,	'/pfblockerng/pfblockerng_feeds.php');
+	$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+	$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 	pfb_software_add_tab($tab_array);
-	$tab_array[]	= array(gettext('Wizard'),	false,	'/wizard.php?xml=pfblockerng_wizard.xml');
-	display_top_tabs($tab_array, true);
+	$tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
+	display_top_tabs($tab_array, TRUE);
 }
 
 $form = new Form('Save');
@@ -256,7 +256,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_cb',
 	'pfBlockerNG',
 	gettext('Enable'),
-	$pconfig['enable_cb'] === 'on' ? true:false,
+	$pconfig['enable_cb'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'Context help is available on various pages by clicking the \'blue infoblock\' icons &emsp;---->'
@@ -267,7 +267,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_keep',
 	'Keep Settings',
 	gettext('Enable'),
-	$pconfig['pfb_keep'] === 'on' ? true:false,
+	$pconfig['pfb_keep'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
@@ -280,7 +280,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_feed_internal_filter',
 	'Internal Feed Host Filter',
 	gettext('Enable'),
-	$pconfig['pfb_feed_internal_filter'] === 'on' ? true:false,
+	$pconfig['pfb_feed_internal_filter'] === 'on' ? TRUE:FALSE,
 	'on'
 ))->setHelp('Restrict feeds from being fetched from non-public/internal addresses. '
 		. 'The exemptions list below allows specific IP/CIDRs through.'
