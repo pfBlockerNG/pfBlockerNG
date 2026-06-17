@@ -64,6 +64,16 @@ numerically — their count is the total phase count.
 All phase work happens in a dedicated worktree checked out to `adr/{NN}-{slug}`; the main
 checkout is never edited by phases. Set it up idempotently:
 
+- **Managed-remote sessions (check FIRST).** Per CLAUDE.md "Managed-remote sessions: branch
+  policy + cross-session resume": if the environment permits pushing to the canonical
+  `adr/{NN}-{slug}` branch (the **preferred** config), use it as normal — resume is native, no
+  special-casing. Only if push is **hard-pinned** to a minted `claude/<slug>-<rand>` branch does
+  the pinned branch replace `adr/{NN}-{slug}`: then work in the primary checkout (not a separate
+  worktree), `git fetch origin` and **discover** any prior branch carrying this ADR's
+  `RESULTS/{NN}_*` handoffs + an `ADR-RESUME:` sentinel; if exactly one unambiguous candidate
+  exists, **fast-forward its commits onto the current pinned branch** and continue at its
+  `next-phase` (no prompt). Ask only on genuine ambiguity. Record/carry the `ADR-RESUME` sentinel
+  in the handoff.
 - **Resolve the branch name first.** Compute `{slug}` from the ADR title per CLAUDE.md
   "Branch naming (ADRs and issues)" → the target branch `adr/{NN}-{slug}`. This is
   deterministic, so it matches whatever a prior phase already created.

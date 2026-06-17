@@ -762,6 +762,47 @@ reusing its own `adr/{NN}-*` branch across phases is reuse, not a collision — 
 Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsbl`; issue #43 "TLD-Allow
 KeyError on …" → `issue/43-tld-allow-keyerror-on`.
 
+#### Managed-remote sessions: branch policy + cross-session resume
+
+A **managed remote (web/app) session mints its own branch** — `claude/<slug>-<rand>`, created
+and checked out at container start. **Where you may push is set by the environment's branch-push
+policy** (configured in the environment/trigger, *not* this repo — see
+<https://code.claude.com/docs/en/claude-code-on-the-web>), and that choice decides which of the
+two models below applies. Two configurations, **in order of preference**:
+
+**Preferred — allow pushing to the canonical work-item branch.** Configure the environment's
+push policy to permit the repo's own `adr/{NN}-{slug}` and `issue/{NN}-{slug}` branches (keep
+`devel`/`main` **PR-only** — never a direct push). Then a managed-remote session works the item
+on its canonical convention branch exactly as off-appliance: the worktree + branch-naming rules
+apply unchanged, and **resume is native** — `/adr-phase` / `/gh-issue` recompute the slug and
+find the existing branch with **no archaeology**. Prefer this; it makes the minted `claude/*`
+branch a non-issue. The hard "never push anywhere but the session branch" pin is the wrong
+default for this repo — it should always carve out this exception.
+
+**Fallback — push hard-pinned to the minted `claude/*` branch.** When the environment forbids
+pushing anywhere but the minted branch, you cannot reach the canonical name, so the pinned branch
+**replaces** the convention for the session — adopt it; there is no start-time choice to confirm.
+The cost: each session gets a *fresh* branch, so work spans sessions only if a resuming session
+**finds the prior one**. The discover-and-fast-forward convention (managed-remote, pinned only):
+
+- **Record the override loudly + machine-readably** in the first handoff (`RESULTS/01_Results.txt`,
+  or the issue branch note): the prose override (actual branch replaces the `{NN}-{slug}`
+  convention; a bare `/adr-phase {NN}` / `/adr-all {NN}` / `/gh-issue {NN}` recomputes the wrong
+  name and misses the work) **plus a greppable sentinel line** `ADR-RESUME: branch=<actual-branch>
+  next-phase=<N>` (or `ISSUE-RESUME:` for an issue).
+- **Before starting an ADR/issue fresh, DISCOVER prior work.** `git fetch origin`; scan remote
+  branches for that item's committed handoffs (`RESULTS/{NN}_*` for an ADR) and the `*-RESUME:`
+  sentinel. Select the candidate with the **highest contiguous completed phase**.
+- **Resume by fast-forward onto your own branch** (push is pinned — you cannot push to the
+  discovered branch): replay/cherry-pick the discovered commits onto the current session branch
+  (they share base `devel`, so it is a clean linear replay), continue the remaining phases, and
+  push to *your* branch. Carry the sentinel forward with an updated `next-phase`.
+- **Auto-resume WITHOUT asking iff unambiguous:** exactly one viable candidate, a valid `*-RESUME:`
+  sentinel, and no sign of a concurrent live session on it (no recent foreign pushes — the "reuse
+  only when no other session owns it" rule still holds). Then do **not** prompt — just resume.
+- **`AskUserQuestion` only on genuine ambiguity:** multiple viable candidates, a missing/garbled
+  sentinel, or a candidate that looks live (cooperate / wait instead of clobbering).
+
 ---
 
 ## GitHub issues
