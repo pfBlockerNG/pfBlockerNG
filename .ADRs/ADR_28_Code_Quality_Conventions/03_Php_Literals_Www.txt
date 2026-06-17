@@ -1,0 +1,50 @@
+================================================================================
+PHASE 3 PROMPT — PHP TRUE/FALSE uppercase normalisation: www/
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.1 item 5, §6 Phase 3 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 3 of 10, MECHANICAL and
+BEHAVIOUR-PRESERVING: same uppercase normalisation across the web UI PHP. Work inline, one commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+Continues item 5 across src/usr/local/www/. Split from Phase 2 to keep each diff reviewable.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/02_Results.txt — confirm the package .inc literals
+  are normalised. If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.1 item 5, §2.4)
+- src/usr/local/www/pfblockerng/*.php, src/usr/local/www/widgets/widgets/pfblockerng.widget.php,
+  src/usr/local/www/wizards/pfblockerng_wizard.inc.
+- CLAUDE.md (PHP standards; clean the diff). NOTE: JS boolean literals stay LOWERCASE true/false —
+  item 5 is PHP-only.
+
+ACTION PLAN
+1. Replace lowercase/PascalCase PHP boolean LITERALS with uppercase TRUE/FALSE across the www/ PHP
+   files. PHP code only.
+2. Do NOT change JS `true`/`false` (JS convention is lowercase), nor the strings 'true'/'false', nor
+   stored/wire values.
+3. No logic or structural change.
+
+CONSTRAINTS
+- Pure mechanical literal-case change in PHP regions only (mind inline <script> JS blocks — leave JS).
+- Tabs; no realignment of untouched lines.
+- Keep PFBL-01 sniff green.
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit / vendor/bin/phpstan / vendor/bin/phpcs -> green/clean
+- php -l on each touched file -> no syntax errors
+- diff-read: PHP literal-case only; no JS touched; no logic moved.
+
+EXPECTED RESULT
+All PHP boolean literals in www/ are uppercase; JS untouched; behaviour byte-identical.
+
+COMMIT (single)
+    www: uppercase PHP TRUE/FALSE literals in pfBlockerNG UI (ADR-28 P3)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/03_Results.txt
+State: per-file count; confirmation JS left lowercase and no logic changed. Go-ahead for Phase 4.

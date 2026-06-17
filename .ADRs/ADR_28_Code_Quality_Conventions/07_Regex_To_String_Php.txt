@@ -1,0 +1,57 @@
+================================================================================
+PHASE 7 PROMPT — regex -> string functions (PHP)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §1.4, §2.1 item 4, §6 Phase 7 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 7 of 10, BEHAVIOUR-PRESERVING. Work
+inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Issue #265 item 4: prefer string functions over regex where equivalent — clearer, and genuinely
+cheaper in HOT LOOPS (per-line/per-host paths). pfblockerng.inc has ~33 preg_* calls; most are
+one-shot. The win is real only on the hot ones, but equivalent swaps elsewhere also improve clarity.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/06_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§1.4 hot-loop nuance, §2.1 item 4)
+- The preg_* call sites in pfblockerng.inc (+ siblings/www where present). Identify which run inside
+  per-line / per-host / per-feed loops (hot) vs one-shot.
+- CLAUDE.md (PHP; Test coverage).
+
+ACTION PLAN (tests FIRST per swap)
+1. For each preg_* that is SEMANTICALLY EQUIVALENT to a string op, replace it:
+   - fixed-substring presence -> str_contains / strpos
+   - prefix/suffix -> str_starts_with / str_ends_with
+   - literal replace -> str_replace
+   - simple split on a literal -> explode
+   Prioritise hot-loop sites.
+2. Before each swap, add/extend a test asserting identical output on representative inputs AND the
+   edge cases the regex handled (anchors, empty, multi-occurrence, delimiters, case). The test must
+   pass against BOTH old and new to prove equivalence.
+3. LEAVE any regex whose semantics a string op cannot reproduce (character classes, alternation,
+   backrefs, quantifiers, true pattern matching). Do not force-fit.
+
+CONSTRAINTS
+- Behaviour-preserving: identical results incl. edge cases. If unsure it's equivalent, keep the regex.
+- Tabs; PFBL-01 green; clean diff.
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit -> green (+ equivalence tests per swap)
+- vendor/bin/phpstan / vendor/bin/phpcs -> clean
+- python -m pytest -> green
+- diff-read: each swap is provably equivalent; non-equivalent regexes untouched.
+
+EXPECTED RESULT
+Equivalent (esp. hot-loop) preg_* calls replaced by string functions; pattern-requiring regexes kept;
+behaviour identical.
+
+COMMIT (single)
+    pfblockerng: prefer string functions over equivalent regex in PHP (ADR-28 P7)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/07_Results.txt
+State: swaps made (which were hot-loop); regexes deliberately kept (why); equivalence tests added.
+Go-ahead for Phase 8.

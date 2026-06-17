@@ -1,0 +1,62 @@
+================================================================================
+PHASE 4 PROMPT — Enum adoption at the pfb_global() config seam
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.2, §2.3, §6 Phase 4 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 4 of 10, BEHAVIOUR-PRESERVING via the
+Phase-1 adapter. This is the HIGHEST-RISK phase — the config seam. Work inline, one commit, push
+directly.
+
+WHY THIS PHASE EXISTS
+pfb_global() (pfblockerng.inc:1278) is the central config->runtime seam: it reads installedpackages
+blobs into $pfb[...] and normalises flags to 'on'/'off'/'' strings (e.g. :1334, :1364, :1373).
+Converting it to internal enums/bools via the Phase-1 adapter centralises the read boundary; the
+stored config.xml format stays frozen (ADR §2.2).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/03_Results.txt (and 01_Results.txt for the adapter
+  signatures + per-field stored vocabulary). If 01/03 missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.2 adapter rule, §2.3 contract incl. side-effect
+  rule, §7 reject criteria)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_global() :1278; the flag reads it produces and
+  the downstream `=== 'on'` / `== 'on'` compares those flags feed; the SAVE paths that write these
+  flags back to config (config_set_path / write_config).
+- CLAUDE.md (PHP, Naming, Test coverage).
+
+ACTION PLAN (tests FIRST)
+1. Extend/confirm round-trip tests cover every field pfb_global() touches (use the Phase-1 list).
+2. In pfb_global(), populate the chosen flags as internal enums/bools via the adapter
+   (read = Enum::tryFrom(stored) ?? default). Update the downstream comparisons that consume those
+   $pfb[...] values to compare against the enum/bool instead of the 'on' string.
+3. On every SAVE path for these fields, write the EXACT legacy stored string back ($enum->value) — the
+   config.xml value must be byte-identical to before. Verify against the round-trip tests.
+4. Reorder a conditional ONLY if proven side-effect-free (ADR §2.3.3); otherwise leave order as-is —
+   reordering is Phase 6's job, not this phase.
+5. Any field that cannot round-trip losslessly: exclude it (leave as string), and note it in the
+   handoff for ADR documentation (§7 reject path).
+
+CONSTRAINTS
+- config.xml stored values FROZEN — prove byte-identical via round-trip tests + a save/load assertion.
+- Behaviour-preserving: DNSBL/IP/Geo decisions unchanged. Tabs; PFBL-01 green; no die()/exit().
+- Do not expand scope to other .inc files (Phase 5) or to regex/reorder (Phases 6-7).
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit  -> green (+ extended round-trip + seam behaviour tests)
+- vendor/bin/phpstan / vendor/bin/phpcs -> clean
+- python -m pytest    -> green
+- diff-read: each save path writes the legacy string; no stored value changed.
+
+EXPECTED RESULT
+pfb_global() and its downstream compares use internal enums/bools; config.xml unchanged; behaviour
+identical; any non-round-trippable field excluded + documented.
+
+COMMIT (single)
+    pfblockerng: adopt config enums at the pfb_global seam via adapter (ADR-28 P4)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/04_Results.txt
+State: which fields converted vs excluded (with reason); the save-path round-trip evidence; the
+downstream compares updated; confirmation config.xml byte-identical. Go-ahead for Phase 5.

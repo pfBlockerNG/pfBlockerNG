@@ -1,0 +1,56 @@
+================================================================================
+PHASE 5 PROMPT — Enum adoption: remaining .inc + www/ flags
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.2, §2.3, §6 Phase 5 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 5 of 10, BEHAVIOUR-PRESERVING via the
+adapter. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 4 converted the central pfb_global() seam. The remaining config-derived flag reads live in the
+other .inc files and the www/ pages (the ~236 `== 'on'`/`== 'off'` compares across src/). Route them
+all through the same field-aware adapter so the whole flag surface is internally enum/bool while the
+stored format stays frozen.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/04_Results.txt — the converted vs excluded fields, the
+  adapter usage pattern, the byte-identical-config evidence. If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.2, §2.3, §2.4, §7)
+- The flag reads in: pfblockerng_install.inc, pfblockerng_extra.inc, pfb_unbound_include.inc, and
+  src/usr/local/www/pfblockerng/*.php (+ widget + wizard). Reuse Phase-1/4 enums; add new field enums
+  only where a new multi-option flag appears, pinning backing values to existing stored strings.
+- CLAUDE.md (PHP, Naming, Test coverage).
+
+ACTION PLAN (tests FIRST)
+1. For each remaining config-derived flag, extend round-trip tests to its full stored vocabulary, then
+   read it via the adapter and compare against the enum/bool. Write the legacy string on every save.
+2. Do NOT reorder conditionals (Phase 6) or swap regex (Phase 7) here — enum adoption only.
+3. Exclude any field that can't round-trip; record it in the handoff for §7 documentation.
+4. Keep www/ behaviour (rendered output, posted values) identical — UI render tests / phpunit must
+   show no change.
+
+CONSTRAINTS
+- config.xml stored values FROZEN; prove byte-identical per field.
+- Behaviour-preserving; tabs; PFBL-01 green; www/ JS untouched.
+- Scope is enum adoption only.
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit -> green (+ extended round-trip + per-file behaviour tests)
+- vendor/bin/phpstan / vendor/bin/phpcs -> clean
+- python -m pytest -> green
+- diff-read: every save writes the legacy string; no stored value changed.
+
+EXPECTED RESULT
+All adopted config flags across the remaining .inc + www/ files read as internal enums/bools through
+the adapter; config.xml byte-identical; behaviour identical; exclusions documented.
+
+COMMIT (single)
+    pfblockerng: route remaining config flags through the enum adapter (ADR-28 P5)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/05_Results.txt
+State: fields converted per file; any further exclusions; confirmation config.xml byte-identical and
+www/ output unchanged. Go-ahead for Phase 6.

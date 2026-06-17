@@ -1,0 +1,56 @@
+================================================================================
+PHASE 2 PROMPT — PHP TRUE/FALSE uppercase normalisation: package .inc
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §1.2, §2.1 item 5, §6 Phase 2 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 2 of 10, MECHANICAL and
+BEHAVIOUR-PRESERVING: normalise PHP boolean literals to uppercase in the package .inc files only.
+Work inline on the branch, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Issue #265 item 5 wants uppercase TRUE/FALSE (pfSense house style). PHP boolean literals are
+case-insensitive, so this is provably behaviour-preserving. Doing it early shrinks diff noise so the
+later semantic phases land on a normalised surface.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/01_Results.txt — confirm Phase 1 landed (enums +
+  adapters defined, conventions documented). If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.1 item 5, §2.4)
+- The four targets: src/usr/local/pkg/pfblockerng/pfblockerng.inc, pfblockerng_install.inc,
+  pfblockerng_extra.inc, pfb_unbound_include.inc. Note stray PascalCase to fix (e.g. pfblockerng.inc
+  :10564 `False`, :1640 `False`).
+- CLAUDE.md (PHP standards; clean the diff).
+
+ACTION PLAN
+1. Replace every lowercase/PascalCase `true`/`false` PHP boolean LITERAL with uppercase TRUE/FALSE in
+   the four files. Literals only — do NOT touch the strings 'true'/'false', identifiers, comments
+   describing behaviour, or any value that is part of a stored/wire contract.
+2. Leave NULL and other constants alone (out of scope this phase).
+3. No logic, ordering, or structural change of any kind.
+
+CONSTRAINTS
+- Pure mechanical literal-case change. If a token's case change would alter meaning, it is not a
+  boolean literal — skip it.
+- Tabs; do not reflow or realign untouched lines (alignment is a later, opportunistic concern).
+- Keep PFBL-01 sniff green.
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit           -> green (unchanged behaviour)
+- vendor/bin/phpstan           -> clean
+- vendor/bin/phpcs             -> clean
+- php -l on each touched file   -> no syntax errors
+- diff-read: every hunk is a literal-case change only; no logic moved.
+
+EXPECTED RESULT
+All PHP boolean literals in the four package .inc files are uppercase; behaviour byte-identical.
+
+COMMIT (single)
+    pfblockerng: uppercase PHP TRUE/FALSE literals in package includes (ADR-28 P2)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/02_Results.txt
+State: per-file count of literals normalised; any PascalCase fixed; confirmation no logic changed.
+Go-ahead for Phase 3.
