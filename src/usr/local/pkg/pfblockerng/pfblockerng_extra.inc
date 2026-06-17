@@ -58,7 +58,7 @@ if (!function_exists('logger')) {
 			$message = str_replace(PHP_EOL, '', $message);
 			$log_string = (strlen($message) > 0) ? "{$log_prefix} {$message}" : $log_prefix;
 		} else {
-			$log_string = $log_prefix . ' ' . str_replace(PHP_EOL, '', var_export($message, true));
+			$log_string = $log_prefix . ' ' . str_replace(PHP_EOL, '', var_export($message, TRUE));
 		}
 		syslog($pri, $log_string);
 	}

@@ -28,7 +28,7 @@ define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
 
 global $g;
 
-config_read_file(false, true);
+config_read_file(FALSE, TRUE);
 
 // Enable logging if called via pfBlockerNG
 $verbose = FALSE;
