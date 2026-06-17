@@ -1424,7 +1424,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoaddrnot_' . $advmode,
 			"Invert {$adv_type}",
 			NULL,
-			$pconfig['autoaddrnot_' . $advmode] === 'on' ? TRUE:FALSE,
+			pfb_cfg_toggle_read($pconfig['autoaddrnot_' . $advmode]) === PfbToggle::On,
 			'on'
 		))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)");
 
@@ -1433,7 +1433,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoports_' . $advmode,
 			'Custom DST Port',
 			NULL,
-			$pconfig['autoports_' . $advmode] === 'on' ? TRUE:FALSE,
+			pfb_cfg_toggle_read($pconfig['autoports_' . $advmode]) === PfbToggle::On,
 			'on'
 		))->setHelp('Enable')
 		  ->setWidth(2);
@@ -1459,7 +1459,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autoaddr_' . $advmode,
 			"Custom {$custom_location}",
 			NULL,
-			$pconfig["autoaddr_{$advmode}"] === 'on' ? TRUE:FALSE,
+			pfb_cfg_toggle_read($pconfig["autoaddr_{$advmode}"]) === PfbToggle::On,
 			'on'
 		))->setHelp('Enable')->setWidth(1);
 
@@ -1467,7 +1467,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'autonot_' . $advmode,
 			NULL,
 			NULL,
-			$pconfig["autonot_{$advmode}"] === 'on' ? TRUE:FALSE,
+			pfb_cfg_toggle_read($pconfig["autonot_{$advmode}"]) === PfbToggle::On,
 			'on'
 		))->setHelp('Invert')->setWidth(1);
 
@@ -1538,7 +1538,7 @@ if ($gtype == 'dnsbl') {
 		'filter_alexa',
 		'TOP1M Whitelist',
 		'Enable',
-		$pconfig['filter_alexa'] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig['filter_alexa']) === PfbToggle::On,
 		'on'
 	))->setHelp('Filter Group via TOP1M');
 
@@ -1626,7 +1626,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		'whois_convert',
 		'Enable Domain/AS',
 		NULL,
-		$pconfig['whois_convert'] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig['whois_convert']) === PfbToggle::On,
 		'on'
 	));
 

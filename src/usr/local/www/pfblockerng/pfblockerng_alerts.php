@@ -2912,7 +2912,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	if ($rtype == 'Block' && $pfb_ipv4 && !$pfb_geoip && $mask_suppression) {
 
 		$v4suppression32 = $v4suppression24 = FALSE; 
-		if ($pfb['supp'] == 'on') {
+		if (pfb_cfg_toggle_read($pfb['supp']) === PfbToggle::On) {
 			if (isset($clists['ipsuppression']['data'][$host . '/32'])) {
 				$w_line = rtrim($clists['ipsuppression']['data'][$host . '/32'], "\x00..\x1F");
 				$v4suppression32 = TRUE;
@@ -3323,7 +3323,7 @@ $group->add(new Form_Checkbox(
 	'alertrefresh',
 	'Auto-Refresh',
 	NULL,
-	($alertrefresh == 'on' ? TRUE : FALSE),
+	pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On,
 	'on'
 ))->setHelp('Auto&nbsp;Refresh')->setAttribute('title', 'Select to \'Auto-Refresh\' Alerts page every 60 seconds.');
 
@@ -3358,7 +3358,7 @@ $group->add(new Form_Select(
 	$options_pfbmaxtable
 ))->setHelp('Select the maximum Stat Table entries to display');
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group->add(new Form_Select(
 		'pfbextdns',
 		'DNS lookup',
@@ -3379,7 +3379,7 @@ $group->add(new Form_Input(
 ))->setHelp('IP Filter Limit Entries')
   ->setAttribute('title', 'Enter number of \'Filter Limit Entries\' to view. Set to \'0\' to disable');
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group->add(new Form_Input(
 		'dnsblfilterlimitentries',
 		'DNSBL Filter Limit',
@@ -3431,7 +3431,7 @@ $group->add(new Form_Input(
   ->setAttribute('style', "background: {$pfb['unimatch']}")
   ->setWidth(2);
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group->add(new Form_Input(
 		'unidnsbl',
 		'',
@@ -3485,7 +3485,7 @@ $group->add(new Form_Input(
   ->setAttribute('style', "background: {$pfb['unimatch2']}; color: white;")
   ->setWidth(2);
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group->add(new Form_Input(
 		'unidnsbl2',
 		'',
@@ -3508,7 +3508,7 @@ if ($pfb['dnsbl'] == 'on') {
 }
 $section->add($group);
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group = new Form_Group('DNS Reply Log Options');
 	$group->add(new Form_Select(
 		'pfbreplytypes',
@@ -3608,7 +3608,7 @@ $group->add(new Form_Select(
   ->setAttribute('style', 'width: auto; overflow: hidden;')
   ->setAttribute('size', 15);
 
-if ($pfb['dnsbl'] == 'on') {
+if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	$group->add(new Form_Select(
 		'pfbdnsblstat',
 		'Disabled DNSBL Stats',
@@ -3752,7 +3752,7 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 	  ->setwidth(2);
 	$section->add($group);
 
-	if ($pfb['dnsbl'] == 'on') {
+	if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 		$group = new Form_Group('DNSBL');
 		$group->add(new Form_Input(
 			'filterlogentries_dnsbldate',
@@ -4053,7 +4053,7 @@ if (!$alert_summary):
 		// Validate Alert view and Log type
 		switch ($alert_view) {
 			case 'alert':
-				if ($pfb['dnsbl'] == 'on') {
+				if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 					$pfbentries = "{$pfbdnscnt}";
 					if ($pfb['filterlogentries'] && $dnsblfilterlimitentries != 0) {
 						$pfbentries = $dnsblfilterlimitentries;
@@ -4123,7 +4123,7 @@ if (!$alert_summary):
 <div class="panel panel-default" style="width: 100%;">
 	<div class="panel-heading">
 		<h2 class="panel-title">
-			<? if ($alertrefresh == 'on'): ?>
+			<? if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On): ?>
 			<i class="fa-solid fa-pause-circle" id="PauseRefresh" " title="Pause Alerts Refresh"></i>&nbsp;
 			<? endif; ?>
 			<?=gettext($logtype)?><small>-&nbsp;<?=gettext('Last')?>&nbsp;<?=$pfbentries?>&nbsp;<?=gettext('Alert Entries')?></small>
@@ -4533,7 +4533,7 @@ foreach ($stats as $stat_type => $stype):
 <div class="panel panel-default" id="Alert_Stats_<?=$stat_type?>" style="display: inline-block; width: 100%;">
 	<div class="panel-heading">
 		<h2 class="panel-title">
-			<? if ($alertrefresh == 'on'): ?>
+			<? if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On): ?>
 			<i class="fa-solid fa-pause-circle" id="PauseRefresh" " title="Pause Alerts Refresh"></i>&nbsp;
 			<? endif; ?>
 
@@ -4782,7 +4782,7 @@ foreach ($stats as $stat_type => $stype):
 endif;
 
 // Refresh page every 60 secs
-if ($alertrefresh == 'on') {
+if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On) {
 
 	$pageview = '?';
 	if ($pfb['filterlogentries']) {

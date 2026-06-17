@@ -377,7 +377,7 @@ function pfBlockerNG_update_table() {
 	}
 
 	// DNSBL collect statistics
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on') {
+	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 
 		$pfb['dnsbl_missing'] = TRUE;	// Flag to indicate error message to user in widget
 		$db_handle = pfb_open_sqlite(1, 'Widget stats');
@@ -591,12 +591,12 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	// Status indicator if pfBlockerNG is enabled/disabled
-	if ($pfb['enable'] == 'on') {
+	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 		$pfb_status	= 'fa-solid fa-check-circle text-success';
 		$pfb_msg	= 'pfBlockerNG is Active.';
 
 		// Check Masterfile Database Sanity
-		if (isset($pfb['config']['enable_dup']) && $pfb['config']['enable_dup'] == 'on') {
+		if (isset($pfb['config']['enable_dup']) && pfb_cfg_toggle_read($pfb['config']['enable_dup']) === PfbToggle::On) {
 			$db_sanity = exec("{$pfb['grep']} 'Sanity check' {$pfb['logdir']}/pfblockerng.log | tail -1 | {$pfb['grep']} -o 'PASSED'");
 			if ($db_sanity != 'PASSED') {
 				$pfb_status	= 'fa-solid fa-exclamation-circle text-warning';
@@ -616,7 +616,7 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	// Status indicator if DNSBL is actively running
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on' && $unbound_validate) {
+	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['unbound_state']) === PfbToggle::On && $unbound_validate) {
 
 		// Check DNSBL Database Sanity
 		$db_sanity = exec("{$pfb['grep']} 'DNSBL update' {$pfb['logdir']}/pfblockerng.log | tail -1 | {$pfb['grep']} -o 'OUT OF SYNC'");
@@ -765,7 +765,7 @@ function pfBlockerNG_get_header($mode='') {
 	$dnsbl_last_clear	= '';
 
 	// Collect Last packet clear timestamps
-	if ($pfb['enable'] == 'on') {
+	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 		$db_handle = pfb_open_sqlite(6, 'Last Clear Stats');
 		$pfb_found = FALSE;
 		if ($db_handle) {

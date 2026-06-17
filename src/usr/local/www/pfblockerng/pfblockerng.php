@@ -261,7 +261,7 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 				}
 
 				// Skip TOP1M update, if disabled
-				if ($pfb['dnsbl_alexa'] != 'on') {
+				if (pfb_cfg_toggle_read($pfb['dnsbl_alexa']) !== PfbToggle::On) {
 					unset($pfb['extras'][2]); // Remove TOP1M
 				}
 
@@ -2005,7 +2005,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddrnot_' . $advmode,
 		"Invert {$adv_type}",
 		NULL,
-		$pconfig['autoaddrnot_' . $advmode] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig['autoaddrnot_' . $advmode]) === PfbToggle::On,
 		'on'
 	))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)");
 
@@ -2014,7 +2014,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoports_' . $advmode,
 		'Custom DST Port',
 		NULL,
-		$pconfig['autoports_' . $advmode] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig['autoports_' . $advmode]) === PfbToggle::On,
 		'on'
 	))->setHelp('Enable')
 	  ->setWidth(2);
@@ -2040,7 +2040,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddr_' . $advmode,
 		"Custom {$custom_location}",
 		NULL,
-		$pconfig["autoaddr_{$advmode}"] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig["autoaddr_{$advmode}"]) === PfbToggle::On,
 		'on'
 	))->setHelp('Enable')->setWidth(1);
 
@@ -2048,7 +2048,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autonot_' . $advmode,
 		NULL,
 		NULL,
-		$pconfig["autonot_{$advmode}"] === 'on' ? TRUE:FALSE,
+		pfb_cfg_toggle_read($pconfig["autonot_{$advmode}"]) === PfbToggle::On,
 		'on'
 	))->setHelp('Invert')->setWidth(1);
 
@@ -2416,7 +2416,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_rep',
 	'Max',
 	'Enable',
-	$pconfig['enable_rep'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_rep']) === PfbToggle::On,
 	'on'
 ))->setHelp('Enables search for repeat offenders in a /24 range on <strong>Each individual Blocklist</strong>');
 
@@ -2448,7 +2448,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_pdup',
 	'pMAX',
 	'Enable',
-	$pconfig['enable_pdup'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_pdup']) === PfbToggle::On,
 	'on'
 ))->setHelp('Enables search for repeat offenders in All BlockLists, <strong>without</strong> Country Code Exclusion');
 
@@ -2463,7 +2463,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_dedup',
 	'dMAX',
 	'Enable',
-	$pconfig['enable_dedup'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_dedup']) === PfbToggle::On,
 	'on'
 ))->setHelp('Enables search for repeat offenders in All blocklists <strong>using</strong> Country Code Exclusion');
 

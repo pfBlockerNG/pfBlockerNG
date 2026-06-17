@@ -165,7 +165,7 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_deny_action']	= 'reject';	
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
 
-	$pfb_auto_wiz = (config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto') == 'on');
+	$pfb_auto_wiz = (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On);
 	$dnsvip_settings = pfb_wizard_dnsvip_settings(
 		$pfb_auto_wiz,
 		config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4'),
@@ -180,7 +180,7 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsbl']		= 'on';
 
 	// Default DNSBL Whitelist
-	if (config_get_path('pfblockerng_wizard/step3/suppression') == 'on') {
+	if (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/suppression')) === PfbToggle::On) {
 
 		$new_config['pfblockerngdnsblsettings']['config'][0]['suppression']	= 
 

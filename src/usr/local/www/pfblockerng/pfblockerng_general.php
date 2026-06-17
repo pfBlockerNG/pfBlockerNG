@@ -256,7 +256,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_cb',
 	'pfBlockerNG',
 	gettext('Enable'),
-	$pconfig['enable_cb'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['enable_cb']) === PfbToggle::On,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'Context help is available on various pages by clicking the \'blue infoblock\' icons &emsp;---->'
@@ -267,7 +267,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_keep',
 	'Keep Settings',
 	gettext('Enable'),
-	$pconfig['pfb_keep'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['pfb_keep']) === PfbToggle::On,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
@@ -280,7 +280,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_feed_internal_filter',
 	'Internal Feed Host Filter',
 	gettext('Enable'),
-	$pconfig['pfb_feed_internal_filter'] === 'on' ? TRUE:FALSE,
+	pfb_cfg_toggle_read($pconfig['pfb_feed_internal_filter']) === PfbToggle::On,
 	'on'
 ))->setHelp('Restrict feeds from being fetched from non-public/internal addresses. '
 		. 'The exemptions list below allows specific IP/CIDRs through.'
