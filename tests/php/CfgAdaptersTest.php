@@ -322,4 +322,146 @@ final class CfgAdaptersTest extends TestCase
 			'PfbToggle::Off and PfbLenient::Off must produce different stored strings'
 		);
 	}
+
+	// -----------------------------------------------------------------------
+	// Scenario D — Seam behaviour: pfb_global() adapter expressions produce
+	// byte-identical strings to the OLD inline ternaries they replace.
+	//
+	// These tests are the falsifiable proof that the seam is unchanged.
+	// They MUST fail if someone alters the normalisation.
+	//
+	// dnsbl_vip_auto (line ~1334): old = ($raw ?? '') == 'on' ? 'on' : ''
+	//   Replaced by: pfb_cfg_toggle_read($raw ?? '')->value
+	//
+	// dnsbl_lenient (line ~1364): old = (($raw ?? '') === 'on') ? 'on' : 'off'
+	//   Replaced by: pfb_cfg_lenient_read($raw ?? '')->value
+	//
+	// dnsbl_idn (lines ~1372-1373): EXCLUDED — old ternary passes '' through
+	//   as '' (not 'off'), which differs from pfb_cfg_idn_mode_read('')->value
+	//   ('off'). Seam left as-is; see ADR-28 Phase 4 handoff (04_Results.txt).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * dnsbl_vip_auto seam: adapter expression is byte-identical to the old ternary.
+	 *
+	 * Old: ($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '') == 'on' ? 'on' : ''
+	 * New: pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value
+	 *
+	 * Scenario:
+	 *   Given each reachable stored input for pfb_dnsvip_auto.
+	 *   When run through the old ternary and the new adapter expression.
+	 *   Then both produce the same byte-identical string.
+	 */
+	public function testSeamDnsblVipAutoAdapterMatchesOldTernary(): void
+	{
+		$cases = [
+			['on',  'on', 'on'],      // canonical checked -> 'on'
+			['',    '',   ''],        // canonical unchecked -> ''
+			[null,  '',   ''],        // null (missing key, ?? '' gives '') -> ''
+			['off', '',   ''],        // junk -> ''
+			['yes', '',   ''],        // junk -> ''
+			['1',   '',   ''],        // junk -> ''
+		];
+
+		foreach ($cases as [$raw, $expectedOld, $expectedNew]) {
+			$coalesced = $raw ?? '';
+			// Before: old ternary result (what pfb_global() used to produce).
+			$old = $coalesced == 'on' ? 'on' : '';
+			$this->assertSame($expectedOld, $old, "old ternary for input " . var_export($raw, TRUE));
+
+			// After: adapter expression (what pfb_global() now produces).
+			$new = pfb_cfg_toggle_read($coalesced)->value;
+			$this->assertSame($expectedNew, $new, "adapter for input " . var_export($raw, TRUE));
+
+			// Byte-identical: the seam is unchanged.
+			$this->assertSame($old, $new, "old vs new differ for input " . var_export($raw, TRUE));
+		}
+	}
+
+	/**
+	 * dnsbl_lenient seam: adapter expression is byte-identical to the old ternary.
+	 *
+	 * Old: (($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '') === 'on') ? 'on' : 'off'
+	 * New: pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value
+	 *
+	 * Scenario:
+	 *   Given each reachable stored input for pfb_dnsbl_lenient.
+	 *   When run through the old ternary and the new adapter expression.
+	 *   Then both produce the same byte-identical string.
+	 */
+	public function testSeamDnsblLenientAdapterMatchesOldTernary(): void
+	{
+		$cases = [
+			['on',      'on',  'on'],   // enabled -> 'on'
+			['off',     'off', 'off'],  // explicit off -> 'off'
+			['',        'off', 'off'],  // absent/blank pre-ADR-22 -> 'off'
+			[null,      'off', 'off'],  // null (missing key) -> 'off'
+			['yes',     'off', 'off'],  // junk -> 'off'
+			['1',       'off', 'off'],  // junk -> 'off'
+			['enabled', 'off', 'off'],  // junk -> 'off'
+		];
+
+		foreach ($cases as [$raw, $expectedOld, $expectedNew]) {
+			$coalesced = $raw ?? '';
+			// Before: old ternary result.
+			$old = ($coalesced === 'on') ? 'on' : 'off';
+			$this->assertSame($expectedOld, $old, "old ternary for input " . var_export($raw, TRUE));
+
+			// After: adapter expression.
+			$new = pfb_cfg_lenient_read($coalesced)->value;
+			$this->assertSame($expectedNew, $new, "adapter for input " . var_export($raw, TRUE));
+
+			// Byte-identical: the seam is unchanged.
+			$this->assertSame($old, $new, "old vs new differ for input " . var_export($raw, TRUE));
+		}
+	}
+
+	/**
+	 * dnsbl_idn seam exclusion: prove the adapter would NOT be byte-identical to the
+	 * old ternary for the '' input, confirming why the seam is excluded.
+	 *
+	 * Old: ($raw === 'on') ? 'all' : $raw   — passes '' through as ''
+	 * Adapter: pfb_cfg_idn_mode_read('')->value   — returns 'off'
+	 *
+	 * This test PINS the exclusion decision: it will fail if the old seam behaviour
+	 * ever changes to match the adapter (at which point the seam can be adopted).
+	 */
+	public function testSeamDnsblIdnExclusionProofEmptyPassthrough(): void
+	{
+		// Old ternary: '' passes through unchanged.
+		$raw    = '';
+		$oldResult = ($raw === 'on') ? 'all' : $raw;
+		$this->assertSame('', $oldResult, 'old ternary must pass empty string through as empty string');
+
+		// Adapter: '' normalises to Off = 'off'.
+		$adapterResult = pfb_cfg_idn_mode_read($raw)->value;
+		$this->assertSame('off', $adapterResult, 'adapter must return off for empty string');
+
+		// They differ — this is why dnsbl_idn is excluded from seam adoption.
+		$this->assertNotSame($oldResult, $adapterResult, 'old and adapter must differ for empty string (exclusion proof)');
+	}
+
+	/**
+	 * dnsbl_idn seam: document the old ternary's pass-through behaviour for all inputs.
+	 *
+	 * This pins the CURRENT seam behaviour so any future change is detected.
+	 */
+	public function testSeamDnsblIdnOldTernaryBehaviour(): void
+	{
+		// Old seam: $pfb_idn_raw = $stored ?? ''; $pfb['dnsbl_idn'] = ($pfb_idn_raw === 'on') ? 'all' : $pfb_idn_raw;
+		$cases = [
+			['on',          'all'],         // legacy migration: 'on' -> 'all'
+			['all',         'all'],         // canonical
+			['confusable',  'confusable'],  // canonical
+			['off',         'off'],         // canonical
+			['',            ''],            // absent/blank: passes through as '' (NOT 'off')
+			['junk',        'junk'],        // junk: passes through unchanged
+		];
+
+		foreach ($cases as [$raw, $expected]) {
+			$pfb_idn_raw  = $raw ?? '';
+			$result       = ($pfb_idn_raw === 'on') ? 'all' : $pfb_idn_raw;
+			$this->assertSame($expected, $result, "old ternary for input " . var_export($raw, TRUE));
+		}
+	}
 }

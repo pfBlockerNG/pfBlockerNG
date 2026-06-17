@@ -260,7 +260,7 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
   a string, documented below). The legacy `'on'` value for `pfb_idn` is the only known
   exception: it normalises to `'all'` on read (one-way migration, intentional).
 - PHP adapters: `pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
-  `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php`.
+  `pfb_cfg_idn_mode_read/write` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`.
 - Python adapters: `pfb_cfg_idn_mode_read/write`, `pfb_cfg_toggle_read/write`,
   `pfb_cfg_lenient_read/write` in `src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py`.
 
