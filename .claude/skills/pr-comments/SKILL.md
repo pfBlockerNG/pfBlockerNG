@@ -5,7 +5,9 @@ description: >
   its nitpick and outside-diff-range findings (and human reviewer comments) —
   validate each against the CURRENT code, apply the ones that genuinely hold
   (skip the rest with a reason, defer pre-existing ones to their own PR), then
-  reply on every thread. With --wait-for=<handle> it first blocks until that
+  reply on every thread. Nitpick AND outside-diff-range findings are mandatory to
+  handle, with the same rigor as inline ones — every finding gets a verdict and a
+  reply; none is skipped merely for the bucket it landed in. With --wait-for=<handle> it first blocks until that
   reviewer (usually CodeRabbit) has FINISHED reviewing — polling the PR, not a
   one-shot read — and, if CodeRabbit declines because the base isn't the default
   branch, comments to trigger a full review and keeps waiting. Args: [PR number]
@@ -176,6 +178,15 @@ diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
 enumerate every finding (inline + nitpick + outside-diff-range) and its location.
 Build the full list before fixing anything.
 
+**Every enumerated finding is mandatory to handle** — inline, **🧹 Nitpick**, AND
+**⚠️ Outside diff range** alike. Each MUST get an explicit Step-5 verdict
+(APPLY / SKIP / DEFER, with a reason) and a Step-7 reply; none may be silently
+dropped. Note that "Outside diff range" is CodeRabbit's *category label* (a finding
+about lines just outside the changed hunk) — it is NOT the scope verdict
+"pre-existing → DEFER". An outside-diff-range finding often concerns code this PR
+*did* change; judge scope per finding via `git blame` in Step 5, never by the bucket
+it arrived in.
+
 ## Step 5 — Validate each finding against the CURRENT code (the crux)
 
 For every finding, decide a verdict — do **not** auto-apply:
@@ -186,9 +197,11 @@ For every finding, decide a verdict — do **not** auto-apply:
   — e.g. in this repo ruff `select = [E,F,W,I]` (so `S110`/`BLE001` don't fire,
   and ruff doesn't implement `F824` at all). A nit for an unenforced rule is noise;
   skip it.
-- **Scope, via `git blame`.** Is the code the PR introduced, or **pre-existing /
-  outside the diff**? A pre-existing latent bug is real but usually belongs in its
-  own PR, not bloating this one.
+- **Scope, via `git blame`.** Is the code the PR introduced, or genuinely
+  **pre-existing** (untouched by this PR)? A pre-existing latent bug is real but
+  usually belongs in its own PR, not bloating this one. Decide this by blame, NOT by
+  CodeRabbit's "Outside diff range" label — that label routinely flags code the PR
+  did change, which is in scope and handled like any other finding.
 - **Sanity-check the suggested fix itself.** CodeRabbit's proposed diff can be
   wrong or unsafe (e.g. producing malformed output). Validate the *suggestion*,
   not just the *problem*.
