@@ -7,9 +7,10 @@ description: >
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
   delete the branch. The review step gives CodeRabbit ~5 minutes to acknowledge the
-  PR: if it does, wait on its review; if it stays silent, spawn a Claude Sonnet
-  sub-agent to review in its place (still folding CodeRabbit's review in if it shows
-  up late) — and handle every comment of every review the same way. This
+  PR: if it does, wait on its review; if it stays silent, nudge it once with
+  `@coderabbitai review` and wait 5 more minutes, and only if it is STILL silent spawn
+  a Claude Sonnet sub-agent to review in its place (still folding CodeRabbit's review in
+  if it shows up late) — and handle every comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
   (documentation-only, CLAUDE.md, ADR text, skills). Args: [PR number] (defaults to
@@ -56,9 +57,9 @@ CodeRabbit, when installed, posts something on a new PR within a few minutes. So
 availability per-PR, anchored on the PR's creation time: if **any** CodeRabbit message
 (issue comment, review, or inline comment) appears within **5 minutes of the PR's
 creation**, it is active → **Step 1b**. If those 5 minutes elapse with **no CodeRabbit
-message whatsoever**, assume it is not available → **Step 1c**. (If the PR is already
-older than 5 minutes when you start and CodeRabbit has posted nothing, conclude `NOACK`
-immediately — no need to wait.)
+message whatsoever**, do not yet assume it is absent → **Step 1c** (nudge it first). (If
+the PR is already older than 5 minutes when you start and CodeRabbit has posted nothing,
+conclude `NOACK` immediately — no need to wait.)
 
 Run the wait as a background Bash command (a self-exiting loop = one wake; never a
 foreground `sleep`), then read `$RESULT`:
@@ -85,7 +86,7 @@ done
 ```
 
 - **`ACK`** (a CodeRabbit message appeared) → **Step 1b**.
-- **`NOACK`** (silent for the full window) → **Step 1c**.
+- **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
@@ -94,9 +95,29 @@ done
   code, applies the ones that genuinely hold, skips the rest with a reason, and
   replies on every thread.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
-  do not stall the flow — fall back to **Step 1c**.
+  do not stall the flow — fall back to the Sonnet stand-in (**Step 1d**); the nudge in
+  Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
+  acknowledged.
 
-### Step 1c — No ack in 5 min → Claude Sonnet sub-agent reviewer (fold in a late CodeRabbit)
+### Step 1c — No ack → nudge `@coderabbitai review`, then wait 5 more minutes
+
+Before concluding CodeRabbit is absent, explicitly ask it to review — it sometimes just
+missed the PR's creation event. Post the nudge once, then re-run the **Step 1a** wait with
+a **fresh** 5-minute deadline (anchored on *now*, not the PR's creation time):
+
+```sh
+gh pr comment "$PR" --repo "$OWNER_REPO" --body '@coderabbitai review'
+```
+
+Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 300 ))`. On the result:
+
+- **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
+- **`NOACK`** (still silent 5 min after the nudge) → **Step 1d**.
+
+Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
+do not loop on it.
+
+### Step 1d — Still no ack → Claude Sonnet sub-agent reviewer (fold in a late CodeRabbit)
 
 Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in too.
 
