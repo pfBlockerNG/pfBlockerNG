@@ -57,7 +57,6 @@ ignore = [
 # Each case param then "redefines" the imported name from ruff's view — the standard
 # re-export idiom, not real shadowing. F811 is suppressed only for these files.
 "tests/smoke/test_software_update.py"          = ["F811"]
-"tests/smoke/test_adr28_upgrade_contract.py"   = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound"]

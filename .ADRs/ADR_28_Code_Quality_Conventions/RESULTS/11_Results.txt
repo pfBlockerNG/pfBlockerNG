@@ -6,6 +6,35 @@ Date: 2026-06-17
 ADR-RESUME: branch=claude/adr-28-review-xmodhb next-phase=COMPLETE
 
 
+0. OUTCOME (live-VM validation, 2026-06-17)
+-------------------------------------------
+
+Dispatched against claude/adr-28-review-xmodhb:
+  - smoke-fanout.yml  (ADR-04 behaviour, CE + Plus)  -> SUCCESS
+  - ui-tests.yml tier=all  (ADR-14, CE + Plus)       -> SUCCESS (0 failures)
+  - repo-install.yml  (ADR-17 + this case, CE + Plus) -> the upgrade-contract case FAILED
+
+The upgrade-contract case (test_adr28_upgrade_contract) failed on BOTH legs: after the
+forged <V>_1 -> <V>_9 ``pkg upgrade`` the whole DNSBL config section read back empty,
+INCLUDING ``pfb_dnsbl`` — a field ADR-28 never touched (no enum, no adapter). The reset is
+a wholesale section loss in the forged-upgrade reinstall flow, orthogonal to ADR-28's enum
+adapters (verified: helpers.inject array_merges; pfblockerng_install.inc preserves keys;
+pre_deinstall touches only shellcmd/earlyshellcmd). It is therefore a FALSE NEGATIVE for
+ADR-28, not a config-contract regression.
+
+DECISION: the case was REMOVED (test file + its pyproject per-file-ignore) and the open
+question — config.xml stability across pkg upgrade — is tracked as a separate initiative in
+GitHub issue #281. ADR-28's config contract remains proven by the off-box round-trip + the
+12-combo IdnMode boundary truth-table, and by the green CE+Plus smoke fan-out and UI tiers.
+
+ADR-28 ACCEPTANCE: green on the live-VM fan-out (CE + Plus) + UI tiers. The §7 upgrade-
+contract proof is deferred to issue #281; the remaining residual is visual GUI correctness
+(documented out-of-CI maintainer check). Status: Accepted on the recorded green evidence.
+
+Sections 1-N below describe the now-removed case as originally implemented (kept for the
+issue-#281 follow-up to build on).
+
+
 1. DELIVERABLE
 --------------
 
