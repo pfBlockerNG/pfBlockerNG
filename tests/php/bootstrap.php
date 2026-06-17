@@ -69,8 +69,11 @@ error_reporting($pfb_prev_er);
 //    under test, defined verbatim; no production file is modified. Guarded so a
 //    real include path (on-appliance) never double-defines.
 // 6. Load the ADR-28 adapter helpers so tests can exercise them against the
-//    real bootstrap environment (enums + adapter fns; not yet wired into prod).
-require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php';
+//    real bootstrap environment (enums + adapter fns; inlined into pfblockerng_extra.inc,
+//    ADR-28 P4).  On-appliance pfblockerng.inc loads extra.inc via a host-absolute
+//    file_exists() check that is not satisfied off-appliance, so we load it explicitly
+//    here by its repo-relative path.
+require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 
 if (!function_exists('step3_submitphpaction')) {
 	$pfb_wizard_src = file_get_contents(
