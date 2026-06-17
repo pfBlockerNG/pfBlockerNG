@@ -239,7 +239,7 @@ offers two buttons:
 - **Check now** — refresh the comparison from our repo (reads `pkg … -r <ourrepo>`, never
   the Netgate repo).
 - **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
-  (it never switches channels). Enabled only when an update is available.
+  (it never switches channels). The button is enabled only when an update is available.
 
 > The Software tab, the page, and the update notice are present **only on a build installed
 > from one of our repos** (`pfblockerng` / `pfblockerng-nightly`). On a stock

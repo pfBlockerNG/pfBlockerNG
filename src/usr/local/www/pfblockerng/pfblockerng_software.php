@@ -251,8 +251,9 @@ print($form);
 // The destructive Update streams into the terminal AFTER the form has rendered (so the
 // textareas exist for the JS to write into). POST-guarded only.
 if ($pfb_sw_action === 'update') {
-	// Re-check availability server-side: the disabled button is client-side only, so a
-	// crafted/stale POST must not run pkg when there is nothing to install.
+	// Defense-in-depth: the "Update now" button is only disabled client-side, so also
+	// refuse the action server-side when there is nothing to install — never run pkg on a
+	// stale/no-op POST. (Request authenticity is enforced by pfSense's CSRF token.)
 	if (!$update_available) {
 		pfb_software_status(gettext('No update is currently available.'));
 	} elseif ($pfb_sw_pkgname === '') {
