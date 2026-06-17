@@ -719,9 +719,15 @@ def test_no_php_no_guard_injected(tmp_path: Path) -> None:
     assert rc == 0
     full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
     dep_names = set(full.get("deps", {}).keys())
-    # foo comes from RUN_DEPENDS; no php* / py* variant guard added (no --php)
+    # foo comes from RUN_DEPENDS; no variant guard is injected without --php. Exclude
+    # both shapes a guard could take: the real Python guard dep is the interpreter
+    # package pythonNNN (e.g. python311 — which does NOT start with "py3"), and the bare
+    # flavor token py311 must never become a dep name either (the --php companion test
+    # asserts that directly). Checking both means an accidental guard of either form
+    # fails this test rather than slipping through.
     assert "foo" in dep_names
     assert not any(n.startswith("php8") for n in dep_names)
+    assert not any(n.startswith("python3") for n in dep_names)
     assert not any(n.startswith("py3") for n in dep_names)
 
 
