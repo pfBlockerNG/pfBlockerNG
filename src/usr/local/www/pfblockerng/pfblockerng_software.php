@@ -251,7 +251,11 @@ print($form);
 // The destructive Update streams into the terminal AFTER the form has rendered (so the
 // textareas exist for the JS to write into). POST-guarded only.
 if ($pfb_sw_action === 'update') {
-	if ($pfb_sw_pkgname === '') {
+	// Re-check availability server-side: the disabled button is client-side only, so a
+	// crafted/stale POST must not run pkg when there is nothing to install.
+	if (!$update_available) {
+		pfb_software_status(gettext('No update is currently available.'));
+	} elseif ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot update.'));
 	} else {
 		pfb_software_status(gettext('Updating pfBlockerNG...'));
