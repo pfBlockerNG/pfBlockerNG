@@ -26,9 +26,7 @@ from collections import defaultdict
 from typing import Any
 
 from pfb_unbound import (
-    IDN_MODE_ALL,
     IDN_MODE_CONFUSABLE,
-    IDN_MODE_OFF,
     IdnMode,
     evaluate_domain,
     idn_mode_decision,
@@ -154,42 +152,48 @@ class TestIdnModeFromLegacy:
 
 class TestEvaluateDomainIdnBaselineGolden:
     def test_all_idn_blocks_every_idn_query_as_idn_feed(self) -> None:
-        # Given All-IDN mode; When each xn-- query is evaluated; Then it is found and
-        # tagged feed="IDN"/group="DNSBL_IDN" -- byte-identical to pfb_unbound:4342 today.
+        # Given All-IDN mode (IdnMode enum -- the real runtime type after the read boundary);
+        # When each xn-- query is evaluated; Then it is found and tagged feed="IDN"/
+        # group="DNSBL_IDN" -- byte-identical to pfb_unbound:4342 today.
         for q in _IDN_QUERIES:
-            dec = _evaluate(q, idn_mode=IDN_MODE_ALL)
+            dec = _evaluate(q, idn_mode=IdnMode.All)
             assert dec.is_found is True, q
             assert dec.feed == "IDN", q
             assert dec.group == "DNSBL_IDN", q
 
     def test_off_lets_every_idn_query_resolve(self) -> None:
-        # Given Off mode; When the SAME xn-- queries are evaluated; Then none is found
-        # (the IDN feed never fires). Paired with the All-IDN case above, this proves the
-        # mode -- not the input -- decides: identical queries, opposite verdicts.
+        # Given Off mode (IdnMode enum); When the SAME xn-- queries are evaluated; Then
+        # none is found (the IDN feed never fires). Paired with the All-IDN case above,
+        # this proves the mode -- not the input -- decides: identical queries, opposite
+        # verdicts.
         for q in _IDN_QUERIES:
-            assert _evaluate(q, idn_mode=IDN_MODE_ALL).is_found is True, q  # before-state
-            assert _evaluate(q, idn_mode=IDN_MODE_OFF).is_found is False, q
+            assert _evaluate(q, idn_mode=IdnMode.All).is_found is True, q  # before-state
+            assert _evaluate(q, idn_mode=IdnMode.Off).is_found is False, q
 
     def test_confusable_blocks_only_the_homograph_not_every_idn(self) -> None:
         # Phase 5 wires the analyzer: Confusable is no longer inert. It must block ONLY the
         # genuine cross-script homograph (xn--pple-43d = аpple, Latin+Cyrillic), while the
         # other IDN forms in the All-IDN set resolve -- the surgical-vs-blunt contract. The
-        # All-IDN before-state pins that ALL of these block under All-IDN, so green proves
-        # Confusable's analyzer (not the input) narrows the block to the homograph. Full
-        # severity-tier coverage lives in tests/test_adr08_confusable_matcher.py; this guard
-        # just pins that Confusable diverges from All-IDN (no longer inert / block-all).
+        # All-IDN before-state pins that ALL of these block under All-IDN (IdnMode enum), so
+        # green proves Confusable's analyzer (not the input) narrows the block to the
+        # homograph. Full severity-tier coverage lives in
+        # tests/test_adr08_confusable_matcher.py; this guard just pins that Confusable
+        # diverges from All-IDN (no longer inert / block-all).
         homograph = "xn--pple-43d.com"  # аpple -- Latin+Cyrillic, MALICIOUS
         for q in _IDN_QUERIES:
-            assert _evaluate(q, idn_mode=IDN_MODE_ALL).is_found is True, q  # before-state
+            assert _evaluate(q, idn_mode=IdnMode.All).is_found is True, q  # before-state
         # Only the homograph blocks under Confusable; the rest are not block-all'd.
-        assert _evaluate(homograph, idn_mode=IDN_MODE_CONFUSABLE).is_found is True
+        assert _evaluate(homograph, idn_mode=IdnMode.Confusable).is_found is True
         for q in _IDN_QUERIES:
             if q != homograph:
-                assert _evaluate(q, idn_mode=IDN_MODE_CONFUSABLE).is_found is False, q
+                assert _evaluate(q, idn_mode=IdnMode.Confusable).is_found is False, q
 
     def test_non_idn_unaffected_in_every_mode(self) -> None:
         # Non-IDN queries (no xn-- label) are never touched by the IDN branch, in ANY mode.
-        for mode in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+        # Uses IdnMode enum members (the isinstance(IdnMode) branch) for Off and All, and
+        # an IDN_MODE_* string (the isinstance(str) legacy-compat branch) for Confusable --
+        # both branches of the mode-dispatch are exercised across this suite.
+        for mode in (IdnMode.Off, IdnMode.All, IDN_MODE_CONFUSABLE):
             for q in _NON_IDN_QUERIES:
                 assert _evaluate(q, idn_mode=mode).is_found is False, (mode, q)
 
