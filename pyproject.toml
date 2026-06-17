@@ -52,11 +52,12 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Cross-module pytest fixture re-export: ``test_software_update.py`` imports the ``repo_vm``
-# fixture from ``test_repo_install`` so its cases can request it (pytest resolves fixtures
-# per-module). Each case param then "redefines" the imported name from ruff's view — the
-# standard re-export idiom, not real shadowing. F811 is suppressed only for this file.
-"tests/smoke/test_software_update.py" = ["F811"]
+# Cross-module pytest fixture re-export: these files import the ``repo_vm`` fixture from
+# ``test_repo_install`` so their cases can request it (pytest resolves fixtures per-module).
+# Each case param then "redefines" the imported name from ruff's view — the standard
+# re-export idiom, not real shadowing. F811 is suppressed only for these files.
+"tests/smoke/test_software_update.py"          = ["F811"]
+"tests/smoke/test_adr28_upgrade_contract.py"   = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound"]
