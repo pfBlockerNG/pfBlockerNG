@@ -3255,15 +3255,15 @@ EOF;
 
 	if (file_exists('/usr/local/lib/lighttpd/mod_openssl.so')) {
 		if ($pfb['dnsbl_py_nolog'] == 'on') {
-			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_auth", "mod_accesslog", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
+			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		} else {
-			$pfb_conf .= 'server.modules			= ( "mod_auth", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
+			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		}
 	} else {
 		if ($pfb['dnsbl_py_nolog'] == 'on') {
-			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_auth", "mod_accesslog", "mod_fastcgi", "mod_rewrite" )';
+			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite" )';
 		} else {
-			$pfb_conf .= 'server.modules			= ( "mod_auth", "mod_fastcgi", "mod_rewrite" )';
+			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite" )';
 		}
 	}
 
