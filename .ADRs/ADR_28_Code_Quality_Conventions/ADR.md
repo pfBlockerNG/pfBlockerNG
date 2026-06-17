@@ -11,6 +11,7 @@
   - `CLAUDE.md` — the conventions policy of record
   - `tests/phpcs/PfBlockerNG/` — the targeted enforcement sniff
   - `tests/php/`, `tests/` — round-trip + behaviour-pinning tests
+  - `tests/smoke/` — the automated upgrade-contract case (Phase 11)
 - **Target runtime:** PHP 8.3 (pfSense CE 2.8); Python 3.11+ (stdlib only inside Unbound's pythonmod); POSIX `/bin/sh`
 - **Test surface:** `vendor/bin/phpunit` + `vendor/bin/phpcs` + `vendor/bin/phpstan` (PHP, PR gate); `python -m pytest` (Python + tooling, PR gate); `tests/smoke` (ADR-04 live VM — the upgrade-contract + behaviour proof); `shellcheck`/`sh -n`
 
@@ -166,7 +167,10 @@ one commit, each leaving the full suite green, each reviewed before the next. Pe
   wired into `phpcs.xml.dist` + CI.
 - Round-trip identity tests covering every adapted config field's full stored vocabulary.
 - Full suite green at every phase: `python -m pytest`, `vendor/bin/phpunit`, `vendor/bin/phpstan`,
-  `vendor/bin/phpcs`, `ruff check`/`ruff format`, `shellcheck`/`sh -n`; ADR-04 smoke fan-out green.
+  `vendor/bin/phpcs`, `ruff check`/`ruff format`, `shellcheck`/`sh -n`. `ui_render` (Tier A) gates
+  each `src/`-touching PR automatically.
+- **Phase 11** adds an automated **upgrade-contract** smoke case and dispatches the **smoke fan-out
+  (CE + Plus)** + the **UI tiers** — the live-VM acceptance gate, green before Accept.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -259,13 +263,26 @@ Prompt: `09_Shell_Conventions.txt` — behaviour-preserving; coordinates with AD
   equivalent, and opportunistic alignment. **Do not touch** ADR-26 `LC_ALL=C` prefixes. shellcheck +
   smoke green.
 
-### Phase 10 — Enforcement sniff + Definition of Done
+### Phase 10 — Enforcement sniff + CLAUDE.md reconcile
 
 Prompt: `10_Sniff_And_Dod.txt`.
 
 - Add the targeted PHPCS sniff enforcing uppercase PHP `TRUE`/`FALSE`; wire into `phpcs.xml.dist` +
-  CI; pin it with a fixture test alongside the PFBL-01 sniff tests. Reconcile `CLAUDE.md`, confirm
-  the full DoD (§7), ensure the diff is minimal.
+  CI; pin it with a fixture test alongside the PFBL-01 sniff tests. Reconcile `CLAUDE.md` (incl. any
+  documented field exclusions), ensure the diff is minimal.
+
+### Phase 11 — Smoke/UI validation + automated upgrade-contract + Definition of Done
+
+Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
+
+- Build an **automated upgrade-contract smoke case** (`tests/smoke`, `repo`/upgrade marker): install
+  the prior release `.pkg` with a representative settings spread, capture `config.xml`, `pkg upgrade`
+  to the branch build, then assert every adapted field's stored value is **byte-identical** and a
+  representative runtime behaviour (a blocked DNSBL name, an IP block) is unchanged. This automates
+  the §7 contract proof so acceptance needs no manual sign-off (CLAUDE.md "ADR acceptance").
+- **Dispatch the live-VM validation:** `smoke-fanout.yml` (ADR-04 suite, **CE + Plus**, AND-gated)
+  and the **UI tiers** (`ui_render` is the PR gate; dispatch `ui_e2e`/`ui_browser` too). Record the
+  green run links. Confirm the full DoD (§7).
 
 ## 7. Definition of done
 
@@ -273,13 +290,16 @@ Prompt: `10_Sniff_And_Dod.txt`.
 - **Round-trip identity proven** for every adapted config field over its full stored vocabulary
   (the §2.2 gate). Any excluded field documented in `CLAUDE.md` / the ADR.
 - The PHPCS uppercase-`TRUE`/`FALSE` sniff active and green.
-- **Manual smoke checklist (owner: maintainer)** — the upgrade-contract proof CI cannot fully cover:
-  1. Install the prior release on a pfSense VM, configure a representative spread of settings
-     (DNSBL on/off, IDN mode, lenient, auto-VIP, a couple of feeds).
-  2. Export `config.xml`; upgrade to the ADR-28 branch package.
-  3. Confirm `config.xml` stored values are **byte-identical** for every adapted field, and the GUI
-     shows every setting unchanged.
-  4. Confirm runtime behaviour (a blocked DNSBL name, an IP block) is identical pre/post.
+- **Automated upgrade-contract smoke (Phase 11)** green on the live-VM fan-out: install prior
+  release → configure a representative settings spread (DNSBL on/off, IDN mode, lenient, auto-VIP, a
+  couple of feeds) → `pkg upgrade` to the branch build → assert every adapted field's `config.xml`
+  value is **byte-identical** and a representative runtime behaviour (blocked DNSBL name, IP block) is
+  unchanged. This automates the contract proof — **no manual sign-off** (CLAUDE.md "ADR acceptance").
+- **Smoke fan-out (CE + Plus) + UI tiers green** — `smoke-fanout.yml` AND-gate passes; `ui_render`
+  PR gate green; `ui_e2e`/`ui_browser` dispatched green.
+- **Residual manual check (owner: maintainer, out-of-CI):** true *visual* GUI correctness only — a
+  spot-check that the settings pages render unchanged. Per CLAUDE.md this is a documented out-of-CI
+  limitation, **not** an acceptance blocker.
 - **Reject criteria (explicit):**
   - If a config field's stored value **cannot round-trip losslessly** through its adapter and the
     field cannot simply be excluded without losing the convention's value → that field's conversion

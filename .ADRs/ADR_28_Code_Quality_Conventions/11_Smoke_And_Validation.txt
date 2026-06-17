@@ -1,0 +1,81 @@
+================================================================================
+PHASE 11 PROMPT — Smoke/UI validation + automated upgrade-contract + DoD
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.2, §2.3, §4, §7, §6 Phase 11 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 11 of 11, the ACCEPTANCE GATE. Adds the
+automated live-VM proof that the refactor preserved the config contract and behaviour, and dispatches
+the fan-out. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+ADR-28's crux risk is the upgrade contract: config.xml stored values must survive a real package
+upgrade byte-for-byte (ADR §1.3, §2.2). Off-box round-trip tests prove the adapter in isolation; this
+phase proves it END-TO-END on a real pfSense VM across an actual pkg upgrade, so acceptance needs no
+manual sign-off (CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off"). It also runs
+the CE+Plus fan-out and the UI tiers.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/10_Results.txt — the full list of adapted config
+  fields + any exclusions (the fields the upgrade case must assert byte-identical). Also skim
+  04/05_Results.txt for the per-field stored vocabulary. If 10_Results.txt missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.2, §2.3 contract, §4, §7 DoD + reject criteria)
+- CLAUDE.md — "Smoke tests (ADR-04)", "Running tests", and the "Updating documentation" steps that
+  describe smoke-fanout.yml / ui-tests.yml dispatch and the CE+Plus AND-gate.
+- tests/smoke/ — helpers.py (unique_domain, ensure_dnsbl_vip), test_repo_install.py (the `repo`
+  marker + pkg upgrade _1->_9 pattern, the closest existing upgrade flow to mirror), conftest +
+  smoke_vm fixture; tests/smoke/fixtures/ (inert RFC 5737/3849 + uuid-*.com feeds).
+- tests/smoke/ui/ — the ui_render tier (the PR gate).
+
+ACTION PLAN (the upgrade-contract case is the new, load-bearing test)
+1. Add an automated upgrade-contract smoke case (tests/smoke; reuse the `repo` marker / upgrade
+   pattern from test_repo_install.py, or a sibling test):
+   GIVEN a VM with the PRIOR release pkg installed and a representative settings spread written to
+     config.xml (DNSBL enable on/off, an IDN mode, pfb_dnsbl_lenient, pfb_dnsvip_auto, a couple of
+     inert feeds from tests/smoke/fixtures) — assert the BEFORE state (settings present; a feed name
+     resolves, a configured block is in effect).
+   WHEN the branch-built pkg is installed over it (pkg upgrade / pkg add the branch .pkg).
+   THEN for EVERY adapted field (the Phase-10 list) the stored config.xml value is BYTE-IDENTICAL to
+     the captured before-value, AND the runtime behaviour is unchanged (a blocked DNSBL name still
+     returns its block shape; an IP block still applies). Probe ON-BOX (drill @127.0.0.1) per the
+     ADR-04 rules; use helpers.unique_domain(); never RFC 6761 / HSTS-preload names.
+   This is a transition test: assert before AND after (no false pass).
+2. Wire the case so the smoke fan-out picks it up (correct marker; CE + Plus). Keep it offline-safe
+   (pkg add of the branch build; deps baked on the image per ADR-04).
+3. Dispatch the live-VM validation and record green run links in the handoff:
+   - smoke-fanout.yml (ADR-04 suite, CE + Plus, all-smoke-passed AND-gate)
+   - the UI tiers (ui_render is the PR gate; also dispatch ui_e2e / ui_browser)
+4. Confirm the full §7 Definition of Done; note the single residual out-of-CI item (visual GUI
+   correctness) as a documented limitation, not a blocker.
+
+CONSTRAINTS
+- Follow every ADR-04 smoke truth (chroot paths, on-box probe, first-response-authoritative, block
+  shapes, unique_domain, SMOKE_ADMIN_PASSWORD gating for UI). Plus image is private/licensed — do not
+  hardcode its identity; the harness supplies it.
+- Inert fixtures only (RFC 5737/3849, uuid-*.com). Behaviour-preserving: the case proves NO change.
+- Do not modify production src/ here (validation only); if the case reveals a contract break, STOP
+  and report — that is a reject-criteria trigger (§7), not something to patch in this phase.
+
+VERIFICATION (must all pass)
+- python -m pytest                                   -> green (off-box; new case collected/SKIPs
+  cleanly without a VM)
+- the upgrade-contract smoke case                    -> green on the live VM (CE + Plus)
+- smoke-fanout.yml all-smoke-passed                  -> green
+- ui_render (+ ui_e2e/ui_browser dispatched)         -> green
+- ruff check . / ruff format . / mypy tests/ (excl. tests/smoke) -> clean
+
+EXPECTED RESULT
+An automated, regression-guarding upgrade-contract smoke case proving config.xml byte-identical +
+behaviour unchanged across a real pkg upgrade, green on the CE+Plus fan-out; UI tiers green; §7 DoD
+satisfied with only the visual-GUI residual left to the maintainer.
+
+COMMIT (single)
+    test(smoke): add ADR-28 upgrade-contract case; validate CE+Plus fan-out (ADR-28 P11)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/11_Results.txt
+State: the upgrade-contract case name + the fields it asserts; the before/after assertions; the green
+smoke-fanout + UI run links; confirmation the §7 DoD is met; any reject-criteria trigger hit. This is
+the final phase — note ADR-28 is ready to flip to Accepted on the recorded green evidence.

@@ -5,7 +5,7 @@ ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.2, §2.3, §6 Phas
 ================================================================================
 
 ROLE
-Branch adr/28-code-quality-conventions (off devel). Phase 5 of 10, BEHAVIOUR-PRESERVING via the
+Branch adr/28-code-quality-conventions (off devel). Phase 5 of 11, BEHAVIOUR-PRESERVING via the
 adapter. Work inline, one commit, push directly.
 
 WHY THIS PHASE EXISTS
