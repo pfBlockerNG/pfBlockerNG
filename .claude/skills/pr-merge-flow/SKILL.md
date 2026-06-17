@@ -6,9 +6,9 @@ description: >
   feedback, validate + apply each finding and reply, and ONLY if that completes
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
-  delete the branch. The review step gives CodeRabbit ~5 minutes to acknowledge the
+  delete the branch. The review step gives CodeRabbit ~10 minutes to acknowledge the
   PR: if it does, wait on its review; if it stays silent, nudge it once with
-  `@coderabbitai review` and wait 5 more minutes, and only if it is STILL silent spawn
+  `@coderabbitai review` and wait 10 more minutes, and only if it is STILL silent spawn
   a Claude Sonnet sub-agent to review in its place (still folding CodeRabbit's review in
   if it shows up late) — and handle every comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
@@ -45,31 +45,31 @@ Args: `{{ args }}`
 
 ## Step 1 — Review feedback
 
-Decide the review source with a **5-minute acknowledgement window** (1a), run the
+Decide the review source with a **10-minute acknowledgement window** (1a), run the
 matching path — 1b (CodeRabbit) or 1c (Sonnet substitute, which still folds CodeRabbit
 back in if it shows up late) — then apply the shared gate. Whichever reviews you end up
 with, **handle every comment of every review you receive**; *how* each comment is
 handled (the triage below) never changes.
 
-### Step 1a — Give CodeRabbit 5 minutes to acknowledge THIS PR
+### Step 1a — Give CodeRabbit 10 minutes to acknowledge THIS PR
 
 CodeRabbit, when installed, posts something on a new PR within a few minutes. So judge
 availability per-PR, anchored on the PR's creation time: if **any** CodeRabbit message
-(issue comment, review, or inline comment) appears within **5 minutes of the PR's
-creation**, it is active → **Step 1b**. If those 5 minutes elapse with **no CodeRabbit
+(issue comment, review, or inline comment) appears within **10 minutes of the PR's
+creation**, it is active → **Step 1b**. If those 10 minutes elapse with **no CodeRabbit
 message whatsoever**, do not yet assume it is absent → **Step 1c** (nudge it first). (If
-the PR is already older than 5 minutes when you start and CodeRabbit has posted nothing,
+the PR is already older than 10 minutes when you start and CodeRabbit has posted nothing,
 conclude `NOACK` immediately — no need to wait.)
 
 Run the wait as a background Bash command (a self-exiting loop = one wake; never a
 foreground `sleep`), then read `$RESULT`:
 
 ```sh
-# Set first: OWNER_REPO  PR  RESULT(tmpfile). Waits until 5 min past PR creation for
+# Set first: OWNER_REPO  PR  RESULT(tmpfile). Waits until 10 min past PR creation for
 # ANY CodeRabbit ("coderabbit" login) message; ACK as soon as one appears, else NOACK.
 created=$(gh pr view "$PR" --repo "$OWNER_REPO" --json createdAt -q .createdAt)
-# createdAt + 300s as epoch. BSD date (macOS): -juf; GNU date: the `date -d` fallback.
-deadline=$(( $(date -juf "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null || date -d "$created" +%s) + 300 ))
+# createdAt + 600s as epoch. BSD date (macOS): -juf; GNU date: the `date -d` fallback.
+deadline=$(( $(date -juf "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null || date -d "$created" +%s) + 600 ))
 while :; do
   hits=$(
     { gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
@@ -99,20 +99,20 @@ done
   Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
   acknowledged.
 
-### Step 1c — No ack → nudge `@coderabbitai review`, then wait 5 more minutes
+### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
 
 Before concluding CodeRabbit is absent, explicitly ask it to review — it sometimes just
 missed the PR's creation event. Post the nudge once, then re-run the **Step 1a** wait with
-a **fresh** 5-minute deadline (anchored on *now*, not the PR's creation time):
+a **fresh** 10-minute deadline (anchored on *now*, not the PR's creation time):
 
 ```sh
 gh pr comment "$PR" --repo "$OWNER_REPO" --body '@coderabbitai review'
 ```
 
-Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 300 ))`. On the result:
+Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the result:
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
-- **`NOACK`** (still silent 5 min after the nudge) → **Step 1d**.
+- **`NOACK`** (still silent 10 min after the nudge) → **Step 1d**.
 
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
