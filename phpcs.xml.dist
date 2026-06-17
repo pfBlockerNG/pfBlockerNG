@@ -1,15 +1,41 @@
 <?xml version="1.0"?>
 <ruleset name="pfBlockerNG-validation">
     <description>
-        PFBL-01 input-validation gate. Runs the project's custom PfBlockerNG standard
-        (the RequirePfbFilter sniff) over the package include that holds the
-        ADR-06/07/10/13 in-scope surfaces. PHPStan + PHPUnit remain the broad PHP
-        gates; this is a single, targeted rule, not a style standard.
+        pfBlockerNG PHPCS gates. Runs two targeted rules from the project's
+        custom PfBlockerNG standard:
+
+        - PFBL-01 RequirePfbFilter: input-validation contract gate scoped to
+          pfblockerng.inc (the ADR-06/07/10/13 surfaces).
+        - ADR-28 UppercaseBooleanLiteral: uppercase TRUE/FALSE value literals,
+          applied across all src/ PHP (pfblockerng.inc + pfblockerng_extra.inc
+          + pfblockerng_install.inc + pfb_unbound_include.inc + www/).
+
+        PHPStan + PHPUnit remain the broad PHP gates; these are single,
+        targeted rules, not a style standard.
     </description>
 
-    <!-- The in-scope surface lives in the main package include. -->
-    <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+    <!-- Files scanned when phpcs runs with no explicit path (pre-commit hook
+         + CI). Each sniff further restricts its scope via include-pattern. -->
+    <file>src/usr/local/pkg/pfblockerng</file>
+    <file>src/usr/local/www</file>
 
-    <!-- The bundled custom standard (its ruleset.xml references the sniff). -->
-    <rule ref="./tests/phpcs/PfBlockerNG/ruleset.xml"/>
+    <!-- Only scan PHP and include files; skip anything else under www/. -->
+    <arg name="extensions" value="php,inc"/>
+
+    <!-- ================================================================
+         PFBL-01 RequirePfbFilter — scoped to pfblockerng.inc only.
+         The in-scope surface (ADR-06/07/10/13 input paths) lives there.
+         ================================================================ -->
+    <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/Validation/RequirePfbFilterSniff.php">
+        <include-pattern>pfblockerng\.inc$</include-pattern>
+    </rule>
+
+    <!-- ================================================================
+         ADR-28 UppercaseBooleanLiteral — all src/ PHP.
+         Phases 2-3 already normalised every value literal; this sniff
+         guards regressions. Type declarations (string|false, ?true, …)
+         are excluded by PHPCS's own context-aware tokenizer.
+         ================================================================ -->
+    <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php"/>
+
 </ruleset>
