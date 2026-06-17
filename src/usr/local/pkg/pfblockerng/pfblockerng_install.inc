@@ -42,13 +42,13 @@ if (
 	isset($pfb_dnsbl_config['pfb_dnsvip_pass'])
 ) {
 	// Update existing VIPs.
-	$vips_found = false;
+	$vips_found = FALSE;
 	$vips_config = config_get_path('virtualip/vip', []);
 	foreach ($vips_config as &$vip) {
 		if (!str_starts_with($vip['descr'], 'pfB DNSBL')) {
 			continue;
 		}
-		$vips_found = true;
+		$vips_found = TRUE;
 
 		$vip['descr'] = 'pfBlockerNG DNSBL';
 		$vip['uniqid'] = $vip['uniqid'] ?? uniqid();
@@ -705,11 +705,11 @@ foreach (array('clearip', 'cleardnsbl') as $type) {
 		$pfb_cmd_esc = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php '{$type}' >/dev/null 2>&1";
 		if (pfblockerng_cron_exists($pfb_cmd_esc, '0', '0', '*', '*')) {
 			$ufound = TRUE;
-			install_cron_job("pfblockerng.php '{$type}'", false);
+			install_cron_job("pfblockerng.php '{$type}'", FALSE);
 		}
 		if (pfblockerng_cron_exists($pfb_cmd_esc, '0', '0', '*', '7')) {
 			$ufound = TRUE;
-			install_cron_job("pfblockerng.php '{$type}'", false);
+			install_cron_job("pfblockerng.php '{$type}'", FALSE);
 		}
 
 		// Add correct cron entry, if enabled
@@ -723,7 +723,7 @@ foreach (array('clearip', 'cleardnsbl') as $type) {
 			$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type} >/dev/null 2>&1";
 			if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
 				$ufound = TRUE;
-				install_cron_job($pfb_cmd, true, '0', '0', '*', '*', $pfb_day, 'root');
+				install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
 			}
 		}
 	}

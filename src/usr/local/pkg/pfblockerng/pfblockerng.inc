@@ -170,19 +170,19 @@ foreach (array('existing', 'actual') as $pftype) {
 // Default cURL options
 $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL download agent-' . system_get_uniqueid(),
 				CURLOPT_SSL_CIPHER_LIST	=> 'TLSv1.3, TLSv1.2',
-				CURLOPT_FOLLOWLOCATION	=> true,
-				CURLOPT_SSL_VERIFYPEER	=> true,
-				CURLOPT_SSL_VERIFYHOST	=> true,
-				CURLOPT_FRESH_CONNECT	=> true,
-				CURLOPT_FILETIME	=> true,
-				CURLOPT_TCP_NODELAY	=> true,
+				CURLOPT_FOLLOWLOCATION	=> TRUE,
+				CURLOPT_SSL_VERIFYPEER	=> TRUE,
+				CURLOPT_SSL_VERIFYHOST	=> TRUE,
+				CURLOPT_FRESH_CONNECT	=> TRUE,
+				CURLOPT_FILETIME	=> TRUE,
+				CURLOPT_TCP_NODELAY	=> TRUE,
 				CURLOPT_CONNECTTIMEOUT	=> 15,
-				CURLOPT_AUTOREFERER	=> true,
+				CURLOPT_AUTOREFERER	=> TRUE,
 				CURLOPT_MAXREDIRS	=> 10,
 				CURLOPT_HTTP_VERSION	=> CURL_HTTP_VERSION_NONE,
-				CURLOPT_FORBID_REUSE	=> true,
-				CURLOPT_SSL_ENABLE_ALPN	=> true,
-				CURLOPT_SSL_ENABLE_NPN	=> true,
+				CURLOPT_FORBID_REUSE	=> TRUE,
+				CURLOPT_SSL_ENABLE_ALPN	=> TRUE,
+				CURLOPT_SSL_ENABLE_NPN	=> TRUE,
 				CURLOPT_ENCODING	=> 'gzip',	// Request 'gzip' response encoding when the server offers it
 				// Constrain libcurl to the schemes pfBlockerNG fetches feeds over (http/https/ftp;
 				// rsync uses exec separately) — an independent backstop to the PFB_FILTER_URL scheme
@@ -809,7 +809,7 @@ function pfb_get_vips(): array {
 	];
 }
 
-function pfb_get_vip_options(int $family, bool $pkg_xml_format = false) {
+function pfb_get_vip_options(int $family, bool $pkg_xml_format = FALSE) {
 	$vips = pfb_get_vips();
 	if ($family == AF_INET) {
 		$selection = &$vips['v4'];
@@ -863,33 +863,33 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	$enabled6 = !empty($vip6);
 
 	if (!$enabled4 && !$enabled6) {
-		return [false, gettext('no VIP configured')];
+		return [FALSE, gettext('no VIP configured')];
 	}
 
 	if ($enabled4 && ($interface != get_configured_vip_interface($vip4))) {
-		return [false, sprintf(gettext('IPv4 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
+		return [FALSE, sprintf(gettext('IPv4 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
 	}
 	if ($enabled6 && ($interface != get_configured_vip_interface($vip6))) {
-		return [false, sprintf(gettext('IPv6 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
+		return [FALSE, sprintf(gettext('IPv6 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
 	}
 
 	$vips = pfb_get_vips();
 	if ($enabled4) {
 		if (!isset($vips['v4'][$vip4])) {
-			return [false, gettext('invalid IPv4 VIP')];
-		} elseif (count(where_is_ipaddr_configured(get_configured_vip_ipv4($vip4), '' , true, true, ''))) {
-			return [false, gettext('IPv4 VIP overlaps with an existing subnet')];
+			return [FALSE, gettext('invalid IPv4 VIP')];
+		} elseif (count(where_is_ipaddr_configured(get_configured_vip_ipv4($vip4), '' , TRUE, TRUE, ''))) {
+			return [FALSE, gettext('IPv4 VIP overlaps with an existing subnet')];
 		}
 	}
 	if ($enabled6) {
 		if (!isset($vips['v6'][$vip6])) {
-			return [false, gettext('invalid IPv6 VIP')];
-		} elseif ($enabled6 && count(where_is_ipaddr_configured(get_configured_vip_ipv6($vip6), '' , true, true, ''))) {
-			return [false, gettext('IPv6 VIP overlaps with an existing subnet')];
+			return [FALSE, gettext('invalid IPv6 VIP')];
+		} elseif ($enabled6 && count(where_is_ipaddr_configured(get_configured_vip_ipv6($vip6), '' , TRUE, TRUE, ''))) {
+			return [FALSE, gettext('IPv6 VIP overlaps with an existing subnet')];
 		}
 	}
 
-	return [true, null];
+	return [TRUE, null];
 }
 
 // [ ADR-13 ] Ordered, preferred-first list of DNS-themed candidate sinkhole VIP
@@ -959,12 +959,12 @@ function pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string {
 
 	foreach ($candidates as $candidate) {
 		// (a) Not an address already used by an existing VIP.
-		if (in_array($candidate, $existing_addresses, true)) {
+		if (in_array($candidate, $existing_addresses, TRUE)) {
 			continue;
 		}
 		// (b) Does not overlap any configured subnet (interface IPs, other VIPs,
 		// etc.) — same call shape as pfb_validate_vips.
-		if (count(where_is_ipaddr_configured($candidate, '', true, true, ''))) {
+		if (count(where_is_ipaddr_configured($candidate, '', TRUE, TRUE, ''))) {
 			continue;
 		}
 		return $candidate;
@@ -1004,7 +1004,7 @@ function pfb_unbound_listens_v6(): bool {
 
 	// A disabled resolver listens on nothing.
 	if (!config_path_enabled('unbound')) {
-		return false;
+		return FALSE;
 	}
 
 	$active_interface = config_get_path('unbound/active_interface', '');
@@ -1012,13 +1012,13 @@ function pfb_unbound_listens_v6(): bool {
 
 	// Empty or 'all' => 'interface-automatic: yes' => bind every address on the
 	// enabled interfaces. v6 is listened-on iff any configured interface has a v6.
-	if (empty($active_interfaces) || in_array('all', $active_interfaces, true)) {
+	if (empty($active_interfaces) || in_array('all', $active_interfaces, TRUE)) {
 		foreach (array_keys(get_configured_interface_list()) as $ubif) {
 			if (is_ipaddrv6(get_interface_ipv6($ubif))) {
-				return true;
+				return TRUE;
 			}
 		}
-		return false;
+		return FALSE;
 	}
 
 	// Explicit interface list: mirror unbound_generate_config_text()'s bind loop.
@@ -1030,15 +1030,15 @@ function pfb_unbound_listens_v6(): bool {
 		}
 		// A literal IPv6 address binds directly.
 		if (is_ipaddrv6($ubif)) {
-			return true;
+			return TRUE;
 		}
 		// An interface name resolves to its v6 address (if any).
 		if (is_ipaddrv6(get_interface_ipv6($ubif))) {
-			return true;
+			return TRUE;
 		}
 	}
 
-	return false;
+	return FALSE;
 }
 
 // [ ADR-13 ] Locate the index of the auto-managed DNSBL VIP this package owns inside a
@@ -1284,7 +1284,7 @@ function pfb_global() {
 	}
 
 	// Reload config.xml to get any recent changes
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	// General variables
 	$pfb['config']		= config_get_path('installedpackages/pfblockerng/config/0', []);
@@ -1429,7 +1429,7 @@ function pfb_global() {
 		}
 	}
 	else {
-		$pfb['curl_defaults'][CURLOPT_TCP_FASTOPEN]		= true;
+		$pfb['curl_defaults'][CURLOPT_TCP_FASTOPEN]		= TRUE;
 	}
 
 	// Set pfBlockerNG to disabled on 're-install'
@@ -1922,7 +1922,7 @@ function pfb_wizard_skip_action(array $post): ?string {
  */
 function pfb_wizard_get_action(array $get): ?string {
 	$action = $get['wizard'] ?? '';
-	return in_array($action, array('skip', 'disable'), true) ? $action : null;
+	return in_array($action, array('skip', 'disable'), TRUE) ? $action : null;
 }
 
 /*
@@ -2022,7 +2022,7 @@ function pfb_pkg_repo_name_for_channel(?string $channel): ?string {
  * them.
  */
 function pfb_software_is_our_build(?string $installed_repo): bool {
-	return in_array($installed_repo, array('pfblockerng', 'pfblockerng-nightly'), true);
+	return in_array($installed_repo, array('pfblockerng', 'pfblockerng-nightly'), TRUE);
 }
 
 /*
@@ -2033,7 +2033,7 @@ function pfb_software_is_our_build(?string $installed_repo): bool {
  */
 function pfb_update_available(?string $installed, ?string $latest): bool {
 	if (!is_string($installed) || $installed === '' || !is_string($latest) || $latest === '') {
-		return false;
+		return FALSE;
 	}
 	return pkg_version_compare($installed, $latest) === '<';
 }
@@ -2059,10 +2059,10 @@ function pfb_software_check_enabled(?string $raw): bool {
  */
 function pfb_should_notify(?string $installed, ?string $latest, ?string $last_notified, bool $enabled): bool {
 	if (!$enabled) {
-		return false;
+		return FALSE;
 	}
 	if (!pfb_update_available($installed, $latest)) {
-		return false;
+		return FALSE;
 	}
 	return $latest !== $last_notified;
 }
@@ -2187,7 +2187,7 @@ function pfb_software_read_cache(): array {
 	if ($raw === FALSE || $raw === '') {
 		return array();
 	}
-	$data = json_decode($raw, true);
+	$data = json_decode($raw, TRUE);
 	return is_array($data) ? $data : array();
 }
 
@@ -2236,7 +2236,7 @@ function pfb_software_write_cache(array $cache): void {
  * the "Check for new versions" enable-gate so a manual check always runs; it never bypasses the
  * provenance gate, and notifications still require the setting enabled.
  */
-function pfb_software_update_check(bool $force = false, ?array $io = null): array {
+function pfb_software_update_check(bool $force = FALSE, ?array $io = null): array {
 	$io = is_array($io) ? $io : array();
 
 	$pkgname = array_key_exists('installed_name', $io)
@@ -2335,10 +2335,10 @@ function pfb_software_panel_override(?string $path = null): ?bool {
 	}
 	$v = strtolower(trim((string) @file_get_contents($path)));
 	if ($v === 'on') {
-		return true;
+		return TRUE;
 	}
 	if ($v === 'off') {
-		return false;
+		return FALSE;
 	}
 	return null;
 }
@@ -2358,7 +2358,7 @@ function pfb_software_provenance_ok(): bool {
  * consistently present (our build) or absent (Netgate build) across the GUI.
  * Call immediately before display_top_tabs(); $active marks it the current tab.
  */
-function pfb_software_add_tab(array &$tab_array, bool $active = false): void {
+function pfb_software_add_tab(array &$tab_array, bool $active = FALSE): void {
 	if (pfb_software_provenance_ok()) {
 		$tab_array[] = array(gettext('Software'), $active, '/pfblockerng/pfblockerng_software.php');
 	}
@@ -2487,7 +2487,7 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 	// Reject anything that is not a plain basename BEFORE touching the filesystem
 	// (defence against ../ traversal and absolute paths in a hand-edited config).
 	if ($script === '' || basename($script) !== $script) {
-		return false;
+		return FALSE;
 	}
 	return array_key_exists($script, pfb_hook_scripts($when, $dir));
 }
@@ -2876,7 +2876,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			// ---- Teardown: a NON-selected type (or disabled) leaves no orphans. ----
 			// Strictly additive: only act when this aggregate actually exists -- on a box
 			// that never selected this type, nothing is touched (byte-identical to today).
-			if (!in_array($type, $selected, true)) {
+			if (!in_array($type, $selected, TRUE)) {
 				if (file_exists($aggout) || file_exists($consumer)) {
 					unlink_if_exists($aggout);
 					unlink_if_exists($consumer);
@@ -3727,7 +3727,7 @@ function pfb_unbound_dnsbl($mode) {
 	pfb_global();
 
 	// Reload config.xml to get any recent changes
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	$pfbupdate = FALSE;
 	$log = '';
@@ -4787,7 +4787,7 @@ function pfb_unbound_python($mode) {
 	pfb_global();
 
 	// Reload config.xml to get any recent changes
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	$pfbpython = FALSE;
 
@@ -6867,8 +6867,8 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 						// Allow downgrade of cURL settings 'Flex' after 1st failure, if user configured.
 						if ($retries == 1 && $pflex && in_array($curl_error, array( '35', '51', '60'))) {
-							curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-							curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+							curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
+							curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, FALSE);
 							curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'TLSv1.3, TLSv1.2, TLSv1.1, TLSv1, SSLv3');
 							$log = "\n  Downgrading SSL settings (Flex)";
 							pfb_logger("{$log}", "{$logtype}");
@@ -7407,7 +7407,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['deny_outbound'][] = $rule;
 			if ($action != 'Deny_Both') {
 				break;
@@ -7447,7 +7447,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['deny_inbound'][] = $rule;
 			break;
 		case 'Permit_Both':
@@ -7486,7 +7486,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['permit_outbound'][] = $rule;
 			if ($action != 'Permit_Both') {
 				break;
@@ -7526,7 +7526,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['permit_inbound'][] = $rule;
 			break;
 		case 'Match_Both':
@@ -7564,7 +7564,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_out) && $agateway_out != 'default') {
 				$rule['gateway'] = "{$agateway_out}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['match_outbound'][] = $rule;
 			if ($action != 'Match_Both') {
 				break;
@@ -7603,7 +7603,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($agateway_in) && $agateway_in != 'default') {
 				$rule['gateway'] = "{$agateway_in}";
 			}
-			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
+			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['match_inbound'][] = $rule;
 			break;
 	}
@@ -7619,7 +7619,7 @@ function pfb_aliastables($mode) {
 	$earlyshellcmd = '/usr/local/pkg/pfblockerng/pfblockerng.sh aliastables';
 
 	// Reload config.xml to get any recent changes
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	$a_earlyshellcmd = config_get_path('system/earlyshellcmd', []);
 	$a_shellcmdsettings = config_get_path('installedpackages/shellcmdsettings/config', []);
@@ -9410,7 +9410,7 @@ function pfb_livetail($logfile, $mode) {
 
 	while (TRUE) {
 		usleep(300000); //0.3s
-		clearstatcache(false, "{$logfile}");
+		clearstatcache(FALSE, "{$logfile}");
 		$len = @filesize("{$logfile}");
 
 		if ($len < $lastpos) {
@@ -9418,7 +9418,7 @@ function pfb_livetail($logfile, $mode) {
 		}
 		else {
 			$f = @fopen("{$logfile}", 'rb+');
-			if ($f === false) {
+			if ($f === FALSE) {
 				break;
 			}
 			@fseek($f, $lastpos);
@@ -9447,7 +9447,7 @@ function pfb_livetail($logfile, $mode) {
 				$pfb_buffer = @fread($f, 2048);
 				$pfb_output .= str_replace( "\r", '', $pfb_buffer);
 				pfbupdate_output($pfb_output);
-				clearstatcache(false, $pfb['log']);
+				clearstatcache(FALSE, $pfb['log']);
 				ob_flush();
 				flush();
 				if ($f) {
@@ -9864,7 +9864,7 @@ function sync_package_pfblockerng($cron='') {
 	// If table limit not defined, set default to 2M
 	if (empty(config_get_path('system/maximumtableentries'))) {
 		config_set_path('system/maximumtableentries', '2000000');
-		write_config('pfBlockerNG: save max Firewall table entries limit', false);
+		write_config('pfBlockerNG: save max Firewall table entries limit', FALSE);
 	}
 	$pfb['table_limit'] = config_get_path('system/maximumtableentries');
 
@@ -10584,7 +10584,7 @@ function sync_package_pfblockerng($cron='') {
 								continue;
 							}
 
-							$line = str_replace('"', '', strstr($host, '"', False));
+							$line = str_replace('"', '', strstr($host, '"', FALSE));
 							$host_ip = trim(str_replace('A ', '', strstr($line, 'A ', FALSE)));
 							$domain = strstr($line, ' ', TRUE);
 							if (substr($domain, 0, 4) == 'www.') {
@@ -13041,7 +13041,7 @@ function sync_package_pfblockerng($cron='') {
 	#########################################
 
 	// Reload config.xml to get any recent changes
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	$exist_aliases = config_get_path('aliases/alias', []);
 	foreach ($exist_aliases as $cbalias) {
@@ -13090,7 +13090,7 @@ function sync_package_pfblockerng($cron='') {
 			$new_rules = $permit_rules = $match_rules = $other_rules = $fpermit_rules = $fmatch_rules = $fother_rules = array();
 
 			// Reload config.xml to get any recent changes
-			config_read_file(false, true);
+			config_read_file(FALSE, TRUE);
 
 			// New vs old rules array comparison
 			$orig_rules_nocreated = $new_rules_nocreated = array();
@@ -13215,7 +13215,7 @@ function sync_package_pfblockerng($cron='') {
 				$rule['icmptype']	= 'echoreq';
 				$rule['source']		= array('any' => '');
 				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']));
-				$rule['created']	= array('time' => (int)microtime(true), 'username' => 'Auto');
+				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 				$new_rules[]		= $rule;
 
 				$rule			= $pfb['base_rule_float'];
@@ -13229,7 +13229,7 @@ function sync_package_pfblockerng($cron='') {
 				$rule['source']		= array('any' => '');
 				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']),
 								 'port' => 'pfB_DNSBL_Ports');
-				$rule['created']	= array('time' => (int)microtime(true), 'username' => 'Auto');
+				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 				$new_rules[]		= $rule;
 			}
 
@@ -13520,7 +13520,7 @@ function sync_package_pfblockerng($cron='') {
 		pfb_logger("\nSaving config changes", 1);
 
 		// Reload config.xml to get any recent changes and merge/save changes.
-		config_read_file(false, true);
+		config_read_file(FALSE, TRUE);
 		config_set_path('', array_replace_recursive(config_get_path(''), $pfb_config));
 		write_config('pfBlockerNG: save settings');
 
@@ -13530,7 +13530,7 @@ function sync_package_pfblockerng($cron='') {
 
 	// Query NAT Rules for previous IPv4 pfBlockerNG aliasnames which are not in the new '_v4' suffix format
 	$pfb_found	= FALSE;
-	config_read_file(false, true);
+	config_read_file(FALSE, TRUE);
 
 	foreach (config_get_path('nat/rule', []) as $key => $ex_nat) {
 		foreach (array('source', 'destination') as $rtype) {
@@ -13644,8 +13644,8 @@ function sync_package_pfblockerng($cron='') {
 
 			// Determine if CRON job requires updating
 			if (!pfblockerng_cron_exists($pfb_cmd, $pfb['min'], $pfb_hour, $pfb_mday, $pfb_wday)) {
-				install_cron_job('pfblockerng.php cron', false);
-				install_cron_job($pfb_cmd, true, $pfb['min'], $pfb_hour, $pfb_mday, $pfb_month, $pfb_wday, $pfb_who);
+				install_cron_job('pfblockerng.php cron', FALSE);
+				install_cron_job($pfb_cmd, TRUE, $pfb['min'], $pfb_hour, $pfb_mday, $pfb_month, $pfb_wday, $pfb_who);
 			}
 		}
 		else {
@@ -13654,7 +13654,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 	else {
 		// Clear any existing pfBlockerNG CRON jobs
-		install_cron_job('pfblockerng.php cron', false);
+		install_cron_job('pfblockerng.php cron', FALSE);
 	}
 
 	// Define pfBlockerNG MaxMind/TOP1M/ASN Cron job
@@ -13670,13 +13670,13 @@ function sync_package_pfblockerng($cron='') {
 
 		// Determine if CRON job requires updating
 		if (!pfblockerng_cron_exists($pfb_gcmd, $pfb_gmin, 'random', $pfb_gmday, $pfb_gwday)) {
-			install_cron_job('pfblockerng.php dcc', false);
-			install_cron_job($pfb_gcmd, true, $pfb_gmin, $pfb_ghour, $pfb_gmday, $pfb_gmonth, $pfb_gwday, $pfb_gwho);
+			install_cron_job('pfblockerng.php dcc', FALSE);
+			install_cron_job($pfb_gcmd, TRUE, $pfb_gmin, $pfb_ghour, $pfb_gmday, $pfb_gmonth, $pfb_gwday, $pfb_gwho);
 		}
 	}
 	else {
 		// Clear any existing pfBlockerNG CRON jobs
-		install_cron_job('pfblockerng.php dcc', false);
+		install_cron_job('pfblockerng.php dcc', FALSE);
 	}
 
 	// Define pfBlockerNG SafeSearch CNAME fallback freshness cron (issue #149).
@@ -13694,13 +13694,13 @@ function sync_package_pfblockerng($cron='') {
 		$pfb_sswho	= 'root';
 
 		if (!pfblockerng_cron_exists($pfb_sscmd, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_sswday)) {
-			install_cron_job('pfblockerng.php ss_refresh', false);
-			install_cron_job($pfb_sscmd, true, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_ssmonth, $pfb_sswday, $pfb_sswho);
+			install_cron_job('pfblockerng.php ss_refresh', FALSE);
+			install_cron_job($pfb_sscmd, TRUE, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_ssmonth, $pfb_sswday, $pfb_sswho);
 		}
 	}
 	else {
 		// Clear the SafeSearch freshness CRON job when SafeSearch is disabled
-		install_cron_job('pfblockerng.php ss_refresh', false);
+		install_cron_job('pfblockerng.php ss_refresh', FALSE);
 	}
 
 
@@ -13732,8 +13732,8 @@ function sync_package_pfblockerng($cron='') {
 
 			// Determine if CRON job requires updating
 			if (!pfblockerng_cron_exists($pfb_bcmd, $pfb_bmin, 'random', $pfb_bmday, $pfb_bwday)) {
-				install_cron_job('pfblockerng.php bl', false);
-				install_cron_job($pfb_bcmd, true, $pfb_bmin, $pfb_bhour, $pfb_bmday, $pfb_bmonth, $pfb_bwday, $pfb_bwho);
+				install_cron_job('pfblockerng.php bl', FALSE);
+				install_cron_job($pfb_bcmd, TRUE, $pfb_bmin, $pfb_bhour, $pfb_bmday, $pfb_bmonth, $pfb_bwday, $pfb_bwho);
 			}
 		}
 		else {
@@ -13742,7 +13742,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 	else {
 		// Clear any existing pfBlockerNG Blacklist CRON jobs
-		install_cron_job('pfblockerng.php bl', false);
+		install_cron_job('pfblockerng.php bl', FALSE);
 	}
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
@@ -13758,28 +13758,28 @@ function sync_package_pfblockerng($cron='') {
 				// Remove unreferenced 'daily' or 'weekly' cron job
 				$pfb_other = ($pfb_day == '*') ? '7' : '*';
 				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_other)) {
-					install_cron_job("pfblockerng.php {$type}", false);
+					install_cron_job("pfblockerng.php {$type}", FALSE);
 				}
 
 				if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
-					install_cron_job($pfb_cmd, true, '0', '0', '*', '*', $pfb_day, 'root');
+					install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
 				}
 			}
 			else {
 				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-					install_cron_job("pfblockerng.php {$type}", false);
+					install_cron_job("pfblockerng.php {$type}", FALSE);
 			}
 				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-					install_cron_job("pfblockerng.php {$type}", false);
+					install_cron_job("pfblockerng.php {$type}", FALSE);
 				}
 			}
 		}
 		else {
 			if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-				install_cron_job("pfblockerng.php {$type}", false);
+				install_cron_job("pfblockerng.php {$type}", FALSE);
 			}
 			if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-				install_cron_job("pfblockerng.php {$type}", false);
+				install_cron_job("pfblockerng.php {$type}", FALSE);
 			}
 		}
 	}
@@ -13913,7 +13913,7 @@ function pfblockerng_php_pre_deinstall_command() {
 				}
 			}
 			config_set_path('widgets/sequence', implode(',', $widgetlist));
-			write_config('pfBlockerNG: Remove widget', false);
+			write_config('pfBlockerNG: Remove widget', FALSE);
 		}
 	}
 	else {
@@ -14192,7 +14192,7 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 	];
 
 	$ret = [
-		'xmlrpc_recv_result' => false
+		'xmlrpc_recv_result' => FALSE
 	];
 	foreach ($section_paths as $path) {
 		$old_section = config_get_path($path, []);
@@ -14208,7 +14208,7 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 		}
 
 		$ret[$path] = array_merge($old_section, $new_section);
-		$ret['xmlrpc_recv_result'] = true;
+		$ret['xmlrpc_recv_result'] = TRUE;
 	}
 
 	return $ret;
