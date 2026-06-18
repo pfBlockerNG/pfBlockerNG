@@ -1306,7 +1306,7 @@ function pfb_global() {
 	$pfb['config_global']	= config_get_path('installedpackages/pfblockerngglobal', []);
 
 	$pfb['enable']		= $pfb['config']['enable_cb'];			// Enable/Disable of pfBlockerNG
-	$pfb['keep']		= $pfb['config']['pfb_keep'];			// Keep blocklists on pfBlockerNG Disable
+	$pfb['keep']		= $pfb['config']['pfb_keep'] ?? 'on';		// Keep blocklists on pfBlockerNG Disable (default ON; matches GUI, preserves settings on upgrade)
 	$pfb['interval']	= $pfb['config']['pfb_interval']	?: '1';	// Hour cycle for scheduler
 
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
@@ -6365,6 +6365,27 @@ function pfb_dnsbl_lenient_migrate($dconfig) {
 	}
 	$dconfig['pfb_dnsbl_lenient'] = 'on';
 	return $dconfig;
+}
+
+
+// Issue #281: one-time upgrade seed for the 'pfb_keep' General-settings flag. The
+// pre-deinstall hook wipes ALL pfBlockerNG config sections unless pfb_keep == 'on';
+// the GUI default is 'on' but it only persists to config.xml once General settings are
+// saved. On an EXISTING install (a populated General config section) that predates the
+// key, seed it to 'on' so a later pkg upgrade's pre-deinstall preserves user settings.
+// A fresh install has no prior section -> NULL (no write); the runtime default in
+// pfb_global() covers it. An existing value (including an explicit '' = off) is never
+// overwritten. Returns the updated config array to persist, or NULL when nothing changes.
+function pfb_keep_migrate($gconfig) {
+
+	if (!is_array($gconfig) || empty($gconfig)) {
+		return NULL;
+	}
+	if (isset($gconfig['pfb_keep'])) {
+		return NULL;
+	}
+	$gconfig['pfb_keep'] = 'on';
+	return $gconfig;
 }
 
 
