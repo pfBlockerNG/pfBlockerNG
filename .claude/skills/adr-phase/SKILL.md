@@ -73,7 +73,11 @@ checkout is never edited by phases. Set it up idempotently:
   `RESULTS/{NN}_*` handoffs + an `ADR-RESUME:` sentinel; if exactly one unambiguous candidate
   exists, **fast-forward its commits onto the current pinned branch** and continue at its
   `next-phase` (no prompt). Ask only on genuine ambiguity. Record/carry the `ADR-RESUME` sentinel
-  in the handoff.
+  in the handoff. **But if the pinned branch was minted/named for a different item** (its name
+  references another ADR/issue, e.g. `claude/gh-issue-7-…` while you start ADR-12), do **not**
+  overload it: cut a **new** branch named for **this** ADR and push there if the policy allows;
+  only when pushes are hard-pinned to that one stale branch may you reuse it, and then **flag the
+  name/item mismatch to the user first** (CLAUDE.md "One branch per work item").
 - **Resolve the branch name first.** Compute `{slug}` from the ADR title per CLAUDE.md
   "Branch naming (ADRs and issues)" → the target branch `adr/{NN}-{slug}`. This is
   deterministic, so it matches whatever a prior phase already created.

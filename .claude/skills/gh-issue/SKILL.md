@@ -175,6 +175,15 @@ issue title via the CLAUDE.md sanitiser (lowercase; strip emoji/non-ASCII; `[a-z
 only; collapse runs to `-`; ≤30 chars at a `-` boundary; empty → bare `issue/{NN}`).
 Set up idempotently (mirrors `/adr-phase` Step 3):
 
+- **Managed-remote session — fresh branch per issue (check FIRST).** Per CLAUDE.md
+  "Managed-remote sessions: branch policy + cross-session resume": if the push policy permits
+  the canonical `issue/{NN}-{slug}`, use it as normal. If pushes are hard-pinned to a minted
+  `claude/<slug>-<rand>` branch, work in the primary checkout on that branch — **but if that
+  branch was minted/named for a different item** (its name references another issue/ADR, e.g.
+  `claude/gh-issue-7-…` while you are handling issue #8), do **not** overload it: cut a **new**
+  branch named for **this** issue and push there if the policy allows; only when pushes are
+  hard-pinned to that one stale branch may you reuse it, and then **flag the name/item mismatch
+  to the user first** (CLAUDE.md "One branch per work item").
 - **Base** = `devel` unless the user said otherwise. `git fetch origin devel`.
 - **Worktree path**: a fixed per-issue path outside or gitignored relative to the
   main checkout, e.g. `.claude/worktrees/issue-{NN}` (if that area isn't ignored,

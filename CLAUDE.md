@@ -845,6 +845,18 @@ find the existing branch with **no archaeology**. Prefer this; it makes the mint
 branch a non-issue. The hard "never push anywhere but the session branch" pin is the wrong
 default for this repo — it should always carve out this exception.
 
+**One branch per work item — a fresh branch for each new issue/ADR.** Whichever model is in
+force, a branch belongs to the **single** issue/ADR it was opened for; never carry one work
+item's branch over to a different item. When you are asked to handle a **different** item than
+the current branch was minted/named for — its name references another item (e.g. the branch is
+`claude/gh-issue-7-…` but you are now working issue #8) — do **not** commit the new work onto
+that mismatched branch. Cut a **new** branch named for the new item (the canonical
+`issue/{NN}-{slug}` / `adr/{NN}-{slug}` when the push policy allows it, else a fresh
+`claude/<new-item-slug>-<rand>`) off the latest `origin/devel`, and push there. Only when the
+environment **hard-pins** pushes to that one stale branch and forbids every other ref is reuse
+acceptable — and then **flag the name/item mismatch to the user** before proceeding, rather than
+silently overloading it. A branch name that disagrees with the work item is a smell.
+
 **Fallback — push hard-pinned to the minted `claude/*` branch.** When the environment forbids
 pushing anywhere but the minted branch, you cannot reach the canonical name, so the pinned branch
 **replaces** the convention for the session — adopt it; there is no start-time choice to confirm.
