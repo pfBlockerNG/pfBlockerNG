@@ -692,10 +692,34 @@ class _StubDnsServer:
         with self._lock:
             self._records[self._fqdn(src)] = {"cname": self._fqdn(target)}
 
-    def register_nxdomain(self, name: str) -> None:
-        """Answer NXDOMAIN for ``name`` (an upstream that denies the name exists)."""
+    def register_nxdomain(
+        self,
+        name: str,
+        *,
+        ede_info_code: int | None = None,
+        ede_text: str = "",
+        authoritative: bool = False,
+        recursion_available: bool = False,
+    ) -> None:
+        """Answer NXDOMAIN for ``name``, modelling the distinct upstream NXDOMAIN
+        shapes the issue #267 detector must tell apart (AA/RA survive to
+        ``inplace_cb_query_response``):
+
+          * default (a Quad9-style BLOCK): RA=0, AA=0 -> the block signal.
+          * ``recursion_available=True`` (a forwarder relaying a NATURAL NXDOMAIN):
+            RA=1, AA=0 -> NOT a block (RA=1 excludes it).
+          * ``authoritative=True`` (an AUTHORITATIVE NXDOMAIN, recursive mode):
+            RA=0, AA=1 -> NOT a block (AA=0 is what excludes it).
+
+        Optional ``ede_info_code``/``ede_text`` attach an RFC 8914 EDE option (the
+        EXTRA-TEXT is the provider name, or ``""`` for none).
+        """
+        rec: dict[str, object] = {"nxdomain": True, "aa": authoritative, "ra": recursion_available}
+        if ede_info_code is not None:
+            rec["ede_info_code"] = ede_info_code
+            rec["ede_text"] = ede_text
         with self._lock:
-            self._records[self._fqdn(name)] = {"nxdomain": True}
+            self._records[self._fqdn(name)] = rec
 
     def clear_cname(self) -> None:
         """Drop ALL per-name records (back to the sentinel default for everything)."""
@@ -739,6 +763,8 @@ class _StubDnsServer:
         return rec.get("aaaa" if want_v6 else "a")  # type: ignore[return-value]
 
     def _build_response(self, data: bytes, client: str = "") -> bytes | None:
+        import dns.edns
+        import dns.flags
         import dns.message
         import dns.rcode
         import dns.rdatatype
@@ -762,7 +788,22 @@ class _StubDnsServer:
             target_rec = self._records.get(str(rec["cname"])) if (rec is not None and "cname" in rec) else None
         if rec is not None and rec.get("nxdomain"):
             resp.set_rcode(dns.rcode.NXDOMAIN)
+            # make_response starts with RA=0/AA=0 (the Quad9 block shape). Raise AA/RA
+            # only for the control shapes (authoritative / forwarded-natural NXDOMAIN).
+            if rec.get("aa"):
+                resp.flags |= dns.flags.AA
+            if rec.get("ra"):
+                resp.flags |= dns.flags.RA
+            ede_info_code = rec.get("ede_info_code")
+            if ede_info_code is not None:
+                # Attach an RFC 8914 EDE option so Unbound passes it upstream-side.
+                ede_text = str(rec.get("ede_text", "")) or None
+                ede_opt = dns.edns.EDEOption(int(ede_info_code), text=ede_text)
+                resp.use_edns(edns=0, options=[ede_opt])
             return resp.to_wire()
+        # Non-NXDOMAIN (normal) answers come from a RECURSIVE upstream (Quad9-style),
+        # so RA=1 -- this is what makes upstream RA=0 a meaningful block signal.
+        resp.flags |= dns.flags.RA
         if q.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
             return resp.to_wire()  # other qtypes: empty NOERROR
         want_v6 = q.rdtype == dns.rdatatype.AAAA

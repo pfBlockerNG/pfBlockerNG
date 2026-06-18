@@ -28,6 +28,8 @@ __all__ = [
     "register_inplace_cb_reply_cache",
     "register_inplace_cb_reply_local",
     "register_inplace_cb_reply_servfail",
+    "register_inplace_cb_query_response",
+    "register_inplace_cb_edns_back_parsed_call",
     # Reply-message helper
     "DNSMessage",
     # RR types / class
@@ -210,6 +212,42 @@ def register_inplace_cb_reply_servfail(*_: Any) -> bool:
 
     Same args and callback signature as :func:`register_inplace_cb_reply`.
     The callback's ``rep`` argument is ``None`` (no reply was constructed).
+
+    Returns:
+        True on success, False on failure.
+    """
+    return True
+
+
+def register_inplace_cb_query_response(*_: Any) -> bool:
+    """Register a callback invoked after a query RESPONSE is received from an
+    upstream/authoritative server, BEFORE Unbound finalises the client reply.
+
+    Callback signature::
+
+        def cb(qstate, response, **kwargs):
+            ...
+
+    ``response`` is the upstream ``dns_msg`` (``response.rep`` is its
+    :class:`reply_info`, whose ``flags`` still carry the upstream header).
+
+    Returns:
+        True on success, False on failure.
+    """
+    return True
+
+
+def register_inplace_cb_edns_back_parsed_call(*_: Any) -> bool:
+    """Register a callback invoked once Unbound has parsed the EDNS of an
+    upstream (back-end) response.
+
+    Callback signature::
+
+        def cb(qstate, **kwargs):
+            ...
+
+    The upstream's EDNS options are available on ``qstate.edns_opts_back_in``
+    (a linked list of options with ``opt_code`` / ``opt_data``).
 
     Returns:
         True on success, False on failure.
