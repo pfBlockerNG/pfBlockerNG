@@ -4925,6 +4925,8 @@ function pfb_unbound_python($mode) {
 		// Already validated + clamped (digits-only) in pfb_global().
 		$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
 
+		$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
+
 		$now = date('m/j/y H:i:s', time());
 
 		$pfb_py_conf = <<<EOF
@@ -4950,6 +4952,7 @@ python_cname	= {$python_cname}
 python_control	= {$python_control}
 python_control_legacy	= {$python_control_legacy}
 regex_cap	= {$regex_cap}
+forwarding	= {$forwarding}
 
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {

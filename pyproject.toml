@@ -16,6 +16,7 @@ markers = [
     "ui_browser: live-VM Web-UI browser/JS test (ADR-14 Tier B, Playwright); deselected from the default run",
     "repo: live-VM release->repository install flow (ADR-17); distinct from -m smoke; deselected from the default run",
     "safesearch: live-VM SafeSearch CNAME redirect (issue #149); ALSO marked smoke (runs under -m smoke); focused dispatch via -m safesearch",
+    "upstream: live-VM upstream/external-block detection (issue #267); ALSO marked smoke (runs under -m smoke); focused dispatch via -m upstream",
 ]
 
 # coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line

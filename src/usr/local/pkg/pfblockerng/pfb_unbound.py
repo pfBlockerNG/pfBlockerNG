@@ -74,6 +74,7 @@ if TYPE_CHECKING:
         module_env,
         module_qstate,
         query_info,
+        register_inplace_cb_query_response,
         register_inplace_cb_reply,
         register_inplace_cb_reply_cache,
         register_inplace_cb_reply_local,
@@ -830,6 +831,16 @@ def init_standard(id: int, env: module_env) -> bool:
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply_servfail")
         return False
 
+    # Issue #267: register the upstream-facing query_response callback. It fires on the
+    # raw server response BEFORE Unbound builds the client reply, preserving the upstream
+    # RA/AA bits + EDNS options (including EDE). Registered defensively: a failure (or
+    # an Unbound too old to expose this callback) must not break module init.
+    try:
+        if not register_inplace_cb_query_response(inplace_cb_query_response, env, id):
+            log_info("[pfBlockerNG]: Failed register_inplace_cb_query_response")
+    except Exception as _e:
+        sys.stderr.write("[pfBlockerNG] register_inplace_cb_query_response: {}\n".format(_e))
+
     # Store previous error message to avoid repeating
     pfb["p_err"] = ""
 
@@ -949,6 +960,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["async_worker"] = False
     pfb["reload_watcher"] = False
     pfb["control_watcher"] = False
+    pfb["forwarding"] = False
 
     # DNSBL Python files
     pfb["pfb_unbound.ini"] = "pfb_unbound.ini"
@@ -1129,6 +1141,9 @@ def init_standard(id: int, env: module_env) -> bool:
             if config.has_option("MAIN", "python_control_legacy"):
                 pfb["python_control_legacy"] = config.getboolean("MAIN", "python_control_legacy")
             warn_if_legacy_control_enabled(pfb["python_control_legacy"])
+
+            if config.has_option("MAIN", "forwarding"):
+                pfb["forwarding"] = config.getboolean("MAIN", "forwarding")
 
             # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
             # long/complex regex" static pre-filter (drops over-long/nested-quantifier
@@ -1815,6 +1830,86 @@ IDN_ACT_NONE = "none"
 IDN_ACT_ALERT = "alert"
 IDN_ACT_BLOCK = "block"
 
+# Issue #267: RFC 8914 Extended DNS Error info-codes that signal an upstream block.
+EDE_BLOCKED = 15  # INFO-CODE 15: Blocked
+EDE_FILTERED = 17  # INFO-CODE 17: Filtered
+# EDNS option code 15 carries RFC 8914 EDE data (distinct from the INFO-codes above).
+EDNS_OPT_CODE_EDE = 15
+
+
+@dataclass(frozen=True)
+class UpstreamBlock:
+    """Result of classifying a forwarded DNS reply as an upstream/external block.
+
+    Mirrors Pi-hole's external-block detection (NXRA / EDE15 / EDE17 signals).
+    """
+
+    signal: str  # "NXRA" | "EDE15" | "EDE17"
+    label: str  # human detail, e.g. "NXRA", "EDE15 (Blocked)", "EDE17 (Filtered)"
+    provider: str  # EDE EXTRA-TEXT if the response carried one, else "" (generic)
+
+
+def classify_upstream_block(
+    rcode: int,
+    ra_available: bool,
+    aa_authoritative: bool = False,
+    ede: list[tuple[int, str]] | None = None,
+) -> UpstreamBlock | None:
+    """Decide whether a forwarded DNS reply is an upstream/external block (Pi-hole parity).
+
+    Args:
+        rcode: the reply RCODE (compare against RCODE_NXDOMAIN).
+        ra_available: True if the reply's RA (Recursion Available) header bit is SET.
+        aa_authoritative: True if the reply's AA (Authoritative Answer) bit is SET.
+            An authoritative NXDOMAIN (AA=1) is a real NXDOMAIN from the zone owner,
+            not a filtering block — excluded from NXRA detection.
+        ede: parsed RFC 8914 Extended DNS Error options as (info_code, extra_text) pairs,
+             or None/empty if the reply carried none.
+
+    Returns an UpstreamBlock if the reply matches a known upstream-block signal, else None.
+    Precedence: a recognised EDE (15 Blocked / 17 Filtered) is the stronger, standardised
+    signal and wins (and carries its EXTRA-TEXT as ``provider``); otherwise NXRA
+    (rcode == NXDOMAIN AND NOT ra_available AND NOT aa_authoritative). A natural recursive
+    NXDOMAIN (RA set), an authoritative NXDOMAIN (AA set), and a non-NXDOMAIN with no
+    recognised EDE are NOT blocks (return None).
+    """
+    if ede:
+        ede15_extra: str | None = None
+        ede17_extra: str | None = None
+        for info_code, extra_text in ede:
+            if info_code == EDE_BLOCKED and ede15_extra is None:
+                ede15_extra = extra_text
+            elif info_code == EDE_FILTERED and ede17_extra is None:
+                ede17_extra = extra_text
+        if ede15_extra is not None:
+            return UpstreamBlock("EDE15", "EDE15 (Blocked)", ede15_extra.strip())
+        if ede17_extra is not None:
+            return UpstreamBlock("EDE17", "EDE17 (Filtered)", ede17_extra.strip())
+    if rcode == RCODE_NXDOMAIN and not ra_available and not aa_authoritative:
+        return UpstreamBlock("NXRA", "NXRA", "")
+    return None
+
+
+def _parse_ede_options(opts: Iterable[tuple[int, bytes]]) -> list[tuple[int, str]]:
+    """Parse raw EDNS option pairs into RFC 8914 EDE (info_code, extra_text) tuples.
+
+    Pure / unit-testable -- no Unbound API calls.  For each ``(opt_code, opt_data)``
+    pair: if ``opt_code == EDNS_OPT_CODE_EDE`` and the data is at least 2 bytes, the
+    first 2 bytes are the big-endian INFO-CODE and the remainder (if any) is the
+    UTF-8 EXTRA-TEXT.  Pairs whose opt_code is not 15 or whose data is shorter than 2
+    bytes are silently skipped (not EDE / malformed).
+    """
+    result: list[tuple[int, str]] = []
+    for opt_code, opt_data in opts:
+        if opt_code != EDNS_OPT_CODE_EDE:
+            continue
+        if len(opt_data) < 2:
+            continue
+        info_code = int.from_bytes(opt_data[:2], "big")
+        extra_text = opt_data[2:].decode("utf-8", "replace")
+        result.append((info_code, extra_text))
+    return result
+
 
 def _idn_dual_form(verdict: NameVerdict) -> str:
     """Actionable dual-form description of the offending label, for the log line.
@@ -2391,6 +2486,37 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
     pfb_log("/var/log/pfblockerng/unified.log", csv_line)
 
 
+def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: str) -> None:
+    """Log an issue #267 upstream/external DNS block -- same CSV shape as a DNSBL block.
+
+    Mirrors ``_log_idn_alert``'s structure.  ``b_type`` is ``"Upstream_Block"`` so the
+    PHP Reports/Alerts page can filter and render it distinctly (a later PR).
+    ``b_eval`` is the classifier label (e.g. ``"NXRA"``); ``feed`` is the provider
+    name from EDE EXTRA-TEXT, or ``"External"`` when the reply carried none.
+    No consecutive-duplicate suppression for now (noted as a follow-up).
+    """
+    if q_ip == "Unknown":
+        q_ip = "127.0.0.1"
+    csv_line = ",".join(
+        "{}".format(v)
+        for v in (
+            "DNSBL-python",
+            make_timestamp(),
+            q_name,
+            q_ip,
+            "Python",  # p_type
+            "Upstream_Block",  # b_type -- greppable prefix, distinct from feed blocks
+            "Upstream",  # group
+            result.label,  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
+            result.provider or "External",  # feed -- provider name or generic sentinel
+            "+",  # dupEntry (dedup follow-up)
+            q_type,
+        )
+    )
+    pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
+    pfb_log("/var/log/pfblockerng/unified.log", csv_line)
+
+
 def make_timestamp() -> str:
     for _ in range(2):
         try:
@@ -2899,6 +3025,63 @@ def inplace_cb_reply_servfail(
     **kwargs: Any,
 ) -> bool:
     get_details_reply("servfail", qinfo, qstate, rep, kwargs)
+    return True
+
+
+def _upstream_edns_opts(qstate: Any) -> list[tuple[int, bytes]]:
+    """Read the upstream's EDNS options from ``qstate.edns_opts_back_in_iter``.
+
+    Returns ``[(opt_code, opt_data_bytes), ...]`` — empty list on any failure.
+    Validated live (issue #267, run #158): no option registration needed for EDE (code 15).
+    """
+    try:
+        return [(int(o.code), bytes(o.data)) for o in qstate.edns_opts_back_in_iter]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _client_ip_from_qstate(qstate: Any) -> str:
+    """Best-effort client IP from ``qstate.mesh_info.reply_list``; fallback ``"127.0.0.1"``."""
+    try:
+        rl = qstate.mesh_info.reply_list
+        if rl is not None:
+            qr = getattr(rl, "query_reply", None)
+            if qr is not None:
+                addr = getattr(qr, "addr", None)
+                if addr:
+                    return str(addr)
+    except Exception:  # noqa: BLE001
+        pass
+    return "127.0.0.1"
+
+
+def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool:
+    """Detect an upstream/external DNS block on the RAW upstream response (issue #267).
+
+    Fires per upstream response, before Unbound rebuilds the client reply, so the
+    upstream RA/AA bits + EDE survive here (the inplace_cb_reply* hooks do not see them).
+    Only active in forwarding mode (pfb["forwarding"]). Observe-and-log only.
+    """
+    try:
+        if not pfb.get("forwarding"):
+            return True
+        rep = getattr(response, "rep", None)
+        flags = getattr(rep, "flags", None) if rep is not None else None
+        if not isinstance(flags, int):
+            return True
+        rcode = flags & 0x000F
+        ra = bool(flags & 0x0080)  # wire RA bit (NOT the runtime PKT_RA=0x20)
+        aa = bool(flags & 0x0400)  # wire AA bit
+        ede = _parse_ede_options(_upstream_edns_opts(qstate))
+        result = classify_upstream_block(rcode, ra, aa, ede)
+        if result is None:
+            return True
+        q_name = get_q_name_qstate(qstate)
+        q_type = get_q_type(qstate, None)
+        q_ip = _client_ip_from_qstate(qstate)
+        _log_upstream_block(q_name, q_ip, result, q_type)
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG] inplace_cb_query_response: {}\n".format(e))
     return True
 
 
