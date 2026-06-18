@@ -131,6 +131,12 @@ if ($_POST) {
 	$pconfig = $_POST;
 }
 
+// Validate the user-supplied 'Force Reload' option against its allowed values,
+// defaulting to 'All' for any unexpected input.
+if (isset($pconfig['pfb_reload_option'])) {
+	$pconfig['pfb_reload_option'] = pfb_reload_option_value($pconfig['pfb_reload_option']);
+}
+
 // Load Wizard settings and reload pfBlockerNG
 $pfb_wizard = FALSE;
 if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {

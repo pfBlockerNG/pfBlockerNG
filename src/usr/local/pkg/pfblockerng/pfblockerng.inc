@@ -323,6 +323,18 @@ function pfb_valid_vtype($vtype) {
 	return ($vtype === '_v4' || $vtype === '_v6');
 }
 
+// Normalise the user-supplied 'Force Reload' option to one of its only
+// legitimate values — 'All', 'IP', 'DNSBL' — returning 'All' for any absent,
+// non-string, or unexpected input. Used to validate $_POST['pfb_reload_option']
+// at the pfblockerng_update.php input boundary before it reaches the status
+// display, the reload-type switch, or the log line. Exact-match only.
+function pfb_reload_option_value($value) {
+	if (is_string($value) && in_array($value, array('All', 'IP', 'DNSBL'), TRUE)) {
+		return $value;
+	}
+	return 'All';
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
