@@ -17,6 +17,8 @@ use PHPUnit\Framework\TestCase;
  *   - a path with '..' that realpath-escapes an allowed dir   -> REJECTED
  *   - a redundant-separator variant of an escaping path       -> REJECTED
  *   - a non-existent path (realpath() returns FALSE)          -> REJECTED
+ *   - a symlink in an allowed dir pointing OUTSIDE it         -> REJECTED
+ *   - a symlink in an allowed dir whose target is in-bounds   -> ALLOWED
  *   - a real regular file DIRECTLY under an allowed dir       -> ALLOWED
  *
  * The ALLOWED case needs a real file under a real allowed directory (the allow-list
@@ -99,6 +101,83 @@ final class FeedUrlLocalFileTest extends TestCase
 			$this->assertTrue($this->validate($file), 'a real file directly in an allowed dir must be allowed');
 		} finally {
 			@unlink($file);
+		}
+	}
+
+	/**
+	 * A symlink placed INSIDE an allowed directory but pointing OUTSIDE it must be
+	 * rejected: realpath() resolves the link to its target, whose canonical directory
+	 * is not in the allow-list. Paired with the in-bounds symlink test below, this proves
+	 * the verdict follows the canonical TARGET location, not the link's own path — the
+	 * core reason canonicalization is required. Skips (does not fail) when the environment
+	 * cannot create the allowed dir, the out-of-bounds target, or the symlink.
+	 */
+	public function testSymlinkEscapingAllowedDirRejected(): void
+	{
+		$dir = '/var/db/pfblockerng/deny';
+		if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
+			$this->markTestSkipped("cannot create allowed dir {$dir} in this environment");
+		}
+
+		// Target OUTSIDE every allowed dir.
+		$outside = tempnam(sys_get_temp_dir(), 'pfb_outside_');
+		if ($outside === false) {
+			$this->markTestSkipped('cannot create an out-of-bounds target file');
+		}
+
+		$link = $dir . '/pfb_symlink_escape_' . getmypid() . '.txt';
+		@unlink($link);
+		if (!@symlink($outside, $link)) {
+			@unlink($outside);
+			$this->markTestSkipped('cannot create a symlink in this environment');
+		}
+
+		try {
+			$this->assertFalse(
+				$this->validate($link),
+				'a symlink inside an allowed dir pointing outside it must be rejected'
+			);
+		} finally {
+			@unlink($link);
+			@unlink($outside);
+		}
+	}
+
+	/**
+	 * The companion in-bounds case: a symlink inside an allowed dir whose target is a
+	 * regular file ALSO directly under an allowed dir is accepted. Establishes that the
+	 * rejection above is caused by the target ESCAPING the allow-list, not by the input
+	 * merely being a symlink — without it, an "always reject symlinks" implementation
+	 * would pass the escape test for the wrong reason. Skips when the environment cannot
+	 * create the files/link.
+	 */
+	public function testSymlinkWithinAllowedDirAccepted(): void
+	{
+		$dir = '/var/db/pfblockerng/deny';
+		if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
+			$this->markTestSkipped("cannot create allowed dir {$dir} in this environment");
+		}
+
+		$target = $dir . '/pfb_symlink_target_' . getmypid() . '.txt';
+		if (@file_put_contents($target, "test\n") === false) {
+			$this->markTestSkipped("cannot write {$target} in this environment");
+		}
+
+		$link = $dir . '/pfb_symlink_inbounds_' . getmypid() . '.txt';
+		@unlink($link);
+		if (!@symlink($target, $link)) {
+			@unlink($target);
+			$this->markTestSkipped('cannot create a symlink in this environment');
+		}
+
+		try {
+			$this->assertTrue(
+				$this->validate($link),
+				'a symlink whose target is a regular file directly in an allowed dir must be allowed'
+			);
+		} finally {
+			@unlink($link);
+			@unlink($target);
 		}
 	}
 }
