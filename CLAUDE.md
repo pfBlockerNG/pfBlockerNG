@@ -789,7 +789,11 @@ change, land its PR with **`/pr-merge-flow N`** — roughly `/pr-comments N
 --wait-for=coderabbitai && /pr-merge N`: get review feedback, validate + apply its findings and
 reply, then (only if that completes cleanly) rebase-merge once real CI is green. The review
 source adapts: **CodeRabbit** when active on the repo (it is — installed on the `pfBlockerNG`
-org), else a **Claude Sonnet sub-agent reviewer**. The **only** exemptions are the dev-only
+org), else a **Claude Sonnet sub-agent reviewer**. **Snyk** reviews PRs too: when it is
+reviewing (detectable via its PR check / review comments), wait for it **in parallel** and
+handle its security findings the same way — except Snyk posts **no** nitpick or
+outside-diff-range comments, so every Snyk finding is an in-diff item to fix or justify-skip.
+The **only** exemptions are the dev-only
 classes that go straight to `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills
 — see "Worktrees"); everything touching `src/`, `tests/`, or CI uses this flow.
 

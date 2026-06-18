@@ -178,6 +178,12 @@ diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
 enumerate every finding (inline + nitpick + outside-diff-range) and its location.
 Build the full list before fixing anything.
 
+**Snyk** (when reviewing the PR — `--wait-for=snyk`, or a Snyk PR check / `snyk`-login review
+comments are present) is an **additional** source: pull its inline review comments the same way
+(source 1 above) and read its PR-check detail. Snyk reports **security** findings only and posts
+**no** nitpick or outside-diff-range buckets — so there is just the one in-diff class, each
+finding handled with the same Step-5 verdict + Step-7 reply as a CodeRabbit inline finding.
+
 **Every enumerated finding is mandatory to handle** — inline, **🧹 Nitpick**, AND
 **⚠️ Outside diff range** alike. Each MUST get an explicit Step-5 verdict
 (APPLY / SKIP / DEFER, with a reason) and a Step-7 reply; none may be silently
