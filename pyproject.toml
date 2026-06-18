@@ -57,7 +57,8 @@ ignore = [
 # ``test_repo_install`` so their cases can request it (pytest resolves fixtures per-module).
 # Each case param then "redefines" the imported name from ruff's view — the standard
 # re-export idiom, not real shadowing. F811 is suppressed only for these files.
-"tests/smoke/test_software_update.py"          = ["F811"]
+"tests/smoke/test_software_update.py"              = ["F811"]
+"tests/smoke/test_upgrade_config_stability.py"  = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound"]

@@ -142,6 +142,18 @@ if ($cfg_lenient !== NULL) {
 }
 unset($cfg, $cfg_lenient);
 
+// Issue #281: preserve user settings across pkg upgrade. pfb_keep_migrate() seeds the
+// missing 'pfb_keep' General-settings flag to 'on' only on an already-populated config
+// section (an existing install); a fresh install returns NULL and the pfb_global()
+// runtime default stands. An existing value is never overwritten.
+$cfg = config_get_path('installedpackages/pfblockerng/config/0', []);
+$cfg_keep = pfb_keep_migrate($cfg);
+if ($cfg_keep !== NULL) {
+	config_set_path('installedpackages/pfblockerng/config/0', $cfg_keep);
+	write_config('pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)');
+}
+unset($cfg, $cfg_keep);
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
