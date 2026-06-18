@@ -104,3 +104,49 @@ class TestStubNormalAnswerShape:
         resp = _response({}, "normal-267.example.")
         # QR + RD + RA + rcode=0 -> exactly 0x8180.
         assert resp.flags == 0x8180
+
+
+class TestStubResolvingBranches:
+    """The non-block builder branches (pre-existing stub behaviour, now in the shared
+    ``build_response``): registered A/AAAA, NODATA, CNAME chain, and non-address qtype.
+    All are recursive-upstream NOERROR answers (flags 0x8180); they differ in the answer
+    section. Pinned off-box so an extraction regression fails without a booted VM.
+    """
+
+    @staticmethod
+    def _a_addrs(resp: dns.message.Message) -> list[str]:
+        return [item.address for rrset in resp.answer if rrset.rdtype == dns.rdatatype.A for item in rrset]
+
+    def test_registered_a_record(self) -> None:
+        resp = _response({"host-267.example.": {"a": ("203.0.113.7",)}}, "host-267.example.", "A")
+        assert resp.flags == 0x8180  # NOERROR, RA=1
+        assert self._a_addrs(resp) == ["203.0.113.7"]
+
+    def test_registered_aaaa_record(self) -> None:
+        resp = _response({"host6-267.example.": {"aaaa": ("2001:db8::7",)}}, "host6-267.example.", "AAAA")
+        assert resp.flags == 0x8180
+        aaaa = [item.address for rrset in resp.answer if rrset.rdtype == dns.rdatatype.AAAA for item in rrset]
+        assert aaaa == ["2001:db8::7"]
+
+    def test_nodata_missing_family(self) -> None:
+        # Registered with A only -> an AAAA query is NODATA: NOERROR with NO answer rrset.
+        resp = _response({"v4only-267.example.": {"a": ("203.0.113.7",)}}, "v4only-267.example.", "AAAA")
+        assert resp.flags == 0x8180
+        assert len(resp.answer) == 0
+
+    def test_cname_chain_resolves_to_target(self) -> None:
+        records = {
+            "alias-267.example.": {"cname": "canon-267.example."},
+            "canon-267.example.": {"a": ("203.0.113.8",)},
+        }
+        resp = _response(records, "alias-267.example.", "A")
+        assert resp.flags == 0x8180
+        # Two-rrset answer: the CNAME plus the target's A (what pfb_unbound's CNAME walk reads).
+        assert any(rrset.rdtype == dns.rdatatype.CNAME for rrset in resp.answer)
+        assert self._a_addrs(resp) == ["203.0.113.8"]
+
+    def test_non_address_qtype_is_empty_noerror(self) -> None:
+        # A non-A/AAAA qtype (MX) -> empty NOERROR, no answer.
+        resp = _response({}, "mx-267.example.", "MX")
+        assert resp.flags == 0x8180
+        assert len(resp.answer) == 0
