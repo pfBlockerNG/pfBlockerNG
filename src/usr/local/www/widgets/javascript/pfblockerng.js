@@ -44,7 +44,8 @@ function pfBlockerNG_escapeHtml(s) {
  * verbatim. Mirrors the per-column escaping contract in pfblockerng.widget.php.
  *
  * @param {string[]} cols - [alias, count, packets, updated, img].
- * @returns {string} the row's <td> cells (caller wraps them in <tr>).
+ * @returns {string} the row's <td> cells terminated by a closing </tr>; the
+ *   caller prepends the opening <tr> (preserving the original row assembly).
  */
 function pfBlockerNG_buildWidgetRow(cols) {
 	var line = '<td><small>' + cols[0] + '</small></td>';
