@@ -95,14 +95,20 @@ final class IpRegexPrefilterGuardTest extends TestCase
 		];
 	}
 
-	/** Lines the IPv4 dot-count guard rejects — none can contain a v4 match. */
+	/**
+	 * Lines that yield no IPv4 match — both guard outcomes:
+	 *   guard-false (cannot reach the regex) AND guard-true-but-regex-empty
+	 *   ('999.999.999.999' has 3 dots so it passes the prefilter, yet every
+	 *    octet is out of range so the regex matches nothing).
+	 */
 	public static function ipv4NonMatchingLines(): array
 	{
 		return [
-			'no dots, pure text'       => ['# a comment header, words only'],
-			'two dots only'            => ['ver 1.2.3 not an address here'],
-			'colon-only v6 line'       => ['2001:db8::1'],
-			'empty'                    => [''],
+			'no dots, pure text'        => ['# a comment header, words only'],
+			'two dots only'             => ['ver 1.2.3 not an address here'],
+			'colon-only v6 line'        => ['2001:db8::1'],
+			'three dots, octets > 255'  => ['999.999.999.999'],
+			'empty'                     => [''],
 		];
 	}
 
@@ -118,13 +124,19 @@ final class IpRegexPrefilterGuardTest extends TestCase
 		];
 	}
 
-	/** Lines the IPv6 colon guard rejects — none can contain a v6 match. */
+	/**
+	 * Lines that yield no IPv6 match — both guard outcomes:
+	 *   guard-false (cannot reach the regex) AND guard-true-but-regex-empty
+	 *   ('key: value text' contains a colon so it passes the prefilter, yet it
+	 *    is not an address so the regex matches nothing).
+	 */
 	public static function ipv6NonMatchingLines(): array
 	{
 		return [
-			'no colon, pure text'      => ['plain-hostname-no-separator'],
-			'dotted v4 only'           => ['192.168.0.1/24'],
-			'empty'                    => [''],
+			'no colon, pure text'       => ['plain-hostname-no-separator'],
+			'dotted v4 only'            => ['192.168.0.1/24'],
+			'colon present, not an addr' => ['key: value text'],
+			'empty'                     => [''],
 		];
 	}
 
