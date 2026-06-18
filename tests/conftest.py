@@ -107,6 +107,9 @@ def reset_pfb_globals() -> None:
     # each test starts with a clean runtime warn/evict bookkeeping.
     pfb_unbound._regex_warned.clear()
     pfb_unbound._regex_perf_strikes.clear()
+    # Reset the literal-prefilter index caches so each test starts with a clean index.
+    pfb_unbound._block_regex_index = None
+    pfb_unbound._allow_regex_index = None
     pfb_unbound.whiteDB = defaultdict(str)
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)

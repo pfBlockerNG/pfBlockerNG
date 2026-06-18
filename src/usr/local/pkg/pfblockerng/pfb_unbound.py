@@ -36,6 +36,15 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+# CPython 3.11+ internal regex AST parser used by the literal-prefilter to extract
+# a required substring from a compiled pattern.  The import is best-effort: if the
+# private module is absent (non-CPython, future rename) the prefilter degrades
+# gracefully to always-run (no correctness impact, only a performance one).
+try:
+    import re._parser as _sre_parse  # type: ignore[attr-defined]
+except Exception:
+    _sre_parse = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     # Symbols injected by Unbound's embedded Python interpreter (pythonmod) into
     # this script's globals at runtime. They are imported here only so static
@@ -1074,6 +1083,12 @@ def init_standard(id: int, env: module_env) -> bool:
     # (re)load so a fresh regex set starts with clean warn/evict bookkeeping.
     _regex_warned.clear()
     _regex_perf_strikes.clear()
+    # Drop the literal-prefilter index caches so a fresh build occurs on the next
+    # query (the new regex dicts are different objects; the identity check would
+    # catch this anyway, but releasing the slot here avoids holding the old DB).
+    global _block_regex_index, _allow_regex_index
+    _block_regex_index = None
+    _allow_regex_index = None
     whiteDB = defaultdict(str)
     hstsDB = defaultdict(str)
     gpListDB = defaultdict(str)
@@ -4242,6 +4257,87 @@ _REGEX_HAVE_THREAD_TIME = hasattr(time, "thread_time")
 _regex_warned: set[str] = set()
 _regex_perf_strikes: dict[str, int] = {}
 
+# Single-slot identity cache for the literal-prefilter index (one per scan
+# function).  Each slot is None or (db_ref, buckets, always) where db_ref is the
+# exact dict object of the regex DB, buckets maps first-char -> [(name, literal)],
+# and always is the list of names whose pattern yielded no required literal.  A
+# wholesale snapshot swap changes the dict's identity and triggers a rebuild; an
+# in-place eviction (pop) on the SAME dict does not -- a stale bucket entry for an
+# evicted name is a safe over-inclusion (the regex_db.get(_k) guard skips it).
+_block_regex_index: tuple[dict[str, Any], dict[str, list[tuple[str, str]]], list[str]] | None = None
+_allow_regex_index: tuple[dict[str, Any], dict[str, list[tuple[str, str]]], list[str]] | None = None
+
+
+def _required_literal(pattern: str) -> str | None:
+    """Return a lowercased substring that MUST appear in every match of ``pattern``,
+    or None if none can be proven.
+
+    Walks Python's regex AST to find the longest contiguous run of mandatory literal
+    characters.  A run is broken by anything that is not a guaranteed-present literal:
+    character classes, alternations, optional/unbounded quantifiers, assertions, and
+    backrefs all break or contribute nothing.  MAX_REPEAT with min>=1 and SUBPATTERN
+    groups recurse.
+
+    Returns the longest run lowercased when its length is >=2, else None.  On any
+    parse error (unknown opcode, private-module absent, non-CPython) returns None so
+    the rule becomes always-run -- a safe degradation that changes no decision.
+    """
+    if _sre_parse is None:
+        return None
+
+    def _runs(seq: Any) -> Iterator[str]:
+        cur: list[str] = []
+        for op, av in seq:
+            name: str = op.name if hasattr(op, "name") else str(op)
+            if name == "LITERAL":
+                cur.append(chr(av))
+                continue
+            if cur:
+                yield "".join(cur)
+                cur = []
+            if name in ("MAX_REPEAT", "MIN_REPEAT"):
+                mn, _mx, item = av
+                if mn >= 1:
+                    yield from _runs(item)
+            elif name == "SUBPATTERN":
+                yield from _runs(av[-1])
+            # BRANCH, IN, ANY, AT, ASSERT, GROUPREF, etc. -> break the run, yield nothing
+        if cur:
+            yield "".join(cur)
+
+    try:
+        parsed = _sre_parse.parse(pattern)
+        best = max(_runs(parsed), key=len, default="")
+        return best.lower() if len(best) >= 2 else None
+    except Exception:
+        return None
+
+
+def _build_regex_index(
+    regex_db: dict[str, Any],
+) -> tuple[dict[str, list[tuple[str, str]]], list[str]]:
+    """Build (buckets, always) for the literal-prefilter over ``regex_db``.
+
+    ``buckets`` maps first-char-of-literal -> list of (name, literal); ``always``
+    collects the names whose pattern yielded no required literal (they are always
+    candidate for the full re.search).  Both are built once per distinct db object
+    and cached by the caller.
+    """
+    buckets: dict[str, list[tuple[str, str]]] = {}
+    always: list[str] = []
+    for name, r in regex_db.items():
+        pattern_obj = r.get("re") if isinstance(r, dict) else r
+        raw_pattern: str = pattern_obj.pattern if hasattr(pattern_obj, "pattern") else ""
+        lit = _required_literal(raw_pattern) if raw_pattern else None
+        if lit is None:
+            always.append(name)
+        else:
+            ch = lit[0]
+            if ch not in buckets:
+                buckets[ch] = []
+            buckets[ch].append((name, lit))
+    return buckets, always
+
 
 def _regex_is_catastrophic_shape(pattern: str) -> bool:
     """Pure static analysis (NO execution): True when ``pattern`` carries a structurally
@@ -5153,12 +5249,37 @@ def _scan_block_band(
                 if band > best:
                     best, best_meta = band, {"kind": "zone", "entry": entry, "matched": q}
     if cfg.get("regexDB") and q_name:
+        # Literal-prefilter: build (or reuse) a first-char bucket index so only rules
+        # whose required literal substring is present in the query reach re.search.
+        # A necessary-condition guard -- a rule whose literal is absent cannot match,
+        # so skipping its re.search changes no decision.  Rules with no extractable
+        # literal (pure alternation, complex anchors) are always-run.  The full
+        # re.search still runs on the ORIGINAL q_name (not the lowercased form used
+        # for the membership test), so case handling is unchanged.  The warn/evict
+        # ReDoS guard is unaffected: a slow rule is still timed and evicted on the
+        # queries where it actually runs.
+        global _block_regex_index
+        if _block_regex_index is None or _block_regex_index[0] is not regex_db:
+            _buckets, _always = _build_regex_index(regex_db)
+            _block_regex_index = (regex_db, _buckets, _always)
+        _bi_buckets, _bi_always = _block_regex_index[1], _block_regex_index[2]
+        q_lower = q_name.lower()
+        cand: set[str] = set(_bi_always)
+        for _ch in set(q_lower):
+            _b = _bi_buckets.get(_ch)
+            if _b:
+                for _name, _lit in _b:
+                    if _lit in q_lower:
+                        cand.add(_name)
         # Snapshot-iterate + time each match (ADR-07 P7), same warn/evict policy as the
         # fast-path discovery scan; collect evicted names and pop AFTER the loop.
         warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
         evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
         to_evict: list[str] = []
-        for _k, r in list(regex_db.items()):
+        for _k in cand:
+            r = regex_db.get(_k)
+            if r is None:  # evicted since the index was built -> skip (safe)
+                continue
             pattern = r.get("re") if isinstance(r, dict) else r
             match, elapsed_ms = _regex_timed_search(pattern, q_name)
             if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_Regex", _k):
@@ -5187,9 +5308,27 @@ def _scan_allow_regex_band(
     loop -- the same warn/evict policy as the block-regex scans; fact 3)."""
     if not q_name:
         return 0
+    # Literal-prefilter: same necessary-condition guard as _scan_block_band (see
+    # that function's comment).  Separate cache slot keyed to allow_regex_db's identity.
+    global _allow_regex_index
+    if _allow_regex_index is None or _allow_regex_index[0] is not allow_regex_db:
+        _ai_buckets, _ai_always = _build_regex_index(allow_regex_db)
+        _allow_regex_index = (allow_regex_db, _ai_buckets, _ai_always)
+    _ai_buckets, _ai_always = _allow_regex_index[1], _allow_regex_index[2]
+    q_lower = q_name.lower()
+    cand: set[str] = set(_ai_always)
+    for _ch in set(q_lower):
+        _b = _ai_buckets.get(_ch)
+        if _b:
+            for _name, _lit in _b:
+                if _lit in q_lower:
+                    cand.add(_name)
     best = 0
     to_evict: list[str] = []
-    for _k, r in list(allow_regex_db.items()):
+    for _k in cand:
+        r = allow_regex_db.get(_k)
+        if r is None:  # evicted since the index was built -> skip (safe)
+            continue
         pattern = r.get("re") if isinstance(r, dict) else r
         match, elapsed_ms = _regex_timed_search(pattern, q_name)
         if _regex_should_evict(_k, elapsed_ms, warn_ms, evict_ms, "DNSBL_AllowRegex", _k):
