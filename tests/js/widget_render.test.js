@@ -127,10 +127,51 @@ test('pfBlockerNG_buildWidgetRow: plain row (no metacharacters) renders correctl
 	// When
 	var row = pfBlockerNG_buildWidgetRow(cols);
 
-	// Then: all five columns appear in the expected td structure.
+	// Then: all five columns appear in the expected td structure, wrapped in a
+	// complete <tr>...</tr> (the row owns both its opening and closing tags).
+	assert.ok(row.startsWith('<tr>'), 'row starts with opening <tr>');
+	assert.ok(row.endsWith('</td></tr>'), 'row ends with closing </td></tr>');
 	assert.ok(row.includes('<td><small>pfB_Deny_v4</small></td>'), 'col0 present');
 	assert.ok(row.includes('<td><small>1,234</small></td>'), 'col1 present');
 	assert.ok(row.includes('<td><small>0</small></td>'), 'col2 present');
 	assert.ok(row.includes('<td><small>Jun 01 12:00</small></td>'), 'col3 present');
 	assert.ok(row.includes('<td><i class="fa-solid fa-turn-down"></i></td></tr>'), 'col4 present');
+});
+
+// Scenario: the row is self-contained — exactly one <tr>/</tr> pair, no nesting.
+//
+// Given any row built by the helper,
+// When its tag occurrences are counted,
+// Then there is exactly one opening <tr> and one closing </tr> (so the caller
+//   must NOT add its own wrapping tags — issue #288).
+
+test('pfBlockerNG_buildWidgetRow: emits exactly one <tr>/</tr> pair', () => {
+	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa"></i>'];
+
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	assert.equal(row.split('<tr>').length - 1, 1, 'exactly one opening <tr>');
+	assert.equal(row.split('</tr>').length - 1, 1, 'exactly one closing </tr>');
+});
+
+// Scenario: multi-row assembly matches the caller's join('') (issue #288).
+//
+// Given several rows accumulated in an array (as the AJAX callback does),
+// When they are concatenated the way the caller now does — join('') —
+// Then the markup carries no stray comma (the old '<tr>' + array coercion
+//   inserted commas via Array.prototype.toString()) and contains exactly one
+//   <tr>/</tr> pair per row, with no leftover trailing tag.
+
+test('pfBlockerNG_buildWidgetRow: rows join into well-formed markup with no stray commas', () => {
+	// Given: two distinct rows.
+	var rowA = pfBlockerNG_buildWidgetRow(['AliasA', '1', '0', 'Jun 01 12:00', '<i></i>']);
+	var rowB = pfBlockerNG_buildWidgetRow(['AliasB', '2', '0', 'Jun 02 12:00', '<i></i>']);
+
+	// When: assembled the way the AJAX callback inserts them.
+	var assembled = [rowA, rowB].join('');
+
+	// Then: no comma artifact, and exactly one <tr>/</tr> per row (no extra trailing tag).
+	assert.ok(!assembled.includes(','), 'no stray comma between rows');
+	assert.equal(assembled.split('<tr>').length - 1, 2, 'one opening <tr> per row');
+	assert.equal(assembled.split('</tr>').length - 1, 2, 'one closing </tr> per row');
 });
