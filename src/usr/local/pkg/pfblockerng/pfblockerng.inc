@@ -3240,6 +3240,21 @@ function dnsbl_save_stats() {
 					}
 				}
 			}
+
+			// Seed the aggregate Upstream group row if it does not yet exist.
+			// Python increments its counter via pfb_db_enqueue on each upstream block;
+			// the UPDATE in _db_flush_dnsbl only fires on an existing row, so we must
+			// ensure the row is present whenever DNSBL feeds are active.
+			if (!isset($sql_groupnames['Upstream'])) {
+				$stmt = $db_handle->prepare(
+					"INSERT INTO dnsbl (groupname, timestamp, entries, counter)"
+					. " VALUES ('Upstream', :timestamp, 0, 0);"
+				);
+				if ($stmt) {
+					$stmt->bindValue(':timestamp', date('M j H:i:s', time()), SQLITE3_TEXT);
+					$stmt->execute();
+				}
+			}
 		}
 		pfb_close_sqlite($db_handle);
 	}

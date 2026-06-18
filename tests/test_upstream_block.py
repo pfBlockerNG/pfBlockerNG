@@ -4,19 +4,23 @@ Covers:
 - ``_parse_ede_options`` (pure EDE wire parser)
 - ``classify_upstream_block`` (NXRA / EDE15 / EDE17 classifier)
 - ``UpstreamBlock`` result type
+- ``_log_upstream_block`` counter enqueue branch (sqlite3_dnsbl_con guard)
 
 All tests are pure off-box — no Unbound API calls, no fixtures, no I/O.
 """
 
 from __future__ import annotations
 
+import pytest
 from unboundmodule import RCODE_NOERROR, RCODE_NXDOMAIN
 
+import pfb_unbound
 from pfb_unbound import (
     EDE_BLOCKED,
     EDE_FILTERED,
     EDNS_OPT_CODE_EDE,
     UpstreamBlock,
+    _log_upstream_block,
     _parse_ede_options,
     classify_upstream_block,
 )
@@ -366,3 +370,68 @@ class TestClassifyUpstreamBlockAAGuard:
         assert result is not None
         assert result.signal == "EDE15"
         assert result.provider == "Quad9"
+
+
+# ---------------------------------------------------------------------------
+# _log_upstream_block — sqlite3_dnsbl_con guard (counter enqueue)
+# ---------------------------------------------------------------------------
+
+
+class TestLogUpstreamBlockCounterEnqueue:
+    """Scenario: _log_upstream_block enqueues a dnsbl counter task iff sqlite3_dnsbl_con is truthy.
+
+    Background:
+        The function writes CSV to dnsbl.log + unified.log, then — when the SQLite
+        DNSBL connection is active — calls pfb_db_enqueue(("dnsbl", "Upstream")) to
+        increment the aggregate Upstream row counter.  The guard ``if pfb["sqlite3_dnsbl_con"]``
+        must be the discriminator: the enqueue fires when truthy and is suppressed when falsy.
+
+    Given:
+        A valid UpstreamBlock result (NXRA signal, no provider) and a monkeypatched
+        pfb_db_enqueue that records calls.  pfb_log is patched to a no-op so no real
+        file I/O occurs.
+    """
+
+    _RESULT = UpstreamBlock(signal="NXRA", label="NXRA", provider="")
+
+    def test_enqueues_upstream_counter_when_connection_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """
+        When sqlite3_dnsbl_con is truthy, _log_upstream_block enqueues ("dnsbl", "Upstream").
+
+        Before-state (con=False): no enqueue occurs (proven in the companion test).
+        After-state (con=True): exactly one ("dnsbl", "Upstream") task is enqueued.
+        """
+        calls: list[tuple[str, ...]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
+
+        # Before: connection inactive -> no enqueue (verified in companion test; establish
+        # that the initial fixture state is falsy so the flip is meaningful).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        # Flip to active.
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+
+        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
+        assert dnsbl_tasks == [("dnsbl", "Upstream")], f"Expected exactly one ('dnsbl', 'Upstream') task; got: {calls}"
+
+    def test_no_enqueue_when_connection_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """
+        When sqlite3_dnsbl_con is falsy, _log_upstream_block does NOT enqueue any dnsbl task.
+
+        This is the discriminating before-state: same function call, con=False -> no task.
+        Proves the guard is real and the counter is not always incremented.
+        """
+        calls: list[tuple[str, ...]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
+
+        # Fixture default: sqlite3_dnsbl_con is False (see conftest reset_pfb_globals).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+
+        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
+        assert dnsbl_tasks == [], f"Expected no dnsbl enqueue with sqlite3_dnsbl_con=False; got: {calls}"
