@@ -101,9 +101,29 @@ def _upstream_block_lines(log: str, name: str) -> list[str]:
     """Lines in ``log`` with source DNSBL-python, b_type Upstream_Block, and ``name``."""
     out = []
     for line in log.splitlines():
-        if "Upstream_Block" in line and name in line and line.startswith("DNSBL-python"):
+        # Cheapest guard first (ADR-28 conv #2): the source prefix rules out most lines
+        # before the substring scans.
+        if line.startswith("DNSBL-python") and "Upstream_Block" in line and name in line:
             out.append(line)
     return out
+
+
+def _wait_for_upstream_block_lines(vm: SmokeVM, name: str, *, timeout_s: float = 8.0, poll_s: float = 0.5) -> list[str]:
+    """Poll the on-box dnsbl.log for ``name``'s Upstream_Block lines until they appear.
+
+    The python module logs asynchronously (a queue flush), so a fresh probe's line is
+    not instantaneous. Bounded polling is steadier than a fixed sleep on slow CI VMs and
+    returns as soon as the line lands on fast paths. (Absence checks can't poll — they
+    keep a fixed settle, see the control tests.)
+    """
+    deadline = time.monotonic() + timeout_s
+    lines: list[str] = []
+    while time.monotonic() < deadline:
+        lines = _upstream_block_lines(_read_dnsbl_log(vm), name)
+        if lines:
+            return lines
+        time.sleep(poll_s)
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +154,10 @@ class TestUpstreamBlockNXRA:
         ans = h.dns_probe(deployed_vm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(2)  # let the async log queue flush
-        log = _read_dnsbl_log(deployed_vm)
-        lines = _upstream_block_lines(log, name)
+        lines = _wait_for_upstream_block_lines(deployed_vm, name)
         assert lines, (
-            f"No Upstream_Block log line for {name} after NXRA probe.\nLog excerpt (last 3000 chars):\n{log[-3000:]}"
+            f"No Upstream_Block log line for {name} after NXRA probe.\n"
+            f"Log excerpt (last 3000 chars):\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
         )
         assert any("NXRA" in line for line in lines), (
             f"Upstream_Block line found but b_eval is not NXRA.\nLines: {lines}"
@@ -163,11 +182,43 @@ class TestUpstreamBlockEDE15:
         ans = h.dns_probe(deployed_vm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(2)
-        log = _read_dnsbl_log(deployed_vm)
-        lines = _upstream_block_lines(log, name)
-        assert lines, f"No Upstream_Block log line for {name} (EDE15).\nLog excerpt:\n{log[-3000:]}"
+        lines = _wait_for_upstream_block_lines(deployed_vm, name)
+        assert lines, (
+            f"No Upstream_Block log line for {name} (EDE15).\nLog excerpt:\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
+        )
         assert any("EDE15 (Blocked)" in line for line in lines), f"b_eval is not 'EDE15 (Blocked)'.\nLines: {lines}"
+        assert any("Quad9" in line for line in lines), (
+            f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
+        )
+
+
+class TestUpstreamBlockEDE17:
+    """EDE 17 (Filtered) signal: upstream NXDOMAIN with RFC 8914 EDE option.
+
+    Twin of the EDE15 case for the other recognised EDE info-code, so both documented
+    signals are exercised on the live-VM path (test-coverage mandate: every branch).
+    """
+
+    def test_ede17_block_detected_with_provider(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+        """
+        Given: stub answers NXDOMAIN + EDE INFO-CODE 17 (Filtered) with EXTRA-TEXT "Quad9".
+        When: the on-box resolver resolves that name.
+        Then:
+          - dnsbl.log contains an Upstream_Block line for the name.
+          - b_eval is "EDE17 (Filtered)".
+          - feed/provider column contains "Quad9".
+        """
+        name = h.unique_domain("pfbsmoke-upstream-ede17")
+        stub_dns.register_nxdomain(name, ede_info_code=17, ede_text="Quad9")
+
+        ans = h.dns_probe(deployed_vm, name, "A")
+        assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
+
+        lines = _wait_for_upstream_block_lines(deployed_vm, name)
+        assert lines, (
+            f"No Upstream_Block log line for {name} (EDE17).\nLog excerpt:\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
+        )
+        assert any("EDE17 (Filtered)" in line for line in lines), f"b_eval is not 'EDE17 (Filtered)'.\nLines: {lines}"
         assert any("Quad9" in line for line in lines), (
             f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
         )
