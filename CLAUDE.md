@@ -923,18 +923,20 @@ GitHub **Verified** badge. Pick by whether the box has the **user's own signing 
 
 **Default — agent / managed-remote environment (no user signing key on the box):**
 
-- **Author = the human owner** (`Andre Brait <andrebrait@gmail.com>`), set explicitly
-  (`--author=` / `GIT_AUTHOR_*`) — what GitHub shows in the commit object and credits on the
-  contribution graph (via the author's linked, verified email), so the human stays a contributor.
 - **Committer = signer = Claude's GitHub identity** (the account whose **verified email owns the
-  registered signing key**). GitHub binds the Verified badge to the **committer, not the author**:
-  the committer email, the signing key, and the GitHub account must all line up on Claude's side,
-  so the signer is necessarily the committer. (This is why "committed *by the user* yet signed by
-  Claude" cannot be Verified — committer follows the signer; we keep the user as **author**
-  instead.)
+  registered signing key**). GitHub binds the Verified badge — and the credit it shows for a
+  commit — to the **committer**, so the committer must be Claude for the signature to verify.
+  (This is why "committed *by the user* yet signed by Claude" cannot be Verified — committer
+  follows the signer.)
+- **Author = the human owner** (`Andre Brait <andrebrait@gmail.com>`), set explicitly
+  (`--author=` / `GIT_AUTHOR_*`) — keeps the human in the commit object.
+- **Credit the human with a `Co-authored-by: Andre Brait <andrebrait@gmail.com>` trailer** — the
+  final line, after a blank line. **Mandatory:** the author field alone is *not* enough — with
+  Claude as committer GitHub credits only Claude, so without this trailer the human is never
+  surfaced as a contributor. (A `Co-authored-by:` for *Claude* is redundant — Claude is already
+  the committer — so omit Claude's.)
 - **Sign every commit** (`-S`; SSH or GPG). Valid signature + key on Claude's account + matching
-  committer email ⇒ **Verified**, attributed to Claude. `Co-authored-by:` is redundant here
-  (Claude is already the committer) — omit it.
+  committer email ⇒ **Verified**, attributed to Claude.
 
 **User's personal environment, signing with the user's own key** (`commit.gpgsign = true`, or a
 configured `user.signingkey`): do **not** override the local identity — let the user author,
