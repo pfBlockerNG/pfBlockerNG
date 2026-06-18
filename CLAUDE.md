@@ -915,3 +915,44 @@ labels already exist — `gh label list`):
 `<scope>: <imperative summary>` (follow the existing log). E.g. `ci: simplify pytest
 invocation`, `dev: add ShellCheck config`, `pfblockerng: fix IPv6 subnet match`. No trailing
 period. Body optional for non-obvious changes.
+
+### Author, committer, and signing
+
+Two environments, two attribution shapes — both keep the **human owner visible** and earn a
+GitHub **Verified** badge. Pick by whether the box has the **user's own signing key**.
+
+**Default — agent / managed-remote environment (no user signing key on the box):**
+
+- **Author = the human owner** (`Andre Brait <andrebrait@gmail.com>`), set explicitly
+  (`--author=` / `GIT_AUTHOR_*`) — what GitHub shows in the commit object and credits on the
+  contribution graph (via the author's linked, verified email), so the human stays a contributor.
+- **Committer = signer = Claude's GitHub identity** (the account whose **verified email owns the
+  registered signing key**). GitHub binds the Verified badge to the **committer, not the author**:
+  the committer email, the signing key, and the GitHub account must all line up on Claude's side,
+  so the signer is necessarily the committer. (This is why "committed *by the user* yet signed by
+  Claude" cannot be Verified — committer follows the signer; we keep the user as **author**
+  instead.)
+- **Sign every commit** (`-S`; SSH or GPG). Valid signature + key on Claude's account + matching
+  committer email ⇒ **Verified**, attributed to Claude. `Co-authored-by:` is redundant here
+  (Claude is already the committer) — omit it.
+
+**User's personal environment, signing with the user's own key** (`commit.gpgsign = true`, or a
+configured `user.signingkey`): do **not** override the local identity — let the user author,
+commit, and sign as themselves, so the commit is **Verified as the user** (author = committer =
+signer = the user). Claude is then *not* the committer, so the only way to credit it is the
+trailer:
+
+- **Add `Co-authored-by: Claude <…>` as the final line(s)** of the message, after a blank line,
+  using Claude's **GitHub-recognized identity** (the same account used as committer in the default
+  model) so it actually registers as a co-author — a trailer with an unrecognized email is just
+  text and credits no one. **Mandatory in this environment:** never let a user-signed commit ship
+  with no mention of Claude.
+- Leave the user's `-S` signing in place; do **not** add `--author=` (the user is the author).
+
+**Badge precondition** (one-time infrastructure, not per-commit): the default model needs Claude's
+committer email verified on its GitHub account and that account holding the registered signing key.
+In the **Claude Code managed-remote environment this is platform-provided** — every commit is signed
+automatically by the platform key under the `claude` committer identity (with the human as author),
+so the badge works with no setup. Only a **bare / self-hosted** agent setup must provision the
+key + email itself (until then commits land correctly attributed but read *Unverified*). The
+personal-environment model already has this via the user's own key.
