@@ -52,6 +52,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from . import stub_responses
+
 # --------------------------------------------------------------------------- #
 # Paths + constants
 # --------------------------------------------------------------------------- #
@@ -74,8 +76,9 @@ GUEST_TO_HOST_ALIAS = "10.0.2.2"
 # (see _StubDnsServer / helpers.configure_upstream). Distinct from every DNSBL
 # block shape (NXDOMAIN / 0.0.0.0 / the VIP), so a name that should be blocked
 # but ISN'T resolves to the sentinel — a true pass, never a false-green block.
-STUB_DNS_A = "203.0.113.99"  # RFC 5737 documentation range
-STUB_DNS_AAAA = "2001:db8::99"  # RFC 3849 documentation range
+# Single source: stub_responses (shared with the off-box shape tests).
+STUB_DNS_A = stub_responses.STUB_DNS_A  # RFC 5737 documentation range
+STUB_DNS_AAAA = stub_responses.STUB_DNS_AAAA  # RFC 3849 documentation range
 
 # Hard readiness ceiling; wait_ready.sh polls (no fixed sleep) up to this.
 DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
@@ -714,10 +717,12 @@ class _StubDnsServer:
         Optional ``ede_info_code``/``ede_text`` attach an RFC 8914 EDE option (the
         EXTRA-TEXT is the provider name, or ``""`` for none).
         """
-        rec: dict[str, object] = {"nxdomain": True, "aa": authoritative, "ra": recursion_available}
-        if ede_info_code is not None:
-            rec["ede_info_code"] = ede_info_code
-            rec["ede_text"] = ede_text
+        rec = stub_responses.nxdomain_record(
+            authoritative=authoritative,
+            recursion_available=recursion_available,
+            ede_info_code=ede_info_code,
+            ede_text=ede_text,
+        )
         with self._lock:
             self._records[self._fqdn(name)] = rec
 
@@ -751,74 +756,18 @@ class _StubDnsServer:
         with self._lock:
             self._queries.clear()
 
-    @staticmethod
-    def _addrs(rec: dict[str, object] | None, want_v6: bool) -> list[str] | None:
-        """Addresses to emit for a record of this family, or None for NODATA.
-
-        rec None (unregistered) -> the sentinel (a single default address). Registered
-        with the family -> its list. Registered WITHOUT the family -> None (NODATA).
-        """
-        if rec is None:
-            return [STUB_DNS_AAAA if want_v6 else STUB_DNS_A]
-        return rec.get("aaaa" if want_v6 else "a")  # type: ignore[return-value]
-
     def _build_response(self, data: bytes, client: str = "") -> bytes | None:
-        import dns.edns
-        import dns.flags
-        import dns.message
-        import dns.rcode
-        import dns.rdatatype
-        import dns.rrset
-
-        try:
-            req = dns.message.from_wire(data)
-        except Exception:
-            return None
-        resp = dns.message.make_response(req)
-        if not req.question:
-            return resp.to_wire()
-        q = req.question[0]
-        name = q.name.to_text().lower()
-        # Snapshot the query log AND the record(s) this answer needs atomically, so a
-        # concurrent register_*/clear_cname on the test thread can't change the override
-        # map mid-request (which would make the smoke assertions nondeterministic).
+        # Snapshot the override map under the lock so a concurrent register_*/clear_cname
+        # on the test thread can't change it mid-request (which would make the smoke
+        # assertions nondeterministic), then build off the snapshot via the shared
+        # stub_responses builder (single source, shared with the off-box shape tests).
         with self._lock:
-            self._queries.append({"name": name, "type": dns.rdatatype.to_text(q.rdtype), "client": client})
-            rec = self._records.get(name)
-            target_rec = self._records.get(str(rec["cname"])) if (rec is not None and "cname" in rec) else None
-        if rec is not None and rec.get("nxdomain"):
-            resp.set_rcode(dns.rcode.NXDOMAIN)
-            # make_response starts with RA=0/AA=0 (the Quad9 block shape). Raise AA/RA
-            # only for the control shapes (authoritative / forwarded-natural NXDOMAIN).
-            if rec.get("aa"):
-                resp.flags |= dns.flags.AA
-            if rec.get("ra"):
-                resp.flags |= dns.flags.RA
-            ede_info_code = rec.get("ede_info_code")
-            if ede_info_code is not None:
-                # Attach an RFC 8914 EDE option so Unbound passes it upstream-side.
-                ede_text = str(rec.get("ede_text", "")) or None
-                ede_opt = dns.edns.EDEOption(int(ede_info_code), text=ede_text)
-                resp.use_edns(edns=0, options=[ede_opt])
-            return resp.to_wire()
-        # Non-NXDOMAIN (normal) answers come from a RECURSIVE upstream (Quad9-style),
-        # so RA=1 -- this is what makes upstream RA=0 a meaningful block signal.
-        resp.flags |= dns.flags.RA
-        if q.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
-            return resp.to_wire()  # other qtypes: empty NOERROR
-        want_v6 = q.rdtype == dns.rdatatype.AAAA
-        rtype = "AAAA" if want_v6 else "A"
-        if rec is not None and "cname" in rec:
-            target = str(rec["cname"])
-            resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", "CNAME", target))
-            ips = self._addrs(target_rec, want_v6)
-            if ips:
-                resp.answer.append(dns.rrset.from_text(target, 60, "IN", rtype, *ips))
-            return resp.to_wire()
-        ips = self._addrs(rec, want_v6)
-        if ips:
-            resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", rtype, *ips))
-        return resp.to_wire()
+            records = dict(self._records)
+        wire, qlog = stub_responses.build_response(records, data, sentinel_a=STUB_DNS_A, sentinel_aaaa=STUB_DNS_AAAA)
+        if qlog is not None:
+            with self._lock:
+                self._queries.append({"name": qlog["name"], "type": qlog["type"], "client": client})
+        return wire
 
     def _serve_udp(self) -> None:
         self._udp.settimeout(0.5)
