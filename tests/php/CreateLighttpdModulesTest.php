@@ -6,17 +6,24 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_create_lighttpd() — pins the server.modules list emitted for the DNSBL
+ * pfb_create_lighttpd() — pins the server.modules set emitted for the DNSBL
  * lighttpd configuration.
  *
- * Two facts this test enforces:
- *   (1) mod_auth is ABSENT from every server.modules line — it was loaded in all
- *       four variants but never referenced by any auth.* directive; removing it is
+ * Three facts this test enforces:
+ *   (1) mod_auth is ABSENT from the configuration — it was loaded in all four
+ *       variants but never referenced by any auth.* directive; removing it is
  *       the fix for issue #266.
- *   (2) The py_nolog flag drives a real branch: 'off' produces no access-log modules
- *       (mod_access / mod_accesslog absent); 'on' adds them (mod_access +
- *       mod_accesslog present). Both sides are asserted before/after the flip so the
- *       test fails on a regression, not just on coverage.
+ *   (2) mod_access is ALWAYS loaded, regardless of the py_nolog setting — it is
+ *       what makes the unconditional `url.access-deny = ( "~", ".inc" )` directive
+ *       effective. With mod_access unloaded, lighttpd treats url.access-deny as an
+ *       unknown directive and silently ignores it, so the ".inc"/"~" denial is not
+ *       enforced (issue #279). It is appended on its own `server.modules += (...)`
+ *       line so it is independent of the logging branch.
+ *   (3) The py_nolog flag drives a real branch — but only for mod_accesslog (the
+ *       access-log module): 'off' omits it, 'on' adds it. The flip is asserted
+ *       before/after so the test fails on a regression, not just on coverage; the
+ *       same flip confirms mod_access stays present on BOTH sides (it is not
+ *       py_nolog-gated).
  *
  * On the CI runner (no lighttpd binary, no /usr/local/lib/lighttpd/mod_openssl.so)
  * the function deterministically exercises the non-openssl branches. Those are the
@@ -55,8 +62,12 @@ final class CreateLighttpdModulesTest extends TestCase
 	}
 
 	/**
-	 * Extract the server.modules line from a generated lighttpd conf string.
-	 * Returns the raw line (trimmed) so assertions are on the exact emitted text.
+	 * Extract the first server.modules list line from a generated lighttpd conf
+	 * string (the branch-selected `server.modules = ( ... )` list). Returns the
+	 * raw line (trimmed) so assertions are on the exact emitted text.
+	 *
+	 * mod_access lives on a separate unconditional `server.modules += ( ... )`
+	 * line, so assertions about it run against the whole conf, not this line.
 	 */
 	private function modulesLine(string $conf): string
 	{
@@ -69,63 +80,71 @@ final class CreateLighttpdModulesTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// py_nolog OFF — logging modules absent; mod_auth absent (regression guard).
+	// py_nolog OFF — access-log module absent; mod_access still loaded (backs
+	// url.access-deny); mod_auth absent (regression guard).
 	// -------------------------------------------------------------------------
 
-	public function testNologOffOmitsAccessLogModulesAndModAuth(): void
+	public function testNologOffLoadsModAccessOmitsAccessLogAndModAuth(): void
 	{
-		// Given: py_nolog is off (the before-state).
+		// Given: py_nolog is off (the shipped default).
 		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'off';
 
 		// When: conf is generated.
 		$conf    = pfb_create_lighttpd();
 		$modules = $this->modulesLine($conf);
 
-		// Then: core modules are present.
+		// Then: core modules are present in the branch-selected list.
 		$this->assertStringContainsString('"mod_fastcgi"', $modules,
 			'mod_fastcgi must be present when py_nolog=off');
 		$this->assertStringContainsString('"mod_rewrite"', $modules,
 			'mod_rewrite must be present when py_nolog=off');
 
-		// Access-log modules must NOT appear (logging is disabled).
-		$this->assertStringNotContainsString('"mod_access"', $modules,
-			'mod_access must be absent when py_nolog=off');
+		// The access-log module must NOT appear (logging is disabled).
 		$this->assertStringNotContainsString('"mod_accesslog"', $modules,
 			'mod_accesslog must be absent when py_nolog=off');
 
+		// mod_access MUST be loaded even with logging off — it backs the
+		// unconditional url.access-deny directive (issue #279).
+		$this->assertStringContainsString('url.access-deny', $conf,
+			'url.access-deny is emitted unconditionally');
+		$this->assertStringContainsString('"mod_access"', $conf,
+			'mod_access must be loaded when py_nolog=off so url.access-deny is enforced (#279)');
+
 		// Regression guard — mod_auth must be absent (dead config removed in #266).
-		$this->assertStringNotContainsString('"mod_auth"', $modules,
-			'mod_auth must not appear in server.modules (issue #266: no auth.* directive uses it)');
+		$this->assertStringNotContainsString('"mod_auth"', $conf,
+			'mod_auth must not appear in the config (issue #266: no auth.* directive uses it)');
 	}
 
 	// -------------------------------------------------------------------------
-	// py_nolog ON — before/after: proves the flag is a live branch, not dead code.
+	// py_nolog ON — before/after: the flip drives mod_accesslog only, while
+	// mod_access stays loaded on both sides (proves it is not py_nolog-gated).
 	// -------------------------------------------------------------------------
 
-	public function testNologOnAddsAccessLogModulesAndStillOmitsModAuth(): void
+	public function testNologFlipDrivesAccessLogWhileModAccessStaysLoaded(): void
 	{
 		// Given: start with py_nolog off (before-state asserted explicitly).
 		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'off';
 		$confBefore    = pfb_create_lighttpd();
 		$modulesBefore = $this->modulesLine($confBefore);
 
-		// Before: access-log modules absent (same as the dedicated off-test above,
-		// but re-asserted here so the flip has an observable before-state).
-		$this->assertStringNotContainsString('"mod_access"', $modulesBefore,
-			'before: mod_access absent with py_nolog=off');
+		// Before: access-log module absent; mod_access already present.
 		$this->assertStringNotContainsString('"mod_accesslog"', $modulesBefore,
 			'before: mod_accesslog absent with py_nolog=off');
+		$this->assertStringContainsString('"mod_access"', $confBefore,
+			'before: mod_access present even with py_nolog=off (#279)');
 
 		// When: py_nolog is flipped to on.
 		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'on';
 		$confAfter    = pfb_create_lighttpd();
 		$modulesAfter = $this->modulesLine($confAfter);
 
-		// Then: access-log modules now appear (the flip caused the change).
-		$this->assertStringContainsString('"mod_access"', $modulesAfter,
-			'after: mod_access must be present when py_nolog=on');
+		// Then: the access-log module now appears (the flip caused the change).
 		$this->assertStringContainsString('"mod_accesslog"', $modulesAfter,
 			'after: mod_accesslog must be present when py_nolog=on');
+
+		// mod_access is unaffected by the flip — still present.
+		$this->assertStringContainsString('"mod_access"', $confAfter,
+			'after: mod_access still present when py_nolog=on (#279)');
 
 		// Core modules still present.
 		$this->assertStringContainsString('"mod_fastcgi"', $modulesAfter,
@@ -134,7 +153,7 @@ final class CreateLighttpdModulesTest extends TestCase
 			'mod_rewrite must be present when py_nolog=on');
 
 		// Regression guard — mod_auth absent in the on-branch too.
-		$this->assertStringNotContainsString('"mod_auth"', $modulesAfter,
-			'mod_auth must not appear in server.modules with py_nolog=on (issue #266)');
+		$this->assertStringNotContainsString('"mod_auth"', $confAfter,
+			'mod_auth must not appear in the config with py_nolog=on (issue #266)');
 	}
 }
