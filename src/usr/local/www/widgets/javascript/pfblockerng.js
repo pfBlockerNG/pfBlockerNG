@@ -24,6 +24,20 @@
 var pfBlockerNGFailedTimer;
 var pfBlockerNGWidgetTimer;
 
+function pfBlockerNG_escapeHtml(s) {
+	var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+	return String(s).replace(/[&<>"']/g, function(c) { return map[c]; });
+}
+
+function pfBlockerNG_buildWidgetRow(cols) {
+	var line = '<td><small>' + cols[0] + '</small></td>';
+	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[1]) + '</small></td>';
+	line += '<td><small>' + cols[2] + '</small></td>';
+	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[3]) + '</small></td>';
+	line += '<td>' + cols[4] + '</td></tr>';
+	return line;
+}
+
 /* update timers (10000 ms = 10 seconds, 60000 ms = 1 minute, 300000 ms = 5 mins) */
 var pfBlockerNGupdateFailedDelay	= 300000;
 var pfBlockerNGupdateWidgetDelay	= 15000;
@@ -59,13 +73,7 @@ function pfBlockerNG_fetch_new_widget_callback(callback_data) {
 				}
 			}
 			else if (row_cnt > 4) {
-				var line = '';
-				line =  '<td><small>' + row_split[0] + '</small></td>';
-				line += '<td><small>' + row_split[1] + '</small></td>';
-				line += '<td><small>' + row_split[2] + '</small></td>';
-				line += '<td><small>' + row_split[3] + '</small></td>';
-				line += '<td>' + row_split[4] + '</td></tr>';
-				new_data_to_add[new_data_to_add.length] = line;
+				new_data_to_add[new_data_to_add.length] = pfBlockerNG_buildWidgetRow(row_split);
 			}
 		}
 
@@ -106,93 +114,99 @@ function fetch_new_pfBlockerNG_widget() {
 	});
 }
 
-/* start local AJAX engine */
-pfBlockerNGFailedTimer	= setInterval('fetch_new_pfBlockerNG_failed()', pfBlockerNGupdateFailedDelay);
-pfBlockerNGWidgetTimer	= setInterval('fetch_new_pfBlockerNG_widget()', pfBlockerNGupdateWidgetDelay);
+if (typeof window !== 'undefined') {
+	/* start local AJAX engine */
+	pfBlockerNGFailedTimer	= setInterval('fetch_new_pfBlockerNG_failed()', pfBlockerNGupdateFailedDelay);
+	pfBlockerNGWidgetTimer	= setInterval('fetch_new_pfBlockerNG_widget()', pfBlockerNGupdateWidgetDelay);
 
-events.push(function() {
+	events.push(function() {
 
-	// Keep popover open on mouseover
-	// Reference: http://jsfiddle.net/wojtekkruszewski/zf3m7/22/
-	var originalLeave = $.fn.popover.Constructor.prototype.leave;
-	$.fn.popover.Constructor.prototype.leave = function(obj) {
-		var self = obj instanceof this.constructor ?
-			obj : $(obj.currentTarget)[this.type](this.getDelegateOptions()).data('bs.' + this.type)
-		var container, timeout;
+		// Keep popover open on mouseover
+		// Reference: http://jsfiddle.net/wojtekkruszewski/zf3m7/22/
+		var originalLeave = $.fn.popover.Constructor.prototype.leave;
+		$.fn.popover.Constructor.prototype.leave = function(obj) {
+			var self = obj instanceof this.constructor ?
+				obj : $(obj.currentTarget)[this.type](this.getDelegateOptions()).data('bs.' + this.type)
+			var container, timeout;
 
-		originalLeave.call(this, obj);
+			originalLeave.call(this, obj);
 
-		if (obj.currentTarget) {
-			container = $(obj.currentTarget).siblings('.popover')
-			timeout = self.timeout;
-			container.one('mouseenter', function() {
+			if (obj.currentTarget) {
+				container = $(obj.currentTarget).siblings('.popover')
+				timeout = self.timeout;
+				container.one('mouseenter', function() {
 
-				// We entered the actual popover - call off the dogs
-				clearTimeout(timeout);
+					// We entered the actual popover - call off the dogs
+					clearTimeout(timeout);
 
-				// Increase pfBNG refresh intervals
-				var pfBlockerNGupdateFailedDelay	= 90000;
-				var pfBlockerNGupdateWidgetDelay	= 90000;
+					// Increase pfBNG refresh intervals
+					var pfBlockerNGupdateFailedDelay	= 90000;
+					var pfBlockerNGupdateWidgetDelay	= 90000;
 
-				clearInterval(pfBlockerNGFailedTimer);
-				clearInterval(pfBlockerNGWidgetTimer);
-
-				// Let's monitor popover content instead
-				container.one('mouseleave', function(){
-					$.fn.popover.Constructor.prototype.leave.call(self, self);
-
-					// Reset pfBNG refresh intervals
-					var pfBlockerNGupdateFailedDelay	= 300000;
-					var pfBlockerNGupdateWidgetDelay	= 15000;
-	
 					clearInterval(pfBlockerNGFailedTimer);
 					clearInterval(pfBlockerNGWidgetTimer);
 
-					pfBlockerNGFailedTimer	= setInterval('fetch_new_pfBlockerNG_failed()', pfBlockerNGupdateFailedDelay);
-					pfBlockerNGWidgetTimer	= setInterval('fetch_new_pfBlockerNG_widget()', pfBlockerNGupdateWidgetDelay);
-				});
-			})
-		}
-	};
-	$('body').popover({ selector: '[data-popover]', trigger: 'click hover', placement: 'right', delay: {show: 50, hide: 400}});
+					// Let's monitor popover content instead
+					container.one('mouseleave', function(){
+						$.fn.popover.Constructor.prototype.leave.call(self, self);
 
-	$('[id^=pfblockerngackicon]').click(function(event) {
-		$('#pfblockerngack').val('true');
-		$('#formicons').submit();
-	});
+						// Reset pfBNG refresh intervals
+						var pfBlockerNGupdateFailedDelay	= 300000;
+						var pfBlockerNGupdateWidgetDelay	= 15000;
 
-	$('[id^=pfblockerngclearicon]').click(function(event) {
-		$('<div></div>').appendTo('body')
-		.html('<div><h6>Select which Packet Counts to clear:</h6><small>Note: Selecting \'IP\' will clear all pfSense counters.</small></div>')
-		.dialog({
-			modal: true,
-			autoOpen: true,
-			resizable: false,
-			closeOnEscape: true,
-			width: 'auto',
-			title: 'Clear Packet Counts:',
-			position: { my: 'top+50px', at: 'top' },
-			buttons: {
-				All: function () {
-					$('#pfblockerngclearall').val(true);
-					$(this).dialog("close");
-					$('#formicons').submit();
-				},
-				IP: function () {
-					$('#pfblockerngclearip').val(true);
-					$(this).dialog("close");
-					$('#formicons').submit();
-				},
-				DNSBL: function () {
-					$('#pfblockerngcleardnsbl').val(true);
-					$(this).dialog("close");
-					$('#formicons').submit();
-				},
-				Cancel: function (event, ui) {
-					$(this).dialog("close");
-				}
+						clearInterval(pfBlockerNGFailedTimer);
+						clearInterval(pfBlockerNGWidgetTimer);
+
+						pfBlockerNGFailedTimer	= setInterval('fetch_new_pfBlockerNG_failed()', pfBlockerNGupdateFailedDelay);
+						pfBlockerNGWidgetTimer	= setInterval('fetch_new_pfBlockerNG_widget()', pfBlockerNGupdateWidgetDelay);
+					});
+				})
 			}
-		}).css('background-color','#ffd700');
-		$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
+		};
+		$('body').popover({ selector: '[data-popover]', trigger: 'click hover', placement: 'right', delay: {show: 50, hide: 400}});
+
+		$('[id^=pfblockerngackicon]').click(function(event) {
+			$('#pfblockerngack').val('true');
+			$('#formicons').submit();
+		});
+
+		$('[id^=pfblockerngclearicon]').click(function(event) {
+			$('<div></div>').appendTo('body')
+			.html('<div><h6>Select which Packet Counts to clear:</h6><small>Note: Selecting \'IP\' will clear all pfSense counters.</small></div>')
+			.dialog({
+				modal: true,
+				autoOpen: true,
+				resizable: false,
+				closeOnEscape: true,
+				width: 'auto',
+				title: 'Clear Packet Counts:',
+				position: { my: 'top+50px', at: 'top' },
+				buttons: {
+					All: function () {
+						$('#pfblockerngclearall').val(true);
+						$(this).dialog("close");
+						$('#formicons').submit();
+					},
+					IP: function () {
+						$('#pfblockerngclearip').val(true);
+						$(this).dialog("close");
+						$('#formicons').submit();
+					},
+					DNSBL: function () {
+						$('#pfblockerngcleardnsbl').val(true);
+						$(this).dialog("close");
+						$('#formicons').submit();
+					},
+					Cancel: function (event, ui) {
+						$(this).dialog("close");
+					}
+				}
+			}).css('background-color','#ffd700');
+			$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
+		});
 	});
-});
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+	module.exports = { pfBlockerNG_escapeHtml: pfBlockerNG_escapeHtml, pfBlockerNG_buildWidgetRow: pfBlockerNG_buildWidgetRow };
+}

@@ -275,7 +275,7 @@ function pfBlockerNG_update_table() {
 				$pfb_table[$pfb_alias] = array('count' => $match[1], 'img' => $pfb['down']);
 				exec("{$pfb['ls']} -l -D'%b %d %T' {$pfb_aliasdir_esc} | {$pfb['awk']} '{ print \$6,\$7,\$8 }'", $update);
 
-				$pfb_table[$pfb_alias]['update']	= htmlspecialchars($update[0]);
+				$pfb_table[$pfb_alias]['update']	= $update[0];
 				$pfb_table[$pfb_alias]['rule']		= 0;
 				$pfb_table[$pfb_alias]['packets']	= 0;
 				unset($match, $update);
@@ -396,7 +396,7 @@ function pfBlockerNG_update_table() {
 							$pfb_dtable[$res['groupname']] = array ('count' => $res['entries'], 'img' => $pfb['up']);
 						}
 					}
-					$pfb_dtable[$res['groupname']]['update'] = htmlspecialchars("{$res['timestamp']}");
+					$pfb_dtable[$res['groupname']]['update'] = "{$res['timestamp']}";
 
 					if (!is_numeric($res['counter'])) {
 						$res['counter'] = 0;
@@ -923,6 +923,8 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 				$values['count'] = number_format($values['count'], 0, '', ',' ) ?: 0;
 			}
 
+			$alias_html = htmlspecialchars($pfb_alias);
+
 			if (strpos($pfb_alias, 'DNSBL_') !== FALSE) {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
@@ -954,21 +956,21 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 
 				// Alias table popup
 				if ($values['count'] > 0 && $pfb['popup'] == 'on') {
-					$pfb_alias = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
+					$alias_html = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
 						. " data-trigger=\"hover focus\" title=\"pfBlockerNG Alias details\" data-content=\""
-						. alias_info_popup($values['id']) . "\" data-html=\"true\">{$pfb_alias}</a>";
+						. alias_info_popup($values['id']) . "\" data-html=\"true\">" . htmlspecialchars($pfb_alias) . "</a>";
 				}
 			}
 
 			if ($mode == 'js') {
-				print $response = "{$pfb_alias}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}\n";
+				print $response = "{$alias_html}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}\n";
 			}
 			else {
 				print ("<tr>
-						<td><small>{$pfb_alias}</small></td>
+						<td><small>{$alias_html}</small></td>
 						<td><small>{$values['count']}</small></td>
 						<td><small>{$packets}</small></td>
-						<td><small>{$values['update']}</small></td>
+						<td><small>" . htmlspecialchars($values['update']) . "</small></td>
 						<td>{$values['img']}</td>
 				</tr>");
 

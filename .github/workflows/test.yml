@@ -408,6 +408,25 @@ jobs:
         run: node --test
         working-directory: scripts/worker
 
+  widget-js-tests:
+    name: Widget JS unit tests (node --test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Run the Dashboard widget JS tests
+        # Offline unit coverage for the widget render helpers (pfBlockerNG_escapeHtml /
+        # pfBlockerNG_buildWidgetRow): pins that data columns are HTML-escaped before
+        # DOM insertion and that server-rendered markup columns pass through verbatim.
+        run: node --test tests/js/*.test.js
+
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
     # MANUAL-ONLY (issue #76). The spikes carry their GO/NO-GO verdict in their EXIT
@@ -482,7 +501,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, worker-tests, ui-suite]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, worker-tests, widget-js-tests, ui-suite]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -533,6 +552,10 @@ jobs:
           fi
           if [ "${{ needs.worker-tests.result }}" != "success" ]; then
             echo "Worker unit tests (node --test) failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.widget-js-tests.result }}" != "success" ]; then
+            echo "Widget JS unit tests (node --test) failed or were cancelled."
             exit 1
           fi
           # ADR-14 UI suite (label-gated): 'skipped' (unlabeled PR / push) is a
