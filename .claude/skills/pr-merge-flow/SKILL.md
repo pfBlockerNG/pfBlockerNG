@@ -91,10 +91,11 @@ done
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
-- Invoke the **pr-comments** skill with `N --wait-for=coderabbitai`. It blocks until
-  CodeRabbit has finished reviewing, then validates each finding against the current
-  code, applies the ones that genuinely hold, skips the rest with a reason, and
-  replies on every thread.
+- Invoke the **pr-comments** skill with `N --wait-for=coderabbitai,snyk` (one call,
+  both reviewers — `pr-comments` waits per-handle and skips either if it isn't reviewing
+  the PR; **Snyk** rides this same call, see Step 1e). It blocks until they have finished
+  reviewing, then validates each finding against the current code, applies the ones that
+  genuinely hold, skips the rest with a reason, and replies on every thread.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
   do not stall the flow — fall back to the Sonnet stand-in (**Step 1d**); the nudge in
   Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
@@ -159,16 +160,18 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
 
 ### Step 1e — Snyk security review (in parallel, when present)
 
-Snyk reviews PRs independently of CodeRabbit — run this **alongside** the 1a–1d path, not
-instead of it. Detect and wait the same way, then handle its findings with the same triage.
+Snyk reviews PRs independently of CodeRabbit — handle it **alongside** the 1a–1d path, not
+instead of it. **The wait runs through `/pr-comments`, not a bespoke poll here:** on the
+CodeRabbit-present path (1b) Snyk is already folded into that one call's
+`--wait-for=coderabbitai,snyk`; on the **Sonnet-substitute path (1d)** — where no CodeRabbit
+`pr-comments` wait runs — invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
+its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` check/comment ⇒
+skipped, no stall), so it is always safe to include. This step just records Snyk's specifics:
 
 - **Detect** whether Snyk is reviewing THIS PR: a Snyk **PR check** (a status/check-run whose
   context/name contains `snyk`, e.g. `code/snyk`) on the head SHA, and/or **review comments**
-  from a Snyk app/bot (login contains `snyk`). Either presence ⇒ Snyk is engaged. If neither
-  ever appears, Snyk is not active on this PR — skip this step.
-- **Wait** until the Snyk check reaches a **terminal** state (success/failure/neutral) — don't
-  gate the merge while it is still queued/running. (`/pr-comments … --wait-for=snyk` polls the
-  same way the CodeRabbit wait does.)
+  from a Snyk app/bot (login contains `snyk`). Either presence ⇒ Snyk is engaged; neither ⇒ not
+  active on this PR (the `--wait-for=snyk` wait skips it).
 - **Handle every finding.** Snyk reports **security** issues and, unlike CodeRabbit, posts **no**
   nitpick or outside-diff-range comments — so there are no buckets to sort: every Snyk finding is
   a substantive, in-diff item. Apply the same per-finding triage as CodeRabbit — **APPLY** (fix

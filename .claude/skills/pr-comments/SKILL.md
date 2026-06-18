@@ -10,8 +10,10 @@ description: >
   reply; none is skipped merely for the bucket it landed in. With --wait-for=<handle> it first blocks until that
   reviewer (usually CodeRabbit) has FINISHED reviewing — polling the PR, not a
   one-shot read — and, if CodeRabbit declines because the base isn't the default
-  branch, comments to trigger a full review and keeps waiting. Args: [PR number]
-  [--wait-for=<handle>] (PR defaults to the current branch's). Use when the user
+  branch, comments to trigger a full review and keeps waiting. --wait-for is
+  repeatable / comma-separated (e.g. --wait-for=coderabbitai,snyk) to wait on
+  several reviewers, skipping any that are not reviewing the PR. Args: [PR number]
+  [--wait-for=<handle>[,<handle>...]] (PR defaults to the current branch's). Use when the user
   says "address the PR comments", "fix the CodeRabbit comments", "handle the
   review feedback on PR N", "wait for CodeRabbit then handle the comments", or
   invokes /pr-comments.
@@ -31,14 +33,27 @@ reply to every thread.
   stop and ask.
 - Resolve `OWNER/REPO` with `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - Be on the PR's **head** branch (checkout if needed) so fixes land on it.
-- Parse flags: `--wait-for=<handle>` (also accept `--wait-for <handle>`) turns on
-  the wait in Step 2. Without it, skip Step 2 entirely and go to Step 3.
+- Parse flags: `--wait-for=<handle>` (also accept `--wait-for <handle>`) turns on the
+  wait in Step 2. It is **repeatable** and also accepts a **comma-separated list** —
+  `--wait-for=coderabbitai,snyk` or `--wait-for=coderabbitai --wait-for=snyk` — so you can
+  wait on more than one reviewer (e.g. CodeRabbit **and** Snyk). Without it, skip Step 2
+  entirely and go to Step 3.
 
 ## Step 2 — (optional) Wait for the reviewer to finish — `--wait-for=<handle>`
 
 **Only when `--wait-for=<handle>` was given** (e.g. `/pr-comments --wait-for=coderabbitai`,
 typically run the instant you push the PR). Block here until `<handle>` has
 **finished reviewing**, then fall through to the rest of the flow.
+
+**Multiple handles** (`--wait-for=coderabbitai,snyk`): run the wait below **once per handle**
+and continue only when **all engaged** reviewers have finished. **Tolerate an absent reviewer:**
+if a handle shows **no engagement at all** on the PR within a short presence window (no review,
+comment, or — for Snyk — PR check; ~5 min), it is not reviewing this PR — **skip it and don't
+block** (a `TIMEOUT` with zero prior activity = not-present, not a stall). The
+`DECLINE`/`PAUSE`/`@coderabbitai`-nudge machinery below is **CodeRabbit-specific**; other handles
+(**Snyk**, human reviewers) use only the plain `FINISHED`/`TIMEOUT` path. For **Snyk**, "finished"
+also counts its **PR check** reaching a terminal state (`code/snyk` success/failure/neutral on the
+head SHA), not just review comments.
 
 - **"Finished" = the reviewer has posted its findings in the PR** — inline review
   comments and/or a final summary message. It does **not** mean any code/commit
