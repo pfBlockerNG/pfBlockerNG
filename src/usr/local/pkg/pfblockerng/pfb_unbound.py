@@ -2530,6 +2530,9 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
     pfb_log("/var/log/pfblockerng/unified.log", csv_line)
+    # Increment the aggregate Upstream group counter (parity with per-feed DNSBL blocks).
+    if pfb["sqlite3_dnsbl_con"]:
+        pfb_db_enqueue(("dnsbl", "Upstream"))
 
 
 def make_timestamp() -> str:

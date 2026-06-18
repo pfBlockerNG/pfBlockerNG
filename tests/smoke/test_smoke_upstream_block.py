@@ -21,6 +21,10 @@ When triggered, a ``DNSBL-python``-source CSV line is written to
 ``Upstream_Block``, ``group`` ``Upstream``, and ``b_eval`` equal to the
 classifier label (``"NXRA"``, ``"EDE15 (Blocked)"``, etc.).
 
+The ``Upstream`` groupname row in the SQLite ``dnsbl`` table is seeded by
+``dnsbl_save_stats()`` in PHP and its ``counter`` column is incremented by
+Python on each upstream block — the same pattern as per-feed DNSBL counters.
+
 These tests are DESELECTED from the default ``python -m pytest`` run. Run via::
 
     python -m pytest tests/smoke -m smoke --override-ini="addopts="
@@ -313,4 +317,103 @@ class TestUpstreamBlockNormalControl:
         assert not lines, (
             f"Normal resolution produced Upstream_Block lines — over-triggering.\n"
             f"Lines: {lines}\nLog excerpt:\n{log[-2000:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Upstream SQLite counter — dnsbl table row increments end-to-end
+# ---------------------------------------------------------------------------
+
+_DNSBL_DB = "/var/unbound/pfb_py_dnsbl.sqlite"
+
+
+def _read_upstream_counter(vm: SmokeVM) -> int:
+    """Read the ``counter`` column of the ``Upstream`` row from the on-box dnsbl SQLite DB.
+
+    Uses ``python3 -c`` over SSH — py-sqlite3 is a baked dep on the smoke image.
+    Returns -1 when the row does not yet exist (DB absent or row missing).
+    """
+    script = (
+        "import sqlite3, sys\n"
+        f"try:\n"
+        f"    con = sqlite3.connect({_DNSBL_DB!r})\n"
+        f"    row = con.execute(\"SELECT counter FROM dnsbl WHERE groupname='Upstream'\").fetchone()\n"
+        f"    print(row[0] if row else -1)\n"
+        f"except Exception as e:\n"
+        f"    print(-1)\n"
+    )
+    result = vm.ssh("python3", "-c", script)
+    try:
+        return int(result.stdout.strip())
+    except (ValueError, AttributeError):
+        return -1
+
+
+def _wait_for_counter_above(vm: SmokeVM, baseline: int, *, timeout_s: float = 15.0, poll_s: float = 0.5) -> int:
+    """Poll the on-box Upstream dnsbl counter until it exceeds ``baseline`` or the deadline expires.
+
+    The counter is flushed by the async db_worker thread, so a freshly-logged block
+    does not appear instantly.  Bounded polling matches the log-line polling pattern
+    used by ``_wait_for_upstream_block_lines``.
+
+    Returns the final observed counter value (may equal ``baseline`` on timeout).
+    """
+    deadline = time.monotonic() + timeout_s
+    current = baseline
+    while time.monotonic() < deadline:
+        current = _read_upstream_counter(vm)
+        if current > baseline:
+            return current
+        time.sleep(poll_s)
+    return current
+
+
+class TestUpstreamCounterIncrement:
+    """The dnsbl SQLite Upstream counter increments end-to-end on an upstream block.
+
+    Scenario: an NXRA block is logged by _log_upstream_block; the async
+    db_worker flushes the enqueued ("dnsbl", "Upstream") task; the on-box
+    ``counter`` column for the Upstream row increases.
+
+    Before/after: counter is read BEFORE the probe and AFTER, asserting a
+    strict increase so that the test fails if the counter is stuck.
+    """
+
+    def test_upstream_counter_increments_on_nxra_block(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+        """
+        Given: DNSBL active, forwarding to stub, dnsbl table seeded with Upstream row.
+        When: stub answers NXDOMAIN (RA=0, AA=0) — an NXRA upstream block is logged.
+        Then: the on-box dnsbl counter for groupname='Upstream' strictly increases.
+        """
+        name = h.unique_domain("pfbsmoke-upstream-ctr")
+        stub_dns.register_nxdomain(name)  # RA=0, AA=0 -> NXRA block
+
+        # Before: record the baseline counter (row may already have a count from
+        # earlier tests in this session).
+        baseline = _read_upstream_counter(deployed_vm)
+        assert baseline >= 0, (
+            "Upstream row not found in dnsbl table before probe — "
+            "dnsbl_save_stats() did not seed it. "
+            f"DB: {_DNSBL_DB!r}"
+        )
+
+        # When: trigger a block (first response is authoritative — assert it arrived).
+        ans = h.dns_probe(deployed_vm, name, "A")
+        assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
+
+        # Confirm the block line was logged (proves the detection fired, not just a
+        # natural NXDOMAIN — the counter increment is meaningless without this).
+        lines = _wait_for_upstream_block_lines(deployed_vm, name)
+        assert lines, (
+            f"No Upstream_Block log line for {name} — detection did not fire; "
+            f"counter increment cannot be attributed to an upstream block.\n"
+            f"Log excerpt:\n{_read_dnsbl_log(deployed_vm)[-2000:]}"
+        )
+
+        # Then: wait for the async flush and assert strict increase.
+        final = _wait_for_counter_above(deployed_vm, baseline)
+        assert final > baseline, (
+            f"Upstream counter did not increase after NXRA block: "
+            f"baseline={baseline}, final={final}. "
+            f"Detection fired (log line present), so the enqueue or flush may be broken."
         )
