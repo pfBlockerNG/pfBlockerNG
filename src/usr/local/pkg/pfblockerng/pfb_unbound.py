@@ -4272,6 +4272,12 @@ def _required_literal(pattern: str) -> str | None:
     """Return a lowercased substring that MUST appear in every match of ``pattern``,
     or None if none can be proven.
 
+    Backs the per-query regex-rule prefilter: rules are bucketed by this literal's
+    first char and only run when it is present in the query; a rule with no literal
+    is always-run.  Necessary-condition only -- it never drops a match.  Rationale,
+    benchmarks, and the bucket-vs-Aho-Corasick decision live in
+    .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/12_Results.txt.
+
     Walks Python's regex AST to find the longest contiguous run of mandatory literal
     characters.  A run is broken by anything that is not a guaranteed-present literal:
     character classes, alternations, optional/unbounded quantifiers, assertions, and
