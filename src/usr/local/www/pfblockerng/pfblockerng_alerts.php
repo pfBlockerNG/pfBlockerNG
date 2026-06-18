@@ -49,6 +49,7 @@ $pfb['uniblock']	= $pfb['aglobal']['uniblock']		?: '#FFF9C4';
 $pfb['unipermit']	= $pfb['aglobal']['unipermit']		?: '#80CBC4';
 $pfb['unimatch']	= $pfb['aglobal']['unimatch']		?: '#B3E5FC';
 $pfb['unidnsbl']	= $pfb['aglobal']['unidnsbl']		?: '#EF9A9A';
+$pfb['uniupstream']	= $pfb['aglobal']['uniupstream']	?: '#CE93D8';
 $pfb['unireply']	= $pfb['aglobal']['unireply']		?: '#E8E8E8';
 
 // Unified Log - Dark Theme
@@ -56,6 +57,7 @@ $pfb['uniblock2']	= $pfb['aglobal']['uniblock2']		?: '#83791D';
 $pfb['unipermit2']	= $pfb['aglobal']['unipermit2']		?: '#3B8780';	
 $pfb['unimatch2']	= $pfb['aglobal']['unimatch2']		?: '#42809D';
 $pfb['unidnsbl2']	= $pfb['aglobal']['unidnsbl2']		?: '#E84E4E';
+$pfb['uniupstream2']	= $pfb['aglobal']['uniupstream2']	?: '#9C27B0';
 $pfb['unireply2']	= $pfb['aglobal']['unireply2']		?: '#54585E';
 
 $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
@@ -524,7 +526,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Unified Log - Light Theme Hex settings
-		foreach (array('uniblock' => '#FFF9C4', 'unipermit' => '#80CBC4', 'unimatch' => '#B3E5FC', 'unidnsbl' => '#EF9A9A', 'unireply' => '#E8E8E8') as $h_type => $h_default) {
+		foreach (array('uniblock' => '#FFF9C4', 'unipermit' => '#80CBC4', 'unimatch' => '#B3E5FC', 'unidnsbl' => '#EF9A9A', 'uniupstream' => '#CE93D8', 'unireply' => '#E8E8E8') as $h_type => $h_default) {
 			if (isset($_POST[$h_type]) && !empty($_POST[$h_type])) {
 				$pfb['aglobal'][$h_type] = pfb_filter($_POST[$h_type], PFB_FILTER_HEX_COLOR, 'alerts hex', $h_default);
 			} else {
@@ -533,7 +535,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Unified Log - Dark Theme Hex settings
-		foreach (array('uniblock2' => '#83791D', 'unipermit2' => '#3B8780', 'unimatch2' => '#42809D', 'unidnsbl2' => '#E84E4E', 'unireply2' => '#54585E') as $h_type => $h_default) {
+		foreach (array('uniblock2' => '#83791D', 'unipermit2' => '#3B8780', 'unimatch2' => '#42809D', 'unidnsbl2' => '#E84E4E', 'uniupstream2' => '#9C27B0', 'unireply2' => '#54585E') as $h_type => $h_default) {
 			if (isset($_POST[$h_type]) && !empty($_POST[$h_type])) {
 				$pfb['aglobal'][$h_type] = pfb_filter($_POST[$h_type], PFB_FILTER_HEX_COLOR, 'alerts hex', $h_default);
 			} else {
@@ -2183,6 +2185,9 @@ function convert_dnsbl_log($mode, $fields) {
 		$fields[4] = '';
 	}
 
+	// Upstream DNS block (logged by _log_upstream_block; not a local feed entry).
+	$isUpstream = ($fields[5] === 'Upstream_Block');
+
 	// Determine event parameters
 	list ( $isTLD, $isCNAME, $isPython, $isExclusion, $pfb_python, $qdomain, $wt_line ) = dnsbl_log_details($fields);
 
@@ -2193,7 +2198,9 @@ function convert_dnsbl_log($mode, $fields) {
 	$p_group = $p_domain = $p_feed = $p_mode = '';
 
 	// Collect current details about domain
-	if (!$isPython && !$isWhitelist_found) {
+	// Skip for upstream blocks: the domain is not in a local feed, so pfb_dnsbl_parse()
+	// would rewrite group/feed/mode to 'Unknown', corrupting the row.
+	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
 		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
 		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
 		$pfb_group	= $domain_details['pfb_group']	?: 'Unknown';
@@ -2241,6 +2248,11 @@ function convert_dnsbl_log($mode, $fields) {
 	if (!$isMatch) {
 		list ( $isTLD, $isCNAME, $isPython, $isExclusion, $pfb_python, $qdomain, $wt_line ) = dnsbl_log_details($fields);
 		list ( $supp_dom, $ex_dom, $isWhitelist_found ) = dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain);
+	}
+
+	// Upstream block: override icon to cloud (uses raw fields[7]/[8] before truncation below).
+	if ($isUpstream) {
+		$pfb_python = "&nbsp;<i class=\"fa-solid fa-cloud\" title=\"Upstream Block: " . pfb_hsc($fields[7]) . " [ " . pfb_hsc($fields[8]) . " ]\"></i>";
 	}
 
 	// Filter Field array
@@ -2482,6 +2494,15 @@ function convert_dnsbl_log($mode, $fields) {
 		$dup['DNSBL'] = 0;
 	}
 
+	// Upstream blocks have no local feed entry: suppress the lock/whitelist/exclusion
+	// action icons (they all target a local-feed domain; they are no-op or confusing
+	// for an upstream block). The threat-lookup $alert_dom icon is kept as-is.
+	if ($isUpstream) {
+		$unlock_dom = '&nbsp;&nbsp;&nbsp;';
+		$supp_dom   = '';
+		$ex_dom     = '';
+	}
+
 	if ($mode != 'Unified') {
 		print ("<tr>
 			<td>{$pfbalertdnsbl[99]}{$dup_cnt}</td>
@@ -2494,12 +2515,17 @@ function convert_dnsbl_log($mode, $fields) {
 			</tr>");
 	}
 	else {
-		$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unidnsbl2'] : $pfb['unidnsbl'];
+		if ($isUpstream) {
+			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['uniupstream2'] : $pfb['uniupstream'];
+		} else {
+			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unidnsbl2'] : $pfb['unidnsbl'];
+		}
 		if ($bg == 'none') {
 			$bg = '';
 		}
+		$tr_title = $isUpstream ? 'Upstream Block Event' : 'DNSBL Event';
 
-		print ("<tr title=\"DNSBL Event\" style=\"background-color:{$bg}\">
+		print ("<tr title=\"{$tr_title}\" style=\"background-color:{$bg}\">
 			<td style=\"white-space: nowrap;\">{$pfbalertdnsbl[99]}{$dup_cnt}</td>
 			<td></td>
 			<td>{$pfbalertdnsbl[7]}<br /><small>{$pfbalertdnsbl[17]}</small></td>
@@ -3443,6 +3469,16 @@ if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 	  ->setWidth(2);
 
 	$group->add(new Form_Input(
+		'uniupstream',
+		'',
+		'text',
+		$pfb['uniupstream'],
+		['placeholder' => '#CE93D8']
+	))->setHelp('Upstream Block Event color')
+	  ->setAttribute('style', "background: {$pfb['uniupstream']}")
+	  ->setWidth(2);
+
+	$group->add(new Form_Input(
 		'unireply',
 		'',
 		'text',
@@ -3494,6 +3530,16 @@ if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 		['placeholder' => '#E84E4E']
 	))->setHelp('DNSBL Block Event color')
 	  ->setAttribute('style', "background: {$pfb['unidnsbl2']}; color: white;")
+	  ->setWidth(2);
+
+	$group->add(new Form_Input(
+		'uniupstream2',
+		'',
+		'text',
+		$pfb['uniupstream2'],
+		['placeholder' => '#9C27B0']
+	))->setHelp('Upstream Block Event color')
+	  ->setAttribute('style', "background: {$pfb['uniupstream2']}; color: white;")
 	  ->setWidth(2);
 
 	$group->add(new Form_Input(

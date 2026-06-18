@@ -30,6 +30,8 @@ session-scoped VM for the sibling flows -- exercises the reverse branch too.
 from __future__ import annotations
 
 import base64
+import subprocess
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -414,4 +416,118 @@ def test_addsuppress_cidr24_writes_and_invalid_ip_rejected(
             f"config_set_path('{CFG_V4SUPPRESSION}', '{original}');\n"
             "write_config('pfBlockerNG smoke: restore v4suppression');\n"
             "echo 'OK';",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Upstream block rendering (issue #285): a synthetic Upstream_Block CSV line
+# appended to dnsbl.log must render with the cloud icon ($pfb_python override)
+# and the Group column must show "Upstream", NOT "Unknown".
+#
+# "Unknown" is what the stale-entry correction block (pfb_dnsbl_parse) would
+# produce for a domain that is not in any local feed.  The $isUpstream guard
+# skips that correction; these two assertions discriminate the branches:
+#
+#   fa-cloud   present  → Edit D step 9 (icon override) ran
+#   Upstream   present  → Edit D step 8 (skip stale-correction) kept the group
+#   Unknown    absent   → the old code path is NOT taken
+# --------------------------------------------------------------------------- #
+
+
+def test_upstream_block_renders_cloud_icon_and_correct_group(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Upstream_Block CSV line renders the cloud icon and preserves group 'Upstream'.
+
+    Scenario: stale-correction skip + icon override for upstream DNS blocks.
+
+    Background:
+        pfblockerng_alerts.php ``convert_dnsbl_log`` has two paths for upstream
+        blocks: (a) skip the ``pfb_dnsbl_parse`` stale-entry correction that would
+        rewrite group/feed to 'Unknown', and (b) replace the bolt icon with a cloud.
+        Both are tested by injecting a synthetic ``Upstream_Block`` CSV line directly
+        into ``dnsbl.log`` and asserting the rendered HTML.
+
+    Given: DNSBL is enabled (required for the DNSBL Python tab to appear); a
+        synthetic ``Upstream_Block`` line for a unique domain is appended to
+        ``/var/log/pfblockerng/dnsbl.log``.
+
+    When: the Reports/Alerts page is GET-ted (default ``alert`` view, which renders
+        the ``DNSBL Python`` tab from ``dnsbl.log``).
+
+    Then:
+        (a) ``fa-cloud`` is present in the rendered HTML for that domain's row —
+            proving the bolt-icon override fired (Edit D step 9).
+        (b) the text ``Upstream`` appears near the domain and the text ``Unknown``
+            does NOT appear near it — proving the stale-entry correction was skipped
+            (Edit D step 8); without the skip, pfb_dnsbl_parse would rewrite the
+            group to 'Unknown'.
+
+    Cleanup: the appended log line is removed in ``finally`` (truncate the file back
+        to its original size) so the session VM is clean for sibling tests.
+    """
+    vm = smoke_vm
+    domain = helpers.unique_domain("upstrmui")
+
+    # The synthetic log line exactly mirrors _log_upstream_block's CSV output.
+    # 11 fields (indices 0-10), comma-separated, with '+' as the dup-entry token.
+    ts = time.strftime("%b %d %H:%M:%S")  # e.g. "Jun 18 12:00:00"
+    csv_line = f"DNSBL-python,{ts},{domain},127.0.0.1,Python,Upstream_Block,Upstream,NXRA,Quad9,+,A\n"
+
+    dnsbl_log = "/var/log/pfblockerng/dnsbl.log"
+
+    # Capture the original byte size so we can truncate back to it on cleanup.
+    size_result = vm.ssh("stat", "-f", "%z", dnsbl_log, timeout=15)
+    original_size = size_result.stdout.strip() if size_result.returncode == 0 else "0"
+
+    helpers.set_dnsbl_enabled(vm, True)
+
+    try:
+        # GIVEN: append the synthetic upstream-block line via SSH tee -a.
+        subprocess.run(
+            vm.ssh_argv("tee", "-a", dnsbl_log),
+            input=csv_line,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+        # WHEN: GET the Alerts page (default alert view → DNSBL Python tab).
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), (
+            "alerts page GET returned login form (session lost before upstream-block render test)"
+        )
+        html_body = resp.text
+
+        # THEN (a): the cloud icon class is present in the page (Edit D step 9).
+        assert "fa-cloud" in html_body, (
+            f"fa-cloud icon class absent from the rendered Alerts page — "
+            f"the upstream-block icon override (Edit D step 9) did not fire for {domain!r}"
+        )
+
+        # THEN (b): the domain appears and its row shows group 'Upstream', not 'Unknown'.
+        # We find the domain in the rendered HTML and inspect a window around it.
+        dom_idx = html_body.find(domain)
+        assert dom_idx != -1, f"synthetic upstream-block domain {domain!r} not found in the rendered Alerts page HTML"
+        # Look in a 2 kB window around the domain occurrence for the Group value.
+        window = html_body[max(0, dom_idx - 1024) : dom_idx + 1024]
+        assert "Upstream" in window, (
+            f"Group 'Upstream' not found near domain {domain!r} in rendered HTML — "
+            f"stale-entry correction may have overwritten it (Edit D step 8 check failed)"
+        )
+        assert "Unknown" not in window, (
+            f"Group 'Unknown' found near domain {domain!r} in rendered HTML — "
+            f"pfb_dnsbl_parse rewrote the group, meaning $isUpstream guard did not fire "
+            f"(Edit D step 8 regression)"
+        )
+    finally:
+        # Truncate dnsbl.log back to its pre-test size to remove the appended line.
+        subprocess.run(
+            vm.ssh_argv("/usr/bin/truncate", "-s", original_size, dnsbl_log),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
