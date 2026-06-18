@@ -125,6 +125,17 @@ final class FeedUrlLocalFileTest extends TestCase
 			$this->markTestSkipped('cannot create an out-of-bounds target file');
 		}
 
+		// Make the "outside" precondition explicit and deterministic: if this
+		// environment's temp dir happens to resolve INSIDE the allowed dir, the
+		// rejection below would not be exercised, so skip rather than assert.
+		$real_dir     = realpath($dir);
+		$real_outside = realpath($outside);
+		if ($real_dir === false || $real_outside === false ||
+		    str_starts_with($real_outside, rtrim($real_dir, '/') . '/')) {
+			@unlink($outside);
+			$this->markTestSkipped('temp target is not outside the allowed dir in this environment');
+		}
+
 		$link = $dir . '/pfb_symlink_escape_' . getmypid() . '.txt';
 		@unlink($link);
 		if (!@symlink($outside, $link)) {
