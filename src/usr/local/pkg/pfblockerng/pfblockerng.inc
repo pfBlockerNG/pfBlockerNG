@@ -12598,7 +12598,8 @@ function sync_package_pfblockerng($cron='') {
 										}
 
 										// IPv4/CIDR format 192.168.0.0 | 192.168.0.0/16
-										if (preg_match_all($pfb['ipv4'], $oline, $matches)) {
+										// A match requires 3 literal dots; skip the regex engine on lines that cannot contain one.
+										if (substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], $oline, $matches)) {
 											$matches = array_unique($matches[0]);
 											foreach ($matches as $match) {
 
@@ -12670,7 +12671,8 @@ function sync_package_pfblockerng($cron='') {
 										}
 
 										// IPv6 Regex parser
-										if (preg_match_all($pfb['ipv6'], $oline, $matches)) {
+										// A match requires a literal colon; skip the regex engine on colon-less lines.
+										if (strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], $oline, $matches)) {
 											$matches = array_unique($matches[0]);
 											foreach ($matches as $match) {
 
