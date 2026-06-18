@@ -914,20 +914,20 @@ period. Body optional for non-obvious changes.
 
 ### Commit authorship
 
-Every commit is **authored — and, where the environment provides a signing key, signed — as
-the user** (the human driving the session), with **Claude credited as co-author**, never as the
-author. Concretely:
+Prefer commits **authored and signed as the user** (the human driving the session), with
+**Claude credited as co-author** via a `Co-Authored-By: Claude …` trailer (plus any session
+trailer the harness mandates). **Verification takes priority, though** — a GPG-**Verified**
+commit wins over a cosmetically user-attributed but **Unverified** one:
 
-- Set the git identity to the **user's** name/email before committing
-  (`git config user.name`/`user.email`, or a per-commit `git -c user.name=… -c user.email=…`),
-  so both **author and committer are the user** — not a bot/assistant identity.
-- Append a `Co-Authored-By: Claude …` trailer to the commit body (plus any session trailer the
-  harness mandates).
-- **Signing is best-effort:** sign as the user when a key is available; when the environment has
-  none (e.g. a managed-remote container), the user authorship still applies and the missing
-  signature is acceptable — never substitute a bot committer just to satisfy a signature/identity
-  check.
+- **Where a user signing key is available** — author, commit, and **sign as the user**, so the
+  commit is both user-attributed **and** Verified. Set the git identity to the user's name/email
+  (`git config user.name`/`user.email`, or a per-commit `git -c user.name=… -c user.email=…`).
+- **Where the only available signing key is the assistant/bot identity** (e.g. a managed-remote
+  container, whose key is registered to `noreply@anthropic.com`) — **commit as that bot identity
+  so the commit stays Verified**, rather than producing an *Unverified* user-authored commit. The
+  `Co-Authored-By: Claude` trailer still credits Claude; user attribution yields to keeping the
+  signature valid in this environment.
 
-This **overrides** any harness default that sets the committer to an assistant/bot identity
-(`noreply@anthropic.com`). A tooling check that expects the bot committer is the thing to
-reconcile, not this rule.
+In short: user-authored **and** signed is best; when you must choose, keep the commit
+**Verified**. This **matches** the harness default in signing-less environments rather than
+overriding it.
