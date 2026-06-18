@@ -3302,8 +3302,11 @@ EOF;
 		}
 	}
 
+	// mod_access backs url.access-deny below; load it unconditionally so the
+	// ".inc"/"~" denial is enforced regardless of the logging branch above.
 	$pfb_conf .= <<<EOF
 
+server.modules			+= ( "mod_access" )
 index-file.names		= ( "index.php" )
 mimetype.assign			= ( ".html" => "text/html", ".gif" => "image/gif" )
 url.access-deny			= ( "~", ".inc" )
