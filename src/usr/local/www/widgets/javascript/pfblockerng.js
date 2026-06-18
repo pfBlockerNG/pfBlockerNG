@@ -24,11 +24,28 @@
 var pfBlockerNGFailedTimer;
 var pfBlockerNGWidgetTimer;
 
+/**
+ * HTML-escape a value so it renders as text in an HTML context.
+ * Replaces the five HTML metacharacters (& < > " ') with their entities;
+ * non-string input is coerced with String().
+ *
+ * @param {*} s - value to escape.
+ * @returns {string} the escaped string.
+ */
 function pfBlockerNG_escapeHtml(s) {
 	var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 	return String(s).replace(/[&<>"']/g, function(c) { return map[c]; });
 }
 
+/**
+ * Build the table-row cells for one widget alias/group from the AJAX columns.
+ * The data columns (count, updated) are HTML-escaped here; the server-rendered
+ * markup columns (alias cell, packets pivot link, status icon) pass through
+ * verbatim. Mirrors the per-column escaping contract in pfblockerng.widget.php.
+ *
+ * @param {string[]} cols - [alias, count, packets, updated, img].
+ * @returns {string} the row's <td> cells (caller wraps them in <tr>).
+ */
 function pfBlockerNG_buildWidgetRow(cols) {
 	var line = '<td><small>' + cols[0] + '</small></td>';
 	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[1]) + '</small></td>';
