@@ -47,10 +47,11 @@ import shlex
 import subprocess
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import NamedTuple
 
 from .conftest import GUEST_TO_HOST_ALIAS, SMOKE_DIR, STUB_DNS_A, SmokeVM, resolve_a
 
@@ -315,6 +316,23 @@ class IpCase:
         return f"pfB_{self.aliasname}_{self.family}"
 
 
+class SafeSearchEntry(NamedTuple):
+    """One SafeSearch CNAME-redirect row for :func:`inject_safesearch_cname_entries`.
+
+    Stored as a 5-column CSV row in ``pfb_py_ss.txt``:
+    ``domain,cname,target,baked_v4,baked_v6`` — where column 2 is the LITERAL
+    token ``cname`` (the routing marker ``isSafeSearch["A"] == "cname"``), column 3
+    is the CNAME target fqdn that Unbound chases (#1 redirect), and columns 4/5 are
+    the #2 baked-fallback IPs used when the chase yields only a bare CNAME (no address).
+    Leave ``baked_v4`` / ``baked_v6`` empty when the test does not exercise the fallback.
+    """
+
+    domain: str
+    target: str
+    baked_v4: str = ""
+    baked_v6: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # Deploy — install the branch-under-test .pkg (evolved; NOT deploy.sh rsync)
 # --------------------------------------------------------------------------- #
@@ -414,6 +432,17 @@ def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 
 
 UNBOUND_HSTS_FILE = "/var/unbound/pfb_py_hsts.txt"
 UNBOUND_PFB_INI = "/var/unbound/pfb_unbound.ini"
+# pfb_unbound.py loads SafeSearch redirect entries from this chroot-relative CSV
+# (5-col format: domain,cname,target,baked_v4,baked_v6; see inject_safesearch_cname_entries).
+UNBOUND_PY_SS_FILE = "/var/unbound/pfb_py_ss.txt"
+
+# SafeSearch test IPs — each is DISTINCT from the stub sentinel (STUB_DNS_A /
+# STUB_DNS_AAAA) so a test can tell "chase reached the target" from "sentinel default",
+# and from each other so a test can tell "#1 chase result" from "#2 baked fallback".
+SS_TARGET_A = "198.51.100.10"  # RFC 5737 TEST-NET-2: the CNAME chase target address (#1)
+SS_TARGET_AAAA = "2001:db8:5350::10"  # RFC 3849: the CNAME chase target address (#1)
+SS_BAKED_A = "203.0.113.20"  # RFC 5737 TEST-NET-3 (≠ STUB_DNS_A .99): baked fallback (#2)
+SS_BAKED_AAAA = "2001:db8:5350::20"  # RFC 3849 (≠ STUB_DNS_AAAA ::99): baked fallback (#2)
 
 
 def add_hsts_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
@@ -988,6 +1017,156 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
             f"set_unbound_forwarding({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
     # services_unbound_configure restarts Unbound — wait for it before any probe.
+    wait_unbound_ready(vm)
+
+
+def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float = 120.0) -> None:
+    """Wire Unbound to the stub DNS so SafeSearch CNAME redirects resolve hermetically.
+
+    Supports BOTH resolver modes so a test can vary forwarding without touching
+    the stub wiring:
+
+    ``forwarding_on=True`` (FORWARDING mode): delegates to the same config as
+    :func:`use_system_dns_upstream` — sets ``system/dnsserver = [10.0.2.2]``,
+    ``unbound/forwarding = on``, clears ``dnssec`` and ``custom_options``.
+    Queries forward to ``10.0.2.2`` (the SLIRP host alias), which NATs
+    ``guest->10.0.2.2:53`` to the stub on the runner's loopback.
+
+    ``forwarding_on=False`` (RECURSIVE mode): keeps ``unbound/forwarding`` UNSET
+    (Unbound recurses normally) but injects a catch-all ``forward-zone`` in
+    ``unbound/custom_options`` pointing every query at ``10.0.2.2``, so the stub
+    still answers all queries while Unbound operates in recursive mode.
+    ``custom_options`` is stored base64-encoded in ``config.xml`` (the pfBlockerNG
+    textarea convention: the GUI base64-encodes on save, the renderer decodes on
+    read); the encoded value is written here.  ``dnssec`` is cleared in both
+    modes — the stub's answers are unsigned and a validator would mark them bogus.
+
+    In BOTH modes: runs ``services_unbound_configure()`` + :func:`wait_unbound_ready`,
+    then probes a throwaway name to confirm the stub relay is live before returning.
+    A failed self-check raises immediately with the mode and the answer received.
+
+    NOTE: ``services_unbound_configure`` regenerates ``unbound.conf`` WITHOUT
+    pfBlockerNG's python module.  The caller MUST run a pfBlockerNG reload AFTER
+    this call to re-add the module and reload ``safeSearchDB`` before any
+    SafeSearch probe.
+    """
+    if forwarding_on:
+        # Forwarding mode: identical to use_system_dns_upstream — delegate so
+        # the self-check and config shape stay in sync with that helper.
+        use_system_dns_upstream(vm, timeout=timeout)
+        return
+
+    # Recursive mode: no unbound/forwarding, but route every query to the stub
+    # via a catch-all forward-zone in custom_options.  pfSense stores
+    # custom_options base64-encoded (pfbng_text_area_decode / base64_encode on
+    # save), so encode before writing.
+    forward_zone = 'forward-zone:\n    name: "."\n    forward-addr: 10.0.2.2\n'
+    encoded = base64.b64encode(forward_zone.encode()).decode()
+    snippet = (
+        "$s = config_get_path('system', array());\n"
+        f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
+        "unset($s['dnsallowoverride']);\n"
+        "config_set_path('system', $s);\n"
+        "$u = config_get_path('unbound', array());\n"
+        "unset($u['forwarding']);\n"
+        "unset($u['dnssec']);\n"
+        f"$u['custom_options'] = {_php_str(encoded)};\n"
+        "config_set_path('unbound', $u);\n"
+        "write_config('pfBlockerNG smoke: stub-DNS SafeSearch recursive mode');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"use_stub_for_safesearch(forwarding_on=False) failed: "
+            f"rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+    # services_unbound_configure restarts Unbound — wait for it before any probe.
+    wait_unbound_ready(vm)
+    # RELAY SELF-CHECK: resolve a throwaway name; in recursive mode every query
+    # routes to the stub via the catch-all forward-zone and MUST return the sentinel.
+    probe = unique_domain("ssstubselfcheck")
+    ans = dns_probe(vm, probe, "A", timeout=10.0, attempts=3, delay=3.0)
+    if not resolves_to(ans, STUB_DNS_A):
+        raise RuntimeError(
+            f"SafeSearch stub relay self-check FAILED (recursive mode): "
+            f"{probe} -> {ans} (expected sentinel {STUB_DNS_A}). "
+            f"The catch-all forward-zone -> 10.0.2.2 -> runner 127.0.0.1:53 path is not working."
+        )
+
+
+def inject_safesearch_cname_entries(
+    vm: SmokeVM,
+    entries: Sequence[SafeSearchEntry],
+    *,
+    timeout: float = 60.0,
+) -> None:
+    """Append fabricated SafeSearch CNAME-redirect rows to ``pfb_py_ss.txt`` and reload.
+
+    Each entry is written as a 5-column CSV row:
+    ``domain,cname,target,baked_v4,baked_v6`` where column 2 is the LITERAL token
+    ``cname`` (the routing marker ``isSafeSearch["A"] == "cname"`` in
+    ``pfb_unbound.py``), column 3 is the CNAME target fqdn that Unbound chases
+    (#1 redirect), and columns 4/5 are the #2 baked-fallback IPs used when the chase
+    yields only a bare CNAME with no address.  Empty strings for ``baked_v4``/
+    ``baked_v6`` are valid when the test does not exercise the fallback path.
+
+    Rows are APPENDED (``tee -a``) so any package-written rows survive; the file is
+    created if absent.  Appending is idempotent-friendly within a session as long as
+    each test uses unique domain names (:func:`unique_domain`).
+
+    After writing, the Unbound daemon is bounced RAW (TERM the pid, wait, restart)
+    to reload ``safeSearchDB`` from the updated file — identical to
+    ``pfb_stop_start_unbound`` (``pfblockerng.inc:5444``).  This is NOT a pfBlockerNG
+    update (which would overwrite the file with package-generated content); the raw
+    bounce re-runs the python module's ``init()`` which re-reads ``pfb_py_ss.txt`` as
+    written.  For ``safeSearchDB`` to take effect the DNSBL python module must already
+    be loaded in ``unbound.conf`` — DNSBL must be enabled and a pfBlockerNG reload run
+    before this call.
+    """
+    csv_lines = "\n".join(f"{e.domain},cname,{e.target},{e.baked_v4},{e.baked_v6}" for e in entries)
+    contents = csv_lines + "\n"
+    # Append to the SafeSearch CSV (chroot-relative; Unbound is chrooted at /var/unbound).
+    result = subprocess.run(
+        vm.ssh_argv("tee", "-a", UNBOUND_PY_SS_FILE),
+        input=contents,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"inject_safesearch_cname_entries: tee to {UNBOUND_PY_SS_FILE} failed: "
+            f"rc={result.returncode} {result.stderr!r}"
+        )
+    # Raw Unbound bounce to reload safeSearchDB from the updated file.
+    # Mirrors pfb_stop_start_unbound (pfblockerng.inc:5444): TERM the pid, wait
+    # up to 30 s for exit, then restart the daemon (which re-daemonizes and returns).
+    # Fed on stdin to a remote /bin/sh (the php_eval idiom) so the multi-token POSIX
+    # script — $(...), `;`, the for-loop — is parsed by sh itself, never the SSH
+    # login shell (pfSense root defaults to tcsh, which would mangle it).
+    bounce_cmd = (
+        "kill -TERM $(cat /var/run/unbound.pid)\n"
+        "for i in $(seq 1 30); do\n"
+        "  pgrep -x unbound >/dev/null || break\n"
+        "  sleep 1\n"
+        "done\n"
+        "/usr/local/sbin/unbound -c /var/unbound/unbound.conf\n"
+    )
+    bounce = subprocess.run(
+        vm.ssh_argv("/bin/sh"),
+        input=bounce_cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if bounce.returncode != 0:
+        raise RuntimeError(
+            f"inject_safesearch_cname_entries: Unbound bounce failed: rc={bounce.returncode} {bounce.stderr!r}"
+        )
     wait_unbound_ready(vm)
 
 
