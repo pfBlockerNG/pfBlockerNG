@@ -1,11 +1,11 @@
 #!/bin/sh
-# prepare-commit-msg: credit the human owner as a Co-authored-by trailer.
+# prepare-commit-msg: credit the human owner as a Co-Authored-By trailer.
 #
 # In agent / managed-remote environments the *committer* is the agent (e.g.
 # Claude) and GitHub attributes the commit — and the contribution credit it
 # shows — to that committer. The human is recorded only as the git author,
 # which GitHub does NOT surface as a contributor on the commit. This hook
-# appends a Co-authored-by trailer for the human so they are credited, while
+# appends a Co-Authored-By trailer for the human so they are credited, while
 # the agent stays the committer/signer (e.g. for a Verified signature).
 #
 # The human is resolved GENERICALLY — no hardcoded identity — in order:
@@ -62,5 +62,5 @@ name=$(git config --get coauthor.name 2>/dev/null || true)
 # Append as a real trailer (interpret-trailers handles the blank-line block);
 # fall back to a plain append if interpret-trailers is unavailable.
 git interpret-trailers --in-place \
-	--trailer "Co-authored-by: $name <$email>" "$msg_file" 2>/dev/null \
-	|| printf '\nCo-authored-by: %s <%s>\n' "$name" "$email" >>"$msg_file"
+	--trailer "Co-Authored-By: $name <$email>" "$msg_file" 2>/dev/null \
+	|| printf '\nCo-Authored-By: %s <%s>\n' "$name" "$email" >>"$msg_file"
