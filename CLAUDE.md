@@ -471,6 +471,12 @@ automated commits hit the same checks (subject to the runner's installed tools).
   `sh -n` + `shellcheck`, `php -l`. Each runs only when its tool is installed (missing =
   reported + skipped; CI is the hard gate); PHPStan/PHPCS/PHPUnit run only when `vendor/bin/`
   has them. Emergency bypass: `git commit --no-verify`.
+- **`.githooks/prepare-commit-msg`** appends a `Co-authored-by:` trailer for the human owner so
+  GitHub credits them even when an agent is the committer (see *Commit style → Author, committer,
+  and signing*). It resolves the owner generically — `coauthor.email`/`coauthor.name` git config,
+  else `$CLAUDE_CODE_USER_EMAIL`, else the commit author — and is a no-op when the human is already
+  the committer or already credited. Runs even under `--no-verify` (that flag skips only
+  `pre-commit`/`commit-msg`).
 - **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
 
 ---
@@ -930,11 +936,14 @@ GitHub **Verified** badge. Pick by whether the box has the **user's own signing 
   follows the signer.)
 - **Author = the human owner** (`Andre Brait <andrebrait@gmail.com>`), set explicitly
   (`--author=` / `GIT_AUTHOR_*`) — keeps the human in the commit object.
-- **Credit the human with a `Co-authored-by: Andre Brait <andrebrait@gmail.com>` trailer** — the
-  final line, after a blank line. **Mandatory:** the author field alone is *not* enough — with
-  Claude as committer GitHub credits only Claude, so without this trailer the human is never
-  surfaced as a contributor. (A `Co-authored-by:` for *Claude* is redundant — Claude is already
-  the committer — so omit Claude's.)
+- **Credit the human with a `Co-authored-by:` trailer for the owner** — the final line, after a
+  blank line. **Mandatory:** the author field alone is *not* enough — with Claude as committer
+  GitHub credits only Claude, so without this trailer the human is never surfaced as a contributor.
+  This is injected automatically by the `.githooks/prepare-commit-msg` hook, which resolves the
+  owner **generically** (`coauthor.email`/`coauthor.name` git config, else `$CLAUDE_CODE_USER_EMAIL`,
+  else the commit author) — it credits whoever the owner is, not a fixed identity, and is a no-op
+  when the human is already the committer or already credited. (A `Co-authored-by:` for *Claude* is
+  redundant — Claude is already the committer — so omit Claude's.)
 - **Sign every commit** (`-S`; SSH or GPG). Valid signature + key on Claude's account + matching
   committer email ⇒ **Verified**, attributed to Claude.
 

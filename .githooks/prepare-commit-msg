@@ -1,0 +1,66 @@
+#!/bin/sh
+# prepare-commit-msg: credit the human owner as a Co-authored-by trailer.
+#
+# In agent / managed-remote environments the *committer* is the agent (e.g.
+# Claude) and GitHub attributes the commit — and the contribution credit it
+# shows — to that committer. The human is recorded only as the git author,
+# which GitHub does NOT surface as a contributor on the commit. This hook
+# appends a Co-authored-by trailer for the human so they are credited, while
+# the agent stays the committer/signer (e.g. for a Verified signature).
+#
+# The human is resolved GENERICALLY — no hardcoded identity — in order:
+#   1. git config coauthor.email / coauthor.name   (explicit per-clone override)
+#   2. $CLAUDE_CODE_USER_EMAIL                      (managed-remote owner)
+#   3. the commit author, when it differs from the committer
+# The display name falls back to a prior commit by that email, then the email's
+# local-part. The hook is a NO-OP when the human is already the committer (a
+# developer signing their own commits), when no human can be resolved, or when
+# that co-author is already present — so it is safe in every environment.
+#
+# Enable: git config core.hooksPath .githooks
+
+set -u
+
+msg_file=$1
+msg_type=${2:-}
+
+# Only touch ordinary commits — leave merge/squash messages alone.
+case "$msg_type" in
+	merge|squash) exit 0 ;;
+esac
+
+ident_email() {
+	# Extract the <email> from a "Name <email> ts tz" ident line.
+	printf '%s\n' "$1" | sed -n 's/.*<\(.*\)>.*/\1/p'
+}
+
+committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
+committer_email=$(ident_email "$committer_ident")
+
+# Resolve the human's email, most specific source first.
+email=$(git config --get coauthor.email 2>/dev/null || true)
+[ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
+if [ -z "$email" ]; then
+	author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
+	[ -n "$author_email" ] && [ "$author_email" != "$committer_email" ] && email=$author_email
+fi
+
+# Nothing to credit, or the human IS the committer (already credited) → no-op.
+[ -n "$email" ] || exit 0
+[ "$email" != "$committer_email" ] || exit 0
+
+# Already credited in this message? → no-op (case-insensitive, literal email).
+if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$email>"; then
+	exit 0
+fi
+
+# Resolve a display name (cosmetic — GitHub matches the co-author by email).
+name=$(git config --get coauthor.name 2>/dev/null || true)
+[ -n "$name" ] || name=$(git log -1 --author="$email" --format='%an' 2>/dev/null || true)
+[ -n "$name" ] || name=${email%@*}
+
+# Append as a real trailer (interpret-trailers handles the blank-line block);
+# fall back to a plain append if interpret-trailers is unavailable.
+git interpret-trailers --in-place \
+	--trailer "Co-authored-by: $name <$email>" "$msg_file" 2>/dev/null \
+	|| printf '\nCo-authored-by: %s <%s>\n' "$name" "$email" >>"$msg_file"
