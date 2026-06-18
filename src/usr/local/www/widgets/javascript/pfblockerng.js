@@ -44,11 +44,11 @@ function pfBlockerNG_escapeHtml(s) {
  * verbatim. Mirrors the per-column escaping contract in pfblockerng.widget.php.
  *
  * @param {string[]} cols - [alias, count, packets, updated, img].
- * @returns {string} the row's <td> cells terminated by a closing </tr>; the
- *   caller prepends the opening <tr> (preserving the original row assembly).
+ * @returns {string} a complete <tr>...</tr> table row; the caller concatenates
+ *   the rows with join('') (no separator), so the markup stays well-formed.
  */
 function pfBlockerNG_buildWidgetRow(cols) {
-	var line = '<td><small>' + cols[0] + '</small></td>';
+	var line = '<tr><td><small>' + cols[0] + '</small></td>';
 	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[1]) + '</small></td>';
 	line += '<td><small>' + cols[2] + '</small></td>';
 	line += '<td><small>' + pfBlockerNG_escapeHtml(cols[3]) + '</small></td>';
@@ -97,7 +97,7 @@ function pfBlockerNG_fetch_new_widget_callback(callback_data) {
 
 		if (new_data_to_add.length > 0) {
 			var tbody = $('#pfBNG-table');
-			tbody.html('<tr>' + new_data_to_add + '</tr>');
+			tbody.html(new_data_to_add.join(''));
 			$('body').popover({ selector: '[data-popover]', trigger: 'click hover', placement: 'right', delay: {show: 50, hide: 400}});
 			$('#pfB_col1, #pfB_col2, #pfB_col3, #pfB_col4').attr("data-sorted", false);
 		}
