@@ -139,6 +139,29 @@ class TestSharedHandlerBypass:
         # Cleanup: await the spawned timer thread so its async state does not leak.
         _await_control_thread_stopped("addbypass192.0.2.10")
 
+    def test_addbypass_with_duration_adds_ip_then_expires(self) -> None:
+        # Scenario: a timed addbypass must insert the IP into the bypass set immediately
+        # (so DNSBL is bypassed for the duration), then the expiry thread removes it.
+        # Background: the no-duration path inserts synchronously; the timed path must too.
+
+        # Given: the IP is NOT in the bypass DB before the command (BEFORE state).
+        assert P.gpListDB.get("198.51.100.20") is None
+
+        # When: addbypass with a 1-second duration is applied.
+        P.pfb["mod_threading"] = True
+        applied, msg = P.pfb_apply_control_command(["python_control", "addbypass", "198.51.100.20", "1"])
+
+        # Then (insert): the command succeeds and the IP is in the bypass set immediately --
+        # before the expiry thread's sleep elapses. This assertion fails on pre-fix code.
+        assert applied is True
+        assert "second" in msg
+        assert P.gpListDB.get("198.51.100.20") == 0
+        assert P.pfb["gpListDB"] is True
+
+        # Then (expiry): once the timer thread finishes, the IP is removed.
+        _await_control_thread_stopped("addbypass198.51.100.20")
+        assert P.gpListDB.get("198.51.100.20") is None
+
     def test_addbypass_dash_encoded_ipv4_is_unmapped(self) -> None:
         # The DNS-TXT transport encodes the dotted IPv4 with '-'; the shared handler
         # un-maps it. Proves the legacy encoding still resolves to the real IP.
