@@ -2961,6 +2961,7 @@ def pfb_apply_control_command(control_command: list[str]) -> tuple[bool, str]:
                                     control_rcd = False
                                     control_msg = "Python_control: Add bypass for IP: [ {} ] thread failed".format(b_ip)
                                 else:
+                                    gpListDB[b_ip] = 0
                                     control_msg = "{} for {} second(s)".format(control_msg, duration)
                             else:
                                 control_rcd = False
