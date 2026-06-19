@@ -1301,6 +1301,80 @@ function pfb_alias_field_type_ok(string $field, string $alias_type): bool
 	return FALSE;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-30 Phase 1 — Pure schedule-period deciders for log rotation.
+//
+// Two pure helper functions — no I/O, no globals, no config access.
+// The caller passes all inputs explicitly; this is the testable seam.
+//
+// Period-key format (what gets stored in the state file per log type):
+//   'off' or ''           -> '' (schedule disabled; no key)
+//   'daily'               -> 'YYYY-MM-DD'    (date('Y-m-d', $ts))
+//   'weekly'              -> 'YYYY-Www'       (date('o-\WW', $ts) — ISO week-year)
+//   'monthly'             -> 'YYYY-MM'        (date('Y-m', $ts))
+//   any unrecognised      -> '' (off-default; defensive)
+//
+// ISO week-year note: date('o') returns the ISO 8601 week-YEAR (not the
+// calendar year), so 2027-01-01 (calendar year 2027) yields '2026-W53'
+// (ISO year 2026, week 53) rather than the wrong '2027-W01'. This is the
+// correct behaviour — use date('o'), never date('Y'), for the week key.
+//
+// Tests: tests/php/LogRotateScheduleTest.php
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_log_rotate_period — compute the period key for a given schedule and time.
+ *
+ * Returns a string period key representing the calendar window that $ts falls
+ * in, given $schedule. Returns '' when the schedule is off/empty/unrecognised.
+ * The key is compared with the stored last-reset key to decide whether to reset.
+ *
+ * PURE — no I/O, no globals, no side effects.
+ *
+ * @param string $schedule  Schedule value: 'off'|''|'daily'|'weekly'|'monthly'.
+ *                          Any unrecognised value is treated as 'off'.
+ * @param int    $ts        Unix timestamp to compute the period key for.
+ * @return string           Period key, or '' when the schedule is off/unrecognised.
+ */
+function pfb_log_rotate_period(string $schedule, int $ts): string
+{
+	return match ($schedule) {
+		'daily'   => date('Y-m-d', $ts),
+		'weekly'  => date('o-\WW', $ts),
+		'monthly' => date('Y-m',   $ts),
+		default   => '',
+	};
+}
+
+/**
+ * pfb_log_should_reset — decide whether a log should be reset at $now_ts.
+ *
+ * Returns TRUE when the calendar period has rolled over since the last reset
+ * (i.e. the current period key differs from $last_key), or when $last_key is
+ * empty (the log has never been reset and a reset is overdue).
+ * Always returns FALSE when the schedule is 'off' / '' / unrecognised.
+ *
+ * PURE — no I/O, no globals, no side effects. Idempotent: within the same
+ * period, pfb_log_rotate_period($schedule, $now_ts) === $last_key, so this
+ * returns FALSE on every tick after the first reset in that period.
+ *
+ * @param string $schedule  Schedule value: 'off'|''|'daily'|'weekly'|'monthly'.
+ * @param string $last_key  The period key stored after the last reset, or '' if
+ *                          the log has never been reset (triggers reset).
+ * @param int    $now_ts    Current Unix timestamp.
+ * @return bool             TRUE iff the log should be truncated now.
+ */
+function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): bool
+{
+	$period = pfb_log_rotate_period($schedule, $now_ts);
+	if ($period === '') {
+		// Schedule is off or unrecognised — never reset.
+		return FALSE;
+	}
+	// Reset when the period has changed (or when the log has never been reset).
+	return $period !== $last_key;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
