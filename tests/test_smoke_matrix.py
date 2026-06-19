@@ -128,3 +128,55 @@ def test_topology_skips_when_matrix_absent(monkeypatch: pytest.MonkeyPatch) -> N
     assert mx.build_matrix() is None
     with pytest.raises(pytest.skip.Exception):
         mx.matrix_variants()
+
+
+# Build-only matrix (the shape smoke.yml always injects via --print-build, which excludes
+# route-only entries). This documents how route-only entries are kept out of the topology:
+# they never reach SMOKE_MATRIX_JSON because --print-build filters them at the reader level.
+# The _matrix.py:build_matrix() function trusts the injected JSON, so CI-injected
+# SMOKE_MATRIX_JSON (from --print-build) is always free of route-only entries.
+_BUILD_ONLY_MATRIX = (
+    '[{"pfsense_version":"2.8.0","freebsd_major":"15","arch":"amd64",'
+    '"php_version":"8.3","py_flavor":"py311","variant":"CE"}]'
+)
+
+
+def test_smoke_topology_excludes_route_only_via_build_matrix_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The smoke topology never produces a variant for a route-only pfSense version.
+
+    Protection mechanism: smoke.yml injects SMOKE_MATRIX_JSON from
+    ``read-version-matrix.sh --print-build``, which excludes ``role=route-only``
+    entries. _matrix.py:build_matrix() reads the injected JSON as-is. So the
+    topology never sees route-only entries — the exclusion is at the reader level.
+
+    Before/after: with a build-only matrix (no route-only), the topology produces
+    a CE variant. Adding a second build CE entry (e.g. the next version) produces two
+    variants — proving the topology faithfully mirrors its input, so the only way
+    a route-only entry would appear is if the wrong --print-* mode were injected
+    (documented: always use --print-build for SMOKE_MATRIX_JSON).
+    """
+    # BEFORE: single-entry build matrix → one CE variant (FreeBSD:15:amd64).
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_BUILD_ONLY_MATRIX)
+    variants_before = mx.matrix_variants()
+    abis_before = {v.abi for v in variants_before}
+    assert "FreeBSD:15:amd64" in abis_before, f"before: CE 2.8 variant expected; got {abis_before!r}"
+    # The route-only 2.7 ABI must NOT appear (it is absent from the injected JSON).
+    assert "FreeBSD:14:amd64" not in abis_before, (
+        f"before: route-only 2.7 ABI must not appear (not in build matrix); got {abis_before!r}"
+    )
+
+    # AFTER: add a second build CE entry → two variants; the topology mirrors its input.
+    two_ce = (
+        '[{"pfsense_version":"2.8.0","freebsd_major":"15","arch":"amd64","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+        '{"pfsense_version":"2.9.0","freebsd_major":"16","arch":"amd64","php_version":"8.5","py_flavor":"py311","variant":"CE"}]'
+    )
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=two_ce)
+    mx.build_matrix.cache_clear()
+    variants_after = mx.matrix_variants()
+    abis_after = {v.abi for v in variants_after}
+    assert "FreeBSD:15:amd64" in abis_after, f"after: 2.8 CE still present; got {abis_after!r}"
+    assert "FreeBSD:16:amd64" in abis_after, f"after: 2.9 CE present; got {abis_after!r}"
+    # Still no route-only 2.7 ABI (never injected via --print-build).
+    assert "FreeBSD:14:amd64" not in abis_after, (
+        f"after: route-only ABI must remain absent from smoke topology; got {abis_after!r}"
+    )

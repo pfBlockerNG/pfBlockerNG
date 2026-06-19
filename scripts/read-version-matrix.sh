@@ -4,7 +4,8 @@
 #
 # Usage:
 #   read-version-matrix.sh [--ref <git-ref>] [--file <path>] [--github-output]
-#                          [--print-build | --print-ci | --print-test | --print-all]
+#                          [--print-build | --print-ci | --print-test | --print-all
+#                           | --print-route]
 #                          [--variant CE|Plus]
 #
 # Options:
@@ -15,11 +16,18 @@
 #   --github-output      Write build_matrix, ci_matrix, variant, python_versions,
 #                        and php_versions to $GITHUB_OUTPUT (GitHub Actions step
 #                        outputs format).
-#   --print-build        Print BUILD matrix JSON to stdout.
-#   --print-ci           Print CI matrix JSON to stdout.
+#   --print-build        Print BUILD matrix JSON to stdout. Excludes role=route-only
+#                        entries (those are served but not built or smoked).
+#   --print-ci           Print CI matrix JSON to stdout. Excludes role=route-only
+#                        entries (same exclusion as --print-build).
 #   --print-test         Print the derived test matrices (python_versions +
-#                        php_versions) to stdout (labelled).
-#   --print-all          Print both matrices to stdout (labelled).
+#                        php_versions) to stdout (labelled). Excludes role=route-only.
+#   --print-all          Print both BUILD and CI matrices to stdout (labelled).
+#   --print-route        Print ROUTE matrix JSON to stdout — every entry with a live
+#                        catalog: role=build (or absent) UNION role=route-only. This
+#                        is the set whose release/<varver>/<arch>/ catalog is served.
+#                        Excludes truly-dropped entries (those are simply absent from
+#                        supported-versions.json).
 #   --variant CE|Plus    Filter both matrices to entries whose `variant` field
 #                        matches the given value (case-insensitive). Returns ALL
 #                        matching entries — during a transition window there may
@@ -27,25 +35,31 @@
 #                        this flag all entries are returned (backward-compatible).
 #
 # Outputs:
-#   BUILD matrix     — all entries from supported-versions.json, each carrying:
-#     pfsense_version, channel, freebsd_version, freebsd_major,
+#   BUILD matrix     — role=build entries (absent role treated as build; back-compat).
+#     Each entry carries: pfsense_version, channel, freebsd_version, freebsd_major,
 #     php_version, py_flavor, variant, status, ci, arch. `arch` is resolved
 #     (default "amd64"), so the build fans out version × arch — an entry that
 #     omits arch (every entry today) stays amd64, while an aarch64 entry
 #     (Plus-only, Netgate ARM appliances) builds a FreeBSD:N:aarch64 .pkg
-#     (issue #199).
+#     (issue #199). role=route-only entries are EXCLUDED: they are served from a
+#     frozen .pkg but never built or smoked.
 #   CI matrix        — the ci:true entries (ANY channel), subset of BUILD matrix.
 #     Inherits the resolved `arch` from the BUILD matrix, and additionally carries
 #     a resolved image_name (default "pfsense-ce") and mac (default the CE pin
 #     "BC:24:11:37:9C:AC"), so an entry that omits them — every CE entry today —
 #     keeps the CE image + MAC, while a ci:true Plus entry can carry its own
-#     image_name/mac (ADR-24).
+#     image_name/mac (ADR-24). role=route-only entries are EXCLUDED (same as BUILD).
+#   ROUTE matrix     — BUILD matrix UNION role=route-only entries. Every entry whose
+#     release/<varver>/<arch>/ catalog is actively served. The generator uses this
+#     to determine which varver paths to build (route-only from frozen .pkg, build
+#     entries from the fresh build). Absent role == build (fully back-compat).
 #   python_versions  — DISTINCT python versions derived from each BUILD-matrix
 #     entry's py_flavor (`pyN` + `MM` => `N.MM`, e.g. py311 => 3.11; py39 => 3.9),
 #     sorted + deduped. test.yml's pytest matrix (supported-only — only the
-#     pythons the matrix actually ships).
+#     pythons the matrix actually ships). Excludes route-only (no build, no test leg).
 #   php_versions     — DISTINCT php_version across the BUILD-matrix entries,
 #     sorted + deduped. test.yml's PHP-jobs matrix (supported-only).
+#     Excludes route-only (no build, no test leg).
 #
 # Requirements: git, jq (both available on ubuntu-latest GH runners).
 # Pure read — no writes anywhere; exits non-zero on any error.
@@ -63,6 +77,7 @@ DO_GITHUB_OUTPUT=0
 DO_PRINT_BUILD=0
 DO_PRINT_CI=0
 DO_PRINT_TEST=0
+DO_PRINT_ROUTE=0
 VARIANT_FILTER=""
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -75,14 +90,16 @@ while [ $# -gt 0 ]; do
     --print-build)   DO_PRINT_BUILD=1;   shift ;;
     --print-ci)      DO_PRINT_CI=1;      shift ;;
     --print-test)    DO_PRINT_TEST=1;    shift ;;
+    --print-route)   DO_PRINT_ROUTE=1;   shift ;;
     --print-all)     DO_PRINT_BUILD=1; DO_PRINT_CI=1; shift ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
 
 # Default: print both matrices when running standalone with no print flags and no
-# GH output. (--print-test alone is an explicit request — don't add build/ci to it.)
-if [ "$DO_GITHUB_OUTPUT" -eq 0 ] && [ "$DO_PRINT_BUILD" -eq 0 ] && [ "$DO_PRINT_CI" -eq 0 ] && [ "$DO_PRINT_TEST" -eq 0 ]; then
+# GH output. (--print-test and --print-route alone are explicit requests — don't
+# add build/ci to them.)
+if [ "$DO_GITHUB_OUTPUT" -eq 0 ] && [ "$DO_PRINT_BUILD" -eq 0 ] && [ "$DO_PRINT_CI" -eq 0 ] && [ "$DO_PRINT_TEST" -eq 0 ] && [ "$DO_PRINT_ROUTE" -eq 0 ]; then
   DO_PRINT_BUILD=1
   DO_PRINT_CI=1
 fi
@@ -117,26 +134,32 @@ if ! printf '%s' "$RAW_JSON" | jq -e '.versions | type == "array"' >/dev/null 2>
   exit 1
 fi
 
-# ── Build matrix: all entries (optionally filtered by --variant) ──────────────
+# ── Route matrix: ALL entries with a live catalog (build ∪ route-only) ───────
+# role absent/build/route-only all have a served catalog. A truly dropped version
+# is simply absent from the JSON. Absent role defaults to "build" (back-compat).
 if [ -n "$VARIANT_FILTER" ]; then
   # Case-insensitive match: compare lowercase of both sides.
   _VF_LOWER="$(printf '%s' "$VARIANT_FILTER" | tr '[:upper:]' '[:lower:]')"
-  BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c \
+  ROUTE_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c \
     --arg vf "$_VF_LOWER" \
     '[.versions[] | select((.variant // "" | ascii_downcase) == $vf)]')"
 else
-  BUILD_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
+  ROUTE_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
 fi
 
-# ── Normalise: each BUILD-matrix entry carries a resolved `arch` (default amd64) ──
-# So the build fans out version × arch (issue #199 — aarch64 Netgate appliances).
-# An entry that omits arch — or sets it to "" — stays amd64; an aarch64 entry
-# (Plus-only) builds a FreeBSD:N:aarch64 .pkg. The empty-string coercion mirrors
-# the image_name/mac handling below: `//` alone treats only null/missing as absent,
-# so a literal "" would flow through and a downstream ABI build would emit
-# `FreeBSD:N:` (no arch). The CI matrix inherits this resolved arch verbatim.
-BUILD_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+# Normalise arch in the ROUTE matrix (same rule as BUILD: absent/empty => amd64).
+ROUTE_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c '
   [ .[] | . + { arch: (if ((.arch // "") == "") then "amd64" else .arch end) } ]')"
+
+# ── Build matrix: role=build entries only (excludes role=route-only) ──────────
+# An absent role is treated as "build" ((.role // "build") == "build") so with
+# today's matrices — no route-only entries — the BUILD matrix is byte-identical to
+# the old full .versions[] output (fully back-compat).
+BUILD_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c \
+  '[.[] | select((.role // "build") != "route-only")]')"
+
+# BUILD_MATRIX inherits already-normalised arch from ROUTE_MATRIX (absent/empty =>
+# amd64, done above). The CI matrix inherits this resolved arch verbatim.
 
 # ── CI matrix: the ci:true entries (ANY channel) within the variant-filtered set ──
 # The channel no longer filters (ADR-24): a ci:true Plus entry is a first-class CI
@@ -231,4 +254,8 @@ if [ "$DO_PRINT_TEST" -eq 1 ]; then
   printf '%s' "$PYTHON_VERSIONS" | jq .
   printf '\nphp_versions:\n'
   printf '%s' "$PHP_VERSIONS" | jq .
+fi
+
+if [ "$DO_PRINT_ROUTE" -eq 1 ]; then
+  printf '%s' "$ROUTE_MATRIX" | jq .
 fi

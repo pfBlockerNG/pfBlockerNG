@@ -101,6 +101,24 @@ def _plus_entry(**overrides: Any) -> dict[str, Any]:
     return entry
 
 
+def _route_only_entry(**overrides: Any) -> dict[str, Any]:
+    """A role=route-only CE matrix entry (EOL: served from frozen .pkg, never built)."""
+    entry: dict[str, Any] = {
+        "pfsense_version": "2.7",
+        "channel": "CE",
+        "freebsd_version": "14.0-RELEASE",
+        "freebsd_major": "14",
+        "php_version": "8.2",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "EOL",
+        "ci": False,
+        "role": "route-only",
+    }
+    entry.update(overrides)
+    return entry
+
+
 def _make_matrix_ref(tmp_path: Path, versions: list[dict[str, Any]], *, ref: str = "ci-metadata") -> Path:
     """Create a git repo in tmp_path with supported-versions.json committed on `ref`.
 
@@ -108,7 +126,7 @@ def _make_matrix_ref(tmp_path: Path, versions: list[dict[str, Any]], *, ref: str
     cwd, so callers run the script with cwd = this path.
     """
     repo = tmp_path / "matrix-repo"
-    repo.mkdir()
+    repo.mkdir(parents=True)
 
     def _git(*args: str) -> None:
         subprocess.run(
@@ -162,6 +180,11 @@ def _ci_matrix(repo: Path, ref: str = "ci-metadata") -> list[dict[str, Any]]:
 
 def _build_matrix(repo: Path, ref: str = "ci-metadata") -> list[dict[str, Any]]:
     proc = _run(repo, "--ref", ref, "--file", "supported-versions.json", "--print-build")
+    return json.loads(proc.stdout)  # type: ignore[no-any-return]
+
+
+def _route_matrix(repo: Path, ref: str = "ci-metadata") -> list[dict[str, Any]]:
+    proc = _run(repo, "--ref", ref, "--file", "supported-versions.json", "--print-route")
     return json.loads(proc.stdout)  # type: ignore[no-any-return]
 
 
@@ -319,3 +342,92 @@ def test_build_matrix_empty_string_arch_normalizes_to_amd64(tmp_path: Path) -> N
     build = _build_matrix(repo)
     assert len(build) == 1
     assert build[0]["arch"] == "amd64", f"empty arch must default to amd64; got {build[0]['arch']!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario i — route-only entry EXCLUDED from build/ci/test, INCLUDED in route.
+# An EOL pfSense version with role=route-only must never fan out a build or smoke
+# leg, but must appear in --print-route so the generator knows to serve its frozen
+# .pkg. This is the core Part-2 (ADR-27 §2.4) gate.
+# --------------------------------------------------------------------------- #
+def test_route_only_excluded_from_build_ci_test_included_in_route(tmp_path: Path) -> None:
+    """A route-only entry is absent from build/ci/test and present in route.
+
+    Before: matrix with only build entries → route output is identical to build
+    (back-compat; no regression). After adding a route-only entry: build/ci/test
+    unchanged, route gains the extra entry.
+    """
+    # BEFORE: build-only matrix — route == build (back-compat baseline).
+    repo = _make_matrix_ref(tmp_path, [_ce_entry()])
+    build_before = _build_matrix(repo)
+    route_before = _route_matrix(repo)
+    assert [e["pfsense_version"] for e in build_before] == ["2.8"], "before: build has the CE entry"
+    assert [e["pfsense_version"] for e in route_before] == ["2.8"], "before: route == build (back-compat)"
+
+    # AFTER: add a route-only entry → build/ci/test stay unchanged; route gains it.
+    repo2 = _make_matrix_ref(tmp_path / "r2", [_ce_entry(), _route_only_entry()])
+    build_after = _build_matrix(repo2)
+    ci_after = _ci_matrix(repo2)
+    py_after, php_after = _test_matrices(repo2)
+    route_after = _route_matrix(repo2)
+
+    build_versions = {e["pfsense_version"] for e in build_after}
+    assert build_versions == {"2.8"}, f"route-only must be excluded from build; got {build_versions!r}"
+
+    ci_versions = {e["pfsense_version"] for e in ci_after}
+    assert ci_versions == {"2.8"}, f"route-only must be excluded from ci; got {ci_versions!r}"
+
+    assert py_after == ["3.11"], f"route-only must not add a python version to --print-test; got {py_after!r}"
+    assert php_after == ["8.3"], f"route-only must not add a php version to --print-test; got {php_after!r}"
+
+    route_versions = {e["pfsense_version"] for e in route_after}
+    assert route_versions == {"2.8", "2.7"}, f"route must include the route-only entry; got {route_versions!r}"
+    route_only_entry = next(e for e in route_after if e["pfsense_version"] == "2.7")
+    assert route_only_entry["role"] == "route-only", "route-only role must be present in route matrix"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario j — absent role treated as build (back-compat mapping).
+# An entry with NO `role` field must appear in --print-build exactly as before —
+# the (.role // "build") default is the contract.
+# --------------------------------------------------------------------------- #
+def test_absent_role_treated_as_build(tmp_path: Path) -> None:
+    """An entry without a `role` field is treated as role=build (present in build, absent in route-only set).
+
+    Before: the CE entry (no role field) appears in build — proving this is the
+    current state. Asserting it also appears in route confirms route is a superset of build
+    (no regression: route == build when there are no route-only entries).
+    """
+    repo = _make_matrix_ref(tmp_path, [_ce_entry()])  # no 'role' field
+    build = _build_matrix(repo)
+    route = _route_matrix(repo)
+
+    # BEFORE: entry with no role is in build (the current / back-compat behaviour).
+    assert any(e["pfsense_version"] == "2.8" for e in build), "no-role entry must be in build"
+    # Also in route (route is a superset of build; with no route-only entries they are identical).
+    assert any(e["pfsense_version"] == "2.8" for e in route), "no-role entry must also be in route"
+    # Absent role never appears in the route matrix as 'route-only'.
+    assert all(e.get("role") != "route-only" for e in route), "no-role entry must not carry role=route-only"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario k — no-route-only matrices: build output byte-identical (back-compat).
+# With ZERO route-only entries, the build matrix must be identical to the route
+# matrix (both == all entries). Pinned as a before/after regression guard.
+# --------------------------------------------------------------------------- #
+def test_no_route_only_build_equals_route(tmp_path: Path) -> None:
+    """With no route-only entries, --print-build and --print-route emit the same versions.
+
+    This is the exact back-compat contract: adding the role seam must not change
+    the output for any matrix that has no route-only entries (i.e. today's real matrix).
+    """
+    versions = [_ce_entry(), _plus_entry(ci=True)]
+    repo = _make_matrix_ref(tmp_path, versions)
+    build = _build_matrix(repo)
+    route = _route_matrix(repo)
+
+    build_vs = sorted(e["pfsense_version"] for e in build)
+    route_vs = sorted(e["pfsense_version"] for e in route)
+    assert build_vs == route_vs, (
+        f"without route-only entries, build == route (back-compat); build={build_vs!r} route={route_vs!r}"
+    )
