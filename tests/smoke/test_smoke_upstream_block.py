@@ -325,31 +325,42 @@ class TestUpstreamBlockNormalControl:
 # ---------------------------------------------------------------------------
 
 _DNSBL_DB = "/var/unbound/pfb_py_dnsbl.sqlite"
+_CTR_OPEN = "<<<UPCTR>>>"
+_CTR_CLOSE = "<<<UPEND>>>"
 
 
 def _read_upstream_counter(vm: SmokeVM) -> int:
-    """Read the ``counter`` column of the ``Upstream`` row from the on-box dnsbl SQLite DB.
+    """Read the ``counter`` of the ``Upstream`` row from the on-box dnsbl SQLite DB.
 
-    Uses ``python3 -c`` over SSH — py-sqlite3 is a baked dep on the smoke image.
-    Returns -1 when the row does not yet exist (DB absent or row missing).
+    Uses pfSsh.php (PHP + the SQLite3 class the package itself runs on), NOT a python
+    one-liner: the appliance ships ``python3.11`` with no ``python3`` symlink, so a
+    ``python3 -c`` read is not portable. Reads the same ``/var/unbound/pfb_py_dnsbl.sqlite``
+    the chrooted Python module writes. The value is delimited so pfSsh.php's startup
+    banner does not pollute it. Returns the integer counter, or -1 when the row is
+    absent or the DB/table cannot be read.
     """
-    script = (
-        "import sqlite3, sys\n"
-        f"try:\n"
-        f"    con = sqlite3.connect({_DNSBL_DB!r})\n"
-        f"    row = con.execute(\"SELECT counter FROM dnsbl WHERE groupname='Upstream'\").fetchone()\n"
-        f"    print(row[0] if row else -1)\n"
-        f"except Exception as e:\n"
-        f"    print(-1)\n"
+    snippet = (
+        "$__c = -1;\n"
+        "try {\n"
+        f"    $__db = new SQLite3('{_DNSBL_DB}');\n"
+        "    $__r = $__db->querySingle(\"SELECT counter FROM dnsbl WHERE groupname = 'Upstream'\");\n"
+        "    $__c = ($__r === null || $__r === FALSE) ? -1 : (int) $__r;\n"
+        "    $__db->close();\n"
+        "} catch (Throwable $__e) { $__c = -1; }\n"
+        f"echo '{_CTR_OPEN}' . $__c . '{_CTR_CLOSE}';\n"
     )
-    result = vm.ssh("python3", "-c", script)
+    out = h.php_eval(vm, snippet).stdout or ""
+    start = out.find(_CTR_OPEN)
+    end = out.find(_CTR_CLOSE)
+    if start == -1 or end == -1:
+        return -1
     try:
-        return int(result.stdout.strip())
-    except (ValueError, AttributeError):
+        return int(out[start + len(_CTR_OPEN) : end])
+    except ValueError:
         return -1
 
 
-def _wait_for_counter_above(vm: SmokeVM, baseline: int, *, timeout_s: float = 15.0, poll_s: float = 0.5) -> int:
+def _wait_for_counter_above(vm: SmokeVM, baseline: int, *, timeout_s: float = 30.0, poll_s: float = 2.0) -> int:
     """Poll the on-box Upstream dnsbl counter until it exceeds ``baseline`` or the deadline expires.
 
     The counter is flushed by the async db_worker thread, so a freshly-logged block
@@ -393,7 +404,7 @@ class TestUpstreamCounterIncrement:
         baseline = _read_upstream_counter(deployed_vm)
         assert baseline >= 0, (
             "Upstream row not found in dnsbl table before probe — "
-            "dnsbl_save_stats() did not seed it. "
+            "the Python DB-init seed (_db_create) did not create it. "
             f"DB: {_DNSBL_DB!r}"
         )
 

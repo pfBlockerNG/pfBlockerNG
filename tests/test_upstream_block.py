@@ -11,15 +11,19 @@ All tests are pure off-box — no Unbound API calls, no fixtures, no I/O.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from unboundmodule import RCODE_NOERROR, RCODE_NXDOMAIN
 
 import pfb_unbound
 from pfb_unbound import (
+    DB_DNSBL,
     EDE_BLOCKED,
     EDE_FILTERED,
     EDNS_OPT_CODE_EDE,
     UpstreamBlock,
+    _db_create,
     _log_upstream_block,
     _parse_ede_options,
     classify_upstream_block,
@@ -435,3 +439,52 @@ class TestLogUpstreamBlockCounterEnqueue:
 
         dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
         assert dnsbl_tasks == [], f"Expected no dnsbl enqueue with sqlite3_dnsbl_con=False; got: {calls}"
+
+
+# ---------------------------------------------------------------------------
+# _db_create — the dnsbl table seeds the synthetic 'Upstream' row at zero
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblDbSeedsUpstreamRow:
+    """Scenario: creating the dnsbl DB seeds an 'Upstream' counter row at zero.
+
+    Background:
+        The per-block counter is applied as a bare ``UPDATE dnsbl SET counter =
+        counter + ? WHERE groupname = ?`` (_db_flush_dnsbl), which no-ops on a
+        missing row. 'Upstream' is synthetic (never a feed), so _db_create seeds it
+        on DB creation -- mirroring the resolver row-0 seed -- so the increment has
+        a row to hit. The seed must be idempotent and must never reset an already
+        accumulated counter on a later init/reconnect.
+    """
+
+    @staticmethod
+    def _counter_rows(con: sqlite3.Connection) -> list[tuple[int]]:
+        return con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchall()
+
+    def test_create_seeds_upstream_row_at_zero(self) -> None:
+        # Given/When: a fresh dnsbl DB is created.
+        con = sqlite3.connect(":memory:")
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+        # Then: exactly one 'Upstream' row exists, entries and counter both 0.
+        row = con.execute("SELECT entries, counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (0, 0), f"Upstream row not seeded at zero: {row!r}"
+        assert len(self._counter_rows(con)) == 1, "expected exactly one Upstream row"
+
+    def test_create_is_idempotent_and_preserves_counter(self) -> None:
+        # Given: a created DB whose Upstream counter has since accumulated.
+        con = sqlite3.connect(":memory:")
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+        assert self._counter_rows(con) == [(0,)]  # before: seeded at 0
+        con.execute("UPDATE dnsbl SET counter = counter + 5 WHERE groupname = 'Upstream'")
+        con.commit()
+        assert self._counter_rows(con) == [(5,)]  # accumulated
+
+        # When: the DB is (re-)created again (a later module init / fault reconnect).
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+
+        # Then: still a single row, counter PRESERVED (not reset, not duplicated).
+        assert self._counter_rows(con) == [(5,)], "re-create must not reset or duplicate the Upstream row"
