@@ -345,6 +345,101 @@ def test_older_nightlies_fold_under_each_edition() -> None:
     assert "FreeBSD:15:amd64" not in plus_section and ">26.03<" in plus_section and ">8.5<" in plus_section
 
 
+def test_older_releases_lists_retained_excludes_latest() -> None:
+    """Scenario: surface the retained older devel/stable releases, never the newest per channel.
+
+    Given three devel versions (two old + the newest) and two stable versions (one old + the
+      newest) for one ABI plus a nightly build,
+    When the older-releases list is built,
+    Then the NEWEST devel and the NEWEST stable are excluded (they are in the edition table
+      already) and the two older devel + one older stable remain; nightly is never included.
+    """
+    # Before-state: establish the newest versions ARE in the edition table (not in older-releases).
+    dev_new = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:16:amd64", "d3.pkg")
+    dev_mid = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.15", "FreeBSD:16:amd64", "d2.pkg")
+    dev_old = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.14", "FreeBSD:16:amd64", "d1.pkg")
+    stb_new = _pkg("stable", "pfSense-pkg-pfBlockerNG", "3.1.0", "FreeBSD:16:amd64", "s2.pkg")
+    stb_old = _pkg("stable", "pfSense-pkg-pfBlockerNG", "3.0.0", "FreeBSD:16:amd64", "s1.pkg")
+    nightly = _pkg("nightly", "pfSense-pkg-pfBlockerNG-nightly", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
+    all_pkgs = [dev_new, dev_mid, dev_old, stb_new, stb_old, nightly]
+
+    # Before: the newest versions are NOT in older_releases (they live in the edition table).
+    rows = gl.older_releases(all_pkgs)
+    versions = [(r["channel"], r["version"]) for r in rows]
+    assert ("devel", "3.2.16") not in versions  # newest devel stays out
+    assert ("stable", "3.1.0") not in versions  # newest stable stays out
+    assert ("nightly", "3.2.16.20260614.9") not in versions  # nightly never in older_releases
+
+    # After (what's retained): two older devel + one older stable.
+    assert ("devel", "3.2.15") in versions
+    assert ("devel", "3.2.14") in versions
+    assert ("stable", "3.0.0") in versions
+
+    # The packages block folds them into a disclosure under the edition table.
+    matrix = [_mx("FreeBSD:16:amd64", "2.8", "CE", "8.3", "py311")]
+    html = gl._packages_html(all_pkgs, matrix)
+    assert "<h3>pfSense CE</h3>" in html
+    assert "<details><summary>Older releases (3)</summary>" in html
+    # Disclosure sits AFTER the edition's main table (before any Older nightlies entry).
+    assert html.index("<h3>pfSense CE</h3>") < html.index("Older releases (3)")
+    details = html[html.index("Older releases (3)") :]
+    assert "3.2.15" in details and "3.2.14" in details and "3.0.0" in details
+    assert "3.2.16" not in details  # the newest devel stays out of the 'older' disclosure
+    assert "3.1.0" not in details  # the newest stable stays out of the 'older' disclosure
+    # The disclosure table carries a Channel column (devel/stable mixed) + the same edition columns.
+    assert "<th>Channel</th>" in details and "<th>pfSense</th>" in details
+
+
+def test_older_releases_empty_when_only_latest_per_channel() -> None:
+    """With only one version of each channel retained there is nothing 'older' to disclose.
+
+    This is today's default (N=M=1): only the newest devel and stable live in the catalog.
+    The disclosure is entirely absent from the rendered page — no empty affordance.
+    """
+    dev = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:16:amd64", "d.pkg")
+    stb = _pkg("stable", "pfSense-pkg-pfBlockerNG", "3.1.0", "FreeBSD:16:amd64", "s.pkg")
+    nightly = _pkg("nightly", "pfSense-pkg-pfBlockerNG-nightly", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
+
+    assert gl.older_releases([dev, stb, nightly]) == []
+    # …and the packages block omits the disclosure entirely.
+    assert "Older releases" not in gl._packages_html([dev, stb, nightly], None)
+
+
+def test_older_releases_fold_under_each_edition() -> None:
+    """Scenario: each edition's older releases fold UNDER that edition's own table.
+
+    Given retained older devel releases for BOTH a CE ABI and a Plus ABI,
+    When the packages block is rendered with a matrix covering both ABIs,
+    Then the CE older-releases disclosure sits inside the CE section (after the CE table,
+      before the Plus heading) carrying only CE rows, and the Plus one sits in the Plus
+      section carrying only Plus rows — CE section first, Channel column present in each.
+    """
+    ce_new = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "ce2.pkg")
+    ce_old = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.15", "FreeBSD:15:amd64", "ce1.pkg")
+    plus_new = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:16:aarch64", "p2.pkg")
+    plus_old = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.15", "FreeBSD:16:aarch64", "p1.pkg")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
+    ]
+
+    html = gl._packages_html([ce_new, ce_old, plus_new, plus_old], matrix)
+
+    # CE section before Plus section; each has its own folded older-releases disclosure.
+    assert html.index("<h3>pfSense CE</h3>") < html.index("<h3>pfSense Plus</h3>")
+    assert html.count("<summary>Older releases (1)</summary>") == 2  # one per edition (each ABI: 1 older)
+    # The CE section spans from its heading to the Plus heading; the Plus section follows.
+    ce_section = html[html.index("<h3>pfSense CE</h3>") : html.index("<h3>pfSense Plus</h3>")]
+    plus_section = html[html.index("<h3>pfSense Plus</h3>") :]
+    # Each edition's disclosure folds in its OWN ABI's older release, never the other's.
+    assert "Older releases (1)" in ce_section and "FreeBSD:15:amd64" in ce_section
+    assert "FreeBSD:16:aarch64" not in ce_section and ">2.8<" in ce_section and ">8.3<" in ce_section
+    assert "Older releases (1)" in plus_section and "FreeBSD:16:aarch64" in plus_section
+    assert "FreeBSD:15:amd64" not in plus_section and ">26.03<" in plus_section and ">8.5<" in plus_section
+    # Channel column present in older-releases disclosures (devel/stable can coexist).
+    assert "<th>Channel</th>" in ce_section and "<th>Channel</th>" in plus_section
+
+
 def test_build_edition_sections_unmatched_abi_falls_to_other() -> None:
     """A build whose ABI the matrix doesn't cover lands in 'Other' (manifest php/py), not hidden."""
     p = _pkg("devel", "d", "3.2.16", "FreeBSD:14:amd64", "x.pkg")
