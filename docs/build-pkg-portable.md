@@ -252,6 +252,12 @@ File entries carry `sum` (`1$<sha256hex>`), `uname`/`gname` (`root`/`wheel`),
 The output filename is `<PORTNAME>-<PKGVERSION>.pkg`, where `PKGVERSION` is
 `PORTVERSION[_PORTREVISION][,PORTEPOCH]`.
 
+`PORTREVISION` is read directly from the port's Makefile and appended as `_N` when
+non-zero (e.g. `4.0.0_2`). The release automation (`release.yml` `sync-ports-fork`
+job) keeps this in sync: when a release tag carries the **same PORTVERSION** already
+committed on the ports fork, it auto-increments `PORTREVISION` (rebuild bump); when
+the PORTVERSION changes, `PORTREVISION` is removed (reset to 0, no `_N` suffix).
+
 ## Exit status and output streams
 
 - **stdout**: on success, the absolute path of the written `.pkg` (nothing else),
