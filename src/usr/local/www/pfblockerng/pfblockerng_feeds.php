@@ -27,7 +27,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-$fconfig	= config_get_path('installedpackages/pfblockerngglobal', []);
+$fconfig	= PfbConfig::readSection('installedpackages/pfblockerngglobal');
 
 // Load/convert Feeds (w/alternative aliasname(s), if user-configured)
 $feed_info	= convert_feeds_json();
@@ -107,6 +107,7 @@ if ($_POST) {
 			}
 			else {
 				$fconfig['feed_' . $l_aliasname] = $_POST['feed_' . $l_aliasname] ?: '';
+				// foreign key: pfblockerngglobal/feed_* are dynamic alias-name keys, not in registry
 				config_set_path("installedpackages/pfblockerngglobal/feed_{$l_aliasname}", $fconfig['feed_' . $l_aliasname]);
 				$config_mod = TRUE;
 
@@ -136,6 +137,7 @@ if ($_POST) {
 						$value					= strtolower($value);		// config XML tag needs to be lowercase
 						${"feed_alt_$value"}			= $post;
 						$fconfig['feed_alt_' . $value]		= ${"feed_alt_$value"};
+						// foreign key: pfblockerngglobal/feed_alt_* are dynamic alternate-URL keys, not in registry
 						config_set_path("installedpackages/pfblockerngglobal/feed_alt_{$value}", $fconfig['feed_alt_' . $value]);
 					}
 					else {
@@ -743,6 +745,7 @@ print ($section);
 			$conf_type = $list_type[$gtype];
 			$feedtype  = $gtype;
 
+			// foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
 			foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $rowid => $list) {
 				if (isset($list['row'])) {
 					foreach ($list['row'] as $row) {

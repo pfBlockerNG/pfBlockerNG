@@ -189,7 +189,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 	$disable_move	= TRUE;
 	$all_group	= $new_group = array();
 
-	$rowdata	= config_get_path("installedpackages/{$conf_type}/config", []);
+	$rowdata	= PfbConfig::readSection("installedpackages/{$conf_type}/config");
 
 	$feed_info = convert_feeds_json();			// Load/convert Feeds (w/alternative aliasname(s), if user-configured
 	if (is_array($feed_info) &&
@@ -210,7 +210,8 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 
 					// If an alternate URL is defined, add applicable URL
 					if (isset($feed['alternate'])) {
-						$selected = config_get_path('installedpackages/pfblockerngglobal/feed_alt_' . strtolower($feed['header']));
+						// foreign key: pfblockerngglobal/feed_alt_* are dynamic alternate-URL keys, not in registry
+					$selected = config_get_path('installedpackages/pfblockerngglobal/feed_alt_' . strtolower($feed['header']));
 						$selected = str_replace('alt_', '', $selected);
 
 						if ($feed['header'] != $selected) {
@@ -408,6 +409,7 @@ $options_stateremoval		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
 $portslist = $networkslist = '';
 $options_aliasports_in = $options_aliasports_out = array();
 
+// foreign section: aliases/alias is a pfSense core section, not in registry
 foreach (config_get_path('aliases/alias', []) as $alias) {
 	if ($alias['type'] == 'port') {
 		$portslist .= "{$alias['name']},";
@@ -721,6 +723,7 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	if (!$input_errors) {
+		// foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
 
 		if (isset($_POST['description']) && !empty($_POST['description'])) {
@@ -770,6 +773,7 @@ if ($_POST && isset($_POST['save'])) {
 		}
 
 		// Set flag to update CustomList on next Cron|Force update|Force reload
+		// foreign key: installedpackages/{conf_type} list structure not in registry
 		if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom")) != $_POST['custom']) {
 			$action = $_POST['action'];
 			$aname  = $_POST['aliasname'];
@@ -834,7 +838,7 @@ else {
 	if ($action == 'addgroup' || $action == 'add') {
 		;
 	} else {
-		$rowdata = config_get_path("installedpackages/{$conf_type}/config", []);
+		$rowdata = PfbConfig::readSection("installedpackages/{$conf_type}/config");
 	}
 
 	$pconfig				= array();
@@ -924,6 +928,7 @@ if (isset($Lmove) and isset($Xmove) && isset($rowdata[$rowid]['row'])) {
 	}
 
 	$rowdata[$rowid]['row'] = $final;
+	// foreign structure: list row data not in registry
 	config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row", $rowdata[$rowid]['row']);
 	$savemsg = 'The selected row(s) have been moved.';
 	write_config("pfBlockerNG: {$gtype} - Rows(s) moved");
