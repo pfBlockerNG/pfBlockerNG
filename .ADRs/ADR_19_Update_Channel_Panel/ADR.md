@@ -29,6 +29,8 @@
 >    channelled build. "Read latest" maps channel -> repo: stable/devel -> `-r pfblockerng`,
 >    nightly -> `-r pfblockerng-nightly`.
 
+**Amendment (2026-06-19):** The background cron check now gates on `pfb_software_provenance_ok()` — the same predicate that gates the Software page's visibility — so the page and the background check share one displayability condition. A build that is not page-displayable (not installed from our repo, or overridden off) performs no background check and raises no update notice, even if "Check for new versions" remains enabled from a prior our-repo install.
+
 - **Status:** **Accepted** (2026-06-15) — landed on `devel` (PR #232, rebase-merged);
   validated by the off-box gates + the live-VM `repo` positive journey and the `ui_render`
   negative gate. No separate manual maintainer sign-off is required per the CLAUDE.md
