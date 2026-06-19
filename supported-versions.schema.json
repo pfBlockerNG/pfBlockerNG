@@ -68,6 +68,16 @@
             "enum": ["amd64", "aarch64"],
             "default": "amd64",
             "description": "Target ABI architecture. Omit (or 'amd64') for the standard amd64 build; the reader resolves missing/empty to 'amd64'. 'aarch64' = Netgate ARM appliances (Plus-only); the build keys on (freebsd_major, arch) so an aarch64 entry yields a FreeBSD:<major>:aarch64 .pkg. No ARM CI image exists yet, so an aarch64 entry must be build-only (ci=false)."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["build", "route-only"],
+            "default": "build",
+            "description": "Distribution role (ADR-27 Part 2). 'build' (default; omit for today's behaviour) = built + smoked + served. 'route-only' = an EOL pfSense version that is NO LONGER built or smoked, but whose last .pkg is still served from a frozen catalog so installs in the field keep updating. A route-only entry MUST set ci=false and provide last_tag; the reader excludes it from --print-build/--print-ci/--print-test and includes it only in --print-route. An unknown role fails the reader closed."
+          },
+          "last_tag": {
+            "type": "string",
+            "description": "ADR-27 Part 2 (route-only only): the GitHub Release tag whose assets hold the LAST .pkg built for this EOL pfSense version, e.g. 'v3.1.0_5'. The pfBlockerNG/pkg publish workflow downloads that tag's .pkg and serves it as this version's frozen catalog. Ignored for build entries."
           }
         },
         "additionalProperties": false
