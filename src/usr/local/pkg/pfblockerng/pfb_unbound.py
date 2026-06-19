@@ -2181,15 +2181,16 @@ def _db_create(db: int, cursor: Any) -> None:
         )
         # Seed the synthetic 'Upstream' group row (issue #285) so the per-block counter
         # UPDATE in _db_flush_dnsbl has a row to increment -- the upstream block is not a
-        # feed, so dnsbl_save_stats() never creates it. Idempotent + preserves any
-        # accumulated counter (only inserts when absent), mirroring the resolver row-0
-        # seed above.
-        cursor.execute("SELECT COUNT(*) FROM dnsbl WHERE groupname = 'Upstream'")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute(
-                "INSERT INTO dnsbl ( groupname, timestamp, entries, counter ) VALUES ( 'Upstream', ?, 0, 0 )",
-                (make_timestamp(),),
-            )
+        # feed, so dnsbl_save_stats() never creates it. The single INSERT ... WHERE NOT
+        # EXISTS is atomic (vs a check-then-insert): it stays a no-op once the row is
+        # present, so it is idempotent and preserves any accumulated counter across a
+        # re-init/reconnect, and cannot duplicate the row if another opener races it.
+        cursor.execute(
+            "INSERT INTO dnsbl ( groupname, timestamp, entries, counter ) "
+            "SELECT 'Upstream', ?, 0, 0 "
+            "WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname = 'Upstream')",
+            (make_timestamp(),),
+        )
     elif db == DB_CACHE:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
