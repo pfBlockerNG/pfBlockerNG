@@ -586,3 +586,38 @@ def test_full_idempotency_round_trip() -> None:
     # After: with journal 100 marked as posted, only 101 is missing.
     remaining = rtg.missing_journals(journals, posted_ids)
     assert [j["id"] for j in remaining] == [101]
+
+
+# --- parse_issue_ids (the explicit --issue-ids list parser) --------------------
+
+
+def test_parse_issue_ids_comma_separated() -> None:
+    assert rtg.parse_issue_ids("16893,16830,16814") == [16893, 16830, 16814]
+
+
+def test_parse_issue_ids_space_and_newline_separated() -> None:
+    assert rtg.parse_issue_ids("16893 16830\n16814") == [16893, 16830, 16814]
+
+
+def test_parse_issue_ids_mixed_separators_and_padding() -> None:
+    assert rtg.parse_issue_ids("  16893, 16830 ,16814 ") == [16893, 16830, 16814]
+
+
+def test_parse_issue_ids_dedupes_preserving_first_seen_order() -> None:
+    # 16830 repeats; the result keeps first-seen order and drops the dup.
+    assert rtg.parse_issue_ids("16893,16830,16893,16814,16830") == [16893, 16830, 16814]
+
+
+def test_parse_issue_ids_drops_non_numeric_tokens() -> None:
+    assert rtg.parse_issue_ids("16893, foo, 16830, 12.5, -4") == [16893, 16830]
+
+
+def test_parse_issue_ids_empty_returns_empty_list() -> None:
+    assert rtg.parse_issue_ids("") == []
+    assert rtg.parse_issue_ids("   ,  \n ") == []
+
+
+def test_parse_issue_ids_all_non_numeric_returns_empty() -> None:
+    # All-junk input must parse to [] so the CLI can reject it instead of
+    # silently falling back to migrating every open issue.
+    assert rtg.parse_issue_ids("foo, bar, baz") == []
