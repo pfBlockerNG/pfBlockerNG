@@ -117,6 +117,13 @@ are attached to the **GitHub Release**, deduplicated by FreeBSD major × arch �
 per distinct `(major, arch)` covers every pfSense version on that major. A build failure surfaces in CI
 but must **not** block the `ports-pr` step (the ports PR is the real distribution path).
 
+The `sync-ports-fork` job in `release.yml` also updates `PORTREVISION` on the ports fork using
+`scripts/portrevision-rebuild.sh`: when the release tag carries the same PORTVERSION already
+committed on the fork (a repackage/rebuild), it auto-increments `PORTREVISION` (`_1`, `_2`, …);
+when the PORTVERSION changes, `PORTREVISION` is removed (pkg orders `4.0.0 < 4.0.0_1 < 4.0.1`).
+The builder (`build-pkg-portable.py`) already reads and emits `_N` from the Makefile — no
+builder change is needed for rebuild bumps.
+
 The daily **version-tracker** (`version-tracker.yml`, `0 6 * * *`) also triggers
 `build-pkg-linux.yml` for every BUILD matrix entry to validate each entry's build pair
 independently of a release tag.

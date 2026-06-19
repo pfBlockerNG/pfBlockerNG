@@ -630,6 +630,15 @@ jobs:
           token: ${{ secrets.PORTS_TOKEN }}
           fetch-depth: 0
 
+      - name: Checkout pfBlockerNG (scripts only — sparse)
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/pfBlockerNG
+          ref: ${{ needs.release.outputs.tag }}
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+
       - name: Configure git
         run: |
           git config user.name  "github-actions[bot]"
@@ -662,13 +671,30 @@ jobs:
           fi
           MAKEFILE="${PORT_PATH}/Makefile"
 
-          # PORTVERSION = the numeric version; GH_TAGNAME = the actual release tag
-          # (so a real `make package` fetch resolves it); drop PORTREVISION.
+          # Read the current PORTVERSION and PORTREVISION from the Makefile before
+          # editing, so the compare-and-bump helper can decide whether to increment
+          # or reset.  Absent PORTREVISION is treated as 0 by the helper.
+          OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+          OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
+
+          # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
+          # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
+          NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
+            "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
+
+          # Update PORTVERSION and GH_TAGNAME.
           sed -i \
             -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
             -e "s|^GH_TAGNAME=.*|GH_TAGNAME=\t${TAG}|" \
-            -e "/^PORTREVISION=/d" \
             "$MAKEFILE"
+
+          # Apply PORTREVISION per ports convention: remove when 0; set/insert after
+          # PORTVERSION when > 0.  The sed removes any existing line first, then the
+          # PORTVERSION line is used as an anchor to insert the new one.
+          sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
+          if [ "${NEW_PORTREVISION}" -gt 0 ]; then
+            sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+          fi
 
           if git diff --quiet -- "$MAKEFILE"; then
             echo "${PORT_PATH} already at ${PORTVERSION} (${TAG}) — nothing to push."
