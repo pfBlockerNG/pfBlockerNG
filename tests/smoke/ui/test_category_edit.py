@@ -35,6 +35,7 @@ download.
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -412,3 +413,300 @@ def test_asn_autocomplete_term_returns_json_list(
     assert isinstance(parsed, list), f"ASN autocomplete must return a JSON list, got {type(parsed).__name__}"
     # Each returned entry (if any) is a string ASN line from the cached list.
     assert all(isinstance(item, str) for item in parsed), "ASN autocomplete list entries must be strings"
+
+
+# --------------------------------------------------------------------------- #
+# Helpers: create / delete a firewall alias via the pfSense config API.
+# --------------------------------------------------------------------------- #
+
+_PORT_ALIAS_ADDR = "8080"
+_NET_ALIAS_CIDR = "192.0.2.0/24"  # RFC 5737 — safe, never routed
+
+
+def _input_tag(body: str, name: str) -> str:
+    """Return the single ``<input ... name="<name>" ...>`` tag from a form body.
+
+    Used to assert the RELOADED edit page rendered a field's saved state on the
+    field ITSELF (not merely that the attribute exists somewhere on the page) --
+    a bare ``'checked' in body`` would pass on any page that has any checked box.
+    Returns '' when no such input is present.
+    """
+    m = re.search(r'<input\b[^>]*\bname="' + re.escape(name) + r'"[^>]*>', body)
+    return m.group(0) if m else ""
+
+
+def _option_selected(body: str, value: str) -> bool:
+    """True when a ``<option value="<value>" ... selected ...>`` is rendered."""
+    return re.search(r'<option\b[^>]*\bvalue="' + re.escape(value) + r'"[^>]*\bselected\b', body) is not None
+
+
+def _mk_alias(vm: helpers.SmokeVM, name: str, alias_type: str, address: str) -> None:
+    """Append a pfSense firewall alias via the config API.
+
+    Writes a single entry to ``aliases/alias`` and calls ``write_config``.
+    ``alias_type`` must be ``'port'`` or ``'network'`` (the values
+    ``alias_get_type()`` returns and the category-edit validation checks).
+    """
+    row = {
+        "name": name,
+        "type": alias_type,
+        "address": address,
+        "descr": "pfBlockerNG smoke alias",
+        "detail": "",
+    }
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        f"$aliases[] = {helpers._php_kv_array(row)};\n"
+        "config_set_path('aliases/alias', $aliases);\n"
+        "write_config('pfBlockerNG smoke: create test alias');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_mk_alias({name!r}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+def _rm_alias(vm: helpers.SmokeVM, name: str) -> None:
+    """Remove the first firewall alias whose name matches ``name`` from the config."""
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$out = array();\n"
+        "foreach ($aliases as $a) {\n"
+        f"  if (($a['name'] ?? '') !== {helpers._php_str(name)}) {{ $out[] = $a; }}\n"
+        "}\n"
+        "config_set_path('aliases/alias', $out);\n"
+        "write_config('pfBlockerNG smoke: delete test alias');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_rm_alias({name!r}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+# --------------------------------------------------------------------------- #
+# Advanced Inbound/Outbound: full field save + reload persistence.
+# --------------------------------------------------------------------------- #
+
+
+def test_ipv4_advanced_inout_full_save_persists_and_reloads(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Advanced Inbound and Outbound firewall settings persist in config.xml and
+    are reflected in the reloaded form.
+
+    Scenario: saving a Deny_Both alias with all Advanced In/Out toggles and
+    custom aliases stores the values, and reloading the edit page renders them.
+
+    Background:
+        The save handler (lines 741-764) writes each advanced field via
+        ``config_set_path`` only when ``$gtype == 'ipv4'``. ``autoproto_*`` /
+        ``aliasports_*`` / ``aliasaddr_*`` are validated: a non-'any' protocol is
+        required when ``autoports_*`` or ``autoaddr_*`` is set (lines 604-614);
+        the alias names must pass ``is_alias()`` + ``alias_get_type() in
+        {network,port}`` (lines 593-601). We therefore create a real port alias
+        and a real network alias first, use action=Deny_Both (no Permit guard),
+        and supply non-any protocols (tcp / udp).
+
+    Given:
+        - A port alias and a network alias exist in the firewall config.
+        - The target IPv4 rowid is free (all advanced keys read '').
+    When:
+        ``_post_form`` saves a Deny_Both alias with:
+        - autoproto_in=tcp, autoports_in=on, aliasports_in=<port alias>,
+          autoaddr_in=on, aliasaddr_in=<net alias>, autonot_in=on.
+        - autoproto_out=udp, autoports_out=on, aliasports_out=<port alias>,
+          autoaddr_out=on, aliasaddr_out=<net alias>, autonot_out=on.
+    Then:
+        - config.xml reflects the saved values for all eight advanced fields.
+        - A GET of the edit page renders the saved values (checkboxes checked,
+          alias names in value attributes, protocols selected).
+    """
+    vm = smoke_vm
+    port_alias = "smkadvport"
+    net_alias = "smkadvnet"
+    rowid = _free_rowid(vm, CFG_IPV4)
+    base = f"{CFG_IPV4}/{rowid}"
+
+    _mk_alias(vm, port_alias, "port", _PORT_ALIAS_ADDR)
+    _mk_alias(vm, net_alias, "network", _NET_ALIAS_CIDR)
+    try:
+        # BEFORE: all advanced keys at the free slot read '' (POST must CAUSE them).
+        for key in (
+            "autoproto_in",
+            "autoports_in",
+            "aliasports_in",
+            "autoaddr_in",
+            "aliasaddr_in",
+            "autonot_in",
+            "autoproto_out",
+            "autoports_out",
+            "aliasports_out",
+            "autoaddr_out",
+            "aliasaddr_out",
+            "autonot_out",
+        ):
+            assert helpers.config_get(vm, f"{base}/{key}") == "", (
+                f"rowid {rowid} not free: {key} already set before POST"
+            )
+
+        # WHEN: save with all Advanced Inbound and Outbound options populated.
+        # action=Deny_Both avoids the Permit guard (lines 631-648).
+        # Non-any protocols satisfy the proto guard (lines 604-614).
+        _post_form(
+            webui,
+            _ipv4_payload(
+                rowid,
+                "smkadv",
+                action="Deny_Both",
+                autoproto_in="tcp",
+                autoports_in="on",
+                aliasports_in=port_alias,
+                autoaddr_in="on",
+                aliasaddr_in=net_alias,
+                autonot_in="on",
+                autoproto_out="udp",
+                autoports_out="on",
+                aliasports_out=port_alias,
+                autoaddr_out="on",
+                aliasaddr_out=net_alias,
+                autonot_out="on",
+            ),
+        )
+
+        # THEN (config.xml): every advanced field landed.
+        assert helpers.config_get(vm, f"{base}/autoproto_in") == "tcp", "autoproto_in not persisted as 'tcp'"
+        assert helpers.config_get(vm, f"{base}/autoports_in") == "on", "autoports_in toggle not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/aliasports_in") == port_alias, (
+            f"aliasports_in not persisted as {port_alias!r}"
+        )
+        assert helpers.config_get(vm, f"{base}/autoaddr_in") == "on", "autoaddr_in toggle not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/aliasaddr_in") == net_alias, (
+            f"aliasaddr_in not persisted as {net_alias!r}"
+        )
+        assert helpers.config_get(vm, f"{base}/autonot_in") == "on", "autonot_in toggle not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/autoproto_out") == "udp", "autoproto_out not persisted as 'udp'"
+        assert helpers.config_get(vm, f"{base}/autoports_out") == "on", "autoports_out toggle not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/aliasports_out") == port_alias, (
+            f"aliasports_out not persisted as {port_alias!r}"
+        )
+        assert helpers.config_get(vm, f"{base}/autoaddr_out") == "on", "autoaddr_out toggle not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/aliasaddr_out") == net_alias, (
+            f"aliasaddr_out not persisted as {net_alias!r}"
+        )
+        assert helpers.config_get(vm, f"{base}/autonot_out") == "on", "autonot_out toggle not persisted as 'on'"
+
+        # RELOAD: GET the edit page for this row and assert the form reflects
+        # the saved state.  The pfSense form framework renders checked checkboxes
+        # as ``<input ... checked>``, alias inputs as ``value="<name>"``, and
+        # selected protocol options as ``<option ... selected>``.
+        reload_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4", "rowid": str(rowid)})
+        assert not looks_like_login_page(reload_resp.text), (
+            "category GET (reload) returned the login form (session lost)"
+        )
+        body = reload_resp.text
+
+        # The custom-alias text inputs must render with the saved alias name in
+        # their OWN value attribute (not merely present somewhere on the page).
+        for field, alias in (
+            ("aliasports_in", port_alias),
+            ("aliasaddr_in", net_alias),
+            ("aliasports_out", port_alias),
+            ("aliasaddr_out", net_alias),
+        ):
+            tag = _input_tag(body, field)
+            assert tag, f"reloaded form has no input named {field!r}"
+            assert f'value="{alias}"' in tag, f"reloaded {field!r} input did not render value={alias!r}: {tag}"
+
+        # Each enabled toggle must render CHECKED on its OWN input (a bare
+        # 'checked in body' would pass on any page with any checked box).
+        for field in ("autoports_in", "autoaddr_in", "autonot_in", "autoports_out", "autoaddr_out", "autonot_out"):
+            tag = _input_tag(body, field)
+            assert tag, f"reloaded form has no input named {field!r}"
+            assert "checked" in tag, f"reloaded {field!r} toggle did not render checked: {tag}"
+
+        # The protocol <select>s must render the saved option as selected.
+        assert _option_selected(body, "tcp"), "reloaded form did not render autoproto_in option 'tcp' as selected"
+        assert _option_selected(body, "udp"), "reloaded form did not render autoproto_out option 'udp' as selected"
+
+    finally:
+        _del_rowid(vm, CFG_IPV4, rowid)
+        _rm_alias(vm, port_alias)
+        _rm_alias(vm, net_alias)
+
+
+def test_ipv4_invert_toggles_persist_with_alias_native(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Invert Source/Destination toggles persist when action=Alias_Native.
+
+    Scenario: saving autoaddrnot_in=on and autoaddrnot_out=on with
+    action=Alias_Native stores the values and the reloaded form reflects them.
+
+    Background:
+        The UI validation (lines 619-628) requires action=Alias_Native when
+        either Invert toggle is set -- any other action results in an
+        ``$input_errors`` abort. Alias_Native has no switch case in
+        ``pfb_firewall_rule()`` and therefore emits no auto-rule; the alias is
+        used directly in user-defined inverted rules. This test confirms the
+        persistence path (save handler lines 745/754) stores the invert flags
+        correctly when the required action is supplied.
+
+    Given:
+        The target IPv4 rowid is free (autoaddrnot_in and autoaddrnot_out read '').
+    When:
+        ``_post_form`` saves action=Alias_Native with autoaddrnot_in=on and
+        autoaddrnot_out=on (the only valid combination per UI validation).
+    Then:
+        - config.xml stores autoaddrnot_in='on', autoaddrnot_out='on',
+          action='Alias_Native'.
+        - The reloaded edit page body reflects the saved invert state.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_IPV4)
+    base = f"{CFG_IPV4}/{rowid}"
+
+    try:
+        # BEFORE: invert flags read '' at the free slot (POST must CAUSE them).
+        assert helpers.config_get(vm, f"{base}/autoaddrnot_in") == "", (
+            f"rowid {rowid} not free: autoaddrnot_in already set"
+        )
+        assert helpers.config_get(vm, f"{base}/autoaddrnot_out") == "", (
+            f"rowid {rowid} not free: autoaddrnot_out already set"
+        )
+
+        # WHEN: save Alias_Native with both Invert toggles on.
+        # Alias_Native is REQUIRED by validation (lines 619-628); any other action
+        # with these flags set would abort the save.
+        _post_form(
+            webui,
+            _ipv4_payload(
+                rowid,
+                "smkinv",
+                action="Alias_Native",
+                autoaddrnot_in="on",
+                autoaddrnot_out="on",
+            ),
+        )
+
+        # THEN (config.xml): flags and action persisted.
+        assert helpers.config_get(vm, f"{base}/autoaddrnot_in") == "on", "autoaddrnot_in not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/autoaddrnot_out") == "on", "autoaddrnot_out not persisted as 'on'"
+        assert helpers.config_get(vm, f"{base}/action") == "Alias_Native", "action not persisted as 'Alias_Native'"
+
+        # RELOAD: GET the edit page and assert the saved Invert state appears.
+        reload_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4", "rowid": str(rowid)})
+        assert not looks_like_login_page(reload_resp.text), (
+            "category GET (reload) returned the login form (session lost)"
+        )
+        body = reload_resp.text
+
+        # Both Invert checkboxes must render CHECKED on their OWN inputs.
+        for field in ("autoaddrnot_in", "autoaddrnot_out"):
+            tag = _input_tag(body, field)
+            assert tag, f"reloaded form has no input named {field!r}"
+            assert "checked" in tag, f"reloaded {field!r} Invert toggle did not render checked: {tag}"
+
+    finally:
+        _del_rowid(vm, CFG_IPV4, rowid)
