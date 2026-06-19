@@ -1,0 +1,73 @@
+================================================================================
+PHASE 7 PROMPT — Generator: route-only catalog from frozen .pkg (no build, no nightly)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.4, §6 Phase 7)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 7 of 10. Teaches the catalog BRAIN to
+serve a route-only (EOL) version from frozen .pkg WITHOUT a fresh build or a nightly subtree, while
+leaving every `build` entry byte-identical (Part 1). Inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+A route-only version is one we no longer build NEW packages for, but whose LAST .pkg must stay
+installable. Its catalog is regenerated each run from that frozen .pkg (a GitHub Release asset — the
+same durable store Part 1 already folds in via --release-extra-pkgs) and served at the NORMAL
+release/<varver>/<arch>/ path, so the Worker needs no change (Phase 8 only pins this).
+
+REQUIRED READING
+- FIRST read RESULTS/06_Results.txt — the `role` semantics + `--print-route` contract. If missing, STOP.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md §2.4 (generator bullet) + §6 Phase 7.
+- scripts/build-repo-portable.py:
+  - build_repo_matrix(...) (~line 661): it iterates `matrix`, and per entry builds a RELEASE subtree
+    release/<varver>/<arch>/ (devel HEAD + stable + Part-1 retained extras via retain_by_channel) AND
+    a NIGHTLY subtree nightly/<varver>/<arch>/ (when build_nightly), then appends a routing entry
+    {pattern, catalog, status} (status = entry.get("status","active")). varver = catalog_name_from_version().
+  - The Part-1 seam: --release-extra-pkgs / release_extra_pkgs + retain_by_channel(...) (the frozen-.pkg
+    fold-in) and _write_catalog_dir (one NDJSON object per (name,version) — no compile needed to index a .pkg).
+- tests/test_build_repo_portable.py — make_pkg()/synthetic .pkg fixtures; test_build_matrix_* cases
+  (test_build_matrix_release_holds_devel_and_stable, test_build_matrix_routing_json,
+  test_build_matrix_routing_status_passthrough). Mirror their structure.
+
+ACTION PLAN (BDD; assert build-entry parity BEFORE asserting route-only behaviour)
+1. build_repo_matrix: branch on `entry.get("role","build")`:
+   - `build` → unchanged (Part 1 path: fresh build + retained release + nightly + routing entry).
+   - `route-only` → DO NOT invoke the builder for a fresh devel-HEAD .pkg and DO NOT create the
+     nightly subtree; build release/<varver>/<arch>/ ONLY from that varver's provided frozen .pkg
+     (the route-only input — extend the existing release-extra-pkgs plumbing so frozen .pkg can be
+     supplied per varver), then append its routing entry so the Worker routes it.
+   - Decide + document the input contract for the frozen .pkg (e.g. a `route_only_pkgs` mapping
+     varver -> [Path], or reuse release_extra_pkgs keyed by ABI/varver). Keep it deterministic.
+   - If a route-only entry has NO frozen .pkg provided, FAIL LOUD (BuildRepoError) — never emit an
+     empty/again-built catalog for it.
+2. Off-box tests (tests/test_build_repo_portable.py), CE + Plus:
+   - GIVEN a synthetic matrix = one `build` CE entry + one `route-only` CE entry + one `route-only`
+     Plus entry, with frozen .pkg supplied for the route-only ones:
+     - THEN the route-only release/<varver>/<arch>/ catalog lists exactly the frozen .pkg version(s);
+     - THEN NO nightly/<varver>/ dir exists for the route-only entries;
+     - THEN routing entries exist for ALL three (so none is 404'd);
+     - AND (parity) the `build` entry's release + nightly subtrees are byte-identical to a matrix with
+       the route-only entries removed (before/after — proves route-only is additive, not a regression).
+   - A route-only entry with no frozen .pkg raises BuildRepoError.
+
+CONSTRAINTS
+- Python 3.11+, stdlib + existing zstd; deterministic, mtime-pinned (ADR-17). Type-hint new funcs.
+- Releases only — a route-only entry NEVER produces a nightly subtree.
+- Do not regress Part 1: `build` entries and the cross-generator drift pins stay intact.
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff check . / ruff format --check / mypy tests/  → green/clean.
+- Diff-read build_repo_matrix: the `build` path is untouched; the route-only path is a clean branch.
+
+EXPECTED RESULT
+build_repo_matrix serves a route-only version's release catalog from frozen .pkg, no nightly, routed;
+build entries unchanged.
+
+COMMIT (single)
+    dev: serve route-only (EOL) versions from frozen .pkg, no rebuild (ADR-27 P7)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/07_Results.txt
+State: the exact frozen-.pkg input contract (how publish supplies it per varver); the route-only
+branch in build_repo_matrix; the no-nightly + routing-entry guarantees; the test names + the CE/Plus
+parity assertions. Go-ahead for Phase 8.

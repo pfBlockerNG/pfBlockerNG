@@ -1,0 +1,73 @@
+================================================================================
+PHASE 6 PROMPT — Matrix `role` seam (reader + schema)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §1.3, §2.4, §6 Phase 6)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 6 of 10 — first Part-2 phase.
+BEHAVIOUR-PRESERVING: production matrices have no `route-only` entries yet, so every existing
+output must be byte-identical. Inline, one commit, push directly (PR opens at the end of Part 2).
+
+WHY THIS PHASE EXISTS
+Part 2 (EOL route-only distribution) hangs off ONE seam: a per-entry `role` that keeps an EOL
+pfSense version OUT of the build/CI/smoke fan-out while keeping it routable + served. This phase
+adds that seam to the matrix reader; later phases consume it (generator P7, worker P8, landing P9,
+smoke P10).
+
+REQUIRED READING
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md §2.4 (the `role` contract) + §6 Phase 6.
+- scripts/read-version-matrix.sh — the `--print-build` (ALL `.versions[]`), `--print-ci`
+  (`.ci == true`), `--print-test`, `--print-all` modes; how it git-fetches `origin/ci-metadata`
+  and reads `supported-versions.json` `.versions[]`. Note the exact jq that emits each mode.
+- scripts/README.md — the `supported-versions.json` field docs (pfsense_version / freebsd_major /
+  arch / php_version / py_flavor / variant / status / ci); where to document `role`.
+- tests/test_smoke_matrix.py + tests/smoke/_matrix.py — does the smoke topology consume the matrix
+  (SMOKE_MATRIX_JSON via `--print-build`)? If so, a `route-only` entry must never appear there.
+- CLAUDE.md "Updating documentation" (the `ci-metadata` orphan-branch rule) + Shell standards
+  (POSIX sh, quoted expansions; `jq` is an allowed add-on binary).
+
+ACTION PLAN
+1. scripts/read-version-matrix.sh:
+   - Add a `--print-route` mode: emit every entry with a live catalog = role `build` OR
+     `route-only` (i.e. all entries whose `role` is absent/`build`/`route-only` — everything still
+     in the file; a truly dropped version is simply absent).
+   - Make `--print-build`, `--print-ci`, `--print-test` EXCLUDE `role == "route-only"`. Treat an
+     ABSENT `role` as `build` (back-compat): `(.role // "build")`. So with no `route-only` entries,
+     all three modes are byte-identical to today.
+   - Keep the existing `--variant` filter + arch defaulting behaviour intact.
+2. scripts/README.md: document the optional `role` field (default `build`; `route-only` = served +
+   routed but not built/smoked) and the `--print-route` mode. Note the matching `supported-versions.json`
+   schema/example update is applied on the `ci-metadata` orphan branch (referenced, not in this diff).
+3. Tests: extend the matrix-reader coverage (an off-box harness test, or tests/test_smoke_matrix.py
+   if that is where matrix parsing is unit-tested). Pin, with a synthetic matrix that includes ONE
+   `route-only` entry plus `build`/absent-role entries:
+   - `--print-route` contains the route-only entry; `--print-build`/`--print-ci`/`--print-test` do NOT.
+   - an entry with NO `role` is treated as `build` (present in build).
+   - BEFORE/AFTER: with zero route-only entries, build output equals the pre-change output (no regression).
+   If tests/smoke/_matrix.py reads the matrix, add a case proving a route-only entry is ignored by the
+   smoke topology.
+
+CONSTRAINTS
+- POSIX /bin/sh; quote all expansions; `jq` filters only (no bashisms). Deterministic output order.
+- Back-compat is mandatory: absent `role` ⇒ `build`; no behaviour change with today's matrices.
+- This repo's diff = reader script + docs + tests. The `ci-metadata` JSON schema edit is referenced.
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff check . / ruff format --check / mypy tests/  → green/clean.
+- shellcheck + `sh -n` on read-version-matrix.sh; run it locally against a synthetic
+  supported-versions.json (build + route-only) and eyeball each --print-* mode.
+- npx markdownlint-cli2 on the touched Markdown.
+
+EXPECTED RESULT
+`role` is a first-class matrix concept: route-only entries are served+routable but never built or
+smoked; absent role == build; today's outputs unchanged.
+
+COMMIT (single)
+    dev: add a route-only role to the version-matrix reader (ADR-27 P6)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/06_Results.txt
+State: the exact `--print-route` semantics + the jq used to exclude route-only from build/ci/test;
+how absent-role maps to build; the verbatim `ci-metadata` supported-versions.json schema/example edit
+to apply on that orphan branch; the test names added. Go-ahead for Phase 7.
