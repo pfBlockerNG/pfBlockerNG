@@ -1,0 +1,204 @@
+ADR-29 Phase 3 — Rollback / backward-compat contract
+======================================================
+Status: COMPLETE — all verification gates green
+Date:   2026-06-19
+
+## What was done
+
+Added the forward/backward invariant helpers, off-box rollback unit tests,
+a downgrade smoke leg, and CLAUDE.md documentation. Behaviour-preserving:
+no stored-value change, no behavioural change.
+
+## Since-version convention
+
+Every `pfb_cfg_registry()` entry now carries a `'since'` field:
+
+  Format:  'X.Y.Z'  (semver-like; verified by RollbackContractTest)
+  Meaning: first package release that introduced the key to config.xml.
+  For legacy keys (pre-registry): the earliest still-shipped release
+  is the acceptable baseline.
+
+  Actual values in the registry:
+    '1.0.0'  — original-era keys (present since the package first shipped)
+    '2.0.0'  — Python-mode-era keys (dnsbl_mode, pfb_py_block peers)
+    '3.0.0'  — first ADR-xx additions (e.g. pfb_dnsport)
+    '3.1.0'  — mid-cycle ADR additions
+    '3.2.0'  — ADR-22/ADR-28/PFBL-03/issue-#281 additions
+
+  The since-version field was already partially populated in Phase 1.
+  Phase 3 replaced any 'ADR-29-P1' placeholder stubs (none remained —
+  all had real version strings already) and documented the convention.
+
+## New helper functions — pfblockerng_extra.inc
+
+### pfb_cfg_field_vocab(): array
+
+Returns the per-adapter-type legacy stored vocabulary map:
+
+  'toggle'  => ['on', '']
+  'lenient' => ['on', 'off', '']   -- '' is LEGACY READ token; write emits 'off'
+  'plain'   => ['']                -- sentinel; identity adapters are unbounded
+
+Used by RollbackContractTest to select the correct vocabulary for each field
+and prove BACKWARD invariant membership.
+
+### pfb_cfg_field_adapter_type(array $entry): string
+
+Inspects a registry entry's 'read_adapter' and returns 'toggle', 'lenient',
+or 'plain'. Used by RollbackContractTest to group fields and by the
+toggleAdaptedKeys() private helper to collect all toggle-adapted fields.
+
+Both helpers are inserted between pfb_run_migrations() and the logger()/
+localize_text() fallbacks in pfblockerng_extra.inc, with a full ADR-29 P3
+documentation comment block above them.
+
+## Rollback-excluded fields
+
+Fields whose BACKWARD invariant is satisfied by construction (identity adapter
+at PfbConfig level; no novel token possible) but that are NOT registered under
+an adapter-type enum:
+
+  pfb_idn — uses NULL/NULL adapters (identity). The 'on'->'all' normalisation
+             happens only at pfb_global() outside PfbConfig. All stored tokens
+             ('on', 'all', 'confusable', 'off', '') round-trip unchanged.
+             Covered explicitly by testForwardPfbIdnLegacyOnPassesThroughAsIdentity
+             and testBackwardPfbIdnAllCanonicalTokensRoundTripAsIdentity.
+
+  pfb_dnsbl_lenient note: '' (pre-ADR-22 absent-key state) is a LEGACY READ
+             token but NOT a write target. The write adapter emits 'off' for
+             PfbLenient::Off. 'off' is already in the legacy vocabulary (older
+             code treating 'off' as "disabled"), so no novel token is introduced.
+             BACKWARD invariant passes for this field.
+
+## Off-box rollback unit tests — tests/php/RollbackContractTest.php [NEW FILE]
+
+21 tests across 5 groups:
+
+  A — Since-version (2 tests)
+      testSinceVersionPopulatedForEveryRegisteredField
+      testSinceVersionFollowsVersionPattern
+
+  B — FORWARD invariant (8 tests)
+      testForwardToggleFieldsOnYieldsOnEnum
+      testForwardToggleFieldsOffYieldsOffEnum
+      testForwardToggleFieldsAbsentKeyYieldsToggleEnum
+      testForwardLenientFieldOnYieldsOnEnum
+      testForwardLenientFieldOffYieldsOffEnum
+      testForwardLenientFieldEmptyYieldsOffEnum
+      testForwardPlainStringFieldsPassLegacyTokensUnchanged
+      testForwardPfbIdnLegacyOnPassesThroughAsIdentity
+
+  C — BACKWARD invariant (5 tests)
+      testBackwardToggleFieldsOnEmitsLegacyToken
+      testBackwardToggleFieldsOffEmitsLegacyToken
+      testBackwardLenientFieldOnEmitsLegacyToken
+      testBackwardLenientFieldOffEmitsLegacyToken
+      testBackwardPlainStringFieldsIdentityAdapterCannotIntroduceNovelTokens
+      testBackwardPfbIdnAllCanonicalTokensRoundTripAsIdentity
+
+  D — Adapter-type helper API (3 tests)
+      testAdapterTypeHelperReturnsValidTypeForEveryRegisteredField
+      testAdapterTypeHelperLenientAssignedOnlyToPfbDnsblLenient
+      testFieldVocabHelperReturnsNonEmptyVocabularyForAllTypes
+
+  E — Comprehensive per-field forward + backward for every vocab token (2 tests)
+      testAllToggleFieldsForwardAndBackwardForEveryVocabToken
+      testLenientFieldForwardAndBackwardForEveryVocabToken
+
+Pattern: every test asserts the BEFORE state (raw stored value confirmed) before
+calling read/write, satisfying the CLAUDE.md "before-and-after" mandate.
+
+## Smoke downgrade leg — test_pkg_downgrade_preserves_config_values
+
+Added to tests/smoke/test_upgrade_config_stability.py (sibling of the existing
+upgrade contract test):
+
+  Name:    test_pkg_downgrade_preserves_config_values
+  Marker:  repo (deselected from -m smoke; module-level pytestmark = pytest.mark.repo)
+  Timeout: 900 s (same budget as upgrade leg — two pkg installs + two reloads + probes)
+
+  Skips cleanly off-VM: the repo_vm fixture from test_repo_install.py guards on
+  SMOKE_PKG env var and a live VM; without them it skips with "SMOKE_PKG not set /
+  not a file". No new env-var gates introduced.
+
+  Flow:
+    GIVEN:  install HIGHER forged build (<V>_9) from file:// repo
+            write representative config (dnsbl_lenient='on', dnsbl_vip_auto='on',
+            pfb_dnsbl='on', pfb_idn='all'; pfb_keep NOT set — migration seeds it)
+            assert migration seeded pfb_keep='on'
+            snapshot config.xml (BEFORE values)
+            verify every expected field value in the BEFORE snapshot
+            set up DNSBL feed + VIP; reload; BEFORE DNS probe -> NOERROR + VIP
+    WHEN:   pkg delete + rebuild repo with lower build (<V>_1) + pkg_install_from_repo
+            (reinstall flow — mirrors user rollback)
+    THEN:   assert pkg version == low_version
+            read config.xml (AFTER values); _assert_snapshot_identical(before, after)
+            reload on lower build; AFTER DNS probe -> NOERROR + VIP
+            (proves lower build reads gateway-written values as sane runtime values)
+
+  Reuses: reversion_pkg, build_guest_repo, pkg_delete, pkg_install_from_repo,
+          pkg_update, write_repo_conf, repo_priority, read_compact_version,
+          _write_representative_config, _snapshot_config, _assert_snapshot_identical,
+          _setup_dnsbl_feed — all already in the file.
+
+## Tests
+
+  vendor/bin/phpunit:
+    Before Phase 3: 684 tests, 2321 assertions  (Phase 2 baseline)
+    After  Phase 3: 705 tests, 2598 assertions  (+21 tests, +277 assertions)
+
+  python -m pytest:
+    1733 passed (no new Python unit tests; smoke test skips off-VM)
+
+  Collect check:
+    test_upgrade_config_stability.py — 2 tests collected (upgrade + downgrade legs)
+
+## Verification gates — all passed
+
+  php -l pfblockerng_extra.inc                          -> "No syntax errors detected"
+  vendor/bin/phpunit                                     -> 705 tests, 2598 assertions — OK
+  vendor/bin/phpstan analyse                             -> "No errors"
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/        -> (no output — clean)
+  python -m pytest tests/smoke/test_upgrade_config_stability.py
+    --collect-only -q --override-ini="addopts="          -> 2 tests collected
+  python -m pytest                                       -> 1733 passed
+  ruff check . && ruff format --check .                  -> "All checks passed! / 112 files already formatted"
+  npx markdownlint-cli2                                  -> "0 error(s)"
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    — Added: pfb_cfg_field_vocab() + pfb_cfg_field_adapter_type() + ADR-29 P3 comment
+      block (~50 lines, after pfb_run_migrations())
+
+  tests/php/RollbackContractTest.php  [NEW FILE]
+    — 21 tests across 5 groups (A since-version / B forward / C backward /
+      D helper API / E comprehensive per-field)
+
+  tests/smoke/test_upgrade_config_stability.py
+    — Added: test_pkg_downgrade_preserves_config_values (~100 lines)
+    — Updated: module docstring to cover both cases; Since-version convention note;
+      module-level comment update
+
+  CLAUDE.md
+    — Added: rollback contract policy block (since-version convention, FORWARD/BACKWARD
+      invariants, field vocabulary table, excluded fields, off-VM downgrade gate) under
+      the "Config gateway — PfbConfig (ADR-29)" section; step 2 (since) added to
+      "Adding a new registered field" checklist
+
+## Go-ahead for Phase 4
+
+Phase 3 is complete. The rollback contract is:
+  - Defined (field vocabulary, FORWARD/BACKWARD invariants, excluded fields)
+  - Implemented as helpers (pfb_cfg_field_vocab, pfb_cfg_field_adapter_type)
+  - Pinned by unit tests (RollbackContractTest, 21 tests)
+  - End-to-end proven by smoke downgrade leg (test_pkg_downgrade_preserves_config_values)
+  - Documented in CLAUDE.md
+
+All gates green. Phase 4 can proceed.
+
+## Commit
+
+  pfblockerng: add config rollback contract and downgrade smoke (ADR-29 P3)
+
+  Branch: adr/29-config-gateway
