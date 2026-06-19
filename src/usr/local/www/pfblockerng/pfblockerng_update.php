@@ -451,7 +451,7 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run
 	} elseif ($pconfig['pfb_force'] == 'cron') {
 		pfb_cron_update('cron');
 	} elseif ($pconfig['pfb_force'] == 'reload') {
-		config_set_path('installedpackages/pfblockerng/config/0/pfb_reuse', 'on');
+		PfbConfig::write('pfb_reuse', 'on');
 		write_config('pfBlockerNG: Running Force Reload');
 		pfb_cron_update('reload');
 	}

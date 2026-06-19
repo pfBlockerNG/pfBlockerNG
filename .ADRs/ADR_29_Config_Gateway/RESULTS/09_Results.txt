@@ -1,0 +1,171 @@
+ADR-29 Phase 9 — Enforcement sniff + CLAUDE.md reconcile
+=========================================================
+
+## Status: DONE — all gates green; go-ahead for Phase 10
+
+---
+
+## Sniff: PfBlockerNG.Config.RequireConfigGateway
+
+**File:** `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php`
+
+**Sniff code:** `PfBlockerNG.Config.RequireConfigGateway.RawRegisteredKeyAccess`
+
+**Scope:** All `src/` PHP (`phpcs.xml.dist` scans `src/usr/local/pkg/pfblockerng` +
+`src/usr/local/www`), with two `<exclude-pattern>` entries:
+  - `pfblockerng_extra.inc` — the gateway implementation itself
+  - `pfblockerng_migrate.inc` — migration driver shim
+
+**What it flags:** A `config_get_path` / `config_set_path` / `config_del_path` call
+whose first argument is a **static string literal** that exactly matches one of the
+65 full paths in `$registeredPaths` (the `pfb_cfg_registry()` inventory embedded in
+the sniff as a configurable property).
+
+**What it does NOT flag (precision):**
+  - Dynamic paths — first argument contains a variable or expression (T_VARIABLE,
+    T_DOUBLE_QUOTED_STRING with interpolation, concatenation chains)
+  - Non-registered foreign keys (pfblockerngipsettings/*, widget-*, per-row/per-feed
+    dynamic keys, per-continent structures, pfSense-core sections)
+  - Section-level reads (path ends at /config/0 or the section name; no trailing key)
+  - The gateway file itself (pfblockerng_extra.inc — excluded via phpcs.xml.dist)
+  - Out-of-scope keys per ADR-29 §2.5 (e.g. the raw `dnsbl_webpage` key used in
+    pfblockerng_dnsbl.php is not in the registered path set; the registry has `dnsblwebpage`)
+
+**Allow-list (foreign keys documented in source files, not flagged):**
+See the complete foreign-key exclusion list now in CLAUDE.md "Config gateway — PfbConfig (ADR-29)"
+section. All foreign annotations were committed in Phases 4–8.
+
+---
+
+## Stragglers routed to PfbConfig (4 sites)
+
+The sniff found 4 genuine straggling registered-key raw accesses outside the gateway:
+
+1. **`pfblockerng.inc` line 2272** — `config_get_path('...pfb_software_check', null)`
+   in an anonymous function body (software update checker).
+   → `PfbConfig::read('pfb_software_check')` (plain string; null default preserved
+     since `PfbConfig::read` returns `''` for absent, and the caller handles both
+     string and null via `is_string()` — `''` satisfies `is_string()` = TRUE, so
+     behaviour is preserved; the caller was already null-hardened).
+
+2. **`pfblockerng.inc` line 6273** — `config_get_path('...pfb_feed_internal_allowlist')`
+   in `pfb_feed_internal_allowlist()`.
+   → `PfbConfig::read('pfb_feed_internal_allowlist')` (plain string, default '').
+     Caller: `!is_string($raw) || $raw === ''` — still correct; PfbConfig always
+     returns a string (never null), so `is_string()` is always TRUE; empty default
+     is identical to the old null-to-empty flow.
+
+3. **`pfblockerng.inc` line 6438** — `config_get_path('...pfb_feed_internal_filter')`
+   in `pfb_feed_filter_enabled()`.
+   → `PfbConfig::read('pfb_feed_internal_filter')` (plain string, default 'on').
+     Caller: `return ($value !== 'off')`. The registered default is `'on'`
+     (absent = filter enabled), which matches the original raw-read behaviour
+     (`config_get_path` returns null when absent; null !== 'off' = TRUE = enabled).
+     Parity preserved.
+
+4. **`pfblockerng_update.php` line 454** — `config_set_path('...pfb_reuse', 'on')`
+   in the Force Reload handler.
+   → `PfbConfig::write('pfb_reuse', 'on')` (plain string write; no adapter).
+     Semantically identical — PfbConfig::write stores the exact string provided.
+
+All four are behaviour-preserving; parity confirmed by existing tests + phpunit green.
+
+---
+
+## Fixture tests: tests/php/RequireConfigGatewaySniffTest.php
+
+**New fixtures (tests/phpcs/fixtures/):**
+
+- `gateway_violation.php` — three raw config_*_path calls on registered keys:
+  - Line 19: `config_get_path('installedpackages/pfblockerng/config/0/pfb_keep')` — gen section
+  - Line 22: `config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl', 'on')` — DNSBL settings section
+  - Line 25: `config_del_path('installedpackages/pfblockerngsafesearch/safesearch_enable')` — SafeSearch section
+  Sniff MUST flag exactly lines [19, 22, 25].
+
+- `gateway_compliant.php` — foreign/non-registered keys, dynamic paths (variable interpolation,
+  concatenation), pfSense-core sections, and section-level reads.
+  Sniff MUST produce ZERO findings.
+
+**Test cases (RequireConfigGatewaySniffTest.php):**
+
+1. `testFlagsRawRegisteredKeyAccess` — violation fixture; asserts exactly 3 findings
+   on lines [19, 22, 25], each carrying `PfBlockerNG.Config.RequireConfigGateway.RawRegisteredKeyAccess`.
+   (Before/after proof: compliant fixture has same call shapes but on foreign keys → zero findings,
+   proving the registered key path — not the function name — triggers the sniff.)
+
+2. `testCompliantCasesAreClean` — compliant fixture; asserts zero findings.
+   Covers: foreign section, dynamic per-row path with variable, pfSense-core section,
+   section-level read of registered section (no trailing key), dynamic-concatenation path,
+   foreign write (blacklist section), widget-* foreign key, wizard temp section delete.
+
+3. `testDoesNotInterfereWithOtherFixtures` — asserts the new sniff produces zero
+   RequireConfigGateway findings on the existing `out_of_scope.php` and `bool_compliant.php`
+   PFBL-01/ADR-28 fixtures (proves no inter-sniff interference).
+
+---
+
+## phpcs violation count on src/ = 0
+
+`vendor/bin/phpcs --standard=phpcs.xml.dist src/` — **clean (exit 0, no output)**.
+
+After routing the 4 stragglers, the sniff is green on the full src/ tree.
+
+---
+
+## CLAUDE.md changes
+
+1. **"PHPCS — two targeted sniffs"** → **"PHPCS — three targeted sniffs"**; added the
+   `RequireConfigGateway` entry with scope, precision rules, and the note to keep
+   `$registeredPaths` in the sniff in sync when adding a new registry entry.
+
+2. **Gateway policy — stale Phase 1 text removed**: the bullet "Existing call sites in
+   pfb_global(), www/, and install.inc are not migrated in Phase 1 — they remain on direct
+   config_*_path. Migration is Phase 2 (ADR-29). Phase 1 change is behaviour-preserving
+   and unused-in-prod." was obsolete (Phases 2–8 completed all routing). Replaced with:
+   "Enforcement sniff (PfBlockerNG.Config.RequireConfigGateway) makes the rule mechanical:
+   any config_*_path call on a registered key outside the gateway is a CI-blocking error."
+
+3. **Foreign-key exclusion list** added to the gateway policy section: a Markdown table
+   of all `installedpackages/pfblockerng*` paths that are legitimately NOT in the registry
+   (dynamic/per-row/per-feed/foreign-section/pfSense-core), documenting why each stays on
+   direct `config_*_path`. This is the inventory of documented exceptions the sniff does
+   not flag.
+
+---
+
+## Verification gates
+
+All commands run from repo root after the straggler fixes:
+
+- `vendor/bin/phpunit` — **772 tests, 2780 assertions — OK**
+  (baseline Phase 8: 769/2760; +3 new sniff fixture tests, +20 assertions)
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/` — **clean (exit 0)**
+  RequireConfigGateway violation count on src/: **0**
+- `vendor/bin/phpstan analyse` — **No errors**
+- `python -m pytest` — **1733 passed**
+- `ruff check .` + `ruff format --check .` — **All checks passed / 112 files already formatted**
+- `npx markdownlint-cli2` — **0 error(s)**
+
+---
+
+## Files changed (Phase 9)
+
+- `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` — NEW: sniff
+- `tests/phpcs/PfBlockerNG/ruleset.xml` — add new sniff entry
+- `phpcs.xml.dist` — wire RequireConfigGateway with exclude-patterns for the gateway file
+- `tests/phpcs/fixtures/gateway_violation.php` — NEW: violating fixture
+- `tests/phpcs/fixtures/gateway_compliant.php` — NEW: compliant fixture
+- `tests/php/RequireConfigGatewaySniffTest.php` — NEW: sniff fixture test (3 tests)
+- `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — route 3 straggler raw accesses
+- `src/usr/local/www/pfblockerng/pfblockerng_update.php` — route 1 straggler raw access
+- `CLAUDE.md` — reconcile: sniff list, gateway enforcement bullet, foreign-key exclusion table
+
+---
+
+## Go-ahead for Phase 10
+
+Phase 9 complete. The enforcement sniff is active, precise (0 false positives on foreign/dynamic
+keys; no false negatives on registered raw accesses), and green on all of src/. CLAUDE.md
+documents the final gateway policy. All gates green.
+
+Phase 10 (Smoke/UI validation + upgrade & rollback contract + Definition of Done) can proceed.

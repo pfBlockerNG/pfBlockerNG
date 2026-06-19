@@ -16,4 +16,9 @@
          The directory layout PfBlockerNG/Sniffs/CodeStyle/ encodes the
          sniff code PfBlockerNG.CodeStyle.UppercaseBooleanLiteral. -->
     <rule ref="./Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php"/>
+
+    <!-- ADR-29: enforce the config-gateway access rule.
+         The directory layout PfBlockerNG/Sniffs/Config/ encodes the
+         sniff code PfBlockerNG.Config.RequireConfigGateway. -->
+    <rule ref="./Sniffs/Config/RequireConfigGatewaySniff.php"/>
 </ruleset>
