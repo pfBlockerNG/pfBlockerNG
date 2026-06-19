@@ -373,8 +373,8 @@ final class UnboundPyControlWriteTest extends TestCase
 		// Given: no lock file yet.
 		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_control.lock");
 
-		// When: a write succeeds.
-		pfb_unbound_py_write_control('enable');
+		// When: a write succeeds (assert the seq so a FALSE return can't pass this test).
+		$this->assertSame(1, pfb_unbound_py_write_control('enable'));
 
 		// Then: the lock file was created.
 		$this->assertFileExists("{$this->tmp}/pfb_py_control.lock");
