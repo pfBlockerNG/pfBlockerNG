@@ -64,10 +64,10 @@ The three packages are mutually exclusive — install **one**. Choose **stable**
 you specifically want to track development builds.
 
 Releases follow semantic versioning. Development releases are pre-release tags cut
-from `devel` — `X.Y.Z.aN` (alpha), `X.Y.Z.bN` (beta), `X.Y.Z.rcN` (release
-candidate) — and stable releases are plain `X.Y.Z`, cut from `main`. They order
-naturally for `pkg` (`4.0.0.a1` < `4.0.0.b1` < `4.0.0.rc1` < `4.0.0`). Nightly builds
-are not published as GitHub releases.
+from `devel` — `vX.Y.Z.aN` (alpha), `vX.Y.Z.bN` (beta), `vX.Y.Z.rcN` (release
+candidate) — and stable releases are plain `vX.Y.Z`, cut from `main`. The
+corresponding package versions order naturally for `pkg` (`4.0.0.a1` < `4.0.0.b1`
+< `4.0.0.rc1` < `4.0.0`). Nightly builds are not published as GitHub releases.
 
 In the self-hosted repository the **stable** and **development** packages are served
 from a single repo (`pfblockerng`) — exactly as Netgate ships `pfSense-pkg-pfBlockerNG`
