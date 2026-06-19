@@ -1093,10 +1093,10 @@ function pfb_migration_registry(): array
 function pfb_run_migrations(): void
 {
 	foreach (pfb_migration_registry() as $migration) {
-		$cfg    = config_get_path($migration['section'], []);
+		$cfg    = PfbConfig::readSection($migration['section']);
 		$result = ($migration['apply'])($cfg);
 		if ($result !== NULL) {
-			config_set_path($migration['section'], $result);
+			PfbConfig::writeSection($migration['section'], $result);
 			write_config($migration['message']);
 		}
 	}

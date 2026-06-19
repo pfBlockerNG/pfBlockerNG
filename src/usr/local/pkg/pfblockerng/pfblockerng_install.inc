@@ -31,7 +31,7 @@ pfb_global();
 $g['pfblockerng_install'] = TRUE;
 
 // Migrate old VIP configuration.
-$pfb_dnsbl_config = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+$pfb_dnsbl_config = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 if (
 	isset($pfb_dnsbl_config['pfb_dnsvip']) ||
 	isset($pfb_dnsbl_config['pfb_dnsblv6']) ||
@@ -43,7 +43,7 @@ if (
 ) {
 	// Update existing VIPs.
 	$vips_found = FALSE;
-	$vips_config = config_get_path('virtualip/vip', []);
+	$vips_config = config_get_path('virtualip/vip', []); // foreign key — out of ADR-29 gateway scope
 	foreach ($vips_config as &$vip) {
 		if (!str_starts_with($vip['descr'], 'pfB DNSBL')) {
 			continue;
@@ -64,7 +64,7 @@ if (
 	}
 	unset($vip);
 	if ($vips_found) {
-		config_set_path('virtualip/vip', $vips_config);
+		config_set_path('virtualip/vip', $vips_config); // foreign key — out of ADR-29 gateway scope
 	} elseif (is_ipaddrv4($pfb_dnsbl_config['pfb_dnsvip'])) {
 		// DNSBL is enabled but a VIP isn't configured.
 		file_notice('pfBlockerNG', gettext('The DNSBL VIP needs to be configured manually'), 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
@@ -99,9 +99,9 @@ if (
 		$pfb_dnsbl_config['pfb_dnsvip_pass']
 	);
 	// Reset saved wizard configuration.
-	config_del_path('pfblockerng_wizard');
+	config_del_path('pfblockerng_wizard'); // foreign key — out of ADR-29 gateway scope (root-level, not installedpackages/pfblockerng*)
 
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
+	PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
 	write_config('Migrated old pfBlockerNG VIP configuraiton');
 	pfb_global();
 }
@@ -130,13 +130,13 @@ if (!file_exists('/usr/local/www/pfblockerng/pfblockerng_reputation.php') || emp
 	update_status(" done.");
 }
 
-$widgets = config_get_path('widgets/sequence');
+$widgets = config_get_path('widgets/sequence'); // foreign key — out of ADR-29 gateway scope
 if (strpos($widgets, 'pfblockerng') === FALSE) {
 	update_status("\nAdding pfBlockerNG Widget to the Dashboard...");
 	if (empty($widgets)) {
-		config_set_path('widgets/sequence', 'pfblockerng:col2:open:0');
+		config_set_path('widgets/sequence', 'pfblockerng:col2:open:0'); // foreign key — out of ADR-29 gateway scope
 	} else {
-		config_set_path('widgets/sequence', $widgets . ',pfblockerng:col2:open:0');
+		config_set_path('widgets/sequence', $widgets . ',pfblockerng:col2:open:0'); // foreign key — out of ADR-29 gateway scope
 	}
 	update_status(" done.");
 	write_config('Added pfBlockerNG widget to the dashboard');
@@ -191,7 +191,7 @@ if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl
 
 // Replace 'default' DNSBL active blocked webpage
 if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
-    config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsblwebpage', '') == 'dnsbl_default.php') {
+    PfbConfig::read('dnsblwebpage') == 'dnsbl_default.php') {
     @copy('/usr/local/www/pfblockerng/www/dnsbl_default.php', '/usr/local/www/pfblockerng/www/dnsbl_active.php');
 }
 
@@ -222,14 +222,14 @@ foreach (glob("{$pfb_pkgdir}/{ip,dnsbl}_{pre,post}_*.{sh,py}", GLOB_BRACE) ?: []
 update_status(($pfb_moved > 0 ? " moved {$pfb_moved} ... done.\n" : " none ... done.\n"));
 
 // Remove discontinued pfBlockerNG CRON job
-foreach (config_get_path('cron/item', []) as $key => $item) {
+foreach (config_get_path('cron/item', []) as $key => $item) { // foreign key — out of ADR-29 gateway scope
 	if (strpos($item['command'], 'pfblockerng.php dc >>') !== FALSE) {
-		config_del_path("cron/item/{$key}");
+		config_del_path("cron/item/{$key}"); // foreign key — out of ADR-29 gateway scope
 	}
 }
 
 // Remove incorrect xml setting
-config_del_path('installedpackages/pfblockerngantartica');
+PfbConfig::deleteSection('installedpackages/pfblockerngantartica');
 
 // Upgrade Adv. Inbound settings to new variable names.
 update_status(" Adv. Inbound firewall rule settings...");
@@ -240,44 +240,50 @@ $upgrade_type = array('pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdn
 		    'pfblockerngtopspammers', 'pfblockerngproxyandsatellite');
 
 foreach ($upgrade_type as $type) {
-	if (is_array(config_get_path("installedpackages/{$type}/config"))) {
+	$pfb_type_config = PfbConfig::readSection("installedpackages/{$type}/config");
+	if (is_array($pfb_type_config)) {
+		$pfb_type_items = $pfb_type_config;
+
 		// Remove any empty '<config></config>' XML tags
-		if (empty(config_get_path("installedpackages/{$type}/config/0"))) {
-			config_del_path("installedpackages/{$type}/config/0");
+		if (empty($pfb_type_items[0])) {
+			unset($pfb_type_items[0]);
+			PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
 			$ufound = TRUE;
 		}
 
-		foreach (config_get_path("installedpackages/{$type}/config", []) as $key => $utype) {
+		$pfb_type_items = PfbConfig::readSection("installedpackages/{$type}/config");
+		foreach ($pfb_type_items as $key => $utype) {
 			if (isset($utype['autoports'])) {
 				$ufound = TRUE;
 				if ($utype['autoports'] == 'on' && !empty($utype['aliasports']) && !isset($conf_config[$key]['autoports_in'])) {
-					config_set_path("installedpackages/{$type}/config/{$key}/autoports_in", 'on');
-					config_set_path("installedpackages/{$type}/config/{$key}/aliasports_in", $utype['aliasports']);
+					$pfb_type_items[$key]['autoports_in']  = 'on';
+					$pfb_type_items[$key]['aliasports_in'] = $utype['aliasports'];
 				}
-				config_del_path("installedpackages/{$type}/config/{$key}/autoports");;
-				config_del_path("installedpackages/{$type}/config/{$key}/aliasports");;
+				unset($pfb_type_items[$key]['autoports'], $pfb_type_items[$key]['aliasports']);
 			}
 			if (isset($utype['autodest'])) {
 				$ufound = TRUE;
 				if ($utype['autodest'] == 'on' && !empty($utype['aliasdest']) && !isset($conf_config[$key]['autoaddr_in'])) {
-					config_set_path("installedpackages/{$type}/config/{$key}/autoaddr_in", 'on');
-					config_set_path("installedpackages/{$type}/config/{$key}/aliasaddr_in", $utype['aliasdest']);
+					$pfb_type_items[$key]['autoaddr_in']  = 'on';
+					$pfb_type_items[$key]['aliasaddr_in'] = $utype['aliasdest'];
 				}
-				config_del_path("installedpackages/{$type}/config/{$key}/autodest");;
-				config_del_path("installedpackages/{$type}/config/{$key}/aliasdest");;
+				unset($pfb_type_items[$key]['autodest'], $pfb_type_items[$key]['aliasdest']);
 			}
 			if (isset($utype['autonot'])) {
 				$ufound = TRUE;
 				if ($utype['autonot'] == 'on' && !isset($conf_config[$key]['autonot_in'])) {
-					config_set_path("installedpackages/{$type}/config/{$key}/autonot_in", $utype['autonot']);
+					$pfb_type_items[$key]['autonot_in'] = $utype['autonot'];
 				}
-				config_del_path("installedpackages/{$type}/config/{$key}/autonot");;
+				unset($pfb_type_items[$key]['autonot']);
 			}
 			if (isset($utype['autoproto'])) {
 				$ufound = TRUE;
-				config_set_path("installedpackages/{$type}/config/{$key}/autoproto_in", $utype['autoproto']);
-				config_del_path("installedpackages/{$type}/config/{$key}/autoproto");;
+				$pfb_type_items[$key]['autoproto_in'] = $utype['autoproto'];
+				unset($pfb_type_items[$key]['autoproto']);
 			}
+		}
+		if ($ufound) {
+			PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
 		}
 	}
 }
@@ -292,8 +298,8 @@ if ($ufound) {
 update_status(" OpenVPN/IPSec interface selections...");
 $ufound = FALSE;
 
-$pfb_interfaces = config_get_path('installedpackages/pfblockerng/config/0');
-if (is_array($pfb_interfaces)) {
+$pfb_interfaces = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+if (!empty($pfb_interfaces)) {
 	if (!empty($pfb['config'])) {
 
 		$u_msg = '[';
@@ -301,7 +307,7 @@ if (is_array($pfb_interfaces)) {
 		// pfBlockerNG OpenVPN interface selection upgrade
 		if (array_get_path($pfb_interfaces, 'openvpn_action', '') == 'on') {
 
-			if (config_get_path('openvpn/openvpn-server') != null &&
+			if (config_get_path('openvpn/openvpn-server') != null && // foreign key — out of ADR-29 gateway scope
 			    strpos($pfb_interfaces['outbound_interface'], 'openvpn') === FALSE) {
 
 				$csv_string = '';
@@ -314,7 +320,7 @@ if (is_array($pfb_interfaces)) {
 				$u_msg .= ' OpenVPN (Outbound) &';
 			}
 
-			if (config_get_path('openvpn/openvpn-client') != null) {
+			if (config_get_path('openvpn/openvpn-client') != null) { // foreign key — out of ADR-29 gateway scope
 				if (strpos($pfb_interfaces['outbound_interface'], 'openvpn') === FALSE && !$ufound) {
 					$csv_string = '';
 					if (isset($pfb_interfaces['outbound_interface'])) {
@@ -340,7 +346,7 @@ if (is_array($pfb_interfaces)) {
 		// pfBlockerNG IPSec interface selection upgrade
 		if (isset($pfb['config']['ipsec_action']) &&
 		    $pfb_interfaces['ipsec_action'] == 'on' &&
-		    !empty(config_get_path('ipsec')) &&
+		    !empty(config_get_path('ipsec')) && // foreign key — out of ADR-29 gateway scope
 		    strpos($pfb_interfaces['outbound_interface'], 'enc0') === FALSE) {
 
 			$csv_string = '';
@@ -358,7 +364,7 @@ if (is_array($pfb_interfaces)) {
 		if (isset($pfb_interfaces['ipsec_action'])) {
 			unset($pfb_interfaces['ipsec_action']);
 		}
-		config_set_path('installedpackages/pfblockerng/config/0', $pfb_interfaces);
+		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb_interfaces);
 	}
 }
 
@@ -374,7 +380,8 @@ update_status(" Proofpoint/ET IQRisk settings...");
 $ufound = FALSE;
 
 $et_type = [];
-$pfb_iqrisk = config_get_path('installedpackages/pfblockerngreputation/config/0');
+$pfb_iqrisk = PfbConfig::readSection('installedpackages/pfblockerngreputation/config/0');
+$pfb_iqrisk = empty($pfb_iqrisk) ? NULL : $pfb_iqrisk;
 if (is_array($pfb_iqrisk)) {
 	$et_type = array();
 	foreach (array('etblock', 'etmatch') as $type) {
@@ -410,7 +417,7 @@ if ($ufound) {
 	foreach ($et_type as $type => $cats) {
 		$pfb_iqrisk[$type] = implode(',', $cats);
 	}
-	config_set_path('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
+	PfbConfig::writeSection('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
 } else {
 	update_status(" no changes required ... done.\n");
 }
@@ -418,12 +425,12 @@ if ($ufound) {
 // Move General Tab 'IP settings' to new IP tab
 update_status(" General Tab -> IP Tab settings...");
 
-if (config_get_path('installedpackages/pfblockerng/config/0') != null &&
-    config_get_path('installedpackages/pfblockerngipsettings/config/0') == null) {
+$pfb_gen_section  = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+$pfb_ip_section   = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
+if (!empty($pfb_gen_section) && empty($pfb_ip_section)) {
 
-	$pfb['gconfig'] = config_get_path('installedpackages/pfblockerng/config/0', []);
-
-	$pfb['iconfig'] = config_get_path('installedpackages/pfblockerngipsettings/config/0', []);
+	$pfb['gconfig'] = $pfb_gen_section;
+	$pfb['iconfig'] = $pfb_ip_section;
 
 	$settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',
 				'inbound_interface', 'inbound_deny_action', 'outbound_interface', 'outbound_deny_action',
@@ -431,12 +438,12 @@ if (config_get_path('installedpackages/pfblockerng/config/0') != null &&
 
 	foreach ($settings as $setting) {
 		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting] ?: '';
-		config_set_path("installedpackages/pfblockerngipsettings/config/0/{$setting}", $pfb['iconfig'][$setting]);
 		if (isset($pfb['gconfig'][$setting])) {
 			unset($pfb['gconfig'][$setting]);
-			config_del_path("installedpackages/pfblockerng/config/0/{$setting}");
 		}
 	}
+	PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
+	PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 	update_status(" saving new changes ... done.\n");
 }
 else {
@@ -447,9 +454,10 @@ else {
 update_status(" pfBlockerNGSuppress Alias -> IPv4 Suppression Customlist...");
 $ufound = FALSE;
 
-if (config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression') == null) {
+$pfb_ip_cfg = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
+if (!isset($pfb_ip_cfg['v4suppression'])) { // v4suppression is unregistered — check via section read
 	$customlist = '';
-	foreach (config_get_path('aliases/alias', []) as $key => $alias) {
+	foreach (config_get_path('aliases/alias', []) as $key => $alias) { // foreign key — out of ADR-29 gateway scope
 		if ($alias['name'] == 'pfBlockerNGSuppress') {
 
 			$slist = array(explode(' ', $alias['address']), explode('||', $alias['detail']));
@@ -466,7 +474,9 @@ if (config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppress
 					}
 				}
 			}
-			config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression',  base64_encode($customlist) ?: '');
+			// v4suppression is unregistered; write via section to stay within the gateway surface.
+			$pfb_ip_cfg['v4suppression'] = base64_encode($customlist) ?: '';
+			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
 			// unset($config['aliases']['alias'][$key]);
 			$ufound = TRUE;
 			break;
@@ -484,10 +494,11 @@ if ($ufound) {
 // install so existing feeds are never silently dropped (operator can re-enable). The
 // run-once decision is pfb_feed_filter_install_default() (NULL => leave unset => default
 // ON); the !isset guard there makes this idempotent across repeated installs/upgrades.
-$pfb_gcfg = config_get_path('installedpackages/pfblockerng/config/0');
+$pfb_gcfg = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+$pfb_gcfg = empty($pfb_gcfg) ? NULL : $pfb_gcfg;
 $pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
 if ($pfb_feed_default !== null) {
-	config_set_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_filter', $pfb_feed_default);
+	PfbConfig::write('pfb_feed_internal_filter', $pfb_feed_default);
 }
 
 // Convert dnsbl_info CSV file to SQLite3 database format
@@ -558,11 +569,11 @@ if ($ufound) {
 update_status(" Upgrading previous EasyLists to new format...");
 $ufound = FALSE;
 
-if (!empty(config_get_path('installedpackages/pfblockerngdnsbleasylist', []))) {
+if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))) {
 
 	// Collect all enabled EasyLists
 	$enabled	= array();
-	$ex_easylists	= config_get_path('installedpackages/pfblockerngdnsbleasylist/config/0', []);
+	$ex_easylists	= PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist/config/0');
 
 	foreach (array_get_path($ex_easylists, 'row', []) as $easylist) {
 		if ($easylist['state'] == 'Enabled') {
@@ -603,13 +614,13 @@ if (!empty(config_get_path('installedpackages/pfblockerngdnsbleasylist', []))) {
 		$add['logging']	= $ex_easylists['logging'];
 		$add['order']	= $ex_easylists['order'];
 
-		$dnsblcfg = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+		$dnsblcfg   = PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config');
 		$dnsblcfg[] = $add;
-		config_set_path('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
+		PfbConfig::writeSection('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
 	}
 
 	// Remove Previous EasyList configuration
-	config_del_path('installedpackages/pfblockerngdnsbleasylist');
+	PfbConfig::deleteSection('installedpackages/pfblockerngdnsbleasylist');
 }
 
 if ($ufound) {
@@ -622,7 +633,7 @@ if ($ufound) {
 update_status(" Upgrading previous Firefox DoH to new format...");
 $ufound = FALSE;
 
-$doh_config = config_get_path('installedpackages/pfblockerngsafesearch', []);
+$doh_config = PfbConfig::readSection('installedpackages/pfblockerngsafesearch');
 if (!empty($doh_config)) {
 	if (isset($doh_config['safesearch_firefoxdoh'])) {
 		$ufound = TRUE;
@@ -632,7 +643,7 @@ if (!empty($doh_config)) {
 			$doh_config['safesearch_doh_list'] = 'use-application-dns.net';
 		}
 		unset($doh_config['safesearch_firefoxdoh']);
-		config_set_path('installedpackages/pfblockerngsafesearch', $doh_config);
+		PfbConfig::writeSection('installedpackages/pfblockerngsafesearch', $doh_config);
 	}
 }
 
@@ -646,15 +657,21 @@ if ($ufound) {
 update_status(" MaxMind License Key configuration setting...");
 $ufound = FALSE;
 
-if (config_get_path('installedpackages/pfblockerng/config/0') != null &&
-	config_get_path('installedpackages/pfblockerngipsettings/config/0/maxmind_key') == null) {
-	$maxmind_config = config_get_path('installedpackages/pfblockerng/config/0', []);
+$pfb_maxmind_gen = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+$pfb_maxmind_ip  = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
+// maxmind_key is unregistered; absence is checked via section read
+if (!empty($pfb_maxmind_gen) && !isset($pfb_maxmind_ip['maxmind_key'])) {
+	$maxmind_config = $pfb_maxmind_gen;
 	foreach (array('maxmind_key', 'maxmind_locale', 'database_cc') as $m_setting) {
 		if (isset($maxmind_config[$m_setting])) {
 			$ufound = TRUE;
-			config_set_path("installedpackages/pfblockerngipsettings/config/0/{$m_setting}", $maxmind_config[$m_setting]);
-			config_del_path("installedpackages/pfblockerng/config/0/{$m_setting}");
+			$pfb_maxmind_ip[$m_setting] = $maxmind_config[$m_setting];
+			unset($maxmind_config[$m_setting]);
 		}
+	}
+	if ($ufound) {
+		PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
+		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $maxmind_config);
 	}
 }
 
@@ -668,8 +685,11 @@ if ($ufound) {
 update_status(" Validating Widget cron settings...");
 $ufound = FALSE;
 
+// widget-clearip / widget-cleardnsbl are unregistered keys in pfblockerngglobal; read via section.
+$pfb_global_cfg = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 foreach (array('clearip', 'cleardnsbl') as $type) {
-	if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") != null) {
+	$pfb_widget_val = $pfb_global_cfg["widget-{$type}"] ?? NULL;
+	if ($pfb_widget_val !== NULL) {
 
 		// Remove incorrect cron entries
 		$pfb_cmd_esc = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php '{$type}' >/dev/null 2>&1";
@@ -683,10 +703,10 @@ foreach (array('clearip', 'cleardnsbl') as $type) {
 		}
 
 		// Add correct cron entry, if enabled
-		if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") != 'never') {
+		if ($pfb_widget_val != 'never') {
 
 			$pfb_day = '*';
-			if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") == 'weekly') {
+			if ($pfb_widget_val == 'weekly') {
 				$pfb_day = '7';
 			}
 
