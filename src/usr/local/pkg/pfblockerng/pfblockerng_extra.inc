@@ -1009,6 +1009,99 @@ final class PfbConfig
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ADR-29 Phase 2 — Migration registry + driver.
+//
+// pfb_migration_registry() is the ordered, idempotent, since-version-gated
+// inventory of every upgrade migration. Each entry delegates to an existing
+// *_migrate / *_seed helper (from pfblockerng.inc) and carries the exact
+// write_config() message that appeared in the original install.inc block.
+//
+// Registry shape:
+//   'id'       => string — unique, stable identifier for the migration
+//   'section'  => string — full config.xml section path to read/write
+//   'apply'    => callable($cfg: array): ?array
+//                   returns the updated section array to persist,
+//                   or NULL for a no-op (already migrated / fresh install)
+//   'message'  => string — write_config() description when the migration writes
+//   'since'    => string — version that introduced the migration
+//
+// The driver in pfblockerng_install.inc calls pfb_run_migrations() to execute
+// all entries in registry order. The helper bodies are UNCHANGED; this registry
+// only wraps/calls them so the install.inc is one loop instead of four blocks.
+//
+// Tests: tests/php/MigrationRegistryTest.php
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_migration_registry — the ordered list of upgrade migrations.
+ *
+ * Returns an array of migration descriptor maps, in the order they must run.
+ * Each entry's 'apply' callable wraps an existing *_migrate / *_seed helper.
+ *
+ * @return list<array{id:string,section:string,apply:callable,message:string,since:string}>
+ */
+function pfb_migration_registry(): array
+{
+	$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+	$gen   = 'installedpackages/pfblockerng/config/0';
+
+	return [
+		// 1. ADR-02: force DNSBL to python-only mode.
+		[
+			'id'      => 'adr02-dnsbl-python-mode',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_dnsbl_python_migrate',
+			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
+			'since'   => '2.0.0',
+		],
+		// 2. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle.
+		[
+			'id'      => 'pfbl03-control-legacy-seed',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_control_legacy_seed',
+			'message' => 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)',
+			'since'   => '3.2.0',
+		],
+		// 3. ADR-22: preserve permissive DNSBL scheme parsing for existing installs.
+		[
+			'id'      => 'adr22-dnsbl-lenient',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_dnsbl_lenient_migrate',
+			'message' => 'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)',
+			'since'   => '3.2.0',
+		],
+		// 4. Issue #281: seed pfb_keep to preserve settings across pkg upgrade.
+		[
+			'id'      => 'issue281-pfb-keep-seed',
+			'section' => $gen,
+			'apply'   => 'pfb_keep_migrate',
+			'message' => 'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)',
+			'since'   => '3.2.0',
+		],
+	];
+}
+
+/**
+ * pfb_run_migrations — execute all registered upgrade migrations in order.
+ *
+ * Iterates pfb_migration_registry(). For each entry: reads the registered
+ * section, calls apply($cfg), and when the result is non-NULL writes it back
+ * and calls write_config() with the entry's message. Each migration's own
+ * apply() is responsible for run-once / idempotency (NULL = already done).
+ */
+function pfb_run_migrations(): void
+{
+	foreach (pfb_migration_registry() as $migration) {
+		$cfg    = config_get_path($migration['section'], []);
+		$result = ($migration['apply'])($cfg);
+		if ($result !== NULL) {
+			config_set_path($migration['section'], $result);
+			write_config($migration['message']);
+		}
+	}
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
