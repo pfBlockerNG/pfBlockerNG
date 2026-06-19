@@ -11,24 +11,27 @@ the **`ci-metadata` orphan branch** (its own history, off `main`/`devel`) as
 
 | Script | Use |
 | --- | --- |
-| [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD matrix and CI matrix. |
+| [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD, CI, and ROUTE matrices. |
 
 The `read-version-matrix.sh` reader is also exposed as a composite GH Actions action
 (`.github/actions/read-version-matrix/`) that emits these outputs:
 
-- `build_matrix` — all entries → one `.pkg` per distinct FreeBSD major.
-- `ci_matrix` — every `ci: true` entry (CE **and** Plus, ADR-24) → the smoke-fan-out set,
-  each carrying its resolved `image_name` (default `pfsense-ce`) + `mac`.
-- `python_versions` — the DISTINCT python versions derived from each entry's `py_flavor`
+- `build_matrix` — `role=build` entries (absent role treated as `build`) → one `.pkg` per
+  distinct FreeBSD major. Excludes `role=route-only` (served from frozen `.pkg`, not rebuilt).
+- `ci_matrix` — every `ci: true` entry (CE **and** Plus, ADR-24) within the BUILD matrix →
+  the smoke-fan-out set, each carrying its resolved `image_name` (default `pfsense-ce`) + `mac`.
+  Excludes `role=route-only` (same exclusion as build; no smoke leg for a frozen version).
+- `python_versions` — the DISTINCT python versions derived from each BUILD entry's `py_flavor`
   (`pyN` + `MM` → `N.MM`; e.g. `py311` → `3.11`, `py39` → `3.9`), sorted + deduped.
-- `php_versions` — the DISTINCT `php_version` values across the entries, sorted + deduped.
+- `php_versions` — the DISTINCT `php_version` values across the BUILD entries, sorted + deduped.
 
 `python_versions` / `php_versions` are the **supported-only** test matrices (only the
 versions the matrix actually ships): `test.yml`'s `read-matrix` job feeds them into the
 pytest job (`strategy.matrix.python-version`) and the four PHP jobs
 (`strategy.matrix.php-version`) via `fromJSON`, so the test gates fan out over exactly the
 supported set — no hardcoded version list. The reader also has a `--print-test` mode that
-prints both to stdout (mirroring `--print-build` / `--print-ci`).
+prints both to stdout (mirroring `--print-build` / `--print-ci`), and a `--print-route` mode
+for the ROUTE matrix (see below).
 
 ### Schema
 
@@ -42,9 +45,32 @@ prints both to stdout (mirroring `--print-build` / `--print-ci`).
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
   "arch":            "amd64",        # OPTIONAL; ABI arch (amd64 | aarch64). Omit => amd64. aarch64 = Netgate ARM appliances, Plus-only (issue #199)
   "status":          "GA",           # beta | GA
-  "ci":              true            # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
+  "ci":              true,           # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
+  "role":            "build"         # OPTIONAL; "build" (default, absent => build) | "route-only"
 }
 ```
+
+The `role` field controls how the catalog generator treats an entry:
+
+- **Absent or `"build"`** (today's behaviour; back-compat): the entry is built, smoke-tested,
+  and its `release/<varver>/<arch>/` catalog is regenerated from the fresh build each run. An
+  absent `role` is always treated as `"build"` — no existing entry needs to change.
+- **`"route-only"`**: the entry's release catalog is regenerated from its **last frozen `.pkg`**
+  (a GitHub Release asset) and served at `release/<varver>/<arch>/` — but it is **not** rebuilt,
+  not included in `--print-build` / `--print-ci` / `--print-test`, and not smoke-tested. This
+  is the EOL state: a pfSense version that has left the build matrix still gets its route served
+  so existing boxes can `pkg install`/`upgrade`. A truly dropped entry (no route at all) is
+  simply absent from the JSON.
+
+`--print-route` emits the **ROUTE matrix** — the BUILD matrix UNION `role=route-only` entries.
+This is every entry with an actively served `release/<varver>/<arch>/` catalog. The publish
+pipeline uses `--print-route` minus `--print-build` to enumerate the `route-only` entries whose
+frozen `.pkg` it needs to feed to the catalog generator.
+
+> **`ci-metadata` schema note:** the `role` field is applied by a PR against the `ci-metadata`
+> orphan branch (edit `supported-versions.json` there, same as adding/dropping a version). No
+> real version is currently `route-only` — the field is added to the schema so the machinery is
+> in place when the min supported pfSense first advances (ADR-27 Part 2).
 
 The reader resolves `arch` to `amd64` when omitted (or empty), so a pre-#199 matrix
 builds exactly as before. The build path keys on `(freebsd_major, arch)`, so an
@@ -57,8 +83,9 @@ image yet, so an `aarch64` entry should set `ci: false` (build + distribute only
 - **Add** when a beta/GA lands (curated — a human edits the JSON via a PR against
   `ci-metadata`). Add immediately on a beta so the build + CI validation starts early;
   the status field distinguishes beta from GA.
-- **Drop** the oldest CE entry only when the newest CE goes GA (the window is *previous
-  major + current major*, transiently `+1` during a beta).
+- **Drop** an entry when it should be fully removed (no catalog served). For an EOL version
+  that still has users, set `role: "route-only"` instead of dropping it — the last `.pkg` keeps
+  being served. Drop only when you want a clean 404 (no route).
 - **Plus** entries set `ci: true` to run the smoke fan-out from a **PRIVATE, licensed** GHCR
   image (`pfsense-plus`, ADR-24); their VM identity comes from the `SMOKE_PLUS_*` secrets,
   never the matrix, and is redacted from the uploaded diagnostics.
@@ -69,10 +96,11 @@ image yet, so an `aarch64` entry should set `ci: false` (build + distribute only
 
 ### Build vs CI split
 
-| Channel | `.pkg` build | Live-VM smoke CI |
-| --- | --- | --- |
-| CE | yes (portable Linux builder) | yes (`ci: true`) |
-| Plus | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | yes (`ci: true`, from a private licensed image — ADR-24) |
+| Channel / role | `.pkg` build | Live-VM smoke CI | Catalog served |
+| --- | --- | --- | --- |
+| CE — `build` (default) | yes (portable Linux builder) | yes (`ci: true`) | yes |
+| Plus — `build` (default) | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | yes (`ci: true`, from a private licensed image — ADR-24) | yes |
+| Any — `route-only` | **no** (frozen `.pkg` reused) | **no** | yes (from frozen `.pkg`) |
 
 **Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
 **sole** `.pkg` builder for both CI and releases: it runs on a plain Linux runner and
