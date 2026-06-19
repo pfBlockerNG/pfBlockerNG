@@ -2172,9 +2172,13 @@ def _db_file(db: int) -> str:
 def _db_create(db: int, cursor: Any) -> None:
     if db == DB_RESOLVER:
         cursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
-        cursor.execute("SELECT COUNT(*) FROM resolver")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO resolver ( row, totalqueries, queries ) VALUES ( 0, 0, 0 )")
+        # Seed row 0 atomically (no-op once present) -- same singleton-seed shape as the
+        # dnsbl 'Upstream' row below: INSERT ... WHERE NOT EXISTS avoids a check-then-insert
+        # race and is idempotent (preserves accumulated totals across a re-init/reconnect).
+        cursor.execute(
+            "INSERT INTO resolver ( row, totalqueries, queries ) "
+            "SELECT 0, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM resolver)"
+        )
     elif db == DB_DNSBL:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
