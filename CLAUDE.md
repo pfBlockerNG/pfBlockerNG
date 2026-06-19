@@ -285,6 +285,41 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
 - Mass realignment of untouched lines — alignment is opportunistic within touched blocks only.
 - `stubs/`, generated artifacts, third-party vendored code.
 
+#### Config gateway — PfbConfig (ADR-29)
+
+`PfbConfig` in `pfblockerng_extra.inc` is the **single access point for every registered
+`installedpackages/pfblockerng*` scalar field**. It wraps `config_get_path`/`config_set_path`/
+`config_del_path` with the ADR-28 adapter layer and a declarative field registry
+(`pfb_cfg_registry()`).
+
+**Rules for all new code that touches a registered field:**
+
+- **Read via `PfbConfig::read($key)`** — never call `config_get_path` directly for a key
+  that is in the registry. The gateway applies the default-on-absent and the read adapter.
+- **Write via `PfbConfig::write($key, $value)`** — never call `config_set_path` directly
+  for a registered key. The gateway applies the write adapter (enum → stored string).
+- **Delete via `PfbConfig::delete($key)`** — wraps `config_del_path` with registry check.
+- **Section helpers** (`readSection`/`writeSection`/`deleteSection`) pass through to the
+  raw `config_*_path` functions at the section granularity — use them for whole-section
+  reads/writes that are not per-field (structural arrays, dynamic feed lists).
+- **Unregistered key → `InvalidArgumentException`** — every unknown key throws at the call
+  site, not silently; keeps blind-spots visible.
+- **Do not `write_config()` inside the gateway.** `PfbConfig::write()` does not persist;
+  the caller decides when to flush (same contract as direct `config_set_path`).
+- **Registry is read-only after boot.** `pfb_cfg_registry()` is a static-cached function;
+  never mutate its return value.
+- **Existing call sites** in `pfb_global()`, `www/`, and `install.inc` are **not** migrated
+  in Phase 1 — they remain on direct `config_*_path`. Migration is Phase 2 (ADR-29).
+  Phase 1 change is behaviour-preserving and unused-in-prod.
+
+**Adding a new registered field:**
+
+1. Add an entry to `pfb_cfg_registry()` with the exact `config.xml` key, its section path,
+   the default stored string, and the adapter pair (or `NULL`/`NULL` for plain string).
+2. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
+3. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
+4. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
+
 ---
 
 ## Test coverage (mandatory)
