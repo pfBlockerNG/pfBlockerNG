@@ -3251,7 +3251,61 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Alerts'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 include_once('head.inc');
+?>
 
+<style>
+/* Stats panel: flex columns that shrink and wrap on narrow viewports */
+.pfb-stats-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.pfb-stats-col {
+	flex: 1 1 480px;
+	min-width: 0;
+}
+/* Let the d3pie SVG scale fluidly within its column */
+.pfb-stats-col svg {
+	max-width: 100%;
+	height: auto;
+}
+
+@media print {
+	.pfb-stats-row { display: block; }
+	.pfb-stats-col {
+		width: 100% !important;
+		float: none !important;
+		height: auto !important;
+		overflow: visible !important;
+		page-break-inside: avoid;
+	}
+	.panel-body { overflow: visible !important; }
+	* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+
+<script type="text/javascript">
+//<![CDATA[
+/* Set a viewBox on the fixed-size d3pie SVG so CSS max-width scales it
+   without distorting the annotated labels. */
+function pfbPieFluid(id) {
+	var el = document.getElementById(id);
+	if (!el) { return; }
+	var svg = el.querySelector('svg');
+	if (!svg) { return; }
+	var w = svg.getAttribute('width');
+	var h = svg.getAttribute('height');
+	if (w && h && !svg.getAttribute('viewBox')) {
+		svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+	}
+	svg.removeAttribute('width');
+	svg.removeAttribute('height');
+	svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+}
+//]]>
+</script>
+
+<?php
 // Define default Alerts Tab href link (Top row)
 $get_req = pfb_alerts_default_page();
 
@@ -4636,7 +4690,8 @@ foreach ($stats as $stat_type => $stype):
 
 			<?php else: ?>
 
-			<div style="height: <?=$height;?>px; width: 50%; float: left; overflow-y: scroll;">
+			<div class="pfb-stats-row">
+			<div class="pfb-stats-col" style="height: <?=$height;?>px; overflow-y: scroll;">
 			<table class="table table-responsive table-bordered table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>
 
 				<thead>
@@ -4806,7 +4861,7 @@ foreach ($stats as $stat_type => $stype):
 			</table>
 			</div>
 
-			<div style="height: <?=$height;?>px; width: 50%; float: right;">
+			<div class="pfb-stats-col" style="height: <?=$height;?>px;">
 				<div id="pieChart_<?=$stat_type?>">
 				<?php
 					if ($topcount > 9) {
@@ -4819,6 +4874,7 @@ foreach ($stats as $stat_type => $stype):
 				?>
 				</div>
 			</div>
+			</div><!-- /.pfb-stats-row -->
 
 			<!-- Display max table extry limit, if found -->
 			<?php if ($max_table_entries): ?>
@@ -5027,6 +5083,7 @@ var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
 		}
 	}
 });
+pfbPieFluid("pieChart_<?=$stat_type?>");
 //]]>
 </script>
 <?php
@@ -5445,6 +5502,7 @@ events.push(function() {
 		} else if (pieChart == 'replydate') {
 			pieChart_replydate.redraw();
 		}
+		pfbPieFluid('pieChart_' + pieChart);
 	})
 
 	$('[id^=DNSBLWT]').click(function(event) {
