@@ -308,9 +308,9 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
   the caller decides when to flush (same contract as direct `config_set_path`).
 - **Registry is read-only after boot.** `pfb_cfg_registry()` is a static-cached function;
   never mutate its return value.
-- **Existing call sites** in `pfb_global()`, `www/`, and `install.inc` are **not** migrated
-  in Phase 1 — they remain on direct `config_*_path`. Migration is Phase 2 (ADR-29).
-  Phase 1 change is behaviour-preserving and unused-in-prod.
+- **Enforcement sniff** (`PfBlockerNG.Config.RequireConfigGateway`) makes the rule mechanical:
+  any `config_*_path` call on a registered key outside the gateway is a CI-blocking error.
+  See the PHPCS sniff entry above for the precise scope and foreign-key exclusions.
 
 **Adding a new registered field:**
 
@@ -373,6 +373,34 @@ registry, the earliest still-shipped release is the baseline (`'1.0.0'` for orig
 carries the `repo` marker (deselected from `-m smoke`). Install HIGHER build → write config →
 downgrade to LOWER build via `pkg delete` + reinstall → assert byte-identical store AND DNSBL
 probe still returns VIP. Skips cleanly when `SMOKE_PKG`/`repo_vm` is absent.
+
+**Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`):**
+
+The following `installedpackages/pfblockerng*` paths are **not** registered in `pfb_cfg_registry()`
+and stay on direct `config_*_path`. The enforcement sniff does NOT flag them (they are not in the
+registered path set). Each annotation is committed in the relevant source file.
+
+| Section / Key | Reason |
+| --- | --- |
+| `pfblockerngipsettings/config/0/v4suppression` | Foreign section — not in registry |
+| `pfblockerngdnsbl/config/{row}/custom` | Dynamic per-row key, not in registry |
+| `pfblockerngdnsbl/config/{row}/logging` | Dynamic per-row key, not in registry |
+| `pfblockernglistsv4/config/{row}/custom` | Dynamic per-row key, not in registry |
+| `pfblockernglistsv6/config/{row}/custom` | Dynamic per-row key, not in registry |
+| `pfblockerngdnsbl` (section-level) | Dynamic per-feed list section |
+| `pfblockernglistsv4` / `pfblockernglistsv6` (section-level) | Dynamic per-feed list sections |
+| `pfblockerngsync/config/0/row/*` | Dynamic XMLRPC row blob, not in registry |
+| `pfblockerngglobal/widget-*` | Dashboard widget keys, not in registry |
+| `pfblockerngblacklist/*` | Entire section is foreign (not in registry) |
+| `pfblockerngglobal/feed_*` + `feed_alt_*` | Dynamic alias-name keys, not in registry |
+| `pfblockerngglobal` (section-level) | Dynamic feed-key section |
+| `pfblockerng_wizard/*` | Wizard temp section, entirely foreign |
+| `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
+| `pfblockerngreputation/config/0` | Static display section, no registered keys |
+| `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
+| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope key (ADR-29 §2.5); the registered key is `dnsblwebpage` |
+| `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
+| `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
 
 ---
 
@@ -444,7 +472,7 @@ gates (pulled by `composer install`, enforced in CI `test.yml` + the pre-commit 
 `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
 `tests/php/pfsense_doubles.php`).
 
-**PHPCS — two targeted sniffs** (in `tests/phpcs/PfBlockerNG/`), both wired via `phpcs.xml.dist`,
+**PHPCS — three targeted sniffs** (in `tests/phpcs/PfBlockerNG/`), all wired via `phpcs.xml.dist`,
 each with its own scope:
 
 - **PFBL-01 `RequirePfbFilter`** (`PfBlockerNG.Validation.RequirePfbFilter`, scoped to
@@ -463,6 +491,18 @@ each with its own scope:
   **excluded** — PHPCS's tokenizer converts them to `T_STRING` before the sniff fires. Strings
   (`'true'`/`"false"`), identifiers, and `null` are out of scope. Behaviour pinned by
   `tests/php/UppercaseBooleanLiteralSniffTest.php` against `tests/phpcs/fixtures/`.
+
+- **ADR-29 `RequireConfigGateway`** (`PfBlockerNG.Config.RequireConfigGateway`, scoped to
+  **all `src/` PHP** except `pfblockerng_extra.inc` and `pfblockerng_migrate.inc`): flags any
+  `config_get_path` / `config_set_path` / `config_del_path` call whose first argument is a
+  **static string literal** resolving to a **registered** `installedpackages/pfblockerng*` key
+  (from `pfb_cfg_registry()`). All registered keys must go through `PfbConfig::read/write/delete`.
+  Precise by design — does NOT flag: dynamic paths (`$var` interpolation), non-registered
+  (foreign) keys, section-level reads (path ends at the section, no scalar key suffix), or
+  pfSense-core sections. `pfblockerng_extra.inc` is excluded (the gateway itself). When adding a
+  new registered key to `pfb_cfg_registry()`, also add its full path to the `$registeredPaths`
+  property in `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php`. Behaviour
+  pinned by `tests/php/RequireConfigGatewaySniffTest.php` against `tests/phpcs/fixtures/`.
 
 Run `vendor/bin/phpcs --standard=phpcs.xml.dist src/` (config from `phpcs.xml.dist`).
 

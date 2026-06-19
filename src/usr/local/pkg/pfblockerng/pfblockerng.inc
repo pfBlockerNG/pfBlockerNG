@@ -2275,7 +2275,7 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	// The single "Check for new versions" setting (default ENABLED) gates the BACKGROUND
 	// (cron) check + notifications. A manual "Check now" ($force) always runs, so a user can
 	// do a one-off check without leaving background checking enabled.
-	$check_raw = config_get_path('installedpackages/pfblockerng/config/0/pfb_software_check', null);
+	$check_raw = PfbConfig::read('pfb_software_check');
 	$enabled = pfb_software_check_enabled(is_string($check_raw) ? $check_raw : null);
 	if (!$enabled && !$force) {
 		return pfb_software_read_cache();
@@ -6322,7 +6322,7 @@ function pfb_ip_is_internal($ip) {
 function pfb_feed_internal_allowlist($ignored = NULL) {
 
 	$ignored = 0;
-	$raw = config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist');
+	$raw = PfbConfig::read('pfb_feed_internal_allowlist');
 	if (!is_string($raw) || $raw === '') {
 		return array();
 	}
@@ -6487,7 +6487,7 @@ function pfb_keep_migrate($gconfig) {
 // than the literal 'off' is treated as ON.
 function pfb_feed_filter_enabled() {
 
-	$value = config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_internal_filter');
+	$value = PfbConfig::read('pfb_feed_internal_filter');
 	return ($value !== 'off');
 }
 
