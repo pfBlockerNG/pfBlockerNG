@@ -28,9 +28,10 @@ global $pfb;
 pfb_global();
 $disable_move = FALSE;
 
-$pfb['dconfig'] = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 
 // Collect local domain TLD for Python TLD Allow array
+// foreign key — out of ADR-29 gateway scope (system/domain is not a pfblockerng* path)
 if (strpos(config_get_path('system/domain'), '.') !== FALSE) {
 	$local_tld = ltrim(strstr(config_get_path('system/domain'), '.', FALSE), '.');
 } else {
@@ -67,7 +68,8 @@ if ($pconfig['pfb_idn'] === 'on') {
 }
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
-$pconfig['pfb_idn_block_malicious']	= isset($pfb['dconfig']['pfb_idn_block_malicious'])	? $pfb['dconfig']['pfb_idn_block_malicious'] : 'on';
+// Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
+$pconfig['pfb_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');
 $pconfig['pfb_idn_escalate_suspicious']	= $pfb['dconfig']['pfb_idn_escalate_suspicious']		?: '';
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
 $pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
@@ -327,6 +329,7 @@ $options_action			= [ 'Disabled' => 'Disabled', 'Deny_Inbound' => 'Deny Inbound'
 $options_aliaslog		= [ 'enabled' => 'Enable', 'disabled' => 'Disable' ];
 
 // Collect all pfSense 'Port' Aliases
+// foreign key — out of ADR-29 gateway scope (aliases/alias is not a pfblockerng* path)
 $ports_list = $networks_list = '';
 foreach (config_get_path('aliases/alias', []) as $alias) {
 	if ($alias['type'] == 'port') {
@@ -410,6 +413,7 @@ if ($_POST) {
 				$dnsbl_webpage = TRUE;
 			}
 			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
+			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
 			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $pfb['dconfig']['dnsbl_webpage']);
 		}
 		else {
@@ -640,7 +644,7 @@ if ($_POST) {
 				@copy("/usr/local/www/pfblockerng/www/{$pfb['dconfig']['dnsbl_webpage']}", '/usr/local/www/pfblockerng/www/dnsbl_active.php');
 			}
 
-			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
+			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
 			if ($savemsg) {
 				header("Location: /pfblockerng/pfblockerng_dnsbl.php?savemsg={$savemsg}");
