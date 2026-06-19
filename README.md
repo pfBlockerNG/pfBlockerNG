@@ -47,6 +47,13 @@ the **Apache License 2.0**.
   for you instead of a manual setup
   ([ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md)).
 
+> **Reserved alias prefix (`pfB_`).** Every firewall alias pfBlockerNG creates is named with
+> the `pfB_` prefix, and that prefix is how it recognizes its own aliases: on each reload it
+> deletes any `pfB_`-named alias that is not one of its currently active aliases. **Do not give
+> your own aliases a `pfB_` name** — including an "alias of aliases" that groups pfB tables — or
+> pfBlockerNG will remove it on the next reload. Name such aliases without the `pfB_` prefix;
+> they can still reference `pfB_*` aliases as members.
+
 ## Release channels
 
 Two channels track two branches of this repository:
