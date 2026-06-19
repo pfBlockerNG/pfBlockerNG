@@ -26,6 +26,8 @@ import threading
 import time
 from typing import Any
 
+import pytest
+
 import pfb_unbound as P
 
 
@@ -321,6 +323,22 @@ class _ControlHarness:
         self.thread = threading.Thread(name="pfb_control_watcher_test", target=P.pfb_control_watcher, daemon=True)
         self.thread.start()
 
+    def wait_started(self, timeout: float = 5.0) -> bool:
+        """Wait until the watcher has written its startup baseline to the applied file.
+
+        The watcher writes its baseline applied marker (seq 0, or the seq of any
+        pre-existing channel record) at startup -- before entering its poll loop.
+        Commands published before this baseline is written may be treated as
+        pre-existing records (adopted without being applied) rather than fresh
+        commands to execute.  Always call this after ``start()`` and before the
+        first ``publish()`` to guarantee correct ordering under CPU contention."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.read_applied() is not None:
+                return True
+            time.sleep(0.005)
+        return False
+
     def wait_applied(self, seq: int, timeout: float = 3.0) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -329,98 +347,185 @@ class _ControlHarness:
             time.sleep(0.01)
         return False
 
-    def stop_join(self, timeout: float = 5.0) -> None:
+    def stop_join(self) -> bool:
+        """Signal the watcher to stop and wait until it dies.
+
+        Loops in 0.5-second slices for up to 10 seconds so that CPU contention
+        does not cause a single long join to return prematurely.  Returns True
+        when the thread has fully exited, False when it outlived the budget."""
         P.pfb_control_stop.set()
-        if self.thread is not None:
-            self.thread.join(timeout=timeout)
+        if self.thread is None:
+            return True
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            self.thread.join(timeout=0.5)
+            if not self.thread.is_alive():
+                return True
+        return False
+
+
+# Sentinel used in the snapshot below to distinguish "key absent" from "key = None"
+# so the restore step can faithfully delete keys that were not present.
+_ABSENT: object = object()
+
+
+@pytest.fixture
+def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
+    """Isolated, guaranteed-teardown fixture for TestControlWatcherLoop.
+
+    Setup:
+      - Refuses to proceed if a prior ``pfb_control_watcher_test`` thread is still
+        alive (converts any upstream leak into a loud, deterministic failure).
+      - Snapshots the shared module-globals that the harness + tests mutate so
+        teardown can restore them faithfully regardless of test outcome.
+      - Constructs a ``_ControlHarness`` against ``tmp_path`` and yields it.
+
+    Teardown (ALWAYS runs, even when the test body raises):
+      - Calls the hardened ``stop_join`` and asserts the watcher thread is dead,
+        so a slow thread under CPU contention cannot bleed into the next test.
+      - Re-scans ``threading.enumerate()`` to confirm no leaked watcher survives.
+      - Restores every snapshotted global to its pre-test value.
+    """
+    # Guard: refuse to start if a prior test's watcher is still alive.
+    live_before = [t for t in threading.enumerate() if t.name == "pfb_control_watcher_test"]
+    assert not live_before, (
+        "control_harness setup: a pfb_control_watcher_test thread from a PREVIOUS test "
+        f"is still alive: {live_before!r}.  A prior test leaked its watcher."
+    )
+
+    # Snapshot the module-globals this fixture (via _ControlHarness) and the tests mutate.
+    # Use _ABSENT so we can distinguish "was not set" from "was set to None".
+    _pfb_keys = ("pfb_py_control", "pfb_py_control_applied", "python_blacklist")
+    snapshot_pfb: dict[str, Any] = {k: P.pfb.get(k, _ABSENT) for k in _pfb_keys}
+    snapshot_control_stop: Any = getattr(P, "pfb_control_stop", _ABSENT)
+    snapshot_control_thread: Any = getattr(P, "pfb_control_watcher_thread", _ABSENT)
+
+    h = _ControlHarness(tmp_path, monkeypatch)
+    try:
+        yield h
+    finally:
+        # Guaranteed teardown: stop the watcher and assert it is dead.
+        died = h.stop_join()
+        assert died, (
+            f"control_harness teardown: watcher thread '{h.thread!r}' did not exit "
+            "within 10 s — the watcher is still alive after stop_join."
+        )
+        if h.thread is not None:
+            assert not h.thread.is_alive(), (
+                f"control_harness teardown: thread {h.thread!r} is still alive after stop_join reported death."
+            )
+
+        # Confirm no pfb_control_watcher_test thread survives in the process.
+        live_after = [t for t in threading.enumerate() if t.name == "pfb_control_watcher_test"]
+        assert not live_after, f"control_harness teardown: leaked watcher thread(s) still alive: {live_after!r}"
+
+        # Restore snapshotted pfb keys.
+        for k, v in snapshot_pfb.items():
+            if v is _ABSENT:
+                P.pfb.pop(k, None)
+            else:
+                P.pfb[k] = v
+
+        # Restore pfb_control_stop and pfb_control_watcher_thread.
+        if snapshot_control_stop is _ABSENT:
+            try:
+                del P.pfb_control_stop  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
+        else:
+            P.pfb_control_stop = snapshot_control_stop
+
+        if snapshot_control_thread is _ABSENT:
+            try:
+                del P.pfb_control_watcher_thread  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
+        else:
+            P.pfb_control_watcher_thread = snapshot_control_thread
 
 
 class TestControlWatcherLoop:
-    def test_fresh_command_is_applied(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def test_fresh_command_is_applied(self, control_harness: _ControlHarness) -> None:
         # Scenario: a root-issued command arriving on the channel performs the action.
-        h = _ControlHarness(tmp_path, monkeypatch)
+        h = control_harness
         # Given: DNSBL blocking is ON (BEFORE).
         P.pfb["python_blacklist"] = True
         h.start()
-        try:
-            assert P.pfb["python_blacklist"] is True  # BEFORE: still on, nothing applied.
+        # Wait for the watcher's startup baseline before publishing -- prevents the
+        # command from being mistaken for a pre-existing record under CPU contention.
+        assert h.wait_started()
 
-            # When: a disable command (seq 1) is published.
-            h.publish({"seq": 1, "cmd": "disable"})
+        assert P.pfb["python_blacklist"] is True  # BEFORE: still on, nothing applied.
 
-            # Then: the reader applies it -- blocking goes OFF and the applied marker reaches 1.
-            assert h.wait_applied(1)
-            assert P.pfb["python_blacklist"] is False
-        finally:
-            h.stop_join()
-        assert not h.thread.is_alive()
+        # When: a disable command (seq 1) is published.
+        h.publish({"seq": 1, "cmd": "disable"})
 
-    def test_addbypass_then_removebypass_via_channel(self, tmp_path: Any, monkeypatch: Any) -> None:
-        h = _ControlHarness(tmp_path, monkeypatch)
+        # Then: the reader applies it -- blocking goes OFF and the applied marker reaches 1.
+        assert h.wait_applied(1)
+        assert P.pfb["python_blacklist"] is False
+
+    def test_addbypass_then_removebypass_via_channel(self, control_harness: _ControlHarness) -> None:
+        h = control_harness
         # Given: the IP is NOT bypassed (BEFORE).
         assert P.gpListDB.get("192.0.2.10") is None
         h.start()
-        try:
-            h.publish({"seq": 1, "cmd": "addbypass", "ip": "192.0.2.10"})
-            assert h.wait_applied(1)
-            assert P.gpListDB.get("192.0.2.10") == 0  # AFTER add: bypassed.
+        # Wait for the watcher's startup baseline before publishing.
+        assert h.wait_started()
 
-            h.publish({"seq": 2, "cmd": "removebypass", "ip": "192.0.2.10"})
-            assert h.wait_applied(2)
-            assert P.gpListDB.get("192.0.2.10") is None  # AFTER remove: gone again.
-        finally:
-            h.stop_join()
-        assert not h.thread.is_alive()
+        h.publish({"seq": 1, "cmd": "addbypass", "ip": "192.0.2.10"})
+        assert h.wait_applied(1)
+        assert P.gpListDB.get("192.0.2.10") == 0  # AFTER add: bypassed.
 
-    def test_stale_seq_is_ignored_fresh_is_applied(self, tmp_path: Any, monkeypatch: Any) -> None:
+        h.publish({"seq": 2, "cmd": "removebypass", "ip": "192.0.2.10"})
+        assert h.wait_applied(2)
+        assert P.gpListDB.get("192.0.2.10") is None  # AFTER remove: gone again.
+
+    def test_stale_seq_is_ignored_fresh_is_applied(self, control_harness: _ControlHarness) -> None:
         # Scenario: replay safety -- a record whose seq <= last applied is IGNORED; only
         # a strictly-advancing seq takes effect.
-        h = _ControlHarness(tmp_path, monkeypatch)
+        h = control_harness
         P.pfb["python_blacklist"] = True
         h.start()
-        try:
-            # Apply seq 5 (disable): blocking OFF.
-            h.publish({"seq": 5, "cmd": "disable"})
-            assert h.wait_applied(5)
-            assert P.pfb["python_blacklist"] is False
+        # Wait for the watcher's startup baseline before publishing.
+        assert h.wait_started()
 
-            # Re-arm blocking out-of-band, then replay an OLD seq (3, enable). The reader
-            # must NOT apply it (3 <= 5), so blocking stays as we set it.
-            P.pfb["python_blacklist"] = True
-            h.publish({"seq": 3, "cmd": "enable"})
-            time.sleep(0.3)  # give the watcher a few poll cycles
-            assert P.pfb["python_blacklist"] is True  # unchanged: stale seq ignored.
-            assert (h.read_applied() or 0) == 5  # applied marker did NOT regress.
+        # Apply seq 5 (disable): blocking OFF.
+        h.publish({"seq": 5, "cmd": "disable"})
+        assert h.wait_applied(5)
+        assert P.pfb["python_blacklist"] is False
 
-            # A genuinely fresh seq (6, disable) IS applied -> blocking OFF again.
-            h.publish({"seq": 6, "cmd": "disable"})
-            assert h.wait_applied(6)
-            assert P.pfb["python_blacklist"] is False
-        finally:
-            h.stop_join()
-        assert not h.thread.is_alive()
+        # Re-arm blocking out-of-band, then replay an OLD seq (3, enable). The reader
+        # must NOT apply it (3 <= 5), so blocking stays as we set it.
+        P.pfb["python_blacklist"] = True
+        h.publish({"seq": 3, "cmd": "enable"})
+        time.sleep(0.3)  # give the watcher a few poll cycles
+        assert P.pfb["python_blacklist"] is True  # unchanged: stale seq ignored.
+        assert (h.read_applied() or 0) == 5  # applied marker did NOT regress.
 
-    def test_preexisting_record_adopted_as_baseline_not_replayed(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # A genuinely fresh seq (6, disable) IS applied -> blocking OFF again.
+        h.publish({"seq": 6, "cmd": "disable"})
+        assert h.wait_applied(6)
+        assert P.pfb["python_blacklist"] is False
+
+    def test_preexisting_record_adopted_as_baseline_not_replayed(self, control_harness: _ControlHarness) -> None:
         # A record already on disk at startup (e.g. from a prior run) is the baseline --
         # the reader adopts its seq WITHOUT applying it; only a future advance acts.
-        h = _ControlHarness(tmp_path, monkeypatch)
+        h = control_harness
         # Pre-existing disable at seq 9, but blocking is ON: if it were replayed, blocking
         # would be flipped OFF. It must NOT be.
         h.publish({"seq": 9, "cmd": "disable"})
         P.pfb["python_blacklist"] = True
         h.start()
-        try:
-            assert h.wait_applied(9)  # baseline adopted + published.
-            time.sleep(0.2)
-            assert P.pfb["python_blacklist"] is True  # NOT replayed.
+        # wait_applied(9) itself is the started gate here (seq 9 = baseline): the
+        # watcher adopts it and publishes it without applying the command.
+        assert h.wait_applied(9)  # baseline adopted + published.
+        time.sleep(0.2)
+        assert P.pfb["python_blacklist"] is True  # NOT replayed.
 
-            # A future advance (seq 10) DOES apply.
-            h.publish({"seq": 10, "cmd": "disable"})
-            assert h.wait_applied(10)
-            assert P.pfb["python_blacklist"] is False
-        finally:
-            h.stop_join()
-        assert not h.thread.is_alive()
+        # A future advance (seq 10) DOES apply.
+        h.publish({"seq": 10, "cmd": "disable"})
+        assert h.wait_applied(10)
+        assert P.pfb["python_blacklist"] is False
 
     def test_unknown_command_record_consumed_without_side_effect(self, tmp_path: Any, monkeypatch: Any) -> None:
         # A record with an unknown cmd advances the seq (consumed) but performs no action.
@@ -428,6 +533,7 @@ class TestControlWatcherLoop:
         P.pfb["python_blacklist"] = True
         h.start()
         try:
+            assert h.wait_started()  # ensure baseline before publishing
             h.publish({"seq": 1, "cmd": "wipe-everything"})
             assert h.wait_applied(1)  # consumed (marker advances) ...
             assert P.pfb["python_blacklist"] is True  # ... but no side effect.
