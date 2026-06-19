@@ -65,6 +65,7 @@ import pytest
 # Tier-B dep: guard the import so collecting this module without Playwright
 # installed (this dev venv, or any host that skips the browser tier) does not
 # hard-error. Everything below references `expect` from the imported module.
+from .. import helpers
 from .conftest import mask_page_identity
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
@@ -351,3 +352,117 @@ def test_idn_mode_select_gates_confusable_subtoggles(
     expect(block_mal).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(escalate).to_be_hidden(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_idn_all_subtoggles_hidden")
+
+
+# --------------------------------------------------------------------------- #
+# ADR-29 gateway save→reload→assert round-trip (pfb_dnsbl_lenient on DNSBL page)
+# --------------------------------------------------------------------------- #
+
+# Config path for the pfb_dnsbl_lenient field (DNSBL settings section).
+_CFG_LENIENT = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient"
+
+# POST timeout: DNSBL settings save only write_config()s (no reload), so it's fast.
+_DNSBL_POST_TIMEOUT = 120.0
+
+
+@pytest.fixture(scope="module")
+def dnsbl_vip_ready_browser(smoke_vm: helpers.SmokeVM) -> None:
+    """Ensure the DNSBL sinkhole VIP exists so the DNSBL settings page save validates.
+
+    The DNSBL settings save always runs ``pfb_validate_vips`` (manual mode) before
+    writing config.  Without a valid VIP the save fails with an input error and
+    config.xml is never written — any gateway assertion would false-fail.
+    Module-scoped so it runs once per collection of this module.
+    """
+    helpers.ensure_dnsbl_vip(smoke_vm)
+
+
+def test_gateway_dnsbl_lenient_save_roundtrip(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready_browser: None,
+    screenshot_dir: Path,
+) -> None:
+    """pfb_dnsbl_lenient (PfbLenient gateway field) persists via the DNSBL page and DOM.
+
+    Proves that the ADR-29 gateway routing on ``pfblockerng_dnsbl.php`` stores the
+    exact legacy token for ``pfb_dnsbl_lenient`` ('on'/'off') and that the DNSBL page
+    re-renders the checkbox in the matching state when reloaded.
+
+    ``pfb_dnsbl_lenient`` uses the PfbLenient adapter — the only adapter class whose
+    stored off-value is 'off' (not '') and whose legacy vocabulary includes '' as a
+    legacy read token.  Testing its two canonical write tokens ('on' / 'off') here
+    proves the lenient adapter branch of the P6-routed page round-trips correctly.
+
+    Scenario: ADR-29 gateway save→reload round-trip for pfb_dnsbl_lenient on the DNSBL page.
+      Background: pfBlockerNG deployed; DNSBL VIP seeded; webConfigurator authenticated.
+
+    Given the current stored value of pfb_dnsbl_lenient (read via config_get oracle)
+      is one of 'on', 'off', or '' (the legacy read token treated as off),
+
+    When the DNSBL page is POST-saved with pfb_dnsbl_lenient set to the OTHER canonical
+      value ('on' ↔ 'off'),
+
+    Then config.xml holds the new token (write-adapter gate); AND the DNSBL page,
+      navigated fresh in the browser, renders the pfb_dnsbl_lenient checkbox in the
+      state that matches the new stored token (DOM-state gate); AND a second POST
+      restores the original value with the same two assertions (both directions).
+    """
+    page = browser_page
+
+    # GIVEN: read the starting value; treat '' (legacy absent) as 'off' for flip logic.
+    original_raw = helpers.config_get(smoke_vm, _CFG_LENIENT)
+    assert original_raw in ("on", "off", ""), (
+        f"pfb_dnsbl_lenient starting value {original_raw!r} not in expected vocabulary"
+    )
+    # Normalise '' to 'off' for the flip direction (both '' and 'off' are "not on").
+    original_eff = original_raw if original_raw == "on" else "off"
+    flipped = "off" if original_eff == "on" else "on"
+
+    try:
+        # ---- FLIP: POST pfb_dnsbl_lenient to the opposite canonical value ---- #
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": flipped}, timeout=_DNSBL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "pfb_dnsbl_lenient flip POST lost the session"
+
+        # Config oracle: stored token must equal the flipped value.
+        stored_flip = helpers.config_get(smoke_vm, _CFG_LENIENT)
+        assert stored_flip == flipped, (
+            f"pfb_dnsbl_lenient gateway FAIL after flip: stored {stored_flip!r}, "
+            f"expected {flipped!r} (ADR-29 PfbLenient write-adapter must emit the exact legacy token)"
+        )
+
+        # DOM oracle: reload the DNSBL page and assert the checkbox state matches.
+        _open(page, webui, DNSBL_PAGE)
+        box_flip = page.locator("#pfb_dnsbl_lenient")
+        expect(box_flip).to_be_attached(timeout=JS_TIMEOUT_MS)
+        if flipped == "on":
+            expect(box_flip).to_be_checked(timeout=JS_TIMEOUT_MS)
+        else:
+            expect(box_flip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_flip")
+
+        # ---- RESTORE: POST pfb_dnsbl_lenient back to the original effective value ---- #
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_eff}, timeout=_DNSBL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "pfb_dnsbl_lenient restore POST lost the session"
+
+        # Config oracle: stored token must equal original_eff.
+        stored_restore = helpers.config_get(smoke_vm, _CFG_LENIENT)
+        assert stored_restore == original_eff, (
+            f"pfb_dnsbl_lenient gateway FAIL after restore: stored {stored_restore!r}, expected {original_eff!r}"
+        )
+
+        # DOM oracle: reload and assert the checkbox matches the restored value.
+        _open(page, webui, DNSBL_PAGE)
+        box_restore = page.locator("#pfb_dnsbl_lenient")
+        expect(box_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
+        if original_eff == "on":
+            expect(box_restore).to_be_checked(timeout=JS_TIMEOUT_MS)
+        else:
+            expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_restore")
+
+    finally:
+        # Belt-and-suspenders: restore to original_eff on any mid-flip abort.
+        if helpers.config_get(smoke_vm, _CFG_LENIENT) != original_eff:
+            webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_eff}, timeout=_DNSBL_POST_TIMEOUT)

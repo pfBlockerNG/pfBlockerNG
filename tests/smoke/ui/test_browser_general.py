@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
 from .conftest import mask_page_identity
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
@@ -145,3 +146,105 @@ def test_general_aggregate_types_multiselect(
     )
     _shot(page, screenshot_dir, "general_full_aggregate_selected")
     _shot_field(field, screenshot_dir, "general_aggregate_types_selected")
+
+
+# --------------------------------------------------------------------------- #
+# ADR-29 gateway save→reload→assert round-trip (pfb_keep on General page)
+# --------------------------------------------------------------------------- #
+
+# Config path for the pfb_keep field (General section).
+_CFG_KEEP = "installedpackages/pfblockerng/config/0/pfb_keep"
+
+# POST timeout for the General page (sync_package_pfblockerng runs after write).
+_GENERAL_POST_TIMEOUT = 300.0
+
+
+def test_gateway_pfb_keep_save_roundtrip(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    screenshot_dir: Path,
+) -> None:
+    """pfb_keep (PfbToggle gateway field) persists via the General page and reflects in the DOM.
+
+    Proves that the ADR-29 gateway routing on ``pfblockerng_general.php`` stores
+    the exact legacy token for ``pfb_keep`` ('on'/''), and that the General page
+    re-renders the checkbox in the correct state when the page is reloaded.
+
+    Scenario: ADR-29 gateway save→reload round-trip for pfb_keep on the General page.
+      Background: pfBlockerNG deployed; webConfigurator authenticated; wizard dismissed.
+
+    Given the current stored value of pfb_keep (read via config_get oracle) is one
+      of the two legal tokens ('on' or ''),
+
+    When the General page is POST-saved with pfb_keep set to the OTHER value,
+
+    Then config.xml holds the new token (write-adapter gate); AND the General page,
+      navigated fresh in the browser, renders the pfb_keep checkbox in the state that
+      matches the new stored token (DOM-state gate); AND a second POST restores the
+      original value with the same two assertions (before-and-after, both directions).
+    """
+    page = browser_page
+
+    # GIVEN: read the starting value so we know which direction to flip first.
+    original = helpers.config_get(smoke_vm, _CFG_KEEP)
+    assert original in ("on", ""), f"pfb_keep starting value {original!r} not in expected vocabulary {{'on', ''}}"
+    # The two branches: flip to the opposite, then restore.
+    flipped = "" if original == "on" else "on"
+
+    try:
+        # ---- FLIP: POST pfb_keep to the opposite value ---- #
+        # ON sends the checkbox value; OFF omits the field (browser behaviour for
+        # unchecked boxes); webui.post() re-GETs for a fresh CSRF token each POST.
+        overrides_flip: dict[str, str] = {"pfb_keep": flipped} if flipped == "on" else {"pfb_keep": flipped}
+        resp = webui.post(GENERAL_PAGE, overrides_flip, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "pfb_keep flip POST lost the session (got login page)"
+
+        # Config oracle: stored token must equal the flipped value.
+        stored_flip = helpers.config_get(smoke_vm, _CFG_KEEP)
+        assert stored_flip == flipped, (
+            f"pfb_keep gateway FAIL after flip: stored {stored_flip!r}, expected {flipped!r} "
+            f"(ADR-29 write-adapter must emit the exact legacy token)"
+        )
+        _shot(page, screenshot_dir, "gateway_general_pfb_keep_before_reload")
+
+        # DOM oracle: reload the General page and assert the checkbox state matches.
+        _open(page, webui, GENERAL_PAGE)
+        box_flip = page.locator("#pfb_keep")
+        expect(box_flip).to_be_attached(timeout=JS_TIMEOUT_MS)
+        if flipped == "on":
+            expect(box_flip).to_be_checked(timeout=JS_TIMEOUT_MS)
+        else:
+            expect(box_flip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_general_pfb_keep_after_flip")
+
+        # ---- RESTORE: POST pfb_keep back to the original value ---- #
+        overrides_restore: dict[str, str] = {"pfb_keep": original} if original == "on" else {"pfb_keep": original}
+        resp = webui.post(GENERAL_PAGE, overrides_restore, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "pfb_keep restore POST lost the session (got login page)"
+
+        # Config oracle: stored token must equal the original.
+        stored_restore = helpers.config_get(smoke_vm, _CFG_KEEP)
+        assert stored_restore == original, (
+            f"pfb_keep gateway FAIL after restore: stored {stored_restore!r}, expected {original!r}"
+        )
+
+        # DOM oracle: reload and assert the checkbox matches the restored value.
+        _open(page, webui, GENERAL_PAGE)
+        box_restore = page.locator("#pfb_keep")
+        expect(box_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
+        if original == "on":
+            expect(box_restore).to_be_checked(timeout=JS_TIMEOUT_MS)
+        else:
+            expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_general_pfb_keep_after_restore")
+
+    finally:
+        # Belt-and-suspenders: ensure box is always left at its original value even
+        # if an assertion above aborted mid-flip, so the session VM is left clean.
+        if helpers.config_get(smoke_vm, _CFG_KEEP) != original:
+            webui.post(
+                GENERAL_PAGE,
+                {"pfb_keep": original} if original == "on" else {"pfb_keep": original},
+                timeout=_GENERAL_POST_TIMEOUT,
+            )
