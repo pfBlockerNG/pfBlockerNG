@@ -335,6 +335,15 @@ function pfb_reload_option_value($value) {
 	return 'All';
 }
 
+// Entry count for a pfBlockerNG alias file, excluding the '1.1.1.1' placeholder
+// (used for an empty alias). $grep_lines is the output array of
+// `grep -cv '^1.1.1.1$' <file>` — a single line holding the count in element 0.
+// Returns 0 when the output is missing or non-numeric.
+function pfb_alias_entry_count(array $grep_lines): int {
+	return is_numeric($grep_lines[0] ?? NULL) ? (int) $grep_lines[0] : 0;
+}
+
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;

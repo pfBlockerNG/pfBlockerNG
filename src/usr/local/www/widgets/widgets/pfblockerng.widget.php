@@ -279,10 +279,7 @@ function pfBlockerNG_update_table() {
 
 				$pfb_aliasdir_esc = escapeshellarg("{$pfb['aliasdir']}/{$pfb_alias}.txt");
 				exec("{$pfb['grep']} -cv '^1\.1\.1\.1\$' {$pfb_aliasdir_esc}", $match);
-				if (!is_numeric($match[1])) {
-					$match[1] = 0;
-				}
-				$pfb_table[$pfb_alias] = array('count' => $match[1], 'img' => $pfb['down']);
+				$pfb_table[$pfb_alias] = array('count' => pfb_alias_entry_count($match), 'img' => $pfb['down']);
 				exec("{$pfb['ls']} -l -D'%b %d %T' {$pfb_aliasdir_esc} | {$pfb['awk']} '{ print \$6,\$7,\$8 }'", $update);
 
 				$pfb_table[$pfb_alias]['update']	= $update[0];
