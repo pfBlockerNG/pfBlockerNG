@@ -2071,8 +2071,14 @@ def get_rep_ttl(rep: reply_info | None) -> str:
 
 def get_tld(qstate: module_qstate) -> str:
     tld = ""
-    if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
-        tld = qstate.qinfo.qname_list[-2]
+    try:
+        if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
+            tld = qstate.qinfo.qname_list[-2]
+    except Exception as e:
+        # A qname carrying invalid UTF-8 bytes makes Unbound's qname_list access raise
+        # while decoding the labels; swallow it and fall back to an empty TLD rather than
+        # crashing the Python module on that query (mirrors get_q_name_qstate).
+        sys.stderr.write("[pfBlockerNG]: Failed get_tld: {}".format(e))
     return tld
 
 
