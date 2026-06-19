@@ -1,0 +1,64 @@
+================================================================================
+PHASE 8 PROMPT — Worker: pin route-only routing (no logic change expected)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.4 Worker bullet, §6 Phase 8)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 8 of 10. Proves the Cloudflare Worker
+routes a route-only (EOL) version's pkg UA to its NORMAL release/<varver>/<arch>/ catalog with NO
+logic change — the route-only design's whole point is the edge stays dumb. Inline, one commit, push.
+
+WHY THIS PHASE EXISTS
+ADR §2.4 asserts "Worker unchanged". That claim must be GUARDED by a test, not assumed — so a future
+edit can't silently break EOL routing. The Worker already matches `routes.find(r => ua.includes(r.pattern))`
+and maps to `${PAGES}/${channel}/${route.catalog}/${arch}/${rest}`; a route-only version is just
+another route entry pointing at its release/<varver> catalog.
+
+REQUIRED READING
+- FIRST read RESULTS/07_Results.txt — confirm route-only emits a NORMAL routing entry (same
+  {pattern, catalog, status} shape, catalog = the varver, served at release/<varver>/). If it does
+  NOT (e.g. a special archive path was introduced), STOP and reconcile before writing Worker tests.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md §2.4 (Worker bullet) + §6 Phase 8.
+- scripts/worker/src/index.js — the route match (UA.includes(pattern)), resolveTarget() path mapping
+  (channel detection release|nightly, parseArch from the FreeBSD:MAJ:ARCH segment, 302 to
+  ${PAGES}/${channel}/${route.catalog}/${arch}/${rest}), and the `status` field (currently NOT
+  consulted — it is informational).
+- scripts/worker/test/router.test.js — node --test; how it stubs globalThis.caches.default.match
+  (returns the routing manifest) + globalThis.fetch; the CE/PLUS route fixtures
+  {pattern, catalog, status}; the existing CE/Plus/nightly routing assertions.
+
+ACTION PLAN
+1. Determine whether ANY index.js change is required. Expectation: NONE — a route-only route is an
+   ordinary entry. If RESULTS/07 introduced anything the edge must understand (it should not), make the
+   MINIMAL change and justify it in the handoff. Do not add status/role handling speculatively.
+2. router.test.js — add offline cases (edge stubbed, no network/wrangler):
+   - A route-only CE version (e.g. an older `pfSense/2.6` UA → `ce-2.6` catalog) 302-redirects to
+     `${PAGES}/release/ce-2.6/<arch>/<file>` — i.e. routed normally, NOT 404'd.
+   - A route-only Plus version (an older `Netgate pfSense Plus/<ver>` UA → `plus-<ver>`) likewise.
+   - Opposite-edition guard: the CE route-only UA does NOT match the Plus pattern and vice-versa.
+   - (Pin the manifest these tests use to include a route-only entry alongside the live build routes,
+     mirroring how routing.json carries all served versions.)
+
+CONSTRAINTS
+- JS/ESM; match the existing router.test.js style (node --test, the same stub helpers). No new deps,
+  no network, no wrangler.
+- If index.js is genuinely unchanged, the value of this phase IS the regression-guarding test — that
+  is acceptable and expected (ADR §2.4 "pinned by a router.test.js case").
+
+VERIFICATION (must all pass)
+- node --test scripts/worker/test/  → green (run as the `worker-tests` job does).
+- python -m pytest / ruff / mypy tests/  → unaffected/green (no Python touched, or only docs).
+
+EXPECTED RESULT
+A route-only CE and Plus version's UA routes to its normal release/<varver> catalog, proven offline;
+the "Worker unchanged" claim is now a guarded invariant.
+
+COMMIT (single)
+    dev: pin route-only (EOL) version routing in the worker tests (ADR-27 P8)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/08_Results.txt
+State: whether index.js changed (and why, if so); the router.test.js cases added (CE + Plus +
+opposite-edition guard); confirmation route-only routes to release/<varver> (not 404, no special
+path). Go-ahead for Phase 9.
