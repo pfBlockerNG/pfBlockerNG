@@ -1,0 +1,108 @@
+ADR-30 Phase 1 Results — Pure schedule-period deciders
+=======================================================
+
+Branch: adr/30-scheduled-log-reset
+Phase:  1 of 5 (behaviour-preserving — two dormant pure functions + tests)
+Status: DONE — all gates green
+
+FUNCTION SIGNATURES
+-------------------
+
+pfb_log_rotate_period(string $schedule, int $ts): string
+  Added to: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  Pure — no I/O, no globals.
+
+pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): bool
+  Added to: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  Pure — no I/O, no globals. Delegates to pfb_log_rotate_period internally.
+
+PERIOD-KEY FORMAT
+-----------------
+
+  'off' or ''           -> '' (schedule disabled)
+  'daily'               -> 'YYYY-MM-DD'   (PHP date('Y-m-d', $ts))
+  'weekly'              -> 'YYYY-Www'      (PHP date('o-\WW', $ts) — ISO week-year)
+  'monthly'             -> 'YYYY-MM'       (PHP date('Y-m', $ts))
+  any unrecognised      -> '' (off-default, defensive)
+
+ISO WEEK-YEAR DECISION
+----------------------
+
+Used date('o') (ISO 8601 week-YEAR) not date('Y') (calendar year) for
+the weekly period key. This correctly handles year-end splits: 2027-01-01
+falls in ISO week 2026-W53 (not 2027-W01), because the ISO year 2027 only
+begins on 2027-01-04. The test asserts this concretely.
+
+TEST FILE
+---------
+
+  tests/php/LogRotateScheduleTest.php
+  21 tests, 76 assertions
+
+Coverage:
+  - pfb_log_rotate_period: off/''/unrecognised -> ''; daily -> 'YYYY-MM-DD';
+    weekly -> 'YYYY-Www'; monthly -> 'YYYY-MM'.
+  - Daily boundary: same day (same key) vs adjacent day (different key).
+  - Weekly boundary: same ISO week vs adjacent ISO week (W29 vs W30).
+  - Weekly ISO year-boundary: 2027-01-01 ∈ 2026-W53 / 2027-01-04 ∈ 2027-W01.
+  - Monthly boundary: same month (July) vs next month (August).
+  - pfb_log_should_reset: off => FALSE (all last_key variants);
+    empty last_key + active schedule => TRUE (all three schedules);
+    same period => FALSE (before-assertion); new period => TRUE (after-assertion);
+    for daily, weekly, monthly independently.
+  - ISO year-boundary via pfb_log_should_reset: 2026-W53 same => FALSE then
+    new period 2027-W01 => TRUE.
+  - Unrecognised schedule => FALSE in both functions.
+  - Composition consistency test spanning all schedules.
+
+EDGES HARDENED
+--------------
+
+  - '' (empty string) is treated identically to 'off' in both functions.
+  - Unrecognised schedules (e.g. 'DAILY', 'bogus', 'yearly') default to
+    off-behaviour (return '' / FALSE) — asserted.
+  - ISO week-year: date('o') chosen over date('Y') to avoid the
+    calendar-year/ISO-year split — concretely asserted with 2027-01-01 and
+    2027-01-04 which straddle the 2026-W53 / 2027-W01 boundary.
+  - Empty $last_key (never reset) => TRUE for any active schedule —
+    asserted for all three active schedules.
+  - Timestamps in tests use mktime() (same timezone as date()) to avoid
+    hardcoded epoch values that break across timezone environments.
+
+GATE RESULTS
+------------
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    -> No syntax errors detected
+
+  vendor/bin/phpunit --filter LogRotateSchedule
+    -> OK (21 tests, 76 assertions)
+
+  vendor/bin/phpunit (full suite)
+    -> OK (872 tests, 3181 assertions)
+    Note: 'drill: not found' messages in output are pre-existing env-only
+    warnings (missing binary in this dev environment), not test failures.
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    -> (no output = no violations)
+
+  vendor/bin/phpstan analyse src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    -> OK No errors
+
+SCOPE
+-----
+
+Files changed:
+  - src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc  (two functions added)
+  - tests/php/LogRotateScheduleTest.php                   (new file)
+
+No call sites changed. Functions are dormant this phase.
+No config fields registered this phase (that is Phase 2).
+No I/O paths changed.
+
+GO-AHEAD FOR PHASE 2
+--------------------
+
+Phase 2 may proceed: register the 10 per-log log_rotate_<type> config fields in
+pfb_cfg_registry(), add each path to the sniff $registeredPaths, and extend
+CfgGatewayTest + RollbackContractTest + inventory test.
