@@ -593,14 +593,20 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 
-	// Validate Adv. firewall rule settings
-	foreach (array(	'aliasports_in' => 'Port In', 'aliasaddr_in' => 'Destination In',
-			'aliasports_out' => 'Port Out', 'aliasaddr_out' => 'Destination Out') as $value => $auto_dir) {
-		if (!empty($_POST[$value])) {
-			if (!is_alias($_POST[$value])) {
-				$input_errors[] = "Settings: Advanced {$auto_dir}bound Alias error - Must use an existing Alias";
-			} elseif (!in_array(alias_get_type($_POST[$value]), ['network', 'port'])) {
-				$input_errors[] = "Settings: Advanced {$auto_dir}bound Alias error - Must use an alias type of Network or Port";
+	// Validate Adv. firewall rule settings (issue #356: per-field alias-type check).
+	// Port fields require a port-type alias; address fields require a network or host alias.
+	$adv_alias_fields = [
+		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
+		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
+		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network or Host-type'],
+		'aliasaddr_out'  => ['dir' => 'Destination Out', 'type_label' => 'Network or Host-type'],
+	];
+	foreach ($adv_alias_fields as $field => $meta) {
+		if (!empty($_POST[$field])) {
+			if (!is_alias($_POST[$field])) {
+				$input_errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use an existing Alias";
+			} elseif (!pfb_alias_field_type_ok($field, alias_get_type($_POST[$field]))) {
+				$input_errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use a {$meta['type_label']} alias";
 			}
 		}
 	}
@@ -1451,7 +1457,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'text',
 			$pconfig["aliasports_{$advmode}"]
 		))->setHelp('<a target="_blank" href="/firewall_aliases.php?tab=port">Click Here to add/edit Aliases</a>
-				Do not manually enter port numbers.<br />Do not use \'pfB_\' in the Port Alias name.')
+				Do not manually enter port numbers.<br />Do not use \'pfB_\' in the Port Alias name.<br />Must be a Port-type alias.')
 		  ->setWidth(8);
 		$section->add($group);
 
@@ -1485,7 +1491,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			$pconfig['aliasaddr_' . $advmode]
 		))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
 			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the \'IP Network Type\' Alias name.<br />'
-			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)")
+			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be a Network or Host-type alias.")
 		  ->setWidth(8);
 		$section->add($group);
 

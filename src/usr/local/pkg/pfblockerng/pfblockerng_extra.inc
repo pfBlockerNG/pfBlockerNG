@@ -1205,6 +1205,102 @@ function pfb_cfg_field_adapter_type(array $entry): string
 	return 'toggle';
 }
 
+// ---------------------------------------------------------------------------
+// Issue #357 — alias-rename follow-up helper.
+//
+// pfSense's alias-rename path (saveAlias() in alias-utils.inc) calls
+// update_alias_name() to rewrite core config sections (aliases, filter,
+// nat, …) but does NOT touch installedpackages/*.  The four per-row
+// Advanced Inbound/Outbound alias keys (aliasports_in / aliasports_out /
+// aliasaddr_in / aliasaddr_out) stored in our list sections go stale after
+// a rename.  pfb_alias_rename_followup() rewrites them in-memory via the
+// PfbConfig section gateway; the caller (the pre_write_config shim or any
+// other save path) is responsible for persisting via write_config().
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_alias_rename_followup — follow a firewall-alias rename into
+ * pfBlockerNG's stored Advanced Inbound/Outbound references.
+ *
+ * pfSense's alias rename does not update installedpackages/*, so rewrite
+ * the four per-row alias keys across the IP/DNSBL list sections, through
+ * the PfbConfig section gateway. Does NOT persist (write_config is the
+ * caller's job). Returns TRUE if anything changed.
+ *
+ * @param  string $old_name  The alias name before the rename.
+ * @param  string $new_name  The alias name after the rename.
+ * @return bool              TRUE when at least one key was rewritten.
+ */
+function pfb_alias_rename_followup(string $old_name, string $new_name): bool
+{
+	if ($old_name === '' || $new_name === '' || $old_name === $new_name) {
+		return FALSE;
+	}
+
+	$changed  = FALSE;
+	$sections = ['pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdnsbl'];
+	$keys     = ['aliasports_in', 'aliasports_out', 'aliasaddr_in', 'aliasaddr_out'];
+
+	foreach ($sections as $section) {
+		$path = "installedpackages/{$section}/config";
+		$rows = PfbConfig::readSection($path);
+		if (empty($rows)) {
+			continue;
+		}
+
+		$section_dirty = FALSE;
+		foreach ($rows as $i => $row) {
+			foreach ($keys as $key) {
+				if (($rows[$i][$key] ?? '') === $old_name) {
+					$rows[$i][$key] = $new_name;
+					$section_dirty  = TRUE;
+					$changed        = TRUE;
+				}
+			}
+		}
+
+		if ($section_dirty) {
+			PfbConfig::writeSection($path, $rows);
+		}
+	}
+
+	return $changed;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #356 — per-field alias-type validation helper.
+//
+// The four Advanced Inbound/Outbound alias fields accept different alias
+// types: port fields (aliasports_*) require a pfSense 'port' alias; address
+// fields (aliasaddr_*) require a 'network' or 'host' alias.  This helper
+// encodes that rule in one testable place so the category-edit validation
+// loop and any future caller stay in sync.
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_alias_field_type_ok — check whether an alias type is valid for a
+ * given Advanced Inbound/Outbound field.
+ *
+ * Port fields (aliasports_*) require a 'port' alias; address fields
+ * (aliasaddr_*) require a 'network' or 'host' alias.
+ * Unknown field names return FALSE (fail closed).
+ *
+ * @param  string $field       One of aliasports_in, aliasports_out,
+ *                             aliasaddr_in, aliasaddr_out.
+ * @param  string $alias_type  The type string returned by alias_get_type().
+ * @return bool                TRUE when the alias type is allowed for this field.
+ */
+function pfb_alias_field_type_ok(string $field, string $alias_type): bool
+{
+	if ($field === 'aliasports_in' || $field === 'aliasports_out') {
+		return $alias_type === 'port';
+	}
+	if ($field === 'aliasaddr_in' || $field === 'aliasaddr_out') {
+		return $alias_type === 'network' || $alias_type === 'host';
+	}
+	return FALSE;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
