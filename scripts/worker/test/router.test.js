@@ -186,3 +186,80 @@ test("fetch: routing.json unavailable -> 502 (fail closed, never a guess)", asyn
   const res = await route("pkg/1.21 (FreeBSD:15:amd64; pfSense/2.8)", "/FreeBSD:15:amd64/meta.conf");
   assert.equal(res.status, 502);
 });
+
+// --- route-only (EOL) version routing (ADR-27 §2.4) -------------------------
+// A route-only version is a routing.json entry for an EOL pfSense version whose
+// .pkg is served from a frozen release/<varver>/ catalog — identical structure to
+// a live build entry. The Worker sees the same {pattern, catalog, status} shape and
+// routes it the same way; no code change in index.js is needed or made (ADR-27 §2.4:
+// "Worker unchanged"). These tests guard that invariant.
+
+// Manifest with live build entries + route-only (EOL) entries alongside them,
+// mirroring how routing.json carries all served versions in production.
+const CE_EOL = { pattern: "pfSense/2.6", catalog: "ce-2.6", status: "EOL" };
+const PLUS_EOL = { pattern: "Netgate pfSense Plus/25.03", catalog: "plus-25.03", status: "EOL" };
+// More-specific (Plus) patterns first; EOL entries listed after active ones, matching
+// the published order — but UA matching is pattern-substring, so order within EOL does
+// not matter; the guard cases below pin that CE and Plus patterns never cross-match.
+const MANIFEST_WITH_EOL = { routes: [PLUS, CE, PLUS_EOL, CE_EOL] };
+
+test("fetch: route-only CE version (pfSense/2.6) routes to release/ce-2.6/ — not 404", async () => {
+  // Given a routing.json that includes a route-only CE entry alongside live entries:
+  // When a pfSense 2.6 CE box requests a file,
+  // Then the Worker 302-redirects to the frozen release/ce-2.6/ catalog — routed normally,
+  // NOT 404'd. Proves a route-only route is an ordinary entry; no special-casing needed.
+  stubEdge(MANIFEST_WITH_EOL);
+  const res = await route(
+    "pkg/1.21 (FreeBSD:14:amd64; pfSense/2.6)",
+    "/FreeBSD:14:amd64/packagesite.pkg",
+  );
+  assert.equal(res.status, 302, "EOL CE version must be routed, not rejected");
+  assert.equal(
+    res.headers.get("location"),
+    `${PAGES}/release/ce-2.6/amd64/packagesite.pkg`,
+    "EOL CE must map to release/ce-2.6/ (normal path, not a special archive path)",
+  );
+});
+
+test("fetch: route-only Plus version (pfSense Plus/25.03) routes to release/plus-25.03/ — not 404", async () => {
+  // Given a routing.json with a route-only Plus entry alongside live entries:
+  // When a pfSense Plus 25.03 box requests a file,
+  // Then the Worker 302-redirects to the frozen release/plus-25.03/ catalog — not 404.
+  // The status field is "EOL" but the Worker does not consult it (informational only).
+  stubEdge(MANIFEST_WITH_EOL);
+  const res = await route(
+    "pkg/1.21 (FreeBSD:15:aarch64; Netgate pfSense Plus/25.03)",
+    "/FreeBSD:15:aarch64/meta.conf",
+  );
+  assert.equal(res.status, 302, "EOL Plus version must be routed, not rejected");
+  assert.equal(
+    res.headers.get("location"),
+    `${PAGES}/release/plus-25.03/aarch64/meta.conf`,
+    "EOL Plus must map to release/plus-25.03/ (normal path, not a special archive path)",
+  );
+});
+
+test("fetch: route-only CE UA does NOT match the Plus route-only pattern (opposite-edition guard)", async () => {
+  // Before: the CE-EOL UA resolves to ce-2.6 (proven above).
+  // Here: a manifest with ONLY the Plus-EOL route confirms the CE-EOL UA gets 404,
+  // proving the CE pattern "pfSense/2.6" and the Plus pattern "Netgate pfSense Plus/25.03"
+  // never cross-match — the UA substring "pfSense/2.6" does NOT appear in "Netgate pfSense Plus/25.03".
+  stubEdge({ routes: [PLUS_EOL] });
+  const res = await route(
+    "pkg/1.21 (FreeBSD:14:amd64; pfSense/2.6)",
+    "/FreeBSD:14:amd64/meta.conf",
+  );
+  assert.equal(res.status, 404, "CE-EOL UA must not match the Plus-EOL route");
+});
+
+test("fetch: route-only Plus UA does NOT match the CE route-only pattern (opposite-edition guard)", async () => {
+  // Mirror of the above: a manifest with ONLY the CE-EOL route confirms the Plus-EOL UA
+  // gets 404 — "Netgate pfSense Plus/25.03" does NOT contain "pfSense/2.6".
+  // Together these two guards pin that EOL entries share no cross-edition pattern leakage.
+  stubEdge({ routes: [CE_EOL] });
+  const res = await route(
+    "pkg/1.21 (FreeBSD:15:aarch64; Netgate pfSense Plus/25.03)",
+    "/FreeBSD:15:aarch64/meta.conf",
+  );
+  assert.equal(res.status, 404, "Plus-EOL UA must not match the CE-EOL route");
+});
