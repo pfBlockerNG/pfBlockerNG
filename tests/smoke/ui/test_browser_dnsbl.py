@@ -384,52 +384,48 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     dnsbl_vip_ready_browser: None,
     screenshot_dir: Path,
 ) -> None:
-    """pfb_dnsbl_lenient (PfbLenient gateway field) persists via the DNSBL page and DOM.
+    """pfb_dnsbl_lenient round-trips through the DNSBL page and the gateway.
 
-    Proves that the ADR-29 gateway routing on ``pfblockerng_dnsbl.php`` stores the
-    exact legacy token for ``pfb_dnsbl_lenient`` ('on'/'off') and that the DNSBL page
-    re-renders the checkbox in the matching state when reloaded.
+    Proves the ADR-29 gateway routing on ``pfblockerng_dnsbl.php`` stores the matching
+    checkbox token for ``pfb_dnsbl_lenient`` and that the page re-renders the checkbox
+    in the matching state when reloaded.
 
-    ``pfb_dnsbl_lenient`` uses the PfbLenient adapter — the only adapter class whose
-    stored off-value is 'off' (not '') and whose legacy vocabulary includes '' as a
-    legacy read token.  Testing its two canonical write tokens ('on' / 'off') here
-    proves the lenient adapter branch of the P6-routed page round-trips correctly.
+    NOTE on the stored vocabulary: although ``pfb_dnsbl_lenient`` has a 3-state
+    PfbLenient *read* adapter at the ``pfb_global()`` seam ('on'/'off'/''), the DNSBL
+    *page* treats it as a plain on/'' checkbox — it saves via ``pfb_filter(...,
+    PFB_FILTER_ON_OFF)`` (which rejects 'off') and renders via
+    ``pfb_cfg_toggle_read() === PfbToggle::On``. So the only page-reachable stored
+    tokens are 'on' (checked) and '' (unchecked); this test round-trips those.
 
     Scenario: ADR-29 gateway save→reload round-trip for pfb_dnsbl_lenient on the DNSBL page.
       Background: pfBlockerNG deployed; DNSBL VIP seeded; webConfigurator authenticated.
 
-    Given the current stored value of pfb_dnsbl_lenient (read via config_get oracle)
-      is one of 'on', 'off', or '' (the legacy read token treated as off),
-
-    When the DNSBL page is POST-saved with pfb_dnsbl_lenient set to the OTHER canonical
-      value ('on' ↔ 'off'),
-
-    Then config.xml holds the new token (write-adapter gate); AND the DNSBL page,
-      navigated fresh in the browser, renders the pfb_dnsbl_lenient checkbox in the
-      state that matches the new stored token (DOM-state gate); AND a second POST
-      restores the original value with the same two assertions (both directions).
+    Given the current checkbox state of pfb_dnsbl_lenient (read via config_get oracle —
+      'on' = checked, anything else = unchecked),
+    When the DNSBL page is POST-saved with the checkbox flipped,
+    Then config.xml holds the matching token ('on' or ''); AND the DNSBL page, navigated
+      fresh in the browser, renders the checkbox in the matching state; AND a second POST
+      restores the original state with the same two assertions (both directions).
     """
     page = browser_page
 
-    # GIVEN: read the starting value; treat '' (legacy absent) as 'off' for flip logic.
+    # GIVEN: the page stores this field as a plain on/'' checkbox ('off' is not a
+    # page-reachable token — pfb_filter ON_OFF rejects it). Map the stored value to its
+    # checkbox token: 'on' = checked, anything else (''/'off'/absent) = unchecked.
     original_raw = helpers.config_get(smoke_vm, _CFG_LENIENT)
-    assert original_raw in ("on", "off", ""), (
-        f"pfb_dnsbl_lenient starting value {original_raw!r} not in expected vocabulary"
-    )
-    # Normalise '' to 'off' for the flip direction (both '' and 'off' are "not on").
-    original_eff = original_raw if original_raw == "on" else "off"
-    flipped = "off" if original_eff == "on" else "on"
+    original_box = "on" if original_raw == "on" else ""
+    flipped = "" if original_box == "on" else "on"
 
     try:
-        # ---- FLIP: POST pfb_dnsbl_lenient to the opposite canonical value ---- #
+        # ---- FLIP: POST the checkbox to the opposite state ---- #
         resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": flipped}, timeout=_DNSBL_POST_TIMEOUT)
         assert "Sign In" not in resp.text, "pfb_dnsbl_lenient flip POST lost the session"
 
-        # Config oracle: stored token must equal the flipped value.
+        # Config oracle: stored token must equal the flipped checkbox value.
         stored_flip = helpers.config_get(smoke_vm, _CFG_LENIENT)
         assert stored_flip == flipped, (
             f"pfb_dnsbl_lenient gateway FAIL after flip: stored {stored_flip!r}, "
-            f"expected {flipped!r} (ADR-29 PfbLenient write-adapter must emit the exact legacy token)"
+            f"expected {flipped!r} (the DNSBL-page checkbox stores 'on'/'' through the gateway)"
         )
 
         # DOM oracle: reload the DNSBL page and assert the checkbox state matches.
@@ -442,27 +438,27 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
             expect(box_flip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_flip")
 
-        # ---- RESTORE: POST pfb_dnsbl_lenient back to the original effective value ---- #
-        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_eff}, timeout=_DNSBL_POST_TIMEOUT)
+        # ---- RESTORE: POST the checkbox back to its original state ---- #
+        resp = webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_box}, timeout=_DNSBL_POST_TIMEOUT)
         assert "Sign In" not in resp.text, "pfb_dnsbl_lenient restore POST lost the session"
 
-        # Config oracle: stored token must equal original_eff.
+        # Config oracle: stored token must equal the original checkbox value.
         stored_restore = helpers.config_get(smoke_vm, _CFG_LENIENT)
-        assert stored_restore == original_eff, (
-            f"pfb_dnsbl_lenient gateway FAIL after restore: stored {stored_restore!r}, expected {original_eff!r}"
+        assert stored_restore == original_box, (
+            f"pfb_dnsbl_lenient gateway FAIL after restore: stored {stored_restore!r}, expected {original_box!r}"
         )
 
         # DOM oracle: reload and assert the checkbox matches the restored value.
         _open(page, webui, DNSBL_PAGE)
         box_restore = page.locator("#pfb_dnsbl_lenient")
         expect(box_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
-        if original_eff == "on":
+        if original_box == "on":
             expect(box_restore).to_be_checked(timeout=JS_TIMEOUT_MS)
         else:
             expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_restore")
 
     finally:
-        # Belt-and-suspenders: restore to original_eff on any mid-flip abort.
-        if helpers.config_get(smoke_vm, _CFG_LENIENT) != original_eff:
-            webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_eff}, timeout=_DNSBL_POST_TIMEOUT)
+        # Belt-and-suspenders: restore to the original checkbox value on any mid-flip abort.
+        if helpers.config_get(smoke_vm, _CFG_LENIENT) != original_box:
+            webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_box}, timeout=_DNSBL_POST_TIMEOUT)
