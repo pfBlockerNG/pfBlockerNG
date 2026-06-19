@@ -406,14 +406,18 @@ def _edition_table_html(rows: list[dict]) -> str:
 
 def _packages_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
     """The Published-packages block: one titled table per pfSense edition, each followed by
-    that edition's retained older nightlies folded into a collapsed disclosure."""
+    that edition's retained older releases and older nightlies, each folded into a collapsed
+    disclosure."""
     sections = [(k, rows) for k, rows in build_edition_sections(pkgs, matrix) if rows]
     if not sections:
         return '<p class="empty">No packages published yet.</p>'
-    older_by_edition = _older_nightlies_by_edition(pkgs, matrix)
+    older_releases_by_edition = _older_releases_by_edition(pkgs, matrix)
+    older_nightlies_by_edition = _older_nightlies_by_edition(pkgs, matrix)
     return "".join(
         f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>"
-        f"{_edition_table_html(rows)}{_older_nightlies_details(older_by_edition.get(k, []))}"
+        f"{_edition_table_html(rows)}"
+        f"{_older_releases_details(older_releases_by_edition.get(k, []))}"
+        f"{_older_nightlies_details(older_nightlies_by_edition.get(k, []))}"
         for k, rows in sections
     )
 
@@ -470,6 +474,62 @@ def _older_nightlies_details(rows: list[dict]) -> str:
     if not rows:
         return ""
     return f"<details><summary>Older nightlies ({len(rows)})</summary>{_older_nightlies_table_html(rows)}</details>"
+
+
+def older_releases(pkgs: list[dict]) -> list[dict]:
+    """The retained stable/devel release builds OTHER than the newest per channel.
+
+    The per-edition tables surface only the latest devel and stable versions (the
+    "install now" view); release retention (ADR-27) keeps several older releases in the
+    catalog, reachable here so a human can find a rollback target. Sorted newest-first
+    within each channel, then by ABI. Empty when no older versions are retained.
+    """
+    latest = latest_versions(pkgs)
+    rows = [p for p in pkgs if p["channel"] in ("devel", "stable") and p["version"] != latest.get(p["channel"])]
+    rows.sort(key=lambda p: p["abi"])
+    rows.sort(key=lambda p: (CH_ORDER.index(p["channel"]), ver_key(p["version"])), reverse=True)
+    return rows
+
+
+def _older_releases_table_html(rows: list[dict]) -> str:
+    """One older-releases table for a single edition: same columns as the per-edition
+    tables (matrix-joined pfSense version + PHP/Python), WITH Channel — devel and stable
+    can both appear, so the channel column distinguishes them."""
+    body = "".join(
+        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
+        f"<td>{_esc(r['channel'])}</td>"
+        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
+        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
+        f'<td class="num">{_esc(r.get("published", ""))}</td>'
+        f"<td>{commit_cell(r.get('commit', ''))}</td>"
+        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
+        for r in rows
+    )
+    return (
+        '<div class="tablewrap"><table><thead><tr>'
+        "<th>pfSense</th><th>Channel</th><th>Version</th><th>ABI</th>"
+        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _older_releases_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
+    """The retained older releases grouped by edition key (matrix-joined by ABI), so each
+    edition's disclosure folds in directly under that edition's table. Empty when none."""
+    by_edition: dict[str, list[dict]] = {}
+    for ekey, row in _join_matrix(older_releases(pkgs), matrix):
+        by_edition.setdefault(ekey, []).append(row)
+    return by_edition
+
+
+def _older_releases_details(rows: list[dict]) -> str:
+    """One edition's retained older releases, folded into a collapsed disclosure; "" when
+    that edition has none. Includes Channel column (devel and stable can both appear)."""
+    if not rows:
+        return ""
+    return f"<details><summary>Older releases ({len(rows)})</summary>{_older_releases_table_html(rows)}</details>"
 
 
 def render_page(

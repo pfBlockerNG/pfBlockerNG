@@ -161,7 +161,10 @@ pkg install pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable b
 
 `pkg install <name>` with no version always resolves the **highest** version listed in the
 catalog (newest-wins). Only the configured N most recent devel releases and M most recent
-stable releases are retained; builds older than that window are no longer in the catalog.
+stable releases are retained; builds older than that window are no longer in the catalog. The
+**repository landing page** ([pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg))
+shows an "Older releases" disclosure per pfSense edition listing the retained versions with
+their commit and date — use it to find the version string to pass to `pkg install`.
 
 > **Config-schema note:** rolling back across a schema-changing release may leave the stored
 > `config.xml` in a format the older code cannot read. Test first in a non-production VM.
