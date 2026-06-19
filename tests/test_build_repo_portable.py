@@ -2193,3 +2193,125 @@ def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
     objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
     versions = {o["version"] for o in objs}
     assert versions == {"3.1.0_4", "3.1.0_5"}
+
+
+# --------------------------------------------------------------------------- #
+# ADR-27 Phase 10: --route-only-pkgs CLI flag
+#
+# The Python API accepts route_only_pkgs as a dict; publish.yml calls the CLI,
+# so the --route-only-pkgs VARVER:PATH flag (repeatable) must be wired end-to-end.
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
+    """``--route-only-pkgs VARVER:PATH`` wires route_only_pkgs through the CLI.
+
+    Scenario: CE 2.7 route-only entry + one frozen .pkg supplied via CLI flag
+      Given a route-only CE 2.7 matrix entry (role=route-only) and a frozen .pkg
+        And --route-only-pkgs ce-2.7:<path> passed on the CLI
+      When ``brp.main(["--build-matrix", ...])`` is called
+      Then rc == 0
+       And release/ce-2.7/amd64/ catalog exists with the frozen version
+       And nightly/ce-2.7/ does NOT exist (no nightly for route-only)
+    """
+    out = tmp_path / "site"
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    frozen_pkg = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    matrix_json = json.dumps([_CE_EOL])
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(matrix_json)
+
+    # BEFORE: site dir does not exist yet.
+    assert not out.exists()
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(matrix_file),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--route-only-pkgs",
+            f"ce-2.7:{frozen_pkg}",
+        ]
+    )
+
+    # THEN: CLI exits 0, catalog present, no nightly.
+    assert rc == 0
+    catalog = out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg"
+    assert catalog.is_file(), f"route-only release catalog not emitted: {catalog}"
+    objs = _catalog_objects(catalog)
+    assert len(objs) == 1
+    assert objs[0]["version"] == "3.1.0_5"
+    assert not (out / "nightly" / "ce-2.7").exists(), "nightly subtree must not exist for route-only entry"
+
+
+def test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen(tmp_path: Path) -> None:
+    """``--route-only-pkgs`` is repeatable: two flags for the same varver fold both .pkg files in.
+
+    Scenario: same varver supplied twice — the rollback use-case (last two frozen builds).
+      Given two frozen .pkg files for ce-2.7
+        And --route-only-pkgs ce-2.7:<a> --route-only-pkgs ce-2.7:<b> on the CLI
+      When brp.main is called
+      Then the catalog lists BOTH versions.
+    """
+    out = tmp_path / "site"
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
+    frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
+    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([_CE_EOL]))
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(matrix_file),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--route-only-pkgs",
+            f"ce-2.7:{frozen_a}",
+            "--route-only-pkgs",
+            f"ce-2.7:{frozen_b}",
+        ]
+    )
+
+    assert rc == 0
+    objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    assert {o["version"] for o in objs} == {"3.1.0_4", "3.1.0_5"}
+
+
+def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
+    """``--route-only-pkgs`` without a colon separator is a usage error (SystemExit).
+
+    Scenario: malformed VARVER:PATH argument (no colon).
+      Given --route-only-pkgs ce-2.7-without-colon (missing ':')
+      When brp.main is called
+      Then it raises SystemExit (argparse usage error).
+    """
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([_CE_EOL]))
+
+    with pytest.raises(SystemExit):
+        brp.main(
+            [
+                "--build-matrix",
+                "--matrix-json",
+                str(matrix_file),
+                "--out",
+                str(tmp_path / "site"),
+                "--route-only-pkgs",
+                "ce-2.7-no-colon",  # missing ':' separator
+            ]
+        )

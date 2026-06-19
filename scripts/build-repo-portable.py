@@ -1038,6 +1038,19 @@ def main(argv: list[str]) -> int:
         ),
     )
     g_matrix.add_argument(
+        "--route-only-pkgs",
+        action="append",
+        default=[],
+        dest="route_only_pkgs",
+        metavar="VARVER:PATH",
+        help=(
+            "frozen .pkg for a route-only (EOL) catalog entry, in VARVER:PATH form "
+            "(repeatable; e.g. --route-only-pkgs ce-2.7=/path/to/frozen.pkg). "
+            "publish.yml downloads these from GitHub Releases and passes them here. "
+            "Required for every route-only matrix entry; raises BuildRepoError when absent."
+        ),
+    )
+    g_matrix.add_argument(
         "--annotate",
         action="append",
         default=[],
@@ -1086,6 +1099,14 @@ def main(argv: list[str]) -> int:
             k, v = item.split("=", 1)
             annotate[k] = v
         extra_pkgs = [Path(p) for p in args.release_extra_pkgs] if args.release_extra_pkgs else None
+        route_only: dict[str, list[Path]] | None = None
+        if args.route_only_pkgs:
+            route_only = {}
+            for item in args.route_only_pkgs:
+                if ":" not in item:
+                    ap.error(f"--route-only-pkgs must be VARVER:PATH (got {item!r})")
+                varver_key, _, pkg_path = item.partition(":")
+                route_only.setdefault(varver_key, []).append(Path(pkg_path))
         try:
             build_repo_matrix(
                 matrix,
@@ -1100,6 +1121,7 @@ def main(argv: list[str]) -> int:
                 release_keep_devel=args.release_keep_devel,
                 release_keep_stable=args.release_keep_stable,
                 release_extra_pkgs=extra_pkgs,
+                route_only_pkgs=route_only,
                 annotate=annotate or None,
             )
         except (BuildRepoError, subprocess.CalledProcessError) as e:
