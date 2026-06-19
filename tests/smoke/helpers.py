@@ -53,7 +53,15 @@ from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
-from .conftest import GUEST_TO_HOST_ALIAS, SMOKE_DIR, STUB_DNS_A, SmokeVM, resolve_a
+from .conftest import (
+    DEFAULT_BOOT_TIMEOUT,
+    GUEST_TO_HOST_ALIAS,
+    SMOKE_DIR,
+    STUB_DNS_A,
+    WAIT_READY_SH,
+    SmokeVM,
+    resolve_a,
+)
 
 # --------------------------------------------------------------------------- #
 # Paths / constants
@@ -1933,6 +1941,79 @@ def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"reset {verb} failed: rc={result.returncode} stderr={result.stderr!r}")
     reload(vm, "update", timeout=timeout)
+
+
+# --------------------------------------------------------------------------- #
+# Reboot — restart the guest OS, then wait until it is fully usable again
+# --------------------------------------------------------------------------- #
+# conftest.smoke_vm is ONE long-lived boot whose copy-on-write overlay IS the guest
+# disk, so a guest ``/sbin/reboot`` restarts the OS while QEMU, the overlay,
+# /conf/config.xml and /var/db all survive -- exactly the boot path issue #334 is
+# about (``is_platform_booting()`` true). A test that reboots carries the ``reboot``
+# marker (deselected from ``-m smoke``): the reboot mutates the SHARED session VM, so
+# it must run in its own dispatch, not interleaved with the per-case smoke matrix.
+
+
+def kern_boottime(vm: SmokeVM, *, timeout: float = 15.0) -> str:
+    """The guest's ``kern.boottime`` sysctl -- a token unique to each boot.
+
+    It changes on every real reboot, so comparing it before/after PROVES the box
+    actually went down and came back, rather than the harness reconnecting to a
+    still-alive pre-reboot sshd. Returns '' when unreadable (SSH down mid-reboot)."""
+    result = vm.ssh("/sbin/sysctl", "-n", "kern.boottime", timeout=timeout)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float = 5.0) -> None:
+    """Reboot the guest OS and block until it is usable again (SSH + web + Unbound).
+
+    Each step guards against a FALSE "ready":
+
+      1. Capture ``kern.boottime`` BEFORE the reboot.
+      2. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH
+         session, so a non-zero / dropped result is EXPECTED, not an error.
+      3. Poll ``kern.boottime`` until it is readable AND differs from the captured
+         value. This proves the OS rebooted and cleanly steps over the brief window
+         where the OLD sshd still answers (same boottime) before it dies.
+      4. Run ``wait_ready.sh`` (watching the QEMU pid + the web port) so the
+         webConfigurator (nginx + PHP) is up, then ``wait_unbound_ready`` -- the
+         same full-readiness gate the initial boot uses.
+    """
+    before = kern_boottime(vm)
+    # The reboot drops the SSH connection; ignore the result (best-effort).
+    vm.ssh("/sbin/reboot", timeout=30.0)
+
+    deadline = time.monotonic() + timeout
+    rebooted = False
+    while time.monotonic() < deadline:
+        now = kern_boottime(vm)
+        if now and now != before:
+            rebooted = True
+            break
+        time.sleep(poll)
+    if not rebooted:
+        raise RuntimeError(f"reboot_vm: guest did not reboot within {timeout}s (kern.boottime stayed {before!r})")
+
+    # Full readiness via the same shell gate the initial boot uses. wait_ready.sh's
+    # positional args are <ssh-key> [host] [port] [timeout] [vm-pid] [web-port]; pass
+    # the vm-pid + web-port pair only when the pid is known (so a dead boot fails fast
+    # AND web readiness requires nginx+PHP, not just sshd).
+    argv = [
+        "sh",
+        str(WAIT_READY_SH),
+        vm.ssh_key_path,
+        vm.host,
+        str(vm.ssh_port),
+        str(int(max(1.0, deadline - time.monotonic()))),
+    ]
+    if vm.vm_pid is not None:
+        argv += [str(vm.vm_pid), str(vm.web_port)]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
+        )
+    wait_unbound_ready(vm)
 
 
 UNBOUND_CONF = "/var/unbound/unbound.conf"
