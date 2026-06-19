@@ -597,7 +597,7 @@ if ($_POST && isset($_POST['save'])) {
 		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
 		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
 		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network or Host-type'],
-		'aliasaddr_out'  => ['dir' => 'Destination Out', 'type_label' => 'Network or Host-type'],
+		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network or Host-type'],
 	];
 	foreach ($adv_alias_fields as $field => $meta) {
 		if (!empty($_POST[$field])) {
