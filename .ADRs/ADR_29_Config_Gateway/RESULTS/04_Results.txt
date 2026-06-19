@@ -1,0 +1,165 @@
+ADR-29 Phase 4 — Route the config read seam and section wipe through the gateway
+==================================================================================
+Status: COMPLETE — all verification gates green
+Date:   2026-06-19
+
+## What was done
+
+Routed the pfb_global() read seam, the SafeSearch direct reads, and the
+pfb_remove_config_settings() section wipe through PfbConfig. Added 25 default-parity
+tests before any source change to encode the contract. Behaviour-preserving: all
+downstream $pfb[...] values and the wipe section set are IDENTICAL. The ONLY intended
+behaviour change is the #281 default repair (pfb_keep), asserted explicitly.
+
+## Default-parity tests — tests/php/PfbGlobalParityTest.php [NEW FILE]
+
+25 tests in 4 groups, all GREEN before the source change:
+
+  A — General section (13 tests)
+      testParityEnableCbAbsentYieldsOff
+      testParityPfbKeepAbsentYieldsOn            *** #281 REPAIR ASSERTION ***
+      testParityPfbIntervalAbsentYieldsOne
+      testParityPfbAggTypesAbsentYieldsEmpty
+      testParityPfbMinAbsentYieldsZero
+      testParityPfbHourAbsentYieldsZero
+      testParityPfbDailystartAbsentYieldsZero
+      testParitySkipfeedAbsentYieldsZeroString
+      testParityPfbReuseAbsentYieldsOff
+
+  B — DNSBL settings section (10 tests)
+      testParityPfbDnsblAbsentYieldsOff
+      testParityPfbDnsvipAutoAbsentYieldsOff
+      testParityDnsblInterfaceAbsentYieldsLo0
+      testParityAlexaTypeAbsentYieldsTranco
+      testParityGlobalLogAbsentYieldsEmpty
+      testParityPfbDnsblLenientAbsentYieldsOff
+      testParityPfbHstsAbsentYieldsOff
+      testParityPfbIdnAbsentYieldsEmpty
+      testParityPfbIdnBlockMaliciousAbsentYieldsOn
+      testParityPfbIdnEscalateSuspiciousAbsentYieldsEmpty
+      testParityPfbRegexCapAbsentYieldsEmpty
+
+  C — SafeSearch section (4 tests)
+      testParitySafesearchEnableAbsentYieldsDisable
+      testParitySafesearchYoutubeAbsentYieldsDisable
+      testParitySafesearchDohAbsentYieldsDisable
+      testParitySafesearchDohListAbsentYieldsEmpty
+
+  D — Explicit #281 repair assertion (1 test)
+      testRepair281PfbKeepDefaultIsFormallyOn
+        Asserts: absent -> 'on' (matches OLD ?? 'on'); explicit '' -> 'off' (user
+        opt-out still honoured). No behaviour change — the default is now FORMAL.
+
+## pfb_global() keys and sections routed (pfblockerng.inc)
+
+Section reads via PfbConfig::readSection():
+  installedpackages/pfblockerng/config/0         -> $pfb['config']
+  installedpackages/pfblockerngdnsblsettings/config/0 -> $pfb['dnsblconfig']
+
+NOT registered (kept as direct config_get_path):
+  installedpackages/pfblockerngipsettings/config/0 -> $pfb['ipconfig']
+  installedpackages/pfblockerngblacklist           -> $pfb['blconfig']
+  installedpackages/pfblockerngglobal              -> $pfb['config_global']
+
+Per-key reads via PfbConfig::read() — adapter fields and non-trivial defaults:
+  enable_cb                  -> PfbConfig::read('enable_cb')->value
+  pfb_keep                   -> PfbConfig::read('pfb_keep')->value  [#281]
+  pfb_interval               -> PfbConfig::read('pfb_interval')
+  pfb_agg_types              -> PfbConfig::read('pfb_agg_types')
+  pfb_dnsbl                  -> PfbConfig::read('pfb_dnsbl')->value
+  pfb_dnsvip_auto            -> PfbConfig::read('pfb_dnsvip_auto')->value
+  dnsbl_interface            -> PfbConfig::read('dnsbl_interface')
+  alexa_type                 -> PfbConfig::read('alexa_type')
+  global_log                 -> PfbConfig::read('global_log')
+  pfb_dnsbl_lenient          -> PfbConfig::read('pfb_dnsbl_lenient')->value
+  pfb_hsts                   -> PfbConfig::read('pfb_hsts')->value
+  pfb_idn                    -> PfbConfig::read('pfb_idn')  [plain; on->all normalise preserved]
+  pfb_idn_block_malicious    -> PfbConfig::read('pfb_idn_block_malicious')
+  pfb_idn_escalate_suspicious -> PfbConfig::read('pfb_idn_escalate_suspicious')
+  pfb_regex_cap              -> PfbConfig::read('pfb_regex_cap')
+  safesearch_enable          -> PfbConfig::read('safesearch_enable')
+  safesearch_youtube         -> PfbConfig::read('safesearch_youtube')
+  safesearch_doh             -> PfbConfig::read('safesearch_doh')
+  safesearch_doh_list        -> PfbConfig::read('safesearch_doh_list')
+
+Plain-string fields left reading from the cached section array (registered but
+null/null adapters, identical read semantics for the cached-array path):
+  pfb_dnsport, pfb_dnsport_ssl, alexa_enable, alexa_count, alexa_inclusion,
+  pfb_cache, pfb_py_reply, pfb_regex, pfb_regex_list, pfb_cname, pfb_pytld,
+  pfb_py_nolog, pfb_noaaaa, pfb_noaaaa_list, pfb_gp, pfb_gp_bypass_list.
+  (These still benefit from section-level gateway via readSection.)
+
+## pfb_remove_config_settings() wipe — the ~20-section set
+
+Same 20 sections as before — now via PfbConfig::deleteSection():
+  pfblockerng, pfblockerngglobal, pfblockerngsync, pfblockerngreputation,
+  pfblockerngipsettings, pfblockernglistsv4, pfblockernglistsv6,
+  pfblockerngdnsbl, pfblockerngdnsblsettings, pfblockerngsafesearch,
+  pfblockerngblacklist, pfblockerngafrica, pfblockerngantarctica,
+  pfblockerngasia, pfblockerngeurope, pfblockerngnorthamerica,
+  pfblockerngoceania, pfblockerngsouthamerica, pfblockerngtopspammers,
+  pfblockerngproxyandsatellite.
+
+The exact set is UNCHANGED from the old config_del_path loop.
+
+## #281 surface
+
+The pfb_keep default repair: the registry default 'on' matches the old ?? 'on' fallback
+exactly. No stored-value change; no runtime behaviour change. The migration (pfb_keep_migrate)
+seeds this into config.xml for existing installs (Phase 2); the runtime default via PfbConfig
+is now formal, not scattered per-site. The #281 class is structurally closed.
+
+## Watch-outs for Phase 5
+
+- pfb_global() cron loop (pfb_min/pfb_hour/pfb_dailystart) still reads from $pfb['config']
+  cache array after the section is readSection'd. Parity holds. Phase 5 can route these
+  individually if desired, but it's not required for correctness.
+- SafeSearch now goes fully through the gateway. The old code had explicit 'Disable' fallbacks
+  in config_get_path; the registry defaults match ('Disable'). Confirmed by parity tests C.
+- pfb_remove_config_settings() is now gateway-routed; deleteSection wraps config_del_path
+  — same semantic, same behaviour. The pre-deinstall hook calls this unchanged.
+- pfb['keep'] comparison at pre-deinstall: $pfb['keep'] != 'on' — now gets '' (PfbToggle::Off
+  ->value) or 'on' (PfbToggle::On->value), same as before.
+- www/ pages and install.inc writes NOT touched — Phase 5.
+
+## Tests
+
+  vendor/bin/phpunit:
+    Before Phase 4: 705 tests, 2598 assertions  (Phase 3 baseline)
+    After  Phase 4: 730 tests, 2662 assertions  (+25 tests, +64 assertions)
+
+  python -m pytest: 1733 passed
+
+## Verification gates — all passed
+
+  php -l pfblockerng.inc                         -> "No syntax errors detected"
+  vendor/bin/phpunit                              -> 730 tests, 2662 assertions — OK
+  vendor/bin/phpstan analyse                      -> "No errors"
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> (no output — clean)
+  python -m pytest                                -> 1733 passed
+  ruff check . && ruff format --check .           -> "All checks passed! / 112 files already formatted"
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    — pfb_global(): sections config/dnsblconfig -> PfbConfig::readSection()
+    — pfb_global(): per-key reads with adapters/defaults -> PfbConfig::read()
+    — pfb_global(): SafeSearch block -> PfbConfig::read()
+    — pfb_remove_config_settings(): config_del_path loop -> PfbConfig::deleteSection()
+
+  tests/php/PfbGlobalParityTest.php  [NEW FILE]
+    — 25 parity tests (groups A-D; #281 explicit repair assertion)
+
+## Go-ahead for Phase 5
+
+Phase 4 is complete. The central read seam (pfb_global), the section wipe
+(pfb_remove_config_settings), and the pre-deinstall keep-read all flow through PfbConfig.
+Default parity is proven per-key by 25 unit tests. The #281 class is structurally closed.
+
+All gates green. Phase 5 (www/ pages + install.inc writes) can proceed.
+
+## Commit
+
+  pfblockerng: route the config read seam and section wipe through the gateway (ADR-29 P4)
+
+  Branch: adr/29-config-gateway
