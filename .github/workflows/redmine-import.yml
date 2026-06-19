@@ -48,6 +48,13 @@ on:
           process all open issues (subject to limit/updated_after).
         required: false
         default: ""
+      issue_ids:
+        description: >
+          Process ONLY this explicit comma/space-separated list of Redmine
+          issue IDs (skips fetching the open-issue list).  Use after triage
+          to import a curated set.  Leave empty to process all open issues.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -81,20 +88,25 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit }}
           UPDATED_AFTER: ${{ github.event.inputs.updated_after }}
           ISSUE_ID: ${{ github.event.inputs.issue_id }}
+          ISSUE_IDS: ${{ github.event.inputs.issue_ids }}
         run: |
           set -eu
-          ARGS=""
+          # Build argv as a bash array so each value stays one argument (handles the
+          # comma/space list in ISSUE_IDS) and never re-tokenizes the command.
+          ARGS=()
           if [ "$DRY_RUN" = "true" ]; then
-            ARGS="$ARGS --dry-run"
+            ARGS+=(--dry-run)
           fi
           if [ -n "$LIMIT" ]; then
-            ARGS="$ARGS --limit $LIMIT"
+            ARGS+=(--limit "$LIMIT")
           fi
           if [ -n "$UPDATED_AFTER" ]; then
-            ARGS="$ARGS --updated-after $UPDATED_AFTER"
+            ARGS+=(--updated-after "$UPDATED_AFTER")
           fi
           if [ -n "$ISSUE_ID" ]; then
-            ARGS="$ARGS --issue $ISSUE_ID"
+            ARGS+=(--issue "$ISSUE_ID")
           fi
-          # shellcheck disable=SC2086
-          python scripts/redmine_to_github.py $ARGS
+          if [ -n "$ISSUE_IDS" ]; then
+            ARGS+=(--issue-ids "$ISSUE_IDS")
+          fi
+          python scripts/redmine_to_github.py "${ARGS[@]}"

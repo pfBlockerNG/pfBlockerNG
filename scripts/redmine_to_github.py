@@ -272,6 +272,25 @@ def parse_posted_journal_ids(comment_bodies: Iterable[str]) -> set[int]:
     return ids
 
 
+def parse_issue_ids(raw: str) -> list[int]:
+    """Parse a comma/space-separated list of Redmine issue IDs into ints.
+
+    Tolerates commas, spaces, and newlines as separators; ignores blank tokens;
+    drops non-numeric tokens. Duplicates are removed while preserving first-seen
+    order (so the migration processes them in the order given).
+    """
+    ids: list[int] = []
+    seen: set[int] = set()
+    for tok in re.split(r"[,\s]+", raw.strip()):
+        if not tok or not tok.isdigit():
+            continue
+        n = int(tok)
+        if n not in seen:
+            seen.add(n)
+            ids.append(n)
+    return ids
+
+
 def note_journals(journals: list[dict]) -> list[dict]:
     """Return journals that carry a non-empty note, in chronological order.
 
@@ -581,6 +600,7 @@ def _run_migration(
     limit: int | None,
     updated_after: date | None,
     single_issue_id: int | None,
+    explicit_ids: list[int] | None,
     sleep_seconds: float,
     migration_author: str,
 ) -> _Stats:
@@ -601,9 +621,14 @@ def _run_migration(
         redmine_to_gh = list_imported_issues(owner_repo, github_token, sleep_seconds)
         logging.info("Found %d already-imported issues", len(redmine_to_gh))
 
-    # Collect Redmine issue IDs to process.
-    if single_issue_id is not None:
-        issue_ids: list[int] = [single_issue_id]
+    # Collect Redmine issue IDs to process. An explicit ID list (--issue-ids) takes
+    # precedence and skips the open-issue fetch entirely; then a single --issue; else
+    # the full open-issue list.
+    if explicit_ids is not None:
+        issue_ids: list[int] = list(explicit_ids)
+        logging.info("Processing %d explicitly-listed Redmine issue(s)", len(issue_ids))
+    elif single_issue_id is not None:
+        issue_ids = [single_issue_id]
     else:
         logging.info("Fetching open Redmine issue list…")
         issue_ids = fetch_open_issue_ids(redmine_base_url, redmine_api_key, sleep_seconds)
@@ -754,6 +779,15 @@ def main() -> None:
         help="Migrate a single Redmine issue by ID (for testing).",
     )
     ap.add_argument(
+        "--issue-ids",
+        default="",
+        metavar="IDS",
+        help=(
+            "Process ONLY this explicit, comma/space-separated list of Redmine issue IDs "
+            "(skips fetching the open-issue list). Useful after triage to import a curated set."
+        ),
+    )
+    ap.add_argument(
         "--redmine-base-url",
         default=_REDMINE_BASE_URL,
         help=f"Redmine base URL (default: {_REDMINE_BASE_URL})",
@@ -807,6 +841,15 @@ def main() -> None:
     if args.dry_run:
         logging.info("=== DRY-RUN MODE — no writes will be made ===")
 
+    # An explicit --issue-ids that parses to nothing (only junk/separators) must NOT
+    # silently fall through to migrating every open issue — fail loudly instead.
+    explicit_ids: list[int] | None = None
+    if args.issue_ids.strip():
+        explicit_ids = parse_issue_ids(args.issue_ids)
+        if not explicit_ids:
+            logging.error("Invalid --issue-ids %r (expected at least one numeric ID)", args.issue_ids)
+            sys.exit(1)
+
     try:
         stats = _run_migration(
             redmine_base_url=args.redmine_base_url,
@@ -817,6 +860,7 @@ def main() -> None:
             limit=args.limit,
             updated_after=updated_after,
             single_issue_id=args.issue_id,
+            explicit_ids=explicit_ids,
             sleep_seconds=args.sleep,
             migration_author=args.migration_author,
         )
