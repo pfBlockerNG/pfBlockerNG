@@ -638,6 +638,7 @@ jobs:
           sparse-checkout: scripts/
           sparse-checkout-cone-mode: false
           path: pfblockerng-src
+          persist-credentials: false
 
       - name: Configure git
         run: |
@@ -675,6 +676,10 @@ jobs:
           # editing, so the compare-and-bump helper can decide whether to increment
           # or reset.  Absent PORTREVISION is treated as 0 by the helper.
           OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+          if [ -z "${OLD_PORTVERSION}" ]; then
+            echo "::error::PORTVERSION not found in ${MAKEFILE}"
+            exit 1
+          fi
           OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
 
           # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
