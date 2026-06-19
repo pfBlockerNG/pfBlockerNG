@@ -1,0 +1,61 @@
+================================================================================
+PHASE 5 PROMPT — Landing "Older releases" + rollback documentation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.1 landing/CLI rows, §2.3, §6 Phase 5)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 5 of 5 (final). Surfaces the retained
+rollback targets to humans and documents the rollback procedure. NO src/ — this ADR ships no GUI
+(rollback is a support/debug action, not a user flow; see ADR §2.1 "Rollback UX (CLI only)" + §2.3).
+Touches scripts/ + tests/ + docs only, so the ui_render gate does NOT apply. Inline, one commit, push.
+
+WHY THIS PHASE EXISTS
+With the catalog now retaining releases (Phases 1-4), surface the rollback targets on the self-hosted
+landing page (parallel to "Older nightlies") and document the CLI rollback so an operator can find and
+perform a downgrade. There is deliberately no GUI page — that stays with the deferred ADR-19 panel.
+
+REQUIRED READING
+- FIRST, read RESULTS/04_Results.txt — confirm rollback works via the catalog + the exact pkg command an
+  operator runs. If it does NOT (REJECT trigger fired), STOP and report — the docs must not promise a
+  rollback that pkg cannot perform.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md  (§2.1 landing + CLI rows, §3 foot-gun, §7)
+- scripts/gen_landing.py — _older_nightlies_by_edition / _older_nightlies_details / _packages_html
+  (mirror these for "Older releases"); tests/test_gen_landing.py.
+- README + docs/ — where install/usage is documented (place the rollback procedure consistently);
+  CLAUDE.md ("Updating documentation", markdownlint rules).
+
+ACTION PLAN
+1. gen_landing.py: add a per-edition "Older releases" disclosure (the retained devel/stable versions,
+   minus the newest already shown in the edition table) with commit/date, reusing the matrix-join +
+   _older_nightlies_table_html shape. Keep output deterministic.
+   Unit tests in tests/test_gen_landing.py: the disclosure lists exactly the retained-but-not-newest set
+   (before/after: assert the newest is in the main table and ABSENT from "Older releases"); columns;
+   empty case (only one retained version -> no "Older releases" disclosure).
+2. README/docs: document the CLI rollback procedure -- `pkg install pfSense-pkg-pfBlockerNG[-devel]-<version>`
+   (pinned, deps resolved from our repo) or `pkg add <pages-url>/.../<name>-<version>.pkg`. Include the
+   config-schema-mismatch caveat (ADR §3 foot-gun): a newer config read by older code can misbehave; there
+   is no backward config migration -- rollback is a support/debug action. Match neighbouring doc style.
+
+CONSTRAINTS
+- Python 3.11+, stdlib + existing zstd; deterministic, mtime-pinned landing output (ADR-17).
+- Docs: markdownlint-clean; terse, match neighbouring style; no overlong prose.
+- Do NOT add any src/ page or pfSense menu entry -- no GUI in this ADR (ADR §2.3).
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff check . / ruff format --check / mypy tests/   → green/clean (gen_landing cases)
+- npx markdownlint-cli2 on the touched Markdown
+- (No php -l / ui_render — no src/ touched.)
+
+EXPECTED RESULT
+The landing page shows "Older releases" per edition; the README/docs describe the CLI rollback + caveat.
+No src/ change.
+
+COMMIT (single)
+    dev: surface retained releases on the landing page + document CLI rollback (ADR-27 P5)
+Push directly to the branch; open the PR per the normal landing flow (tests/scripts touched).
+
+HANDOFF — write RESULTS/05_Results.txt
+State: the gen_landing additions + tests (the "Older releases" disclosure, before/after); the doc
+location + the rollback procedure documented. Note Part 2 (§2.4) remains design-only/deferred. ADR-27
+Part 1 complete — summarize the Definition-of-Done evidence (§7) for the maintainer's accept decision.
