@@ -7,9 +7,9 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * sanitize_ipaddr() — normalise an IPv4(/mask): strip leading zeros, drop a /32,
- * auto-/24 a trailing-zero host, force the 4th octet to 0 on /24, and (when
- * $pfb['supp']=='on' and not a custom list) drop loopback/reserved/private and
- * apply the Advanced CIDR floor.
+ * keep a bare address as a single host (/32) even when it ends in '.0', force
+ * the 4th octet to 0 on an explicit /24, and (when $pfb['supp']=='on' and not a
+ * custom list) drop loopback/reserved/private and apply the Advanced CIDR floor.
  */
 #[CoversFunction('sanitize_ipaddr')]
 final class SanitizeIpaddrTest extends TestCase
@@ -32,11 +32,16 @@ final class SanitizeIpaddrTest extends TestCase
 		$this->assertSame('10.0.0.0/24', sanitize_ipaddr('10.0.0.0/24', false, 'Disabled'));
 	}
 
-	public function testAutoSlash24WhenTrailingOctetZeroAndNoMask(): void
+	// A bare IPv4 ending in '.0' is a single host (/32), not a /24 network.
+	// '.0' is a valid host address; inferring /24 would silently over-block the
+	// surrounding 255 addresses (issue #320). A feed that means the network
+	// writes the mask explicitly ('192.0.2.0/24'), covered by the next test.
+	public function testBareTrailingZeroAddressKeptAsSingleHostNotWidenedToSlash24(): void
 	{
-		$this->assertSame('192.0.2.0/24', sanitize_ipaddr('192.0.2.0', false, 'Disabled'));
+		$this->assertSame('192.0.2.0', sanitize_ipaddr('192.0.2.0', false, 'Disabled'));
 	}
 
+	// The paired branch: an EXPLICIT /24 is normalised to its network address.
 	public function testSlash24ForcesFourthOctetToZero(): void
 	{
 		$this->assertSame('192.0.2.0/24', sanitize_ipaddr('192.0.2.7/24', false, 'Disabled'));

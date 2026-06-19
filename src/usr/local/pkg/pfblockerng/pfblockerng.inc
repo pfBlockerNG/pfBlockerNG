@@ -6009,12 +6009,11 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		}
 
 		if ($key == 3) {
-			// If mask is not defined and 4th octet is '0', set mask to '24'
-			if ($octet == 0 && empty($mask)) {
-				$mask = 24;
-			}
-
-			// If mask is '24', force 4th octet to '0'
+			// If mask is '24', force 4th octet to '0' (normalise to the
+			// network address). A bare IPv4 with no mask is treated as a
+			// single host (/32) - the trailing '.0' is a valid host, so it
+			// is NOT widened to a /24 (that silently over-blocks 255 extra
+			// addresses; a feed that means the network writes '.0/24').
 			if ($mask == 24 && $octet != 0) {
 				$ip[$key] = 0;
 			}
