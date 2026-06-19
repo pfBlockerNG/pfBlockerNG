@@ -91,6 +91,15 @@ PAGE_TABLE: tuple[Page, ...] = (
         ("Pre-defined Alias/Group/Feeds", "DNSBL Alias name(s):"),
     ),
     Page("alerts", "/pfblockerng/pfblockerng_alerts.php", ("Alert Settings",)),
+    # The Reports sub-tabs are the same page under ?view=; the stats views (IP Block
+    # Stats + DNSBL Block Stats, issue #387) traverse the view switch + the per-stat-type
+    # two-column render path. The sub-tab nav label is rendered on every view
+    # (data-independent), so it is the marker. The pie panels themselves are alert-data
+    # gated, and the responsive-layout + print-stylesheet *visual* correctness added for
+    # #387 is an ADR-14 out-of-CI item (ui_browser tier + maintainer), not asserted here;
+    # these entries guard the stats view-handler paths against a PHP render regression.
+    Page("alerts_ip_block_stat", "/pfblockerng/pfblockerng_alerts.php?view=ip_block_stat", ("IP Block Stats",)),
+    Page("alerts_dnsbl_stat", "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat", ("DNSBL Block Stats",)),
     Page("log", "/pfblockerng/pfblockerng_log.php", ("Log/File Browser selections",)),
     Page("sync", "/pfblockerng/pfblockerng_sync.php", ("XMLRPC Sync Settings",)),
     Page("safesearch", "/pfblockerng/pfblockerng_safesearch.php", ("SafeSearch settings", "DNSBL SafeSearch")),
