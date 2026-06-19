@@ -335,6 +335,15 @@ registered field, asserted per-field by `tests/php/RollbackContractTest.php`:
   by construction: backed enums use their backing value (the exact legacy stored string), and
   plain-string fields use identity adapters.
 
+**Scope limit (no versioned schema).** This is *not* full backward compatibility — that needs a
+versioned config schema this package deliberately lacks (ADR-28 §1.3). The invariants cover the
+**vocabulary of existing registered fields** only. A genuinely **new option added in a later
+release** is unknown to an older one: on rollback the old code **ignores** the key (inert, not
+misread or corrupting) and its value is **preserved** in `config.xml` for roll-forward — the new
+feature is simply unusable on the old version (inherent, out of scope). `since-version` bounds each
+field's rollback claim to releases at/after that version; it is a per-field scope marker, not a
+migration.
+
 **Field vocabularies** (`pfb_cfg_field_vocab()`):
 
 | Adapter type | Legacy stored vocabulary |
