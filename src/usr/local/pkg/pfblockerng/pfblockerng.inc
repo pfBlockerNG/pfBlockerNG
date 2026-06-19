@@ -343,6 +343,22 @@ function pfb_alias_entry_count(array $grep_lines): int {
 	return is_numeric($grep_lines[0] ?? NULL) ? (int) $grep_lines[0] : 0;
 }
 
+// Reformat a stored timestamp string to ISO 8601 'YYYY-MM-DD HH:MM:SS' for display.
+// Accepts any date string parseable by strtotime() (e.g. the DNSBL SQLite timestamp
+// written as 'M j H:i:s' — 'Nov 31 14:30:45'). An already-ISO value round-trips
+// unchanged. An unparseable or empty value is returned as-is so callers never see
+// a garbled '1970-01-01 00:00:00' placeholder.
+function pfb_iso_timestamp(string $raw): string {
+	if ($raw === '') {
+		return $raw;
+	}
+	$epoch = strtotime($raw);
+	if ($epoch === FALSE) {
+		return $raw;
+	}
+	return date('Y-m-d H:i:s', $epoch);
+}
+
 // Returns TRUE only for a legacy bare pfB_ alias on an IPv4-family rule that
 // still needs the '_v4' suffix appended. Addresses already ending in '_v4' or
 // '_v6' are left alone (the '_v6' skip mirrors the NAT-rule upgrade path and

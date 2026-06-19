@@ -280,7 +280,7 @@ function pfBlockerNG_update_table() {
 				$pfb_aliasdir_esc = escapeshellarg("{$pfb['aliasdir']}/{$pfb_alias}.txt");
 				exec("{$pfb['grep']} -cv '^1\.1\.1\.1\$' {$pfb_aliasdir_esc}", $match);
 				$pfb_table[$pfb_alias] = array('count' => pfb_alias_entry_count($match), 'img' => $pfb['down']);
-				exec("{$pfb['ls']} -l -D'%b %d %T' {$pfb_aliasdir_esc} | {$pfb['awk']} '{ print \$6,\$7,\$8 }'", $update);
+				exec("{$pfb['ls']} -l -D'%Y-%m-%d %T' {$pfb_aliasdir_esc} | {$pfb['awk']} '{ print \$6,\$7 }'", $update);
 
 				$pfb_table[$pfb_alias]['update']	= $update[0];
 				$pfb_table[$pfb_alias]['rule']		= 0;
@@ -405,7 +405,7 @@ function pfBlockerNG_update_table() {
 							$pfb_dtable[$res['groupname']] = array ('count' => $res['entries'], 'img' => $pfb['up']);
 						}
 					}
-					$pfb_dtable[$res['groupname']]['update'] = "{$res['timestamp']}";
+					$pfb_dtable[$res['groupname']]['update'] = pfb_iso_timestamp((string) $res['timestamp']);
 
 					if (!is_numeric($res['counter'])) {
 						$res['counter'] = 0;
