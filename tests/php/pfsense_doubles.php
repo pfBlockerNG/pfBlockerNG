@@ -231,6 +231,25 @@ if (!function_exists('config_set_path')) {
 	}
 }
 
+if (!function_exists('config_del_path')) {
+	// pfSense config.lib.inc: unset the node at a '/'-separated path.
+	// A missing path is a no-op (matches pfSense behaviour).
+	function config_del_path(string $path): void {
+		$keys = explode('/', rtrim($path, '/'));
+		$last = array_pop($keys);
+		$node = &$GLOBALS['config'];
+		foreach ($keys as $key) {
+			if (!is_array($node) || !array_key_exists($key, $node)) {
+				return;
+			}
+			$node = &$node[$key];
+		}
+		if (is_array($node)) {
+			unset($node[$last]);
+		}
+	}
+}
+
 if (!function_exists('config_path_enabled')) {
 	// pfSense config.lib.inc: node exists, is an array and carries the enable key.
 	function config_path_enabled(string $path, $enable_key = 'enable') {
