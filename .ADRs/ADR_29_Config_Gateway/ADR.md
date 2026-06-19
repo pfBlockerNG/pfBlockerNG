@@ -1,6 +1,6 @@
 # ADR-29: Centralized configuration gateway (one reader/writer owning defaults, migrations, and the rollback contract)
 
-- **Status:** **Proposed** (2026-06-19)
+- **Status:** **Accepted** (2026-06-19) — landed on `devel` (PR #306, rebase-merged); live-VM smoke fan-out green on CE 2.8 + Plus 26.03
 - **Date:** 2026-06-19
 - **Branch:** `adr/29-config-gateway` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
