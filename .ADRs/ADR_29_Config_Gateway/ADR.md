@@ -106,17 +106,29 @@ phases** (§6). Adopt "all reads/writes go through the gateway" as **policy of r
   same keys are seeded with the same values in a defined order; each stays run-once/idempotent.
 - Adding a future migration is a registry entry with a `since-version`, not a copy-pasted block.
 
-### 2.3 The rollback / backward-compatibility contract (the new guarantee)
+### 2.3 The rollback / backward-compatibility contract (the new guarantee — and its honest limits)
 
-- Each registry field carries a **`since-version`**. The contract: **code at version *N* must read,
-  without crash or silent settings-loss, any `config.xml` written by version *N±k*** for every
-  shipped *k* — both **forward** (ADR-28's existing freeze: new code reads old store) and
-  **backward / rollback** (old code reads what new code wrote).
-- The gateway makes this achievable: because writes always emit the **legacy stored vocabulary** for
-  a field (never a new on-disk token), a downgrade leaves older code reading values it already
-  understands. A field that **cannot** be made rollback-safe (e.g. a genuinely new stored token an
-  older release would not recognise) is **excluded** — kept as a plain string / documented — exactly
-  as ADR-28 excludes non-round-trippable fields.
+**Full** backward compatibility is impossible without a versioned config schema (which this package
+deliberately lacks — ADR-28 §1.3). The gateway therefore guarantees a *narrower, achievable*
+contract, scoped per field by `since-version`:
+
+- **Guaranteed (per existing registered field a rolled-back release already knows): no misread, no
+  corruption, no settings-loss.** `PfbConfig::write()` only ever emits a token from that field's
+  **legacy stored vocabulary** (a backed enum writes its backing value = the exact legacy string;
+  plain fields use identity), so a downgrade leaves older code reading values it already understands.
+  A field whose write cannot stay within legacy vocabulary is **excluded** (kept a plain string /
+  documented), exactly as ADR-28 excludes non-round-trippable fields.
+- **NOT guaranteed (and cannot be): a genuinely new option used by an older release.** A key/option
+  introduced in a later release is unknown to an older one; on rollback the old code simply
+  **ignores** that key — it is *inert*, **not** misread or corrupting — and its value is
+  **preserved** in `config.xml` for a later roll-forward (the wipe path excepted, see §2.5). The
+  feature is unusable on the old version because the feature does not exist there. This is inherent
+  and **out of scope**. `since-version` records *when* a key/vocabulary appeared, bounding each
+  field's rollback claim to releases at/after that version — a per-field scope marker, not a
+  migration.
+- **Forbidden (the dangerous case the BACKWARD invariant rejects):** changing an *existing* field's
+  stored vocabulary to a token an older release would misread (read as off / crash). The gateway
+  never emits such a token.
 
 ### 2.4 Semantics that MUST be preserved (the contract — pinned before each swap)
 
