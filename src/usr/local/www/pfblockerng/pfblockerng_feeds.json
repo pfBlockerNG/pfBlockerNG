@@ -1052,6 +1052,106 @@
 					"header":	"CC6"
 				}
 			]
+		},
+		"BlockListDE_6": {
+			"info":		"BlockList.DE is a fail2ban reporting service.-LB-The 'PRI3 Alias' contains a single URL for all BlockList.DE feeds.-LB-This BlockListDE_6 Alias can be utilized to enable specific BlockList.DE IPv6 Feeds, as desired.-LB-The frequency of updates is set to once per hour.",
+			"description":	"Collection of specific fail2ban reporting service IPv6 Feeds.",
+			"action":	"block",
+			"cron":		"01hour",
+			"feeds": [
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"contact":	"https://www.blocklist.de/en/contact.html",
+					"url":		"https://lists.blocklist.de/lists/apache.txt",
+					"delist":	"https://www.blocklist.de/en/delist.html?ip=",
+					"header":	"BlockListDE_Apache6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/asterisk.txt",
+					"header":	"BlockListDE_Asterisk6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/bots.txt",
+					"header":	"BlockListDE_Bots6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/bruteforcelogin.txt",
+					"header":	"BlockListDE_Brute6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/email.txt",
+					"header":	"BlockListDE_Email6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/ftp.txt",
+					"header":	"BlockListDE_FTP6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/proftpd.txt",
+					"header":	"BlockListDE_FTPD6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/ircbot.txt",
+					"header":	"BlockListDE_IRC6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/imap.txt",
+					"header":	"BlockListDE_IMAP6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/mail.txt",
+					"header":	"BlockListDE_Mail6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/pop3.txt",
+					"header":	"BlockListDE_POP36"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://www.blocklist.de/lists/postfix.txt",
+					"header":	"BlockListDE_Postfix6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/sip.txt",
+					"header":	"BlockListDE_SIP6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/ssh.txt",
+					"header":	"BlockListDE_SSH6"
+				},
+				{
+					"feed":		"BlockList DE",
+					"website":	"https://www.blocklist.de/",
+					"url":		"https://lists.blocklist.de/lists/strongips.txt",
+					"header":	"BlockListDE_Strong6"
+				}
+			]
 		}
 	},
 	"dnsbl": {
