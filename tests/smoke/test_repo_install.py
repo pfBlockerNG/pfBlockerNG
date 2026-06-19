@@ -1776,3 +1776,174 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
     assert opp.php not in rquery_out, (
         f"Worker URL returned the {opp.abi} ({opp.php}) catalog to a {own.abi} box; pkg rquery output:\n{rquery_out}"
     )
+
+
+# =========================================================================== #
+# ADR-27 Phase 4 — release rollback lifecycle (multi-version catalog, -m repo) #
+#                                                                               #
+# Proves the ADR-27 §2 premise on a REAL pfSense VM: a multi-version release   #
+# catalog lets pkg install a pinned older version with dependency resolution    #
+# from our repo (the only route that resolves deps; pkg add <raw-url> does not #
+# consult the catalog for dep resolution). This is the REJECT gate per ADR §7: #
+# if `pkg install <name>-<version>` cannot roll back with dep resolution, Part  #
+# 1 degrades to docs-only (raw `pkg add` path only).                           #
+#                                                                               #
+# Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).   #
+# Dispatched via:  gh workflow run smoke.yml -f pytest_marker=repo             #
+# =========================================================================== #
+
+
+def pkg_install_pinned(vm: SmokeVM, version: str, *, timeout: float = 600.0) -> subprocess.CompletedProcess[str]:
+    """``pkg install -y <name>-<version>`` — the PINNED rollback command (ADR §2.1 rollback UX).
+
+    This is the exact CLI command documented in README and scripts/README.md: installs the
+    named package at an EXPLICIT version from the multi-version catalog.  If the version
+    is not in the catalog, pkg returns non-zero.  Dep resolution against the enabled repos
+    runs normally — the catalog-provided dep metadata is honoured, not bypassed (unlike
+    ``pkg add <raw-url>`` which skips catalog dep resolution).  A non-zero exit raises with
+    the full output.
+    """
+    pinned_name = f"{PKG_NAME}-{version}"
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", pinned_name, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pkg install {pinned_name} failed: rc={result.returncode}"
+            f"\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
+
+
+@pytest.mark.timeout(900)  # forge 2 builds + 2 catalog gen + 3 pkg ops (install/rollback/upgrade) > the 30s cap.
+def test_release_rollback_to_retained_older_version(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-27 P4 KILL-GATE: a multi-version release catalog allows a REAL pfSense box to
+    pin-install an OLDER retained version with dependency resolution (the documented
+    rollback UX), then re-upgrade to the newest — a full install→rollback→upgrade lifecycle.
+
+    This is the ADR §7 REJECT gate: if ``pkg install <name>-<version>`` cannot pin-install
+    a retained older version with dep resolution from our repo, Part 1 degrades to docs-only
+    (only ``pkg add <raw-url>`` is available, with no dep resolution from the catalog).
+
+    The multi-version catalog is built on the runner (pure-Python ``build-repo-portable.py``)
+    over BOTH the lower (``<V>_lo``) and higher (``<V>_hi``) forged builds, then shipped to
+    the guest as a single ``<ABI>/`` tree.  Both packages are advertised in the same
+    ``packagesite.yaml``; ``pkg install <name>`` resolves the highest; ``pkg install
+    <name>-<V>_lo`` resolves the pinned older one.
+
+    The variant (ABI / PHP flavor) comes from the version matrix (SMOKE_ABI / SMOKE_PHP_VERSION)
+    — never hardcoded.  ``build_repo_via_portable`` derives the ABI bucket from the ``.pkg``'s
+    own manifest (the branch ``.pkg`` is the box's exact ABI: ``FreeBSD:15:amd64`` / php83 on
+    CE, ``FreeBSD:16:amd64`` / php85 on Plus).
+
+    Scenario: install-newest → pin-rollback → re-upgrade, all from a multi-version release catalog.
+      Background:
+        - Two versions forged from the branch .pkg: ``<V>_lo`` (older) and ``<V>_hi`` (newer).
+        - A single multi-version catalog serving BOTH, built by build-repo-portable.py.
+        - A NONE-signed file:// repo conf above the Netgate pfSense repo.
+
+    Given the package ABSENT and the multi-version catalog carrying BOTH ``<V>_lo`` and ``<V>_hi``,
+      When ``pkg install -y <name>`` (no version pin) runs,
+      Then NEWEST-WINS: ``<V>_hi`` is active, origin is our repo, RUN_DEPENDS resolved.
+        (This asserts the before-state for the rollback step — proves the catalog serves
+        the highest version by default and that the after-rollback state is a real regression.)
+    When ``pkg install -y <name>-<V>_lo`` (PINNED older version) runs,
+      Then ROLLBACK: ``<V>_lo`` is active, origin is still our repo, no "Missing dependency"
+        (catalog dep resolution worked; the premise holds).
+        (This is the REJECT gate: if this install fails, Part 1 must be downgraded to docs-only.)
+    When ``pkg upgrade -y <name>`` runs (after pkg update -f re-reads the same catalog),
+      Then RE-UPGRADE: ``<V>_hi`` is active again, origin is our repo — lifecycle closed.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    src = Path(pkg)
+
+    base_version = read_compact_version(src)
+    lo_version = f"{base_version}_lo"
+    hi_version = f"{base_version}_hi"
+    # Sanity: the forged versions must be distinct so each transition is real.
+    assert lo_version != hi_version
+    # The rollback target must sort BELOW the high version so pkg install <name> picks hi by default.
+    # pkg version-sorts by PORTVERSION rules: _lo < _hi lexicographically under pkg's epoch/revision
+    # model. Verified: reversion_pkg only rewrites the version string; all other manifest fields
+    # (including deps) are copied verbatim, so both builds have identical RUN_DEPENDS.
+
+    lo_pkg = reversion_pkg(src, lo_version, tmp_path / "rollback_lo")
+    hi_pkg = reversion_pkg(src, hi_version, tmp_path / "rollback_hi")
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    try:
+        # ---- Build the multi-version catalog (BOTH builds in one ABI tree) ----
+        # build_repo_via_portable takes a list of .pkg files; with two distinct versions of
+        # the SAME package it writes two NDJSON entries in packagesite.yaml — a multi-version
+        # catalog exactly as build_repo_matrix(release_keep_devel=2) produces in production.
+        # The catalog is built on the runner (pure Python; no libpkg needed) and shipped to
+        # the guest under PORTABLE_REPO_ROOT/<ABI>/ (same helper used by the portable fidelity tests).
+        multi_abi_dir = build_repo_via_portable(repo_vm, [lo_pkg, hi_pkg], tmp_path)
+
+        # --- GIVEN: package absent; multi-version catalog enabled above the pfSense repo. ---
+        pkg_delete(repo_vm)
+        write_repo_conf(repo_vm, multi_abi_dir, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, (
+            f"{PKG_NAME} unexpectedly present before the rollback lifecycle test"
+        )
+
+        # --- WHEN (1): install without a version pin → newest-wins. ---
+        proc_install = pkg_install_from_repo(repo_vm)
+
+        # THEN (before-state anchor): the box is at the HIGHER version (newest-wins default),
+        # from our repo, deps resolved.  This is the before-state the rollback must visibly
+        # depart from — if the before-state is already at _lo, the rollback assertion is vacuous.
+        combined_install = proc_install.stdout + proc_install.stderr
+        assert "Missing dependency" not in combined_install, (
+            f"Multi-version catalog: RUN_DEPENDS did not resolve on newest-wins install:\n{combined_install}"
+        )
+        before_version = pkg_installed_version(repo_vm)
+        assert before_version == hi_version, (
+            f"Newest-wins: expected {hi_version!r} installed first (highest in catalog), "
+            f"got {before_version!r} — catalog version ordering wrong"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"Newest-wins install: origin {pkg_repo_origin(repo_vm)!r}, expected {OURS_REPO_NAME!r}"
+        )
+
+        # --- WHEN (2): pin-install the OLDER version — the documented rollback command. ---
+        # This is the ADR §7 REJECT gate: failure here (non-zero exit or "Missing dependency")
+        # means the catalog-based rollback premise does NOT hold.
+        proc_rollback = pkg_install_pinned(repo_vm, lo_version)
+
+        # THEN (rollback): the box is now at the LOWER version, STILL from our repo, deps resolved.
+        combined_rollback = proc_rollback.stdout + proc_rollback.stderr
+        assert "Missing dependency" not in combined_rollback, (
+            f"Rollback: RUN_DEPENDS did not resolve when pinning {lo_version!r}:\n{combined_rollback}"
+        )
+        rollback_version = pkg_installed_version(repo_vm)
+        assert rollback_version == lo_version, (
+            f"Rollback: expected {lo_version!r} active after pin-install, got {rollback_version!r}"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"Rollback: origin {pkg_repo_origin(repo_vm)!r}, expected {OURS_REPO_NAME!r} — "
+            f"pinned install should still source from our multi-version catalog"
+        )
+
+        # --- WHEN (3): re-upgrade — close the lifecycle. ---
+        # The multi-version catalog still carries hi_version; pkg upgrade moves back up.
+        pkg_update(repo_vm)
+        proc_upgrade = pkg_upgrade(repo_vm)
+
+        # THEN (re-upgrade): the box is back at the HIGHER version, lifecycle closed.
+        combined_upgrade = proc_upgrade.stdout + proc_upgrade.stderr
+        assert "Missing dependency" not in combined_upgrade, (
+            f"Re-upgrade: RUN_DEPENDS did not resolve when upgrading from {lo_version!r}:\n{combined_upgrade}"
+        )
+        reupgraded_version = pkg_installed_version(repo_vm)
+        assert reupgraded_version == hi_version, (
+            f"Re-upgrade: expected {hi_version!r} after upgrade, got {reupgraded_version!r} — lifecycle did not close"
+        )
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
+            f"Re-upgrade: origin {pkg_repo_origin(repo_vm)!r}, expected {OURS_REPO_NAME!r}"
+        )
+    finally:
+        pkg_delete(repo_vm)
+        # PORTABLE_REPO_ROOT is cleaned by build_repo_via_portable on each call;
+        # the broader GUEST_SPIKE_DIR teardown runs in the repo_vm module fixture.
