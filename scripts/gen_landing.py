@@ -532,6 +532,139 @@ def _older_releases_details(rows: list[dict]) -> str:
     return f"<details><summary>Older releases ({len(rows)})</summary>{_older_releases_table_html(rows)}</details>"
 
 
+def _eol_varver(pfsense_version: str, variant: str) -> str:
+    """The catalog dir name (varver) for a route-only matrix entry.
+
+    Mirrors build-repo-portable.py's catalog_name_from_version (major.minor only):
+      "2.7" + "CE"   -> "ce-2.7"
+      "25.03"+ "Plus" -> "plus-25.03"
+    """
+    major_minor = ".".join(pfsense_version.split(".")[:2])
+    return f"{variant.lower()}-{major_minor}"
+
+
+def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str, str, dict]]:
+    """The last-served .pkg for each EOL (route-only) pfSense version.
+
+    A matrix entry is EOL iff ``role == "route-only"``. For each such entry, this function
+    finds the newest .pkg version (by ver_key) served for that varver's path prefix
+    (``release/<varver>/``), enriched with the matrix-provided pfSense version + PHP/Python.
+
+    Returns ``(edition_key, pfsense_version, row)`` triples — one per (EOL pfSense version,
+    ABI) combination — in deterministic order: CE before Plus, older pfSense version before
+    newer within each edition, ABI alphabetically within each version.
+    """
+    eol_entries = [e for e in (matrix or []) if e.get("role") == "route-only"]
+    if not eol_entries:
+        return []
+
+    # Group pkgs by path prefix release/<varver>/, so each EOL varver's pool is isolated.
+    varver_pkgs: dict[str, list[dict]] = {}
+    for p in pkgs:
+        # rel format: release/<varver>/<arch>/name.pkg (always forward-slash, os.path.relpath
+        # normalises to the OS separator, so normalise here too).
+        rel = p["rel"].replace(os.sep, "/")
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[0] == "release":
+            vv = parts[1]
+            varver_pkgs.setdefault(vv, []).append(p)
+
+    # For each EOL matrix entry, find the newest pkg per ABI in its varver pool.
+    # One matrix entry = one (pfsense_version, variant, abi) combination.
+    out: list[tuple[str, str, dict]] = []
+    seen: set[tuple[str, str]] = set()  # (varver, abi) already emitted — dedup multi-arch entries
+    for e in eol_entries:
+        version = e.get("pfsense_version", "")
+        variant = e.get("variant", "")
+        abi = e.get("abi", "")
+        php = e.get("php_version") or e.get("php", "")
+        py = _dotted_ver(e.get("py_flavor", "")) or e.get("py", "")
+        ekey = _edition_key(variant)
+        varver = _eol_varver(version, variant)
+        dedup_key = (varver, abi)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        pool = [p for p in varver_pkgs.get(varver, []) if p["abi"] == abi]
+        if not pool:
+            continue  # no .pkg served for this (varver, abi) — skip silently
+
+        # Newest served version = highest ver_key.
+        best = max(pool, key=lambda p: ver_key(p["version"]))
+        row = dict(best)
+        row["pfsense_version"] = version
+        row["php"] = php
+        row["py"] = py
+        out.append((ekey, version, row))
+
+    # Sort: edition order (CE < Plus < Other), then pfSense version newest-first, then ABI.
+    edition_rank = {k: i for i, k in enumerate(EDITION_ORDER)}
+
+    def _sort_key(t: tuple[str, str, dict]) -> tuple[int, list[int], str]:
+        ekey, ver, row = t
+        return (edition_rank.get(ekey, len(EDITION_ORDER)), ver_key(ver), row["abi"])
+
+    out.sort(key=_sort_key)
+    return out
+
+
+def _eol_table_html(rows: list[dict]) -> str:
+    """One EOL-versions table for a single edition.
+
+    Columns mirror the older-nightlies table shape (no Channel — irrelevant for EOL):
+    pfSense | Version | ABI | PHP | Python | Published | Commit | Size.
+    """
+    body = "".join(
+        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
+        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
+        f"<td><code>{_esc(r['abi'])}</code></td>"
+        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
+        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
+        f'<td class="num">{_esc(r.get("published", ""))}</td>'
+        f"<td>{commit_cell(r.get('commit', ''))}</td>"
+        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
+        for r in rows
+    )
+    return (
+        '<div class="tablewrap"><table><thead><tr>'
+        "<th>pfSense</th><th>Version</th><th>ABI</th>"
+        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _eol_versions_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
+    """The EOL pfSense versions block: one table per edition (CE, Plus), each listing every
+    route-only pfSense version and the last/highest .pkg still served for it.
+
+    Returns "" when no matrix route-only entries exist — the section is entirely absent
+    (no empty heading emitted).
+    """
+    triples = eol_versions(pkgs, matrix)
+    if not triples:
+        return ""
+
+    # Group into per-edition lists, preserving the sorted order.
+    by_edition: dict[str, list[dict]] = {}
+    for ekey, _ver, row in triples:
+        by_edition.setdefault(ekey, []).append(row)
+
+    ordered_keys = [k for k in EDITION_ORDER if k in by_edition]
+    ordered_keys += [k for k in sorted(by_edition) if k not in EDITION_ORDER and k != "Other"]
+    if "Other" in by_edition:
+        ordered_keys.append("Other")
+
+    body = "".join(f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>{_eol_table_html(by_edition[k])}" for k in ordered_keys)
+    return (
+        "<h2>EOL pfSense versions</h2>"
+        "<p>These pfSense versions have reached end-of-life. The last build we served for "
+        "each is still available below &mdash; pkg(8) on an EOL firewall continues to "
+        "receive it automatically.</p>"
+        f"{body}"
+    )
+
+
 def render_page(
     base: str,
     pkgs: list[dict],
@@ -541,6 +674,7 @@ def render_page(
     """Render the root landing page."""
     latest = latest_versions(pkgs)
     cards = _release_card(base, latest, conf_fn) + _nightly_card(base, latest, conf_fn)
+    eol_block = _eol_versions_html(pkgs, matrix)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -554,6 +688,7 @@ def render_page(
         "separate, opt-in repo.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
+        f"{eol_block}"
         "<h2>Repository files</h2>"
         '<p class="blurb">Browse every channel, version and ABI &mdash; and the raw pkg(8) catalogs your '
         "firewall fetches &mdash; in a directory-style listing.</p>"

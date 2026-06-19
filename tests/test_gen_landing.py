@@ -650,3 +650,208 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     deep = (site / "experimental/ce-2.9/FreeBSD:16:riscv64/extra" / "index.html").read_text()
     assert "pfSense-pkg-pfBlockerNG-devel-9.9.9.pkg" in deep
     assert 'href="../../../../"' in deep  # 4 levels deep -> 4 hops to the site root
+
+
+# ── EOL pfSense versions ──────────────────────────────────────────────────────
+
+
+def _mx_eol(abi: str, ver: str, variant: str, php: str, py: str) -> dict[str, str]:
+    """A route-only (EOL) matrix entry."""
+    return {
+        "abi": abi,
+        "pfsense_version": ver,
+        "variant": variant,
+        "php_version": php,
+        "py_flavor": py,
+        "role": "route-only",
+        "status": "EOL",
+    }
+
+
+def _eol_pkg(version: str, abi: str, varver: str) -> dict[str, Any]:
+    """A package row as collect_packages would produce for a route-only (EOL) catalog entry.
+
+    rel is under release/<varver>/<arch>/ — exactly where build-repo-portable.py places them.
+    """
+    arch = abi.split(":")[-1]
+    return {
+        "channel": "stable",
+        "name": "pfSense-pkg-pfBlockerNG",
+        "version": version,
+        "abi": abi,
+        "rel": f"release/{varver}/{arch}/pfSense-pkg-pfBlockerNG-{version}.pkg",
+        "size": 42,
+        "published": "2026-01-10 08:00 UTC",
+        "commit": "aabbcc1122334455667788990011223344556677",
+        "php": "",
+        "py": "",
+    }
+
+
+def test_eol_versions_empty_when_no_route_only_entries() -> None:
+    """Before-state: no route-only matrix entries => eol_versions returns [] and the
+    EOL section is entirely absent from the rendered page."""
+    # Before: no route-only entries in matrix.
+    pkg = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "d.pkg")
+    matrix = [_mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311")]
+
+    result = gl.eol_versions([pkg], matrix)
+    assert result == []  # before-state: empty
+
+    # The EOL section is absent — no heading, no table.
+    html = gl._eol_versions_html([pkg], matrix)
+    assert html == ""
+
+    # After: adding a route-only entry makes the section appear (transition proof).
+    matrix_with_eol = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+    ]
+    eol_pkg = _eol_pkg("3.1.0_5", "FreeBSD:14:amd64", "ce-2.7")
+    result_after = gl.eol_versions([pkg, eol_pkg], matrix_with_eol)
+    assert len(result_after) == 1  # after: the EOL entry appears
+    html_after = gl._eol_versions_html([pkg, eol_pkg], matrix_with_eol)
+    assert "EOL pfSense versions" in html_after  # section now present
+
+
+def test_eol_versions_lists_newest_served_pkg_per_eol_version() -> None:
+    """Scenario: two .pkg versions served for a CE 2.7 (route-only) entry; only newest shown.
+
+    Given a matrix with a live CE 2.8 (build) entry and a route-only CE 2.7 entry,
+    And two .pkg files served under release/ce-2.7/ (v3.1.0_4 older, v3.1.0_5 newer),
+    When eol_versions is called,
+    Then CE 2.7 appears exactly once, showing v3.1.0_5 (the newest), not v3.1.0_4.
+    And the live build version (3.2.16) is ABSENT from the EOL result.
+    """
+    live_pkg = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "d.pkg")
+    eol_old = _eol_pkg("3.1.0_4", "FreeBSD:14:amd64", "ce-2.7")
+    eol_new = _eol_pkg("3.1.0_5", "FreeBSD:14:amd64", "ce-2.7")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+    ]
+
+    result = gl.eol_versions([live_pkg, eol_old, eol_new], matrix)
+
+    assert len(result) == 1
+    ekey, ver, row = result[0]
+    assert ekey == "CE"
+    assert ver == "2.7"
+    assert row["version"] == "3.1.0_5"  # newest — not the older 3.1.0_4
+    assert row["pfsense_version"] == "2.7"
+    assert row["php"] == "8.2"
+    assert row["py"] == "3.11"
+    # Live build version never appears in the EOL result.
+    all_versions = {r["version"] for _, _, r in result}
+    assert "3.2.16" not in all_versions
+
+
+def test_eol_versions_ce_and_plus_split_into_separate_tables() -> None:
+    """Scenario: CE and Plus route-only entries appear in separate tables; no cross-edition leak.
+
+    Given a matrix with one route-only CE 2.7 entry and one route-only Plus 25.03 entry,
+    And .pkg files served for each EOL entry under the matching release/<varver>/ path,
+    When _eol_versions_html is called,
+    Then the CE pfSense version (2.7) appears only in the CE table (not in Plus),
+    And the Plus pfSense version (25.03) appears only in the Plus table (not in CE),
+    And the CE table comes before the Plus table.
+    """
+    eol_ce = _eol_pkg("3.1.0_5", "FreeBSD:14:amd64", "ce-2.7")
+    eol_plus = _eol_pkg("3.0.9_1", "FreeBSD:15:amd64", "plus-25.03")
+    # A live build pkg that must NOT appear in either EOL table.
+    live_pkg = _pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "d.pkg")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "26.03", "Plus", "8.5", "py311"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+        _mx_eol("FreeBSD:15:amd64", "25.03", "Plus", "8.3", "py311"),
+    ]
+
+    # Before-state: confirm live pkg is NOT in the EOL triples list.
+    triples = gl.eol_versions([eol_ce, eol_plus, live_pkg], matrix)
+    all_versions = {r["version"] for _, _, r in triples}
+    assert "3.2.16" not in all_versions  # live build absent from EOL list
+
+    html = gl._eol_versions_html([eol_ce, eol_plus, live_pkg], matrix)
+
+    # Both editions have their own h3 heading.
+    assert "<h3>pfSense CE</h3>" in html
+    assert "<h3>pfSense Plus</h3>" in html
+    # CE comes before Plus.
+    assert html.index("<h3>pfSense CE</h3>") < html.index("<h3>pfSense Plus</h3>")
+
+    # Slice CE and Plus sections.
+    ce_section = html[html.index("<h3>pfSense CE</h3>") : html.index("<h3>pfSense Plus</h3>")]
+    plus_section = html[html.index("<h3>pfSense Plus</h3>") :]
+
+    # CE section: the CE EOL version appears; Plus EOL version does not.
+    assert ">2.7<" in ce_section
+    assert "3.1.0_5" in ce_section
+    assert "25.03" not in ce_section
+    assert "3.0.9_1" not in ce_section
+
+    # Plus section: the Plus EOL version appears; CE EOL version does not.
+    assert ">25.03<" in plus_section
+    assert "3.0.9_1" in plus_section
+    assert ">2.7<" not in plus_section
+    assert "3.1.0_5" not in plus_section
+
+    # Live build version absent from both sections.
+    assert "3.2.16" not in html[html.index("EOL pfSense versions") :]
+
+
+def test_eol_versions_section_absent_from_rendered_page_when_no_route_only() -> None:
+    """The EOL section is NOT emitted to the landing page when the matrix has no route-only entries.
+
+    This pins the before-state: an existing deployment with no route-only matrix entries
+    produces an identical page (no new empty heading, no new section).
+    """
+    pkgs = [_pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "d.pkg")]
+    matrix = [_mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311")]
+
+    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf, matrix)
+
+    assert "EOL pfSense versions" not in page
+
+
+def test_eol_versions_section_present_in_rendered_page_with_route_only() -> None:
+    """The landing page surfaces the EOL section when route-only matrix entries exist.
+
+    Given a matrix with one live CE build and one route-only CE 2.7 + one route-only Plus 25.03,
+    And corresponding .pkg files under the EOL varver paths,
+    When render_page is called,
+    Then the page contains an 'EOL pfSense versions' h2 section after 'Published packages',
+    And the CE and Plus sub-tables are present with the correct versions,
+    And the live build version is absent from the EOL section.
+    """
+    live_pkg = _pkg(
+        "devel",
+        "pfSense-pkg-pfBlockerNG-devel",
+        "3.2.16",
+        "FreeBSD:15:amd64",
+        "release/ce-2.8/amd64/pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg",
+    )
+    eol_ce = _eol_pkg("3.1.0_5", "FreeBSD:14:amd64", "ce-2.7")
+    eol_plus = _eol_pkg("3.0.9_1", "FreeBSD:15:aarch64", "plus-25.03")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+        _mx_eol("FreeBSD:15:aarch64", "25.03", "Plus", "8.3", "py311"),
+    ]
+
+    page = gl.render_page("https://pfblockerng.github.io/pkg", [live_pkg, eol_ce, eol_plus], _stub_conf, matrix)
+
+    # EOL section is present, after 'Published packages'.
+    assert "EOL pfSense versions" in page
+    assert page.index("Published packages") < page.index("EOL pfSense versions")
+    # EOL section comes before 'Repository files'.
+    assert page.index("EOL pfSense versions") < page.index("Repository files")
+
+    # The CE and Plus sub-tables are in the EOL section.
+    eol_block = page[page.index("EOL pfSense versions") : page.index("Repository files")]
+    assert "<h3>pfSense CE</h3>" in eol_block
+    assert "<h3>pfSense Plus</h3>" in eol_block
+    assert "3.1.0_5" in eol_block
+    assert "3.0.9_1" in eol_block
+
+    # Live build version is absent from the EOL section.
+    assert "3.2.16" not in eol_block
