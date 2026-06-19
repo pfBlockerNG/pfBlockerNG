@@ -2208,6 +2208,7 @@ function convert_dnsbl_log($mode, $fields) {
 
 	$isMatch = TRUE;
 	$p_group = $p_domain = $p_feed = $p_mode = '';
+	$p_feed_disp = $p_group_disp = '';
 
 	// Collect current details about domain
 	// Skip for upstream blocks: the domain is not in a local feed, so pfb_dnsbl_parse()
@@ -2363,6 +2364,7 @@ function convert_dnsbl_log($mode, $fields) {
 		} else {
 			$p_feed	= pfb_hsc($p_feed);
 		}
+		$p_feed_disp = $p_feed;
 		$p_feed	= "<s>{$p_feed}</s><br />";
 	}
 	if (!empty($fields[8])) {
@@ -2375,6 +2377,7 @@ function convert_dnsbl_log($mode, $fields) {
 		} else {
 			$p_group = pfb_hsc($p_group);
 		}
+		$p_group_disp = $p_group;
 		$p_group = "<s>{$p_group}</s><br />";
 	}
 	if (!empty($fields[6])) {
@@ -2383,6 +2386,9 @@ function convert_dnsbl_log($mode, $fields) {
 
 	$pfbalertdnsbl[13]	= "{$p_group}" . pfb_hsc($fields[6]);
 	$pfbalertdnsbl[15]	= "{$p_feed}" . pfb_hsc($fields[8]);
+
+	// Group the Feed/Group cell by record when both changed, mirroring the IP cell.
+	$feed_group_cell = pfb_dnsbl_feed_group_cell($p_feed_disp, pfb_hsc($fields[8]), $p_group_disp, pfb_hsc($fields[6]));
 
 	// Query type suffix (Python mode logs the record type as field [10]; older
 	// Unbound-mode lines carry it in the b_type suffix [5] and lack field [10]).
@@ -2523,7 +2529,7 @@ function convert_dnsbl_log($mode, $fields) {
 			<td style=\"white-space: nowrap;\">{$unlock_dom}&nbsp;{$alert_dom}&nbsp;{$supp_dom}{$ex_dom}</td>
 			<td>{$pfbalertdnsbl[8]}<small>&emsp;[ {$pfbalertdnsbl[20]} ]</small> {$pfb_https}{$pfb_python}
 				<br /><small>{$pfbalertdnsbl[19]}</small></td>
-			<td title=\"{$f_g_title}\">{$pfbalertdnsbl[15]}<br /><small>{$pfbalertdnsbl[13]}</small></td>
+			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
 			</tr>");
 	}
 	else {
@@ -2547,7 +2553,7 @@ function convert_dnsbl_log($mode, $fields) {
 			<td>{$pfbalertdnsbl[2]}</td>
 			<td style=\"white-space: nowrap;\">{$unlock_dom}&nbsp;{$alert_dom}&nbsp;{$supp_dom}{$ex_dom}</td>
 			<td>{$pfbalertdnsbl[8]}</td>
-			<td title=\"{$f_g_title}\">{$pfbalertdnsbl[15]}<br /><small>{$pfbalertdnsbl[13]}</small></td>
+			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
 			<td></td>
 			</tr>");
 	}
@@ -2748,6 +2754,36 @@ function pfb_ip_feed_match_cell(string $feed, string $feed_new, string $match, s
 	}
 	// Neither changed.
 	return "{$feed}<br /><small>{$match}</small>";
+}
+
+
+/**
+ * Build the inner HTML for the DNSBL alert Feed/Group cell.
+ *
+ * Sibling of pfb_ip_feed_match_cell() for the DNSBL views. When a domain was
+ * previously blocked by a different feed AND a different group (both $prev_feed
+ * and $prev_group are non-empty), groups the output by record: the struck
+ * previous pair first, then the current pair. When only one of the two has a
+ * previous value the per-field layout is preserved, matching today's behaviour.
+ *
+ * All four parameters must already be HTML-escaped by the caller; $prev_feed and
+ * $prev_group are empty strings when there is no previous value for that field.
+ */
+function pfb_dnsbl_feed_group_cell(string $prev_feed, string $cur_feed, string $prev_group, string $cur_group): string {
+	if ($prev_feed !== '' && $prev_group !== '') {
+		// Both changed — group by record: struck previous pair, then current pair.
+		return "<s>{$prev_feed}</s><br /><small><s>{$prev_group}</s></small><br />{$cur_feed}<br /><small>{$cur_group}</small>";
+	}
+	elseif ($prev_feed !== '') {
+		// Only the feed changed — per-field layout.
+		return "<s>{$prev_feed}</s><br />{$cur_feed}<br /><small>{$cur_group}</small>";
+	}
+	elseif ($prev_group !== '') {
+		// Only the group changed — per-field layout.
+		return "{$cur_feed}<br /><small><s>{$prev_group}</s><br />{$cur_group}</small>";
+	}
+	// No previous value.
+	return "{$cur_feed}<br /><small>{$cur_group}</small>";
 }
 
 
