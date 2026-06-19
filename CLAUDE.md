@@ -606,7 +606,9 @@ automated commits hit the same checks (subject to the runner's installed tools).
   else `$CLAUDE_CODE_USER_EMAIL`, else the commit author — and is a no-op when the human is already
   the committer or already credited. Runs even under `--no-verify` (that flag skips only
   `pre-commit`/`commit-msg`).
-- **`.githooks/pre-push`** enforces tag naming before pushes reach the remote.
+- **`.githooks/pre-push`** enforces the release tag scheme before pushes reach the remote — it
+  delegates to `scripts/release-version.sh` (the single source of truth), so a `vX.Y.Z` tag must
+  sit on `main` and a `vX.Y.Z.aW`/`.bW`/`.rcW` tag on `devel` (not yet on `main`).
 
 ---
 
@@ -850,10 +852,34 @@ When the min CE version changes, also:
 | `main` | Stable  | `net/pfSense-pkg-pfBlockerNG` |
 | `devel` | Development | `net/pfSense-pkg-pfBlockerNG-devel` |
 
-New features land in `devel`. Pushing a `vX.Y.Z` tag triggers CI: tests → GitHub Release → bump
+New features land in `devel`. Pushing a versioned tag triggers CI: tests → GitHub Release → bump
 the matching port on **our own `pfBlockerNG/FreeBSD-ports` fork** (`pfblockerng/use-github`, the
-build-input branch) — self-hosted distribution, **no upstream `pfsense/FreeBSD-ports` PR**. Tags
-from `devel` → pre-releases; from `main` → stable releases.
+build-input branch) — self-hosted distribution, **no upstream `pfsense/FreeBSD-ports` PR**.
+
+**Tag scheme (single source of truth: `scripts/release-version.sh`).** Semver core `X.Y.Z`, no
+odd/even conventions:
+
+- **Pre-releases — `vX.Y.Z.aW` / `.bW` / `.rcW`** (alpha / beta / rc; `W` ≥ 1): cut from
+  **`devel` only** → GitHub **pre-release**. FreeBSD pkg orders them natively
+  (`4.0.0.a1 < 4.0.0.b1 < 4.0.0.rc1 < 4.0.0`), and the tag maps to a pkg-safe `PORTVERSION`
+  verbatim (carries no `-`).
+- **Stable — `vX.Y.Z`**: cut from **`main` only** → full release. The stable tag is typically
+  the same commit as the final `rcW`, so `devel` stays in sync; `devel` then opens the next
+  series (`X.(Y+1).0.a1`).
+- `release-version.sh` validates the shape + branch↔channel pairing; both `release.yml` and
+  `.githooks/pre-push` consume it, so the rule never drifts. Behaviour pinned by
+  `tests/test_release_version.py`.
+
+**Release notes.** `release.yml` renders the body as Claude-authored **highlights** +
+a full-commit **compare link** + a collapsed commit list. Highlights come from a hand-written
+`.github/release-notes/<tag>.md` when present (the default — $0, Claude-authored per release);
+absent that, an optional Haiku draft if an `ANTHROPIC_API_KEY` secret is set; else a placeholder.
+**Nightly builds get no GitHub Release.**
+
+**Dry-run.** `release.yml`'s `workflow_dispatch` is a no-publish harness: pass the `tag` to
+simulate (e.g. `v4.0.0.a1`) with `dry_run=true` (default) to validate the scheme, build the
+`.pkg` artifacts, and render the body — **publishing nothing** (no Release, port bump, pkg-repo
+poke, or Worker deploy). Dispatchable only from the default branch once merged.
 
 ### Self-hosted `pkg` repository (ADR-17)
 

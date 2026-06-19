@@ -1,0 +1,125 @@
+"""Behaviour guard for the release tag/version scheme (scripts/release-version.sh).
+
+This is the single source of truth that `release.yml` (publish gating, PORTVERSION
+bump) and `.githooks/pre-push` (client-side tag enforcement) both consume, so it
+is pinned here directly rather than re-deriving the regex in each consumer.
+
+Scheme:
+  * vX.Y.Z              -> STABLE release, cut from `main` only
+  * vX.Y.Z.aW/.bW/.rcW  -> ALPHA/BETA/RC prerelease, cut from `devel` only
+
+The script classifies a tag into version/channel/prerelease/prekind/portversion,
+rejects malformed tags, and (when a branch is supplied) enforces branch<->channel.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-version.sh"
+
+
+def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(_SCRIPT), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _fields(stdout: str) -> dict[str, str]:
+    return dict(line.split("=", 1) for line in stdout.splitlines() if "=" in line)
+
+
+# (tag, branch, expected channel/prerelease/prekind/portversion)
+_VALID = [
+    ("v4.0.0.a1", "devel", "devel", "true", "a", "4.0.0.a1"),
+    ("v4.0.0.a2", "devel", "devel", "true", "a", "4.0.0.a2"),
+    ("v4.0.0.b1", "devel", "devel", "true", "b", "4.0.0.b1"),
+    ("v4.0.0.rc1", "devel", "devel", "true", "rc", "4.0.0.rc1"),
+    ("v4.0.0.rc12", "devel", "devel", "true", "rc", "4.0.0.rc12"),
+    ("v4.0.0", "main", "stable", "false", "", "4.0.0"),
+    ("v10.20.30", "main", "stable", "false", "", "10.20.30"),
+    # No branch context (dry-run): channel inferred from the tag shape, no branch check.
+    ("v4.1.0.a3", "", "devel", "true", "a", "4.1.0.a3"),
+    ("v4.1.0", "", "stable", "false", "", "4.1.0"),
+]
+
+
+@pytest.mark.parametrize("tag,branch,channel,prerelease,prekind,portversion", _VALID)
+def test_valid_tag_classification(
+    tag: str, branch: str, channel: str, prerelease: str, prekind: str, portversion: str
+) -> None:
+    """A well-formed tag classifies into the expected channel/prerelease/PORTVERSION."""
+    args = [tag, branch] if branch else [tag]
+    res = _run(*args)
+    assert res.returncode == 0, res.stderr
+    f = _fields(res.stdout)
+    assert f["version"] == tag[1:]
+    assert f["channel"] == channel
+    assert f["prerelease"] == prerelease
+    assert f["prekind"] == prekind
+    # PORTVERSION must be pkg-safe (no '-', the pkg name/version separator) and == version.
+    assert f["portversion"] == portversion
+    assert "-" not in f["portversion"]
+
+
+_MALFORMED = [
+    "v4.0.0-devel",  # legacy suffix scheme — no longer valid
+    "v4.0.0-rc1",  # dash, not the dotted .rcW form
+    "v4.0.0.x1",  # unknown stage letter
+    "v4.0.0.a",  # stage letter without a sequence number
+    "v4.0.a1",  # only two numeric components
+    "v4.0.0.alpha1",  # spelled-out stage word, not a|b|rc
+    "4.0.0.a1",  # missing leading v
+    "v4.0.0.a1.1",  # trailing junk after the stage
+]
+
+
+@pytest.mark.parametrize("tag", _MALFORMED)
+def test_malformed_tag_rejected(tag: str) -> None:
+    """A tag that does not match either form is rejected with a non-zero exit."""
+    res = _run(tag)
+    assert res.returncode != 0
+    assert "not a valid release tag" in res.stderr
+
+
+def test_empty_tag_rejected() -> None:
+    """No tag argument is a usage error."""
+    res = _run()
+    assert res.returncode != 0
+    assert "no tag given" in res.stderr
+
+
+# Branch<->channel mismatches: a prerelease may only come from devel, a stable
+# only from main. The opposite pairing must fail (the before/after of the gate).
+@pytest.mark.parametrize(
+    "tag,good_branch,bad_branch",
+    [
+        ("v4.0.0.a1", "devel", "main"),  # prerelease belongs on devel, not main
+        ("v4.0.0", "main", "devel"),  # stable belongs on main, not devel
+    ],
+)
+def test_branch_channel_enforcement(tag: str, good_branch: str, bad_branch: str) -> None:
+    """The SAME tag passes on its correct branch and is rejected on the wrong one."""
+    ok = _run(tag, good_branch)
+    assert ok.returncode == 0, ok.stderr
+
+    bad = _run(tag, bad_branch)
+    assert bad.returncode != 0
+    assert "points at" in bad.stderr or "points to" in bad.stderr
+
+
+def test_ordering_documented_matches_pkg_semantics() -> None:
+    """Sanity: the four stage forms classify so their PORTVERSIONs order a<b<rc<stable.
+
+    FreeBSD pkg orders 4.0.0.a1 < 4.0.0.b1 < 4.0.0.rc1 < 4.0.0 natively; this only
+    asserts the script emits those exact PORTVERSION strings (the ordering itself is
+    a pkg property, validated live by the repo-install smoke).
+    """
+    versions = [_fields(_run(t).stdout)["portversion"] for t in ("v4.0.0.a1", "v4.0.0.b1", "v4.0.0.rc1", "v4.0.0")]
+    assert versions == ["4.0.0.a1", "4.0.0.b1", "4.0.0.rc1", "4.0.0"]

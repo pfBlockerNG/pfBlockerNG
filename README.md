@@ -63,6 +63,12 @@ opt-in package available **only** from this fork's self-hosted repository (Optio
 The three packages are mutually exclusive — install **one**. Choose **stable** unless
 you specifically want to track development builds.
 
+Releases follow semantic versioning. Development releases are pre-release tags cut
+from `devel` — `X.Y.Z.aN` (alpha), `X.Y.Z.bN` (beta), `X.Y.Z.rcN` (release
+candidate) — and stable releases are plain `X.Y.Z`, cut from `main`. They order
+naturally for `pkg` (`4.0.0.a1` < `4.0.0.b1` < `4.0.0.rc1` < `4.0.0`). Nightly builds
+are not published as GitHub releases.
+
 In the self-hosted repository the **stable** and **development** packages are served
 from a single repo (`pfblockerng`) — exactly as Netgate ships `pfSense-pkg-pfBlockerNG`
 and `-devel` from its one `pfSense` repo — so one bootstrap exposes both; you pick which
