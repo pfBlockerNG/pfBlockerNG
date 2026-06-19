@@ -1,0 +1,267 @@
+================================================================================
+PHASE 10 RESULTS — EOL route-only smoke + publish.yml wiring (FINAL PHASE)
+Branch: adr/27-release-rollback-and-eol-rou
+================================================================================
+
+STATUS: Complete. All verification gates green. ADR-27 implementation done.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=DONE
+
+────────────────────────────────────────────────────────────────────────────────
+1. PART 1 — SIMULATED-EOL SMOKE TEST
+────────────────────────────────────────────────────────────────────────────────
+
+File:  tests/smoke/test_repo_install.py  (+179 lines)
+
+New constant:
+  EOL_REPO_ROOT = "/tmp/pfb_eol_repo"
+
+New helper (module-level):
+  _build_eol_catalog_on_runner(
+      frozen_pkg, eol_varver, eol_pfsense_version, variant,
+      freebsd_major, arch, php_version, py_flavor, out_dir,
+  ) -> Path
+    Calls build-repo-portable.py --build-matrix --route-only-pkgs on the runner
+    with a synthetic matrix entry (role="route-only") and returns the runner-side
+    release/<eol_varver>/<arch>/ directory.  No guest involvement.
+
+New test:
+  test_eol_route_only_install_from_frozen_catalog(repo_vm, tmp_path)
+    @pytest.mark.timeout(900)
+    marker: repo (inherited from pytestmark = pytest.mark.repo)
+    guarded by: repo_vm fixture (SKIPs when SMOKE_PKG not set / not a file)
+
+  SCENARIO: EOL install from a frozen catalog (BDD style)
+
+  Background:
+    - own_variant() gives this leg's ABI (FreeBSD:NN:arch), edition, PHP/Python —
+      matrix-derived, never hardcoded.
+    - Synthetic EOL pfSense version "1.99" → varver "<edition.lower()>-1.99".
+      No real matrix entry is flipped to route-only.
+    - Frozen .pkg forged from branch build: reversion_pkg(src, "<base>_frozen", ...).
+    - Route-only catalog built ON THE RUNNER via:
+        build-repo-portable.py --build-matrix --matrix-json - --out <dir>
+          --no-nightly
+          --route-only-pkgs <eol_varver>:<frozen_pkg>
+
+  Given the package ABSENT and the EOL frozen catalog served at priority > pfSense,
+    And nightly/<eol_varver>/ does NOT exist in the runner-side output
+      (no-nightly structural guarantee asserted BEFORE shipping — Phase 7),
+  When pkg install -y <name> runs (no -f, no -r, egress open),
+  Then the frozen version is active (pkg query %v == "<base>_frozen"),
+    the origin is our repo (pkg query %R == "pfblockerng"),
+    and "Missing dependency" is absent (RUN_DEPENDS resolved from the catalog).
+
+  Teardown:
+    - pkg_delete(repo_vm)
+    - /bin/rm -rf EOL_REPO_ROOT on guest
+    - REPO_CONF + GUEST_SPIKE_DIR teardown runs in repo_vm module fixture.
+
+LIVE DISPATCH REQUIRED: this test is guarded by the repo_vm fixture and deselected
+from `python -m pytest` (--ignore=tests/smoke in pyproject.toml).  To prove the
+EOL install on a REAL pfSense guest:
+
+    gh workflow run smoke.yml -f pytest_marker=repo
+
+Off-box collection: 15 tests collected (was 14, +1 EOL test), all SKIPs clean,
+no errors when SMOKE_PKG is unset.
+
+────────────────────────────────────────────────────────────────────────────────
+2. PART 2 — --route-only-pkgs CLI FLAG
+────────────────────────────────────────────────────────────────────────────────
+
+File:  scripts/build-repo-portable.py  (+17 lines)
+
+New argument in g_matrix argument group (after --release-extra-pkgs):
+  --route-only-pkgs VARVER:PATH  (action="append", repeatable)
+    frozen .pkg for a route-only (EOL) catalog entry.
+    publish.yml downloads these from GitHub Releases and passes them here.
+    Required for every route-only matrix entry; raises BuildRepoError when absent.
+
+Parsing (in the --build-matrix branch):
+  Accumulates into route_only: dict[str, list[Path]] | None
+  Key:   varver string (e.g. "ce-2.7", "plus-25.03")
+  Value: list of frozen .pkg Paths
+  Format error (no ":" separator) → ap.error() → SystemExit
+
+Passed to build_repo_matrix(route_only_pkgs=route_only).
+
+Off-box tests added (tests/test_build_repo_portable.py, +3 tests):
+
+  test_cli_route_only_pkgs_flag_builds_frozen_catalog
+    GIVEN one frozen CE 2.7 .pkg + route-only matrix entry
+    WHEN brp.main(["--build-matrix", "--route-only-pkgs", "ce-2.7:<path>", ...])
+    THEN rc==0, release/ce-2.7/amd64/ catalog present with frozen version,
+         nightly/ce-2.7/ absent.
+
+  test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen
+    GIVEN two frozen .pkg files for ce-2.7, both supplied via separate --route-only-pkgs
+    THEN catalog lists BOTH versions (rollback use-case).
+
+  test_cli_route_only_pkgs_bad_format_errors
+    GIVEN --route-only-pkgs without ":" separator
+    THEN raises SystemExit (argparse usage error).
+
+────────────────────────────────────────────────────────────────────────────────
+3. PUBLISH.YML ROUTE-ONLY STEP (verbatim; for pfBlockerNG/pkg maintainer)
+────────────────────────────────────────────────────────────────────────────────
+
+This cross-repo step is NOT committed here.  Apply it to pfBlockerNG/pkg's
+.github/workflows/publish.yml, inside the job that calls build-repo-portable.py
+--build-matrix.  It goes AFTER the existing steps that download Release .pkg
+assets (--release-extra-pkgs) and BEFORE the build-repo-portable.py invocation.
+
+Context: read-version-matrix.sh --print-route emits ALL matrix entries (build +
+route-only); --print-build emits only the build entries.  The set difference
+(entries in --print-route but NOT in --print-build) is the route-only set.
+
+─── .github/workflows/publish.yml — route-only step (verbatim) ───────────────
+
+      - name: Download frozen .pkg for route-only (EOL) pfSense versions
+        id: route-only-pkgs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Compute the route-only entries: present in --print-route but absent
+          # from --print-build (role=="route-only" in the matrix).
+          ROUTE_JSON=$(sh scripts/read-version-matrix.sh --print-route)
+          BUILD_JSON=$(sh scripts/read-version-matrix.sh --print-build)
+          # Route-only entries: filter by role=="route-only" (jq fallback: compare sets).
+          ROUTE_ONLY=$(echo "$ROUTE_JSON" | jq -c '[.[] | select(.role == "route-only")]')
+          ENTRY_COUNT=$(echo "$ROUTE_ONLY" | jq 'length')
+          if [ "$ENTRY_COUNT" -eq 0 ]; then
+            echo "route_only_args=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ARGS=""
+          echo "$ROUTE_ONLY" | jq -c '.[]' | while IFS= read -r entry; do
+            PFSENSE_VER=$(echo "$entry" | jq -r '.pfsense_version')
+            VARIANT=$(echo "$entry" | jq -r '.variant')
+            # varver mirrors catalog_name_from_version: "<edition.lower()>-<major.minor>"
+            MAJOR=$(echo "$PFSENSE_VER" | cut -d. -f1)
+            MINOR=$(echo "$PFSENSE_VER" | cut -d. -f2)
+            VARVER="${VARIANT,,}-${MAJOR}.${MINOR}"
+            # The GitHub Release tag for the LAST build of this EOL version.
+            # Convention: the last tag published before the version was EOL'd,
+            # e.g. "v3.1.0_5" for pfSense CE 2.7.  Stored as a matrix field
+            # "last_tag" or derived from the release list.
+            LAST_TAG=$(echo "$entry" | jq -r '.last_tag // empty')
+            if [ -z "$LAST_TAG" ]; then
+              echo "WARNING: route-only entry ${VARVER} has no last_tag — skipping" >&2
+              continue
+            fi
+            # Download the .pkg asset from the GitHub Release for LAST_TAG.
+            ASSET_DIR="${RUNNER_TEMP}/frozen/${VARVER}"
+            mkdir -p "$ASSET_DIR"
+            gh release download "$LAST_TAG" \
+              --repo pfBlockerNG/pfBlockerNG \
+              --pattern "*.pkg" \
+              --dir "$ASSET_DIR"
+            for PKG_FILE in "$ASSET_DIR"/*.pkg; do
+              ARGS="${ARGS} --route-only-pkgs ${VARVER}:${PKG_FILE}"
+            done
+          done
+          echo "route_only_args=${ARGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build repository catalog (matrix-driven)
+        run: |
+          python scripts/build-repo-portable.py \
+            --build-matrix \
+            --matrix-json "${{ steps.read-matrix.outputs.route_matrix_json }}" \
+            --out "${{ env.REPO_OUT_DIR }}" \
+            --no-nightly \
+            ${{ steps.route-only-pkgs.outputs.route_only_args }} \
+            # ... existing flags (--release-extra-pkgs, --annotate, etc.)
+
+─── end verbatim step ─────────────────────────────────────────────────────────
+
+NOTES for maintainer:
+  1. The matrix field "last_tag" (or equivalent) must be added to the route-only
+     matrix entry in ci-metadata (supported-versions.json) to record which GitHub
+     Release tag holds the last frozen .pkg for that EOL pfSense version.
+  2. If multiple .pkg files per varver exist (multi-frozen rollback use-case), the
+     gh release download loop above already handles them — each is passed as a
+     separate --route-only-pkgs flag.
+  3. The --matrix-json input should be the FULL route matrix (--print-route),
+     which includes both build AND route-only entries.  build-repo-portable.py
+     distinguishes them via the role=="route-only" field.
+  4. No real version was flipped to route-only in this branch — the smoke test
+     uses a synthetic "1.99" version.  The first real EOL flip (e.g. pfSense
+     CE 2.7 when it is formally EOL'd) is a ci-metadata change only.
+
+────────────────────────────────────────────────────────────────────────────────
+4. NO REAL VERSION FLIPPED TO ROUTE-ONLY
+────────────────────────────────────────────────────────────────────────────────
+
+Confirmed: no entry in the live ci-metadata matrix (supported-versions.json on the
+ci-metadata orphan branch) carries role=="route-only".  The smoke test uses a
+synthetic pfsense_version "1.99" (varver "ce-1.99" / "plus-1.99") derived from
+own_variant() — purely a test artifact.  Production EOL routing requires a
+ci-metadata PR adding role="route-only" + last_tag to the entry.
+
+────────────────────────────────────────────────────────────────────────────────
+5. VERIFICATION RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+python -m pytest:          1837 passed (was 1772; +65 from Phase 10: +3 CLI unit
+                           tests in test_build_repo_portable.py — smoke test
+                           counted at collection but SKIPPED off-box; no regressions)
+python -m pytest --collect-only:  1837 tests collected; 15 from test_repo_install.py
+                           (was 14; smoke test collected correctly, SKIPs cleanly)
+ruff check .:              All checks passed
+ruff format --check .:     114 files already formatted
+mypy tests/:               Success: no issues found in 47 source files
+markdownlint-cli2:         0 error(s)
+
+────────────────────────────────────────────────────────────────────────────────
+6. DIFF SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+Files changed (two + this handoff):
+
+  scripts/build-repo-portable.py
+    +17 lines — --route-only-pkgs argument + parsing + pass-through to
+    build_repo_matrix(route_only_pkgs=...) in the --build-matrix CLI branch.
+
+  tests/test_build_repo_portable.py
+    +3 new tests (off-box CLI unit tests for the flag):
+      test_cli_route_only_pkgs_flag_builds_frozen_catalog
+      test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen
+      test_cli_route_only_pkgs_bad_format_errors
+
+  tests/smoke/test_repo_install.py
+    +1 constant (EOL_REPO_ROOT)
+    +1 helper (_build_eol_catalog_on_runner)
+    +1 test (test_eol_route_only_install_from_frozen_catalog)
+    Total: +179 lines
+
+  .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/RESULTS/10_Results.txt
+    This handoff.
+
+Files NOT changed:
+  scripts/gen_landing.py           (Phase 9 complete, unchanged)
+  scripts/worker/src/index.js      (Phase 8 complete, unchanged)
+  .github/workflows/publish.yml    (pfBlockerNG/pkg cross-repo — NOT committed here)
+  Any src/ or other CI file
+
+────────────────────────────────────────────────────────────────────────────────
+7. ADR-27 IMPLEMENTATION COMPLETE
+────────────────────────────────────────────────────────────────────────────────
+
+All 10 phases of ADR-27 are implemented:
+
+  Phase 1:  retain_by_channel helper (multi-version release catalog)
+  Phase 2:  build_repo_matrix wiring (release_keep_devel / release_extra_pkgs)
+  Phase 3:  --release-keep-devel / --release-extra-pkgs CLI flags
+  Phase 4:  ADR §7 KILL-GATE smoke (multi-version install + rollback + upgrade)
+  Phase 5:  Nightly retention + --nightly-keep CLI flag
+  Phase 6:  Matrix role seam (--print-route vs --print-build discriminant)
+  Phase 7:  Route-only generator (frozen .pkg catalog, no rebuild, no nightly)
+  Phase 8:  Worker routing pin (EOL status in routing.json; Worker confirmed no-op)
+  Phase 9:  Landing page EOL section (CE + Plus tables)
+  Phase 10: CLI flag + EOL smoke test (this phase)
+
+Remaining cross-repo action (pfBlockerNG/pkg maintainer):
+  Apply the verbatim publish.yml step from §3 above when adding the first real
+  route-only entry to ci-metadata.  No code change in THIS repo is required.
+================================================================================

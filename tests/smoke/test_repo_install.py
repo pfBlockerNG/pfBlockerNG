@@ -1256,6 +1256,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 # Base dir for ADR-20 variant catalogs on the guest (isolated from the ADR-17 spike dir).
 VARIANT_REPO_ROOT = "/tmp/pfb_variant_repo"
 
+# Base dir for ADR-27 EOL route-only catalog on the guest.
+EOL_REPO_ROOT = "/tmp/pfb_eol_repo"
+
 
 # Routing Worker URL (Phase 5). The live Case 4 leg is gated on SMOKE_WORKER_LIVE (the
 # deterministic routing proof is the offline scripts/worker/test/ suite).
@@ -1951,3 +1954,204 @@ def test_release_rollback_to_retained_older_version(repo_vm: SmokeVM, tmp_path: 
         pkg_delete(repo_vm)
         # PORTABLE_REPO_ROOT is cleaned by build_repo_via_portable on each call;
         # the broader GUEST_SPIKE_DIR teardown runs in the repo_vm module fixture.
+
+
+# =========================================================================== #
+# ADR-27 Phase 10 — EOL route-only install from a frozen catalog              #
+#                                                                              #
+# Proves the Part-2 (route-only distribution) path end-to-end on a REAL       #
+# pfSense guest: a frozen .pkg forged from the branch build, served via the    #
+# Phase-7 route-only generator (--build-matrix + --route-only-pkgs), is       #
+# installable by a real pfSense box — and NO nightly subtree was ever emitted  #
+# for the EOL varver (the structural no-nightly guarantee).                    #
+#                                                                              #
+# Marker: @pytest.mark.repo (inherited from pytestmark = pytest.mark.repo).   #
+# Deselected from default `python -m pytest` — dispatched via:                #
+#     gh workflow run smoke.yml -f pytest_marker=repo                          #
+# =========================================================================== #
+
+
+def _build_eol_catalog_on_runner(
+    frozen_pkg: Path,
+    eol_varver: str,
+    eol_pfsense_version: str,
+    variant: str,
+    freebsd_major: str,
+    arch: str,
+    php_version: str,
+    py_flavor: str,
+    out_dir: Path,
+) -> Path:
+    """Build a route-only (EOL) catalog on the runner via ``--build-matrix --route-only-pkgs``.
+
+    Runs ``build-repo-portable.py --build-matrix`` with a synthetic route-only
+    matrix entry and ``--route-only-pkgs <eol_varver>:<frozen_pkg>``.  The new
+    Phase-10 CLI flag is exercised end-to-end here — this is the exact invocation
+    shape publish.yml uses for real EOL versions.
+
+    Returns the runner-side ``release/<eol_varver>/<arch>/`` directory whose files
+    will be shipped to the guest.
+    """
+    matrix_entry = {
+        "pfsense_version": eol_pfsense_version,
+        "variant": variant,
+        "freebsd_major": freebsd_major,
+        "arch": arch,
+        "php_version": php_version,
+        "py_flavor": py_flavor,
+        "status": "EOL",
+        "role": "route-only",
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BUILD_REPO_PORTABLE),
+            "--build-matrix",
+            "--matrix-json",
+            "-",
+            "--out",
+            str(out_dir),
+            "--no-nightly",
+            "--route-only-pkgs",
+            f"{eol_varver}:{frozen_pkg}",
+        ],
+        input=json.dumps([matrix_entry]),
+        capture_output=True,
+        text=True,
+        timeout=120.0,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"build-repo-portable.py --build-matrix (route-only) failed: rc={proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    release_dir = out_dir / "release" / eol_varver / arch
+    assert release_dir.is_dir(), f"route-only generator did not emit release/{eol_varver}/{arch}/ under {out_dir}"
+    for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
+        assert (release_dir / fname).is_file(), f"route-only generator did not emit {fname} under {release_dir}"
+    return release_dir
+
+
+@pytest.mark.timeout(900)  # forge + catalog gen + pkg ops on a real guest > 30 s cap.
+def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-27 P10 KILL-GATE: a REAL pfSense box installs from a route-only (EOL)
+    frozen catalog built by the Phase-7 generator path (``--build-matrix --route-only-pkgs``).
+
+    The variant (ABI / PHP / Python / edition) is derived from the version matrix
+    (``own_variant()``) — never hardcoded.  A synthetic EOL pfSense version
+    (``"1.99"``, varver ``"<edition>-1.99"``) is used so no real matrix entry is
+    flipped to route-only by this test.  The frozen ``.pkg`` is forged from the
+    branch build using ``reversion_pkg`` (payload untouched, only the version string
+    changed).
+
+    No-nightly assertion is on the RUNNER (structural guarantee, Phase 7): the
+    ``nightly/<eol_varver>/`` directory must NOT exist in the generator output before
+    the catalog is shipped to the guest.
+
+    Scenario: EOL install from a frozen catalog
+      Background:
+        - own_variant() gives this leg's ABI (FreeBSD:NN:arch), edition, PHP/Python.
+        - A synthetic EOL varver ``<edition.lower()>-1.99`` is computed.
+        - A frozen .pkg is forged: ``<base_version>_frozen`` (reversion_pkg).
+        - Route-only catalog built ON THE RUNNER via --build-matrix + --route-only-pkgs.
+        - NONE-signed file:// repo conf pointing at the EOL catalog shipped to the guest.
+
+    Given the package ABSENT and the EOL catalog carried by the frozen version,
+      And ``nightly/<eol_varver>/`` does NOT exist in the runner-side catalog output
+        (the no-nightly structural guarantee),
+    When ``pkg install -y <name>`` runs on the guest (no -f, no -r),
+    Then the frozen version is active (``pkg query %v`` == ``<base>_frozen``),
+      the origin is OUR repo (``pkg query %R`` == ``pfblockerng``),
+      and ``Missing dependency`` is absent (RUN_DEPENDS resolved from the catalog).
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    src = Path(pkg)
+
+    own = own_variant()
+
+    # Synthetic EOL pfSense version — never a real matrix entry, so no production
+    # entry is accidentally flipped to route-only by this test.
+    eol_pfsense_version = "1.99"
+    eol_varver = f"{own.variant.lower()}-1.99"
+
+    # Split the ABI string "FreeBSD:<major>:<arch>" into its components.
+    _proto, freebsd_major, arch = own.abi.split(":", 2)
+
+    # Derive the PHP version string expected by the matrix entry (e.g. "8.3" from "php83").
+    # own.php is "php83" / "php85" — strip "php" and re-insert the dot: "83" → "8.3".
+    raw_php = own.php.removeprefix("php")  # e.g. "83"
+    php_version = raw_php[0] + "." + raw_php[1:]  # e.g. "8.3"
+
+    # Forge the "last supported" frozen .pkg: same payload as the branch build, new version.
+    base_version = read_compact_version(src)
+    frozen_version = f"{base_version}_frozen"
+    frozen_pkg = reversion_pkg(src, frozen_version, tmp_path / "eol_frozen")
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    # ---- Build the route-only (EOL) catalog ON THE RUNNER (no guest involved). ----
+    # Uses --build-matrix + --route-only-pkgs — the exact CLI shape publish.yml will use.
+    eol_out_dir = tmp_path / "eol_catalog_out"
+    local_release_dir = _build_eol_catalog_on_runner(
+        frozen_pkg,
+        eol_varver,
+        eol_pfsense_version,
+        own.variant,
+        freebsd_major,
+        arch,
+        php_version,
+        own.py,
+        eol_out_dir,
+    )
+
+    # GIVEN (runner-side before-state): no nightly subtree was emitted for the EOL varver.
+    # Structural guarantee (Phase 7): the route-only branch in build_repo_matrix never
+    # reaches the nightly code path.  Assert it BEFORE shipping to the guest so the
+    # no-nightly guarantee is proven unconditionally (not just absent from the guest).
+    assert not (eol_out_dir / "nightly" / eol_varver).exists(), (
+        f"nightly/{eol_varver}/ must NOT exist for a route-only entry — "
+        f"the no-nightly structural guarantee (Phase 7) is violated"
+    )
+
+    try:
+        # ---- Ship the EOL catalog tree to the guest. ----
+        # Ship only the release/<eol_varver>/<arch>/ files (the ABI subtree); the
+        # guest conf points directly at the on-guest ABI directory.
+        guest_abi_dir = f"{EOL_REPO_ROOT}/{eol_varver}/{arch}"
+        _ssh_check(repo_vm, "/bin/rm", "-rf", EOL_REPO_ROOT)
+        _ssh_check(repo_vm, "/bin/mkdir", "-p", guest_abi_dir)
+        for f in sorted(local_release_dir.iterdir()):
+            if f.is_file():
+                _scp_to_guest(repo_vm, f, f"{guest_abi_dir}/{f.name}")
+
+        # --- GIVEN: package absent; EOL catalog enabled above the pfSense repo. ---
+        pkg_delete(repo_vm)
+        write_repo_conf(repo_vm, guest_abi_dir, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        before_version = pkg_installed_version(repo_vm)
+        assert before_version is None, (
+            f"{PKG_NAME} unexpectedly present before EOL install (version: {before_version!r})"
+        )
+
+        # --- WHEN: pkg install across ALL enabled repos, no -r/-f. ---
+        proc = pkg_install_from_repo(repo_vm)
+
+        # --- THEN: frozen version installed from our repo; deps resolved. ---
+        combined = proc.stdout + proc.stderr
+        assert "Missing dependency" not in combined, f"EOL frozen install: RUN_DEPENDS did not resolve:\n{combined}"
+        installed = pkg_installed_version(repo_vm)
+        assert installed == frozen_version, (
+            f"EOL frozen install: expected {frozen_version!r}, got {installed!r} — "
+            f"wrong version installed from the route-only catalog"
+        )
+        origin = pkg_repo_origin(repo_vm)
+        assert origin == OURS_REPO_NAME, (
+            f"EOL frozen install: origin {origin!r}, expected {OURS_REPO_NAME!r} — "
+            f"pkg did not install from our route-only catalog"
+        )
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", EOL_REPO_ROOT, timeout=60.0)
+        # REPO_CONF and GUEST_SPIKE_DIR teardown runs in the repo_vm module fixture.
