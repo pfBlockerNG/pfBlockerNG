@@ -93,7 +93,7 @@ version actually exists (§2.4) — it has no consumer today and must not be bui
 | Retention source | **GitHub Releases** (durable, already every release `.pkg`). `publish.yml` enumerates Releases, buckets by `prerelease` (devel pre-release) vs stable, takes the newest `N`/`M`, downloads their `.pkg`, and feeds them to the generator alongside the fresh devel-HEAD build. No new stateful store (unlike nightly's cache — Releases *are* the store). |
 | Catalog shape | `release/<varver>/<arch>/` now carries up to `N`+`M` versions per ABI (multi-version NDJSON). `pkg install <pkg>` still takes newest; `pkg install <pkg>-<version>` / `pkg add` pins an older one. |
 | Landing page | The ADR-20 "Older nightlies" per-edition disclosure pattern (`gen_landing.py`) generalizes to an **"Older releases"** disclosure under each edition — surfacing the retained devel/stable versions with their commit/date so a human can find a rollback target. |
-| Rollback UX (CLI only) | Documented support/debug procedure: `pkg install pfSense-pkg-pfBlockerNG[-devel]-<version>` (pinned) or `pkg add <pages-url>/…/<name>-<version>.pkg`. The catalog now resolves deps for the pinned version. **No GUI** — rollback is a support/debugging action, not an expected user flow, so it does not warrant a shipped `src/www/` page (which would carry an `ui_render`/PHP blast radius for a rarely-trodden path). A future GUI version-pick, if ever wanted, stays with the deferred ADR-19 Update/Channel panel. |
+| Rollback UX (CLI only) | Documented support/debug procedure: `pkg install -f pfSense-pkg-pfBlockerNG[-devel]-<version>` (pinned) or `pkg add <pages-url>/…/<name>-<version>.pkg`. `-f` is required — `pkg install` never downgrades over a newer installed build, so the pin is a no-op without it (proven on the live VM); the catalog still resolves deps for the pinned version (unlike `pkg add`). **No GUI** — rollback is a support/debugging action, not an expected user flow, so it does not warrant a shipped `src/www/` page (which would carry an `ui_render`/PHP blast radius for a rarely-trodden path). A future GUI version-pick, if ever wanted, stays with the deferred ADR-19 Update/Channel panel. |
 
 ### 2.2 Semantics that MUST be preserved (the contract — pin with tests before changing)
 
@@ -168,8 +168,9 @@ exists — building it speculatively risks ADR-01's trap).
 
 - The `release/<varver>/<arch>/` catalog carries the newest **N** devel + **M** stable versions per ABI
   (deduped, version-sorted, pruned deterministically); `pkg install <name>` still yields the newest.
-- A real pfSense box can `pkg install <name>-<oldversion>` (or `pkg add`) a **retained older** release and end up
-  with that exact version active, deps resolved from our repo — proven by the live `-m repo` smoke.
+- A real pfSense box can `pkg install -f <name>-<oldversion>` (or `pkg add`) a **retained older** release and end
+  up with that exact version active, deps resolved from our repo — proven by the live `-m repo` smoke. (`-f` is
+  required to downgrade over a newer installed build; deps still resolve from the catalog.)
 - The off-box catalog-membership test pins that exactly the expected retained versions appear (and an older-than-
   window one does not).
 - The landing page shows an "Older releases" disclosure per edition (unit-tested in `tests/test_gen_landing.py`),
@@ -230,8 +231,9 @@ Prompt: `03_Publish_Retention.txt`.
 Prompt: `04_Rollback_Smoke.txt`.
 
 - `tests/smoke/test_repo_install.py`: forge ≥2 retained release versions (reuse the existing re-version helper);
-  install newest, assert it active; **roll back** via `pkg install <name>-<olderversion>`; assert the older
-  version is now active, deps resolved from our repo; then re-upgrade to newest (before/after lifecycle).
+  install newest, assert it active; **roll back** via `pkg install -f <name>-<olderversion>` (`-f` forces the
+  downgrade over the newer installed build); assert the older version is now active, deps resolved from our repo;
+  then re-upgrade to newest (before/after lifecycle).
 - Pin: `pkg install <name>` (no version) still picks newest; the pinned install picks exactly the requested one.
 
 ### Phase 5 — Landing "Older releases" + rollback documentation
@@ -240,7 +242,7 @@ Prompt: `05_Landing_And_Docs.txt`.
 
 - `scripts/gen_landing.py`: add the per-edition "Older releases" disclosure (mirror `_older_nightlies_*`),
   surfacing the retained devel/stable versions with commit/date so a human can find a rollback target.
-- `README`/`docs`: document the CLI rollback procedure (`pkg install <name>-<version>` / `pkg add <url>`),
+- `README`/`docs`: document the CLI rollback procedure (`pkg install -f <name>-<version>` / `pkg add <url>`),
   including the config-schema-mismatch caveat (no backward config migration).
 - Tests: `gen_landing` unit cases in `tests/test_gen_landing.py` (the "Older releases" disclosure, before/after).
 
@@ -252,7 +254,7 @@ Prompt: `05_Landing_And_Docs.txt`.
   all from our repo with deps resolved; newest-wins default intact; cross-repo precedence intact.
 - §2.4 (Part 2) present as design-of-record; **no** part-2 code merged.
 - **Manual smoke checklist (owner: maintainer)** — the items CI cannot fully cover:
-  - On a real box, CLI roll back (`pkg install <name>-<oldver>`) to an older version and back; confirm the package functions (a DNSBL match) after each.
+  - On a real box, CLI roll back (`pkg install -f <name>-<oldver>`) to an older version and back; confirm the package functions (a DNSBL match) after each.
   - Confirm a rollback across a config-schema change warns and does not corrupt config (documented limitation).
   - Confirm Pages/catalog growth at `N=M=10` is within the publish runtime/artifact budget.
 - **Reject criteria (ADR-01 discipline):** REJECT (or rescope) if any holds —

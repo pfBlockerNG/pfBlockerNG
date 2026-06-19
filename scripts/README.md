@@ -337,13 +337,15 @@ retention depth, it prunes to the newest N/M before writing the catalog.
 When the retention depth is `>1`, the catalog lists multiple versions. A user can pin:
 
 ```sh
-# Roll back to a specific devel build
-pkg install pfSense-pkg-pfBlockerNG-devel-3.2.15
+# Roll back to a specific devel build (-f forces the downgrade over a newer installed build)
+pkg install -f pfSense-pkg-pfBlockerNG-devel-3.2.15
 
 # Roll back to a specific stable build
-pkg install pfSense-pkg-pfBlockerNG-3.2.14
+pkg install -f pfSense-pkg-pfBlockerNG-3.2.14
 ```
 
+`-f` is required: `pkg install` never downgrades over a newer already-installed build, so the
+pin is a no-op without it (deps still resolve from the catalog, unlike `pkg add <url>`).
 `pkg install <name>` (no version) still resolves the **highest** listed version
 (newest-wins, `pkg` version ordering). Rollback is available **only for the N/M most recent
 releases** — releases older than the retention window are absent from the catalog.
