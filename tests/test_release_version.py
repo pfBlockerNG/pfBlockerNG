@@ -23,6 +23,7 @@ _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-version.
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    """Invoke the classifier script with the given args, capturing stdout/stderr/exit."""
     return subprocess.run(
         ["sh", str(_SCRIPT), *args],
         capture_output=True,
@@ -32,6 +33,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _fields(stdout: str) -> dict[str, str]:
+    """Parse the script's ``KEY=VALUE`` stdout lines into a dict."""
     return dict(line.split("=", 1) for line in stdout.splitlines() if "=" in line)
 
 
@@ -77,6 +79,11 @@ _MALFORMED = [
     "v4.0.0.alpha1",  # spelled-out stage word, not a|b|rc
     "4.0.0.a1",  # missing leading v
     "v4.0.0.a1.1",  # trailing junk after the stage
+    "v01.2.3",  # leading zero in a version component (not strict semver)
+    "v1.02.3",  # leading zero in the minor component
+    "v1.2.03",  # leading zero in the patch component
+    "v4.0.0.a0",  # prerelease sequence must be >= 1
+    "v4.0.0.a01",  # leading zero in the prerelease sequence
 ]
 
 

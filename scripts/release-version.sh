@@ -46,12 +46,14 @@ fi
 version="${tag#v}"
 
 # Classify by shape. Stage prereleases carry a .(a|b|rc)<N> suffix; stable is
-# the bare semver core. grep -E with anchors gives a full-string match.
-if printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+# the bare semver core. grep -E with anchors gives a full-string match. Numeric
+# parts are strict semver — no leading zeros (`0` or `[1-9][0-9]*`); the stage
+# sequence number is >= 1 (`[1-9][0-9]*`), per the documented `W >= 1`.
+if printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
 	channel="stable"
 	prerelease="false"
 	prekind=""
-elif printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+\.(a|b|rc)[0-9]+$'; then
+elif printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(a|b|rc)[1-9][0-9]*$'; then
 	channel="devel"
 	prerelease="true"
 	# Extract the stage kind (a|b|rc) from the trailing .<kind><N> component.

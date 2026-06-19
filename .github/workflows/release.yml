@@ -196,22 +196,43 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then
+            # Dispatch is the DRY-RUN harness only: the commit-check gate and the
+            # branch<->channel enforcement are both skipped here, so a real publish
+            # must never run from a dispatch. Reject dry_run=false explicitly — cut a
+            # real release by pushing a tag, which runs the full gates.
             DRY_RUN="${INPUT_DRY:-true}"
+            if [ "$DRY_RUN" != "true" ]; then
+              echo "::error::workflow_dispatch is dry-run only (it skips the commit + branch gates); to publish, push a release tag instead"
+              exit 1
+            fi
             TAG="$INPUT_TAG"
             [ -n "$TAG" ] || { echo "::error::workflow_dispatch requires the 'tag' input (e.g. v4.0.0.a1)"; exit 1; }
             BRANCH=""   # simulation: skip branch<->channel enforcement
           else
             DRY_RUN="false"
             TAG="$REF_NAME"
-            BRANCH=$(git branch -r --contains "$TAG" \
-              | grep -v HEAD | sed 's|origin/||' | grep -E '^(main|devel)$' | head -1)
+            # Branch detection must be deterministic AND mandatory: a stable tag sits
+            # on BOTH main and devel (main is an ancestor of devel), so prefer main;
+            # a tag reachable from neither release branch is rejected (never published).
+            ON_MAIN=0
+            ON_DEVEL=0
+            git merge-base --is-ancestor "$TAG" "origin/main"  2>/dev/null && ON_MAIN=1
+            git merge-base --is-ancestor "$TAG" "origin/devel" 2>/dev/null && ON_DEVEL=1
+            if [ "$ON_MAIN" = 1 ]; then
+              BRANCH="main"
+            elif [ "$ON_DEVEL" = 1 ]; then
+              BRANCH="devel"
+            else
+              echo "::error::${TAG} is not reachable from origin/main or origin/devel"
+              exit 1
+            fi
           fi
 
           OUT=$(sh scripts/release-version.sh "$TAG" "$BRANCH") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
 
-          # Map an empty branch (dispatch) to the channel's canonical branch so the
-          # downstream port-bump picks the right port path even in a dry-run.
+          # Dispatch (dry-run) has no branch context; map the classified channel to its
+          # canonical branch so the downstream port path is still correct in the summary.
           if [ -z "$BRANCH" ]; then
             [ "$channel" = "devel" ] && BRANCH="devel" || BRANCH="main"
           fi
