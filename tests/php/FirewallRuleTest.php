@@ -15,14 +15,33 @@ use PHPUnit\Framework\TestCase;
  * asserts the rule pushed onto the correct per-direction bucket; no live pfSense
  * state is involved.
  *
+ * Intent anchors (from the UI help texts in pfblockerng_category_edit.php):
+ *   - Baseline: auto-rule uses 'any' port, 'any' protocol, 'any' destination,
+ *     'any' gateway.
+ *   - Advanced Inbound (alias = source): Custom DST Port → destination port;
+ *     Custom Destination → destination address; autonot_in inverts the custom
+ *     destination address; aproto_in / agateway_in refine the rule.
+ *   - Advanced Outbound (alias = destination): Custom DST Port → destination
+ *     port; Custom Source → source address; autonot_out inverts the custom
+ *     source address; aproto_out / agateway_out refine the rule.
+ *   - Invert Source/Destination (autoaddrnot_in / autoaddrnot_out) REQUIRES
+ *     Action = Alias_Native (UI validation lines 619-628). Alias_Native has NO
+ *     switch case in pfb_firewall_rule() and therefore emits NO auto-rule — the
+ *     intended semantics: use the native alias directly in a hand-crafted
+ *     inverted rule. The aaddrnot branches inside pfb_firewall_rule() are
+ *     therefore unreachable in valid config and are intentionally NOT asserted
+ *     as a feature here — see testInvertActionAliasNativeProducesNoAutoRule.
+ *
  * Covered branches:
  *   - All nine action values and their target buckets.
  *   - _Both fall-through: one rule lands in BOTH outbound and inbound buckets.
  *   - Advanced Inbound: four destination combinations (neither / adest-only /
- *     aports-only / both); aaddrnot_in off vs on; anot_in when adest present
- *     and when absent; aproto_in set vs empty; agateway_in 'default'/''/custom.
+ *     aports-only / both); anot_in when adest present and when absent;
+ *     aproto_in set vs empty; agateway_in 'default'/''/custom.
  *   - Advanced Outbound: asrc_out empty vs set; anot_out with and without
- *     asrc_out; aports_out; aaddrnot_out; aproto_out; agateway_out.
+ *     asrc_out; aports_out; aproto_out; agateway_out.
+ *   - Alias_Native and an unknown action → no auto-rule (zero rules in every
+ *     bucket), which is the intended Invert Source/Destination behaviour.
  *   - vtype: _v4 → ipprotocol stays 'inet'; _v6 → 'inet6'.
  *   - float off → no 'direction' key on Deny/Permit; float on → 'direction' set.
  *   - Match rules: 'direction' always set even with float off; no 'quick' key
@@ -313,33 +332,6 @@ final class FirewallRuleTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// Advanced Inbound — aaddrnot_in: off → no source['not']; on → present.
-	// Before/after transition asserted so the flip is proved causal.
-	// -------------------------------------------------------------------------
-
-	public function testDenyInboundAddrnot_inFlipAddsSourceNot(): void
-	{
-		// Given: aaddrnot_in off (default '').
-		pfb_firewall_rule('Deny_Inbound', 'pfB_A', '_v4', 'off',
-			'default', 'default', '', '', '', '', '');
-		$before = $this->lastRule('deny_inbound');
-
-		// Before: source has no 'not' key.
-		$this->assertArrayNotHasKey('not', $before['source'],
-			'before: source[not] must be absent when aaddrnot_in is empty');
-
-		// When: aaddrnot_in='on'.
-		pfb_firewall_rule('Deny_Inbound', 'pfB_A', '_v4', 'off',
-			'default', 'default', 'on', '', '', '', '');
-		$after = $this->lastRule('deny_inbound');
-
-		// Then: source now has 'not' key.
-		$this->assertArrayHasKey('not', $after['source'],
-			'after: source[not] must be set when aaddrnot_in=on');
-		$this->assertSame('', $after['source']['not']);
-	}
-
-	// -------------------------------------------------------------------------
 	// Advanced Inbound — anot_in: sets destination['not'] only when adest non-empty.
 	// -------------------------------------------------------------------------
 
@@ -405,7 +397,7 @@ final class FirewallRuleTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// Advanced Inbound — touch on Permit_Inbound and Match_Inbound too.
+	// Advanced Inbound — touch on Permit_Inbound too.
 	// -------------------------------------------------------------------------
 
 	public function testPermitInboundAnot_inWithAdestSetsDestinationNot(): void
@@ -413,13 +405,6 @@ final class FirewallRuleTest extends TestCase
 		pfb_firewall_rule('Permit_Inbound', 'pfB_A', '_v4', 'off',
 			'default', 'default', '', '10.0.0.0/8', '', '', 'on');
 		$this->assertArrayHasKey('not', $this->lastRule('permit_inbound')['destination']);
-	}
-
-	public function testMatchInboundAaddrnot_inOnSetsSourceNot(): void
-	{
-		pfb_firewall_rule('Match_Inbound', 'pfB_A', '_v4', 'off',
-			'default', 'default', 'on');
-		$this->assertArrayHasKey('not', $this->lastRule('match_inbound')['source']);
 	}
 
 	// -------------------------------------------------------------------------
@@ -485,28 +470,6 @@ final class FirewallRuleTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// Advanced Outbound — aaddrnot_out: 'on' → destination['not'] set.
-	// -------------------------------------------------------------------------
-
-	public function testDenyOutboundAaddrnot_outOnSetsDestinationNot(): void
-	{
-		// aaddrnot_out is parameter 12 (0-indexed 11): gateway_in, gateway_out, aaddrnot_in,
-		// adest_in, aports_in, aproto_in, anot_in, aaddrnot_out.
-		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off',
-			'default', 'default', '', '', '', '', '', 'on');
-		$rule = $this->lastRule('deny_outbound');
-		$this->assertArrayHasKey('not', $rule['destination'],
-			'destination[not] must be set when aaddrnot_out=on');
-	}
-
-	public function testDenyOutboundAaddrnot_outOffLeavesNoDestinationNot(): void
-	{
-		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
-		$this->assertArrayNotHasKey('not', $this->lastRule('deny_outbound')['destination'],
-			'destination[not] must be absent when aaddrnot_out is empty');
-	}
-
-	// -------------------------------------------------------------------------
 	// Advanced Outbound — aproto_out.
 	// -------------------------------------------------------------------------
 
@@ -546,7 +509,7 @@ final class FirewallRuleTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// Advanced Outbound — touch on Permit_Outbound and Match_Outbound too.
+	// Advanced Outbound — touch on Permit_Outbound too.
 	// -------------------------------------------------------------------------
 
 	public function testPermitOutboundAsrc_outSetGivesAddressSource(): void
@@ -557,11 +520,65 @@ final class FirewallRuleTest extends TestCase
 			$this->lastRule('permit_outbound')['source']);
 	}
 
-	public function testMatchOutboundAaddrnot_outOnSetsDestinationNot(): void
+	// -------------------------------------------------------------------------
+	// Alias_Native and unknown actions produce NO auto-rule (zero bucket entries).
+	//
+	// Intent: Action=Alias_Native is required for "Invert Source/Destination"
+	// (UI validation lines 619-628). It has no switch case in pfb_firewall_rule()
+	// so NO auto-rule is emitted — the alias is used raw in user-defined rules.
+	// -------------------------------------------------------------------------
+
+	public function testInvertActionAliasNativeProducesNoAutoRule(): void
 	{
-		pfb_firewall_rule('Match_Outbound', 'pfB_A', '_v4', 'off',
-			'default', 'default', '', '', '', '', '', 'on');
-		$this->assertArrayHasKey('not', $this->lastRule('match_outbound')['destination']);
+		/**
+		 * Scenario: Alias_Native with both Invert toggles active emits no auto-rule.
+		 *
+		 * Given: all six buckets are empty (setUp).
+		 * When:  pfb_firewall_rule() is called with action=Alias_Native and both
+		 *        autoaddrnot flags set to 'on' (the only valid config per UI validation).
+		 * Then:  every bucket remains empty — Alias_Native skips the switch and the
+		 *        function returns without pushing anything.
+		 */
+
+		// Given: all buckets empty.
+
+		// When: Alias_Native called with invert on for both directions.
+		pfb_firewall_rule('Alias_Native', 'pfB_X', '_v4', 'off',
+			'default', 'default', 'on', '', '', '', '', 'on', '', '', '', '');
+
+		// Then: no bucket received any rule.
+		foreach (self::BUCKETS as $bucket) {
+			$this->assertCount(0, $GLOBALS['pfb'][$bucket],
+				"bucket '{$bucket}' must stay empty when action=Alias_Native (no auto-rule emitted)");
+		}
+	}
+
+	public function testUnknownActionProducesNoAutoRule(): void
+	{
+		/**
+		 * Scenario: an unrecognised action pushes nothing onto any bucket.
+		 *
+		 * Given: all six buckets are empty.
+		 * When:  pfb_firewall_rule() is called with action values that match no
+		 *        switch case ('Disabled' and 'Frobnicate').
+		 * Then:  all six buckets remain empty after each call.
+		 */
+
+		// Given: all buckets empty.
+
+		// When/Then: 'Disabled' matches no case.
+		pfb_firewall_rule('Disabled', 'pfB_X', '_v4', 'off');
+		foreach (self::BUCKETS as $bucket) {
+			$this->assertCount(0, $GLOBALS['pfb'][$bucket],
+				"bucket '{$bucket}' must stay empty for action=Disabled");
+		}
+
+		// When/Then: an arbitrary unknown string matches no case.
+		pfb_firewall_rule('Frobnicate', 'pfB_X', '_v4', 'off');
+		foreach (self::BUCKETS as $bucket) {
+			$this->assertCount(0, $GLOBALS['pfb'][$bucket],
+				"bucket '{$bucket}' must stay empty for action=Frobnicate");
+		}
 	}
 
 	// -------------------------------------------------------------------------
