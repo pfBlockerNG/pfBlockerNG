@@ -29,6 +29,13 @@ Changes here drive all downstream automation:
 - **Drop** the oldest CE entry only when the newest CE goes GA. The supported window
   is always _(previous GA + current GA)_, transiently `+1` during an active beta.
 - **Plus** entries are always `ci: false` (build-only — no licensed CI image).
+- **EOL (route-only)** — when a version is end-of-lifed but still has installs
+  in the field, set `role: "route-only"` + `ci: false` + `last_tag: "<last
+  Release tag>"` instead of dropping the entry. It is no longer built or smoked,
+  but its last `.pkg` stays served from a frozen catalog so existing installs
+  keep updating (ADR-27 Part 2). Absent `role` = `build` (normal); the reader
+  keeps a `route-only` entry out of `--print-build`/`-ci`/`-test`, only in
+  `--print-route`.
 
 ## How workflows read this
 
