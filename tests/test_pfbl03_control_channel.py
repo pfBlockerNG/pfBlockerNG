@@ -397,6 +397,7 @@ def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
     # Use _ABSENT so we can distinguish "was not set" from "was set to None".
     _pfb_keys = ("pfb_py_control", "pfb_py_control_applied", "python_blacklist")
     snapshot_pfb: dict[str, Any] = {k: P.pfb.get(k, _ABSENT) for k in _pfb_keys}
+    snapshot_gp_list_db: dict[Any, Any] = dict(P.gpListDB)
     snapshot_control_stop: Any = getattr(P, "pfb_control_stop", _ABSENT)
     snapshot_control_thread: Any = getattr(P, "pfb_control_watcher_thread", _ABSENT)
 
@@ -404,44 +405,59 @@ def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
     try:
         yield h
     finally:
-        # Guaranteed teardown: stop the watcher and assert it is dead.
-        died = h.stop_join()
-        assert died, (
-            f"control_harness teardown: watcher thread '{h.thread!r}' did not exit "
-            "within 10 s — the watcher is still alive after stop_join."
-        )
-        if h.thread is not None:
-            assert not h.thread.is_alive(), (
-                f"control_harness teardown: thread {h.thread!r} is still alive after stop_join reported death."
-            )
+        # Guaranteed teardown. Collect invariant failures rather than asserting
+        # inline so a failed check can never skip the global restoration below --
+        # restore ALWAYS runs (inner finally), then we surface any failures.
+        teardown_errors: list[str] = []
+        try:
+            # Stop the watcher and confirm it is dead.
+            died = h.stop_join()
+            if not died:
+                teardown_errors.append(
+                    f"control_harness teardown: watcher thread '{h.thread!r}' did not exit "
+                    "within 10 s — the watcher is still alive after stop_join."
+                )
+            elif h.thread is not None and h.thread.is_alive():
+                teardown_errors.append(
+                    f"control_harness teardown: thread {h.thread!r} is still alive after stop_join reported death."
+                )
 
-        # Confirm no pfb_control_watcher_test thread survives in the process.
-        live_after = [t for t in threading.enumerate() if t.name == "pfb_control_watcher_test"]
-        assert not live_after, f"control_harness teardown: leaked watcher thread(s) still alive: {live_after!r}"
+            # Confirm no pfb_control_watcher_test thread survives in the process.
+            live_after = [t for t in threading.enumerate() if t.name == "pfb_control_watcher_test"]
+            if live_after:
+                teardown_errors.append(
+                    f"control_harness teardown: leaked watcher thread(s) still alive: {live_after!r}"
+                )
+        finally:
+            # Restore snapshotted pfb keys.
+            for k, v in snapshot_pfb.items():
+                if v is _ABSENT:
+                    P.pfb.pop(k, None)
+                else:
+                    P.pfb[k] = v
 
-        # Restore snapshotted pfb keys.
-        for k, v in snapshot_pfb.items():
-            if v is _ABSENT:
-                P.pfb.pop(k, None)
+            # Restore gpListDB in place (callers hold a reference to this dict).
+            P.gpListDB.clear()
+            P.gpListDB.update(snapshot_gp_list_db)
+
+            # Restore pfb_control_stop and pfb_control_watcher_thread.
+            if snapshot_control_stop is _ABSENT:
+                try:
+                    del P.pfb_control_stop  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
             else:
-                P.pfb[k] = v
+                P.pfb_control_stop = snapshot_control_stop
 
-        # Restore pfb_control_stop and pfb_control_watcher_thread.
-        if snapshot_control_stop is _ABSENT:
-            try:
-                del P.pfb_control_stop  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
-        else:
-            P.pfb_control_stop = snapshot_control_stop
+            if snapshot_control_thread is _ABSENT:
+                try:
+                    del P.pfb_control_watcher_thread  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+            else:
+                P.pfb_control_watcher_thread = snapshot_control_thread
 
-        if snapshot_control_thread is _ABSENT:
-            try:
-                del P.pfb_control_watcher_thread  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
-        else:
-            P.pfb_control_watcher_thread = snapshot_control_thread
+        assert not teardown_errors, "\n".join(teardown_errors)
 
 
 class TestControlWatcherLoop:
@@ -527,19 +543,16 @@ class TestControlWatcherLoop:
         assert h.wait_applied(10)
         assert P.pfb["python_blacklist"] is False
 
-    def test_unknown_command_record_consumed_without_side_effect(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def test_unknown_command_record_consumed_without_side_effect(self, control_harness: _ControlHarness) -> None:
         # A record with an unknown cmd advances the seq (consumed) but performs no action.
-        h = _ControlHarness(tmp_path, monkeypatch)
+        h = control_harness
         P.pfb["python_blacklist"] = True
         h.start()
-        try:
-            assert h.wait_started()  # ensure baseline before publishing
-            h.publish({"seq": 1, "cmd": "wipe-everything"})
-            assert h.wait_applied(1)  # consumed (marker advances) ...
-            assert P.pfb["python_blacklist"] is True  # ... but no side effect.
-        finally:
-            h.stop_join()
-        assert not h.thread.is_alive()
+        assert h.wait_started()  # ensure baseline before publishing
+        assert P.pfb["python_blacklist"] is True  # BEFORE: on, nothing applied yet.
+        h.publish({"seq": 1, "cmd": "wipe-everything"})
+        assert h.wait_applied(1)  # consumed (marker advances) ...
+        assert P.pfb["python_blacklist"] is True  # ... but no side effect.
 
 
 # --------------------------------------------------------------------------- #
