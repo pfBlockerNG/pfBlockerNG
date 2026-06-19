@@ -1045,7 +1045,7 @@ def main(argv: list[str]) -> int:
         metavar="VARVER:PATH",
         help=(
             "frozen .pkg for a route-only (EOL) catalog entry, in VARVER:PATH form "
-            "(repeatable; e.g. --route-only-pkgs ce-2.7=/path/to/frozen.pkg). "
+            "(repeatable; e.g. --route-only-pkgs ce-2.7:/path/to/frozen.pkg). "
             "publish.yml downloads these from GitHub Releases and passes them here. "
             "Required for every route-only matrix entry; raises BuildRepoError when absent."
         ),
