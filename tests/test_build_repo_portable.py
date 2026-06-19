@@ -1429,6 +1429,37 @@ def test_retain_by_channel_empty_channel_is_noop(tmp_path: Path) -> None:
     assert len(kept) == 2
 
 
+@pytest.mark.parametrize(
+    ("keep_devel", "keep_stable"),
+    [(-1, 1), (1, -1), (-1, -1)],
+)
+def test_retain_by_channel_rejects_negative_keep(tmp_path: Path, keep_devel: int, keep_stable: int) -> None:
+    """A negative keep value is rejected up front (fail fast), not slice-applied silently.
+
+    A negative ``keep`` would otherwise reach ``_retain_newest``'s ``[:keep]`` slice — e.g.
+    ``keep=-1`` drops the NEWEST build instead of pruning the oldest — losing data with no
+    error. ``retain_by_channel`` must raise ``BuildRepoError`` for any negative input.
+
+    Scenario: 2 devel + 2 stable pkgs, one (or both) keep value negative
+      Given a valid set of pkgs
+      When retain_by_channel is called with a negative keep_devel and/or keep_stable
+      Then it raises BuildRepoError (no silent slice, no partial result)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+
+    # Positive control: the non-negative call DOES return (proves the inputs are valid and
+    # only the negative value triggers the raise — not some unrelated failure).
+    assert len(brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_devel=1, keep_stable=1)) == 2
+
+    with pytest.raises(brp.BuildRepoError, match=">= 0"):
+        brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_devel=keep_devel, keep_stable=keep_stable)
+
+
 # --------------------------------------------------------------------------- #
 # ADR-27 Phase 2: release-subtree retention in build_repo_matrix
 #

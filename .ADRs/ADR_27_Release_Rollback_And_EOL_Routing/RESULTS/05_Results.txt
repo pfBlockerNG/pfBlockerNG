@@ -1,7 +1,8 @@
 ADR-27 Phase 5 Results — Landing "Older releases" + rollback documentation
 ==========================================================================
 
-Status: COMPLETE — ADR-27 Part 1 all phases done; go-ahead for PR.
+Status: COMPLETE — ADR-27 Part 1 all phases done; §7 live -m repo smoke GREEN
+        (run 27802532591, CE leg). Ready to land.
 
 ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=DONE
 
@@ -109,10 +110,10 @@ Phase 4 (Rollback smoke — live VM, -m repo):
     Then: lo_version active, origin pfblockerng, no missing dep (PREMISE HOLDS).
     When: pkg upgrade.
     Then: hi_version restored (lifecycle closed).
-  Off-box collection: 14 tests collected. On-box: dispatch required
-  (gh workflow run smoke.yml -f pytest_marker=repo).
-  REJECT gate: no REJECT triggered (pkg pinned-version install confirmed
-  to work via catalog in the rollback command per Phase 4 Results).
+  Off-box collection: 14 tests collected. On-box: dispatched + GREEN
+  (smoke.yml -f pytest_marker=repo, run 27802532591, CE leg).
+  REJECT gate: no REJECT triggered — pkg pinned-version install with `-f`
+  confirmed to roll back via the catalog (deps resolved) on the live VM.
 
 Phase 5 (Landing "Older releases" + docs):
   older_releases() + _older_releases_* in scripts/gen_landing.py.
