@@ -1,0 +1,60 @@
+================================================================================
+PHASE 6 PROMPT — Route www/ group A: General + IP + DNSBL
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.4.2 first)
+================================================================================
+
+ROLE
+You implement Phase 6 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING. Route the
+$pconfig load/save of the General, IP, and DNSBL settings pages through PfbConfig / its section
+helpers. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The www/ pages still read/write raw config strings with their own per-field defaults — the exact
+divergence source #281 came from (general.php defaulted pfb_keep 'on' while pfb_global did not).
+Routing the pages through the gateway makes the page and the runtime read agree by construction.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/05_Results.txt — it
+  must confirm install-time access is routed and green. If missing, STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1 section helpers, §2.4.2/§2.4.3).
+- src/usr/local/www/pfblockerng/pfblockerng_general.php (the #281 pfb_keep save site, ~:57 default,
+  ~:159 save), pfblockerng_ip.php, pfblockerng_dnsbl.php — their $pconfig load blocks and POST save
+  blocks (config_get_path/config_set_path).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig + section helpers.
+- CLAUDE.md — PHP standards; "Web UI help text" rule (don't alter visible text); the ui_render gate;
+  test mandate.
+
+ACTION PLAN
+1. Route each page's $pconfig LOAD through PfbConfig section-read + per-field read (registry defaults
+   now own the page defaults — remove the page-local `?: 'on'`/`isset(...) ? ... : default` only when
+   the registry default matches; assert parity in a test). Route the POST SAVE through PfbConfig
+   write / section-write so the stored vocabulary is the adapter's exact legacy string.
+2. Do NOT change any visible form field, label, help text, option value, or page behaviour — only the
+   config access underneath. Foreign keys on these pages (if any) stay raw + annotated.
+3. Tests: extend tests/php/ to assert each routed page field's load default == prior default and its
+   save round-trips to the identical stored value. ui_render (Tier A) must stay green (the PR gate).
+
+CONSTRAINTS
+- Behaviour-preserving; no visible UI change; no stored-value change.
+- PHP tabs/uppercase literals; keep ADR-28 + PFBL-01 sniffs green.
+- Bound the diff to these three pages (group A) — do not touch other www/ pages (later phases).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the per-page parity/round-trip tests
+- vendor/bin/phpstan analyse / phpcs   -> clean
+- php -l on the three pages
+- python -m pytest              -> green
+- diff-read: only general/ip/dnsbl config access changed; forms/markup untouched
+
+EXPECTED RESULT
+General + IP + DNSBL pages load/save via the gateway; page defaults now come from the one registry;
+no visible change.
+
+COMMIT (single)
+    pfblockerng: route General/IP/DNSBL pages through the config gateway (ADR-29 P6)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/06_Results.txt
+Record: the pages + fields routed, any page-local default removed (and its parity test), foreign keys
+left raw, test counts, and the go-ahead for Phase 7.

@@ -1,0 +1,73 @@
+================================================================================
+PHASE 2 PROMPT — Migration registry + driver
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.2 first)
+================================================================================
+
+ROLE
+You implement Phase 2 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING:
+consolidate the four existing upgrade migrations into one ordered, idempotent,
+since-version-gated registry + driver. Same keys, same values, same effective order. Work
+inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Four independent migrations are hand-wired with no registry/ordering: ADR-02 (inline DNSBL
+python-mode), pfb_control_legacy_seed, pfb_dnsbl_lenient_migrate, pfb_keep_migrate. Centralising
+them gives a single ordered driver and an inventory, and is the seam future migrations plug into.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/01_Results.txt —
+  it must confirm PfbConfig + the field registry exist and tests are green. If missing, Phase 1
+  is incomplete; STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.2, §2.4.4).
+- src/usr/local/pkg/pfblockerng/pfblockerng_install.inc — the four migration blocks (the ADR-02
+  inline block ~:109-116, and the blocks invoking pfb_control_legacy_seed/pfb_dnsbl_lenient_migrate/
+  pfb_keep_migrate). Note their ORDER and each write_config() message.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_control_legacy_seed (~:6332),
+  pfb_dnsbl_lenient_migrate (~:6358), pfb_keep_migrate (~:6379).
+- tests/php/PfbDnsblLenientMigrateTest.php, ControlLegacySeedTest.php, PfbKeepMigrateTest.php —
+  the existing per-migration tests (keep them green).
+- CLAUDE.md — PHP standards + test mandate.
+
+ACTION PLAN
+1. Define a MIGRATION REGISTRY (in pfblockerng_extra.inc alongside the field registry, or a sibling
+   structure): an ORDERED list of entries, each { id, since-version, section, apply($cfg)->?array }
+   reusing the existing *_migrate/*_seed helper bodies (do NOT rewrite their logic — wrap/call them).
+   Preserve today's order: ADR-02 python-mode, then control-legacy seed, then lenient, then keep
+   (match the current install.inc order exactly).
+2. Add ONE driver in pfblockerng_install.inc that iterates the registry: for each entry read the
+   section, call apply(), and if non-NULL config_set_path + write_config with the entry's message.
+   Replace the four hand-wired blocks with this single driver loop. Keep each migration run-once/
+   idempotent exactly as today.
+3. Tests in tests/php/: an ORDERING + IDEMPOTENCY + RUN-ONCE test over representative pre-existing
+   install states (fresh install; legacy install missing each key; install already migrated) proving
+   the driver reproduces the four legacy migrations' outcomes and is a no-op on a second run. Keep
+   the existing per-migration tests passing (the helper bodies are unchanged).
+
+CONSTRAINTS
+- Behaviour-preserving: the SAME keys are seeded with the SAME values, in the SAME effective order,
+  with the SAME run-once discipline. No stored-value change.
+- Do NOT route general config reads/writes through the gateway yet (later phases) — this phase is
+  the migration consolidation only.
+- PHP: tabs; uppercase TRUE/FALSE/NULL; no die/exit; sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the new ordering/idempotency test + the existing
+                                   per-migration tests
+- vendor/bin/phpstan analyse    -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  -> clean
+- php -l on pfblockerng_install.inc + pfblockerng_extra.inc
+- diff-read: install.inc now loops the driver; the four blocks are gone; no other behaviour change
+
+EXPECTED RESULT
+One ordered migration driver replaces the four hand-wired blocks; outcomes identical on every
+install state; future migrations are registry entries.
+
+COMMIT (single)
+    pfblockerng: consolidate upgrade migrations into an ordered registry (ADR-29 P2)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/02_Results.txt
+Record: the migration registry shape + the ordered entry list (id/since-version/message), how the
+driver replaced the blocks, the test names + counts, any subtlety (run-once markers), and the
+go-ahead for Phase 3.

@@ -1,0 +1,65 @@
+================================================================================
+PHASE 4 PROMPT — Route the high-risk seam: pfb_global() reads + the wipe + pre-deinstall
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.4.3 first)
+================================================================================
+
+ROLE
+You implement Phase 4 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING via the
+Phase-1 gateway. This routes the HIGHEST-RISK config surface — the pfb_global() read seam, the
+section wipe, and the pre-deinstall read of $pfb['keep'] (the #281 surface) — through PfbConfig.
+Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+pfb_global() is the central config->runtime read; pfb_remove_config_settings() is the broad wipe the
+pre-deinstall hook runs. Centralising their access removes the divergent-default class (#281) at its
+root and proves default parity for every key.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/03_Results.txt — it
+  must confirm the gateway, registry, migration driver, and rollback gate are green. If missing, STOP.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1 gateway, §2.4.2/§2.4.3 no-behaviour-change + default parity).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_global() (~:1302-1309 and the full flag/section
+  population that follows), pfb_remove_config_settings() (~:6360+ — the ~22-section config_del_path
+  loop), pfblockerng_php_pre_deinstall_command() (~:13869) reading $pfb['keep'].
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig API + registry (Phase 1).
+- tests/php/ — CfgAdaptersTest + any pfb_global-touching tests; the #281 PfbKeepMigrateTest.
+- CLAUDE.md — PHP standards, test mandate (every branch, before-and-after).
+
+ACTION PLAN (golden/parity tests FIRST)
+1. Add DEFAULT-PARITY tests: for every key pfb_global() reads, assert PfbConfig::read(key) for an
+   absent/empty section equals the value the CURRENT pfb_global() code produces (the registered
+   default == the prior per-site default). Where #281 deliberately repairs a divergence (pfb_keep),
+   assert the repaired value ('on') and note it. These tests must pass BEFORE the swap (they encode
+   the contract) — run them against current code first.
+2. Route pfb_global() flag/section population through PfbConfig::read / section-read. Keep $pfb[...]
+   shapes identical (same runtime values downstream code expects). Route pfb_remove_config_settings()
+   section deletions through PfbConfig::delete / section-delete (same ~22 sections). The pre-deinstall
+   read of keep already benefits from the registry default.
+3. Re-run the full suite; the golden/parity + DNSBL/IP behaviour tests prove no downstream change.
+
+CONSTRAINTS
+- Behaviour-preserving: $pfb[...] runtime values and the wipe's section set are IDENTICAL. No stored
+  change. The ONLY intended behaviour change is the already-landed #281 default repair, asserted here.
+- Do NOT touch www/ pages or install.inc writes yet (later phases).
+- PHP tabs/uppercase literals; keep PFBL-01 + ADR-28 sniffs green; stub any newly-reached pfSense fn.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the new default-parity tests
+- vendor/bin/phpstan analyse / phpcs   -> clean
+- php -l on pfblockerng.inc
+- python -m pytest              -> green
+- diff-read: pfb_global() + pfb_remove_config_settings() now call PfbConfig; downstream untouched
+
+EXPECTED RESULT
+The central read seam + the wipe + the pre-deinstall keep-read all flow through PfbConfig with proven
+default parity; the #281 class is structurally closed.
+
+COMMIT (single)
+    pfblockerng: route the config read seam and section wipe through the gateway (ADR-29 P4)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/04_Results.txt
+Record: which pfb_global keys/sections were routed, the default-parity test names + any deliberate
+repair, the wipe section list now via the gateway, test counts, watch-outs, and the go-ahead for
+Phase 5.

@@ -1,0 +1,70 @@
+================================================================================
+PHASE 3 PROMPT — Rollback / backward-compat contract + test gate
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.3, §7 first)
+================================================================================
+
+ROLE
+You implement Phase 3 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING
+(tests + doc + an existing-smoke extension). This phase encodes the rollback contract and the
+FALSIFIABLE gate every later migration phase relies on. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+ADR-28 froze the format FORWARD (new code reads old store). The #281 follow-up asks for SMOOTH
+ROLLBACK too: old code reading what new code wrote. Because the gateway always writes the legacy
+stored vocabulary, downgrades are safe by construction — but that guarantee is only real if a test
+falsifies it. This phase builds that test.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/02_Results.txt — it
+  must confirm the migration registry/driver is green. If missing, STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.3 rollback contract, §2.4, §7 DoD + reject criteria).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — the field registry from Phase 1 (the
+  since-version field).
+- tests/smoke/test_upgrade_config_stability.py — the #281 upgrade smoke (forges _1 -> _9, asserts
+  byte-identical config across pkg upgrade). Read how reversion_pkg/build_guest_repo/pkg_upgrade and
+  the config snapshot/assert helpers work; you will add a DOWNGRADE leg in the same style.
+- CLAUDE.md — "Smoke tests (ADR-04)" section; the test-coverage mandate (before-and-after).
+
+ACTION PLAN
+1. Encode each registry field's `since-version` (Phase 1 left the field; populate it from the key's
+   introduction — current shipped version for legacy keys is acceptable as a baseline; document the
+   convention). Add the invariant helper(s) the tests use.
+2. Off-box rollback unit tests (tests/php/): for every registered field, assert the FORWARD invariant
+   (read of any legacy stored value yields a sane runtime value) AND the BACKWARD invariant (write of
+   any runtime value yields ONLY a legacy stored token an older release recognises — i.e. the write
+   never emits a novel on-disk token). A field that cannot satisfy backward-safety is EXCLUDED and
+   listed (mirror ADR-28's pfb_idn exclusion style).
+3. Extend tests/smoke/test_upgrade_config_stability.py (or add a sibling `test_*_rollback`) with a
+   DOWNGRADE leg: install the HIGHER build, write a representative settings spread through the
+   package, snapshot config.xml, `pkg` downgrade/reinstall the LOWER build, then assert (a) the store
+   is byte-identical and (b) the lower build reads sane values (a representative runtime behaviour —
+   a blocked DNSBL name — still works). Reuse the existing forged-pkg + repo_vm machinery; keep the
+   `repo` marker; never set pfb_keep (the #281 condition) — rely on the seed.
+4. Document the rollback contract + any excluded field in CLAUDE.md (extend the Phase-1 policy text).
+
+CONSTRAINTS
+- No stored-value change; no behavioural change. This phase is tests + since-version data + doc.
+- The smoke addition must SKIP cleanly off-VM (no SMOKE_PKG/VM) like the sibling cases.
+- PHP tabs/uppercase literals; ruff-clean Python; sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the new forward/backward invariant tests
+- python -m pytest tests/smoke/test_upgrade_config_stability.py --collect-only -q
+  --override-ini="addopts="   -> collects clean (incl. the new downgrade case)
+- ruff check . && ruff format --check .   -> clean
+- vendor/bin/phpstan analyse / phpcs      -> clean
+- diff-read: tests + since-version data + CLAUDE.md only
+
+EXPECTED RESULT
+A falsifiable rollback gate exists: per-field forward+backward invariants off-box, and a live
+downgrade leg in the upgrade smoke. Excluded fields documented.
+
+COMMIT (single)
+    pfblockerng: add config rollback contract and downgrade smoke (ADR-29 P3)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/03_Results.txt
+Record: the since-version convention, the forward/backward invariant helper API, the list of any
+rollback-excluded fields, the smoke downgrade-leg name + how it skips off-VM, test counts, and the
+go-ahead for Phase 4.

@@ -1,0 +1,57 @@
+================================================================================
+PHASE 7 PROMPT — Route www/ group B: SafeSearch + Reputation + Feeds + Blacklist + Category edit
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.4.2 first)
+================================================================================
+
+ROLE
+You implement Phase 7 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING. Route the
+$pconfig load/save of the SafeSearch, Reputation, Feeds, Blacklist, and Category-edit pages through
+PfbConfig / section helpers. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Continues the staged www/ migration (group B) so each phase's diff stays reviewable. Same rationale
+as Phase 6: page and runtime read must agree via the one registry.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/06_Results.txt — it must
+  confirm group A is routed and green (and the section-helper pattern it used). If missing, STOP.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1, §2.4.2).
+- src/usr/local/www/pfblockerng/pfblockerng_safesearch.php, the reputation tab, pfblockerng_feeds.php,
+  pfblockerng_blacklist.php, pfblockerng_category_edit.php — their config_get_path/config_set_path
+  load/save blocks. Note feeds/blacklist may store list structures (not just flags) — route them via
+  the section helpers; if a structure cannot pass through a field adapter, treat it as a section blob
+  read/write (no per-field adapter) and document it.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig + section helpers.
+- CLAUDE.md — PHP standards; Web-UI help-text rule; ui_render gate; test mandate.
+
+ACTION PLAN
+1. Route each page's load/save through PfbConfig as in Phase 6. For list/structure sections (feeds,
+   blacklist, category groups) use section read/write blobs — the gateway must round-trip a structure
+   byte-identically (add a test). Remove page-local defaults only when the registry default matches
+   (parity test).
+2. No visible UI change; foreign keys stay raw + annotated.
+3. Tests: per-page parity/round-trip incl. a structure round-trip for the list sections. ui_render green.
+
+CONSTRAINTS
+- Behaviour-preserving; no visible UI/stored change; bound the diff to group B pages only.
+- PHP tabs/uppercase literals; sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. structure round-trip + parity tests
+- vendor/bin/phpstan analyse / phpcs   -> clean
+- php -l on the group B pages
+- python -m pytest              -> green
+- diff-read: only group B config access changed; markup untouched
+
+EXPECTED RESULT
+SafeSearch + Reputation + Feeds + Blacklist + Category-edit load/save via the gateway; list
+structures round-trip byte-identically; no visible change.
+
+COMMIT (single)
+    pfblockerng: route SafeSearch/Feeds/Blacklist pages through the config gateway (ADR-29 P7)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/07_Results.txt
+Record: pages + fields/structures routed, any section-blob fields (no per-field adapter) + their
+round-trip test, foreign keys left raw, test counts, and the go-ahead for Phase 8.
