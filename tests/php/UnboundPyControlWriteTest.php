@@ -6,25 +6,36 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * PFBL-03 privileged DNSBL-control writer: pfb_unbound_py_write_control() and its
- * permission-specific publisher pfb_unbound_py_atomic_write_root().
+ * Control-channel writer: pfb_unbound_py_write_control(),
+ * pfb_unbound_py_wait_control_applied(), and pfb_unbound_py_atomic_write_root().
  *
  * Scenario: the writer is the ROOT-only producer of the local privileged command
  * channel (/var/unbound/pfb_py_control, here redirected to a temp dnsbldir). It
- * validates the command + argument (the semantic layer), assembles a JSON record with
- * a monotonically-advancing sequence, and atomically publishes it. These tests pin:
+ * validates the command + argument (the semantic layer), acquires an exclusive lock,
+ * assembles a JSON record with a monotonically-advancing sequence, atomically publishes
+ * it, and waits for the watcher to advance the applied marker before returning.
+ * These tests pin:
  *   - the command allow-list (disable/enable/addbypass/removebypass) and rejection of
  *     anything else (no file written);
  *   - argument validation at the WRITER (invalid IP / out-of-range duration rejected,
  *     no side effect) -- the reader re-validates independently (Python suite);
  *   - the record shape (cmd/ip/duration/seq/ts) and the seq advance (replay safety);
+ *   - the lock file is created on a successful write;
+ *   - the applied-wait semantics: returns TRUE when the marker >= seq, FALSE on timeout;
+ *   - the writer still returns the seq when the wait times out (command IS on disk);
  *   - the publisher's command-channel permission model (owner root, group unbound,
  *     mode 0640) and its atomic, no-temp-left-behind behaviour.
  *
  * Run against a temp $pfb sandbox (no live box, no chroot). chown('root') is a no-op
  * for a non-root test runner; mode 0640 is asserted because it does not need privilege.
+ *
+ * The applied marker is pre-seeded to PHP_INT_MAX in setUp() so the default-timeout
+ * wait path returns immediately for all existing tests (simulates the watcher having
+ * already applied any seq). New tests that exercise the wait directly use an explicit
+ * $wait_timeout argument.
  */
 #[CoversFunction('pfb_unbound_py_write_control')]
+#[CoversFunction('pfb_unbound_py_wait_control_applied')]
 #[CoversFunction('pfb_unbound_py_atomic_write_root')]
 final class UnboundPyControlWriteTest extends TestCase
 {
@@ -44,6 +55,11 @@ final class UnboundPyControlWriteTest extends TestCase
 			'dnsbldir' => $this->tmp,
 			'supp'     => 'off',	// pfb_filter()'s private/reserved IP exclusion off for the test
 		]);
+
+		// Pre-seed the applied marker to PHP_INT_MAX so the default-timeout wait in
+		// write_control returns immediately -- simulates the watcher having already applied
+		// any seq. Tests that probe the wait directly overwrite this before calling.
+		file_put_contents("{$this->tmp}/pfb_py_control.applied", (string) PHP_INT_MAX . "\n");
 	}
 
 	protected function tearDown(): void
@@ -83,6 +99,11 @@ final class UnboundPyControlWriteTest extends TestCase
 		$rec = json_decode(trim($raw), true);
 		$this->assertIsArray($rec);
 		return $rec;
+	}
+
+	private function channelApplied(): string
+	{
+		return "{$this->tmp}/pfb_py_control.applied";
 	}
 
 	// --- the four valid commands (record shape) -----------------------------
@@ -255,5 +276,129 @@ final class UnboundPyControlWriteTest extends TestCase
 		$this->assertFalse(
 			pfb_unbound_py_atomic_write_root("{$this->tmp}/nope/deep/cmd", 'x')
 		);
+	}
+
+	// --- wait_control_applied: poll semantics -------------------------------
+
+	public function testWaitControlAppliedReturnsTrueWhenMarkerAlreadySatisfied(): void
+	{
+		// Given: applied marker already >= the seq we wait for.
+		file_put_contents($this->channelApplied(), "10\n");
+
+		// When/Then: returns TRUE immediately for seq <= 10.
+		$this->assertTrue(pfb_unbound_py_wait_control_applied(10));
+		$this->assertTrue(pfb_unbound_py_wait_control_applied(5));
+		$this->assertTrue(pfb_unbound_py_wait_control_applied(1));
+	}
+
+	public function testWaitControlAppliedReturnsTrueWhenMarkerExceedsSeq(): void
+	{
+		// Marker strictly greater than requested seq is also satisfied.
+		file_put_contents($this->channelApplied(), "99\n");
+		$this->assertTrue(pfb_unbound_py_wait_control_applied(50));
+	}
+
+	public function testWaitControlAppliedReturnsFalseOnTimeoutWhenMarkerBelow(): void
+	{
+		// Given: marker is below the seq we wait for.
+		file_put_contents($this->channelApplied(), "0\n");
+
+		// When: wait with a very short timeout (0.4 s keeps the test fast).
+		// Then: returns FALSE -- the marker never advanced.
+		$result = pfb_unbound_py_wait_control_applied(5, 0.4);
+		$this->assertFalse($result);
+	}
+
+	public function testWaitControlAppliedReturnsFalseWhenMarkerAbsent(): void
+	{
+		// Given: no applied marker file at all.
+		@unlink($this->channelApplied());
+
+		// When: wait with a short timeout.
+		// Then: returns FALSE (file never appears).
+		$this->assertFalse(pfb_unbound_py_wait_control_applied(1, 0.4));
+	}
+
+	// --- write_control with wait satisfied (marker high via setUp) ----------
+
+	public function testWriteControlReturnsSeqWhenWaitSatisfied(): void
+	{
+		// Given: applied marker is at PHP_INT_MAX (setUp), so the wait returns instantly.
+		// When/Then: write returns the published seq.
+		$seq = pfb_unbound_py_write_control('enable');
+		$this->assertSame(1, $seq);
+		$this->assertSame(1, $this->readRecord()['seq']);
+	}
+
+	// --- write_control with wait NOT satisfied (marker low) -----------------
+
+	public function testWriteControlReturnsSeqEvenWhenWaitTimesOut(): void
+	{
+		// Given: applied marker is below any seq the writer will publish.
+		file_put_contents($this->channelApplied(), "0\n");
+
+		// When: write with a small timeout so the wait times out quickly.
+		// Then: STILL returns the published seq (the command IS on disk).
+		$seq = pfb_unbound_py_write_control('enable', '', '', 0.4);
+		$this->assertSame(1, $seq);
+
+		// And: the channel record was written with the correct seq.
+		$rec = $this->readRecord();
+		$this->assertSame('enable', $rec['cmd']);
+		$this->assertSame(1, $rec['seq']);
+	}
+
+	// --- write_control with wait_timeout = 0 (fire-and-forget) -------------
+
+	public function testWriteControlSkipsWaitWhenTimeoutIsZero(): void
+	{
+		// Given: applied marker is NOT advanced (below any seq).
+		file_put_contents($this->channelApplied(), "0\n");
+
+		// When: write with $wait_timeout = 0 -- skip-wait path.
+		// Then: returns the seq immediately without blocking.
+		$seq = pfb_unbound_py_write_control('disable', '', '', 0);
+		$this->assertSame(1, $seq);
+
+		// And: the record is on disk.
+		$rec = $this->readRecord();
+		$this->assertSame('disable', $rec['cmd']);
+		$this->assertSame(1, $rec['seq']);
+	}
+
+	// --- lock file ---------------------------------------------------------
+
+	public function testLockFileExistsAfterSuccessfulWrite(): void
+	{
+		// Given: no lock file yet.
+		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_control.lock");
+
+		// When: a write succeeds.
+		pfb_unbound_py_write_control('enable');
+
+		// Then: the lock file was created.
+		$this->assertFileExists("{$this->tmp}/pfb_py_control.lock");
+	}
+
+	// --- sequential writers advance the seq under the lock -----------------
+
+	public function testTwoSequentialWritersAdvanceSeqCorrectly(): void
+	{
+		// Given: applied marker is high (setUp) so waits return immediately.
+		// Note: true multi-process concurrency cannot be exercised in the unit sandbox;
+		// this test proves the sequential case (lock does not break the normal advance).
+
+		// When: first write.
+		$seq1 = pfb_unbound_py_write_control('disable');
+
+		// Then: seq is 1.
+		$this->assertSame(1, $seq1);
+
+		// When: second write.
+		$seq2 = pfb_unbound_py_write_control('enable');
+
+		// Then: seq strictly advances to 2, and the on-disk record reflects it.
+		$this->assertSame(2, $seq2);
+		$this->assertSame(2, $this->readRecord()['seq']);
 	}
 }
