@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -11,17 +10,20 @@ use PHPUnit\Framework\TestCase;
  * + the cache helpers, with the pkg IO INJECTED (no real `pkg` off-appliance).
  *
  * Scenario: a cron tick reads installed-vs-our-repo-latest, writes a cache, and raises a
- * de-duped file_notice — but ONLY on a build installed from one of OUR repos.
+ * de-duped file_notice — but ONLY on a build that is page-displayable (provenance_ok).
  *
  * Background: the pure decision core (Phase 2) is already pinned; here we pin the
- * SIDE-EFFECTS — the provenance gate (no-op on a Netgate build), the pkg-lock / no-DNS
- * short-circuits (serve cache, no network, no error), the cache contents, and the
+ * SIDE-EFFECTS — the provenance gate (no-op on a non-displayable build), the pkg-lock /
+ * no-DNS short-circuits (serve cache, no network, no error), the cache contents, and the
  * per-version de-dupe across ticks. Every branch asserts the BEFORE-state (cache present?
  * notice fired?) and the AFTER-state so green proves the side-effect was CAUSED by the
  * input, not pre-existing.
  *
- * The IO is doubled by passing $io = ['installed_name','installed','installed_repo',
- * 'latest'] to the orchestrator (its documented unit-test seam). file_notice /
+ * The IO is doubled by passing $io = ['installed_name','installed','provenance_ok','latest']
+ * to the orchestrator (its documented unit-test seam). 'provenance_ok' (bool) replaces the
+ * old 'installed_repo' key: the orchestrator now delegates repo-string discrimination to
+ * pfb_software_provenance_ok() (the page-displayability predicate); per-repo branch coverage
+ * for pfb_software_is_our_build() lives in SoftwareUpdateDecisionTest. file_notice /
  * is_subsystem_dirty / get_dnsavailable are doubled in pfsense_doubles.php, driven via
  * $GLOBALS (pfb_test_file_notices / pfb_test_pkg_locked / pfb_test_dns_available).
  */
@@ -93,22 +95,29 @@ final class SoftwareUpdateCheckTest extends TestCase
 		];
 	}
 
-	private function ourBuildIo(string $installed, string $latest, string $repo = 'pfblockerng', string $name = 'pfSense-pkg-pfBlockerNG-devel'): array
+	private function ourBuildIo(string $installed, string $latest, string $name = 'pfSense-pkg-pfBlockerNG-devel'): array
 	{
 		return [
 			'installed_name' => $name,
 			'installed'      => $installed,
-			'installed_repo' => $repo,
+			'provenance_ok'  => TRUE,
 			'latest'         => $latest,
 		];
 	}
 
 	/*
-	 * ---- Provenance gate (the 2026-06-15 amendment) — BOTH sides ----
+	 * ---- Provenance gate — BOTH sides ----
+	 *
+	 * The gate is now pfb_software_provenance_ok() — the same predicate that controls
+	 * whether the Software PAGE is displayable — injected as $io['provenance_ok'] (bool).
+	 * Per-repo branch coverage for pfb_software_is_our_build() lives in
+	 * SoftwareUpdateDecisionTest; here we pin the ORCHESTRATOR's behaviour on each side
+	 * of the boolean, including the real-world case (enabled flag left over from a prior
+	 * our-repo install, user has since switched back to Netgate).
 	 */
 
 	/**
-	 * Given a build installed from OUR repo with a newer version available,
+	 * Given a page-displayable build (provenance_ok=true) with a newer version available,
 	 * When the check runs,
 	 * Then it writes the cache AND reaches a notify decision (a notice fires under an
 	 * ON knob). This is the "feature present" side of the gate.
@@ -137,38 +146,104 @@ final class SoftwareUpdateCheckTest extends TestCase
 	}
 
 	/**
-	 * Given a build installed from the Netgate ports repo ('pfSense') — or any non-our
-	 * origin — with a newer version nominally available,
+	 * Given a non-displayable build (provenance_ok=false) with a newer version nominally
+	 * available and "Check for new versions" ON,
 	 * When the check runs,
-	 * Then it is a COMPLETE no-op: no cache is written and no notice is raised. This is
-	 * the "feature absent on a stock build" side of the gate; it must be the FIRST thing
-	 * the check does.
+	 * Then it is a COMPLETE no-op: no cache is written and no notice is raised. This is the
+	 * "feature absent" side of the gate. Per-repo discrimination (which repo strings yield
+	 * false) is pinned in SoftwareUpdateDecisionTest::testSoftwareIsOurBuild.
 	 */
-	#[DataProvider('foreignRepoProvider')]
-	public function testNetgateBuildIsCompleteNoOp(string $repo): void
+	public function testNonDisplayableBuildIsCompleteNoOp(): void
 	{
 		// Given: ON knob (would notify if the gate let it through), clean before-state.
 		$this->setCheck('on');
 		$this->assertNull($this->readCache(), 'before: no cache file');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
 
-		// When: an update IS nominally available, but the build is not ours.
-		$io = $this->ourBuildIo('3.2.0_1', '3.2.0_9', $repo);
+		// When: an update IS nominally available, but the build is not page-displayable.
+		$io = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
+		];
 		pfb_software_update_check(false, $io);
 
 		// Then: nothing happened — no cache write, no notice.
-		$this->assertNull($this->readCache(), 'after: Netgate build must NOT write a cache');
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: Netgate build raises NO notice');
+		$this->assertNull($this->readCache(), 'after: non-displayable build must NOT write a cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: non-displayable build raises NO notice');
 	}
 
-	public static function foreignRepoProvider(): array
+	/**
+	 * Regression test: a user who was on our build (so "Check for new versions" is
+	 * still 'on') switches back to the Netgate-installed build. The enabled flag persists
+	 * in config but provenance_ok is now false — the background check must be a complete
+	 * no-op regardless of the enabled setting.
+	 *
+	 * Given: "Check for new versions" ON (persisted from the prior our-repo install),
+	 *        a newer version nominally available,
+	 *        but provenance_ok=false (the build is no longer ours).
+	 * When the background check runs,
+	 * Then it is a complete no-op (no cache written, no notice raised) — the enabled flag
+	 * is irrelevant once the provenance gate closes.
+	 */
+	public function testEnabledButNotDisplayableDoesNotCheckOrNotify(): void
 	{
-		return [
-			'Netgate ports repo' => ['pfSense'],
-			'empty/unknown'      => [''],
-			'literal unknown'    => ['unknown'],
-			'a decoy repo'       => ['netgate-decoy'],
+		// Given: setting is still ON from the prior our-repo install; clean before-state.
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When: provenance gate is closed (user moved back to Netgate's build).
+		$io = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
 		];
+		pfb_software_update_check(false, $io);
+
+		// Then: complete no-op — neither the cache nor any notice was written.
+		$this->assertNull($this->readCache(), 'after: no cache despite enabled flag (gate is closed)');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice despite enabled flag');
+	}
+
+	/**
+	 * Transition test — proves the provenance gate is a real branch, not an always-on path.
+	 *
+	 * BEFORE (provenance_ok=false): same enabled + update-available inputs → complete no-op.
+	 * AFTER  (provenance_ok=true):  same inputs → cache written + notice raised.
+	 *
+	 * Green proves the gate flip (not pre-existing state) caused the behaviour change.
+	 */
+	public function testProvenanceGateTransition(): void
+	{
+		$this->setCheck('on');
+
+		// BEFORE: gate closed → complete no-op.
+		$this->assertNull($this->readCache(), 'before gate flip: no cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before gate flip: no notice');
+
+		$closedIo = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $closedIo);
+		$this->assertNull($this->readCache(), 'gate closed: no cache written');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'gate closed: no notice raised');
+
+		// AFTER: gate open → cache written + notice raised.
+		$openIo = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $openIo);
+		$this->assertNotNull($this->readCache(), 'gate open: cache must be written');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'gate open: notice must fire');
 	}
 
 	/*
@@ -209,7 +284,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$cache = pfb_software_update_check(false, [
 			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
 			'installed'      => '3.2.0_1',
-			'installed_repo' => 'pfblockerng',
+			'provenance_ok'  => TRUE,
 			// note: NO 'latest' key -> forces the guarded live read.
 		]);
 
@@ -242,7 +317,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$cache = pfb_software_update_check(false, [
 			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
 			'installed'      => '3.2.0_1',
-			'installed_repo' => 'pfblockerng',
+			'provenance_ok'  => TRUE,
 		]);
 
 		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when no DNS');
@@ -277,7 +352,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$cache = pfb_software_update_check(false, [
 			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
 			'installed'      => '3.2.0_1',
-			'installed_repo' => 'pfblockerng',
+			'provenance_ok'  => TRUE,
 			// no 'latest' -> guarded live read returns '' (pkg locked).
 		]);
 

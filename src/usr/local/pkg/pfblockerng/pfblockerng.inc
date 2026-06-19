@@ -2229,13 +2229,15 @@ function pfb_software_write_cache(array $cache): void {
  * The cron-driven software-update check (ADR-19 §2 "Background check").
  *
  * Order is deliberate:
- *   1. Resolve installed name + version + the repo it came FROM. The repo can be
- *      injected for unit tests via $io ['installed_name','installed','installed_repo',
- *      'latest']; absent keys fall through to the live pfb_pkg_*() shellout.
- *   2. PROVENANCE GATE FIRST (2026-06-15 amendment): pfb_software_is_our_build() on the
- *      installed repo. A Netgate-installed build (repo 'pfSense'/unknown/empty) is a
- *      complete no-op — NO catalog read, NO cache write, NO file_notice — Netgate's own
- *      badge serves those users.
+ *   1. Resolve installed name + version. These can be injected for unit tests via
+ *      $io ['installed_name','installed','latest']; absent keys fall through to the
+ *      live pfb_pkg_*() shellout.
+ *   2. PROVENANCE GATE FIRST: gate on pfb_software_provenance_ok() — the SAME predicate
+ *      that decides whether the Software PAGE is displayable (our-repo install, honouring
+ *      the hidden CI/support override) — so a build that cannot show the page never runs
+ *      the background check or raises an update notice, even if "Check for new versions"
+ *      remains enabled from a prior our-repo install. Injectable via $io['provenance_ok']
+ *      for off-box tests.
  *   3. Read our-repo latest for the channel's repo (guarded inside pfb_pkg_latest()).
  *      An empty latest (pkg locked / no DNS / repo absent) preserves the cached latest so
  *      the page keeps showing the last-known value rather than regressing to ''.
@@ -2257,12 +2259,16 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$installed = array_key_exists('installed', $io)
 		? (string) $io['installed']
 		: pfb_pkg_installed_version($pkgname);
-	$installed_repo = array_key_exists('installed_repo', $io)
-		? (string) $io['installed_repo']
-		: pfb_pkg_installed_repo($pkgname);
 
-	// 2. Provenance gate FIRST — a Netgate-installed build does nothing at all.
-	if (!pfb_software_is_our_build($installed_repo)) {
+	// 2. Provenance gate FIRST — gate on the SAME predicate that decides whether the Software
+	// PAGE is displayable (pfb_software_provenance_ok(): our-repo install, honouring the
+	// hidden CI/support override), so a build that cannot show the page never runs the
+	// background check or notifies — even if "Check for new versions" is still enabled from a
+	// prior our-repo install. Injectable via $io['provenance_ok'] for off-box tests.
+	$provenance_ok = array_key_exists('provenance_ok', $io)
+		? (bool) $io['provenance_ok']
+		: pfb_software_provenance_ok();
+	if (!$provenance_ok) {
 		return pfb_software_read_cache();
 	}
 
