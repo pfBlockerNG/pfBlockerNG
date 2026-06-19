@@ -2722,6 +2722,35 @@ function convert_dns_reply_log($mode, $fields) {
 }
 
 
+/**
+ * Build the inner HTML for the IP alert Feed/Match cell.
+ *
+ * When both the feed name and matched IP/CIDR were re-evaluated (both $feed_new
+ * and $match_new are non-empty), groups the output by record: the struck
+ * previous pair first, then the current pair. When only one field changed the
+ * per-field layout is preserved, matching today's existing behaviour.
+ *
+ * All four parameters must already be HTML-escaped by the caller; $feed_new and
+ * $match_new must be empty strings when the corresponding field did not change.
+ */
+function pfb_ip_feed_match_cell(string $feed, string $feed_new, string $match, string $match_new): string {
+	if ($feed_new !== '' && $match_new !== '') {
+		// Both changed — group by record: struck previous pair, then current pair.
+		return "<s>{$feed}</s><br /><small><s>{$match}</s></small><br />{$feed_new}<br /><small>{$match_new}</small>";
+	}
+	elseif ($feed_new !== '') {
+		// Only feed changed — per-field layout.
+		return "<s>{$feed}</s><br />{$feed_new}<br /><small>{$match}</small>";
+	}
+	elseif ($match_new !== '') {
+		// Only match changed — per-field layout.
+		return "{$feed}<br /><small><s>{$match}</s><br />{$match_new}</small>";
+	}
+	// Neither changed.
+	return "{$feed}<br /><small>{$match}</small>";
+}
+
+
 // Function to convert IP Logs (ip_block, ip_permit and ip_match).log -> Reports Tab
 function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	global $pfb, $continents, $filterfieldsarray, $clists, $ip_unlock, $counter, $pfbentries, $skipcount, $dup, $ipfilterlimit, $ipfilterlimitentries;
@@ -3160,14 +3189,8 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$feed_new	= pfb_hsc($feed_new);
 	}
 
-	if (!empty($feed_new)) {
-		$fields[15]	= "<s>{$fields[15]}</s><br />{$feed_new}";
-	}
-
-	$fields[14]	= pfb_hsc($fields[14]);
-	if (!empty($eval_new)) {
-		$fields[14]	= "<s>{$fields[14]}</s><br />" . pfb_hsc($eval_new);
-	}
+	$fields[14]		= pfb_hsc($fields[14]);
+	$feed_match_cell	= pfb_ip_feed_match_cell($fields[15], $feed_new, $fields[14], pfb_hsc($eval_new));
 
 	if (empty($fields[16])) {
 		$fields[16] = 'Unknown';
@@ -3207,7 +3230,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			<td>{$dst_icons}</td>
 			<td>{$fields[98]}{$dstport}&emsp;{$query_port}<br /><small>{$hostname['dst']}</small></td>
 			<td>{$fields[12]}<br />{$fields[18]}</td>
-			<td title=\"{$pfb_matchtitle}\">{$fields[15]}<br /><small>{$fields[14]}</small></td>
+			<td title=\"{$pfb_matchtitle}\">{$feed_match_cell}</td>
 			</tr>");
 	}
 	else {
@@ -3236,7 +3259,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			<td><small>{$fields[2]}</small></td>
 			<td style=\"white-space: nowrap; text-align: center;\">{$dst_icons}</td>
 			<td>{$fields[98]}{$dstport}&emsp;{$query_port}<br /><small>{$hostname['dst']}</small></td>
-			<td title=\"{$pfb_matchtitle}\">{$fields[15]}<br /><small>{$fields[14]}</small></td>
+			<td title=\"{$pfb_matchtitle}\">{$feed_match_cell}</td>
 			<td>{$fields[12]}<br />{$fields[18]}</td>
 			</tr>");
 	}
