@@ -14071,7 +14071,7 @@ function pfblockerng_php_pre_deinstall_command() {
 }
 
 
-// Remove settings from config.xml — section wipe via the gateway (ADR-29 P4).
+// Remove settings from config.xml — deinstall wipe of whole pfBlockerNG sections.
 function pfb_remove_config_settings() {
 	global $pfb;
 
@@ -14096,7 +14096,10 @@ function pfb_remove_config_settings() {
 			'pfblockerngtopspammers',
 			'pfblockerngproxyandsatellite' ) as $type) {
 
-		PfbConfig::deleteSection("installedpackages/{$type}");
+		// ADR-29 foreign-key exclusion: a deinstall wipes whole package sections
+		// (dynamic per-row lists, blacklist, continent structures) — a section-level
+		// operation, not a registered scalar-field access. Use config_del_path directly.
+		config_del_path("installedpackages/{$type}");
 	}
 }
 
