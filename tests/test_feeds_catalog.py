@@ -44,6 +44,16 @@ def _all_headers(catalog: dict) -> list[str]:  # type: ignore[type-arg]
     return headers
 
 
+def _find_feed_by_url(catalog: dict, url: str) -> dict | None:  # type: ignore[type-arg]
+    """Return the first feed object whose 'url' equals url, across all sections."""
+    for section in ("ipv4", "ipv6", "dnsbl"):
+        for grp in catalog.get(section, {}).values():
+            for feed in grp.get("feeds", []):
+                if feed.get("url") == url:
+                    return feed  # type: ignore[return-value]
+    return None
+
+
 def test_catalog_is_valid_json() -> None:
     """pfblockerng_feeds.json must parse as valid JSON."""
     assert _FEEDS_JSON.exists(), f"feeds JSON not found at {_FEEDS_JSON}"
@@ -86,3 +96,16 @@ def test_blocklist_de_6_headers_unique_across_catalog(catalog: dict) -> None:  #
     ipv6_group = catalog["ipv6"]["BlockListDE_6"]
     colliding = [f["header"] for f in ipv6_group.get("feeds", []) if counts.get(f.get("header", ""), 0) > 1]
     assert not colliding, f"BlockListDE_6 headers collide with other catalog entries: {colliding}"
+
+
+def test_dead_malc0de_bl_boot_feed_is_discontinued(catalog: dict) -> None:  # type: ignore[type-arg]
+    """The dead Malc0de bl/BOOT feed must carry status 'discontinued' (issue #372).
+
+    The website returns a placeholder; the feed is kept (removal deferred) but
+    flagged so the UI shows it as unavailable rather than offering it as active.
+    """
+    feed = _find_feed_by_url(catalog, "https://malc0de.com/bl/BOOT")
+    assert feed is not None, "Malc0de bl/BOOT feed entry not found in catalog"
+    assert feed.get("status") == "discontinued", (
+        f"Malc0de bl/BOOT feed must be marked 'status': 'discontinued' (issue #372) — got status={feed.get('status')!r}"
+    )
