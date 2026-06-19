@@ -3,8 +3,8 @@
 # Single source of truth for the scheme: scripts/release-version.sh.
 #
 # Rules:
-#   - vX.Y.Z              -> commit must be reachable from origin/main   (stable)
-#   - vX.Y.Z.aW|.bW|.rcW  -> commit on origin/devel but NOT origin/main  (prerelease)
+#   - vX.Y.Z                       -> commit must be reachable from origin/main   (stable)
+#   - vX.Y.Z.alpha.N|.beta.N|.rc.N -> commit on origin/devel but NOT origin/main  (prerelease)
 #   - neither branch, or a malformed version tag -> rejected
 #
 # Enable: git config core.hooksPath .githooks

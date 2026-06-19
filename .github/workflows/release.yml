@@ -2,8 +2,8 @@ name: Release
 
 # Triggered when a versioned tag is pushed.  Tag scheme (single source of truth:
 # scripts/release-version.sh):
-#   * vX.Y.Z              -> STABLE release    (from 'main')  -> full release
-#   * vX.Y.Z.aW|.bW|.rcW  -> ALPHA/BETA/RC      (from 'devel') -> pre-release
+#   * vX.Y.Z                       -> STABLE release (from 'main')  -> full release
+#   * vX.Y.Z.alpha.N|.beta.N|.rc.N -> ALPHA/BETA/RC   (from 'devel') -> pre-release
 # After publishing the GitHub Release, the matching port's PORTVERSION +
 # GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
 # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github) — the build-input branch.
@@ -17,11 +17,11 @@ on:
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'      # stable: vX.Y.Z (from main)
-      - 'v[0-9]*.[0-9]*.[0-9]*.*'    # prerelease: vX.Y.Z.aW|.bW|.rcW (from devel)
+      - 'v[0-9]*.[0-9]*.[0-9]*.*'    # prerelease: vX.Y.Z.alpha.N|.beta.N|.rc.N (from devel)
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to simulate, e.g. v4.0.0.a1 (REQUIRED for a dispatch run)."
+        description: "Tag to simulate, e.g. v4.0.0.alpha.1 (REQUIRED for a dispatch run)."
         required: true
       dry_run:
         description: "true (default) = validate + build but publish NOTHING."
@@ -122,7 +122,7 @@ jobs:
       - name: Detect pkg channel from tag
         id: channel
         # The channel drives which port we build (devel vs stable). Classified by
-        # scripts/release-version.sh: vX.Y.Z.aW|.bW|.rcW -> devel, vX.Y.Z -> stable.
+        # scripts/release-version.sh: vX.Y.Z.alpha.N|.beta.N|.rc.N -> devel, vX.Y.Z -> stable.
         env:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
@@ -206,7 +206,7 @@ jobs:
               exit 1
             fi
             TAG="$INPUT_TAG"
-            [ -n "$TAG" ] || { echo "::error::workflow_dispatch requires the 'tag' input (e.g. v4.0.0.a1)"; exit 1; }
+            [ -n "$TAG" ] || { echo "::error::workflow_dispatch requires the 'tag' input (e.g. v4.0.0.alpha.1)"; exit 1; }
             BRANCH=""   # simulation: skip branch<->channel enforcement
           else
             DRY_RUN="false"
@@ -640,15 +640,15 @@ jobs:
         # template-inject into this shell.
         env:
           BRANCH: ${{ needs.release.outputs.branch }}
-          TAG: ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.a1 | v4.0.0
-          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.a1 | 4.0.0 (pkg-safe)
+          TAG: ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
+          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.alpha.1 | 4.0.0 (pkg-safe)
         run: |
           set -eu
           # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
           # in the `release` job; re-assert the shape here as belt-and-braces so a
           # malformed value can never reach the Makefile.
           if [ "$BRANCH" = "devel" ]; then
-            printf '%s' "$PORTVERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.(a|b|rc)[0-9]+$' || {
+            printf '%s' "$PORTVERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.(alpha|beta|rc)\.[0-9]+$' || {
               echo "::error::invalid devel PORTVERSION/tag: ${TAG}"; exit 1; }
           else
             printf '%s' "$PORTVERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {

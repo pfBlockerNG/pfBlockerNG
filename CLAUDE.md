@@ -608,7 +608,7 @@ automated commits hit the same checks (subject to the runner's installed tools).
   `pre-commit`/`commit-msg`).
 - **`.githooks/pre-push`** enforces the release tag scheme before pushes reach the remote — it
   delegates to `scripts/release-version.sh` (the single source of truth), so a `vX.Y.Z` tag must
-  sit on `main` and a `vX.Y.Z.aW`/`.bW`/`.rcW` tag on `devel` (not yet on `main`).
+  sit on `main` and a `vX.Y.Z.alpha.N`/`.beta.N`/`.rc.N` tag on `devel` (not yet on `main`).
 
 ---
 
@@ -859,13 +859,14 @@ build-input branch) — self-hosted distribution, **no upstream `pfsense/FreeBSD
 **Tag scheme (single source of truth: `scripts/release-version.sh`).** Semver core `X.Y.Z`, no
 odd/even conventions:
 
-- **Pre-releases — `vX.Y.Z.aW` / `.bW` / `.rcW`** (alpha / beta / rc; `W` ≥ 1): cut from
-  **`devel` only** → GitHub **pre-release**. FreeBSD pkg orders them natively
-  (`4.0.0.a1 < 4.0.0.b1 < 4.0.0.rc1 < 4.0.0`), and the tag maps to a pkg-safe `PORTVERSION`
+- **Pre-releases — `vX.Y.Z.alpha.N` / `.beta.N` / `.rc.N`** (alpha / beta / rc; `N` ≥ 1): cut
+  from **`devel` only** → GitHub **pre-release**. FreeBSD pkg orders them natively
+  (`4.0.0.alpha.1 < 4.0.0.beta.1 < 4.0.0.rc.1 < 4.0.0` — pkg special-cases the `alpha`/`beta`/`rc`
+  stage keywords as sorting below the bare release), and the tag maps to a pkg-safe `PORTVERSION`
   verbatim (carries no `-`).
 - **Stable — `vX.Y.Z`**: cut from **`main` only** → full release. The stable tag is typically
-  the same commit as the final `rcW`, so `devel` stays in sync; `devel` then opens the next
-  series (`X.(Y+1).0.a1`).
+  the same commit as the final `rc.N`, so `devel` stays in sync; `devel` then opens the next
+  series (`X.(Y+1).0.alpha.1`).
 - `release-version.sh` validates the shape + branch↔channel pairing; both `release.yml` and
   `.githooks/pre-push` consume it, so the rule never drifts. Behaviour pinned by
   `tests/test_release_version.py`.
@@ -877,7 +878,7 @@ absent that, an optional Haiku draft if an `ANTHROPIC_API_KEY` secret is set; el
 **Nightly builds get no GitHub Release.**
 
 **Dry-run.** `release.yml`'s `workflow_dispatch` is a no-publish harness: pass the `tag` to
-simulate (e.g. `v4.0.0.a1`) with `dry_run=true` (default) to validate the scheme, build the
+simulate (e.g. `v4.0.0.alpha.1`) with `dry_run=true` (default) to validate the scheme, build the
 `.pkg` artifacts, and render the body — **publishing nothing** (no Release, port bump, pkg-repo
 poke, or Worker deploy). Dispatchable only from the default branch once merged.
 

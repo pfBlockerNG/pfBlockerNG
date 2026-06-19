@@ -5,8 +5,8 @@ bump) and `.githooks/pre-push` (client-side tag enforcement) both consume, so it
 is pinned here directly rather than re-deriving the regex in each consumer.
 
 Scheme:
-  * vX.Y.Z              -> STABLE release, cut from `main` only
-  * vX.Y.Z.aW/.bW/.rcW  -> ALPHA/BETA/RC prerelease, cut from `devel` only
+  * vX.Y.Z                          -> STABLE release, cut from `main` only
+  * vX.Y.Z.alpha.N/.beta.N/.rc.N    -> ALPHA/BETA/RC prerelease, cut from `devel` only
 
 The script classifies a tag into version/channel/prerelease/prekind/portversion,
 rejects malformed tags, and (when a branch is supplied) enforces branch<->channel.
@@ -39,15 +39,15 @@ def _fields(stdout: str) -> dict[str, str]:
 
 # (tag, branch, expected channel/prerelease/prekind/portversion)
 _VALID = [
-    ("v4.0.0.a1", "devel", "devel", "true", "a", "4.0.0.a1"),
-    ("v4.0.0.a2", "devel", "devel", "true", "a", "4.0.0.a2"),
-    ("v4.0.0.b1", "devel", "devel", "true", "b", "4.0.0.b1"),
-    ("v4.0.0.rc1", "devel", "devel", "true", "rc", "4.0.0.rc1"),
-    ("v4.0.0.rc12", "devel", "devel", "true", "rc", "4.0.0.rc12"),
+    ("v4.0.0.alpha.1", "devel", "devel", "true", "alpha", "4.0.0.alpha.1"),
+    ("v4.0.0.alpha.2", "devel", "devel", "true", "alpha", "4.0.0.alpha.2"),
+    ("v4.0.0.beta.1", "devel", "devel", "true", "beta", "4.0.0.beta.1"),
+    ("v4.0.0.rc.1", "devel", "devel", "true", "rc", "4.0.0.rc.1"),
+    ("v4.0.0.rc.12", "devel", "devel", "true", "rc", "4.0.0.rc.12"),
     ("v4.0.0", "main", "stable", "false", "", "4.0.0"),
     ("v10.20.30", "main", "stable", "false", "", "10.20.30"),
     # No branch context (dry-run): channel inferred from the tag shape, no branch check.
-    ("v4.1.0.a3", "", "devel", "true", "a", "4.1.0.a3"),
+    ("v4.1.0.alpha.3", "", "devel", "true", "alpha", "4.1.0.alpha.3"),
     ("v4.1.0", "", "stable", "false", "", "4.1.0"),
 ]
 
@@ -72,18 +72,22 @@ def test_valid_tag_classification(
 
 _MALFORMED = [
     "v4.0.0-devel",  # legacy suffix scheme — no longer valid
-    "v4.0.0-rc1",  # dash, not the dotted .rcW form
-    "v4.0.0.x1",  # unknown stage letter
-    "v4.0.0.a",  # stage letter without a sequence number
-    "v4.0.a1",  # only two numeric components
-    "v4.0.0.alpha1",  # spelled-out stage word, not a|b|rc
-    "4.0.0.a1",  # missing leading v
-    "v4.0.0.a1.1",  # trailing junk after the stage
+    "v4.0.0.a1",  # legacy short stage form — no longer valid
+    "v4.0.0.b1",  # legacy short stage form — no longer valid
+    "v4.0.0.rc1",  # legacy short stage form (rc without the dot+seq) — no longer valid
+    "v4.0.0-rc.1",  # dash, not the dotted .rc.N form
+    "v4.0.0.alpha1",  # stage word not dot-separated from the sequence
+    "v4.0.0.alpha",  # stage word without a sequence number
+    "v4.0.a.1",  # only two numeric components
+    "v4.0.0.gamma.1",  # unknown stage word (not alpha|beta|rc)
+    "v4.0.0.pre.1",  # 'pre' is pkg-recognized but not part of our scheme
+    "4.0.0.alpha.1",  # missing leading v
+    "v4.0.0.alpha.1.1",  # trailing junk after the sequence
     "v01.2.3",  # leading zero in a version component (not strict semver)
     "v1.02.3",  # leading zero in the minor component
     "v1.2.03",  # leading zero in the patch component
-    "v4.0.0.a0",  # prerelease sequence must be >= 1
-    "v4.0.0.a01",  # leading zero in the prerelease sequence
+    "v4.0.0.alpha.0",  # prerelease sequence must be >= 1
+    "v4.0.0.alpha.01",  # leading zero in the prerelease sequence
 ]
 
 
@@ -107,7 +111,7 @@ def test_empty_tag_rejected() -> None:
 @pytest.mark.parametrize(
     "tag,good_branch,bad_branch",
     [
-        ("v4.0.0.a1", "devel", "main"),  # prerelease belongs on devel, not main
+        ("v4.0.0.alpha.1", "devel", "main"),  # prerelease belongs on devel, not main
         ("v4.0.0", "main", "devel"),  # stable belongs on main, not devel
     ],
 )
@@ -122,11 +126,15 @@ def test_branch_channel_enforcement(tag: str, good_branch: str, bad_branch: str)
 
 
 def test_ordering_documented_matches_pkg_semantics() -> None:
-    """Sanity: the four stage forms classify so their PORTVERSIONs order a<b<rc<stable.
+    """Sanity: the stage forms classify so their PORTVERSIONs order alpha<beta<rc<stable.
 
-    FreeBSD pkg orders 4.0.0.a1 < 4.0.0.b1 < 4.0.0.rc1 < 4.0.0 natively; this only
-    asserts the script emits those exact PORTVERSION strings (the ordering itself is
-    a pkg property, validated live by the repo-install smoke).
+    FreeBSD pkg orders 4.0.0.alpha.1 < 4.0.0.beta.1 < 4.0.0.rc.1 < 4.0.0 natively
+    (a component starting with a letter gets an implicit leading -1, so any
+    .alpha/.beta/.rc sorts below the bare release; the keyword weight alpha<beta<rc
+    breaks ties). This only asserts the script emits those exact PORTVERSION strings;
+    the ordering itself is a pkg property, validated live by the repo-install smoke.
     """
-    versions = [_fields(_run(t).stdout)["portversion"] for t in ("v4.0.0.a1", "v4.0.0.b1", "v4.0.0.rc1", "v4.0.0")]
-    assert versions == ["4.0.0.a1", "4.0.0.b1", "4.0.0.rc1", "4.0.0"]
+    versions = [
+        _fields(_run(t).stdout)["portversion"] for t in ("v4.0.0.alpha.1", "v4.0.0.beta.1", "v4.0.0.rc.1", "v4.0.0")
+    ]
+    assert versions == ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"]
