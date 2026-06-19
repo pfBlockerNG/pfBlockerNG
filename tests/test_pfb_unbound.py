@@ -877,6 +877,18 @@ class TestGetTld:
     def test_none_qstate_returns_empty(self) -> None:
         assert pfb_unbound.get_tld(None) == ""
 
+    def test_invalid_utf8_qname_returns_empty_not_raise(self) -> None:
+        # Regression (issue #328): a qname carrying an invalid UTF-8 byte (0xdc) makes
+        # Unbound's qname_list access raise while decoding the labels. get_tld must
+        # swallow it and return an empty TLD, not propagate and crash the Python module.
+        class _RaisingQinfo:
+            @property
+            def qname_list(self) -> list[str]:
+                raise UnicodeDecodeError("utf-8", b"\xdc", 0, 1, "invalid continuation byte")
+
+        qstate = types.SimpleNamespace(qinfo=_RaisingQinfo())
+        assert pfb_unbound.get_tld(qstate) == ""
+
 
 class TestGetTldFromName:
     def test_multilabel(self) -> None:
