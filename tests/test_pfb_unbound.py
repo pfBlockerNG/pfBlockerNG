@@ -349,6 +349,27 @@ class TestDbSubsystem:
         finally:
             con.close()
 
+    def test_seed_is_idempotent_and_preserves_resolver_counter(self, tmp_path: Any) -> None:
+        # The atomic row-0 seed (INSERT ... WHERE NOT EXISTS) must not reset or
+        # duplicate the row on a later init/reconnect. Accumulate, re-create, assert.
+        import sqlite3
+
+        con = sqlite3.connect(str(tmp_path / "resolver.sqlite"))
+        try:
+            pfb_unbound._db_create(pfb_unbound.DB_RESOLVER, con.cursor())
+            con.commit()
+            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(0,)]  # before: single seed at 0
+            con.execute("UPDATE resolver SET totalqueries = totalqueries + 7 WHERE row = 0")
+            con.commit()
+
+            pfb_unbound._db_create(pfb_unbound.DB_RESOLVER, con.cursor())  # re-init
+            con.commit()
+
+            # Single row, counter preserved (not reset to 0, not duplicated).
+            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(7,)]
+        finally:
+            con.close()
+
     def test_resolver_counter_accumulates(self, tmp_path: Any) -> None:
         self._resolver(tmp_path)
         for _ in range(5):
