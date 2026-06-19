@@ -431,3 +431,26 @@ def test_no_route_only_build_equals_route(tmp_path: Path) -> None:
     assert build_vs == route_vs, (
         f"without route-only entries, build == route (back-compat); build={build_vs!r} route={route_vs!r}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Fail-closed on an unknown role. An absent role ⇒ build and "route-only" are the
+# ONLY accepted values; a typo (e.g. "route_only") must abort the reader rather
+# than be silently treated as build (which would re-enable build/CI/smoke for an
+# EOL version). Pinned for --print-build (the path that derives the build set).
+# --------------------------------------------------------------------------- #
+def test_invalid_role_fails_closed(tmp_path: Path) -> None:
+    """An unknown role aborts the reader with a non-zero exit and a clear error."""
+    bad = {**_ce_entry(), "role": "route_only"}  # underscore typo, not "route-only"
+    repo = _make_matrix_ref(tmp_path, [bad])
+
+    proc = subprocess.run(
+        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--print-build"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_clean_git_env(),
+    )
+
+    assert proc.returncode != 0, f"reader must fail on an invalid role; stdout:\n{proc.stdout}"
+    assert "invalid role" in proc.stderr, f"expected an 'invalid role' error; stderr:\n{proc.stderr}"

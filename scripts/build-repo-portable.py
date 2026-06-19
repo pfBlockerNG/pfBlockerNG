@@ -808,6 +808,12 @@ def build_repo_matrix(
         py_flavor = entry["py_flavor"]
         status = entry.get("status", "active")
         role = entry.get("role", "build")
+        if role not in ("build", "route-only"):
+            # Fail closed: an unknown role (e.g. a "route_only" typo) must NOT fall through
+            # to the build path and silently re-enable a fresh build for an EOL version.
+            raise BuildRepoError(
+                f"invalid role {role!r} for version {version} ({variant}); expected 'build' or 'route-only'"
+            )
         varver = catalog_name_from_version(version, variant)  # e.g. "ce-2.8"
         common = dict(abi=abi, php=php, py_flavor=py_flavor, varver=varver, arch=arch, **builder_kwargs)
 
@@ -815,13 +821,22 @@ def build_repo_matrix(
             # --- route-only: serve a frozen .pkg from a prior release; no rebuild, no nightly ---
             # The frozen .pkg must be provided by the caller via route_only_pkgs[varver].
             # Fail loud when absent — never emit an empty catalog for an EOL version.
-            frozen = list((route_only_pkgs or {}).get(varver) or [])
-            if not frozen:
+            frozen_pool = list((route_only_pkgs or {}).get(varver) or [])
+            if not frozen_pool:
                 raise BuildRepoError(
                     f"route-only entry for {varver!r} (version {version}, variant {variant}) "
                     f"has no frozen .pkg provided — supply it via route_only_pkgs[{varver!r}]. "
                     f"A route-only entry without a frozen .pkg would produce an empty or stale "
                     f"catalog; refusing to proceed."
+                )
+            # A varver's frozen pool may carry multiple ABIs (e.g. a Plus amd64 + aarch64
+            # pair). Each (varver, arch) catalog must hold ONLY its own ABI — _emit_catalog
+            # dedups by (name, version), not ABI, so an unfiltered pool would cross-contaminate.
+            frozen = [p for p in frozen_pool if read_compact_manifest(p).get("abi") == abi]
+            if not frozen:
+                raise BuildRepoError(
+                    f"route-only entry for {varver!r} (version {version}, variant {variant}) has "
+                    f"frozen .pkg, but none match ABI {abi!r} — supply a frozen .pkg for this ABI."
                 )
             release_dir = out_dir / "release" / varver / arch
             n_release = _emit_catalog_from_paths(release_dir, frozen)

@@ -151,6 +151,13 @@ fi
 ROUTE_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c '
   [ .[] | . + { arch: (if ((.arch // "") == "") then "amd64" else .arch end) } ]')"
 
+# Fail closed on an unknown role (allowed: absent, "build", "route-only") so a typo
+# like "route_only" cannot silently re-enable build/CI/smoke for an EOL version.
+if [ "$(printf '%s' "$ROUTE_MATRIX" | jq '[.[] | select(has("role") and (.role != "build" and .role != "route-only"))] | length')" -gt 0 ]; then
+  printf '::error::invalid role in %s (allowed: "build", "route-only", or absent)\n' "$MATRIX_FILE" >&2
+  exit 1
+fi
+
 # ── Build matrix: role=build entries only (excludes role=route-only) ──────────
 # An absent role is treated as "build" ((.role // "build") == "build") so with
 # today's matrices — no route-only entries — the BUILD matrix is byte-identical to
