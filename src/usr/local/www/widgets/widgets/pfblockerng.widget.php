@@ -47,7 +47,7 @@ $pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="pf Errors 
 $wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc', 'dnsblquery' => 5,
 			'maxfails' => 3, 'maxheight' => 2500, 'clearip' => 'never', 'cleardnsbl' => 'never');
 
-$pfb['wglobal'] = config_get_path('installedpackages/pfblockerngglobal', []);
+$pfb['wglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 foreach ($wglobal_array as $type => $value) {
 	$pfb[$type] = $pfb['wglobal']['widget-' . "{$type}"] ?: $value;
 }
@@ -74,27 +74,34 @@ if ($_POST) {
 	if (isset($_POST['pfb_submit'])) {
 		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'], PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'], PFB_FILTER_ON_OFF, 'widget');
+		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-popup', $pfb['wglobal']['widget-popup']);
+		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-sortmix', $pfb['wglobal']['widget-sortmix']);
 
 		if (in_array($_POST['pfb_sortcolumn'], array('none', 'alias', 'count', 'packets', 'update'))) {
 			$pfb['wglobal']['widget-sortcolumn']	= $_POST['pfb_sortcolumn'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-sortcolumn', $pfb['wglobal']['widget-sortcolumn']);
 		}
 		if (in_array($_POST['pfb_sortdir'], array('asc', 'des'))) {
 			$pfb['wglobal']['widget-sortdir']	= $_POST['pfb_sortdir'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-sortdir', $pfb['wglobal']['widget-sortdir']);
 		}
 		if (in_array($_POST['pfb_clearip'], array('never', 'daily', 'weekly'))) {
 			$pfb['wglobal']['widget-clearip']	= $_POST['pfb_clearip'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-clearip', $pfb['wglobal']['widget-clearip']);
 		}
 		if (in_array($_POST['pfb_cleardnsbl'], array('never', 'daily', 'weekly'))) {
 			$pfb['wglobal']['widget-cleardnsbl']	= $_POST['pfb_cleardnsbl'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-cleardnsbl', $pfb['wglobal']['widget-cleardnsbl']);
 		}
 		if (is_numeric($_POST['pfb_dnsblquery']) && $_POST['pfb_dnsblquery'] < 10000) {
 			$pfb['wglobal']['widget-dnsblquery']	= $_POST['pfb_dnsblquery'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-dnsblquery', $pfb['wglobal']['widget-dnsblquery']);
 
 			// Restart pfb_dnsbl service on Query frequency changes
@@ -104,10 +111,12 @@ if ($_POST) {
 		}
 		if (is_numeric($_POST['pfb_maxfails']) && $_POST['pfb_maxfails'] < 100) {
 			$pfb['wglobal']['widget-maxfails']	= $_POST['pfb_maxfails'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxfails', $pfb['wglobal']['widget-maxfails']);
 		}
 		if (is_numeric($_POST['pfb_maxheight']) && $_POST['pfb_maxheight'] < 10000) {
 			$pfb['wglobal']['widget-maxheight']	= $_POST['pfb_maxheight'];
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxheight', $pfb['wglobal']['widget-maxheight']);
 		}
 
@@ -154,6 +163,7 @@ if ($_POST) {
 		// Remove old settings
 		if (isset($pfb['wglobal']['widget-maxpivot'])) {
 			unset($pfb['wglobal']['widget-maxpivot']);
+			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_del_path('installedpackages/pfblockerngglobal/widget-maxpivot');
 		}
 
@@ -305,6 +315,7 @@ function pfBlockerNG_update_table() {
 	}
 
 	// Determine if firewall rules are defined
+	// foreign section: filter/rule is a pfSense core section, not in registry
 	$pfb_filter_rules = config_get_path('filter/rule', []);
 
 	if (!empty($pfb_filter_rules)) {
@@ -370,6 +381,7 @@ function pfBlockerNG_update_table() {
 	}
 
 	// Collect pfB Alias ID for popup
+	// foreign section: aliases/alias is a pfSense core section, not in registry
 	foreach (config_get_path('aliases/alias', []) as $key => $alias) {
 		if (isset($pfb_table[$alias['name']])) {
 			$pfb_table[$alias['name']]['id'] = $key;
@@ -483,6 +495,7 @@ function pfBlockerNG_get_failed() {
 			if (!empty(pfb_filter($f_alias, PFB_FILTER_WORD, 'widget')) && $f_alias != $p_alias) {
 				$pfb_found = FALSE;
 				foreach ($list_type as $conf_type => $type) {
+					// foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
 					foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $key => $alias) {
 						if ($alias['aliasname'] == $f_alias) {
 							$pfb_found = TRUE;

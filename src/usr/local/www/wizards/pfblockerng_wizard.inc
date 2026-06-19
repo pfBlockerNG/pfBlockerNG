@@ -48,6 +48,7 @@ function pfb_wizard_skip_check() {
 function step2_stepbeforeformdisplay() {
 	global $pkg, $stepid, $pfb_wizard;
 
+	// foreign section: pfblockerng_wizard is a wizard temp section, not in registry
 	config_del_path('pfblockerng_wizard');
 
 	$fields	= &$pkg['step'][2]['fields']['field'];
@@ -95,7 +96,9 @@ function step2_submitphpaction() {
 		}
 	}
 
+	// foreign section: pfblockerng_wizard is a wizard temp section, not in registry
 	config_set_path('pfblockerng_wizard/step2/inbound_interface', implode(',', (array)$_POST['inbound_interface']));
+	// foreign section: pfblockerng_wizard is a wizard temp section, not in registry
 	config_set_path('pfblockerng_wizard/step2/outbound_interface', implode(',', (array)$_POST['outbound_interface']));
 }
 
@@ -153,6 +156,7 @@ function step4_submitphpaction() {
 	pfb_clear_contents();
 
 	// Add default pfBlockerNG configuration
+	// foreign structure: bulk wizard init reads the whole installedpackages blob for re-write; not routed per-key
 	$new_config = config_get_path('installedpackages');
 	$new_config['pfblockerng']['config'][0]['enable_cb']				= 'on';
 	$new_config['pfblockerng']['config'][0]['pfb_keep']				= 'on';
@@ -165,6 +169,7 @@ function step4_submitphpaction() {
 	$new_config['pfblockerngipsettings']['config'][0]['outbound_deny_action']	= 'reject';	
 	$new_config['pfblockerngipsettings']['config'][0]['pass_order']			= 'order_0';
 
+	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
 	$pfb_auto_wiz = (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')) === PfbToggle::On);
 	$dnsvip_settings = pfb_wizard_dnsvip_settings(
 		$pfb_auto_wiz,
@@ -174,12 +179,15 @@ function step4_submitphpaction() {
 	foreach ($dnsvip_settings as $pfb_dnsvip_key => $pfb_dnsvip_val) {
 		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsvip_key] = $pfb_dnsvip_val;
 	}
+	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport');
+	// foreign section: pfblockerng_wizard/step3/* are wizard temp keys, not in registry
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport_ssl']		= config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl');
 
 	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsbl']		= 'on';
 
 	// Default DNSBL Whitelist
+	// foreign section: pfblockerng_wizard/step3/suppression is a wizard temp key, not in registry
 	if (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/suppression')) === PfbToggle::On) {
 
 		$new_config['pfblockerngdnsblsettings']['config'][0]['suppression']	= 
@@ -262,7 +270,9 @@ ZXRnYXRlLmNvbQ0K
 		}
 	}
 
+	// foreign structure: bulk wizard init writes the whole installedpackages blob; not routed per-key
 	config_set_path('installedpackages', $new_config);
+	// foreign section: pfblockerng_wizard is a wizard temp section, not in registry
 	config_del_path('pfblockerng_wizard');
 
 	write_config('pfBlockerNG: Default Wizard configuration saved');
