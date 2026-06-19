@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -423,6 +424,16 @@ final class CfgGatewayTest extends TestCase
 			'log_max_dnsbl_parse_err',
 			'log_max_dnsreplylog',
 			'log_max_unilog',
+			'log_rotate_log',
+			'log_rotate_errlog',
+			'log_rotate_extraslog',
+			'log_rotate_ip_blocklog',
+			'log_rotate_ip_permitlog',
+			'log_rotate_ip_matchlog',
+			'log_rotate_dnslog',
+			'log_rotate_dnsbl_parse_err',
+			'log_rotate_dnsreplylog',
+			'log_rotate_unilog',
 			'pfb_software_check',
 			'pfb_feed_internal_filter',
 			'pfb_feed_internal_allowlist',
@@ -849,5 +860,128 @@ final class CfgGatewayTest extends TestCase
 
 		$this->assertSame($first, $second, 'Registry must return the same array on repeated calls');
 		$this->assertNotEmpty($first, 'Registry must not be empty');
+	}
+
+	// -----------------------------------------------------------------------
+	// ADR-30 — log_rotate_<type> field round-trip, default-absent, inventory
+	// -----------------------------------------------------------------------
+
+	/**
+	 * All 10 log_rotate_<type> fields are registered.
+	 *
+	 * Scenario:
+	 *   Background: ADR-30 adds one log_rotate_<type> key per log type.
+	 *     Given pfb_cfg_registry().
+	 *     When checking for each expected key.
+	 *     Then all 10 are present.
+	 */
+	public function testLogRotateFieldsAreRegistered(): void
+	{
+		$registry  = pfb_cfg_registry();
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key = 'log_rotate_' . $type;
+			$this->assertArrayHasKey($key, $registry,
+				"log_rotate_{$type} must be in the registry"
+			);
+		}
+	}
+
+	/**
+	 * Data provider — all 10 log_rotate_<type> keys × all 4 vocabulary tokens.
+	 *
+	 * @return array<string, array{string, string}>
+	 */
+	public static function logRotateVocabularyProvider(): array
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$vocab     = ['off', 'daily', 'weekly', 'monthly'];
+		$cases     = [];
+		foreach ($log_types as $type) {
+			foreach ($vocab as $token) {
+				$cases["log_rotate_{$type}/{$token}"] = ["log_rotate_{$type}", $token];
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * log_rotate_<type>: write(read(v)) == v for every vocabulary token.
+	 *
+	 * Scenario:
+	 *   Background: log_rotate_<type> fields use identity (null/null) adapter.
+	 *     Given a vocabulary token v ∈ {'off','daily','weekly','monthly'}.
+	 *     When PfbConfig::read($key) then PfbConfig::write($key, result).
+	 *     Then write(read(v)) == v (round-trip identity).
+	 */
+	#[DataProvider('logRotateVocabularyProvider')]
+	public function testLogRotateFieldRoundTripForAllVocabularyTokens(
+		string $key,
+		string $token
+	): void {
+		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+		// Given: a vocabulary token stored.
+		$this->seedConfig($path, $token);
+
+		// Before: raw value confirmed.
+		$this->assertSame($token, config_get_path($path),
+			"before: {$key} seeded to '{$token}'"
+		);
+
+		// When: read.
+		$result = PfbConfig::read($key);
+
+		// Then: identity adapter — result is the same string.
+		$this->assertIsString($result, "{$key} read('{$token}') must return a string");
+		$this->assertSame($token, $result,
+			"{$key} read('{$token}') must return '{$token}' (identity)"
+		);
+
+		// And: write back produces the same stored value (round-trip).
+		PfbConfig::write($key, $result);
+		$this->assertSame($token, config_get_path($path),
+			"write(read('{$token}')) == '{$token}' for {$key}"
+		);
+	}
+
+	/**
+	 * log_rotate_<type>: absent key returns default 'off'.
+	 *
+	 * Scenario:
+	 *   Background: key entirely absent from config.xml.
+	 *     Given no value seeded.
+	 *     When PfbConfig::read($key).
+	 *     Then 'off' is returned (registered default).
+	 */
+	public function testLogRotateFieldAbsentKeyReturnsDefaultOff(): void
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key  = 'log_rotate_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+			// Before: absent.
+			$this->assertNull(config_get_path($path),
+				"before: {$key} must be absent"
+			);
+
+			// When/Then: default 'off' returned.
+			$result = PfbConfig::read($key);
+			$this->assertSame('off', $result,
+				"{$key} absent must return 'off' (registered default)"
+			);
+		}
 	}
 }

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -726,6 +727,108 @@ final class RollbackContractTest extends TestCase
 			$stored = (string) config_get_path($path);
 			$this->assertContains($stored, $vocab,
 				"BACKWARD: pfb_dnsbl_lenient token='{$token}' write(read) stored='{$stored}' not in vocab"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// F -- ADR-30 log_rotate_<type> rollback contract
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Data provider — all 10 log_rotate_<type> keys × all 4 vocabulary tokens.
+	 *
+	 * @return array<string, array{string, string}>
+	 */
+	public static function logRotateVocabularyProvider(): array
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$vocab     = ['off', 'daily', 'weekly', 'monthly'];
+		$cases     = [];
+		foreach ($log_types as $type) {
+			foreach ($vocab as $token) {
+				$cases["log_rotate_{$type}/{$token}"] = ["log_rotate_{$type}", $token];
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * log_rotate_<type>: FORWARD invariant — every vocabulary token yields a string (no crash).
+	 * log_rotate_<type>: BACKWARD invariant — write(read(v)) stores exactly v (identity).
+	 *
+	 * Scenario:
+	 *   Background: log_rotate_<type> uses null/null adapters (plain-string identity).
+	 *     Given a stored vocabulary token v ∈ {'off','daily','weekly','monthly'}.
+	 *     When PfbConfig::read($key).
+	 *     Then (FORWARD) result is a string — not NULL, not a crash.
+	 *     And (BACKWARD) PfbConfig::write($key, result) stores the same string v.
+	 */
+	#[DataProvider('logRotateVocabularyProvider')]
+	public function testLogRotateFieldForwardAndBackwardForEveryVocabToken(
+		string $key,
+		string $token
+	): void {
+		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+		// GIVEN: legacy token stored.
+		config_set_path($path, $token);
+
+		// BEFORE: raw value confirmed.
+		$this->assertSame($token, config_get_path($path),
+			"before forward+backward: {$key} token='{$token}'"
+		);
+
+		// FORWARD: read returns a well-formed string (no crash, correct type).
+		$runtime = PfbConfig::read($key);
+		$this->assertIsString($runtime,
+			"FORWARD: {$key} token='{$token}' must return a string"
+		);
+		$this->assertSame($token, $runtime,
+			"FORWARD: {$key} token='{$token}' identity adapter must return token unchanged"
+		);
+
+		// BACKWARD: write(runtime) stores exactly the same string (in vocabulary; no novel token).
+		PfbConfig::write($key, $runtime);
+		$stored = config_get_path($path);
+		$this->assertSame($token, $stored,
+			"BACKWARD: {$key} token='{$token}' write(read) must store '{$token}' (identity)"
+		);
+	}
+
+	/**
+	 * log_rotate_<type>: absent key returns 'off' (FORWARD — sane default, no crash).
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.xml (clean install / field never written).
+	 *     Given no stored value.
+	 *     When PfbConfig::read($key).
+	 *     Then 'off' is returned (registered default; no crash).
+	 */
+	public function testLogRotateFieldAbsentKeyReturnsOffDefault(): void
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key  = 'log_rotate_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+			// GIVEN: absent (setUp cleared config).
+			// BEFORE: confirm absent.
+			$this->assertNull(config_get_path($path),
+				"before: {$key} must be absent"
+			);
+
+			// FORWARD: read returns the registered default 'off' — no crash.
+			$result = PfbConfig::read($key);
+			$this->assertSame('off', $result,
+				"FORWARD: {$key} absent must return 'off' (registered default)"
 			);
 		}
 	}
