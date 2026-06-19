@@ -316,9 +316,54 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
 
 1. Add an entry to `pfb_cfg_registry()` with the exact `config.xml` key, its section path,
    the default stored string, and the adapter pair (or `NULL`/`NULL` for plain string).
-2. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
-3. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
-4. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
+2. Set the `since` value to the package release that first introduced the key to `config.xml`
+   (format: `'X.Y.Z'`; for legacy keys the earliest still-shipped release is acceptable).
+3. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
+4. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
+5. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
+
+**Rollback / backward-compat contract (ADR-29 Phase 3):**
+
+The gateway is the enforcement mechanism for downgrade safety. Two invariants hold for every
+registered field, asserted per-field by `tests/php/RollbackContractTest.php`:
+
+- **FORWARD invariant** (old store → new code): `PfbConfig::read($key)` on any legacy stored
+  token returns a well-formed runtime value — no crash, correct type, sane default for absent.
+- **BACKWARD invariant** (new code → old store → old code): `PfbConfig::write($key, $v)` only
+  ever emits a string that is a member of the field's **legacy stored vocabulary** — it never
+  introduces a novel on-disk token that an older release wouldn't understand. This is guaranteed
+  by construction: backed enums use their backing value (the exact legacy stored string), and
+  plain-string fields use identity adapters.
+
+**Field vocabularies** (`pfb_cfg_field_vocab()`):
+
+| Adapter type | Legacy stored vocabulary |
+| ------------ | ------------------------ |
+| `toggle`     | `{'on', ''}` |
+| `lenient`    | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
+| `plain`      | identity — any stored value passes through unchanged |
+
+**Excluded fields** — backward-safe at the `PfbConfig` level (no novel token risk); documented
+exclusions from adapter adoption per ADR-28 §2.2:
+
+- **`pfb_idn`** — uses `NULL`/`NULL` adapters (identity). The `'on'→'all'` normalisation
+  happens only at the `pfb_global()` seam outside `PfbConfig`. All stored tokens (`'on'`,
+  `'all'`, `'confusable'`, `'off'`, `''`) round-trip unchanged through the gateway.
+
+**Since-version convention:**
+
+Every registry entry carries a `'since'` field (`'X.Y.Z'` pattern). It records the first
+package release that introduced the key to `config.xml`. For legacy keys that pre-date the
+registry, the earliest still-shipped release is the baseline (`'1.0.0'` for original-era keys,
+`'2.0.0'` for Python-mode era, `'3.x.y'` for ADR additions). Required format verified by
+`RollbackContractTest::testSinceVersionFollowsVersionPattern`.
+
+**Off-VM downgrade gate:**
+
+`tests/smoke/test_upgrade_config_stability.py::test_pkg_downgrade_preserves_config_values`
+carries the `repo` marker (deselected from `-m smoke`). Install HIGHER build → write config →
+downgrade to LOWER build via `pkg delete` + reinstall → assert byte-identical store AND DNSBL
+probe still returns VIP. Skips cleanly when `SMOKE_PKG`/`repo_vm` is absent.
 
 ---
 

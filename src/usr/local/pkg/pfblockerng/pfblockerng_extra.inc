@@ -1102,6 +1102,109 @@ function pfb_run_migrations(): void
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ADR-29 Phase 3 — Rollback / backward-compat contract helpers.
+//
+// pfb_cfg_field_vocab() documents the FULL STORED VOCABULARY for every
+// registered field adapter type. The tests (RollbackContractTest.php) use
+// this to assert the FORWARD invariant (every legacy stored token yields a
+// sane runtime value) and the BACKWARD invariant (every write emits ONLY a
+// token in the legacy vocabulary — never a novel on-disk token an older
+// release would not recognise).
+//
+// ROLLBACK CONTRACT (ADR-29 §2.3):
+//   - A field PASSES the backward invariant iff, for every possible runtime
+//     value R, write_adapter(R) returns a string that is a member of the
+//     field's legacy stored vocabulary.  The gateway always writes legacy
+//     tokens, so downgrades leave older code reading values it already
+//     understands.
+//   - A field EXCLUDED from backward-safety testing is one where write()
+//     CANNOT guarantee a legacy token — those are excluded from adapter
+//     adoption entirely (like pfb_idn's 'on'→'all' normalisation at the
+//     pfb_global() seam, which bypasses PfbConfig).  At the PfbConfig level,
+//     no field is excluded because all write adapters emit legacy tokens.
+//
+// SINCE-VERSION CONVENTION:
+//   The 'since' field in pfb_cfg_registry() records the package release that
+//   INTRODUCED the key to config.xml. For keys that pre-date the registry
+//   (i.e. existed before ADR-29 Phase 1), 'since' is set to the earliest
+//   release that still ships the pfBlockerNG line that uses the key — using
+//   the legacy release series as a conservative baseline (e.g. '1.0.0' for
+//   original-era keys, '2.0.0' for the Python-mode era, '3.x.y' for ADR-xx
+//   additions).  The current shipped devel version is always an acceptable
+//   baseline for any key whose introduction predates the registry (there is
+//   no config-version migration routine, so any installed config.xml may
+//   contain any subset of these keys).
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_cfg_field_vocab — the legacy stored vocabulary for each adapter type.
+ *
+ * Returns a map of adapter-type label => array of ALL strings a pre-ADR-29
+ * release might have persisted for a field of that type.  Tests iterate over
+ * each registered field's adapter to select the matching vocabulary, then
+ * assert:
+ *
+ *   FORWARD: read_adapter($stored) does not crash and returns a well-formed
+ *            runtime value for EVERY token in the vocabulary.
+ *   BACKWARD: write_adapter(read_adapter($stored)) ∈ vocabulary for every
+ *             canonical stored token (i.e. the gateway never emits a novel
+ *             on-disk string an older release would not recognise).
+ *
+ * Adapter types:
+ *   'toggle'  — PfbToggle fields: 'on' | '' (checked/unchecked checkbox).
+ *   'lenient' — PfbLenient fields: 'on' | 'off' | '' ('' = pre-ADR-22 absent).
+ *   'plain'   — null/null adapters: any string; identity through (no novel token).
+ *
+ * The idn-mode adapter (pfb_cfg_idn_mode_read/write) is NOT wired at PfbConfig
+ * level for pfb_idn (excluded; legacy 'on' cannot round-trip through the adapter
+ * without normalisation — pfb_idn uses null adapters and is backward-safe as-is).
+ *
+ * @return array<string,list<string>>
+ */
+function pfb_cfg_field_vocab(): array
+{
+	return [
+		// Toggle checkbox: 'on' (enabled) | '' (disabled / absent). No novel tokens.
+		'toggle'  => ['on', ''],
+
+		// Lenient flag: 'on' (enabled) | 'off' (disabled) | '' (pre-ADR-22 absent).
+		// '' is a legacy stored value that maps to Off on read; write emits 'off'.
+		// 'off' is a legacy token (predates ADR-22 — the migration only runs when
+		// the key is entirely absent, not when it is 'off'). Backward-safe: any
+		// older release that reads 'off' treats it as "disabled", which is correct.
+		'lenient' => ['on', 'off', ''],
+
+		// Plain string (null/null adapters): identity. Backward-safe by construction.
+		// The 'plain' vocabulary contains the sentinel empty string; individual
+		// field values are arbitrary strings (numeric, named option, etc.) but the
+		// contract only requires that no novel token is INTRODUCED by the adapter.
+		'plain'   => [''],
+	];
+}
+
+/**
+ * pfb_cfg_field_adapter_type — return the adapter type label for a registry entry.
+ *
+ * Returns 'toggle', 'lenient', or 'plain' — matching the keys in pfb_cfg_field_vocab().
+ * Used by RollbackContractTest to look up the vocabulary for each registered field.
+ *
+ * @param  array $entry  A registry entry from pfb_cfg_registry().
+ * @return string        Adapter type label.
+ */
+function pfb_cfg_field_adapter_type(array $entry): string
+{
+	$read = $entry['read_adapter'];
+	if ($read === NULL) {
+		return 'plain';
+	}
+	if ($read === 'pfb_cfg_lenient_read') {
+		return 'lenient';
+	}
+	// All other adapters are toggle (pfb_cfg_toggle_read).
+	return 'toggle';
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

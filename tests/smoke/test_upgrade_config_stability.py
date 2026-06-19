@@ -1,11 +1,23 @@
-"""Issue #281 — UPGRADE CONFIG-PRESERVATION CONTRACT: config.xml user settings
-survive a ``pkg upgrade`` from a prior-release build to the branch build.
+"""Config-preservation contract across both upgrade and downgrade.
 
 NOT A SMOKE TEST. Like ``test_repo_install.py`` this validates a *distribution*
-mechanic — specifically the config-preservation guarantee across package upgrade —
-and carries the ``repo`` marker (NOT ``smoke``), so ``pytest -m smoke`` never
-selects it. It reuses ``test_repo_install.py``'s hermetic ``file://`` catalog and
-``repo_vm`` fixture machinery.
+mechanic — specifically the config-preservation guarantee across package install
+transitions — and carries the ``repo`` marker (NOT ``smoke``), so
+``pytest -m smoke`` never selects it. It reuses ``test_repo_install.py``'s
+hermetic ``file://`` catalog and ``repo_vm`` fixture machinery.
+
+TWO CASES:
+
+``test_pkg_upgrade_preserves_config_values`` — UPGRADE CONTRACT (issue #281)
+  Config.xml user settings survive a ``pkg upgrade`` from a prior-release build
+  to the branch build. Proves the pfb_keep_migrate() install-time seed fixes the
+  pre-deinstall hook bug.
+
+``test_pkg_downgrade_preserves_config_values`` — DOWNGRADE / ROLLBACK CONTRACT
+  ADR-29 Phase 3: config.xml stored values are byte-identical after installing
+  the HIGHER build, writing representative settings, and then downgrading back to
+  the LOWER build. Also proves the lower build reads sane values — a DNSBL-blocked
+  unique_domain() name still returns the VIP block shape after downgrade.
 
 ROOT CAUSE (issue #281): on ``pkg upgrade``, pfSense fires the old pkg's
 ``custom_php_pre_deinstall_command`` -> ``pfblockerng_php_pre_deinstall_command()``.
@@ -57,9 +69,9 @@ Run only via its own dispatch::
 
     python -m pytest tests/smoke -m repo --override-ini="addopts="
 
-Needs the booted ``smoke_vm`` / ``repo_vm`` fixture, the branch ``.pkg``
-(``SMOKE_PKG``) and the ``zstd`` runner host-tool (for the re-versioned builds);
-without them it skips cleanly.
+Both cases need the booted ``smoke_vm`` / ``repo_vm`` fixture, the branch
+``.pkg`` (``SMOKE_PKG``) and the ``zstd`` runner host-tool (for the
+re-versioned builds); without them they skip cleanly.
 """
 
 from __future__ import annotations
@@ -318,6 +330,149 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
             f"AFTER upgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
             f"got rcode={after_answer.rcode!r} records={after_answer.records!r}. "
             f"Runtime contract broken by upgrade."
+        )
+
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-29 P3 — Downgrade / rollback config-preservation contract               #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)  # two pkg installs + two reloads + DNS probes; budget ~12 min
+def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """DOWNGRADE CONFIG-PRESERVATION CONTRACT (ADR-29 Phase 3): config.xml stored
+    values written by the HIGHER build are byte-identical after downgrading to the
+    LOWER build, and the lower build reads sane values (DNSBL probe still works).
+
+    This is the rollback leg of the ADR-29 backward-compat contract: because every
+    write adapter emits only legacy vocabulary tokens (ADR-28 §2.2), a downgrade
+    leaves older code reading values it already understands — no crash, no
+    silent settings-loss.
+
+    NOTE: pfb_keep is intentionally NOT set directly — the install-time migration
+    (pfb_keep_migrate) seeds it on the HIGHER build install, and it must survive
+    the downgrade unchanged (byte-identical). We rely on the migration seed, just
+    as in the upgrade contract test.
+
+    Scenario: ADR-29 rollback safety holds end-to-end on the live VM.
+      Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
+
+    Given the HIGHER (branch) build (``<V>_9``) installed and representative config
+      written (dnsbl_lenient='on', dnsbl_vip_auto='on', pfb_dnsbl='on',
+      pfb_idn='all'; pfb_keep seeded by migration), and a DNSBL-blocked
+      unique_domain() name returning the VIP block shape on-box,
+
+    When the LOWER build (``<V>_1``) is installed over the higher build via
+      ``pkg install`` (reinstall path — same ABI, no ``pkg upgrade`` direction
+      reversal; ``pkg delete`` + ``pkg_install_from_repo`` with the low-version
+      repo mirrors what a user does to roll back),
+
+    Then every snapshotted config.xml value is byte-identical (same raw stored
+      string, no loss or mutation), AND the DNSBL probe still returns NOERROR + VIP
+      on the SAME domain (runtime contract unchanged — lower build reads sane values).
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file — repo_vm already gated this"
+
+    base_version = read_compact_version(Path(pkg))
+    low_version = f"{base_version}_1"
+    high_version = f"{base_version}_9"
+    assert low_version != high_version, "forged builds must differ for a real version transition"
+
+    # Forge two builds on the runner — only the version string changes.
+    low_pkg = reversion_pkg(Path(pkg), low_version, tmp_path / "low")
+    high_pkg = reversion_pkg(Path(pkg), high_version, tmp_path / "high")
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    try:
+        # ------------------------------------------------------------------ #
+        # GIVEN: higher (branch) build installed; representative config written#
+        # ------------------------------------------------------------------ #
+
+        # Install the HIGHER build from our file:// repo.
+        pkg_delete(repo_vm)
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, (
+            "package unexpectedly present before downgrade-contract test install"
+        )
+        pkg_install_from_repo(repo_vm)
+        assert pkg_installed_version(repo_vm) == high_version, (
+            f"expected higher build {high_version!r} installed, got {pkg_installed_version(repo_vm)!r}"
+        )
+
+        # Write representative config fields into config.xml on the HIGHER build.
+        # pfb_keep is intentionally omitted — the install migration seeds it.
+        _write_representative_config(repo_vm)
+
+        # Assert the install-time migration seeded pfb_keep='on' into config.xml.
+        seeded_keep = h.config_get(repo_vm, _CFG_GLOBAL + "/pfb_keep")
+        assert seeded_keep == "on", (
+            f"install-time migration did not seed pfb_keep on higher build: got {seeded_keep!r}, expected 'on'."
+        )
+
+        # Snapshot the stored values on the HIGHER build (BEFORE values).
+        before_snapshot = _snapshot_config(repo_vm)
+
+        # Verify every expected value is present.
+        for path, expected in _SNAPSHOT_FIELDS:
+            actual = before_snapshot[path]
+            assert actual == expected, f"BEFORE (higher build): config.xml {path!r} = {actual!r}, expected {expected!r}"
+
+        # Set up DNSBL feed and VIP so the DNS probe can run.
+        h.ensure_dnsbl_vip(repo_vm)
+        _setup_dnsbl_feed(repo_vm)
+
+        # Reload to make the DNSBL live on the HIGHER build.
+        h.reload(repo_vm, "updatednsbl")
+
+        # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
+        before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
+        assert h.is_vip(before_answer), (
+            f"BEFORE downgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+            f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
+            f"DNSBL was not live on the higher build."
+        )
+
+        # ------------------------------------------------------------------ #
+        # WHEN: downgrade to lower build (pkg delete + reinstall lower version)#
+        # ------------------------------------------------------------------ #
+
+        # Replace the repo catalog with the lower build, then reinstall.
+        # This mirrors the user rollback flow: delete current, install older.
+        pkg_delete(repo_vm)
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg])
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
+
+        installed_after = pkg_installed_version(repo_vm)
+        assert installed_after == low_version, (
+            f"downgrade did not move {high_version!r} -> {low_version!r}; now at {installed_after!r}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # THEN: config.xml values byte-identical; DNSBL behaviour unchanged  #
+        # ------------------------------------------------------------------ #
+
+        # Read config.xml AFTER downgrade and assert every field is byte-identical.
+        after_snapshot = _snapshot_config(repo_vm)
+        _assert_snapshot_identical(before_snapshot, after_snapshot)
+
+        # DNS contract: re-reload so the LOWER build's DNSBL is live, then probe
+        # the SAME blocked domain. Must still return NOERROR + VIP.
+        # This proves the lower build reads the written values as sane runtime values.
+        h.reload(repo_vm, "updatednsbl")
+        after_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
+        assert h.is_vip(after_answer), (
+            f"AFTER downgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+            f"got rcode={after_answer.rcode!r} records={after_answer.records!r}. "
+            f"Runtime contract broken by downgrade — rollback safety violated."
         )
 
     finally:
