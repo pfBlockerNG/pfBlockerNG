@@ -1,0 +1,65 @@
+================================================================================
+PHASE 5 PROMPT — Smoke + validation + docs (per-log)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md   (read §2.2, §4, §7 first)
+================================================================================
+
+ROLE
+Branch adr/30-scheduled-log-reset. Phase 5 of 5. Prove the behaviour end-to-end on a live
+VM and finalise. One commit, push to branch; then the ADR PR can land.
+
+WHY THIS PHASE EXISTS
+The deciders are unit-tested off-box, but the real per-log truncation + inode/ownership
+preservation + once-per-period gating only exist on a live pfSense VM (no live system in CI
+otherwise). This phase pins the §2.2 contract with an ADR-04 smoke and records the manual
+checklist for what CI cannot cover (real calendar rollover).
+
+REQUIRED READING
+- FIRST read RESULTS/04_Results.txt — confirm the UI + reset wiring. If missing, STOP and report.
+- .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (§2.2 contract, §7 DoD + manual checklist + reject)
+- CLAUDE.md "Smoke tests (ADR-04)" — probe on-box, the diagnostics bundle, the marker path
+  /var/db/pfblockerng/log_rotate.last + the log paths under /var/log/pfblockerng (+ the
+  /var/unbound chroot for the python logs).
+- tests/smoke/ — an existing test for the harness/fixtures + helpers; tests/smoke/conftest.py.
+
+ACTION PLAN
+1. Add tests/smoke/test_log_rotate.py (ADR-04 harness). Scenarios (Given/When/Then, assert
+   before AND after — no false pass). Use at least two logs to prove per-log independence:
+   - GIVEN log_rotate_ip_blocklog=daily AND log_rotate_ip_permitlog=off, both logs seeded with
+     lines, AND the marker entry for ip_blocklog set to a STALE period (yesterday) — capture
+     the ip_blocklog inode (ls -i) first. WHEN the cron entry runs. THEN ip_blocklog is EMPTY,
+     its inode UNCHANGED; ip_permitlog is UNTOUCHED; the marker entry for ip_blocklog now holds
+     today's period.
+   - GIVEN the ip_blocklog marker entry already holds today's period (same period). WHEN the
+     cron runs again (logs re-seeded). THEN ip_blocklog is NOT emptied (idempotent no-op).
+   - GIVEN a chrooted python log (e.g. dnslog) with a schedule + stale marker. WHEN the cron
+     runs. THEN it is emptied, inode preserved, AND still owned by unbound.
+   - GIVEN all log_rotate_<type>=off. WHEN the cron runs with stale markers. THEN no log is emptied.
+2. If a Web-UI tier is in scope, assert the General page renders the per-log schedule controls
+   (ui_render) and a POST persists the values.
+3. Update user-facing help/doc as needed (public feature — no secret/PFBL detail).
+4. Set ADR Status -> Accepted (date) on green per CLAUDE.md "ADR acceptance" (automated coverage
+   alone suffices once the smoke proves real behaviour + guards regression); record the live-VM
+   run + the §7 manual checklist as the documented out-of-CI items.
+
+CONSTRAINTS
+- Smoke domains/data per CLAUDE.md (uuid-*.com, RFC 5737/3849; never RFC 6761 / HSTS-preload).
+- Do NOT weaken the §2.2 contract to make a test pass; a real failure is a reject signal (§7).
+
+VERIFICATION (all must pass)
+- python -m pytest ; ruff check . ; ruff format .   -> green/clean (smoke harness is python)
+- vendor/bin/phpunit / phpcs / phpstan              -> still green (no src regressions)
+- The smoke (dispatched on the live VM) proves: per-log boundary reset + inode preserved + off
+  no-op + per-log independence + idempotent same-period.
+
+EXPECTED RESULT
+End-to-end proof on a live VM; ADR-30 Accepted; issue #341 resolvable by the landing PR
+(put "Fixes #341" in the PR body).
+
+COMMIT (single)
+    tests: live-VM smoke for per-log scheduled log reset (ADR-30 P5)
+Push to adr/30-scheduled-log-reset.
+
+HANDOFF — write RESULTS/05_Results.txt
+State: the smoke scenarios + results; the live-VM run id; the manual checklist status; that
+Status flipped to Accepted; confirm all gates green. ADR complete.
