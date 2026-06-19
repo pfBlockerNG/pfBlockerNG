@@ -49,7 +49,7 @@ $pfb['uniblock']	= $pfb['aglobal']['uniblock']		?: '#FFF9C4';
 $pfb['unipermit']	= $pfb['aglobal']['unipermit']		?: '#80CBC4';
 $pfb['unimatch']	= $pfb['aglobal']['unimatch']		?: '#B3E5FC';
 $pfb['unidnsbl']	= $pfb['aglobal']['unidnsbl']		?: '#EF9A9A';
-$pfb['uniupstream']	= $pfb['aglobal']['uniupstream']	?: '#CE93D8';
+$pfb['uniupstream']	= ($pfb['aglobal']['uniupstream'] ?? '')	?: '#CE93D8';
 $pfb['unireply']	= $pfb['aglobal']['unireply']		?: '#E8E8E8';
 
 // Unified Log - Dark Theme
@@ -57,7 +57,7 @@ $pfb['uniblock2']	= $pfb['aglobal']['uniblock2']		?: '#83791D';
 $pfb['unipermit2']	= $pfb['aglobal']['unipermit2']		?: '#3B8780';	
 $pfb['unimatch2']	= $pfb['aglobal']['unimatch2']		?: '#42809D';
 $pfb['unidnsbl2']	= $pfb['aglobal']['unidnsbl2']		?: '#E84E4E';
-$pfb['uniupstream2']	= $pfb['aglobal']['uniupstream2']	?: '#9C27B0';
+$pfb['uniupstream2']	= ($pfb['aglobal']['uniupstream2'] ?? '')	?: '#9C27B0';
 $pfb['unireply2']	= $pfb['aglobal']['unireply2']		?: '#54585E';
 
 $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
