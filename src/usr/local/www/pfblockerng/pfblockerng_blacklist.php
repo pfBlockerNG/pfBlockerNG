@@ -109,7 +109,7 @@ if (!empty($blacklist_types)) {
 	}
 }
 
-$pfb['bconfig']	= config_get_path('installedpackages/pfblockerngblacklist', []);
+$pfb['bconfig']	= PfbConfig::readSection('installedpackages/pfblockerngblacklist');
 
 $pconfig = array();
 $pconfig['blacklist_enable']		= $pfb['bconfig']['blacklist_enable']				?: 'Disable';
@@ -162,6 +162,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 			$_POST['blacklist_enable'] = 'Disable';
 		}
 		$pfb['bconfig']['blacklist_enable'] = $_POST['blacklist_enable'];
+		// foreign key: pfblockerngblacklist not in registry; write directly
 		config_set_path('installedpackages/pfblockerngblacklist/blacklist_enable', $pfb['bconfig']['blacklist_enable']);
 		$config_mod = TRUE;
 	}
@@ -171,6 +172,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 			$_POST['blacklist_lang'] = 'EN';
 		}
 		$pfb['bconfig']['blacklist_lang'] = $_POST['blacklist_lang'];
+		// foreign key: pfblockerngblacklist not in registry; write directly
 		config_set_path('installedpackages/pfblockerngblacklist/blacklist_lang', $pfb['bconfig']['blacklist_lang']);
 		$config_mod = TRUE;
 	}
@@ -206,6 +208,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 			$_POST['blacklist_selected'] = '';
 		}
 
+		// foreign keys: pfblockerngblacklist sub-keys not in registry; write directly
 		if (isset($_POST['blacklist_selected'])) {
 			$pfb['bconfig']['blacklist_selected']	= implode(',', (array)$_POST['blacklist_selected'])	?: '';
 			config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', $pfb['bconfig']['blacklist_selected']);
@@ -268,6 +271,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 			$a_list[] = $list;
 		}
 		$pfb['bconfig']['item'] = $a_list;
+		// foreign structure: pfblockerngblacklist/item is a dynamic per-type list blob, not in registry
 		config_set_path('installedpackages/pfblockerngblacklist/item', $pfb['bconfig']['item']);
 
 		// Check for Large category selections and show savemsg
