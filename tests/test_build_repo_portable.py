@@ -2195,6 +2195,75 @@ def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
     assert versions == {"3.1.0_4", "3.1.0_5"}
 
 
+def test_invalid_role_raises_build_repo_error(tmp_path: Path) -> None:
+    """An unknown role (e.g. a ``route_only`` typo) is rejected, not silently built.
+
+    Fail-closed contract: only ``build`` / ``route-only`` (or absent ⇒ build) are valid.
+    A typo must NOT fall through to the build path and re-enable a fresh build for an EOL
+    version.
+    """
+    out = tmp_path / "site"
+    typo_entry = {**_CE, "role": "route_only"}  # underscore, not hyphen
+
+    with pytest.raises(brp.BuildRepoError, match="invalid role"):
+        brp.build_repo_matrix([typo_entry], out, builder=_stub_builder)
+
+
+def test_route_only_frozen_pkg_filtered_by_abi(tmp_path: Path) -> None:
+    """A varver's frozen pool spanning multiple ABIs is filtered per (varver, arch).
+
+    Scenario: Plus 25.03 EOL on BOTH amd64 and aarch64 (one varver, two arch entries),
+      route_only_pkgs carrying one frozen .pkg per ABI.
+      Given the pool [plus amd64 .pkg, plus aarch64 .pkg] under "plus-25.03"
+       When build_repo_matrix runs for both arch entries
+      Then release/plus-25.03/amd64 holds ONLY the amd64 .pkg
+       And release/plus-25.03/aarch64 holds ONLY the aarch64 .pkg
+      (a pool dedups by (name, version), so without an ABI filter each arch catalog
+       would cross-contaminate with the other ABI's build).
+    """
+    out = tmp_path / "site"
+    plus_amd64 = {**_PLUS_EOL, "freebsd_major": "15", "arch": "amd64"}
+    plus_arm = {**_PLUS_EOL, "freebsd_major": "15", "arch": "aarch64"}
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    pkg_amd64 = frozen_dir / "plus-amd64.pkg"
+    pkg_arm = frozen_dir / "plus-aarch64.pkg"
+    make_pkg(pkg_amd64, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:amd64")
+    make_pkg(pkg_arm, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:aarch64")
+
+    brp.build_repo_matrix(
+        [plus_amd64, plus_arm],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        route_only_pkgs={"plus-25.03": [pkg_amd64, pkg_arm]},
+    )
+
+    amd64_objs = _catalog_objects(out / "release" / "plus-25.03" / "amd64" / "packagesite.pkg")
+    arm_objs = _catalog_objects(out / "release" / "plus-25.03" / "aarch64" / "packagesite.pkg")
+    assert [o["abi"] for o in amd64_objs] == ["FreeBSD:15:amd64"]
+    assert [o["abi"] for o in arm_objs] == ["FreeBSD:15:aarch64"]
+
+
+def test_route_only_no_frozen_pkg_for_abi_raises(tmp_path: Path) -> None:
+    """A route-only entry whose frozen pool has NO .pkg matching the entry's ABI fails loud.
+
+    A non-empty pool that matches a different ABI must not silently yield an empty catalog.
+    """
+    out = tmp_path / "site"
+    frozen = tmp_path / "wrong-abi.pkg"
+    # _CE_EOL is FreeBSD:14:amd64; supply only a FreeBSD:16:amd64 .pkg → no ABI match.
+    make_pkg(frozen, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:16:amd64")
+
+    with pytest.raises(brp.BuildRepoError, match="none match ABI"):
+        brp.build_repo_matrix(
+            [_CE_EOL],
+            out,
+            builder=_stub_builder,
+            route_only_pkgs={"ce-2.7": [frozen]},
+        )
+
+
 # --------------------------------------------------------------------------- #
 # ADR-27 Phase 10: --route-only-pkgs CLI flag
 #
