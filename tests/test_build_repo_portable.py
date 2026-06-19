@@ -1894,3 +1894,302 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     stable_top = max(brp._pkg_version_key(o["version"]) for o in stable_objs)
     assert devel_top >= brp._pkg_version_key("3.0.4")
     assert stable_top >= brp._pkg_version_key("2.0.4")
+
+
+# --------------------------------------------------------------------------- #
+# ADR-27 Phase 7: route-only catalog generation from frozen .pkg
+#
+# A route-only entry (role="route-only") is an EOL pfSense version whose last
+# .pkg is served from a frozen GitHub Release asset — no fresh build, no nightly.
+# The Worker still routes requests for that version to its (frozen) catalog.
+#
+# These tests pin every guarantee of the route-only path:
+#   * release/<varver>/<arch>/ catalog lists exactly the frozen .pkg version(s)
+#   * NO nightly/<varver>/ subtree ever exists for a route-only entry
+#   * routing.json carries routes for ALL entries (build + route-only), so no 404
+#   * build-entry parity: with route-only entries added, the build entry's release
+#     + nightly subtrees are BYTE-IDENTICAL to a run without the route-only entries
+#     (proves route-only is purely additive — not a regression)
+#   * a route-only entry with no frozen .pkg provided raises BuildRepoError (fail
+#     loud — never emit an empty or stale catalog for an EOL version)
+# --------------------------------------------------------------------------- #
+
+# EOL CE entry (pfSense 2.7, FreeBSD 14, PHP 8.2) — route-only role.
+_CE_EOL = {
+    "pfsense_version": "2.7",
+    "variant": "CE",
+    "freebsd_major": "14",
+    "php_version": "8.2",
+    "py_flavor": "py311",
+    "status": "EOL",
+    "arch": "amd64",
+    "role": "route-only",
+}
+# EOL Plus entry (Plus 25.03, FreeBSD 15, PHP 8.3) — route-only role.
+_PLUS_EOL = {
+    "pfsense_version": "25.03",
+    "variant": "Plus",
+    "freebsd_major": "15",
+    "php_version": "8.3",
+    "py_flavor": "py311",
+    "status": "EOL",
+    "arch": "amd64",
+    "role": "route-only",
+}
+
+
+def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) -> None:
+    """A route-only entry's release catalog lists ONLY the frozen .pkg, nothing else.
+
+    Scenario: EOL CE 2.7 with one frozen .pkg
+      Given a frozen CE 2.7 .pkg (version 3.1.0_5) in route_only_pkgs
+       When build_repo_matrix runs with role=route-only for CE 2.7
+      Then release/ce-2.7/amd64/packagesite.pkg lists exactly that one package
+       And the name is pfBlockerNG-devel and the version is 3.1.0_5
+    """
+    out = tmp_path / "site"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg.parent.mkdir()
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    # Before-state: no release subtree yet.
+    assert not (out / "release" / "ce-2.7").exists()
+
+    brp.build_repo_matrix(
+        [_CE_EOL],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={"ce-2.7": [frozen_pkg]},
+    )
+
+    rel = out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg"
+    assert rel.is_file(), "release catalog must exist for a route-only entry"
+    objs = _catalog_objects(rel)
+
+    # Exactly one entry, the frozen .pkg.
+    assert len(objs) == 1
+    assert objs[0]["name"] == "pfBlockerNG-devel"
+    assert objs[0]["version"] == "3.1.0_5"
+
+
+def test_route_only_no_nightly_subtree(tmp_path: Path) -> None:
+    """A route-only entry NEVER produces a nightly/ subtree.
+
+    Scenario: EOL CE 2.7 + active CE 2.8 — build_nightly=True (default)
+      Given route-only CE 2.7 and build CE 2.8
+       When build_repo_matrix runs (build_nightly=True)
+      Then nightly/ce-2.7/ does NOT exist  (route-only: no nightly — ever)
+       And nightly/ce-2.8/ DOES exist      (build entry: nightly built as normal)
+    """
+    out = tmp_path / "site"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg.parent.mkdir()
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    # Before-state: neither nightly subtree exists.
+    assert not (out / "nightly" / "ce-2.7").exists()
+    assert not (out / "nightly" / "ce-2.8").exists()
+
+    brp.build_repo_matrix(
+        [_CE_EOL, _CE],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={"ce-2.7": [frozen_pkg]},
+    )
+
+    # Route-only entry: NO nightly subtree.
+    assert not (out / "nightly" / "ce-2.7").exists(), "route-only must never produce a nightly/"
+    # Build entry: nightly subtree present as normal.
+    assert (out / "nightly" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+
+
+def test_route_only_routing_entries_for_all_entries(tmp_path: Path) -> None:
+    """routing.json carries routes for ALL matrix entries — build AND route-only.
+
+    Scenario: one build CE 2.8 + one route-only CE 2.7 + one route-only Plus 25.03
+      Given three entries: CE 2.8 (build), CE 2.7 (route-only), Plus 25.03 (route-only)
+       When build_repo_matrix runs
+      Then routing.json contains routes for all three varvers:
+           ce-2.8, ce-2.7, plus-25.03 — so no version returns a 404
+    """
+    out = tmp_path / "site"
+    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_ce.parent.mkdir()
+    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-devel-3.0.9_1.pkg"
+    frozen_plus.parent.mkdir()
+    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:amd64")
+
+    # Before-state: no routing.json yet.
+    assert not (out / "routing.json").exists()
+
+    brp.build_repo_matrix(
+        [_CE, _CE_EOL, _PLUS_EOL],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={
+            "ce-2.7": [frozen_ce],
+            "plus-25.03": [frozen_plus],
+        },
+    )
+
+    routing = json.loads((out / "routing.json").read_text())
+    routes = routing["routes"]
+    catalogs = {r["catalog"] for r in routes}
+
+    # All three versions routed (none is 404'd).
+    assert "ce-2.8" in catalogs, "build entry ce-2.8 must have a route"
+    assert "ce-2.7" in catalogs, "route-only entry ce-2.7 must have a route"
+    assert "plus-25.03" in catalogs, "route-only entry plus-25.03 must have a route"
+
+    # Status flows through verbatim for each entry.
+    by_catalog = {r["catalog"]: r for r in routes}
+    assert by_catalog["ce-2.8"]["status"] == "active"
+    assert by_catalog["ce-2.7"]["status"] == "EOL"
+    assert by_catalog["plus-25.03"]["status"] == "EOL"
+
+
+def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> None:
+    """Adding route-only entries leaves build-entry subtrees BYTE-IDENTICAL.
+
+    Scenario: before = CE 2.8 (build) only; after = CE 2.8 + CE 2.7 (route-only)
+      Given build_repo_matrix([CE 2.8]) -> capture release + nightly catalogs for ce-2.8
+       When re-run with the same CE 2.8 + route-only CE 2.7 added
+      Then release/ce-2.8/ catalog bytes == before bytes
+       And nightly/ce-2.8/ catalog bytes == before bytes
+      (route-only is purely additive — no regression on the build path)
+    """
+    out = tmp_path / "site"
+    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_ce.parent.mkdir()
+    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    # BEFORE: build-only matrix (CE 2.8 only).
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder)
+    rel_before = (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+    nightly_before = (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+
+    # AFTER: same matrix + route-only CE 2.7 added.
+    brp.build_repo_matrix(
+        [_CE, _CE_EOL],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={"ce-2.7": [frozen_ce]},
+    )
+    rel_after = (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+    nightly_after = (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+
+    # Build-entry subtrees are byte-identical — route-only is additive, not a regression.
+    assert rel_after == rel_before, "route-only must not alter the build entry's release catalog"
+    assert nightly_after == nightly_before, "route-only must not alter the build entry's nightly catalog"
+
+    # Route-only CE 2.7 release catalog now exists (the additive part).
+    assert (out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg").is_file()
+
+
+def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
+    """route-only works for BOTH CE and Plus variants.
+
+    Scenario: one build CE 2.8 + route-only CE 2.7 + route-only Plus 25.03
+      Given separate frozen .pkg for each route-only entry
+       When build_repo_matrix runs
+      Then release/ce-2.7/amd64/ catalog lists the frozen CE pkg
+       And release/plus-25.03/amd64/ catalog lists the frozen Plus pkg
+       And NO nightly/ subtrees exist for either route-only entry
+    """
+    out = tmp_path / "site"
+    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_ce.parent.mkdir()
+    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-devel-3.0.9_1.pkg"
+    frozen_plus.parent.mkdir()
+    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:amd64")
+
+    brp.build_repo_matrix(
+        [_CE, _CE_EOL, _PLUS_EOL],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={
+            "ce-2.7": [frozen_ce],
+            "plus-25.03": [frozen_plus],
+        },
+    )
+
+    # CE route-only: correct frozen version served.
+    ce_objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    assert len(ce_objs) == 1
+    assert ce_objs[0]["version"] == "3.1.0_5"
+
+    # Plus route-only: correct frozen version served.
+    plus_objs = _catalog_objects(out / "release" / "plus-25.03" / "amd64" / "packagesite.pkg")
+    assert len(plus_objs) == 1
+    assert plus_objs[0]["version"] == "3.0.9_1"
+
+    # No nightly for either route-only entry.
+    assert not (out / "nightly" / "ce-2.7").exists()
+    assert not (out / "nightly" / "plus-25.03").exists()
+
+
+def test_route_only_missing_frozen_pkg_raises_build_repo_error(tmp_path: Path) -> None:
+    """A route-only entry with no frozen .pkg provided raises BuildRepoError.
+
+    Scenario: route-only CE 2.7 with NO entry in route_only_pkgs
+      Given a route-only CE 2.7 matrix entry
+        And route_only_pkgs is empty (or missing that varver key)
+       When build_repo_matrix runs
+      Then BuildRepoError is raised immediately — no catalog emitted, no silent empty output
+    """
+    out = tmp_path / "site"
+
+    # route_only_pkgs completely absent.
+    with pytest.raises(brp.BuildRepoError, match="route-only"):
+        brp.build_repo_matrix([_CE_EOL], out, builder=_stub_builder)
+
+    # route_only_pkgs present but missing the relevant varver key.
+    with pytest.raises(brp.BuildRepoError, match="route-only"):
+        brp.build_repo_matrix(
+            [_CE_EOL],
+            out,
+            builder=_stub_builder,
+            route_only_pkgs={"plus-26.03": []},  # wrong key
+        )
+
+    # route_only_pkgs has the key but with an EMPTY list.
+    with pytest.raises(brp.BuildRepoError, match="route-only"):
+        brp.build_repo_matrix(
+            [_CE_EOL],
+            out,
+            builder=_stub_builder,
+            route_only_pkgs={"ce-2.7": []},  # empty list
+        )
+
+    # No output dir created on error (fail loud, fail clean).
+    assert not (out / "release" / "ce-2.7").exists()
+
+
+def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
+    """Multiple frozen .pkg files in route_only_pkgs are ALL indexed in the release catalog.
+
+    This is the rollback use-case: a route-only entry can carry more than one frozen
+    version (e.g. the last two builds before EOL) — both appear in the catalog.
+    """
+    out = tmp_path / "site"
+    frozen_dir = tmp_path / "frozen"
+    frozen_dir.mkdir()
+    frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
+    frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
+    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    brp.build_repo_matrix(
+        [_CE_EOL],
+        out,
+        builder=_stub_builder,
+        route_only_pkgs={"ce-2.7": [frozen_a, frozen_b]},
+    )
+
+    objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    versions = {o["version"] for o in objs}
+    assert versions == {"3.1.0_4", "3.1.0_5"}

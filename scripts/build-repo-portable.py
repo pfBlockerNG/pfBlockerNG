@@ -744,12 +744,15 @@ def build_repo_matrix(
     release_keep_devel: int = 1,
     release_keep_stable: int = 1,
     release_extra_pkgs: list[Path] | None = None,
+    route_only_pkgs: dict[str, list[Path]] | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant/arch repository tree + routing.json from the version matrix.
 
     For each matrix entry (each carrying pfsense_version, variant, freebsd_major, arch,
-    php_version, py_flavor, status):
+    php_version, py_flavor, status, and optionally role):
+
+    **build entries** (``role`` absent or ``"build"`` — the default, unchanged path):
 
       * RELEASE subtree ``release/<varver>/<arch>/`` — the devel .pkg, plus the stable
         .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
@@ -762,6 +765,30 @@ def build_repo_matrix(
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
       * a routing.json route ``{pattern, catalog: <varver>, status}`` (deduped, most
         specific first).
+
+    **route-only entries** (``role == "route-only"`` — EOL versions served from frozen .pkg):
+
+      * NO builder call for a fresh devel-HEAD .pkg — the version is EOL, no new build.
+      * NO nightly subtree — a route-only entry never gets a nightly build.
+      * RELEASE subtree ``release/<varver>/<arch>/`` — built EXCLUSIVELY from the frozen
+        .pkg supplied in ``route_only_pkgs[varver]`` (a list of pre-downloaded Release
+        assets, one per arch entry, provided by publish.yml). The existing
+        ``_emit_catalog_from_paths`` machinery handles the rest.
+      * If ``route_only_pkgs`` has no entry for this ``varver`` (or is ``None``), the call
+        raises ``BuildRepoError`` — a route-only entry with no frozen .pkg is a hard error.
+      * a routing.json route ``{pattern, catalog: <varver>, status}`` — the Worker still
+        routes requests to the (now-frozen) catalog, so clients can install the last-known
+        good version without a 404.
+
+    Frozen-.pkg input contract (``route_only_pkgs``):
+      Callers (e.g. publish.yml) supply a ``dict[varver, list[Path]]`` mapping the
+      ``catalog_name_from_version()`` key (e.g. ``"ce-2.7"``) to the ordered list of
+      pre-downloaded .pkg files for that version. publish.yml downloads these from the
+      corresponding GitHub Release tag and passes them here. Each path must be a valid
+      .pkg (readable by ``read_compact_manifest``). The mapping is keyed by ``varver``
+      so multiple arch entries for the same version can share the same frozen .pkg pool
+      (``_emit_catalog_from_paths`` deduplicates by (name, version), so arch-specific
+      or duplicate entries are handled safely).
 
     ``builder`` is injectable (tests pass a stub); the default drives build-pkg-portable.py.
     Extra ``builder_kwargs`` pass through to every builder call. Returns a summary dict.
@@ -780,55 +807,79 @@ def build_repo_matrix(
         php = entry["php_version"]
         py_flavor = entry["py_flavor"]
         status = entry.get("status", "active")
+        role = entry.get("role", "build")
         varver = catalog_name_from_version(version, variant)  # e.g. "ce-2.8"
         common = dict(abi=abi, php=php, py_flavor=py_flavor, varver=varver, arch=arch, **builder_kwargs)
 
-        # --- release subtree: devel + (optional) stable + (optional) older releases ---
-        # The freshly built devel (+ stable when a stable_tag exists) are always present.
-        # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
-        # Releases by publish.yml); together they form the full candidate pool, pruned via
-        # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
-        # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
-        release_dir = out_dir / "release" / varver / arch
-        with tempfile.TemporaryDirectory() as td:
-            staging = Path(td)
-            release_pkgs: list[Path] = [builder("devel", out_dir=staging, ports=ports, local_src=local_src, **common)]
-            if stable_tag:
-                release_pkgs.append(
-                    builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
+        if role == "route-only":
+            # --- route-only: serve a frozen .pkg from a prior release; no rebuild, no nightly ---
+            # The frozen .pkg must be provided by the caller via route_only_pkgs[varver].
+            # Fail loud when absent — never emit an empty catalog for an EOL version.
+            frozen = list((route_only_pkgs or {}).get(varver) or [])
+            if not frozen:
+                raise BuildRepoError(
+                    f"route-only entry for {varver!r} (version {version}, variant {variant}) "
+                    f"has no frozen .pkg provided — supply it via route_only_pkgs[{varver!r}]. "
+                    f"A route-only entry without a frozen .pkg would produce an empty or stale "
+                    f"catalog; refusing to proceed."
                 )
-            # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
-            # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
-            all_release_pkgs = release_pkgs + list(release_extra_pkgs or [])
-            kept_release = retain_by_channel(
-                all_release_pkgs,
-                keep_devel=release_keep_devel,
-                keep_stable=release_keep_stable,
-            )
-            n_release = _emit_catalog_from_paths(release_dir, kept_release)
-        built.append(str(release_dir))
-        sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
+            release_dir = out_dir / "release" / varver / arch
+            n_release = _emit_catalog_from_paths(release_dir, frozen)
+            built.append(str(release_dir))
+            sys.stderr.write(f"==> route-only release catalog {release_dir} ({n_release} package(s), frozen)\n")
+            # No nightly subtree — route-only entries never get a nightly build.
 
-        # --- nightly subtree: fold the new build in with retained prior nightlies ---
-        if build_nightly:
-            nightly_dir = out_dir / "nightly" / varver / arch
-            # Glob the retained package files, EXCLUDING the catalog files (which are also
-            # named *.pkg: packagesite.pkg / data.pkg) — they are not libpkg archives.
-            existing = (
-                sorted(p for p in nightly_dir.glob("*.pkg") if p.name not in _CATALOG_PKG_FILES)
-                if nightly_dir.is_dir()
-                else []
-            )
+        else:
+            # --- build entry (role absent or "build"): unchanged Part-1 path ---
+
+            # --- release subtree: devel + (optional) stable + (optional) older releases ---
+            # The freshly built devel (+ stable when a stable_tag exists) are always present.
+            # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
+            # Releases by publish.yml); together they form the full candidate pool, pruned via
+            # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
+            # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
+            release_dir = out_dir / "release" / varver / arch
             with tempfile.TemporaryDirectory() as td:
                 staging = Path(td)
-                pkgver = nightly_pkgversion(entry) if nightly_pkgversion else None
-                new_nightly = builder(
-                    "nightly", out_dir=staging, ports=ports, local_src=local_src, pkgversion=pkgver, **common
+                release_pkgs: list[Path] = [
+                    builder("devel", out_dir=staging, ports=ports, local_src=local_src, **common)
+                ]
+                if stable_tag:
+                    release_pkgs.append(
+                        builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
+                    )
+                # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
+                # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
+                all_release_pkgs = release_pkgs + list(release_extra_pkgs or [])
+                kept_release = retain_by_channel(
+                    all_release_pkgs,
+                    keep_devel=release_keep_devel,
+                    keep_stable=release_keep_stable,
                 )
-                kept = _retain_newest([*existing, new_nightly], nightly_keep)
-                n = _emit_catalog_from_paths(nightly_dir, kept)
-            built.append(str(nightly_dir))
-            sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
+                n_release = _emit_catalog_from_paths(release_dir, kept_release)
+            built.append(str(release_dir))
+            sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
+
+            # --- nightly subtree: fold the new build in with retained prior nightlies ---
+            if build_nightly:
+                nightly_dir = out_dir / "nightly" / varver / arch
+                # Glob the retained package files, EXCLUDING the catalog files (which are also
+                # named *.pkg: packagesite.pkg / data.pkg) — they are not libpkg archives.
+                existing = (
+                    sorted(p for p in nightly_dir.glob("*.pkg") if p.name not in _CATALOG_PKG_FILES)
+                    if nightly_dir.is_dir()
+                    else []
+                )
+                with tempfile.TemporaryDirectory() as td:
+                    staging = Path(td)
+                    pkgver = nightly_pkgversion(entry) if nightly_pkgversion else None
+                    new_nightly = builder(
+                        "nightly", out_dir=staging, ports=ports, local_src=local_src, pkgversion=pkgver, **common
+                    )
+                    kept = _retain_newest([*existing, new_nightly], nightly_keep)
+                    n = _emit_catalog_from_paths(nightly_dir, kept)
+                built.append(str(nightly_dir))
+                sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
 
         routes.append({"pattern": _ua_pattern(variant, version), "catalog": varver, "status": status})
 
