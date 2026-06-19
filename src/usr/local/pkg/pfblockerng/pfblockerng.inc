@@ -343,6 +343,17 @@ function pfb_alias_entry_count(array $grep_lines): int {
 	return is_numeric($grep_lines[0] ?? NULL) ? (int) $grep_lines[0] : 0;
 }
 
+// Returns TRUE only for a legacy bare pfB_ alias on an IPv4-family rule that
+// still needs the '_v4' suffix appended. Addresses already ending in '_v4' or
+// '_v6' are left alone (the '_v6' skip mirrors the NAT-rule upgrade path and
+// fixes issue #360: a 'pfB_*_v6' alias must never become 'pfB_*_v6_v4').
+function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
+	return str_starts_with((string) $address, 'pfB_') &&
+	       substr((string) $address, -3) !== '_v4' &&
+	       substr((string) $address, -3) !== '_v6' &&
+	       $ipprotocol === 'inet';
+}
+
 
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
@@ -10148,9 +10159,7 @@ function sync_package_pfblockerng($cron='') {
 
 		// Query for previous IPv4 pfBlockerNG 'alias type' aliasnames which are not in the new '_v4' suffix format
 		foreach (array('source', 'destination') as $rtype) {
-			if (substr($rule[$rtype]['address'], 0, 4) == 'pfB_' &&
-				substr($rule[$rtype]['address'], -3) != '_v4' &&
-				$rule['ipprotocol'] == 'inet') {
+			if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
 				$pfb['autorules'] = TRUE;	// Set flag to re-configure Firewall rules and add missing '_v4' suffix
 			}
 		}
@@ -13248,10 +13257,7 @@ function sync_package_pfblockerng($cron='') {
 
 						// Upgrade previous IPv4 pfBlockerNG 'alias type' aliasnames to new '_v4' suffix format
 						foreach (array('source', 'destination') as $rtype) {
-							if (substr($rule[$rtype]['address'], 0, 4) == 'pfB_' &&
-							    substr($rule[$rtype]['address'], -3) != '_v4' &&
-							    $rule['ipprotocol'] == 'inet') {
-
+							if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
 								// Add '_v4' suffix
 								$rule[$rtype]['address'] = "{$rule[$rtype]['address']}_v4";
 							}
