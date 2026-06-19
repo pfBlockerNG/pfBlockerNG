@@ -477,21 +477,30 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
 
     dnsbl_log = "/var/log/pfblockerng/dnsbl.log"
 
-    # Capture the original byte size so we can truncate back to it on cleanup.
+    # Capture the original byte size so we can truncate back to it on cleanup. Fail
+    # fast if stat fails: falling back to "0" would make the cleanup truncate wipe
+    # the whole log.
     size_result = vm.ssh("stat", "-f", "%z", dnsbl_log, timeout=15)
-    original_size = size_result.stdout.strip() if size_result.returncode == 0 else "0"
+    assert size_result.returncode == 0, (
+        f"Failed to stat {dnsbl_log!r} before mutation: rc={size_result.returncode}, stderr={size_result.stderr!r}"
+    )
+    original_size = size_result.stdout.strip()
 
     helpers.set_dnsbl_enabled(vm, True)
 
     try:
         # GIVEN: append the synthetic upstream-block line via SSH tee -a.
-        subprocess.run(
+        append_result = subprocess.run(
             vm.ssh_argv("tee", "-a", dnsbl_log),
             input=csv_line,
             capture_output=True,
             text=True,
             timeout=15,
             check=False,
+        )
+        assert append_result.returncode == 0, (
+            f"Failed to append synthetic line to {dnsbl_log!r}: "
+            f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
         )
 
         # WHEN: GET the Alerts page (default alert view → DNSBL Python tab).
@@ -524,10 +533,14 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
         )
     finally:
         # Truncate dnsbl.log back to its pre-test size to remove the appended line.
-        subprocess.run(
+        truncate_result = subprocess.run(
             vm.ssh_argv("/usr/bin/truncate", "-s", original_size, dnsbl_log),
             capture_output=True,
             text=True,
             timeout=15,
             check=False,
+        )
+        assert truncate_result.returncode == 0, (
+            f"Failed to restore {dnsbl_log!r} to size={original_size!r}: "
+            f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
         )
