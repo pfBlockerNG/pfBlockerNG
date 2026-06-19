@@ -36,7 +36,7 @@ $aglobal_array = array(	'pfbunicnt' => 200, 'pfbdenycnt' => 25, 'pfbpermitcnt' =
 			'pfbdnscnt' => 25, 'pfbdnsreplycnt' => 200,
 			'ipfilterlimitentries' => 100, 'dnsblfilterlimitentries' => 100, 'dnsfilterlimitentries' => 100); 
 
-$pfb['aglobal'] = config_get_path('installedpackages/pfblockerngglobal', []);
+$pfb['aglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 
 $alertrefresh	= isset($pfb['aglobal']['alertrefresh'])	? $pfb['aglobal']['alertrefresh']	: 'on';
 $pfbpageload	= $pfb['aglobal']['pfbpageload']	!= ''	? $pfb['aglobal']['pfbpageload']	: 'unified';
@@ -171,8 +171,10 @@ if (!$alert_summary) {
 		$c_config = $clists[$type] = array();
 
 		if ($vtype == 'dnsbl') {
+			// foreign structure: pfblockerngdnsbl is a dynamic per-feed list section, not in registry
 			$c_config = config_get_path('installedpackages/pfblockerngdnsbl');
 		} else {
+			// foreign structure: pfblockernglistsv4/v6 are dynamic per-feed list sections, not in registry
 			$c_config = config_get_path("installedpackages/pfblockernglistsv{$vtype}");
 		}
 
@@ -184,12 +186,14 @@ if (!$alert_summary) {
 
 					if ($type == 'dnsbl') {
 						$lname = "DNSBL_{$data['aliasname']}";
+						// foreign structure: pfblockerngdnsbl/config/{row}/custom is a dynamic per-row key, not in registry
 						$clists[$type][$lname]['base64'] = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/custom");
 						$clists[$type][$lname]['base64_idx'] = $row;
 
 						// Collect Global DNSBL Logging type, or Group logging setting
-						$g_log = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log') ?: '';
+						$g_log = PfbConfig::read('global_log');
 						if (empty($g_log)) {
+							// foreign structure: pfblockerngdnsbl/config/{row}/logging is a dynamic per-row key, not in registry
 							$d_log = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging");
 						} else {
 							$d_log = $g_log;
@@ -211,6 +215,7 @@ if (!$alert_summary) {
 						$clists[$type][$lname]['log'] = $d_type;
 					} else {
 						$lname = "pfB_{$data['aliasname']}_v{$vtype}";
+						// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
 						$clists[$type][$lname]['base64'] = config_get_path("installedpackages/pfblockernglistsv{$vtype}/config/{$row}/custom");
 						$clists[$type][$lname]['base64_idx'] = $row;
 					}
@@ -245,14 +250,13 @@ if (!$alert_summary) {
 		}
 	}
 
-	config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', 
+	// foreign key: pfblockerngipsettings not in registry; write directly
+	config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression',
 		config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression') ?: '');
 
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression',
-		config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression') ?: '');
+	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
 
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion',
-		config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion') ?: '');
+	PfbConfig::write('tldexclusion', PfbConfig::read('tldexclusion') ?: '');
 
 	foreach (array('ipsuppression', 'dnsblwhitelist', 'tldexclusion') as $key => $type) {
 
@@ -261,11 +265,12 @@ if (!$alert_summary) {
 		}
 
 		if ($key == 0) {
+			// foreign key: pfblockerngipsettings not in registry; read directly
 			$clists[$type]['base64'] = config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression');
 		} elseif ($key == 1) {
-			$clists[$type]['base64'] = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression');
+			$clists[$type]['base64'] = PfbConfig::read('suppression');
 		} elseif ($key == 2) {
-			$clists[$type]['base64'] = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion');
+			$clists[$type]['base64'] = PfbConfig::read('tldexclusion');
 		}
 
 		$clists[$type]['data']		= array();
@@ -586,7 +591,7 @@ if (isset($_POST) && !empty($_POST)) {
 			$pageview = 'alert';
 		}
 
-		config_set_path("installedpackages/pfblockerngglobal", $pfb['aglobal']);
+		PfbConfig::writeSection('installedpackages/pfblockerngglobal', $pfb['aglobal']);
 		write_config('pfBlockerNG: Update ALERT tab settings.', FALSE);
 		header("Location: /pfblockerng/pfblockerng_alerts.php?view={$pageview}");
 		exit;
@@ -838,6 +843,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$data .= "{$v4suppression_dat}\r\n";
 			$clists['ipsuppression']['base64'] = base64_encode($data);
+			// foreign key: pfblockerngipsettings not in registry; write directly
 			config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', $clists['ipsuppression']['base64']);
 			write_config("pfBlockerNG: Added {$ip} to the IPv4 Suppression customlist", FALSE);
 			pfb_create_suppression_file();	// Create pfbsuppression.txt
@@ -895,7 +901,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 			}
 			$clists['dnsblwhitelist']['base64'] = base64_encode($data);
-			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/suppression', $clists['dnsblwhitelist']['base64']);
+			PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", FALSE);
 
 			// Refresh the query-time whiteDB so the domain is no longer allowed.
@@ -921,6 +927,7 @@ if (isset($_POST) && !empty($_POST)) {
 				$data .= "{$domain}\r\n";
 			}
 			$clists['dnsbl'][$list]['base64'] = base64_encode($data);
+			// foreign structure: pfblockerngdnsbl/config/{row}/custom is a dynamic per-row key, not in registry
 			config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$list]['base64_idx']}/custom", $clists['dnsbl'][$list]['base64']);
 			write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Group [ {$list} ] customlist", FALSE);
 			$cl_added = TRUE;
@@ -1059,7 +1066,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$data .= "{$whitelist}\r\n";
 				$clists['dnsblwhitelist']['base64'] = base64_encode($data);
-				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/suppression", $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", FALSE);
 			}
 
@@ -1096,6 +1103,7 @@ if (isset($_POST) && !empty($_POST)) {
 					$data .= "{$line}";
 				}
 				$clists['dnsbl'][$lname]['base64'] = base64_encode($data);
+				// foreign structure: pfblockerngdnsbl/config/{row}/custom is a dynamic per-row key, not in registry
 				config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$lname]['base64_idx']}/custom", $clists['dnsbl'][$lname]['base64']);
 				write_config("pfBlockerNG: Removed [ {$domain} ] from DNSBL Group [ {$lname} ] customlist (whitelisted)", FALSE);
 			}
@@ -1174,7 +1182,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$data .= "{$exclude_string}\r\n";
 				$clists['tldexclusion']['base64'] = base64_encode($data);
-				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion", $clists['tldexclusion']['base64']);
+				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
 		}
@@ -1262,7 +1270,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 				$clists['dnsblwhitelist']['base64'] = base64_encode($data);
-				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/suppression", $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 				break;
 			case 'delete_exclusion':
 				$type = 'TLD Exclusion';
@@ -1275,7 +1283,7 @@ if (isset($_POST) && !empty($_POST)) {
 					$data .= "{$line}";
 				}
 				$clists['tldexclusion']['base64'] = base64_encode($data);
-				config_set_path("installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion", $clists['tldexclusion']['base64']);
+				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
 				break;
 			case 'delete_ip':
 				$type	= 'IPv4 Suppression';
@@ -1319,6 +1327,7 @@ if (isset($_POST) && !empty($_POST)) {
 						$data .= "{$line}";
 					}
 					$clists['ipsuppression']['base64'] = base64_encode($data);
+					// foreign key: pfblockerngipsettings not in registry; write directly
 					config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', $clists['ipsuppression']['base64']);
 					$savemsg = "Removed [ {$ip_revert} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
 				}
@@ -1346,6 +1355,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 
 					$clists['ipwhitelist' . $vtype][$table_2]['base64'] = base64_encode($data);
+					// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
 					config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table_2]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table_2]['base64']);
 					$aname = substr(substr($table_2, 4),0, -3);					// Remove 'pfB_' and '_v4'
 					touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
@@ -1554,6 +1564,7 @@ if (isset($_POST) && !empty($_POST)) {
 			$data .= "{$whitelist_string}";
 
 			$clists['ipwhitelist' . $vtype][$table]['base64'] = base64_encode($data);
+			// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
 			config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table]['base64']);
 			write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
 
@@ -1671,6 +1682,7 @@ $supp_ip_txt	= "Clicking this Suppression Icon, will immediately remove the bloc
 
 // Collect Interfaces
 $dnsbl_int = array();
+// foreign section: interfaces is a pfSense core section, not in registry
 foreach (config_get_path('interfaces', []) as $int) {
 	if ($int['ipaddr'] != 'dhcp' && !empty($int['ipaddr']) && !empty($int['subnet'])) {
 		$dnsbl_int[] = array("{$int['ipaddr']}/{$int['subnet']}", "{$int['descr']}");
@@ -2515,6 +2527,7 @@ function convert_dnsbl_log($mode, $fields) {
 			</tr>");
 	}
 	else {
+		// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
 		if ($isUpstream) {
 			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['uniupstream2'] : $pfb['uniupstream'];
 		} else {
@@ -2685,6 +2698,7 @@ function convert_dns_reply_log($mode, $fields) {
 		$style_bg = '';
 		$title = 'DNS Reply Event';
 		if ($fields[7] == '127.0.0.1') {
+			// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
 			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unireply2'] : $pfb['unireply'];
 			if ($bg != 'none') {
 				$style_bg = "style=\"background-color:{$bg}\"";
@@ -3197,6 +3211,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			</tr>");
 	}
 	else {
+		// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
 		switch($rtype) {
 			case 'Block':
 				$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['uniblock2'] : $pfb['uniblock'];

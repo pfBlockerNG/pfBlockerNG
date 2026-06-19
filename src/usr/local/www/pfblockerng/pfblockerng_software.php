@@ -50,7 +50,7 @@ $pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
 
 // The "Check for new versions" setting (default ENABLED). Persisted as 'on'/'off'; an unset
 // value (never saved) reads as enabled via pfb_software_check_enabled().
-$pfb_sw_check_raw = config_get_path('installedpackages/pfblockerng/config/0/pfb_software_check', null);
+$pfb_sw_check_raw = PfbConfig::read('pfb_software_check');
 $pfb_sw_check	= pfb_software_check_enabled(is_string($pfb_sw_check_raw) ? $pfb_sw_check_raw : null);
 
 
@@ -113,7 +113,7 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 // unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
 // explicit 'off' is the user opting out.
 if ($_POST && isset($_POST['save'])) {
-	config_set_path('installedpackages/pfblockerng/config/0/pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off');
+	PfbConfig::write('pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off');
 	write_config('[pfBlockerNG] save Software settings');
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;
