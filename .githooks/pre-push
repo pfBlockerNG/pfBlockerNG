@@ -1,15 +1,17 @@
 #!/bin/sh
-# Enforces tag naming convention before any push.
+# Enforces the release tag scheme before any push reaches the remote.
+# Single source of truth for the scheme: scripts/release-version.sh.
 #
 # Rules:
-#   - vX.X.X        -> commit must be reachable from origin/main
-#   - vX.X.X-devel  -> commit must be reachable from origin/devel
-#                      but NOT yet merged into origin/main
-#   - Neither branch -> rejected
+#   - vX.Y.Z              -> commit must be reachable from origin/main   (stable)
+#   - vX.Y.Z.aW|.bW|.rcW  -> commit on origin/devel but NOT origin/main  (prerelease)
+#   - neither branch, or a malformed version tag -> rejected
 #
 # Enable: git config core.hooksPath .githooks
 
 z40="0000000000000000000000000000000000000000"
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="."
+CLASSIFY="${ROOT}/scripts/release-version.sh"
 
 while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
     # Only inspect tag pushes
@@ -20,7 +22,7 @@ while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
 
     tag="${remote_ref#refs/tags/}"
 
-    # Only enforce versioned tags (vX.X.X or vX.X.X-*)
+    # Only enforce versioned tags (vX.Y.Z and vX.Y.Z.<suffix>)
     case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) continue ;; esac
 
     # Dereference annotated tags to the underlying commit
@@ -38,23 +40,20 @@ while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
         exit 1
     fi
 
-    # A commit merged into main must use the plain vX.X.X form
-    if [ "$on_main" = 1 ]; then
-        case "$tag" in
-            *-devel)
-                echo "error: '$tag' points to a commit on 'main'; use vX.X.X (drop the -devel suffix)" >&2
-                exit 1
-                ;;
-        esac
-    # A commit only on devel must use the vX.X.X-devel form
-    elif [ "$on_devel" = 1 ]; then
-        case "$tag" in
-            *-devel) ;;
-            *)
-                echo "error: '$tag' points to a commit only on 'devel'; use vX.X.X-devel" >&2
-                exit 1
-                ;;
-        esac
+    # A commit merged into main must be a STABLE tag; a commit only on devel must
+    # be a PRERELEASE tag. Delegate the shape + branch<->channel check to the
+    # single source of truth so the hook and the workflow never drift.
+    if [ "$on_main" = 1 ]; then branch="main"; else branch="devel"; fi
+
+    if [ ! -f "$CLASSIFY" ]; then
+        echo "error: ${CLASSIFY} not found — cannot validate the tag scheme" >&2
+        exit 1
+    fi
+
+    if ! err=$(sh "$CLASSIFY" "$tag" "$branch" 2>&1 >/dev/null); then
+        echo "error: tag '$tag' is not valid for branch '$branch':" >&2
+        printf '%s\n' "$err" | sed 's/^/       /' >&2
+        exit 1
     fi
 done
 

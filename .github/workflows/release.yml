@@ -1,19 +1,32 @@
 name: Release
 
-# Triggered when a versioned tag (v*) is pushed to any branch.
-# Tags pushed from 'devel' become pre-releases; tags from 'main' become
-# full releases.  After publishing the GitHub Release, the matching port's
-# PORTVERSION + GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
+# Triggered when a versioned tag is pushed.  Tag scheme (single source of truth:
+# scripts/release-version.sh):
+#   * vX.Y.Z              -> STABLE release    (from 'main')  -> full release
+#   * vX.Y.Z.aW|.bW|.rcW  -> ALPHA/BETA/RC      (from 'devel') -> pre-release
+# After publishing the GitHub Release, the matching port's PORTVERSION +
+# GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
 # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github) — the build-input branch.
 # Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
 #
-# workflow_dispatch allows a dry-run (point at an existing tag via
-# workflow_dispatch + the tag ref).
+# workflow_dispatch is a DRY-RUN harness: pass the tag to simulate; with
+# dry_run=true (default) it validates the scheme, builds the .pkg artifacts and
+# renders the release body, but publishes NOTHING (no Release, no port bump, no
+# pkg-repo poke, no Worker deploy) — for end-to-end validation before a real tag.
 on:
   push:
     tags:
-      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'      # stable: vX.Y.Z (from main)
+      - 'v[0-9]*.[0-9]*.[0-9]*.*'    # prerelease: vX.Y.Z.aW|.bW|.rcW (from devel)
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to simulate, e.g. v4.0.0.a1 (REQUIRED for a dispatch run)."
+        required: true
+      dry_run:
+        description: "true (default) = validate + build but publish NOTHING."
+        required: false
+        default: "true"
 
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; verify-checks: checks:read to read the
@@ -36,6 +49,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A workflow_dispatch run is the dry-run harness (no real tag / commit
+          # gate to assert) — skip the commit-check requirement for it.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Dry-run dispatch: skipping the 'All tests passed' commit gate."
+            exit 0
+          fi
           SHA="${{ github.sha }}"
           REPO="${{ github.repository }}"
 
@@ -102,16 +121,18 @@ jobs:
 
       - name: Detect pkg channel from tag
         id: channel
-        # Tags from devel are *-devel; tags from main have no -devel suffix.
-        # The channel drives which port we build: devel or stable.
+        # The channel drives which port we build (devel vs stable). Classified by
+        # scripts/release-version.sh: vX.Y.Z.aW|.bW|.rcW -> devel, vX.Y.Z -> stable.
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          case "$TAG" in
-            *-devel) PKG_CHANNEL="devel" ;;
-            *)       PKG_CHANNEL="stable" ;;
-          esac
-          echo "pkg_channel=${PKG_CHANNEL}" >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG}  →  pkg channel: ${PKG_CHANNEL}"
+          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$REF_NAME"; fi
+          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          eval "$OUT"
+          echo "pkg_channel=${channel}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}  →  pkg channel: ${channel}"
 
       - name: Read matrix from ci-metadata
         id: matrices
@@ -150,9 +171,12 @@ jobs:
       contents: write
 
     outputs:
+      tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
       branch: ${{ steps.meta.outputs.branch }}
+      portversion: ${{ steps.meta.outputs.portversion }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
 
     steps:
       - uses: actions/checkout@v6
@@ -161,90 +185,147 @@ jobs:
 
       - name: Gather release metadata
         id: meta
+        # Validate + classify the tag via the single source of truth
+        # (scripts/release-version.sh). A push is a real release (dry_run=false,
+        # branch enforced); a workflow_dispatch is the dry-run harness (dry_run
+        # defaults true, branch check skipped since the tag may not exist yet).
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_DRY: ${{ github.event.inputs.dry_run }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-          # Determine which branch this tag was created from
-          BRANCH=$(git branch -r --contains "$TAG" \
-            | grep -v HEAD \
-            | sed 's|origin/||' \
-            | grep -E '^(main|devel)$' \
-            | head -1)
-          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
-
-          # Enforce tag naming convention per branch
-          case "$BRANCH" in
-            devel)
-              case "$TAG" in
-                *-devel) ;;
-                *) echo "Error: tags from 'devel' must match vX.X.X-devel (got '${TAG}')"; exit 1 ;;
-              esac
-              ;;
-            main)
-              case "$TAG" in
-                *-devel) echo "Error: tags from 'main' must not have -devel suffix (got '${TAG}')"; exit 1 ;;
-              esac
-              ;;
-          esac
-
-          # Tags from 'devel' are pre-releases
-          if [ "$BRANCH" = "devel" ]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            DRY_RUN="${INPUT_DRY:-true}"
+            TAG="$INPUT_TAG"
+            [ -n "$TAG" ] || { echo "::error::workflow_dispatch requires the 'tag' input (e.g. v4.0.0.a1)"; exit 1; }
+            BRANCH=""   # simulation: skip branch<->channel enforcement
           else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            DRY_RUN="false"
+            TAG="$REF_NAME"
+            BRANCH=$(git branch -r --contains "$TAG" \
+              | grep -v HEAD | sed 's|origin/||' | grep -E '^(main|devel)$' | head -1)
           fi
 
-      - name: Find previous tag on the same branch
-        id: prev_tag
-        run: |
-          BRANCH="${{ steps.meta.outputs.branch }}"
-          CURRENT="${GITHUB_REF_NAME}"
+          OUT=$(sh scripts/release-version.sh "$TAG" "$BRANCH") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
 
-          # All tags reachable from this branch, sorted by version descending,
-          # excluding the current tag
-          PREV=$(git tag --sort=-version:refname \
-            | grep -v "^${CURRENT}$" \
-            | while read t; do
-                git merge-base --is-ancestor "$t" "origin/${BRANCH}" 2>/dev/null \
-                  && echo "$t" && break
-              done)
-
-          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          CURRENT="${GITHUB_REF_NAME}"
-          PREV="${{ steps.prev_tag.outputs.tag }}"
-
-          if [ -n "$PREV" ]; then
-            RANGE="${PREV}..${CURRENT}"
-            HEADER="Changes since ${PREV}"
-          else
-            RANGE="${CURRENT}"
-            HEADER="Initial release"
+          # Map an empty branch (dispatch) to the channel's canonical branch so the
+          # downstream port-bump picks the right port path even in a dry-run.
+          if [ -z "$BRANCH" ]; then
+            [ "$channel" = "devel" ] && BRANCH="devel" || BRANCH="main"
           fi
-
-          BODY=$(git log "$RANGE" \
-            --pretty=format:"- %s" \
-            --no-merges \
-            -- \
-            src/ scripts/ \
-            | head -50)
 
           {
-            echo "body<<EOF"
-            echo "## ${HEADER}"
-            echo ""
-            echo "${BODY}"
-            echo "EOF"
+            echo "tag=${TAG}"
+            echo "version=${version}"
+            echo "channel=${channel}"
+            echo "prerelease=${prerelease}"
+            echo "portversion=${portversion}"
+            echo "branch=${BRANCH}"
+            echo "dry_run=${DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
+          echo "Tag ${TAG}: channel=${channel} prerelease=${prerelease} portversion=${portversion} dry_run=${DRY_RUN}"
+
+      - name: Find the previous release tag (compare base)
+        id: prev_tag
+        # The previous release = the highest-version tag that is an ANCESTOR of the
+        # current release's commit (a real compare base, robust to channel renames
+        # and rebased history). For a dispatch dry-run the "commit" is the checked-out
+        # ref HEAD; for a push it is the tag.
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then COMMIT="HEAD"; else COMMIT="$TAG"; fi
+          # Prefer the highest-version tag that is an ANCESTOR of this commit (a true
+          # predecessor in history). `|| true` guards each stage so an empty tag list /
+          # all-excluded grep does not trip the default `pipefail`.
+          PREV=$(git tag --sort=-version:refname \
+            | { grep -v "^${TAG}$" || true; } \
+            | while read -r t; do
+                git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null && { echo "$t"; break; }
+              done) || true
+          # Fallback (e.g. the first tag of a rebased series, whose predecessor is no
+          # longer an ancestor): the next-lower version tag overall. A GitHub compare
+          # link is still meaningful across diverged history.
+          if [ -z "$PREV" ]; then
+            PREV=$( { git tag; echo "$TAG"; } | sort -V -r | uniq \
+              | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
+          fi
+          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
+          echo "Previous release tag: ${PREV:-<none>}"
+
+      - name: Render release body
+        id: changelog
+        # Body = Claude-authored highlights + a link to the FULL commit list +
+        # a collapsed commit summary. Highlights come from a hand-written
+        # .github/release-notes/<tag>.md when present (the default, $0, Claude-
+        # authored per release); else, if an ANTHROPIC_API_KEY secret is set, a
+        # best-effort Haiku draft from the commit range; else a placeholder.
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PREV: ${{ steps.prev_tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -u
+          if [ "$EVENT" = "workflow_dispatch" ]; then HEAD_REF="HEAD"; else HEAD_REF="$TAG"; fi
+
+          # Range for the commit list + the full-changelog link.
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..${HEAD_REF}"
+            FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](https://github.com/${REPO}/compare/${PREV}...${TAG})"
+          else
+            RANGE="$HEAD_REF"
+            FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](https://github.com/${REPO}/commits/${TAG})"
+          fi
+
+          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:"- %s" -- src/ scripts/)
+          COUNT=$(printf '%s\n' "$COMMITS" | grep -c '^- ' || true)
+
+          # Resolve the highlights section.
+          NOTES_FILE=".github/release-notes/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            HIGHLIGHTS=$(cat "$NOTES_FILE")
+            echo "Using hand-written highlights: ${NOTES_FILE}"
+          elif [ -n "${ANTHROPIC_API_KEY}" ]; then
+            echo "No ${NOTES_FILE}; drafting highlights with Haiku from ${RANGE}."
+            PROMPT=$(printf 'Write concise GitHub release-note highlights (markdown, grouped by theme, no preamble) for pfBlockerNG %s, summarizing the most important features and fixes from these commit subjects:\n\n%s' "$TAG" "$COMMITS")
+            REQ=$(jq -n --arg m "claude-haiku-4-5" --arg p "$PROMPT" \
+              '{model:$m,max_tokens:1024,messages:[{role:"user",content:$p}]}')
+            HIGHLIGHTS=$(curl -sS https://api.anthropic.com/v1/messages \
+              -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              -d "$REQ" | jq -r '.content[0].text // empty') || HIGHLIGHTS=""
+            [ -n "$HIGHLIGHTS" ] || HIGHLIGHTS="_Highlights unavailable; see the full changelog below._"
+          else
+            HIGHLIGHTS="_Highlights not yet written. See the full changelog below._"
+          fi
+
+          # Assemble the body once in-shell, then emit it to BOTH the step output
+          # (consumed by the publish step) and the run summary (so a dry-run shows
+          # exactly what would be published). Built from shell vars only — never by
+          # templating the body back into a script.
+          BODY=$(printf '## Highlights\n\n%s\n\n%s\n\n<details><summary>All commits (%s)</summary>\n\n%s\n\n</details>\n' \
+            "$HIGHLIGHTS" "$FULL_LINK" "$COUNT" "$COMMITS")
+
+          {
+            echo "body<<__RELEASE_BODY__"
+            printf '%s\n' "$BODY"
+            echo "__RELEASE_BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Rendered release body — ${TAG}"
+            echo ""
+            printf '%s\n' "$BODY"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build source archive
         run: |
-          TAG="${GITHUB_REF_NAME}"
           VERSION="${{ steps.meta.outputs.version }}"
           ARCHIVE="pfBlockerNG-${VERSION}.tar.gz"
 
@@ -255,9 +336,33 @@ jobs:
             src/
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
+      - name: Dry-run validation summary (no publish)
+        if: ${{ steps.meta.outputs.dry_run == 'true' }}
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          PORTVERSION: ${{ steps.meta.outputs.portversion }}
+          PREV: ${{ steps.prev_tag.outputs.tag }}
+        run: |
+          {
+            echo "## Dry-run release validation — ${TAG}"
+            echo ""
+            echo "Publishing is SKIPPED (dry_run=true). The rendered body is shown above."
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| channel | ${CHANNEL} |"
+            echo "| prerelease | ${PRERELEASE} |"
+            echo "| PORTVERSION | ${PORTVERSION} |"
+            echo "| previous tag | ${PREV:-<none>} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish GitHub Release
+        if: ${{ steps.meta.outputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
           name: pfBlockerNG ${{ steps.meta.outputs.version }}
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
@@ -384,10 +489,10 @@ jobs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
     needs: [release, build-pkgs-portable, read-matrix]
-    # Run whenever release succeeded, regardless of the build outcome. A
-    # build-pkgs-portable failure surfaces as a red leg but does not prevent
-    # attach-pkgs from completing with a warning if nothing built.
-    if: always() && needs.release.result == 'success'
+    # Run whenever release succeeded AND it was a real publish (not a dry-run);
+    # regardless of the build outcome. A build-pkgs-portable failure surfaces as a
+    # red leg but does not prevent attach-pkgs from completing with a warning.
+    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: write
 
@@ -444,7 +549,7 @@ jobs:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
     needs: [release]
-    if: always() && needs.release.result == 'success'
+    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
     steps:
@@ -474,7 +579,7 @@ jobs:
   deploy-worker:
     name: Deploy Cloudflare routing Worker
     needs: [release]
-    if: always() && needs.release.result == 'success'
+    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
     uses: ./.github/workflows/deploy-worker.yml
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -491,6 +596,7 @@ jobs:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
     needs: release
+    if: needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
 
@@ -513,24 +619,20 @@ jobs:
         # template-inject into this shell.
         env:
           BRANCH: ${{ needs.release.outputs.branch }}
-          VERSION: ${{ needs.release.outputs.version }}   # e.g. 3.2.16-devel | 3.2.16
+          TAG: ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.a1 | v4.0.0
+          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.a1 | 4.0.0 (pkg-safe)
         run: |
           set -eu
-          TAG="v${VERSION}"
-          # Strict branch-aware version shape: devel = X.Y.Z-devel, stable = X.Y.Z.
-          # Fail fast on any other shape (e.g. -rc1/-alpha) so PORTVERSION below can
-          # never keep a '-' (an invalid pkg version). Belt-and-braces with release's
-          # meta gate, which only checks the -devel suffix, not the rest of the string.
+          # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
+          # in the `release` job; re-assert the shape here as belt-and-braces so a
+          # malformed value can never reach the Makefile.
           if [ "$BRANCH" = "devel" ]; then
-            printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-devel$' || {
-              echo "::error::invalid devel version/tag: ${TAG}"; exit 1; }
+            printf '%s' "$PORTVERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.(a|b|rc)[0-9]+$' || {
+              echo "::error::invalid devel PORTVERSION/tag: ${TAG}"; exit 1; }
           else
-            printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
-              echo "::error::invalid stable version/tag: ${TAG}"; exit 1; }
+            printf '%s' "$PORTVERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
           fi
-          # PORTVERSION must be pkg-safe (no '-'): the channel lives in the port's
-          # PKGNAMESUFFIX, not the version. Strip a trailing -devel.
-          PORTVERSION="${VERSION%-devel}"
 
           if [ "$BRANCH" = "devel" ]; then
             PORT_PATH="net/pfSense-pkg-pfBlockerNG-devel"
