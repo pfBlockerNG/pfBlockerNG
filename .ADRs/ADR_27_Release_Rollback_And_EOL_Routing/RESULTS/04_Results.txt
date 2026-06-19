@@ -1,8 +1,8 @@
 ADR-27 Phase 4 Results — Rollback smoke (live VM, -m repo)
 ===========================================================
 
-Status: COMPLETE (test written + gates green) — go-ahead for Phase 5.
-        Live dispatch REQUIRED to prove the premise: see dispatch section below.
+Status: COMPLETE — test written, off-box gates green, AND the live -m repo dispatch is
+        now GREEN (run 27802532591, CE leg) after the corrections below. Premise proven.
 
 ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=5
 
@@ -85,10 +85,10 @@ Catalog mechanics
   at a tmp dir holding both .pkg files; the generator writes two NDJSON
   objects to packagesite.yaml (one per (name, version)) — the same multi-
   version path the Phase 1/2 retain_by_channel helper enables in production.
-- The catalog is FLAT (no --catalog-name; produces <ABI>/ directly at
-  PORTABLE_REPO_ROOT/<ABI>/).  This is the same layout used by
-  test_portable_catalog_is_accepted and test_portable_catalog_dedups_*
-  — consistent with the existing portable fidelity cases.
+- build_repo_via_portable drives build-repo-portable.py with --catalog-name release
+  (nesting the catalog under <out>/release/<ABI>/), then flattens that to the <ABI>/
+  layout the repo conf serves — the same helper used by test_portable_catalog_is_accepted
+  and test_portable_catalog_dedups_*, consistent with the existing portable fidelity cases.
 
 ------------------------------------------------------------------------
 Off-box gate outputs

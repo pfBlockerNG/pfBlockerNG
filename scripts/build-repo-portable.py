@@ -627,6 +627,14 @@ def _retain_newest(pkg_paths: list[Path], keep: int) -> list[Path]:
     return [path for _nv, (path, _mt) in ordered[:keep]]
 
 
+def _non_negative_int(value: str) -> int:
+    """argparse ``type`` for the ``--release-keep-*`` flags: reject a negative count up front."""
+    iv = int(value)
+    if iv < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return iv
+
+
 def retain_by_channel(
     pkg_paths: list[Path],
     *,
@@ -645,9 +653,18 @@ def retain_by_channel(
       * ``keep >= len(bucket)`` → keep all (no-op).
       * ``keep < len(bucket)`` → prune to the ``keep`` newest.
 
+    ``keep_devel`` / ``keep_stable`` must be ``>= 0``; a negative value is rejected (it would
+    otherwise flow into ``_retain_newest``'s ``[:keep]`` slice and silently drop the newest
+    builds — fail fast instead).
+
     Returns the kept paths in a deterministic stable order (devel first, then stable, then
     nightly; within each bucket newest-first as returned by ``_retain_newest``).
     """
+    if keep_devel < 0 or keep_stable < 0:
+        raise BuildRepoError(
+            f"release keep values must be >= 0 (got keep_devel={keep_devel}, keep_stable={keep_stable})"
+        )
+
     devel: list[Path] = []
     stable: list[Path] = []
     nightly: list[Path] = []
@@ -936,7 +953,7 @@ def main(argv: list[str]) -> int:
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
     g_matrix.add_argument(
         "--release-keep-devel",
-        type=int,
+        type=_non_negative_int,
         default=1,
         dest="release_keep_devel",
         help=(
@@ -948,7 +965,7 @@ def main(argv: list[str]) -> int:
     )
     g_matrix.add_argument(
         "--release-keep-stable",
-        type=int,
+        type=_non_negative_int,
         default=1,
         dest="release_keep_stable",
         help=(

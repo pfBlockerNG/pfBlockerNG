@@ -39,9 +39,11 @@ Version-order function reused: ``_retain_newest(bucket, keep)``
 No call-site change
 ------------------------------------------------------------------------
 
-``build_repo_matrix`` is NOT modified. The helper is defined and tested only.
-``git diff HEAD`` confirms: only additions (the new function + 8 test functions +
-a private helper ``_make_pkg_channel``). Catalog output is byte-identical to before.
+``build_repo_matrix`` is NOT modified BY PHASE 1. The helper is defined and tested only.
+The Phase-1 commit diff confirms: only additions (the new function + 8 test functions +
+a private helper ``_make_pkg_channel``); catalog output is byte-identical to before.
+(Scope note: Phase 2 DOES extend ``build_repo_matrix`` to call this helper — so this
+no-modification claim is about the Phase-1 snapshot, not branch HEAD.)
 
 ------------------------------------------------------------------------
 Tests added (tests/test_build_repo_portable.py)
