@@ -1794,17 +1794,19 @@ def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
 
 
 def pkg_install_pinned(vm: SmokeVM, version: str, *, timeout: float = 600.0) -> subprocess.CompletedProcess[str]:
-    """``pkg install -y <name>-<version>`` — the PINNED rollback command (ADR §2.1 rollback UX).
+    """``pkg install -fy <name>-<version>`` — the PINNED rollback command (ADR §2.1 rollback UX).
 
     This is the exact CLI command documented in README and scripts/README.md: installs the
-    named package at an EXPLICIT version from the multi-version catalog.  If the version
-    is not in the catalog, pkg returns non-zero.  Dep resolution against the enabled repos
-    runs normally — the catalog-provided dep metadata is honoured, not bypassed (unlike
-    ``pkg add <raw-url>`` which skips catalog dep resolution).  A non-zero exit raises with
-    the full output.
+    named package at an EXPLICIT version from the multi-version catalog.  ``-f`` (force) is
+    REQUIRED to roll *back*: without it, ``pkg install`` is a no-op when a NEWER build of the
+    same package is already installed (pkg never downgrades by default) — the documented
+    FreeBSD downgrade idiom.  If the version is not in the catalog, pkg returns non-zero.  Dep
+    resolution against the enabled repos runs normally — the catalog-provided dep metadata is
+    honoured, not bypassed (unlike ``pkg add <raw-url>`` which skips catalog dep resolution).
+    A non-zero exit raises with the full output.
     """
     pinned_name = f"{PKG_NAME}-{version}"
-    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", pinned_name, timeout=timeout)
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-fy", pinned_name, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             f"pkg install {pinned_name} failed: rc={result.returncode}"
@@ -1845,7 +1847,7 @@ def test_release_rollback_to_retained_older_version(repo_vm: SmokeVM, tmp_path: 
       Then NEWEST-WINS: ``<V>_hi`` is active, origin is our repo, RUN_DEPENDS resolved.
         (This asserts the before-state for the rollback step — proves the catalog serves
         the highest version by default and that the after-rollback state is a real regression.)
-    When ``pkg install -y <name>-<V>_lo`` (PINNED older version) runs,
+    When ``pkg install -fy <name>-<V>_lo`` (PINNED older version, ``-f`` forces the downgrade) runs,
       Then ROLLBACK: ``<V>_lo`` is active, origin is still our repo, no "Missing dependency"
         (catalog dep resolution worked; the premise holds).
         (This is the REJECT gate: if this install fails, Part 1 must be downgraded to docs-only.)

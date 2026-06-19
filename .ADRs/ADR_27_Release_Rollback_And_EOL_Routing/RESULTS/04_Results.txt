@@ -142,3 +142,27 @@ What is NOT done (Phase 5 scope)
 Phase 5 adds the landing-page "Older releases" disclosure (gen_landing.py)
 and the README/docs CLI rollback procedure update.  No gen_landing.py or
 README changes in this phase.
+
+------------------------------------------------------------------------
+CORRECTION (post-live-dispatch) — rollback command needs `-f`
+------------------------------------------------------------------------
+
+The first live `-m repo` dispatch proved the documented rollback command was
+incomplete. Two empirical findings from the CE leg:
+
+1. Forged-version ordering: `pkg` sorts a non-numeric PORTREVISION suffix
+   ALPHABETICALLY, so the original `_lo`/`_hi` labels inverted (`lo` > `hi`).
+   Fixed to numeric `_1` (lower) / `_9` (higher), matching the existing
+   `_1`->`_9` upgrade cases in the same file.
+
+2. Downgrade needs force: `pkg install -y <name>-<older>` is a NO-OP when a
+   NEWER build is already installed (pkg never downgrades by default; rc=0,
+   version unchanged). The live VM showed the box stayed at `_9` after the
+   pinned `_1` install. The correct FreeBSD downgrade idiom is
+   `pkg install -f <name>-<version>`. Dep resolution still runs from the
+   catalog (the §7 premise HOLDS — this is NOT a reject; only the documented
+   command was missing `-f`).
+
+Applied: `pkg_install_pinned` now runs `pkg install -fy <name>-<version>`;
+ADR §2.1 rollback UX, §6 Phase 4/5, §7, README.md, and scripts/README.md all
+document `pkg install -f`. Re-dispatched `-m repo` to confirm green.

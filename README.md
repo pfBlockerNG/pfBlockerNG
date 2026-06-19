@@ -155,12 +155,14 @@ the release catalog lists **multiple versions** of the stable and devel packages
 pin to any retained version by specifying it explicitly:
 
 ```sh
-pkg install pfSense-pkg-pfBlockerNG-devel-<version>   # pin to an older devel build
-pkg install pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable build
+pkg install -f pfSense-pkg-pfBlockerNG-devel-<version>   # pin to an older devel build
+pkg install -f pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable build
 ```
 
-`pkg install <name>` with no version always resolves the **highest** version listed in the
-catalog (newest-wins). Only the configured N most recent devel releases and M most recent
+The `-f` (force) flag is **required to roll back**: `pkg install` never downgrades over a
+newer already-installed build, so without it the command is a no-op. Dependencies are still
+resolved from the catalog (unlike `pkg add <url>`). `pkg install <name>` with no version
+always resolves the **highest** version listed in the catalog (newest-wins). Only the configured N most recent devel releases and M most recent
 stable releases are retained; builds older than that window are no longer in the catalog. The
 **repository landing page** ([pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg))
 shows an "Older releases" disclosure per pfSense edition listing the retained versions with
