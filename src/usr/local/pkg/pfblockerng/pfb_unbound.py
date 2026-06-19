@@ -2078,7 +2078,7 @@ def get_tld(qstate: module_qstate) -> str:
         # A qname carrying invalid UTF-8 bytes makes Unbound's qname_list access raise
         # while decoding the labels; swallow it and fall back to an empty TLD rather than
         # crashing the Python module on that query (mirrors get_q_name_qstate).
-        sys.stderr.write("[pfBlockerNG]: Failed get_tld: {}".format(e))
+        sys.stderr.write("[pfBlockerNG]: Failed get_tld: {}\n".format(e))
     return tld
 
 
