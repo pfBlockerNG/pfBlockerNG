@@ -167,8 +167,26 @@ class RequireConfigGatewaySniff implements Sniff
 		// literal (no variable interpolation — $tokens will be T_CONSTANT_ENCAPSED_STRING
 		// for single-quoted; double-quoted with no interpolation also tokenises as a
 		// single T_CONSTANT_ENCAPSED_STRING or T_DOUBLE_QUOTED_STRING).
-		$firstArg = $phpcsFile->findNext(T_WHITESPACE, $openParen + 1, NULL, TRUE);
-		if ($firstArg === FALSE) {
+		//
+		// Skip whitespace AND comment tokens so that a comment between the opening
+		// parenthesis and the first argument (e.g. config_get_path(/* note */ '...'))
+		// does not evade the sniff (false negative).
+		$skipTokens = [
+			T_WHITESPACE,
+			T_COMMENT,
+			T_DOC_COMMENT,
+			T_DOC_COMMENT_OPEN_TAG,
+			T_DOC_COMMENT_CLOSE_TAG,
+			T_DOC_COMMENT_STAR,
+			T_DOC_COMMENT_WHITESPACE,
+			T_DOC_COMMENT_STRING,
+			T_DOC_COMMENT_TAG,
+		];
+		$firstArg = $openParen + 1;
+		while ($firstArg < count($tokens) && in_array($tokens[$firstArg]['code'], $skipTokens, TRUE)) {
+			$firstArg++;
+		}
+		if ($firstArg >= count($tokens)) {
 			return;
 		}
 
