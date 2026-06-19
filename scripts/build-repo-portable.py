@@ -89,6 +89,13 @@
 #     --routing-entries '[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]' \
 #     --routing-json-path routing.json
 #
+# RELEASE RETENTION (ADR-27 Phase 2)
+#   --release-keep-devel N   retain the N newest devel releases per ABI (default 1 = latest-only)
+#   --release-keep-stable M  retain the M newest stable releases per ABI (default 1 = latest-only)
+#   --release-extra-pkgs <path>  (repeatable) pre-built older-release .pkg to fold in alongside
+#     the fresh build; publish.yml downloads these from GitHub Releases and passes them here.
+#   Defaults (N=M=1) reproduce today's behaviour; set higher values to enable rollback.
+#
 # This is a developer tool (not shipped in release archives). See --help.
 
 from __future__ import annotations
@@ -717,6 +724,9 @@ def build_repo_matrix(
     nightly_keep: int = 14,
     nightly_pkgversion: Callable[[dict], str] | None = None,
     build_nightly: bool = True,
+    release_keep_devel: int = 1,
+    release_keep_stable: int = 1,
+    release_extra_pkgs: list[Path] | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant/arch repository tree + routing.json from the version matrix.
@@ -725,7 +735,11 @@ def build_repo_matrix(
     php_version, py_flavor, status):
 
       * RELEASE subtree ``release/<varver>/<arch>/`` — the devel .pkg, plus the stable
-        .pkg built from ``stable_tag`` (skipped when no stable tag exists), in one catalog.
+        .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
+        folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
+        the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
+        Defaults (1/1) reproduce today's latest-only behaviour; setting higher values
+        enables rollback by retaining older releases in the catalog.
       * NIGHTLY subtree ``nightly/<varver>/<arch>/`` — the freshly built nightly folded in
         with any pre-existing nightlies in that subtree (cache-restored by the caller),
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
@@ -752,7 +766,12 @@ def build_repo_matrix(
         varver = catalog_name_from_version(version, variant)  # e.g. "ce-2.8"
         common = dict(abi=abi, php=php, py_flavor=py_flavor, varver=varver, arch=arch, **builder_kwargs)
 
-        # --- release subtree: devel + (optional) stable, one channel-group catalog ---
+        # --- release subtree: devel + (optional) stable + (optional) older releases ---
+        # The freshly built devel (+ stable when a stable_tag exists) are always present.
+        # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
+        # Releases by publish.yml); together they form the full candidate pool, pruned via
+        # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
+        # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
         release_dir = out_dir / "release" / varver / arch
         with tempfile.TemporaryDirectory() as td:
             staging = Path(td)
@@ -761,9 +780,17 @@ def build_repo_matrix(
                 release_pkgs.append(
                     builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
                 )
-            _emit_catalog_from_paths(release_dir, release_pkgs)
+            # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
+            # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
+            all_release_pkgs = release_pkgs + list(release_extra_pkgs or [])
+            kept_release = retain_by_channel(
+                all_release_pkgs,
+                keep_devel=release_keep_devel,
+                keep_stable=release_keep_stable,
+            )
+            n_release = _emit_catalog_from_paths(release_dir, kept_release)
         built.append(str(release_dir))
-        sys.stderr.write(f"==> release catalog {release_dir} ({len(release_pkgs)} package(s))\n")
+        sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
 
         # --- nightly subtree: fold the new build in with retained prior nightlies ---
         if build_nightly:
@@ -908,6 +935,41 @@ def main(argv: list[str]) -> int:
     )
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
     g_matrix.add_argument(
+        "--release-keep-devel",
+        type=int,
+        default=1,
+        dest="release_keep_devel",
+        help=(
+            "devel releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
+            "Set >1 to enable rollback: the release/ catalog then carries multiple devel versions so a user "
+            "can pkg install <name>-devel-<older-version>. The publish job must supply the older .pkg via "
+            "--release-extra-pkgs."
+        ),
+    )
+    g_matrix.add_argument(
+        "--release-keep-stable",
+        type=int,
+        default=1,
+        dest="release_keep_stable",
+        help=(
+            "stable releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
+            "Set >1 to enable rollback: the release/ catalog then carries multiple stable versions. "
+            "The publish job must supply the older .pkg via --release-extra-pkgs."
+        ),
+    )
+    g_matrix.add_argument(
+        "--release-extra-pkgs",
+        action="append",
+        default=[],
+        dest="release_extra_pkgs",
+        metavar="PATH",
+        help=(
+            "pre-built older-release .pkg file to fold into the release catalog alongside the fresh build "
+            "(repeatable; e.g. downloaded from GitHub Releases by publish.yml). "
+            "Pruned by --release-keep-devel / --release-keep-stable after folding."
+        ),
+    )
+    g_matrix.add_argument(
         "--annotate",
         action="append",
         default=[],
@@ -955,6 +1017,7 @@ def main(argv: list[str]) -> int:
                 ap.error(f"--annotate must be K=V (got {item!r})")
             k, v = item.split("=", 1)
             annotate[k] = v
+        extra_pkgs = [Path(p) for p in args.release_extra_pkgs] if args.release_extra_pkgs else None
         try:
             build_repo_matrix(
                 matrix,
@@ -966,6 +1029,9 @@ def main(argv: list[str]) -> int:
                 nightly_keep=args.nightly_keep,
                 nightly_pkgversion=(lambda _e: pkgver) if pkgver else None,
                 build_nightly=not args.no_nightly,
+                release_keep_devel=args.release_keep_devel,
+                release_keep_stable=args.release_keep_stable,
+                release_extra_pkgs=extra_pkgs,
                 annotate=annotate or None,
             )
         except (BuildRepoError, subprocess.CalledProcessError) as e:
