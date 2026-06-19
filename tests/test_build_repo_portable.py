@@ -1427,3 +1427,193 @@ def test_retain_by_channel_empty_channel_is_noop(tmp_path: Path) -> None:
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
     assert kept_nv == {("pfBlockerNG", "2.0.1"), ("pfBlockerNG", "2.0.2")}
     assert len(kept) == 2
+
+
+# --------------------------------------------------------------------------- #
+# ADR-27 Phase 2: release-subtree retention in build_repo_matrix
+#
+# These tests pin the retention behaviour of the release subtree:
+#   * defaults (release_keep_devel=1, release_keep_stable=1) reproduce today's
+#     latest-only output — the BEFORE state (inert change)
+#   * with N=M=3 and 4 of each channel provided, the catalog lists exactly the
+#     newest 3 of each — the 4th is absent (AFTER state)
+#   * newest-wins: pkg install <name> (no version) still gets the highest version
+#     across all retained entries (contract §2.2.2)
+#   * generator drift pins (conf bytes) still hold
+# --------------------------------------------------------------------------- #
+
+
+def _catalog_objects(catalog_pkg: Path) -> list[dict]:
+    """Return all packagesite NDJSON objects from a catalog .pkg."""
+    raw = _read_member(catalog_pkg, "packagesite.yaml").decode()
+    return [json.loads(ln) for ln in raw.splitlines() if ln]
+
+
+def _versions_in_release(catalog_pkg: Path) -> set[str]:
+    return {o["version"] for o in _catalog_objects(catalog_pkg)}
+
+
+def _names_versions_in_release(catalog_pkg: Path) -> set[tuple[str, str]]:
+    return {(o["name"], o["version"]) for o in _catalog_objects(catalog_pkg)}
+
+
+def test_release_default_is_latest_only(tmp_path: Path) -> None:
+    """Defaults (release_keep_devel=1, release_keep_stable=1) produce exactly one devel +
+    one stable in the release catalog — the BEFORE state (inert change, no rollback).
+
+    Scenario: default keep values with devel + stable
+      Given build_repo_matrix with NO release_extra_pkgs and default keep values
+        And a stable tag is set (so one stable is built)
+      When the matrix runs
+      Then the release catalog lists exactly ONE devel version (before-state)
+       And exactly ONE stable version (before-state)
+       And the total entry count is 2
+    """
+    out = tmp_path / "site"
+
+    # Before-state: no release dir yet.
+    assert not (out / "release").exists()
+
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder, stable_tag="v3.2.15")
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert rel.is_file()
+
+    objs = _catalog_objects(rel)
+    names = {o["name"] for o in objs}
+
+    # Exactly one devel + one stable (latest-only — the before/default state).
+    assert "pfBlockerNG-devel" in names
+    assert "pfBlockerNG" in names
+    assert len(objs) == 2
+
+
+def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
+    """With release_keep_devel=3, release_keep_stable=3 and 4 of each provided,
+    the catalog lists the newest 3 of each channel — the 4th (oldest) is absent.
+
+    Scenario: rollback depth 3, 4 candidates per channel
+      Given 4 pre-built devel pkgs (versions 3.0.1..3.0.4)
+        And 4 pre-built stable pkgs (versions 2.0.1..2.0.4)
+        And release_keep_devel=3, release_keep_stable=3
+      When build_repo_matrix runs with those extra pkgs + the fresh build
+      Then devel: versions 3.0.2, 3.0.3, 3.0.4 are in the catalog
+       And devel: version 3.0.1 (the oldest) is NOT in the catalog
+       And stable: versions 2.0.2, 2.0.3, 2.0.4 are in the catalog
+       And stable: version 2.0.1 (the oldest) is NOT in the catalog
+    """
+    extras = tmp_path / "extras"
+    extras.mkdir()
+    abi = "FreeBSD:15:amd64"
+
+    # 4 pre-built devel candidates (the fresh build will be version "1.0_1" from the
+    # stub, so all 4 extras sit below "1.0_1" as older versions). Use 3.0.1..3.0.4 as
+    # clearly ordered versions to make the test readable.
+    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}", abi=abi) for i in range(1, 5)]
+    # 4 pre-built stable candidates.
+    stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}", abi=abi) for i in range(1, 5)]
+
+    all_extras = devel_extras + stable_extras
+
+    # Before-state: with defaults (keep=1), only the freshest 1 of each is kept.
+    out_before = tmp_path / "before"
+    brp.build_repo_matrix(
+        [_CE],
+        out_before,
+        builder=_stub_builder,
+        stable_tag="v3.2.15",
+        release_extra_pkgs=all_extras,
+        release_keep_devel=1,
+        release_keep_stable=1,
+    )
+    rel_before = out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    objs_before = _catalog_objects(rel_before)
+    assert len(objs_before) == 2  # 1 devel + 1 stable with keep=1
+
+    # After-state: with keep=3, the newest 3 of each channel are retained.
+    out = tmp_path / "site"
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=_stub_builder,
+        stable_tag="v3.2.15",
+        release_extra_pkgs=all_extras,
+        release_keep_devel=3,
+        release_keep_stable=3,
+    )
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    nv_set = _names_versions_in_release(rel)
+
+    # Devel: 3.0.2, 3.0.3, 3.0.4 present; 3.0.1 dropped (4th/oldest).
+    assert ("pfBlockerNG-devel", "3.0.4") in nv_set
+    assert ("pfBlockerNG-devel", "3.0.3") in nv_set
+    assert ("pfBlockerNG-devel", "3.0.2") in nv_set
+    assert ("pfBlockerNG-devel", "3.0.1") not in nv_set
+
+    # Stable: 2.0.2, 2.0.3, 2.0.4 present; 2.0.1 dropped.
+    assert ("pfBlockerNG", "2.0.4") in nv_set
+    assert ("pfBlockerNG", "2.0.3") in nv_set
+    assert ("pfBlockerNG", "2.0.2") in nv_set
+    assert ("pfBlockerNG", "2.0.1") not in nv_set
+
+
+def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
+    """The release packagesite NDJSON has one object per (name, version) kept —
+    newest is still the highest version (newest-wins default, contract §2.2.2).
+
+    Scenario: multi-version catalog integrity
+      Given release_keep_devel=2, release_keep_stable=2, 3 of each provided as extras
+        And a fresh devel build (the stub produces version "1.0_1")
+        And the newest extras are 3.0.3 (devel) and 2.0.3 (stable)
+      When build_repo_matrix runs
+      Then the catalog has exactly 4 objects (2 devel + 2 stable)
+       And the highest-version devel object is at least 3.0.3
+       And the highest-version stable object is at least 2.0.3
+       And every kept (name, version) pair appears exactly once (no duplicates)
+    """
+    extras = tmp_path / "extras"
+    extras.mkdir()
+    abi = "FreeBSD:15:amd64"
+
+    # 3 extras each channel; with keep=2 only the newest 2 survive per channel.
+    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}", abi=abi) for i in range(1, 4)]
+    stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}", abi=abi) for i in range(1, 4)]
+
+    out = tmp_path / "site"
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=_stub_builder,
+        stable_tag="v3.2.15",
+        release_extra_pkgs=devel_extras + stable_extras,
+        release_keep_devel=2,
+        release_keep_stable=2,
+    )
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    objs = _catalog_objects(rel)
+
+    # Exactly 4 catalog entries: 2 devel + 2 stable.
+    assert len(objs) == 4
+
+    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
+    assert len(devel_objs) == 2
+    assert len(stable_objs) == 2
+
+    # No duplicate (name, version) pairs.
+    nv_list = [(o["name"], o["version"]) for o in objs]
+    assert len(nv_list) == len(set(nv_list)), "duplicate (name, version) pair in catalog"
+
+    # Newest-wins: the highest devel version in the catalog is 3.0.3 (the extras newest).
+    devel_versions = sorted(
+        [brp._pkg_version_key(o["version"]) for o in devel_objs],
+        reverse=True,
+    )
+    stable_versions = sorted(
+        [brp._pkg_version_key(o["version"]) for o in stable_objs],
+        reverse=True,
+    )
+    # The retained top versions must be at least 3.0.3 and 2.0.3 respectively.
+    assert devel_versions[0] >= brp._pkg_version_key("3.0.3")
+    assert stable_versions[0] >= brp._pkg_version_key("2.0.3")
