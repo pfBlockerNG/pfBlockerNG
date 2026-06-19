@@ -710,3 +710,87 @@ def test_ipv4_invert_toggles_persist_with_alias_native(
 
     finally:
         _del_rowid(vm, CFG_IPV4, rowid)
+
+
+# --------------------------------------------------------------------------- #
+# ui_render tier (PR gate): GET the IPv4 category-edit page and assert the
+# alias-type help-text and <select> fields added by issue #356.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.ui_render
+def test_ipv4_category_edit_renders_alias_type_help_text(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,  # noqa: ARG001
+) -> None:
+    """The IPv4 category-edit page renders the alias-type help-text strings.
+
+    Scenario: a GET of ``pfblockerng_category_edit.php?type=ipv4`` returns a
+    200 response with the ``Must be a Port-type alias.`` and
+    ``Must be a Network or Host-type alias.`` help strings that were added by
+    issue #356 to guide the user when filling the Advanced In/Out alias fields.
+
+    Background:
+        ``pfb_alias_field_type_ok()`` validates alias type on save; the matching
+        help text was added to the page alongside each alias <select> (one for
+        port fields, one for address fields). This render test confirms the text
+        is present in the response body and the page is error-free.
+
+    Given:
+        The webConfigurator is accessible and the admin session is valid.
+    When:
+        GET ``pfblockerng_category_edit.php?type=ipv4``.
+    Then:
+        - HTTP 200.
+        - Body contains ``Must be a Port-type alias.``
+        - Body contains ``Must be a Network or Host-type alias.``
+        - Body free of ``Fatal error``, ``Parse error``, ``Warning``, ``Notice``,
+          ``Uncaught`` (standard ui_render guarantee).
+    """
+    resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
+    assert resp.status_code == 200, f"IPv4 category-edit GET returned HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert not looks_like_login_page(body), "IPv4 category-edit GET returned the login form (session lost)"
+    for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
+        assert bad not in body, f"IPv4 category-edit page contains PHP error: {bad!r}"
+    assert "Must be a Port-type alias." in body, (
+        "IPv4 category-edit page is missing help text 'Must be a Port-type alias.'"
+    )
+    assert "Must be a Network or Host-type alias." in body, (
+        "IPv4 category-edit page is missing help text 'Must be a Network or Host-type alias.'"
+    )
+
+
+@pytest.mark.ui_render
+def test_ipv4_category_edit_renders_four_alias_select_fields(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,  # noqa: ARG001
+) -> None:
+    """The IPv4 category-edit page renders all four alias <select> fields.
+
+    Scenario: the four Advanced In/Out alias-reference <select> fields —
+    ``aliasports_in``, ``aliasports_out``, ``aliasaddr_in``, ``aliasaddr_out`` —
+    are present in the rendered page body.
+
+    Background:
+        Issue #356 wires alias-type validation to these four fields. A render
+        test confirms the page actually emits <select> tags with those names so
+        the validation path is reachable from the UI (not a dead branch).
+
+    Given:
+        The webConfigurator is accessible and the admin session is valid.
+    When:
+        GET ``pfblockerng_category_edit.php?type=ipv4``.
+    Then:
+        - HTTP 200, no PHP errors.
+        - Each of ``aliasports_in``, ``aliasports_out``, ``aliasaddr_in``,
+          ``aliasaddr_out`` appears as a ``<select name="...">`` in the body.
+    """
+    resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
+    assert resp.status_code == 200, f"IPv4 category-edit GET returned HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert not looks_like_login_page(body), "IPv4 category-edit GET returned the login form (session lost)"
+    for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
+        assert bad not in body, f"IPv4 category-edit page contains PHP error: {bad!r}"
+    for field in ("aliasports_in", "aliasports_out", "aliasaddr_in", "aliasaddr_out"):
+        assert f'name="{field}"' in body, f'IPv4 category-edit page is missing <select name="{field}"> field'
