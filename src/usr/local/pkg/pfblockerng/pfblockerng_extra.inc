@@ -410,6 +410,29 @@ function pfb_cfg_registry(): array
 			'since'         => '2.0.0',
 		],
 
+		// ADR-30: per-log scheduled reset period (off|daily|weekly|monthly). Default 'off'.
+		// Vocabulary: {'off','daily','weekly','monthly'}. Plain-string (identity) adapter.
+		// Mirrors the log_max_<type> set exactly — one entry per managed log type.
+		// MAINTAINER NOTE: 'since' is set to '3.2.0' (newest registry version at ADR-30 authoring);
+		// confirm and update to the actual first release that ships these fields.
+	];
+
+	$log_types = [
+		'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+		'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+	];
+	foreach ($log_types as $log_type) {
+		$registry['log_rotate_' . $log_type] = [
+			'section'       => $gen,
+			'default'       => 'off',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '3.2.0',
+		];
+	}
+
+	$registry = $registry + [
+
 		// Software update check last-seen version (string or null). Default ''.
 		'pfb_software_check' => [
 			'section'       => $gen,
