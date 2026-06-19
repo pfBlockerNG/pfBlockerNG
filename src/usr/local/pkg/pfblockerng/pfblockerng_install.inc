@@ -106,53 +106,11 @@ if (
 	pfb_global();
 }
 
-// ADR-02: Migrate DNSBL mode to Python-only.
-$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
-if (!empty($cfg) && (($cfg['dnsbl_mode'] ?? '') !== 'dnsbl_python' || ($cfg['pfb_py_block'] ?? '') !== 'on')) {
-	$cfg['dnsbl_mode']    = 'dnsbl_python';
-	$cfg['pfb_py_block']  = 'on';
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg);
-	write_config('pfBlockerNG: migrated DNSBL to Python-only mode');
-}
-unset($cfg);
-
-// PFBL-03: one-time seed of the deprecated legacy DNS-TXT control sub-toggle. DNSBL
-// control is now CLI-driven; the DNS-TXT transport is OFF by default. The run-once,
-// iff-grandfather decision is pfb_control_legacy_seed() (NULL => leave unchanged); it seeds
-// 'pfb_control_legacy' ON only when the pre-existing config already had DNSBL Control
-// enabled, and a one-shot marker keeps it from re-seeding on later saves.
-$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
-$cfg_seeded = pfb_control_legacy_seed($cfg);
-if ($cfg_seeded !== NULL) {
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg_seeded);
-	write_config('pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)');
-}
-unset($cfg, $cfg_seeded);
-
-// ADR-22: preserve permissive DNSBL scheme parsing for EXISTING installs on upgrade.
-// pfb_dnsbl_lenient_migrate() sets the missing key to 'on' (lenient) only on an
-// already-populated DNSBL config section; a fresh install has no prior section, so it
-// returns NULL and the new-install strict default (OFF) stands. An existing value is
-// never overwritten.
-$cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
-$cfg_lenient = pfb_dnsbl_lenient_migrate($cfg);
-if ($cfg_lenient !== NULL) {
-	config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg_lenient);
-	write_config('pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)');
-}
-unset($cfg, $cfg_lenient);
-
-// Issue #281: preserve user settings across pkg upgrade. pfb_keep_migrate() seeds the
-// missing 'pfb_keep' General-settings flag to 'on' only on an already-populated config
-// section (an existing install); a fresh install returns NULL and the pfb_global()
-// runtime default stands. An existing value is never overwritten.
-$cfg = config_get_path('installedpackages/pfblockerng/config/0', []);
-$cfg_keep = pfb_keep_migrate($cfg);
-if ($cfg_keep !== NULL) {
-	config_set_path('installedpackages/pfblockerng/config/0', $cfg_keep);
-	write_config('pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)');
-}
-unset($cfg, $cfg_keep);
+// ADR-29 P2: run all registered upgrade migrations in order. Each migration's apply()
+// callable reads the section, returns the updated array or NULL (no-op), and the driver
+// writes back and calls write_config() only when a change is needed. Replaces the four
+// hand-wired blocks (ADR-02, PFBL-03, ADR-22, issue #281) with a single ordered registry.
+pfb_run_migrations();
 
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {

@@ -6391,6 +6391,25 @@ function pfb_feed_filter_install_default($gconfig) {
 }
 
 
+// ADR-02: one-time upgrade migration for the DNSBL python-only mode. $dconfig is the
+// existing DNSBL-settings 'config/0' node. Forces 'dnsbl_mode' to 'dnsbl_python' and
+// 'pfb_py_block' to 'on'. Idempotent: returns NULL when both keys already carry the target
+// values (or when the section is empty/absent — no prior DNSBL config = nothing to migrate).
+// Returns the updated config array to persist, or NULL when nothing should change.
+function pfb_dnsbl_python_migrate($dconfig) {
+
+	if (!is_array($dconfig) || empty($dconfig)) {
+		return NULL;
+	}
+	if (($dconfig['dnsbl_mode'] ?? '') === 'dnsbl_python' && ($dconfig['pfb_py_block'] ?? '') === 'on') {
+		return NULL;
+	}
+	$dconfig['dnsbl_mode']   = 'dnsbl_python';
+	$dconfig['pfb_py_block'] = 'on';
+	return $dconfig;
+}
+
+
 // PFBL-03: one-time upgrade seed for the deprecated legacy DNS-TXT control sub-toggle.
 // $dconfig is the existing DNSBL-settings 'config/0' node. DNSBL control is CLI-driven and
 // the DNS-TXT transport is OFF by default; to avoid breaking an operator already driving
