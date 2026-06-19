@@ -36,6 +36,7 @@ $wizard_action = pfb_wizard_get_action($_GET ?: array());
 // again. Stored outside config/0 so a fresh, unconfigured install still reads as
 // unconfigured (config/0 == null) for the upgrade-migration paths in pfblockerng_install.inc.
 if ($wizard_action === 'disable') {
+	// foreign key — out of ADR-29 gateway scope (pfb_wizard_skip is not a /config/0 scalar)
 	config_set_path('installedpackages/pfblockerng/pfb_wizard_skip', 'on');
 	write_config('[pfBlockerNG] Disable setup wizard auto-launch');
 }
@@ -43,23 +44,22 @@ if ($wizard_action === 'disable') {
 // Skip the auto-launch for this request ('skip'), permanently ('disable' persisted),
 // or once the package has been configured.
 if (pfb_wizard_suppress_autolaunch($wizard_action,
-    config_get_path('installedpackages/pfblockerng/pfb_wizard_skip'),
-    config_get_path('installedpackages/pfblockerng/config/0'))) {
+    config_get_path('installedpackages/pfblockerng/pfb_wizard_skip'),	// foreign key — out of ADR-29 gateway scope
+    config_get_path('installedpackages/pfblockerng/config/0'))) {	// section existence check — not a scalar read
 	$pfb_wizard = FALSE;
 }
 
-$pfb['gconfig'] = config_get_path('installedpackages/pfblockerng/config/0', []);
+$pfb['gconfig'] = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 
 $pconfig = array();
 $pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
 
-// Default to 'on' for new installation only
-$pconfig['pfb_keep']			= isset($pfb['gconfig']['pfb_keep'])			? $pfb['gconfig']['pfb_keep'] : 'on';
+// Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
+$pconfig['pfb_keep']			= PfbConfig::read('pfb_keep')->value;
 
-// Master toggle for the internal-address feed-host filter. Default 'on' for a new,
-// unconfigured install (key absent); pinned 'off' once on an existing install by the
-// upgrade migration in pfblockerng_install.inc so configured feeds are never dropped.
-$pconfig['pfb_feed_internal_filter']	= isset($pfb['gconfig']['pfb_feed_internal_filter'])	? $pfb['gconfig']['pfb_feed_internal_filter'] : 'on';
+// Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
+// Pinned 'off' on existing installs by the upgrade migration in pfblockerng_install.inc.
+$pconfig['pfb_feed_internal_filter']	= PfbConfig::read('pfb_feed_internal_filter');
 
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
@@ -199,7 +199,7 @@ if ($_POST) {
 			$pfb['gconfig']['log_max_dnsreplylog']		= $_POST['log_max_dnsreplylog']			?: 20000;
 			$pfb['gconfig']['log_max_unilog']		= $_POST['log_max_unilog']			?: 20000;
 
-			config_set_path('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
 
 			$pfb['save'] = TRUE;
