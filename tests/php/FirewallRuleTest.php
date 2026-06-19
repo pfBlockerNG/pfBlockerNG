@@ -75,7 +75,9 @@ final class FirewallRuleTest extends TestCase
 
 		$buckets = array_fill_keys(self::BUCKETS, []);
 
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], $buckets, [
+		// Build a clean fixture from known values only — do NOT inherit ambient
+		// $GLOBALS['pfb'] from the bootstrap/other suites (sandbox isolation).
+		$GLOBALS['pfb'] = array_merge($buckets, [
 			'base_rule'            => ['ipprotocol' => 'inet'],
 			'base_rule_float'      => ['quick' => 'yes', 'floating' => 'yes', 'ipprotocol' => 'inet'],
 			'deny_action_inbound'  => 'block',
@@ -149,6 +151,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertArrayNotHasKey('direction', $rule,                       'no direction when float=off');
 		$this->assertArrayNotHasKey('log',       $rule,                       'no log key when global_log=off and pfb_log not enabled');
 		$this->assertArrayNotHasKey('gateway',   $rule,                       'no gateway when agateway_in=default');
+		$this->assertOtherBucketsEmpty('deny_inbound');
 	}
 
 	public function testDenyOutboundBaselineRule(): void
@@ -166,6 +169,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertIsInt($rule['created']['time'],                          'created.time must be an int');
 		$this->assertArrayNotHasKey('direction', $rule,                       'no direction when float=off');
 		$this->assertArrayNotHasKey('log',       $rule,                       'no log key when global_log=off and pfb_log not enabled');
+		$this->assertOtherBucketsEmpty('deny_outbound');
 	}
 
 	public function testPermitInboundBaselineRule(): void
@@ -179,6 +183,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertSame(['address' => 'pfB_PermitAlias'], $rule['source']);
 		$this->assertSame(['any' => ''],    $rule['destination']);
 		$this->assertSame('Auto',           $rule['created']['username']);
+		$this->assertOtherBucketsEmpty('permit_inbound');
 	}
 
 	public function testPermitOutboundBaselineRule(): void
@@ -190,6 +195,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertSame('pass',           $rule['type'],                   'Permit type must be pass');
 		$this->assertSame(['any' => ''],    $rule['source'],                  'source any when asrc_out empty');
 		$this->assertSame(['address' => 'pfB_PermitAlias'], $rule['destination']);
+		$this->assertOtherBucketsEmpty('permit_outbound');
 	}
 
 	public function testMatchInboundBaselineRule(): void
@@ -207,6 +213,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertSame(['address' => 'pfB_MatchAlias'], $rule['source']);
 		$this->assertSame(['any' => ''],    $rule['destination']);
 		$this->assertSame('Auto',           $rule['created']['username']);
+		$this->assertOtherBucketsEmpty('match_inbound');
 	}
 
 	public function testMatchOutboundBaselineRule(): void
@@ -220,6 +227,7 @@ final class FirewallRuleTest extends TestCase
 		$this->assertArrayNotHasKey('quick', $rule,                          'Match rule must not have quick key');
 		$this->assertSame(['any' => ''],    $rule['source']);
 		$this->assertSame(['address' => 'pfB_MatchAlias'], $rule['destination']);
+		$this->assertOtherBucketsEmpty('match_outbound');
 	}
 
 	// -------------------------------------------------------------------------
