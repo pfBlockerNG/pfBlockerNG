@@ -305,3 +305,48 @@ set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
 
 Artifacts = **one per distinct FreeBSD major**; CI smoke = every `ci: true` image, CE **and** Plus.
 The scheduled version-tracking + release-automation design is its own ADR.
+
+## Catalog generator — release retention and rollback
+
+`build-repo-portable.py --build-matrix` generates the self-hosted `pkg` repository tree
+(ADR-17). By default it keeps only the **latest** release of each channel per
+`(version, arch)` — identical to the pre-ADR-27 behaviour. Three flags enable rollback:
+
+| Flag | Default | Purpose |
+| ---- | ------- | ------- |
+| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per `(version, arch)` in the `release/` catalog. Set `>1` to list older versions so users can pin to them. |
+| `--release-keep-stable M` | `1` (latest-only) | Same for the stable channel. |
+| `--release-extra-pkgs PATH` | (none) | Pre-built older-release `.pkg` to fold into the release pool alongside the fresh build (repeatable — pass one per file). The generator prunes the merged pool to `N` / `M` after folding. |
+
+`--release-keep-devel 0` / `--release-keep-stable 0` is the **unbounded** sentinel (keep all).
+
+### How the publish pipeline uses these flags
+
+`pfBlockerNG/pkg`'s `publish.yml` passes:
+
+- one `--release-extra-pkgs <path>` per older `.pkg` it downloaded from GitHub Releases
+  (pre-release assets → devel pool; full-release assets → stable pool), and
+- `--release-keep-devel N` / `--release-keep-stable M` at the configured retention depth
+  (default 10 when retention is enabled; overridable via `workflow_dispatch` inputs).
+
+The generator is the backstop: even if `publish.yml` passes more `.pkg` files than the
+retention depth, it prunes to the newest N/M before writing the catalog.
+
+### Rolling back a release or devel install
+
+When the retention depth is `>1`, the catalog lists multiple versions. A user can pin:
+
+```sh
+# Roll back to a specific devel build
+pkg install pfSense-pkg-pfBlockerNG-devel-3.2.15
+
+# Roll back to a specific stable build
+pkg install pfSense-pkg-pfBlockerNG-3.2.14
+```
+
+`pkg install <name>` (no version) still resolves the **highest** listed version
+(newest-wins, `pkg` version ordering). Rollback is available **only for the N/M most recent
+releases** — releases older than the retention window are absent from the catalog.
+
+> **Config-schema note:** rolling back across a schema-changing release may leave the stored
+> `config.xml` in a format the older code cannot read. Test first in a non-production VM.

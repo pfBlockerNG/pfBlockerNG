@@ -1617,3 +1617,249 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     # The retained top versions must be at least 3.0.3 and 2.0.3 respectively.
     assert devel_versions[0] >= brp._pkg_version_key("3.0.3")
     assert stable_versions[0] >= brp._pkg_version_key("2.0.3")
+
+
+# --------------------------------------------------------------------------- #
+# ADR-27 Phase 3: CLI dry-run — --release-extra-pkgs end-to-end
+#
+# These tests exercise the DOCUMENTED PUBLISH.YML INPUT PATH through the CLI
+# (brp.main([...])) rather than the Python API, so the actual command-line
+# wiring (argparse → extra_pkgs conversion → build_repo_matrix) is proven.
+#
+# Pattern: synthetic devel_1..4 + stable_1..4 passed as --release-extra-pkgs;
+# --release-keep-devel / --release-keep-stable assert that the catalog holds
+# exactly the newest N/M and the oldest candidate is absent. Before-and-after
+# assertions confirm the pruning is genuine, not a coincidental match.
+# --------------------------------------------------------------------------- #
+
+
+def _with_stub_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch brp.build_repo_matrix so CLI calls use _stub_builder (no subprocess)."""
+    _real = brp.build_repo_matrix
+
+    def _patched(matrix: list[dict], out_dir: Path, **kw: Any) -> dict:
+        kw.setdefault("builder", _stub_builder)
+        return _real(matrix, out_dir, **kw)
+
+    monkeypatch.setattr(brp, "build_repo_matrix", _patched)
+
+
+def test_cli_release_extra_pkgs_default_is_latest_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI defaults (--release-keep-devel 1, --release-keep-stable 1) keep only the
+    latest release when --release-extra-pkgs carry older versions too.
+
+    Scenario: CLI latest-only default with older extras supplied
+      Given 3 pre-built devel extras (3.0.1, 3.0.2, 3.0.3) passed via --release-extra-pkgs
+        And 3 pre-built stable extras (2.0.1, 2.0.2, 2.0.3) passed via --release-extra-pkgs
+        And no --release-keep-devel / --release-keep-stable override (default 1)
+      When brp.main([--build-matrix, ...]) is called
+      Then the release catalog has exactly 1 devel entry (before-state: default is latest-only)
+       And the release catalog has exactly 1 stable entry
+       And the highest-version devel (3.0.3) is the one retained
+       And the highest-version stable (2.0.3) is the one retained
+    """
+    _with_stub_builder(monkeypatch)
+
+    extras = tmp_path / "extras"
+    extras.mkdir()
+    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 4)]
+    stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 4)]
+
+    # Before-state: confirm the extra pkgs exist and span all 6 versions.
+    assert len(devel_extras) == 3
+    assert len(stable_extras) == 3
+
+    out = tmp_path / "site"
+    mfile = tmp_path / "matrix.json"
+    mfile.write_text(json.dumps({"versions": [_CE]}))
+
+    extra_flags: list[str] = []
+    for p in devel_extras + stable_extras:
+        extra_flags += ["--release-extra-pkgs", str(p)]
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile),
+            "--out",
+            str(out),
+            "--no-nightly",
+            # No --release-keep-devel / --release-keep-stable  → default 1
+        ]
+        + extra_flags
+    )
+    assert rc == 0
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert rel.is_file()
+    objs = _catalog_objects(rel)
+
+    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
+
+    # Before-state (default keep=1): exactly one devel entry, one stable entry.
+    assert len(devel_objs) == 1, f"expected 1 devel, got {len(devel_objs)}"
+    assert len(stable_objs) == 1, f"expected 1 stable, got {len(stable_objs)}"
+
+    # The retained entries are the highest-version ones (newest-wins).
+    assert devel_objs[0]["version"] >= "3.0.3"
+    assert stable_objs[0]["version"] >= "2.0.3"
+
+
+def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI correctly prunes to newest N/M when --release-keep-devel/stable are set.
+
+    Scenario: rollback depth 3, 4 candidates per channel via CLI
+      Given 4 pre-built devel extras (3.0.1..3.0.4) passed as --release-extra-pkgs
+        And 4 pre-built stable extras (2.0.1..2.0.4) passed as --release-extra-pkgs
+        And --release-keep-devel 3, --release-keep-stable 3
+      When brp.main([--build-matrix, ...]) is called
+      Then the release catalog has exactly 3 devel entries (AFTER state: rollback enabled)
+       And the release catalog has exactly 3 stable entries
+       And the oldest devel (3.0.1) is absent from the catalog
+       And the oldest stable (2.0.1) is absent from the catalog
+       And the 3 newest devel versions (3.0.2, 3.0.3, 3.0.4) are present
+       And the 3 newest stable versions (2.0.2, 2.0.3, 2.0.4) are present
+    """
+    _with_stub_builder(monkeypatch)
+
+    extras = tmp_path / "extras"
+    extras.mkdir()
+    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 5)]
+    stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 5)]
+
+    out = tmp_path / "site"
+    mfile = tmp_path / "matrix.json"
+    mfile.write_text(json.dumps({"versions": [_CE]}))
+
+    extra_flags: list[str] = []
+    for p in devel_extras + stable_extras:
+        extra_flags += ["--release-extra-pkgs", str(p)]
+
+    # Before-state: with default keep=1 only 1 devel + 1 stable appear.
+    out_before = tmp_path / "before"
+    mfile_before = tmp_path / "matrix_before.json"
+    mfile_before.write_text(json.dumps({"versions": [_CE]}))
+    rc_before = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile_before),
+            "--out",
+            str(out_before),
+            "--no-nightly",
+        ]
+        + extra_flags
+    )
+    assert rc_before == 0
+    before_objs = _catalog_objects(out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    before_devel = [o for o in before_objs if o["name"] == "pfBlockerNG-devel"]
+    before_stable = [o for o in before_objs if o["name"] == "pfBlockerNG"]
+    assert len(before_devel) == 1, "before-state: default keep=1 must yield exactly 1 devel"
+    assert len(before_stable) == 1, "before-state: default keep=1 must yield exactly 1 stable"
+
+    # After-state: with keep=3 the catalog lists 3 devel + 3 stable.
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--release-keep-devel",
+            "3",
+            "--release-keep-stable",
+            "3",
+        ]
+        + extra_flags
+    )
+    assert rc == 0
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert rel.is_file()
+    objs = _catalog_objects(rel)
+    nv = {(o["name"], o["version"]) for o in objs}
+
+    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
+
+    # After-state: 3 devel + 3 stable.
+    assert len(devel_objs) == 3, f"expected 3 devel after, got {len(devel_objs)}"
+    assert len(stable_objs) == 3, f"expected 3 stable after, got {len(stable_objs)}"
+
+    # Oldest excluded.
+    assert ("pfBlockerNG-devel", "3.0.1") not in nv, "oldest devel must be pruned"
+    assert ("pfBlockerNG", "2.0.1") not in nv, "oldest stable must be pruned"
+
+    # Newest 3 present.
+    for v in ("3.0.2", "3.0.3", "3.0.4"):
+        assert ("pfBlockerNG-devel", v) in nv, f"devel {v} must be retained"
+    for v in ("2.0.2", "2.0.3", "2.0.4"):
+        assert ("pfBlockerNG", v) in nv, f"stable {v} must be retained"
+
+
+def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With multiple retained devel versions the highest version ranks first (newest-wins).
+
+    Scenario: pkg install <name> without version must resolve to the highest kept version
+      Given 4 devel extras (3.0.1..3.0.4) and keep=2
+        And 4 stable extras (2.0.1..2.0.4) and keep=2
+      When brp.main([--build-matrix, ...]) is called
+      Then the catalog lists exactly 2 devel + 2 stable entries
+       And the highest devel version in the catalog is >= 3.0.4 (newest-wins)
+       And the highest stable version in the catalog is >= 2.0.4 (newest-wins)
+       And no (name, version) pair is duplicated in the catalog
+    """
+    _with_stub_builder(monkeypatch)
+
+    extras = tmp_path / "extras"
+    extras.mkdir()
+    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 5)]
+    stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 5)]
+
+    out = tmp_path / "site"
+    mfile = tmp_path / "matrix.json"
+    mfile.write_text(json.dumps({"versions": [_CE]}))
+
+    extra_flags: list[str] = []
+    for p in devel_extras + stable_extras:
+        extra_flags += ["--release-extra-pkgs", str(p)]
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--release-keep-devel",
+            "2",
+            "--release-keep-stable",
+            "2",
+        ]
+        + extra_flags
+    )
+    assert rc == 0
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    objs = _catalog_objects(rel)
+
+    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
+
+    # Exactly 2 devel + 2 stable.
+    assert len(devel_objs) == 2
+    assert len(stable_objs) == 2
+
+    # No duplicate (name, version) pairs.
+    nv_list = [(o["name"], o["version"]) for o in objs]
+    assert len(nv_list) == len(set(nv_list)), "duplicate (name, version) pair in catalog"
+
+    # Newest-wins: highest version in the retained set is >= 3.0.4 / 2.0.4.
+    devel_top = max(brp._pkg_version_key(o["version"]) for o in devel_objs)
+    stable_top = max(brp._pkg_version_key(o["version"]) for o in stable_objs)
+    assert devel_top >= brp._pkg_version_key("3.0.4")
+    assert stable_top >= brp._pkg_version_key("2.0.4")

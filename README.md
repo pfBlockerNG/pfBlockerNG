@@ -148,6 +148,24 @@ source commit rides the package — `pkg info -A pfSense-pkg-pfBlockerNG-nightly
 The **last 14 builds** are kept, so you can roll back by installing an older version
 explicitly (`pkg install pfSense-pkg-pfBlockerNG-nightly-<version>`).
 
+#### Rolling back a stable or devel release
+
+When the self-hosted repository is configured with a retention depth greater than one,
+the release catalog lists **multiple versions** of the stable and devel packages. You can
+pin to any retained version by specifying it explicitly:
+
+```sh
+pkg install pfSense-pkg-pfBlockerNG-devel-<version>   # pin to an older devel build
+pkg install pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable build
+```
+
+`pkg install <name>` with no version always resolves the **highest** version listed in the
+catalog (newest-wins). Only the configured N most recent devel releases and M most recent
+stable releases are retained; builds older than that window are no longer in the catalog.
+
+> **Config-schema note:** rolling back across a schema-changing release may leave the stored
+> `config.xml` in a format the older code cannot read. Test first in a non-production VM.
+
 ### Updating
 
 ```sh
