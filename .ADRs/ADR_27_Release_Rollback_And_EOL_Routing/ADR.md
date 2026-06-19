@@ -8,11 +8,11 @@
   - `scripts/build-repo.sh` (`--print-conf` template — unchanged contract, referenced)
   - `tests/smoke/test_repo_install.py` + `tests/smoke/_matrix.py` (rollback smoke; ADR-04 `repo` marker)
   - `tests/test_build_repo_portable.py` (off-box catalog membership)
-  - `src/usr/local/www/` (the pfSense GUI rollback panel) + `src/usr/local/pkg/pfblockerng/`
+  - `scripts/gen_landing.py` (the Pages landing "Older releases" disclosure) + `README`/`docs` (CLI rollback procedure)
   - **Cross-repo:** `pfBlockerNG/pkg` `.github/workflows/publish.yml` (enumerate + fold the retained Releases)
   - **Design-only (deferred):** the `ci-metadata` version matrix schema + `scripts/read-version-matrix.sh` + `scripts/worker/` (the route-only flag)
-- **Target runtime:** Python 3.11+ (portable builders, runner-side; stdlib + the existing zstd dep); PHP 8.3 (pfSense CE 2.8 GUI); POSIX `/bin/sh`; Cloudflare Worker (JS, ESM)
-- **Test surface:** `tests/test_build_repo_portable.py` + `tests/test_smoke_matrix.py` (off-box, PR gate); `tests/smoke/test_repo_install.py` `-m repo` (live VM, dispatch); `tests/smoke/ui` `-m ui_render` (ADR-14, the GUI panel); `scripts/worker/test/` (`node --test`, part-2 design only)
+- **Target runtime:** Python 3.11+ (portable builders, runner-side; stdlib + the existing zstd dep); POSIX `/bin/sh`; Cloudflare Worker (JS, ESM — part-2 design only)
+- **Test surface:** `tests/test_build_repo_portable.py` + `tests/test_smoke_matrix.py` + `tests/test_gen_landing.py` (off-box, PR gate); `tests/smoke/test_repo_install.py` `-m repo` (live VM, dispatch); `scripts/worker/test/` (`node --test`, part-2 design only)
 
 Builds on **ADR-17** (self-hosted `pkg` repo / derived index), **ADR-18** (nightly channel + 14-deep
 Actions-cache retention), and **ADR-20** (CE/Plus variant distribution — `routing.json` + the Cloudflare
@@ -80,7 +80,7 @@ is a forward-looking gap, not a live defect.)
 
 ## 2. Decision
 
-Two composable parts. **Part 1 (rollback retention + GUI) is implemented by the phases below.** **Part 2
+Two composable parts. **Part 1 (rollback retention) is implemented by the phases below.** **Part 2
 (EOL route-only distribution) is specified here but its implementation is deferred** until an EOL pfSense
 version actually exists (§2.4) — it has no consumer today and must not be built speculatively.
 
@@ -93,8 +93,7 @@ version actually exists (§2.4) — it has no consumer today and must not be bui
 | Retention source | **GitHub Releases** (durable, already every release `.pkg`). `publish.yml` enumerates Releases, buckets by `prerelease` (devel pre-release) vs stable, takes the newest `N`/`M`, downloads their `.pkg`, and feeds them to the generator alongside the fresh devel-HEAD build. No new stateful store (unlike nightly's cache — Releases *are* the store). |
 | Catalog shape | `release/<varver>/<arch>/` now carries up to `N`+`M` versions per ABI (multi-version NDJSON). `pkg install <pkg>` still takes newest; `pkg install <pkg>-<version>` / `pkg add` pins an older one. |
 | Landing page | The ADR-20 "Older nightlies" per-edition disclosure pattern (`gen_landing.py`) generalizes to an **"Older releases"** disclosure under each edition — surfacing the retained devel/stable versions with their commit/date so a human can find a rollback target. |
-| Rollback UX (CLI) | Documented: `pkg install pfSense-pkg-pfBlockerNG[-devel]-<version>` (pinned) or `pkg add <pages-url>/…/<name>-<version>.pkg`. The catalog now resolves deps for the pinned version. |
-| Rollback UX (GUI) | A pfSense package page (`src/usr/local/www/`) listing the **installed** version + the **available** versions (read from the live repo catalog via `pkg rquery`/`pkg search`), with a guarded "switch to this version" action that runs the pinned `pkg install`. Coordinated with the deferred ADR-19 panel (this is the rollback slice of it). |
+| Rollback UX (CLI only) | Documented support/debug procedure: `pkg install pfSense-pkg-pfBlockerNG[-devel]-<version>` (pinned) or `pkg add <pages-url>/…/<name>-<version>.pkg`. The catalog now resolves deps for the pinned version. **No GUI** — rollback is a support/debugging action, not an expected user flow, so it does not warrant a shipped `src/www/` page (which would carry an `ui_render`/PHP blast radius for a rarely-trodden path). A future GUI version-pick, if ever wanted, stays with the deferred ADR-19 Update/Channel panel. |
 
 ### 2.2 Semantics that MUST be preserved (the contract — pin with tests before changing)
 
@@ -116,8 +115,9 @@ version actually exists (§2.4) — it has no consumer today and must not be bui
 - **Per-version dependency divergence** across retained releases is out of scope: we assume the RUN_DEPENDS set
   is stable across the retained window (true today). If a future release changes deps incompatibly, that older
   version's install is best-effort (documented).
-- **A full GUI Update/Channel panel** (channel switching, update badge) stays **ADR-19**; ADR-27 adds only the
-  **rollback/version-pick** slice.
+- **Any GUI** is out of scope. The full Update/Channel panel (channel switching, update badge) stays **ADR-19**,
+  and even the rollback/version-pick ships **no `src/www/` page** — rollback is a CLI + landing-disclosure support
+  action, not an expected user flow. ADR-27 touches no `src/` production code at all.
 
 ### 2.4 Part 2 — EOL route-only distribution (DESIGN ONLY; implementation deferred)
 
@@ -144,8 +144,9 @@ exists — building it speculatively risks ADR-01's trap).
 
 **Positive**
 
-- A real, supported **rollback** path for releases (CLI + GUI), reusing the proven nightly multi-version
-  mechanism — no new catalog machinery, no new stateful store (Releases are the source).
+- A real, supported **rollback** path for releases (CLI), reusing the proven nightly multi-version
+  mechanism — no new catalog machinery, no new stateful store (Releases are the source), and **no `src/`
+  change** (pure tooling/tests/docs, so no `ui_render`/PHP blast radius).
 - The forward-looking **EOL** gap has a vetted design (matrix role + frozen archive) ready to implement the
   moment it has a consumer — without re-litigating the routing model.
 - The landing page gains an "Older releases" view, parallel to "Older nightlies".
@@ -154,10 +155,10 @@ exists — building it speculatively risks ADR-01's trap).
 
 - **Catalog/Pages growth:** `release/` grows by up to `N`+`M` versions per ABI. Bounded by the defaults
   (10+10); the Pages artifact + the publish runtime grow accordingly. Mitigated by the bound + version-sorted prune.
-- **GUI surface (`src/`):** a new page ships to users and must clear the ADR-14 `ui_render` gate (no PHP
-  warnings/notices) and the PFBL-01 sniff where applicable. Larger blast radius than a pure-tooling change.
 - **Rollback foot-gun:** downgrading can hit a config-schema mismatch (a newer config read by older code). The
-  GUI action must warn; out-of-scope to *migrate* config backwards (documented limitation).
+  rollback **documentation** warns; out-of-scope to *migrate* config backwards (documented limitation). Keeping
+  rollback CLI-only (no one-click GUI) also makes the foot-gun a deliberate, support-driven action rather than a
+  casually-reachable button.
 - **Cross-repo coupling:** the retention *policy* lives in this repo's generator, but the *candidate provision*
   lives in `pfBlockerNG/pkg` `publish.yml` — the two must stay in step (the generator's prune is the backstop).
 
@@ -171,21 +172,18 @@ exists — building it speculatively risks ADR-01's trap).
   with that exact version active, deps resolved from our repo — proven by the live `-m repo` smoke.
 - The off-box catalog-membership test pins that exactly the expected retained versions appear (and an older-than-
   window one does not).
-- The GUI panel lists installed + available versions and performs a guarded version switch; it clears the ADR-14
-  `ui_render` gate (200, no `Fatal/Parse/Warning/Notice/Uncaught`, marker present, no new `php_error.log` line).
-- The landing page shows an "Older releases" disclosure per edition (unit-tested in `tests/test_gen_landing.py`).
+- The landing page shows an "Older releases" disclosure per edition (unit-tested in `tests/test_gen_landing.py`),
+  and the CLI rollback procedure is documented (`README`/`docs`).
 - Part 2 is documented (§2.4) with the matrix-role + Worker-route design; **no** part-2 code lands.
 
 ## 5. Constraints (from CLAUDE.md)
 
 - Portable builders: Python 3.11+, stdlib + the existing zstd encoder; deterministic, mtime-pinned output.
-- GUI: PHP 8.3, tabs; pfSense help-text style; no `die()`/`exit()` in library code; PFBL-01 RequirePfbFilter
-  where input handling applies.
 - Shell: POSIX `/bin/sh`, quoted expansions, `LC_ALL=C` on machine-data sorts (ADR-26).
 - `pkg` catalog fidelity (ADR-17): NONE-signed, `priority: 100`, byte-identical generators
   (`tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py` drift pins).
-- No live Unbound in CI; the live VM smoke (ADR-04) is dispatch-only; the Web-UI `ui_render` tier is the PR gate
-  for `src/www/` (ADR-14).
+- No `src/` production code changes (no GUI) — so no `ui_render`/PHP gate applies; the live VM smoke (ADR-04
+  `-m repo`) is dispatch-only.
 - Rebase-only PRs; one commit per phase; `python -m pytest` green at every phase.
 
 ## 6. Action plan
@@ -236,15 +234,15 @@ Prompt: `04_Rollback_Smoke.txt`.
   version is now active, deps resolved from our repo; then re-upgrade to newest (before/after lifecycle).
 - Pin: `pkg install <name>` (no version) still picks newest; the pinned install picks exactly the requested one.
 
-### Phase 5 — GUI rollback panel + landing "Older releases"
+### Phase 5 — Landing "Older releases" + rollback documentation
 
-Prompt: `05_Gui_And_Landing.txt`.
+Prompt: `05_Landing_And_Docs.txt`.
 
-- `scripts/gen_landing.py`: add the per-edition "Older releases" disclosure (mirror `_older_nightlies_*`); unit
-  tests in `tests/test_gen_landing.py`.
-- `src/usr/local/www/`: a pfBlockerNG version-rollback page — list installed + available (from `pkg`), guarded
-  switch action; pfSense GUI idioms; ADR-14 `ui_render` marker + no `php_error.log` line.
-- Tests: `gen_landing` unit cases; `tests/smoke/ui -m ui_render` for the new page.
+- `scripts/gen_landing.py`: add the per-edition "Older releases" disclosure (mirror `_older_nightlies_*`),
+  surfacing the retained devel/stable versions with commit/date so a human can find a rollback target.
+- `README`/`docs`: document the CLI rollback procedure (`pkg install <name>-<version>` / `pkg add <url>`),
+  including the config-schema-mismatch caveat (no backward config migration).
+- Tests: `gen_landing` unit cases in `tests/test_gen_landing.py` (the "Older releases" disclosure, before/after).
 
 ## 7. Definition of done
 
@@ -252,10 +250,9 @@ Prompt: `05_Gui_And_Landing.txt`.
   the retained set and the "Older releases" view.
 - **Live `-m repo` smoke (CE + Plus fan-out):** install newest → roll back to a retained older version → re-upgrade,
   all from our repo with deps resolved; newest-wins default intact; cross-repo precedence intact.
-- **ADR-14 `ui_render`:** the rollback page renders clean on the live VM.
 - §2.4 (Part 2) present as design-of-record; **no** part-2 code merged.
 - **Manual smoke checklist (owner: maintainer)** — the items CI cannot fully cover:
-  - On a real box, GUI-switch to an older version and back; confirm the package functions (a DNSBL match) after each.
+  - On a real box, CLI roll back (`pkg install <name>-<oldver>`) to an older version and back; confirm the package functions (a DNSBL match) after each.
   - Confirm a rollback across a config-schema change warns and does not corrupt config (documented limitation).
   - Confirm Pages/catalog growth at `N=M=10` is within the publish runtime/artifact budget.
 - **Reject criteria (ADR-01 discipline):** REJECT (or rescope) if any holds —
@@ -263,4 +260,3 @@ Prompt: `05_Gui_And_Landing.txt`.
     resolution (i.e. rollback needs `pkg add` of a raw URL with no dep resolution) — then "rollback via catalog"
     is false and only the GitHub-Release-asset path remains (downgrade Part 1 to docs-only).
   - Multi-version `release/` catalogs are rejected/mis-resolved by a real `pkg update` (fidelity break).
-  - The GUI switch cannot be made safe (no guard prevents a config-corrupting downgrade) — ship CLI-only, defer GUI.
