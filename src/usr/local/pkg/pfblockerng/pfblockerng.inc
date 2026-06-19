@@ -4323,6 +4323,38 @@ function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
 }
 
 
+// Poll until the control-channel watcher has applied sequence $seq (or beyond), confirming
+// the published command was consumed. Mirrors pfb_unbound_py_wait_applied() in structure:
+// reads the applied marker (/var/unbound/pfb_py_control.applied), parses the first line as
+// an integer, and returns TRUE when the stored value >= $seq. Returns FALSE on timeout.
+// A $timeout_s <= 0 is never passed here (the caller guards); 200 ms poll interval.
+function pfb_unbound_py_wait_control_applied($seq, $timeout_s = 5) {
+	global $pfb;
+
+	$seq     = (int) $seq;
+	$applied  = "{$pfb['dnsbldir']}/pfb_py_control.applied";
+	$deadline = microtime(TRUE) + (float) $timeout_s;
+
+	do {
+		if (file_exists($applied)) {
+			$raw = @file_get_contents($applied);
+			if ($raw !== FALSE) {
+				$first = strtok($raw, "\n");
+				if ($first !== FALSE) {
+					$first = trim($first);
+					if ($first !== '' && ctype_digit($first) && (int) $first >= $seq) {
+						return TRUE;
+					}
+				}
+			}
+		}
+		usleep(200000);	// 200 ms between polls
+	} while (microtime(TRUE) < $deadline);
+
+	return FALSE;
+}
+
+
 // PFBL-03: atomically publish the DNSBL-control command channel to the chroot
 // (/var/unbound/pfb_py_control). Mirrors pfb_unbound_py_atomic_write (stage -> fwrite ->
 // fflush -> fsync -> rename) but uses a COMMAND-CHANNEL permission model rather than the
@@ -4398,10 +4430,13 @@ function pfb_unbound_py_atomic_write_root($path, $content) {
 //   $duration optional seconds (1-3600) for disable/addbypass; ignored otherwise
 //
 // Returns the published sequence (>= 1) on success, or FALSE on an invalid command /
-// invalid argument / write failure. No die()/exit().
-function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '') {
+// invalid argument / lock failure / write failure. No die()/exit().
+// $wait_timeout: seconds to wait for the watcher to apply the command (default 5).
+//   <= 0 = fire-and-forget (skip the wait entirely, return the seq immediately).
+function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_timeout = 5) {
 	global $pfb;
 
+	// Validate the command allow-list before touching the lock -- cheap guard first.
 	$valid_cmds = array('disable', 'enable', 'addbypass', 'removebypass');
 	if (!in_array($cmd, $valid_cmds, TRUE)) {
 		pfb_logger("\nPFBL-03: control command not authorized [ " . htmlspecialchars((string) $cmd) . " ]", 2);
@@ -4430,8 +4465,23 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '') {
 		$record['duration'] = (int) $clean_dur;
 	}
 
-	// Read the current sequence from the channel (first line is no longer used; the seq
-	// rides INSIDE the JSON record) and advance it. A missing/unparseable record -> 1.
+	// Serialize concurrent writers: acquire an exclusive lock before read->increment->publish
+	// so two writers cannot read the same seq and issue duplicate records, and a second
+	// writer cannot overwrite a still-unapplied command.
+	$lockpath = "{$pfb['dnsbldir']}/pfb_py_control.lock";
+	$lock = @fopen($lockpath, 'c');	// 'c': create if absent, no truncate
+	if ($lock === FALSE) {
+		pfb_logger("\nPFBL-03: control channel lock open failed [ {$lockpath} ]", 2);
+		return FALSE;
+	}
+	if (!@flock($lock, LOCK_EX)) {
+		@fclose($lock);
+		pfb_logger("\nPFBL-03: control channel lock acquire failed [ {$lockpath} ]", 2);
+		return FALSE;
+	}
+
+	// Read the current sequence from the channel and advance it. A missing/unparseable
+	// record -> seq 0 -> next publish is 1.
 	$channel = "{$pfb['dnsbldir']}/pfb_py_control";
 	$cur = 0;
 	if (file_exists($channel)) {
@@ -4448,14 +4498,30 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '') {
 
 	$payload = json_encode($record);
 	if ($payload === FALSE) {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
 		pfb_logger("\nPFBL-03: control command [ {$cmd} ] rejected: encode failure", 2);
 		return FALSE;
 	}
 
 	if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
 		return FALSE;
 	}
 
+	// While still holding the lock, optionally wait for the watcher to apply the command
+	// before returning. The command IS on disk regardless; the wait only confirms consumption.
+	if ($wait_timeout > 0) {
+		$applied = pfb_unbound_py_wait_control_applied($record['seq'], $wait_timeout);
+		if (!$applied) {
+			pfb_logger("\nPFBL-03: control command [ {$cmd} ] seq {$record['seq']} published"
+				. " but not confirmed applied within {$wait_timeout}s; the watcher will still apply it", 2);
+		}
+	}
+
+	@flock($lock, LOCK_UN);
+	@fclose($lock);
 	return $record['seq'];
 }
 
