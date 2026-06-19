@@ -620,6 +620,53 @@ def _retain_newest(pkg_paths: list[Path], keep: int) -> list[Path]:
     return [path for _nv, (path, _mt) in ordered[:keep]]
 
 
+def retain_by_channel(
+    pkg_paths: list[Path],
+    *,
+    keep_devel: int,
+    keep_stable: int,
+) -> list[Path]:
+    """Bucket paths by package-name channel and keep the newest ``keep_*`` per channel.
+
+    Channel detection (by the package ``name`` field in each path's manifest):
+      * name ending ``-devel``   → devel channel
+      * name ending ``-nightly`` → nightly channel (left untouched: not pruned here)
+      * anything else            → stable channel
+
+    Pruning rules (reuses ``_retain_newest`` for version-sorted ordering):
+      * ``keep == 0`` → keep ALL of that channel (the "unbounded / disabled" sentinel).
+      * ``keep >= len(bucket)`` → keep all (no-op).
+      * ``keep < len(bucket)`` → prune to the ``keep`` newest.
+
+    Returns the kept paths in a deterministic stable order (devel first, then stable, then
+    nightly; within each bucket newest-first as returned by ``_retain_newest``).
+    """
+    devel: list[Path] = []
+    stable: list[Path] = []
+    nightly: list[Path] = []
+
+    for p in pkg_paths:
+        m = read_compact_manifest(p)
+        name: str = m.get("name", "")
+        if name.endswith("-nightly"):
+            nightly.append(p)
+        elif name.endswith("-devel"):
+            devel.append(p)
+        else:
+            stable.append(p)
+
+    def _prune(bucket: list[Path], keep: int) -> list[Path]:
+        if keep == 0 or keep >= len(bucket):
+            # keep==0 is the "unbounded" sentinel; keep>=len is a no-op.
+            return _retain_newest(bucket, len(bucket)) if bucket else []
+        return _retain_newest(bucket, keep)
+
+    kept_devel = _prune(devel, keep_devel)
+    kept_stable = _prune(stable, keep_stable)
+    # Nightly is left untouched (caller handles its own retention).
+    return kept_devel + kept_stable + nightly
+
+
 def _subprocess_pkg_builder(
     channel: str,
     *,

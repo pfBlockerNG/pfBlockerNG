@@ -1148,3 +1148,282 @@ def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
     for call in seen:
         assert call["annotate"] == {"commit": "deadbeef", "created": "123"}
     assert {c["channel"] for c in seen} == {"devel", "nightly"}
+
+
+# --------------------------------------------------------------------------- #
+# ADR-27 Phase 1: retain_by_channel — channel-keyed release-retention helper
+#
+# These tests pin the helper in isolation (no call-site change in build_repo_matrix
+# yet — Phase 2 wires it in). They cover every branch:
+#   * devel vs stable bucketed independently (one does not affect the other)
+#   * keep < len(bucket) → prune to newest keep (version order + determinism)
+#   * keep >= len(bucket) → no-op (keep all)
+#   * keep == 0 → keep all of that channel (the "unbounded/disabled" sentinel)
+#   * mixed devel+stable+nightly input: nightly left untouched regardless
+#   * before-state assertions where the outcome depends on keep value
+# --------------------------------------------------------------------------- #
+
+
+def _make_pkg_channel(
+    tmp_path: Path,
+    name: str,
+    version: str,
+    *,
+    abi: str = "FreeBSD:15:amd64",
+) -> Path:
+    """Write a minimal .pkg and return its path (name encodes the channel)."""
+    p = tmp_path / f"{name}-{version}.pkg"
+    make_pkg(p, name=name, version=version, abi=abi)
+    return p
+
+
+def test_retain_by_channel_devel_pruned_independently(tmp_path: Path) -> None:
+    """Devel bucket is pruned to keep_devel; stable bucket is untouched when keep_stable=0.
+
+    Scenario: 3 devel versions + 2 stable versions; keep_devel=2, keep_stable=0
+      Given 3 devel pkgs (v1, v2, v3) and 2 stable pkgs (s1.0, s2.0)
+        And keep_devel=2, keep_stable=0 (stable unbounded)
+      When retain_by_channel is called
+      Then devel result contains only the 2 newest (v2, v3) — v1 dropped
+       And stable result contains BOTH stable pkgs (keep_stable=0 = keep all)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    dv3 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.3")
+    sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+
+    # Before-state: all 5 paths provided.
+    all_paths = [dv1, dv2, dv3, sv1, sv2]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=2, keep_stable=0)
+
+    kept_names_versions = {
+        (brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept
+    }
+    # Devel: newest 2 kept (v2, v3); v1 dropped.
+    assert ("pfBlockerNG-devel", "3.0.3") in kept_names_versions
+    assert ("pfBlockerNG-devel", "3.0.2") in kept_names_versions
+    assert ("pfBlockerNG-devel", "3.0.1") not in kept_names_versions
+    # Stable: both kept (keep_stable=0 = unbounded).
+    assert ("pfBlockerNG", "2.0.1") in kept_names_versions
+    assert ("pfBlockerNG", "2.0.2") in kept_names_versions
+
+
+def test_retain_by_channel_stable_pruned_independently(tmp_path: Path) -> None:
+    """Stable bucket is pruned to keep_stable; devel bucket is untouched when keep_devel=0.
+
+    Scenario: 2 devel versions + 3 stable versions; keep_devel=0, keep_stable=1
+      Given 2 devel pkgs (v1, v2) and 3 stable pkgs (s1.0, s2.0, s3.0)
+        And keep_devel=0 (unbounded), keep_stable=1
+      When retain_by_channel is called
+      Then stable result contains only s3.0 (newest 1); s1.0 and s2.0 dropped
+       And devel result contains BOTH devel pkgs (keep_devel=0 = keep all)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+    sv3 = _make_pkg_channel(d, "pfBlockerNG", "2.0.3")
+
+    # Before-state: all 5 paths.
+    all_paths = [dv1, dv2, sv1, sv2, sv3]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=1)
+
+    kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
+    # Stable: only newest (s3.0).
+    assert ("pfBlockerNG", "2.0.3") in kept_nv
+    assert ("pfBlockerNG", "2.0.2") not in kept_nv
+    assert ("pfBlockerNG", "2.0.1") not in kept_nv
+    # Devel: both kept.
+    assert ("pfBlockerNG-devel", "3.0.1") in kept_nv
+    assert ("pfBlockerNG-devel", "3.0.2") in kept_nv
+
+
+def test_retain_by_channel_keep_zero_is_unbounded_sentinel(tmp_path: Path) -> None:
+    """keep==0 for a channel keeps ALL of that channel (the unbounded/disabled sentinel).
+
+    Scenario: keep_devel=0, keep_stable=0
+      Given 3 devel pkgs and 3 stable pkgs
+      When retain_by_channel with both keeps=0
+      Then ALL 6 paths are returned (no pruning)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    all_paths = [_make_pkg_channel(d, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 4)] + [
+        _make_pkg_channel(d, "pfBlockerNG", f"2.0.{i}") for i in range(1, 4)
+    ]
+
+    # Before-state: 6 paths in.
+    assert len(all_paths) == 6
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+
+    # All 6 kept.
+    assert len(kept) == 6
+    kept_versions_devel = {
+        brp.read_compact_manifest(p)["version"]
+        for p in kept
+        if brp.read_compact_manifest(p)["name"] == "pfBlockerNG-devel"
+    }
+    kept_versions_stable = {
+        brp.read_compact_manifest(p)["version"] for p in kept if brp.read_compact_manifest(p)["name"] == "pfBlockerNG"
+    }
+    assert kept_versions_devel == {"3.0.1", "3.0.2", "3.0.3"}
+    assert kept_versions_stable == {"2.0.1", "2.0.2", "2.0.3"}
+
+
+def test_retain_by_channel_keep_larger_than_bucket_is_noop(tmp_path: Path) -> None:
+    """keep >= len(bucket) is a no-op — all paths in that bucket are retained.
+
+    Scenario: keep_devel=100, keep_stable=100 with only 2 devel and 2 stable pkgs
+      Given 2 devel pkgs and 2 stable pkgs
+        And keep values far larger than the buckets
+      When retain_by_channel is called
+      Then all 4 paths are returned (no pruning)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+
+    # Before-state: 4 inputs.
+    all_paths = [dv1, dv2, sv1, sv2]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=100, keep_stable=100)
+
+    assert len(kept) == 4
+
+
+def test_retain_by_channel_version_order_deterministic(tmp_path: Path) -> None:
+    """The newest-N selection uses version order (not filesystem order or name order).
+
+    Scenario: devel pkgs with non-lexicographic versions, keep_devel=2
+      Given devel pkgs at versions 3.0.1, 3.0.9, 3.0.10 (lexicographic order differs)
+        And keep_devel=2
+      When retain_by_channel is called
+      Then 3.0.10 and 3.0.9 are kept (numerically newest 2), 3.0.1 dropped
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    # Write in reverse order so filesystem order can't accidentally "win".
+    p10 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.10")
+    p9 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.9")
+    p1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+
+    # Before-state: all 3 present.
+    kept_all = brp.retain_by_channel([p10, p9, p1], keep_devel=0, keep_stable=0)
+    assert len(kept_all) == 3
+
+    # With keep_devel=2: 3.0.10 and 3.0.9 must survive; 3.0.1 dropped.
+    kept = brp.retain_by_channel([p10, p9, p1], keep_devel=2, keep_stable=0)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+    assert kept_versions == {"3.0.10", "3.0.9"}
+    assert "3.0.1" not in kept_versions
+
+
+def test_retain_by_channel_nightly_untouched(tmp_path: Path) -> None:
+    """Nightly pkgs pass through unchanged regardless of keep_devel / keep_stable.
+
+    Scenario: mixed input with devel, stable, AND nightly pkgs
+      Given 1 devel, 1 stable, 2 nightly pkgs; keep_devel=1, keep_stable=1
+      When retain_by_channel is called
+      Then devel: 1 kept (the only one)
+       And stable: 1 kept (the only one)
+       And BOTH nightly pkgs pass through — nightly is left untouched
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    sv = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    nv1 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260601.1")
+    nv2 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260602.1")
+
+    all_paths = [dv, sv, nv1, nv2]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=1, keep_stable=1)
+
+    kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
+    # Devel: the one devel pkg kept.
+    assert ("pfBlockerNG-devel", "3.0.1") in kept_nv
+    # Stable: the one stable pkg kept.
+    assert ("pfBlockerNG", "2.0.1") in kept_nv
+    # Both nightly pkgs retained untouched.
+    assert ("pfBlockerNG-nightly", "3.0.20260601.1") in kept_nv
+    assert ("pfBlockerNG-nightly", "3.0.20260602.1") in kept_nv
+    assert len(kept) == 4
+
+
+def test_retain_by_channel_mixed_prune_nightly_untouched(tmp_path: Path) -> None:
+    """Mixed input: devel pruned, stable pruned, nightly passed through.
+
+    Scenario: prune both channels from a 3+3+2 mixed input
+      Given 3 devel pkgs, 3 stable pkgs, 2 nightly pkgs
+        And keep_devel=1, keep_stable=2
+      When retain_by_channel is called
+      Then devel: only the newest 1 kept
+       And stable: only the newest 2 kept
+       And both nightly pkgs pass through (untouched)
+       AND each channel is pruned independently (devel prune does not affect stable)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    d1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    d2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    d3 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.3")
+    s1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    s2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+    s3 = _make_pkg_channel(d, "pfBlockerNG", "2.0.3")
+    n1 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260601.1")
+    n2 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260602.1")
+
+    # Before-state: 8 pkgs in, each channel has its full set.
+    all_paths = [d1, d2, d3, s1, s2, s3, n1, n2]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=1, keep_stable=2)
+
+    kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
+
+    # Devel: only newest 1 (3.0.3).
+    assert ("pfBlockerNG-devel", "3.0.3") in kept_nv
+    assert ("pfBlockerNG-devel", "3.0.2") not in kept_nv
+    assert ("pfBlockerNG-devel", "3.0.1") not in kept_nv
+
+    # Stable: newest 2 (2.0.2, 2.0.3); 2.0.1 dropped.
+    assert ("pfBlockerNG", "2.0.3") in kept_nv
+    assert ("pfBlockerNG", "2.0.2") in kept_nv
+    assert ("pfBlockerNG", "2.0.1") not in kept_nv
+
+    # Nightly: both pass through.
+    assert ("pfBlockerNG-nightly", "3.0.20260601.1") in kept_nv
+    assert ("pfBlockerNG-nightly", "3.0.20260602.1") in kept_nv
+
+    # Total: 1 devel + 2 stable + 2 nightly = 5.
+    assert len(kept) == 5
+
+
+def test_retain_by_channel_empty_channel_is_noop(tmp_path: Path) -> None:
+    """An empty channel bucket is a no-op — no KeyError, no side effects.
+
+    Scenario: only stable pkgs provided, no devel, no nightly
+      Given 2 stable pkgs and keep_devel=5
+      When retain_by_channel is called
+      Then both stable pkgs are returned; no error from the empty devel bucket
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
+
+    kept = brp.retain_by_channel([sv1, sv2], keep_devel=5, keep_stable=0)
+
+    kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
+    assert kept_nv == {("pfBlockerNG", "2.0.1"), ("pfBlockerNG", "2.0.2")}
+    assert len(kept) == 2
