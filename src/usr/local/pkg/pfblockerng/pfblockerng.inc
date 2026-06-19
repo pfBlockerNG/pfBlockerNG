@@ -1306,6 +1306,26 @@ function pfb_validate_domain_labels($input) {
 }
 
 
+// Field-aware MaxMind credential notice. MaxMind GeoLite2 requires BOTH an
+// Account ID and a License Key. Returns the notice naming the missing field(s),
+// or '' when both are present.
+function pfb_maxmind_credential_notice(string $maxmind_key, string $maxmind_account): string {
+	$key_missing     = ($maxmind_key === '');
+	$account_missing = ($maxmind_account === '');
+	if (!$key_missing && !$account_missing) {
+		return '';
+	}
+	if ($key_missing && $account_missing) {
+		$need = 'an Account ID and License Key';
+	} elseif ($account_missing) {
+		$need = 'an Account ID';
+	} else {
+		$need = 'a License Key';
+	}
+	return "MaxMind now requires {$need}! Review the IP tab: MaxMind settings for more information.";
+}
+
+
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
 	global $g, $pfb;
@@ -12116,11 +12136,13 @@ function sync_package_pfblockerng($cron='') {
 			$cc_name = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 			if (isset($continent_config['action']) && $continent_config['action'] != 'Disabled' && $pfb['enable'] == 'on') {
 
-				// Maxmind License Key verification and user notification
+				// Maxmind credential verification and user notification
 				if ($maxmind_run_once && !$maxmind_verify) {
-					$mmsg = 'MaxMind now requires a License Key! Review the IP tab: MaxMind settings for more information.';
-					pfb_logger("\n\nURGENT:\n    {$mmsg}\n", 1);
-					file_notice('pfBlockerNG MaxMind', $mmsg, 'pfBlockerNG', '/pfblockerng/pfblockerng_ip.php', 2);
+					$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
+					if ($mmsg !== '') {
+						pfb_logger("\n\nURGENT:\n    {$mmsg}\n", 1);
+						file_notice('pfBlockerNG MaxMind', $mmsg, 'pfBlockerNG', '/pfblockerng/pfblockerng_ip.php', 2);
+					}
 					$maxmind_run_once = FALSE;
 				}
 
@@ -12399,11 +12421,11 @@ function sync_package_pfblockerng($cron='') {
 							$custom	= FALSE;
 						}
 
-						// Maxmind License Key verification
+						// Maxmind credential verification
 						if ($maxmind_run_once && $row['format'] == 'geoip') {
-							$mmsg = 'MaxMind now requires an Account ID and License Key! Review the IP tab: MaxMind settings for more information.';
-							if (empty($pfb['maxmind_key']) || empty($pfb['maxmind_account'])) {
-								pfb_logger("\n\nURGENT:\n    {$mmsg}.\n", 1);
+							$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
+							if ($mmsg !== '') {
+								pfb_logger("\n\nURGENT:\n    {$mmsg}\n", 1);
 								file_notice('pfBlockerNG MaxMind', $mmsg, 'pfBlockerNG', '/pfblockerng/pfblockerng_ip.php', 2);
 							}
 							$maxmind_run_once = FALSE;

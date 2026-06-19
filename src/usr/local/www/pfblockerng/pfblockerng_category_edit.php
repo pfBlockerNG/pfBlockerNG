@@ -583,10 +583,12 @@ if ($_POST && isset($_POST['save'])) {
 			$line++;
 		}
 
-		// Validate MaxMind License Key
-		if ($value == 'geoip' && strpos($key, 'format-') !== FALSE && empty($pfb['maxmind_key'])) {
-			$input_errors[] = "{$type} Source Definitions, Line {$line}: "
-				. 'MaxMind now requires a License Key! Review the IP tab: MaxMind settings for more information.';
+		// Validate MaxMind credentials
+		if ($value == 'geoip' && strpos($key, 'format-') !== FALSE) {
+			$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
+			if ($mmsg !== '') {
+				$input_errors[] = "{$type} Source Definitions, Line {$line}: " . $mmsg;
+			}
 		}
 	}
 

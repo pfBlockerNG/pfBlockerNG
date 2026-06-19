@@ -1880,11 +1880,10 @@ $section->addInput(new Form_StaticText(
 	. '&emsp;Use &emsp;<strong>CTRL+CLICK</strong>&emsp;to&emsp;<strong>select/unselect</strong>&emsp; the IPv4/6 Countries below as required.'
 ));
 
-// Maxmind License Key verification
-if (empty($pfb['maxmind_key'])) {
-	print_callout('<br /><br /><p><strong>'
-			. 'MaxMind now requires a License Key! Review the IP tab: MaxMind settings for more information.'
-			. '</strong></p><br />', 'danger', '');
+// Maxmind credential verification
+$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
+if ($mmsg !== '') {
+	print_callout('<br /><br /><p><strong>' . $mmsg . '</strong></p><br />', 'danger', '');
 }
 
 $group = new Form_Group('');

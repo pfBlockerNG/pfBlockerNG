@@ -387,14 +387,13 @@ if (isset($savemsg)) {
 	<div id="<?=$pageid;?>" class="panel-body">
 
 		<?php
-			// Maxmind License Key verification
+			// Maxmind credential verification
 			if ($gtype == 'geoip') {
 				$maxmind_verify = TRUE;
-				if (empty($pfb['maxmind_key'])) {
+				$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
+				if ($mmsg !== '') {
 					$maxmind_verify = FALSE;
-					print_callout('<br /><p><strong>'
-							. 'MaxMind now requires a License Key! Review the IP tab: MaxMind settings for more information.'
-							. '</strong></p><br />', 'warning', '');
+					print_callout('<br /><p><strong>' . $mmsg . '</strong></p><br />', 'warning', '');
 				}
 			}
 		?>
