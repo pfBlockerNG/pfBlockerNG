@@ -58,7 +58,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
 from .conftest import mask_page_identity
+from .webui import extract_csrf_token, looks_like_login_page
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -310,3 +312,230 @@ def test_addrow_clones_a_source_row_and_renumbers(
     expect(page.locator("select[id^='state-']")).to_have_count(before + 1, timeout=JS_TIMEOUT_MS)
     expect(page.locator("#state-1")).to_be_attached(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "addrow_after")
+
+
+# --------------------------------------------------------------------------- #
+# Alias-type validation (#356): wrong alias type in a port/address field is
+# rejected by the server with the expected error string.
+#
+# Implementation note: the alias-type check (``pfb_alias_field_type_ok``) fires
+# on the SAVE round-trip (a PHP server validation), not purely in JS.  Driving
+# it through a Playwright browser would require navigating away from the page on
+# submit (the error page replaces the form page) and then back — a brittle,
+# slow flow that is harder to reason about than a direct HTTP POST.  The HTTP
+# approach (webui.session.post) is the same mechanism ``test_category_edit.py``
+# uses for every save flow and is the accepted pattern in this suite.  We use
+# ``webui`` here (its session is already authenticated, shared, and correct) with
+# a fresh CSRF token harvested from a real GET — the same pattern as
+# ``_post_form`` in ``test_category_edit.py``.
+# --------------------------------------------------------------------------- #
+
+_CATEGORY_PAGE = "/pfblockerng/pfblockerng_category_edit.php"
+_SAVE_TIMEOUT = 120.0
+_CFG_IPV4 = "installedpackages/pfblockernglistsv4/config"
+
+
+def _post_ipv4_form(webui: WebUI, payload: dict[str, str]) -> str:
+    """POST a fully-enumerated IPv4 category-edit payload and return the response body.
+
+    GETs the page first to harvest a fresh ``__csrf_magic`` token, then POSTs
+    directly via the raw session (same pattern as ``_post_form`` in
+    ``test_category_edit.py`` — avoids the rowhelper scrape limitation).
+    """
+    get = webui.get(_CATEGORY_PAGE, params={"type": "ipv4"})
+    assert not looks_like_login_page(get.text), "category GET returned the login form (session lost)"
+    token = extract_csrf_token(get.text)
+    data = dict(payload)
+    data["__csrf_magic"] = token
+    data["save"] = "save"
+    resp = webui.session.post(webui.url(_CATEGORY_PAGE), data=data, verify=webui._verify, timeout=_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "category POST returned the login form (session lost)"
+    return resp.text
+
+
+def _free_rowid_ipv4(vm: helpers.SmokeVM) -> int:
+    """Next free IPv4 list rowid (gaps in existing rows are avoided)."""
+    pre = (
+        f"$c = config_get_path({helpers._php_str(_CFG_IPV4)}, array());\n"
+        "$max = -1;\n"
+        "foreach (array_keys($c) as $k) { if (is_numeric($k) && (int)$k > $max) { $max = (int)$k; } }\n"
+        "$free = $max + 1;"
+    )
+    return int(helpers._php_read_scalar(vm, pre, "$free", timeout=_SAVE_TIMEOUT))
+
+
+def _del_rowid_ipv4(vm: helpers.SmokeVM, rowid: int) -> None:
+    snippet = (
+        f"config_del_path({helpers._php_str(f'{_CFG_IPV4}/{rowid}')});\n"
+        "write_config('pfBlockerNG smoke: drop alias-type test row');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=_SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_del_rowid_ipv4({rowid}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+def _mk_alias(vm: helpers.SmokeVM, name: str, alias_type: str, address: str) -> None:
+    """Append a pfSense firewall alias via the config API."""
+    row = {
+        "name": name,
+        "type": alias_type,
+        "address": address,
+        "descr": "pfBlockerNG smoke alias",
+        "detail": "",
+    }
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        f"$aliases[] = {helpers._php_kv_array(row)};\n"
+        "config_set_path('aliases/alias', $aliases);\n"
+        "write_config('pfBlockerNG smoke: create test alias');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=_SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_mk_alias({name!r}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+def _rm_alias(vm: helpers.SmokeVM, name: str) -> None:
+    """Remove the first firewall alias whose name matches ``name``."""
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$out = array();\n"
+        "foreach ($aliases as $a) {\n"
+        f"  if (($a['name'] ?? '') !== {helpers._php_str(name)}) {{ $out[] = $a; }}\n"
+        "}\n"
+        "config_set_path('aliases/alias', $out);\n"
+        "write_config('pfBlockerNG smoke: delete test alias');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=_SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_rm_alias({name!r}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+def _ipv4_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
+    """A complete IPv4 alias save payload (one Disabled placeholder row)."""
+    payload = {
+        "type": "ipv4",
+        "rowid": str(rowid),
+        "aliasname": aliasname,
+        "description": "smoke alias-type test",
+        "action": "Deny_Both",
+        "cron": "Never",
+        "dow": "",
+        "sort": "sort",
+        "aliaslog": "enabled",
+        "stateremoval": "enabled",
+        "autoproto_in": "tcp",
+        "agateway_in": "default",
+        "autoproto_out": "any",
+        "agateway_out": "default",
+        "suppression_cidr": "Disabled",
+        "srcint": "",
+        "script_pre": "",
+        "script_post": "",
+        "custom": "",
+        "format-0": "auto",
+        "state-0": "Disabled",
+        "url-0": "",
+        "header-0": "",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_alias_type_port_field_rejects_network_alias(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+    browser_page: "Page",  # noqa: ARG001
+    screenshot_dir: Path,  # noqa: ARG001
+) -> None:
+    """Saving a network alias in ``aliasports_in`` (a port field) is rejected.
+
+    Scenario: ``pfb_alias_field_type_ok()`` validates that port alias fields
+    only accept port-type aliases. Supplying a network alias produces the error
+    ``Must use a Port-type alias`` in the response; a valid port alias in the
+    same field is accepted.
+
+    Background:
+        Issue #356 added ``pfb_alias_field_type_ok()`` which returns FALSE when
+        an address-type alias (``alias_get_type() === 'network'``) is passed to
+        a port field (``aliasports_*``). The save handler converts that to an
+        ``$input_errors`` entry whose text matches ``'Must use a Port-type alias'``.
+        A browser form-submit round-trip would navigate away from the page, making
+        it fragile to drive with Playwright; the server-side validation is
+        equivalently exercised through the authenticated HTTP session (the same
+        mechanism ``test_category_edit.py`` uses for all save flows).
+
+    Given:
+        - A network alias ``smkbwtypenet`` exists in the firewall config.
+        - A port alias ``smkbwtypeport`` exists in the firewall config.
+        - The target IPv4 rowid is free.
+    When (reject):
+        POST the IPv4 save with ``aliasports_in=smkbwtypenet`` (network alias
+        in a port field) and ``autoports_in=on``, ``autoproto_in=tcp``.
+    Then (reject):
+        - The response body contains ``Must use a Port-type alias``
+          (server validation error — the config is NOT written).
+    When (accept):
+        POST the same payload with ``aliasports_in=smkbwtypeport`` (correct
+        port alias in the port field).
+    Then (accept):
+        - The response body does NOT contain ``Must use a Port-type alias``.
+        - config.xml stores ``aliasports_in='smkbwtypeport'``.
+    """
+    vm = smoke_vm
+    net_alias = "smkbwtypenet"
+    port_alias = "smkbwtypeport"
+    rowid = _free_rowid_ipv4(vm)
+    base = f"{_CFG_IPV4}/{rowid}"
+
+    _mk_alias(vm, net_alias, "network", "192.0.2.0/24")
+    _mk_alias(vm, port_alias, "port", "8080")
+    try:
+        # BEFORE: rowid is free (no aliasports_in set yet).
+        assert helpers.config_get(vm, f"{base}/aliasports_in") == "", (
+            f"precondition: rowid {rowid} not free (aliasports_in already set)"
+        )
+
+        # REJECT: network alias supplied to a port field -> server validation error.
+        reject_body = _post_ipv4_form(
+            webui,
+            _ipv4_payload(
+                rowid,
+                "smkbwtype",
+                autoports_in="on",
+                autoproto_in="tcp",
+                aliasports_in=net_alias,
+            ),
+        )
+        assert "Must use a Port-type alias" in reject_body, (
+            f"expected 'Must use a Port-type alias' error in response when a network alias "
+            f"is used in a port field, but it was absent (first 500 chars: {reject_body[:500]!r})"
+        )
+        # Config must NOT have been written (the error aborted the save).
+        assert helpers.config_get(vm, f"{base}/aliasports_in") == "", (
+            "aliasports_in must not be written when the save is rejected by alias-type validation"
+        )
+
+        # ACCEPT: correct port alias in the port field -> no error, config written.
+        accept_body = _post_ipv4_form(
+            webui,
+            _ipv4_payload(
+                rowid,
+                "smkbwtype",
+                autoports_in="on",
+                autoproto_in="tcp",
+                aliasports_in=port_alias,
+            ),
+        )
+        assert "Must use a Port-type alias" not in accept_body, (
+            "expected no alias-type error when a port alias is used in a port field"
+        )
+        assert helpers.config_get(vm, f"{base}/aliasports_in") == port_alias, (
+            f"aliasports_in was not written after a valid save with port alias {port_alias!r}"
+        )
+    finally:
+        _del_rowid_ipv4(vm, rowid)
+        _rm_alias(vm, net_alias)
+        _rm_alias(vm, port_alias)
