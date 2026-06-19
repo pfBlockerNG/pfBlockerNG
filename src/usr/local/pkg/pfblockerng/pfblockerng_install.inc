@@ -241,50 +241,57 @@ $upgrade_type = array('pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdn
 
 foreach ($upgrade_type as $type) {
 	$pfb_type_config = PfbConfig::readSection("installedpackages/{$type}/config");
-	if (is_array($pfb_type_config)) {
-		$pfb_type_items = $pfb_type_config;
 
-		// Remove any empty '<config></config>' XML tags
-		if (empty($pfb_type_items[0])) {
-			unset($pfb_type_items[0]);
-			PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
-			$ufound = TRUE;
-		}
+	// Skip absent sections entirely — readSection() returns [] for a missing
+	// section, so is_array() is always true; use empty() to distinguish absent
+	// from present (restores the pre-ADR-29 NULL → is_array(NULL)=false guard).
+	if (empty($pfb_type_config)) {
+		continue;
+	}
 
-		$pfb_type_items = PfbConfig::readSection("installedpackages/{$type}/config");
-		foreach ($pfb_type_items as $key => $utype) {
-			if (isset($utype['autoports'])) {
-				$ufound = TRUE;
-				if ($utype['autoports'] == 'on' && !empty($utype['aliasports']) && !isset($conf_config[$key]['autoports_in'])) {
-					$pfb_type_items[$key]['autoports_in']  = 'on';
-					$pfb_type_items[$key]['aliasports_in'] = $utype['aliasports'];
-				}
-				unset($pfb_type_items[$key]['autoports'], $pfb_type_items[$key]['aliasports']);
+	$pfb_type_items = $pfb_type_config;
+	$type_ufound    = FALSE;
+
+	// Remove any empty '<config></config>' XML tags.
+	// Only unset index 0 when it actually exists and is empty.
+	if (array_key_exists(0, $pfb_type_items) && empty($pfb_type_items[0])) {
+		unset($pfb_type_items[0]);
+		$type_ufound = TRUE;
+	}
+
+	foreach ($pfb_type_items as $key => $utype) {
+		if (isset($utype['autoports'])) {
+			$type_ufound = TRUE;
+			if ($utype['autoports'] == 'on' && !empty($utype['aliasports']) && !isset($pfb_type_items[$key]['autoports_in'])) {
+				$pfb_type_items[$key]['autoports_in']  = 'on';
+				$pfb_type_items[$key]['aliasports_in'] = $utype['aliasports'];
 			}
-			if (isset($utype['autodest'])) {
-				$ufound = TRUE;
-				if ($utype['autodest'] == 'on' && !empty($utype['aliasdest']) && !isset($conf_config[$key]['autoaddr_in'])) {
-					$pfb_type_items[$key]['autoaddr_in']  = 'on';
-					$pfb_type_items[$key]['aliasaddr_in'] = $utype['aliasdest'];
-				}
-				unset($pfb_type_items[$key]['autodest'], $pfb_type_items[$key]['aliasdest']);
-			}
-			if (isset($utype['autonot'])) {
-				$ufound = TRUE;
-				if ($utype['autonot'] == 'on' && !isset($conf_config[$key]['autonot_in'])) {
-					$pfb_type_items[$key]['autonot_in'] = $utype['autonot'];
-				}
-				unset($pfb_type_items[$key]['autonot']);
-			}
-			if (isset($utype['autoproto'])) {
-				$ufound = TRUE;
-				$pfb_type_items[$key]['autoproto_in'] = $utype['autoproto'];
-				unset($pfb_type_items[$key]['autoproto']);
-			}
+			unset($pfb_type_items[$key]['autoports'], $pfb_type_items[$key]['aliasports']);
 		}
-		if ($ufound) {
-			PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
+		if (isset($utype['autodest'])) {
+			$type_ufound = TRUE;
+			if ($utype['autodest'] == 'on' && !empty($utype['aliasdest']) && !isset($pfb_type_items[$key]['autoaddr_in'])) {
+				$pfb_type_items[$key]['autoaddr_in']  = 'on';
+				$pfb_type_items[$key]['aliasaddr_in'] = $utype['aliasdest'];
+			}
+			unset($pfb_type_items[$key]['autodest'], $pfb_type_items[$key]['aliasdest']);
 		}
+		if (isset($utype['autonot'])) {
+			$type_ufound = TRUE;
+			if ($utype['autonot'] == 'on' && !isset($pfb_type_items[$key]['autonot_in'])) {
+				$pfb_type_items[$key]['autonot_in'] = $utype['autonot'];
+			}
+			unset($pfb_type_items[$key]['autonot']);
+		}
+		if (isset($utype['autoproto'])) {
+			$type_ufound = TRUE;
+			$pfb_type_items[$key]['autoproto_in'] = $utype['autoproto'];
+			unset($pfb_type_items[$key]['autoproto']);
+		}
+	}
+	if ($type_ufound) {
+		PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
+		$ufound = TRUE;
 	}
 }
 

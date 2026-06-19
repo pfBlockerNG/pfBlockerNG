@@ -1401,7 +1401,7 @@ function pfb_global() {
 	$pfb['safesearch_enable']	= PfbConfig::read('safesearch_enable');
 	$pfb['safesearch_youtube']	= PfbConfig::read('safesearch_youtube');
 	$pfb['safesearch_doh']		= PfbConfig::read('safesearch_doh');
-	$pfb['safesearch_doh_list']	= explode(',', PfbConfig::read('safesearch_doh_list'));
+	$pfb['safesearch_doh_list']	= array_values(array_filter(array_map('trim', explode(',', PfbConfig::read('safesearch_doh_list'))), 'strlen'));
 
 	// DNSBL SafeSearch
 	$pfb['dnsbl_safe_search'] = FALSE;

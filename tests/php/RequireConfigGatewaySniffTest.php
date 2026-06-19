@@ -92,8 +92,9 @@ final class RequireConfigGatewaySniffTest extends TestCase
 	}
 
 	/**
-	 * Violating fixture: three raw config_*_path calls on registered keys MUST
-	 * each be flagged — one per gated function (get / set / del).
+	 * Violating fixture: four raw config_*_path calls on registered keys MUST
+	 * each be flagged — one per gated function (get / set / del) plus one where
+	 * an inline comment appears between '(' and the key (comment-evasion guard).
 	 *
 	 * Before/after proof: the exact same call patterns appear in the compliant
 	 * fixture but on FOREIGN keys — zero findings there proves the registered
@@ -104,21 +105,22 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		$findings = $this->findingsFor('gateway_violation.php');
 
 		$this->assertCount(
-			3,
+			4,
 			$findings,
-			'exactly three raw registered-key calls must be flagged (get / set / del)'
+			'exactly four raw registered-key calls must be flagged (get / set / del / comment-evasion)'
 		);
 
 		$lines = array_column($findings, 'line');
 		sort($lines);
 
-		// Line 19: config_get_path on pfb_keep (gen section)
-		// Line 22: config_set_path on pfb_dnsbl (DNSBL settings section)
-		// Line 25: config_del_path on safesearch_enable (SafeSearch section)
+		// Line 20: config_get_path on pfb_keep (gen section)
+		// Line 23: config_set_path on pfb_dnsbl (DNSBL settings section)
+		// Line 26: config_del_path on safesearch_enable (SafeSearch section)
+		// Line 29: config_get_path with inline comment before the key (comment-evasion)
 		$this->assertSame(
-			[19, 22, 25],
+			[20, 23, 26, 29],
 			$lines,
-			'findings must land on the three raw registered-key call lines'
+			'findings must land on the four raw registered-key call lines'
 		);
 
 		foreach ($findings as $finding) {
