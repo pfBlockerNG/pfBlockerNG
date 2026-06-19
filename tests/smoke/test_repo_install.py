@@ -1857,14 +1857,16 @@ def test_release_rollback_to_retained_older_version(repo_vm: SmokeVM, tmp_path: 
     src = Path(pkg)
 
     base_version = read_compact_version(src)
-    lo_version = f"{base_version}_lo"
-    hi_version = f"{base_version}_hi"
+    lo_version = f"{base_version}_1"
+    hi_version = f"{base_version}_9"
     # Sanity: the forged versions must be distinct so each transition is real.
     assert lo_version != hi_version
     # The rollback target must sort BELOW the high version so pkg install <name> picks hi by default.
-    # pkg version-sorts by PORTVERSION rules: _lo < _hi lexicographically under pkg's epoch/revision
-    # model. Verified: reversion_pkg only rewrites the version string; all other manifest fields
-    # (including deps) are copied verbatim, so both builds have identical RUN_DEPENDS.
+    # pkg version-sorts the trailing ``_N`` as the numeric PORTREVISION, so _1 < _9 (same as the
+    # _1->_9 upgrade cases above). A non-numeric suffix (_lo/_hi) would instead sort ALPHABETICALLY
+    # under pkg's PORTREVISION rules — "lo" > "hi" — inverting the intended order. Verified:
+    # reversion_pkg only rewrites the version string; all other manifest fields (including deps)
+    # are copied verbatim, so both builds have identical RUN_DEPENDS.
 
     lo_pkg = reversion_pkg(src, lo_version, tmp_path / "rollback_lo")
     hi_pkg = reversion_pkg(src, hi_version, tmp_path / "rollback_hi")
