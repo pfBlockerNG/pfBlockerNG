@@ -41,6 +41,17 @@ while the PR is in review / awaiting CI, **🏁** on merge + cleanup. Format
 `<emoji> ***#NN***: ***Title***`; once a PR exists, carry its number —
 `<emoji> ***#NN***(***#PR***): ***Title***` — trimming the title to the ~28-char budget.
 
+## Step 0 — Sync to the latest remote base FIRST (before triaging or planning)
+
+Before anything else — **every invocation, including when you already handled another issue or ADR
+earlier in this session** — `git fetch origin` and ground all triage, planning, and work on the
+just-fetched `origin/devel` (or the chosen base). The remote advances out of band (parallel agents
+land commits), so re-fetch each time; never plan or branch off a stale local `devel` or an
+in-session snapshot left over from a previous item. A stale base re-runs bugs the base has already
+fixed and sends you chasing a phantom regression (CLAUDE.md "Rebase onto the latest base BEFORE
+opening a PR"). This governs Step 6: cut a fresh `issue/{NN}-{slug}` from `origin/devel`, and when
+**reusing/resuming** an existing branch, rebase it onto the freshly-fetched `origin/devel` first.
+
 ## Step 1 — Parse args
 
 Args string: `{{ args }}`
@@ -200,6 +211,9 @@ Set up idempotently (mirrors `/adr-phase` Step 3):
   `issue/{NN}`): reuse an existing one; else if the branch exists
   `git worktree add <path> <branch>`; else
   `git worktree add <path> -b issue/{NN}-{slug} origin/devel`.
+- **On reuse, rebase the branch onto the freshly-fetched `origin/devel` (Step 0) before
+  executing steps** — a branch cut earlier in (or before) this session must pick up commits
+  the base gained since, or the fix runs against an already-fixed base.
 - **Collision** with an unrelated `issue/{NN}-{slug}` → append `-{epoch}` and use
   that name for the rest of the run.
 - **Labels**: mark the issue picked up — remove none, add `WIP` (CLAUDE.md

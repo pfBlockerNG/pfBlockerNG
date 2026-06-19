@@ -42,6 +42,18 @@ is just a loop over the single-phase procedure; nothing may differ because it ra
 under `all` versus a single invocation. There is **one worktree per ADR**, reused
 across phases whether you call each phase yourself or `all` loops them.
 
+## Step 0 — Sync to the latest remote base FIRST (before parsing or planning)
+
+Before anything else — **every invocation, including when you already implemented another ADR or
+issue earlier in this session** — `git fetch origin` and base all work on the just-fetched
+`origin/<base>` (default `origin/devel`). The remote advances out of band (parallel agents land
+commits), so re-fetch and re-base each time; never plan or branch off a stale local `devel` or an
+in-session snapshot left over from a previous item. A stale base re-runs bugs the base has already
+fixed and sends you chasing a phantom regression (CLAUDE.md "Rebase onto the latest base BEFORE
+opening a PR"). This governs Step 3: cut a fresh `adr/{NN}-{slug}` from `origin/<base>`, and when
+**reusing/resuming** an existing branch, rebase it onto the freshly-fetched `origin/<base>`
+(`git -C <path> rebase origin/<base>`; `--force-with-lease` to push) **before** running any phase.
+
 ## Step 1 — Parse args
 
 Args string: `{{ args }}`
@@ -95,6 +107,10 @@ checkout is never edited by phases. Set it up idempotently:
   slug scheme is still picked up rather than duplicated):
   - If a worktree for this ADR's branch already exists → reuse it.
   - Else if the branch exists → `git worktree add <path> <branch>`.
+  - **On either reuse path, rebase the branch onto the freshly-fetched `origin/<base>` (Step 0)
+    before running any phase** (`git -C <path> rebase origin/<base>`; `--force-with-lease` to
+    push) — a branch cut earlier in (or before) this session must pick up commits the base
+    gained since, or its phases run against an already-fixed base.
   - Else (cutting `adr/{NN}-{slug}` fresh): `git fetch origin <base>`, then **check the
     base for unpushed work** — `git rev-list --count origin/<base>..<base>`. **If
     the local base branch has commits not on the remote, WARN the user and ask
