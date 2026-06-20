@@ -399,3 +399,165 @@ if (!function_exists('get_dnsavailable')) {
 		return (bool) ($GLOBALS['pfb_test_dns_available'] ?? true);
 	}
 }
+
+// --- pfb_collect_localip() doubles ---
+//
+// These support testing the local-IP collection logic off-appliance.
+// Tests seed $GLOBALS['pfb_test_*'] maps; the doubles serve those values.
+
+if (!function_exists('get_interfaces_with_gateway')) {
+	// pfSense interfaces.inc: returns an array of friendly interface names that have
+	// a gateway configured. Tests seed $GLOBALS['pfb_test_interfaces_with_gateway']
+	// (a plain list of names, default []); absent the key → empty list.
+	function get_interfaces_with_gateway() {
+		return $GLOBALS['pfb_test_interfaces_with_gateway'] ?? [];
+	}
+}
+
+if (!function_exists('get_interface_ip')) {
+	// pfSense interfaces.inc: returns the runtime IPv4 address for a friendly interface
+	// name, or null when unconfigured. Tests seed $GLOBALS['pfb_test_interface_ip']
+	// (map of name => ipv4 string, default []); absent key → null (no address).
+	function get_interface_ip($interface = 'wan', $gateways_status = false) {
+		$map = $GLOBALS['pfb_test_interface_ip'] ?? [];
+		return $map[$interface] ?? null;
+	}
+}
+
+if (!function_exists('get_interface_ipv6')) {
+	// pfSense interfaces.inc: returns the runtime IPv6 address for a friendly interface
+	// name, or null when unconfigured. Tests seed $GLOBALS['pfb_test_configured_ipv6']
+	// (map of name => ipv6 string, default []); absent key → null.
+	function get_interface_ipv6($interface = 'wan', $flush = false, $linklocal_fallback = false, $gateways_status = false) {
+		$map = $GLOBALS['pfb_test_configured_ipv6'] ?? [];
+		return $map[$interface] ?? null;
+	}
+}
+
+if (!function_exists('get_interface_subnetv6')) {
+	// pfSense interfaces.inc: returns the runtime IPv6 prefix length (integer as string)
+	// for a friendly interface name, or null when unconfigured. Tests seed
+	// $GLOBALS['pfb_test_interface_subnetv6'] (map of name => bits string, default []).
+	function get_interface_subnetv6($interface = 'wan') {
+		$map = $GLOBALS['pfb_test_interface_subnetv6'] ?? [];
+		return $map[$interface] ?? null;
+	}
+}
+
+if (!function_exists('get_interface_subnet')) {
+	// pfSense interfaces.inc: returns the runtime IPv4 prefix length (integer as string)
+	// for a friendly interface name, or null when unconfigured. Tests seed
+	// $GLOBALS['pfb_test_interface_subnet'] (map of name => bits string, default []).
+	function get_interface_subnet($interface = 'wan') {
+		$map = $GLOBALS['pfb_test_interface_subnet'] ?? [];
+		return $map[$interface] ?? null;
+	}
+}
+
+if (!function_exists('get_configured_ipv6_addresses')) {
+	// pfSense interfaces.inc: returns a map of friendly-interface-name => runtime-IPv6-addr
+	// for every interface that currently has an IPv6 address (incl. track6/dhcp6/SLAAC).
+	// Tests seed $GLOBALS['pfb_test_configured_ipv6'] (same map the per-interface
+	// get_interface_ipv6() reads from, so one seed covers both). Default → [].
+	function get_configured_ipv6_addresses($linklocal_fallback = false) {
+		return $GLOBALS['pfb_test_configured_ipv6'] ?? [];
+	}
+}
+
+if (!function_exists('gen_subnetv6')) {
+	// pfSense util.inc: given an IPv6 address and a prefix-length integer/string,
+	// return the network address in 'addr/bits' notation. Faithful implementation
+	// using PHP's inet_pton/inet_ntop to mask out host bits.
+	function gen_subnetv6($ipaddr, $bits) {
+		$bits = (int) $bits;
+		if ($bits < 0 || $bits > 128) {
+			return '';
+		}
+		$packed = @inet_pton((string) $ipaddr);
+		if ($packed === false) {
+			return '';
+		}
+		// Build a 128-bit mask with $bits leading 1s.
+		$mask   = str_repeat("\xff", (int) ($bits / 8));
+		$remain = $bits % 8;
+		if ($remain > 0) {
+			$mask .= chr(0xff & (0xff << (8 - $remain)));
+		}
+		$mask = str_pad($mask, 16, "\x00");
+		// AND each byte of the address with the mask.
+		$net = '';
+		for ($i = 0; $i < 16; $i++) {
+			$net .= chr(ord($packed[$i]) & ord($mask[$i]));
+		}
+		return inet_ntop($net) . '/' . $bits;
+	}
+}
+
+if (!function_exists('subnetv4_expand')) {
+	// pfSense util.inc: expand a CIDR subnet (e.g. '192.168.1.0/24') to a flat array
+	// of all host IP strings in that range. Faithful but capped at 65536 hosts so an
+	// accidental wide subnet can't OOM a test run.
+	function subnetv4_expand($subnet) {
+		if (strpos($subnet, '/') === false) {
+			return [];
+		}
+		[$ip, $bits] = explode('/', $subnet, 2);
+		$bits = (int) $bits;
+		if ($bits < 0 || $bits > 32) {
+			return [];
+		}
+		$base  = ip2long($ip);
+		if ($base === false) {
+			return [];
+		}
+		$count = 1 << (32 - $bits);
+		// Mask to the network address.
+		$mask  = $bits === 0 ? 0 : (~0 << (32 - $bits));
+		$base  = $base & $mask;
+		// Cap to avoid OOM in tests.
+		$cap = min($count, 65536);
+		$out = [];
+		for ($i = 0; $i < $cap; $i++) {
+			$out[] = long2ip($base + $i);
+		}
+		return $out;
+	}
+}
+
+if (!function_exists('ip_in_subnet')) {
+	// pfSense util.inc: TRUE when $addr falls within $subnet (supports both IPv4 and IPv6).
+	// Faithful implementation using inet_pton for both families.
+	function ip_in_subnet($addr, $subnet) {
+		if (strpos($subnet, '/') === false) {
+			return false;
+		}
+		[$net_addr, $bits] = explode('/', $subnet, 2);
+		$bits = (int) $bits;
+
+		$addr_packed = @inet_pton((string) $addr);
+		$net_packed  = @inet_pton((string) $net_addr);
+		if ($addr_packed === false || $net_packed === false) {
+			return false;
+		}
+		$len = strlen($addr_packed);
+		if ($len !== strlen($net_packed)) {
+			// Different address families.
+			return false;
+		}
+		// Compare $bits leading bits.
+		$full_bytes = (int) ($bits / 8);
+		$rem        = $bits % 8;
+		for ($i = 0; $i < $full_bytes; $i++) {
+			if (ord($addr_packed[$i]) !== ord($net_packed[$i])) {
+				return false;
+			}
+		}
+		if ($rem > 0 && $full_bytes < $len) {
+			$mask = 0xff & (0xff << (8 - $rem));
+			if ((ord($addr_packed[$full_bytes]) & $mask) !== (ord($net_packed[$full_bytes]) & $mask)) {
+				return false;
+			}
+		}
+		return true;
+	}
+}
