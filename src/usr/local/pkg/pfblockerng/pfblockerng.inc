@@ -11357,6 +11357,13 @@ function sync_package_pfblockerng($cron='') {
 								$custom = FALSE;
 							}
 
+							// ADR-31 P4: per-row action → manifest mode.
+							// 'action' is a dynamic per-row key (like 'custom') — read
+							// directly; default/absent ⇒ 'Deny' (deny path, byte-identical).
+							// Config storage freeze (ADR-28): only 'Permit'/'Deny' are stored;
+							// absent is treated as 'Deny'.
+							$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
+
 							// Global DNSBL Logging/Blocking mode
 							if (!empty($pfb['dnsbl_global_log'])) {
 								$list['logging'] = $pfb['dnsbl_global_log'];
@@ -11413,10 +11420,12 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-07 P8: a reused feed isn't re-parsed, so read the
 								// persisted '.abp' marker to carry its format_hint forward.
 								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
+								// ADR-31 P4: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
-									$custom ? 'user' : 'feed');
+									$custom ? 'user' : 'feed',
+									$mode);
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
 								$alias_cnt		= $alias_cnt + $list_cnt;
@@ -12010,10 +12019,12 @@ function sync_package_pfblockerng($cron='') {
 								// their RAW lines through to the Python parser (parse_abp); all
 								// other feeds stay 'plain' (PHP-extracted bare domains).
 								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
+								// ADR-31 P4: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									$easylist ? 'abp' : 'plain',
-									$custom ? 'user' : 'feed');
+									$custom ? 'user' : 'feed',
+									$mode);
 
 								// ADR-07 P8: persist the ABP marker so a future reuse build (which
 								// does not re-parse the feed) carries the format_hint forward.
