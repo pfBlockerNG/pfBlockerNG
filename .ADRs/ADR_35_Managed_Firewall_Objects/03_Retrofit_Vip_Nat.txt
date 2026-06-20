@@ -1,0 +1,127 @@
+================================================================================
+PHASE 3 PROMPT — Retrofit VIP + NAT onto the shared layer (behaviour-preserving)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md   (read §1, §2.1, §2.2, §6 Phase 3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/35-managed-firewall-objects (off devel). Phase 3
+rewires the existing VIP + DNSBL-NAT call sites to use the shared pfb_fwobj_find/remove helpers.
+Observable behaviour must be IDENTICAL — the Phase 1 golden suite is the gate. One commit, push
+directly (open a PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The shared layer exists (Phase 2) and is proven correct in isolation. Now the existing ad-hoc
+VIP and NAT code must call it — so the per-section marker logic is in one place and the Phase 4
+sweep is meaningful. The constraint is absolute: the Phase 1 oracle must stay green. If it
+doesn't, the retrofit changed behaviour and must be corrected before proceeding.
+
+REQUIRED READING
+FIRST, read the prior phase's handoff:
+.ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/02_Results.txt — it must confirm: the exact
+function signatures in pfblockerng_fwobj.inc, the constant names, how $marker matching works
+for prefix vs exact string, and the go-ahead for Phase 3. If it is missing, Phase 2 is not
+complete; STOP and report.
+
+Then read:
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — §2.1 (per-area decision), §2.2 (no persisted
+  marker change; identical idempotency; double-guard preserved; user objects inviolable).
+- .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01_Results.txt — the Phase 1 oracle fixture
+  shapes; what the tests drive and assert.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    - pfb_find_marked_vip()  (line ~1121) — the function to retrofit; it currently reads
+      config_get_path('virtualip/vip', []) and loops looking for descr matching
+      PFB_AUTO_VIP_DESCR_V4/V6. Replace the loop body with a call to pfb_fwobj_find().
+    - pfb_manage_dnsbl_vip()  (line ~1178) — the create + disable logic. On disable it calls
+      pfb_find_marked_vip() then checks the IP double-guard before removing. The double-guard
+      MUST be preserved exactly — pass it as the $guard callable to pfb_fwobj_remove().
+    - pfb_create_dnsbl()  (line ~3775) — the NAT block. Retrofit the remove-on-disable path
+      (the strpos loop) to call pfb_fwobj_remove() with the 'pfB DNSBL' marker. The add-on-
+      enable path writes the entry with 'pfB DNSBL - DO NOT EDIT' — no change to what is
+      written; only the removal detection uses the shared helper.
+- src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc (from Phase 2) — the helpers to call.
+- tests/php/FwobjCurrentBehaviourTest.php (Phase 1 oracle) — must stay green after this phase.
+- CLAUDE.md — ADR-28 (storage freeze: no persisted string changes), PHP standards.
+
+ACTION PLAN
+1. Retrofit pfb_find_marked_vip():
+   - Replace the manual loop over config_get_path('virtualip/vip', []) with a call to
+     pfb_fwobj_find('virtualip/vip', PFB_AUTO_VIP_DESCR_V4) (for v4) or PFB_AUTO_VIP_DESCR_V6
+     (for v6), depending on the address family context the caller passes.
+   - The function's return contract is unchanged: returns the matching row array, or FALSE.
+   - Verify: testVipFindByMarkerV4, testVipFindByMarkerV6, testVipFindReturnsNullWhenAbsent
+     all still pass.
+
+2. Retrofit pfb_manage_dnsbl_vip() disable branch:
+   - The current code calls pfb_find_marked_vip() then manually checks if the row's subnet
+     matches pfb_dnsvip4/pfb_dnsvip6 (the double-guard). Preserve this logic exactly but
+     express it as the $guard callable passed to pfb_fwobj_remove():
+       $guard = function($row) use ($stored_ip) {
+           return isset($row['subnet']) && $row['subnet'] === $stored_ip;
+       };
+       pfb_fwobj_remove('virtualip/vip', PFB_AUTO_VIP_DESCR_V4, $guard);
+   - CRITICAL: the double-guard must behave identically to today — a marked VIP with a
+     non-matching IP must NOT be removed (testVipDisableDoesNotRemoveVipWithNonMatchingIp).
+   - The create (enabled) branch of pfb_manage_dnsbl_vip() calls pfb_find_marked_vip() and
+     creates the VIP if absent. After step 1, this already benefits from the shared find. No
+     further change needed to the create branch.
+
+3. Retrofit pfb_create_dnsbl() NAT removal:
+   - The current code iterates nat/rule[], removing rows where
+     strpos($descr, 'pfB DNSBL') !== FALSE. Replace this loop with:
+       pfb_fwobj_remove('nat/rule', PFB_FWOBJ_NAT_LEGACY_PFX);
+     (The Phase 2 handoff confirms how pfb_fwobj_remove handles the 'pfB DNSBL' prefix marker.)
+   - The add-on-enable path is NOT changed — it still writes descr='pfB DNSBL - DO NOT EDIT'.
+   - Verify: testNatStripsOnDisable, testNatStripsLegacyPfbDnsblPrefix,
+     testNatNeverTouchesUserRule all still pass.
+
+4. Run vendor/bin/phpunit. The COMPLETE test suite (Phase 1 + Phase 2) must be green. If any
+   Phase 1 test fails, the retrofit changed behaviour — fix until all pass, do NOT relax the
+   tests.
+
+5. Diff-read the changes before committing:
+   - Only pfb_find_marked_vip(), pfb_manage_dnsbl_vip() disable branch, and the NAT removal
+     loop in pfb_create_dnsbl() should change.
+   - No new constants written to config.xml; no persisted descr string changed.
+   - No new helpers added (those are in pfblockerng_fwobj.inc, already committed in Phase 2).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; uppercase TRUE/FALSE (ADR-28).
+- NO persisted marker/string changes. The descr values written to config.xml are identical
+  before and after. (Storage freeze — ADR-28 §2.2.)
+- The double-guard for VIP removal MUST be preserved exactly.
+- The filter-rule side (pfb_firewall_rule, pfb_ prefix rebuild) is left AS-IS — §2.3 out of
+  scope. Do not touch it.
+- No new test methods added to FwobjCurrentBehaviourTest — it is a golden oracle and must not
+  be modified (only read to confirm it stays green).
+- PFBL-01 sniff: pfb_fwobj_find/remove are pure helpers in pfblockerng_fwobj.inc, not in
+  pfblockerng.inc's scoped functions — no new exec-family calls introduced; sniff stays green.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green — ALL tests: Phase 1 FwobjCurrentBehaviourTest (unchanged oracle)
+  AND Phase 2 FwobjLayerTest
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> no syntax errors
+- PHPStan (vendor/bin/phpstan analyse) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (PFBL-01 + ADR-28 + ADR-29 sniffs)
+- python -m pytest -> green
+- Diff-read: changes in pfblockerng.inc confined to pfb_find_marked_vip(),
+  pfb_manage_dnsbl_vip() disable branch, pfb_create_dnsbl() NAT removal loop only
+
+EXPECTED RESULT
+pfb_find_marked_vip(), pfb_manage_dnsbl_vip(), and pfb_create_dnsbl() NAT removal all route
+through pfb_fwobj_find/remove. The Phase 1 golden suite passes unchanged — behaviour provably
+identical. No persisted marker string changed.
+
+COMMIT (single)
+    pfblockerng: retrofit VIP + NAT teardown onto fwobj layer (ADR-35 P3)
+Push directly to adr/35-managed-firewall-objects; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/03_Results.txt (plain .txt)
+Record:
+- The exact lines changed in pfblockerng.inc for each of the three functions (line number
+  ranges before and after, and what was replaced with what).
+- The $guard closure used for the VIP double-guard (exact code or equivalent).
+- The marker string passed to pfb_fwobj_remove for the NAT removal.
+- Confirmation that Phase 1 oracle tests pass unchanged.
+- Verification output: phpunit total pass count (Phase 1 + Phase 2), phpstan clean, phpcs clean.
+- Go-ahead for Phase 4.
