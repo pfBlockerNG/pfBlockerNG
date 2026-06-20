@@ -193,8 +193,12 @@ $section->addInput(new Form_Select(
 	'Enable Sync',
 	$pconfig['varsynconchanges'],
 	$options_varsynconchanges
-))->setHelp('When enabled, this will sync all configuration settings to the Replication Targets.<br /><br />'
-		. '<b>Important:</b> While using "Sync to hosts defined below", only sync from host A to B, A to C'
+))->setHelp('Push this firewall\'s pfBlockerNG configuration to other firewalls. '
+		. '<b>Sync to configured system backup server</b> includes pfBlockerNG in the firewall\'s '
+		. 'normal config sync to the peer set under System &gt; High Availability Sync '
+		. '(the Replication Targets below are ignored). <b>Sync to host(s) defined below</b> pushes '
+		. 'to the Replication Targets configured here.<br /><br />'
+		. '<b>Important:</b> While using "Sync to host(s) defined below", only sync from host A to B, A to C'
 		. '<br /> but <b>do not</b> enable XMLRPC sync <b>to</b> A. This will result in a loop!');
 
 $section->addInput(new Form_Input(
@@ -215,6 +219,15 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 
 $section = new Form_Section('XMLRPC Replication Targets');
+$section->addInput(new Form_StaticText(
+	'Notes',
+	'<small>'
+	. 'For each target, match the protocol, IP/hostname and port of the remote firewall\'s '
+	. 'webConfigurator &mdash; the protocol (http or https) must match the remote, or the sync will fail.<br />'
+	. 'Using a dedicated user in the <i>admins</i> group on the target (rather than the primary admin '
+	. 'account) is recommended, so the primary account is not exposed for syncing.'
+	. '</small>'
+));
 $rowdata = $pfb['sconfig']['row'];
 
 // Add empty row placeholder if no rows defined
