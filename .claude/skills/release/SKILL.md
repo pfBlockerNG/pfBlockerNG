@@ -71,11 +71,13 @@ devel" guard, applied before the tag exists.
    - Git hooks are active (`git config core.hooksPath` = `.githooks`); if not, run
      `sh scripts/setup-hooks.sh` so the pre-push backstop is armed.
 
-5. **Optional — curated notes.** The release body is auto-drafted by GitHub Models
-   (`openai/gpt-4.1`) from the commit range and persisted to `docs/release-notes/<tag>.md`.
-   If the user wants hand-written notes instead, they commit `docs/release-notes/<tag>.md`
-   on the channel branch first — the workflow falls back to it when present and inference
-   is unavailable. Do not author it unless asked.
+5. **Notes source.** The release body comes from `docs/release-notes/<tag>.md` when that file
+   is committed on the channel branch — it is **authoritative**, and the GitHub Models step is
+   **skipped** (an optional first-line `<!-- SUMMARY: … -->` marker becomes the title suffix,
+   stripped from the body). When no file exists, GitHub Models (`openai/gpt-4.1`) drafts it from
+   the commit range and the `persist-notes` job records it. To author/curate the notes yourself
+   (or to "play the model" when Models is unavailable), use **`/release-with-changelog`** — it
+   writes the file, commits it, then calls this skill. Don't author notes here unless asked.
 
 6. **Confirm, then push.** Pushing a release tag is **irreversible and public** (it cuts
    a GitHub Release, publishes the `.pkg`, and bumps the ports fork). Confirm the
