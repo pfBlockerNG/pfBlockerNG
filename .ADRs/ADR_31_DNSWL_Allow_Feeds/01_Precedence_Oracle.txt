@@ -1,0 +1,68 @@
+================================================================================
+PHASE 1 PROMPT — Pin the allow-precedence contract (oracle)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §1.1, §2, §2.2 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 1 of 6. BEHAVIOUR-PRESERVING:
+you add pytest coverage only — NO production code changes. Work in the worktree,
+one commit, push to the branch.
+
+WHY THIS PHASE EXISTS
+The DNSWL feature rests on one existing fact: a feed-level allow (band 2, the shape
+an ABP `@@||host^` rule already produces) overrides a block feed (band 1) but loses
+to the operator's manual whitelist (band 6). Phase 2 will route permit-feed hosts
+into that SAME band-2 store. So we first pin band-2 semantics as an ORACLE that must
+already be green on untouched devel — it becomes the regression net proving Phase 2
+did not disturb existing ABP allow behaviour and that the operator still wins.
+
+REQUIRED READING
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§1.1 bands, §2.2 contract)
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    dnsbl_build_from_manifest() (:399), the ABP allow store (:4700-4711),
+    _resolve_numeric_allow() (:5436), whitelist_lookup_band() (:5374-5396),
+    evaluate_domain() (:5627).
+- tests/ — find existing ABP/DNSBL build tests (grep for dnsbl_build_from_manifest,
+  whiteDB, abp) and reuse their off-box manifest-build harness/fixtures.
+- CLAUDE.md (Python rules; test-coverage mandate — every branch, before-and-after).
+
+ACTION PLAN (tests only)
+1. Using the existing off-box build harness, construct a manifest with TWO feeds:
+   a block feed listing host H, and a feed carrying an ABP allow `@@||H^`.
+2. Pin, before-and-after (this is the band-2-beats-band-1 contract):
+   - block feed only  -> H is BLOCKED (is_found true / block decision).
+   - block + @@ allow  -> H RESOLVES (allow wins; band 2 >= band 1).
+3. Pin operator sovereignty (the safety contract Phase 2 must not break):
+   - manual suppression entry for H  -> H RESOLVES even with a block feed (band 6).
+   - the @@ allow (band 2) does NOT override a manual `$important` user block
+     (band 5) — assert the block still wins. (Read the bands; if no easy band-5
+     fixture exists, assert at least that band-6 manual whitelist is sovereign and
+     document the band-5 case for the smoke phase.)
+4. Pin non-interference: a non-listed host is unaffected in all cases.
+   Name tests BDD-style for the behaviour (Given block feed + @@ allow / When
+   resolving H / Then resolves). Comments state INTENT, not mechanics.
+
+CONSTRAINTS
+- NO production code edits this phase. Tests + fixtures only.
+- Python 4-space indent, stdlib-only test deps already used by the suite.
+- Do NOT touch pfb_unbound.py, the manifest writer, or any PHP/UI.
+
+VERIFICATION (all must pass on UNTOUCHED devel)
+- python -m pytest <new test file>   -> green (the oracle holds today)
+- python -m pytest                   -> full suite green
+- ruff check . / ruff format .       -> clean
+
+EXPECTED RESULT
+A pytest module pins band-2-allow-beats-block-feed, manual-whitelist-sovereign, and
+non-listed-unaffected — all green on devel, ready to guard Phase 2.
+
+COMMIT (single)
+    tests: pin DNSBL feed-allow precedence contract as an oracle (ADR-31 P1)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/01_Results.txt
+State: the test file + count; the exact build-harness entry points and fixture shape
+used; which band each assertion pins and the symbol/line it exercises; any band-5
+case you could/couldn't fixture (so Phase 6 smoke covers it); confirmation the suite
+is green on devel. Go-ahead for Phase 2.

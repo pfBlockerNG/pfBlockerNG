@@ -1,0 +1,79 @@
+================================================================================
+PHASE 2 PROMPT — Python: permit-mode build branch -> whiteDB band 2
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 2 of 6. Adds a DORMANT build
+branch (no PHP emits mode='permit' until Phase 4) + its tests. Work in the worktree,
+one commit, push to the branch.
+
+WHY THIS PHASE EXISTS
+A subscribed DNSWL feed is "a feed every host of which is an implicit @@||host^
+allow" (ADR §2). The matcher + precedence already handle band-2 allows; this phase
+teaches the BUILD to route a permit feed's hosts into that same band-2 whiteDB store.
+mode absent/'deny' must build byte-identically (Phase 1 oracle guards this).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/01_Results.txt — the oracle tests + the
+  build-harness entry points it documents. If it is missing, Phase 1 is not complete;
+  STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.1 Python-build row, §2.2 contract)
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    dnsbl_build_from_manifest() (:399) and how it reads each manifest feed entry's
+    fields (header/group/log/format/provenance);
+    the ABP allow store + band-2 wildcard shape (:4700-4711);
+    _dnsbl_parse_abp_line() (:3476-3570) for the host-extraction it already does;
+    whitelist/band lookup (:5374-5396), _resolve_numeric_allow() (:5436).
+- tests/ — the harness from Phase 1's handoff.
+- CLAUDE.md (Python: stdlib-only, 4-space, from __future__ import annotations,
+  no bare except; test-coverage mandate).
+
+ACTION PLAN (tests FIRST)
+1. Extend the manifest-entry read in dnsbl_build_from_manifest() to recognise an
+   optional `mode` field: 'permit' vs absent/'deny'. Absent ⇒ 'deny' (back-compat,
+   §2.2.5).
+2. For a mode=='permit' feed: for EVERY host line of its raw feed, extract the host
+   (reuse the existing host-extraction; ignore ABP `@@`/`||`/$important directives —
+   v1 "every host = allow", ADR §2) and insert it into whiteDB as a band-2 wildcard
+   allow (same store/shape as @@||host^ at :4700-4711). Tag provenance so a report can
+   attribute the allow to its DNSWL feed (match the existing provenance convention).
+3. mode absent/'deny' ⇒ the existing block build path, UNCHANGED.
+4. Tests (extend the Phase-1 module or a sibling):
+   - GIVEN a manifest with a block feed listing H AND a permit feed listing H,
+     WHEN built, THEN H is in whiteDB at band 2 AND resolves (allow wins). Assert the
+     before-state (block-only ⇒ blocked) first.
+   - manual suppression for H still sovereign over a permit allow (band 6 > 2).
+   - subdomain: permit entry example.com ⇒ sub.example.com also allowed (wildcard).
+   - non-listed host unaffected.
+   - REGRESSION: a manifest with NO permit feed builds byte-identically — reuse the
+     Phase-1 oracle (it must still pass unchanged).
+
+CONSTRAINTS
+- stdlib only (Unbound loader); chroot-relative raw-feed paths (pfb_py_raw) — do not
+  read host-absolute paths.
+- Do NOT change _resolve_numeric_allow() or the band numbers — permit reuses band 2.
+- Do NOT touch PHP/UI/manifest-writer this phase. The branch is dormant (no producer).
+
+VERIFICATION (all must pass)
+- python -m pytest <permit tests>   -> green (assert before-state too)
+- python -m pytest                  -> full suite green INCLUDING the Phase-1 oracle
+- ruff check . / ruff format .      -> clean
+
+EXPECTED RESULT
+dnsbl_build_from_manifest() routes a mode='permit' feed's hosts to whiteDB band 2;
+absent/deny builds are byte-identical; all pinned by tests. No PHP produces 'permit'
+yet (dormant).
+
+COMMIT (single)
+    pfblockerng: build permit-mode DNSBL feeds as band-2 allows (ADR-31 P2)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/02_Results.txt
+State: the exact manifest `mode` contract (values, absent⇒deny); where/how a permit
+host enters whiteDB (function + line) and the band asserted; the provenance tag value
+chosen; the host-extraction reused; test names + counts; confirmation the Phase-1
+oracle still passes unchanged. Note for Phase 4: the precise manifest-entry shape PHP
+must emit (`mode='permit'`). Go-ahead for Phase 3.

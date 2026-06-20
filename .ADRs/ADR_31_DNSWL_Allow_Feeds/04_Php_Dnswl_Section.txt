@@ -1,0 +1,80 @@
+================================================================================
+PHASE 4 PROMPT — PHP: the DNSWL section + mode='permit' wiring
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 4 of 6. This phase CONNECTS Phase
+2's dormant permit build branch: PHP now reads a DNSWL config section and emits
+manifest entries with mode='permit'. Work in the worktree, one commit, push.
+
+WHY THIS PHASE EXISTS
+With the Python permit build (P2) and the reusable download seam (P3) in place, this
+phase produces the permit feeds: a new dynamic section pfblockerngdnswl/config, each
+row downloaded/staged via the P3 seam with mode='permit', surfacing as mode='permit'
+manifest entries that P2 turns into band-2 whiteDB allows.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/03_Results.txt — the seam signature + the
+  deny manifest-entry decision. ALSO read RESULTS/02_Results.txt — the exact
+  mode='permit' entry shape Python expects. If either is missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.1 config-section + manifest rows, §2.2)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the DNSBL loop that reads
+  pfblockerngdnsbl/config (:11014-11036) as the template; the manifest writer (:4784).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig + pfb_cfg_registry()
+  IF you add a global scalar (e.g. dnswl_enable master toggle).
+- tests/php/CfgGatewayTest.php + RollbackContractTest.php (if registering a scalar);
+  tests/phpcs/.../RequireConfigGatewaySniff.php ($registeredPaths).
+- CLAUDE.md (PHP rules; Naming — mirror pfblockerngdnsbl exactly; ADR-28/29 config
+  rules; PFBL-01 input-validation sniff).
+
+ACTION PLAN
+1. Read installedpackages/pfblockerngdnswl/config rows (mirror the DNSBL loop's read
+   at :11014-11036). Section is DYNAMIC/per-row ⇒ direct config_*_path, NOT PfbConfig
+   (foreign-key exclusion, like pfblockerngdnsbl).
+2. For each enabled DNSWL row, call the P3 seam with mode='permit' so it downloads/
+   stages the raw feed and emits a manifest entry with mode='permit' (exact shape per
+   RESULTS/02). Same download path/schedule as DNSBL (no new cron).
+3. IF a global master toggle (e.g. dnswl_enable) is warranted: register it through
+   PfbConfig — pfb_cfg_registry() entry (key, section path, default stored string,
+   adapter pair, since), add its full path to the sniff $registeredPaths, extend
+   CfgGatewayTest (round-trip + default-absent) + RollbackContractTest (vocabulary) +
+   the inventory test. Read/write it via PfbConfig::read/write ONLY.
+4. Feed header/url validation: reuse pfb_filter()/pfb_sanitise_feed_header() exactly as
+   the DNSBL section does — the PFBL-01 sniff must stay green for the new surface.
+5. PHPUnit: a configured permit row yields a mode='permit' manifest entry (the
+   producer side of P2's contract); a deny config still byte-identical.
+
+CONSTRAINTS
+- Mirror the DNSBL section's naming/shape (Naming — established pattern). Section key
+  pfblockerngdnswl; row fields state/url/header/format/custom like its DNSBL sibling.
+- config.xml storage hard-freeze (ADR-28): only ADD keys with sane default-on-absent;
+  change no existing stored value.
+- Do NOT touch the Python build (done in P2) beyond confirming the manifest shape.
+- UI is Phase 5 — this phase wires the engine only.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit                 -> green incl. the permit-manifest-entry test
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean (PFBL-01 + ConfigGateway)
+- vendor/bin/phpstan analyse <edited files>         -> clean
+- php -l on edited files
+- python -m pytest                   -> green (P2 now has a real producer; the end-to-
+  end build of a synthetic permit config, if exercised, yields band-2 allows)
+
+EXPECTED RESULT
+A DNSWL config section is downloaded/staged on the update pass and emits mode='permit'
+manifest entries that Python (P2) loads as band-2 allows. No UI yet (config edited by
+hand or test for now).
+
+COMMIT (single)
+    pfblockerng: read DNSWL allow-feed section and emit permit manifest entries (ADR-31 P4)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/04_Results.txt
+State: the section key + row field names; whether a global scalar was added (and its
+registry/sniff/test wiring) or not; the seam call site; the PHPUnit producer test; any
+validation seam reused. Confirm the full PHP+Python end-to-end (permit config ⇒ band-2
+allow) is now green. Note for Phase 5: the section/row schema the UI must edit.
+Go-ahead for Phase 5.

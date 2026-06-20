@@ -1,0 +1,74 @@
+================================================================================
+PHASE 5 PROMPT — UI: the DNSWL / Allow Feeds page
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.1 UI row, §4 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 5 of 6. Adds the operator-facing
+feed grid + row editor for the DNSWL section wired in Phase 4. Work in the worktree,
+one commit, push to the branch.
+
+WHY THIS PHASE EXISTS
+Phase 4 made the engine read pfblockerngdnswl/config; operators need a page to add/
+edit allow-feed rows, parallel to the DNSBL block-feed grid. The page must round-trip
+a row to the section schema Phase 4 reads, and pass the Tier-A ui_render gate.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/04_Results.txt — the exact section key + row
+  field names + any global toggle the UI must expose. If missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.1 UI row, §4 acceptance)
+- src/usr/local/www/pfblockerng/pfblockerng_category.php and
+  pfblockerng_category_edit.php (the DNSBL feed grid + row editor — the template);
+  pfblockerng_dnsbl.php (the DNSBL settings page) and how the pfBlockerNG menu/tabs
+  are built (find the menu/tab definition and mirror an entry for DNSWL).
+- src/etc/inc/priv/ — privilege defs, IF a new page needs a privilege entry.
+- CLAUDE.md (PHP UI rules; Web-UI help text — brief, match neighbours; Naming;
+  ADR-14 ui_render Tier-A gate).
+
+ACTION PLAN
+1. Add a DNSWL / Allow-Feeds grid page + row editor mirroring
+   pfblockerng_category.php / _category_edit.php, editing pfblockerngdnswl/config with
+   the field names from RESULTS/04 (header/url/state/format/custom). Reuse the existing
+   feed-row validation/sanitisation (pfb_filter()/pfb_sanitise_feed_header()).
+2. Wire the page into the pfBlockerNG menu/tab navigation (mirror the DNSBL entry).
+   Add a privilege def if the pattern requires one.
+3. Help text: state the precedence plainly — a DNSWL allow overrides BLOCK FEEDS but
+   the manual DNSBL whitelist and manual blocks still win (band 2). Brief, matching
+   neighbouring help wording (do not out-prose them).
+4. If a global master toggle was added in P4, surface it on the appropriate settings
+   page, loaded/saved via PfbConfig.
+
+CONSTRAINTS
+- Mirror the DNSBL feed pages' structure/markup/idiom (Naming + established pattern);
+  do not invent a new layout.
+- Uppercase TRUE/FALSE; no die()/exit(); tabs.
+- A registered scalar is read/written via PfbConfig only (RequireConfigGateway green);
+  the dynamic per-row section stays on direct config_*_path.
+- Do NOT change the Python/PHP engine (Phases 2/4) — this is presentation + round-trip.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean
+- vendor/bin/phpstan analyse <edited www files>     -> clean
+- php -l on every edited .php
+- ui_render (Tier A) for the new page:
+    python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+  (SMOKE_ADMIN_PASSWORD set; else it SKIPs, not fails) — GET 200, body free of
+  Fatal/Parse/Warning/Notice/Uncaught, page marker present, no new php_error.log line,
+  and a saved row appears in pfblockerngdnswl/config.
+- python -m pytest / vendor/bin/phpunit -> still green.
+
+EXPECTED RESULT
+An operator can add/edit/delete DNSWL allow-feed rows from the UI; saved rows feed the
+Phase-4 engine; the page passes ui_render with correct precedence help text.
+
+COMMIT (single)
+    www: add DNSWL allow-feeds grid and row editor (ADR-31 P5)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/05_Results.txt
+State: the page file(s) added; menu/tab + privilege wiring; the help-text wording for
+precedence; the ui_render result (or SKIP reason); confirmation a UI-saved row reaches
+pfblockerngdnswl/config and is picked up by the engine. Note for Phase 6: the exact UI
+steps to configure a permit feed (for the smoke journey). Go-ahead for Phase 6.
