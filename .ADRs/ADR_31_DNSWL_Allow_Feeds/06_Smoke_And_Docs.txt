@@ -27,10 +27,12 @@ REQUIRED READING
   tests/smoke/fixtures/ + its README; tests/smoke/helpers.py (ensure_dnsbl_vip).
 
 ACTION PLAN
-1. Add a smoke journey (test_smoke_feeds.py or a sibling) using mock feeds:
-   - a BLOCK feed listing domains B (block-only) and S (shared);
-   - a PERMIT (DNSWL) feed listing S and a subdomain parent P.
-   Configure both sections, update, reload, wait_unbound_ready.
+1. Add a smoke journey (test_smoke_feeds.py or a sibling) using mock feeds — both are
+   DNSBL feed rows in pfblockerngdnsbl/config, distinguished only by the per-row action:
+   - a Deny-action BLOCK feed listing domains B (block-only) and S (shared);
+   - a Permit-action ALLOW feed listing S and a subdomain parent P.
+   Configure both rows (the Permit one via the per-row action=Permit field), update,
+   reload, wait_unbound_ready.
 2. Assert, every case BEFORE-AND-AFTER (mandate):
    - BEFORE adding the permit feed: S is BLOCKED (its block shape) — proves the block
      works, so a later "resolves" proves the permit CAUSED it.
