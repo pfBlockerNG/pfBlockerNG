@@ -74,7 +74,9 @@ class RebootObservation:
     archive_present: bool
     after_members: list[str]
     after_rule: bool
-    # ramdisk leg only: did /var actually get wiped on the reboot (MFS engaged)?
+    # ramdisk leg only: was the /var sentinel created pre-reboot, and did /var actually
+    # get wiped on the reboot (MFS engaged)?
+    sentinel_created: bool | None = None
     var_wiped: bool | None = None
     var_mount: str = ""
 
@@ -137,8 +139,12 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
 
     # ramdisk leg: drop a /var sentinel so the post-reboot check can PROVE /var came up
     # as a memory filesystem (the sentinel is wiped) rather than persisting on disk.
+    # Confirm it actually landed — a sentinel that was never created would read as
+    # "wiped" after the reboot and make the MFS proof a false green.
+    sentinel_created: bool | None = None
     if ramdisk:
         vm.ssh("/usr/bin/touch", VAR_WIPE_SENTINEL)
+        sentinel_created = vm.ssh("test", "-e", VAR_WIPE_SENTINEL).returncode == 0
 
     # When: reboot the guest, exercising the boot-time sync short-circuit (and, on the
     # ramdisk leg, the /var wipe + earlyshellcmd archive restore).
@@ -164,6 +170,7 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         archive_present=archive_present,
         after_members=after_members,
         after_rule=after_rule,
+        sentinel_created=sentinel_created,
         var_wiped=var_wiped,
         var_mount=var_mount,
     )
@@ -194,6 +201,12 @@ def test_ip_alias_and_rule_survive_reboot(reboot_observation: RebootObservation)
         assert obs.archive_present, (
             f"precondition [ramdisk]: {h.ALIASARCHIVE} must exist pre-reboot (the earlyshellcmd "
             "restore source) — else the ramdisk path is not actually exercised"
+        )
+        # The sentinel must have been created pre-reboot, else the wipe check below is a
+        # false green (a sentinel that never existed also reads as "gone" after reboot).
+        assert obs.sentinel_created, (
+            f"precondition [ramdisk]: {VAR_WIPE_SENTINEL} must exist pre-reboot — could not "
+            "create it, so the post-reboot wipe assertion cannot be trusted"
         )
         # Prove MFS actually engaged: the /var sentinel must be GONE after the reboot,
         # which means /var came up fresh (memory FS) and the alias survived via the

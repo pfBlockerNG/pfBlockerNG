@@ -1979,7 +1979,19 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float
          webConfigurator (nginx + PHP) is up, then ``wait_unbound_ready`` -- the
          same full-readiness gate the initial boot uses.
     """
-    before = kern_boottime(vm)
+    # Capture a NON-EMPTY boottime baseline first: an empty '' baseline (SSH transiently
+    # unreadable) would let the first readable post-reboot boottime compare unequal and
+    # falsely report a reboot that never happened. The box is known-ready here, so a short
+    # retry is enough.
+    before = ""
+    baseline_deadline = time.monotonic() + 30.0
+    while time.monotonic() < baseline_deadline:
+        before = kern_boottime(vm)
+        if before:
+            break
+        time.sleep(poll)
+    if not before:
+        raise RuntimeError("reboot_vm: could not read a kern.boottime baseline before rebooting")
     # The reboot drops the SSH connection; ignore the result (best-effort).
     vm.ssh("/sbin/reboot", timeout=30.0)
 
@@ -1998,17 +2010,23 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float
     # positional args are <ssh-key> [host] [port] [timeout] [vm-pid] [web-port]; pass
     # the vm-pid + web-port pair only when the pid is known (so a dead boot fails fast
     # AND web readiness requires nginx+PHP, not just sshd).
+    wait_budget = int(max(1.0, deadline - time.monotonic()))
     argv = [
         "sh",
         str(WAIT_READY_SH),
         vm.ssh_key_path,
         vm.host,
         str(vm.ssh_port),
-        str(int(max(1.0, deadline - time.monotonic()))),
+        str(wait_budget),
     ]
     if vm.vm_pid is not None:
         argv += [str(vm.vm_pid), str(vm.web_port)]
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    # Cap the subprocess itself a little past the script's own budget, so a stalled
+    # wait_ready.sh can never hang the (timeout-exempt) module fixture indefinitely.
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=wait_budget + 30)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"reboot_vm: wait_ready.sh did not return within {wait_budget + 30}s") from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
