@@ -169,6 +169,7 @@ jobs:
     needs: verify-checks
     permissions:
       contents: write
+      models: read   # actions/ai-inference (GitHub Models) for the release-notes draft
 
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -250,100 +251,188 @@ jobs:
 
       - name: Find the previous release tag (compare base)
         id: prev_tag
-        # The previous release = the highest-version tag that is an ANCESTOR of the
-        # current release's commit (a real compare base, robust to channel renames
-        # and rebased history). For a dispatch dry-run the "commit" is the checked-out
-        # ref HEAD; for a push it is the tag.
+        # The previous release = the highest-version tag of the SAME channel that is an
+        # ANCESTOR of the current release's commit — the natural "previous release of this
+        # channel" the notes diff against. Falls back to the highest ancestor tag of any
+        # channel, then to the next-lower version tag overall, so a genesis release (no
+        # same-channel predecessor) still gets a meaningful compare base. For a dispatch
+        # dry-run the "commit" is the checked-out ref HEAD; for a push it is the tag.
         env:
           EVENT: ${{ github.event_name }}
           TAG: ${{ steps.meta.outputs.tag }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then COMMIT="HEAD"; else COMMIT="$TAG"; fi
-          # Prefer the highest-version tag that is an ANCESTOR of this commit (a true
-          # predecessor in history). `|| true` guards each stage so an empty tag list /
-          # all-excluded grep does not trip the default `pipefail`.
+          # 1) Highest-version SAME-channel ancestor tag. release-version.sh classifies
+          #    each tag's channel; the `|| true` guards keep pipefail from tripping on an
+          #    empty tag list / a non-scheme tag.
           PREV=$(git tag --sort=-version:refname \
             | { grep -v "^${TAG}$" || true; } \
             | while read -r t; do
-                git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null && { echo "$t"; break; }
+                git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
+                tch=$(sh scripts/release-version.sh "$t" 2>/dev/null | sed -n 's/^channel=//p') || true
+                [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
               done) || true
-          # Fallback (e.g. the first tag of a rebased series, whose predecessor is no
-          # longer an ancestor): the next-lower version tag overall. A GitHub compare
-          # link is still meaningful across diverged history.
+          # 2) Fallback: highest-version ANCESTOR tag of ANY channel.
+          if [ -z "$PREV" ]; then
+            PREV=$(git tag --sort=-version:refname \
+              | { grep -v "^${TAG}$" || true; } \
+              | while read -r t; do
+                  git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null && { echo "$t"; break; }
+                done) || true
+          fi
+          # 3) Final fallback (rebased/diverged history): the next-lower version tag overall.
           if [ -z "$PREV" ]; then
             PREV=$( { git tag; echo "$TAG"; } | sort -V -r | uniq \
               | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
           fi
           echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
-          echo "Previous release tag: ${PREV:-<none>}"
+          echo "Previous ${CHANNEL} release tag: ${PREV:-<none>}"
 
-      - name: Render release body
-        id: changelog
-        # Body = Claude-authored highlights + a link to the FULL commit list +
-        # a collapsed commit summary. Highlights come from a hand-written
-        # .github/release-notes/<tag>.md when present (the default, $0, Claude-
-        # authored per release); else, if an ANTHROPIC_API_KEY secret is set, a
-        # best-effort Haiku draft from the commit range; else a placeholder.
+      - name: Prepare release-notes inputs
+        id: notes_prep
+        # Gather the commit range + the user prompt for the model. GitHub Models does a
+        # single prompt→completion (it cannot run git itself), so we collect the commits
+        # here and feed them in. Emits the compare link + the assembled prompt-file path.
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
           PREV: ${{ steps.prev_tag.outputs.tag }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
           EVENT: ${{ github.event_name }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -u
           if [ "$EVENT" = "workflow_dispatch" ]; then HEAD_REF="HEAD"; else HEAD_REF="$TAG"; fi
 
-          # Range for the commit list + the full-changelog link.
+          # Commit range + the compare/changelog link the notes end with.
           if [ -n "$PREV" ]; then
             RANGE="${PREV}..${HEAD_REF}"
-            FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](https://github.com/${REPO}/compare/${PREV}...${TAG})"
+            CMP_URL="https://github.com/${REPO}/compare/${PREV}...${TAG}"
+            FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](${CMP_URL})"
           else
             RANGE="$HEAD_REF"
-            FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](https://github.com/${REPO}/commits/${TAG})"
+            CMP_URL="https://github.com/${REPO}/commits/${TAG}"
+            FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](${CMP_URL})"
           fi
 
-          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:"- %s" -- src/ scripts/)
-          COUNT=$(printf '%s\n' "$COMMITS" | grep -c '^- ' || true)
+          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'%h %s' -- src/ scripts/)
+          [ -n "$COMMITS" ] || COMMITS="(no src/ or scripts/ changes in range)"
 
-          # Resolve the highlights section.
-          NOTES_FILE=".github/release-notes/${TAG}.md"
-          if [ -f "$NOTES_FILE" ]; then
-            HIGHLIGHTS=$(cat "$NOTES_FILE")
-            echo "Using hand-written highlights: ${NOTES_FILE}"
-          elif [ -n "${ANTHROPIC_API_KEY}" ]; then
-            echo "No ${NOTES_FILE}; drafting highlights with Haiku from ${RANGE}."
-            PROMPT=$(printf 'Write concise GitHub release-note highlights (markdown, grouped by theme, no preamble) for pfBlockerNG %s, summarizing the most important features and fixes from these commit subjects:\n\n%s' "$TAG" "$COMMITS")
-            REQ=$(jq -n --arg m "claude-haiku-4-5" --arg p "$PROMPT" \
-              '{model:$m,max_tokens:1024,messages:[{role:"user",content:$p}]}')
-            HIGHLIGHTS=$(curl -sS https://api.anthropic.com/v1/messages \
-              -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-              -H "anthropic-version: 2023-06-01" \
-              -H "content-type: application/json" \
-              -d "$REQ" | jq -r '.content[0].text // empty') || HIGHLIGHTS=""
-            [ -n "$HIGHLIGHTS" ] || HIGHLIGHTS="_Highlights unavailable; see the full changelog below._"
+          # Assemble the user prompt (Context + commit list); the static instructions are
+          # the system prompt (scripts/release-notes-prompt.txt). Written to a file so the
+          # model-generated nothing is interpolated through the shell.
+          PROMPT_FILE="${RUNNER_TEMP}/notes_user_prompt.txt"
+          {
+            printf 'Context:\n'
+            printf -- '- Repository (OWNER/REPO): %s\n' "$REPO"
+            printf -- '- Release tag: %s\n' "$TAG"
+            printf -- '- Previous %s release: %s\n' "$CHANNEL" "${PREV:-<none>}"
+            printf -- '- Final line (use verbatim): %s\n\n' "$FULL_LINK"
+            printf 'Commits:\n%s\n' "$COMMITS"
+          } > "$PROMPT_FILE"
+
+          echo "cmp_url=${CMP_URL}" >> "$GITHUB_OUTPUT"
+          {
+            echo "full_link<<__FL__"
+            printf '%s\n' "$FULL_LINK"
+            echo "__FL__"
+          } >> "$GITHUB_OUTPUT"
+          echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
+          echo "Range: ${RANGE}"
+
+      - name: Draft release notes (GitHub Models)
+        id: ai
+        # Single-shot inference on GitHub Models with the built-in token (no secret, free
+        # tier; needs permissions: models:read on this job). The system prompt is the
+        # static instruction file; the user prompt is the Context + commit list above.
+        # continue-on-error so a Models hiccup/rate-limit falls through to the fallback.
+        continue-on-error: true
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4.1
+          max-tokens: 2000
+          system-prompt-file: scripts/release-notes-prompt.txt
+          prompt-file: ${{ steps.notes_prep.outputs.prompt_file }}
+
+      - name: Assemble release body
+        id: changelog
+        # Parse the model output (SUMMARY line + the first ```-fenced block) into the
+        # release title + body. Resilient: if inference was skipped/failed/empty, fall
+        # back to a committed docs/release-notes/<tag>.md, else a placeholder. Always
+        # guarantees the compare link is present, and persists the body under docs/ for
+        # the persist-notes job. Runs on every event, so a dry-run shows the real body.
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          CMP_URL: ${{ steps.notes_prep.outputs.cmp_url }}
+          FULL_LINK: ${{ steps.notes_prep.outputs.full_link }}
+          RESP_FILE: ${{ steps.ai.outputs['response-file'] }}
+        run: |
+          set -u
+          SUMMARY=""
+          BODY=""
+
+          # The model response is read from its file (never interpolated as shell text).
+          if [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
+            SUMMARY=$(grep -m1 '^SUMMARY:' "$RESP_FILE" | sed 's/^SUMMARY:[[:space:]]*//' | tr -d '\r') || true
+            # Extract the content of the FIRST ```-fenced block (the description).
+            BODY=$(awk '/^```/{fence++; next} fence==1{print}' "$RESP_FILE")
           else
-            HIGHLIGHTS="_Highlights not yet written. See the full changelog below._"
+            echo "No model response — falling back to committed notes / placeholder."
           fi
 
-          # Assemble the body once in-shell, then emit it to BOTH the step output
-          # (consumed by the publish step) and the run summary (so a dry-run shows
-          # exactly what would be published). Built from shell vars only — never by
-          # templating the body back into a script.
-          BODY=$(printf '## Highlights\n\n%s\n\n%s\n\n<details><summary>All commits (%s)</summary>\n\n%s\n\n</details>\n' \
-            "$HIGHLIGHTS" "$FULL_LINK" "$COUNT" "$COMMITS")
+          # Fallbacks: a committed notes file, else a placeholder. Never block the release.
+          if [ -z "$BODY" ]; then
+            if [ -f "docs/release-notes/${TAG}.md" ]; then
+              echo "Using committed docs/release-notes/${TAG}.md"
+              BODY=$(cat "docs/release-notes/${TAG}.md")
+            else
+              BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
+            fi
+          fi
 
+          # Guarantee the compare link is present (append if the model / file omitted it).
+          case "$BODY" in
+            *"${CMP_URL}"*) ;;
+            *) BODY=$(printf '%s\n\n%s' "$BODY" "$FULL_LINK") ;;
+          esac
+
+          # Release title: product + version, plus the short summary when we have one.
+          if [ -n "$SUMMARY" ]; then
+            NAME="pfBlockerNG ${VERSION} — ${SUMMARY}"
+          else
+            NAME="pfBlockerNG ${VERSION}"
+          fi
+
+          # Persist the rendered notes for the persist-notes job to commit under docs/.
+          mkdir -p docs/release-notes
+          printf '%s\n' "$BODY" > "docs/release-notes/${TAG}.md"
+
+          # Emit name + body to the step output (consumed by the publish step) …
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           {
             echo "body<<__RELEASE_BODY__"
             printf '%s\n' "$BODY"
             echo "__RELEASE_BODY__"
           } >> "$GITHUB_OUTPUT"
 
+          # … and to the run summary, so a dry-run shows exactly what would be published.
           {
-            echo "### Rendered release body — ${TAG}"
+            echo "### Rendered release — ${TAG}"
+            echo ""
+            echo "**Title:** ${NAME}"
             echo ""
             printf '%s\n' "$BODY"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload rendered release notes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: docs/release-notes/${{ steps.meta.outputs.tag }}.md
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build source archive
         run: |
@@ -384,7 +473,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: pfBlockerNG ${{ steps.meta.outputs.version }}
+          name: ${{ steps.changelog.outputs.name }}
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           files: ${{ env.ARCHIVE }}
@@ -591,6 +680,67 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg
+
+  # ── 2f. Persist the generated release notes under docs/ (durable record) ────
+  # The Copilot-drafted notes are committed to docs/release-notes/<tag>.md on the
+  # release's channel branch, so the repository keeps a durable record of every
+  # release's notes. ADDITIVE + ISOLATED + BEST-EFFORT — only needs: [release]; a
+  # push failure (branch protection, a race) is a warning, never a release failure.
+  # Skipped on a dry-run. Docs-only and under docs/ ⇒ paths-ignored by CI (no rerun).
+  persist-notes:
+    name: Persist release notes to docs/
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Download rendered notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes-dl
+        continue-on-error: true
+
+      - name: Commit notes under docs/release-notes/
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          BRANCH: ${{ needs.release.outputs.branch }}
+        run: |
+          set -eu
+          SRC=$(find notes-dl -name "${TAG}.md" 2>/dev/null | head -1)
+          if [ -z "$SRC" ]; then
+            echo "::warning::no rendered notes artifact to persist"
+            exit 0
+          fi
+          mkdir -p docs/release-notes
+          cp "$SRC" "docs/release-notes/${TAG}.md"
+          if git diff --quiet -- "docs/release-notes/${TAG}.md"; then
+            echo "docs/release-notes/${TAG}.md already up to date — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "docs/release-notes/${TAG}.md"
+          git commit -m "docs: add release notes for ${TAG}"
+          # use the channel branch tip; rebase once on a racing push, then retry.
+          n=0
+          until git push origin "HEAD:${BRANCH}"; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::warning::could not push release notes to ${BRANCH} after ${n} attempts"
+              exit 0
+            fi
+            echo "push rejected — rebasing on ${BRANCH} (attempt ${n})"
+            git pull --rebase origin "$BRANCH" || true
+          done
+          echo "Persisted docs/release-notes/${TAG}.md to ${BRANCH}"
 
   # ── 2e. Redeploy the Cloudflare routing Worker (ADR-20) ─────────────────────
   # The Worker reads routing.json from Pages and 302-redirects pkg to the
