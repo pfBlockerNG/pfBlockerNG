@@ -562,45 +562,55 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize(
+    ("direction", "src_ip", "dst_ip"),
+    [
+        # Inbound: foreign is the SRC, local is the DST. convert_ip_log() picks
+        # $fields[7] (SRC) as the external host for dir == 'in'.
+        ("in", helpers.IPV6_FOREIGN, helpers.IPV6_LOCAL_HOST),
+        # Outbound: roles swap — local is the SRC, foreign is the DST. The else
+        # branch picks $fields[8] (DST) as the external host for dir != 'in'.
+        ("out", helpers.IPV6_LOCAL_HOST, helpers.IPV6_FOREIGN),
+    ],
+)
 def test_ipv6_alert_external_host_attribution(
     webui: "WebUI",
     smoke_vm: helpers.SmokeVM,
+    direction: str,
+    src_ip: str,
+    dst_ip: str,
 ) -> None:
-    """Foreign IPv6 in SRC renders as blocked host; local IPv6 in DST does not.
+    """The foreign IPv6 renders as the blocked host; the local IPv6 never does.
 
-    Scenario: ip_block.log rendering correctly attributes external vs local IPv6.
+    Scenario: ip_block.log rendering attributes the external host by direction.
 
     Background:
-        ``pfblockerng_alerts.php`` ``convert_ip_log()`` reads ip_block.log and
-        uses the stored SRC IP (``$fields[7]``) as the external/blocked host for
-        inbound events.  The fix for issue #361 ensures pfb_daemon_filterlog()
-        correctly identifies local IPv6 before writing the log row so that:
-        - a foreign IPv6 appears as SRC (the blocked host)
-        - a local IPv6 appears as DST (the local client)
+        ``pfblockerng_alerts.php`` ``convert_ip_log()`` chooses the external host
+        by direction: for ``dir == 'in'`` the host is the SRC IP (``$fields[7]``),
+        for ``dir == 'out'`` it is the DST IP (``$fields[8]``).  The fix for issue
+        #361 makes ``pfb_daemon_filterlog()`` classify local IPv6 correctly so the
+        FOREIGN endpoint is always the host and the LOCAL endpoint is the client.
 
-        This test seeds a synthetic inbound-IPv6 row where:
-        - SRC = ``2001:db8:dead:beef::1`` (foreign — outside the LAN /64)
-        - DST = ``2001:db8:51:1::1234`` (local — inside the LAN /64)
-        - GeoIP = "US" (present in the stored row; rendered from $fields[12])
-        - direction = "in"
+        This test seeds a synthetic IPv6 row for BOTH directions (parametrized),
+        keeping the foreign address (``2001:db8:dead:beef::1``) as the external
+        endpoint in each case — SRC for inbound, DST for outbound — and the local
+        address (``2001:db8:51:1::1234``) as the internal endpoint, GeoIP "US".
+        Covering both ``dir`` branches proves the page keys on direction rather
+        than always rendering one column.
 
-        and asserts the rendered HTML reflects the correct attribution.
+    Given: the foreign threat-lookup link is ABSENT from the Alerts page before
+        the synthetic row is appended (before-state — no false pass).
 
-    Given: a synthetic inbound-IPv6 ip_block.log line with a foreign SRC and a
-        local DST is appended to ``/var/log/pfblockerng/ip_block.log``.
-
-    When: the Reports/Alerts page is GET-ted (IP Firewall tab renders ip_block.log).
+    When: the row is appended to ip_block.log and the Alerts page is GET-ted.
 
     Then (rendering-layer attribution — complements, does not duplicate, the live
-    ``pfb_collect_localip`` smoke test; ``dir`` is seeded ``in`` here, so this
-    guards ``convert_ip_log()``'s host selection + IPv6 rendering, not the
-    collect_localip fix itself):
-        (a) The foreign SRC IPv6 is rendered as the attributed external/blocked
-            host — it appears verbatim in the threat-lookup href
-            ``pfblockerng_threats.php?host=<src>`` (``$host`` = SRC for an inbound
-            event), with its GeoIP code "US" rendered in the same row.
-        (b) The local DST IPv6 is NEVER rendered as the attributed host: its
-            address must not appear as a threat-lookup ``host=`` — that exact
+    ``pfb_collect_localip`` smoke test; ``dir`` is seeded here, so this guards
+    ``convert_ip_log()``'s host selection + IPv6 rendering, not collect_localip):
+        (a) The foreign IPv6 is rendered as the attributed external/blocked host —
+            it appears verbatim in the threat-lookup href
+            ``pfblockerng_threats.php?host=<foreign>``, with GeoIP "US" in the row.
+        (b) The local IPv6 is NEVER rendered as the attributed host: its address
+            must not appear as a threat-lookup ``host=`` — that exact
             misattribution (local shown as the blocked host) is the issue #361
             regression. NB: the SRC/DST table cells wrap IPv6 in ``[...]`` and
             insert a zero-width space after every colon, so the cells must not be
@@ -611,22 +621,33 @@ def test_ipv6_alert_external_host_attribution(
     vm = smoke_vm
     ts = time.strftime("%b %e %H:%M:%S")  # e.g. "Jun  8 12:00:00"
 
-    # RFC 3849 addresses — inert, non-routable, never HSTS-preloaded.
-    foreign_src = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside /64
-    local_dst = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside /64
+    # RFC 3849 addresses — inert, non-routable, never HSTS-preloaded. The foreign
+    # address is the external host in BOTH directions; only its column moves.
+    foreign = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside the /64
+    local = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside the /64
 
     # ip_block.log IPv6 CSV format (21 fields):
     # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
     # src_ip,dst_ip,src_port,dst_port,
     # dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    # ip_eval is the evaluated (blocked) host = the foreign address in both cases.
     csv_line = (
         f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
-        f"{foreign_src},{local_dst},,"
-        f",in,US,pfB_Deny_v6,"
-        f"{foreign_src},pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
+        f"{src_ip},{dst_ip},,"
+        f",{direction},US,pfB_Deny_v6,"
+        f"{foreign},pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
     )
 
     ip_block_log = helpers.IP_BLOCK_LOG
+
+    # convert_ip_log() renders the attributed external host's IP verbatim in the
+    # threat-lookup icon href ($alert_ip): /pfblockerng/pfblockerng_threats.php?host=<host>
+    # ($host = SRC for inbound, DST for outbound). This href carries the RAW
+    # address (colons intact) — unlike the SRC/DST cells, which wrap IPv6 in [...]
+    # and insert a zero-width space (&#8203;) after every colon. Match the href,
+    # never the mangled cell text.
+    threat_foreign = f"/pfblockerng/pfblockerng_threats.php?host={foreign}"
+    threat_local = f"/pfblockerng/pfblockerng_threats.php?host={local}"
 
     # Capture the original byte size — fail fast so cleanup cannot wipe the log.
     size_result = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
@@ -635,8 +656,17 @@ def test_ipv6_alert_external_host_attribution(
     )
     original_size = size_result.stdout.strip()
 
+    # GIVEN (before-state): the foreign threat link is absent before the seed, so a
+    # later 'present' assertion proves THIS row caused it (no false pass).
+    pre = webui.get(ALERTS_PAGE)
+    assert not looks_like_login_page(pre.text), "alerts page GET returned login form before mutation (session lost)"
+    assert threat_foreign not in pre.text, (
+        f"Precondition failed: foreign threat link {threat_foreign!r} already "
+        f"present before the synthetic row was seeded — cannot prove causation."
+    )
+
     try:
-        # GIVEN: append the synthetic IPv6 block line via SSH tee -a.
+        # WHEN: append the synthetic IPv6 block line via SSH tee -a.
         append_result = subprocess.run(
             vm.ssh_argv("tee", "-a", ip_block_log),
             input=csv_line,
@@ -650,45 +680,35 @@ def test_ipv6_alert_external_host_attribution(
             f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
         )
 
-        # WHEN: GET the Alerts page (IP Firewall tab renders ip_block.log).
+        # WHEN: GET the Alerts page (default view renders the ip_block.log table).
         resp = webui.get(ALERTS_PAGE)
         assert not looks_like_login_page(resp.text), (
             "alerts page GET returned login form (session lost before IPv6 attribution render test)"
         )
         html_body = resp.text
 
-        # convert_ip_log() renders the attributed external host's IP verbatim in
-        # the threat-lookup icon href ($alert_ip):
-        #     /pfblockerng/pfblockerng_threats.php?host=<host>
-        # For an inbound event $host is the SRC IP. This href carries the RAW
-        # address (colons intact) — unlike the SRC/DST table cells, which wrap
-        # IPv6 in [...] and insert a zero-width space (&#8203;) after every colon.
-        # So we match on the href, never on the mangled cell text.
-        threat_foreign = f"/pfblockerng/pfblockerng_threats.php?host={foreign_src}"
-        threat_local = f"/pfblockerng/pfblockerng_threats.php?host={local_dst}"
-
-        # THEN (a): the foreign SRC is the attributed external/blocked host.
+        # THEN (a): the foreign IPv6 is the attributed external/blocked host.
         idx = html_body.find(threat_foreign)
         assert idx != -1, (
-            f"Foreign SRC IPv6 {foreign_src!r} is not rendered as the threat-lookup "
-            f"host ({threat_foreign!r} absent) — the inbound IPv6 row did not render, "
-            f"or the foreign address was not attributed as the external host."
+            f"Foreign IPv6 {foreign!r} is not rendered as the threat-lookup host "
+            f"({threat_foreign!r} absent) for dir={direction!r} — the IPv6 row did "
+            f"not render, or the foreign address was not attributed as the host."
         )
         # Its GeoIP code renders in the same row (the GeoIP cell follows the host
         # icons), proving geo attribution went to the foreign host.
         window = html_body[idx : idx + 2048]
         assert "US" in window, (
-            f"GeoIP code 'US' not found in the rendered row for {foreign_src!r} — "
+            f"GeoIP code 'US' not found in the rendered row for {foreign!r} — "
             f"the row may have rendered without GeoIP attribution."
         )
 
-        # THEN (b): the LOCAL DST is NEVER the attributed external host — the local
+        # THEN (b): the LOCAL IPv6 is NEVER the attributed external host — its
         # address must not appear as a threat-lookup host. That misattribution
         # (local rendered as the blocked host) is exactly the issue #361 regression.
         assert threat_local not in html_body, (
-            f"Local DST IPv6 {local_dst!r} is rendered as a threat-lookup host "
-            f"({threat_local!r} present) — the page attributed the LOCAL address as "
-            f"the external blocked host (issue #361 regression)."
+            f"Local IPv6 {local!r} is rendered as a threat-lookup host "
+            f"({threat_local!r} present) for dir={direction!r} — the page attributed "
+            f"the LOCAL address as the external blocked host (issue #361 regression)."
         )
 
     finally:
