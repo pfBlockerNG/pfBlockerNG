@@ -1097,12 +1097,28 @@ jobs:
       contents: read
 
     steps:
+      - name: Generate GitHub App token (FreeBSD-ports)
+        id: ports-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App used by
+        # repo-publish, no standalone PAT to rotate. REQUIRES the App to be installed
+        # on FreeBSD-ports with Contents:write; if it is not, this step fails loudly
+        # ('not installed on ... repositories' / permission error) — the clear signal
+        # to grant it, rather than a confusing empty-token checkout failure.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: FreeBSD-ports
+          permission-contents: write
+
       - name: Checkout the FreeBSD-ports fork (use-github branch)
         uses: actions/checkout@v6
         with:
           repository: pfBlockerNG/FreeBSD-ports
           ref: pfblockerng/use-github
-          token: ${{ secrets.PORTS_TOKEN }}
+          token: ${{ steps.ports-token.outputs.token }}
           fetch-depth: 0
 
       - name: Checkout pfBlockerNG (scripts only — sparse)
