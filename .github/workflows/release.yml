@@ -546,8 +546,13 @@ jobs:
                 VARIANT=$(printf '%s\n' "$ENTRY" | jq -r '.variant // .channel // "CE"')
                 PFV=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version // empty')
                 ABI="FreeBSD:${MAJOR}:${ARCH}"
-                # pkg-safe variant slug, e.g. ce2.8 / plus26.03.
-                VARSLUG=$(printf '%s%s' "$VARIANT" "$PFV" | tr '[:upper:]' '[:lower:]')
+                # Variant slug == the pkg repo's catalog dir name (build-repo-portable.py
+                # catalog_name_from_version): "<variant_lc>-<major.minor>", e.g. ce-2.8 /
+                # plus-26.03. The Release encodes it in the FILENAME; the pkg repo encodes
+                # the same identity as the FOLDER release/<varslug>/<arch>/ — one artifact,
+                # two presentations, the variant segment identical in both.
+                MM=$(printf '%s' "$PFV" | cut -d. -f1-2)
+                VARSLUG="$(printf '%s' "$VARIANT" | tr '[:upper:]' '[:lower:]')-${MM}"
 
                 echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
 
