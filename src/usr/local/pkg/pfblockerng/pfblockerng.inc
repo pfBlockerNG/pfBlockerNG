@@ -391,6 +391,17 @@ function pfb_filter_whitelist_atype(string $raw): string {
 	return "Whitelist|{$ip}|{$descr}";
 }
 
+// Normalise an XMLRPC sync password for storage. The password is a secret
+// credential sent to the replication peer for authentication; it is never
+// rendered as raw HTML (the Sync form's Form_Input escapes the value attribute
+// for display via Form_Element). It is therefore stored VERBATIM — HTML-encoding
+// it on save corrupted any password containing & " ' < > (the escaped form was
+// sent to the peer, so authentication failed and repeated attempts tripped
+// sshguard). Storage is frozen as the literal secret; escaping is an output concern.
+function pfb_sync_filter_password(string $value): string {
+	return $value;
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
