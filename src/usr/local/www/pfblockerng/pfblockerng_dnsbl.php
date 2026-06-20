@@ -2731,7 +2731,8 @@ $section->addInput(new Form_Select(
 	$pconfig['safesearch_doh'],
 	$options_safesearch_doh
 ))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers. Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective.<br />'
-		. 'DNS requests to these domains will return NXDOMAIN.')
+		. 'DNS requests to these domains will return NXDOMAIN.<br />'
+		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php">Feed</a> may cover more providers and update more often than this built-in list.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
