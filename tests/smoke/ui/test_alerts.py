@@ -544,3 +544,163 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
             f"Failed to restore {dnsbl_log!r} to size={original_size!r}: "
             f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# IPv6 alert external-host attribution (issue #361): a synthetic ip_block.log
+# row with a FOREIGN IPv6 as SRC and a LOCAL IPv6 as DST must render the
+# foreign address as the blocked host (with GeoIP) and must NOT render the
+# local address as an external/blocked host.
+#
+# The display logic in convert_ip_log() is:
+#   inbound ($fields[11] == 'in') → $host = $fields[7] (SRC = external/blocked)
+#                                   $client = $fields[8] (DST = local)
+# The fix for issue #361 ensures pfb_daemon_filterlog() correctly identifies
+# local IPv6 before writing the log row, so the stored SRC/DST are authoritative.
+# We verify the RENDERING layer honours the stored values — a complementary check
+# to the smoke test that drives the PHP logic directly.
+# --------------------------------------------------------------------------- #
+
+
+def test_ipv6_alert_external_host_attribution(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Foreign IPv6 in SRC renders as blocked host; local IPv6 in DST does not.
+
+    Scenario: ip_block.log rendering correctly attributes external vs local IPv6.
+
+    Background:
+        ``pfblockerng_alerts.php`` ``convert_ip_log()`` reads ip_block.log and
+        uses the stored SRC IP (``$fields[7]``) as the external/blocked host for
+        inbound events.  The fix for issue #361 ensures pfb_daemon_filterlog()
+        correctly identifies local IPv6 before writing the log row so that:
+        - a foreign IPv6 appears as SRC (the blocked host)
+        - a local IPv6 appears as DST (the local client)
+
+        This test seeds a synthetic inbound-IPv6 row where:
+        - SRC = ``2001:db8:dead:beef::1`` (foreign — outside the LAN /64)
+        - DST = ``2001:db8:51:1::1234`` (local — inside the LAN /64)
+        - GeoIP = "US" (present in the stored row; rendered from $fields[12])
+        - direction = "in"
+
+        and asserts the rendered HTML reflects the correct attribution.
+
+    Given: a synthetic inbound-IPv6 ip_block.log line with a foreign SRC and a
+        local DST is appended to ``/var/log/pfblockerng/ip_block.log``.
+
+    When: the Reports/Alerts page is GET-ted (IP Firewall tab renders ip_block.log).
+
+    Then (rendering-layer attribution — complements, does not duplicate, the live
+    ``pfb_collect_localip`` smoke test; ``dir`` is seeded ``in`` here, so this
+    guards ``convert_ip_log()``'s host selection + IPv6 rendering, not the
+    collect_localip fix itself):
+        (a) The foreign SRC IPv6 is rendered as the attributed external/blocked
+            host — it appears verbatim in the threat-lookup href
+            ``pfblockerng_threats.php?host=<src>`` (``$host`` = SRC for an inbound
+            event), with its GeoIP code "US" rendered in the same row.
+        (b) The local DST IPv6 is NEVER rendered as the attributed host: its
+            address must not appear as a threat-lookup ``host=`` — that exact
+            misattribution (local shown as the blocked host) is the issue #361
+            regression. NB: the SRC/DST table cells wrap IPv6 in ``[...]`` and
+            insert a zero-width space after every colon, so the cells must not be
+            substring-matched; the threat href carries the raw address and can be.
+
+    Cleanup: ip_block.log is truncated back to its pre-seed size in finally.
+    """
+    vm = smoke_vm
+    ts = time.strftime("%b %e %H:%M:%S")  # e.g. "Jun  8 12:00:00"
+
+    # RFC 3849 addresses — inert, non-routable, never HSTS-preloaded.
+    foreign_src = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside /64
+    local_dst = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside /64
+
+    # ip_block.log IPv6 CSV format (21 fields):
+    # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
+    # src_ip,dst_ip,src_port,dst_port,
+    # dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    csv_line = (
+        f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
+        f"{foreign_src},{local_dst},,"
+        f",in,US,pfB_Deny_v6,"
+        f"{foreign_src},pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
+    )
+
+    ip_block_log = helpers.IP_BLOCK_LOG
+
+    # Capture the original byte size — fail fast so cleanup cannot wipe the log.
+    size_result = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
+    assert size_result.returncode == 0, (
+        f"Failed to stat {ip_block_log!r} before mutation: rc={size_result.returncode}, stderr={size_result.stderr!r}"
+    )
+    original_size = size_result.stdout.strip()
+
+    try:
+        # GIVEN: append the synthetic IPv6 block line via SSH tee -a.
+        append_result = subprocess.run(
+            vm.ssh_argv("tee", "-a", ip_block_log),
+            input=csv_line,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert append_result.returncode == 0, (
+            f"Failed to append synthetic line to {ip_block_log!r}: "
+            f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
+        )
+
+        # WHEN: GET the Alerts page (IP Firewall tab renders ip_block.log).
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), (
+            "alerts page GET returned login form (session lost before IPv6 attribution render test)"
+        )
+        html_body = resp.text
+
+        # convert_ip_log() renders the attributed external host's IP verbatim in
+        # the threat-lookup icon href ($alert_ip):
+        #     /pfblockerng/pfblockerng_threats.php?host=<host>
+        # For an inbound event $host is the SRC IP. This href carries the RAW
+        # address (colons intact) — unlike the SRC/DST table cells, which wrap
+        # IPv6 in [...] and insert a zero-width space (&#8203;) after every colon.
+        # So we match on the href, never on the mangled cell text.
+        threat_foreign = f"/pfblockerng/pfblockerng_threats.php?host={foreign_src}"
+        threat_local = f"/pfblockerng/pfblockerng_threats.php?host={local_dst}"
+
+        # THEN (a): the foreign SRC is the attributed external/blocked host.
+        idx = html_body.find(threat_foreign)
+        assert idx != -1, (
+            f"Foreign SRC IPv6 {foreign_src!r} is not rendered as the threat-lookup "
+            f"host ({threat_foreign!r} absent) — the inbound IPv6 row did not render, "
+            f"or the foreign address was not attributed as the external host."
+        )
+        # Its GeoIP code renders in the same row (the GeoIP cell follows the host
+        # icons), proving geo attribution went to the foreign host.
+        window = html_body[idx : idx + 2048]
+        assert "US" in window, (
+            f"GeoIP code 'US' not found in the rendered row for {foreign_src!r} — "
+            f"the row may have rendered without GeoIP attribution."
+        )
+
+        # THEN (b): the LOCAL DST is NEVER the attributed external host — the local
+        # address must not appear as a threat-lookup host. That misattribution
+        # (local rendered as the blocked host) is exactly the issue #361 regression.
+        assert threat_local not in html_body, (
+            f"Local DST IPv6 {local_dst!r} is rendered as a threat-lookup host "
+            f"({threat_local!r} present) — the page attributed the LOCAL address as "
+            f"the external blocked host (issue #361 regression)."
+        )
+
+    finally:
+        # Truncate ip_block.log back to its pre-test size to remove the appended line.
+        truncate_result = subprocess.run(
+            vm.ssh_argv("/usr/bin/truncate", "-s", original_size, ip_block_log),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert truncate_result.returncode == 0, (
+            f"Failed to restore {ip_block_log!r} to size={original_size!r}: "
+            f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
+        )
