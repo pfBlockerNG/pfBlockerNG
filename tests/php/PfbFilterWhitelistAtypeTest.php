@@ -140,7 +140,7 @@ final class PfbFilterWhitelistAtypeTest extends TestCase
 	/**
 	 * An IPv6 address is accepted — PFB_FILTER_IP covers both address families.
 	 */
-	public function testIPv6AddressIsAccepted(): void
+	public function testValidIPv6AddressPassesIpFilter(): void
 	{
 		$composite = 'Whitelist|2001:db8::1|test description';
 
