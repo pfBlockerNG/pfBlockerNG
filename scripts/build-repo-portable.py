@@ -745,6 +745,7 @@ def build_repo_matrix(
     release_keep_stable: int = 1,
     release_extra_pkgs: list[Path] | None = None,
     route_only_pkgs: dict[str, list[Path]] | None = None,
+    release_pkgs: dict[str, list[Path]] | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant/arch repository tree + routing.json from the version matrix.
@@ -789,6 +790,21 @@ def build_repo_matrix(
       so multiple arch entries for the same version can share the same frozen .pkg pool
       (``_emit_catalog_from_paths`` deduplicates by (name, version), so arch-specific
       or duplicate entries are handled safely).
+
+    ``release_pkgs`` (optional) — consume pre-built Release .pkg files instead of
+      rebuilding devel/stable from source for build-entry matrix rows:
+      ``dict[varver, list[Path]]`` mapping ``catalog_name_from_version()`` keys to lists
+      of pre-built Release .pkg paths (e.g. all assets downloaded from GitHub Releases
+      by publish.yml). When provided, the ``release/<varver>/<arch>/`` catalog is SERVED
+      from these (ABI-filtered, then pruned by ``retain_by_channel`` with
+      ``release_keep_devel`` / ``release_keep_stable``) instead of calling the builder
+      for devel/stable. ``release_extra_pkgs`` is still folded in after the pool.
+      An empty pool for a (varver, arch) pair skips that release catalog with a warning
+      (no exception raised — a newly-added version with no Release asset yet simply has
+      no release-channel package until the next release covers it; nightly still covers
+      it from HEAD). Nightly is unaffected — the nightly subtree is always built from
+      source when ``build_nightly`` is True, regardless of ``release_pkgs``.
+      When ``None`` (the default), the existing build-from-source path is used unchanged.
 
     ``builder`` is injectable (tests pass a stub); the default drives build-pkg-portable.py.
     Extra ``builder_kwargs`` pass through to every builder call. Returns a summary dict.
@@ -845,35 +861,55 @@ def build_repo_matrix(
             # No nightly subtree — route-only entries never get a nightly build.
 
         else:
-            # --- build entry (role absent or "build"): unchanged Part-1 path ---
+            # --- build entry (role absent or "build") ---
 
-            # --- release subtree: devel + (optional) stable + (optional) older releases ---
-            # The freshly built devel (+ stable when a stable_tag exists) are always present.
-            # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
-            # Releases by publish.yml); together they form the full candidate pool, pruned via
-            # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
-            # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
             release_dir = out_dir / "release" / varver / arch
-            with tempfile.TemporaryDirectory() as td:
-                staging = Path(td)
-                release_pkgs: list[Path] = [
-                    builder("devel", out_dir=staging, ports=ports, local_src=local_src, **common)
-                ]
-                if stable_tag:
-                    release_pkgs.append(
-                        builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
-                    )
-                # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
-                # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
-                all_release_pkgs = release_pkgs + list(release_extra_pkgs or [])
+
+            if release_pkgs is not None:
+                # --- consume mode: serve release/<varver>/<arch>/ from caller-supplied pre-built .pkg ---
+                # ABI-filtered exactly like the route-only branch; release_extra_pkgs still folded in.
+                # An empty pool is a warning + skip (not an error) — a newly-added version with no
+                # Release asset yet simply has no release-channel package until the next release.
+                pool = [p for p in (release_pkgs.get(varver) or []) if read_compact_manifest(p).get("abi") == abi]
+                candidates = pool + list(release_extra_pkgs or [])
                 kept_release = retain_by_channel(
-                    all_release_pkgs,
+                    candidates,
                     keep_devel=release_keep_devel,
                     keep_stable=release_keep_stable,
                 )
-                n_release = _emit_catalog_from_paths(release_dir, kept_release)
-            built.append(str(release_dir))
-            sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
+                if kept_release:
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release)
+                    built.append(str(release_dir))
+                    sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s), consumed)\n")
+                else:
+                    sys.stderr.write(f"==> WARNING: no Release .pkg for {varver} {abi} — release catalog skipped\n")
+            else:
+                # --- source-build mode (legacy / back-compat): devel + (optional) stable + extras ---
+                # The freshly built devel (+ stable when a stable_tag exists) are always present.
+                # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
+                # Releases by publish.yml); together they form the full candidate pool, pruned via
+                # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
+                # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
+                with tempfile.TemporaryDirectory() as td:
+                    staging = Path(td)
+                    built_pkgs: list[Path] = [
+                        builder("devel", out_dir=staging, ports=ports, local_src=local_src, **common)
+                    ]
+                    if stable_tag:
+                        built_pkgs.append(
+                            builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
+                        )
+                    # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
+                    # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
+                    all_release_pkgs = built_pkgs + list(release_extra_pkgs or [])
+                    kept_release = retain_by_channel(
+                        all_release_pkgs,
+                        keep_devel=release_keep_devel,
+                        keep_stable=release_keep_stable,
+                    )
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release)
+                built.append(str(release_dir))
+                sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
 
             # --- nightly subtree: fold the new build in with retained prior nightlies ---
             if build_nightly:
@@ -1066,6 +1102,19 @@ def main(argv: list[str]) -> int:
         ),
     )
     g_matrix.add_argument(
+        "--release-pkgs",
+        action="append",
+        default=[],
+        dest="release_pkgs",
+        metavar="VARVER:PATH",
+        help=(
+            "pre-built Release .pkg to SERVE the release/<varver>/<arch>/ catalog from, "
+            "in VARVER:PATH form (repeatable; arch derived from the .pkg manifest ABI). "
+            "When supplied, devel+stable are consumed from these instead of rebuilt from source. "
+            "An empty pool for a (varver, arch) skips that release catalog (no error)."
+        ),
+    )
+    g_matrix.add_argument(
         "--annotate",
         action="append",
         default=[],
@@ -1122,6 +1171,14 @@ def main(argv: list[str]) -> int:
                     ap.error(f"--route-only-pkgs must be VARVER:PATH (got {item!r})")
                 varver_key, _, pkg_path = item.partition(":")
                 route_only.setdefault(varver_key, []).append(Path(pkg_path))
+        release_pkgs_arg: dict[str, list[Path]] | None = None
+        if args.release_pkgs:
+            release_pkgs_arg = {}
+            for item in args.release_pkgs:
+                if ":" not in item:
+                    ap.error(f"--release-pkgs must be VARVER:PATH (got {item!r})")
+                varver_key, _, pkg_path = item.partition(":")
+                release_pkgs_arg.setdefault(varver_key, []).append(Path(pkg_path))
         try:
             build_repo_matrix(
                 matrix,
@@ -1137,6 +1194,7 @@ def main(argv: list[str]) -> int:
                 release_keep_stable=args.release_keep_stable,
                 release_extra_pkgs=extra_pkgs,
                 route_only_pkgs=route_only,
+                release_pkgs=release_pkgs_arg,
                 annotate=annotate or None,
             )
         except (BuildRepoError, subprocess.CalledProcessError) as e:
