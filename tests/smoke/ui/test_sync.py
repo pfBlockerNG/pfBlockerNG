@@ -286,7 +286,10 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         "varsyncipaddress-0": host,
         "varsyncport-0": "8443",
         "varsyncusername-0": "syncuser",
-        "varsyncpassword-0": "syncsecret",
+        # Special characters (& " ' < >) pin issue #339: the password must persist
+        # verbatim, NOT HTML-escaped. The pre-fix code stored htmlspecialchars() of
+        # this (P@ss&amp;w&quot;o&#039;rd&lt;x&gt;), which broke XMLRPC auth.
+        "varsyncpassword-0": "P@ss&w\"o'rd<x>",
         "varsyncdestinenable-0": "on",
     }
     try:
@@ -298,7 +301,9 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == host, "row hostname not persisted"
         assert helpers.config_get(vm, _row_path(0, "varsyncport")) == "8443", "row port not persisted"
         assert helpers.config_get(vm, _row_path(0, "varsyncusername")) == "syncuser", "row username not persisted"
-        assert helpers.config_get(vm, _row_path(0, "varsyncpassword")) == "syncsecret", "row password not persisted"
+        assert helpers.config_get(vm, _row_path(0, "varsyncpassword")) == "P@ss&w\"o'rd<x>", (
+            "row password not persisted verbatim (issue #339: must not be HTML-escaped)"
+        )
         assert helpers.config_get(vm, _row_path(0, "varsyncdestinenable")) == "on", "row enable flag not persisted"
 
         # Reverse: omit the row keys -> the undefined-row prune deletes row/0.
