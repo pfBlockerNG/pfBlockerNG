@@ -1,73 +1,309 @@
 name: Release
 
-# Triggered when a versioned tag is pushed.  Tag scheme (single source of truth:
-# scripts/release-version.sh):
-#   * vX.Y.Z                       -> STABLE release (from 'main')  -> full release
-#   * vX.Y.Z.alpha.N|.beta.N|.rc.N -> ALPHA/BETA/RC   (from 'devel') -> pre-release
+# Dispatch-only release pipeline.  The workflow is triggered via workflow_dispatch
+# with a `tag` input; it handles the full lifecycle in a single run:
+#
+#   1. prepare-release (real only): validates the tag + channel, asserts CI is green
+#      on the branch tip, drafts + commits the changelog if absent, then creates +
+#      pushes the release tag on the changelog commit — so the tagged tree always
+#      contains docs/release-notes/<tag>.md.  (A tag pushed via GITHUB_TOKEN does
+#      NOT re-trigger another workflow run, so this run continues to build + publish.)
+#
+#   2. read-matrix / build-pkgs-portable / release: run in both dry-run and real
+#      modes, gated on prepare-release succeeding (or being skipped in dry-run).
+#
+#   3. attach-pkgs / repo-publish / sync-ports-fork / deploy-worker: real-publish only
+#      (dry_run != 'true'), same ordering as before.
+#
+# dry_run=true (default): validate + build off HEAD; publish NOTHING (no commit, no
+# tag, no Release, no port bump, no pkg-repo poke, no Worker deploy).
+# dry_run=false: the real release — prepare-release runs first, then build + publish.
+#
+# Tag scheme (single source of truth: scripts/release-version.sh):
+#   * vX.Y.Z                       -> STABLE release (from 'main')   -> full release
+#   * vX.Y.Z.alpha.N|.beta.N|.rc.N -> ALPHA/BETA/RC  (from 'devel') -> pre-release
 # After publishing the GitHub Release, the matching port's PORTVERSION +
 # GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
 # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github) — the build-input branch.
 # Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
-#
-# workflow_dispatch is a DRY-RUN harness: pass the tag to simulate; with
-# dry_run=true (default) it validates the scheme, builds the .pkg artifacts and
-# renders the release body, but publishes NOTHING (no Release, no port bump, no
-# pkg-repo poke, no Worker deploy) — for end-to-end validation before a real tag.
 on:
-  push:
-    tags:
-      - 'v[0-9]*.[0-9]*.[0-9]*'      # stable: vX.Y.Z (from main)
-      - 'v[0-9]*.[0-9]*.[0-9]*.*'    # prerelease: vX.Y.Z.alpha.N|.beta.N|.rc.N (from devel)
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to simulate, e.g. v4.0.0.alpha.1 (REQUIRED for a dispatch run)."
+        description: "Release tag, e.g. v4.0.0.alpha.1 (REQUIRED)."
         required: true
       dry_run:
-        description: "true (default) = validate + build but publish NOTHING."
+        description: "true (default) = validate + build, publish NOTHING. false = cut the real release."
         required: false
         default: "true"
 
 # Least-privilege default; jobs that need more elevate explicitly below
-# (release: contents:write to publish; verify-checks: checks:read to read the
-# tagged commit's check runs; ui-suite: packages:read to pull the pfSense image
-# from private GHCR). sync-ports-fork operates on the FreeBSD-ports fork via
-# PORTS_TOKEN, not GITHUB_TOKEN.
+# (release: contents:write to publish; prepare-release: contents:write to commit +
+# push the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
+# sync-ports-fork operates on the FreeBSD-ports fork via PORTS_TOKEN, not GITHUB_TOKEN.
 permissions:
   contents: read
   packages: read
 
 jobs:
-  # ── 1. Verify ────────────────────────────────────────────────────────────
-  verify-checks:
-    name: Verify commit checks passed
+  # ── 0. Prepare release (real publish only) ───────────────────────────────
+  # Commits the changelog (when absent) and creates + pushes the release tag on
+  # the resulting commit.  Skipped entirely on dry_run=true — in that mode every
+  # downstream job operates on the dispatch ref HEAD instead.
+  #
+  # Tag pushed via GITHUB_TOKEN does NOT re-trigger this workflow (GitHub's rule),
+  # so this same run continues to build + publish — no recursion.
+  prepare-release:
+    name: Commit changelog + create the release tag
     runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
     permissions:
-      checks: read   # read the tagged commit's check-runs via gh api
+      contents: write
+      models: read    # actions/ai-inference for the changelog draft
+      checks: read    # gh api /commits/<sha>/check-runs to assert CI green
+
+    outputs:
+      tag:         ${{ steps.resolve.outputs.tag }}
+      branch:      ${{ steps.resolve.outputs.branch }}
+      channel:     ${{ steps.resolve.outputs.channel }}
+      portversion: ${{ steps.resolve.outputs.portversion }}
+      sha:         ${{ steps.push-tag.outputs.sha }}
+
     steps:
-      - name: Check 'All tests passed' status for tagged commit
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # full history: tag ancestry + log range
+          persist-credentials: true   # need to push branch + tag via GITHUB_TOKEN
+
+      - name: Resolve tag + channel branch
+        id: resolve
+        # Classify the tag via the single source of truth (scripts/release-version.sh)
+        # and map the channel to its canonical branch.  Re-assert the branch<->channel
+        # pairing with a second release-version.sh call (must exit 0) before proceeding.
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
+          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
+          # Re-assert branch<->channel pairing
+          sh scripts/release-version.sh "$TAG" "$BRANCH" > /dev/null || {
+            echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
+            exit 1
+          }
+          {
+            echo "tag=${TAG}"
+            echo "branch=${BRANCH}"
+            echo "channel=${channel}"
+            echo "portversion=${portversion}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag ${TAG}: channel=${channel} branch=${BRANCH} portversion=${portversion}"
+
+      - name: Check out the channel branch
+        # Operate on the live branch tip, not the dispatch ref.  fetch --tags so
+        # ancestry checks and the tag-exists guard below work correctly.
+        env:
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+        run: |
+          git fetch origin "$BRANCH" --tags
+          git checkout "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+      - name: Refuse an existing tag
+        # Tags are immutable — re-pushing one would re-publish a stale release body.
+        # Fail loudly rather than silently creating a duplicate.
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists locally — tags are immutable; bump the version"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "$TAG" > /dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists on the remote — tags are immutable; bump the version"
+            exit 1
+          fi
+          echo "Tag ${TAG} does not exist yet — proceeding."
+
+      - name: Require CI green on the branch tip
+        # The tag will point at the current HEAD of the channel branch; assert that
+        # its 'All tests passed' check-run is green before we commit anything.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A workflow_dispatch run is the dry-run harness (no real tag / commit
-          # gate to assert) — skip the commit-check requirement for it.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Dry-run dispatch: skipping the 'All tests passed' commit gate."
-            exit 0
-          fi
-          SHA="${{ github.sha }}"
+          SHA=$(git rev-parse HEAD)
           REPO="${{ github.repository }}"
-
           CONCLUSION=$(gh api \
             "repos/${REPO}/commits/${SHA}/check-runs" \
             --jq '[.check_runs[] | select(.name == "All tests passed")]
                   | sort_by(.completed_at) | last | .conclusion // "not_found"')
-
           if [ "$CONCLUSION" != "success" ]; then
-            echo "Error: 'All tests passed' for ${SHA} is '${CONCLUSION}'."
-            echo "Push the commit to a branch first and wait for CI to pass before tagging."
+            echo "::error::'All tests passed' for ${SHA} is '${CONCLUSION}'."
+            echo "Push the commit to a branch first and wait for CI to pass before releasing."
             exit 1
           fi
+          echo "CI green on ${SHA} (conclusion: ${CONCLUSION})"
+
+      - name: Detect committed changelog
+        id: detect
+        # A committed docs/release-notes/<tag>.md is the curated/authoritative notes;
+        # when it exists the Models draft is skipped and the commit step is a no-op.
+        # When absent, also prepare the prompt inputs (prev-tag range + user prompt file)
+        # so the Models step can draft the notes inline here — mirroring the same logic
+        # as the release job's prev_tag + notes_prep steps.
+        env:
+          TAG:     ${{ steps.resolve.outputs.tag }}
+          CHANNEL: ${{ steps.resolve.outputs.channel }}
+          REPO:    ${{ github.repository }}
+        run: |
+          set -u
+          NOTES_FILE="docs/release-notes/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "has_file=true" >> "$GITHUB_OUTPUT"
+            echo "Committed ${NOTES_FILE} found — skipping changelog generation."
+            exit 0
+          fi
+          echo "has_file=false" >> "$GITHUB_OUTPUT"
+
+          # Compute previous same-channel tag (same three-pass logic as release job).
+          COMMIT="HEAD"
+          PREV=$(git tag --sort=-version:refname \
+            | { grep -v "^${TAG}$" || true; } \
+            | while read -r t; do
+                git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
+                tch=$(sh scripts/release-version.sh "$t" 2>/dev/null | sed -n 's/^channel=//p') || true
+                [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
+              done) || true
+          if [ -z "$PREV" ]; then
+            PREV=$(git tag --sort=-version:refname \
+              | { grep -v "^${TAG}$" || true; } \
+              | while read -r t; do
+                  git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null && { echo "$t"; break; }
+                done) || true
+          fi
+          if [ -z "$PREV" ]; then
+            PREV=$( { git tag; echo "$TAG"; } | LC_ALL=C sort -V -r | uniq \
+              | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
+          fi
+
+          # Commit range + compare link.
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..HEAD"
+            CMP_URL="https://github.com/${REPO}/compare/${PREV}...${TAG}"
+            FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](${CMP_URL})"
+          else
+            RANGE="HEAD"
+            CMP_URL="https://github.com/${REPO}/commits/${TAG}"
+            FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](${CMP_URL})"
+          fi
+
+          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'%h %s' -- src/ scripts/)
+          [ -n "$COMMITS" ] || COMMITS="(no src/ or scripts/ changes in range)"
+
+          PROMPT_FILE="${RUNNER_TEMP}/notes_user_prompt.txt"
+          {
+            printf 'Context:\n'
+            printf -- '- Repository (OWNER/REPO): %s\n' "$REPO"
+            printf -- '- Release tag: %s\n' "$TAG"
+            printf -- '- Previous %s release: %s\n' "$CHANNEL" "${PREV:-<none>}"
+            printf -- '- Final line (use verbatim): %s\n\n' "$FULL_LINK"
+            printf 'Commits:\n%s\n' "$COMMITS"
+          } > "$PROMPT_FILE"
+
+          echo "cmp_url=${CMP_URL}" >> "$GITHUB_OUTPUT"
+          {
+            echo "full_link<<__FL__"
+            printf '%s\n' "$FULL_LINK"
+            echo "__FL__"
+          } >> "$GITHUB_OUTPUT"
+          echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Draft changelog (GitHub Models)
+        id: ai
+        # Single-shot inference; skipped when a committed notes file already exists.
+        # continue-on-error so a Models hiccup falls through to the write step which
+        # will emit a minimal placeholder instead.
+        if: ${{ steps.detect.outputs.has_file != 'true' }}
+        continue-on-error: true
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4.1
+          max-tokens: 2000
+          system-prompt-file: scripts/release-notes-prompt.txt
+          prompt-file: ${{ steps.detect.outputs.prompt_file }}
+
+      - name: Write + commit the changelog
+        id: write-changelog
+        # Parse the model response (SUMMARY line + first ```-fenced block) and write
+        # docs/release-notes/<tag>.md, then commit it.  If the model produced nothing,
+        # write a minimal placeholder (so the tag always carries a notes file).
+        # Skipped when a committed file already exists (has_file=true).
+        if: ${{ steps.detect.outputs.has_file != 'true' }}
+        env:
+          TAG:       ${{ steps.resolve.outputs.tag }}
+          FULL_LINK: ${{ steps.detect.outputs.full_link }}
+          CMP_URL:   ${{ steps.detect.outputs.cmp_url }}
+          RESP_FILE: ${{ steps.ai.outputs['response-file'] }}
+        run: |
+          set -u
+          NOTES_FILE="docs/release-notes/${TAG}.md"
+          mkdir -p docs/release-notes
+          SUMMARY=""
+          BODY=""
+
+          if [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
+            SUMMARY=$(grep -m1 '^SUMMARY:' "$RESP_FILE" | sed 's/^SUMMARY:[[:space:]]*//' | tr -d '\r') || true
+            BODY=$(awk '/^```/{fence++; next} fence==1{print}' "$RESP_FILE")
+          fi
+
+          if [ -z "$BODY" ]; then
+            echo "No model response — writing a placeholder notes file."
+            BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
+          fi
+
+          # Guarantee the compare link is present (append if the source omitted it).
+          case "$BODY" in
+            *"${CMP_URL}"*) ;;
+            *) BODY=$(printf '%s\n\n%s' "$BODY" "$FULL_LINK") ;;
+          esac
+
+          # Write the file: optional SUMMARY marker as first line, then the body.
+          if [ -n "$SUMMARY" ]; then
+            printf '<!-- SUMMARY: %s -->\n%s\n' "$SUMMARY" "$BODY" > "$NOTES_FILE"
+          else
+            printf '%s\n' "$BODY" > "$NOTES_FILE"
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$NOTES_FILE"
+          git commit -m "docs: add release notes for ${TAG}"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "Committed docs/release-notes/${TAG}.md"
+
+      - name: Create + push the tag (and changelog commit)
+        id: push-tag
+        # Push the branch first if a changelog commit was made (so the tag lands on
+        # the post-changelog tip), then create and push the annotated tag.
+        #
+        # GITHUB_TOKEN push of a tag does NOT trigger another workflow_dispatch run
+        # (GitHub's re-trigger rule for GITHUB_TOKEN): this run continues to build +
+        # publish without recursion.
+        env:
+          TAG:    ${{ steps.resolve.outputs.tag }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+        run: |
+          # Push the branch only if we have new commits ahead of the remote.
+          if ! git diff --quiet "origin/${BRANCH}..HEAD" 2>/dev/null; then
+            git push origin "HEAD:${BRANCH}"
+            echo "Pushed changelog commit to ${BRANCH}."
+          fi
+          SHA=$(git rev-parse HEAD)
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Created and pushed tag ${TAG} at ${SHA}"
 
   # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
   # Run the FULL tiered Web-UI suite on the live pfSense VM BEFORE publishing.
@@ -79,9 +315,9 @@ jobs:
   # their `needs:` are all `success`), so a not-our-fault browser flake costs a
   # single-leg re-run, never a republish.
   #
-  # This is a SEPARATE gate ALONGSIDE verify-checks (which still asserts the "All
-  # tests passed" PR-time check, covering the Tier-A PR fold). It does not weaken
-  # that gate — the release `needs:` BOTH.
+  # This is a SEPARATE gate ALONGSIDE the CI check asserted by prepare-release
+  # (which still asserts the "All tests passed" branch-tip check, covering the
+  # Tier-A PR fold). It does not weaken that gate — the release `needs:` BOTH.
   #
   # §7 browser DEMOTE/DROP — one-line switch: the browser leg is included here as
   # a separate re-runnable leg (the cheap tiers gate firmly; browser adds the
@@ -107,10 +343,15 @@ jobs:
   # ── 1c. Read version matrix ──────────────────────────────────────────────
   # Read the supported-versions matrix from ci-metadata and compute a
   # deduped build matrix (one entry per distinct FreeBSD major — one .pkg
-  # per ABI). Runs in parallel with verify-checks; build-pkgs needs both.
+  # per ABI). Runs after prepare-release (or in parallel with its skip on dry-run);
+  # build-pkgs-portable needs both.
   read-matrix:
     name: Read version matrix
     runs-on: ubuntu-latest
+    needs: [prepare-release]
+    # Run in both modes: dry-run (prepare-release skipped) AND real (prepare-release succeeded).
+    # If prepare-release failed for any reason, do NOT build or publish.
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
       build_matrix: ${{ steps.matrix.outputs.build_matrix }}
       pkg_channel: ${{ steps.channel.outputs.pkg_channel }}
@@ -124,11 +365,9 @@ jobs:
         # The channel drives which port we build (devel vs stable). Classified by
         # scripts/release-version.sh: vX.Y.Z.alpha.N|.beta.N|.rc.N -> devel, vX.Y.Z -> stable.
         env:
-          EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$REF_NAME"; fi
+          TAG="$INPUT_TAG"
           OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"
           echo "pkg_channel=${channel}" >> "$GITHUB_OUTPUT"
@@ -163,77 +402,67 @@ jobs:
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    # Gate the publish on the PR-time aggregate (verify-checks). The live-VM UI
-    # suite (ui-suite) is TEMPORARILY un-gated (see its `if: false` above) while
-    # the ADR-14 harness is stabilized; re-add `ui-suite` here once it is green.
-    needs: verify-checks
+    # Gate on prepare-release (real: must succeed; dry-run: skipped is fine) AND
+    # the matrix read. The live-VM UI suite (ui-suite) is TEMPORARILY un-gated
+    # (see its `if: false` above) while the ADR-14 harness is stabilized;
+    # re-add `ui-suite` here once it is green.
+    needs: [prepare-release, read-matrix]
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
     permissions:
       contents: write
       models: read   # actions/ai-inference (GitHub Models) for the release-notes draft
 
     outputs:
-      tag: ${{ steps.meta.outputs.tag }}
-      version: ${{ steps.meta.outputs.version }}
-      prerelease: ${{ steps.meta.outputs.prerelease }}
-      branch: ${{ steps.meta.outputs.branch }}
+      tag:         ${{ steps.meta.outputs.tag }}
+      version:     ${{ steps.meta.outputs.version }}
+      prerelease:  ${{ steps.meta.outputs.prerelease }}
+      branch:      ${{ steps.meta.outputs.branch }}
       portversion: ${{ steps.meta.outputs.portversion }}
-      dry_run: ${{ steps.meta.outputs.dry_run }}
+      dry_run:     ${{ steps.meta.outputs.dry_run }}
 
     steps:
       - uses: actions/checkout@v6
         with:
+          # dry_run=true: validate off the dispatch ref (HEAD); no tag exists yet.
+          # dry_run=false: check out the just-created tag (contains the changelog).
+          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0   # need full history for changelog
 
       - name: Gather release metadata
         id: meta
         # Validate + classify the tag via the single source of truth
-        # (scripts/release-version.sh). A push is a real release (dry_run=false,
-        # branch enforced); a workflow_dispatch is the dry-run harness (dry_run
-        # defaults true, branch check skipped since the tag may not exist yet).
+        # (scripts/release-version.sh).  This workflow is always workflow_dispatch;
+        # dry_run=false is the real publish path (prepare-release already ran the gates);
+        # dry_run=true is the validation harness (runs off HEAD, publishes nothing).
         env:
-          EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_DRY: ${{ github.event.inputs.dry_run }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            # Dispatch is the DRY-RUN harness only: the commit-check gate and the
-            # branch<->channel enforcement are both skipped here, so a real publish
-            # must never run from a dispatch. Reject dry_run=false explicitly — cut a
-            # real release by pushing a tag, which runs the full gates.
-            DRY_RUN="${INPUT_DRY:-true}"
-            if [ "$DRY_RUN" != "true" ]; then
-              echo "::error::workflow_dispatch is dry-run only (it skips the commit + branch gates); to publish, push a release tag instead"
-              exit 1
-            fi
-            TAG="$INPUT_TAG"
-            [ -n "$TAG" ] || { echo "::error::workflow_dispatch requires the 'tag' input (e.g. v4.0.0.alpha.1)"; exit 1; }
-            BRANCH=""   # simulation: skip branch<->channel enforcement
+          DRY_RUN="${INPUT_DRY:-true}"
+          TAG="$INPUT_TAG"
+          [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
+
+          if [ "$DRY_RUN" = "true" ]; then
+            # Dry-run: simulate off HEAD — branch<->channel enforcement is skipped since
+            # the tag doesn't exist yet and we're validating format + build only.
+            BRANCH=""
           else
-            DRY_RUN="false"
-            TAG="$REF_NAME"
-            # Branch detection must be deterministic AND mandatory: a stable tag sits
-            # on BOTH main and devel (main is an ancestor of devel), so prefer main;
-            # a tag reachable from neither release branch is rejected (never published).
-            ON_MAIN=0
-            ON_DEVEL=0
-            git merge-base --is-ancestor "$TAG" "origin/main"  2>/dev/null && ON_MAIN=1
-            git merge-base --is-ancestor "$TAG" "origin/devel" 2>/dev/null && ON_DEVEL=1
-            if [ "$ON_MAIN" = 1 ]; then
-              BRANCH="main"
-            elif [ "$ON_DEVEL" = 1 ]; then
-              BRANCH="devel"
-            else
-              echo "::error::${TAG} is not reachable from origin/main or origin/devel"
+            # Real publish: the tag was created by prepare-release on the channel branch;
+            # resolve the branch from the channel classification so downstream jobs have it.
+            OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+            eval "$OUT"   # sets channel (+ version / prerelease / prekind / portversion)
+            if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
+            # Re-assert branch<->channel pairing (belt-and-braces; prepare-release already did this)
+            sh scripts/release-version.sh "$TAG" "$BRANCH" > /dev/null || {
+              echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
               exit 1
-            fi
+            }
           fi
 
-          OUT=$(sh scripts/release-version.sh "$TAG" "$BRANCH") || { echo "$OUT"; exit 1; }
+          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
 
-          # Dispatch (dry-run) has no branch context; map the classified channel to its
-          # canonical branch so the downstream port path is still correct in the summary.
+          # Dry-run has no branch context from the tag; map channel to its canonical branch.
           if [ -z "$BRANCH" ]; then
             [ "$channel" = "devel" ] && BRANCH="devel" || BRANCH="main"
           fi
@@ -255,14 +484,14 @@ jobs:
         # ANCESTOR of the current release's commit — the natural "previous release of this
         # channel" the notes diff against. Falls back to the highest ancestor tag of any
         # channel, then to the next-lower version tag overall, so a genesis release (no
-        # same-channel predecessor) still gets a meaningful compare base. For a dispatch
-        # dry-run the "commit" is the checked-out ref HEAD; for a push it is the tag.
+        # same-channel predecessor) still gets a meaningful compare base. For a dry-run
+        # the "commit" is the checked-out ref HEAD; for a real publish it is the tag.
         env:
-          EVENT: ${{ github.event_name }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          TAG:     ${{ steps.meta.outputs.tag }}
           CHANNEL: ${{ steps.meta.outputs.channel }}
+          DRY_RUN: ${{ steps.meta.outputs.dry_run }}
         run: |
-          if [ "$EVENT" = "workflow_dispatch" ]; then COMMIT="HEAD"; else COMMIT="$TAG"; fi
+          if [ "$DRY_RUN" = "true" ]; then COMMIT="HEAD"; else COMMIT="$TAG"; fi
           # 1) Highest-version SAME-channel ancestor tag. release-version.sh classifies
           #    each tag's channel; the `|| true` guards keep pipefail from tripping on an
           #    empty tag list / a non-scheme tag.
@@ -283,7 +512,7 @@ jobs:
           fi
           # 3) Final fallback (rebased/diverged history): the next-lower version tag overall.
           if [ -z "$PREV" ]; then
-            PREV=$( { git tag; echo "$TAG"; } | sort -V -r | uniq \
+            PREV=$( { git tag; echo "$TAG"; } | LC_ALL=C sort -V -r | uniq \
               | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
           fi
           echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
@@ -295,14 +524,16 @@ jobs:
         # single prompt→completion (it cannot run git itself), so we collect the commits
         # here and feed them in. Emits the compare link + the assembled prompt-file path.
         env:
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          PREV: ${{ steps.prev_tag.outputs.tag }}
+          REPO:    ${{ github.repository }}
+          TAG:     ${{ steps.meta.outputs.tag }}
+          PREV:    ${{ steps.prev_tag.outputs.tag }}
           CHANNEL: ${{ steps.meta.outputs.channel }}
-          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ steps.meta.outputs.dry_run }}
         run: |
           set -u
-          if [ "$EVENT" = "workflow_dispatch" ]; then HEAD_REF="HEAD"; else HEAD_REF="$TAG"; fi
+          # dry_run=true: operate off HEAD (tag does not exist yet).
+          # dry_run=false: operate off the tag (the just-created tag, already checked out).
+          if [ "$DRY_RUN" = "true" ]; then HEAD_REF="HEAD"; else HEAD_REF="$TAG"; fi
 
           # Commit range + the compare/changelog link the notes end with.
           if [ -n "$PREV" ]; then
@@ -320,7 +551,7 @@ jobs:
 
           # Assemble the user prompt (Context + commit list); the static instructions are
           # the system prompt (scripts/release-notes-prompt.txt). Written to a file so the
-          # model-generated nothing is interpolated through the shell.
+          # model-generated content is never interpolated through the shell.
           PROMPT_FILE="${RUNNER_TEMP}/notes_user_prompt.txt"
           {
             printf 'Context:\n'
@@ -340,6 +571,8 @@ jobs:
           echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
           # A committed docs/release-notes/<tag>.md is the curated/authoritative notes for
           # this release; when present it WINS and the Models step is skipped (below).
+          # On dry_run=false the checkout is the tag, which now contains the file committed
+          # by prepare-release — so this is the normal real-publish path.
           if [ -f "docs/release-notes/${TAG}.md" ]; then HAS_FILE=true; else HAS_FILE=false; fi
           echo "has_file=${HAS_FILE}" >> "$GITHUB_OUTPUT"
           echo "Range: ${RANGE}  (committed notes file: ${HAS_FILE})"
@@ -350,9 +583,8 @@ jobs:
         # tier; needs permissions: models:read on this job). The system prompt is the
         # static instruction file; the user prompt is the Context + commit list above.
         # SKIPPED when a committed docs/release-notes/<tag>.md already exists — a curated
-        # (or previously-persisted) file is authoritative, so there's no point spending an
-        # inference call. continue-on-error so a Models hiccup/rate-limit falls through to
-        # the fallback when it does run.
+        # (or prepare-release-committed) file is authoritative. continue-on-error so a
+        # Models hiccup/rate-limit falls through to the fallback when it does run.
         if: ${{ steps.notes_prep.outputs.has_file != 'true' }}
         continue-on-error: true
         uses: actions/ai-inference@v1
@@ -367,12 +599,12 @@ jobs:
         # Parse the model output (SUMMARY line + the first ```-fenced block) into the
         # release title + body. Resilient: if inference was skipped/failed/empty, fall
         # back to a committed docs/release-notes/<tag>.md, else a placeholder. Always
-        # guarantees the compare link is present, and persists the body under docs/ for
-        # the persist-notes job. Runs on every event, so a dry-run shows the real body.
+        # guarantees the compare link is present. Runs on every event, so a dry-run
+        # shows the real body that would be published.
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          CMP_URL: ${{ steps.notes_prep.outputs.cmp_url }}
+          TAG:       ${{ steps.meta.outputs.tag }}
+          VERSION:   ${{ steps.meta.outputs.version }}
+          CMP_URL:   ${{ steps.notes_prep.outputs.cmp_url }}
           FULL_LINK: ${{ steps.notes_prep.outputs.full_link }}
           RESP_FILE: ${{ steps.ai.outputs['response-file'] }}
         run: |
@@ -380,13 +612,11 @@ jobs:
           SUMMARY=""
           BODY=""
           NOTES_FILE="docs/release-notes/${TAG}.md"
-          USED_COMMITTED=false
 
-          # Precedence: a committed notes file wins (curated, or persisted from a prior AI
-          # run); else the GitHub Models response; else a placeholder.
+          # Precedence: a committed notes file wins (curated, or committed by prepare-release);
+          # else the GitHub Models response; else a placeholder.
           if [ -f "$NOTES_FILE" ]; then
             echo "Using committed ${NOTES_FILE}"
-            USED_COMMITTED=true
             # Optional first-line marker '<!-- SUMMARY: ... -->' becomes the title suffix
             # and is stripped from the rendered body.
             SUMMARY=$(sed -n 's/^<!-- SUMMARY:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*-->[[:space:]]*$/\1/p' "$NOTES_FILE" | head -1 | tr -d '\r') || true
@@ -416,14 +646,6 @@ jobs:
             NAME="pfBlockerNG ${VERSION}"
           fi
 
-          # Persist the rendered notes for the persist-notes job to commit under docs/ —
-          # but only when we GENERATED them; a committed file is already in the repo (leave
-          # it untouched so persist-notes is a clean no-op and the SUMMARY marker survives).
-          mkdir -p docs/release-notes
-          if [ "$USED_COMMITTED" != true ]; then
-            printf '%s\n' "$BODY" > "$NOTES_FILE"
-          fi
-
           # Emit name + body to the step output (consumed by the publish step) …
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           {
@@ -441,15 +663,6 @@ jobs:
             printf '%s\n' "$BODY"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload rendered release notes
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-notes
-          path: docs/release-notes/${{ steps.meta.outputs.tag }}.md
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Build source archive
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
@@ -465,11 +678,11 @@ jobs:
       - name: Dry-run validation summary (no publish)
         if: ${{ steps.meta.outputs.dry_run == 'true' }}
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          CHANNEL: ${{ steps.meta.outputs.channel }}
-          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          TAG:         ${{ steps.meta.outputs.tag }}
+          CHANNEL:     ${{ steps.meta.outputs.channel }}
+          PRERELEASE:  ${{ steps.meta.outputs.prerelease }}
           PORTVERSION: ${{ steps.meta.outputs.portversion }}
-          PREV: ${{ steps.prev_tag.outputs.tag }}
+          PREV:        ${{ steps.prev_tag.outputs.tag }}
         run: |
           {
             echo "## Dry-run release validation — ${TAG}"
@@ -512,12 +725,19 @@ jobs:
   build-pkgs-portable:
     name: build .pkg artifacts (portable Linux)
     runs-on: ubuntu-latest
-    needs: [verify-checks, read-matrix]
+    needs: [prepare-release, read-matrix]
+    # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
     timeout-minutes: 30
 
     steps:
       - name: Checkout the tagged source
         uses: actions/checkout@v6
+        with:
+          # dry_run=true: build off the dispatch ref (HEAD); no tag exists yet.
+          # dry_run=false: check out the just-created tag so .pkg is stamped from the
+          #   tagged tree (which includes the committed changelog).
+          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
@@ -530,10 +750,9 @@ jobs:
       - name: Build one .pkg per FreeBSD major (portable)
         env:
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
-          PKG_CHANNEL: ${{ needs.read-matrix.outputs.pkg_channel }}
-          EVENT: ${{ github.event_name }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          PKG_CHANNEL:  ${{ needs.read-matrix.outputs.pkg_channel }}
+          INPUT_TAG:    ${{ github.event.inputs.tag }}
+          DRY_RUN:      ${{ github.event.inputs.dry_run }}
         run: |
           set -eu
           mkdir -p out
@@ -543,7 +762,7 @@ jobs:
           # parallel with) this build, so without an explicit --pkgversion the
           # Release-attached .pkg would carry the PREVIOUS version. release-version.sh
           # is the single source of truth for the pkg-safe portversion.
-          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$REF_NAME"; fi
+          TAG="$INPUT_TAG"
           OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets portversion (+ version / channel / prerelease / prekind)
           echo "Pinning .pkg version to ${portversion} (tag ${TAG})"
@@ -630,8 +849,8 @@ jobs:
   # unambiguity, and appends them to the already-published GitHub Release.
   #
   # DEPENDENCY EDGES — WHY sync-ports-fork IS INTACT:
-  #   sync-ports-fork needs: [release]         ← never needs build-pkgs
-  #   attach-pkgs needs: [release, build-pkgs] ← waits for both, if: always()
+  #   sync-ports-fork needs: [prepare-release, release]        ← never needs build-pkgs
+  #   attach-pkgs needs: [prepare-release, release, build-pkgs] ← waits for both, if: always()
   #
   # A build-pkgs failure makes attach-pkgs skip that leg's artifact but
   # attach the rest (or skip entirely if release also failed). sync-ports-fork is
@@ -640,7 +859,7 @@ jobs:
   attach-pkgs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
-    needs: [release, build-pkgs-portable, read-matrix]
+    needs: [prepare-release, release, build-pkgs-portable, read-matrix]
     # Run whenever release succeeded AND it was a real publish (not a dry-run);
     # regardless of the build outcome. A build-pkgs-portable failure surfaces as a
     # red leg but does not prevent attach-pkgs from completing with a warning.
@@ -667,9 +886,9 @@ jobs:
         # this step emits a warning and succeeds without uploading anything.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ needs.release.outputs.tag }}
         run: |
           set -eu
-          TAG="${GITHUB_REF_NAME}"
 
           PKGS=$(find pkgs -name "*.pkg" 2>/dev/null | head -20)
           if [ -z "$PKGS" ]; then
@@ -703,7 +922,7 @@ jobs:
   repo-publish:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
-    needs: [release, attach-pkgs]
+    needs: [prepare-release, release, attach-pkgs]
     if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
@@ -726,75 +945,15 @@ jobs:
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg
 
-  # ── 2f. Persist the generated release notes under docs/ (durable record) ────
-  # The Copilot-drafted notes are committed to docs/release-notes/<tag>.md on the
-  # release's channel branch, so the repository keeps a durable record of every
-  # release's notes. ADDITIVE + ISOLATED + BEST-EFFORT — only needs: [release]; a
-  # push failure (branch protection, a race) is a warning, never a release failure.
-  # Skipped on a dry-run. Docs-only and under docs/ ⇒ paths-ignored by CI (no rerun).
-  persist-notes:
-    name: Persist release notes to docs/
-    runs-on: ubuntu-latest
-    needs: [release]
-    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.release.outputs.branch }}
-          fetch-depth: 0
-
-      - name: Download rendered notes
-        uses: actions/download-artifact@v4
-        with:
-          name: release-notes
-          path: notes-dl
-        continue-on-error: true
-
-      - name: Commit notes under docs/release-notes/
-        env:
-          TAG: ${{ needs.release.outputs.tag }}
-          BRANCH: ${{ needs.release.outputs.branch }}
-        run: |
-          set -eu
-          SRC=$(find notes-dl -name "${TAG}.md" 2>/dev/null | head -1)
-          if [ -z "$SRC" ]; then
-            echo "::warning::no rendered notes artifact to persist"
-            exit 0
-          fi
-          mkdir -p docs/release-notes
-          cp "$SRC" "docs/release-notes/${TAG}.md"
-          if git diff --quiet -- "docs/release-notes/${TAG}.md"; then
-            echo "docs/release-notes/${TAG}.md already up to date — nothing to commit."
-            exit 0
-          fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "docs/release-notes/${TAG}.md"
-          git commit -m "docs: add release notes for ${TAG}"
-          # use the channel branch tip; rebase once on a racing push, then retry.
-          n=0
-          until git push origin "HEAD:${BRANCH}"; do
-            n=$((n + 1))
-            if [ "$n" -ge 3 ]; then
-              echo "::warning::could not push release notes to ${BRANCH} after ${n} attempts"
-              exit 0
-            fi
-            echo "push rejected — rebasing on ${BRANCH} (attempt ${n})"
-            git pull --rebase origin "$BRANCH" || true
-          done
-          echo "Persisted docs/release-notes/${TAG}.md to ${BRANCH}"
-
   # ── 2e. Redeploy the Cloudflare routing Worker (ADR-20) ─────────────────────
   # The Worker reads routing.json from Pages and 302-redirects pkg to the
   # correct variant catalog.  Redeployed on every release so the live Worker
   # always matches the current wrangler.toml / source.  ADDITIVE + ISOLATED —
-  # same pattern as repo-publish: only needs: [release], never blocks sync-ports-fork.
+  # same pattern as repo-publish: only needs: [prepare-release, release], never
+  # blocks sync-ports-fork.
   deploy-worker:
     name: Deploy Cloudflare routing Worker
-    needs: [release]
+    needs: [prepare-release, release]
     if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
     uses: ./.github/workflows/deploy-worker.yml
     secrets:
@@ -811,7 +970,7 @@ jobs:
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
-    needs: release
+    needs: [prepare-release, release]
     if: needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
@@ -844,8 +1003,8 @@ jobs:
         # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
         # template-inject into this shell.
         env:
-          BRANCH: ${{ needs.release.outputs.branch }}
-          TAG: ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
+          BRANCH:      ${{ needs.release.outputs.branch }}
+          TAG:         ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
           PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.alpha.1 | 4.0.0 (pkg-safe)
         run: |
           set -eu
