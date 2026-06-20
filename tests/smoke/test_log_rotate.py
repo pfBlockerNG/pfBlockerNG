@@ -258,7 +258,7 @@ def test_boundary_reset_inode_preserved_and_per_log_independence(
       - Both logs seeded with inert content.
       - Inode of ``ip_blocklog`` captured before the cron runs.
 
-    When: the cron entry runs (``pfblockerng.php update``).
+    When: the cron entry runs (``pfblockerng.php cron`` -> ``pfblockerng_sync_cron()``).
 
     Then:
       - ``ip_blocklog`` is EMPTY (reset occurred).
@@ -292,7 +292,7 @@ def test_boundary_reset_inode_preserved_and_per_log_independence(
     assert "ip_permitlog" not in marker_before, "BEFORE: marker should have no ip_permitlog entry (schedule is off)"
 
     # --- When ---
-    # Trigger the cron entry point; pfb_log_reset() runs inside pfblockerng.php update.
+    # Trigger the cron entry point; pfb_log_reset() runs inside pfblockerng_sync_cron().
     h.reload(vm, "cron")
 
     # --- Then ---
