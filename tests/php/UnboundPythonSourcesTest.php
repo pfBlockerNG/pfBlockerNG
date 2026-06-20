@@ -140,16 +140,24 @@ final class UnboundPythonSourcesTest extends TestCase
 			'a Permit-action row must carry mode=permit into the manifest JSON');
 	}
 
-	// The deny/absent side of the same branch: a normal block feed emits NO 'mode' key
-	// (byte-identical with pre-ADR-31 manifests; the Python side treats absent as deny).
-	public function testDenyAndAbsentFeedsOmitModeKeyInManifest(): void
+	// The absent side of the deny branch: a feed row with no 'action'/'mode' emits NO
+	// 'mode' key (byte-identical with pre-ADR-31 manifests; Python treats absent as deny).
+	public function testAbsentModeOmitsKeyInManifest(): void
 	{
 		$m = pfb_unbound_python_sources([
 			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
+		]);
+		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'absent action => no mode key (byte-identical with pre-ADR-31)');
+	}
+
+	// The explicit-deny side of the same branch: a row carrying mode='deny' also emits NO
+	// 'mode' key — the deny path is byte-identical whether the action is absent or 'Deny'.
+	public function testExplicitDenyOmitsModeKeyInManifest(): void
+	{
+		$m = pfb_unbound_python_sources([
 			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'deny'],
 		]);
-		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'absent action => no mode key');
-		$this->assertArrayNotHasKey('mode', $m['feeds'][1], 'explicit deny => no mode key (byte-identical)');
+		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'explicit deny => no mode key (byte-identical with pre-ADR-31)');
 	}
 
 	public function testPlainRawIsBareDomainColumn(): void
