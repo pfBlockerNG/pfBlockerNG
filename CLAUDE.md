@@ -871,20 +871,24 @@ odd/even conventions:
   `.githooks/pre-push` consume it, so the rule never drifts. Behaviour pinned by
   `tests/test_release_version.py`.
 
-**Release notes.** `release.yml` drafts the body with **GitHub Models** (`actions/ai-inference`,
-model `openai/gpt-4.1`) — **no secret**, the built-in token + `permissions: models:read`, free
-tier. A shell step gathers the commits since the **previous same-channel release** (`prev_tag`
-classifies each tag's channel via `release-version.sh`), feeds them to the model with the static
-system prompt in **`scripts/release-notes-prompt.txt`**, and the model returns a `SUMMARY:` line
-(→ the Release **title** suffix, `pfBlockerNG VER — 3-word summary`) plus a Markdown code block
-grouping user-facing changes under **Features / Improvements / Bug Fixes** with PR/issue links
-(CI/test/tooling/ADR noise filtered out), ending with the compare link. Resilient: if inference is
-unavailable/empty it falls back to a committed `docs/release-notes/TAG.md`, else a placeholder —
-the release never blocks on the generator. The rendered notes are **persisted** to
-`docs/release-notes/TAG.md` by the `persist-notes` job (committed to the channel branch; docs-only
-⇒ CI-skipped). To swap models, change the `model:` input; to use Claude Haiku on a Max plan instead,
-flip the step to the Claude CLI with `CLAUDE_CODE_OAUTH_TOKEN` (the prompt file + parser are reused).
-**Nightly builds get no GitHub Release.**
+**Release notes.** Body precedence: a **committed `docs/release-notes/TAG.md` wins** (curated, or
+persisted from a prior run) — when present the Models step is **skipped**; else **GitHub Models**
+(`actions/ai-inference`, model `openai/gpt-4.1` — **no secret**, the built-in token +
+`permissions: models:read`, free tier) drafts it; else a placeholder (the release never blocks on
+the generator). When Models runs, a shell step gathers the commits since the **previous
+same-channel release** (`prev_tag` classifies each tag's channel via `release-version.sh`) and
+feeds them with the static system prompt in **`scripts/release-notes-prompt.txt`**; the model
+returns a `SUMMARY:` line (→ the Release **title** suffix, `pfBlockerNG VER — 3-word summary`) plus
+a Markdown code block grouping user-facing changes under **Features / Improvements / Bug Fixes**
+with PR/issue links (CI/test/tooling/ADR noise filtered out), ending with the compare link. A
+**committed file** carries the same notes; its title summary rides in an optional first-line
+`<!-- SUMMARY: … -->` marker (stripped from the rendered body). Generated notes are **persisted**
+to `docs/release-notes/TAG.md` by the `persist-notes` job (committed to the channel branch;
+docs-only ⇒ CI-skipped); a pre-committed file is left untouched. To author notes by hand (or to
+"play the model" when Models is unavailable), commit `docs/release-notes/TAG.md` — same format,
+optional `<!-- SUMMARY: … -->` first line. To swap models, change the `model:` input; to use Claude
+Haiku on a Max plan instead, flip the step to the Claude CLI with `CLAUDE_CODE_OAUTH_TOKEN` (the
+prompt file + parser are reused). **Nightly builds get no GitHub Release.**
 
 **Dry-run.** `release.yml`'s `workflow_dispatch` is a no-publish harness: pass the `tag` to
 simulate (e.g. `v4.0.0.alpha.1`) with `dry_run=true` (default) to validate the scheme, build the
