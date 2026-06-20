@@ -87,6 +87,19 @@ $pconfig['log_max_dnsbl_parse_err']	= $pfb['gconfig']['log_max_dnsbl_parse_err']
 $pconfig['log_max_dnsreplylog']		= $pfb['gconfig']['log_max_dnsreplylog']		?: 20000;
 $pconfig['log_max_unilog']		= $pfb['gconfig']['log_max_unilog']			?: 20000;
 
+// ADR-30: per-log rotation schedule. Read via PfbConfig::read so the registered
+// default ('off') is applied when the key is absent (new install / upgrade).
+$pconfig['log_rotate_log']		= PfbConfig::read('log_rotate_log');
+$pconfig['log_rotate_errlog']		= PfbConfig::read('log_rotate_errlog');
+$pconfig['log_rotate_extraslog']	= PfbConfig::read('log_rotate_extraslog');
+$pconfig['log_rotate_ip_blocklog']	= PfbConfig::read('log_rotate_ip_blocklog');
+$pconfig['log_rotate_ip_permitlog']	= PfbConfig::read('log_rotate_ip_permitlog');
+$pconfig['log_rotate_ip_matchlog']	= PfbConfig::read('log_rotate_ip_matchlog');
+$pconfig['log_rotate_dnslog']		= PfbConfig::read('log_rotate_dnslog');
+$pconfig['log_rotate_dnsbl_parse_err']	= PfbConfig::read('log_rotate_dnsbl_parse_err');
+$pconfig['log_rotate_dnsreplylog']	= PfbConfig::read('log_rotate_dnsreplylog');
+$pconfig['log_rotate_unilog']		= PfbConfig::read('log_rotate_unilog');
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -108,6 +121,8 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 				'600000' => '600,000', '800000' => '800,000', '1000000' => '1,000,000', '1500000' => '1,500,000',
 				'2000000' => '2,000,000', '2500000' => '2,500,000', '3000000' => '3,000,000',
 				'nolimit' => 'No Limit - Not recommended' ];
+// ADR-30: rotation schedule options for each per-log schedule select.
+$options_log_rotate	= [ 'off' => 'Off', 'daily' => 'Daily', 'weekly' => 'Weekly', 'monthly' => 'Monthly' ];
 
 
 // $input_errors is read unconditionally in the render section below, so it must be
@@ -153,6 +168,22 @@ if ($_POST) {
 			}
 		}
 
+		// ADR-30: validate per-log rotation schedule selects. Handled separately to
+		// avoid extending the ${"options_$s_option"} lookup with unknown variable names.
+		$log_rotate_keys = array(
+			'log_rotate_log', 'log_rotate_errlog', 'log_rotate_extraslog',
+			'log_rotate_ip_blocklog', 'log_rotate_ip_permitlog', 'log_rotate_ip_matchlog',
+			'log_rotate_dnslog', 'log_rotate_dnsbl_parse_err',
+			'log_rotate_dnsreplylog', 'log_rotate_unilog',
+		);
+		foreach ($log_rotate_keys as $rkey) {
+			if (is_array($_POST[$rkey])) {
+				$_POST[$rkey] = 'off';
+			} elseif (!array_key_exists($_POST[$rkey], $options_log_rotate)) {
+				$_POST[$rkey] = 'off';
+			}
+		}
+
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
@@ -195,9 +226,23 @@ if ($_POST) {
 			$pfb['gconfig']['log_max_ip_permitlog']		= $_POST['log_max_ip_permitlog']		?: 20000;
 			$pfb['gconfig']['log_max_ip_matchlog']		= $_POST['log_max_ip_matchlog']			?: 20000;
 			$pfb['gconfig']['log_max_dnslog']		= $_POST['log_max_dnslog']			?: 20000;
-			$pfb['gconfig']['log_max_dnsbl_parse_err']	= $_POST['log_max_dnsbl_parse_err']		?: 20000; 
+			$pfb['gconfig']['log_max_dnsbl_parse_err']	= $_POST['log_max_dnsbl_parse_err']		?: 20000;
 			$pfb['gconfig']['log_max_dnsreplylog']		= $_POST['log_max_dnsreplylog']			?: 20000;
 			$pfb['gconfig']['log_max_unilog']		= $_POST['log_max_unilog']			?: 20000;
+
+			// ADR-30: persist per-log rotation schedules. Values have already been validated
+			// above. Written into $pfb['gconfig'] so the writeSection() call below includes
+			// them in the section; PfbConfig::write would be overwritten by writeSection.
+			$pfb['gconfig']['log_rotate_log']		= $_POST['log_rotate_log']		?: 'off';
+			$pfb['gconfig']['log_rotate_errlog']		= $_POST['log_rotate_errlog']		?: 'off';
+			$pfb['gconfig']['log_rotate_extraslog']		= $_POST['log_rotate_extraslog']	?: 'off';
+			$pfb['gconfig']['log_rotate_ip_blocklog']	= $_POST['log_rotate_ip_blocklog']	?: 'off';
+			$pfb['gconfig']['log_rotate_ip_permitlog']	= $_POST['log_rotate_ip_permitlog']	?: 'off';
+			$pfb['gconfig']['log_rotate_ip_matchlog']	= $_POST['log_rotate_ip_matchlog']	?: 'off';
+			$pfb['gconfig']['log_rotate_dnslog']		= $_POST['log_rotate_dnslog']		?: 'off';
+			$pfb['gconfig']['log_rotate_dnsbl_parse_err']	= $_POST['log_rotate_dnsbl_parse_err']	?: 'off';
+			$pfb['gconfig']['log_rotate_dnsreplylog']	= $_POST['log_rotate_dnsreplylog']	?: 'off';
+			$pfb['gconfig']['log_rotate_unilog']		= $_POST['log_rotate_unilog']		?: 'off';
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
@@ -351,15 +396,23 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
-$section = new Form_Section('Log Settings (max lines)');
+// ADR-30: section title includes "(max lines)" for backward-compat label; schedule
+// controls are added inline per log, with a single help note shown per group.
+$section = new Form_Section('Log Settings (max lines / rotation schedule)');
 $log_types = array (	'General'	=> array('pfBlockerNG' => 'log', 'Unified Log' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
 			'IP'		=> array('IP Block' => 'ip_blocklog', 'IP Permit' => 'ip_permitlog', 'IP Match' => 'ip_matchlog'),
 			'DNSBL'		=> array('DNSBL' => 'dnslog', 'DNSBL Parse Error' => 'dnsbl_parse_err'),
 			'DNS Reply'	=> array('DNS Reply' => 'dnsreplylog')
 			);
 
+// Help text for the schedule column — shown once per group (first log in each group).
+$rotate_help = 'Resets this log at the start of each calendar period (day/week/month) so '
+	. 'statistics reflect the current period only. Independent of the max-lines limit. '
+	. '<strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.';
+
 foreach ($log_types as $logdescr => $logtype) {
-	$group = new Form_Group($logdescr);
+	$group    = new Form_Group($logdescr);
+	$first    = TRUE;
 	foreach ($logtype as $descr => $type) {
 		$group->add(new Form_Select(
 			'log_max_' . $type,
@@ -368,6 +421,16 @@ foreach ($log_types as $logdescr => $logtype) {
 			$options_log_types
 		))->setHelp("Default: <strong>20000<br />{$descr}</strong> Log")
 		  ->setWidth(2);
+		$rotate_sel = $group->add(new Form_Select(
+			'log_rotate_' . $type,
+			'Schedule',
+			$pconfig['log_rotate_' . $type],
+			$options_log_rotate
+		))->setWidth(2);
+		if ($first) {
+			$rotate_sel->setHelp($rotate_help);
+			$first = FALSE;
+		}
 	}
 	$section->add($group);
 }

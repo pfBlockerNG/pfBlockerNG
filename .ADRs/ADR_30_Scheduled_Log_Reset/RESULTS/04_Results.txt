@@ -1,0 +1,145 @@
+ADR-30 Phase 4 Results — Log Settings per-log schedule controls
+================================================================
+
+Branch: adr/30-scheduled-log-reset
+Phase:  4 of 5 (UI controls added; all gates green)
+Status: DONE
+
+FILE CHANGED
+------------
+
+  src/usr/local/www/pfblockerng/pfblockerng_general.php only.
+
+CONTROL ID/NAME PATTERN
+-----------------------
+
+  name: log_rotate_<type>   (e.g. log_rotate_log, log_rotate_ip_blocklog)
+  id:   log_rotate_<type>   (pfSense Form_Select derives id from the first arg)
+  Options: Off/Daily/Weekly/Monthly → stored values 'off'/'daily'/'weekly'/'monthly'
+  Default: 'off' (applied by PfbConfig::read on absent key)
+
+HOW THE EXISTING LOOP WAS EXTENDED
+------------------------------------
+
+The existing $log_types group/loop (~:396) was extended to add a second
+Form_Select per log inside the same Form_Group:
+
+  foreach ($log_types as $logdescr => $logtype) {
+      $group = new Form_Group($logdescr);
+      $first = TRUE;
+      foreach ($logtype as $descr => $type) {
+          // existing max-lines select (unchanged)
+          $group->add(new Form_Select('log_max_' . $type, ...));
+          // new schedule select — adjacent in the same group cell
+          $rotate_sel = $group->add(new Form_Select(
+              'log_rotate_' . $type, 'Schedule',
+              $pconfig['log_rotate_' . $type], $options_log_rotate
+          ))->setWidth(2);
+          if ($first) {
+              $rotate_sel->setHelp($rotate_help);   // once per group
+              $first = FALSE;
+          }
+      }
+      $section->add($group);
+  }
+
+The $log_types array covers all 10 log types (General: log/unilog/errlog/extraslog;
+IP: ip_blocklog/ip_permitlog/ip_matchlog; DNSBL: dnslog/dnsbl_parse_err;
+DNS Reply: dnsreplylog) — 10 max-lines selects → 10 schedule selects.
+
+The section title was updated from 'Log Settings (max lines)' to
+'Log Settings (max lines / rotation schedule)'.
+
+LOAD WIRING
+-----------
+
+  $pconfig['log_rotate_<type>'] = PfbConfig::read('log_rotate_<type>');
+
+All 10 reads go through PfbConfig::read() (lines ~:92–101). The registered
+default ('off') is applied when the key is absent — no ?:'off' fallback needed.
+No direct config_get_path() for these keys.
+
+SAVE WIRING
+-----------
+
+Per-log validation handled in a separate loop (not via the existing
+${"options_$s_option"} mechanism — that would cause PHPStan to flag
+$options_log_rotate_<type> as undefined variables for all 10 keys):
+
+  foreach ($log_rotate_keys as $rkey) {
+      if (is_array($_POST[$rkey])) { $_POST[$rkey] = 'off'; }
+      elseif (!array_key_exists($_POST[$rkey], $options_log_rotate)) { $_POST[$rkey] = 'off'; }
+  }
+
+Persist (lines ~:236–245): written into $pfb['gconfig']['log_rotate_<type>']
+so the existing PfbConfig::writeSection() call picks them up with the rest of
+the section. Using PfbConfig::write() then writeSection() would have overwritten
+them (writeSection replaces the whole section with $pfb['gconfig']). No direct
+config_set_path() for registered keys — PHPCS RequireConfigGateway: 0 errors.
+
+HELP TEXT WORDING
+-----------------
+
+Shown once per group (first log in each group), not repeated 10×:
+
+  "Resets this log at the start of each calendar period (day/week/month) so
+  statistics reflect the current period only. Independent of the max-lines limit.
+  A reset discards that period's data — export first if you need history."
+
+RENDER PROOF
+------------
+
+SMOKE_ADMIN_PASSWORD not set — no live pfSense VM available. Deferred to Phase 5.
+
+Static proof:
+  php -l src/usr/local/www/pfblockerng/pfblockerng_general.php
+    -> No syntax errors detected
+
+  Confirmed via grep: 10 Form_Select('log_rotate_' . $type, 'Schedule', ...) calls
+  emitted by the loop; $options_log_rotate has 4 correct keys; $pconfig['log_rotate_*']
+  loaded for all 10 types via PfbConfig::read(); save path sets $pfb['gconfig'][...].
+
+GATE RESULTS
+------------
+
+  php -l src/usr/local/www/pfblockerng/pfblockerng_general.php
+    -> No syntax errors detected
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    -> (no output = 0 errors)
+
+  vendor/bin/phpstan analyse src/usr/local/www/pfblockerng/pfblockerng_general.php
+    -> [OK] No errors
+
+  vendor/bin/phpunit
+    -> OK (975 tests, 3714 assertions)  [unchanged from Phase 3]
+
+SELF-REVIEW VERDICT: DONE
+--------------------------
+
+Checklist:
+  [x] Schedule select added per log via existing loop — not 10 hand-coded rows
+  [x] All 10 log types covered (same $log_types array as max-lines)
+  [x] Options: Off/Daily/Weekly/Monthly → 'off'/'daily'/'weekly'/'monthly'
+  [x] Default 'off' — applied by PfbConfig::read on absent key
+  [x] Load: PfbConfig::read('log_rotate_' . $type) for each type
+  [x] Save: $pfb['gconfig']['log_rotate_' . $type] = validated POST value,
+      persisted by PfbConfig::writeSection() — no direct config_*_path on registered keys
+  [x] Validation: separate $log_rotate_keys loop; guards array/invalid values → 'off'
+  [x] Help text: brief, once per group (first log only via $first flag), covers:
+      period reset, independence from max-lines, data-discard warning
+  [x] Booleans uppercase: $first = TRUE / FALSE; strpos() !== FALSE
+  [x] PHPCS RequireConfigGateway: 0 errors
+  [x] PHPCS UppercaseBooleanLiteral: 0 errors
+  [x] PHPStan: [OK] No errors
+  [x] PHPUnit: OK (975 tests, 3714 assertions)
+  [x] Scope clean: only pfblockerng_general.php changed (+ this handoff)
+  [x] Render proof: php -l clean; controls confirmed in source; live deferred to Phase 5
+
+GO-AHEAD FOR PHASE 5
+---------------------
+
+Phase 5 may proceed: live-VM smoke (ADR-04), boundary-reset + inode-preserved +
+off-no-op + per-log-independence + same-period-idempotency cases; the Tier A
+ui_render check for the General page (confirming the 10 schedule selects are
+present and the page returns 200/no errors); docs/help updates; ADR Status → Accepted.
