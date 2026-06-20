@@ -834,6 +834,108 @@ final class RollbackContractTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// G -- ADR-30 amendment: log_reset_keep_<type> rollback contract
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Data provider — all 10 log_reset_keep_<type> keys × canonical numeric tokens.
+	 *
+	 * @return array<string, array{string, string}>
+	 */
+	public static function logResetKeepVocabularyProvider(): array
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$vocab  = ['0', '100', '500'];
+		$cases  = [];
+		foreach ($log_types as $type) {
+			foreach ($vocab as $token) {
+				$cases["log_reset_keep_{$type}/{$token}"] = ["log_reset_keep_{$type}", $token];
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * log_reset_keep_<type>: FORWARD invariant — every token yields a string (no crash).
+	 * log_reset_keep_<type>: BACKWARD invariant — write(read(v)) stores exactly v (identity).
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_<type> uses null/null adapters (plain-string identity).
+	 *     Given a stored token v ∈ {'0','100','500'}.
+	 *     When PfbConfig::read($key).
+	 *     Then (FORWARD) result is a string — not NULL, not a crash.
+	 *     And (BACKWARD) PfbConfig::write($key, result) stores the same string v.
+	 */
+	#[DataProvider('logResetKeepVocabularyProvider')]
+	public function testLogResetKeepFieldForwardAndBackwardForEveryVocabToken(
+		string $key,
+		string $token
+	): void {
+		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+		// GIVEN: token stored.
+		config_set_path($path, $token);
+
+		// BEFORE: raw value confirmed.
+		$this->assertSame($token, config_get_path($path),
+			"before forward+backward: {$key} token='{$token}'"
+		);
+
+		// FORWARD: read returns a well-formed string (no crash, correct type).
+		$runtime = PfbConfig::read($key);
+		$this->assertIsString($runtime,
+			"FORWARD: {$key} token='{$token}' must return a string"
+		);
+		$this->assertSame($token, $runtime,
+			"FORWARD: {$key} token='{$token}' identity adapter must return token unchanged"
+		);
+
+		// BACKWARD: write(runtime) stores exactly the same string (no novel token).
+		PfbConfig::write($key, $runtime);
+		$stored = config_get_path($path);
+		$this->assertSame($token, $stored,
+			"BACKWARD: {$key} token='{$token}' write(read) must store '{$token}' (identity)"
+		);
+	}
+
+	/**
+	 * log_reset_keep_<type>: absent key returns '0' (FORWARD — sane default, no crash).
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.xml (clean install / field never written).
+	 *     Given no stored value.
+	 *     When PfbConfig::read($key).
+	 *     Then '0' is returned (registered default; no crash).
+	 */
+	public function testLogResetKeepFieldAbsentKeyReturnsZeroDefault(): void
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key  = 'log_reset_keep_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+			// GIVEN: absent (setUp cleared config).
+			// BEFORE: confirm absent.
+			$this->assertNull(config_get_path($path),
+				"before: {$key} must be absent"
+			);
+
+			// FORWARD: read returns the registered default '0' — no crash.
+			$result = PfbConfig::read($key);
+			$this->assertSame('0', $result,
+				"FORWARD: {$key} absent must return '0' (registered default)"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
 	// Private helpers
 	// -----------------------------------------------------------------------
 

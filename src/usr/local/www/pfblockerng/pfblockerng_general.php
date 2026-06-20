@@ -100,6 +100,18 @@ $pconfig['log_rotate_dnsbl_parse_err']	= PfbConfig::read('log_rotate_dnsbl_parse
 $pconfig['log_rotate_dnsreplylog']	= PfbConfig::read('log_rotate_dnsreplylog');
 $pconfig['log_rotate_unilog']		= PfbConfig::read('log_rotate_unilog');
 
+// ADR-30 amendment: lines to keep on scheduled reset. Default '0' (clear fully).
+$pconfig['log_reset_keep_log']			= PfbConfig::read('log_reset_keep_log');
+$pconfig['log_reset_keep_errlog']		= PfbConfig::read('log_reset_keep_errlog');
+$pconfig['log_reset_keep_extraslog']		= PfbConfig::read('log_reset_keep_extraslog');
+$pconfig['log_reset_keep_ip_blocklog']		= PfbConfig::read('log_reset_keep_ip_blocklog');
+$pconfig['log_reset_keep_ip_permitlog']		= PfbConfig::read('log_reset_keep_ip_permitlog');
+$pconfig['log_reset_keep_ip_matchlog']		= PfbConfig::read('log_reset_keep_ip_matchlog');
+$pconfig['log_reset_keep_dnslog']		= PfbConfig::read('log_reset_keep_dnslog');
+$pconfig['log_reset_keep_dnsbl_parse_err']	= PfbConfig::read('log_reset_keep_dnsbl_parse_err');
+$pconfig['log_reset_keep_dnsreplylog']		= PfbConfig::read('log_reset_keep_dnsreplylog');
+$pconfig['log_reset_keep_unilog']		= PfbConfig::read('log_reset_keep_unilog');
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -184,6 +196,20 @@ if ($_POST) {
 			}
 		}
 
+		// ADR-30 amendment: validate per-log keep-lines fields (non-negative integer string).
+		$log_reset_keep_keys = array(
+			'log_reset_keep_log', 'log_reset_keep_errlog', 'log_reset_keep_extraslog',
+			'log_reset_keep_ip_blocklog', 'log_reset_keep_ip_permitlog', 'log_reset_keep_ip_matchlog',
+			'log_reset_keep_dnslog', 'log_reset_keep_dnsbl_parse_err',
+			'log_reset_keep_dnsreplylog', 'log_reset_keep_unilog',
+		);
+		foreach ($log_reset_keep_keys as $kkey) {
+			$v = $_POST[$kkey] ?? '0';
+			if (is_array($v) || !ctype_digit((string) $v)) {
+				$_POST[$kkey] = '0';
+			}
+		}
+
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
@@ -243,6 +269,18 @@ if ($_POST) {
 			$pfb['gconfig']['log_rotate_dnsbl_parse_err']	= $_POST['log_rotate_dnsbl_parse_err']	?: 'off';
 			$pfb['gconfig']['log_rotate_dnsreplylog']	= $_POST['log_rotate_dnsreplylog']	?: 'off';
 			$pfb['gconfig']['log_rotate_unilog']		= $_POST['log_rotate_unilog']		?: 'off';
+
+			// ADR-30 amendment: persist per-log keep-lines (validated above; default '0').
+			$pfb['gconfig']['log_reset_keep_log']			= $_POST['log_reset_keep_log']			?: '0';
+			$pfb['gconfig']['log_reset_keep_errlog']		= $_POST['log_reset_keep_errlog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_extraslog']		= $_POST['log_reset_keep_extraslog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_ip_blocklog']		= $_POST['log_reset_keep_ip_blocklog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_ip_permitlog']		= $_POST['log_reset_keep_ip_permitlog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_ip_matchlog']		= $_POST['log_reset_keep_ip_matchlog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_dnslog']		= $_POST['log_reset_keep_dnslog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_dnsbl_parse_err']	= $_POST['log_reset_keep_dnsbl_parse_err']	?: '0';
+			$pfb['gconfig']['log_reset_keep_dnsreplylog']		= $_POST['log_reset_keep_dnsreplylog']		?: '0';
+			$pfb['gconfig']['log_reset_keep_unilog']		= $_POST['log_reset_keep_unilog']		?: '0';
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
@@ -397,7 +435,7 @@ $section->addInput(new Form_Select(
 $form->add($section);
 
 // ADR-30: section title includes "(max lines)" for backward-compat label; schedule
-// controls are added inline per log, with a single help note shown per group.
+// and reset-keep controls are added inline per log, with a single help note shown per group.
 $section = new Form_Section('Log Settings (max lines / rotation schedule)');
 $log_types = array (	'General'	=> array('pfBlockerNG' => 'log', 'Unified Log' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
 			'IP'		=> array('IP Block' => 'ip_blocklog', 'IP Permit' => 'ip_permitlog', 'IP Match' => 'ip_matchlog'),
@@ -409,6 +447,10 @@ $log_types = array (	'General'	=> array('pfBlockerNG' => 'log', 'Unified Log' =>
 $rotate_help = 'Resets this log at the start of each calendar period (day/week/month) so '
 	. 'statistics reflect the current period only. Independent of the max-lines limit. '
 	. '<strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.';
+// Help text for the keep-lines column — shown once per group (first log in each group).
+$reset_keep_help = 'Lines to retain at the tail of this log when the scheduled reset fires. '
+	. 'Default: <strong>0</strong> (clear fully). '
+	. 'Set &gt; 0 as an opt-in cushion for remote log shippers that need a few moments to drain the file.';
 
 foreach ($log_types as $logdescr => $logtype) {
 	$group    = new Form_Group($logdescr);
@@ -429,6 +471,16 @@ foreach ($log_types as $logdescr => $logtype) {
 		))->setWidth(2);
 		if ($first) {
 			$rotate_sel->setHelp($rotate_help);
+		}
+		$keep_inp = $group->add(new Form_Input(
+			'log_reset_keep_' . $type,
+			'Keep lines',
+			'number',
+			$pconfig['log_reset_keep_' . $type]
+		))->setAttribute('min', '0')
+		  ->setWidth(2);
+		if ($first) {
+			$keep_inp->setHelp($reset_keep_help);
 			$first = FALSE;
 		}
 	}

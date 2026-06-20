@@ -428,6 +428,15 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'since'         => '4.0.0',
 		];
+		// ADR-30 amendment: lines to keep when a scheduled reset fires (numeric string).
+		// Default '0' = clear fully. Plain-string (identity) adapter; mirrors log_rotate_<type>.
+		$registry['log_reset_keep_' . $log_type] = [
+			'section'       => $gen,
+			'default'       => '0',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		];
 	}
 
 	$registry = $registry + [
