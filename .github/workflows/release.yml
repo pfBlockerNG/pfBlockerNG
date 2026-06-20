@@ -338,14 +338,22 @@ jobs:
             echo "__FL__"
           } >> "$GITHUB_OUTPUT"
           echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
-          echo "Range: ${RANGE}"
+          # A committed docs/release-notes/<tag>.md is the curated/authoritative notes for
+          # this release; when present it WINS and the Models step is skipped (below).
+          if [ -f "docs/release-notes/${TAG}.md" ]; then HAS_FILE=true; else HAS_FILE=false; fi
+          echo "has_file=${HAS_FILE}" >> "$GITHUB_OUTPUT"
+          echo "Range: ${RANGE}  (committed notes file: ${HAS_FILE})"
 
       - name: Draft release notes (GitHub Models)
         id: ai
         # Single-shot inference on GitHub Models with the built-in token (no secret, free
         # tier; needs permissions: models:read on this job). The system prompt is the
         # static instruction file; the user prompt is the Context + commit list above.
-        # continue-on-error so a Models hiccup/rate-limit falls through to the fallback.
+        # SKIPPED when a committed docs/release-notes/<tag>.md already exists — a curated
+        # (or previously-persisted) file is authoritative, so there's no point spending an
+        # inference call. continue-on-error so a Models hiccup/rate-limit falls through to
+        # the fallback when it does run.
+        if: ${{ steps.notes_prep.outputs.has_file != 'true' }}
         continue-on-error: true
         uses: actions/ai-inference@v1
         with:
@@ -371,27 +379,31 @@ jobs:
           set -u
           SUMMARY=""
           BODY=""
+          NOTES_FILE="docs/release-notes/${TAG}.md"
+          USED_COMMITTED=false
 
-          # The model response is read from its file (never interpolated as shell text).
-          if [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
+          # Precedence: a committed notes file wins (curated, or persisted from a prior AI
+          # run); else the GitHub Models response; else a placeholder.
+          if [ -f "$NOTES_FILE" ]; then
+            echo "Using committed ${NOTES_FILE}"
+            USED_COMMITTED=true
+            # Optional first-line marker '<!-- SUMMARY: ... -->' becomes the title suffix
+            # and is stripped from the rendered body.
+            SUMMARY=$(sed -n 's/^<!-- SUMMARY:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*-->[[:space:]]*$/\1/p' "$NOTES_FILE" | head -1 | tr -d '\r') || true
+            BODY=$(sed '/^<!-- SUMMARY:.*-->[[:space:]]*$/d' "$NOTES_FILE")
+          elif [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
+            echo "Using the GitHub Models draft."
             SUMMARY=$(grep -m1 '^SUMMARY:' "$RESP_FILE" | sed 's/^SUMMARY:[[:space:]]*//' | tr -d '\r') || true
             # Extract the content of the FIRST ```-fenced block (the description).
             BODY=$(awk '/^```/{fence++; next} fence==1{print}' "$RESP_FILE")
-          else
-            echo "No model response — falling back to committed notes / placeholder."
           fi
 
-          # Fallbacks: a committed notes file, else a placeholder. Never block the release.
           if [ -z "$BODY" ]; then
-            if [ -f "docs/release-notes/${TAG}.md" ]; then
-              echo "Using committed docs/release-notes/${TAG}.md"
-              BODY=$(cat "docs/release-notes/${TAG}.md")
-            else
-              BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
-            fi
+            echo "No committed notes and no model response — using a placeholder."
+            BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
           fi
 
-          # Guarantee the compare link is present (append if the model / file omitted it).
+          # Guarantee the compare link is present (append if the source omitted it).
           case "$BODY" in
             *"${CMP_URL}"*) ;;
             *) BODY=$(printf '%s\n\n%s' "$BODY" "$FULL_LINK") ;;
@@ -404,9 +416,13 @@ jobs:
             NAME="pfBlockerNG ${VERSION}"
           fi
 
-          # Persist the rendered notes for the persist-notes job to commit under docs/.
+          # Persist the rendered notes for the persist-notes job to commit under docs/ —
+          # but only when we GENERATED them; a committed file is already in the repo (leave
+          # it untouched so persist-notes is a clean no-op and the SUMMARY marker survives).
           mkdir -p docs/release-notes
-          printf '%s\n' "$BODY" > "docs/release-notes/${TAG}.md"
+          if [ "$USED_COMMITTED" != true ]; then
+            printf '%s\n' "$BODY" > "$NOTES_FILE"
+          fi
 
           # Emit name + body to the step output (consumed by the publish step) …
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
