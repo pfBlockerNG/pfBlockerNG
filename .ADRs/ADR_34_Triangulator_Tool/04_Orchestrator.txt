@@ -1,0 +1,58 @@
+================================================================================
+PHASE 4 PROMPT — Orchestrator + report model (pfb_triangulate) + explanations
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 4 ties the engine into
+the top-level orchestrator + the classification + plain-English explanations. Read-only. One
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+pfb_triangulate() is the single entry point the UI calls. It auto-detects the input, runs the
+relevant checks, classifies the block mechanism, and attaches the educational explanation that
+makes the tool useful.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/03_Results.txt AND 02_/01_. If missing,
+  STOP and report.
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 orchestrator/classification rows, SS2.2).
+- The Phase-2/3 engine functions + the report structure.
+- CLAUDE.md — PHP standards, Test coverage (every branch).
+
+ACTION PLAN (ordered)
+1. pfb_triangulate($input, $type='auto'): auto-detect IP (is_ipaddr) / domain (PFB_FILTER_
+   DOMAIN) / URL (parse_url -> host); for domains/URLs: resolve -> dnsbl(domain+chain) ->
+   ip(final ips); for IPs: ip() directly (+ optional reverse). Assemble the report struct.
+2. Classify the block mechanism: pure-DNSBL / pure-IP / hybrid / via-CNAME / via-TLD /
+   SafeSearch / DoH-DoT-DoQ / IDN / TLD-Allow (derive from the engine results + existing mode
+   detection). Attach a plain-English explanation per classification (incl. the
+   "whitelisting the IP has no effect on a DNSBL block" guidance).
+3. Tests (PHPUnit): each classification branch from a fixtured combination of resolve/dnsbl/ip
+   results (exact DNSBL; CNAME-in-chain DNSBL; TLD; pure IP; hybrid; clean/no-match); assert
+   the explanation text per branch; assert NO config/cache mutation across a full run.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- READ-ONLY: assert no config_set_path/write_config/cache write anywhere in the run.
+- Validate/detect input before dispatch (PFBL-01).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (all classification branches + no-mutation assertion); php -l;
+  PHPStan + phpcs clean.
+- python -m pytest -> green.
+- diff-read: orchestrator read-only; explanations cover the documented mechanisms.
+
+EXPECTED RESULT
+pfb_triangulate returns a structured, classified, explained, read-only report for any IP/
+domain/URL.
+
+COMMIT (single)
+    pfblockerng: add triangulate orchestrator + classification + explanations (ADR-34 P4)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/04_Results.txt (plain .txt)
+Record: pfb_triangulate signature + the report struct; the classification vocabulary + the
+explanation map; the no-mutation proof; which tests cover which branch; verification numbers;
+go-ahead for Phase 5.

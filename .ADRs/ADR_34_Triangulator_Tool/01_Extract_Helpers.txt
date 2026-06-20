@@ -1,0 +1,54 @@
+================================================================================
+PHASE 1 PROMPT — Prep: extract reusable match/classify helpers (oracle)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS1, SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool (off devel; create off the
+latest devel if absent). Phase 1 is BEHAVIOUR-PRESERVING: extract pure helpers + pin them;
+change NO existing output. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The engine reuses the existing exact/wildcard/TLD classification already implied by
+dnsbl_log_details()/pfb_dnsbl_parse(). Distil the classification into a pure, tested function
+first so the engine builds on a pinned oracle, not a copy that can drift.
+
+REQUIRED READING
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php — dnsbl_log_details (~1976),
+  dnsbl_whitelist_type (~2011), convert_dnsbl_log (~2162).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_dnsbl_parse (~9309); the exact data vs
+  wildcard/TLD zone distinction (unbound_py_data vs ..._zone).
+- tests/php/ for style; CLAUDE.md — PHP standards, Test coverage (branch + BDD).
+
+ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
+1. Identify the smallest pure "classify a name against exact/wildcard/TLD data" decision the
+   engine needs; extract it into a named function (input: name + the data/zone lookup view;
+   output: match type exact|parent_wildcard|tld|none + matched key). Do NOT change existing
+   Alerts output -- reuse the same logic.
+2. If extraction touches an existing function, keep its observable output identical.
+3. Golden tests pinning the extracted classifier for a fixture corpus: exact match, parent/
+   wildcard match, TLD match, no-match (and a CNAME-style name handled by the caller later).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Pure classifier (data view in -> verdict out); no shell, no config writes, no file path
+  re-derivation (Unbound chroot -- reach data via existing helpers).
+- Do NOT create the diagnostics engine file yet (Phase 2). Do NOT change existing output.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (classifier oracle); php -l; PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: extraction only; Alerts output identical.
+
+EXPECTED RESULT
+A pure, pinned exact/wildcard/TLD classifier the engine will reuse; no behaviour change.
+
+COMMIT (single)
+    pfblockerng: extract DNSBL name classifier for diagnostics reuse (ADR-34 P1)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/01_Results.txt (plain .txt)
+Record: the classifier name/signature + match-type vocabulary; the data/zone view it expects;
+the oracle corpus; verification numbers; go-ahead for Phase 2.

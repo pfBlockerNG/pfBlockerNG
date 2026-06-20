@@ -1,0 +1,65 @@
+================================================================================
+PHASE 6 PROMPT — Smoke + Definition of Done + docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS7 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 6 proves the engine
+end-to-end on a live VM (no Unbound in CI off-box), closes the DoD, and updates docs. One
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+Layer attribution is only fully real against live Unbound + pf. A live-VM smoke that lists a
+domain, resolves it (blocked), and triangulates it is the strongest proof the report is correct.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/05_Results.txt AND 04_/03_/02_/01_. If
+  missing, STOP and report.
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS7 DoD + reject criteria).
+- tests/smoke/ — conftest.py (smoke_vm), helpers.py (unique_domain, drill probe, ensure_dnsbl_
+  vip, config injection); tests/smoke/ui/ for the page check.
+- docs/misc/architecture-notes.md — the Alerts/DNSBL section to extend.
+- CLAUDE.md — Smoke tests (on-box probe, unique_domain, block shapes, chroot), Updating docs.
+
+ACTION PLAN (ordered)
+1. Live-VM smoke (assert BEFORE then AFTER):
+   - DNSBL case: add a helpers.unique_domain() (uuid-*.com) to a DNSBL feed; confirm it
+     resolves to the block shape; run pfb_triangulate -> report classifies a DNSBL block,
+     names the feed, and includes the "IP whitelist has no effect" guidance.
+   - IP case: an IP in a pfB_* alias -> report attributes the IP layer + the alias/feed.
+   - CNAME case (where feasible): a name whose chain hits a listed CNAME -> report shows the
+     chain + the blocked CNAME. If a clean CNAME setup is infeasible in CI, document it for the
+     manual checklist.
+   Never RFC 6761 TLDs / HSTS-preload names. Engine stays read-only (assert no config change
+   across the run).
+2. Maintainer MANUAL checklist (RESULTS + ADR SS7): real CNAME-cloak, CDN-IP-in-reputation,
+   TLD-wildcard cases.
+3. Docs: extend docs/misc/architecture-notes.md with the diagnostics engine (resolve/dnsbl/ip/
+   orchestrator, classification, read-only, bounds); update README if workflow changed; add
+   stubs for new pfSense fns; confirm PFBL-01 scopeFunctions current.
+4. Re-confirm DoD + reject criteria: if on-demand lookups can't be bounded safely or layer
+   attribution needs live Unbound in a way CI/manual can't validate, record evidence and
+   recommend reduce (Alerts-context-only) or reject.
+
+CONSTRAINTS
+- Smoke probes ON-BOX; first response after reload authoritative; assert before-then-after.
+- stdlib python; markdown lint clean; tests validate correctness (no theater).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (non-smoke); vendor/bin/phpunit -> green.
+- The smoke case(s) pass on a live VM OR are clearly gated/SKIPped with the manual checklist
+  covering the gap; diagnostics reviewed on any failure.
+- ruff / mypy tests/ / markdownlint -> clean; php -l / phpcs as relevant.
+
+EXPECTED RESULT
+A real DNSBL (and IP) block triangulates correctly on a live VM (or via the documented manual
+smoke); docs updated; DoD + reject criteria resolved.
+
+COMMIT (single)
+    pfblockerng: add Triangulator smoke + docs; close ADR-34 DoD (ADR-34 P6)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/06_Results.txt (plain .txt)
+Record: which DoD items are CI-covered vs manual; the live triangulation results; doc/stub
+updates; the final accept/reduce/reject recommendation for the ADR.
