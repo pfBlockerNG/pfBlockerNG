@@ -8467,55 +8467,54 @@ function pfb_collect_localhosts() {
 
 // Resolve a filter.log Tracker ID to a pfBlockerNG rule.
 //
-// Returns TRUE when $tracker is a known pfB rule whose type matches $type (caller
-// should process the log line). Returns FALSE when the tracker is a known non-pfB
-// ('other') tracker or could not be resolved after retries (caller should skip).
+// Returns TRUE when $tracker is a pfB rule whose type matches $type (caller processes
+// the line); FALSE for a known non-pfB ('other') or an unresolvable tracker (caller skips).
 //
-// $rule_list is updated in-place when a reparse is triggered.
-// $reparse   : callable() => array  — returns a fresh rule list (production: pfb_filterrules).
-// $sleeper   : callable(int) => void — sleep shim (injectable for tests; null => builtin sleep).
-// $on_reparse: callable() => void   — called after each reparse so the daemon can refresh
-//             its $pfb_local / $pfb_localsub / $local_hosts variables; null => no callback.
+// $rule_list  : positive cache from pfb_filterrules(); rebuilt in place on a reparse.
+// $miss_cache : PERSISTENT negative cache of trackers not present in the ruleset; survives
+//               reparses (a reparse rebuilds $rule_list but not this), so each unresolvable
+//               tracker triggers at most ONE reparse for the daemon's life.
+// $reparse    : callable() => array — fresh rule list (production: 'pfb_filterrules').
+// $on_reparse : callable() => void  — refresh daemon-local IP/host collections after a reparse.
 function pfb_resolve_tracker(
 	array &$rule_list,
+	array &$miss_cache,
 	string $tracker,
 	string $type,
-	int &$max_retries,
 	callable $reparse,
-	?callable $sleeper = null,
-	?callable $on_reparse = null
+	?callable $on_reparse = NULL
 ): bool {
-	if ($sleeper === null) {
-		$sleeper = 'sleep';
+	// Negative cache: a tracker the ruleset doesn't list (anchor/trackerless) — never reparse again.
+	if (isset($miss_cache[$tracker])) {
+		return FALSE;
 	}
 
-	for ($retries = 1; $retries <= 5; $retries++) {
-
-		// Skip known non-pfBlockerNG Tracker IDs
-		if (isset($rule_list['other'][$tracker])) {
-			return FALSE;
-		}
-
-		// Resolved: pfB rule whose type matches
-		if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
-			return TRUE;
-		}
-
-		// Tracker not yet known — collect updated pfctl rule data and refresh daemon locals
-		$rule_list = ($reparse)();
-		if ($on_reparse !== null) {
-			($on_reparse)();
-		}
-
-		if ($retries < 5 && $max_retries < 30) {
-			$max_retries++;
-			($sleeper)(5);
-		} else {
-			return FALSE;
-		}
+	// Known non-pfB tracker.
+	if (isset($rule_list['other'][$tracker])) {
+		return FALSE;
 	}
 
-	// Unreachable: loop exits via return inside, but satisfy static analysis
+	// Known pfB tracker of the matching type.
+	if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
+		return TRUE;
+	}
+
+	// Unknown — reparse ONCE to pick up a freshly added/changed rule.
+	$rule_list = ($reparse)();
+	if ($on_reparse !== NULL) {
+		($on_reparse)();
+	}
+
+	if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
+		return TRUE;
+	}
+
+	if (isset($rule_list['other'][$tracker])) {
+		return FALSE;
+	}
+
+	// Still absent after a fresh parse — record in the persistent negative cache.
+	$miss_cache[$tracker] = TRUE;
 	return FALSE;
 }
 
@@ -8638,9 +8637,9 @@ function pfb_daemon_filterlog() {
 		[18]	= Client Hostname
 		[19]	= Duplicate ID indicator		*/
 
-	// Disable pfctl Tracker ID lookup on too many lookup failures
-	$max_retries = 0;
-	
+	// Persistent negative cache: trackers absent from the ruleset are never reparsed again.
+	$tracker_misses = array();
+
 	if (($s_handle = @fopen('php://stdin', 'r')) !== FALSE) {
 		logger(LOG_NOTICE, localize_text('filterlog daemon started'), LOG_PREFIX_PKG_PFBLOCKERNG);
 		while (!feof($s_handle)) {
@@ -8670,7 +8669,8 @@ function pfb_daemon_filterlog() {
 			}
 			$d = explode(',', $f[$f_pos]);
 
-			// Attempt to find the Tracker ID, if not found wait 5secs for filter_reload
+			// Resolve the Tracker ID: reparse at most once per unknown tracker; persistent
+			// negative cache prevents repeated reparses for anchor/trackerless rules.
 			if (!empty($d[3])) {
 				// On reparse: refresh the daemon-local IP/host collections from the box.
 				$pfb_reparse_cb = function () use (&$pfb_local, &$pfb_localsub, &$local_hosts) {
@@ -8681,7 +8681,7 @@ function pfb_daemon_filterlog() {
 				};
 
 				// Resolve the Tracker ID — returns TRUE when a matching pfB rule is found.
-				if (!pfb_resolve_tracker($rule_list, $d[3], $d[6], $max_retries, 'pfb_filterrules', null, $pfb_reparse_cb)) {
+				if (!pfb_resolve_tracker($rule_list, $tracker_misses, $d[3], $d[6], 'pfb_filterrules', $pfb_reparse_cb)) {
 					continue;
 				}
 
