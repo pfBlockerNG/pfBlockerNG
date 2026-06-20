@@ -125,6 +125,33 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame('feed', $m['feeds'][0]['provenance']);
 	}
 
+	// ADR-31: a Permit-action feed row carries 'mode' => 'permit' THROUGH the writer's
+	// key remap into the manifest JSON, so the Python build (dnsbl_build_from_manifest
+	// -> build()) routes its hosts into whiteDB as band-2 allows. A regression here
+	// silently demotes every DNSWL allow-feed back to a plain block feed — the key was
+	// dropped in this remap and only the live-VM smoke caught it.
+	public function testPermitFeedCarriesModeIntoManifest(): void
+	{
+		file_put_contents("{$this->tmp}/dnsbl/permitfeed.txt", "1,allow.example.com,a,b,c,d\n");
+		$m = pfb_unbound_python_sources([
+			['header' => 'permitfeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'permit'],
+		]);
+		$this->assertSame('permit', $m['feeds'][0]['mode'] ?? null,
+			'a Permit-action row must carry mode=permit into the manifest JSON');
+	}
+
+	// The deny/absent side of the same branch: a normal block feed emits NO 'mode' key
+	// (byte-identical with pre-ADR-31 manifests; the Python side treats absent as deny).
+	public function testDenyAndAbsentFeedsOmitModeKeyInManifest(): void
+	{
+		$m = pfb_unbound_python_sources([
+			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
+			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'deny'],
+		]);
+		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'absent action => no mode key');
+		$this->assertArrayNotHasKey('mode', $m['feeds'][1], 'explicit deny => no mode key (byte-identical)');
+	}
+
 	public function testPlainRawIsBareDomainColumn(): void
 	{
 		pfb_unbound_python_sources($this->feeds());

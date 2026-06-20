@@ -4967,6 +4967,14 @@ function pfb_unbound_python_sources($feeds) {
 			'provenance'	=> (isset($feed['provenance']) && $feed['provenance'] === 'user') ? 'user' : 'feed',
 			'log_flag'	=> $logf
 		);
+
+		// ADR-31: carry the permit-mode flag into the manifest JSON so the Python
+		// build (dnsbl_build_from_manifest -> build()) routes this feed's hosts into
+		// whiteDB as band-2 allows. Deny/absent omits the key (byte-identical with
+		// pre-ADR-31 entries; the Python side treats an absent 'mode' as deny).
+		if (isset($feed['mode']) && $feed['mode'] === 'permit') {
+			$manifest_feeds[count($manifest_feeds) - 1]['mode'] = 'permit';
+		}
 	}
 
 	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
