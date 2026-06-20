@@ -1997,38 +1997,92 @@ function pfb_log_reset(): void
 		}
 
 		// Period has rolled over (or this log has never been reset).
-		// Truncate to empty IN PLACE — inode-preserving, mirroring pfb_log_mgmt().
+		// ADR-30 amendment (#416): keep the last $keep lines when $keep > 0 (inode-
+		// preserving, mirroring pfb_log_mgmt()); clear fully when $keep <= 0 (default).
+		$keep = (int) PfbConfig::read('log_reset_keep_' . $logtype);
+
 		if ($logtype === 'dnslog' || $logtype === 'dnsreplylog' || $logtype === 'unilog') {
 
 			// DNS python logs: resolve through the Unbound chroot.
 			if (is_dir("{$chroot_folder}/var/log/pfblockerng")) {
 				$final_log_file = "{$chroot_folder}{$pfb[$logtype]}";
+				$temp           = tempnam("{$chroot_folder}/var/log/pfblockerng", 'pfb_log_');
 			} else {
 				$final_log_file = $pfb[$logtype];
+				$temp           = tempnam("{$g['tmp_path']}/", 'pfb_log_');
 			}
 
 			if (file_exists($final_log_file)) {
-				exec("/bin/cp /dev/null " . escapeshellarg($final_log_file), $out, $ret);
-				if ($ret === 0) {
-					// Re-apply unbound ownership after truncation (same as pfb_log_mgmt).
-					@chown($final_log_file, 'unbound');
-					@chgrp($final_log_file, 'unbound');
+				if ($keep > 0) {
+					// Keep last $keep lines inode-preservingly (ADR-30 amendment / #416).
+					// Gate on each exec exit code: a failed tail/cat must NOT blank the log.
+					exec("/usr/bin/tail -n " . escapeshellarg((string) $keep) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
+					if ($ret === 0) {
+						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($final_log_file), $out, $ret);
+						if ($ret === 0) {
+							// Re-apply unbound ownership after the in-place keep (same as pfb_log_mgmt).
+							@chown($final_log_file, 'unbound');
+							@chgrp($final_log_file, 'unbound');
+						} else {
+							pfb_logger("\npfb_log_reset: failed to overwrite {$final_log_file} during keep", 2);
+							unlink_if_exists($temp);
+							continue;
+						}
+					} else {
+						pfb_logger("\npfb_log_reset: failed to tail {$final_log_file} for keep", 2);
+						unlink_if_exists($temp);
+						continue;
+					}
+					unlink_if_exists($temp);
 				} else {
-					pfb_logger("\npfb_log_reset: failed to truncate {$final_log_file}", 2);
-					continue;
+					// Clear fully (default: $keep == 0).
+					exec("/bin/cp /dev/null " . escapeshellarg($final_log_file), $out, $ret);
+					if ($ret === 0) {
+						// Re-apply unbound ownership after truncation (same as pfb_log_mgmt).
+						@chown($final_log_file, 'unbound');
+						@chgrp($final_log_file, 'unbound');
+					} else {
+						pfb_logger("\npfb_log_reset: failed to truncate {$final_log_file}", 2);
+						unlink_if_exists($temp);
+						continue;
+					}
+					unlink_if_exists($temp);
 				}
+			} else {
+				unlink_if_exists($temp);
 			}
 		} else {
 			if (file_exists($pfb[$logtype])) {
-				exec("/bin/cp /dev/null " . escapeshellarg($pfb[$logtype]), $out, $ret);
-				if ($ret !== 0) {
-					pfb_logger("\npfb_log_reset: failed to truncate {$pfb[$logtype]}", 2);
-					continue;
+				if ($keep > 0) {
+					// Keep last $keep lines inode-preservingly (ADR-30 amendment / #416).
+					// Gate on each exec exit code: a failed tail/cat must NOT blank the log.
+					$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
+					exec("/usr/bin/tail -n " . escapeshellarg((string) $keep) . " " . escapeshellarg($pfb[$logtype]) . " > " . escapeshellarg($temp), $out, $ret);
+					if ($ret === 0) {
+						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($pfb[$logtype]), $out, $ret);
+						if ($ret !== 0) {
+							pfb_logger("\npfb_log_reset: failed to overwrite {$pfb[$logtype]} during keep", 2);
+							unlink_if_exists($temp);
+							continue;
+						}
+					} else {
+						pfb_logger("\npfb_log_reset: failed to tail {$pfb[$logtype]} for keep", 2);
+						unlink_if_exists($temp);
+						continue;
+					}
+					unlink_if_exists($temp);
+				} else {
+					// Clear fully (default: $keep == 0).
+					exec("/bin/cp /dev/null " . escapeshellarg($pfb[$logtype]), $out, $ret);
+					if ($ret !== 0) {
+						pfb_logger("\npfb_log_reset: failed to truncate {$pfb[$logtype]}", 2);
+						continue;
+					}
 				}
 			}
 		}
 
-		// Record the new period key for this log.
+		// Record the new period key for this log (same for both keep and clear paths).
 		$entries[$logtype] = pfb_log_rotate_period($schedule, time());
 		$changed           = TRUE;
 	}
