@@ -73,63 +73,82 @@ final class PfbFilterWhitelistAtypeTest extends TestCase
 	}
 
 	/**
-	 * HTML-special characters in the description are escaped exactly once.
-	 *
-	 * Given: a description containing '&'.
-	 * When:  the helper processes the composite.
-	 * Then:  '&' is encoded as '&amp;' (single escape, NOT '&amp;amp;').
-	 *
-	 * Proves that the downstream addgroup block must NOT re-filter the description
-	 * (which would double-escape '&amp;' → '&amp;amp;').
+	 * HTML-special characters in the description are kept as RAW text (NOT
+	 * HTML-encoded at ingestion). Storage is base64 (the custom list), and each
+	 * display sink escapes on output — so the stored/edited description shows the
+	 * value the user typed ('a & b'), not 'a &amp; b'.
 	 */
-	public function testHtmlSpecialCharsInDescriptionAreEscapedOnce(): void
+	public function testHtmlSpecialCharsInDescriptionArePreservedRaw(): void
 	{
-		$composite = 'Whitelist|89.248.168.42|a & b';
+		$result = pfb_filter_whitelist_atype('Whitelist|89.248.168.42|a & b');
 
-		$result = pfb_filter_whitelist_atype($composite);
-
-		$this->assertStringContainsString('a &amp; b', $result,
-			'ampersand must be HTML-escaped exactly once');
-		$this->assertStringNotContainsString('&amp;amp;', $result,
-			'must not double-escape: &amp;amp; is a double-escape of &');
+		$this->assertSame('Whitelist|89.248.168.42|a & b', $result,
+			'the ampersand must be preserved raw, not HTML-encoded at ingestion');
+		$this->assertStringNotContainsString('&amp;', $result, 'no HTML entity may be introduced');
 	}
 
 	/**
-	 * The other HTML-special characters ('<', '>', '"', "'") are each escaped so
-	 * that $atype is safe in the hidden form-field and the JS-string output sites.
+	 * Angle brackets and quotes in the description are likewise preserved raw; the
+	 * output sinks (json_encode for JS, Form_Input/Form_Textarea for HTML) escape
+	 * them, so ingestion keeps the user's literal text.
 	 */
-	public function testAngleBracketsAndQuotesInDescriptionAreEscaped(): void
+	public function testAngleBracketsAndQuotesInDescriptionArePreservedRaw(): void
 	{
 		$result = pfb_filter_whitelist_atype('Whitelist|89.248.168.42|<b>"x"</b>');
 
-		$this->assertStringContainsString('&lt;b&gt;', $result, '< and > must be escaped');
-		$this->assertStringContainsString('&quot;x&quot;', $result, '" must be escaped');
-		$this->assertStringNotContainsString('<b>', $result, 'no raw tag may survive');
-		$this->assertStringNotContainsString('"x"', $result, 'no raw double-quote may survive');
+		$this->assertSame('Whitelist|89.248.168.42|<b>"x"</b>', $result,
+			'tags and quotes must be preserved raw (escaping is an output concern)');
 	}
 
 	/**
-	 * A description containing a backslash or newline is preserved verbatim by the
-	 * helper (htmlspecialchars does not touch '\' or "\n"). The category-edit page
-	 * therefore emits the value into its JS-string site with json_encode(), which
-	 * escapes those characters — this test pins that contract: json_encode() of the
-	 * helper result is always a valid JS string literal that round-trips.
+	 * A description with control characters or newlines is collapsed to a single
+	 * space, so it cannot inject extra lines into the (newline-delimited, base64
+	 * stored) custom list. Pins the anti-injection contract.
 	 */
-	public function testBackslashAndNewlineDescriptionAreJsSafeViaJsonEncode(): void
+	public function testControlCharsAndNewlinesAreNormalisedToSingleLine(): void
 	{
-		$raw    = "Whitelist|89.248.168.42|foo\\bar\nbaz";
-		$atype  = pfb_filter_whitelist_atype($raw);
+		$result = pfb_filter_whitelist_atype("Whitelist|89.248.168.42|foo\nbar\tbaz");
 
-		// The page renders the JS site as: var atype = json_encode($atype) ;
-		$jsLiteral = json_encode($atype);
+		$this->assertSame('Whitelist|89.248.168.42|foo bar baz', $result,
+			'newlines/tabs must collapse to a single space (no extra custom-list lines)');
+		$this->assertStringNotContainsString("\n", $result, 'no newline may survive');
+		$this->assertStringNotContainsString("\t", $result, 'no tab may survive');
+	}
+
+	/**
+	 * The category-edit page emits $atype into its JS-string site with
+	 * json_encode(..., JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).
+	 * This pins that contract: even a raw description containing quotes, a
+	 * backslash, '<', '>' and '&' yields a JS string literal that round-trips and
+	 * cannot break out of the surrounding <script> block.
+	 */
+	public function testRawDescriptionIsJsSafeViaJsonEncodeHexFlags(): void
+	{
+		$atype = pfb_filter_whitelist_atype('Whitelist|89.248.168.42|x"\\</script><b>&y');
+
+		$jsLiteral = json_encode($atype, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
 		$this->assertIsString($jsLiteral);
-		$this->assertNotFalse($jsLiteral, 'json_encode must succeed');
-		// A valid JS/JSON string literal is wrapped in double quotes and decodes back.
-		$this->assertSame('"', $jsLiteral[0], 'json_encode output is a quoted string literal');
 		$this->assertSame($atype, json_decode($jsLiteral), 'json_encode must round-trip the value');
-		// The raw backslash and newline are escaped, so the JS string cannot break out.
-		$this->assertStringNotContainsString("\n", $jsLiteral, 'newline must be escaped in the JS literal');
+		// Inside the literal (between the delimiting quotes) none of these may appear
+		// raw — the HEX flags escape them, so the string cannot break out of <script>.
+		$inner = substr($jsLiteral, 1, -1);
+		foreach (['<', '>', '&', '"', "'"] as $dangerous) {
+			$this->assertStringNotContainsString($dangerous, $inner,
+				"'{$dangerous}' must be hex-escaped, never literal, in the JS literal");
+		}
+	}
+
+	/**
+	 * A composite whose first token is not exactly 'Whitelist' is rejected (returns
+	 * '') — the helper never normalises a foreign prefix into a whitelist payload.
+	 */
+	public function testNonWhitelistPrefixReturnsEmpty(): void
+	{
+		$this->assertSame('', pfb_filter_whitelist_atype('Feed|89.248.168.42|x'),
+			'a non-Whitelist first token must be rejected');
+		$this->assertSame('', pfb_filter_whitelist_atype('WhitelistFoo|89.248.168.42|x'),
+			'a token merely starting with Whitelist must be rejected');
 	}
 
 	/**
