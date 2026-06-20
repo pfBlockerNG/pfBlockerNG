@@ -413,8 +413,7 @@ function pfb_cfg_registry(): array
 		// ADR-30: per-log scheduled reset period (off|daily|weekly|monthly). Default 'off'.
 		// Vocabulary: {'off','daily','weekly','monthly'}. Plain-string (identity) adapter.
 		// Mirrors the log_max_<type> set exactly — one entry per managed log type.
-		// MAINTAINER NOTE: 'since' is set to '3.2.0' (newest registry version at ADR-30 authoring);
-		// confirm and update to the actual first release that ships these fields.
+		// 'since' = '4.0.0' — the first release that ships these fields.
 	];
 
 	$log_types = [
@@ -427,7 +426,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'off',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.2.0',
+			'since'         => '4.0.0',
 		];
 	}
 
