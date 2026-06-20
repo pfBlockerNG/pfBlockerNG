@@ -355,7 +355,12 @@ jobs:
             TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} still-supported — evaluate for matrix"
 
             # Skip if an open issue with this exact title already exists.
-            EXISTING=$(gh issue list --repo "$REPO" --state open --json title 2>/dev/null \
+            # Scope to the version-tracker label and lift the default 30-item cap:
+            # without an explicit --limit, gh issue list returns only the 30 newest
+            # open issues, so an older tracker issue beyond that window is invisible
+            # to the dedup and a duplicate is opened every run.
+            EXISTING=$(gh issue list --repo "$REPO" --state open \
+              --label "version-tracker" --limit 500 --json title 2>/dev/null \
               | jq --arg t "$TITLE" '[.[] | select(.title == $t)] | length')
             if [ "${EXISTING:-0}" -gt 0 ]; then
               echo "  [skip] open issue already exists for ${CHANNEL} ${VERSION}"
@@ -363,8 +368,9 @@ jobs:
             fi
 
             # Skip if a closed issue with tracker-wontfix mentions this version.
+            # --limit 500 lifts the default 30-item cap (see the dedup note above).
             WONTFIX=$(gh issue list --repo "$REPO" --state closed --label "tracker-wontfix" \
-              --json title 2>/dev/null \
+              --limit 500 --json title 2>/dev/null \
               | jq --arg v "$VERSION" '[.[] | select(.title | contains($v))] | length')
             if [ "${WONTFIX:-0}" -gt 0 ]; then
               echo "  [wontfix] suppressed for ${CHANNEL} ${VERSION}"
@@ -439,10 +445,13 @@ jobs:
             } > "$BODY_FILE"
 
             # Update an existing open tracking issue; create one if none exists.
-            EXISTING_NUM=$(gh issue list --repo "$REPO" --state open --json number,title \
-              2>/dev/null \
+            # Scope to the version-tracker label and lift the default 30-item cap so
+            # an older tracking issue past the first page is still found and updated
+            # in place rather than re-created (the duplicate-issue bug).
+            EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
+              --label "version-tracker" --limit 500 --json number,title 2>/dev/null \
               | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
-              | head -1)
+              | sort -n | head -1)
 
             if [ -n "$EXISTING_NUM" ]; then
               echo "  [update] Updating tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
