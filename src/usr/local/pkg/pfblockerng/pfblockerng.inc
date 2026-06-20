@@ -370,18 +370,24 @@ function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
 	       $ipprotocol === 'inet';
 }
 
-// Validate and sanitise the Reports-tab whitelist composite 'atype' parameter,
-// which arrives as 'Whitelist|<ip>|<description>'. Each field is validated
-// separately: the IP via PFB_FILTER_IP (is_ipaddr + htmlspecialchars) and the
-// description via PFB_FILTER_HTML (htmlspecialchars). Splitting with a limit of 3
-// preserves any '|' characters inside the description. The result is always safe
-// to echo into a JS string literal or a hidden form field. An invalid IP yields
-// an empty IP slot ('Whitelist||<descr>') which the downstream invalid-IP branch
-// in the addgroup block catches and surfaces as a user-visible error.
+// Validate and normalise the Reports-tab whitelist composite 'atype' parameter,
+// which arrives as 'Whitelist|<ip>|<description>'. The IP is validated via
+// PFB_FILTER_IP (is_ipaddr); an invalid IP yields an empty IP slot
+// ('Whitelist||<descr>') that the downstream invalid-IP branch in the addgroup
+// block catches and surfaces as a user-visible error. The description is kept as
+// normalised raw text — control characters and newlines are collapsed to a single
+// space so it cannot inject extra lines into the (base64-stored) custom list — and
+// is NOT HTML-encoded here: storage is base64 and each display sink escapes on
+// output (json_encode for the JS variable, Form_Input/Form_Textarea for HTML).
+// Splitting with a limit of 3 preserves any '|' characters inside the description.
+// A non-'Whitelist' first token is rejected (returns '').
 function pfb_filter_whitelist_atype(string $raw): string {
 	$parts = explode('|', $raw, 3);
-	$ip    = isset($parts[1]) ? pfb_filter($parts[1], PFB_FILTER_IP, 'Category_edit')    : '';
-	$descr = isset($parts[2]) ? pfb_filter($parts[2], PFB_FILTER_HTML, 'Category_edit')  : '';
+	if (($parts[0] ?? '') !== 'Whitelist') {
+		return '';
+	}
+	$ip    = isset($parts[1]) ? pfb_filter($parts[1], PFB_FILTER_IP, 'Category_edit') : '';
+	$descr = isset($parts[2]) ? trim(preg_replace('/[\x00-\x1f\x7f]+/', ' ', (string) $parts[2])) : '';
 	return "Whitelist|{$ip}|{$descr}";
 }
 

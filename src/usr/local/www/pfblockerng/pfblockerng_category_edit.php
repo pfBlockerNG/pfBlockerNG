@@ -1698,7 +1698,7 @@ if (gtype == 'ipv4' || gtype == 'ipv6') {
 	var pagetype = 'advanced';
 
 	var action = "<?=$action;?>";
-	var atype = <?=json_encode($atype);?>;
+	var atype = <?=json_encode($atype, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);?>;
 
 	// Auto-Complete for Adv. In/Out Address Select boxes
 	var plist = "<?=$ports_list?>";
