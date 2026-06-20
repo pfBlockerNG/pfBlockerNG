@@ -5,26 +5,35 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-30 Phase 3 — Marker parse/serialize seams + per-log selection logic.
+ * ADR-30 Phase 3 + amendment #416 — Log-reset helpers and pfb_log_reset() file I/O.
  *
- * Tests the pure, off-box-testable helpers introduced in pfb_log_reset():
+ * Part A (pure helpers, no I/O):
  *   pfb_log_rotate_marker_parse(string $contents): array
  *   pfb_log_rotate_marker_serialize(array $entries): string
+ *   pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): bool
  *
- * Also tests the per-log selection decision using pfb_log_should_reset()
- * with realistic marker data — asserts that one eligible log triggers reset
- * while another in the same period does not (per-log independence).
- *
- * The actual truncate/exec is the live-VM smoke's job (Phase 5); these tests
- * assert the decision + marker logic only, with no real file I/O.
+ * Part B (ADR-30 amendment #416 — pfb_log_reset() file I/O):
+ *   pfb_log_reset() with log_reset_keep_<type> = 0 (full clear) and > 0 (keep N lines).
+ *   Exercises the real exec path off-box using the bootstrap temp sandbox under $g.
  *
  * Coverage mandate (CLAUDE.md):
+ *   Part A:
  *   - Every branch of parse (normal, blank, garbled = no '=', garbled = bad type,
  *     multiple entries, overwrite last occurrence of a duplicate key).
  *   - Every branch of serialize (empty map, single entry, multiple entries sorted).
  *   - Round-trip: parse(serialize(m)) == m for several maps.
  *   - Per-log independence: eligible log => should reset; same-period log => no-op.
  *   - Before-and-after in transition tests.
+ *
+ *   Part B (ADR-30 amendment / #416 — K=0 vs K>0 branch coverage):
+ *   - K=0 (default) empties the log; assert NON-empty before, EMPTY after, marker advanced.
+ *   - K>0 keeps the last K lines inode-preservingly; assert before=N lines,
+ *     after=last K lines (content), inode unchanged, marker advanced.
+ *   - K>0 but fewer than K lines present → whole file retained, marker advanced.
+ *   - DNS log (chroot path) with K>0 → last K lines kept; the chroot-dir absence
+ *     on the test runner falls back to the host path (same assertions as plain log);
+ *     live-VM smoke owns the true chroot + ownership assertions.
+ *   - K=0 on a DNS log → full clear, marker advanced (proves real exec path, not just K branch).
  */
 final class LogRotateResetTest extends TestCase
 {
@@ -453,5 +462,406 @@ final class LogRotateResetTest extends TestCase
 			pfb_log_should_reset('off', '', $ts),
 			'After: off schedule => never resets even with absent marker'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Part B — pfb_log_reset() file I/O (ADR-30 amendment / #416).
+	//
+	// These tests call pfb_log_reset() with real files under the bootstrap
+	// temp sandbox ($g set in tests/php/bootstrap.php). Each test:
+	//   1. Seeds a log file with content at the $pfb[] path.
+	//   2. Writes a stale marker so the log is "due" for reset.
+	//   3. Seeds log_reset_keep_<type> (and log_rotate_<type>='daily') into config.
+	//   4. Calls pfb_log_reset().
+	//   5. Asserts content (empty or kept) + inode (unchanged) + marker (advanced).
+	//
+	// The chroot dir (/var/unbound/var/log/pfblockerng) is absent on the test
+	// runner, so DNS logs fall back to the host path — same assertions apply.
+	// Live-VM smoke owns the true chroot + unbound-ownership assertions.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Helper: return the absolute path to the sandbox log file for $logtype.
+	 * Uses $GLOBALS['pfb'] which is populated at load time from $g.
+	 */
+	private function logPath(string $logtype): string
+	{
+		return $GLOBALS['pfb'][$logtype];
+	}
+
+	/**
+	 * Helper: return the absolute path to the marker file.
+	 */
+	private function markerPath(): string
+	{
+		return $GLOBALS['pfb']['dbdir'] . '/log_rotate.last';
+	}
+
+	/**
+	 * Helper: seed the minimum config keys pfb_global() accesses when called with a
+	 * near-empty config, plus the log schedule + keep values for one log type.
+	 *
+	 * pfb_global() reads many section keys that are normally present on a real pfSense
+	 * box but absent in tests. Seeding their minimums here prevents undefined-array-key
+	 * PHP warnings and keeps the test output clean, without changing any tested behaviour.
+	 * All other log types are set to schedule='off' so only $logtype resets.
+	 *
+	 * @param string $logtype   The single log type to make due for reset.
+	 * @param string $keepVal   Value for log_reset_keep_<logtype> (default '0' = full clear).
+	 */
+	private function seedConfigForReset(string $logtype, string $keepVal = '0'): void
+	{
+		$GLOBALS['config'] = [];
+		$gen               = 'installedpackages/pfblockerng/config/0';
+		$ip                = 'installedpackages/pfblockerngipsettings/config/0';
+		$dnsbl             = 'installedpackages/pfblockerngdnsblsettings/config/0';
+
+		// Minimum general-section keys pfb_global() reads to avoid undefined-key warnings.
+		config_set_path("{$gen}/pfb_min",       '0');
+		config_set_path("{$gen}/pfb_hour",      '0');
+		config_set_path("{$gen}/pfb_dailystart",'0');
+		config_set_path("{$gen}/skipfeed",      '0');
+
+		// Minimum ipsettings keys.
+		config_set_path("{$ip}/suppression",    '');
+		config_set_path("{$ip}/database_cc",    '');
+		config_set_path("{$ip}/maxmind_locale", 'en');
+		config_set_path("{$ip}/asn_reporting",  'disabled');
+		config_set_path("{$ip}/asn_token",      '');
+		config_set_path("{$ip}/maxmind_account",'');
+		config_set_path("{$ip}/maxmind_key",    '');
+
+		// Minimum global section keys.
+		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+
+		// Minimum dnsblsettings keys.
+		config_set_path("{$dnsbl}/pfb_dnsvip4",   '');
+		config_set_path("{$dnsbl}/pfb_dnsvip6",   '');
+		config_set_path("{$dnsbl}/pfb_dnsport",   '8081');
+		config_set_path("{$dnsbl}/pfb_dnsport_ssl",'8443');
+		config_set_path("{$dnsbl}/alexa_enable",  '');
+		config_set_path("{$dnsbl}/pfb_cache",     '');
+		config_set_path("{$dnsbl}/pfb_py_reply",  '');
+		config_set_path("{$dnsbl}/pfb_regex",     '');
+		config_set_path("{$dnsbl}/pfb_regex_list",'');
+		config_set_path("{$dnsbl}/pfb_cname",     '');
+		config_set_path("{$dnsbl}/pfb_pytld",     '');
+		config_set_path("{$dnsbl}/pfb_py_nolog",  '');
+		config_set_path("{$dnsbl}/pfb_noaaaa",    '');
+		config_set_path("{$dnsbl}/pfb_noaaaa_list",'');
+		config_set_path("{$dnsbl}/pfb_gp",        '');
+		config_set_path("{$dnsbl}/pfb_gp_bypass_list",'');
+
+		// $g['unbound_chroot_path'] is used to build pfb_global()'s chroot_cmd string.
+		// Provide a dummy value so the string interpolation resolves without a warning.
+		if (!isset($GLOBALS['g']['unbound_chroot_path'])) {
+			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
+		}
+
+		// All 10 log types: schedule='off' + keep='0' (only $logtype will fire).
+		$allTypes = ['log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+		             'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog'];
+		foreach ($allTypes as $t) {
+			config_set_path("{$gen}/log_rotate_{$t}",    'off');
+			config_set_path("{$gen}/log_reset_keep_{$t}", '0');
+		}
+
+		// The log type under test: daily schedule + the requested keep value.
+		config_set_path("{$gen}/log_rotate_{$logtype}",    'daily');
+		config_set_path("{$gen}/log_reset_keep_{$logtype}", $keepVal);
+	}
+
+	/**
+	 * Helper: call pfb_log_reset() — thin wrapper kept for documentation clarity.
+	 */
+	private function callPfbLogReset(): void
+	{
+		pfb_log_reset();
+	}
+
+	/**
+	 * Helper: write a stale marker (yesterday's date for $logtype) and return the marker path.
+	 *
+	 * @param string $logtype   The log type whose marker entry is stale.
+	 */
+	private function writeStaleMarker(string $logtype): string
+	{
+		$yesterday  = date('Y-m-d', strtotime('-1 day'));
+		$contents   = "{$logtype}={$yesterday}\n";
+		$markerPath = $this->markerPath();
+		$markerDir  = dirname($markerPath);
+		if (!is_dir($markerDir)) {
+			@mkdir($markerDir, 0755, TRUE);
+		}
+		file_put_contents($markerPath, $contents);
+		return $markerPath;
+	}
+
+	/**
+	 * Helper: ensure the sandbox log directory exists.
+	 */
+	private function ensureLogDir(): void
+	{
+		$logdir = $GLOBALS['pfb']['logdir'];
+		if (!is_dir($logdir)) {
+			@mkdir($logdir, 0755, TRUE);
+		}
+	}
+
+	/**
+	 * K=0 (default) clears the log fully on a scheduled reset.
+	 *
+	 * Proves the K=0 branch is real: the same log seeded with K>0 in the sibling
+	 * test keeps lines instead of emptying. Both tests must pass for K to be a
+	 * genuine branch.
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_log = '0' (default — full clear).
+	 *     Given a non-empty 'log' file (5 lines seeded).
+	 *     And   a stale daily marker for 'log' (yesterday).
+	 *     Before: file is NON-EMPTY.
+	 *     When  pfb_log_reset() is called.
+	 *     Then  the 'log' file is EMPTY (fully cleared).
+	 *     And   the marker for 'log' is advanced to today.
+	 */
+	public function testK0ClearsLogFully(): void
+	{
+		$this->ensureLogDir();
+		$logPath = $this->logPath('log');
+
+		// Seed 5 lines.
+		$content = implode("\n", ['line1', 'line2', 'line3', 'line4', 'line5']) . "\n";
+		file_put_contents($logPath, $content);
+
+		// Seed config: daily schedule + keep=0.
+		$this->seedConfigForReset('log', '0');
+
+		// Write a stale marker.
+		$markerPath = $this->writeStaleMarker('log');
+
+		// Before: file is non-empty.
+		$this->assertGreaterThan(0, filesize($logPath), 'Before: log must be non-empty');
+
+		// Act.
+		$this->callPfbLogReset();
+
+		// After: file is EMPTY (K=0 branch cleared it).
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame(0, filesize($logPath), 'After K=0: log must be fully cleared');
+
+		// Marker is advanced to today.
+		$markerContents = (string) file_get_contents($markerPath);
+		$entries        = pfb_log_rotate_marker_parse($markerContents);
+		$this->assertSame(date('Y-m-d'), $entries['log'], 'After K=0: marker advanced to today');
+	}
+
+	/**
+	 * K>0 keeps the last K lines inode-preservingly on a scheduled reset.
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_log = '3' (keep last 3 of 5 lines).
+	 *     Given a 'log' file with 5 distinct lines.
+	 *     And   a stale daily marker for 'log' (yesterday).
+	 *     Before: file has 5 lines; inode = I.
+	 *     When  pfb_log_reset() is called.
+	 *     Then  file has exactly the LAST 3 lines (content matches tail).
+	 *     And   inode is UNCHANGED (in-place truncation).
+	 *     And   marker for 'log' is advanced to today.
+	 */
+	public function testKGreaterThanZeroKeepsLastKLines(): void
+	{
+		$this->ensureLogDir();
+		$logPath = $this->logPath('log');
+
+		// Seed 5 distinct lines.
+		$lines   = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+
+		// Capture inode BEFORE the reset.
+		$inodeBefore = fileinode($logPath);
+
+		// Seed config: daily schedule + keep=3.
+		$this->seedConfigForReset('log', '3');
+
+		// Write a stale marker.
+		$markerPath = $this->writeStaleMarker('log');
+
+		// Before: 5 lines present.
+		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(5, $linesBefore, 'Before: log must have 5 lines');
+
+		// Act.
+		$this->callPfbLogReset();
+
+		// After: exactly the last 3 lines retained.
+		clearstatcache(TRUE, $logPath);
+		$afterContent = (string) file_get_contents($logPath);
+		$afterLines   = array_values(array_filter(explode("\n", $afterContent), 'strlen'));
+		$this->assertCount(3, $afterLines, 'After K=3: log must have exactly 3 lines');
+		$this->assertSame(['charlie', 'delta', 'echo'], $afterLines, 'After K=3: content must be last 3 lines');
+
+		// Inode is unchanged (in-place truncation preserved the inode).
+		$inodeAfter = fileinode($logPath);
+		$this->assertSame($inodeBefore, $inodeAfter, 'After K=3: inode must be unchanged (in-place)');
+
+		// Marker advanced to today.
+		$markerContents = (string) file_get_contents($markerPath);
+		$entries        = pfb_log_rotate_marker_parse($markerContents);
+		$this->assertSame(date('Y-m-d'), $entries['log'], 'After K=3: marker advanced to today');
+	}
+
+	/**
+	 * K>0 but fewer than K lines present retains the entire file unchanged.
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_log = '10' (keep last 10) but only 3 lines present.
+	 *     Given a 'log' file with 3 lines.
+	 *     And   a stale daily marker for 'log' (yesterday).
+	 *     Before: file has 3 lines; inode = I.
+	 *     When  pfb_log_reset() is called.
+	 *     Then  file has all 3 lines (tail -n 10 of a 3-line file returns all 3).
+	 *     And   inode is UNCHANGED.
+	 *     And   marker for 'log' is advanced to today.
+	 */
+	public function testKGreaterThanZeroFewerLinesThanKRetainsAll(): void
+	{
+		$this->ensureLogDir();
+		$logPath = $this->logPath('errlog');
+
+		// Seed 3 lines.
+		$lines   = ['one', 'two', 'three'];
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+
+		// Capture inode BEFORE.
+		$inodeBefore = fileinode($logPath);
+
+		// Seed config: daily schedule + keep=10 (larger than file).
+		$this->seedConfigForReset('errlog', '10');
+
+		// Write stale marker.
+		$markerPath = $this->writeStaleMarker('errlog');
+
+		// Before: 3 lines.
+		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(3, $linesBefore, 'Before: log must have 3 lines');
+
+		// Act.
+		$this->callPfbLogReset();
+
+		// After: all 3 lines still present (K=10 > 3 → tail returns all).
+		clearstatcache(TRUE, $logPath);
+		$afterLines = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertCount(3, $afterLines, 'After K=10 on 3-line file: all 3 lines retained');
+		$this->assertSame(['one', 'two', 'three'], $afterLines, 'After: content is the full original file');
+
+		// Inode unchanged.
+		$this->assertSame($inodeBefore, fileinode($logPath), 'After K=10: inode must be unchanged');
+
+		// Marker advanced.
+		$entries = pfb_log_rotate_marker_parse((string) file_get_contents($markerPath));
+		$this->assertSame(date('Y-m-d'), $entries['errlog'], 'After K=10: marker advanced to today');
+	}
+
+	/**
+	 * DNS log (chroot path) with K>0 keeps the last K lines.
+	 *
+	 * On the test runner /var/unbound/var/log/pfblockerng is absent, so the chroot
+	 * branch falls back to the host path — the assertions are identical to the plain
+	 * log case. The exec+ownership assertions for the true chroot path belong in the
+	 * live-VM smoke suite (ADR-04).
+	 *
+	 * Proves the chroot log type is exercised through the K>0 code path (not dead code).
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_dnslog = '2', schedule = 'daily'.
+	 *     Given a 'dnslog' file with 4 distinct lines.
+	 *     And   a stale daily marker for 'dnslog' (yesterday).
+	 *     Before: file has 4 lines; inode = I.
+	 *     When  pfb_log_reset() is called.
+	 *     Then  file has exactly the LAST 2 lines.
+	 *     And   inode is UNCHANGED.
+	 *     And   marker for 'dnslog' is advanced to today.
+	 */
+	public function testDnsLogKGreaterThanZeroKeepsLastKLines(): void
+	{
+		$this->ensureLogDir();
+		$logPath = $this->logPath('dnslog');
+
+		// Seed 4 distinct lines.
+		$lines   = ['dns-line1', 'dns-line2', 'dns-line3', 'dns-line4'];
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+
+		// Capture inode BEFORE.
+		$inodeBefore = fileinode($logPath);
+
+		// Seed config: daily schedule + keep=2.
+		$this->seedConfigForReset('dnslog', '2');
+
+		// Write stale marker.
+		$markerPath = $this->writeStaleMarker('dnslog');
+
+		// Before: 4 lines.
+		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(4, $linesBefore, 'Before: dnslog must have 4 lines');
+
+		// Act.
+		$this->callPfbLogReset();
+
+		// After: exactly the last 2 lines.
+		clearstatcache(TRUE, $logPath);
+		$afterLines = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertCount(2, $afterLines, 'After K=2: dnslog must have exactly 2 lines');
+		$this->assertSame(['dns-line3', 'dns-line4'], $afterLines, 'After K=2: content must be last 2 lines');
+
+		// Inode unchanged.
+		$this->assertSame($inodeBefore, fileinode($logPath), 'After K=2: inode must be unchanged (in-place)');
+
+		// Marker advanced.
+		$entries = pfb_log_rotate_marker_parse((string) file_get_contents($markerPath));
+		$this->assertSame(date('Y-m-d'), $entries['dnslog'], 'After K=2: marker advanced to today');
+	}
+
+	/**
+	 * K=0 on a DNS log type clears the log fully (proves K=0 path for the chroot branch).
+	 *
+	 * Scenario:
+	 *   Background: log_reset_keep_dnslog = '0' (default — full clear), schedule = 'daily'.
+	 *     Given a non-empty 'dnslog' file.
+	 *     And   a stale daily marker for 'dnslog'.
+	 *     Before: file is NON-EMPTY.
+	 *     When  pfb_log_reset() is called.
+	 *     Then  the 'dnslog' file is EMPTY.
+	 *     And   marker for 'dnslog' is advanced to today.
+	 */
+	public function testK0OnDnsLogClearsLogFully(): void
+	{
+		$this->ensureLogDir();
+		$logPath = $this->logPath('dnslog');
+
+		// Seed content.
+		file_put_contents($logPath, "dns-entry-1\ndns-entry-2\ndns-entry-3\n");
+
+		// Seed config: daily + keep=0.
+		$this->seedConfigForReset('dnslog', '0');
+
+		// Write stale marker.
+		$markerPath = $this->writeStaleMarker('dnslog');
+
+		// Before: non-empty.
+		$this->assertGreaterThan(0, filesize($logPath), 'Before: dnslog must be non-empty');
+
+		// Act.
+		$this->callPfbLogReset();
+
+		// After: empty.
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame(0, filesize($logPath), 'After K=0 on dnslog: must be fully cleared');
+
+		// Marker advanced.
+		$entries = pfb_log_rotate_marker_parse((string) file_get_contents($markerPath));
+		$this->assertSame(date('Y-m-d'), $entries['dnslog'], 'After K=0 on dnslog: marker advanced to today');
 	}
 }

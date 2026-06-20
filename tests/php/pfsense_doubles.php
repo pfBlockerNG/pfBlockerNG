@@ -258,6 +258,17 @@ if (!function_exists('config_path_enabled')) {
 	}
 }
 
+if (!function_exists('config_read_file')) {
+	// pfSense config.lib.inc: reload config from disk. Off-appliance the config
+	// lives in $GLOBALS['config'] (seeded per test) — no disk file exists, so
+	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
+	// changes, but in tests the caller already seeded $GLOBALS['config'] before
+	// calling pfb_global(). Returning [] matches the stub's declared return type.
+	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
+		return [];
+	}
+}
+
 if (!function_exists('write_config')) {
 	// Persisting is out of scope off-appliance; record the call (so tests can
 	// assert whether a code path wrote config) and report success like pfSense.
