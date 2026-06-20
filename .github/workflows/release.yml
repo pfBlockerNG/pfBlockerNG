@@ -147,10 +147,17 @@ jobs:
         # (e.g. CE and Plus on the same major with different php/python deps) each produce
         # their own, distinctly-named .pkg instead of one shadowing the other. The reader
         # already excludes role=route-only entries (served from a frozen catalog).
+        # The matrix rides in via env (never inlined into the script) and is written with a
+        # heredoc block, so its content can't template-inject into the shell.
+        env:
+          FULL_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
         run: |
-          FULL='${{ steps.matrices.outputs.build_matrix }}'
-          printf 'build_matrix=%s\n' "$FULL" >> "$GITHUB_OUTPUT"
-          echo "Full build matrix: $FULL"
+          {
+            echo "build_matrix<<__MATRIX__"
+            printf '%s\n' "$FULL_MATRIX"
+            echo "__MATRIX__"
+          } >> "$GITHUB_OUTPUT"
+          echo "Full build matrix: $FULL_MATRIX"
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:

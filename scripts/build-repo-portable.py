@@ -871,7 +871,10 @@ def build_repo_matrix(
                 # An empty pool is a warning + skip (not an error) — a newly-added version with no
                 # Release asset yet simply has no release-channel package until the next release.
                 pool = [p for p in (release_pkgs.get(varver) or []) if read_compact_manifest(p).get("abi") == abi]
-                candidates = pool + list(release_extra_pkgs or [])
+                # ABI-filter the extras too: _emit_catalog_from_paths dedups by (name, version),
+                # NOT by ABI, so a wrong-ABI extra would cross-contaminate this arch's catalog.
+                extras = [p for p in (release_extra_pkgs or []) if read_compact_manifest(p).get("abi") == abi]
+                candidates = pool + extras
                 kept_release = retain_by_channel(
                     candidates,
                     keep_devel=release_keep_devel,
@@ -900,8 +903,10 @@ def build_repo_matrix(
                             builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
                         )
                     # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
-                    # Releases). Each path must be a valid .pkg; retain_by_channel prunes the pool.
-                    all_release_pkgs = built_pkgs + list(release_extra_pkgs or [])
+                    # Releases), ABI-filtered to this arch — _emit_catalog_from_paths dedups by
+                    # (name, version), not ABI, so a wrong-ABI extra would cross-contaminate.
+                    extras = [p for p in (release_extra_pkgs or []) if read_compact_manifest(p).get("abi") == abi]
+                    all_release_pkgs = built_pkgs + extras
                     kept_release = retain_by_channel(
                         all_release_pkgs,
                         keep_devel=release_keep_devel,

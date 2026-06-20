@@ -2530,6 +2530,49 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
     assert len(objs) == 2, "exactly one devel + one stable expected"
 
 
+def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
+    """release_extra_pkgs is ABI-filtered before channel retention in consume mode.
+
+    Scenario: a wrong-ABI extra with a HIGHER version must not contaminate this arch's catalog
+      Given a ce-2.8 amd64 entry, a correct-ABI devel pkg in the pool, and release_extra_pkgs
+            carrying a correct-ABI stable pkg PLUS a wrong-ABI (FreeBSD:16) devel pkg whose
+            version (9.9.9) is higher than the pool's devel (4.0.0_1)
+       When build_repo_matrix runs in consume mode (keep_devel=1, keep_stable=1)
+      Then the release catalog holds ONLY the FreeBSD:15:amd64 packages — the higher-version
+           wrong-ABI devel is excluded by the ABI filter, not retained over the right-ABI devel
+           (without the filter, retain_by_channel would pick the 9.9.9 wrong-ABI devel).
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    stable_extra = pkg_dir / "pfBlockerNG-4.0.0.pkg"
+    wrong_abi_devel = pkg_dir / "pfBlockerNG-devel-9.9.9.pkg"
+    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    make_pkg(stable_extra, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:amd64")
+    make_pkg(wrong_abi_devel, name="pfBlockerNG-devel", version="9.9.9", abi="FreeBSD:16:amd64")
+
+    assert not (out / "release" / "ce-2.8").exists()
+
+    brp.build_repo_matrix(
+        [_CE],  # FreeBSD:15:amd64
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        release_pkgs={"ce-2.8": [devel_pkg]},
+        release_extra_pkgs=[stable_extra, wrong_abi_devel],
+    )
+
+    objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    abis = {o["abi"] for o in objs}
+    versions = {(o["name"], o["version"]) for o in objs}
+    assert abis == {"FreeBSD:15:amd64"}, "only this arch's ABI may appear in the catalog"
+    assert ("pfBlockerNG-devel", "4.0.0_1") in versions, "right-ABI devel must be kept"
+    assert ("pfBlockerNG", "4.0.0") in versions, "right-ABI stable extra must be kept"
+    assert ("pfBlockerNG-devel", "9.9.9") not in versions, "wrong-ABI extra must be filtered out"
+    assert len(objs) == 2
+
+
 def test_consume_mode_empty_pool_skips_release_catalog_no_exception(tmp_path: Path) -> None:
     """An empty pool for a build varver skips the release catalog — no raise, nightly still runs.
 
