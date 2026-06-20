@@ -370,6 +370,21 @@ function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
 	       $ipprotocol === 'inet';
 }
 
+// Validate and sanitise the Reports-tab whitelist composite 'atype' parameter,
+// which arrives as 'Whitelist|<ip>|<description>'. Each field is validated
+// separately: the IP via PFB_FILTER_IP (is_ipaddr + htmlspecialchars) and the
+// description via PFB_FILTER_HTML (htmlspecialchars). Splitting with a limit of 3
+// preserves any '|' characters inside the description. The result is always safe
+// to echo into a JS string literal or a hidden form field. An invalid IP yields
+// an empty IP slot ('Whitelist||<descr>') which the downstream invalid-IP branch
+// in the addgroup block catches and surfaces as a user-visible error.
+function pfb_filter_whitelist_atype(string $raw): string {
+	$parts = explode('|', $raw, 3);
+	$ip    = isset($parts[1]) ? pfb_filter($parts[1], PFB_FILTER_IP, 'Category_edit')    : '';
+	$descr = isset($parts[2]) ? pfb_filter($parts[2], PFB_FILTER_HTML, 'Category_edit')  : '';
+	return "Whitelist|{$ip}|{$descr}";
+}
+
 
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {

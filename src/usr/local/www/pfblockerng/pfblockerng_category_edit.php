@@ -100,9 +100,14 @@ if (isset($_GET)) {
 		}
 	}
 	if (isset($_GET['atype']) && !empty($_GET['atype'])) {
-		$temp_value = pfb_filter($_GET['atype'], PFB_FILTER_ATYPE, 'Category_edit');
-		if (!empty($temp_value)) {
-			$atype = $temp_value;
+		$raw_atype = $_GET['atype'];
+		if (substr($raw_atype, 0, 9) === 'Whitelist') {
+			$atype = pfb_filter_whitelist_atype($raw_atype);
+		} else {
+			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
+			if (!empty($temp_value)) {
+				$atype = $temp_value;
+			}
 		}
 	}
 }
@@ -134,9 +139,14 @@ if (isset($_POST)) {
 		}
 	}
 	if (isset($_POST['atype']) && !empty($_POST['atype'])) {
-		$temp_value = pfb_filter($_POST['atype'], PFB_FILTER_ATYPE, 'Category_edit');
-		if (!empty($temp_value)) {
-			$atype = $temp_value;
+		$raw_atype = $_POST['atype'];
+		if (substr($raw_atype, 0, 9) === 'Whitelist') {
+			$atype = pfb_filter_whitelist_atype($raw_atype);
+		} else {
+			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
+			if (!empty($temp_value)) {
+				$atype = $temp_value;
+			}
 		}
 	}
 	if (isset($_POST['chgstate']) && $_POST['chgstate'] == 'Enable All') {
@@ -290,14 +300,12 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 			$rowdata[$rowid]['cron']	= 'EveryDay';
 			$rowdata[$rowid]['action']	= 'Permit_Outbound';
 
-			// Extract Whitelisted IP and Description
-			$data = explode('|', $atype);
-
-			if (isset($data[2]) && !empty($data[2])) {
-				$data[2] = pfb_filter($data[2], PFB_FILTER_HTML, 'Category_edit addgroup');
-			} else {
-				$data[2] = '';
-			}
+			// Extract Whitelisted IP and Description.
+			// $atype was already validated field-by-field at the input gate
+			// (pfb_filter_whitelist_atype): IP via PFB_FILTER_IP and description
+			// via PFB_FILTER_HTML. Re-filtering would double-escape HTML entities.
+			$data    = explode('|', $atype, 3);
+			$data[2] = isset($data[2]) ? $data[2] : '';
 
 			if (empty(pfb_filter($data[1], PFB_FILTER_IP, 'Category_edit addgroup'))) {
 				$savemsg = 'Cannot create new IP Whitelist! Invalid data!';
