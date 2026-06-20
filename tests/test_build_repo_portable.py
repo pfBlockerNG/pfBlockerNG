@@ -2384,3 +2384,325 @@ def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
                 "ce-2.7-no-colon",  # missing ':' separator
             ]
         )
+
+
+# --------------------------------------------------------------------------- #
+# Consume-mode: release_pkgs= parameter
+#
+# When release_pkgs is supplied to build_repo_matrix, the release/<varver>/<arch>/
+# catalog is served from caller-supplied pre-built .pkg files (ABI-filtered, pruned
+# via retain_by_channel) instead of rebuilding devel+stable from source.
+# Nightly is always built from source regardless.
+#
+# These tests pin every guarantee of the consume-mode path:
+#   * release/<varver>/<arch>/ catalog lists exactly the consumed .pkg(s)
+#   * ABI filter: a mixed-ABI pool yields arch-specific catalogs
+#   * devel + stable both present in one pool -> retain_by_channel keeps both
+#   * empty pool for a varver -> no release catalog emitted, no exception, nightly OK
+#   * nightly is still built from source when build_nightly=True
+#   * back-compat: release_pkgs=None reproduces the build-from-source path
+#   * CLI: --release-pkgs VARVER:PATH wires through end-to-end
+#   * CLI: bad format (no colon) is a usage error (SystemExit)
+# --------------------------------------------------------------------------- #
+
+
+def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> None:
+    """Consume mode places the pool into release/<varver>/<arch>/ under the canonical name.
+
+    Scenario: CE 2.8 build entry + one pre-built devel .pkg supplied via release_pkgs
+      Given a pre-built pfBlockerNG-devel 4.0.0_1 .pkg (amd64)
+        And release_pkgs={"ce-2.8": [pkg]} passed to build_repo_matrix
+       When build_repo_matrix runs with build_nightly=False
+      Then release/ce-2.8/amd64/packagesite.pkg lists that package
+       And the catalog entry name is pfBlockerNG-devel and version is 4.0.0_1
+       And the builder was NOT called for devel/stable (consume, not rebuild)
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+
+    # Before-state: no release subtree yet.
+    assert not (out / "release" / "ce-2.8").exists()
+
+    builder_calls: list[str] = []
+
+    def tracking_builder(channel: str, **kw: object) -> Path:
+        builder_calls.append(channel)
+        return _stub_builder(channel, **kw)  # type: ignore[arg-type]
+
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=tracking_builder,
+        build_nightly=False,
+        release_pkgs={"ce-2.8": [prebuilt]},
+    )
+
+    # Catalog must exist and list the consumed package.
+    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert catalog.is_file(), "release catalog must exist in consume mode"
+    objs = _catalog_objects(catalog)
+    assert len(objs) == 1
+    assert objs[0]["name"] == "pfBlockerNG-devel"
+    assert objs[0]["version"] == "4.0.0_1"
+
+    # Builder must NOT have been called for devel or stable.
+    assert "devel" not in builder_calls, "builder must not be called for devel in consume mode"
+    assert "stable" not in builder_calls, "builder must not be called for stable in consume mode"
+
+
+def test_consume_mode_abi_filter_yields_arch_specific_catalogs(tmp_path: Path) -> None:
+    """A mixed-ABI pool filtered per (varver, arch) yields separate arch-specific catalogs.
+
+    Scenario: Plus 26.03 on amd64 + aarch64 (two arch entries, one varver)
+      Given a pool with one amd64 .pkg and one aarch64 .pkg under "plus-26.03"
+       When build_repo_matrix runs for both _PLUS (amd64) + _PLUS_ARM (aarch64)
+      Then release/plus-26.03/amd64/ holds ONLY the amd64 .pkg
+       And release/plus-26.03/aarch64/ holds ONLY the aarch64 .pkg
+      (without ABI filter each catalog would cross-contaminate with the other ABI's build)
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    pkg_amd64 = pkg_dir / "pfBlockerNG-devel-4.0.0_1-amd64.pkg"
+    pkg_aarch64 = pkg_dir / "pfBlockerNG-devel-4.0.0_1-aarch64.pkg"
+    make_pkg(pkg_amd64, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:amd64")
+    make_pkg(pkg_aarch64, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:aarch64")
+
+    # Before-state: no catalogs exist.
+    assert not (out / "release" / "plus-26.03").exists()
+
+    brp.build_repo_matrix(
+        [_PLUS, _PLUS_ARM],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        release_pkgs={"plus-26.03": [pkg_amd64, pkg_aarch64]},
+    )
+
+    amd64_objs = _catalog_objects(out / "release" / "plus-26.03" / "amd64" / "packagesite.pkg")
+    arm_objs = _catalog_objects(out / "release" / "plus-26.03" / "aarch64" / "packagesite.pkg")
+
+    # Each arch catalog contains ONLY its own ABI's package.
+    assert [o["abi"] for o in amd64_objs] == ["FreeBSD:16:amd64"]
+    assert [o["abi"] for o in arm_objs] == ["FreeBSD:16:aarch64"]
+
+
+def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
+    """With a devel + stable .pkg in the pool, retain_by_channel keeps both.
+
+    Scenario: pool carries one devel and one stable .pkg for ce-2.8
+      Given pfBlockerNG-devel (devel channel) + pfBlockerNG (stable channel) .pkg in pool
+       When build_repo_matrix runs in consume mode (release_keep_devel=1, release_keep_stable=1)
+      Then release/ce-2.8/amd64 catalog lists BOTH the devel and stable packages
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    stable_pkg = pkg_dir / "pfBlockerNG-4.0.0.pkg"
+    # devel channel: name ends in "-devel" (retain_by_channel uses the name to classify)
+    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    # stable channel: base name without "-devel" suffix
+    make_pkg(stable_pkg, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:amd64")
+
+    # Before-state: no release catalog.
+    assert not (out / "release" / "ce-2.8").exists()
+
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        release_pkgs={"ce-2.8": [devel_pkg, stable_pkg]},
+    )
+
+    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert catalog.is_file()
+    objs = _catalog_objects(catalog)
+    names = {o["name"] for o in objs}
+
+    # Both channels present in the catalog.
+    assert "pfBlockerNG-devel" in names, "devel package must be in release catalog"
+    assert "pfBlockerNG" in names, "stable package must be in release catalog"
+    assert len(objs) == 2, "exactly one devel + one stable expected"
+
+
+def test_consume_mode_empty_pool_skips_release_catalog_no_exception(tmp_path: Path) -> None:
+    """An empty pool for a build varver skips the release catalog — no raise, nightly still runs.
+
+    Scenario: CE 2.8 entry with release_pkgs={"ce-2.8": []} (empty pool)
+      Given release_pkgs maps ce-2.8 to an empty list
+       When build_repo_matrix runs with build_nightly=True
+      Then NO release catalog is emitted (the release dir is absent or has no packagesite)
+       And NO exception is raised
+       And the nightly/ce-2.8/amd64/ catalog IS still built from source
+    """
+    out = tmp_path / "site"
+
+    # Before-state: neither subtree exists.
+    assert not (out / "release" / "ce-2.8").exists()
+    assert not (out / "nightly" / "ce-2.8").exists()
+
+    # Should not raise even with empty pool.
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=_stub_builder,
+        build_nightly=True,
+        release_pkgs={"ce-2.8": []},
+    )
+
+    # Release catalog must NOT be emitted for an empty pool.
+    release_catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert not release_catalog.exists(), "release catalog must not be emitted for empty pool"
+
+    # Nightly must still be built.
+    nightly_catalog = out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert nightly_catalog.is_file(), "nightly catalog must still be built in consume mode"
+
+
+def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
+    """Nightly is always built from source in consume mode, even when release is consumed.
+
+    Scenario: CE 2.8 in consume mode with build_nightly=True
+      Given a pre-built devel .pkg in release_pkgs for ce-2.8
+        And build_nightly=True
+       When build_repo_matrix runs
+      Then nightly/ce-2.8/amd64/ catalog exists (builder called for 'nightly')
+       And release/ce-2.8/amd64/ catalog lists only the consumed pkg (not a nightly build)
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+
+    builder_channels: list[str] = []
+
+    def tracking_builder(channel: str, **kw: object) -> Path:
+        builder_channels.append(channel)
+        return _stub_builder(channel, **kw)  # type: ignore[arg-type]
+
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=tracking_builder,
+        build_nightly=True,
+        release_pkgs={"ce-2.8": [prebuilt]},
+    )
+
+    # Builder called for nightly but NOT for devel/stable.
+    assert "nightly" in builder_channels, "builder must be called for nightly in consume mode"
+    assert "devel" not in builder_channels, "builder must NOT be called for devel in consume mode"
+
+    # Nightly catalog exists.
+    assert (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
+
+    # Release catalog exists and lists the consumed pkg (not the nightly build).
+    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    assert len(rel_objs) == 1
+    assert rel_objs[0]["name"] == "pfBlockerNG-devel"
+    assert rel_objs[0]["version"] == "4.0.0_1"
+
+
+def test_consume_mode_none_reproduces_source_build_path(tmp_path: Path) -> None:
+    """release_pkgs=None (default) reproduces the build-from-source path unchanged.
+
+    Back-compat guard: omitting release_pkgs (or passing None explicitly) must produce a
+    release catalog via the builder, not the consume path.
+
+    Scenario: CE 2.8 entry, release_pkgs omitted
+      Given build_repo_matrix called WITHOUT release_pkgs (default None)
+       When the matrix runs with the stub builder
+      Then release/ce-2.8/amd64/ catalog exists (built via _stub_builder for 'devel')
+       And nightly/ce-2.8/amd64/ catalog exists (built via _stub_builder for 'nightly')
+    """
+    out = tmp_path / "site"
+
+    # Before-state: no subtrees.
+    assert not (out / "release" / "ce-2.8").exists()
+    assert not (out / "nightly" / "ce-2.8").exists()
+
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder)
+
+    # Both subtrees present, built from source via stub.
+    assert (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
+    assert (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
+
+    # Verify the catalog lists the stub-built devel package (confirms source-build path ran).
+    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    assert any(o["name"] == "pfBlockerNG-devel" for o in rel_objs), (
+        "devel package from stub builder must appear in release catalog on source-build path"
+    )
+
+
+def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
+    """``--release-pkgs VARVER:PATH`` wires release_pkgs through the CLI end-to-end.
+
+    Scenario: CE 2.8 build entry + one pre-built .pkg supplied via --release-pkgs flag
+      Given a pre-built pfBlockerNG-devel 4.0.0_1 .pkg
+        And --release-pkgs ce-2.8:<path> passed on the CLI
+       When brp.main is called with --no-nightly
+      Then rc == 0
+       And release/ce-2.8/amd64/ catalog exists with the consumed version
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([_CE]))
+
+    # Before-state: site dir does not exist yet.
+    assert not out.exists()
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(matrix_file),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--release-pkgs",
+            f"ce-2.8:{prebuilt}",
+        ]
+    )
+
+    assert rc == 0
+    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    assert catalog.is_file(), f"consumed release catalog not emitted: {catalog}"
+    objs = _catalog_objects(catalog)
+    assert len(objs) == 1
+    assert objs[0]["version"] == "4.0.0_1"
+
+
+def test_cli_release_pkgs_bad_format_errors(tmp_path: Path) -> None:
+    """``--release-pkgs`` without a colon separator is a usage error (SystemExit).
+
+    Scenario: malformed VARVER:PATH argument (no colon).
+      Given --release-pkgs ce-2.8-without-colon (missing ':')
+       When brp.main is called
+      Then it raises SystemExit (argparse usage error).
+    """
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([_CE]))
+
+    with pytest.raises(SystemExit):
+        brp.main(
+            [
+                "--build-matrix",
+                "--matrix-json",
+                str(matrix_file),
+                "--out",
+                str(tmp_path / "site"),
+                "--no-nightly",
+                "--release-pkgs",
+                "ce-2.8-no-colon",  # missing ':' separator
+            ]
+        )
