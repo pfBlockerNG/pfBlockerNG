@@ -1,0 +1,53 @@
+================================================================================
+PHASE 3 PROMPT — Config: the feed_mgmt_mode setting (default off)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 3 adds the opt-in
+mode setting via the config gateway. No reconcile wiring yet. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The whole feature is opt-in and tri-state (off/notify/auto). The setting must round-trip
+through PfbConfig (ADR-29) with default off, so the apply engine (Phase 4) and UI (Phase 5)
+have a registered key to read.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_33_Auto_Feed_Management/RESULTS/02_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md (SS2 mode table, SS5 constraints).
+- pfblockerng_extra.inc — PfbConfig + pfb_cfg_registry() (ADR-29); since-version convention.
+- tests/phpcs/.../RequireConfigGatewaySniff.php ($registeredPaths).
+- tests/php/CfgGatewayTest.php for the round-trip test pattern; CLAUDE.md — ADR-28/29.
+
+ACTION PLAN (ordered)
+1. Register feed_mgmt_mode in pfb_cfg_registry() (section path + default stored string 'off';
+   plain-string adapter NULL/NULL or a backed enum if you add one; vocabulary {off,notify,
+   auto}). Set since-version to the current release.
+2. Add the full path to the RequireConfigGateway sniff $registeredPaths.
+3. Read/write via PfbConfig::read/write only. No reconcile behaviour yet.
+4. Tests: CfgGatewayTest round-trip (write(read(v))==v for off/notify/auto) + default-absent
+   -> off; update the inventory completeness test if present.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Registered key ONLY via PfbConfig; config.xml stored vocabulary frozen (off is the default
+  stored token).
+- Do NOT wire reconcile/triggers yet (Phase 4).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean (incl. RequireConfigGateway).
+- python -m pytest -> green.
+
+EXPECTED RESULT
+feed_mgmt_mode is a registered, round-tripping setting defaulting to off; nothing consumes it
+yet.
+
+COMMIT (single)
+    pfblockerng: register feed_mgmt_mode setting (off/notify/auto) (ADR-33 P3)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/03_Results.txt (plain .txt)
+Record: the registry entry (key, path, default, adapter, since); the sniff path added; the
+round-trip test; verification numbers; go-ahead for Phase 4.

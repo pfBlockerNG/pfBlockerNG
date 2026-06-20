@@ -1,0 +1,56 @@
+================================================================================
+PHASE 2 PROMPT — Prep: pure reconcile-plan (pfb_feed_reconcile_plan) + tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 2 is
+BEHAVIOUR-PRESERVING: a pure planning function + tests, no side effects, no caller. One commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+The reconciliation decision must be a pure, fully branch-tested function BEFORE anything writes
+config. This is the single decision point the apply engine (Phase 4) consumes.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_33_Auto_Feed_Management/RESULTS/01_Results.txt — the index map shape.
+  If missing, STOP and report.
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md (SS2.1 rule table, SS2.2 contract).
+- The Phase-1 indexer; the user feed-row shape (pfblockernglistsv4/v6 / pfblockerngdnsbl rows:
+  header, url, state).
+- CLAUDE.md — Test coverage (every branch, before/after, BDD).
+
+ACTION PLAN (ordered — tests alongside)
+1. Add a pure function pfb_feed_reconcile_plan($user_rows, $index) -> [ actions ], each action
+   { row_ref, type: none|rewrite_url|disable_discontinued|suggest_alternate, from, to,
+   reason }. Logic per ADR SS2.1:
+   - header matches + url == catalog url -> none
+   - header matches + url in past_urls -> rewrite_url (to catalog url)
+   - matched feed status == discontinued -> disable_discontinued
+   - header not in index -> none (custom/unknown, untouched)
+   - alternate present -> suggest_alternate (informational)
+2. No I/O, no config writes, deterministic ordering.
+3. Tests (PHPUnit): one test per branch (assert the produced action set); idempotency (apply
+   the plan to a copy of the rows, re-plan -> all none); unknown-header untouched;
+   discontinued -> disable not delete.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit(); pure (no config_*_path, no write_config, no file I/O).
+- Do NOT wire into any caller (Phase 4). Do NOT mutate the input rows; return actions.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (full branch + idempotency coverage); php -l; PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: pure + additive.
+
+EXPECTED RESULT
+A pure, fully branch-tested reconcile planner; no caller, no writes.
+
+COMMIT (single)
+    pfblockerng: add pure feed reconcile planner (ADR-33 P2)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/02_Results.txt (plain .txt)
+Record: pfb_feed_reconcile_plan signature + the action shape; the branch matrix covered; the
+idempotency proof; verification numbers; go-ahead for Phase 3.

@@ -1,0 +1,63 @@
+================================================================================
+PHASE 4 PROMPT — Apply engine + triggers (notify vs auto)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2.1, SS2.2, SS2.3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 4 is the behaviour
+change: consume the plan and act per mode, wired to install/update + a manual recheck. One
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+This turns the pure plan (Phase 2) into action under the mode (Phase 3): notify reports without
+writing; auto applies conservatively (backup, never-delete, idempotent) + notifies; off is
+inert.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_33_Auto_Feed_Management/RESULTS/03_Results.txt AND 02_/01_. If missing,
+  STOP and report.
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md (SS2.1 rule, SS2.2 contract, SS2.3 triggers).
+- The Phase-1 indexer + Phase-2 planner; pfblockerng.inc install/update entry points; the
+  feed-row config sections (pfblockernglistsv4/v6, pfblockerngdnsbl) -- dynamic list sections,
+  use section helpers / direct config_*_path (foreign-key list in CLAUDE.md); file_notice +
+  write_config usage; PFB_FILTER_URL validation.
+- CLAUDE.md — PHP standards, PFBL-01, config freeze (schema), Test coverage.
+
+ACTION PLAN (ordered)
+1. Add an orchestrator: read feed_mgmt_mode; if off -> return (no scan). Else load catalog ->
+   index (P1) -> read user rows -> plan (P2).
+2. notify: emit file_notice + collect a structured change list for the UI; write NOTHING.
+3. auto: apply each action -- rewrite_url (validate via PFB_FILTER_URL before writing),
+   disable_discontinued (set state, never delete) -- take a write_config backup, then
+   write_config once; emit a notification summarising what changed. Idempotent (re-run -> no
+   actions).
+4. Wire the orchestrator into the install/update entry point and a manual "Recheck Feeds"
+   handler (UI hook lands in Phase 5; expose the callable now).
+5. Tests (PHPUnit, assert before THEN after): off -> config byte-identical, no notice; notify
+   -> config byte-identical + expected notice list; auto -> exactly the planned rows changed +
+   backup taken + idempotent + custom feeds untouched + discontinued disabled not deleted.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Any feed URL written MUST be validated (PFB_FILTER_URL) before the write (PFBL-01).
+- NEVER delete a user row; discontinued -> disable. notify path MUST NOT call write_config.
+- Do NOT add a cron; triggers are install/update + manual only.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (all mode branches + idempotency + no-mutation assertions);
+  php -l; PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: off short-circuits; notify never writes; auto writes only matched rows.
+
+EXPECTED RESULT
+The reconciler runs per mode on install/update + manual recheck: notify reports, auto applies
+conservatively + notifies, off is inert.
+
+COMMIT (single)
+    pfblockerng: add auto-feed-management apply engine + triggers (ADR-33 P4)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/04_Results.txt (plain .txt)
+Record: the orchestrator + handler entry points; the backup mechanism; the change-list shape
+the UI will render; which tests cover which mode/branch; verification numbers; go-ahead Phase 5.
