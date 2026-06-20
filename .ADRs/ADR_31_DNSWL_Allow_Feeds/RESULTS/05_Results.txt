@@ -1,0 +1,164 @@
+ADR-31 Phase 5 — UI: Deny/Permit action select on the DNSBL feed editor
+========================================================================
+
+Status: COMPLETE — all gates green; single commit with code + handoff.
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=6
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+A bare ``/adr-phase 31`` or ``/adr-all 31`` will recompute the canonical slug
+and miss this work.  Resume via this RESULTS file + the sentinel above.
+
+File edited
+-----------
+``src/usr/local/www/pfblockerng/pfblockerng_category_edit.php``
+
+What changed
+------------
+1. **``$options_row_action`` array** added near ``$options_logging`` (line ~447):
+
+       $options_row_action = [ 'Deny' => 'Deny', 'Permit' => 'Permit' ];
+
+   DNSBL-only; used exclusively in the per-row Form_Select below.
+
+2. **Per-row ``action-{r_id}`` Form_Select** added in the rowhelper loop, after the
+   Header/Label input, before the Delete button, guarded by ``if ($gtype == 'dnsbl')``:
+
+       if ($gtype == 'dnsbl') {
+           $row_action_val = (isset($row['action']) && $row['action'] === 'Permit') ? 'Permit' : 'Deny';
+           $group->add(new Form_Select(
+               'action-' . $r_id,
+               '',
+               $row_action_val,
+               $options_row_action
+           ))->setHelp(($numrows == $rowcounter) ? 'Action' : NULL)
+             ->setAttribute('style', 'width: auto')
+             ->setAttribute('size', 1)
+             ->setWidth(1);
+       }
+
+   The default-on-absent guard (``=== 'Permit'`` test) is byte-identical to the
+   Phase 4 engine derivation — pre-Phase-5 rows (no stored ``action``) display as
+   Deny and continue to work without any migration.
+
+3. **Guidelines infotxt** updated to add an Action entry for the DNSBL case:
+
+       "Action: Default: Deny — blocks matched domains (standard block feed).
+        Permit — marks this feed as an allow list: matched domains are whitelisted
+        and override block feeds (band 2). The manual DNSBL whitelist and manual
+        DNSBL blocks still take precedence."
+
+Round-trip contract
+-------------------
+Select name: ``action-{r_id}``  (e.g. ``action-0``, ``action-1``).
+Posted values: ``'Deny'`` | ``'Permit'``.
+
+Saved by the **existing generic rowhelper loop** at
+``pfblockerng_category_edit.php:~820``:
+
+    config_set_path(
+        "installedpackages/{$conf_type}/config/{$rowid}/row/{$k_field[1]}/{$k_field[0]}",
+        $value
+    );
+
+For ``action-0``: ``$k_field[0] = 'action'``, ``$k_field[1] = '0'`` →
+saves to ``installedpackages/pfblockerngdnsbl/config/{rowid}/row/0/action``.
+
+This is the exact path Phase 4 reads (``$row['action'] ?? ''``).  No new save
+path was needed — the generic rowhelper already handles it, exactly as it handles
+``state-N``, ``format-N``, ``header-N``, and ``logging-N`` (note: ``logging`` here
+refers to the group-level field, not per-row; per-row only has ``state``/``url``/
+``header``/``format``/``action``).
+
+Dynamic per-row key (parallel to ``logging``, ``custom``) — NOT routed through
+PfbConfig (foreign-key exclusion, same as
+``pfblockerngdnsbl/config/{group}/row/{idx}/custom``).  The dynamic path uses
+variable interpolation so the ``RequireConfigGateway`` sniff is unaffected.
+
+Values pass through ``pfb_filter($value, PFB_FILTER_HTML, ...)`` in the rowhelper
+save — ``'Permit'`` and ``'Deny'`` carry no HTML special characters and survive
+unchanged.
+
+The absent ↔ 'Deny' round-trip is transparent: a pre-Phase-5 row with no stored
+``action`` key displays as Deny (the guard ``=== 'Permit'`` treats absent as Deny)
+and saves back as ``'Deny'`` on next form submission — no data loss, no forced
+migration.
+
+Help text wording
+-----------------
+Column header: ``Action``
+Guideline entry (in the "Click here for Guidelines" infoblock, DNSBL branch):
+
+    Action: Default: Deny — blocks matched domains (standard block feed).
+    Permit — marks this feed as an allow list: matched domains are whitelisted
+    and override block feeds (band 2). The manual DNSBL whitelist and manual
+    DNSBL blocks still take precedence.
+
+Matches the length/style of neighbouring guideline entries (State, Source,
+Header/Label). Does not out-prose them.
+
+Grid column
+-----------
+Skipped — adding a column to pfblockerng_category.php (the group list grid)
+would require touching the JS/table rendering and isn't needed for the engine
+to work. Phase prompt says "only if cheap; skip if invasive." Skipped.
+
+ui_render result
+----------------
+SKIPPED locally — no VM / SMOKE_ADMIN_PASSWORD. Expected; not a failure.
+The orchestrator dispatches the real ui_render in CI (``ui-tests.yml``) after
+the PR lands.
+
+The existing DNSBL category-edit page entry in
+``tests/smoke/ui/test_render_smoke.py`` is unchanged — no new page was added.
+The new select renders on the existing page; the marker check continues to pass.
+
+Gate results
+------------
+- ``php -l pfblockerng_category_edit.php``             : No syntax errors
+- ``vendor/bin/phpcs --standard=phpcs.xml.dist src/``  : clean (0 errors)
+- ``vendor/bin/phpstan analyse pfblockerng_category_edit.php`` : No errors
+- ``vendor/bin/phpunit``                               : 1039 passed (unchanged)
+- ``python -m pytest``                                 : 1904 passed (unchanged)
+- ``ruff check .``                                     : All checks passed
+- ``ui_render`` (Tier A, CI)                           : SKIP locally — expected
+
+Note for Phase 6 (smoke journey)
+---------------------------------
+To mark a DNSBL feed row as Permit for the smoke journey:
+
+1. In the test's config setup, set the per-row ``action`` key directly in
+   ``config.xml`` (via the harness's config helpers):
+
+       installedpackages/pfblockerngdnsbl/config/{group_idx}/row/{row_idx}/action = 'Permit'
+
+2. Alternatively, use the UI: navigate to DNSBL → (group) → edit the alias →
+   Source Definitions table → change the ``Action`` dropdown for the desired
+   row from ``Deny`` to ``Permit`` → Save.
+
+3. After saving, trigger a "Force Reload - DNSBL" so ``sync_package_pfblockerng()``
+   regenerates the manifest with ``"mode": "permit"`` for that feed.
+
+4. Verify: the domains from the Permit feed resolve normally (not blocked) despite
+   being listed — confirming the band-2 allow overrides any block feed.
+
+The exact config path for the smoke harness:
+  - Group index: whichever group holds the test feed (0-based)
+  - Row index: whichever row within that group's ``row`` array holds the Permit feed
+  - Key: ``action``, value: ``'Permit'``
+
+Go-ahead for Phase 6
+---------------------
+The per-row Deny/Permit select is implemented and wired:
+  - A ``Deny``/``Permit`` Form_Select appears on every DNSBL feed-row editor row.
+  - Default-on-absent = Deny (pre-Phase-5 rows unchanged).
+  - Saves to ``row/{r_id}/action`` via the existing rowhelper loop — exact path
+    Phase 4 reads.
+  - Help text states band-2 precedence; matches neighbours in length/style.
+  - No new page/menu/privilege/pkg-plist entry.
+  - All PHP gates (lint, PHPUnit, PHPCS, PHPStan) and Python suite clean.
+
+Phase 6 may now proceed (smoke journey: Permit feed allow-overrides a block feed).

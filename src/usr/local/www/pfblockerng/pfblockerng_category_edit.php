@@ -444,6 +444,9 @@ $options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
 				'nxdomain'	=> 'NXDOMAIN (no logging)' ];
 
+// Per-row action for DNSBL feeds: Deny (block, default) or Permit (allow list — overrides block feeds).
+$options_row_action	= [ 'Deny' => 'Deny', 'Permit' => 'Permit' ];
+
 $options_suppression_cidr	= [ 'Disabled' => 'Disabled' ] + array_combine(range(1, 17, 1), range(1, 17, 1));
 
 $interfaces_list		= get_configured_interface_list_by_realif();
@@ -1174,6 +1177,22 @@ foreach ($rowdata[$rowid] as $tags) {
 		  ->setAttribute('style', $failed_bg)
 		  ->setWidth(3);
 
+		// ADR-31 P5: per-row Deny/Permit action for DNSBL feeds.
+		// Absent or unrecognised value defaults to 'Deny' (block) — matches the engine default.
+		// Dynamic per-row key (like 'logging') — saved by the rowhelper loop below; not via PfbConfig.
+		if ($gtype == 'dnsbl') {
+			$row_action_val = (isset($row['action']) && $row['action'] === 'Permit') ? 'Permit' : 'Deny';
+			$group->add(new Form_Select(
+				'action-' . $r_id,
+				'',
+				$row_action_val,
+				$options_row_action
+			))->setHelp(($numrows == $rowcounter) ? 'Action' : NULL)
+			  ->setAttribute('style', 'width: auto')
+			  ->setAttribute('size', 1)
+			  ->setWidth(1);
+		}
+
 		// Delete row button
 		$group->add(new Form_Button(
 			'deleterow' . $rowcounter,
@@ -1267,6 +1286,15 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 				<strong>Network ranges:</strong>172.16.1.0-172.16.1.255&emsp;
 				<strong>IP Address:</strong>172.16.1.10&emsp;
 				<strong>CIDR:</strong>172.16.1.0/24
+			</dd>';
+}
+
+if ($gtype == 'dnsbl') {
+	$infotxt .= '<dt>Action:</dt>
+			<dd>Default: <strong>Deny</strong> — blocks matched domains (standard block feed).<br />
+				<strong>Permit</strong> — marks this feed as an allow list: matched domains are
+				whitelisted and override block feeds (band 2). The manual DNSBL whitelist and
+				manual DNSBL blocks still take precedence.
 			</dd>';
 }
 
