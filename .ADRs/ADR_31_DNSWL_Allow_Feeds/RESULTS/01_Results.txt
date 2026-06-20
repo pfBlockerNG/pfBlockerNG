@@ -1,0 +1,91 @@
+ADR-31 Phase 1 — Precedence Oracle Results
+==========================================
+
+Status: COMPLETE — all 9 tests green on untouched devel production code.
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=2
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+A bare ``/adr-phase 31`` or ``/adr-all 31`` will recompute the canonical slug
+and miss this work.  Resume via this RESULTS file + the sentinel above.
+
+Test file
+---------
+``tests/test_adr31_precedence_oracle.py`` — 9 tests, 3 classes.
+
+Gate results
+------------
+- ``python -m pytest tests/test_adr31_precedence_oracle.py``: 9 passed
+- ``python -m pytest``: 1894 passed (baseline 1885 + 9 new)
+- ``ruff check .``: clean
+- ``ruff format --check .``: clean
+
+Build harness entry points used
+--------------------------------
+Entry point 1 — ``pfb_unbound.build(manifest, config, line_reader=reader)``
+  Synthetic in-memory manifest: one or two ABP-format feeds; ``reader`` maps
+  the ``raw`` sentinel key to an in-memory list of lines.  Same pattern as
+  ``tests/test_adr21_abp_per_line.py``.  Returns a ``BuildResult``.
+
+Entry point 2 — ``pfb_unbound.evaluate_domain(domain, domain, tld, False, cfg, containers)``
+  Driven via ``_cfg_for(result)`` (derives flags from BuildResult, sets
+  ``important_rules`` from ``result.important_rules``) and
+  ``_containers_for(result)`` (maps BuildResult dicts into the containers dict).
+  Same pattern as ``tests/test_adr06_build_module.py::_evaluate_build``.
+
+Fixture shape
+-------------
+Block feed:  ``format_hint='abp'``, provenance='feed' (default) or 'user' (band-5).
+              Lines: ``||domain^`` anchors -> band-1 block entries in data_db/zone_db.
+Allow feed:  Same ABP feed (combined lines) after block lines.
+              Lines: ``@@||domain^`` anchors -> band-2 allow entries in white_db.
+User whitelist: ``config.user_whitelist`` list -> band-6 entries in white_db.
+User block:  Separate feed with provenance='user' -> band-5 entries in data_db/zone_db.
+
+Band assertions made
+--------------------
+| Test                                          | Band pinned          | Symbol / line exercised                          |
+|-----------------------------------------------|----------------------|--------------------------------------------------|
+| test_block_only_domain_is_blocked             | band 1 (BEFORE)      | data_db/zone_db payload; evaluate_domain:5488    |
+| test_abp_allow_resolves_blocked_domain        | band 2 >= band 1     | _resolve_numeric_allow:5405; PRIO_FEED_ALLOW=2   |
+| test_allow_domain_subdomain_coverage          | band 2, wildcard=True| white_db["band"]+["wildcard"]; suffix walk:5396  |
+| test_manual_whitelist_resolves_blocked_domain | band 6 >= band 1     | whitelist_lookup_band:5380; PRIO_USER_ALLOW=6    |
+| test_manual_whitelist_sovereign_over_feed_allow | band 6 > band 2   | monotonic widen rule:4714; band 6 not downgraded |
+| test_user_important_block_beats_feed_allow    | band 5 > band 2      | PRIO_USER_BLOCK=5; _resolve_numeric_allow:5442   |
+| test_unlisted_domain_not_blocked              | is_found=False       | evaluate_domain fast path; no block DB hit       |
+| test_unlisted_domain_unaffected_by_manual_whitelist | is_found=False | same                                           |
+| test_allow_feed_does_not_create_block_for_unlisted  | is_found=False | whiteDB never creates a block                  |
+
+Band-5 fixture notes
+--------------------
+Band 5 (PRIO_USER_BLOCK) is produced by a manifest feed entry with
+``"provenance": "user"``, which triggers the ``block_band = PRIO_USER_BLOCK``
+path in ``build()`` (pfb_unbound.py:4648).  The test
+``test_user_important_block_beats_feed_allow`` drives two manifest entries in
+one build() call: a ``provenance='user'`` block feed (band 5) and a normal
+feed-provenance allow feed (band 2).  The BEFORE state (band-5 block alone)
+is verified first; then the AFTER state (band 5 with band-2 allow present)
+confirms band 5 > band 2 and the block still wins.
+
+Band-5 smoke coverage for Phase 6
+----------------------------------
+The band-5 off-box oracle (``test_user_important_block_beats_feed_allow``)
+is green here.  The live-VM smoke (Phase 6) should also verify the Custom_List
+path end-to-end: add a Custom_List (user-curated, band-5) entry for a domain
+that a permit feed (band-2) also allows, and assert the domain stays blocked.
+The smoke helper ``_is_blocked`` / ``_resolves`` used here map directly to
+drill-on-box VIP vs normal-response checks in the smoke harness.
+
+Go-ahead for Phase 2
+--------------------
+All three contracts are pinned and green on untouched production code:
+  1. Band-2 feed allow beats band-1 feed block (the core permit-feed semantic).
+  2. Band-6 manual whitelist and band-5 user block remain sovereign over band-2.
+  3. Non-listed domains are entirely unaffected.
+
+Phase 2 may now add the ``permit``-mode build branch in
+``dnsbl_build_from_manifest()`` / ``build()``.  The oracle tests serve as the
+regression net: Phase 2 must leave all 9 tests green.
