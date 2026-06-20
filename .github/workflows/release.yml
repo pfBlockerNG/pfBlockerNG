@@ -667,18 +667,21 @@ jobs:
   # ── 2d. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo:
   # its own publish.yml enumerates this repo's Releases (the durable store),
-  # rebuilds the per-ABI catalog, and deploys to its OWN GitHub Pages via
-  # same-repo OIDC — no cross-repo deploy key. On a release we just trigger it so
-  # the new Release appears at pfblockerng.github.io/pkg within seconds (its daily
-  # schedule is the backstop).
-  # ADDITIVE + ISOLATED — wired like attach-pkgs: sync-ports-fork / attach-pkgs do
-  # NOT `needs:` this, and this only `needs: [release]`, so a failure here can NEVER
-  # gate or break release / sync-ports-fork / attach-pkgs.
+  # CONSUMES the Release .pkg assets for the release/<varver>/<arch>/ subtree (devel
+  # = latest prerelease, stable = latest stable; nightly still built from devel HEAD),
+  # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
+  # On a release we just trigger it so the new Release appears at
+  # pfblockerng.github.io/pkg within seconds (its daily schedule is the backstop).
+  # ORDERING: this needs [release, attach-pkgs] — the consume run downloads the Release
+  # assets, so they must be ATTACHED first. attach-pkgs exits 0 even with no assets
+  # (build failure), so this still fires; the consumer then serves the prior release.
+  # ADDITIVE + ISOLATED — sync-ports-fork does NOT `needs:` this, so a failure here can
+  # NEVER gate or break release / sync-ports-fork / attach-pkgs.
   repo-publish:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
-    needs: [release]
-    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    needs: [release, attach-pkgs]
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
     steps:
