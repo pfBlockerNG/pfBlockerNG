@@ -1,0 +1,152 @@
+================================================================================
+PHASE 1 PROMPT — Config fields + golden rule-builder tests (oracle)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_36_DNS_Redirection/ADR.md   (read §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/36-dns-redirection (off devel; create off the
+latest devel if absent). Phase 1 is ORACLE-FIRST: register new config fields and write golden
+tests that pin the exact rule shape before any rule-building logic is wired to a live sync.
+One commit, push directly to the branch.
+
+WHY THIS PHASE EXISTS
+The §2.2 rule shape is the ground truth (maintainer's working config.xml). Encode it as
+machine-checked tests BEFORE writing the builder, so the builder is validated against the
+oracle, not the other way around.
+
+REQUIRED READING
+- .ADRs/ADR_36_DNS_Redirection/ADR.md — especially §2.2 (rule shape, invariants), §2.1
+  (decision table), §5 (constraints).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — pfb_cfg_registry(), PfbConfig class,
+  existing toggle/plain adapter pattern, and the RequireConfigGateway sniff exclusion comment
+  convention.
+- tests/php/CfgGatewayTest.php — the round-trip + default-absent test pattern to follow.
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php — the $registeredPaths
+  property; add all three new full paths here.
+- tests/php/RollbackContractTest.php — the $inventory array; add all three new keys here.
+- CLAUDE.md — ADR-29 "Adding a new registered field" (5-step process), ADR-28 storage freeze +
+  uppercase TRUE/FALSE, PHP standards, Test coverage mandate (branch + BDD).
+
+ACTION PLAN (ordered — registry + tests FIRST)
+
+1. Register three new fields in pfb_cfg_registry() (pfblockerng_extra.inc):
+
+   Key: dns_redirect_enable
+   Section path: installedpackages/pfblockerngdnsblsettings/config/0
+   Config.xml key: dns_redirect_enable
+   Adapter: toggle (pfb_cfg_toggle_read / pfb_cfg_toggle_write)
+   Stored vocabulary: {'on', ''}
+   Default stored string: ''  (feature off by default)
+   since: '4.0.0'
+
+   Key: dns_redirect_iface
+   Section path: installedpackages/pfblockerngdnsblsettings/config/0
+   Config.xml key: dns_redirect_iface
+   Adapter: NULL/NULL (plain identity — comma-joined interface string)
+   Stored vocabulary: any string (comma-separated interface names)
+   Default stored string: ''
+   since: '4.0.0'
+
+   Key: dns_redirect_exception
+   Section path: installedpackages/pfblockerngdnsblsettings/config/0
+   Config.xml key: dns_redirect_exception
+   Adapter: NULL/NULL (plain identity — alias name string)
+   Stored vocabulary: any string
+   Default stored string: ''
+   since: '4.0.0'
+
+2. Add all three full config.xml paths to $registeredPaths in
+   tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php so the sniff enforces
+   gateway access for these keys in all non-gateway PHP source files.
+
+3. Add all three keys to the $inventory in RollbackContractTest.php
+   (testInventoryCompletenessAllKnownKeysAccountedFor).
+
+4. Add CfgGatewayTest.php tests for each of the three fields:
+   - round-trip: write(read(v)) == v for every stored vocabulary value
+   - default-absent: PfbConfig::read($key) on an empty config returns the correct default
+   These are the ADR-29 step-4 tests.
+
+5. Write a pure skeleton function pfb_build_dns_redirect_rules($iface, $ipprotocol, $exception)
+   in pfblockerng.inc (or a new pfblockerng_dns_redirect.inc if the implementer judges it
+   cleaner — check the file sizes and existing structure first). The function signature and
+   return structure must be defined now; the full implementation comes in Phase 2.
+   Return type: array with two entries:
+     [0] => array (the NAT rdr rule fields)
+     [1] => array (the associated filter PASS rule fields)
+   Stub may return an empty/placeholder array at this stage.
+
+6. Write PHPUnit golden tests for pfb_build_dns_redirect_rules() (tests/php/). Required test
+   cases (branch coverage — all mandatory):
+
+   a. inet family, no exception alias:
+      - ipprotocol is 'inet'
+      - target is '127.0.0.1'
+      - source is <any> (no address/not elements in source)
+      - destination has network '(self)', not present, port '53'
+      - natreflection is 'disable'
+      - protocol is 'tcp/udp'
+      - local-port is '53'
+      - descr contains the pfB_DNS_Redirect marker
+
+   b. inet6 family, no exception alias:
+      - ipprotocol is 'inet6'
+      - target is '::1'
+      - source is <any>
+      - destination: same negated (self) + port 53 invariant
+      - natreflection, protocol, local-port: same as (a)
+
+   c. inet family, exception alias set (non-empty string):
+      - source has address equal to the alias name AND not present (negated)
+      - destination: same negated (self) + port 53 invariant
+
+   d. inet6 family, exception alias set:
+      - same negated-alias source, ::1 target, inet6 ipprotocol
+
+   e. Multiple interfaces (call builder for two interfaces):
+      - each call returns independent rule sets
+      - markers differ by interface name
+
+   f. Marker in both NAT rule descr AND associated filter rule descr (for each family):
+      - assert descr field present and starts with 'pfB_' in both entries [0] and [1]
+
+   Tests MUST assert each individual field, not just array shape. A missing 'natreflection'
+   key, a wrong target, or a non-negated destination must each independently fail a test.
+   Write tests BEFORE completing the builder implementation (the tests will initially fail
+   against the stub — that is expected and correct).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- ADR-28: uppercase TRUE/FALSE in all new PHP.
+- ADR-29: follow the 5-step registry process exactly. The stored vocabulary is defined once
+  here and NEVER changes.
+- Storage freeze: the chosen stored key names (dns_redirect_enable, dns_redirect_iface,
+  dns_redirect_exception) are permanent. Confirm they do not collide with any existing key
+  before registering.
+- Do NOT wire the builder to sync_package_pfblockerng() yet (Phase 2). Do NOT add UI yet
+  (Phase 3).
+
+VERIFICATION (must all pass before phase is done)
+- vendor/bin/phpunit -> green (CfgGateway round-trip + default-absent; golden rule tests will
+  FAIL against the stub — document this in the handoff; the phase is done when the registry
+  tests are green and the golden tests are written and passing against the stub where they can).
+- php -l on all touched files.
+- PHPStan + phpcs clean (PFBL-01 + ADR-28 + ADR-29 sniffs) on all touched files.
+- python -m pytest -> green (no Python changes; verify no regressions).
+- Confirm: no existing key collision (grep pfblockerngdnsblsettings for dns_redirect_* before
+  registering).
+
+EXPECTED RESULT
+Three PfbConfig-registered fields with round-trip tests green; a pfb_build_dns_redirect_rules()
+skeleton with golden tests that pin the §2.2 rule shape and will be driven green in Phase 2.
+
+COMMIT (single)
+    pfblockerng: add DNS redirect config fields + rule-shape oracle tests (ADR-36 P1)
+Push directly to adr/36-dns-redirection; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_36_DNS_Redirection/RESULTS/01_Results.txt (plain .txt)
+Record: the three registry entries (key names, section paths, adapter types, defaults, since);
+the $registeredPaths additions (exact path strings); pfb_build_dns_redirect_rules() signature
+and return structure; which golden tests are green vs still failing against the stub (expected);
+verification numbers; any key collision check result; go-ahead for Phase 2.
