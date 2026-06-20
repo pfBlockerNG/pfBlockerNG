@@ -3457,3 +3457,254 @@ class CaseContext:
                 print(f"[smoke] reset() failed during teardown (suppressed; original error stands): {reset_exc!r}")
             else:
                 raise
+
+
+# --------------------------------------------------------------------------- #
+# IPv6 locality helpers — issue #361 live-VM coverage
+# --------------------------------------------------------------------------- #
+
+# RFC 3849 documentation-range constants used by the locality smoke tests.
+# These are inert (documentation range only; no internet routing).
+IPV6_LOCAL_IFACE = "lan"  # LAN — never touches the WAN/SSH path
+IPV6_LOCAL_ADDR = "2001:db8:51:1::1"  # static address on the LAN interface
+IPV6_LOCAL_BITS = 64  # prefix length → /64
+IPV6_LOCAL_SUBNET = "2001:db8:51:1::"  # network address of the /64
+IPV6_LOCAL_HOST = "2001:db8:51:1::1234"  # a host INSIDE the /64
+IPV6_FOREIGN = "2001:db8:dead:beef::1"  # OUTSIDE the /64 → must be foreign
+
+# ip_block.log lives here on a pfSense guest (pfblockerng.inc:81).
+IP_BLOCK_LOG = "/var/log/pfblockerng/ip_block.log"
+
+
+def set_interface_ipv6(
+    vm: SmokeVM,
+    iface: str,
+    addr: str,
+    bits: int,
+    *,
+    timeout: float = 120.0,
+) -> dict[str, str]:
+    """Set a static IPv6 address on ``iface`` and return the prior IPv6 config.
+
+    Writes ``ipaddrv6 = addr`` and ``subnetv6 = str(bits)`` to the
+    ``interfaces/<iface>`` config section, calls ``interface_configure()`` to
+    apply the address to the OS, then polls ``get_configured_ipv6_addresses()``
+    until the address is live (up to 20 s).
+
+    Only the LAN interface (``IPV6_LOCAL_IFACE``) should be used here: the WAN
+    interface carries the SLIRP-NAT SSH path; changing its IPv6 config risks
+    disconnecting the guest.
+
+    Returns the *prior* IPv6 keys so the caller can restore them in ``finally``:
+    ``{"ipaddrv6": <old_ipaddrv6>, "subnetv6": <old_subnetv6>}`` (empty strings
+    when the keys were absent).
+    """
+    # Read the prior IPv6 config first so the caller can restore on teardown.
+    prior_snippet = (
+        f"$iface = config_get_path({_php_str('interfaces/' + iface)}, array());\n"
+        f"echo {_php_str(_CFG_VAL_OPEN)}"
+        " . ($iface['ipaddrv6'] ?? '')"
+        f" . {_php_str('|||')}"
+        " . ($iface['subnetv6'] ?? '')"
+        f" . {_php_str(_CFG_VAL_CLOSE)};"
+    )
+    prior_result = php_eval(vm, prior_snippet, timeout=timeout)
+    out = prior_result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"set_interface_ipv6: could not read prior config: rc={prior_result.returncode} out={out!r}")
+    inner = out[start + len(_CFG_VAL_OPEN) : end]
+    parts = inner.split("|||", 1)
+    prior = {"ipaddrv6": parts[0], "subnetv6": parts[1] if len(parts) > 1 else ""}
+
+    # Apply the new static IPv6 via pfSsh.php → the pfSense config API.
+    # interface_configure() brings the address up on the OS level.
+    snippet = (
+        "require_once('interfaces.inc');\n"
+        f"$iface = config_get_path({_php_str('interfaces/' + iface)}, array());\n"
+        f"$iface['ipaddrv6'] = {_php_str(addr)};\n"
+        f"$iface['subnetv6'] = {_php_str(str(bits))};\n"
+        f"config_set_path({_php_str('interfaces/' + iface)}, $iface);\n"
+        "write_config('pfBlockerNG smoke: set static IPv6 for locality test');\n"
+        f"if (function_exists('interface_configure')) {{ interface_configure({_php_str(iface)}); }}\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_interface_ipv6({iface}, {addr}/{bits}) failed: "
+            f"rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+    # Poll until get_configured_ipv6_addresses() returns the address (≤20 s).
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        live_snippet = (
+            "$addrs = get_configured_ipv6_addresses();\n"
+            f"echo {_php_str(_CFG_VAL_OPEN)}"
+            " . (isset($addrs[" + _php_str(iface) + "]) ? $addrs[" + _php_str(iface) + "] : '')"
+            f" . {_php_str(_CFG_VAL_CLOSE)};"
+        )
+        live_result = php_eval(vm, live_snippet, timeout=30.0)
+        lout = live_result.stdout
+        ls = lout.find(_CFG_VAL_OPEN)
+        le = lout.find(_CFG_VAL_CLOSE)
+        if ls != -1 and le != -1:
+            live_addr = lout[ls + len(_CFG_VAL_OPEN) : le].strip()
+            if live_addr == addr:
+                return prior
+        time.sleep(1.0)
+    raise RuntimeError(
+        f"set_interface_ipv6({iface}, {addr}/{bits}): address never appeared in "
+        f"get_configured_ipv6_addresses() within 20 s"
+    )
+
+
+def restore_interface_ipv6(
+    vm: SmokeVM,
+    iface: str,
+    prior: dict[str, str],
+    *,
+    timeout: float = 120.0,
+) -> None:
+    """Restore the IPv6 config on ``iface`` to the state saved by :func:`set_interface_ipv6`.
+
+    When ``prior["ipaddrv6"]`` is empty the keys are removed (the interface had no
+    static IPv6 before the test). Calls ``interface_configure()`` to make the
+    removal/change effective on the OS.
+    """
+    if prior.get("ipaddrv6"):
+        snippet = (
+            "require_once('interfaces.inc');\n"
+            f"$iface = config_get_path({_php_str('interfaces/' + iface)}, array());\n"
+            f"$iface['ipaddrv6'] = {_php_str(prior['ipaddrv6'])};\n"
+            f"$iface['subnetv6'] = {_php_str(prior.get('subnetv6', ''))};\n"
+            f"config_set_path({_php_str('interfaces/' + iface)}, $iface);\n"
+            "write_config('pfBlockerNG smoke: restore IPv6 after locality test');\n"
+            f"if (function_exists('interface_configure')) {{ interface_configure({_php_str(iface)}); }}\n"
+            "echo 'OK';"
+        )
+    else:
+        snippet = (
+            "require_once('interfaces.inc');\n"
+            f"$iface = config_get_path({_php_str('interfaces/' + iface)}, array());\n"
+            "unset($iface['ipaddrv6'], $iface['subnetv6']);\n"
+            f"config_set_path({_php_str('interfaces/' + iface)}, $iface);\n"
+            "write_config('pfBlockerNG smoke: restore IPv6 after locality test');\n"
+            f"if (function_exists('interface_configure')) {{ interface_configure({_php_str(iface)}); }}\n"
+            "echo 'OK';"
+        )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"restore_interface_ipv6({iface}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def collect_localip(
+    vm: SmokeVM,
+    *,
+    timeout: float = 60.0,
+) -> tuple[set[str], list[str]]:
+    """Call the REAL ``pfb_collect_localip()`` on the box and return its two structures.
+
+    Returns ``(pfb_local, pfb_localsub)`` where:
+
+    * ``pfb_local``   — a :class:`set` of exact local IP strings (the keys of the
+      PHP hash; ``$pfb_local`` after the ``array_flip`` in the function).
+    * ``pfb_localsub`` — a :class:`list` of local CIDR subnet strings
+      (``$pfb_localsub``).
+
+    Both are serialized from PHP as JSON so the boundary is explicit and survives
+    any value that might contain the sentinel delimiters.  The function is called
+    via ``pfSsh.php`` so it runs in the FULLY bootstrapped pfSense + pfBlockerNG
+    environment (config loaded, all includes available).
+    """
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "list($pfb_local, $pfb_localsub) = pfb_collect_localip();\n"
+        # pfb_local is an array_flip'd hash: keys are the IPs, values are indices.
+        # json_encode a plain array of its keys so Python gets clean strings.
+        "$out_local  = array_keys($pfb_local);\n"
+        "$out_sub    = array_values($pfb_localsub);\n"
+        f"echo {_php_str(_CFG_VAL_OPEN)}"
+        " . json_encode(array('local' => $out_local, 'localsub' => $out_sub))"
+        f" . {_php_str(_CFG_VAL_CLOSE)};"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(
+            f"collect_localip: no delimited JSON in pfSsh.php output: "
+            f"rc={result.returncode} out={out!r} err={result.stderr!r}"
+        )
+    import json
+
+    payload = json.loads(out[start + len(_CFG_VAL_OPEN) : end])
+    pfb_local: set[str] = set(payload["local"])
+    pfb_localsub: list[str] = list(payload["localsub"])
+    return pfb_local, pfb_localsub
+
+
+def ip_in_localsub(addr: str, pfb_localsub: list[str]) -> bool:
+    """Return True iff ``addr`` falls inside any subnet in ``pfb_localsub``.
+
+    Pure Python mirror of ``pfb_local_ip()`` (``ip_in_subnet()`` in PHP).
+    Uses :mod:`ipaddress` so IPv6 normalisation (``::`` == ``::0``) is handled
+    correctly.  Only the CIDR-subnet side (``pfb_localsub``) is checked; the
+    exact-match side (``pfb_local``) is tested by simple set membership.
+    """
+    import ipaddress
+
+    try:
+        target = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    for cidr in pfb_localsub:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            if target in net:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def get_lan_ipv4(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Return the configured IPv4 address of the LAN interface (or '' if absent).
+
+    Used by the locality smoke test to assert the IPv4 path is unaffected.
+    Reads ``interfaces/lan/ipaddr`` from config.xml — the stored address (valid
+    for static interfaces; DHCP stores 'dhcp', which is also a usable string for
+    the test's assertion that it appears in ``pfb_local``).
+    """
+    snippet = (
+        f"$iface = config_get_path({_php_str('interfaces/lan')}, array());\n"
+        f"echo {_php_str(_CFG_VAL_OPEN)}"
+        " . ($iface['ipaddr'] ?? '')"
+        f" . {_php_str(_CFG_VAL_CLOSE)};"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"get_lan_ipv4: no delimited value: rc={result.returncode} out={out!r}")
+    return out[start + len(_CFG_VAL_OPEN) : end].strip()
+
+
+def get_live_ipv4(vm: SmokeVM, iface: str = "lan", *, timeout: float = 30.0) -> str:
+    """Return the RUNTIME IPv4 of ``iface`` via ``get_interface_ip()`` (or '').
+
+    ``get_interface_ip()`` resolves DHCP/static/alias so it is the authoritative
+    live address even when config.xml stores 'dhcp'.
+    """
+    return _php_read_scalar(
+        vm,
+        "",
+        f"get_interface_ip({_php_str(iface)}) ?: ''",
+        timeout=timeout,
+    )
