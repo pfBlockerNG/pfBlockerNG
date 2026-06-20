@@ -385,7 +385,6 @@ function pfb_filter_whitelist_atype(string $raw): string {
 	return "Whitelist|{$ip}|{$descr}";
 }
 
-
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
