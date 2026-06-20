@@ -108,7 +108,9 @@ current period*.
 ### 2.3 Explicitly kept / out of scope
 
 - **Archived/rolled copies** (`.0/.1`, keep-N) and **pfSense `newsyslog`** integration — rejected
-  (§2.4); revisit only if operators ask for retained history.
+  (§2.4); revisit only if operators ask for retained history. **Amended (#416, §8):** a narrow
+  opt-in *in-place* line-retention buffer on reset (not archived copies) was later added for the
+  log-shipper unshipped-tail case.
 - The **line-cap** mechanism and its values — untouched (the schedule sits alongside it).
 - **Python/shell** — no change; the reset is PHP-only (mirrors `pfb_log_mgmt()`).
 
@@ -242,3 +244,66 @@ the full CE + Plus matrix. Steps to verify after the PR merges:
 2. Confirm all legs green (`all-smoke-passed` AND-gate).
 3. The manual checklist (§7 above) covers real calendar-rollover paths that CI cannot simulate —
    run it post-accept at the next natural daily boundary.
+
+## 8. Amendment (#416): opt-in line-retention buffer on reset
+
+**Status:** Implemented (pending live-VM smoke), 2026-06-20. Narrows §2.3's "keep-N … revisit only if
+operators ask": the §2.4 rejection of *archived copies* stands — this adds an **in-place line cushion**,
+not rotated files.
+
+### 8.1 Motivation
+
+The reset truncates a due log to **empty**. For operators **shipping these logs off-box** (remote
+syslog / a shipper keyed on `(inode, offset)` — the #264/#280 audience), the full empty can discard the
+**unshipped tail**: lines written after the shipper's last read but before the boundary truncation. The
+line-cap trim does not have this problem — it drops the *oldest* lines (most time to ship); only the
+reset zeroes the newest content.
+
+### 8.2 Decision
+
+One **opt-in per-log** registered field **`log_reset_keep_<type>`** (numeric string, default `'0'`) for
+the same 10 log types, mirroring `log_rotate_<type>` / `log_max_<type>` exactly (loop-generated registry
+entry, `$gen` section, plain identity adapter, `since 4.0.0`, a General-settings UI field). On a rolled
+boundary:
+
+- **`K = 0`** (default) → **full empty** (`cp /dev/null`) — byte-for-byte the original §2 behaviour.
+- **`K > 0`** → **keep the last `K` lines in place**, reusing `pfb_log_mgmt()`'s inode-preserving
+  `tail -n K → temp → cat temp → file` with per-exec exit-code gating (a failed `tail`/`cat` never
+  blanks the live log) and the same chroot-path + `chown unbound` handling for the python logs.
+- Values that cast to `< 1` (negative/garbage) are treated as full empty.
+- **Marker/period bookkeeping is identical** for both paths — the new period key is recorded once per
+  boundary either way; idempotency and per-log independence (§2.2) are unchanged.
+
+### 8.3 Why a line count, not a time window
+
+The request was framed as "keep the last few minutes/hours." A true time window would need to parse a
+timestamp from every line, but the 10 log types have heterogeneous formats (some lines are not cleanly
+timestamped) — fragile and format-coupled. A line count is a robust, format-agnostic proxy reusing the
+proven line-cap machinery; the UI help text states it is a line cushion, not a literal time guarantee.
+
+### 8.4 Alternatives rejected
+
+- **Rotate to a `.1` sidecar instead of emptying** — would re-introduce the #264/#280 inode-churn
+  regression (a shipper keyed on `(inode, offset)` sees a rotation and re-ships the whole file); the
+  exact failure ADR-30 avoids. The retention buffer stays **in place** (same inode).
+- **Time-window retention** (keep lines newer than T) — deferred (the per-format timestamp parsing
+  above); revisit only on a concrete need.
+
+### 8.5 Contract preserved (§2.2)
+
+All five §2.2 invariants hold: default `'0'` ⇒ zero behaviour change; inode + ownership preserved on
+both the keep and clear paths; idempotent once-per-period; per-log independent; the new key round-trips
+through `PfbConfig` (`write(read(v)) == v`, absent ⇒ `'0'`).
+
+### 8.6 Coverage
+
+- **Off-box** (`tests/php/LogRotateResetTest.php`): both branches — `K = 0` empties; `K > 0` keeps
+  exactly the last K lines (content + **inode** preserved); fewer-than-K retains the whole file; plain
+  and dns-log paths. The `K > 0` assertion fails on the pre-amendment code (which empties), proving it
+  is a real branch.
+- **Config** (`CfgGatewayTest` / `RollbackContractTest`): round-trip + rollback invariants for all 10
+  new keys.
+- **Live-VM** (`tests/smoke/test_log_rotate.py`): a `K > 0` keep case over the cron path — the real
+  chroot + `chown unbound` the off-box runner cannot assert. Niche/opt-in, so this is the one added
+  live leg; the §7 manual checklist gains a "set `log_reset_keep_*`, confirm the last K survive a real
+  boundary" step.
