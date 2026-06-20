@@ -294,6 +294,11 @@ jobs:
           TAG:    ${{ steps.resolve.outputs.tag }}
           BRANCH: ${{ steps.resolve.outputs.branch }}
         run: |
+          # Annotated tags need a committer identity. The changelog step also sets
+          # this, but it is skipped when a committed notes file already exists, so set
+          # it here unconditionally (idempotent if already set).
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           # Push the branch only if we have new commits ahead of the remote.
           if ! git diff --quiet "origin/${BRANCH}..HEAD" 2>/dev/null; then
             git push origin "HEAD:${BRANCH}"
