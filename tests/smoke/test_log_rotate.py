@@ -137,6 +137,35 @@ def _set_log_rotate_schedule(
         )
 
 
+def _set_log_reset_keep(
+    vm: SmokeVM,
+    keep_counts: dict[str, int],
+    *,
+    timeout: float = 60.0,
+) -> None:
+    """Set one or more log_reset_keep_<type> retention counts in config.
+
+    ``keep_counts`` maps log type (e.g. ``'ip_blocklog'``) to the number of
+    lines to retain on a scheduled reset (0 = clear fully, K > 0 = keep last K).
+    Written directly into the General settings config section so PfbConfig::read
+    picks them up on the next cron tick, mirroring ``_set_log_rotate_schedule``.
+    """
+    sets = ""
+    for log_type, count in keep_counts.items():
+        key = f"log_reset_keep_{log_type}"
+        sets += f"$g[{h._php_str(key)}] = {h._php_str(str(count))};\n"
+    snippet = (
+        f"$g = config_get_path({h._php_str(CFG_GENERAL)}, array());\n"
+        f"{sets}"
+        f"config_set_path({h._php_str(CFG_GENERAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: set log_reset_keep counts');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_log_reset_keep failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def _seed_log(vm: SmokeVM, log_path: str, content: str, *, timeout: float = 30.0) -> None:
     """Write ``content`` into ``log_path`` via ``tee`` (replaces the file)."""
     result = h.subprocess.run(
@@ -239,6 +268,38 @@ _SEED_IP_PERMITLOG = "2026-01-15 02:00:00 pfblockerng 192.0.2.3 PERMIT pfB_Permi
 _SEED_DNSLOG = (
     "2026-01-15 03:00:00 DNSBL pfb-smoke-inert-label-1 192.0.2.10 1\n"
     "2026-01-15 03:01:00 DNSBL pfb-smoke-inert-label-2 192.0.2.11 1\n"
+)
+
+# 6-line seeds for retention-buffer tests (N=6, K=3: keep the last 3 lines).
+# Lines are numbered so the tail assertion can be exact and unambiguous.
+_SEED_IP_BLOCKLOG_6 = (
+    "2026-01-15 01:00:00 pfblockerng 192.0.2.1 BLOCK pfB_TestList line-1\n"
+    "2026-01-15 01:01:00 pfblockerng 192.0.2.2 BLOCK pfB_TestList line-2\n"
+    "2026-01-15 01:02:00 pfblockerng 192.0.2.3 BLOCK pfB_TestList line-3\n"
+    "2026-01-15 01:03:00 pfblockerng 192.0.2.4 BLOCK pfB_TestList line-4\n"
+    "2026-01-15 01:04:00 pfblockerng 192.0.2.5 BLOCK pfB_TestList line-5\n"
+    "2026-01-15 01:05:00 pfblockerng 192.0.2.6 BLOCK pfB_TestList line-6\n"
+)
+# Expected tail after keep K=3: the last 3 lines of _SEED_IP_BLOCKLOG_6.
+_SEED_IP_BLOCKLOG_6_TAIL3 = (
+    "2026-01-15 01:03:00 pfblockerng 192.0.2.4 BLOCK pfB_TestList line-4\n"
+    "2026-01-15 01:04:00 pfblockerng 192.0.2.5 BLOCK pfB_TestList line-5\n"
+    "2026-01-15 01:05:00 pfblockerng 192.0.2.6 BLOCK pfB_TestList line-6\n"
+)
+
+_SEED_DNSLOG_6 = (
+    "2026-01-15 03:00:00 DNSBL pfb-smoke-inert-label-1 192.0.2.10 1\n"
+    "2026-01-15 03:01:00 DNSBL pfb-smoke-inert-label-2 192.0.2.11 1\n"
+    "2026-01-15 03:02:00 DNSBL pfb-smoke-inert-label-3 192.0.2.12 1\n"
+    "2026-01-15 03:03:00 DNSBL pfb-smoke-inert-label-4 192.0.2.13 1\n"
+    "2026-01-15 03:04:00 DNSBL pfb-smoke-inert-label-5 192.0.2.14 1\n"
+    "2026-01-15 03:05:00 DNSBL pfb-smoke-inert-label-6 192.0.2.15 1\n"
+)
+# Expected tail after keep K=3: the last 3 lines of _SEED_DNSLOG_6.
+_SEED_DNSLOG_6_TAIL3 = (
+    "2026-01-15 03:03:00 DNSBL pfb-smoke-inert-label-4 192.0.2.13 1\n"
+    "2026-01-15 03:04:00 DNSBL pfb-smoke-inert-label-5 192.0.2.14 1\n"
+    "2026-01-15 03:05:00 DNSBL pfb-smoke-inert-label-6 192.0.2.15 1\n"
 )
 
 
@@ -571,3 +632,185 @@ def test_all_off_no_log_emptied(deployed_vm: SmokeVM) -> None:
     _rm_marker(vm)
     _rm_log(vm, LOG_IP_BLOCKLOG)
     _rm_log(vm, LOG_IP_PERMITLOG)
+
+
+# --------------------------------------------------------------------------- #
+# Case 5: retention buffer (K > 0) — plain log keeps the last K lines
+# --------------------------------------------------------------------------- #
+
+
+def test_retention_buffer_plain_log_keeps_last_k_lines(deployed_vm: SmokeVM) -> None:
+    """Scenario 5 — retention buffer (plain log): keep last K=3 lines on scheduled reset.
+
+    Pairs with Scenario 1 (K=0, full clear) to prove log_reset_keep_<type> is a
+    real branch on a real VM: when K > 0, pfb_log_reset() tails the last K lines
+    into the same inode instead of blanking it.
+
+    Given:
+      - ``ip_blocklog`` schedule = daily, log_reset_keep_ip_blocklog = 3.
+      - Log seeded with 6 distinct inert lines (N=6 > K=3).
+      - Marker entry for ip_blocklog = yesterday (stale, boundary triggers reset).
+      - Inode captured before the cron runs.
+      - Content asserted non-empty (N lines) BEFORE cron.
+
+    When: the cron entry runs (``pfblockerng.php cron`` → ``pfblockerng_sync_cron()``).
+
+    Then:
+      - ``ip_blocklog`` holds EXACTLY the last 3 seeded lines (lines 4–6), in order.
+      - The inode is UNCHANGED (the keep is done in-place via tail→temp→cat).
+      - The marker entry for ip_blocklog now holds today's daily key.
+    """
+    vm = deployed_vm
+
+    # --- Given ---
+    _set_log_rotate_schedule(vm, {"ip_blocklog": "daily"})
+    _set_log_reset_keep(vm, {"ip_blocklog": 3})
+    _seed_log(vm, LOG_IP_BLOCKLOG, _SEED_IP_BLOCKLOG_6)
+    _write_marker(vm, {"ip_blocklog": _stale_daily_key()})
+
+    content_before = _read_file(vm, LOG_IP_BLOCKLOG)
+    assert content_before.strip(), "BEFORE: ip_blocklog should be non-empty after 6-line seed — test setup failed"
+    assert content_before.count("\n") >= 6, (  # noqa: PLR2004
+        f"BEFORE: ip_blocklog should have 6 lines, got: {content_before!r}"
+    )
+
+    inode_before = _get_inode(vm, LOG_IP_BLOCKLOG)
+    assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
+
+    marker_before = _read_marker(vm)
+    assert marker_before.get("ip_blocklog") == _stale_daily_key(), (
+        f"BEFORE: marker ip_blocklog should be yesterday's key {_stale_daily_key()!r}, "
+        f"got {marker_before.get('ip_blocklog')!r}"
+    )
+
+    # --- When ---
+    h.reload(vm, "cron")
+
+    # --- Then ---
+    content_after = _read_file(vm, LOG_IP_BLOCKLOG)
+    assert content_after == _SEED_IP_BLOCKLOG_6_TAIL3, (
+        f"AFTER: ip_blocklog should hold exactly the last 3 seeded lines.\n"
+        f"  expected: {_SEED_IP_BLOCKLOG_6_TAIL3!r}\n"
+        f"  got:      {content_after!r}"
+    )
+
+    inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
+    assert inode_after == inode_before, (
+        f"AFTER: ip_blocklog inode changed — file was recreated instead of kept in-place "
+        f"(before={inode_before!r}, after={inode_after!r})"
+    )
+
+    marker_after = _read_marker(vm)
+    expected_key = _current_daily_key()
+    assert marker_after.get("ip_blocklog") == expected_key, (
+        f"AFTER: marker ip_blocklog should be today's key {expected_key!r}, got {marker_after.get('ip_blocklog')!r}"
+    )
+
+    # --- Cleanup ---
+    _set_log_rotate_schedule(vm, {"ip_blocklog": "off"})
+    _set_log_reset_keep(vm, {"ip_blocklog": 0})
+    _rm_marker(vm)
+    _rm_log(vm, LOG_IP_BLOCKLOG)
+
+
+# --------------------------------------------------------------------------- #
+# Case 6: retention buffer (K > 0) — chrooted dns log keeps last K lines + unbound ownership
+# --------------------------------------------------------------------------- #
+
+
+def test_retention_buffer_chrooted_dns_log_keeps_last_k_lines_and_ownership(
+    deployed_vm: SmokeVM,
+) -> None:
+    """Scenario 6 — retention buffer (chrooted dns log): keep last K=3 lines + unbound ownership.
+
+    Pairs with Scenario 3 (K=0, full clear for dnslog) to prove the chroot path +
+    ``chown unbound`` in pfb_log_reset() also fires for the K > 0 branch.  The
+    chroot-path resolution mirrors test_chrooted_python_log_reset_preserves_inode_and_ownership:
+    use /var/unbound/var/log/pfblockerng/dnsbl.log when the chroot dir exists.
+
+    Given:
+      - dnslog schedule = daily, log_reset_keep_dnslog = 3.
+      - dnslog seeded with 6 distinct inert lines (N=6 > K=3) at the effective path.
+      - File owned by unbound (mirrors production state after pfb_log_mgmt).
+      - Marker entry for dnslog = yesterday (stale).
+      - Inode captured before the cron runs.
+      - Content asserted non-empty (N lines) and owner = unbound BEFORE cron.
+
+    When: the cron entry runs.
+
+    Then:
+      - dnslog holds EXACTLY the last 3 seeded lines (lines 4–6), in order.
+      - dnslog inode is UNCHANGED (in-place keep preserved it).
+      - dnslog is still owned by ``unbound`` (pfb_log_reset re-chowns after the keep).
+      - The marker entry for dnslog holds today's daily key.
+    """
+    vm = deployed_vm
+
+    # Determine the effective log path (mirrors Scenario 3 resolution).
+    chroot_dir_result = vm.ssh("test", "-d", "/var/unbound/var/log/pfblockerng", timeout=10)
+    if chroot_dir_result.returncode == 0:
+        dnslog_path = LOG_DNSLOG_CHROOT
+    else:
+        mk = vm.ssh("/bin/mkdir", "-p", "/var/unbound/var/log/pfblockerng", timeout=30)
+        if mk.returncode == 0:
+            dnslog_path = LOG_DNSLOG_CHROOT
+        else:
+            dnslog_path = LOG_DNSLOG_HOST
+
+    # --- Given ---
+    _set_log_rotate_schedule(vm, {"dnslog": "daily"})
+    _set_log_reset_keep(vm, {"dnslog": 3})
+    _seed_log(vm, dnslog_path, _SEED_DNSLOG_6)
+    vm.ssh("/usr/sbin/chown", "unbound:unbound", dnslog_path, timeout=30)
+    _write_marker(vm, {"dnslog": _stale_daily_key()})
+
+    content_before = _read_file(vm, dnslog_path)
+    assert content_before.strip(), "BEFORE: dnslog should be non-empty after 6-line seed — test setup failed"
+    assert content_before.count("\n") >= 6, (  # noqa: PLR2004
+        f"BEFORE: dnslog should have 6 lines, got: {content_before!r}"
+    )
+
+    inode_before = _get_inode(vm, dnslog_path)
+    assert inode_before, f"BEFORE: could not read dnslog inode at {dnslog_path}"
+
+    owner_before = _get_file_owner(vm, dnslog_path)
+    assert owner_before == "unbound", f"BEFORE: dnslog owner should be 'unbound', got {owner_before!r}"
+
+    marker_before = _read_marker(vm)
+    assert marker_before.get("dnslog") == _stale_daily_key(), (
+        f"BEFORE: marker dnslog should be yesterday's key {_stale_daily_key()!r}, got {marker_before.get('dnslog')!r}"
+    )
+
+    # --- When ---
+    h.reload(vm, "cron")
+
+    # --- Then ---
+    content_after = _read_file(vm, dnslog_path)
+    assert content_after == _SEED_DNSLOG_6_TAIL3, (
+        f"AFTER: dnslog should hold exactly the last 3 seeded lines.\n"
+        f"  expected: {_SEED_DNSLOG_6_TAIL3!r}\n"
+        f"  got:      {content_after!r}"
+    )
+
+    inode_after = _get_inode(vm, dnslog_path)
+    assert inode_after == inode_before, (
+        f"AFTER: dnslog inode changed — file was recreated instead of kept in-place "
+        f"(before={inode_before!r}, after={inode_after!r})"
+    )
+
+    owner_after = _get_file_owner(vm, dnslog_path)
+    assert owner_after == "unbound", (
+        f"AFTER: dnslog owner should still be 'unbound' after retention keep, got {owner_after!r}"
+    )
+
+    marker_after = _read_marker(vm)
+    expected_key = _current_daily_key()
+    assert marker_after.get("dnslog") == expected_key, (
+        f"AFTER: marker dnslog should be today's key {expected_key!r}, got {marker_after.get('dnslog')!r}"
+    )
+
+    # --- Cleanup ---
+    _set_log_rotate_schedule(vm, {"dnslog": "off"})
+    _set_log_reset_keep(vm, {"dnslog": 0})
+    _rm_marker(vm)
+    _rm_log(vm, dnslog_path)
