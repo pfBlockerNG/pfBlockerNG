@@ -457,6 +457,20 @@ else {
 	update_status(" no changes required ... done.\n");
 }
 
+// Reverse DNS lookups (enable_rdns) default OFF for new installs; preserve the
+// historical always-on behaviour for existing installs with a one-time seed.
+update_status(" Reverse DNS lookup default...");
+$pfb_rdns_seed = pfb_rdns_seed_value(
+	config_get_path('installedpackages/pfblockerng/config/0', []),
+	config_get_path('installedpackages/pfblockerngipsettings/config/0', [])
+);
+if ($pfb_rdns_seed !== null) {
+	config_set_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns', $pfb_rdns_seed);
+	update_status(" saving new changes ... done.\n");
+} else {
+	update_status(" no changes required ... done.\n");
+}
+
 // Upgrade pfBlockerNGSuppress alias to IPv4 Suppression custom list
 update_status(" pfBlockerNGSuppress Alias -> IPv4 Suppression Customlist...");
 $ufound = FALSE;

@@ -37,7 +37,7 @@ $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
 $pconfig['suppression']		= isset($pfb['iconfig']['suppression'])			? $pfb['iconfig']['suppression'] : 'on';
 
 $pconfig['enable_log']		= $pfb['iconfig']['enable_log']				?: '';
-$pconfig['enable_resolve']	= isset($pfb['iconfig']['enable_resolve'])		? $pfb['iconfig']['enable_resolve'] : 'on';
+$pconfig['enable_rdns']		= $pfb['iconfig']['enable_rdns']				?: '';
 $pconfig['ip_placeholder']	= $pfb['iconfig']['ip_placeholder']			?: '127.1.7.7';
 $pconfig['maxmind_locale']	= $pfb['iconfig']['maxmind_locale']			?: 'en';
 $pconfig['asn_reporting']	= $pfb['iconfig']['asn_reporting']			?: 'disabled';
@@ -187,7 +187,7 @@ if ($_POST) {
 			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['suppression']		= pfb_filter($_POST['suppression'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['enable_resolve']	= pfb_filter($_POST['enable_resolve'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
 			$pfb['iconfig']['maxmind_locale']	= $_POST['maxmind_locale']					?: 'en';
 			$pfb['iconfig']['database_cc']		= pfb_filter($_POST['database_cc'], PFB_FILTER_ON_OFF, 'ip')	?: '';
@@ -308,13 +308,13 @@ $section->addInput(new Form_Checkbox(
 );
 
 $section->addInput(new Form_Checkbox(
-	'enable_resolve',
-	'Resolve IP Addresses',
+	'enable_rdns',
+	'Reverse DNS Lookups',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_resolve']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_rdns']) === PfbToggle::On,
 	'on'
-))->setHelp('Perform a reverse DNS (PTR) lookup to resolve the hostname for each blocked IP address in the Alerts and logs.<br />'
-		. 'Disable to avoid the extra DNS traffic and load from these lookups.');
+))->setHelp('Perform a reverse DNS (PTR) lookup to resolve the hostname of each blocked IP address shown in the Alerts and logs.<br />'
+		. 'Enabling this increases the number of DNS queries performed, though the impact is usually negligible.');
 
 $section->addInput(new Form_Input(
 	'ip_placeholder',
