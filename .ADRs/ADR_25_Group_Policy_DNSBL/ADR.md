@@ -2,8 +2,18 @@
 
 - **Status:** **Proposed** (2026-06-14)
 - **Date:** 2026-06-14
-- **Folds in:** issue #384 (Redmine #11099) — "DNSBL blocking by schedule" (block during
-  school hours). Scheduling is a per-group axis here, not a separate feature.
+- **Folds in / supersedes:** the per-client / per-network / per-source differentiated
+  DNSBL-policy requests this ADR delivers as its core feature:
+  - **#384** (Redmine #11099) — "DNSBL blocking by schedule" (block during school hours);
+    scheduling is a per-group axis here, not a separate feature.
+  - **#321** (Redmine #16578) — pfBlockerNG profiles per interface/VLAN (OPNsense-style
+    Unbound Access Lists).
+  - **#315** (Redmine #16830) — DNS-Resolver + pfBlockerNG policy per network.
+  - **#377** (Redmine #12932) — per-user/GUI-managed DNSBL whitelist (ACLs).
+  - **#386** (Redmine #10841) — per Source/VLAN/Network individual black & white lists.
+
+  The implementing PR **closes all of them** (`Closes #384`, `Closes #321`, `Closes #315`,
+  `Closes #377`, `Closes #386` in its body) so they resolve automatically on merge.
 - **Branch:** `adr/25-group-policy-dnsbl` (off `devel`; slug per CLAUDE.md "Branch naming")
   / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (decision path +
   build), `pfblockerng.inc` (manifest + config + migration), `src/usr/local/www/pfblockerng/`
@@ -392,6 +402,12 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 ---
 
 ## 7. Definition of done
+
+### On merge (issue closure)
+
+- [ ] The landing PR body carries `Closes #384`, `Closes #321`, `Closes #315`, `Closes #377`,
+      and `Closes #386` so every folded-in / superseded issue closes automatically when ADR-25
+      lands (each was left a comment pointing here while the ADR was Proposed).
 
 ### Automated (CI)
 
