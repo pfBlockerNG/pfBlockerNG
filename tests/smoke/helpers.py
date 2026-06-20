@@ -2016,6 +2016,43 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float
     wait_unbound_ready(vm)
 
 
+# pfBlockerNG archives its IP aliastables + DNSBL DB here for RAMDISK installs; the
+# earlyshellcmd `pfblockerng.sh aliastables` restores it on boot (pfblockerng.inc:7791,
+# pfblockerng.sh:208). Present only after an `update` runs with use_mfs_tmpvar enabled.
+ALIASARCHIVE = "/usr/local/etc/aliastables.tar.bz2"
+
+
+def set_ramdisk(vm: SmokeVM, on: bool, *, var_size: int = 512, tmp_size: int = 128, timeout: float = 60.0) -> None:
+    """Enable/disable pfSense RAM disks for /tmp and /var (takes effect on next boot).
+
+    pfSense mounts /tmp and /var as memory filesystems when ``<system><use_mfs_tmpvar>``
+    is present (``system_advanced_misc.php``); sizes are MiB (GUI minimums: /tmp 40,
+    /var 60). The element's mere PRESENCE is "enabled" — both pfSense's
+    ``config_path_enabled('system', 'use_mfs_tmpvar')`` (pfblockerng.inc:7777) and the
+    shell's ``grep -c use_mfs_tmpvar`` (pfblockerng.sh:101) key on it.
+
+    On the conversion reboot pfSense WIPES /var, so pfBlockerNG's earlyshellcmd restores
+    its aliastables from :data:`ALIASARCHIVE` — the exact path issue #334 exercises on a
+    RAMDISK install. ``var_size`` is generous (the default 60 MiB is tight for the
+    unbound chroot + pfBlockerNG DB on a 4 GB box).
+    """
+    if on:
+        snippet = (
+            f"config_set_path('system/use_mfs_tmpvar', '');\n"
+            f"config_set_path('system/use_mfs_var_size', {_php_str(str(var_size))});\n"
+            f"config_set_path('system/use_mfs_tmp_size', {_php_str(str(tmp_size))});\n"
+            "write_config('pfBlockerNG smoke: enable RAM disks');\necho 'OK';"
+        )
+    else:
+        snippet = (
+            "config_del_path('system/use_mfs_tmpvar');\n"
+            "write_config('pfBlockerNG smoke: disable RAM disks');\necho 'OK';"
+        )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_ramdisk({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 UNBOUND_CONF = "/var/unbound/unbound.conf"
 UNBOUND_BEFORE = "/tmp/pfb_unbound_before.conf"
 # Snapshot of the EFFECTIVE unbound config (unbound.conf + every file it pulls in
