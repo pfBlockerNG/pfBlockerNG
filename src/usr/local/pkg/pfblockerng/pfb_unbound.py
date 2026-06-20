@@ -4636,6 +4636,46 @@ def build(
         group = feed_row["group"]
         fmt = feed_row["format_hint"]
         log_flag = feed_row["log_flag"]
+        # ADR-31: permit-mode feeds — every host line is a band-2 wildcard allow.
+        # ``mode`` absent or ``'deny'`` falls through to the existing block build path
+        # (backward-safe: older manifests without the field build byte-identically).
+        # ``mode='permit'`` routes hosts into whiteDB at PRIO_FEED_ALLOW (band 2),
+        # wildcard=True (subdomain-covering, matching @@||host^), important=False.
+        # ABP directives (@@, ||, [, !, $options) are ignored in v1 ("every host = allow").
+        # Provenance is recorded via index_for(feed, group) so reports can attribute
+        # the allow to its DNSWL feed (same convention as block-feed entries).
+        if feed_row.get("mode") == "permit":
+            for raw_line in line_reader(feed_row["raw"]):
+                # Skip ABP/comment control lines — in a permit feed every plain host is
+                # an allow; ABP directives (@@||, ||, !, [Adblock...) are ignored (v1).
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("!") or stripped.startswith("["):
+                    continue
+                if stripped.startswith("@@") or stripped.startswith("||"):
+                    continue
+                entry = parse(fmt, stripped)
+                if entry is None:
+                    continue
+                domain = normalise(entry.value)
+                if domain is None:
+                    continue
+                # Insert as band-2 wildcard allow (@@||host^ shape) into whiteDB.
+                # Monotonic-widen on collision: never downgrade an existing higher band
+                # (e.g. a user whitelist entry at band 6 must not be narrowed to band 2).
+                idx = index_for(feed, group)
+                new_entry: dict[str, Any] = {
+                    "wildcard": True,
+                    "important": False,
+                    "band": PRIO_FEED_ALLOW,
+                    "index": idx,
+                }
+                existing = white_db.get(domain)
+                if existing is None:
+                    white_db[domain] = new_entry
+                elif _white_entry_band(existing) < PRIO_FEED_ALLOW:
+                    white_db[domain] = new_entry
+                # Same or higher band: keep existing (monotonic widen — never downgrade).
+            continue
         # ADR-07: a DNSBL Group Custom_List (the {alias}_custom synthetic row, PHP
         # provenance='user') is USER-curated -> SOVEREIGN over feeds: the user is the
         # sovereign and a list (automated) can never override an explicit user choice.

@@ -1,0 +1,171 @@
+ADR-31 Phase 2 — Permit-mode Build Branch Results
+==================================================
+
+Status: COMPLETE — 10 new tests green; Phase-1 oracle (9 tests) still passes; full
+suite 1904 passed.
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=3
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+A bare ``/adr-phase 31`` or ``/adr-all 31`` will recompute the canonical slug
+and miss this work.  Resume via this RESULTS file + the sentinel above.
+
+Manifest ``mode`` contract
+--------------------------
+Field name : ``mode`` (optional string in each ``feeds[]`` entry of the manifest JSON)
+Values     : ``'permit'`` | ``'deny'`` | absent
+Semantics  : absent / ``'deny'``   → existing block build path, byte-identical behaviour
+             ``'permit'``          → permit-mode build branch (Phase 2 implements this)
+Back-compat: absent treated as ``'deny'`` — no required field; additive and optional
+             (ADR-31 §2.2.5).
+
+Note for Phase 4 (PHP manifest writer)
+---------------------------------------
+PHP must emit exactly ``"mode": "permit"`` (string, lowercase) in the JSON manifest
+entry for each DNSWL feed row.  Block/deny feed entries omit the field entirely
+(or emit ``"mode": "deny"`` — both are equivalent on the Python side).  The field
+must appear inside the per-feed object in ``feeds[]``, NOT in the top-level ``config``
+block.  Example manifest entry:
+
+    {
+      "feed": "MyDNSWL",
+      "group": "AllowFeeds",
+      "format_hint": "plain",
+      "log_flag": "1",
+      "mode": "permit",
+      "raw": "pfb_py_raw/myDNSWL_raw.txt"
+    }
+
+Where / how a permit host enters whiteDB
+-----------------------------------------
+Function : ``build()`` in ``src/usr/local/pkg/pfblockerng/pfb_unbound.py``
+Location : the new ``if feed_row.get("mode") == "permit":`` branch inside the
+           ``for feed_row in manifest.get("feeds", []):`` loop (inserted before the
+           existing ``provenance``/``block_band`` logic).
+
+Flow:
+  1. For each line of the raw feed, skip empty lines, ABP comment/control lines
+     (``!``, ``[``), and ABP anchors (``@@…``, ``||…``) — in v1 every plain host = allow.
+  2. Call ``parse(fmt, stripped)`` to extract the host token (handles plain/hosts/csv:pon
+     formats; returns None for invalid lines).
+  3. Call ``normalise(entry.value)`` to lowercase + validate the domain shape.
+  4. Call ``index_for(feed, group)`` to record provenance (same convention as block entries).
+  5. Insert into ``white_db[domain]`` as::
+
+       {"wildcard": True, "important": False, "band": PRIO_FEED_ALLOW, "index": idx}
+
+  6. Monotonic-widen on collision: if an existing entry has ``band >= PRIO_FEED_ALLOW``
+     (e.g. a band-6 manual whitelist entry), keep the existing higher band entry.
+     ``_white_entry_band(existing) < PRIO_FEED_ALLOW`` → replace; same or higher → keep.
+  7. After the permit loop, ``continue`` to skip the rest of the deny-path logic.
+
+Band asserted: ``PRIO_FEED_ALLOW = 2`` (same as an ABP ``@@||host^`` allow).
+``wildcard=True`` → subdomain-covering (the suffix walk in ``evaluate_domain`` covers
+``sub.example.com`` when ``example.com`` is in whiteDB with ``wildcard=True``).
+
+Provenance tag
+--------------
+Each permit feed's host entry carries an ``"index"`` key (``int``) that maps back to
+``feed_group_index_db[idx]`` → ``{"feed": "<FeedName>", "group": "<GroupName>"}``.
+This is the same provenance convention as block entries; reports can attribute a
+permit allow to its DNSWL feed.
+
+Host extraction
+---------------
+Host extraction reuses the existing ``parse(fmt, raw_line)`` → ``normalise(entry.value)``
+call path (not ``_dnsbl_parse_abp_line()``):
+  - ``parse()`` handles all existing plain/hosts/csv:pon/abp formats.
+  - ``normalise()`` lowercases and validates the domain shape.
+  - ABP directives inside a permit feed (``@@||``, ``||``, ``!``, ``[Adblock``) are
+    skipped BEFORE ``parse()`` via the stripped-prefix guards (v1: every plain host = allow;
+    ABP directives are not honoured inside permit feeds).
+
+Test file and counts
+--------------------
+File  : ``tests/test_adr31_permit_build.py`` — 10 tests, 5 classes.
+Oracle: ``tests/test_adr31_precedence_oracle.py`` — 9 tests (unchanged, all still pass).
+
+Test classes and their contracts:
+
+  TestPermitFeedOverridesBlockFeed (3 tests)
+    test_block_only_domain_is_blocked_before_permit
+      BEFORE state: block-only feed → domain IS blocked (pins band-1 block semantics).
+    test_permit_feed_resolves_blocked_domain
+      AFTER state: block + permit feed → domain RESOLVES (band 2 >= band 1); asserts
+      whiteDB entry at PRIO_FEED_ALLOW (band 2), wildcard=True.
+    test_permit_feed_host_has_feed_group_index
+      Provenance: permit entry carries ``index`` key → feed_group_index_db[idx] maps
+      to the permit feed's feed/group name.
+
+  TestManualSovereignOverPermit (2 tests)
+    test_permit_allow_resolves_block_before_manual
+      BEFORE state: block + permit ⇒ band-2 allow in whiteDB.
+    test_manual_whitelist_not_downgraded_by_permit
+      AFTER state: block + permit + manual whitelist ⇒ band-6 entry stays at band 6
+      (monotonic-widen — permit cannot downgrade a higher-band entry).
+
+  TestPermitSubdomainCoverage (2 tests)
+    test_permit_subdomain_before_state
+      BEFORE state: sub.domain blocked with no permit feed.
+    test_permit_entry_covers_subdomain
+      AFTER state: permit entry for parent domain covers the subdomain (wildcard=True
+      + suffix walk); both parent and sub resolve.
+
+  TestNonListedUnaffectedByPermit (1 test)
+    test_non_listed_host_still_resolves
+      Domain in neither block nor permit feed resolves normally (is_found=False).
+
+  TestDenyModeByteIdentical (2 tests)
+    test_no_permit_feed_builds_byte_identical
+      No permit feed → white_db empty, block entry at band 1, domain blocked.
+    test_explicit_deny_mode_unchanged
+      Explicit mode='deny' behaves identically to absent mode: block path used, no
+      allow side-effect.
+
+Gate results
+------------
+- ``python -m pytest tests/test_adr31_permit_build.py``: 10 passed
+- ``python -m pytest tests/test_adr31_precedence_oracle.py``: 9 passed (unchanged)
+- ``python -m pytest``: 1904 passed (1894 baseline + 9 Phase-1 + 1 other + 10 Phase-2)
+- ``ruff check .``: clean
+- ``ruff format --check .``: clean
+- ``mypy tests/test_adr31_permit_build.py``: Success: no issues found
+
+Files changed
+-------------
+src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  - Added ``mode='permit'`` branch in ``build()`` inside the ``for feed_row in
+    manifest.get("feeds", []):`` loop (before the existing provenance/block_band logic).
+  - The branch skips ABP/comment lines, calls parse()+normalise() for host extraction,
+    calls index_for(feed,group) for provenance, and inserts into white_db at PRIO_FEED_ALLOW
+    (band 2) with wildcard=True, using monotonic-widen on collision.
+  - A ``continue`` at the end of the permit branch skips the deny/block path for that feed.
+
+tests/test_adr31_permit_build.py
+  - New: 10 tests across 5 classes (see above).
+
+Absent/deny build byte-identical check
+---------------------------------------
+The Phase-1 oracle (all 9 tests) remains green on the modified production code,
+confirming that manifests without ``mode='permit'`` entries build byte-identically.
+The ``test_no_permit_feed_builds_byte_identical`` and ``test_explicit_deny_mode_unchanged``
+tests in Phase 2 additionally assert this directly.
+
+DORMANT status
+--------------
+This branch is DORMANT: no PHP code emits ``mode='permit'`` yet (Phase 4 adds that).
+The permit-mode build path is implemented and tested off-box but has no live producer
+until Phase 4 wires the PHP manifest writer.
+
+Go-ahead for Phase 3
+--------------------
+The permit-mode build branch is implemented and pinned:
+  - ``mode='permit'`` routes hosts to whiteDB at band 2 (wildcard=True).
+  - absent/deny builds are byte-identical (Phase-1 oracle still passes).
+  - All 10 Phase-2 tests and 9 Phase-1 oracle tests are green.
+  - Linters (ruff check, ruff format, mypy) are clean.
+
+Phase 3 may now proceed (PHP manifest writer changes, per the ADR).
