@@ -324,7 +324,7 @@ $options_alexa_inclusion	= [	'ae' => 'AE',
 					'za' => 'ZA'
 				];
 
-$options_action			= [ 'Disabled' => 'Disabled', 'Deny_Inbound' => 'Deny Inbound', 'Deny_Outbound' => 'Deny Outbound', 'Deny_Both' => 'Deny Both', 'Alias_Deny' => 'Alias Deny' ];
+$options_action			= [ 'Disabled' => 'Disabled', 'Deny_Inbound' => 'Deny Inbound', 'Deny_Outbound' => 'Deny Outbound', 'Deny_Both' => 'Deny Both', 'Alias_Deny' => 'Alias Deny', 'Alias_Native' => 'Alias Native' ];
 
 $options_aliaslog		= [ 'enabled' => 'Enable', 'disabled' => 'Disable' ];
 
@@ -2959,9 +2959,16 @@ $list_action_text = 'Default: <strong>Disabled</strong>
 				still allowing <u>deliberate</u> outgoing sessions to be created in the other direction.</li>
 				</ul>
 
-				<strong><u>\'Alias Deny\' Rule:</u></strong><br />
-				<strong>\'Alias Deny\'</strong> rules create an <a href="/firewall_aliases.php">alias</a> for the list (and do nothing else).
-				This enables a pfBlockerNG list to be used by name, in any firewall rule or pfSense function, as desired.
+				<strong><u>\'Alias\' Rules:</u></strong><br />
+				\'Alias\' rules create an <a href="/firewall_aliases.php">alias</a> for the list without adding any firewall rules.
+				 This enables a pfBlockerNG list to be used by name, in any firewall rule or pfSense function, as desired.<br />
+
+				<ul>
+				<li><strong>Alias Deny</strong> - the IPs are added to the alias and can use the De-Duplication and Reputation
+				processes (if configured).</li>
+				<li><strong>Alias Native</strong> - the IPs are kept in their Native format without any modifications
+				(De-Duplication and Reputation are bypassed).</li>
+				</ul>
 			</div>';
 
 $section->addInput(new Form_Select(
