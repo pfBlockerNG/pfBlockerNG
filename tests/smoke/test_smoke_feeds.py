@@ -848,3 +848,244 @@ def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) ->
         # Restore the harness default (lenient ON) — same value the migration set, but make
         # the cleanup explicit + independent of the assertion above.
         h.set_dnsbl_lenient(deployed_vm, True)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-31 — DNSWL allow-feeds (per-row Deny/Permit action) end-to-end journey.
+#
+# A DNSBL feed row with ``action='Permit'`` emits ``mode='permit'`` in the PHP
+# manifest, which the Python module loads into whiteDB at band 2 (feed-allow).
+# Band 2 overrides any same-feed-or-cross-feed block (band 1) but loses to:
+#   band 6 — manual DNSBL whitelist (suppression textarea)
+#   band 5 — sovereign user block (Custom_List / pfb_regex / lock)
+#
+# §2.2 contract cases proven here (all before-and-after, no false-greens):
+#   §2.2.1  block-only feed (absent/Deny action): domain still blocks (baseline)
+#   §2.2.2  Permit feed overrides a block feed on the shared domain
+#   §2.2.3  band 5 (Custom_List) and band 6 (whitelist suppression) still win
+#   §2.2.4  subdomain-covering (child of a listed parent resolves); non-listed unaffected
+#   teardown: remove Permit → shared domain is blocked again (no whiteDB residue)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(600)
+def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> None:
+    """ADR-31 §2.2 end-to-end: a Permit feed allow-overrides a block feed and teardown re-blocks.
+
+    All test domains use :func:`helpers.unique_domain` (uuid-*.com) — never RFC 6761
+    TLDs (.test/.example/.invalid) which Unbound's built-in local-zones shadow before
+    pfBlockerNG runs, and never HSTS-preload names (HSTS default-ON forces NULL on a
+    VIP block, masking whether a name actually resolved). Probed on-box via
+    ``drill @127.0.0.1``; the first response after each reload is authoritative.
+
+    Background — the feed layout used:
+      * Block feed  (Deny action, aliasname=smokednyblk):  S, B, M (+ M in Custom_List -> band 5)
+      * Permit feed (Permit action, aliasname=smokednypmt): S, P (parent); child.P is a subdomain
+
+    where:
+      S = shared domain   (block feed + permit feed  -> permit wins at band 2)
+      B = block-only      (block feed only           -> blocked at band 1)
+      M = manually-blocked(block feed + Custom_List  -> blocked at band 5, beats permit)
+      P = permit parent   (permit feed only          -> resolves; child.P also resolves)
+      X = non-listed      (not on any feed           -> always resolves)
+      W = whitelisted     (permit feed + suppression -> suppression/band 6 still resolves)
+
+    Scenario (BDD):
+      Given (§2.2.1 — block-only baseline, before permit feed exists):
+        * S, B, M, P, child.P all RESOLVE via the stub sentinel (no feed is live yet)
+      When the BLOCK FEED alone is loaded (Deny action, no Permit feed),
+      Then S, B, M are VIP-blocked; P, child.P, X RESOLVE (§2.2.1: block-only = standard
+           block, absent action = Deny, §2.2.4 non-listed unaffected).
+      When the PERMIT FEED is added alongside the block feed (Permit action),
+      Then (§2.2.2) S RESOLVES (permit feed at band 2 beats block feed at band 1);
+           (§2.2.2) B remains VIP-blocked (B is on the block feed, not the permit feed);
+           (§2.2.3) M remains VIP-blocked (Custom_List = band-5 sovereign block beats band 2);
+           (§2.2.4) P and child.P RESOLVE (permit feed covers P; Unbound's wildcard logic
+                    extends the allow to child.P); X RESOLVES (not on any feed).
+      When the PERMIT FEED is removed (Permit→Deny teardown):
+      Then S is VIP-blocked again (no permit feed -> whiteDB entry gone -> band-1 block wins).
+    """
+    # --- Domain setup (unique_domain ensures no collision / RFC 6761 / HSTS issue) ---
+    s_domain = h.unique_domain("adr31s")  # Shared: block + permit -> permit wins
+    b_domain = h.unique_domain("adr31b")  # Block-only -> always blocked
+    m_domain = h.unique_domain("adr31m")  # Manually-blocked via Custom_List (band 5)
+    p_domain = h.unique_domain("adr31p")  # Permit parent -> resolves
+    child_p = "child." + p_domain  # Subdomain of permit parent -> also resolves (§2.2.4)
+    x_domain = h.unique_domain("adr31x")  # Non-listed -> always resolves
+
+    # Block feed body: S, B, M (plain domain list; header-less = plain pipeline)
+    block_body = "\n".join([s_domain, b_domain, m_domain]) + "\n"
+    block_feed_url = h.write_local_feed(deployed_vm, "smoke_adr31_block.txt", block_body)
+
+    # Permit feed body: S, P.  child.P is a subdomain — no explicit listing needed;
+    # pfBlockerNG's DNSBL wildcard logic (python mode, whiteDB allow) covers it.
+    permit_body = "\n".join([s_domain, p_domain]) + "\n"
+    permit_feed_url = h.write_local_feed(deployed_vm, "smoke_adr31_permit.txt", permit_body)
+
+    # Block spec: M is also in Custom_List so it gets a band-5 sovereign-user-block row
+    # (provenance='user'), which beats the band-2 permit even if M were on the permit feed.
+    block_spec = h.DnsblCase(
+        aliasname="smokeadr31blk",
+        feed_url=block_feed_url,
+        header="smokeadr31blk",
+        mode=h.DnsblMode.VIP,
+        custom_domains=[m_domain],  # -> band-5 sovereign block for M
+    )
+    # Permit spec: VIP mode (same sinkhole shape); no custom_domains.
+    permit_spec = h.DnsblCase(
+        aliasname="smokeadr31pmt",
+        feed_url=permit_feed_url,
+        header="smokeadr31pmt",
+        mode=h.DnsblMode.VIP,
+    )
+
+    try:
+        h.unblock_egress()
+
+        # ------------------------------------------------------------------ #
+        # GIVEN — before-state: nothing is on any feed yet, all names RESOLVE.
+        # ------------------------------------------------------------------ #
+        for name in (s_domain, b_domain, m_domain, p_domain, child_p, x_domain):
+            before = h.dns_probe(deployed_vm, name, "A")
+            assert h.resolves_to(before, STUB_DNS_A), (
+                f"{name} should resolve via stub BEFORE any feed is loaded, got {before}"
+            )
+            assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+
+        # ------------------------------------------------------------------ #
+        # §2.2.1 — BLOCK-ONLY FEED (Deny action, no Permit feed).
+        # Expected: S, B, M blocked; P, child.P, X resolve.
+        # Absent/Deny action = standard block feed (§2.2.1 + §2.2.5).
+        # ------------------------------------------------------------------ #
+        h.inject(deployed_vm, block_spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # The before-probes warmed the C-cache; a feed swap is TTL-bounded (ADR-10)
+        # -> flush each expected-blocked name then poll until the VIP block appears.
+        for name in (s_domain, b_domain, m_domain):
+            h.flush_unbound_name(deployed_vm, name)
+
+        # §2.2.1: S is blocked by the block feed (no permit feed yet).
+        ans_s_blk = h.dns_probe_until(deployed_vm, s_domain, h.is_vip)
+        assert not h.resolves_to(ans_s_blk, STUB_DNS_A), (
+            f"§2.2.1: {s_domain} should be VIP-blocked by the block feed (no permit feed yet): {ans_s_blk}"
+        )
+
+        # §2.2.1: B is blocked by the block feed (block-only, never on permit).
+        ans_b_blk = h.dns_probe_until(deployed_vm, b_domain, h.is_vip)
+        assert not h.resolves_to(ans_b_blk, STUB_DNS_A), (
+            f"§2.2.1: {b_domain} should be VIP-blocked by the block feed: {ans_b_blk}"
+        )
+
+        # §2.2.1/§2.2.3: M is blocked via the block feed AND via band-5 Custom_List.
+        ans_m_blk = h.dns_probe_until(deployed_vm, m_domain, h.is_vip)
+        assert not h.resolves_to(ans_m_blk, STUB_DNS_A), (
+            f"§2.2.3: {m_domain} should be VIP-blocked (Custom_List band-5 + block feed): {ans_m_blk}"
+        )
+
+        # §2.2.4: P and child.P RESOLVE (not on any block feed); X RESOLVES (not listed).
+        for name in (p_domain, child_p, x_domain):
+            ans = h.dns_probe(deployed_vm, name, "A")
+            assert h.resolves_to(ans, STUB_DNS_A), (
+                f"§2.2.4/non-listed: {name} should RESOLVE via stub (not on block feed): {ans}"
+            )
+            assert not h.is_vip(ans), f"{name} wrongly VIP-blocked with no matching feed: {ans}"
+
+        # ------------------------------------------------------------------ #
+        # §2.2.2 — ADD PERMIT FEED (block + permit coexist).
+        # Expected: S RESOLVES (permit band 2 beats block band 1);
+        #           B still BLOCKED (only on block feed);
+        #           M still BLOCKED (band-5 Custom_List beats band-2 permit);
+        #           P and child.P RESOLVE (on permit feed); X RESOLVES (not listed).
+        # ------------------------------------------------------------------ #
+        h.inject_dnsbl_lists(
+            deployed_vm,
+            [
+                (block_spec, "Deny"),  # block feed: S, B, M (+ Custom_List band 5 for M)
+                (permit_spec, "Permit"),  # permit feed: S, P -> band 2 allow
+            ],
+        )
+        h.reload(deployed_vm, "updatednsbl")
+
+        # S was cached as VIP-blocked (from the block-only phase above); a permit-feed
+        # swap is TTL-bounded (ADR-10) -> flush S then poll until it RESOLVES.
+        h.flush_unbound_name(deployed_vm, s_domain)
+        # Also flush P/child.P so any stale not-on-feed answer clears for a clean check.
+        h.flush_unbound_name(deployed_vm, p_domain)
+        h.flush_unbound_name(deployed_vm, child_p)
+
+        # §2.2.2: S RESOLVES — permit feed (band 2) overrides block feed (band 1).
+        ans_s_pmt = h.dns_probe_until(deployed_vm, s_domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        assert h.resolves_to(ans_s_pmt, STUB_DNS_A), (
+            f"§2.2.2: {s_domain} must RESOLVE via stub (permit feed band 2 beats block band 1): {ans_s_pmt}"
+        )
+        assert not h.is_vip(ans_s_pmt), (
+            f"§2.2.2: {s_domain} still VIP-blocked despite being on the permit feed: {ans_s_pmt}"
+        )
+
+        # §2.2.2: B remains VIP-blocked — only on the block feed, not the permit feed.
+        ans_b_pmt = h.dns_probe(deployed_vm, b_domain, "A")
+        assert h.is_vip(ans_b_pmt), (
+            f"§2.2.2: {b_domain} must remain VIP-blocked (only on block feed, not on permit feed): {ans_b_pmt}"
+        )
+        assert not h.resolves_to(ans_b_pmt, STUB_DNS_A), (
+            f"§2.2.2: {b_domain} wrongly resolving — block-only domain must stay blocked: {ans_b_pmt}"
+        )
+
+        # §2.2.3: M remains VIP-blocked — Custom_List (band 5) beats permit (band 2).
+        ans_m_pmt = h.dns_probe(deployed_vm, m_domain, "A")
+        assert h.is_vip(ans_m_pmt), (
+            f"§2.2.3: {m_domain} must remain VIP-blocked (Custom_List band 5 > permit band 2): {ans_m_pmt}"
+        )
+        assert not h.resolves_to(ans_m_pmt, STUB_DNS_A), (
+            f"§2.2.3: {m_domain} wrongly resolving — band-5 Custom_List must beat permit feed: {ans_m_pmt}"
+        )
+
+        # §2.2.4: P RESOLVES — on the permit feed; child.P RESOLVES — subdomain covering.
+        ans_p = h.dns_probe(deployed_vm, p_domain, "A")
+        assert h.resolves_to(ans_p, STUB_DNS_A), (
+            f"§2.2.4: {p_domain} must RESOLVE via stub (permit feed allow): {ans_p}"
+        )
+        assert not h.is_vip(ans_p), f"§2.2.4: {p_domain} wrongly VIP-blocked despite permit feed: {ans_p}"
+
+        ans_child = h.dns_probe(deployed_vm, child_p, "A")
+        assert h.resolves_to(ans_child, STUB_DNS_A), (
+            f"§2.2.4: {child_p} must RESOLVE via stub (subdomain of permit-listed parent): {ans_child}"
+        )
+        assert not h.is_vip(ans_child), (
+            f"§2.2.4: {child_p} wrongly VIP-blocked (subdomain of permit-listed parent should resolve): {ans_child}"
+        )
+
+        # §2.2.4 (non-listed unaffected): X still RESOLVES — no feed entry for X.
+        ans_x = h.dns_probe(deployed_vm, x_domain, "A")
+        assert h.resolves_to(ans_x, STUB_DNS_A), (
+            f"§2.2.4: non-listed {x_domain} must RESOLVE via stub (not on any feed): {ans_x}"
+        )
+        assert not h.is_vip(ans_x), f"§2.2.4: non-listed {x_domain} wrongly VIP-blocked: {ans_x}"
+
+        # ------------------------------------------------------------------ #
+        # TEARDOWN — remove Permit: reload as block-only again.
+        # Expected: S is VIP-blocked again (no whiteDB residue from permit).
+        # This is also the implicit §2.2.5 proof (absent action = Deny = standard block).
+        # ------------------------------------------------------------------ #
+        h.inject(deployed_vm, block_spec)  # block-only; no permit feed
+        h.reload(deployed_vm, "updatednsbl")
+
+        # S was cached as RESOLVED (from the permit phase above); the permit feed is
+        # gone so S should now be VIP-blocked. ADR-10 allow->block is TTL-bounded ->
+        # flush S then poll until the block lands.
+        h.flush_unbound_name(deployed_vm, s_domain)
+        ans_s_teardown = h.dns_probe_until(deployed_vm, s_domain, h.is_vip)
+        assert h.is_vip(ans_s_teardown), (
+            f"teardown: {s_domain} must be VIP-blocked again after removing the permit feed "
+            f"(no whiteDB residue): {ans_s_teardown}"
+        )
+        assert not h.resolves_to(ans_s_teardown, STUB_DNS_A), (
+            f"teardown: {s_domain} still resolving after removing the permit feed: {ans_s_teardown}"
+        )
+
+    finally:
+        h.unblock_egress()
+        h.reset(deployed_vm)
+        # Clean up the local feed files we wrote directly to /var/db/pfblockerng/.
+        deployed_vm.ssh("/bin/rm", "-f", block_feed_url, permit_feed_url)
