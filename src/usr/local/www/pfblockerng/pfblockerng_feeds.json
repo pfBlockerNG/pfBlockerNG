@@ -143,6 +143,7 @@
 			"cron":		"01hour",
 			"feeds": [
 				{
+					"status":	"discontinued",
 					"feed":		"Alienvault",
 					"website":	"https://www.alienvault.com/",
 					"contact":	"https://www.alienvault.com/support",
