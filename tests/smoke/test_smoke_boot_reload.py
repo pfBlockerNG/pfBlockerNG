@@ -13,10 +13,22 @@ alias tables and does NOT call ``filter_configure()``. The only boot-time alias
 handling is the ``earlyshellcmd`` running ``pfblockerng.sh aliastables``, which
 restores from the archive for RAMDISK/``md`` installs only (``pfblockerng.sh:202``).
 
-This test pins the END STATE the fix must guarantee: after a reboot, the IP alias
-table is still populated AND a pf rule still references it. It runs on the smoke
-VM's standard (non-ramdisk) install — the lowest-risk reboot scenario — and is the
-empirical probe for which half of the contract is actually lost there.
+Two legs, because the install kind changes what survives a reboot:
+
+* **standard** — a normal disk install. The ``pfB_*`` alias DEFINITION lives in
+  ``config.xml`` and the urltable backing file persists on disk, so pfSense core's
+  boot ``filter_configure`` may repopulate the table independently of pfBlockerNG.
+* **ramdisk** — ``<system><use_mfs_tmpvar>`` enabled, so /var is wiped on boot. This
+  is the reporter's scenario: the earlyshellcmd restores the aliastables archive,
+  then the pfBlockerNG boot short-circuit neither rebuilds nor reloads the filter.
+
+Both legs pin the SAME end state the fix must guarantee: after a reboot, the IP
+alias table is still populated AND a pf rule still references it.
+
+The slow work (inject → reload → reboot) runs in the module fixture, NOT the test
+body: the smoke workflow caps the test BODY at 30s (``--timeout=30``,
+``timeout_func_only=true``), but fixtures are exempt — same reason the ~2 min
+``deploy`` fixture is. The test body is pure assertions on the captured observation.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``) AND from
 ``-m smoke`` (it carries its own ``reboot`` marker, because rebooting the shared
@@ -32,6 +44,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import pytest
 
@@ -39,6 +52,20 @@ from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.reboot
+
+
+@dataclass
+class RebootObservation:
+    """The alias/rule state captured before and after one reboot, for one leg."""
+
+    ramdisk: bool
+    fed_ip: str
+    alias: str
+    before_members: list[str]
+    before_rule: bool
+    archive_present: bool
+    after_members: list[str]
+    after_rule: bool
 
 
 @pytest.fixture(scope="module")
@@ -60,10 +87,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     try:
         yield smoke_vm
     finally:
-        # Rebuild the aliases the reboot may have dropped, so the box is left in a
-        # known-good state for any later dispatch on the same image. Best-effort —
-        # never mask the test result.
+        # Leave RAM disks OFF and rebuild the aliases the reboot may have dropped, so
+        # the box is left in a known-good state. Best-effort — never mask the result.
         try:
+            h.set_ramdisk(smoke_vm, False)
             h.reload(smoke_vm, "update")
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
             print(f"[smoke] reboot teardown reload failed (non-fatal): {exc}")
@@ -71,48 +98,85 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         h.collect_host_diagnostics(smoke_vm)
 
 
-def test_ip_alias_and_rule_survive_reboot(deployed_vm: SmokeVM) -> None:
-    """Scenario: a ``pfB_<name>_v4`` Deny alias + its auto rule survive a reboot.
+@pytest.fixture(scope="module", params=[False, True], ids=["standard", "ramdisk"])
+def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> RebootObservation:
+    """Build a Deny IP alias, capture its state, reboot, recapture — once per leg.
 
-    Background:
-        A Deny IP feed builds the ``pfB_<name>_v4`` urltable alias and an auto
-        firewall rule that references it.
-
-    Given the feed is injected and reloaded
-        the alias table contains the fed IP AND a pf rule references the alias.
-    When the guest is rebooted (the boot-time sync path runs)
-        ``sync_package_pfblockerng()`` takes the ``is_platform_booting()`` branch.
-    Then the alias table is STILL populated AND a rule STILL references it.
-
-    The before-state is asserted first (proving the alias/rule WERE present), so a
-    post-reboot failure proves the reboot CAUSED the loss — the #334 reproduction.
-    On current ``devel`` this is expected to fail; the fix makes it pass.
+    All VM I/O (inject → reload → reboot → recapture) lives HERE so the 30s test-body
+    timeout never covers the ~1 min reboot. ``params`` runs ``standard`` first (pristine
+    install) then ``ramdisk`` (enables ``use_mfs_tmpvar``, which the next reboot honours).
     """
     vm = deployed_vm
+    ramdisk: bool = request.param
     fed_ip = "198.51.100.77"  # RFC 5737 TEST-NET-2 (inert documentation IP)
-    spec = h.IpCase(aliasname="Cont334", feed_url="", action="Deny_Both", family="v4")
-    spec.feed_url = h.write_local_feed(vm, "issue334_deny.txt", f"{fed_ip}\n")
+    spec = h.IpCase(aliasname=f"Cont334{'ram' if ramdisk else 'std'}", feed_url="", action="Deny_Both", family="v4")
 
-    # --- Given: inject + reload build the alias table and the referencing rule ---
+    # Given: (ramdisk leg) enable RAM disks BEFORE the reload so the reload registers
+    # the earlyshellcmd and archives the aliastables under use_mfs_tmpvar.
+    if ramdisk:
+        h.set_ramdisk(vm, True)
+
+    spec.feed_url = h.write_local_feed(vm, f"issue334_{'ram' if ramdisk else 'std'}.txt", f"{fed_ip}\n")
     h.inject(vm, spec)
     h.reload(vm, "update")
 
     before_members = h.wait_pfctl_table(vm, spec.alias)
-    assert h.member_present(before_members, fed_ip), (
-        f"precondition: {spec.alias} must contain {fed_ip} after reload, got {before_members!r}"
-    )
-    assert h.rule_references(vm, spec.alias), f"precondition: a pf rule must reference {spec.alias} after reload"
+    before_rule = h.rule_references(vm, spec.alias)
+    archive_present = ramdisk and vm.ssh("test", "-f", h.ALIASARCHIVE).returncode == 0
 
-    # --- When: reboot the guest, exercising the boot-time sync short-circuit ---
+    # When: reboot the guest, exercising the boot-time sync short-circuit (and, on the
+    # ramdisk leg, the /var wipe + earlyshellcmd archive restore).
     h.reboot_vm(vm)
 
-    # --- Then: the alias table + its rule reference must STILL be present ---
+    # Then (captured): the alias table + its rule reference, post-reboot.
     after_members = h.wait_pfctl_table(vm, spec.alias)
-    assert h.member_present(after_members, fed_ip), (
-        f"issue #334: {spec.alias} lost member {fed_ip} after reboot — the boot path "
-        f"did not rebuild the IP alias table; got {after_members!r}"
+    after_rule = h.rule_references(vm, spec.alias)
+
+    return RebootObservation(
+        ramdisk=ramdisk,
+        fed_ip=fed_ip,
+        alias=spec.alias,
+        before_members=before_members,
+        before_rule=before_rule,
+        archive_present=archive_present,
+        after_members=after_members,
+        after_rule=after_rule,
     )
-    assert h.rule_references(vm, spec.alias), (
-        f"issue #334: no pf rule references {spec.alias} after reboot — the boot path "
-        "did not reload the firewall filter"
+
+
+def test_ip_alias_and_rule_survive_reboot(reboot_observation: RebootObservation) -> None:
+    """Scenario: a ``pfB_<name>_v4`` Deny alias + its auto rule survive a reboot.
+
+    Given a Deny IP feed is injected and reloaded
+        the alias table contains the fed IP AND a pf rule references the alias.
+    When the guest is rebooted (the boot-time sync path runs)
+    Then the alias table is STILL populated AND a rule STILL references it.
+
+    The before-state is asserted first (proving the alias/rule WERE present), so a
+    post-reboot failure proves the reboot CAUSED the loss — the #334 reproduction.
+    On current ``devel`` at least the ramdisk leg is expected to fail; the fix makes
+    both legs pass.
+    """
+    obs = reboot_observation
+    leg = "ramdisk" if obs.ramdisk else "standard"
+
+    # --- Given (before reboot): the alias table + rule were built ---
+    assert h.member_present(obs.before_members, obs.fed_ip), (
+        f"precondition [{leg}]: {obs.alias} must contain {obs.fed_ip} after reload, got {obs.before_members!r}"
+    )
+    assert obs.before_rule, f"precondition [{leg}]: a pf rule must reference {obs.alias} after reload"
+    if obs.ramdisk:
+        assert obs.archive_present, (
+            f"precondition [ramdisk]: {h.ALIASARCHIVE} must exist pre-reboot (the earlyshellcmd "
+            "restore source) — else the ramdisk path is not actually exercised"
+        )
+
+    # --- Then (after reboot): the alias table + its rule must STILL be present ---
+    assert h.member_present(obs.after_members, obs.fed_ip), (
+        f"issue #334 [{leg}]: {obs.alias} lost member {obs.fed_ip} after reboot — "
+        f"the boot path did not rebuild the IP alias table; got {obs.after_members!r}"
+    )
+    assert obs.after_rule, (
+        f"issue #334 [{leg}]: no pf rule references {obs.alias} after reboot — "
+        "the boot path did not reload the firewall filter"
     )
