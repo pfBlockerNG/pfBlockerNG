@@ -1,6 +1,6 @@
 # ADR-30: Scheduled (calendar-boundary) reset of pfBlockerNG report logs
 
-- **Status:** **Proposed** (2026-06-19)
+- **Status:** **Implemented (pending live-VM smoke)** (2026-06-20)
 - **Date:** 2026-06-19
 - **Branch:** `adr/30-scheduled-log-reset` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
@@ -231,3 +231,14 @@ current period*.
 chroot/ownership handling (it should — `: > file` truncates in place); or (b) the feature cannot be
 made genuinely opt-in/zero-default-impact. (The log-set question is **settled**: a per-log schedule
 over the full `pfb_log_mgmt()` set, mirroring the per-log line cap — issue #341 maintainer decision.)
+
+### Maintainer acceptance steps (live-VM fan-out — dispatched via `smoke-fanout.yml`)
+
+Phase 5 lands the smoke suite (`tests/smoke/test_log_rotate.py`, 4 cases, `pytest.mark.smoke`).
+Status flips to **Accepted** when `smoke-fanout.yml` runs green on the merged `devel` tip against
+the full CE + Plus matrix. Steps to verify after the PR merges:
+
+1. Dispatch `smoke-fanout.yml` (no inputs; reads `ci-metadata` version matrix).
+2. Confirm all legs green (`all-smoke-passed` AND-gate).
+3. The manual checklist (§7 above) covers real calendar-rollover paths that CI cannot simulate —
+   run it post-accept at the next natural daily boundary.
