@@ -1,0 +1,70 @@
+================================================================================
+PHASE 5 PROMPT — Log Settings UI: enable + facility + severity controls
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md   (read §2.1, §4 first)
+================================================================================
+
+ROLE
+Phase 5 of ADR-38 on the implementation branch. Adds the operator controls. One
+commit, pushed on the branch.
+
+WHY THIS PHASE EXISTS
+The feature is wired (Phases 3-4) but only reachable by editing config.xml. This
+phase exposes the master toggle + facility + severity in the Log Settings section so
+operators can turn it on and pick a facility their SIEM expects.
+
+REQUIRED READING
+- FIRST, read RESULTS/04_Results.txt — confirm both legs emit and honour the toggle.
+  If missing, STOP and report.
+- ADR §2.1 (the three settings + vocabularies + defaults: off / local6 / notice),
+  §4 (acceptance), §2.3 (remote = pfSense "Everything" — say so in help text).
+- src/usr/local/www/pfblockerng/pfblockerng_general.php — the Log Settings section
+  (the log_max_* / log_rotate_* controls); how it loads/saves $pfb['gconfig'] and now
+  reads through PfbConfig; the Form_Checkbox / Form_Select helpers used nearby.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — the registered keys + the
+  token→constant map (for the select option lists).
+- CLAUDE.md → "Web UI help text" (brief, match neighbours); ui_render Tier-A gate.
+- tests/smoke/ui/ — how ui_render asserts a page-specific marker + no php_error.log.
+
+ACTION PLAN
+1. In the Log Settings section add:
+   - a Form_Checkbox `log_syslog` ("Send security events to System Log").
+   - a Form_Select `log_syslog_facility` (the full log_local0..7 + daemon/user/auth…
+     vocabulary, default local6), shown/relevant when enabled.
+   - a Form_Select `log_syslog_priority` (log_emerg…log_debug, default notice).
+   Load current values via PfbConfig::read(); save via PfbConfig::write() on POST
+   (then the existing write_config flush) — never raw config_*_path for these keys.
+2. Help text (terse, neighbour-matching): note that records are tagged `pfblockerng`
+   in key=value form to a dedicated facility, and that REMOTE delivery uses pfSense
+   Status > System Logs > Settings > Remote Logging ("Everything"); default facility
+   local6.
+3. Optional progressive-disclosure JS to disable the two selects when unchecked —
+   only if it matches the page's existing pattern; otherwise leave them always shown.
+
+CONSTRAINTS
+- PHP 8.3, tabs, uppercase TRUE/FALSE. Registered keys go through PfbConfig only
+  (RequireConfigGateway). Match the surrounding control + help-text style; do not
+  out-prose the neighbours.
+- Do NOT change the emit logic or defaults; UI only.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  → clean (gateway happy)
+- vendor/bin/phpstan  → clean ; php -l on the page
+- ui_render (Tier A): the General page returns 200, body free of Fatal/Parse/Warning/
+  Notice/Uncaught, the new controls present, and no new php_error.log line.
+  Run: python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+  (needs SMOKE_ADMIN_PASSWORD; else it SKIPs — note that in the handoff).
+- diff-read: the three controls load/save through PfbConfig with correct defaults.
+
+EXPECTED RESULT
+Firewall > pfBlockerNG > General > Log Settings shows the enable checkbox + facility +
+severity selects; saving round-trips through PfbConfig; the page renders clean.
+
+COMMIT (single)
+    pfblockerng: add syslog export controls to Log Settings (ADR-38 P5)
+Push on the branch.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/05_Results.txt`
+Record: the control ids + help wording; whether progressive-disclosure JS was added;
+the ui_render result (or SKIP reason); verification numbers. Carry the ADR-RESUME
+sentinel (next-phase=6) if pinned. Go-ahead for Phase 6.
