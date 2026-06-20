@@ -8465,6 +8465,61 @@ function pfb_collect_localhosts() {
 }
 
 
+// Resolve a filter.log Tracker ID to a pfBlockerNG rule.
+//
+// Returns TRUE when $tracker is a known pfB rule whose type matches $type (caller
+// should process the log line). Returns FALSE when the tracker is a known non-pfB
+// ('other') tracker or could not be resolved after retries (caller should skip).
+//
+// $rule_list is updated in-place when a reparse is triggered.
+// $reparse   : callable() => array  — returns a fresh rule list (production: pfb_filterrules).
+// $sleeper   : callable(int) => void — sleep shim (injectable for tests; null => builtin sleep).
+// $on_reparse: callable() => void   — called after each reparse so the daemon can refresh
+//             its $pfb_local / $pfb_localsub / $local_hosts variables; null => no callback.
+function pfb_resolve_tracker(
+	array &$rule_list,
+	string $tracker,
+	string $type,
+	int &$max_retries,
+	callable $reparse,
+	?callable $sleeper = null,
+	?callable $on_reparse = null
+): bool {
+	if ($sleeper === null) {
+		$sleeper = 'sleep';
+	}
+
+	for ($retries = 1; $retries <= 5; $retries++) {
+
+		// Skip known non-pfBlockerNG Tracker IDs
+		if (isset($rule_list['other'][$tracker])) {
+			return FALSE;
+		}
+
+		// Resolved: pfB rule whose type matches
+		if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
+			return TRUE;
+		}
+
+		// Tracker not yet known — collect updated pfctl rule data and refresh daemon locals
+		$rule_list = ($reparse)();
+		if ($on_reparse !== null) {
+			($on_reparse)();
+		}
+
+		if ($retries < 5 && $max_retries < 30) {
+			$max_retries++;
+			($sleeper)(5);
+		} else {
+			return FALSE;
+		}
+	}
+
+	// Unreachable: loop exits via return inside, but satisfy static analysis
+	return FALSE;
+}
+
+
 // Firewall filter.log parser daemon
 function pfb_daemon_filterlog() {
 	global $pfb;
@@ -8616,42 +8671,17 @@ function pfb_daemon_filterlog() {
 			$d = explode(',', $f[$f_pos]);
 
 			// Attempt to find the Tracker ID, if not found wait 5secs for filter_reload
-			$other = FALSE;
 			if (!empty($d[3])) {
-				for ($retries = 1; $retries <= 5; $retries++) {
+				// On reparse: refresh the daemon-local IP/host collections from the box.
+				$pfb_reparse_cb = function () use (&$pfb_local, &$pfb_localsub, &$local_hosts) {
+					$data		= pfb_collect_localip();
+					$pfb_local	= $data[0] ?: array();
+					$pfb_localsub	= $data[1] ?: array();
+					$local_hosts	= pfb_collect_localhosts();
+				};
 
-					// Skip known non-pfBlockerNG Tracker IDs
-					if (isset($rule_list['other'][$d[3]])) {
-						$other = TRUE;
-						break;
-					}
-
-					// Break on pfBlockerNG rule Tracker ID and Rule type (block|permit|match)
-					// If the user switched a manual rule from one type to another, the Tracker ID will stay the same
-					// So this comparison will refresh the data on changes
-					if (isset($rule_list[$d[3]]) && $rule_list[$d[3]]['type'] == $d[6]) {
-						break;
-					}
-
-					// Collect updated pfctl Rule data, Host and local IP data
-					else {
-						$rule_list	= pfb_filterrules();
-						$data		= pfb_collect_localip();
-						$pfb_local	= $data[0] ?: array();
-						$pfb_localsub	= $data[1] ?: array();
-
-						$local_hosts	= pfb_collect_localhosts();
-					}
-
-					if ($retries < 5 && $max_retries < 30) {
-						$max_retries++;
-						sleep(5);
-					} else {
-						$other = TRUE;
-					}
-				}
-
-				if ($other) {
+				// Resolve the Tracker ID — returns TRUE when a matching pfB rule is found.
+				if (!pfb_resolve_tracker($rule_list, $d[3], $d[6], $max_retries, 'pfb_filterrules', null, $pfb_reparse_cb)) {
 					continue;
 				}
 
