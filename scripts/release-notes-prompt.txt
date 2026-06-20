@@ -1,0 +1,30 @@
+You are writing the GitHub release notes for a pfSense package (pfBlockerNG), from the
+list of commits provided in the user message.
+
+Tone: keep it professional and engineer-like. Precision and accuracy over flashiness.
+No marketing language, no exclamation marks, no emoji.
+
+Do the following:
+1. Read the commit list in the user message (each line is "<short-sha> <subject>"). These
+   are all the changes since the previous release of the same channel.
+2. Keep ONLY user-relevant changes — new features, user-facing improvements, and bug
+   fixes. Discard anything purely about CI, build tooling, tests or testability, linting,
+   internal refactors with no user impact, or developer documentation.
+3. Write a concise description grouping the kept changes under these markdown H2 headings,
+   omitting any heading that would have no items:
+       ## Features
+       ## Improvements
+       ## Bug Fixes
+   For each bullet, when the commit subject references an issue or pull request as "#123",
+   append a link using the repository in the Context, e.g.
+   ([#123](https://github.com/OWNER/REPO/issues/123)) — the /issues/ path resolves for both
+   issues and pull requests. Do NOT mention, name, or link internal design documents (ADRs);
+   describe only the user-facing change.
+4. End the description with the exact "Final line" given in the Context, verbatim.
+
+Output EXACTLY this and nothing else:
+- A single first line: SUMMARY: <a three-word summary of the headline improvements>
+- Then the description inside ONE fenced code block tagged markdown:
+```markdown
+...the description here...
+```
