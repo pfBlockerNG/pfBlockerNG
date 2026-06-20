@@ -8614,6 +8614,28 @@ function pfb_collect_localip() {
 		}
 	}
 
+	// Collect runtime IPv6 addresses for inbound/outbound list matching.
+	// Interfaces using a dynamic address mode (track6/dhcp6/SLAAC) store a keyword
+	// in config.xml rather than a literal IPv6 address, so the interface loop above
+	// produces nothing for them.  get_configured_ipv6_addresses() returns the actual
+	// runtime addresses (keyed by friendly interface name) and covers all modes.
+	$pfb_v6 = get_configured_ipv6_addresses();
+	if (!empty($pfb_v6)) {
+		foreach ($pfb_v6 as $iface => $v6addr) {
+			if (!is_ipaddrv6($v6addr)) {
+				continue;
+			}
+			$pfb_local[] = $v6addr;
+			$bits = get_interface_subnetv6($iface);
+			if ($bits !== null && $bits !== '') {
+				$subnet = gen_subnetv6($v6addr, (string) $bits);
+				if (!empty($subnet)) {
+					$pfb_localsub[] = $subnet;
+				}
+			}
+		}
+	}
+
 	// Remove any duplicate IPs
 	if (!empty($pfb_local)) {
 		$pfb_local = array_flip(array_filter(array_unique($pfb_local)));
