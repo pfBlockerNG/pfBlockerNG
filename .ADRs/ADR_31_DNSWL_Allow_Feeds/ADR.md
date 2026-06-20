@@ -9,9 +9,10 @@
     `_resolve_numeric_allow()` (`:5436`), the ABP allow store (`:4700`).
   - `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — the DNSBL feed download/stage loop
     (`:11054-11191`), the manifest writer `pfb_unbound_py_atomic_write()` (`:4784`,
-    `$pfb['unbound_py_sources']` `:108`); reading the new `pfblockerngdnswl/config` section.
-  - `src/usr/local/www/pfblockerng/` — a new DNSWL / Allow-feeds page mirroring the DNSBL feed grid
-    (`pfblockerng_category.php`, `pfblockerng_category_edit.php`, `pfblockerng_dnsbl.php`).
+    `$pfb['unbound_py_sources']` `:108`); reading the new per-row **action** field on the existing
+    `pfblockerngdnsbl/config` rows.
+  - `src/usr/local/www/pfblockerng/pfblockerng_category_edit.php` — a `Deny`/`Permit` action select
+    added to the existing DNSBL feed-row editor (no new page).
   - `tests/` (pytest) + `tests/php/` (PHPUnit) + `tests/smoke/` (ADR-04 live VM, ADR-16 mock feeds).
 - **Target runtime:** Python 3.11+ in Unbound's pythonmod (stdlib only, chrooted at `/var/unbound`);
   PHP 8.3 (pfSense CE 2.8).
@@ -94,8 +95,10 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
   counter false-positives) but the operator's **manual whitelist (band 6)** and manual `$important`
   block (band 5) still win. A remote third-party list can never un-block what the operator
   *explicitly* blocked. Reuses the existing band exactly — no new resolver, no new band.
-- **Config = a separate DNSWL / Allow-feeds section** (`installedpackages/pfblockerngdnswl/config`),
-  a parallel feed grid distinct from the block-feed grid — conceptual clarity over a per-row flag.
+- **Config = a per-row `Deny`/`Permit` action on the existing DNSBL feed rows**
+  (`pfblockerngdnsbl/config`), mirroring the **IP side's per-list `Deny`/`Permit`/`Match` action**
+  (CLAUDE.md "follow the established pattern"). Default `Deny` ⇒ a `permit` row is purely additive;
+  no new config section, no new download loop, **no new shipped page**.
 - **Entry semantics = every host is an allow** (v1). In a `permit` feed every plain / hosts-file /
   `||host^` line yields a **subdomain-covering** allow (like `@@||host^`); ABP `@@` lines and
   block-only directives inside a permit feed are **ignored** (documented). No mixed ABP semantics in
@@ -105,13 +108,13 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
 
 | Area | Decision |
 | --- | --- |
-| **Config section** | New **dynamic** section `installedpackages/pfblockerngdnswl/config`, mirroring `pfblockerngdnsbl/config` row shape (`state`, `url`, `header`, `format`, `custom`). Dynamic per-row list ⇒ **not** in the `PfbConfig` registry (foreign/section-level, like its DNSBL sibling); section-level reads via direct `config_*_path`. Any **new global scalar** (e.g. a master `dnswl_enable` toggle, if added) IS registered through `PfbConfig`. |
-| **Manifest field** | Add **`mode`** to each manifest feed entry: `'deny'` (default, **absent ⇒ deny** — backward-safe) or `'permit'`. The single new value crossing the boundary. |
-| **PHP download/stage** | **Extract** the per-row download+stage+manifest-entry body of the DNSBL loop (`:11054-11191`) into a reusable seam parameterised by section + `mode` (behaviour-preserving for the deny path), then call it for `pfblockerngdnswl/config` rows with `mode='permit'`. Permit rows stage raw feeds under the same `pfb_py_raw` and get a manifest entry with `mode='permit'`. Same download path, same schedule. |
+| **Config field** | A per-row **`action`** field on the existing `pfblockerngdnsbl/config` rows: `Deny` (default / absent) or `Permit`, mirroring the IP-side per-list action. Dynamic per-row key ⇒ **not** in the `PfbConfig` registry (foreign/section-level, like its DNSBL siblings `custom`/`logging`); read via direct `config_*_path`. No new section. |
+| **Manifest field** | Add **`mode`** to each manifest feed entry: `'deny'` (default, **absent ⇒ deny** — backward-safe) or `'permit'`. The single new value crossing the boundary. A `Permit`-action row emits `mode='permit'`. |
+| **PHP download/stage** | The existing DNSBL loop (`:11054-11191`) reads each row's `action`; for a `Permit` row it calls the Phase-3 manifest-row seam with `mode='permit'` (the only structural difference vs a deny row). Permit rows stage raw feeds under the same `pfb_py_raw` / `dnsdir`, on the same download path + schedule. No second loop. |
 | **Python build** | In `dnsbl_build_from_manifest()`, a feed entry with `mode=='permit'` routes **every host line** of its raw feed into `whiteDB` as a **band-2 wildcard allow** (the existing `@@\|\|host^` store/shape at `:4700-4711`), ignoring ABP directives. `mode` absent/`'deny'` ⇒ today's block build, byte-identical. Provenance tags the allow so reports can attribute it. |
 | **Precedence** | **Unchanged resolver.** Permit entries are band 2; `_resolve_numeric_allow()` (`:5436`) already returns `allow_band >= block_band` ⇒ band 2 beats band 1 (block feeds), loses to band 5/6 (manual). No code change to the resolver. |
 | **Subdomain semantics** | Subdomain-covering (`wildcard=True`), matching `@@\|\|host^` — `allow.example.com` permits `example.com` and `*.example.com`. |
-| **UI** | New **DNSWL / Allow Feeds** page mirroring the DNSBL feed grid + row editor (`pfblockerng_category.php` / `_category_edit.php` pattern), wired into the pfBlockerNG menu/tabs. Brief help text stating the band-2 precedence (manual whitelist/blocks still win). |
+| **UI** | A `Deny`/`Permit` **action select** added to the existing DNSBL feed-row editor (`pfblockerng_category_edit.php`) — no new page, no menu/tab/privilege change, nothing new to ship in `pkg-plist`. Brief help text stating the band-2 precedence (manual whitelist/blocks still win). Optionally surface the action in the feed grid column. |
 | **Schedule / cron** | **None added.** Permit feeds download on the existing pfBlockerNG update pass alongside block feeds. |
 
 ### 2.2 Semantics that MUST be preserved (the contract — pin with tests before wiring)
@@ -145,9 +148,12 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
 - **Band 6 (sovereign) for subscribed feeds:** lets a remote third-party list override the
   operator's own manual blocks — a safety inversion. Rejected: the operator's explicit decisions
   must win (issue #324 fork → band 2).
-- **A per-row Deny/Permit flag on the existing DNSBL grid** (instead of a separate section): smaller
-  surface, but conflates two opposite intents in one grid and one set of group actions. Rejected for
-  conceptual clarity (issue #324 fork → separate section).
+- **A separate DNSWL / Allow-feeds section + page** (instead of the per-row action): cleaner
+  conceptual separation, but duplicates the feed grid/editor, the download loop, and — critically —
+  adds **new shipped `.php` pages** that must be registered in `pkg-plist` (an omitted plist entry
+  ships nothing → the page 404s on the box; this bit the first implementation). Rejected: the per-row
+  action mirrors the IP-side `Deny`/`Permit`/`Match` pattern, ships no new file, and is less surface
+  (issue #324 fork → per-row action).
 - **PHP-side allow parsing / a separate allow store:** duplicates the ABP allow machinery that
   already exists in Python (`whiteDB`, band 2). Rejected — reuse it; PHP only stages + flags `mode`.
 
@@ -164,8 +170,8 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
 
 **Negative / risks**
 
-- A new config section + UI page + a Python build branch + manifest field — real surface, contained
-  by mirroring the DNSBL feed grid and by the phasing.
+- A per-row config field + one UI select + a Python build branch + a manifest field — modest surface,
+  contained by riding the existing DNSBL grid/editor/loop and by the phasing.
 - A permit feed **can** un-block domains other block feeds list (by design) — an operator who adds a
   careless allow-list could weaken blocking. Mitigated by band 2 (manual blocks/whitelist still win)
   and called out in help text.
@@ -203,9 +209,9 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
 
 > Each phase is one commit and leaves `python -m pytest` + `vendor/bin/phpunit` green. The early
 > phases are the **behaviour-preserving, test-first groundwork** — pin the precedence contract as an
-> oracle and extract the PHP download seam — *before* the permit build branch and the new section are
-> wired. The Python build branch (Phase 2) is dormant until a manifest actually carries
-> `mode='permit'` (Phase 4); the UI (Phase 5) lands after the engine works.
+> oracle and extract the PHP manifest-row seam — *before* the permit build branch and the per-row
+> action are wired. The Python build branch (Phase 2) is dormant until a manifest actually carries
+> `mode='permit'` (Phase 4); the UI select (Phase 5) lands after the engine works.
 
 ### Phase 1 — Pin the allow-precedence contract (oracle; behaviour-preserving)
 
@@ -238,23 +244,26 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
   omitted when deny — decide and pin). PHPUnit pins the extracted seam's manifest-entry output for a
   deny row. Keep PFBL-01 + `RequireConfigGateway` green.
 
-### Phase 4 — PHP: the DNSWL section + `mode='permit'` wiring
+### Phase 4 — PHP: the per-row `Permit` action → `mode='permit'` wiring
 
-- Prompt: `04_Php_Dnswl_Section.txt`
-- Read `installedpackages/pfblockerngdnswl/config` rows, download/stage them via the Phase-3 seam
-  with `mode='permit'`, emit manifest entries with `mode='permit'`. Register any new **global scalar**
-  (e.g. a `dnswl_enable` master toggle) through `PfbConfig` (registry + sniff `$registeredPaths` +
-  `CfgGatewayTest`/`RollbackContractTest`); the per-row section stays on direct `config_*_path`.
-  Feed header/url validation reuses the input-handling contract (PFBL-01 green). PHPUnit: a permit
-  row produces a `mode='permit'` manifest entry; **this connects Phase 2's dormant branch**.
+- Prompt: `04_Php_Permit_Action.txt`
+- In the existing DNSBL feed loop (`pfblockerng.inc:11054-11191`), read each row's per-row `action`
+  (`Deny` default / `Permit`); for a `Permit` row pass `mode='permit'` to the Phase-3 manifest-row
+  seam and propagate `mode='permit'` into the manifest JSON entry. No new section, no second loop,
+  no new global scalar. The per-row `action` key stays on direct `config_*_path` (foreign-key
+  exclusion, like the sibling per-row `custom`/`logging`). Feed header/url validation reuses the
+  input-handling contract (PFBL-01 green). PHPUnit: a `Permit` row produces a `mode='permit'`
+  manifest entry, a `Deny`/absent row stays byte-identical; **this connects Phase 2's dormant branch**.
 
-### Phase 5 — UI: the DNSWL / Allow Feeds page
+### Phase 5 — UI: the `Deny`/`Permit` action select on the DNSBL feed editor
 
-- Prompt: `05_Ui_Dnswl_Page.txt`
-- Add the DNSWL / Allow-Feeds grid + row editor mirroring the DNSBL feed pages, wired into the
-  pfBlockerNG menu/tabs, with help text stating the band-2 precedence (manual whitelist/blocks still
-  win). `ui_render` (Tier A) proof: page GET 200, no PHP error/notice, marker present, controls
-  render and round-trip a row to `pfblockerngdnswl/config`.
+- Prompt: `05_Ui_Permit_Action.txt`
+- Add a `Deny`/`Permit` action `Form_Select` to the existing DNSBL feed-row editor
+  (`pfblockerng_category_edit.php`), default `Deny`, round-tripping to the per-row `action` key Phase 4
+  reads; help text stating the band-2 precedence (manual whitelist/blocks still win). **No new page,
+  menu, privilege, or `pkg-plist` entry.** `ui_render` (Tier A) proof: the existing DNSBL editor page
+  still GET 200, no PHP error/notice, marker present, the new select renders and a saved row carries
+  `action='Permit'`.
 
 ### Phase 6 — Smoke + validation + docs
 
@@ -286,4 +295,5 @@ an ABP `@@` allow). Three settled forks (issue #324 maintainer decisions):
 green through Phase 2); or (b) the precedence cannot be kept safe — i.e. a permit feed can be shown
 to override the operator's manual whitelist or manual `$important` block (§2.2.3 fails); or (c)
 absent-`mode` back-compat (§2.2.1/§2.2.5) cannot be guaranteed byte-identical. (The three forks —
-band 2, separate section, every-host-allow — are **settled** maintainer decisions for issue #324.)
+band 2, per-row `Deny`/`Permit` action, every-host-allow — are **settled** maintainer decisions for
+issue #324.)
