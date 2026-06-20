@@ -39,6 +39,13 @@ ACTION PLAN (ordered)
    the block shape. Drive distinct source IPs (drill -I <src>, a second interface, or source
    binding). Record the exact reproduction (commands + observed responses + unbound-control
    cache dump).
+1b. REPRODUCE the SCHEDULE TIME-TRANSITION variant of the same bleed (ADR SS2.2): a
+   policy-relevant name resolved while a group is OFF-schedule (verdict PASS) warms the
+   C-cache with the real answer; when the schedule window opens the name should now BLOCK but
+   may be served the stale cached answer and escape. Model the clock boundary (a short window,
+   or a manual flip of "active now") and confirm whether the chosen scheme closes it. The
+   group-policy feature folds in DNSBL-blocking-by-schedule (issue #384), so the cache scheme
+   must hold across BOTH the client axis and the time axis.
 2. EVALUATE candidate schemes from ADR SS2.2, each with a short written argument + a measured
    number where feasible:
    (a) no_cache_store on every policy-relevant name when group policy is on (listed names

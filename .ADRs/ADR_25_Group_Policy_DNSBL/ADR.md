@@ -1,7 +1,9 @@
-# ADR-25: Per-client Group Policy for DNSBL blocking
+# ADR-25: Per-client Group Policy for DNSBL blocking (incl. time scheduling)
 
 - **Status:** **Proposed** (2026-06-14)
 - **Date:** 2026-06-14
+- **Folds in:** issue #384 (Redmine #11099) — "DNSBL blocking by schedule" (block during
+  school hours). Scheduling is a per-group axis here, not a separate feature.
 - **Branch:** `adr/25-group-policy-dnsbl` (off `devel`; slug per CLAUDE.md "Branch naming")
   / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (decision path +
   build), `pfblockerng.inc` (manifest + config + migration), `src/usr/local/www/pfblockerng/`
@@ -70,6 +72,18 @@ the ADR-10 watcher via the `pfb_py_reload` sentinel.
 - The decision cache is **domain-keyed**. Any client-dependent verdict that is cached
   domain-only is a **cross-client correctness bug**.
 
+### 1.6 Scheduling is requested but unwired (issue #384 / Redmine #11099)
+
+A standing feature request asks for **DNSBL blocking by schedule** — "enable/disable it
+during school hours". pfSense already ships a native scheduler: the `<schedules>` config
+section (Firewall > Schedules), referenced by firewall rules via a `sched` name and evaluated
+by `filter_get_time_based_rule_status()`. None of it is wired into the DNSBL decision path —
+the only time-driven element today is the hourly feed-update cron (`pfb_interval`), which
+governs list *refresh*, not whether blocking is *active*. Per-client policy and time-of-day
+gating are the same shape of problem (a group of clients gets a different verdict under a
+condition), so this ADR folds scheduling in as a **per-group axis** rather than a parallel
+feature — the maintainer's call on the issue.
+
 ---
 
 ## 2. Decision
@@ -77,9 +91,17 @@ the ADR-10 watcher via the `pfb_py_reload` sentinel.
 Replace the single global bypass with **N named policy-groups**, Pi-Hole–style
 (<https://docs.pi-hole.net/group_management/example/>; Pi-Hole's FTL is open source and was
 read as prior art). A policy-group binds **client CIDRs** to **a subset of DNSBL aliases**
-plus **per-group allow/deny domain rules** and **an action tier (Block / Warn)**. A client
-matching no group falls to a **default group** = today's behaviour (all aliases, Block) →
-**backward compatible**.
+plus **per-group allow/deny domain rules**, **an action tier (Block / Warn)**, and an
+**optional schedule** (a named pfSense firewall Schedule) that gates **when the group is in
+force**. A client belonging to no group (by CIDR) falls to a **default group** = today's
+behaviour (all aliases, Block) → **backward compatible**.
+
+**Schedules reuse pfSense's native scheduler, not a new one.** A group carries a `sched`
+reference to an existing `<schedules>` entry; we serialise that schedule's time ranges into
+the manifest and evaluate "is it active now" in the chroot. No schedule ⇒ the group is
+**always in force** (today's behaviour). This keeps one schedule concept for the admin
+(reused across firewall rules and groups) at the cost of re-implementing the active-window
+test in the stdlib-only Python module (§2.4, §3).
 
 ### 2.1 Resolution model (the architecture that keeps the domain-keyed cache valid)
 
@@ -89,22 +111,37 @@ is group-dependent. We exploit that with an **alias-membership bitmask**:
 | Concern | Where | Shape |
 |--------|-------|-------|
 | Which aliases a domain is in | build (`pfb_unbound.py`) | `domain → int bitmask` over aliases (one bit per `DNSBL_*` alias). A domain in two aliases gets both bits. **Group-agnostic ⇒ stays in the domain-keyed `decisionDB`.** |
-| Which aliases a client subscribes to | per-query, from manifest | client source IP → **union** of the masks of every policy-group whose CIDR set contains it (cached per IP in a small `gpClientDB`). |
+| Which groups a client belongs to | per-IP, cached | client source IP → set of policy-groups whose CIDR set contains it (`gpClientGroups`, **time-independent** — cached per IP, cleared only on an ADR-10 swap). |
+| Whether a group is **in force now** | per-query | `schedule_active(group)`: *now* falls within a serialised time range of the group's referenced pfSense Schedule. **No `sched` ⇒ always in force.** Cheap (a handful of ranges); evaluated live so it tracks time boundaries. |
+| Which aliases a client subscribes to | per-query | **union** of the masks of the client's **active** groups (belongs-to ∩ in-force-now). |
 | Block test | per-query | `domain_mask & client_mask != 0` → O(1) int AND. |
-| Allow / deny domain rules | per-query | per-group exact/suffix domain sets, unioned across the client's groups. |
-| Action tier (Block vs Warn) | per-query | strictest tier among the client's groups whose subscription matched. |
+| Allow / deny domain rules | per-query | per-group exact/suffix domain sets, unioned across the client's **active** groups. |
+| Action tier (Block vs Warn) | per-query | strictest tier among the client's **active** groups whose subscription matched. |
 
-**Merge precedence (deterministic, union semantics):**
+**Membership vs enforcement (what makes scheduling expressible).** Belonging to a group is by
+**CIDR** and is time-independent; *enforcement* is gated by the group's **schedule**. The
+resolution starts from the client's groups, then narrows to the active ones:
 
-1. **Allow-domain** match in any of the client's groups → **PASS** (allow always wins —
-   Pi-Hole rule).
-2. else **Deny-domain** match in any group → **BLOCK**.
+- Client belongs to **zero** groups (by CIDR) → **default group** (all aliases, Block =
+  today). Schedule plays no part here.
+- Client belongs to ≥1 group but **none is in force now** → **PASS** (it is governed by
+  groups, all currently off — *not* the global default). This is what lets "block only during
+  school hours" mean *unrestricted otherwise*: put the clients in a scheduled blocking group;
+  outside the window the group is inert and they resolve freely, instead of falling back to
+  the all-Block default.
+- Client has ≥1 **active** group → apply the merge precedence below over the active set.
+
+**Merge precedence (deterministic, union semantics — over the client's ACTIVE groups):**
+
+1. **Allow-domain** match in any active group → **PASS** (allow always wins — Pi-Hole rule).
+2. else **Deny-domain** match in any active group → **BLOCK**.
 3. else **subscribed-alias** match (`domain_mask & client_mask`) → action = **strictest
-   tier** among matching groups (**Block > Warn**); Warn = resolve normally **and log**.
+   tier** among matching active groups (**Block > Warn**); Warn = resolve normally **and log**.
 4. else → **PASS**.
 
 The legacy `pfb_gp`/`pfb_gp_bypass_list` bypass = a migrated group with an **empty alias
-subscription and no deny rules** → naturally PASS for its members under the same engine.
+subscription, no deny rules, and no schedule** (always in force) → naturally PASS for its
+members under the same engine.
 
 ### 2.2 The cache-bleed correctness problem — SPIKE-gated (Phase 1)
 
@@ -115,6 +152,16 @@ message cache**. When a *pass/warn* client resolves a listed name, Unbound cache
 `qstate.no_cache_store` on synthetic block replies for a related reason; this generalises
 the hazard to *all* policy-relevant names.) This likely already affects the legacy bypass
 feature, undocumented.
+
+**Scheduling generalises the same bleed to a *time* axis.** A policy-relevant name resolved
+while a group is **off-schedule** (verdict PASS) gets its real answer C-cached with a normal
+TTL; when the schedule window opens, a query that should now **block** is served the stale
+cached answer and escapes — the cross-client bleed, triggered by a clock boundary instead of
+a second client. The chosen scheme must close **both**: scheme (a) does so for free, since a
+name carrying any alias bit is policy-relevant and re-enters `operate()` every query
+regardless of the hour (so no schedule-boundary cache flush is needed); a scheme that caches
+policy-relevant answers (b/c) must prove it invalidates across a window edge. Phase 1
+reproduces the **time-transition** variant alongside the cross-client one.
 
 **This is the premise that must be proven before the feature is built.** Phase 1 is a
 **research spike** (no shipped production code) that:
@@ -147,7 +194,12 @@ ADR-01 outcome the process exists to surface. Phases 3–7 adopt the Phase-1 win
 - **Legacy bypass preserved.** Existing `pfb_gp`/`pfb_gp_bypass_list` configs keep working
   (migrated to a Bypass group) — a listed IP still skips all DNSBL; `python_control
   addbypass/removebypass [duration]` still works.
-- **Default group = today.** An unmatched client gets all aliases + Block.
+- **Default group = today.** A client matching **no group by CIDR** gets all aliases + Block.
+- **No schedule ⇒ always in force.** A group without a `sched` reference behaves exactly as
+  an unscheduled group would — its enforcement never depends on the clock. Removing/renaming
+  the referenced pfSense Schedule degrades safely to "always in force" (fail-open to the
+  group's own rules, never a crash). A client that belongs to groups but has **none active**
+  resolves freely (PASS) — it does **not** silently fall to the all-Block default.
 - **Block shapes unchanged** (NOERROR+VIP or NULL per per-feed `log`; never NXDOMAIN for a
   feed match). Warn does not invent a new shape — it **resolves + logs**.
 - **ADR-10 swap + ADR-15 cache invariants hold:** a swap clears `decisionDB` AND the new
@@ -157,6 +209,16 @@ ADR-01 outcome the process exists to surface. Phases 3–7 adopt the Phase-1 win
 
 ### 2.4 Explicitly kept / out of scope
 
+- **Scheduling reuses pfSense Schedules — no custom scheduler.** A group references an
+  existing `<schedules>` entry by name (one schedule per group; compose finer windows by
+  splitting into multiple groups). We do **not** build a new time-window UI/store. The schedule
+  *definition* lives in pfSense core config; we only serialise its resolved ranges into the
+  manifest and evaluate them in the chroot. **Time-of-day correctness in the Unbound chroot is
+  an implementation item** (Phase 4/5): `time.localtime()` resolves against the chroot's
+  `/var/unbound/etc/localtime`, which may be absent → wrong window. The build must serialise
+  ranges in a timezone-explicit form (or ensure zoneinfo is reachable in-chroot); proven by a
+  Phase-7 schedule smoke. Inverted/"all except" windows are out of scope (express the inverse
+  as the group's active window).
 - **Per-feed (sub-alias) subscription** — the subscribable unit is the **DNSBL alias**
   (`DNSBL_*`), not the individual feed. Per-feed is a possible later ADR; the bitmask
   design does not preclude it.
@@ -176,6 +238,10 @@ ADR-01 outcome the process exists to surface. Phases 3–7 adopt the Phase-1 win
 
 - True per-client DNSBL policy (Pi-Hole-style): different client ranges get different
   aliases blocked, warned (logged), or passed — the requested capability.
+- **Scheduling (issue #384) for free on the same engine:** a group's enforcement is gated by
+  a reused pfSense Schedule, so "block during school hours" is one group with a `sched` and no
+  new subsystem. Time gating is a cheap per-query active-window test; the expensive domain
+  match stays cached and group-/time-agnostic.
 - The **bitmask + group-agnostic matcher** keeps `decisionDB` domain-keyed: the expensive
   match is computed once per name regardless of #groups; only a cheap per-IP mask + int
   AND is added. Memory scales with #aliases (a single int per domain), not #groups.
@@ -196,17 +262,25 @@ ADR-01 outcome the process exists to surface. Phases 3–7 adopt the Phase-1 win
   harness extension for source-bound queries.
 - **Union merge** can surprise an admin (a permissive group widens a restrictive one);
   mitigated by the allow>block>warn precedence being documented in the UI.
+- **Schedule timezone in the chroot** is a correctness trap: a naive `time.localtime()` in
+  `/var/unbound` can evaluate the window in UTC and block/unblock at the wrong hour. Bounded
+  by serialising ranges TZ-explicitly + a Phase-7 schedule smoke that asserts the boundary,
+  but it is a real surface the spike/Phase-4 must close (§2.4).
 
 ---
 
 ## 4. Requirements (acceptance)
 
 - Admin can define ≥1 policy-group: name, enabled, client CIDR list, subscribed `DNSBL_*`
-  aliases, action tier (Block/Warn), allow-domain + deny-domain lists.
-- A query's verdict follows §2.1 resolution + §2.3 precedence, by client source IP.
+  aliases, action tier (Block/Warn), allow-domain + deny-domain lists, and an **optional
+  schedule** (a pfSense firewall Schedule selected from the existing ones).
+- A query's verdict follows §2.1 resolution + §2.3 precedence, by client source IP **and the
+  current time** (a group enforces only while its schedule is active; no schedule ⇒ always).
+- A scheduled blocking group blocks inside its window and the same clients resolve freely
+  outside it (issue #384), without falling back to the all-Block default.
 - Group policy OFF ⇒ byte-identical to today; legacy bypass auto-migrates and still works.
-- Decision correctness holds across the C-cache (Phase-1 scheme), ADR-10 swaps, and
-  CNAME chains.
+- Decision correctness holds across the C-cache (Phase-1 scheme, **incl. schedule-window
+  transitions**), ADR-10 swaps, and CNAME chains.
 - All gates green: `pytest`, `ruff`, `mypy tests/`, `php -l`, PHPStan, PHPUnit, PHPCS
   (PFBL-01), `ui_render`.
 
@@ -231,7 +305,9 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 
 - Prompt: `01_Spike_Cache_Strategy.txt`
 - **Research only — no production code shipped** (throwaway harness allowed).
-- Reproduce the cross-client C-cache bleed on a live VM; pin it.
+- Reproduce the cross-client C-cache bleed on a live VM; pin it. **Also reproduce the
+  schedule time-transition variant** (off-schedule PASS warms the cache → window opens →
+  block escapes) and confirm the chosen scheme closes it.
 - Evaluate schemes (a)/(b)/(c) from §2.2; benchmark the viable one(s) — methodology +
   kill-threshold.
 - **Output:** `RESULTS/01_Results.txt` recording the chosen scheme (or a reduce/reject
@@ -261,30 +337,40 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 
 - Prompt: `04_Config_Manifest_Migration.txt`
 - `config.xml` schema for policy-groups (name, enabled, CIDRs, subscribed aliases, tier,
-  allow/deny domains) + the default group.
+  allow/deny domains, **optional `sched` schedule reference**) + the default group.
 - Migrate legacy `pfb_gp`/`pfb_gp_bypass_list` → a Bypass group (idempotent; absent ⇒
   no-op).
 - Extend the manifest: groups, alias→bit map, per-group subscribed bitmask, client-CIDR→
-  group map, allow/deny lists, default-group policy. PFBL-01 validation on all inputs.
+  group map, allow/deny lists, default-group policy, **and per-group serialised schedule time
+  ranges** (read from the pfSense `<schedules>` section; TZ-explicit so the chroot evaluates
+  the right wall-clock window). PFBL-01 validation on all inputs. A dangling/removed schedule
+  ref serialises as "always in force" (fail-open).
 - Tests (PHPUnit): schema decode, migration (before legacy → after group; absent → no-op),
-  manifest shape before/after, bitmask map.
+  manifest shape before/after, bitmask map, **schedule serialisation (ranges + dangling-ref →
+  always-on)**.
 
 ### Phase 5 — Python decision layer + Phase-1 cache scheme
 
 - Prompt: `05_Decision_Layer.txt`
-- Load manifest groups; build `gpClientDB` (client IP → unioned mask + rule refs, cached);
-  implement §2.1 resolution + §2.3 precedence; Warn = resolve+log; apply the Phase-1 cache
-  scheme. Clear `gpClientDB` on ADR-10 swap.
+- Load manifest groups; build `gpClientGroups` (client IP → CIDR-matched groups, time-
+  independent, cached); per query compute the **active** subset via `schedule_active(group)`
+  over the serialised ranges (no `sched` ⇒ always active); implement §2.1 membership-vs-
+  enforcement + §2.3 precedence over the active set; Warn = resolve+log; apply the Phase-1
+  cache scheme. Clear the per-IP cache on ADR-10 swap.
 - Tests: every branch — allow-wins, deny, subscribed-hit Block, subscribed-hit Warn,
-  no-match PASS, default group, union across 2 groups, migrated legacy bypass; before/after
-  transition tests; CNAME-chain + swap-invalidation cases.
+  no-match PASS, default group, union across 2 groups, migrated legacy bypass; **schedule:
+  in-window enforces vs out-of-window PASS (assert before+after across the boundary), no-sched
+  always-on, belongs-but-all-inactive ⇒ PASS not default, dangling ref ⇒ always-on**;
+  before/after transition tests; CNAME-chain + swap-invalidation cases.
 
 ### Phase 6 — Web UI (policy-group management)
 
 - Prompt: `06_WebUI.txt`
 - New `www/pfblockerng/` page(s) to list/add/edit policy-groups (name, CIDRs, alias
-  multiselect, tier, allow/deny). Replace the legacy bypass textarea with the migrated
-  group (or link to it). Help text matches neighbours.
+  multiselect, tier, allow/deny, **schedule dropdown of existing pfSense Schedules** + a
+  "none = always on" entry, with a link to Firewall > Schedules to create one). Replace the
+  legacy bypass textarea with the migrated group (or link to it). Help text matches neighbours
+  and notes the active-window semantics briefly.
 - Tests: ADR-14 Tier A `ui_render` (200, no PHP errors, page marker, no new
   `php_error.log`); PHPUnit for any extracted page decider.
 
@@ -295,6 +381,10 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
   interface / per-source binding) to prove per-group Block/Warn/PASS, default group, and
   legacy migration end-to-end on a live VM; where CI cannot, codify a maintainer manual
   smoke.
+- **Schedule smoke:** a group with a short pfSense Schedule window — assert a listed name is
+  blocked **inside** the window and resolves **outside** it for the same client (drive the
+  clock or pick a boundary), proving the chroot evaluates the right wall-clock window (the §3
+  TZ trap) and the time-transition cache scheme holds.
 - Update `docs/misc/architecture-notes.md` (group-policy section), `README.md` if workflow
   changes, stubs if new pfSense fns; PFBL-01 sniff scope.
 - Tests: smoke case(s) + green full suite.
@@ -311,6 +401,9 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 - [ ] ADR-14 `ui_render` green for the new policy-group page (marker present, no new
       `php_error.log` line).
 - [ ] Off-state parity test: group policy disabled ⇒ ADR-06/07 oracles byte-identical.
+- [ ] Schedule branch tests (Phase 5): in-window enforces vs out-of-window PASS
+      (before+after across the boundary); no-`sched` always-on; belongs-but-all-inactive ⇒
+      PASS (not the all-Block default); dangling schedule ref ⇒ always-on.
 
 ### Manual smoke (maintainer, on-box) — the multi-source part CI can't do
 
@@ -325,8 +418,13 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 - [ ] Default group: an unmatched client gets all-aliases Block (today's behaviour).
 - [ ] Legacy migration: an upgrade from a config with `pfb_gp`/`pfb_gp_bypass_list` yields
       a Bypass group; those IPs still skip all DNSBL; `python_control addbypass` still works.
+- [ ] **Schedule (issue #384)**: a scheduled blocking group blocks a listed name **inside**
+      its window and the same client resolves it **outside** the window — assert the **before**
+      (resolves off-window) and **after** (blocks on-window); the chroot evaluates the correct
+      local wall-clock window.
 - [ ] **Cache-bleed**: a pass/warn client warming a listed name does **not** let a block
-      client escape (the Phase-1 scheme holds live).
+      client escape, **and** an off-schedule resolution does not let an on-schedule query
+      escape the block (the Phase-1 scheme holds live across both client and time axes).
 
 ### Reject criteria (decide at Phase 1, revisit at Phase 5)
 

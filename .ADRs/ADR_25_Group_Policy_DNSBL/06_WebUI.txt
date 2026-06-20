@@ -30,10 +30,15 @@ ACTION PLAN (ordered)
 1. Add a policy-group LIST page + an ADD/EDIT page (or a section within the DNSBL settings,
    matching the existing alias/category UI pattern): fields = name, enabled, client CIDRs,
    subscribed DNSBL_ aliases (multiselect of existing aliases), action tier (Block|Warn),
-   allow-domains, deny-domains. Validate inputs server-side via the Phase-4 validators.
+   allow-domains, deny-domains, and a SCHEDULE dropdown populated from the existing pfSense
+   Schedules (config <schedules>) with a "none = always on" default entry + a link to
+   Firewall > Schedules to create one. Validate inputs server-side via the Phase-4 validators
+   (a chosen schedule must name an existing Schedule).
 2. Replace the legacy single bypass textarea with the migrated Bypass group (or clearly link
    to the new page), preserving the migration from Phase 4. Help text matches neighbours;
-   document the allow>block>warn precedence + union semantics briefly.
+   document the allow>block>warn precedence + union semantics + the schedule active-window
+   meaning (out-of-window => the group is inert; a client governed only by inactive groups
+   resolves freely) briefly.
 3. Wire the menu/tab + privileges (etc/inc/priv if a new page needs an ACL entry, following
    existing pfBlockerNG .priv.inc entries).
 4. Extract any non-trivial save/validate logic into a pure decider in pfblockerng.inc

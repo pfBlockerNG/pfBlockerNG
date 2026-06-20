@@ -37,13 +37,19 @@ ACTION PLAN (ordered)
    - union across two groups.
    - default group (unmatched IP) = all-aliases Block.
    - legacy migration: pre-set pfb_gp/pfb_gp_bypass_list -> Bypass group; those IPs skip DNSBL.
-   - cache-bleed: a pass/warn client warming a listed name does NOT let a block client escape.
+   - SCHEDULE (issue #384): a group with a short pfSense Schedule window blocks a listed name
+     INSIDE the window and the same client resolves it OUTSIDE (drive a real boundary or pick a
+     just-elapsed/just-future window) -> proves the chroot evaluates the right wall-clock window
+     (the ADR SS3 TZ trap) and the belongs-but-inactive => PASS path.
+   - cache-bleed: a pass/warn client warming a listed name does NOT let a block client escape,
+     AND an off-schedule resolution does NOT let an on-schedule query escape.
    Use helpers.unique_domain() (uuid-*.com); never RFC 6761 TLDs or HSTS-preload names.
 3. Write the maintainer MANUAL smoke checklist (in RESULTS + reflected in ADR SS7) for any
    case CI cannot cover.
 4. Docs: extend docs/misc/architecture-notes.md with the group-policy section (bitmask model,
-   gpClientDB, cache scheme, precedence); update README.md if workflow changed; add stubs for
-   any new pfSense fns; confirm the PFBL-01 scopeFunctions list is current.
+   gpClientGroups, schedule active-window eval + chroot TZ handling, cache scheme, precedence,
+   membership-vs-enforcement); update README.md if workflow changed; add stubs for any new
+   pfSense fns; confirm the PFBL-01 scopeFunctions list is current.
 5. Re-confirm the DoD + reject criteria against the Phase-1 numbers: if the live cache scheme
    misses the kill-threshold, record it and recommend reduce/reject per ADR SS7.
 
