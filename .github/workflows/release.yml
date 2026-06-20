@@ -515,9 +515,22 @@ jobs:
         env:
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
           PKG_CHANNEL: ${{ needs.read-matrix.outputs.pkg_channel }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -eu
           mkdir -p out
+
+          # Pin the .pkg version to the RELEASE tag, not the use-github Makefile's
+          # current PORTVERSION. sync-ports-fork bumps that Makefile only AFTER (and in
+          # parallel with) this build, so without an explicit --pkgversion the
+          # Release-attached .pkg would carry the PREVIOUS version. release-version.sh
+          # is the single source of truth for the pkg-safe portversion.
+          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$REF_NAME"; fi
+          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets portversion (+ version / channel / prerelease / prekind)
+          echo "Pinning .pkg version to ${portversion} (tag ${TAG})"
 
           # The artifact's creation time = the tagged commit's committer date (epoch).
           # Baked into each .pkg as the `created` annotation so the landing page shows
@@ -550,6 +563,7 @@ jobs:
                   --ports "$PORTS_DIR" \
                   --channel "$PKG_CHANNEL" \
                   --local-src . \
+                  --pkgversion "$portversion" \
                   --abi "$ABI" \
                   --py-flavor "$PY" \
                   --php "$PHP" \
