@@ -1,0 +1,55 @@
+================================================================================
+PHASE 2 PROMPT — Prep: normalized record + provider interface; wrap MaxMind
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 2 is BEHAVIOUR-PRESERVING:
+it introduces the seam but keeps MaxMind the only implementation, output byte-identical. One
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+A single normalized seam replaces the scattered vendor calls. Routing the four consumers
+through it with MaxMind behind it (no IPinfo yet, no new setting yet) de-risks the later
+IPinfo work: the Phase-1 oracle proves the seam changed nothing.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/01_Results.txt — the extracted functions +
+  oracle. If missing, STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS2.1 decision table, SS2.2 contract).
+- The Phase-1 extracted functions + their call sites; tests/php/ oracle.
+- CLAUDE.md — PHP standards, naming, Test coverage.
+
+ACTION PLAN (ordered)
+1. DEFINE the normalized GeoIP/ASN record (country_iso, country_name, continent, asn, as_org,
+   flags map, capability flags supports_locale + which deprecated flags are present).
+2. DEFINE GeoipProvider + AsnProvider interfaces (lookup -> normalized record; country/
+   continent map; capabilities).
+3. IMPLEMENT the MaxMind provider behind the interface, delegating to the Phase-1 functions;
+   route all four consumers through the seam. Output MUST stay byte-identical (oracle green).
+4. Tests: interface unit tests (MaxMind impl returns the expected normalized record for
+   fixture inputs); the Phase-1 oracle stays green unchanged.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in lib code.
+- MaxMind is the ONLY provider this phase; do NOT add IPinfo, a setting, or per-consumer
+  selection yet.
+- Do NOT change config.xml or any output.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (oracle unchanged + interface tests); php -l; PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: consumers now call the seam; output identical.
+
+EXPECTED RESULT
+A normalized provider seam with a MaxMind implementation; all four consumers routed through
+it; behaviour identical to today.
+
+COMMIT (single)
+    pfblockerng: add GeoIP/ASN provider seam (MaxMind impl) (ADR-32 P2)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/02_Results.txt (plain .txt)
+Record: the normalized record shape; the interface signatures; how each consumer was routed;
+verification numbers; go-ahead for Phase 3.

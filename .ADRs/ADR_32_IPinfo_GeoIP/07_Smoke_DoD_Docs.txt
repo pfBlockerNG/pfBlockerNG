@@ -1,0 +1,62 @@
+================================================================================
+PHASE 7 PROMPT — Smoke + Definition of Done + docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS7 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 7 proves the CI-coverable
+parts on a live VM, codifies the credentialed manual smoke, and updates docs. One commit, push
+directly.
+
+WHY THIS PHASE EXISTS
+Real GeoIP/ASN DB downloads need vendor credentials, so the end-to-end IPinfo/MaxMind download
++ convert path CANNOT run in CI. This phase verifies what CI can (UI renders, MaxMind path
+unchanged, provider switch), writes the maintainer manual checklist for the rest, and closes
+the DoD + reject criteria.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/06_Results.txt AND 05_/04_/01_. If missing,
+  STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS7 DoD + reject criteria).
+- tests/smoke/ — conftest.py (smoke_vm), helpers.py; the ADR-14 ui_render pattern.
+- docs/misc/architecture-notes.md — the GeoIP/Reputation section to extend.
+- CLAUDE.md — Smoke tests, Updating documentation.
+
+ACTION PLAN (ordered)
+1. Live-VM smoke for the non-credentialed paths: provider-selector pages render (ui_render);
+   with provider=MaxMind the GeoIP/ASN behaviour is unchanged (oracle parity on-box where
+   feasible); switching the setting flips the active provider uniformly.
+2. Write the maintainer MANUAL smoke checklist (in RESULTS + ADR SS7) for the credentialed
+   paths: real MaxMind key download/build; real IPinfo token download of the CIDR DB + build +
+   enrichment + per-continent aliases; provider switch both directions + inert-field notices;
+   a small-box RAM/time check ingesting the full IPinfo CIDR DB.
+3. Docs: extend docs/misc/architecture-notes.md with the provider abstraction (normalized
+   record, geoip_provider/asn_provider, no per-consumer mixing, frozen-config notices); update
+   README if workflow changed; add stubs for any new pfSense fns; confirm PFBL-01
+   scopeFunctions current.
+4. Re-confirm DoD + reject criteria: if the IPinfo CIDR DB blows the small-box RAM/time budget
+   or cannot serve the four consumers without un-normalizable regressions, record numbers and
+   recommend reduce (ASN-only / enrichment-only) or reject the GeoIP half.
+
+CONSTRAINTS
+- Smoke probes ON-BOX; first response after reload authoritative.
+- stdlib python; POSIX sh; markdown lint clean; tests validate correctness (no theater).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (non-smoke); vendor/bin/phpunit -> green.
+- The live-VM smoke passes OR is clearly gated/SKIPped with the manual checklist covering the
+  gap; diagnostics reviewed on any failure.
+- ruff / mypy tests/ / markdownlint -> clean; php -l / phpcs as relevant.
+
+EXPECTED RESULT
+Provider switch + MaxMind parity verified on a live VM (or via the documented manual smoke);
+docs updated; DoD + reject criteria resolved.
+
+COMMIT (single)
+    pfblockerng: add GeoIP provider smoke + docs; close ADR-32 DoD (ADR-32 P7)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/07_Results.txt (plain .txt)
+Record: which DoD items are CI-covered vs manual; the small-box ingest result vs budget; doc/
+stub updates; the final accept/reduce/reject recommendation for the ADR.

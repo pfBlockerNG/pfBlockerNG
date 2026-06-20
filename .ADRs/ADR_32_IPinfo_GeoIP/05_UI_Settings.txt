@@ -1,0 +1,60 @@
+================================================================================
+PHASE 5 PROMPT — UI: provider selectors + capability notices (PfbConfig)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2, SS5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 5 wires the provider choice
+to the UI + config. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The seam (Phases 2-4) is config-driven once an admin can pick the provider. One geoip_provider
+setting and one asn_provider setting, each applied UNIFORMLY (no per-consumer mixing).
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/04_Results.txt AND 02_Results.txt. If missing,
+  STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS2 decision, SS5 constraints).
+- src/usr/local/www/pfblockerng/pfblockerng.php — the IP-tab settings (maxmind_key, asn_token
+  fields) + Reputation page.
+- pfblockerng_extra.inc — PfbConfig + pfb_cfg_registry() (ADR-29); the RequireConfigGateway
+  sniff registeredPaths.
+- tests/smoke/ui/ test_render_smoke.py (ADR-14 Tier A); tests/php/ for an extracted decider.
+- CLAUDE.md — PHP standards, Web UI help text, Naming, Smoke tests (ui_render).
+
+ACTION PLAN (ordered)
+1. Register geoip_provider (default 'maxmind') + asn_provider (default 'ipinfo') in
+   pfb_cfg_registry() with adapters; add their paths to the RequireConfigGateway sniff
+   $registeredPaths. Read via PfbConfig::read, write via PfbConfig::write.
+2. Add the two selectors to the IP tab; the active provider drives ALL consumers of its domain
+   (the seam already does this) -- the UI must make clear there is no per-consumer choice.
+   Show provider capabilities (locale support, which flags exist) as help text.
+3. When a stored setting is inert under the active provider (e.g. a deprecated flag), surface
+   a notice on the page (decider extracted to pfblockerng.inc, testable off-box). Validate all
+   inputs server-side (PFBL-01).
+4. Tests: PHPUnit for the registry round-trip (write(read(v))==v for both keys) + the
+   capability/notice decider (each branch); ADR-14 ui_render for the changed IP/Reputation
+   pages (200, no Fatal/Parse/Warning/Notice/Uncaught, marker present, no new php_error.log).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Registered keys ONLY via PfbConfig (ADR-29); config.xml stored vocabulary frozen.
+- ui_render asserts MORE than HTTP 200.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean (incl. RequireConfigGateway).
+- python -m pytest -> green.
+- ADR-14 ui_render green (SMOKE_ADMIN_PASSWORD set; else SKIP).
+
+EXPECTED RESULT
+Admins can pick the GeoIP and ASN providers; the choice applies uniformly; inert settings get
+a notice; config round-trips losslessly.
+
+COMMIT (single)
+    pfblockerng: add GeoIP/ASN provider selectors + capability notices (ADR-32 P5)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/05_Results.txt (plain .txt)
+Record: the new config keys + registry entries; the page element ids; the notice decider
+name/signature; the ui_render marker; verification numbers; go-ahead for Phase 6.
