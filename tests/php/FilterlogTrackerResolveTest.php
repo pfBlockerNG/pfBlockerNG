@@ -138,7 +138,7 @@ final class FilterlogTrackerResolveTest extends TestCase
 		};
 
 		$ruleList  = $this->emptyRuleList();
-		$missCache = ['7777' => TRUE];  // pre-loaded into the negative cache
+		$missCache = ["7777\0block" => TRUE];  // pre-loaded into the negative cache (tracker\0type key)
 
 		// When: tracker is in miss_cache
 		$result = pfb_resolve_tracker($ruleList, $missCache, '7777', 'block', $reparse);
@@ -176,14 +176,14 @@ final class FilterlogTrackerResolveTest extends TestCase
 
 		// Before: no reparses yet, tracker absent from both caches
 		$this->assertSame(0, $reparseCount, 'Precondition: zero reparses before call');
-		$this->assertArrayNotHasKey('4242', $missCache, 'Precondition: tracker not in miss_cache');
+		$this->assertArrayNotHasKey("4242\0block", $missCache, 'Precondition: tracker not in miss_cache');
 
 		$result = pfb_resolve_tracker($ruleList, $missCache, '4242', 'block', $reparse);
 
 		// Then: FALSE with exactly one reparse, tracker now in miss_cache
 		$this->assertFalse($result, 'Unresolved tracker must return FALSE');
 		$this->assertSame(1, $reparseCount, '#326 fix: an unresolved tracker must trigger at most ONE reparse per first encounter, not 5');
-		$this->assertArrayHasKey('4242', $missCache, 'Unresolved tracker must be added to miss_cache after one reparse');
+		$this->assertArrayHasKey("4242\0block", $missCache, 'Unresolved tracker must be added to miss_cache after one reparse');
 	}
 
 	// ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ final class FilterlogTrackerResolveTest extends TestCase
 
 		$this->assertFalse($first, 'First call for unresolved tracker must return FALSE');
 		$this->assertSame(1, $afterFirst, 'First call must trigger exactly one reparse');
-		$this->assertArrayHasKey('5555', $missCache, 'First call must add tracker to miss_cache');
+		$this->assertArrayHasKey("5555\0block", $missCache, 'First call must add tracker to miss_cache');
 
 		// When: second call for the SAME tracker — miss_cache already has the entry
 		$second = pfb_resolve_tracker($ruleList, $missCache, '5555', 'block', $reparse);
@@ -236,8 +236,8 @@ final class FilterlogTrackerResolveTest extends TestCase
 		$afterOtherTracker = $reparseCount;
 
 		$this->assertSame($afterFirst + 1, $afterOtherTracker, 'A different unresolved tracker triggers one more reparse');
-		$this->assertArrayHasKey('5555', $missCache, 'miss_cache entry for 5555 must survive a reparse triggered by a different tracker');
-		$this->assertArrayHasKey('6666', $missCache, 'New unresolved tracker 6666 must also be added to miss_cache');
+		$this->assertArrayHasKey("5555\0block", $missCache, 'miss_cache entry for 5555 must survive a reparse triggered by a different tracker');
+		$this->assertArrayHasKey("6666\0block", $missCache, 'New unresolved tracker 6666 must also be added to miss_cache');
 
 		// And now '5555' is still negative-cached even though $rule_list was just rebuilt
 		$third = pfb_resolve_tracker($ruleList, $missCache, '5555', 'block', $reparse);
@@ -341,6 +341,48 @@ final class FilterlogTrackerResolveTest extends TestCase
 		$this->assertSame(1, $reparseCount, 'Type mismatch must trigger exactly one reparse');
 		$this->assertSame('block', $ruleList['2222']['type'], 'rule_list must reflect the fresh parse result');
 		$this->assertArrayNotHasKey('2222', $missCache, 'A positively-resolved tracker must NOT be in miss_cache');
+	}
+
+	// ---------------------------------------------------------------------------
+	// Regression: a type mismatch must NOT poison the cache for the matching type
+	// ---------------------------------------------------------------------------
+
+	/**
+	 * Scenario: a transient type mismatch must never suppress a later matching event.
+	 *
+	 * Given  a pfB tracker present in rule_list as type 'block'
+	 * When   a log line arrives with a mismatched type 'match' (and the reparse does NOT
+	 *        resolve that type), then a later line arrives with the correct type 'block'
+	 * Then   the mismatched call is FALSE and caches only the (tracker,'match') key;
+	 *        the matching call returns TRUE via the positive cache with ZERO reparses —
+	 *        the negative cache did not poison the tracker.
+	 *
+	 * Guards the keyed-by-(tracker,type) + positive-first design: keying the miss cache
+	 * by tracker alone would have suppressed the matching event for the daemon's life.
+	 */
+	public function testTypeMismatchDoesNotPoisonCacheForMatchingType(): void
+	{
+		$reparseCount = 0;
+		// Reparse returns the tracker still only as type 'block' — the 'match' type stays unresolved.
+		$reparse = function () use (&$reparseCount): array {
+			$reparseCount++;
+			return $this->ruleListWithPfb('1212', 'block');
+		};
+
+		$ruleList  = $this->ruleListWithPfb('1212', 'block');
+		$missCache = [];
+
+		// When: a mismatched-type ('match') line is resolved — unresolved, one reparse, cached by (tracker,type)
+		$mismatch = pfb_resolve_tracker($ruleList, $missCache, '1212', 'match', $reparse);
+		$this->assertFalse($mismatch, 'A type mismatch that the reparse cannot resolve must return FALSE');
+		$this->assertSame(1, $reparseCount, 'The mismatched type triggers exactly one reparse');
+		$this->assertArrayHasKey("1212\0match", $missCache, 'Only the mismatched (tracker,type) pair is negative-cached');
+		$this->assertArrayNotHasKey("1212\0block", $missCache, 'The matching type must NOT be negative-cached');
+
+		// Then: a later correctly-typed ('block') line resolves TRUE via the positive cache, no reparse
+		$match = pfb_resolve_tracker($ruleList, $missCache, '1212', 'block', $reparse);
+		$this->assertTrue($match, 'The matching type must still resolve TRUE — the cache was not poisoned');
+		$this->assertSame(1, $reparseCount, 'The matching-type lookup must not trigger any further reparse (positive cache first)');
 	}
 
 	// ---------------------------------------------------------------------------

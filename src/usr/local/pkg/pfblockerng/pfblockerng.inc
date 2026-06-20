@@ -8471,9 +8471,11 @@ function pfb_collect_localhosts() {
 // the line); FALSE for a known non-pfB ('other') or an unresolvable tracker (caller skips).
 //
 // $rule_list  : positive cache from pfb_filterrules(); rebuilt in place on a reparse.
-// $miss_cache : PERSISTENT negative cache of trackers not present in the ruleset; survives
-//               reparses (a reparse rebuilds $rule_list but not this), so each unresolvable
-//               tracker triggers at most ONE reparse for the daemon's life.
+// $miss_cache : PERSISTENT negative cache keyed by "tracker\0type"; survives reparses (a
+//               reparse rebuilds $rule_list but not this), so each unresolvable tracker/type
+//               triggers at most ONE reparse for the daemon's life. Keying by type (and
+//               checking the positive pfB cache first) ensures a transient type mismatch
+//               never suppresses a later log event whose type DOES match the pfB rule.
 // $reparse    : callable() => array — fresh rule list (production: 'pfb_filterrules').
 // $on_reparse : callable() => void  — refresh daemon-local IP/host collections after a reparse.
 function pfb_resolve_tracker(
@@ -8484,19 +8486,22 @@ function pfb_resolve_tracker(
 	callable $reparse,
 	?callable $on_reparse = NULL
 ): bool {
-	// Negative cache: a tracker the ruleset doesn't list (anchor/trackerless) — never reparse again.
-	if (isset($miss_cache[$tracker])) {
+	// Known pfB tracker of the matching type. Checked before the miss cache so a tracker
+	// that becomes valid (e.g. after a reparse for another tracker) always resolves.
+	if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
+		return TRUE;
+	}
+
+	$miss_key = "{$tracker}\0{$type}";
+
+	// Negative cache: a tracker/type the ruleset doesn't list (anchor/trackerless) — never reparse again.
+	if (isset($miss_cache[$miss_key])) {
 		return FALSE;
 	}
 
 	// Known non-pfB tracker.
 	if (isset($rule_list['other'][$tracker])) {
 		return FALSE;
-	}
-
-	// Known pfB tracker of the matching type.
-	if (isset($rule_list[$tracker]) && $rule_list[$tracker]['type'] == $type) {
-		return TRUE;
 	}
 
 	// Unknown — reparse ONCE to pick up a freshly added/changed rule.
@@ -8513,8 +8518,8 @@ function pfb_resolve_tracker(
 		return FALSE;
 	}
 
-	// Still absent after a fresh parse — record in the persistent negative cache.
-	$miss_cache[$tracker] = TRUE;
+	// Still unresolved for this tracker/type after a fresh parse — record in the negative cache.
+	$miss_cache[$miss_key] = TRUE;
 	return FALSE;
 }
 
