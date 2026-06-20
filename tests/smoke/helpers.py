@@ -1636,6 +1636,119 @@ def inject_ip_lists(vm: SmokeVM, specs: list[IpCase], *, timeout: float = 90.0) 
         raise RuntimeError(f"inject_ip_lists failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
+    """One DNSBL list-group as a PHP literal for use in :func:`inject_dnsbl_lists`.
+
+    Mirrors ``_dnsbl_inject_snippet`` at the single-list level: builds the group's
+    ``$list`` array (aliasname / action='unbound' / cron / order / logging / custom /
+    row) and returns it as a PHP expression suitable for embedding in an array literal.
+
+    ``row_action`` sets the per-primary-row ``action`` key (``'Deny'`` or ``'Permit'``).
+    The default ``'Deny'`` is byte-identical to the absent-key behaviour (Phase 4 reads
+    ``$row['action'] ?? ''`` and treats any non-'Permit' value as Deny); ``'Permit'``
+    marks this feed as an allow-list (band 2 whiteDB, overrides block feeds).
+
+    Only the primary feed row's action is settable here; ``extra_rows`` carry no action
+    override (they inherit the Deny default). Custom_List (``spec.custom_domains``) is
+    rendered as a PHP ``base64_encode()`` call for correctness across PHP string escaping.
+    """
+    row: dict[str, str] = {
+        "header": spec.header,
+        "url": spec.feed_url,
+        "state": "Enabled",
+        "format": "auto",
+    }
+    if row_action == "Permit":
+        row["action"] = "Permit"
+    rows = [row]
+    rows += [{"header": hdr, "url": url, "state": "Enabled", "format": "auto"} for (hdr, url) in spec.extra_rows]
+    rows_php = "array(" + ", ".join(_php_kv_array(r) for r in rows) + ")"
+    logging_php = _php_str(_dnsbl_list_logging(spec.mode))
+    if spec.custom_domains:
+        crlf = "\r\n".join(spec.custom_domains)
+        # base64_encode is a PHP built-in; encoding here avoids double-escaping.
+        custom_php = f", 'custom' => base64_encode({_php_str(crlf)})"
+    else:
+        custom_php = ""
+    # Build the list-group PHP array literal directly (no _php_kv_array for the outer
+    # shell so we can embed the non-string 'row' and 'logging' PHP expressions).
+    alias_php = _php_str(spec.aliasname)
+    return (
+        f"array('aliasname' => {alias_php}, 'action' => 'unbound', 'cron' => 'EveryDay',"
+        f" 'order' => 'primary', 'logging' => {logging_php}, 'row' => {rows_php}{custom_php})"
+    )
+
+
+def inject_dnsbl_lists(
+    vm: SmokeVM,
+    specs_and_actions: list[tuple[DnsblCase, str]],
+    *,
+    timeout: float = 90.0,
+) -> None:
+    """Inject MULTIPLE DNSBL list-groups in ONE config write, preserving every one.
+
+    :func:`inject` (via ``_dnsbl_inject_snippet``) calls
+    ``config_set_path(CFG_DNSBL_LISTS, array($list))``, which replaces the entire DNSBL
+    config with a SINGLE list-group. Calling it twice for two groups therefore discards
+    the first. Use this helper when a test needs two (or more) DNSBL groups to coexist —
+    for example a Deny feed and a Permit feed that share a domain (the ADR-31 §2.2.2
+    contract: the Permit allow overrides the block).
+
+    ``specs_and_actions`` is a list of ``(DnsblCase, row_action)`` pairs, where
+    ``row_action`` is ``'Deny'`` (default block feed) or ``'Permit'`` (allow feed that
+    loads its domains into whiteDB at band 2). Settings from the FIRST spec are used for
+    the DNSBL-settings section (``pfb_dnsbl``, whitelist, etc.); per-list settings
+    (logging, aliasname, custom_domains) come from each spec individually.
+
+    Control records are applied per-spec, mirroring :func:`inject`.
+    """
+    if not specs_and_actions:
+        raise ValueError("inject_dnsbl_lists: at least one (spec, action) pair required")
+    for spec, _ in specs_and_actions:
+        set_control_records(vm, spec.control_local_data, spec.control_local_zone, timeout=timeout)
+
+    # Build the DNSBL-settings snippet from the FIRST spec (the primary block feed).
+    primary_spec, _ = specs_and_actions[0]
+    settings = _dnsbl_mode_settings(primary_spec.mode)
+    settings["pfb_dnsbl"] = "on"
+    if primary_spec.whitelist:
+        settings["suppression"] = _b64_textarea(primary_spec.whitelist)
+    if primary_spec.dnsbl_ip_action:
+        settings["action"] = primary_spec.dnsbl_ip_action
+    if primary_spec.user_regex:
+        settings["pfb_regex"] = "on"
+        settings["pfb_regex_list"] = _b64_textarea(primary_spec.user_regex)
+    if primary_spec.regex_cap:
+        settings["pfb_regex_cap"] = "on"
+    if primary_spec.cname_validation:
+        settings["pfb_cname"] = "on"
+    if primary_spec.hsts is not None:
+        settings["pfb_hsts"] = "on" if primary_spec.hsts else "off"
+    if primary_spec.idn_mode is not None:
+        settings["pfb_idn"] = primary_spec.idn_mode
+    if primary_spec.idn_block_malicious is not None:
+        settings["pfb_idn_block_malicious"] = "on" if primary_spec.idn_block_malicious else ""
+    if primary_spec.idn_escalate_suspicious is not None:
+        settings["pfb_idn_escalate_suspicious"] = "on" if primary_spec.idn_escalate_suspicious else ""
+
+    # Build each list-group PHP literal.
+    lists_php = ", ".join(_dnsbl_list_php(spec, action) for spec, action in specs_and_actions)
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$g['enable_cb'] = 'on';\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"$s = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$s = array_merge($s, {_php_kv_array(settings)});\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
+        f"config_set_path({_php_str(CFG_DNSBL_LISTS)}, array({lists_php}));\n"
+        "write_config('pfBlockerNG smoke: DNSBL multi-list (ADR-31)');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"inject_dnsbl_lists failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings = _dnsbl_mode_settings(spec.mode)
     settings["pfb_dnsbl"] = "on"

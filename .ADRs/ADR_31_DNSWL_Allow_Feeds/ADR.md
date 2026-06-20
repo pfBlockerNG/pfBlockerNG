@@ -1,6 +1,6 @@
 # ADR-31: Subscribable remote DNSWL (allow-list) feeds for DNSBL
 
-- **Status:** **Proposed** (2026-06-20)
+- **Status:** **Implemented (pending live-VM smoke fan-out)** (2026-06-20)
 - **Date:** 2026-06-20
 - **Branch:** `adr/31-dnswl-allow-feeds` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
