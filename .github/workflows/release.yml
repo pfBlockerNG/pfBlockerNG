@@ -702,7 +702,13 @@ jobs:
             echo "| previous tag | ${PREV:-<none>} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish GitHub Release
+      - name: Create the GitHub Release as a DRAFT
+        # This repo has IMMUTABLE RELEASES enabled: once a release is PUBLISHED its
+        # assets are frozen, so assets can only be added while it is still a draft.
+        # Create it as a draft here (with the source archive), let attach-pkgs add the
+        # .pkg assets to the same draft, then the publish-release job flips it to
+        # published — at which point immutability locks it with ALL assets present.
+        # (draft: true defers the release.published event to the publish-release step.)
         if: ${{ steps.meta.outputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@v3
         with:
@@ -710,6 +716,7 @@ jobs:
           name: ${{ steps.changelog.outputs.name }}
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
+          draft: true
           files: ${{ env.ARCHIVE }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
@@ -885,10 +892,12 @@ jobs:
         continue-on-error: true
 
       - name: Append .pkg files to the GitHub Release
-        # Upload the renamed .pkg files to the already-published release using
-        # `gh release upload`. This is idempotent: re-uploading an asset with
-        # --clobber replaces it. If pkgs/ has no .pkg files (all builds failed),
-        # this step emits a warning and succeeds without uploading anything.
+        # Upload the renamed .pkg files to the still-DRAFT release using
+        # `gh release upload` (the release is published later by publish-release —
+        # immutable-release repos only accept assets while the release is a draft).
+        # This is idempotent: re-uploading an asset with --clobber replaces it. If
+        # pkgs/ has no .pkg files (all builds failed), this step emits a warning and
+        # succeeds without uploading anything.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG:      ${{ needs.release.outputs.tag }}
@@ -911,6 +920,32 @@ jobs:
           done
           echo "All .pkg artifacts attached to release ${TAG}"
 
+  # ── 2c2. Publish the draft Release (flip draft → published) ──────────────
+  # The release was created as a DRAFT (immutable-release repos freeze assets at
+  # publish time, so the source archive + every .pkg must be uploaded to the draft
+  # FIRST — done by `release` + `attach-pkgs`). This job flips it to published,
+  # which emits the release.published event and locks the now-complete release as
+  # immutable. It runs only after attach-pkgs so all assets are present; a failed
+  # build (no .pkg) still publishes the release with whatever assets attached.
+  publish-release:
+    name: Publish the draft Release
+    runs-on: ubuntu-latest
+    needs: [prepare-release, release, attach-pkgs]
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.release.outputs.dry_run != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Flip the draft release to published
+        env:
+          GH_TOKEN:   ${{ github.token }}
+          TAG:        ${{ needs.release.outputs.tag }}
+          PRERELEASE: ${{ needs.release.outputs.prerelease }}
+        run: |
+          set -eu
+          if [ "$PRERELEASE" = "true" ]; then PRE_FLAG="--prerelease"; else PRE_FLAG="--latest"; fi
+          gh release edit "$TAG" --draft=false $PRE_FLAG
+          echo "Published release ${TAG} (prerelease=${PRERELEASE})."
+
   # ── 2d. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo:
   # its own publish.yml enumerates this repo's Releases (the durable store),
@@ -919,16 +954,18 @@ jobs:
   # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
   # On a release we just trigger it so the new Release appears at
   # pfblockerng.github.io/pkg within seconds (its daily schedule is the backstop).
-  # ORDERING: this needs [release, attach-pkgs] — the consume run downloads the Release
-  # assets, so they must be ATTACHED first. attach-pkgs exits 0 even with no assets
-  # (build failure), so this still fires; the consumer then serves the prior release.
+  # ORDERING: this needs [release, attach-pkgs, publish-release] — the consume run
+  # enumerates this repo's PUBLISHED Releases and downloads their assets, so the
+  # release must be both fully attached AND flipped to published first. attach-pkgs
+  # exits 0 even with no assets (build failure) and publish-release still publishes,
+  # so this still fires; the consumer then serves whatever assets are present.
   # ADDITIVE + ISOLATED — sync-ports-fork does NOT `needs:` this, so a failure here can
   # NEVER gate or break release / sync-ports-fork / attach-pkgs.
   repo-publish:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
-    needs: [prepare-release, release, attach-pkgs]
-    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.release.outputs.dry_run != 'true'
+    needs: [prepare-release, release, attach-pkgs, publish-release]
+    if: always() && needs.release.result == 'success' && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
     steps:
