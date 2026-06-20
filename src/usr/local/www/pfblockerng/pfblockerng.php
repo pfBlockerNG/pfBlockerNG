@@ -769,6 +769,12 @@ function pfblockerng_sync_cron() {
 	// If Update GUI 'Manual view' is selected. Last output will be missed. So sleep for 5 secs.
 	sleep(5);
 	pfb_log_mgmt();
+
+	// ADR-30: reset each log that has a configured schedule and whose calendar
+	// period has rolled over. Called after pfb_log_mgmt() so the line-cap trim
+	// runs first; the reset then empties the log for the new period. Per-log
+	// boundary-gated: a no-op for every log except those whose period just rolled.
+	pfb_log_reset();
 }
 
 

@@ -1859,6 +1859,167 @@ function pfb_log_mgmt() {
 }
 
 
+// ---------------------------------------------------------------------------
+// ADR-30 — Scheduled (calendar-boundary) per-log reset helpers + action.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the contents of the log_rotate.last marker file into a map of
+ * log type -> last-reset period key.
+ *
+ * Format: one entry per line, "<type>=<period-key>"; blank lines and lines
+ * that do not match the expected format are silently ignored (garbled entry
+ * => '' for that type, i.e. treated as "never reset").
+ *
+ * PURE — no I/O, no globals, no side effects.
+ *
+ * @param string $contents  Raw contents of the marker file ('' when absent).
+ * @return array<string,string>  Map of type => period-key (may be empty).
+ */
+function pfb_log_rotate_marker_parse(string $contents): array
+{
+	$entries = [];
+	foreach (explode("\n", $contents) as $line) {
+		$line = trim($line);
+		if ($line === '') {
+			continue;
+		}
+		$eq = strpos($line, '=');
+		if ($eq === FALSE || $eq === 0) {
+			// Garbled line — skip; the caller treats missing => '' => reset.
+			continue;
+		}
+		$type = substr($line, 0, $eq);
+		$key  = substr($line, $eq + 1);
+		// Only accept entries whose type looks like a valid log identifier:
+		// alphanumeric + underscore, non-empty. Anything else is garbled.
+		if (!preg_match('/^[a-z_][a-z0-9_]*$/', $type)) {
+			continue;
+		}
+		$entries[$type] = $key;
+	}
+	return $entries;
+}
+
+/**
+ * Serialize a log-type -> period-key map back into marker-file contents.
+ *
+ * Each entry is emitted as "<type>=<period-key>\n"; entries are sorted by
+ * type name for stable, human-readable output. The result always ends with
+ * a newline (or is '' when the map is empty).
+ *
+ * PURE — no I/O, no globals, no side effects.
+ *
+ * @param array<string,string> $entries  Map of type => period-key.
+ * @return string                         Serialized contents for the marker file.
+ */
+function pfb_log_rotate_marker_serialize(array $entries): string
+{
+	if (empty($entries)) {
+		return '';
+	}
+	ksort($entries);
+	$lines = '';
+	foreach ($entries as $type => $key) {
+		$lines .= "{$type}={$key}\n";
+	}
+	return $lines;
+}
+
+/**
+ * Reset each pfBlockerNG log that has a configured calendar schedule and
+ * whose period has rolled over since it was last reset.
+ *
+ * Iterates the same 10 log types that pfb_log_mgmt() manages. For each:
+ *   - Reads its log_rotate_<type> schedule via PfbConfig (RequireConfigGateway).
+ *   - Looks up its last-reset period key from the per-log marker file.
+ *   - Calls pfb_log_should_reset() to decide (pure, no I/O).
+ *   - On a rolled boundary: truncates that log to empty IN PLACE (inode +
+ *     ownership preserved — same chroot/chown handling as pfb_log_mgmt()),
+ *     then updates that log's marker entry.
+ * Persists the marker file once after the loop.
+ *
+ * Called once per cron tick, immediately after pfb_log_mgmt().
+ * NOT called on the settings-save path.
+ *
+ * Contract (ADR-30 §2.2):
+ *   - 'off'/'' schedule => that log is never touched.
+ *   - Idempotent: a second tick in the same period is a no-op (marker unchanged).
+ *   - Per-log independent: one log's reset never affects another.
+ *   - Inode + unbound ownership preserved for chrooted python logs (#264/#280).
+ */
+function pfb_log_reset(): void
+{
+	global $g, $pfb;
+	pfb_global();
+
+	$chroot_folder = '/var/unbound';
+	$marker_path   = "{$pfb['dbdir']}/log_rotate.last";
+
+	// Load the marker file once. A missing or unreadable file is treated as
+	// 'never reset' for every log (the read returns '' -> parse returns []).
+	$marker_contents = @file_get_contents($marker_path) ?: '';
+	$entries         = pfb_log_rotate_marker_parse($marker_contents);
+
+	$changed = FALSE;
+
+	foreach (array('log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
+			'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
+
+		// Read this log's schedule from the config gateway (ADR-29).
+		$schedule = PfbConfig::read('log_rotate_' . $logtype);
+
+		// Missing entry => '' => pfb_log_should_reset treats as "never reset".
+		$last_key = $entries[$logtype] ?? '';
+
+		if (!pfb_log_should_reset($schedule, $last_key, time())) {
+			continue;
+		}
+
+		// Period has rolled over (or this log has never been reset).
+		// Truncate to empty IN PLACE — inode-preserving, mirroring pfb_log_mgmt().
+		if ($logtype === 'dnslog' || $logtype === 'dnsreplylog' || $logtype === 'unilog') {
+
+			// DNS python logs: resolve through the Unbound chroot.
+			if (is_dir("{$chroot_folder}/var/log/pfblockerng")) {
+				$final_log_file = "{$chroot_folder}{$pfb[$logtype]}";
+			} else {
+				$final_log_file = $pfb[$logtype];
+			}
+
+			if (file_exists($final_log_file)) {
+				exec("/bin/cp /dev/null " . escapeshellarg($final_log_file), $out, $ret);
+				if ($ret === 0) {
+					// Re-apply unbound ownership after truncation (same as pfb_log_mgmt).
+					@chown($final_log_file, 'unbound');
+					@chgrp($final_log_file, 'unbound');
+				} else {
+					pfb_logger("\npfb_log_reset: failed to truncate {$final_log_file}", 2);
+					continue;
+				}
+			}
+		} else {
+			if (file_exists($pfb[$logtype])) {
+				exec("/bin/cp /dev/null " . escapeshellarg($pfb[$logtype]), $out, $ret);
+				if ($ret !== 0) {
+					pfb_logger("\npfb_log_reset: failed to truncate {$pfb[$logtype]}", 2);
+					continue;
+				}
+			}
+		}
+
+		// Record the new period key for this log.
+		$entries[$logtype] = pfb_log_rotate_period($schedule, time());
+		$changed           = TRUE;
+	}
+
+	// Persist the marker file once, only when something was reset.
+	if ($changed) {
+		@file_put_contents($marker_path, pfb_log_rotate_marker_serialize($entries), LOCK_EX);
+	}
+}
+
+
 // Record log messsages to pfBlockerNG log file and/or error log file.
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
