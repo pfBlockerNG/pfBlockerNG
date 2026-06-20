@@ -110,21 +110,31 @@ jobs:
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
 
-      - name: Refuse an existing tag
-        # Tags are immutable — re-pushing one would re-publish a stale release body.
-        # Fail loudly rather than silently creating a duplicate.
+      - name: Refuse a published release; resume a draft (idempotent)
+        id: tag_state
+        # Idempotency: this whole flow only becomes irreversible at the final publish
+        # step. A PUBLISHED release is immutable+final → refuse (bump the version). A tag
+        # that exists with only a DRAFT release (or no release yet) is a half-finished
+        # prior run → RESUME it: reuse the existing tag and let the draft be updated
+        # in place. Records tag_exists so the tag step reuses rather than recreates.
         env:
-          TAG: ${{ steps.resolve.outputs.tag }}
+          TAG:      ${{ steps.resolve.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null 2>&1; then
-            echo "::error::tag ${TAG} already exists locally — tags are immutable; bump the version"
+          REPO="${{ github.repository }}"
+          STATE=$(gh release view "$TAG" --repo "$REPO" --json isDraft \
+            --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo "none")
+          if [ "$STATE" = "published" ]; then
+            echo "::error::a PUBLISHED release for ${TAG} already exists — it is immutable; bump the version"
             exit 1
           fi
           if git ls-remote --exit-code --tags origin "$TAG" > /dev/null 2>&1; then
-            echo "::error::tag ${TAG} already exists on the remote — tags are immutable; bump the version"
-            exit 1
+            TAG_EXISTS=true
+          else
+            TAG_EXISTS=false
           fi
-          echo "Tag ${TAG} does not exist yet — proceeding."
+          echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
+          echo "Release state for ${TAG}: ${STATE}; tag exists on remote: ${TAG_EXISTS} — proceeding (resume-safe)."
 
       - name: Require CI green on the branch tip
         # The tag will point at the current HEAD of the channel branch; assert that
@@ -304,8 +314,9 @@ jobs:
         # (GitHub's re-trigger rule for GITHUB_TOKEN): this run continues to build +
         # publish without recursion.
         env:
-          TAG:    ${{ steps.resolve.outputs.tag }}
-          BRANCH: ${{ steps.resolve.outputs.branch }}
+          TAG:        ${{ steps.resolve.outputs.tag }}
+          BRANCH:     ${{ steps.resolve.outputs.branch }}
+          TAG_EXISTS: ${{ steps.tag_state.outputs.tag_exists }}
         run: |
           # Annotated tags need a committer identity. The changelog step also sets
           # this, but it is skipped when a committed notes file already exists, so set
@@ -317,11 +328,18 @@ jobs:
             git push origin "HEAD:${BRANCH}"
             echo "Pushed changelog commit to ${BRANCH}."
           fi
-          SHA=$(git rev-parse HEAD)
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "$TAG"
+          if [ "$TAG_EXISTS" = "true" ]; then
+            # Resume of a prior draft run: the tag already exists (never published →
+            # not burned). Reuse it as-is rather than moving it; SHA = the tagged commit.
+            SHA=$(git rev-list -n 1 "refs/tags/${TAG}" 2>/dev/null || git rev-parse HEAD)
+            echo "Tag ${TAG} already exists — reusing it (resuming a prior draft run)."
+          else
+            SHA=$(git rev-parse HEAD)
+            git tag -a "$TAG" -m "$TAG"
+            git push origin "$TAG"
+            echo "Created and pushed tag ${TAG} at ${SHA}"
+          fi
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Created and pushed tag ${TAG} at ${SHA}"
 
   # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
   # Run the FULL tiered Web-UI suite on the live pfSense VM BEFORE publishing.
@@ -418,7 +436,7 @@ jobs:
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
-    name: Publish GitHub Release
+    name: Create draft GitHub Release
     runs-on: ubuntu-latest
     # Gate on prepare-release (real: must succeed; dry-run: skipped is fine) AND
     # the matrix read. The live-VM UI suite (ui-suite) is TEMPORARILY un-gated
@@ -730,6 +748,9 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           draft: true
+          # Idempotent on re-run: update the existing draft and replace its source
+          # archive rather than erroring or duplicating it.
+          overwrite_files: true
           files: ${{ env.ARCHIVE }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
@@ -933,28 +954,72 @@ jobs:
           done
           echo "All .pkg artifacts attached to release ${TAG}"
 
-  # ── 2c2. Publish the draft Release (flip draft → published) ──────────────
+  # ── 2c2. Health-check, then publish the draft Release (the FINAL, gated step) ──
   # The release was created as a DRAFT (immutable-release repos freeze assets at
   # publish time, so the source archive + every .pkg must be uploaded to the draft
-  # FIRST — done by `release` + `attach-pkgs`). This job flips it to published,
-  # which emits the release.published event and locks the now-complete release as
-  # immutable. It runs only after attach-pkgs so all assets are present; a failed
-  # build (no .pkg) still publishes the release with whatever assets attached.
+  # FIRST — done by `release` + `attach-pkgs`). Publishing is the LAST, irreversible
+  # action: it emits release.published and locks the release immutable. So we GATE it
+  # on a healthcheck that the draft is complete — the source archive AND exactly one
+  # .pkg per build-matrix entry are attached, and the name/body are non-empty. A failed
+  # build (missing .pkg) FAILS the healthcheck and the release STAYS A DRAFT, never a
+  # half-published immutable release; re-running the flow then resumes that same draft.
   publish-release:
-    name: Publish the draft Release
+    name: Health-check + publish the draft Release
     runs-on: ubuntu-latest
-    needs: [prepare-release, release, attach-pkgs]
-    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.release.outputs.dry_run != 'true'
+    needs: [prepare-release, release, attach-pkgs, read-matrix]
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: write
     steps:
-      - name: Flip the draft release to published
+      - name: Health-check the draft release is complete
+        # Verify completeness BEFORE the irreversible publish. Expected assets: the
+        # source archive + exactly one .pkg per build-matrix entry (every CE/Plus
+        # variant × FreeBSD major × arch). Anything missing → fail, leaving the draft
+        # intact for a resume. Already-published (idempotent re-run) short-circuits OK.
+        env:
+          GH_TOKEN:     ${{ github.token }}
+          TAG:          ${{ needs.release.outputs.tag }}
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+        run: |
+          set -eu
+          REPO="${{ github.repository }}"
+
+          META=$(gh release view "$TAG" --repo "$REPO" --json isDraft,name,body,assets)
+          IS_DRAFT=$(printf '%s' "$META" | jq -r '.isDraft')
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "Release ${TAG} is already published — nothing to verify (idempotent re-run)."
+            exit 0
+          fi
+
+          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq 'length')
+          PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
+          SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
+
+          echo "Draft assets:"
+          printf '%s' "$META" | jq -r '.assets[].name' | sort | sed 's/^/  - /'
+          echo "Expected .pkg: ${EXPECTED_PKGS} | found .pkg: ${PKG_COUNT} | source archives: ${SRC_COUNT}"
+
+          FAIL=0
+          [ "$SRC_COUNT" -ge 1 ] || { echo "::error::no source archive (.tar.gz) attached to the draft"; FAIL=1; }
+          [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — not publishing an incomplete release"; FAIL=1; }
+          printf '%s' "$META" | jq -e '(.name // "") != "" and ((.body // "") | length) > 0' >/dev/null \
+            || { echo "::error::release name or body is empty"; FAIL=1; }
+          [ "$FAIL" -eq 0 ] || exit 1
+          echo "Healthcheck passed — draft ${TAG} is complete and safe to publish."
+
+      - name: Publish (flip draft → published) — the final, irreversible step
         env:
           GH_TOKEN:   ${{ github.token }}
           TAG:        ${{ needs.release.outputs.tag }}
           PRERELEASE: ${{ needs.release.outputs.prerelease }}
         run: |
           set -eu
+          REPO="${{ github.repository }}"
+          IS_DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "Release ${TAG} already published — nothing to do (idempotent)."
+            exit 0
+          fi
           if [ "$PRERELEASE" = "true" ]; then PRE_FLAG="--prerelease"; else PRE_FLAG="--latest"; fi
           gh release edit "$TAG" --draft=false $PRE_FLAG
           echo "Published release ${TAG} (prerelease=${PRERELEASE})."
@@ -969,9 +1034,9 @@ jobs:
   # pfblockerng.github.io/pkg within seconds (its daily schedule is the backstop).
   # ORDERING: this needs [release, attach-pkgs, publish-release] — the consume run
   # enumerates this repo's PUBLISHED Releases and downloads their assets, so the
-  # release must be both fully attached AND flipped to published first. attach-pkgs
-  # exits 0 even with no assets (build failure) and publish-release still publishes,
-  # so this still fires; the consumer then serves whatever assets are present.
+  # release must be fully attached, healthchecked, AND flipped to published first.
+  # publish-release only publishes a COMPLETE draft (healthcheck), so by the time this
+  # fires the published release carries every expected .pkg.
   # ADDITIVE + ISOLATED — sync-ports-fork does NOT `needs:` this, so a failure here can
   # NEVER gate or break release / sync-ports-fork / attach-pkgs.
   repo-publish:
@@ -1002,14 +1067,13 @@ jobs:
 
   # ── 2e. Redeploy the Cloudflare routing Worker (ADR-20) ─────────────────────
   # The Worker reads routing.json from Pages and 302-redirects pkg to the
-  # correct variant catalog.  Redeployed on every release so the live Worker
-  # always matches the current wrangler.toml / source.  ADDITIVE + ISOLATED —
-  # same pattern as repo-publish: only needs: [prepare-release, release], never
-  # blocks sync-ports-fork.
+  # correct variant catalog. Redeployed on every release so the live Worker
+  # always matches the current wrangler.toml / source. Gated on publish-release:
+  # nothing outward-facing happens until the release is definitively published.
   deploy-worker:
     name: Deploy Cloudflare routing Worker
-    needs: [prepare-release, release]
-    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    needs: [prepare-release, release, publish-release]
+    if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     uses: ./.github/workflows/deploy-worker.yml
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1021,12 +1085,14 @@ jobs:
   # fork's build-input branch (pfblockerng/use-github) — the SAME branch every
   # build reads (release.yml build-pkgs-portable, pfBlockerNG/pkg publish.yml) —
   # so the fork's port stays in lockstep with each release. Direct push: it's our
-  # branch, no PR. A no-op bump (version unchanged) just exits.
+  # branch, no PR. A no-op bump (version unchanged) just exits. Gated on
+  # publish-release so the public port only advances once the release is definitively
+  # published (healthcheck passed) — never for a draft that failed to complete.
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
-    needs: [prepare-release, release]
-    if: needs.release.outputs.dry_run != 'true'
+    needs: [prepare-release, release, publish-release]
+    if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
 
