@@ -95,9 +95,9 @@ devel" guard, applied before the tag exists.
    - a GitHub **Release** (`pre-release` for alpha/beta/rc), title
      `pfBlockerNG <version> — <3-word summary>`, body grouped Features / Improvements /
      Bug Fixes ending in the compare link;
-   - one **`.pkg` per FreeBSD major × arch**, named
-     `pfSense-pkg-pfBlockerNG[-devel]-<portversion>-FreeBSD-<major>-<arch>.pkg`, attached
-     to the Release;
+   - one **`.pkg` per variant × FreeBSD major × arch**, named
+     `pfSense-pkg-pfBlockerNG[-devel]-<portversion>-<varslug>-FreeBSD-<major>-<arch>.pkg`
+     (e.g. `…-4.0.0.alpha.1-ce-2.8-FreeBSD-15-amd64.pkg`), attached to the Release;
    - the **self-hosted pkg repo** republish (`pfBlockerNG/pkg`) so the build appears at
      `pfblockerng.github.io/pkg` within minutes;
    - the **port bump** on `pfBlockerNG/FreeBSD-ports@pfblockerng/use-github`.
