@@ -1021,7 +1021,7 @@ jobs:
             exit 0
           fi
           if [ "$PRERELEASE" = "true" ]; then PRE_FLAG="--prerelease"; else PRE_FLAG="--latest"; fi
-          gh release edit "$TAG" --draft=false $PRE_FLAG
+          gh release edit "$TAG" --repo "$REPO" --draft=false $PRE_FLAG
           echo "Published release ${TAG} (prerelease=${PRERELEASE})."
 
   # ── 2d. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
