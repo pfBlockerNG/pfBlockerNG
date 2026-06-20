@@ -662,55 +662,56 @@ def test_retention_buffer_plain_log_keeps_last_k_lines(deployed_vm: SmokeVM) -> 
     """
     vm = deployed_vm
 
-    # --- Given ---
-    _set_log_rotate_schedule(vm, {"ip_blocklog": "daily"})
-    _set_log_reset_keep(vm, {"ip_blocklog": 3})
-    _seed_log(vm, LOG_IP_BLOCKLOG, _SEED_IP_BLOCKLOG_6)
-    _write_marker(vm, {"ip_blocklog": _stale_daily_key()})
+    try:
+        # --- Given ---
+        _set_log_rotate_schedule(vm, {"ip_blocklog": "daily"})
+        _set_log_reset_keep(vm, {"ip_blocklog": 3})
+        _seed_log(vm, LOG_IP_BLOCKLOG, _SEED_IP_BLOCKLOG_6)
+        _write_marker(vm, {"ip_blocklog": _stale_daily_key()})
 
-    content_before = _read_file(vm, LOG_IP_BLOCKLOG)
-    assert content_before.strip(), "BEFORE: ip_blocklog should be non-empty after 6-line seed — test setup failed"
-    assert content_before.count("\n") >= 6, (  # noqa: PLR2004
-        f"BEFORE: ip_blocklog should have 6 lines, got: {content_before!r}"
-    )
+        content_before = _read_file(vm, LOG_IP_BLOCKLOG)
+        assert content_before.strip(), "BEFORE: ip_blocklog should be non-empty after 6-line seed — test setup failed"
+        assert content_before.count("\n") >= 6, (  # noqa: PLR2004
+            f"BEFORE: ip_blocklog should have 6 lines, got: {content_before!r}"
+        )
 
-    inode_before = _get_inode(vm, LOG_IP_BLOCKLOG)
-    assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
+        inode_before = _get_inode(vm, LOG_IP_BLOCKLOG)
+        assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
 
-    marker_before = _read_marker(vm)
-    assert marker_before.get("ip_blocklog") == _stale_daily_key(), (
-        f"BEFORE: marker ip_blocklog should be yesterday's key {_stale_daily_key()!r}, "
-        f"got {marker_before.get('ip_blocklog')!r}"
-    )
+        marker_before = _read_marker(vm)
+        assert marker_before.get("ip_blocklog") == _stale_daily_key(), (
+            f"BEFORE: marker ip_blocklog should be yesterday's key {_stale_daily_key()!r}, "
+            f"got {marker_before.get('ip_blocklog')!r}"
+        )
 
-    # --- When ---
-    h.reload(vm, "cron")
+        # --- When ---
+        h.reload(vm, "cron")
 
-    # --- Then ---
-    content_after = _read_file(vm, LOG_IP_BLOCKLOG)
-    assert content_after == _SEED_IP_BLOCKLOG_6_TAIL3, (
-        f"AFTER: ip_blocklog should hold exactly the last 3 seeded lines.\n"
-        f"  expected: {_SEED_IP_BLOCKLOG_6_TAIL3!r}\n"
-        f"  got:      {content_after!r}"
-    )
+        # --- Then ---
+        content_after = _read_file(vm, LOG_IP_BLOCKLOG)
+        assert content_after == _SEED_IP_BLOCKLOG_6_TAIL3, (
+            f"AFTER: ip_blocklog should hold exactly the last 3 seeded lines.\n"
+            f"  expected: {_SEED_IP_BLOCKLOG_6_TAIL3!r}\n"
+            f"  got:      {content_after!r}"
+        )
 
-    inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
-    assert inode_after == inode_before, (
-        f"AFTER: ip_blocklog inode changed — file was recreated instead of kept in-place "
-        f"(before={inode_before!r}, after={inode_after!r})"
-    )
+        inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
+        assert inode_after == inode_before, (
+            f"AFTER: ip_blocklog inode changed — file was recreated instead of kept in-place "
+            f"(before={inode_before!r}, after={inode_after!r})"
+        )
 
-    marker_after = _read_marker(vm)
-    expected_key = _current_daily_key()
-    assert marker_after.get("ip_blocklog") == expected_key, (
-        f"AFTER: marker ip_blocklog should be today's key {expected_key!r}, got {marker_after.get('ip_blocklog')!r}"
-    )
-
-    # --- Cleanup ---
-    _set_log_rotate_schedule(vm, {"ip_blocklog": "off"})
-    _set_log_reset_keep(vm, {"ip_blocklog": 0})
-    _rm_marker(vm)
-    _rm_log(vm, LOG_IP_BLOCKLOG)
+        marker_after = _read_marker(vm)
+        expected_key = _current_daily_key()
+        assert marker_after.get("ip_blocklog") == expected_key, (
+            f"AFTER: marker ip_blocklog should be today's key {expected_key!r}, got {marker_after.get('ip_blocklog')!r}"
+        )
+    finally:
+        # --- Cleanup (always runs, even on assertion failure — shared module VM) ---
+        _set_log_rotate_schedule(vm, {"ip_blocklog": "off"})
+        _set_log_reset_keep(vm, {"ip_blocklog": 0})
+        _rm_marker(vm)
+        _rm_log(vm, LOG_IP_BLOCKLOG)
 
 
 # --------------------------------------------------------------------------- #
@@ -757,60 +758,62 @@ def test_retention_buffer_chrooted_dns_log_keeps_last_k_lines_and_ownership(
         else:
             dnslog_path = LOG_DNSLOG_HOST
 
-    # --- Given ---
-    _set_log_rotate_schedule(vm, {"dnslog": "daily"})
-    _set_log_reset_keep(vm, {"dnslog": 3})
-    _seed_log(vm, dnslog_path, _SEED_DNSLOG_6)
-    vm.ssh("/usr/sbin/chown", "unbound:unbound", dnslog_path, timeout=30)
-    _write_marker(vm, {"dnslog": _stale_daily_key()})
+    try:
+        # --- Given ---
+        _set_log_rotate_schedule(vm, {"dnslog": "daily"})
+        _set_log_reset_keep(vm, {"dnslog": 3})
+        _seed_log(vm, dnslog_path, _SEED_DNSLOG_6)
+        vm.ssh("/usr/sbin/chown", "unbound:unbound", dnslog_path, timeout=30)
+        _write_marker(vm, {"dnslog": _stale_daily_key()})
 
-    content_before = _read_file(vm, dnslog_path)
-    assert content_before.strip(), "BEFORE: dnslog should be non-empty after 6-line seed — test setup failed"
-    assert content_before.count("\n") >= 6, (  # noqa: PLR2004
-        f"BEFORE: dnslog should have 6 lines, got: {content_before!r}"
-    )
+        content_before = _read_file(vm, dnslog_path)
+        assert content_before.strip(), "BEFORE: dnslog should be non-empty after 6-line seed — test setup failed"
+        assert content_before.count("\n") >= 6, (  # noqa: PLR2004
+            f"BEFORE: dnslog should have 6 lines, got: {content_before!r}"
+        )
 
-    inode_before = _get_inode(vm, dnslog_path)
-    assert inode_before, f"BEFORE: could not read dnslog inode at {dnslog_path}"
+        inode_before = _get_inode(vm, dnslog_path)
+        assert inode_before, f"BEFORE: could not read dnslog inode at {dnslog_path}"
 
-    owner_before = _get_file_owner(vm, dnslog_path)
-    assert owner_before == "unbound", f"BEFORE: dnslog owner should be 'unbound', got {owner_before!r}"
+        owner_before = _get_file_owner(vm, dnslog_path)
+        assert owner_before == "unbound", f"BEFORE: dnslog owner should be 'unbound', got {owner_before!r}"
 
-    marker_before = _read_marker(vm)
-    assert marker_before.get("dnslog") == _stale_daily_key(), (
-        f"BEFORE: marker dnslog should be yesterday's key {_stale_daily_key()!r}, got {marker_before.get('dnslog')!r}"
-    )
+        marker_before = _read_marker(vm)
+        assert marker_before.get("dnslog") == _stale_daily_key(), (
+            f"BEFORE: marker dnslog should be yesterday's key {_stale_daily_key()!r}, "
+            f"got {marker_before.get('dnslog')!r}"
+        )
 
-    # --- When ---
-    h.reload(vm, "cron")
+        # --- When ---
+        h.reload(vm, "cron")
 
-    # --- Then ---
-    content_after = _read_file(vm, dnslog_path)
-    assert content_after == _SEED_DNSLOG_6_TAIL3, (
-        f"AFTER: dnslog should hold exactly the last 3 seeded lines.\n"
-        f"  expected: {_SEED_DNSLOG_6_TAIL3!r}\n"
-        f"  got:      {content_after!r}"
-    )
+        # --- Then ---
+        content_after = _read_file(vm, dnslog_path)
+        assert content_after == _SEED_DNSLOG_6_TAIL3, (
+            f"AFTER: dnslog should hold exactly the last 3 seeded lines.\n"
+            f"  expected: {_SEED_DNSLOG_6_TAIL3!r}\n"
+            f"  got:      {content_after!r}"
+        )
 
-    inode_after = _get_inode(vm, dnslog_path)
-    assert inode_after == inode_before, (
-        f"AFTER: dnslog inode changed — file was recreated instead of kept in-place "
-        f"(before={inode_before!r}, after={inode_after!r})"
-    )
+        inode_after = _get_inode(vm, dnslog_path)
+        assert inode_after == inode_before, (
+            f"AFTER: dnslog inode changed — file was recreated instead of kept in-place "
+            f"(before={inode_before!r}, after={inode_after!r})"
+        )
 
-    owner_after = _get_file_owner(vm, dnslog_path)
-    assert owner_after == "unbound", (
-        f"AFTER: dnslog owner should still be 'unbound' after retention keep, got {owner_after!r}"
-    )
+        owner_after = _get_file_owner(vm, dnslog_path)
+        assert owner_after == "unbound", (
+            f"AFTER: dnslog owner should still be 'unbound' after retention keep, got {owner_after!r}"
+        )
 
-    marker_after = _read_marker(vm)
-    expected_key = _current_daily_key()
-    assert marker_after.get("dnslog") == expected_key, (
-        f"AFTER: marker dnslog should be today's key {expected_key!r}, got {marker_after.get('dnslog')!r}"
-    )
-
-    # --- Cleanup ---
-    _set_log_rotate_schedule(vm, {"dnslog": "off"})
-    _set_log_reset_keep(vm, {"dnslog": 0})
-    _rm_marker(vm)
-    _rm_log(vm, dnslog_path)
+        marker_after = _read_marker(vm)
+        expected_key = _current_daily_key()
+        assert marker_after.get("dnslog") == expected_key, (
+            f"AFTER: marker dnslog should be today's key {expected_key!r}, got {marker_after.get('dnslog')!r}"
+        )
+    finally:
+        # --- Cleanup (always runs, even on assertion failure — shared module VM) ---
+        _set_log_rotate_schedule(vm, {"dnslog": "off"})
+        _set_log_reset_keep(vm, {"dnslog": 0})
+        _rm_marker(vm)
+        _rm_log(vm, dnslog_path)
