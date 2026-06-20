@@ -4810,6 +4810,35 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 }
 
 
+// ADR-31 P3: Build a single per-feed manifest row for $pfb_py_feeds[]. Extracted
+// from the DNSBL download loop so the DNSWL section (Phase 4) can reuse the same
+// structure parameterised by $mode.
+//
+// $mode = 'deny'   → omit the 'mode' key (byte-identical with pre-ADR-31 deny entries;
+//                    Python treats absent as deny — Phase 2 contract).
+// $mode = 'permit' → add 'mode' => 'permit' to the row (Phase 4 DNSWL feeds).
+//
+// No file I/O, no exec, no validation side-effects — pure array construction; the
+// producing loops have already validated $header (PFB_FILTER_WORD) and resolved
+// $format/$provenance before calling here.
+function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
+	string $format, string $provenance, string $mode = 'deny'): array
+{
+	$row = array(
+		'header'     => $header,
+		'group'      => $group,
+		'log'        => $log_flag,
+		'format'     => $format,
+		'provenance' => $provenance,
+	);
+	// deny (or default absent) → omit the 'mode' key; permit → emit it.
+	if ($mode !== 'deny') {
+		$row['mode'] = $mode;
+	}
+	return $row;
+}
+
+
 // ADR-06: Build the shell->Python contract. Writes the per-feed manifest
 // ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
 // lower-cased domain per line) referenced by the manifest. The Python plugin's
@@ -11383,9 +11412,11 @@ function sync_package_pfblockerng($cron='') {
 								$lists_dnsbl_current[]	= "{$row['header']}";
 								// ADR-07 P8: a reused feed isn't re-parsed, so read the
 								// persisted '.abp' marker to carry its format_hint forward.
-								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
-									'format' => file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
-										'provenance' => $custom ? 'user' : 'feed');
+								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
+								$pfb_py_feeds[]		= pfb_feed_manifest_row(
+									$header, $alias, $logging_type,
+									file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
+									$custom ? 'user' : 'feed');
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
 								$alias_cnt		= $alias_cnt + $list_cnt;
@@ -11978,9 +12009,11 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-07 P8: tag ABP feeds 'abp' so the manifest writer passes
 								// their RAW lines through to the Python parser (parse_abp); all
 								// other feeds stay 'plain' (PHP-extracted bare domains).
-								$pfb_py_feeds[]		= array('header' => $header, 'group' => $alias, 'log' => $logging_type,
-									'format' => $easylist ? 'abp' : 'plain',
-										'provenance' => $custom ? 'user' : 'feed');
+								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
+								$pfb_py_feeds[]		= pfb_feed_manifest_row(
+									$header, $alias, $logging_type,
+									$easylist ? 'abp' : 'plain',
+									$custom ? 'user' : 'feed');
 
 								// ADR-07 P8: persist the ABP marker so a future reuse build (which
 								// does not re-parse the feed) carries the format_hint forward.
