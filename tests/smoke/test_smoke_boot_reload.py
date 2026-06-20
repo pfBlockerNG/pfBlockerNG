@@ -53,6 +53,14 @@ from .conftest import SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.reboot
 
+# A throwaway marker dropped in /var right before the ramdisk reboot. pfSense's MFS
+# wipes /var on every boot (it only restores a known set: RRD, DHCP leases, logs,
+# captive portal — NOT a top-level /var file), so the sentinel VANISHING after the
+# reboot is direct, implementation-agnostic proof that /var really came up as a memory
+# filesystem. If it SURVIVES, the config flag did not engage MFS and the ramdisk leg
+# would be a false negative — so the leg asserts on this.
+VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_WIPE_SENTINEL"
+
 
 @dataclass
 class RebootObservation:
@@ -66,6 +74,9 @@ class RebootObservation:
     archive_present: bool
     after_members: list[str]
     after_rule: bool
+    # ramdisk leg only: did /var actually get wiped on the reboot (MFS engaged)?
+    var_wiped: bool | None = None
+    var_mount: str = ""
 
 
 @pytest.fixture(scope="module")
@@ -124,6 +135,11 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
     before_rule = h.rule_references(vm, spec.alias)
     archive_present = ramdisk and vm.ssh("test", "-f", h.ALIASARCHIVE).returncode == 0
 
+    # ramdisk leg: drop a /var sentinel so the post-reboot check can PROVE /var came up
+    # as a memory filesystem (the sentinel is wiped) rather than persisting on disk.
+    if ramdisk:
+        vm.ssh("/usr/bin/touch", VAR_WIPE_SENTINEL)
+
     # When: reboot the guest, exercising the boot-time sync short-circuit (and, on the
     # ramdisk leg, the /var wipe + earlyshellcmd archive restore).
     h.reboot_vm(vm)
@@ -131,6 +147,13 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
     # Then (captured): the alias table + its rule reference, post-reboot.
     after_members = h.wait_pfctl_table(vm, spec.alias)
     after_rule = h.rule_references(vm, spec.alias)
+
+    var_wiped: bool | None = None
+    var_mount = ""
+    if ramdisk:
+        var_wiped = vm.ssh("test", "-e", VAR_WIPE_SENTINEL).returncode != 0
+        mounts = vm.ssh("/sbin/mount")
+        var_mount = next((ln for ln in mounts.stdout.splitlines() if " on /var " in ln), "")
 
     return RebootObservation(
         ramdisk=ramdisk,
@@ -141,6 +164,8 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         archive_present=archive_present,
         after_members=after_members,
         after_rule=after_rule,
+        var_wiped=var_wiped,
+        var_mount=var_mount,
     )
 
 
@@ -169,6 +194,13 @@ def test_ip_alias_and_rule_survive_reboot(reboot_observation: RebootObservation)
         assert obs.archive_present, (
             f"precondition [ramdisk]: {h.ALIASARCHIVE} must exist pre-reboot (the earlyshellcmd "
             "restore source) — else the ramdisk path is not actually exercised"
+        )
+        # Prove MFS actually engaged: the /var sentinel must be GONE after the reboot,
+        # which means /var came up fresh (memory FS) and the alias survived via the
+        # archive restore — not because /var merely persisted on disk.
+        assert obs.var_wiped, (
+            "precondition [ramdisk]: /var was NOT wiped on reboot — use_mfs_tmpvar did not "
+            f"engage a memory filesystem, so this leg is a false negative (mount: {obs.var_mount!r})"
         )
 
     # --- Then (after reboot): the alias table + its rule must STILL be present ---
