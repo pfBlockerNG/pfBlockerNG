@@ -66,9 +66,12 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for this module and set up the base state.
 
     Log rotation does not require DNSBL to be active — it runs purely from the
-    cron tick (``pfblockerng.php update``), which is reached via
-    ``helpers.reload(vm, 'update')``.  We still need pfBlockerNG installed and
-    ``enable_cb=on`` so the cron function body executes (inc:793 gates on it).
+    cron tick (``pfblockerng.php cron`` → ``pfblockerng_sync_cron()``), driven
+    via ``helpers.reload(vm, 'cron')``.  The scheduled reset (``pfb_log_reset()``)
+    lives in ``pfblockerng_sync_cron()`` and runs ONLY on the ``cron`` verb; the
+    ``update`` (Force-Update) verb calls ``sync_package_pfblockerng('cron')``
+    directly and bypasses it, so these cases must drive ``cron``.  We still need
+    pfBlockerNG installed and ``enable_cb=on`` so the cron function body executes.
     The DNSBL VIP and feed infrastructure are NOT needed for these cases.
     """
     if not os.environ.get("SMOKE_PKG"):
@@ -290,7 +293,7 @@ def test_boundary_reset_inode_preserved_and_per_log_independence(
 
     # --- When ---
     # Trigger the cron entry point; pfb_log_reset() runs inside pfblockerng.php update.
-    h.reload(vm, "update")
+    h.reload(vm, "cron")
 
     # --- Then ---
     content_after_block = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -359,7 +362,7 @@ def test_same_period_is_idempotent(deployed_vm: SmokeVM) -> None:
     )
 
     # --- When ---
-    h.reload(vm, "update")
+    h.reload(vm, "cron")
 
     # --- Then ---
     content_after = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -456,7 +459,7 @@ def test_chrooted_python_log_reset_preserves_inode_and_ownership(
     )
 
     # --- When ---
-    h.reload(vm, "update")
+    h.reload(vm, "cron")
 
     # --- Then ---
     content_after = _read_file(vm, dnslog_path)
@@ -538,7 +541,7 @@ def test_all_off_no_log_emptied(deployed_vm: SmokeVM) -> None:
     assert marker_before.get("ip_permitlog") == stale_key, f"BEFORE: marker ip_permitlog should be {stale_key!r}"
 
     # --- When ---
-    h.reload(vm, "update")
+    h.reload(vm, "cron")
 
     # --- Then ---
     content_after_block = _read_file(vm, LOG_IP_BLOCKLOG)

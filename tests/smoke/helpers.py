@@ -1883,7 +1883,11 @@ def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeo
     """Run a pfBlockerNG reload via the PHP CLI cron verb.
 
     ``scope`` is the verb: ``updatednsbl`` / ``updateip`` (targeted, faster per
-    case) or ``update`` (full force, IP+DNSBL).
+    case), ``update`` (full force, IP+DNSBL), or ``cron`` (the scheduled cron
+    tick, ``pfblockerng_sync_cron()``). NOTE: ``cron`` is the ONLY verb that runs
+    the ADR-30 per-log scheduled reset (``pfb_log_reset()``); ``update`` calls
+    ``sync_package_pfblockerng('cron')`` directly and bypasses it, so a test that
+    needs a scheduled log reset to fire MUST use ``cron``, not ``update``.
 
     READINESS depends on whether a restart is expected (ADR-10):
 
@@ -1902,8 +1906,8 @@ def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeo
       the no-restart invariant (pid unchanged), so use this only when a config-clean
       python-mode DNSBL data update is expected; it RAISES if the swap line never appears.
     """
-    if scope not in ("update", "updateip", "updatednsbl"):
-        raise ValueError(f"reload scope must be update/updateip/updatednsbl, got {scope!r}")
+    if scope not in ("update", "updateip", "updatednsbl", "cron"):
+        raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
     result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
