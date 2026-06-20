@@ -89,7 +89,12 @@ if ($_POST) {
 						}
 						break;
 					case 'varsyncpassword':
-						$value = htmlspecialchars($value);
+						// Store verbatim: the password is a secret credential used for
+						// XMLRPC authentication, not rendered as raw HTML. HTML-escaping
+						// it here corrupted any password containing & " ' < > (the
+						// escaped form was sent to the peer, breaking auth). Form_Input
+						// escapes it for safe display on re-render.
+						$value = pfb_sync_filter_password($value);
 						break;
 					case 'varsyncipaddress':
 						// Validate IP Address/Hostname
@@ -300,7 +305,7 @@ foreach ($rowdata as $r_id => $row) {
 		'varsyncpassword-' . $r_id,
 		NULL,
 		'password',
-		htmlspecialchars($row['varsyncpassword']),
+		$row['varsyncpassword'],
 		[ 'placeholder' => 'Target password' ]
 	))->setHelp(($numrows == $rowcounter) ? 'Target Password' : NULL)
 	  ->setWidth(2);
