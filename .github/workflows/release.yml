@@ -112,7 +112,7 @@ jobs:
     name: Read version matrix
     runs-on: ubuntu-latest
     outputs:
-      build_matrix: ${{ steps.dedupe.outputs.build_matrix }}
+      build_matrix: ${{ steps.matrix.outputs.build_matrix }}
       pkg_channel: ${{ steps.channel.outputs.pkg_channel }}
     steps:
       - uses: actions/checkout@v6
@@ -138,26 +138,19 @@ jobs:
         id: matrices
         uses: ./.github/actions/read-version-matrix
 
-      - name: Dedupe build matrix by freebsd_major + arch
-        id: dedupe
-        # For each distinct (freebsd_major, arch), select the first CE entry
-        # (preferred); if no CE entry exists for that pair, fall back to the first
-        # Plus entry. Result: one build entry per distinct FreeBSD major × arch — so
-        # an aarch64 entry (Plus-only, issue #199) produces its own .pkg alongside
-        # the amd64 build — fed to the portable builder's inline loop
-        # (build-pkgs-portable). The reader resolves `arch` (default amd64) on every
-        # entry, so a matrix with no aarch64 entry dedupes exactly as before.
+      - name: Use the full build matrix (every variant)
+        id: matrix
+        # The Release must carry the FULL version matrix — one .pkg per build entry
+        # (every CE/Plus variant × FreeBSD major × arch), NOT a per-ABI dedup. So pass
+        # the build matrix through verbatim; build-pkgs-portable names each artifact by
+        # variant + pfSense version + ABI, so two variants sharing a FreeBSD major × arch
+        # (e.g. CE and Plus on the same major with different php/python deps) each produce
+        # their own, distinctly-named .pkg instead of one shadowing the other. The reader
+        # already excludes role=route-only entries (served from a frozen catalog).
         run: |
-          DEDUPED=$(printf '%s' '${{ steps.matrices.outputs.build_matrix }}' \
-            | jq -c '
-                group_by([.freebsd_major, .arch])
-                | map(
-                    (map(select(.channel == "CE")) | first)
-                    // first
-                  )
-              ')
-          printf 'build_matrix=%s\n' "$DEDUPED" >> "$GITHUB_OUTPUT"
-          echo "Deduped build matrix: $DEDUPED"
+          FULL='${{ steps.matrices.outputs.build_matrix }}'
+          printf 'build_matrix=%s\n' "$FULL" >> "$GITHUB_OUTPUT"
+          echo "Full build matrix: $FULL"
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
@@ -548,16 +541,22 @@ jobs:
                 PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
                 PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
                 ARCH=$(printf '%s\n' "$ENTRY" | jq -r '.arch')
+                # Variant identity (CE/Plus + its pfSense version) disambiguates two
+                # entries that share a FreeBSD major × arch but differ in php/python deps.
+                VARIANT=$(printf '%s\n' "$ENTRY" | jq -r '.variant // .channel // "CE"')
+                PFV=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version // empty')
                 ABI="FreeBSD:${MAJOR}:${ARCH}"
+                # pkg-safe variant slug, e.g. ce2.8 / plus26.03.
+                VARSLUG=$(printf '%s%s' "$VARIANT" "$PFV" | tr '[:upper:]' '[:lower:]')
 
-                echo "--- Building .pkg for FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
+                echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
 
-                PORTS_DIR="${RUNNER_TEMP}/ports-${MAJOR}-${ARCH}"
+                PORTS_DIR="${RUNNER_TEMP}/ports-${VARSLUG}-${MAJOR}-${ARCH}"
                 git clone --depth 1 -b pfblockerng/use-github \
                   "https://github.com/pfBlockerNG/FreeBSD-ports" \
                   "$PORTS_DIR"
 
-                PKG_OUT="out/major-${MAJOR}-${ARCH}"
+                PKG_OUT="out/${VARSLUG}-major-${MAJOR}-${ARCH}"
                 mkdir -p "$PKG_OUT"
                 python3 scripts/build-pkg-portable.py \
                   --ports "$PORTS_DIR" \
@@ -571,16 +570,17 @@ jobs:
                   --annotate "commit=${COMMIT}" \
                   --out "$PKG_OUT"
 
-                echo "Built for FreeBSD ${MAJOR}/${ARCH}:"
+                echo "Built for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}:"
                 ls -l "${PKG_OUT}"/*.pkg
 
-                # Rename to embed FreeBSD major + arch before upload (two arches of
-                # one major must not collide on a shared -FreeBSD-<major>.pkg name).
+                # Rename to embed variant + pfSense version + FreeBSD major + arch before
+                # upload, so every matrix entry yields a uniquely-named artifact (two
+                # variants on one major × arch, or two arches of one major, never collide).
                 for f in "${PKG_OUT}"/*.pkg; do
                   [ -f "$f" ] || continue
                   BASE=$(basename "$f" .pkg)
-                  mv "$f" "${PKG_OUT}/${BASE}-FreeBSD-${MAJOR}-${ARCH}.pkg"
-                  echo "Renamed: $(basename "$f") -> ${BASE}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+                  mv "$f" "${PKG_OUT}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+                  echo "Renamed: $(basename "$f") -> ${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
                 done
               done
 
