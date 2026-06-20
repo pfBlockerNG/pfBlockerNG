@@ -95,6 +95,44 @@ final class PfbFilterWhitelistAtypeTest extends TestCase
 	}
 
 	/**
+	 * The other HTML-special characters ('<', '>', '"', "'") are each escaped so
+	 * that $atype is safe in the hidden form-field and the JS-string output sites.
+	 */
+	public function testAngleBracketsAndQuotesInDescriptionAreEscaped(): void
+	{
+		$result = pfb_filter_whitelist_atype('Whitelist|89.248.168.42|<b>"x"</b>');
+
+		$this->assertStringContainsString('&lt;b&gt;', $result, '< and > must be escaped');
+		$this->assertStringContainsString('&quot;x&quot;', $result, '" must be escaped');
+		$this->assertStringNotContainsString('<b>', $result, 'no raw tag may survive');
+		$this->assertStringNotContainsString('"x"', $result, 'no raw double-quote may survive');
+	}
+
+	/**
+	 * A description containing a backslash or newline is preserved verbatim by the
+	 * helper (htmlspecialchars does not touch '\' or "\n"). The category-edit page
+	 * therefore emits the value into its JS-string site with json_encode(), which
+	 * escapes those characters — this test pins that contract: json_encode() of the
+	 * helper result is always a valid JS string literal that round-trips.
+	 */
+	public function testBackslashAndNewlineDescriptionAreJsSafeViaJsonEncode(): void
+	{
+		$raw    = "Whitelist|89.248.168.42|foo\\bar\nbaz";
+		$atype  = pfb_filter_whitelist_atype($raw);
+
+		// The page renders the JS site as: var atype = json_encode($atype) ;
+		$jsLiteral = json_encode($atype);
+
+		$this->assertIsString($jsLiteral);
+		$this->assertNotFalse($jsLiteral, 'json_encode must succeed');
+		// A valid JS/JSON string literal is wrapped in double quotes and decodes back.
+		$this->assertSame('"', $jsLiteral[0], 'json_encode output is a quoted string literal');
+		$this->assertSame($atype, json_decode($jsLiteral), 'json_encode must round-trip the value');
+		// The raw backslash and newline are escaped, so the JS string cannot break out.
+		$this->assertStringNotContainsString("\n", $jsLiteral, 'newline must be escaped in the JS literal');
+	}
+
+	/**
 	 * An invalid IP produces an empty IP slot; the description is still passed.
 	 * The empty slot causes the downstream invalid-IP branch to show
 	 * "Cannot create new IP Whitelist! Invalid data!" — correct UX preserved.

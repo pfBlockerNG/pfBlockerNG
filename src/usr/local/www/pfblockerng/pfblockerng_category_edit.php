@@ -101,7 +101,7 @@ if (isset($_GET)) {
 	}
 	if (isset($_GET['atype']) && !empty($_GET['atype'])) {
 		$raw_atype = $_GET['atype'];
-		if (substr($raw_atype, 0, 9) === 'Whitelist') {
+		if (substr($raw_atype, 0, 10) === 'Whitelist|') {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
 		} else {
 			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
@@ -140,7 +140,7 @@ if (isset($_POST)) {
 	}
 	if (isset($_POST['atype']) && !empty($_POST['atype'])) {
 		$raw_atype = $_POST['atype'];
-		if (substr($raw_atype, 0, 9) === 'Whitelist') {
+		if (substr($raw_atype, 0, 10) === 'Whitelist|') {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
 		} else {
 			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
@@ -305,7 +305,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 			// (pfb_filter_whitelist_atype): IP via PFB_FILTER_IP and description
 			// via PFB_FILTER_HTML. Re-filtering would double-escape HTML entities.
 			$data    = explode('|', $atype, 3);
-			$data[2] = isset($data[2]) ? $data[2] : '';
+			$data[2] = $data[2] ?? '';
 
 			if (empty(pfb_filter($data[1], PFB_FILTER_IP, 'Category_edit addgroup'))) {
 				$savemsg = 'Cannot create new IP Whitelist! Invalid data!';
@@ -1698,7 +1698,7 @@ if (gtype == 'ipv4' || gtype == 'ipv6') {
 	var pagetype = 'advanced';
 
 	var action = "<?=$action;?>";
-	var atype = "<?=$atype;?>";
+	var atype = <?=json_encode($atype);?>;
 
 	// Auto-Complete for Adv. In/Out Address Select boxes
 	var plist = "<?=$ports_list?>";
