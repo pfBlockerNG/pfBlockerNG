@@ -1414,7 +1414,7 @@ function pfb_global() {
 	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
 	$pfb['asn_token']	= $pfb['ipconfig']['asn_token']		?: '';		// ASN Token (IPinfo)
-	$pfb['resolve']		= pfb_resolve_enabled($pfb['ipconfig']);			// Reverse-DNS lookup for block-log entries (issue #336; default ON)
+	$pfb['rdns']		= pfb_resolve_enabled($pfb['ipconfig']);			// Reverse-DNS lookup for block-log entries (issue #336)
 
 	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
 	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'pfb_global')		?: '';		// Maxmind License Key
@@ -8797,14 +8797,29 @@ function pfb_resolve_tracker(
 }
 
 
-// Reverse-DNS (PTR) lookup for block-log entries (issue #336). Default ON:
-// an absent key (fresh install / upgrade) keeps the legacy behaviour of
-// resolving; FALSE only when the user explicitly unchecks "Resolve IP Addresses".
+// Reverse-DNS (PTR) lookup for block-log entries (issue #336). Defaults OFF for
+// new installs; existing installs are seeded 'on' at upgrade (see
+// pfb_rdns_seed_value() + pfblockerng_install.inc) to preserve prior behaviour.
+// Returns FALSE when the key is absent (new install) or explicitly unchecked.
 function pfb_resolve_enabled(array $ipconfig): bool {
-	if (!array_key_exists('enable_resolve', $ipconfig)) {
-		return TRUE;
+	if (!array_key_exists('enable_rdns', $ipconfig)) {
+		return FALSE;
 	}
-	return pfb_cfg_toggle_read($ipconfig['enable_resolve']) === PfbToggle::On;
+	return pfb_cfg_toggle_read($ipconfig['enable_rdns']) === PfbToggle::On;
+}
+
+// Decide the one-time upgrade seed for enable_rdns (issue #336). An EXISTING
+// install (non-empty general config) that has no enable_rdns key yet predates
+// the option and historically always resolved, so seed 'on' to preserve that.
+// A fresh install (empty general config) is left unseeded -> defaults OFF.
+// A box that already has the key (incl. an explicit '' opt-out) is never reseeded.
+// $gconfig  = installedpackages/pfblockerng/config/0
+// $ipconfig = installedpackages/pfblockerngipsettings/config/0
+function pfb_rdns_seed_value(array $gconfig, array $ipconfig): ?string {
+	if (!empty($gconfig) && !array_key_exists('enable_rdns', $ipconfig)) {
+		return 'on';
+	}
+	return null;
 }
 
 
@@ -9098,7 +9113,7 @@ function pfb_daemon_filterlog() {
 							$geoip = 'Unk';
 						}
 
-						if ($pfb['resolve']) {
+						if ($pfb['rdns']) {
 							$resolved_host = gethostbyaddr($host) ?: 'Unknown';
 							if ($host == $resolved_host || $resolved_host == 'Unknown') {
 								$resolved_host = 'Unknown';
