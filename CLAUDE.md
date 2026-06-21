@@ -914,6 +914,16 @@ Phase-1 live finding), so our above-Netgate `priority: 100` makes `pkg install`/
 stock GUI **Install** pull our build. GUI discovery + the update badge stay Netgate-bound; a GUI
 "Updates/Channel" panel is deferred (would touch `src/`).
 
+**Hard rule — the catalog is keyed by *varver* (`ce-2.8` / `plus-26.03`), NOT by `${ABI}`.** (ADR-20
+superseded ADR-17's `${ABI}` bucketing described in the paragraph above.) A pfSense `${ABI}`
+(`FreeBSD:<major>:<arch>`) is **NOT in 1:1 correspondence** with a pfSense version or its
+`php<XY>`/`py3<XY>` build inputs: two versions/editions can share one FreeBSD major — one `${ABI}` —
+yet need different builds. Netgate's own conf proves it (it bakes the full `pfSense_plus_v26_03_1`
+version in the URL, never the bare ABI). The current matrix being *incidentally* 1:1
+(CE→FreeBSD15, Plus→FreeBSD16) is **not** a licence to "simplify" back to an `${ABI}`-keyed conf —
+that 1:1 is not guaranteed. **Never make that simplification.** Full rationale + the upgrade-lag
+consequence: `docs/misc/architecture-notes.md` → "Self-hosted pkg distribution — ABI is NOT 1:1".
+
 - **Publish pipeline:** the catalog is hosted + deployed by the **separate `pfBlockerNG/pkg`
   repo** (its `.github/workflows/publish.yml`), NOT this repo. Each run it builds the current
   **devel** `.pkg` by running this repo's own `scripts/build-pkg-portable.py` against a checkout
