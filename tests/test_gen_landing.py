@@ -1021,6 +1021,11 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
         text=True,
         capture_output=True,
         env=env,
+        # Run from a directory with NO rc.d/ sibling so HOOK_SRC (which resolves to
+        # cwd/rc.d/... when piped, since $0 is "sh") is absent — forcing the embedded
+        # path, the real production bootstrap. Without this the test would lean on the
+        # runner's cwd happening to lack an rc.d/ sibling.
+        cwd=str(tmp_path),
     )
 
     # ── Then ─────────────────────────────────────────────────────────────────
