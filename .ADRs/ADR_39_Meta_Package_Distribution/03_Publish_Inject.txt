@@ -1,0 +1,55 @@
+================================================================================
+PHASE 3 PROMPT — Publish: build + inject the meta-package per catalog
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_39_Meta_Package_Distribution/ADR.md  (read §2 "Meta-package" + §3 risks)
+================================================================================
+
+ROLE
+Phase 3 of ADR-39. Wires the publish pipeline so `pkg install pfblockerng-repo` resolves on every
+box. Touches `pfBlockerNG/pkg`'s `publish.yml` and this repo's `build-repo-portable.py` tests. Use
+the normal worktree + PR flow (publish.yml lives in the pkg repo — its change lands via that repo's
+flow; coordinate as the existing devel-`.pkg` build step does).
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt — the meta-package port name + how it builds. If missing, STOP.
+- .ADRs/ADR_39_Meta_Package_Distribution/ADR.md  (§2 Catalog tree + Meta-package)
+- /home/user/pkg/.github/workflows/publish.yml — the per-varver/arch build+fold steps (how the
+  devel `.pkg` and release `.pkg`s are placed into each `release/<varver>/<arch>` catalog).
+- scripts/build-repo-portable.py — `build_repo` / the matrix tree builder; how a `.pkg` is added to
+  a catalog's `packagesite`/`data.pkg`; `catalog_name_from_version()`.
+
+ACTION PLAN
+1. In `publish.yml`, add a step that builds `pfblockerng-repo` for each matrix `<varver>/<arch>`
+   entry (matching ABI, via `build-pkg-portable.py`) — it is tiny + arch-independent in content, so
+   the only per-entry difference is the stamped ABI. Fold the built `.pkg` into that entry's catalog
+   alongside the pfBlockerNG package(s). Do the same for nightly catalogs if a nightly meta-package
+   exists (per Phase 2's channel decision).
+2. Confirm the meta-package appears in BOTH the release and nightly trees as required, so a box on
+   either channel can `pkg install pfblockerng-repo`.
+3. Tests: extend `tests/test_build_repo_portable.py` to assert that a generated catalog
+   (`packagesite.yaml` / `data.pkg`) CONTAINS the meta-package entry for each varver/arch — before
+   this change it is absent; after, present (assert both states).
+
+CONSTRAINTS
+- Do NOT change the catalog directory scheme (`release/<varver>/<arch>`); only add a package into it.
+- Keep the build cheap — one tiny extra `.pkg` per entry; no new heavy deps.
+- Do NOT yet remove routing.json (that is Phase 5) — this phase only ADDS the meta-package.
+
+VERIFICATION
+- `python -m pytest tests/test_build_repo_portable.py` → green (meta-package present in catalogs;
+  absence asserted as the before-state).
+- A local `build-repo-portable.py --build-matrix` dry run lists the meta-package under each
+  `<varver>/<arch>`.
+- yaml lint / `sh -n` on touched workflow shell → clean.
+
+EXPECTED RESULT
+Every published catalog (release + nightly, per varver/arch) carries `pfblockerng-repo`, so a box
+with any conf for our repo can install it.
+
+COMMIT (single)
+    ci: build and publish the pfblockerng-repo meta-package per catalog
+Push to the branch; open a PR per the normal flow.
+
+HANDOFF — write `RESULTS/03_Results.txt`
+Record: the publish.yml step(s) added; which trees carry the meta-package; the test assertions; and
+the go-ahead for Phase 4 (add-repo.sh repoint + install).
