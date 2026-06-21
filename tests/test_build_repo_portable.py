@@ -502,23 +502,29 @@ def test_empty_input_dir_errors(tmp_path: Path) -> None:
 
 
 def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None:
-    """--print-conf emits the NONE-signed ${ABI}/priority-100 client stanza."""
-    rc = brp.main(["--print-conf"])
+    """--print-conf emits the NONE-signed direct Pages URL / priority-100 client stanza (ADR-39).
+
+    ADR-39: the url is fully resolved (no ${ABI} token) — supply --catalog-path to
+    determine the <varver>/<arch> segment.  The default base is the direct GitHub Pages URL.
+    """
+    rc = brp.main(["--print-conf", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng: {" in out  # the shared release repo (stable + devel)
-    assert 'url: "https://pkg.pfblockerng.workers.dev/release/${ABI}"' in out  # Worker URL + release prefix (ADR-20)
+    assert 'url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64"' in out
+    assert "${ABI}" not in out, "ADR-39: ${ABI} must not appear in the resolved conf"
     assert "signature_type: none," in out
     assert "priority: 100," in out
     assert "enabled: yes" in out
 
 
 def test_print_conf_base_url_override(capsys: pytest.CaptureFixture[str]) -> None:
-    """--base-url overrides the host while keeping the literal ${ABI} suffix."""
-    rc = brp.main(["--print-conf", "--base-url", "https://fork.example.io/p/"])
+    """--base-url overrides the host; --catalog-path supplies the varver/arch segment."""
+    rc = brp.main(["--print-conf", "--base-url", "https://fork.example.io/p/", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert 'url: "https://fork.example.io/p/release/${ABI}"' in out  # trailing slash trimmed + release prefix
+    assert 'url: "https://fork.example.io/p/release/ce-2.8/amd64"' in out
+    assert "${ABI}" not in out
 
 
 def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:

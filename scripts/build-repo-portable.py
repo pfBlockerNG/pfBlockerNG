@@ -139,7 +139,7 @@ META_CONF = (
 # by pfSense User-Agent — written once, never needs updating on an OS upgrade. Kept
 # identical to scripts/build-repo.sh / add-repo.sh DEFAULT_BASE_URL so all three
 # generators emit a byte-equal --print-conf.
-DEFAULT_BASE_URL = "https://pkg.pfblockerng.workers.dev"
+DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
 CONF_PRIORITY = 100
 
 # A safe single path segment: an ABI is used UNVALIDATED from manifest data as a
@@ -945,16 +945,23 @@ def build_repo_matrix(
     return {"routes": routes, "built": built}
 
 
-def print_conf(base_url: str) -> None:
-    base = base_url.rstrip("/")
+def print_conf(resolved_url: str) -> None:
+    """Emit the release-channel repo-conf stanza.
+
+    ``resolved_url`` is the fully-resolved URL for the box's edition/version/arch
+    (ADR-39): ``<base>/release/<varver>/<arch>`` — no ``${ABI}`` token.
+    Supply ``--catalog-path <varver>/<arch>`` so tests can pin the exact bytes.
+    """
+    url = resolved_url.rstrip("/")
     sys.stdout.write(
         "# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).\n"
-        "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The ${ABI}\n"
-        "# variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.\n"
+        "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
+        "# fully resolved for this box's edition/version/arch (ADR-39); the self-heal\n"
+        "# rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects our build.\n"
         "pfblockerng: {\n"
-        f'  url: "{base}/release/${{ABI}}",\n'
+        f'  url: "{url}",\n'
         "  mirror_type: none,\n"
         "  signature_type: none,\n"
         f"  priority: {CONF_PRIORITY},\n"
@@ -992,7 +999,18 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--base-url",
         default=DEFAULT_BASE_URL,
-        help="base URL for --print-conf (the conf appends the literal ${ABI} pkg variable)",
+        help="base URL for --print-conf (default: the ADR-39 direct Pages base)",
+    )
+    ap.add_argument(
+        "--catalog-path",
+        default="",
+        dest="catalog_path",
+        help=(
+            "catalog subtree for --print-conf, in '<varver>/<arch>' form "
+            "(e.g. 'ce-2.8/amd64', 'plus-26.03/aarch64'). "
+            "When supplied, the emitted url is <base-url>/release/<catalog-path>. "
+            "Required for byte-identical output across all three generators."
+        ),
     )
     ap.add_argument(
         "--catalog-name",
@@ -1129,7 +1147,10 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     if args.print_conf:
-        print_conf(args.base_url)
+        _base = args.base_url.rstrip("/")
+        _cat = args.catalog_path.strip("/") if args.catalog_path else ""
+        _resolved = f"{_base}/release/{_cat}" if _cat else _base
+        print_conf(_resolved)
         return 0
 
     if args.generate_routing_json:

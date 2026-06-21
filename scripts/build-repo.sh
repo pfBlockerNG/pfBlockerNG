@@ -88,22 +88,24 @@ set -eu
 # This --print-conf template is kept in sync with add-repo.sh (byte-identical release
 # stanza — what `add-repo.sh stable` and `add-repo.sh devel` both write). Override with
 # --base-url for forks/staging.
-DEFAULT_BASE_URL="https://pkg.pfblockerng.workers.dev"
+DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
 print_conf() {
-    # $1 = base URL (no trailing slash). The url value is a STATIC string with the
-    # literal ${ABI} pkg variable appended — deliberately single-quoted on emission
-    # so neither this shell nor the URL-encoding gate sees a live expansion.
+    # $1 = fully-resolved URL (no trailing slash). The URL is a STATIC, directly-resolved
+    # string for the box's edition/version/arch — no ${ABI} token (ADR-39).
+    # Supply --catalog-path <varver>/<arch> (e.g. "ce-2.8/amd64") so the test can
+    # pin the exact resolved conf; the url is then base/release/<varver>/<arch>.
     base="$1"
     cat <<EOF
 # pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
-# NONE-signed: trust anchor is HTTPS to the host (no signing key). The \${ABI}
-# variable is expanded by pkg(8) and follows the box across a pfSense OS upgrade.
+# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
+# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.
 pfblockerng: {
-  url: "${base}/release/\${ABI}",
+  url: "${base}",
   mirror_type: none,
   signature_type: none,
   priority: ${CONF_PRIORITY},
@@ -117,14 +119,16 @@ IN=""
 OUT=""
 PRINT_CONF=0
 BASE_URL="$DEFAULT_BASE_URL"
+CATALOG_PATH=""
 PKG_BIN="${PKG_BIN:-pkg}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --in)         IN="$2"; shift 2 ;;
-        --out)        OUT="$2"; shift 2 ;;
-        --print-conf) PRINT_CONF=1; shift ;;
-        --base-url)   BASE_URL="$2"; shift 2 ;;
+        --in)            IN="$2"; shift 2 ;;
+        --out)           OUT="$2"; shift 2 ;;
+        --print-conf)    PRINT_CONF=1; shift ;;
+        --base-url)      BASE_URL="$2"; shift 2 ;;
+        --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
         -h|--help)
             sed -n '37,57p' "$0"   # the Usage/Options/Env block from the header
             exit 0 ;;
@@ -133,7 +137,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$PRINT_CONF" -eq 1 ]; then
-    print_conf "${BASE_URL%/}"
+    _full_url="${BASE_URL%/}/release/${CATALOG_PATH}"
+    print_conf "${_full_url%/}"
     exit 0
 fi
 
