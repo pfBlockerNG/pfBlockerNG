@@ -5,10 +5,11 @@
 > Root cause: the pfSense product User-Agent is only injected by the PHP/GUI layer
 > (`pkg_call`/`pkg_exec`); raw CLI `pkg update`/`pkg install`/`pkg-static` (the upgrade
 > path) send a bare `pkg/<ver>` UA that matches nothing — every real request returned
-> `404 Unsupported pfSense version`. Replaced by on-box detection in `add-repo.sh`
-> (reads `globals.plus.inc` + `/etc/version` + `pkg config abi` to resolve the direct
-> `<varver>/<arch>` URL) plus a self-guarding `rc.d` self-heal hook that corrects a
-> stale varver on the first post-upgrade boot. **The variant-keyed catalog tree
+> `404 Unsupported pfSense version`. Replaced by on-box detection (reads
+> `/etc/product_label` + `/etc/version` + `pkg config abi` to resolve the direct
+> `<varver>/<arch>` URL), folded into a self-guarding `rc.d` **conf-regenerator** hook
+> that rewrites the repo conf for the box's current variant on each boot (before any
+> networked `pkg` op), installed by `add-repo.sh`. **The variant-keyed catalog tree
 > (`release/<varver>/<arch>`, `nightly/<varver>/<arch>`) is retained unchanged.**
 > See ADR-39.
 >
