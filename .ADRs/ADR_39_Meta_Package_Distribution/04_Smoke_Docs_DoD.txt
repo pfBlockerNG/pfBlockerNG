@@ -1,5 +1,14 @@
-ADR-39 — Phase 4: smoke (self-heal) + docs + DoD
+ADR-39 — Phase 4: smoke (conf regeneration) + docs + DoD
 ================================================
+
+>>> FINAL-DESIGN NOTE (supersedes the specifics below). The hook is a conf REGENERATOR
+>>> (no pkg/network/snapshot/reconcile at boot), so the smoke proves: orphan guard
+>>> (absent conf => no-op), stale-varver REGENERATION to the box's real <varver>/<arch>
+>>> with an end-to-end resolve from the corrected conf (the hook's folded detection
+>>> cross-checked against an independent Python oracle), and idempotence. There is NO
+>>> "reconcile activation" or boot-ordering/DNS check (the hook touches no network).
+>>> Smoke lives in tests/smoke/test_repo_install.py (test_generate_hook_*). Read ADR.md
+>>> §6 Phase 4 + §7 for the authoritative design; the text below is the original record.
 
 GOAL
 Prove the on-box path end-to-end on the live-VM fan-out and reconcile the docs. This phase is

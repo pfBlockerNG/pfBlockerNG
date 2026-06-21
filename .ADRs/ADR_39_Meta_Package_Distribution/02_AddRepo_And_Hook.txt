@@ -1,5 +1,18 @@
-ADR-39 — Phase 2: add-repo.sh resolved conf + self-heal rc.d hook
+ADR-39 — Phase 2: add-repo.sh resolved conf + conf-regenerator rc.d hook
 =================================================================
+
+>>> FINAL-DESIGN NOTE (supersedes the specifics below). The hook is a pure CONF
+>>> REGENERATOR, not a "self-heal" patcher: for each of our conf files that exists it
+>>> detects <varver>/<arch> and UNCONDITIONALLY overwrites the conf with the canonical
+>>> body. NO pkg call, NO network, NO snapshot, NO parse-and-compare, NO reconcile.
+>>> Detection is FOLDED into the hook (no scripts/lib helper); edition = "/etc/product_label
+>>> contains 'Plus'". The hook is named pfblockerng_repo_generate.sh, ordered
+>>> REQUIRE: FILESYSTEMS / BEFORE: NETWORKING, always exit 0. add-repo.sh is a lean
+>>> bootstrap: install the hook, stage the conf, run the hook to resolve it, verify the
+>>> marker line, then pkg update + verify. All four conf producers (3 --print-conf
+>>> generators + the hook) stay byte-identical, including a marker first line. The hook
+>>> spec is tests/shell/generate_hook_spec.sh. Read ADR.md §2 for the authoritative design;
+>>> the text below is the original Phase-2 record.
 
 GOAL
 Repoint the bootstrap to the DIRECT GitHub Pages catalog (no Worker, no ${ABI}) and add a

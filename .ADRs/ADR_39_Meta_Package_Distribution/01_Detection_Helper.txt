@@ -4,6 +4,14 @@ Target model: Claude Sonnet 4.6
 ADR: .ADRs/ADR_39_Meta_Package_Distribution/ADR.md  (read §1.3 and §2 "Detection" first)
 ================================================================================
 
+>>> FINAL-DESIGN NOTE (supersedes this prompt). The standalone
+>>> scripts/lib/detect_variant.sh prototyped here was FOLDED INTO the rc.d hook
+>>> (scripts/rc.d/pfblockerng_repo_generate.sh) and DELETED, along with its
+>>> detect_variant_spec.sh. Final detection is KISS: edition = "/etc/product_label
+>>> contains 'Plus'" (absent file => ce), version = major.minor of /etc/version,
+>>> arch = leaf of `pkg config abi`. It is exercised by tests/shell/generate_hook_spec.sh.
+>>> This prompt is kept as the historical Phase-1 record.
+
 ROLE
 You are on the `adr/39-meta-package-distribution` worktree performing Phase 1 of ADR-39.
 This phase is BEHAVIOUR-PRESERVING: it adds new, not-yet-wired code (a detection helper +
