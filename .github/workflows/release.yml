@@ -12,11 +12,11 @@ name: Release
 #   2. read-matrix / build-pkgs-portable / release: run in both dry-run and real
 #      modes, gated on prepare-release succeeding (or being skipped in dry-run).
 #
-#   3. attach-pkgs / repo-publish / sync-ports-fork / deploy-worker: real-publish only
+#   3. attach-pkgs / repo-publish / sync-ports-fork: real-publish only
 #      (dry_run != 'true'), same ordering as before.
 #
 # dry_run=true (default): validate + build off HEAD; publish NOTHING (no commit, no
-# tag, no Release, no port bump, no pkg-repo poke, no Worker deploy).
+# tag, no Release, no port bump, no pkg-repo poke).
 # dry_run=false: the real release — prepare-release runs first, then build + publish.
 #
 # Tag scheme (single source of truth: scripts/release-version.sh):
@@ -1064,20 +1064,6 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg
-
-  # ── 2e. Redeploy the Cloudflare routing Worker (ADR-20) ─────────────────────
-  # The Worker reads routing.json from Pages and 302-redirects pkg to the
-  # correct variant catalog. Redeployed on every release so the live Worker
-  # always matches the current wrangler.toml / source. Gated on publish-release:
-  # nothing outward-facing happens until the release is definitively published.
-  deploy-worker:
-    name: Deploy Cloudflare routing Worker
-    needs: [prepare-release, release, publish-release]
-    if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
-    uses: ./.github/workflows/deploy-worker.yml
-    secrets:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # ── 3. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ─────
   # Self-hosted distribution (ADR-17): we do NOT PR the upstream pfsense ports

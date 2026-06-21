@@ -593,7 +593,7 @@ def test_render_autoindex_lists_dirs_files_and_parent() -> None:
 
 def test_render_autoindex_root_has_no_parent_and_is_colon_safe() -> None:
     """The browse root omits Parent Directory; an ABI dir with ':' links via './' (RFC 3986 §4.2)."""
-    out = gl.render_autoindex("", ["release", "nightly"], [("routing.json", 99, 1_700_000_000.0)], is_root=True)
+    out = gl.render_autoindex("", ["release", "nightly"], [("meta.json", 99, 1_700_000_000.0)], is_root=True)
     assert "Index of /" in out
     assert "Parent Directory" not in out and 'href="../"' not in out
     assert '<a href="./release/">release/</a>' in out and '<a href="./nightly/">nightly/</a>' in out
@@ -608,7 +608,7 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
     site = tmp_path / "site"
     _touch(site / "release" / "ce-2.8" / "FreeBSD:15:amd64" / "pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg")
     _touch(site / "release" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg")
-    _touch(site / "routing.json")
+    _touch(site / "meta.json")
 
     manifest = {"name": "pfSense-pkg-pfBlockerNG-devel", "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
     monkeypatch.setattr(gl, "read_manifest_zstd", lambda p: manifest)

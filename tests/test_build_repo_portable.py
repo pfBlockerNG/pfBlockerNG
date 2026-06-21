@@ -698,64 +698,6 @@ def test_two_ce_entries_produce_two_versioned_dirs(tmp_path: Path) -> None:
     assert names29 == ["pfBlockerNG-2.9"]
 
 
-def test_routing_json_correct_entries(tmp_path: Path) -> None:
-    """generate_routing_json writes all entries with correct catalog/pattern/status fields.
-
-    Scenario: two active + one legacy entry
-      Given entries with two "active" and one "legacy" status
-      When generate_routing_json is called
-      Then routing.json contains all three entries
-       And each has the correct catalog, pattern, and status fields
-       And both active and legacy entries are present (legacy routes retained)
-    """
-    entries = [
-        {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"},
-        {"pattern": "pfSense/26.03", "catalog": "plus-26.03", "status": "active"},
-        {"pattern": "pfSense/2.7", "catalog": "ce-2.7", "status": "legacy"},
-    ]
-    output_path = str(tmp_path / "routing.json")
-
-    brp.generate_routing_json(entries, output_path)
-
-    with open(output_path) as f:
-        doc = json.load(f)
-
-    assert "routes" in doc
-    routes = doc["routes"]
-    assert len(routes) == 3
-
-    by_catalog = {r["catalog"]: r for r in routes}
-    assert by_catalog["ce-2.8"]["pattern"] == "pfSense/2.8"
-    assert by_catalog["ce-2.8"]["status"] == "active"
-    assert by_catalog["plus-26.03"]["pattern"] == "pfSense/26.03"
-    assert by_catalog["plus-26.03"]["status"] == "active"
-    assert by_catalog["ce-2.7"]["pattern"] == "pfSense/2.7"
-    assert by_catalog["ce-2.7"]["status"] == "legacy"
-
-
-def test_routing_json_legacy_retained(tmp_path: Path) -> None:
-    """Legacy entries are present in routing.json with status="legacy" — NOT omitted.
-
-    Scenario: legacy entry preservation
-      Given a single entry with status "legacy"
-      When generate_routing_json is called
-      Then routing.json contains the entry
-       And its status is "legacy" (not absent, not "active")
-    """
-    entries = [{"pattern": "pfSense/2.7", "catalog": "ce-2.7", "status": "legacy"}]
-    output_path = str(tmp_path / "routing.json")
-
-    brp.generate_routing_json(entries, output_path)
-
-    with open(output_path) as f:
-        doc = json.load(f)
-
-    routes = doc["routes"]
-    assert len(routes) == 1
-    assert routes[0]["status"] == "legacy"
-    assert routes[0]["catalog"] == "ce-2.7"
-
-
 # --------------------------------------------------------------------------- #
 # Nightly channel: CE/Plus variant split with nightly/ path prefix
 # --------------------------------------------------------------------------- #
@@ -857,10 +799,10 @@ def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 #
 # These pin the LITERAL 1:1 projection of the version matrix onto the tree
 # (release/<varver>/<arch>/ + nightly/<varver>/<arch>/, arch leaf — NOT full ABI),
-# the routing.json contents, the release channel-group (devel + stable in one
-# catalog), full-matrix/no-dedup placement, and nightly retention. The DUMB pkg
-# builder is stubbed so the tests exercise the BRAIN (arrangement) without a ports
-# tree — build-pkg-portable.py's own behaviour is covered by its own suite.
+# the release channel-group (devel + stable in one catalog), full-matrix/no-dedup
+# placement, and nightly retention. The DUMB pkg builder is stubbed so the tests
+# exercise the BRAIN (arrangement) without a ports tree — build-pkg-portable.py's
+# own behaviour is covered by its own suite.
 # --------------------------------------------------------------------------- #
 
 # The live matrix shape (subset of fields build_repo_matrix consumes).
@@ -924,14 +866,6 @@ def _names_in(catalog_pkg: Path) -> set[str]:
     return {json.loads(ln)["name"] for ln in raw.splitlines() if ln}
 
 
-def test_ua_pattern_ce_vs_plus() -> None:
-    """_ua_pattern: CE -> 'pfSense/<mm>'; Plus -> 'Netgate pfSense Plus/<mm>'."""
-    assert brp._ua_pattern("CE", "2.8") == "pfSense/2.8"
-    assert brp._ua_pattern("CE", "2.8.1") == "pfSense/2.8"
-    assert brp._ua_pattern("Plus", "26.03") == "Netgate pfSense Plus/26.03"
-    assert brp._ua_pattern("Plus", "26.03.1") == "Netgate pfSense Plus/26.03"
-
-
 def test_pkg_version_key_orders_nightlies_chronologically() -> None:
     """_pkg_version_key sorts nightly <target>.YYYYMMDD.N so a later build ranks higher."""
     older = brp._pkg_version_key("3.2.16.20260606.2")
@@ -942,23 +876,6 @@ def test_pkg_version_key_orders_nightlies_chronologically() -> None:
     # Same date, higher counter outranks (the bug a naive lexicographic compare hits at .10 vs .2).
     assert newer_counter > older
     assert brp._pkg_version_key("3.2.16.20260606.10") > brp._pkg_version_key("3.2.16.20260606.2")
-
-
-def test_dedup_routes_collapses_and_orders_most_specific_first() -> None:
-    """_dedup_routes collapses identical (pattern,catalog,status) and longest-pattern-first.
-
-    Two Plus entries (amd64 + aarch64) share the same UA pattern/catalog/status -> ONE route.
-    The longer Plus pattern precedes the shorter CE pattern (Worker first-match-wins).
-    """
-    routes = [
-        {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"},
-        {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"},
-        {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"},
-    ]
-    out = brp._dedup_routes(routes)
-    assert len(out) == 2  # the duplicate Plus route collapsed
-    assert out[0]["pattern"] == "Netgate pfSense Plus/26.03"  # most specific first
-    assert out[1]["pattern"] == "pfSense/2.8"
 
 
 def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
@@ -985,34 +902,6 @@ def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
     # The full ABI must NOT appear as a path segment (this is the arch-leaf reconciliation).
     assert not (out / "release" / "ce-2.8" / "FreeBSD:15:amd64").exists()
     assert not (out / "release" / "plus-26.03" / "FreeBSD:16:amd64").exists()
-
-
-def test_build_matrix_routing_json(tmp_path: Path) -> None:
-    """routing.json carries one deduped route per variant, catalog=varver, with status.
-
-    Scenario: CE + Plus(amd64) + Plus(aarch64)
-      When build_repo_matrix runs
-      Then routing.json has TWO routes (the two Plus arches collapse to one),
-           each {pattern: UA, catalog: varver, status}, most specific first.
-    """
-    out = tmp_path / "site"
-    brp.build_repo_matrix([_CE, _PLUS, _PLUS_ARM], out, builder=_stub_builder)
-
-    routing = json.loads((out / "routing.json").read_text())
-    routes = routing["routes"]
-    assert len(routes) == 2  # Plus amd64 + aarch64 collapsed to one route
-    # Most-specific (Plus) first.
-    assert routes[0] == {"pattern": "Netgate pfSense Plus/26.03", "catalog": "plus-26.03", "status": "active"}
-    assert routes[1] == {"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "active"}
-
-
-def test_build_matrix_routing_status_passthrough(tmp_path: Path) -> None:
-    """A legacy entry's status flows into its route verbatim (not dropped, not rewritten)."""
-    legacy_ce = {**_CE, "status": "legacy"}
-    out = tmp_path / "site"
-    brp.build_repo_matrix([legacy_ce], out, builder=_stub_builder)
-    routes = json.loads((out / "routing.json").read_text())["routes"]
-    assert routes == [{"pattern": "pfSense/2.8", "catalog": "ce-2.8", "status": "legacy"}]
 
 
 def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
@@ -1056,11 +945,10 @@ def test_build_matrix_aarch64_distinct_leaf(tmp_path: Path) -> None:
 
 
 def test_build_matrix_no_nightly(tmp_path: Path) -> None:
-    """build_nightly=False builds the release subtree + routing but NO nightly/ tree."""
+    """build_nightly=False builds the release subtree but NO nightly/ tree."""
     out = tmp_path / "site"
     brp.build_repo_matrix([_CE], out, builder=_stub_builder, build_nightly=False)
     assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
-    assert (out / "routing.json").is_file()
     assert not (out / "nightly").exists()
 
 
@@ -1907,12 +1795,10 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
 #
 # A route-only entry (role="route-only") is an EOL pfSense version whose last
 # .pkg is served from a frozen GitHub Release asset — no fresh build, no nightly.
-# The Worker still routes requests for that version to its (frozen) catalog.
 #
 # These tests pin every guarantee of the route-only path:
 #   * release/<varver>/<arch>/ catalog lists exactly the frozen .pkg version(s)
 #   * NO nightly/<varver>/ subtree ever exists for a route-only entry
-#   * routing.json carries routes for ALL entries (build + route-only), so no 404
 #   * build-entry parity: with route-only entries added, the build entry's release
 #     + nightly subtrees are BYTE-IDENTICAL to a run without the route-only entries
 #     (proves route-only is purely additive — not a regression)
@@ -2007,53 +1893,6 @@ def test_route_only_no_nightly_subtree(tmp_path: Path) -> None:
     assert not (out / "nightly" / "ce-2.7").exists(), "route-only must never produce a nightly/"
     # Build entry: nightly subtree present as normal.
     assert (out / "nightly" / "ce-2.8" / "amd64" / "meta.conf").is_file()
-
-
-def test_route_only_routing_entries_for_all_entries(tmp_path: Path) -> None:
-    """routing.json carries routes for ALL matrix entries — build AND route-only.
-
-    Scenario: one build CE 2.8 + one route-only CE 2.7 + one route-only Plus 25.03
-      Given three entries: CE 2.8 (build), CE 2.7 (route-only), Plus 25.03 (route-only)
-       When build_repo_matrix runs
-      Then routing.json contains routes for all three varvers:
-           ce-2.8, ce-2.7, plus-25.03 — so no version returns a 404
-    """
-    out = tmp_path / "site"
-    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
-    frozen_ce.parent.mkdir()
-    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
-
-    frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-devel-3.0.9_1.pkg"
-    frozen_plus.parent.mkdir()
-    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:amd64")
-
-    # Before-state: no routing.json yet.
-    assert not (out / "routing.json").exists()
-
-    brp.build_repo_matrix(
-        [_CE, _CE_EOL, _PLUS_EOL],
-        out,
-        builder=_stub_builder,
-        route_only_pkgs={
-            "ce-2.7": [frozen_ce],
-            "plus-25.03": [frozen_plus],
-        },
-    )
-
-    routing = json.loads((out / "routing.json").read_text())
-    routes = routing["routes"]
-    catalogs = {r["catalog"] for r in routes}
-
-    # All three versions routed (none is 404'd).
-    assert "ce-2.8" in catalogs, "build entry ce-2.8 must have a route"
-    assert "ce-2.7" in catalogs, "route-only entry ce-2.7 must have a route"
-    assert "plus-25.03" in catalogs, "route-only entry plus-25.03 must have a route"
-
-    # Status flows through verbatim for each entry.
-    by_catalog = {r["catalog"]: r for r in routes}
-    assert by_catalog["ce-2.8"]["status"] == "active"
-    assert by_catalog["ce-2.7"]["status"] == "EOL"
-    assert by_catalog["plus-25.03"]["status"] == "EOL"
 
 
 def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> None:

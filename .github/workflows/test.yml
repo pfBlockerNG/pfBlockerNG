@@ -386,28 +386,6 @@ jobs:
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
         run: npx --yes markdownlint-cli2
 
-  worker-tests:
-    name: Worker unit tests (node --test)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 'lts/*'
-
-      - name: Run the pkg-routing Worker tests
-        # Offline unit coverage for scripts/worker/ (the Cloudflare routing Worker):
-        # the path math (parseArch/resolveTarget) AND the UA->catalog dispatch through
-        # worker.fetch, with the edge (caches + routing.json fetch) stubbed — no network,
-        # no wrangler. This is the deterministic gate for the routing logic that the
-        # live-VM ADR-20 Case-4 leg can only exercise against the real (CDN-fronted) edge.
-        run: node --test
-        working-directory: scripts/worker
-
   widget-js-tests:
     name: Widget JS unit tests (node --test)
     runs-on: ubuntu-latest
@@ -501,7 +479,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, worker-tests, widget-js-tests, ui-suite]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -548,10 +526,6 @@ jobs:
           fi
           if [ "${{ needs.markdownlint.result }}" != "success" ]; then
             echo "markdownlint failed or was cancelled."
-            exit 1
-          fi
-          if [ "${{ needs.worker-tests.result }}" != "success" ]; then
-            echo "Worker unit tests (node --test) failed or were cancelled."
             exit 1
           fi
           if [ "${{ needs.widget-js-tests.result }}" != "success" ]; then

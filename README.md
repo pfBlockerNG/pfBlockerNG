@@ -104,17 +104,17 @@ normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then
 pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
 ```
 
-`add-repo.sh` with no argument writes the shared
-`/usr/local/etc/pkg/repos/pfblockerng.conf` (which carries **both** the stable and devel
-packages — pick one at `pkg install`), runs `pkg update`, and verifies a package is
-visible. The **nightly** repo is opt-in — `./scripts/add-repo.sh --nightly` writes its
-own `pfblockerng-nightly.conf` (bleeding edge, not for daily use). No variant argument is
-needed — the script auto-detects CE vs Plus via the routing layer. The configuration the
-default run writes is:
+`add-repo.sh` with no argument auto-detects the pfSense variant (CE vs Plus) and writes
+`/usr/local/etc/pkg/repos/pfblockerng.conf` pointing directly to the correct variant
+catalog on GitHub Pages (which carries **both** the stable and devel packages — pick one
+at `pkg install`), runs `pkg update`, and verifies a package is visible. The **nightly**
+repo is opt-in — `./scripts/add-repo.sh --nightly` writes its own
+`pfblockerng-nightly.conf` (bleeding edge, not for daily use). The configuration the
+default run writes points to the variant-specific GitHub Pages URL:
 
 ```sh
 pfblockerng: {
-  url: "https://pkg.pfblockerng.workers.dev/${ABI}",
+  url: "https://pfblockerng.github.io/pkg/ce-2.8/${ABI}",
   mirror_type: none,
   signature_type: none,
   priority: 100,
@@ -122,25 +122,15 @@ pfblockerng: {
 }
 ```
 
+(Plus boxes get `plus-26.03/${ABI}` instead of `ce-2.8/${ABI}`.)
+
 - **`${ABI}`** is a `pkg(8)` variable (expanded by `pkg`, not the shell), so one
-  configuration follows the box across a pfSense OS upgrade.
-- The **routing URL** (`pkg.pfblockerng.workers.dev`) is a Cloudflare Worker that reads
-  the pfSense `User-Agent` on each request and redirects to the correct variant catalog:
-  CE boxes get `ce-2.8/${ABI}/` (php83 dep); Plus boxes get `plus-26.03/${ABI}/`
-  (php85 dep). The conf is written once and **never needs re-running on a pfSense
-  upgrade** — the Worker reroutes automatically.
+  configuration follows the box across a FreeBSD-minor upgrade within the same pfSense
+  version. A pfSense version upgrade (e.g. CE 2.8 → 2.9) re-runs `add-repo.sh` via the
+  self-heal hook to update the conf to the new variant catalog.
 - The repository is **NONE-signed** — trust is anchored in HTTPS to the host.
 - **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
   resolution (and the webConfigurator's **Install** button) picks our build.
-
-> **Transition note (ADR-20):** If you configured the repo before 2026-06-10, re-run
-> `sh scripts/add-repo.sh` (or `sh scripts/add-repo.sh --nightly` for the nightly repo) to
-> refresh the conf to the Worker URL.
-> The legacy `pfblockerng.github.io/pkg/${ABI}/` path continues to serve CE packages
-> during the transition window.
-> Installs and updates work via the **Install** button or `pkg upgrade`. pfSense's stock
-> "update available" badge stays Netgate-bound and won't track our builds, but
-> pfBlockerNG's own **Software** tab does (see [Usage](#software-tab--version--update-notice-for-self-hosted-builds)).
 
 #### Nightly channel (bleeding edge)
 
