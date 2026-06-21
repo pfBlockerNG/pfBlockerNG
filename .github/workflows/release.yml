@@ -1156,49 +1156,64 @@ jobs:
               echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
           fi
 
+          # A devel release bumps TWO ports in lockstep: the -devel port (the Netgate
+          # devel package) AND the -nightly port. publish.yml (pfBlockerNG/pkg) derives
+          # the nightly base version from the -nightly port's PORTVERSION, so unless it
+          # advances together with -devel the nightlies stay pinned to a stale version
+          # and sort BELOW the current prerelease (e.g. 3.2.16.* < 4.0.0.alpha.2). They
+          # share an identical pkg-plist, differing only in PORTNAME/CONFLICTS/GH_ACCOUNT,
+          # so the version edit is the only thing to keep in sync. Both are committed in
+          # ONE commit so the two ports can never diverge. Stable touches only its port.
           if [ "$BRANCH" = "devel" ]; then
-            PORT_PATH="net/pfSense-pkg-pfBlockerNG-devel"
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-{devel,nightly}"
           else
-            PORT_PATH="net/pfSense-pkg-pfBlockerNG"
-          fi
-          MAKEFILE="${PORT_PATH}/Makefile"
-
-          # Read the current PORTVERSION and PORTREVISION from the Makefile before
-          # editing, so the compare-and-bump helper can decide whether to increment
-          # or reset.  Absent PORTREVISION is treated as 0 by the helper.
-          OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
-          if [ -z "${OLD_PORTVERSION}" ]; then
-            echo "::error::PORTVERSION not found in ${MAKEFILE}"
-            exit 1
-          fi
-          OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
-
-          # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
-          # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
-          NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
-            "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
-
-          # Update PORTVERSION and GH_TAGNAME.
-          sed -i \
-            -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
-            -e "s|^GH_TAGNAME=.*|GH_TAGNAME=\t${TAG}|" \
-            "$MAKEFILE"
-
-          # Apply PORTREVISION per ports convention: remove when 0; set/insert after
-          # PORTVERSION when > 0.  The sed removes any existing line first, then the
-          # PORTVERSION line is used as an anchor to insert the new one.
-          sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
-          if [ "${NEW_PORTREVISION}" -gt 0 ]; then
-            sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG"
           fi
 
-          if git diff --quiet -- "$MAKEFILE"; then
-            echo "${PORT_PATH} already at ${PORTVERSION} (${TAG}) — nothing to push."
+          for PORT_PATH in $PORT_PATHS; do
+            MAKEFILE="${PORT_PATH}/Makefile"
+
+            # Read the current PORTVERSION and PORTREVISION from the Makefile before
+            # editing, so the compare-and-bump helper can decide whether to increment
+            # or reset.  Absent PORTREVISION is treated as 0 by the helper.
+            OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+            if [ -z "${OLD_PORTVERSION}" ]; then
+              echo "::error::PORTVERSION not found in ${MAKEFILE}"
+              exit 1
+            fi
+            OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
+
+            # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
+            # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
+            NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
+              "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
+
+            # Update PORTVERSION and GH_TAGNAME.
+            sed -i \
+              -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+              -e "s|^GH_TAGNAME=.*|GH_TAGNAME=\t${TAG}|" \
+              "$MAKEFILE"
+
+            # Apply PORTREVISION per ports convention: remove when 0; set/insert after
+            # PORTVERSION when > 0.  The sed removes any existing line first, then the
+            # PORTVERSION line is used as an anchor to insert the new one.
+            sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
+            if [ "${NEW_PORTREVISION}" -gt 0 ]; then
+              sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+            fi
+
+            git add "$MAKEFILE"
+          done
+
+          # ONE atomic commit for every bumped port — devel + nightly move together.
+          if git diff --cached --quiet; then
+            echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
             exit 0
           fi
-          git add "$MAKEFILE"
           git commit -m "$(printf '%s: update to %s\n\nGH_TAGNAME=%s — pfBlockerNG/pfBlockerNG release.' \
-            "$PORT_PATH" "$PORTVERSION" "$TAG")"
+            "$PORTS_LABEL" "$PORTVERSION" "$TAG")"
 
           # use-github only advances via releases; push directly, rebasing once on a
           # racing update.
@@ -1212,4 +1227,4 @@ jobs:
             echo "push rejected — rebasing on the latest use-github (attempt ${n})"
             git pull --rebase origin pfblockerng/use-github
           done
-          echo "Pushed ${PORT_PATH} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"
+          echo "Pushed ${PORTS_LABEL} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"
