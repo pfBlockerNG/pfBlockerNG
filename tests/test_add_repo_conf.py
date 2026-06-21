@@ -530,3 +530,23 @@ def test_add_repo_base_url_requires_a_value() -> None:
     )
     assert proc.returncode != 0
     assert "--base-url requires a value" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "needle"),
+    [
+        (["sh", str(_ADD_REPO), "--print-conf"], "catalog-path"),
+        (["sh", str(_BUILD_REPO), "--print-conf"], "catalog-path"),
+        ([sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf"], "catalog-path"),
+    ],
+)
+def test_print_conf_requires_catalog_path(argv: list[str], needle: str) -> None:
+    """All three generators FAIL `--print-conf` without `--catalog-path` (no unresolved URL).
+
+    A bare `--print-conf` would otherwise emit a URL ending at the channel (no
+    `<varver>/<arch>`), violating the ADR-39 resolved-URL contract. Each generator must
+    error loud instead of emitting an unusable conf.
+    """
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert proc.returncode != 0, f"{argv!r} should fail without --catalog-path"
+    assert needle in proc.stderr.lower(), proc.stderr

@@ -2137,19 +2137,23 @@ def _run_generate_hook(
     *,
     release_conf: str,
     base_url: str | None = None,
-    nightly_conf: str = "/dev/null",
+    nightly_conf: str | None = None,
     timeout: float = 300.0,
 ) -> subprocess.CompletedProcess[str]:
     """Run the generator hook directly as ``/bin/sh <hook> onestart``.
 
     Driven with its env-overridable paths pointing at the test fixtures:
-    ``PFB_RELEASE_CONF``, ``PFB_NIGHTLY_CONF`` (``/dev/null`` suppresses the nightly
-    channel), and optionally ``PFB_BASE_URL`` (a file:// catalog base). Detection
+    ``PFB_RELEASE_CONF``, ``PFB_NIGHTLY_CONF``, and optionally ``PFB_BASE_URL`` (a
+    file:// catalog base). ``nightly_conf`` defaults to a genuinely NON-EXISTENT path
+    (not ``/dev/null`` — that exists and would defeat the orphan guard's ``[ -f ]``
+    test conceptually), so by default only the release conf is in play. Detection
     reads the real box files (/etc/product_label, /etc/version, pkg config abi).
 
     Returns the completed process. The hook MUST always exit 0 (a non-zero rc is an
     immediate test failure — the ADR-39 "always exit 0" boot-safety rule).
     """
+    if nightly_conf is None:
+        nightly_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng_nightly.conf"
     env_args = [f"PFB_RELEASE_CONF={release_conf}", f"PFB_NIGHTLY_CONF={nightly_conf}"]
     if base_url is not None:
         env_args.append(f"PFB_BASE_URL={base_url}")
@@ -2170,28 +2174,36 @@ def test_generate_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
 
     Scenario: generator hook with no repo conf is a safe no-op.
 
-    Given NO repo conf exists at the configured path (``PFB_RELEASE_CONF`` points at a
-      non-existent path) and NO nightly conf (``PFB_NIGHTLY_CONF=/dev/null``),
+    Given NEITHER our release conf NOR our nightly conf exists (both ``PFB_*_CONF``
+      point at genuinely non-existent paths),
     When ``/bin/sh <hook> onestart`` runs with those overrides,
-    Then the hook exits 0 (MUST — boot-safety hard rule) AND no conf file was created.
-    Assert BEFORE: the conf path does NOT exist.
-    Assert AFTER: the conf path still does NOT exist; exit code 0.
+    Then the hook exits 0 (MUST — boot-safety hard rule) AND neither conf was created.
+    Assert BEFORE: both conf paths do NOT exist.
+    Assert AFTER: both conf paths still do NOT exist; exit code 0.
     """
     _stage_generate_hook(repo_vm, guest_hook=GUEST_HOOK_PATH)
 
     absent_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng.conf"
+    absent_nightly = f"{GENERATE_DIR}/nonexistent_pfblockerng_nightly.conf"
 
-    # BEFORE: the conf does not exist.
-    before_present = repo_vm.ssh("/bin/test", "-f", absent_conf)
-    assert before_present.returncode != 0, f"BEFORE: conf unexpectedly exists at {absent_conf}"
+    # BEFORE: neither conf exists (a genuinely-absent nightly path, NOT /dev/null —
+    # so the orphan guard is exercised for real on both channels).
+    assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
+        f"BEFORE: release conf unexpectedly exists at {absent_conf}"
+    )
+    assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
+        f"BEFORE: nightly conf unexpectedly exists at {absent_nightly}"
+    )
 
-    # WHEN: run the hook with a non-existent conf path.
-    _run_generate_hook(repo_vm, release_conf=absent_conf)
+    # WHEN: run the hook with both conf paths non-existent.
+    _run_generate_hook(repo_vm, release_conf=absent_conf, nightly_conf=absent_nightly)
 
-    # AFTER: conf still absent; hook was a no-op.
-    after_present = repo_vm.ssh("/bin/test", "-f", absent_conf)
-    assert after_present.returncode != 0, (
+    # AFTER: both confs still absent; hook was a no-op (created no channel).
+    assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
         f"AFTER: hook orphan guard FAILED — it created {absent_conf} when the conf was absent"
+    )
+    assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
+        f"AFTER: hook orphan guard FAILED — it created {absent_nightly} when the conf was absent"
     )
 
 

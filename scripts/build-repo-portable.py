@@ -1062,10 +1062,11 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     if args.print_conf:
+        if not args.catalog_path or not args.catalog_path.strip("/"):
+            ap.error("--print-conf requires --catalog-path <varver>/<arch>")
         _base = args.base_url.rstrip("/")
-        _cat = args.catalog_path.strip("/") if args.catalog_path else ""
-        _resolved = f"{_base}/release/{_cat}" if _cat else _base
-        print_conf(_resolved)
+        _cat = args.catalog_path.strip("/")
+        print_conf(f"{_base}/release/{_cat}")
         return 0
 
     if args.build_matrix:

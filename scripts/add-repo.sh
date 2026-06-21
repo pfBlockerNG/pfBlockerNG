@@ -179,6 +179,10 @@ EOF
 # A resolved URL needs --catalog-path <varver>/<arch> (the live bootstrap leaves
 # detection to the hook; --print-conf is a documentation/dry-run aid).
 if [ "$PRINT_CONF" -eq 1 ]; then
+    [ -n "${CATALOG_PATH}" ] || {
+        printf 'add-repo: --catalog-path <varver>/<arch> is required with --print-conf\n' >&2
+        exit 2
+    }
     _url="${BASE_URL%/}/${CHANNEL}/${CATALOG_PATH}"
     print_conf "${_url}"
     exit 0
