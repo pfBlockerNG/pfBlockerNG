@@ -1,6 +1,7 @@
 # ADR-39: On-box pkg-repo conf regeneration (boot hook) + Cloudflare Worker retirement
 
-- **Status:** **Proposed** (2026-06-21)
+- **Status:** **Accepted** (2026-06-21) — repo-marker smoke green on the live-VM fan-out
+  (CE + Plus), run 27918859068; see `RESULTS/04_Results.txt`.
 - **Date:** 2026-06-21
 - **Branch:** `adr/39-meta-package-distribution` (off **`devel`**). The branch/dir keep the
   original "meta-package" slug for continuity; the design **pivoted away from a meta-package**
