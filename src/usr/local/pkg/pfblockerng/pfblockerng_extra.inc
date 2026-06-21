@@ -122,10 +122,17 @@ function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 /**
  * pfb_cfg_toggle_write — write a PfbToggle back to its stored string.
  *
- * Returns the exact legacy stored string ('on' or '').
+ * Returns the exact legacy stored string ('on' or '').  Accepts either the
+ * runtime enum or a raw legacy string (normalised through the read adapter),
+ * matching the PfbConfig::write() "enum or string" contract.
+ *
+ * @param PfbToggle|string $toggle  Runtime enum or raw stored string.
  */
-function pfb_cfg_toggle_write(PfbToggle $toggle): string
+function pfb_cfg_toggle_write(PfbToggle|string $toggle): string
 {
+	if (is_string($toggle)) {
+		$toggle = pfb_cfg_toggle_read($toggle);
+	}
 	return $toggle->value;
 }
 
@@ -151,10 +158,17 @@ function pfb_cfg_lenient_read(mixed $stored): PfbLenient
 /**
  * pfb_cfg_lenient_write — write a PfbLenient back to its stored string.
  *
- * Returns 'on' or 'off' (never '').
+ * Returns 'on' or 'off' (never '').  Accepts either the runtime enum or a raw
+ * legacy string (normalised through the read adapter), matching the
+ * PfbConfig::write() "enum or string" contract.
+ *
+ * @param PfbLenient|string $lenient  Runtime enum or raw stored string.
  */
-function pfb_cfg_lenient_write(PfbLenient $lenient): string
+function pfb_cfg_lenient_write(PfbLenient|string $lenient): string
 {
+	if (is_string($lenient)) {
+		$lenient = pfb_cfg_lenient_read($lenient);
+	}
 	return $lenient->value;
 }
 
@@ -188,9 +202,17 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
  * Returns the canonical stored string ('all', 'confusable', or 'off').
  * NOTE: 'on' (legacy) is never re-emitted; it normalises to 'all' on read
  * and is stored as 'all' on write.  This is the intended one-way migration.
+ *
+ * Accepts either the runtime enum or a raw legacy string (normalised through
+ * the read adapter), matching the PfbConfig::write() "enum or string" contract.
+ *
+ * @param PfbIdnMode|string $mode  Runtime enum or raw stored string.
  */
-function pfb_cfg_idn_mode_write(PfbIdnMode $mode): string
+function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
+	if (is_string($mode)) {
+		$mode = pfb_cfg_idn_mode_read($mode);
+	}
 	return $mode->value;
 }
 

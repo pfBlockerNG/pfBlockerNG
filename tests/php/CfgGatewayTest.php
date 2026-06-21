@@ -611,6 +611,24 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path));
 	}
 
+	public function testWriteToggleFieldAcceptsLegacyStringValue(): void
+	{
+		// Regression: pfblockerng_update.php Force Reload calls
+		// PfbConfig::write('pfb_reuse', 'on') with a raw string. The toggle
+		// write adapter must accept it (enum-or-string contract) and store
+		// the exact legacy token — previously a TypeError.
+		$path = 'installedpackages/pfblockerng/config/0/pfb_reuse';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path));
+
+		// When: write the raw legacy string (not the enum).
+		PfbConfig::write('pfb_reuse', 'on');
+
+		// After: stored as the string 'on'.
+		$this->assertSame('on', config_get_path($path));
+	}
+
 	public function testWriteAppliesLenientAdapterBeforeStorage(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
