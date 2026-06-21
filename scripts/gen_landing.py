@@ -329,8 +329,10 @@ def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         f"{_copyable(_esc(setup))}"
         f'<ul class="pkgs">{items}</ul>'
         "<details><summary>Manual conf (advanced)</summary>"
-        '<p class="blurb">The bootstrap auto-detects your edition/version/arch; in a hand-written conf, '
-        "replace <code>&lt;varver&gt;/&lt;arch&gt;</code> (e.g. <code>plus-26.03/amd64</code>) with yours.</p>"
+        '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
+        "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
+        "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
+        "with your box's values.</p>"
         f"{_copyable(_esc(conf_fn('release')))}</details></div>"
     )
 
@@ -347,8 +349,10 @@ def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         "track the very latest, not on a production firewall.</p>"
         f"{_copyable(_esc(one_liner))}"
         "<details><summary>Manual conf (advanced)</summary>"
-        '<p class="blurb">The bootstrap auto-detects your edition/version/arch; in a hand-written conf, '
-        "replace <code>&lt;varver&gt;/&lt;arch&gt;</code> (e.g. <code>ce-2.8/amd64</code>) with yours.</p>"
+        '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
+        "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
+        "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
+        "with your box's values.</p>"
         f"{_copyable(_esc(conf_fn('nightly')))}</details></div>"
     )
 
