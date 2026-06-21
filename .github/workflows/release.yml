@@ -22,9 +22,11 @@ name: Release
 # Tag scheme (single source of truth: scripts/release-version.sh):
 #   * vX.Y.Z                       -> STABLE release (from 'main')   -> full release
 #   * vX.Y.Z.alpha.N|.beta.N|.rc.N -> ALPHA/BETA/RC  (from 'devel') -> pre-release
-# After publishing the GitHub Release, the matching port's PORTVERSION +
-# GH_TAGNAME are bumped directly on our own FreeBSD-ports fork
+# After publishing the GitHub Release, the matching port's PORTVERSION is
+# bumped directly on our own FreeBSD-ports fork
 # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github) — the build-input branch.
+# GH_TAGNAME is `v${PORTVERSION}` in the Makefile, so it self-resolves to the
+# matching tag and the workflow never sets it.
 # Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
 on:
   workflow_dispatch:
@@ -1067,7 +1069,7 @@ jobs:
 
   # ── 3. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ─────
   # Self-hosted distribution (ADR-17): we do NOT PR the upstream pfsense ports
-  # tree. Bump the matching port's PORTVERSION + GH_TAGNAME directly on our own
+  # tree. Bump the matching port's PORTVERSION directly on our own
   # fork's build-input branch (pfblockerng/use-github) — the SAME branch every
   # build reads (release.yml build-pkgs-portable, pfBlockerNG/pkg publish.yml) —
   # so the fork's port stays in lockstep with each release. Direct push: it's our
@@ -1122,7 +1124,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump PORTVERSION + GH_TAGNAME and push to use-github
+      - name: Bump PORTVERSION and push to use-github
         # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
         # template-inject into this shell.
         env:
@@ -1176,10 +1178,10 @@ jobs:
             NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
               "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
 
-            # Update PORTVERSION and GH_TAGNAME.
+            # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
+            # so it self-resolves to the matching tag — the workflow never sets it.
             sed -i \
               -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
-              -e "s|^GH_TAGNAME=.*|GH_TAGNAME=\t${TAG}|" \
               "$MAKEFILE"
 
             # Apply PORTREVISION per ports convention: remove when 0; set/insert after
@@ -1198,7 +1200,7 @@ jobs:
             echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
             exit 0
           fi
-          git commit -m "$(printf '%s: update to %s\n\nGH_TAGNAME=%s — pfBlockerNG/pfBlockerNG release.' \
+          git commit -m "$(printf '%s: update to %s\n\npfBlockerNG/pfBlockerNG release %s.' \
             "$PORTS_LABEL" "$PORTVERSION" "$TAG")"
 
           # use-github only advances via releases; push directly, rebasing once on a
