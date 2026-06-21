@@ -64,9 +64,11 @@ _make_detect_stub() {
 
 # Build a pkg stub.  $1 = output path.
 # Behaviour is parameterized by env vars set before calling:
-#   PKG_STUB_INFO_RESULT  — exit code for `pkg info <pkg>` (default 1 = not installed)
-#   PKG_STUB_CMDS_LOG     — file to append "pkg <args>" lines to
-#   PKG_STUB_FAIL         — if "1", every pkg subcommand exits 1
+#   PKG_STUB_INFO_RESULT    — exit code for `pkg info <pkg>` (default 1 = not installed)
+#   PKG_STUB_CMDS_LOG       — file to append "pkg <args>" lines to
+#   PKG_STUB_FAIL           — if "1", every pkg subcommand exits 1
+#   PKG_STUB_UPDATE_RESULT  — exit code for `pkg update` specifically (default 0);
+#                             ignored when PKG_STUB_FAIL=1
 _make_pkg_stub() {
     cat > "$1" <<'EOF'
 #!/bin/sh
@@ -74,13 +76,14 @@ _make_pkg_stub() {
 : "${PKG_STUB_INFO_RESULT:=1}"
 : "${PKG_STUB_CMDS_LOG:=/dev/null}"
 : "${PKG_STUB_FAIL:=0}"
+: "${PKG_STUB_UPDATE_RESULT:=0}"
 printf 'pkg %s\n' "$*" >> "${PKG_STUB_CMDS_LOG}"
 if [ "${PKG_STUB_FAIL}" = "1" ]; then
     exit 1
 fi
 case "$1" in
     info)    exit "${PKG_STUB_INFO_RESULT}" ;;
-    update)  exit 0 ;;
+    update)  exit "${PKG_STUB_UPDATE_RESULT}" ;;
     upgrade) exit 0 ;;
     install) exit 0 ;;
     *)       exit 0 ;;
@@ -378,5 +381,149 @@ Describe 'self-heal hook — fail-proof: forced failures still exit 0'
           The status should be success
           The stderr should include "WARNING"
         End
+    End
+End
+
+# ── MISMATCH + pkg update FAILS: conf is restored, reconcile NOT called ───────
+#
+# Before-state: release conf has ce-2.7/amd64 (stale); detect returns ce-2.8/amd64.
+# pkg stub: `update` exits 1 (network/catalog failure).
+# After-state:
+#   - The conf is RESTORED to the original ce-2.7/amd64 (byte-identical to pre-run).
+#   - reconcile (pkg upgrade/install) was NOT attempted.
+#   - Hook still exits 0.
+
+Describe 'self-heal hook — mismatch + pkg update fails: conf restored, no reconcile'
+    setup_uf() {
+        _uf_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/sh_update_fail.XXXXXX")"
+
+        # Conf seeded with stale varver ce-2.7/amd64.
+        PFB_RELEASE_CONF="${_uf_dir}/pfblockerng.conf"
+        PFB_NIGHTLY_CONF="${_uf_dir}/pfblockerng-nightly.conf"
+        _make_release_conf "${PFB_RELEASE_CONF}" "ce-2.7/amd64"
+
+        # Save the original conf bytes for the before/after assertion.
+        _uf_orig="$(cat "${PFB_RELEASE_CONF}")"
+
+        # Detection stub returns the CURRENT varver ce-2.8/amd64 → MISMATCH.
+        PFB_DETECT_HELPER="${_uf_dir}/detect_variant.sh"
+        _make_detect_stub "${PFB_DETECT_HELPER}" "ce-2.8/amd64"
+
+        # pkg stub: update exits 1; log all calls.
+        _uf_pkg_log="${_uf_dir}/pkg_calls.log"
+        PFB_PKG_BIN="${_uf_dir}/pkg"
+        PKG_STUB_CMDS_LOG="${_uf_pkg_log}"
+        PKG_STUB_UPDATE_RESULT="1"
+        _make_pkg_stub "${PFB_PKG_BIN}"
+
+        export PFB_RELEASE_CONF PFB_NIGHTLY_CONF PFB_DETECT_HELPER PFB_PKG_BIN \
+               PKG_STUB_CMDS_LOG PKG_STUB_UPDATE_RESULT
+    }
+    cleanup_uf() {
+        rm -rf "${_uf_dir}"
+        unset PFB_RELEASE_CONF PFB_NIGHTLY_CONF PFB_DETECT_HELPER PFB_PKG_BIN \
+              PKG_STUB_CMDS_LOG PKG_STUB_UPDATE_RESULT _uf_orig _uf_pkg_log
+    }
+    BeforeAll '_source_hook'
+    Before 'setup_uf'
+    After  'cleanup_uf'
+
+    It 'before-state: release conf contains the stale varver ce-2.7/amd64'
+      The contents of file "${PFB_RELEASE_CONF}" should include "ce-2.7/amd64"
+      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.8/amd64"
+    End
+
+    It 'exits 0 even when pkg update fails on mismatch path'
+      When call _selfheal_main
+      The status should be success
+      The stderr should include "WARNING"
+    End
+
+    It 'restores the conf to the original stale varver after pkg update failure'
+      _selfheal_main 2>/dev/null
+      # after-state: conf is byte-identical to the original (old varver back in place).
+      The contents of file "${PFB_RELEASE_CONF}" should equal "${_uf_orig}"
+    End
+
+    It 'does not leave the new varver in the conf after pkg update failure'
+      _selfheal_main 2>/dev/null
+      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.8/amd64"
+    End
+
+    It 'does not call pkg upgrade or pkg install after pkg update failure'
+      _selfheal_main 2>/dev/null
+      # upgrade and install must NOT appear in the call log — only `update` was attempted.
+      The contents of file "${_uf_pkg_log}" should not include "pkg upgrade"
+      The contents of file "${_uf_pkg_log}" should not include "pkg install"
+    End
+End
+
+# ── MISMATCH + pkg update SUCCEEDS: conf is updated, reconcile IS called ─────
+#
+# Before-state: release conf has ce-2.7/amd64 (stale); detect returns ce-2.8/amd64.
+# pkg stub: `update` exits 0 (success).
+# After-state:
+#   - The conf is rewritten to ce-2.8/amd64 (BEFORE = old, AFTER = new).
+#   - reconcile WAS invoked (pkg upgrade or pkg install appears in the call log).
+#   - Hook exits 0.
+
+Describe 'self-heal hook — mismatch + pkg update succeeds: conf updated, reconcile called'
+    setup_us() {
+        _us_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/sh_update_succ.XXXXXX")"
+
+        # Conf seeded with stale varver ce-2.7/amd64.
+        PFB_RELEASE_CONF="${_us_dir}/pfblockerng.conf"
+        PFB_NIGHTLY_CONF="${_us_dir}/pfblockerng-nightly.conf"
+        _make_release_conf "${PFB_RELEASE_CONF}" "ce-2.7/amd64"
+
+        # Detection stub returns the CURRENT varver ce-2.8/amd64 → MISMATCH.
+        PFB_DETECT_HELPER="${_us_dir}/detect_variant.sh"
+        _make_detect_stub "${PFB_DETECT_HELPER}" "ce-2.8/amd64"
+
+        # pkg stub: update exits 0 (success); log all calls.
+        _us_pkg_log="${_us_dir}/pkg_calls.log"
+        PFB_PKG_BIN="${_us_dir}/pkg"
+        PKG_STUB_CMDS_LOG="${_us_pkg_log}"
+        PKG_STUB_UPDATE_RESULT="0"
+        _make_pkg_stub "${PFB_PKG_BIN}"
+
+        export PFB_RELEASE_CONF PFB_NIGHTLY_CONF PFB_DETECT_HELPER PFB_PKG_BIN \
+               PKG_STUB_CMDS_LOG PKG_STUB_UPDATE_RESULT
+    }
+    cleanup_us() {
+        rm -rf "${_us_dir}"
+        unset PFB_RELEASE_CONF PFB_NIGHTLY_CONF PFB_DETECT_HELPER PFB_PKG_BIN \
+              PKG_STUB_CMDS_LOG PKG_STUB_UPDATE_RESULT _us_pkg_log
+    }
+    BeforeAll '_source_hook'
+    Before 'setup_us'
+    After  'cleanup_us'
+
+    It 'before-state: release conf contains the stale varver ce-2.7/amd64'
+      The contents of file "${PFB_RELEASE_CONF}" should include "ce-2.7/amd64"
+      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.8/amd64"
+    End
+
+    It 'exits 0 when pkg update succeeds on mismatch path'
+      When call _selfheal_main
+      The status should be success
+    End
+
+    It 'rewrites the conf to the new varver after pkg update success'
+      _selfheal_main 2>/dev/null
+      # after-state: conf has the new varver (BEFORE = old, AFTER = new).
+      The contents of file "${PFB_RELEASE_CONF}" should include "ce-2.8/amd64"
+      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.7/amd64"
+    End
+
+    It 'calls pkg update -r pfblockerng before reconcile'
+      _selfheal_main 2>/dev/null
+      The contents of file "${_us_pkg_log}" should include "pkg update -r pfblockerng"
+    End
+
+    It 'calls reconcile (pkg upgrade or pkg install) after pkg update success'
+      _selfheal_main 2>/dev/null
+      # The pkg stub returns 1 for `info` by default (not installed), so `install` is called.
+      The contents of file "${_us_pkg_log}" should include "pkg install"
     End
 End
