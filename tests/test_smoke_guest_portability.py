@@ -77,6 +77,7 @@ def find_gnu_grepisms(source: str, filename: str = "<smoke>") -> list[tuple[int,
 
 
 def _smoke_py_files() -> list[Path]:
+    """Every Python module under tests/smoke/ (the harness modules to scan)."""
     return sorted(p for p in _SMOKE_DIR.rglob("*.py") if p.is_file())
 
 
@@ -110,6 +111,7 @@ def test_smoke_harness_uses_no_gnu_only_regex_in_guest_commands() -> None:
 
 
 def test_detector_flags_gnu_backslash_s_in_grep_arg() -> None:
+    """A guest grep arg carrying the GNU-only \\s escape is flagged."""
     src = '_ssh_check(vm, "grep", "-E", r"^\\s*url:", conf_path)\n'
     hits = find_gnu_grepisms(src)
     assert len(hits) == 1, hits
@@ -117,22 +119,24 @@ def test_detector_flags_gnu_backslash_s_in_grep_arg() -> None:
 
 
 def test_detector_passes_posix_space_class() -> None:
+    """The POSIX [[:space:]] form (the fix) is accepted, not flagged."""
     src = '_ssh_check(vm, "grep", "-E", r"^[[:space:]]*url:", conf_path)\n'
     assert find_gnu_grepisms(src) == []
 
 
 def test_detector_flags_gnu_flags() -> None:
+    """GNU-only flags — grep -P and sed -r — are flagged."""
     assert find_gnu_grepisms("vm.ssh(\"grep -P '\\\\d+' /tmp/x\")\n")  # grep -P
     assert find_gnu_grepisms("vm.ssh(\"sed -r 's/a+/b/' /tmp/x\")\n")  # sed -r
 
 
 def test_detector_ignores_python_side_re_without_a_guest_util() -> None:
-    # A Python re pattern with \s but no grep/sed/awk token is NOT a guest command.
+    """A Python re pattern with \\s but no grep/sed/awk token is not a guest command — not flagged."""
     src = 'match = re.search(r\'url:\\s*"([^"]+)"\', raw)\n'
     assert find_gnu_grepisms(src) == []
 
 
 def test_detector_ignores_comments_mentioning_backslash_s() -> None:
-    # A comment near a grep call must not trip the guard (comments are not AST strings).
+    """A comment mentioning \\s near a grep call is not flagged (comments are not AST strings)."""
     src = '# POSIX [[:space:]] not \\s for BSD grep\n_ssh_check(vm, "grep", "-E", r"^[[:space:]]*x", p)\n'
     assert find_gnu_grepisms(src) == []
