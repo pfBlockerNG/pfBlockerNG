@@ -251,12 +251,53 @@ footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid va
 .card.nightly{border-color:var(--warn)}
 .card.nightly .badge{border-color:var(--warn);color:var(--warn)}
 .warn{color:var(--warn)}
+.snip{position:relative}
+.snip>pre{padding-right:3.6rem}
+.copy{position:absolute;top:.45rem;right:.45rem;z-index:1;
+  font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--mut);background:#1f2630;border:1px solid var(--bd);border-radius:6px;
+  padding:.3rem .5rem;cursor:pointer}
+.copy:hover{color:var(--fg);border-color:var(--acc)}
+.copy.copied{color:#3fb950;border-color:#3fb950}
 """
 
 # The release repo carries both packages (the channel picks the package, not the repo).
 _PKG_STABLE = "pfSense-pkg-pfBlockerNG"
 _PKG_DEVEL = "pfSense-pkg-pfBlockerNG-devel"
 _PKG_NIGHTLY = "pfSense-pkg-pfBlockerNG-nightly"
+
+# Minimal, dependency-free clipboard handler for the snippet copy buttons. Delegated
+# (one listener), reads the adjacent <pre> textContent (entities decoded), and falls
+# back to execCommand('copy') where the async Clipboard API is unavailable.
+_COPY_JS = (
+    "(function(){"
+    "function fb(t,cb){var a=document.createElement('textarea');a.value=t;"
+    "a.setAttribute('readonly','');a.style.position='fixed';a.style.top='-1000px';"
+    "a.style.opacity='0';document.body.appendChild(a);a.select();"
+    "try{document.execCommand('copy');}catch(e){}document.body.removeChild(a);cb();}"
+    "function flash(b){b.textContent='Copied';b.classList.add('copied');"
+    "setTimeout(function(){b.textContent='Copy';b.classList.remove('copied');},1500);}"
+    "document.addEventListener('click',function(e){"
+    "var b=e.target.closest&&e.target.closest('.copy');if(!b)return;"
+    "var p=b.parentNode.querySelector('pre');if(!p)return;"
+    "var t=p.textContent,done=function(){flash(b);};"
+    "if(navigator.clipboard&&navigator.clipboard.writeText){"
+    "navigator.clipboard.writeText(t).then(done).catch(function(){fb(t,done);});}"
+    "else{fb(t,done);}});})();"
+)
+
+
+def _copyable(inner: str) -> str:
+    """Wrap already-escaped snippet text in a <pre> with a corner 'Copy' button.
+
+    The button is a sibling of (not inside) the <pre>, so the copied textContent never
+    includes the button label; the <pre> content is emitted unchanged.
+    """
+    return (
+        '<div class="snip">'
+        '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
+        f"<pre>{inner}</pre></div>"
+    )
 
 
 def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
@@ -271,18 +312,18 @@ def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
     setup = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base}"
     items = (
         f'<li><span class="lbl">Stable</span> — {_ver_or_empty(latest, "stable")}'
-        f"<pre>pkg install {_esc(_PKG_STABLE)}</pre></li>"
+        f"{_copyable('pkg install ' + _esc(_PKG_STABLE))}</li>"
         f'<li><span class="lbl">Development</span> — {_ver_or_empty(latest, "devel")}'
-        f"<pre>pkg install {_esc(_PKG_DEVEL)}</pre></li>"
+        f"{_copyable('pkg install ' + _esc(_PKG_DEVEL))}</li>"
     )
     return (
         '<div class="card release"><h3>Stable &amp; development</h3>'
         '<p class="blurb">One bootstrap adds the shared <code>pfblockerng</code> repo, which carries '
         "both packages (they conflict &mdash; install one):</p>"
-        f"<pre>{_esc(setup)}</pre>"
+        f"{_copyable(_esc(setup))}"
         f'<ul class="pkgs">{items}</ul>'
         "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
-        f"<pre>{_esc(conf_fn('release'))}</pre></details></div>"
+        f"{_copyable(_esc(conf_fn('release')))}</details></div>"
     )
 
 
@@ -296,9 +337,9 @@ def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         '<code>pfblockerng-nightly</code> repo. <span class="warn">Bleeding edge</span> &mdash; the only '
         "guarantee is that CI passed; unlike <code>devel</code> it carries no stability target. Use it to "
         "track the very latest, not on a production firewall.</p>"
-        f"<pre>{_esc(one_liner)}</pre>"
+        f"{_copyable(_esc(one_liner))}"
         "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
-        f"<pre>{_esc(conf_fn('nightly'))}</pre></details></div>"
+        f"{_copyable(_esc(conf_fn('nightly')))}</details></div>"
     )
 
 
@@ -696,7 +737,9 @@ def render_page(
         '<footer><a href="https://github.com/pfBlockerNG/pfBlockerNG">Source</a> &middot; '
         '<a href="https://github.com/pfBlockerNG/pfBlockerNG/releases">Releases</a> &middot; '
         '<a href="https://github.com/pfBlockerNG/pkg">This repository</a></footer>'
-        "</div></body></html>\n"
+        "</div>"
+        f"<script>{_COPY_JS}</script>"
+        "</body></html>\n"
     )
 
 

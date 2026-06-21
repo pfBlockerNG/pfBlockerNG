@@ -531,6 +531,45 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert 'href="./FreeBSD:16:aarch64/"' not in page
 
 
+def test_render_page_snippets_have_copy_buttons() -> None:
+    """Scenario: every install/bootstrap/conf snippet gets a one-click 'Copy' affordance.
+
+    Given a rendered landing page,
+    Then each command snippet is wrapped in a .snip block carrying a .copy button while its
+      <pre> content is emitted unchanged (so the copied text is exactly the command),
+    And the supporting CSS + a dependency-free clipboard script are present,
+    And exactly the six command snippets are wrapped — not the inline <code> spans.
+    """
+    pkgs = [_pkg("devel", "pfSense-pkg-pfBlockerNG-devel", "3.2.16", "FreeBSD:15:amd64", "FreeBSD:15:amd64/d.pkg")]
+    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf)
+
+    # The button + wrapper exist, and the <pre> payload is unchanged (button is a sibling).
+    assert '<div class="snip">' in page
+    btn = '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
+    assert btn in page
+    # A representative install line is wrapped: button precedes its own <pre>, content intact.
+    assert f"{btn}<pre>pkg install pfSense-pkg-pfBlockerNG-devel</pre>" in page
+    # The bootstrap one-liner and the manual conf are wrapped too.
+    assert f"{btn}<pre>fetch -qo -" in page
+    assert f"{btn}<pre>release-conf-snippet</pre>" in page
+
+    # Exactly the six command snippets are copyable (2 installs + bootstrap + release conf in the
+    # release card; nightly one-liner + nightly conf in the nightly card) — inline <code> is not.
+    assert page.count('<button class="copy"') == 6
+
+    # The styling + the behaviour that make the button work are shipped inline (static page).
+    assert ".copy{" in page and ".snip{position:relative}" in page
+    assert "navigator.clipboard" in page and "document.execCommand('copy')" in page  # API + fallback
+    assert "<script>" in page  # the handler is wired
+
+
+def test_autoindex_has_no_copy_affordance() -> None:
+    """The copy button/script live only on the landing page, not the directory autoindex."""
+    out = gl.render_autoindex("release", ["amd64"], [("notes.txt", 12, 1_700_000_000.0)])
+    assert 'class="copy"' not in out
+    assert "navigator.clipboard" not in out
+
+
 def test_render_page_table_empty_when_no_packages() -> None:
     page = gl.render_page("https://x/pkg", [], _stub_conf)
     assert "No packages published yet." in page
