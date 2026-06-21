@@ -935,24 +935,24 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
 
 
 @pytest.mark.timeout(600)  # build catalog + run the shipped bootstrap + install > the 30s cap.
-def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
-    """PHASE-4 SHIPPED BOOTSTRAP: the user-facing ``scripts/add-repo.sh`` writes the
-    production conf, ``pkg update``s, verifies our package is visible, and the box
-    then installs OUR build (no ``-f``) — the real client path, not a hand-written conf.
+def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """PHASE-4 SHIPPED BOOTSTRAP: the user-facing ``scripts/add-repo.sh`` installs the
+    rc.d generator hook, runs it to resolve the production conf, ``pkg update``s, verifies
+    our package is visible, and the box then installs OUR build (no ``-f``) — the real
+    client path, not a hand-written conf.
 
     add-repo.sh is run hermetically against a LOCAL ``file://`` catalog via its own
     ``--base-url`` override; the github.io default + a live HTTPS add-repo.sh run are
-    the post-deploy/Phase-6 note. The shipped release conf carries the explicit
-    ``release/`` channel prefix (ADR-20, symmetric with ``nightly/``), so the catalog
-    is laid out by ``build-repo.sh`` under ``<root>/release/<ABI>/``, and
-    ``--base-url file://<root>`` makes add-repo.sh's
-    ``release/${ABI}`` url resolve to it. The script ships priority 100, above the
-    Netgate ``pfSense`` repo (0), so cross-repo install picks ours — the production
-    mechanism.
+    the post-deploy/Phase-6 note. The hook resolves the conf to the PRODUCTION layout
+    ``release/<varver>/<arch>`` (ADR-39 — the bare arch leaf, not the full ABI), so the
+    catalog must be laid out the same way for ``--base-url file://<root>`` to resolve;
+    we build it at ``<root>/release/<varver>/<arch>/`` with the pure-Python generator
+    (the production ``build_repo_matrix`` layout). The script ships priority 100, above
+    the Netgate ``pfSense`` repo (0), so cross-repo install picks ours.
 
-    Given the package ABSENT and a ``build-repo.sh`` catalog under ``<root>/release/<ABI>/``,
-    When ``add-repo.sh --base-url file://<root>`` runs (default release repo: writes the
-      conf, ``pkg update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
+    Given the package ABSENT and a catalog under ``<root>/release/<varver>/<arch>/``,
+    When ``add-repo.sh --base-url file://<root>`` runs (default release repo: installs +
+      runs the hook, ``pkg update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
     Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
       the production conf to ``pfblockerng.conf``, and the install comes from
       OUR repo (``pkg query %R`` == ``pfblockerng``) with deps resolved.
@@ -960,11 +960,19 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
-    # GIVEN: a catalog under <SCRIPT_REPO_ROOT>/release/<ABI>/ (build-repo.sh nests the release
-    # channel there, matching the shipped conf's explicit prefix), package absent. add-repo.sh's
-    # release/${ABI} url resolves here.
-    abi_dir = build_repo_via_script(repo_vm, [Path(pkg)])
-    assert abi_dir.startswith(f"{SCRIPT_REPO_ROOT}/release/"), f"unexpected catalog dir {abi_dir!r}"
+    # GIVEN: a catalog at <SCRIPT_REPO_ROOT>/release/<varver>/<arch>/ matching the box's
+    # variant — the exact path add-repo.sh's hook resolves the conf to (ADR-39). The
+    # bare-arch leaf (not the full ABI) mirrors the production build_repo_matrix layout.
+    real_varver, real_arch = _box_real_catalog(repo_vm).rsplit("/", 1)
+    abi_dir = build_repo_via_portable_named(
+        repo_vm,
+        [Path(pkg)],
+        tmp_path,
+        catalog_name=f"release/{real_varver}",
+        guest_root=SCRIPT_REPO_ROOT,
+        arch_leaf=real_arch,
+    )
+    assert abi_dir == f"{SCRIPT_REPO_ROOT}/release/{real_varver}/{real_arch}", f"unexpected catalog dir {abi_dir!r}"
     pkg_delete(repo_vm)
 
     # WHEN: run the SHIPPED bootstrap against the local catalog root. Its verify step
@@ -1272,13 +1280,23 @@ def build_repo_via_portable_named(
     *,
     catalog_name: str,
     guest_root: str,
+    arch_leaf: str | None = None,
 ) -> str:
-    """Like ``build_repo_via_portable`` but writes under ``<out>/<catalog-name>/<ABI>/``.
+    """Like ``build_repo_via_portable`` but writes under ``<out>/<catalog-name>/<dir>/``.
 
-    Uses ``build-repo-portable.py --catalog-name <catalog_name>`` to place the
-    ABI subtree under the named variant directory (e.g. ``ce-2.8/FreeBSD:15:amd64/``).
-    Ships only the produced ``<catalog-name>/<ABI>/`` tree to the guest under
-    ``guest_root``; returns the on-guest ABI path the repo conf should point at.
+    Uses ``build-repo-portable.py --catalog-name <catalog_name>`` to place the catalog
+    under the named variant directory. The on-guest leaf directory is chosen by
+    ``arch_leaf``:
+
+    * ``arch_leaf=None`` (default) ships under the builder's ``<ABI>/`` bucket
+      (``ce-2.8/FreeBSD:15:amd64/``) and returns that ABI path — for tests whose conf
+      points directly at the returned dir.
+    * ``arch_leaf="amd64"`` ships under the bare-arch leaf (``ce-2.8/amd64/``),
+      mirroring the PRODUCTION ``build_repo_matrix`` layout (release/<varver>/<arch>) —
+      for tests driven by add-repo.sh / the rc.d hook, whose conf resolves to the bare
+      arch leaf (ADR-39), not the full ABI.
+
+    Returns the on-guest path the repo conf should point at.
     """
     in_dir = tmp_path / f"in_{catalog_name}"
     out_dir = tmp_path / f"out_{catalog_name}"
@@ -1317,14 +1335,17 @@ def build_repo_via_portable_named(
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
         assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
 
-    # Ship the <catalog-name>/<ABI>/ tree to the guest.
-    guest_abi_dir = f"{guest_root}/{catalog_name}/{local_abi_dir.name}"
+    # Ship the catalog tree to the guest under the chosen leaf dir: the builder's
+    # <ABI>/ bucket by default, or the bare-arch leaf when arch_leaf is given (the
+    # production release/<varver>/<arch> layout the ADR-39 conf resolves to).
+    leaf = arch_leaf if arch_leaf is not None else local_abi_dir.name
+    guest_leaf_dir = f"{guest_root}/{catalog_name}/{leaf}"
     _ssh_check(vm, "/bin/rm", "-rf", f"{guest_root}/{catalog_name}")
-    _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
+    _ssh_check(vm, "/bin/mkdir", "-p", guest_leaf_dir)
     for f in sorted(local_abi_dir.iterdir()):
         if f.is_file():
-            _scp_to_guest(vm, f, f"{guest_abi_dir}/{f.name}")
-    return guest_abi_dir
+            _scp_to_guest(vm, f, f"{guest_leaf_dir}/{f.name}")
+    return guest_leaf_dir
 
 
 def forge_variant_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_abi: str) -> Path:
@@ -2247,14 +2268,19 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
     test_conf_path = f"{GENERATE_DIR}/pfblockerng_test.conf"
 
     try:
-        # 1. Build the real catalog on the guest under release/<real_varver>/<arch>/.
-        build_repo_via_portable_named(
+        # 1. Build the real catalog on the guest under release/<real_varver>/<arch-leaf>/
+        #    — the PRODUCTION layout (build_repo_matrix) that the hook's regenerated conf
+        #    resolves to (the bare arch leaf, NOT the full ABI). arch_leaf pins the leaf
+        #    dir so the file:// URL the hook writes actually finds the catalog.
+        shipped_dir = build_repo_via_portable_named(
             repo_vm,
             [Path(pkg)],
             tmp_path,
             catalog_name=f"release/{real_varver}",
             guest_root=catalog_base,
+            arch_leaf=real_arch,
         )
+        assert shipped_dir == guest_real_dir, f"catalog shipped to {shipped_dir!r}, expected {guest_real_dir!r}"
         assert _ssh_check(repo_vm, "/bin/test", "-d", guest_real_dir).returncode == 0, (
             f"real catalog dir {guest_real_dir} not created on guest"
         )
