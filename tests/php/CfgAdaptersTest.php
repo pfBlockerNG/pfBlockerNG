@@ -113,6 +113,18 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame('', pfb_cfg_toggle_write(PfbToggle::Off));
 	}
 
+	public function testToggleWriteAcceptsLegacyString(): void
+	{
+		// PfbConfig::write() advertises an "enum or string" contract; a raw
+		// legacy string must normalise through the read adapter (it was a
+		// TypeError before — pfblockerng_update.php Force Reload passes 'on').
+		// Canonical strings round-trip; junk normalises to the '' default.
+		$this->assertSame('on', pfb_cfg_toggle_write('on'));
+		$this->assertSame('', pfb_cfg_toggle_write(''));
+		$this->assertSame('', pfb_cfg_toggle_write('off'));
+		$this->assertSame('', pfb_cfg_toggle_write('yes'));
+	}
+
 	// -----------------------------------------------------------------------
 	// Scenario B — PfbLenient
 	// -----------------------------------------------------------------------
@@ -190,6 +202,16 @@ final class CfgAdaptersTest extends TestCase
 	{
 		$this->assertSame('on', pfb_cfg_lenient_write(PfbLenient::On));
 		$this->assertSame('off', pfb_cfg_lenient_write(PfbLenient::Off));
+	}
+
+	public function testLenientWriteAcceptsLegacyString(): void
+	{
+		// "enum or string" contract: raw legacy string normalises through read.
+		// 'on'/'off' round-trip; '' and junk normalise to the 'off' default.
+		$this->assertSame('on', pfb_cfg_lenient_write('on'));
+		$this->assertSame('off', pfb_cfg_lenient_write('off'));
+		$this->assertSame('off', pfb_cfg_lenient_write(''));
+		$this->assertSame('off', pfb_cfg_lenient_write('yes'));
 	}
 
 	// -----------------------------------------------------------------------
@@ -330,6 +352,18 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame('all', pfb_cfg_idn_mode_write(PfbIdnMode::All));
 		$this->assertSame('confusable', pfb_cfg_idn_mode_write(PfbIdnMode::Confusable));
 		$this->assertSame('off', pfb_cfg_idn_mode_write(PfbIdnMode::Off));
+	}
+
+	public function testIdnModeWriteAcceptsLegacyString(): void
+	{
+		// "enum or string" contract: raw legacy string normalises through read.
+		// Canonical values round-trip; legacy 'on' -> 'all'; '' and junk -> 'off'.
+		$this->assertSame('all', pfb_cfg_idn_mode_write('all'));
+		$this->assertSame('confusable', pfb_cfg_idn_mode_write('confusable'));
+		$this->assertSame('off', pfb_cfg_idn_mode_write('off'));
+		$this->assertSame('all', pfb_cfg_idn_mode_write('on'));
+		$this->assertSame('off', pfb_cfg_idn_mode_write(''));
+		$this->assertSame('off', pfb_cfg_idn_mode_write('yes'));
 	}
 
 	// -----------------------------------------------------------------------
