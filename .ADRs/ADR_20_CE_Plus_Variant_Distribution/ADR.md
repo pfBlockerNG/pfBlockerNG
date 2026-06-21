@@ -15,6 +15,24 @@
 > left a non-failing `xfail`, which masked the gap in CI. Tracked completion: stamp the
 > variant into manifests (#242) → generator variant bucketing → `publish.yml` routing.json +
 > variant catalogs → Worker nightly-prefix fix + `wrangler deploy`, then un-`xfail` Case 4.
+>
+> **Amendment (2026-06-21, #442) — Phase-1 REJECTs in the field; UA routing is non-viable.** The
+> "routing live — verified" status below was verified with a **fabricated product User-Agent**
+> (`curl -A "Netgate pfSense Plus/26.03"`), not a real `pkg update`. On a real box the pkg client
+> sends **`User-Agent: pkg/2.5.1`** — a generic string carrying **no pfSense edition/version** (the
+> `pkg -d update` trace confirms it; Netgate sidesteps this by putting the version in the URL
+> **path**, not the UA). The Worker matches the UA against `routing.json` patterns, so every real
+> request matches nothing and returns `404 Unsupported pfSense version` → pkg reports it as `Failed
+> writing received data to disk/application`. This is precisely the **Phase-1 kill-gate REJECT
+> condition** ("UA absent or replaced"); the gate's GO was recorded against a stub, so the gate's
+> own fallback was never triggered. **Operative correction:** the UA-routed Worker (the §2 "primary
+> mechanism") is dropped; the §2 **Phase-1-REJECT fallback becomes the primary path** — `add-repo.sh`
+> resolves edition (`globals.plus.inc`) + version (`/etc/version`) **locally** and writes a direct
+> GitHub Pages conf, with the **meta-package** (§2 "Meta-package") as the front-end that re-runs that
+> detection on every `pkg upgrade` and lets the Worker + `routing.json` be retired entirely. The
+> as-built tree uses a **bare `<arch>`** leaf (`release/<varver>/<arch>`), so the §2 fallback text's
+> `ce-2.8/${ABI}` path is stale and must be corrected to `release/<varver>/<arch>` when implemented.
+> Tracking + full root cause/repro: **#442**.
 
 - **Status:** **Accepted — routing live** (code accepted 2026-06-10; routing rework B1–B3 landed +
   deployed 2026-06-15, see the amendment + the routing-completion handoff). The matrix-driven
