@@ -299,3 +299,40 @@ hook, then delete the dead Worker/meta-package surface last.
 - The non-package `rc.d` hook is found NOT to survive a real cross-major BE-clone upgrade (would
   force falling back to the dep-free meta-package as the hook's vehicle — the only reason to revive
   it). Surfaced by the maintainer smoke before relying on it in the field.
+
+### Post-merge follow-ups (separate repos / ops — not blocking acceptance)
+
+These items are required for the full ecosystem to reflect the no-Worker design, but they are
+cross-repo or operational and cannot land in a single PR against this repo. They should be
+completed shortly after this branch merges to `devel`.
+
+**(a) `pfBlockerNG/pkg` repo — reconcile `publish.yml` and `gen_landing.py`.**
+`publish.yml` in `pfBlockerNG/pkg` was written for the Worker era: it may reference
+`routing.json` generation, routing-specific comments, or build steps that no longer apply.
+`gen_landing.py` (which generates the Pages landing page) may point the install-card's
+bootstrap URL at `pkg.pfblockerng.workers.dev` (the now-retired Worker). These must be
+updated to reflect the direct-URL architecture:
+
+- Remove any `routing.json` generation steps or comments from `publish.yml`.
+- Update the landing page's install card to use `add-repo.sh` with the default
+  `https://pfblockerng.github.io/pkg` base (no Worker URL).
+- `publish.yml` consumes this repo's `scripts/build-pkg-portable.py` and
+  `scripts/build-repo-portable.py` — both have already had the Worker/`routing.json`
+  generation removed in this ADR's Phase 3; `publish.yml` just needs the references
+  cleaned up to match.
+
+This is a **separate PR against `pfBlockerNG/pkg`** that should be opened after this
+branch lands on `devel` (the scripts it consumes are stable at that point).
+
+**(b) Retire the live Cloudflare Worker deployment.**
+Once this branch merges and `pfBlockerNG/pkg`'s `publish.yml` no longer deploys the Worker:
+
+- Delete the `pfblockerng-router` (or equivalent) Cloudflare Worker in the Cloudflare
+  dashboard (or via `wrangler delete`).
+- Remove the `*.workers.dev` route / custom domain binding if configured.
+- Revoke / archive the `CF_API_TOKEN` / `CF_ACCOUNT_ID` GitHub Actions secrets that
+  authorized `wrangler deploy` (those secrets are now inert; removing them reduces the
+  secret surface).
+
+This is an **operational step** (no code PR needed) that should happen after confirming
+the direct-URL path is live and serving on `pfblockerng.github.io/pkg`.
