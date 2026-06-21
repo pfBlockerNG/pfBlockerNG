@@ -301,24 +301,32 @@ staging dir) and never rewrite foreign conf content; a `+PRE_INSTALL` runs insid
 transaction where nested `pkg` is impossible; libpkg pins every version at solve time. Foreign confs
 (ours) **persist** across upgrades (pfSense leaves them untouched), but a varver conf goes **stale**
 on a version change and can only be corrected by a **separate, later** pkg run — a structural
-one-pkg-run lag. The self-heal hook below closes that lag.
+one-pkg-run lag. The boot-time generator hook below closes that lag.
 
-**`rc.d` self-heal hook (`scripts/rc.d/pfblockerng_repo_selfheal.sh`).** Installed on-box by
-`add-repo.sh` into `/usr/local/etc/rc.d/`; activated at every boot. Key properties:
+**`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
+`add-repo.sh` into `/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**:
+for each of our conf files that exists, it detects the box's `<varver>/<arch>` and
+**unconditionally overwrites** the conf with the canonical body (channel-correct URL + a marker
+comment). **No `pkg` call, no network, no snapshot, no reconcile, no parse-and-compare** —
+re-deriving the conf from scratch is strictly simpler than diffing and patching one in place, and
+never wrong. Key properties:
 
-- **Self-guarding:** first act is `[ -f <our conf> ] || exit 0` — if neither the release nor
-  the nightly conf is present the hook is a complete no-op (an orphaned hook left after the
-  user removes our repo is inert and does not affect boot).
-- **Ordering:** `REQUIRE: NETWORKING LOGIN` — runs after the resolver is up (critical: the heal
-  does a `pkg` network fetch; it must not run before DNS is available on boxes that resolve via
-  `127.0.0.1`). `LOGIN` is a standard late-boot milestone that follows the resolver on pfSense.
-- **Match path (every-boot fast no-op):** compares the `<varver>/<arch>` embedded in the conf
-  URL against the box's current value from `pfb_detect_catalog`; if they match, exits 0
-  immediately — zero `pkg` calls on an up-to-date box.
-- **Mismatch path (post-upgrade heal):** snapshots the conf, rewrites only the `<varver>/<arch>`
-  segment (all other bytes preserved), runs `pkg update -r <repo>`. On success: removes the
-  snapshot, runs reconcile (`pkg upgrade` / `pkg install` of the pfBlockerNG package — best-effort,
-  failure is logged and swallowed). On failure: restores the snapshot so the **next** boot retries.
+- **Self-guarding:** a conf is regenerated only if it already exists; if neither the release nor
+  the nightly conf is present the hook is a complete no-op (an orphaned hook left after the user
+  removes our repo is inert, and a channel the user never bootstrapped is never created).
+- **Ordering:** `REQUIRE: FILESYSTEMS` (so `/usr/local` is mounted) and `BEFORE: NETWORKING` — it
+  runs *before* anything that could invoke `pkg` over the network, so the conf is already correct
+  by the time the box first reaches for a catalog. Running this early is safe precisely because it
+  is local-file-only (no network, no daemon).
+- **Folded detection (KISS):** edition = "`/etc/product_label` contains `Plus`" → `plus`, else
+  `ce`; version = major.minor of `/etc/version`; arch = the leaf of `pkg config abi`. This mirrors
+  `catalog_name_from_version()` in `scripts/build-repo-portable.py`; there is **no** separate
+  `/lib` detection helper (it is folded into the one self-contained hook file).
+- **Byte-identical output:** the conf body the hook writes is byte-for-byte identical to
+  `add-repo.sh --print-conf`, `build-repo.sh --print-conf`, and `build-repo-portable.py
+  --print-conf` (drift-pinned by `tests/test_add_repo_conf.py` across all four producers).
+- **Detection-failure safety:** if version or arch cannot be resolved the hook leaves the existing
+  conf **unchanged** (warns) rather than writing a malformed URL.
 - **Always `exit 0`:** every code path ends in `exit 0`. A non-zero exit would wedge the rc.d
   chain; this hook must never do that.
 - **Verified findings (ADR-39 §1.3):**

@@ -10,14 +10,17 @@ ADR-39 rework: the conf URL is now a DIRECT, fully-resolved GitHub Pages URL
 
     https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>
 
-The ``<varver>/<arch>`` segment is resolved at install time by ``detect_variant.sh``
-(the Phase-1 helper) and baked into the conf.  The self-heal ``rc.d`` hook rewrites
-only that segment on a pfSense OS upgrade.
+The ``<varver>/<arch>`` segment is resolved by the boot-time ``rc.d`` generator hook
+(``pfblockerng_repo_generate.sh``), whose detection is folded in (ADR-39): edition =
+"/etc/product_label contains 'Plus'", version = major.minor of /etc/version, arch =
+the leaf of ``pkg config abi``.  The hook regenerates the whole conf each boot, so the
+URL self-corrects after a pfSense OS upgrade.
 
 Tests below pin:
 
-* **byte-identity** across all three generators (release conf, ``--catalog-path
-  ce-2.8/amd64`` supplied to all three so the resolved URL is deterministic);
+* **byte-identity** across all FOUR producers — the three ``--print-conf`` generators
+  AND the hook (release conf, ``--catalog-path ce-2.8/amd64`` so the URL is
+  deterministic);
 * **resolved URL shape** for representative ``<varver>/<arch>`` values;
 * **no ``${ABI}``** in any generated conf;
 * **idempotence** (re-running add-repo.sh produces an identical conf file);
@@ -41,6 +44,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 _ADD_REPO = _SCRIPTS / "add-repo.sh"
 _BUILD_REPO = _SCRIPTS / "build-repo.sh"
 _BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
+_HOOK = _SCRIPTS / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _PAGES_BASE = "https://pfblockerng.github.io/pkg"
 _OLD_WORKER_URL = "https://pkg.pfblockerng.workers.dev"
@@ -97,12 +101,12 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28_AMD64, base_url: str
 def _run_add_repo(root: str, *, nightly: bool = False) -> None:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
-    PKG_BIN is overridden to a stub that exits 0 for every subcommand.
-    PFB_PKG_CMD is set to the same stub so detect_variant.sh's ``pkg config abi``
-    call returns "FreeBSD:15:amd64" (a minimal but parseable ABI).
-    PFB_VERSION_FILE and PFB_GLOBALS_PLUS_INC are also stubbed to a CE 2.8.1 box.
-    We assert only that the conf file was written; exit code is irrelevant (the
-    verify step fails because the stub returns no rquery output).
+    PKG_BIN is overridden to a stub that exits 0 for every subcommand; for
+    ``pkg config abi`` it prints a real ABI (``FreeBSD:15:amd64``). add-repo.sh
+    installs the generator hook into ``root`` and runs it; the hook resolves the
+    conf from ``root/etc/product_label`` (CE here — no "Plus") and
+    ``root/etc/version`` (2.8.1). We assert only that the conf file was written;
+    exit code is irrelevant (the rquery verify fails because the stub is empty).
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
@@ -120,24 +124,18 @@ def _run_add_repo(root: str, *, nightly: bool = False) -> None:
         )
     os.chmod(fake_pkg, 0o755)
 
-    # CE 2.8.1 version file.
-    ver_dir = os.path.join(root, "etc")
-    os.makedirs(ver_dir, exist_ok=True)
-    ver_file = os.path.join(ver_dir, "version")
-    with open(ver_file, "w") as fh:
+    # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no "Plus" → CE).
+    etc_dir = os.path.join(root, "etc")
+    os.makedirs(etc_dir, exist_ok=True)
+    with open(os.path.join(etc_dir, "version"), "w") as fh:
         fh.write("2.8.1\n")
-
-    # No globals.plus.inc → CE edition.
-    # (We just don't create it; detect_variant.sh defaults to CE when absent.)
+    with open(os.path.join(etc_dir, "product_label"), "w") as fh:
+        fh.write("pfSense\n")
 
     env = {
         **os.environ,
         "PFBLOCKERNG_ROOT": root,
         "PKG_BIN": fake_pkg,
-        # detect_variant.sh env overrides:
-        "PFB_PKG_CMD": fake_pkg,
-        "PFB_VERSION_FILE": ver_file,
-        "PFB_GLOBALS_PLUS_INC": os.path.join(root, "etc", "inc", "globals.plus.inc"),
     }
     argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else [])]
     subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
@@ -186,6 +184,71 @@ def test_release_conf_byte_identical_plus_26_03_amd64() -> None:
 
     assert add == build, f"add-repo.sh vs build-repo.sh mismatch (plus-26.03/amd64):\nadd:\n{add}\nbuild:\n{build}"
     assert add == portable, f"add-repo.sh vs portable mismatch (plus-26.03/amd64):\nadd:\n{add}\nportable:\n{portable}"
+
+
+def _run_hook(root: str, *, edition_label: str, version: str, abi: str, channel: str) -> str:
+    """Run the generator hook off-box against a stubbed box; return the conf it wrote.
+
+    ``channel`` selects which conf the hook regenerates (release|nightly): we stage
+    only that one so the orphan guard leaves the other absent. The hook runs the
+    *_start path directly off-box (no /etc/rc.subr present).
+    """
+    bin_dir = os.path.join(root, "bin")
+    repos = os.path.join(root, "repos")
+    os.makedirs(bin_dir, exist_ok=True)
+    os.makedirs(repos, exist_ok=True)
+
+    fake_pkg = os.path.join(bin_dir, "pkg")
+    with open(fake_pkg, "w") as fh:
+        fh.write(f"#!/bin/sh\ncase \"$*\" in 'config abi') printf '{abi}' ;; esac\nexit 0\n")
+    os.chmod(fake_pkg, 0o755)
+
+    label = os.path.join(root, "product_label")
+    ver = os.path.join(root, "version")
+    with open(label, "w") as fh:
+        fh.write(edition_label + "\n")
+    with open(ver, "w") as fh:
+        fh.write(version + "\n")
+
+    conf_name = "pfblockerng.conf" if channel == "release" else "pfblockerng-nightly.conf"
+    conf_path = os.path.join(repos, conf_name)
+    with open(conf_path, "w") as fh:
+        fh.write("# stub pending\n")
+
+    env = {
+        **os.environ,
+        "PFB_RELEASE_CONF": os.path.join(repos, "pfblockerng.conf"),
+        "PFB_NIGHTLY_CONF": os.path.join(repos, "pfblockerng-nightly.conf"),
+        "PFB_PRODUCT_LABEL": label,
+        "PFB_VERSION_FILE": ver,
+        "PFB_PKG_BIN": fake_pkg,
+    }
+    subprocess.run(["sh", str(_HOOK), "onestart"], env=env, capture_output=True, text=True, check=False)
+    return Path(conf_path).read_text()
+
+
+def test_hook_output_byte_identical_to_print_conf_release() -> None:
+    """The rc.d hook writes the SAME bytes as ``add-repo.sh --print-conf`` (release).
+
+    This is the 4th producer of the conf — the boot-time generator. It MUST match
+    the three ``--print-conf`` generators byte-for-byte for a CE 2.8.1/amd64 box.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", abi="FreeBSD:15:amd64", channel="release")
+    print_conf = _print_conf_sh(_ADD_REPO, _CE_28_AMD64)
+    assert hook_conf == print_conf, f"hook vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
+
+
+def test_hook_output_byte_identical_to_print_conf_nightly_plus() -> None:
+    """The hook's nightly conf for a Plus 26.03/amd64 box matches --print-conf --nightly."""
+    with tempfile.TemporaryDirectory() as root:
+        hook_conf = _run_hook(
+            root, edition_label="pfSense Plus", version="26.03.1", abi="FreeBSD:15:amd64", channel="nightly"
+        )
+    print_conf = _print_conf_sh(_ADD_REPO, _PLUS_2603_AMD64, _PAGES_BASE, "--nightly")
+    assert hook_conf == print_conf, (
+        f"hook nightly vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
+    )
 
 
 # --------------------------------------------------------------------------- #

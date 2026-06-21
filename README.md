@@ -104,17 +104,20 @@ normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then
 pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
 ```
 
-`add-repo.sh` with no argument auto-detects the pfSense variant (CE vs Plus) and writes
-`/usr/local/etc/pkg/repos/pfblockerng.conf` pointing directly to the correct variant
-catalog on GitHub Pages (which carries **both** the stable and devel packages — pick one
-at `pkg install`), runs `pkg update`, and verifies a package is visible. The **nightly**
+`add-repo.sh` with no argument installs a small boot-time `rc.d` hook
+(`pfblockerng_repo_generate.sh`), which detects the pfSense variant (CE vs Plus),
+version, and arch and writes `/usr/local/etc/pkg/repos/pfblockerng.conf` pointing
+**directly** to the correct, fully-resolved variant catalog on GitHub Pages (which
+carries **both** the stable and devel packages — pick one at `pkg install`); the
+bootstrap then runs `pkg update` and verifies a package is visible. The **nightly**
 repo is opt-in — `./scripts/add-repo.sh --nightly` writes its own
 `pfblockerng-nightly.conf` (bleeding edge, not for daily use). The configuration the
-default run writes points to the variant-specific GitHub Pages URL:
+default run writes on a CE 2.8 / amd64 box is:
 
 ```sh
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
 pfblockerng: {
-  url: "https://pfblockerng.github.io/pkg/ce-2.8/${ABI}",
+  url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64",
   mirror_type: none,
   signature_type: none,
   priority: 100,
@@ -122,12 +125,13 @@ pfblockerng: {
 }
 ```
 
-(Plus boxes get `plus-26.03/${ABI}` instead of `ce-2.8/${ABI}`.)
+(Plus boxes get `release/plus-26.03/<arch>` instead of `release/ce-2.8/amd64`.)
 
-- **`${ABI}`** is a `pkg(8)` variable (expanded by `pkg`, not the shell), so one
-  configuration follows the box across a FreeBSD-minor upgrade within the same pfSense
-  version. A pfSense version upgrade (e.g. CE 2.8 → 2.9) re-runs `add-repo.sh` via the
-  self-heal hook to update the conf to the new variant catalog.
+- The URL is **fully resolved** for the box's edition/version/arch (no `${ABI}` token).
+  The `rc.d` hook **regenerates** the whole conf on every boot, so after a pfSense OS
+  upgrade (e.g. CE 2.8 → 2.9, which always reboots) the URL self-corrects to the new
+  variant catalog with no manual step — local-file-only, no `pkg` call, ordered before
+  any network catalog fetch ([ADR-39](.ADRs/ADR_39_Meta_Package_Distribution/ADR.md)).
 - The repository is **NONE-signed** — trust is anchored in HTTPS to the host.
 - **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
   resolution (and the webConfigurator's **Install** button) picks our build.

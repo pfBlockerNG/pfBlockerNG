@@ -96,9 +96,10 @@ print_conf() {
     # pin the exact resolved conf; the url is then base/release/<varver>/<arch>.
     base="$1"
     cat <<EOF
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
 # pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# fully resolved for this box's edition/version/arch (ADR-39); the boot
 # rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.

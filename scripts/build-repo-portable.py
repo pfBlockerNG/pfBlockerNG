@@ -890,9 +890,10 @@ def print_conf(resolved_url: str) -> None:
     """
     url = resolved_url.rstrip("/")
     sys.stdout.write(
+        "# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.\n"
         "# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
-        "# fully resolved for this box's edition/version/arch (ADR-39); the self-heal\n"
+        "# fully resolved for this box's edition/version/arch (ADR-39); the boot\n"
         "# rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects our build.\n"
