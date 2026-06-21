@@ -1126,8 +1126,9 @@ function pfb_unbound_listens_v6(): bool {
 // [ ADR-13 ] Locate the index of the auto-managed DNSBL VIP this package owns inside a
 // virtualip/vip array. Pure (no side effects). Ownership is decided by TWO predicates,
 // both required, mirroring the lifecycle contract:
-//   (1) MARKER  : $vip['descr'] === $marker (PFB_AUTO_VIP_DESCR_V4/_V6) — the package
-//                 only ever touches VIPs it stamped, never a manually-created one.
+//   (1) MARKER  : pfb_fwobj_is_owned($vip['descr']) AND marker match via the same
+//                 prefix/contains logic as pfb_fwobj_find (ADR-35 P3 retrofit). VIP
+//                 markers (PFB_AUTO_VIP_DESCR_V4/V6) start with 'pfB_' → str_starts_with.
 //   (2) IP MATCH: when $match_ip is a non-empty string, $vip['subnet'] must equal it.
 //                 Used on delete to bind removal to the address currently resolved from
 //                 the stored pfb_dnsvip4/6 config, so we never delete a marked VIP whose
@@ -1135,8 +1136,16 @@ function pfb_unbound_listens_v6(): bool {
 //                 marker alone (idempotent reuse on create, before any id is stored).
 // Returns the integer key of the first matching entry, or null if none matches.
 function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
+	$use_prefix = str_starts_with($marker, PFB_FWOBJ_FILTER_PFX);
 	foreach ($vips_config as $idx => $vip) {
-		if (($vip['descr'] ?? '') !== $marker) {
+		$descr = $vip['descr'] ?? '';
+		if (!pfb_fwobj_is_owned($descr)) {
+			continue;
+		}
+		$marker_match = $use_prefix
+			? str_starts_with($descr, $marker)
+			: str_contains($descr, $marker);
+		if (!$marker_match) {
 			continue;
 		}
 		if ($match_ip !== null && $match_ip !== '' && ($vip['subnet'] ?? '') !== $match_ip) {
@@ -1294,16 +1303,23 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 				continue;
 			}
 
-			$idx = pfb_find_marked_vip($vips_config, $fam['marker'], $match_ip);
-			if ($idx === null) {
+			// Double-guard: marker match AND subnet must equal the stored resolved IP.
+			// [ ADR-35 P3 ] Use pfb_fwobj_find with the guard to locate the row, then
+			// pfb_fwobj_remove with the same guard to strip it from config.
+			$guard     = static function(array $row) use ($match_ip): bool {
+				return ($row['subnet'] ?? '') === $match_ip;
+			};
+			$found_row = pfb_fwobj_find('virtualip/vip', $fam['marker'], $guard);
+			if ($found_row === FALSE) {
 				continue;
 			}
 
-			// Bring the alias down live, then drop it from config.
-			interface_vip_bring_down($vips_config[$idx]);
+			// Bring the alias down live, then drop it from config via the shared helper.
+			interface_vip_bring_down($found_row);
 			pfb_logger("\nDNSBL auto-VIP: removed {$fam['marker']} at {$match_ip}", 1);
-			unset($vips_config[$idx]);
-			$vips_config = array_values($vips_config);
+			pfb_fwobj_remove('virtualip/vip', $fam['marker'], $guard);
+			// Re-sync $vips_config from global config (pfb_fwobj_remove wrote it back).
+			$vips_config = config_get_path('virtualip/vip', []);
 
 			if (!empty($dnsblconfig[$fam['idkey']])) {
 				unset($dnsblconfig[$fam['idkey']]);
@@ -3795,20 +3811,17 @@ function pfb_create_dnsbl($mode) {
 	if ((!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] == 'on') && $mode == 'enabled') || $mode == 'disabled') {
 
 		// DNSBL NAT rules generation
-		$pfbfound = FALSE;
-		// Collect existing pfSense NAT rules
-		foreach (config_get_path('nat/rule', []) as $ex_nat) {
-			if (strpos($ex_nat['descr'], 'pfB DNSBL') !== FALSE) {
-				// Collect DNSBL NAT rules
-				$dnsbl_ex_nat[] = $ex_nat;
-				$pfbfound = TRUE;
-			} else {
-				// Collect all 'other' NAT rules
-				$pfb_ex_nat[] = $ex_nat;
-			}
-		}
-
 		if ($mode == 'enabled') {
+			// Collect existing pfSense NAT rules for comparison.
+			foreach (config_get_path('nat/rule', []) as $ex_nat) {
+				if (pfb_fwobj_is_owned($ex_nat['descr'] ?? '')) {
+					// Collect DNSBL NAT rules
+					$dnsbl_ex_nat[] = $ex_nat;
+				} else {
+					// Collect all 'other' NAT rules
+					$pfb_ex_nat[] = $ex_nat;
+				}
+			}
 
 			// Generate new DNSBL NAT per DNSBL listening ports except for 'localhost' interface setting.
 			$dnsbl_new_nat = array();
@@ -3853,18 +3866,10 @@ function pfb_create_dnsbl($mode) {
 				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
 			}
 		} else {
-			$new_nat = array_merge($pfb_ex_nat, $new_nat);
-			// Update when DNSBL NAT found but is now disabled.
-			if ($pfbfound) {
-				$pfbupdate = TRUE;
-			}
-		}
-
-		$pfbfound = FALSE;
-
-		if ($mode != 'enabled') {
-			// Update when DNSBL NAT found but is now disabled.
-			if ($pfbfound) {
+			// [ ADR-35 P3 ] DISABLE: strip pfB DNSBL NAT rules via the shared ownership
+			// helper. pfb_fwobj_remove writes user-only rules back to config when any pfB
+			// rules are found; returns TRUE iff anything was removed.
+			if (pfb_fwobj_remove('nat/rule', PFB_FWOBJ_NAT_LEGACY_PFX)) {
 				$pfbupdate = TRUE;
 			}
 		}
@@ -3879,9 +3884,13 @@ function pfb_create_dnsbl($mode) {
 			pfb_logger("{$log}", 1);
 		}
 
-		// Update config.xml, if changes required
+		// Update config.xml, if changes required.
+		// On enable: write the full new NAT set. On disable: pfb_fwobj_remove already
+		// wrote the config change; just persist via write_config.
 		if ($pfbupdate) {
-			config_set_path('nat/rule', $new_nat);
+			if ($mode == 'enabled') {
+				config_set_path('nat/rule', $new_nat);
+			}
 			write_config('pfBlockerNG: saving DNSBL changes');
 		}
 	}
