@@ -894,3 +894,33 @@ def test_eol_versions_section_present_in_rendered_page_with_route_only() -> None
 
     # Live build version is absent from the EOL section.
     assert "3.2.16" not in eol_block
+
+
+# ── Contract guard: _conf_via_addrepo ↔ add-repo.sh --print-conf ─────────────
+# These tests exercise the REAL add-repo.sh (no monkeypatching) so that any
+# future change to add-repo.sh's --print-conf required-arg contract immediately
+# breaks the unit suite instead of reaching the live publish workflow.
+
+
+def test_conf_via_addrepo_matches_real_add_repo_contract() -> None:
+    """_conf_via_addrepo shells the real add-repo.sh and must produce a valid conf.
+
+    Guards the gen_landing↔add-repo --print-conf contract: on the old code
+    (missing --catalog-path) add-repo.sh exited 2 and raised CalledProcessError,
+    breaking the pfBlockerNG/pkg publish.yml in render_page.  Both channels are
+    exercised (branch coverage).
+    """
+    addrepo: str = str(Path(__file__).resolve().parent.parent / "scripts" / "add-repo.sh")
+    base: str = "https://pfblockerng.github.io/pkg"
+
+    # release channel: repo name `pfblockerng` and URL contains /release/<varver>/<arch>
+    release_conf: str = gl._conf_via_addrepo(addrepo, base, "release")
+    assert release_conf, "release conf must be non-empty"
+    assert "pfblockerng: {" in release_conf
+    assert f"{base}/release/<varver>/<arch>" in release_conf
+
+    # nightly channel: repo name `pfblockerng-nightly` and URL contains /nightly/<varver>/<arch>
+    nightly_conf: str = gl._conf_via_addrepo(addrepo, base, "nightly")
+    assert nightly_conf, "nightly conf must be non-empty"
+    assert "pfblockerng-nightly: {" in nightly_conf
+    assert f"{base}/nightly/<varver>/<arch>" in nightly_conf

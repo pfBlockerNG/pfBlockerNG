@@ -39,6 +39,11 @@ SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 # from the human listing and the package table.
 CATALOG_META = ("packagesite.pkg", "data.pkg")
 
+# Placeholder catalog-path passed to add-repo.sh --print-conf for the manual-conf
+# snippet on the landing page.  The rc.d hook resolves the box's real varver/arch
+# at boot; a hand-written conf must substitute a concrete value (e.g. ce-2.8/amd64).
+_CONF_PLACEHOLDER_PATH = "<varver>/<arch>"
+
 
 def channel_of(name: str) -> str:
     """Map a package NAME to its channel by suffix (-nightly / -devel / stable)."""
@@ -323,7 +328,9 @@ def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         "both packages (they conflict &mdash; install one):</p>"
         f"{_copyable(_esc(setup))}"
         f'<ul class="pkgs">{items}</ul>'
-        "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
+        "<details><summary>Manual conf (advanced)</summary>"
+        '<p class="blurb">The bootstrap auto-detects your edition/version/arch; in a hand-written conf, '
+        "replace <code>&lt;varver&gt;/&lt;arch&gt;</code> (e.g. <code>plus-26.03/amd64</code>) with yours.</p>"
         f"{_copyable(_esc(conf_fn('release')))}</details></div>"
     )
 
@@ -339,7 +346,9 @@ def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         "guarantee is that CI passed; unlike <code>devel</code> it carries no stability target. Use it to "
         "track the very latest, not on a production firewall.</p>"
         f"{_copyable(_esc(one_liner))}"
-        "<details><summary>Manual conf (drop in /usr/local/etc/pkg/repos/)</summary>"
+        "<details><summary>Manual conf (advanced)</summary>"
+        '<p class="blurb">The bootstrap auto-detects your edition/version/arch; in a hand-written conf, '
+        "replace <code>&lt;varver&gt;/&lt;arch&gt;</code> (e.g. <code>ce-2.8/amd64</code>) with yours.</p>"
         f"{_copyable(_esc(conf_fn('nightly')))}</details></div>"
     )
 
@@ -818,9 +827,12 @@ def render_autoindex(
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
     # add-repo.sh selects the channel by FLAG: the release repo is the default (no arg),
     # --nightly picks the nightly repo. Anything other than "nightly" => the release conf.
+    # --catalog-path is required by --print-conf; we pass a literal placeholder here
+    # because the landing page shows a generic snippet — the rc.d hook resolves the
+    # box's real varver/arch at boot (see _CONF_PLACEHOLDER_PATH).
     extra = ["--nightly"] if channel == "nightly" else []
     out = subprocess.run(
-        ["sh", addrepo, "--print-conf", "--base-url", base, *extra],
+        ["sh", addrepo, "--print-conf", "--base-url", base, "--catalog-path", _CONF_PLACEHOLDER_PATH, *extra],
         capture_output=True,
         text=True,
         check=True,
