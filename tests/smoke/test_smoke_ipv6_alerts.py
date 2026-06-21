@@ -64,6 +64,41 @@ def ipv6_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     try:
         yield smoke_vm
     finally:
+        # Leave the box with a live resolver so sibling modules can deploy()
+        # successfully — services_unbound_configure() may have left Unbound
+        # stopped if the gateway-group resolution threw mid-regen (issue #361).
+        try:
+            h.reconfigure_unbound(smoke_vm)
+        except Exception as exc:
+            print(
+                f"WARNING: reconfigure_unbound failed in ipv6_vm teardown: {exc!r}; "
+                "attempting raw Unbound restart as fallback"
+            )
+            # Fallback: raw restart via /etc/rc.d — does not regenerate config
+            # but brings the daemon back up for the next module's deploy().
+            try:
+                bounce_cmd = (
+                    "kill -TERM $(cat /var/run/unbound.pid) 2>/dev/null || true\n"
+                    "for i in $(seq 1 30); do\n"
+                    "  pgrep -x unbound >/dev/null || break\n"
+                    "  sleep 1\n"
+                    "done\n"
+                    "/usr/local/sbin/unbound -c /var/unbound/unbound.conf\n"
+                )
+                import subprocess
+
+                fb = subprocess.run(
+                    smoke_vm.ssh_argv("/bin/sh"),
+                    input=bounce_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120.0,
+                    check=False,
+                )
+                if fb.returncode != 0:
+                    print(f"WARNING: raw Unbound restart also failed: rc={fb.returncode} {fb.stderr!r} {fb.stdout!r}")
+            except Exception as fb_exc:
+                print(f"WARNING: raw Unbound restart raised: {fb_exc!r}")
         h.collect_host_diagnostics(smoke_vm)
 
 
