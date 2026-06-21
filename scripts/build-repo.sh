@@ -9,7 +9,7 @@
 #      never guessed from the filename.
 #   2. Buckets each .pkg under  <out>/release/<ABI>/  (the release channel subtree,
 #      one catalog per ABI, e.g. <out>/release/FreeBSD:15:amd64/) and copies the
-#      .pkg there — symmetric with the nightly/ subtree and the Worker's release tree
+#      .pkg there — symmetric with the nightly/ subtree
 #      (ADR-20), so a conf url with the explicit `release/${ABI}` prefix resolves.
 #   3. Runs `pkg repo <out>/release/<ABI>` per bucket with NO signing key, emitting the
 #      catalog triple (meta.conf / packagesite.pkg / data.pkg) a client
@@ -237,7 +237,7 @@ validate_abi() {
 
 # ── Lay out per-ABI buckets + run `pkg repo` ───────────────────────────────────
 # The release channel is nested under <out>/release/<ABI>/ (ADR-20, symmetric with the
-# nightly/ subtree and the Worker's release subtree), so a client conf whose url carries
+# nightly/ subtree), so a client conf whose url carries
 # the explicit `release/${ABI}` prefix resolves against <out> as the base.
 CHANNEL_ROOT="${OUT}/release"
 mkdir -p "$CHANNEL_ROOT"
