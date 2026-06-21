@@ -3191,7 +3191,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 
 	$section = new Form_Section("DNSBL IPs - Advanced {$adv_mode}bound Firewall Rule Settings", "adv{$advmode}boundsettings", COLLAPSIBLE|SEC_CLOSED);
 	$section->addInput(new Form_StaticText(
-		"dnsbl_ip_text_{$adv_type}",
+		null,
 		"<span class=\"text-danger\">Note:</span>&nbsp; In general, Auto-Rules are created as follows:<br />
 			<dl class=\"dl-horizontal\">
 				<dt>{$adv_mode}bound</dt><dd>'any' port, 'any' protocol, 'any' destination and 'any' gateway</dd>
