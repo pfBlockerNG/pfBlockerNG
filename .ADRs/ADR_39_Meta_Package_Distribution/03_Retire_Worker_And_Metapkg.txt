@@ -1,0 +1,59 @@
+ADR-39 — Phase 3: retire the Worker + routing.json; revert meta-package prep; matrix guard
+==========================================================================================
+
+GOAL
+Delete the dead UA-routing layer and the abandoned meta-package prep, and add the
+fail-closed matrix-collision guard. After this phase nothing references a Worker, routing.json,
+or pfblockerng-repo, and the build cannot ship an ambiguous varver keying.
+
+READ FIRST
+- ADR.md §1.2 (UA proven non-functional — pkg/1.21.3), §2 (Worker / Meta-package /
+  Matrix-collision-guard rows), §1.3 (ABI-not-1:1).
+- The retire surface: scripts/worker/ (whole dir), .github/workflows/deploy-worker.yml,
+  .github/workflows/test.yml (worker-tests job), .github/workflows/release.yml (deploy-worker
+  job), scripts/build-repo-portable.py (routing.json generation + any _ua_pattern /
+  _dedup_routes / generate_routing_json), and publish.yml in the pfBlockerNG/pkg repo
+  (routing.json step) — COORDINATE: the pkg-repo change lands in that repo, note it in the
+  handoff if out of this worktree's scope.
+- The smoke Case-4 leg: tests/smoke/test_repo_install.py (SMOKE_WORKER_LIVE /
+  test_routing_url_delivers_variant_catalog) — delete that leg only; keep the rest.
+- The abandoned meta-package prep IN THIS REPO: tests/test_pfblockerng_repo_pkg.py (delete),
+  scripts/build-pkg-portable.py (revert ONLY the meta-package additions from commit
+  2b39d76/related — diff vs origin/devel to find them; KEEP everything else). The
+  FreeBSD-ports port was already reverted on pfblockerng/use-github (revert 27aa11d398) — do
+  NOT re-touch FreeBSD-ports here.
+- The version matrix: ci-metadata branch supported-versions.json; scripts/read-version-matrix.sh;
+  tests/test_smoke_matrix.py / tests/_matrix or wherever the matrix is parsed in Python.
+
+DO
+1. Delete scripts/worker/ entirely (src + test + package.json + wrangler.toml).
+2. Delete .github/workflows/deploy-worker.yml; remove the worker-tests job from test.yml and
+   the deploy-worker job from release.yml (and any `needs:` references to them).
+3. Remove routing.json generation from build-repo-portable.py (and its tests in
+   tests/test_build_repo_portable.py); confirm routing.json has no other consumer (grep).
+4. Delete tests/test_pfblockerng_repo_pkg.py; revert the meta-package additions in
+   build-pkg-portable.py (keep the general SUB_FILES/post-install machinery — only remove what
+   was added FOR the meta-package; verify build-pkg-portable.py tests still green).
+5. Delete the SMOKE_WORKER_LIVE Case-4 leg in test_repo_install.py.
+6. MATRIX-COLLISION GUARD (new): add a fast unit test (pytest, alongside test_smoke_matrix.py)
+   that loads the matrix and FAILS if any two entries share the same (freebsd_major, arch) with
+   a DIFFERENT (php_version, py_flavor) pair. Assert it PASSES the real matrix AND FAILS a
+   colliding in-test fixture (both branches — before/after). Add a one-line comment citing
+   ADR-39 §1.3 / the architecture-notes invariant.
+
+TESTS
+- python -m pytest (full suite) green with routing + meta-package tests removed.
+- The collision guard: green on the real matrix, red on the fixture.
+- GREP GATE (must return nothing): `grep -rniE 'workers\.dev|routing\.json|deploy-worker|
+  pfblockerng-repo|worker-tests' --include=*.py --include=*.yml --include=*.sh --include=*.js
+  --include=*.md .` EXCEPT legitimate historical mentions in .ADRs/ (ADR text may name them as
+  "deleted"/"superseded"). Document any intentional remaining mention.
+
+CONSTRAINTS
+Do not touch src/ runtime code. Keep build-repo-portable.py's catalog (varver) generation
+intact — only routing.json goes. CI YAML edits must keep the remaining jobs/`needs:` valid.
+
+HANDOFF (RESULTS/03_Results.txt)
+List every deleted path + every edited workflow job; the build-pkg-portable.py revert diff
+summary; the collision-guard test name + its pass/fail-fixture proof; the grep-gate output;
+and the pfBlockerNG/pkg publish.yml routing.json removal as a CROSS-REPO TODO if not done here.
