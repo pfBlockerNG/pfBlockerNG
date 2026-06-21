@@ -146,6 +146,12 @@ PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable
 # proving the SHIPPED bootstrap — not just a hand-written conf — installs our build.
 ADD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "add-repo.sh"
 GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
+# add-repo.sh resolves its companion scripts relative to SCRIPT_DIR (its own dir).
+# Stage them under the same layout the scripts/ tree uses so add-repo.sh can find them.
+ADD_REPO_DETECT_VARIANT_SRC = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "detect_variant.sh"
+ADD_REPO_SELFHEAL_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_selfheal.sh"
+GUEST_ADD_REPO_LIB_DIR = f"{GUEST_SPIKE_DIR}/lib"
+GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
 # deploys the catalog to the repo's standard project Pages URL (gh api
@@ -371,8 +377,10 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
     catalog ROOT; add-repo.sh appends the literal ``${ABI}`` (pkg expands it to the
     box's ABI), so the catalog MUST live under ``<base_url>/<ABI>/``.
     """
-    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR, GUEST_ADD_REPO_LIB_DIR, GUEST_ADD_REPO_RCD_DIR)
     _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
+    _scp_to_guest(vm, ADD_REPO_DETECT_VARIANT_SRC, f"{GUEST_ADD_REPO_LIB_DIR}/detect_variant.sh")
+    _scp_to_guest(vm, ADD_REPO_SELFHEAL_HOOK_SRC, f"{GUEST_ADD_REPO_RCD_DIR}/pfblockerng_repo_selfheal.sh")
     result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
@@ -2268,8 +2276,13 @@ def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, t
     # ── Discover the box's REAL varver/<arch> via the detection helper on-guest ──
     # Source the helper, call pfb_detect_catalog.  This is the canonical oracle for what
     # the hook will compute at runtime — tests must agree with the production detection.
+    # Pass the detection command as a SINGLE ssh arg: sshd wraps it in /bin/sh -c
+    # automatically.  Splitting into ("/bin/sh", "-c", script) causes OpenSSH to
+    # join them with spaces before sending, producing `/bin/sh -c . <file> && cmd`
+    # on the remote — FreeBSD sh then parses -c's script as bare `.` (missing
+    # filename, exit 2) and `<file> && cmd` runs in the outer login-shell context.
     detect_script = f". {GUEST_DETECT_HELPER} && pfb_detect_catalog"
-    detect_result = _ssh_check(repo_vm, "/bin/sh", "-c", detect_script)
+    detect_result = _ssh_check(repo_vm, detect_script)
     real_catalog = detect_result.stdout.strip()
     assert real_catalog, f"pfb_detect_catalog returned empty — detection helper may be broken: {detect_result.stdout!r}"
     assert "/" in real_catalog, f"expected <varver>/<arch>, got {real_catalog!r}"
@@ -2308,12 +2321,7 @@ def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, t
 
         # Create the stale subtree (copy catalog files from the real dir).
         _ssh_check(repo_vm, "/bin/mkdir", "-p", guest_stale_abi_dir)
-        _ssh_check(
-            repo_vm,
-            "/bin/sh",
-            "-c",
-            f"cp -r {guest_real_abi_dir}/. {guest_stale_abi_dir}/",
-        )
+        _ssh_check(repo_vm, f"cp -r {guest_real_abi_dir}/. {guest_stale_abi_dir}/")
 
         # ── 2. Install the package from the REAL catalog URL so it is present BEFORE the heal ──
         pkg_delete(repo_vm)
@@ -2378,7 +2386,7 @@ def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, t
         # Write the corrected conf to the SYSTEM conf path so pkg can read it.
         # (pkg reads /usr/local/etc/pkg/repos/pfblockerng.conf, not our test path.)
         result_copy = subprocess.run(
-            repo_vm.ssh_argv("/bin/sh", "-c", f"cp {test_conf_path} {REPO_CONF}"),
+            repo_vm.ssh_argv("cp", test_conf_path, REPO_CONF),
             capture_output=True,
             text=True,
             timeout=30.0,
