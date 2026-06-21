@@ -156,13 +156,6 @@ GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
 # always-on proof; the live URL only exists once the deploy has run).
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
 DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg"
-# Case 4 (the live Cloudflare Worker leg) is GATED on SMOKE_WORKER_LIVE: unset -> SKIP.
-# The Worker's routing (UA -> catalog + path mapping) is proven deterministically and
-# always-on by the offline unit tests in scripts/worker/test/router.test.js; the live
-# leg additionally depends on the Worker + Pages routing.json being deployed AND
-# CDN-propagated, which a PR/dispatch can't guarantee — so it is opt-in post-deploy
-# verification, not a hard CI gate (it would red the suite on a deploy/propagation race).
-WORKER_LIVE_ENV = "SMOKE_WORKER_LIVE"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
@@ -308,8 +301,8 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     — the ``release/`` segment is intentionally dropped. That flat ``<ABI>/`` layout is
     also the legacy "no variant prefix" path that ``test_legacy_abi_path_still_upgrades``
     (ADR-20 Case 3) reuses this helper to produce, so it must stay flat. The literal
-    ``/release`` end-to-end symmetry is exercised by ``build_repo_via_portable_named``
-    and the routing-Worker cases, not here.
+    ``/release`` end-to-end symmetry is exercised by ``build_repo_via_portable_named``,
+    not here.
 
     Returns the on-guest flat ``<ABI>/`` directory (the branch ``.pkg`` is one ABI,
     ``FreeBSD:15:amd64``) that the ``file://`` repo conf points at.
@@ -356,7 +349,7 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     # release/ segment is intentionally dropped so this doubles as the legacy "no variant
     # prefix" ${ABI}/ layout that test_legacy_abi_path_still_upgrades (ADR-20 Case 3)
     # reuses this helper to produce; the /release symmetry is covered by
-    # build_repo_via_portable_named + the routing-Worker cases.
+    # build_repo_via_portable_named.
     guest_abi_dir = f"{PORTABLE_REPO_ROOT}/{local_abi_dir.name}"
     _ssh_check(vm, "/bin/rm", "-rf", PORTABLE_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
@@ -944,8 +937,8 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM) -> None:
     ``--base-url`` override; the github.io default + a live HTTPS add-repo.sh run are
     the post-deploy/Phase-6 note. The shipped release conf carries the explicit
     ``release/`` channel prefix (ADR-20, symmetric with ``nightly/``), so the catalog
-    is laid out by ``build-repo.sh`` under ``<root>/release/<ABI>/`` — mirroring the
-    Worker's release subtree — and ``--base-url file://<root>`` makes add-repo.sh's
+    is laid out by ``build-repo.sh`` under ``<root>/release/<ABI>/``, and
+    ``--base-url file://<root>`` makes add-repo.sh's
     ``release/${ABI}`` url resolve to it. The script ships priority 100, above the
     Netgate ``pfSense`` repo (0), so cross-repo install picks ours — the production
     mechanism.
@@ -1258,11 +1251,6 @@ VARIANT_REPO_ROOT = "/tmp/pfb_variant_repo"
 
 # Base dir for ADR-27 EOL route-only catalog on the guest.
 EOL_REPO_ROOT = "/tmp/pfb_eol_repo"
-
-
-# Routing Worker URL (Phase 5). The live Case 4 leg is gated on SMOKE_WORKER_LIVE (the
-# deterministic routing proof is the offline scripts/worker/test/ suite).
-WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
 
 
 # --------------------------------------------------------------------------- #
@@ -1692,93 +1680,6 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
     finally:
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", VARIANT_REPO_ROOT, timeout=60.0)
-
-
-# --------------------------------------------------------------------------- #
-# ADR-20 Case 4 — routing URL delivers CE catalog (network; xfail)            #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.timeout(300)
-def test_routing_url_delivers_variant_catalog(repo_vm: SmokeVM) -> None:
-    """ADR-20 P6 CASE 4 — pkg fetch via Worker URL gets THIS box's variant catalog.
-
-    Scenario: pkg fetch via Worker URL gets the box's variant meta.conf.
-      Background: conf with url: https://pkg.pfblockerng.workers.dev.
-
-    Given a box with the conf pointing at the Worker URL (``${ABI}`` suffix added
-      by pkg), ``pkg update -r pfblockerng`` fetches from the Worker.
-    Then the fetched catalog contains the box's OWN variant package (not the opposite) —
-      confirmed by ``pkg rquery -r pfblockerng '%dn %dv' <pkgname>`` showing the box's own
-      php dep (php83 on CE / php85 on Plus, from the matrix).
-
-    GATED on ``SMOKE_WORKER_LIVE`` (unset -> SKIP). The routing LOGIC is proven
-    always-on + deterministically by the offline Worker unit tests
-    (``scripts/worker/test/router.test.js`` — UA->catalog dispatch + path mapping with
-    the edge stubbed). THIS leg additionally exercises the LIVE Worker + Pages
-    routing.json end-to-end, which depends on a deployed + CDN-propagated edge a
-    PR/dispatch can't guarantee; run it as opt-in post-deploy verification.
-    """
-    val = os.environ.get(WORKER_LIVE_ENV, "").strip().lower()
-    if val not in {"1", "true", "yes", "on"}:
-        pytest.skip(
-            f"{WORKER_LIVE_ENV} not set — the live Cloudflare Worker leg is CDN-dependent "
-            f"(deterministic routing proof is the offline scripts/worker/test/ unit suite)"
-        )
-    _ensure_egress_open()
-
-    # Write a NONE-signed repo conf pointing at the Worker URL.
-    # The Worker appends the request path (/<ABI>/...) and 302s to the variant catalog.
-    worker_conf = (
-        f"{OURS_REPO_NAME}: {{\n"
-        f'  url: "{WORKER_BASE_URL}/${{ABI}}",\n'
-        "  signature_type: none,\n"
-        "  enabled: yes,\n"
-        "  priority: 100\n"
-        "}\n"
-    )
-    written = subprocess.run(
-        repo_vm.ssh_argv("tee", REPO_CONF),
-        input=worker_conf,
-        capture_output=True,
-        text=True,
-        timeout=60.0,
-        check=False,
-    )
-    if written.returncode != 0:
-        raise RuntimeError(f"write Worker conf failed: rc={written.returncode} {written.stderr!r}")
-
-    # pkg update via the Worker must succeed (routing.json is live on Pages). Earlier cases in
-    # this VM built the `pfblockerng` repo DB from a different (Pages/add-repo) URL; pkg keys its
-    # cached catalogue DB to the packagesite and otherwise refuses with "wrong packagesite, need
-    # to re-create database" (a forced `-f` refresh does not clear it). Drop the cached per-repo
-    # DB so this fetch re-creates it cleanly from the Worker URL.
-    _ssh_check(repo_vm, "/bin/rm", "-rf", f"/var/db/pkg/repos/{OURS_REPO_NAME}", timeout=60.0)
-    update_result = repo_vm.ssh(
-        "env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", "-r", OURS_REPO_NAME, timeout=120.0
-    )
-    if update_result.returncode != 0:
-        update_out = update_result.stdout + update_result.stderr
-        pytest.fail(
-            f"Worker pkg update failed (rc={update_result.returncode}); routing.json should be live:\n{update_out}"
-        )
-
-    # The fetched catalog must contain the box's OWN variant package (own php dep
-    # present, opposite absent) — variant from the matrix.
-    own = own_variant()
-    opp = opposite_variant()
-    rquery = repo_vm.ssh("pkg", "rquery", "-r", OURS_REPO_NAME, "%dn %dv", PKG_NAME, timeout=60.0)
-    if rquery.returncode != 0:
-        pytest.fail(
-            f"Worker pkg rquery failed (rc={rquery.returncode})\nstdout:\n{rquery.stdout}\nstderr:\n{rquery.stderr}"
-        )
-    rquery_out = rquery.stdout.strip()
-    assert own.php in rquery_out, (
-        f"Worker URL catalog does not contain the box's {own.php} dep; pkg rquery '%dn %dv' output:\n{rquery_out}"
-    )
-    assert opp.php not in rquery_out, (
-        f"Worker URL returned the {opp.abi} ({opp.php}) catalog to a {own.abi} box; pkg rquery output:\n{rquery_out}"
-    )
 
 
 # =========================================================================== #

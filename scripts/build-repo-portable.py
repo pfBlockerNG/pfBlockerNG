@@ -62,21 +62,15 @@
 #   tool once per entry with the appropriate --catalog-name. Each versioned subdir
 #   is self-contained; multiple coexist under the same <out> root.
 #
-# ROUTING MANIFEST (ADR-20 Phase 3)
-#   Pass --generate-routing-json with --routing-entries '<JSON array>' and
-#   --routing-json-path <path> to write a routing manifest instead of building a
-#   catalog. Entries have {pattern, catalog, status}; output is {"routes": [...]}.
-#   Also callable from Python as generate_routing_json(entries, output_path).
-#
-# MATRIX-DRIVEN BUILD (ADR-20 routing rework) — the BRAIN
+# MATRIX-DRIVEN BUILD — the BRAIN
 #   Pass --build-matrix --matrix-json <file|-> --out <dir> to drive the DUMB
 #   build-pkg-portable.py per (matrix entry × channel) and project the version matrix
 #   1:1 onto the tree:
 #       release/<variant>-<major.minor>/<arch>/<catalog files>   (devel + stable)
 #       nightly/<variant>-<major.minor>/<arch>/<catalog files>   (retained to N)
-#   plus routing.json at the pkg root. The LEAF is the bare arch (amd64/aarch64) —
-#   the version segment already implies the FreeBSD major, and each .pkg's manifest
-#   carries its real ABI. Also callable from Python as build_repo_matrix(...).
+#   The LEAF is the bare arch (amd64/aarch64) — the version segment already implies
+#   the FreeBSD major, and each .pkg's manifest carries its real ABI.
+#   Also callable from Python as build_repo_matrix(...).
 #
 # Requires: python3 (stdlib only) + a zstd encoder (the `zstd` binary, or the
 # python `zstandard` module) — the same compressor contract as build-pkg-portable.py.
@@ -85,9 +79,6 @@
 #   build-repo-portable.py --in <dir-of-.pkg> --out <dir>   # build the per-ABI tree
 #   build-repo-portable.py --in <dir> --out <dir> --catalog-name ce-2.8  # versioned
 #   build-repo-portable.py --print-conf [--base-url <url>]  # print the client repo-conf
-#   build-repo-portable.py --generate-routing-json \        # write routing manifest
-#     --routing-entries '[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]' \
-#     --routing-json-path routing.json
 #
 # RELEASE RETENTION (ADR-27 Phase 2)
 #   --release-keep-devel N   retain the N newest devel releases per ABI (default 1 = latest-only)
@@ -404,17 +395,6 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
     return f"{channel}/{name}" if channel else name
 
 
-def generate_routing_json(entries: list[dict], output_path: str) -> None:
-    """Write a routing manifest JSON file from a list of routing entry dicts.
-
-    Each entry must have keys: pattern, catalog, status.
-    Output schema: {"routes": [{"pattern": ..., "catalog": ..., "status": ...}, ...]}.
-    Pure Python stdlib; no network I/O.
-    """
-    payload = {"routes": list(entries)}
-    Path(output_path).write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
-
-
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -521,7 +501,7 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
 # places each .pkg into a literal 1:1 projection of the matrix —
 #     release/<variant>-<major.minor>/<arch>/<catalog files>
 #     nightly/<variant>-<major.minor>/<arch>/<catalog files>
-# — generates each subtree's catalog, and writes routing.json at the pkg root.
+# — generates each subtree's catalog.
 #
 # Layout decisions (maintainer-confirmed):
 #   * channel-group "release" = the production (stable-tag) + devel packages in ONE
@@ -549,18 +529,6 @@ _BUILD_PKG = _THIS_DIR / "build-pkg-portable.py"
 _CATALOG_PKG_FILES = {"packagesite.pkg", "data.pkg"}
 
 
-def _ua_pattern(variant: str, pfsense_version: str) -> str:
-    """The pfSense User-Agent prefix the Worker matches a request against.
-
-    CE   -> "pfSense/<major.minor>"               (e.g. "pfSense/2.8")
-    Plus -> "Netgate pfSense Plus/<major.minor>"  (e.g. "Netgate pfSense Plus/26.03")
-    """
-    major_minor = ".".join(pfsense_version.split(".")[:2])
-    if variant.lower() == "plus":
-        return f"Netgate pfSense Plus/{major_minor}"
-    return f"pfSense/{major_minor}"
-
-
 def _pkg_version_key(version: str) -> list[int]:
     """A monotone sort key for a pkg version, component-wise on ``.`` / ``_`` / ``,``.
 
@@ -570,25 +538,6 @@ def _pkg_version_key(version: str) -> list[int]:
     the only caller).
     """
     return [int(c) if c.isdigit() else 0 for c in re.split(r"[._,]", version)]
-
-
-def _dedup_routes(routes: list[dict]) -> list[dict]:
-    """Dedup routing entries and order most-specific (longest pattern) first.
-
-    Two matrix entries that share a UA pattern + catalog + status (e.g. a Plus
-    version's amd64 and aarch64 entries) collapse to ONE route. Ordering longest
-    pattern first lets the Worker's first-match win for overlapping prefixes
-    ("Netgate pfSense Plus/26.03" before "pfSense/2.8").
-    """
-    seen: set[tuple[str, str, str]] = set()
-    unique: list[dict] = []
-    for r in routes:
-        key = (r["pattern"], r["catalog"], r["status"])
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(r)
-    return sorted(unique, key=lambda r: (-len(r["pattern"]), r["pattern"]))
 
 
 def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:
@@ -748,10 +697,10 @@ def build_repo_matrix(
     release_pkgs: dict[str, list[Path]] | None = None,
     **builder_kwargs: object,
 ) -> dict:
-    """Build the full variant/arch repository tree + routing.json from the version matrix.
+    """Build the full variant/arch repository tree from the version matrix.
 
     For each matrix entry (each carrying pfsense_version, variant, freebsd_major, arch,
-    php_version, py_flavor, status, and optionally role):
+    php_version, py_flavor, and optionally role):
 
     **build entries** (``role`` absent or ``"build"`` — the default, unchanged path):
 
@@ -764,9 +713,6 @@ def build_repo_matrix(
       * NIGHTLY subtree ``nightly/<varver>/<arch>/`` — the freshly built nightly folded in
         with any pre-existing nightlies in that subtree (cache-restored by the caller),
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
-      * a routing.json route ``{pattern, catalog: <varver>, status}`` (deduped, most
-        specific first).
-
     **route-only entries** (``role == "route-only"`` — EOL versions served from frozen .pkg):
 
       * NO builder call for a fresh devel-HEAD .pkg — the version is EOL, no new build.
@@ -777,9 +723,6 @@ def build_repo_matrix(
         ``_emit_catalog_from_paths`` machinery handles the rest.
       * If ``route_only_pkgs`` has no entry for this ``varver`` (or is ``None``), the call
         raises ``BuildRepoError`` — a route-only entry with no frozen .pkg is a hard error.
-      * a routing.json route ``{pattern, catalog: <varver>, status}`` — the Worker still
-        routes requests to the (now-frozen) catalog, so clients can install the last-known
-        good version without a 404.
 
     Frozen-.pkg input contract (``route_only_pkgs``):
       Callers (e.g. publish.yml) supply a ``dict[varver, list[Path]]`` mapping the
@@ -811,7 +754,6 @@ def build_repo_matrix(
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    routes: list[dict] = []
     built: list[str] = []
 
     for entry in matrix:
@@ -822,7 +764,6 @@ def build_repo_matrix(
         abi = f"FreeBSD:{major}:{arch}"
         php = entry["php_version"]
         py_flavor = entry["py_flavor"]
-        status = entry.get("status", "active")
         role = entry.get("role", "build")
         if role not in ("build", "route-only"):
             # Fail closed: an unknown role (e.g. a "route_only" typo) must NOT fall through
@@ -937,12 +878,7 @@ def build_repo_matrix(
                 built.append(str(nightly_dir))
                 sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
 
-        routes.append({"pattern": _ua_pattern(variant, version), "catalog": varver, "status": status})
-
-    routes = _dedup_routes(routes)
-    generate_routing_json(routes, str(out_dir / "routing.json"))
-    sys.stderr.write(f"==> wrote routing.json ({len(routes)} route(s))\n")
-    return {"routes": routes, "built": built}
+    return {"built": built}
 
 
 def print_conf(resolved_url: str) -> None:
@@ -983,11 +919,7 @@ def main(argv: list[str]) -> int:
             "  build-repo-portable.py --in ./pkgs --out ./site --catalog-name ce-2.8\n\n"
             "  # print the client repo-conf (Phase 4 add-repo.sh + README reuse it)\n"
             "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n\n"
-            "  # write a routing manifest (ADR-20)\n"
-            "  build-repo-portable.py --generate-routing-json \\\n"
-            '    --routing-entries \'[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]\' \\\n'
-            "    --routing-json-path routing.json\n\n"
-            "  # matrix-driven: build the full variant/arch tree + routing.json (ADR-20)\n"
+            "  # matrix-driven: build the full variant/arch tree (ADR-20)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"
             "    --matrix-json - --out ./site --ports ./ports --local-src . \\\n"
             "    --nightly-pkgversion 3.2.16.20260615.1\n"
@@ -1022,32 +954,14 @@ def main(argv: list[str]) -> int:
             "Derive from pfsense_version + variant via catalog_name_from_version()."
         ),
     )
-    ap.add_argument(
-        "--generate-routing-json",
-        action="store_true",
-        help=(
-            "write a routing manifest JSON file from --routing-entries to "
-            "--routing-json-path and exit (does NOT build a catalog)"
-        ),
-    )
-    ap.add_argument(
-        "--routing-entries",
-        default=None,
-        help="JSON array of routing entry dicts ({pattern, catalog, status}) for --generate-routing-json",
-    )
-    ap.add_argument(
-        "--routing-json-path",
-        default=None,
-        help="output file path for --generate-routing-json",
-    )
     g_matrix = ap.add_argument_group("matrix-driven build (ADR-20 routing rework)")
     g_matrix.add_argument(
         "--build-matrix",
         action="store_true",
         help=(
             "drive build-pkg-portable.py per (matrix entry × channel), lay out the "
-            "release/<varver>/<arch>/ + nightly/<varver>/<arch>/ tree under --out, and "
-            "write routing.json. Requires --matrix-json + --out."
+            "release/<varver>/<arch>/ + nightly/<varver>/<arch>/ tree under --out. "
+            "Requires --matrix-json + --out."
         ),
     )
     g_matrix.add_argument(
@@ -1153,21 +1067,6 @@ def main(argv: list[str]) -> int:
         print_conf(_resolved)
         return 0
 
-    if args.generate_routing_json:
-        if not args.routing_entries or not args.routing_json_path:
-            ap.error("--generate-routing-json requires --routing-entries and --routing-json-path")
-        try:
-            entries = json.loads(args.routing_entries)
-        except ValueError as e:
-            sys.stderr.write(f"build-repo-portable: --routing-entries is not valid JSON: {e}\n")
-            return 1
-        if not isinstance(entries, list):
-            sys.stderr.write("build-repo-portable: --routing-entries must be a JSON array\n")
-            return 1
-        generate_routing_json(entries, args.routing_json_path)
-        sys.stderr.write(f"==> wrote routing manifest: {args.routing_json_path} ({len(entries)} route(s))\n")
-        return 0
-
     if args.build_matrix:
         if not args.matrix_json or not args.out_dir:
             ap.error("--build-matrix requires --matrix-json and --out")
@@ -1229,7 +1128,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     if not args.in_dir or not args.out_dir:
-        ap.error("--in and --out are required (or use --print-conf / --generate-routing-json)")
+        ap.error("--in and --out are required (or use --print-conf / --build-matrix)")
     in_dir = Path(args.in_dir)
     if not in_dir.is_dir():
         sys.stderr.write(f"build-repo-portable: --in is not a directory: {in_dir}\n")

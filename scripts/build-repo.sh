@@ -78,13 +78,11 @@ set -eu
 # (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
 # we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg and the conf
 # appends the literal ${ABI} pkg(8) variable. Override with --base-url for a fork.
-# NOTE (ADR-20 Phase 3/4): the Pages tree also publishes VERSION-KEYED subdirs:
+# NOTE: the Pages tree also publishes VERSION-KEYED subdirs:
 #   https://pfblockerng.github.io/pkg/ce-2.8/${ABI}/   (CE 2.8.x)
 #   https://pfblockerng.github.io/pkg/plus-26.03/${ABI}/  (Plus 26.03)
-# The Cloudflare Worker (Phase 5) at https://pkg.pfblockerng.workers.dev rewrites
-# requests to the correct versioned dir based on the pfSense User-Agent.
-# add-repo.sh (Phase 4) writes the Worker URL as the canonical conf URL — written
-# once, never needs updating on a pfSense OS upgrade (Worker re-routes automatically).
+# The variant conf is written by add-repo.sh (install/self-heal) and points directly
+# to the versioned GitHub Pages URL for the box's variant — no intermediary layer.
 # This --print-conf template is kept in sync with add-repo.sh (byte-identical release
 # stanza — what `add-repo.sh stable` and `add-repo.sh devel` both write). Override with
 # --base-url for forks/staging.

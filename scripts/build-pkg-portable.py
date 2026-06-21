@@ -863,29 +863,6 @@ def _decompress(data: bytes) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
-def _gh_wrksrc_subdir(mk: Makefile, workdir: Path) -> str:
-    """Return the subdirectory within the GitHub tarball top that WRKSRC maps to.
-
-    Most pfBlockerNG ports set ``WRKSRC = ${WRKDIR}/${GH_PROJECT}-${PORTVERSION}/src``
-    so the subdir is ``"src"``.  The ``pfblockerng-repo`` meta-package points WRKSRC
-    at the tarball root (``${WRKDIR}/${GH_PROJECT}-${PORTVERSION}``) to access
-    ``scripts/lib/detect_variant.sh``; the subdir is ``""`` (copy the whole top).
-
-    Derived by stripping the WRKDIR and project-version prefix from WRKSRC so the
-    logic follows the Makefile, not a hardcoded path.
-    """
-    wrkdir = Path(mk.get("WRKDIR"))
-    wrksrc = Path(mk.get("WRKSRC"))
-    try:
-        rel = wrksrc.relative_to(wrkdir)
-    except ValueError:
-        # WRKSRC outside WRKDIR — fall back to the legacy "src" assumption.
-        return "src"
-    parts = rel.parts  # e.g. ("pfBlockerNG-4.0.0.alpha.2", "src") or ("pfBlockerNG-…",)
-    # First part is the version dir; remainder is the subdir within the tarball top.
-    return str(Path(*parts[1:])) if len(parts) > 1 else ""
-
-
 def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Path | None:
     """Populate ${WRKSRC} for a USE_GITHUB port; return the WRKSRC path, or None
     for a classic port (which installs from ${FILESDIR}, nothing to fetch)."""
@@ -895,20 +872,13 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
     wrksrc = Path(mk.get("WRKSRC"))
     wrksrc.parent.mkdir(parents=True, exist_ok=True)
 
-    # Determine which subdirectory of the tarball top (or the local checkout)
-    # corresponds to WRKSRC.  "src" for the standard pfBlockerNG ports; "" for
-    # the meta-package (which accesses scripts/ from the full repo root).
-    subdir = _gh_wrksrc_subdir(mk, workdir)
-
     if args.local_src:
         local = Path(args.local_src).resolve()
-        if subdir:
-            src_root = local / subdir
-        else:
-            # No subdir: WRKSRC is the repo root — use the local checkout directly.
-            src_root = local
-        if not src_root.is_dir():
-            raise BuildError(f"--local-src {local}: expected {src_root} to exist (WRKSRC subdir: {subdir!r})")
+        src_root = local / "src" if (local / "src").is_dir() else local
+        if not (src_root / "usr").is_dir():
+            raise BuildError(
+                f"--local-src {local} does not look like a pfBlockerNG checkout (expected a src/ tree containing usr/)"
+            )
         # Copy into WRKSRC so post-extract's sed/mv never mutate the working tree.
         shutil.copytree(src_root, wrksrc, dirs_exist_ok=True)
         sys.stderr.write(f"==> source: local working tree {src_root}\n")
@@ -928,12 +898,9 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
     tops = [p for p in extract_root.iterdir() if p.is_dir()]
     if len(tops) != 1:
         raise BuildError(f"unexpected GitHub tarball layout: {[p.name for p in tops]}")
-    if subdir:
-        fetched_src = tops[0] / subdir
-        if not fetched_src.is_dir():
-            raise BuildError(f"fetched tarball has no {subdir}/ dir under {tops[0].name}")
-    else:
-        fetched_src = tops[0]
+    fetched_src = tops[0] / "src"
+    if not fetched_src.is_dir():
+        raise BuildError(f"fetched tarball has no src/ dir under {tops[0].name}")
     shutil.copytree(fetched_src, wrksrc, dirs_exist_ok=True)
     return wrksrc
 
