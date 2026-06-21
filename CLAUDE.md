@@ -167,6 +167,13 @@ gates); for ad-hoc coding, follow the same shape. The higher model may still mak
 one-line edits** and handle **docs / config / settings / skills** directly — delegation is for
 non-trivial `src/`/`tests/`/CI work.
 
+- **The implementer implements; it never re-delegates — the split is exactly one level deep.**
+  A Sonnet implementer spawned for a step does the work itself with Read/Edit/Write/Bash and
+  **must not spawn further agents** (no `Agent`/Task call). Only the orchestrating higher model
+  delegates. This section is read by both roles, so be explicit: **if you are reading it as a
+  spawned implementer, you are the implementer, not a new planner** — build, don't re-delegate.
+  (Recursion here is a real failure mode: an implementer that re-reads "implement with Sonnet"
+  and spawns its own sub-agent returns an "I launched an agent…" no-op instead of code.)
 - **The planner's brief to Sonnet must be self-contained, accurate, and well-referenced** — the
   exact objective, the files/symbols to read and change (paths, `file:line`), the constraints,
   the verification gates, and the prior step's handoff. A vague or wrong brief is a planner bug.
