@@ -264,3 +264,40 @@ pfb_resolve_utf8_ctype() {
 #   _ctype=$(pfb_resolve_utf8_ctype)
 #   LC_COLLATE=C LC_CTYPE="${_ctype}" awk '...Unicode-aware...'
 ```
+
+## Self-hosted pkg distribution — ABI is NOT 1:1 with a pfSense version (varver keying is mandatory)
+
+**Load-bearing invariant. Do not "simplify" it away** (it keeps getting wrongly re-derived). The
+self-hosted catalog (ADR-17/20) is keyed by a **varver** — the pfSense edition+version slug
+`ce-2.8` / `plus-26.03` (`catalog_name_from_version()` in `scripts/build-repo-portable.py`) —
+**never** by the pkg `${ABI}` (`FreeBSD:<major>:<arch>`).
+
+**Why (the trap).** pkg's `${ABI}` carries only the FreeBSD major + arch. A pfSense `${ABI}` is
+**NOT in 1:1 correspondence** with a pfSense version or its package-build inputs (the `php<XY>` /
+`py3<XY>` flavors). Multiple pfSense versions/editions can share one FreeBSD major — hence one
+`${ABI}` — while shipping **different** PHP/Python. So `FreeBSD:16:amd64` does not tell you whether
+the box needs the php8.5 build or some later/other php build; an `${ABI}`-keyed conf would serve the
+wrong package. The varver encodes exactly the `(edition, version) → (php, py)` mapping that `${ABI}`
+cannot.
+
+**Proof (live, 2026-06, Plus 26.03.1).** `pkg config abi` → `FreeBSD:16:amd64`, but **Netgate's own
+repo URL** is
+`pkg+https://pfsense-plus-pkg.netgate.com/pfSense_plus-v26_03_1_amd64-pfSense_plus_v26_03_1` — it
+bakes the **full product version** (`v26_03_1`), not the ABI. Netgate does not key by `${ABI}`
+**because `${ABI}` is not unique to a version**; their proprietary `pfSense-repoc` rewrites the whole
+version-pinned conf on each upgrade (server-side) instead.
+
+**Do NOT conclude "the current matrix is 1:1, so `${ABI}` suffices."** That 1:1 (CE→FreeBSD15,
+Plus→FreeBSD16) is **incidental and not guaranteed** — CE and Plus have shared FreeBSD bases before,
+and the supported window can hold two versions on one major with different deps at any time. A
+fail-closed CI guard may reject a matrix that introduces such a collision, but the design **stays
+varver-keyed regardless**.
+
+**Upgrade consequence (verified — libpkg + `pfSense-upgrade`).** Because the conf is version-pinned it
+cannot auto-follow a version-crossing upgrade the way an `${ABI}` template would, and there is **no
+third-party pre-solve hook** to rewrite it in time: `pfSense-repo-setup`/`repoc` manage only Netgate's
+own `${PRODUCT}.conf`; a `+PRE_INSTALL` runs inside the locked libpkg transaction where nested `pkg`
+is impossible; libpkg pins every version at solve time. Foreign confs (ours) **persist** across
+upgrades (pfSense leaves them untouched), but a varver conf goes **stale** on a version change and can
+only be corrected by a **separate, later** pkg run (a boot-time one-shot or a manual re-bootstrap) —
+a structural one-pkg-run lag. Design detail: ADR-39.
