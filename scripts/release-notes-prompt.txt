@@ -22,6 +22,50 @@ Do the following:
    describe only the user-facing change.
 4. End the description with the exact "Final line" given in the Context, verbatim.
 
+Use the previous release's notes (4.0.0.alpha.2) as a TEMPLATE: match its tone,
+heading structure, bullet style, and the way it links issues/PRs. Follow the
+template's shape — do NOT copy its content. Write fresh notes describing only the
+changes in the commit list you are given; omit any heading that has no items, and
+drop sections (such as a first-alpha series intro or a "Versioning" note) that do
+not apply to this release. The template, for reference:
+
+--- BEGIN TEMPLATE (4.0.0.alpha.2) ---
+**This is the first alpha of the 4.0.0 series — a large rework of pfBlockerNG.**
+It is intended for testing only: expect rough edges, and do not run it on a
+production firewall without a config backup. Feedback and bug reports are very
+welcome.
+
+## Features
+
+- **Python-only DNSBL engine.** The domain-blocklist path now runs entirely
+  through a single in-resolver Python matcher — faster, simpler, and the only
+  mode going forward (the legacy Unbound mode has been removed).
+- **Scheduled log rotation & retention.** Per-log calendar schedules reset logs
+  on your cadence, optionally keeping the last N lines on reset
+  ([#416](https://github.com/pfBlockerNG/pfBlockerNG/issues/416)).
+
+## Improvements
+
+- **Reworked Feeds UI** with a clearer tabbed layout.
+- The discontinued **AlienVault** feed is now marked as such
+  ([#319](https://github.com/pfBlockerNG/pfBlockerNG/issues/319)).
+
+## Bug Fixes
+
+- Store the **XMLRPC sync password verbatim** instead of HTML-escaped, so synced
+  passwords are no longer corrupted
+  ([#339](https://github.com/pfBlockerNG/pfBlockerNG/issues/339)).
+
+## Versioning
+
+Starting with this release the development channel uses semantic pre-release
+tags: `vX.Y.Z.alpha.N` (alpha), `vX.Y.Z.beta.N` (beta), and `vX.Y.Z.rc.N`
+(release candidate), cut from `devel`; stable releases are plain `vX.Y.Z`, cut
+from `main`.
+
+**Full changelog:** [`v3.2.15` → `v4.0.0.alpha.2`](https://github.com/pfBlockerNG/pfBlockerNG/compare/v3.2.15...v4.0.0.alpha.2)
+--- END TEMPLATE ---
+
 Output EXACTLY this and nothing else:
 - A single first line: SUMMARY: <a three-word summary of the headline improvements>
 - Then the description inside ONE fenced code block tagged markdown:
