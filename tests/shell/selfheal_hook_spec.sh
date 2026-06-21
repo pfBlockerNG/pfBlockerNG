@@ -507,6 +507,7 @@ Describe 'self-heal hook — mismatch + pkg update succeeds: conf updated, recon
     It 'exits 0 when pkg update succeeds on mismatch path'
       When call _selfheal_main
       The status should be success
+      The stderr should include "mismatch"
     End
 
     It 'rewrites the conf to the new varver after pkg update success'
