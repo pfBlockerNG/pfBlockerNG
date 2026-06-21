@@ -35,24 +35,34 @@ arch (`amd64`/`aarch64`). To pick the right subtree per box, ADR-20 added a **Cl
 that read the pkg client's `User-Agent`, matched it against a generated `routing.json`, and
 302-redirected to the box's catalog. `add-repo.sh` wrote one conf pointing at the Worker.
 
-### 1.2 The problem — UA routing cannot work (empirically confirmed 2026-06-21)
+### 1.2 The problem — UA routing is unreliable (the UA is context-dependent)
 
-The UA-routing premise was originally "verified" with a **fabricated** product User-Agent. The
-**real** pkg client UA was then captured on a live box (Plus 26.03.1) by pointing a throwaway repo
-at a logging listener and running `pkg update`:
+The UA-routing premise rested on a real but **partial** observation. pfSense's PHP layer
+(`pkg-utils.inc` `pkg_env()`) builds a product User-Agent —
+`product_label/product_version[:uniqueid]` (→ `pfSense/2.8.1-RELEASE:<uid>`,
+`Netgate pfSense Plus/26.03.1-RELEASE:<uid>`) — and injects it **into the process environment of
+`proc_open()`** for PHP-wrapped pkg calls (`pkg_call`/`pkg_exec`, behind `pkg_install`/`pkg_update`
+— the **GUI Package Manager**). ADR-20 Phase 1 probed *that* value and recorded
+`USER_AGENT_VISIBLE = GO`. It is real — for that path; the error was generalising it to **all**
+pkg fetches.
 
-```text
-UA=pkg/1.21.3   (every request — 18/18 identical)
-```
+The product UA is **never written to `pkg.conf`** (verified on CE 2.8.1 + Plus 26.03.1), so it
+applies **only** to PHP/GUI-initiated operations. A **raw CLI `pkg update`** sends the bare libpkg
+default — captured live on Plus 26.03.1 as `pkg/1.21.3` (every request, 18/18 identical) — and so
+does `pkg-static`, the binary the `pfSense-upgrade` path runs (a shell script making direct pkg
+calls — bare UA **even when launched from the GUI's System-Update page**). So the Worker's
+`ua.includes("pfSense/2.8")` resolves a **GUI-initiated** install but returns
+`404 Unsupported pfSense version` for:
 
-It carries **no edition, no version, not even the ABI** — the ABI rides the URL *path* (pkg
-substitutes `${ABI}`), never the UA, and `pkg-static` (the upgrade binary) uses the same bare
-libpkg UA. So `routes.find(r => ua.includes("pfSense/2.8"))` against `pkg/1.21.3` matches nothing
-→ the Worker returns `404 Unsupported pfSense version` for **every real box**. The Worker is not
-"unneeded" — it **never functioned**; its tests passed only against synthetic UAs that no client
-sends. (Netgate sidesteps this by baking the version into the URL *path* and rewriting that path
-server-side via the proprietary `pfSense-repoc`; see §1.3.) The Netgate ports channel is
-unaffected.
+- raw CLI `pkg install`/`upgrade` (advanced users, scripts),
+- our own `repo`-marker smoke and any scripted install,
+- the **`pkg-static` upgrade path** — exactly where the self-heal/reconcile has to work.
+
+A repo that resolves only from the GUI Package Manager is unreliable, and the bare-UA paths
+include the upgrade path that matters most. (Netgate sidesteps the whole problem by baking the
+version into the URL *path* and rewriting it server-side via the proprietary `pfSense-repoc`;
+see §1.3.) On-box detection (§2) resolves the catalog for **every** path. The Netgate ports
+channel is unaffected.
 
 ### 1.3 Load-bearing facts (verified, not assumed)
 
@@ -269,6 +279,16 @@ hook, then delete the dead Worker/meta-package surface last.
   and pfBlockerNG is reconciled. CI simulates the heal by firing the hook against a stale conf; a
   true cross-major OS upgrade and the rc.d-survives-the-BE-clone property are out-of-CI (the latter
   is maintainer-confirmed).
+- **Boot ordering / DNS (smoke-validated):** the hook's heal does a `pkg` fetch, so it must run at a
+  boot stage where DNS works (the resolver is up, or `resolv.conf` carries a reachable upstream) —
+  not strictly before the local resolver if the box resolves via 127.0.0.1. Confirm on the live
+  fan-out that the heal's `pkg update`/reconcile actually succeed at that stage; the rc-order
+  keywords may need tuning to the real boot order.
+- **Reconcile activation (smoke-validated):** confirm the hook's raw `pkg upgrade`/`install` of
+  pfBlockerNG yields an **active** pfBlockerNG after the boot. A raw CLI pkg op does **not** fire
+  pfSense's GUI PHP install hooks (the same PHP-vs-CLI split as §1.2), so activation must come from
+  pfBlockerNG's normal boot-time integration — assert DNSBL actually serves post-heal, not just
+  that the package is installed.
 - The live `pfblockerng.github.io/pkg` URL resolves the variant catalog from a real box (the gated
   `SMOKE_REPO_LIVE_URL` leg, post-merge).
 
