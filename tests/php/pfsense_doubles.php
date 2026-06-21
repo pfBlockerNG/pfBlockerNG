@@ -561,3 +561,117 @@ if (!function_exists('ip_in_subnet')) {
 		return true;
 	}
 }
+
+// --- ADR-35 Phase 1 doubles — VIP lifecycle + NAT/service management ---
+//
+// SPECIALNET_VIPS: pfSense constant (value 12) from globals.inc. Defined here for
+// the runtime double layer (the PHPStan stubs/pfsense/globals.php value is for static
+// analysis only and is not loaded at runtime off-appliance).
+if (!defined('SPECIALNET_VIPS')) {
+	define('SPECIALNET_VIPS', 12);
+}
+//
+//
+// pfb_manage_dnsbl_vip() calls interface_vip_bring_down() on disable and
+// interface_ipalias_configure() on enable (after VIP create).
+// pfb_create_dnsbl() calls is_service_running(), restart_service(), stop_service(),
+// and pfb_create_dnsbl_cert() which in turn calls cert_create().
+// These are all pfSense runtime functions absent off-appliance; doubles here make
+// the VIP/NAT oracle tests in FwobjCurrentBehaviourTest runnable without a live box.
+
+if (!function_exists('interface_vip_bring_down')) {
+	// pfSense interfaces.inc: un-apply a VIP alias from the interface (live pf change).
+	// Off-appliance: record the call for test inspection; no pf present.
+	function interface_vip_bring_down($vip) {
+		$GLOBALS['pfb_test_vip_bring_down_calls'][] = $vip;
+		return TRUE;
+	}
+}
+
+if (!function_exists('interface_ipalias_configure')) {
+	// pfSense interfaces.inc: apply a VIP alias to the interface (live pf change).
+	// Off-appliance: record the call for test inspection; no pf present.
+	function interface_ipalias_configure($vip) {
+		$GLOBALS['pfb_test_ipalias_configure_calls'][] = $vip;
+		return TRUE;
+	}
+}
+
+if (!function_exists('is_service_running')) {
+	// pfSense service-utils.inc: TRUE when the named rc.d service is running.
+	// Default TRUE so the 'if ($pfbupdate || !is_service_running())' block only
+	// fires when $pfbupdate is TRUE (the NAT/config changed), matching real usage.
+	// Tests can override via $GLOBALS['pfb_test_service_running'] (service => bool).
+	function is_service_running($service, $ps = []) {
+		$map = $GLOBALS['pfb_test_service_running'] ?? [];
+		return (bool) ($map[$service] ?? TRUE);
+	}
+}
+
+if (!function_exists('restart_service')) {
+	// pfSense services.inc: restart a named rc.d service. No-op off-appliance.
+	function restart_service($service) {
+		return TRUE;
+	}
+}
+
+if (!function_exists('stop_service')) {
+	// pfSense services.inc: stop a named rc.d service. No-op off-appliance.
+	function stop_service($service) {
+		return TRUE;
+	}
+}
+
+if (!function_exists('cert_create')) {
+	// pfSense cert.inc: generate a self-signed certificate and populate $cert['prv'/'crt'].
+	// Off-appliance: write empty base64-encoded blobs so the caller's file_put_contents
+	// has valid (though empty) data. Returns TRUE (success) so the error-log branch is
+	// not triggered, keeping the test clean.
+	function cert_create(&$cert, $caref, $keylen, $lifetime, $dn, $type = 'self-signed', $digest = 'sha256', $curve = '', $pkcs_alg = '') {
+		$cert['prv'] = base64_encode('');
+		$cert['crt'] = base64_encode('');
+		return TRUE;
+	}
+}
+
+if (!function_exists('get_configured_vip_list')) {
+	// pfSense interfaces.inc: map of VIP id ('_vip<uniqid>') => resolved IP address for
+	// all configured VIPs. Used by pfb_get_vips() inside pfb_validate_vips().
+	// Tests seed $GLOBALS['pfb_test_vip_list'] (map of id => addr); default empty map
+	// → pfb_get_vips() returns no VIPs, which combined with a '_vip_test_*' id causes
+	// pfb_validate_vips to return an 'invalid IPv4 VIP' error and force-disable DNSBL.
+	// Tests that need DNSBL to stay enabled must seed a matching id => addr entry AND
+	// use the 'opt-double' interface (matched by the get_configured_vip_interface double).
+	function get_configured_vip_list($type = '') {
+		return $GLOBALS['pfb_test_vip_list'] ?? [];
+	}
+}
+
+if (!function_exists('get_specialnet')) {
+	// pfSense interfaces.inc: returns an associative array of special network names/
+	// addresses (VIPs, loopback, etc.) indexed by their IP/address. Used by pfb_get_vips()
+	// to filter VIPs to only the ones in the SPECIALNET_VIPS set.
+	// Tests seed $GLOBALS['pfb_test_specialnet'] (addr => label); default includes all
+	// addresses from pfb_test_vip_list so pfb_get_vips() can match them.
+	function get_specialnet($interface = '', $types = []) {
+		// If a test has explicitly seeded this, use it.
+		if (isset($GLOBALS['pfb_test_specialnet'])) {
+			return $GLOBALS['pfb_test_specialnet'];
+		}
+		// Auto-derive from pfb_test_vip_list: every configured VIP addr counts as special.
+		$map = [];
+		foreach ($GLOBALS['pfb_test_vip_list'] ?? [] as $addr) {
+			$map[$addr] = $addr;
+		}
+		return $map;
+	}
+}
+
+if (!function_exists('where_is_ipaddr_configured')) {
+	// pfSense interfaces.inc: returns a list of interface names where $addr is configured
+	// (including subnet membership). Used by pfb_validate_vips() to detect VIP overlap.
+	// Always returns [] off-appliance: no real interfaces exist, so no VIP overlaps.
+	function where_is_ipaddr_configured($ip, $ignore_if = '', $check_localip = false, $check_subnets = false, $cidrprefix = '') {
+		return [];
+	}
+}
