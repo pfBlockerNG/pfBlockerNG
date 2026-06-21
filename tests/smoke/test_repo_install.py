@@ -2144,7 +2144,9 @@ def _box_real_catalog(vm: SmokeVM) -> str:
 
 def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
     """Read the ``url:`` value from a conf file on the guest; returns the bare URL string."""
-    result = _ssh_check(vm, "grep", "-E", r"^\s*url:", conf_path)
+    # POSIX class [[:space:]] — NOT GNU \s: BSD grep -E (FreeBSD/pfSense) treats \s as a
+    # literal 's', so ^\s*url: would not match the space-indented `  url:` conf line.
+    result = _ssh_check(vm, "grep", "-E", r"^[[:space:]]*url:", conf_path)
     # url: "https://..."  -> strip the key, whitespace, and surrounding quotes.
     raw = result.stdout.strip()
     match = re.search(r'url:\s*"([^"]+)"', raw)
