@@ -1485,7 +1485,7 @@ def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str,
 # --------------------------------------------------------------------------- #
 # Aggregate ("Uber") aliases (ADR-11) — the opt-in per-type aggregate selector
 # --------------------------------------------------------------------------- #
-# The General-settings multi-select ``pfb_agg_types`` is a CSV SCALAR at
+# The IP-settings multi-select ``pfb_agg_types`` is a CSV SCALAR at
 # CFG_GLOBAL/pfb_agg_types (e.g. "Deny,Permit"; default "" = none) — a single string
 # (NOT a listtag) so it round-trips with no '<0>' list XML (mirrors blacklist_selected;
 # see pfblockerng.inc:1174). For each selected Type x family, the update pass

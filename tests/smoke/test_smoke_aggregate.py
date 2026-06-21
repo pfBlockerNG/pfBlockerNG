@@ -3,7 +3,7 @@
 pfBlockerNG can build, per SELECTED action type x family, a Native ``urltable`` alias
 ``pfB_<Type>_Aggregated_<family>`` (Type in {Deny,Permit,Match,Native}, family in
 {v4,v6}) = the deduped/``iprange``d union of that type's effective dir. The multi-select
-``pfb_agg_types`` (General settings, opt-in, default ``""`` = none) gates it. The build
+``pfb_agg_types`` (IP settings, opt-in, default ``""`` = none) gates it. The build
 runs IN the update pass (``sync_package_pfblockerng`` -> ``pfb_build_aggregate_aliases``,
 ``inc:2144``, called ``inc:11116``): for each selected type it writes the member union,
 runs ``pfblockerng.sh aggregate`` (cat | sort -u | iprange, mtime-gated), registers the

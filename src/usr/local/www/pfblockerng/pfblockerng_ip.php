@@ -33,6 +33,14 @@ $pconfig = array();
 $pconfig['enable_dup']		= $pfb['iconfig']['enable_dup']				?: '';
 $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
 
+// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar, gateway-registered
+// (general section); presented here beside CIDR Aggregation. Default none -> [''] selects
+// nothing in the multi-select. Options defined here (before the POST handler) so the
+// save-time sanitiser and the rendered select share one source of allowed values.
+// Stored VALUES are Deny/Permit/Match/Native; the labels show the reference-only alias.
+$options_pfb_agg_types		= [ 'Deny' => 'Alias Deny', 'Permit' => 'Alias Permit', 'Match' => 'Alias Match', 'Native' => 'Alias Native' ];
+$pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('pfb_agg_types'));
+
 // Default to 'on' for new installation only
 $pconfig['suppression']		= isset($pfb['iconfig']['suppression'])			? $pfb['iconfig']['suppression'] : 'on';
 
@@ -205,6 +213,15 @@ if ($_POST) {
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'])			?: '';
 
+			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
+			// known option keys; default none). Gateway-registered in the general section, so
+			// written via PfbConfig::write (not the IP section blob). array_keys() keeps the
+			// allowed set in lockstep with $options_pfb_agg_types (defined above).
+			$agg_types_post	= array_values(array_intersect(
+						array_keys($options_pfb_agg_types),
+						(array) ($_POST['pfb_agg_types'] ?? array())));
+			PfbConfig::write('pfb_agg_types', implode(',', $agg_types_post));
+
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');
 			if (!empty($savemsg)) {
@@ -281,6 +298,23 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['enable_agg']) === PfbToggle::On,
 	'on'
 ))->setHelp('Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
+
+// $options_pfb_agg_types is defined near the top (shared with the POST sanitiser).
+$section->addInput(new Form_Select(
+	'pfb_agg_types',
+	'Aggregated Aliases',
+	$pconfig['pfb_agg_types'],
+	$options_pfb_agg_types,
+	TRUE
+))->setHelp('Default: <strong>none</strong><br />'
+		. 'For each selected type, build a <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> alias holding the '
+		. 'CIDR-aggregated union of every feed of that action class &mdash; its directional and Alias variants alike '
+		. '(e.g. <em>Alias Deny</em> covers Deny Inbound/Outbound/Both and Alias Deny; <em>Alias Native</em> the '
+		. 'Alias&nbsp;Native feeds).<br />'
+		. 'Every aggregate is <strong>reference only &mdash; no firewall rule</strong> is added; use it by name where '
+		. 'needed (e.g. your own rule or an HAProxy ACL). Each loads as a pf table, so enable only the type(s) you use.')
+  ->setAttribute('size', count($options_pfb_agg_types))
+  ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Checkbox(
 	'suppression',
