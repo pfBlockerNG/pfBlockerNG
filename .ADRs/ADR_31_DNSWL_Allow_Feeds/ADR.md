@@ -1,6 +1,6 @@
 # ADR-31: Subscribable remote DNSWL (allow-list) feeds for DNSBL
 
-- **Status:** **Implemented (pending live-VM smoke fan-out)** (2026-06-20)
+- **Status:** **Accepted** (2026-06-21; implemented 2026-06-20) — `tests/smoke/test_smoke_feeds.py::test_dnswl_permit_feed_allow_overrides_block_feed` (§2.2.1 block-only baseline → §2.2.2 permit-overrides-block + block-only-stays-blocked → §2.2.3 manual/band-5 still wins → §2.2.4 subdomain-covering + non-listed-unaffected → teardown re-blocks) passes on the CE + Plus live-VM fan-out (run 27918512342). The run's AND-gate is red only from unrelated pre-existing smoke failures (an ipv6-alerts `pfSsh.php` error and an `install-pkg.sh` Unbound-readiness error in the safesearch / upstream-block modules), not from this ADR's case.
 - **Date:** 2026-06-20
 - **Branch:** `adr/31-dnswl-allow-feeds` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**

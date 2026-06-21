@@ -1,6 +1,6 @@
 # ADR-30: Scheduled (calendar-boundary) reset of pfBlockerNG report logs
 
-- **Status:** **Implemented (pending live-VM smoke)** (2026-06-20)
+- **Status:** **Accepted** (2026-06-21; implemented 2026-06-20) — all six `tests/smoke/test_log_rotate.py` cases (boundary reset with inode + ownership preserved, same-period idempotent, chrooted `dnslog`, all-off no-op, and both retention-buffer cases) pass on the CE + Plus live-VM fan-out (run 27918512342). The run's AND-gate is red only from unrelated pre-existing smoke failures (an ipv6-alerts `pfSsh.php` error and an `install-pkg.sh` Unbound-readiness error in the safesearch / upstream-block modules), not from this ADR's cases.
 - **Date:** 2026-06-19
 - **Branch:** `adr/30-scheduled-log-reset` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
@@ -247,7 +247,7 @@ the full CE + Plus matrix. Steps to verify after the PR merges:
 
 ## 8. Amendment (#416): opt-in line-retention buffer on reset
 
-**Status:** Implemented (pending live-VM smoke), 2026-06-20. Narrows §2.3's "keep-N … revisit only if
+**Status:** Accepted (2026-06-21; implemented 2026-06-20) — the retention-buffer smoke cases pass on the CE + Plus fan-out (run 27918512342). Narrows §2.3's "keep-N … revisit only if
 operators ask": the §2.4 rejection of *archived copies* stands — this adds an **in-place line cushion**,
 not rotated files.
 
