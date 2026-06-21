@@ -31,7 +31,10 @@ from datetime import datetime, timezone
 # package is read from its name suffix (channel_of); the install CARDS are rendered
 # separately (release vs nightly) since stable + devel share one repo.
 CH_ORDER: list[str] = ["stable", "devel", "nightly"]
-RAW_ADDREPO = "https://raw.githubusercontent.com/pfBlockerNG/pfBlockerNG/devel/scripts/add-repo.sh"
+# Embed markers in add-repo.sh that delimit the hook placeholder body.
+_HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
+_HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
+_HOOK_HEREDOC = "PFB_HOOK_HEREDOC"
 # The source repo a .pkg is built from — base for the per-artifact commit link.
 SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 
@@ -315,7 +318,7 @@ def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
 def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
     """The unified stable+devel card: ONE bootstrap (the shared `pfblockerng` repo), then
     install whichever package you want — the channels differ only in the package name."""
-    setup = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base}"
+    setup = f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base}"
     items = (
         f'<li><span class="lbl">Stable</span> — {_ver_or_empty(latest, "stable")}'
         f"{_copyable('pkg install ' + _esc(_PKG_STABLE))}</li>"
@@ -339,7 +342,9 @@ def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
 
 def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
     """The nightly card — deliberately set apart: its own repo + a stability caveat."""
-    one_liner = f"fetch -qo - {RAW_ADDREPO} \\\n  | sh -s -- --base-url {base} --nightly\npkg install {_PKG_NIGHTLY}"
+    one_liner = (
+        f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base} --nightly\npkg install {_PKG_NIGHTLY}"
+    )
     return (
         '<div class="card nightly"><h3>Nightly <span class="badge">not for daily use</span></h3>'
         f'<p class="ver">{_ver_or_empty(latest, "nightly")}</p>'
@@ -828,6 +833,63 @@ def render_autoindex(
     )
 
 
+def _embed_hook(add_repo_text: str, hook_text: str) -> str:
+    """Splice *hook_text* into *add_repo_text* between the PFB_EMBED markers.
+
+    The stub body (everything between the BEGIN and END marker lines, inclusive) is
+    replaced with a single-quoted heredoc that prints the hook verbatim — no variable
+    or command expansion in the emitted content, regardless of what the hook contains.
+    The resulting add-repo.sh is self-contained and safe to pipe into ``sh``.
+    """
+    lines = add_repo_text.splitlines(keepends=True)
+    begin_idx = next(
+        (i for i, ln in enumerate(lines) if _HOOK_EMBED_BEGIN in ln),
+        None,
+    )
+    end_idx = next(
+        (i for i, ln in enumerate(lines) if _HOOK_EMBED_END in ln),
+        None,
+    )
+    if begin_idx is None or end_idx is None or begin_idx >= end_idx:
+        raise ValueError(f"add-repo.sh is missing the embed markers ({_HOOK_EMBED_BEGIN!r} / {_HOOK_EMBED_END!r})")
+    if _HOOK_HEREDOC in hook_text:
+        raise ValueError(
+            f"hook text contains the heredoc delimiter {_HOOK_HEREDOC!r} — choose a different delimiter or fix the hook"
+        )
+    # Build the replacement: keep the BEGIN marker line, inject the heredoc, keep END.
+    heredoc_lines = [
+        lines[begin_idx],
+        f"    cat <<'{_HOOK_HEREDOC}'\n",
+        hook_text if hook_text.endswith("\n") else hook_text + "\n",
+        f"{_HOOK_HEREDOC}\n",
+        lines[end_idx],
+    ]
+    return "".join(lines[:begin_idx] + heredoc_lines + lines[end_idx + 1 :])
+
+
+def write_add_repo(site: str, addrepo: str) -> None:
+    """Write a self-contained ``add-repo.sh`` to *site*/add-repo.sh.
+
+    *addrepo* is the path to the repository copy of ``scripts/add-repo.sh`` (which
+    contains the stub placeholder body between the embed markers).  The hook is
+    resolved as ``rc.d/pfblockerng_repo_generate.sh`` relative to the same ``scripts/``
+    directory.  The published file embeds the hook via a single-quoted heredoc so it
+    works correctly when piped into ``sh`` (where ``$0`` is ``sh`` and sibling-file
+    resolution via ``dirname "$0"`` fails).
+    """
+    scripts_dir = os.path.dirname(os.path.abspath(addrepo))
+    hook = os.path.join(scripts_dir, "rc.d", "pfblockerng_repo_generate.sh")
+    with open(addrepo) as fh:
+        add_repo_text = fh.read()
+    with open(hook) as fh:
+        hook_text = fh.read()
+    out_text = _embed_hook(add_repo_text, hook_text)
+    out_path = os.path.join(site, "add-repo.sh")
+    with open(out_path, "w") as fh:
+        fh.write(out_text)
+    os.chmod(out_path, 0o755)
+
+
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
     # add-repo.sh selects the channel by FLAG: the release repo is the default (no arg),
     # --nightly picks the nightly repo. Anything other than "nightly" => the release conf.
@@ -866,6 +928,8 @@ def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = N
         subdirs, files = _dir_entries(site, rel)
         with open(os.path.join(site, rel, "index.html"), "w") as fh:
             fh.write(render_autoindex(rel, subdirs, files))
+    # Publish a self-contained add-repo.sh with the hook embedded for `fetch | sh`.
+    write_add_repo(site, addrepo)
     return len(pkgs)
 
 

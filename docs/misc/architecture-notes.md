@@ -341,4 +341,16 @@ never wrong. Key properties:
     the boot-environment clone, so a non-package hook placed there persists across the very
     upgrade it heals (maintainer-confirmed from long operational use).
 
+**Published one-file bootstrap (`site/add-repo.sh`).** The repository copy of
+`scripts/add-repo.sh` installs the `rc.d` hook by copying the sibling file
+`scripts/rc.d/pfblockerng_repo_generate.sh` via `dirname "$0"`. That path resolution
+fails when the script is **piped** into `sh` (e.g. `fetch … | sh`) because `$0` is then
+`sh`, not the script path. `gen_landing.py`'s `write_site()` generates a self-contained
+`site/add-repo.sh` by splicing the hook body between the `PFB_EMBED_HOOK_BEGIN` /
+`PFB_EMBED_HOOK_END` marker comments inside `pfb_emit_embedded_hook()` — using a
+**single-quoted heredoc** (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's dollar-signs
+or backticks are expanded. The installed file is identical to the repository sibling.
+The published file lives at `pfblockerng.github.io/pkg/add-repo.sh` and is what the
+landing page's copy-paste one-liners point to.
+
 Full design: ADR-39.

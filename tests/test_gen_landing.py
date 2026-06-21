@@ -23,6 +23,11 @@ assert _SPEC and _SPEC.loader
 gl = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gl)
 
+# Paths to the real scripts — used wherever tests exercise the live integration
+# (write_site + write_add_repo) rather than fake fixtures.
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+_ADD_REPO_REAL = _SCRIPTS_DIR / "add-repo.sh"
+
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
@@ -504,10 +509,13 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # release card).
     assert "not yet published" in page
     # The unified release card: ONE bootstrap (no channel arg), then both install targets.
+    # The bootstrap URL points to the SELF-HOSTED add-repo.sh (not the raw GitHub URL).
+    assert f"fetch -qo - {base}/add-repo.sh" in page
     assert f"sh -s -- --base-url {base}" in page
     assert "pkg install pfSense-pkg-pfBlockerNG<" in page  # stable (exact, not -devel)
     assert "pkg install pfSense-pkg-pfBlockerNG-devel" in page  # development
     # Nightly is its own card with the --nightly flag and its own package.
+    assert f"fetch -qo - {base}/add-repo.sh" in page  # same URL for nightly too
     assert f"--base-url {base} --nightly" in page
     assert "pkg install pfSense-pkg-pfBlockerNG-nightly" in page
     # The manual conf came from the injected conf function — release + nightly, keyed by
@@ -614,7 +622,7 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
     monkeypatch.setattr(gl, "read_manifest_zstd", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", "add-repo.sh")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
 
     assert n == 1
     # Landing page (root) links to the browse entry; browse.html exists and lists the top dirs.
@@ -665,7 +673,7 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     monkeypatch.setattr(gl, "read_manifest_zstd", fake_manifest)
     monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://x/pkg/", "add-repo.sh")
+    n = gl.write_site(str(site), "https://x/pkg/", str(_ADD_REPO_REAL))
 
     # Packages found wherever they live (both novel locations), not by an assumed path.
     assert n == 2
@@ -924,3 +932,114 @@ def test_conf_via_addrepo_matches_real_add_repo_contract() -> None:
     assert nightly_conf, "nightly conf must be non-empty"
     assert "pfblockerng-nightly: {" in nightly_conf
     assert f"{base}/nightly/<varver>/<arch>" in nightly_conf
+
+
+# ── Piped-invocation: published add-repo.sh embeds hook + installs correctly ─
+
+
+def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monkeypatch: Any) -> None:
+    """Scenario: the published add-repo.sh installs the hook when piped into sh.
+
+    Background:
+      The repository copy of add-repo.sh resolves its sibling hook via
+      ``dirname "$0"``, which fails when the script is piped (``$0`` is ``sh``).
+      gen_landing.py's write_site() generates a site/add-repo.sh that embeds
+      the hook via a single-quoted heredoc so it is self-contained.
+
+    Given a fresh tmp directory with NO rc.d sibling hook present,
+      And write_site produces site/add-repo.sh with the hook embedded,
+      And the script text is fed to sh via stdin (``sh -s -- --base-url ...``),
+    When add-repo.sh runs in the piped / non-checkout context,
+    Then the hook file is installed on disk (HOOK_SRC absent, embedded path used),
+      And the installed hook is executable and contains the rc.d PROVIDE pragma,
+      And the staged conf file contains the ``Generated at boot`` marker
+          (proving the hook ran via the onestart step in add-repo.sh).
+
+    Before-state: hook file absent before the script runs.
+    """
+    import subprocess
+
+    # ── Given ────────────────────────────────────────────────────────────────
+
+    # Build the site tree (empty — we only need write_site to emit add-repo.sh).
+    site = tmp_path / "site"
+    site.mkdir()
+
+    # Stub _conf_via_addrepo so write_site doesn't need a real pkg environment.
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+
+    base = f"file://{site}"
+    gl.write_site(str(site), base, str(_ADD_REPO_REAL))
+
+    # The published add-repo.sh must exist and pass sh -n.
+    published = site / "add-repo.sh"
+    assert published.exists(), "write_site must produce site/add-repo.sh"
+    published_text = published.read_text()
+    assert published_text.startswith("#!/bin/sh"), "add-repo.sh must start with #!/bin/sh"
+    sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
+    assert sh_n.returncode == 0, f"sh -n failed on published add-repo.sh:\n{sh_n.stderr}"
+    # Hook content is embedded — the stub error text must be gone.
+    assert "no embedded hook in this copy" not in published_text, (
+        "pfb_emit_embedded_hook stub was NOT replaced by gen_landing.py"
+    )
+    # The rc.d PROVIDE pragma from the real hook must be present inside the function.
+    assert "PROVIDE: pfblockerng_repo_generate" in published_text, (
+        "embedded hook body must contain the rc.d PROVIDE pragma"
+    )
+
+    # ── Fixture: a CE 2.8.1 box rooted at tmp_path/root ─────────────────────
+
+    root = tmp_path / "root"
+
+    # pkg stub: exits 0; answers 'pkg config abi' with a real ABI.
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    fake_pkg = bin_dir / "pkg"
+    fake_pkg.write_text("#!/bin/sh\ncase \"$*\" in\n  'config abi') printf 'FreeBSD:15:amd64' ;;\nesac\nexit 0\n")
+    fake_pkg.chmod(0o755)
+
+    # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no 'Plus' -> CE).
+    etc = root / "etc"
+    etc.mkdir()
+    (etc / "version").write_text("2.8.1\n")
+    (etc / "product_label").write_text("pfSense\n")
+
+    # Before-state: no hook installed yet.
+    hook_path = root / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
+    assert not hook_path.exists(), "hook must not exist before the script runs"
+
+    # ── When: pipe the published add-repo.sh into sh (no sibling hook present) ─
+
+    env = {
+        **{k: v for k, v in os.environ.items()},
+        "PFBLOCKERNG_ROOT": str(root),
+        "PKG_BIN": str(fake_pkg),
+    }
+    result = subprocess.run(
+        ["sh", "-s", "--", "--base-url", base],
+        input=published_text,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    # ── Then ─────────────────────────────────────────────────────────────────
+
+    # The hook was installed (embedded path taken — no sibling was present).
+    assert hook_path.exists(), (
+        f"hook not installed at {hook_path}\nadd-repo stdout:\n{result.stdout}\nadd-repo stderr:\n{result.stderr}"
+    )
+    assert os.access(str(hook_path), os.X_OK), "installed hook must be executable"
+    hook_content = hook_path.read_text()
+    assert "PROVIDE: pfblockerng_repo_generate" in hook_content, "installed hook must contain the rc.d PROVIDE pragma"
+
+    # The staged conf contains the 'Generated at boot' marker, proving the hook
+    # was executed successfully by add-repo.sh's onestart step.
+    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
+    assert conf_path.exists(), (
+        f"conf not written at {conf_path}\nadd-repo stdout:\n{result.stdout}\nadd-repo stderr:\n{result.stderr}"
+    )
+    conf_text = conf_path.read_text()
+    assert "Generated at boot by pfblockerng_repo_generate" in conf_text, (
+        f"conf missing the 'Generated at boot' marker:\n{conf_text}"
+    )
