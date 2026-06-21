@@ -27,6 +27,12 @@
 # POSIX sh only; quote all expansions.
 
 # shellcheck shell=sh
+#
+# FreeBSD rc.d script: rc.subr's run_rc_command dispatches the *_start handler
+# and reads $rcvar via indirect variables, so shellcheck cannot see those call
+# sites — SC2317 (unreachable command) on the start-path helpers and SC2034
+# ($rcvar assigned-but-unused) are false positives here.
+# shellcheck disable=SC2317,SC2034
 
 # PROVIDE: pfblockerng_repo_selfheal
 # REQUIRE: NETWORKING LOGIN
