@@ -1,0 +1,157 @@
+ADR-39 Phase 2 Results — Meta-Package Port
+==========================================
+
+Status: COMPLETE — all verification gates green; ready for Phase 3.
+
+Commit: see post-push SHA below.
+Repos:
+  Port:         pfBlockerNG/FreeBSD-ports  branch pfblockerng/use-github
+  Test/handoff: pfBlockerNG/pfBlockerNG    branch adr/39-meta-package-distribution
+
+
+## 1. Port artefact
+
+Port directory: net/pfSense-pkg-pfblockerng-repo/
+
+Files
+  Makefile
+  pkg-plist
+  pkg-descr
+  files/pkg-post-install.in
+  files/pkg-post-deinstall.in
+
+Port name (PORTNAME):  pfSense-pkg-pfblockerng-repo
+Pkg short-name:        pfSense-pkg-pfblockerng-repo
+  (Phase 3 MUST inject exactly this name into whatever conf installs it.)
+
+PORTVERSION: 4.0.0.alpha.2
+  (Tracks the pfBlockerNG release version; will be kept in sync.)
+
+
+## 2. USE_GITHUB / WRKSRC design
+
+GH_ACCOUNT= pfBlockerNG
+GH_PROJECT= pfBlockerNG
+GH_TAGNAME= v${PORTVERSION}
+
+WRKSRC = ${WRKDIR}/${GH_PROJECT}-${PORTVERSION}
+  (NO /src suffix — full tarball root needed for scripts/lib/detect_variant.sh.)
+
+The detection helper is staged from the tarball at:
+  ${WRKSRC}/scripts/lib/detect_variant.sh
+
+and installed to:
+  ${PREFIX}/share/pfSense-pkg-pfblockerng-repo/detect_variant.sh
+  (i.e. /usr/local/share/pfSense-pkg-pfblockerng-repo/detect_variant.sh)
+
+This is the EXACT installed path Phase 3 should document/reference.
+
+DETECT_HELPER_DIR = ${PREFIX}/share/${PORTNAME}
+DETECT_HELPER     = ${DETECT_HELPER_DIR}/detect_variant.sh
+
+pkg-plist:
+  %%DATADIR%%/detect_variant.sh
+  @dir %%DATADIR%%
+
+
+## 3. SUB_FILES and token substitution
+
+SUB_FILES= pkg-post-install pkg-post-deinstall
+SUB_LIST=  PORTNAME=${PORTNAME} DETECT_HELPER=${DETECT_HELPER}
+
+Tokens substituted in .in files:
+  %%DETECT_HELPER%%  →  /usr/local/share/pfSense-pkg-pfblockerng-repo/detect_variant.sh
+  %%PORTNAME%%       →  pfSense-pkg-pfblockerng-repo
+
+build-pkg-portable.py maps:
+  pkg-post-install   → manifest key "post-install"
+  pkg-post-deinstall → manifest key "post-deinstall"
+
+No "install" or "deinstall" keys are present in the manifest.
+
+
+## 4. Post-install behaviour
+
+Phase guard:   exits 0 immediately unless $2 == "POST-INSTALL"
+Helper source: . /usr/local/share/pfSense-pkg-pfblockerng-repo/detect_variant.sh
+Detection:     pfb_detect_catalog() → "<channel>-<family>/<arch>"
+               e.g. "ce-2.8/amd64", "plus-26.03/aarch64"
+Conf path:     /usr/local/etc/pkg/repos/pfblockerng.conf
+URL shape:     https://pfblockerng.github.io/pkg/release/<catalog>
+               (Direct GitHub Pages URL — NO Worker, NO ${ABI} variable; ADR-39 §2.)
+Mirror type:   none
+Sig type:      none
+Priority:      100
+Post-write:    /usr/local/sbin/pkg update -q || true  (best-effort; non-fatal)
+
+Channel decision: "release" channel only.
+  The meta-package is part of the stable release flow. A "nightly" variant
+  (if ever needed) would be a separate port (pfSense-pkg-pfblockerng-nightly-repo).
+  Phase 3 wires the release channel; nightly is out of scope.
+
+Idempotent: yes — running POST-INSTALL twice produces an identical conf (overwrites).
+
+
+## 5. Post-deinstall behaviour
+
+Phase guard:   exits 0 immediately unless $2 == "POST-DEINSTALL"
+Action:        rm -f /usr/local/etc/pkg/repos/pfblockerng.conf (if exists)
+Dependencies:  POSIX sh + base system only — no PHP, no add-on tools.
+
+
+## 6. No runtime dependencies
+
+The manifest carries NO deps dict. The meta-package has no RUN_DEPENDS.
+POSIX sh + base system only in both post-scripts — runs safely under libpkg.
+
+
+## 7. build-pkg-portable.py change (adr/39-meta-package-distribution)
+
+Added: _gh_wrksrc_subdir(mk, workdir) → str
+  Computes the tarball subdir from WRKSRC relative to WRKDIR.
+  - Standard port (WRKSRC = .../pfBlockerNG-4.0.0.alpha.2/src):  returns "src"
+  - Meta-package (WRKSRC = .../pfBlockerNG-4.0.0.alpha.2):       returns ""
+
+Updated: acquire_source()
+  Old: hardcoded tops[0] / "src" for ALL USE_GITHUB ports.
+  New: uses _gh_wrksrc_subdir(); copies the full tarball root when subdir == "".
+  Backward-compatible: existing ports with /src suffix are unaffected.
+
+
+## 8. Build test
+
+File: tests/test_pfblockerng_repo_pkg.py (15 tests, all passing)
+
+Coverage:
+  - Build succeeds, produces .pkg
+  - Manifest has post-install / post-deinstall scripts (correct keys)
+  - No combined install/deinstall keys
+  - detect_variant.sh present in manifest files at correct path (perm 0555)
+  - Compact manifest carries no scripts/files
+  - No run-depends
+  - Phase guard: wrong phase → early exit, conf NOT written/removed
+  - Post-install writes correct conf (CE 2.8.1/amd64 → ce-2.8/amd64;
+    Plus 26.03.1/aarch64 → plus-26.03/aarch64); direct Pages URL; no ${ABI}
+  - Idempotent: two POST-INSTALL runs produce identical conf
+  - Post-deinstall removes the conf
+  - _gh_wrksrc_subdir: "src" for standard port; "" for meta-package
+
+Test suite: 1930 passed (full suite, incl. pre-existing tests).
+ruff check + format: clean.
+sh -n: clean on both .in files.
+
+
+## 9. Go-ahead for Phase 3
+
+Phase 3 MUST:
+  - Reference the meta-package by EXACT name: pfSense-pkg-pfblockerng-repo
+  - Install path of the shipped helper:
+      /usr/local/share/pfSense-pkg-pfblockerng-repo/detect_variant.sh
+  - Wire the pfSense-pkg-pfblockerng-repo port into the release build/CI pipeline.
+  - Ensure the port's PORTVERSION stays in sync with the pfBlockerNG release version.
+  - Test that pkg install pfSense-pkg-pfblockerng-repo on a real pfSense VM:
+      (a) installs detect_variant.sh to the expected path
+      (b) writes /usr/local/etc/pkg/repos/pfblockerng.conf with the correct URL
+      (c) pkg update succeeds against pfblockerng.github.io/pkg/release/<catalog>
+
+Phase 3 is NOT blocked on any Phase 2 item. All ports artefacts are committed.
