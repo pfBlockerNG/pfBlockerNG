@@ -1,0 +1,73 @@
+ADR-39 — Phase 2: add-repo.sh resolved conf + self-heal rc.d hook
+=================================================================
+
+GOAL
+Repoint the bootstrap to the DIRECT GitHub Pages catalog (no Worker, no ${ABI}) and add a
+self-guarding, fail-proof rc.d hook that keeps the conf aligned with the box's pfSense
+version across upgrades. Install the hook FROM add-repo.sh (no package).
+
+READ FIRST
+- ADR.md §1.3 (load-bearing facts), §2 (Decision table + the "Self-heal hook" row + the
+  semantics contract), §5 (constraints).
+- scripts/lib/detect_variant.sh  (Phase 1 helper — the ONLY source of <varver>/<arch>; do
+  NOT reimplement the mapping). Read its interface: how it prints <varver> and <arch>.
+- scripts/add-repo.sh  (current bootstrap — find DEFAULT_BASE_URL / the Worker URL, the
+  --print-conf path, the release vs --nightly channel logic, the conf field block).
+- scripts/build-repo.sh (--print-conf) and scripts/build-repo-portable.py (--print-conf):
+  the OTHER two conf generators that must stay BYTE-IDENTICAL.
+- tests/test_add_repo_conf.py, tests/test_build_repo_portable.py (the byte-identity pins).
+- docs/misc/architecture-notes.md → "ABI is NOT 1:1" (why the URL is varver-keyed, not ${ABI}).
+
+DO
+1. add-repo.sh:
+   - DEFAULT base URL = https://pfblockerng.github.io/pkg  (drop any *.workers.dev Worker URL).
+   - Build the resolved url: "<base>/<channel>/<varver>/<arch>" where <channel> is "release"
+     (default) or "nightly" (--nightly), and <varver>/<arch> come from detect_variant.sh.
+     NO ${ABI} token anywhere in the emitted conf.
+   - Keep every other conf field byte-identical to today: priority: 100, mirror_type: none,
+     signature_type: none, enabled: yes; repo name pfblockerng (release) / pfblockerng-nightly
+     (nightly); conf path /usr/local/etc/pkg/repos/pfblockerng.conf (release) /
+     pfblockerng-nightly.conf (nightly).
+   - After writing the conf, INSTALL the self-heal hook (next item) into /usr/local/etc/rc.d/.
+   - --print-conf must emit the resolved conf for a caller-supplied or detected box identity
+     (so tests can pin it); keep the flag contract from today.
+2. The self-heal hook — a POSIX-sh rc.d script (e.g. /usr/local/etc/rc.d/pfblockerng_repo_selfheal.sh):
+   - rc.d-ordered: REQUIRE networking; run BEFORE the pfBlockerNG/unbound services.
+   - HARD RULE: every code path ends in `exit 0`. It must NEVER be able to wedge boot.
+   - Logic:
+       a. GUARD: for each of our conf files that exists ([ -f ... ]); if none exists, exit 0.
+       b. For each present conf: parse the <varver>/<arch> embedded in its url:; compute the
+          box's current <varver>/<arch> via detect_variant.sh.
+       c. MATCH -> continue (no work). This is the every-boot common case: cheap, no pkg calls.
+       d. MISMATCH -> rewrite ONLY the <varver>/<arch> segment of that conf's url: in place
+          (preserve every other byte), run `pkg update` for that repo, then reconcile the
+          installed pfBlockerNG package for that channel (pkg install -y / upgrade of whatever
+          pfBlockerNG package the box has, so a devel/nightly box that lost it gets it back).
+          Wrap pkg calls so a failure logs and still exits 0.
+   - Source the detection helper from a fixed installed path; add-repo.sh must install
+     detect_variant.sh alongside the hook (or inline it) so the hook is self-contained on-box.
+3. Keep the THREE --print-conf generators byte-identical (update build-repo.sh and
+   build-repo-portable.py to the same resolved-URL shape).
+
+TESTS (every branch; before+after; no theater)
+- tests/test_add_repo_conf.py: rewrite for the resolved URL; assert byte-identity across all
+  three generators; idempotence (re-run -> identical); release vs nightly non-clobber (distinct
+  conf paths/names/url prefixes); NO ${ABI} substring in any emitted conf.
+- New shellspec tests/shell/selfheal_hook_spec.sh (mirror detect_variant_spec.sh style):
+  * guard: conf absent -> exit 0, no rewrite (BEFORE-state: no conf; assert untouched).
+  * match: conf varver == box varver -> exit 0, conf byte-unchanged (assert before==after).
+  * mismatch: seed a conf with a STALE varver, stub detect_variant + pkg; assert the url:
+    flips to the current <varver>/<arch> and ONLY that segment changed (diff the rest).
+  * fail-proof: force an internal error (e.g. stub pkg to fail / unreadable conf) -> still
+    exit 0. Pin the "never non-zero" contract on every path.
+- Run: python -m pytest tests/test_add_repo_conf.py tests/test_build_repo_portable.py ;
+  shellcheck the new hook + add-repo.sh ; sh -n both ; the shellspec.
+
+CONSTRAINTS
+POSIX sh only; quote all expansions; LC_ALL=C on any machine-data sort/compare; no bash-isms.
+Behaviour-preserving for every conf field except url:. Do not touch src/ runtime code.
+
+HANDOFF (RESULTS/02_Results.txt)
+The exact resolved conf for ce-2.8/amd64 and plus-26.03/amd64 (release+nightly), the hook
+path + rc order keywords, the installed detection-helper path, and the test command lines +
+pass output. Note any deviation from the ADR for the next phase.
