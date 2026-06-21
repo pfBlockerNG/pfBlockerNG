@@ -84,17 +84,33 @@ function pfb_software_status($status) {
 // Run a fixed command and stream its output to the terminal, line by line. The
 // command is a FIXED string (no request input is interpolated), so there is no
 // shell-injection surface — the only variable parts are pkg-derived names already
-// escapeshellarg'd by the caller.
+// escapeshellarg'd by the caller. Returns the command's exit status (0 = success,
+// -1 if it could not be started) so the caller can act on the result.
 function pfb_software_run_stream($cmd) {
 	$fh = popen("{$cmd} 2>&1", 'r');
 	if (!is_resource($fh)) {
 		pfb_software_output(gettext('Failed to start the task.'));
-		return;
+		return -1;
 	}
 	while (($line = fgets($fh)) !== FALSE) {
 		pfb_software_output(rtrim($line, "\r\n"));
 	}
-	pclose($fh);
+	return pclose($fh);
+}
+
+
+// Reload the Software page after a short delay so the freshly-installed version and
+// status are shown. Navigates (GET) to the page URL rather than reloading the current
+// request, so the Update POST is never resubmitted. The delay lets the final terminal
+// output settle on screen first.
+function pfb_software_reload() {
+	print("\n<script type=\"text/javascript\">");
+	print("\n//<![CDATA[");
+	print("\nsetTimeout(function(){ window.location.assign('/pfblockerng/pfblockerng_software.php'); }, 1500);");
+	print("\n//]]>");
+	print("\n</script>");
+	ob_flush();
+	flush();
 }
 
 
@@ -262,8 +278,15 @@ if ($pfb_sw_action === 'update') {
 		pfb_software_status(gettext('Updating pfBlockerNG...'));
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
-		pfb_software_run_stream("{$bin} upgrade -y {$pkg}");
-		pfb_software_status(gettext('Update task finished.'));
+		$pfb_sw_rc = pfb_software_run_stream("{$bin} upgrade -y {$pkg}");
+		// On success, reload so the page reflects the new installed version + status;
+		// on failure, leave the terminal log on screen for the user to inspect.
+		if ($pfb_sw_rc === 0) {
+			pfb_software_status(gettext('Update complete — refreshing the page...'));
+			pfb_software_reload();
+		} else {
+			pfb_software_status(gettext('Update task finished with errors — see the log above.'));
+		}
 	}
 }
 ?>
