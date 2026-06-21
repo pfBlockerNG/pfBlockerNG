@@ -1,5 +1,17 @@
 # ADR-20: CE/Plus variant-aware pkg distribution
 
+> **Amendment (2026-06-21 — Routing layer superseded by ADR-39).** The Cloudflare
+> Worker, `routing.json`, and User-Agent routing introduced by ADR-20 are removed.
+> Root cause: the pfSense product User-Agent is only injected by the PHP/GUI layer
+> (`pkg_call`/`pkg_exec`); raw CLI `pkg update`/`pkg install`/`pkg-static` (the upgrade
+> path) send a bare `pkg/<ver>` UA that matches nothing — every real request returned
+> `404 Unsupported pfSense version`. Replaced by on-box detection in `add-repo.sh`
+> (reads `globals.plus.inc` + `/etc/version` + `pkg config abi` to resolve the direct
+> `<varver>/<arch>` URL) plus a self-guarding `rc.d` self-heal hook that corrects a
+> stale varver on the first post-upgrade boot. **The variant-keyed catalog tree
+> (`release/<varver>/<arch>`, `nightly/<varver>/<arch>`) is retained unchanged.**
+> See ADR-39.
+>
 > **Amendment (2026-06-14, PR #216):** `add-repo.sh devel` and `add-repo.sh stable` now both
 > write the shared `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng`) — one
 > catalog carrying both packages, Netgate-style — superseding the `pfblockerng-devel.conf`

@@ -296,8 +296,41 @@ varver-keyed regardless**.
 **Upgrade consequence (verified — libpkg + `pfSense-upgrade`).** Because the conf is version-pinned it
 cannot auto-follow a version-crossing upgrade the way an `${ABI}` template would, and there is **no
 third-party pre-solve hook** to rewrite it in time: `pfSense-repo-setup`/`repoc` manage only Netgate's
-own `${PRODUCT}.conf`; a `+PRE_INSTALL` runs inside the locked libpkg transaction where nested `pkg`
-is impossible; libpkg pins every version at solve time. Foreign confs (ours) **persist** across
-upgrades (pfSense leaves them untouched), but a varver conf goes **stale** on a version change and can
-only be corrected by a **separate, later** pkg run (a boot-time one-shot or a manual re-bootstrap) —
-a structural one-pkg-run lag. Design detail: ADR-39.
+own `${PRODUCT}.conf` — they enumerate only `${PLUS_CERT_BASE}/pfSense-repo-*.name` (Netgate's own
+staging dir) and never rewrite foreign conf content; a `+PRE_INSTALL` runs inside the locked libpkg
+transaction where nested `pkg` is impossible; libpkg pins every version at solve time. Foreign confs
+(ours) **persist** across upgrades (pfSense leaves them untouched), but a varver conf goes **stale**
+on a version change and can only be corrected by a **separate, later** pkg run — a structural
+one-pkg-run lag. The self-heal hook below closes that lag.
+
+**`rc.d` self-heal hook (`scripts/rc.d/pfblockerng_repo_selfheal.sh`).** Installed on-box by
+`add-repo.sh` into `/usr/local/etc/rc.d/`; activated at every boot. Key properties:
+
+- **Self-guarding:** first act is `[ -f <our conf> ] || exit 0` — if neither the release nor
+  the nightly conf is present the hook is a complete no-op (an orphaned hook left after the
+  user removes our repo is inert and does not affect boot).
+- **Ordering:** `REQUIRE: NETWORKING LOGIN` — runs after the resolver is up (critical: the heal
+  does a `pkg` network fetch; it must not run before DNS is available on boxes that resolve via
+  `127.0.0.1`). `LOGIN` is a standard late-boot milestone that follows the resolver on pfSense.
+- **Match path (every-boot fast no-op):** compares the `<varver>/<arch>` embedded in the conf
+  URL against the box's current value from `pfb_detect_catalog`; if they match, exits 0
+  immediately — zero `pkg` calls on an up-to-date box.
+- **Mismatch path (post-upgrade heal):** snapshots the conf, rewrites only the `<varver>/<arch>`
+  segment (all other bytes preserved), runs `pkg update -r <repo>`. On success: removes the
+  snapshot, runs reconcile (`pkg upgrade` / `pkg install` of the pfBlockerNG package — best-effort,
+  failure is logged and swallowed). On failure: restores the snapshot so the **next** boot retries.
+- **Always `exit 0`:** every code path ends in `exit 0`. A non-zero exit would wedge the rc.d
+  chain; this hook must never do that.
+- **Verified findings (ADR-39 §1.3):**
+  - *Every varver-changing upgrade reboots.* pfSense cannot swap the running ABI / PHP /
+    Python interpreters live; any upgrade that changes build inputs rides the staged
+    boot-upgrade (kernel `next_stage` annotation → reboot). So the hook is guaranteed a
+    turn after every upgrade that could invalidate the conf.
+  - *No third-party pre-solve hook exists.* Confirmed on CE 2.8.1 + Plus 26.03.1:
+    `pfSense-repo-setup` only symlinks Netgate's own `${PRODUCT}.conf`; the proprietary
+    `repoc` rewrites Netgate's conf content (server-side); neither touches foreign confs.
+  - *`/usr/local/etc/rc.d/*.sh` survive reboots and BE-clone upgrades.* `/usr/local` rides
+    the boot-environment clone, so a non-package hook placed there persists across the very
+    upgrade it heals (maintainer-confirmed from long operational use).
+
+Full design: ADR-39.
