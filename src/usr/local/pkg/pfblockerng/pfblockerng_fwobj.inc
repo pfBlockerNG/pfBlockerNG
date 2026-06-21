@@ -84,8 +84,9 @@ function pfb_fwobj_is_owned(string $descr): bool
  * Reads config_get_path($section, []) and returns the FIRST row whose 'descr'
  * satisfies pfb_fwobj_is_owned() AND matches $marker:
  *   • If $marker starts with PFB_FWOBJ_FILTER_PFX ('pfB_'): str_starts_with match.
- *   • Otherwise: exact string equality (covers legacy 'pfB DNSBL' variants and
- *     the full 'pfB DNSBL - DO NOT EDIT' marker; caller passes the exact token).
+ *   • Otherwise: str_contains match — aligns with the PFB_FWOBJ_NAT_LEGACY_PFX
+ *     contract ("any descr CONTAINING this prefix") so that passing 'pfB DNSBL'
+ *     matches both the bare form and 'pfB DNSBL - DO NOT EDIT'.
  *
  * If $guard is provided it is called with the candidate row and must return TRUE to
  * accept the row (FALSE skips it — e.g. to filter by interface or subnet).
@@ -95,7 +96,7 @@ function pfb_fwobj_is_owned(string $descr): bool
  * $section: config path string, e.g. 'virtualip/vip', 'nat/rule', 'filter/rule'.
  *
  * @param string        $section  Config path string.
- * @param string        $marker   Descr marker to match (exact, or pfB_ prefix match).
+ * @param string        $marker   Descr marker to match (pfB_ prefix match or str_contains).
  * @param callable|null $guard    Optional row-level predicate; TRUE = accept.
  * @return array<string,mixed>|false  First matching row, or FALSE.
  */
@@ -110,13 +111,13 @@ function pfb_fwobj_find(string $section, string $marker, ?callable $guard = NULL
 			continue;
 		}
 
-		// Marker match: prefix or exact.
+		// Marker match: prefix (pfB_) or contains (legacy NAT prefix and exact forms).
 		if ($use_prefix) {
 			if (!str_starts_with($descr, $marker)) {
 				continue;
 			}
 		} else {
-			if ($descr !== $marker) {
+			if (!str_contains($descr, $marker)) {
 				continue;
 			}
 		}
@@ -139,7 +140,7 @@ function pfb_fwobj_find(string $section, string $marker, ?callable $guard = NULL
 /**
  * Reads config_get_path($section, []), filters OUT every row where:
  *   (a) pfb_fwobj_is_owned($row['descr']) is TRUE, AND
- *   (b) the descr matches $marker (same prefix/exact logic as pfb_fwobj_find), AND
+ *   (b) the descr matches $marker (same prefix/contains logic as pfb_fwobj_find), AND
  *   (c) when $guard is provided, $guard($row) returns TRUE.
  *
  * Any row that fails the ownership check (a) is NEVER removed — user-safety invariant.
@@ -151,7 +152,7 @@ function pfb_fwobj_find(string $section, string $marker, ?callable $guard = NULL
  * Returns TRUE if at least one row was removed, FALSE if nothing matched.
  *
  * @param string        $section  Config path string.
- * @param string        $marker   Descr marker to remove (exact, or pfB_ prefix match).
+ * @param string        $marker   Descr marker to remove (pfB_ prefix match or str_contains).
  * @param callable|null $guard    Optional row-level predicate; TRUE = also remove.
  */
 function pfb_fwobj_remove(string $section, string $marker, ?callable $guard = NULL): bool
@@ -170,10 +171,10 @@ function pfb_fwobj_remove(string $section, string $marker, ?callable $guard = NU
 			continue;
 		}
 
-		// Marker match: prefix or exact.
+		// Marker match: prefix (pfB_) or contains (legacy NAT prefix and exact forms).
 		$marker_match = $use_prefix
 			? str_starts_with($descr, $marker)
-			: ($descr === $marker);
+			: str_contains($descr, $marker);
 
 		if (!$marker_match) {
 			$filtered[] = $row;
