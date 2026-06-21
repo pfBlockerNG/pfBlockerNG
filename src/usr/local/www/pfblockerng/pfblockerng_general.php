@@ -67,10 +67,6 @@ $pconfig['pfb_feed_internal_allowlist']	= (string) base64_decode($pfb['gconfig']
 
 $pconfig['pfb_interval']		= $pfb['gconfig']['pfb_interval']			?: 1;
 
-// ADR-11: opt-in per-type aggregate ("Uber") Native aliases. CSV scalar (like
-// blacklist_selected) so it round-trips with no '<0>' list XML; default none selected.
-$pconfig['pfb_agg_types']		= explode(',', (string) ($pfb['gconfig']['pfb_agg_types'] ?? ''));
-
 $pconfig['pfb_min']			= $pfb['gconfig']['pfb_min']				?: 0;
 $pconfig['pfb_hour']			= $pfb['gconfig']['pfb_hour']				?: 0;
 $pconfig['pfb_dailystart']		= $pfb['gconfig']['pfb_dailystart']			?: 0;
@@ -126,7 +122,6 @@ $options_pfb_min	= [ '0' => '00', '15' => '15', '30' => '30', '45' => '45' ];
 $options_pfb_hour	= range(0, 23, 1);
 $options_pfb_dailystart	= range(0, 23, 1);
 $options_skipfeed	= [ '0' => 'No Limit', '1' => '1', '2' => '2', '3' => '3', '4' => '4', '5' => '5', '6' => '6' ];
-$options_pfb_agg_types	= [ 'Deny' => 'Deny', 'Permit' => 'Permit', 'Match' => 'Match', 'Native' => 'Native' ];
 $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '4000' => '4,000', '6000' => '6,000',
 				'8000' => '8,000', '10000' => '10,000', '20000' => '20,000', '40000' => '40,000', '60000' => '60,000',
 				'80000' => '80,000', '100000' => '100,000', '200000' => '200,000 - Memory intensive...', '400000' => '400,000',
@@ -232,13 +227,6 @@ if ($_POST) {
 			$pfb['gconfig']['pfb_hour']			= $_POST['pfb_hour']				?: 0;
 			$pfb['gconfig']['pfb_dailystart']		= $_POST['pfb_dailystart']			?: 0;
 			$pfb['gconfig']['skipfeed']			= $_POST['skipfeed']				?: 0;
-
-			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to
-			// the known {Deny,Permit,Match,Native} options; default none). Stored as a
-			// single string so it persists with no '<0>' list XML.
-			$agg_types_post	= (array) ($_POST['pfb_agg_types'] ?? array());
-			$agg_types_post	= array_values(array_intersect(array_keys($options_pfb_agg_types), $agg_types_post));
-			$pfb['gconfig']['pfb_agg_types']		= implode(',', $agg_types_post);
 
 			// Remove old Line Limit setting
 			if (isset($pfb['gconfig']['log_maxlines'])) {
@@ -416,20 +404,6 @@ $section->addInput(new Form_Select(
 ))->setHelp('Default: <strong>No limit</strong><br />'
 		. 'Select max daily download failure threshold via CRON. Clear widget \'failed downloads\' to reset.<br />'
 		. 'On a download failure, the previously downloaded list is reloaded.')
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Select(
-	'pfb_agg_types',
-	'Aggregated Aliases',
-	$pconfig['pfb_agg_types'],
-	$options_pfb_agg_types,
-	TRUE
-))->setHelp('Default: <strong>none</strong><br />'
-		. 'For each selected type, build a Native <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> alias '
-		. 'holding that type\'s combined, CIDR-aggregated IP set.<br />'
-		. 'Reference only &mdash; <strong>no firewall rule</strong> is added; use it by name where needed '
-		. '(e.g. in your own rule or an HAProxy ACL). Each loads as a pf table, so enable only the type(s) you use.')
-  ->setAttribute('size', count($options_pfb_agg_types))
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);

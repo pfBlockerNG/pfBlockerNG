@@ -651,7 +651,7 @@ are summarized in **`docs/misc/architecture-notes.md`**; read it before touching
 `.ADRs/ADR_NN_*/`.
 
 **Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
-`pfb_agg_types` multi-select (General settings, **opt-in, default none**) builds, per selected
+`pfb_agg_types` multi-select (IP settings, **opt-in, default none**) builds, per selected
 action type, the Native urltable aliases **`pfB_<Type>_Aggregated_v4`/`_v6`** = the deduped,
 `iprange`d union of that type's effective set (Deny = post-suppression block set incl. DNSBLIP;
 GeoIP folds in by each continent's action — no separate Geo alias). **Native (no firewall
