@@ -136,6 +136,10 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$PRINT_CONF" -eq 1 ]; then
+    [ -n "${CATALOG_PATH}" ] || {
+        echo "build-repo: --catalog-path <varver>/<arch> is required with --print-conf" >&2
+        exit 2
+    }
     _full_url="${BASE_URL%/}/release/${CATALOG_PATH}"
     print_conf "${_full_url%/}"
     exit 0
