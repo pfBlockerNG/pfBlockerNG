@@ -4,7 +4,11 @@
 # Keeps the pfBlockerNG pkg repo conf(s) aligned with this box's pfSense
 # edition/version/arch across OS upgrades. Installed by add-repo.sh.
 #
-# rc.d ordering: REQUIRE networking; runs BEFORE pfBlockerNG/unbound services.
+# rc.d ordering: REQUIRE NETWORKING LOGIN — after the resolver is up.
+# The heal does a pkg network fetch; it must not run before the local resolver
+# (unbound) is available on boxes that resolve via 127.0.0.1.  LOGIN is a
+# standard late-boot milestone that follows the resolver on pfSense.
+# Exact ordering is smoke-validated per ADR-39 §7.
 # HARD RULE: every code path ends in `exit 0`. This hook MUST NEVER wedge boot.
 #
 # Logic:
@@ -12,18 +16,20 @@
 #   2. For each present conf: parse the <varver>/<arch> from its url: line.
 #   3. Compute the box's current <varver>/<arch> via the detection helper.
 #   4. MATCH -> continue (no-op; the every-boot fast path, zero pkg calls).
-#   5. MISMATCH -> rewrite only the <varver>/<arch> segment in the url: line,
-#      run `pkg update` for that repo, then reconcile the installed pfBlockerNG
-#      package (install/upgrade so a devel/nightly box that lost it gets it back).
-#      pkg failures are logged but never propagated (always exit 0).
+#   5. MISMATCH -> snapshot the conf, rewrite only the <varver>/<arch> segment,
+#      run `pkg update` for that repo.
+#      If pkg update FAILS: restore the snapshot (next boot retries) and log a
+#      WARNING; do not reconcile.
+#      If pkg update SUCCEEDS: run reconcile (best-effort; a reconcile failure
+#      is logged but the conf stays correct — recoverable by the user's next pkg
+#      op).  pkg failures are logged but never propagated (always exit 0).
 #
 # POSIX sh only; quote all expansions.
 
 # shellcheck shell=sh
 
 # PROVIDE: pfblockerng_repo_selfheal
-# REQUIRE: NETWORKING
-# BEFORE: pfblockerng unbound
+# REQUIRE: NETWORKING LOGIN
 
 . /etc/rc.subr
 
@@ -108,7 +114,7 @@ _reconcile_pkg() {
     for _rp_pkg in ${_rp_pkgs}; do
         if "${PFB_PKG_BIN}" info "${_rp_pkg}" >/dev/null 2>&1; then
             # Package present — upgrade it so the new catalog's version wins.
-            "${PFB_PKG_BIN}" upgrade -y "${_rp_pkg}" 2>/dev/null \
+            FETCH_TIMEOUT=5 FETCH_RETRY=2 "${PFB_PKG_BIN}" upgrade -y "${_rp_pkg}" 2>/dev/null \
                 || printf '[pfblockerng_repo_selfheal] WARNING: pkg upgrade %s failed (continuing)\n' "${_rp_pkg}" >&2
             return 0
         fi
@@ -116,7 +122,7 @@ _reconcile_pkg() {
     # No package found — try to install the first name in the list.
     _rp_first="${_rp_pkgs%% *}"
     printf '[pfblockerng_repo_selfheal] INFO: installing %s from new catalog\n' "${_rp_first}" >&2
-    "${PFB_PKG_BIN}" install -y "${_rp_first}" 2>/dev/null \
+    FETCH_TIMEOUT=5 FETCH_RETRY=2 "${PFB_PKG_BIN}" install -y "${_rp_first}" 2>/dev/null \
         || printf '[pfblockerng_repo_selfheal] WARNING: pkg install %s failed (continuing)\n' "${_rp_first}" >&2
 }
 
@@ -148,19 +154,36 @@ _heal_one_conf() {
         return 0
     fi
 
-    # MISMATCH: rewrite only the <varver>/<arch> segment.
+    # MISMATCH: snapshot the conf, rewrite, attempt pkg update, revert on failure.
     printf '[pfblockerng_repo_selfheal] INFO: %s varver mismatch — conf has %s, box is %s — rewriting\n' \
         "${_hoc_conf}" "${_hoc_conf_catalog}" "${_hoc_box_catalog}" >&2
 
+    # a. Snapshot the conf before any modification so we can revert on failure.
+    _hoc_snap="${_hoc_conf}.pfb_selfheal_snap"
+    cp "${_hoc_conf}" "${_hoc_snap}" 2>/dev/null || {
+        printf '[pfblockerng_repo_selfheal] WARNING: could not snapshot %s — skipping\n' "${_hoc_conf}" >&2
+        return 0
+    }
+
+    # b. Rewrite only the <varver>/<arch> segment.
     _rewrite_conf_catalog "${_hoc_conf}" "${_hoc_conf_catalog}" "${_hoc_box_catalog}"
 
-    # Update the catalog for this repo.
+    # c. Update the catalog for this repo (network call — guarded by FETCH_TIMEOUT/FETCH_RETRY).
     printf '[pfblockerng_repo_selfheal] INFO: pkg update -r %s\n' "${_hoc_repo}" >&2
-    "${PFB_PKG_BIN}" update -r "${_hoc_repo}" 2>/dev/null \
-        || printf '[pfblockerng_repo_selfheal] WARNING: pkg update -r %s failed (continuing)\n' "${_hoc_repo}" >&2
-
-    # Reconcile the installed pfBlockerNG package for this channel.
-    _reconcile_pkg "${_hoc_pkgs}"
+    if FETCH_TIMEOUT=5 FETCH_RETRY=2 "${PFB_PKG_BIN}" update -r "${_hoc_repo}" 2>/dev/null; then
+        # d. SUCCESS: keep the rewritten conf; remove the snapshot; reconcile (best-effort).
+        rm -f "${_hoc_snap}"
+        _reconcile_pkg "${_hoc_pkgs}"
+    else
+        # d. FAILURE: restore the snapshot so the next boot sees a mismatch and retries.
+        printf '[pfblockerng_repo_selfheal] WARNING: pkg update -r %s failed — restoring conf for retry on next boot\n' \
+            "${_hoc_repo}" >&2
+        mv "${_hoc_snap}" "${_hoc_conf}" 2>/dev/null \
+            || cp "${_hoc_snap}" "${_hoc_conf}" 2>/dev/null \
+            || printf '[pfblockerng_repo_selfheal] WARNING: could not restore snapshot of %s\n' "${_hoc_conf}" >&2
+        rm -f "${_hoc_snap}" 2>/dev/null
+        # Do NOT reconcile — the conf is back to the old <varver>/<arch>.
+    fi
 }
 
 _selfheal_main() {
