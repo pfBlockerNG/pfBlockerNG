@@ -21,6 +21,13 @@ Describe 'read-version-matrix.sh derived test matrices'
     _mm_repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/vermx.XXXXXX")"
     (
       cd "$_mm_repo" || exit 1
+      # Scrub inherited git context. Under the pre-commit hook, git exports
+      # GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / GIT_PREFIX pointing at the
+      # REAL repo; those override `cd`, so the fixture identity below and the
+      # `commit -qm fixture` would otherwise land on the live branch (resetting
+      # user.* + polluting history). Mirrors tests/test_read_version_matrix.py.
+      unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX \
+        GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
       git init -q
       git config user.email ci@example.invalid
       git config user.name CI
@@ -36,7 +43,15 @@ Describe 'read-version-matrix.sh derived test matrices'
   # observable to the caller.
   run_print_test() {
     _rt_repo="$(make_matrix_repo "$1")"
-    ( cd "$_rt_repo" && sh "$READER" --ref HEAD --file supported-versions.json --print-test )
+    (
+      cd "$_rt_repo" || exit 1
+      # Same scrub as make_matrix_repo: the reader shells out to git
+      # (`git show <ref>:<file>`, `git fetch origin`) and must address the
+      # fixture repo, not an inherited GIT_DIR pointing at the real repo.
+      unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX \
+        GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+      sh "$READER" --ref HEAD --file supported-versions.json --print-test
+    )
     _rt_status=$?
     rm -rf "$_rt_repo"
     return "$_rt_status"
