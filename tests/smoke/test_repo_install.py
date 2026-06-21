@@ -146,11 +146,10 @@ PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable
 # proving the SHIPPED bootstrap — not just a hand-written conf — installs our build.
 ADD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "add-repo.sh"
 GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
-# add-repo.sh resolves its companion scripts relative to SCRIPT_DIR (its own dir).
-# Stage them under the same layout the scripts/ tree uses so add-repo.sh can find them.
-ADD_REPO_DETECT_VARIANT_SRC = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "detect_variant.sh"
-ADD_REPO_SELFHEAL_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_selfheal.sh"
-GUEST_ADD_REPO_LIB_DIR = f"{GUEST_SPIKE_DIR}/lib"
+# add-repo.sh resolves the generator hook relative to SCRIPT_DIR (its own dir).
+# Stage it under the same layout the scripts/ tree uses so add-repo.sh can find it.
+# (ADR-39: detection is folded into the hook — there is no /lib helper any more.)
+ADD_REPO_GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
@@ -374,13 +373,13 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
     default and a live HTTPS add-repo.sh run are a post-deploy note), runs ``pkg
     update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
     verify step failing) raises with the captured output. ``base_url`` points at the
-    catalog ROOT; add-repo.sh appends the literal ``${ABI}`` (pkg expands it to the
-    box's ABI), so the catalog MUST live under ``<base_url>/<ABI>/``.
+    catalog ROOT; add-repo.sh installs+runs the generator hook, which resolves the
+    box's ``<channel>/<varver>/<arch>`` subtree, so the catalog MUST live under
+    ``<base_url>/<channel>/<varver>/<arch>/``.
     """
-    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR, GUEST_ADD_REPO_LIB_DIR, GUEST_ADD_REPO_RCD_DIR)
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR, GUEST_ADD_REPO_RCD_DIR)
     _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
-    _scp_to_guest(vm, ADD_REPO_DETECT_VARIANT_SRC, f"{GUEST_ADD_REPO_LIB_DIR}/detect_variant.sh")
-    _scp_to_guest(vm, ADD_REPO_SELFHEAL_HOOK_SRC, f"{GUEST_ADD_REPO_RCD_DIR}/pfblockerng_repo_selfheal.sh")
+    _scp_to_guest(vm, ADD_REPO_GENERATE_HOOK_SRC, f"{GUEST_ADD_REPO_RCD_DIR}/pfblockerng_repo_generate.sh")
     result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
@@ -2067,50 +2066,59 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 
 
 # =========================================================================== #
-# ADR-39 — self-heal rc.d hook (varver correction after an OS upgrade)        #
+# ADR-39 — boot-time repo-conf generator rc.d hook                            #
 #                                                                              #
-# Proves the self-heal hook's three code paths on a REAL pfSense VM:          #
-#   1. GUARD path: no conf -> hook exits 0, no change (boot-safe orphan).     #
-#   2. MISMATCH path: stale varver in conf -> hook rewrites it to the box's   #
-#      current varver, runs pkg update, package is still installed + serving.  #
-#   3. MATCH path (implicit in the mismatch test's after-state re-run):       #
-#      already-correct varver -> hook is a no-op (verified via idempotence).  #
+# Proves the generator hook on a REAL pfSense VM:                             #
+#   1. ORPHAN path: no conf -> hook exits 0, writes nothing (boot-safe).      #
+#   2. REGENERATE path: a conf carrying a STALE varver (as after an OS        #
+#      upgrade) is unconditionally overwritten with the box's CURRENT         #
+#      <varver>/<arch>; the corrected conf then resolves our package via      #
+#      pkg update + install (end-to-end, file:// catalog). The hook's folded  #
+#      detection is cross-checked against an independent Python oracle.        #
+#   3. IDEMPOTENCE: a second run leaves the conf byte-identical (pure regen).  #
 #                                                                              #
-# The hook runs as a POSIX-sh rc.d script.  We drive it directly (not via    #
-# the rc(8) framework) because we only want the shell logic — no service      #
-# lifecycle.  The hook's env-overridable paths (PFB_RELEASE_CONF,             #
-# PFB_DETECT_HELPER, PFB_PKG_BIN) let us point it at test fixtures without   #
-# modifying the production script.                                             #
+# The hook runs as a POSIX-sh rc.d script. Off the rc(8) framework it runs    #
+# its *_start directly (its own else-branch), so we drive it as              #
+# `/bin/sh <hook> onestart`. Env-overridable paths (PFB_RELEASE_CONF,         #
+# PFB_NIGHTLY_CONF, PFB_BASE_URL) point it at test fixtures + a file://       #
+# catalog without modifying the production script. NO pkg call, NO network.   #
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark).                      #
 # Dispatch: gh workflow run smoke.yml -f pytest_marker=repo                   #
 # =========================================================================== #
 
-# Working directory on the guest for the self-heal test.
-SELFHEAL_DIR = "/tmp/pfb_selfheal_test"
-# On-box paths where add-repo.sh installs the hook and detection helper (production).
-GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_selfheal.sh"
-GUEST_DETECT_HELPER = "/usr/local/lib/pfblockerng/detect_variant.sh"
+# Working directory on the guest for the generator-hook test.
+GENERATE_DIR = "/tmp/pfb_generate_test"
+# On-box path where add-repo.sh installs the hook (production).
+GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
-# Source paths for the hook and detection helper (runner side).
-SELFHEAL_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_selfheal.sh"
-DETECT_VARIANT_SRC = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "detect_variant.sh"
+# Source path for the hook (runner side).
+GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 
-def _stage_selfheal_hook(vm: SmokeVM, *, guest_hook: str, guest_helper: str) -> None:
-    """Copy the self-heal hook and detection helper to the guest at the given paths.
-
-    The hook sources ``$PFB_DETECT_HELPER`` (overridable), so ``guest_helper`` is the
-    path the hook will source at runtime.  Both files must exist before the hook runs.
-    """
-    _ssh_check(vm, "/bin/mkdir", "-p", SELFHEAL_DIR)
-    # Ensure parent dirs for the on-box production paths exist on the guest.
+def _stage_generate_hook(vm: SmokeVM, *, guest_hook: str) -> None:
+    """Copy the generator hook to the guest (detection is folded in — no helper)."""
+    _ssh_check(vm, "/bin/mkdir", "-p", GENERATE_DIR)
     _ssh_check(vm, "/bin/mkdir", "-p", "/".join(guest_hook.split("/")[:-1]))
-    _ssh_check(vm, "/bin/mkdir", "-p", "/".join(guest_helper.split("/")[:-1]))
-    _scp_to_guest(vm, SELFHEAL_HOOK_SRC, guest_hook)
-    _scp_to_guest(vm, DETECT_VARIANT_SRC, guest_helper)
+    _scp_to_guest(vm, GENERATE_HOOK_SRC, guest_hook)
     _ssh_check(vm, "/bin/chmod", "755", guest_hook)
-    _ssh_check(vm, "/bin/chmod", "644", guest_helper)
+
+
+def _box_real_catalog(vm: SmokeVM) -> str:
+    """Independent Python oracle for the box's ``<varver>/<arch>`` (cross-checks the hook).
+
+    Mirrors the hook's folded detection: edition = "/etc/product_label contains 'Plus'"
+    (absent file -> CE, matching the hook's grep-on-missing-file = CE), version =
+    major.minor of /etc/version, arch = the leaf of ``pkg config abi``.
+    """
+    label = vm.ssh("/bin/cat", "/etc/product_label", timeout=30.0)
+    edition = "plus" if (label.returncode == 0 and "Plus" in label.stdout) else "ce"
+    ver = _ssh_check(vm, "/bin/cat", "/etc/version").stdout.strip()
+    mm = ".".join(ver.split(".")[:2])
+    abi = _ssh_check(vm, "/usr/local/sbin/pkg", "config", "abi").stdout.strip()
+    arch = abi.rsplit(":", 1)[-1]
+    assert mm and arch, f"oracle could not resolve box catalog: ver={ver!r} abi={abi!r}"
+    return f"{edition}-{mm}/{arch}"
 
 
 def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
@@ -2124,219 +2132,126 @@ def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
     return match.group(1)
 
 
-def _run_selfheal_hook(
+def _run_generate_hook(
     vm: SmokeVM,
     *,
     release_conf: str,
-    detect_helper: str,
+    base_url: str | None = None,
     nightly_conf: str = "/dev/null",
     timeout: float = 300.0,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the self-heal hook directly as ``/bin/sh <hook> start``.
+    """Run the generator hook directly as ``/bin/sh <hook> onestart``.
 
-    The hook is driven with its env-overridable paths pointing at the test fixtures:
-    ``PFB_RELEASE_CONF``, ``PFB_NIGHTLY_CONF``, ``PFB_DETECT_HELPER``, and
-    ``PFB_PKG_BIN``.  ``PFB_NIGHTLY_CONF=/dev/null`` suppresses the nightly-channel
-    heal so the test targets only the release conf.
+    Driven with its env-overridable paths pointing at the test fixtures:
+    ``PFB_RELEASE_CONF``, ``PFB_NIGHTLY_CONF`` (``/dev/null`` suppresses the nightly
+    channel), and optionally ``PFB_BASE_URL`` (a file:// catalog base). Detection
+    reads the real box files (/etc/product_label, /etc/version, pkg config abi).
 
-    Returns the completed process.  The hook MUST always exit 0 (a non-zero rc is an
-    immediate test failure — the hard rule from ADR-39 §2 "always exit 0").
+    Returns the completed process. The hook MUST always exit 0 (a non-zero rc is an
+    immediate test failure — the ADR-39 "always exit 0" boot-safety rule).
     """
-    result = vm.ssh(
-        "env",
-        f"PFB_DETECT_HELPER={detect_helper}",
-        f"PFB_RELEASE_CONF={release_conf}",
-        f"PFB_NIGHTLY_CONF={nightly_conf}",
-        # Use the system pkg (no override needed — the hook defaults to /usr/local/sbin/pkg).
-        "/bin/sh",
-        GUEST_HOOK_PATH,
-        "start",
-        timeout=timeout,
-    )
+    env_args = [f"PFB_RELEASE_CONF={release_conf}", f"PFB_NIGHTLY_CONF={nightly_conf}"]
+    if base_url is not None:
+        env_args.append(f"PFB_BASE_URL={base_url}")
+    result = vm.ssh("env", *env_args, "/bin/sh", GUEST_HOOK_PATH, "onestart", timeout=timeout)
     assert result.returncode == 0, (
-        f"self-heal hook exited {result.returncode} (MUST always be 0 — boot-safety violation):\n"
+        f"generator hook exited {result.returncode} (MUST always be 0 — boot-safety violation):\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     return result
 
 
 @pytest.mark.timeout(60)
-def test_selfheal_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
-    """ADR-39 GUARD PATH: when the release conf is ABSENT the hook exits 0 and writes nothing.
+def test_generate_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
+    """ADR-39 ORPHAN PATH: when the release conf is ABSENT the hook exits 0 and writes nothing.
 
     An orphaned hook (conf removed by the user after removing the repo) must be inert —
-    it must not wedge boot or create files.
+    it must not wedge boot or create a channel the user never bootstrapped.
 
-    Scenario: self-heal hook with no repo conf is a safe no-op.
+    Scenario: generator hook with no repo conf is a safe no-op.
 
     Given NO repo conf exists at the configured path (``PFB_RELEASE_CONF`` points at a
       non-existent path) and NO nightly conf (``PFB_NIGHTLY_CONF=/dev/null``),
-    When ``/bin/sh <hook> start`` runs with those overrides,
+    When ``/bin/sh <hook> onestart`` runs with those overrides,
     Then the hook exits 0 (MUST — boot-safety hard rule) AND no conf file was created.
     Assert BEFORE: the conf path does NOT exist.
     Assert AFTER: the conf path still does NOT exist; exit code 0.
     """
-    # Stage the hook and helper (needed even for the guard path — the hook is the script
-    # under test; the helper install path need not exist but must be sourceable on call).
-    _stage_selfheal_hook(
-        repo_vm,
-        guest_hook=GUEST_HOOK_PATH,
-        guest_helper=GUEST_DETECT_HELPER,
-    )
+    _stage_generate_hook(repo_vm, guest_hook=GUEST_HOOK_PATH)
 
-    absent_conf = f"{SELFHEAL_DIR}/nonexistent_pfblockerng.conf"
+    absent_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng.conf"
 
     # BEFORE: the conf does not exist.
     before_present = repo_vm.ssh("/bin/test", "-f", absent_conf)
     assert before_present.returncode != 0, f"BEFORE: conf unexpectedly exists at {absent_conf}"
 
     # WHEN: run the hook with a non-existent conf path.
-    _run_selfheal_hook(
-        repo_vm,
-        release_conf=absent_conf,
-        detect_helper=GUEST_DETECT_HELPER,
-    )
+    _run_generate_hook(repo_vm, release_conf=absent_conf)
 
     # AFTER: conf still absent; hook was a no-op.
     after_present = repo_vm.ssh("/bin/test", "-f", absent_conf)
     assert after_present.returncode != 0, (
-        f"AFTER: hook guard FAILED — it created {absent_conf} when the conf was absent"
+        f"AFTER: hook orphan guard FAILED — it created {absent_conf} when the conf was absent"
     )
 
 
-@pytest.mark.timeout(600)  # forge build + catalog gen + add-repo.sh + conf rewrite + pkg update > 30s cap.
-def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """ADR-39 MISMATCH PATH: a stale ``<varver>`` in the conf is corrected by the hook.
+@pytest.mark.timeout(600)  # forge build + catalog gen + conf regen + pkg update/install > 30s cap.
+def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-39 REGENERATE PATH: a stale ``<varver>`` in the conf is rewritten to the box's current one.
 
-    Simulates a post-OS-upgrade boot where the conf still points at an OLD varver that
-    is not this box's current varver.  The hook must detect the mismatch, rewrite only
-    the ``<varver>/<arch>`` segment, run ``pkg update`` for our repo, and leave the
-    package installed and all its files present (the distribution test).  Idempotence
-    is verified by a second hook run (match path => no-op, conf unchanged).
+    Simulates a post-OS-upgrade boot where the conf still points at an OLD varver. The
+    hook unconditionally REGENERATES the conf for the box's CURRENT ``<varver>/<arch>``
+    (folded detection), and the corrected conf then resolves our package end-to-end via
+    ``pkg update`` + ``pkg install`` against a file:// catalog. The hook's detection is
+    cross-checked against an independent Python oracle (``_box_real_catalog``) — if they
+    disagree the catalog is not found and ``pkg install`` fails loud. A second run leaves
+    the conf byte-identical (pure regenerate, no patching).
 
-    The stale varver is a SYNTHETIC value (``old-99.99``) that cannot exist in any real
-    catalog, so ``pkg update`` against a file:// catalog URL containing it will FAIL
-    (correct: the hook should restore the snapshot and the conf should revert).  We
-    therefore patch the hook's behavior by:
-      - writing the CORRECT catalog under a SYNTHETIC "stale" varver path on-guest
-        (so pkg update SUCCEEDS with the stale URL before we overwrite the varver),
-        THEN
-      - patching the conf to a truly absent subtree for the BEFORE assertion only,
-        while the REAL catalog is under the box's CORRECT varver path.
-
-    Concretely:
-      1. Build the real catalog under the box's own ``<real_varver>/<arch>/`` path.
-      2. Write the conf with a STALE varver (``stale-9.9``).
-      3. BEFORE: assert conf points at stale subtree.
-      4. Stage the hook; point PFB_RELEASE_CONF at our test conf.
-      5. WHEN: run the hook.
-      6. AFTER: assert conf URL now contains the REAL varver (not ``stale-9.9``),
-         ``pkg update`` re-accepts the corrected conf, and the package is installed
-         with all files present.
-      7. Run the hook AGAIN (idempotence / match path): conf unchanged, exit 0.
-
-    Scenario: self-heal rewrites a stale varver, pkg update re-accepts, package intact.
+    Scenario:
       Background: a file:// catalog at ``<base>/release/<real_varver>/<arch>/``; the
-        conf's url: initially contains ``<base>/release/stale-9.9/<arch>`` (wrong subtree
-        that would 404 on a real Pages fetch, but on file:// pkg update simply fails =>
-        the hook restores the snapshot).
-
-    Because pkg update against the stale URL fails for the file:// path (the stale-9.9/
-    subtree does not exist on disk), the hook restores the snapshot.  The test then asserts
-    the AFTER state: conf is STILL stale (snapshot restored — the retry-safe behavior),
-    the package is still installed from the CORRECT URL that was working before, and
-    files are present.
-
-    Wait — this is the correct behavior for a MISSING stale subtree: the hook REVERTS.
-    But the ADR-39 spec says AFTER: ``pkg update re-accepts, correct build installed``.
-    To verify the FULL mismatch path (rewrite -> successful update -> reconcile), we must
-    make the pkg update SUCCEED.  So we pre-create the stale subtree on-guest AS WELL:
-    the stale subtree carries the same catalog files.  Then:
-      - conf has stale URL -> pkg update works (file:// finds the stale dir)
-      - hook rewrites conf to real varver -> pkg update also works (file:// finds real dir)
-      - AFTER: conf has real varver; package installed; files present.
-
-    This is the full mismatch + successful-update path in one test.
-
-    IMPORTANT: the real varver is discovered by calling pfb_detect_catalog via the
-    detection helper ON THE GUEST (the canonical oracle: what the box considers its own
-    varver right now).  The stale varver is always ``stale-9.9`` (synthetic, impossible
-    to collide with any real varver).
+        seeded conf url initially points at ``<base>/release/stale-9.9/<arch>`` (wrong).
+      Given the conf carries the stale varver (BEFORE asserted),
+      When  the generator hook runs with ``PFB_BASE_URL=<file:// base>``,
+      Then  the conf url contains the box's REAL varver (stale gone) and the canonical
+            marker, ``pkg update`` accepts it, and our package installs with its files;
+      And   a second hook run leaves the conf byte-identical.
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
-    # ── Setup: stage hook and helper ──────────────────────────────────────────
-    _stage_selfheal_hook(
-        repo_vm,
-        guest_hook=GUEST_HOOK_PATH,
-        guest_helper=GUEST_DETECT_HELPER,
-    )
+    _stage_generate_hook(repo_vm, guest_hook=GUEST_HOOK_PATH)
 
-    # ── Discover the box's REAL varver/<arch> via the detection helper on-guest ──
-    # Source the helper, call pfb_detect_catalog.  This is the canonical oracle for what
-    # the hook will compute at runtime — tests must agree with the production detection.
-    # Pass the detection command as a SINGLE ssh arg: sshd wraps it in /bin/sh -c
-    # automatically.  Splitting into ("/bin/sh", "-c", script) causes OpenSSH to
-    # join them with spaces before sending, producing `/bin/sh -c . <file> && cmd`
-    # on the remote — FreeBSD sh then parses -c's script as bare `.` (missing
-    # filename, exit 2) and `<file> && cmd` runs in the outer login-shell context.
-    detect_script = f". {GUEST_DETECT_HELPER} && pfb_detect_catalog"
-    detect_result = _ssh_check(repo_vm, detect_script)
-    real_catalog = detect_result.stdout.strip()
-    assert real_catalog, f"pfb_detect_catalog returned empty — detection helper may be broken: {detect_result.stdout!r}"
-    assert "/" in real_catalog, f"expected <varver>/<arch>, got {real_catalog!r}"
+    # Independent oracle for the box's real <varver>/<arch> (cross-checks the hook's
+    # folded detection — a disagreement makes the catalog unreachable below).
+    real_catalog = _box_real_catalog(repo_vm)
     real_varver, real_arch = real_catalog.rsplit("/", 1)
 
     STALE_VARVER = "stale-9.9"
     stale_catalog = f"{STALE_VARVER}/{real_arch}"
 
-    # Guest base dir for the catalogs (isolated from the ADR-17 spike dir).
-    selfheal_catalog_base = f"{SELFHEAL_DIR}/catalog"
-    # The CORRECT catalog dir on the guest.
-    guest_real_abi_dir = f"{selfheal_catalog_base}/release/{real_catalog}"
-    # The STALE catalog dir on the guest (same files — so pkg update succeeds for stale URL too,
-    # enabling the full mismatch + successful-update + reconcile code path).
-    guest_stale_abi_dir = f"{selfheal_catalog_base}/release/{stale_catalog}"
-    # The test conf we hand to the hook (not the system REPO_CONF — isolated).
-    test_conf_path = f"{SELFHEAL_DIR}/pfblockerng_test.conf"
-    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    catalog_base = f"{GENERATE_DIR}/catalog"
+    base_url = f"file://{catalog_base}"
+    guest_real_dir = f"{catalog_base}/release/{real_catalog}"
+    test_conf_path = f"{GENERATE_DIR}/pfblockerng_test.conf"
 
     try:
-        # ── 1. Build the real catalog on the runner and ship BOTH the real AND stale dirs ──
-        # We use the pure-Python generator (runner-side) to build the catalog files, then
-        # ship them to BOTH the real and stale subtrees on the guest.
-        # build_repo_via_portable returns the flat <ABI>/ dir; we ship to the varver-keyed path.
+        # 1. Build the real catalog on the guest under release/<real_varver>/<arch>/.
         build_repo_via_portable_named(
             repo_vm,
             [Path(pkg)],
             tmp_path,
             catalog_name=f"release/{real_varver}",
-            guest_root=selfheal_catalog_base,
+            guest_root=catalog_base,
         )
-        # Verify the real dir landed on the guest.
-        assert _ssh_check(repo_vm, "/bin/test", "-d", guest_real_abi_dir).returncode == 0, (
-            f"real catalog dir {guest_real_abi_dir} not created on guest"
+        assert _ssh_check(repo_vm, "/bin/test", "-d", guest_real_dir).returncode == 0, (
+            f"real catalog dir {guest_real_dir} not created on guest"
         )
 
-        # Create the stale subtree (copy catalog files from the real dir).
-        _ssh_check(repo_vm, "/bin/mkdir", "-p", guest_stale_abi_dir)
-        _ssh_check(repo_vm, f"cp -r {guest_real_abi_dir}/. {guest_stale_abi_dir}/")
-
-        # ── 2. Install the package from the REAL catalog URL so it is present BEFORE the heal ──
-        pkg_delete(repo_vm)
-        write_repo_conf(repo_vm, guest_real_abi_dir, ours_priority=pfsense_prio + 100)
-        pkg_update(repo_vm)
-        pkg_install_from_repo(repo_vm)
-        installed_before = pkg_installed_version(repo_vm)
-        assert installed_before is not None, "package not installed before self-heal test"
-
-        # ── 3. Write the TEST conf with a STALE varver url ───────────────────
-        # The real url would be:  file://<selfheal_catalog_base>/release/<real_catalog>
-        # We write:               file://<selfheal_catalog_base>/release/<stale_catalog>
-        stale_url = f"file://{selfheal_catalog_base}/release/{stale_catalog}"
+        # 2. Seed the TEST conf with a STALE varver url (canonical body shape).
+        stale_url = f"{base_url}/release/{stale_catalog}"
         stale_conf_body = (
-            f"pfblockerng: {{\n"
+            "# pending boot-time generation\n"
+            "pfblockerng: {\n"
             f'  url: "{stale_url}",\n'
             "  mirror_type: none,\n"
             "  signature_type: none,\n"
@@ -2355,36 +2270,33 @@ def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, t
         if written.returncode != 0:
             raise RuntimeError(f"writing test conf failed: rc={written.returncode} {written.stderr!r}")
 
-        # ── BEFORE: assert the conf contains the STALE varver (not the real one) ──
+        # BEFORE: conf carries the stale varver, not the real one.
         url_before = _read_conf_url_on_guest(repo_vm, test_conf_path)
         assert stale_catalog in url_before, (
-            f"BEFORE: expected conf URL to contain stale catalog {stale_catalog!r}, got {url_before!r}"
+            f"BEFORE: expected stale catalog {stale_catalog!r} in url, got {url_before!r}"
         )
         assert real_catalog not in url_before, (
-            f"BEFORE: conf URL already contains the real catalog {real_catalog!r} — "
-            f"the stale state was not set up correctly"
+            f"BEFORE: conf url already contains the real catalog {real_catalog!r}: {url_before!r}"
         )
 
-        # ── WHEN: run the self-heal hook pointing at the test conf ───────────
-        hook_result = _run_selfheal_hook(
-            repo_vm,
-            release_conf=test_conf_path,
-            detect_helper=GUEST_DETECT_HELPER,
-        )
+        # WHEN: run the generator hook (file:// base) — it regenerates the conf.
+        hook_result = _run_generate_hook(repo_vm, release_conf=test_conf_path, base_url=base_url)
 
-        # ── AFTER: conf URL contains the REAL varver ─────────────────────────
+        # AFTER: conf url has the box's REAL varver (stale gone) + the canonical marker.
         url_after = _read_conf_url_on_guest(repo_vm, test_conf_path)
         assert real_catalog in url_after, (
-            f"AFTER: hook did not rewrite the conf — expected {real_catalog!r} in url, got {url_after!r}\n"
+            f"AFTER: hook did not regenerate to {real_catalog!r}, got {url_after!r}\n"
             f"Hook stdout:\n{hook_result.stdout}\nHook stderr:\n{hook_result.stderr}"
         )
         assert stale_catalog not in url_after, (
             f"AFTER: stale catalog {stale_catalog!r} still in conf url after hook ran: {url_after!r}"
         )
+        marker = _ssh_check(repo_vm, "grep", "-q", "Generated at boot by pfblockerng_repo_generate", test_conf_path)
+        assert marker.returncode == 0, "AFTER: regenerated conf is missing the marker line"
 
-        # ── AFTER: pkg update re-accepts the corrected conf ───────────────────
-        # Write the corrected conf to the SYSTEM conf path so pkg can read it.
+        # AFTER: the corrected conf resolves our package end-to-end (file:// catalog).
         # (pkg reads /usr/local/etc/pkg/repos/pfblockerng.conf, not our test path.)
+        pkg_delete(repo_vm)
         result_copy = subprocess.run(
             repo_vm.ssh_argv("cp", test_conf_path, REPO_CONF),
             capture_output=True,
@@ -2394,31 +2306,22 @@ def test_selfheal_hook_rewrites_stale_varver_and_pkg_updates(repo_vm: SmokeVM, t
         )
         if result_copy.returncode != 0:
             raise RuntimeError(f"copying corrected conf to {REPO_CONF} failed: {result_copy.stderr!r}")
-        pkg_update(repo_vm)  # must accept the corrected (real varver) conf
-
-        # ── AFTER: the package is still installed with all files present ───────
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
         installed_after = pkg_installed_version(repo_vm)
-        assert installed_after is not None, (
-            f"AFTER: package not installed after self-heal (expected version {installed_before!r})"
-        )
+        assert installed_after is not None, "AFTER: package not installed from the corrected conf"
         file_count = assert_all_pkg_files_present(repo_vm)
         assert file_count > 50, f"AFTER: only {file_count} registered files — implausibly few for pfBlockerNG"
 
-        # ── IDEMPOTENCE: run the hook again (match path — conf already correct) ──
-        # Write the test conf again with the CORRECT url (as the hook left it), then
-        # re-run the hook.  Since conf varver == box varver, the hook must be a no-op:
-        # exit 0, conf unchanged.
-        _run_selfheal_hook(
-            repo_vm,
-            release_conf=test_conf_path,
-            detect_helper=GUEST_DETECT_HELPER,
-        )
-        url_idempotent = _read_conf_url_on_guest(repo_vm, test_conf_path)
-        assert real_catalog in url_idempotent, (
-            f"IDEMPOTENCE: conf URL changed on second hook run — expected {real_catalog!r}, got {url_idempotent!r}"
+        # IDEMPOTENCE: a second run leaves the conf byte-identical (pure regenerate).
+        sha_before = _ssh_check(repo_vm, "sha256", "-q", test_conf_path).stdout.strip()
+        _run_generate_hook(repo_vm, release_conf=test_conf_path, base_url=base_url)
+        sha_after = _ssh_check(repo_vm, "sha256", "-q", test_conf_path).stdout.strip()
+        assert sha_before == sha_after, (
+            f"IDEMPOTENCE: conf changed on a second hook run ({sha_before!r} -> {sha_after!r})"
         )
 
     finally:
         pkg_delete(repo_vm)
-        repo_vm.ssh("/bin/rm", "-rf", SELFHEAL_DIR, selfheal_catalog_base, timeout=60.0)
+        repo_vm.ssh("/bin/rm", "-rf", GENERATE_DIR, timeout=60.0)
         # REPO_CONF is cleaned by the repo_vm module fixture teardown.

@@ -1,13 +1,19 @@
 #!/bin/sh
 # add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository on a pfSense
-# box (ADR-17 Phase 4, the client side). Run it ON the pfSense box. It detects
-# the box's pfSense edition/version/arch, writes a DIRECT, fully-resolved pkg(8)
-# repo conf under /usr/local/etc/pkg/repos/, installs the self-heal rc.d hook
-# (ADR-39), runs `pkg update`, and VERIFIES our package is visible from OUR
-# repo — after which
+# box (ADR-17 Phase 4, the client side). Run it ON the pfSense box. It installs
+# the boot-time repo-conf generator rc.d hook (ADR-39), stubs the repo conf so
+# the hook regenerates it for THIS box's edition/version/arch, runs the hook
+# once to resolve the conf now, then runs `pkg update` and VERIFIES our package
+# is visible from OUR repo — after which
 #   pkg install pfSense-pkg-pfBlockerNG-devel   (or -y, no -f, no -r)
 # resolves deps and installs our build, and the stock webConfigurator Install
 # pulls it too via cross-repo resolution (ADR §2; install is not repo-locked).
+#
+# WHY A HOOK DOES THE DETECTION: a pfSense OS upgrade can change the box's
+# edition/version/arch (which moves the catalog subtree). The rc.d hook
+# regenerates the conf every boot, so the URL self-corrects after an upgrade
+# with no work here. add-repo.sh therefore does NO detection itself — it installs
+# the hook and runs it; the hook is the single source of the resolved conf.
 #
 # CHANNELS
 #   Default (NO argument) sets up the RELEASE repo `pfblockerng` — one shared catalog
@@ -25,12 +31,10 @@
 #   default     -> conf /usr/local/etc/pkg/repos/pfblockerng.conf,         repo `pfblockerng`
 #   --nightly   -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf, repo `pfblockerng-nightly`
 #
-# THE CONF (single source of truth — matches `build-repo.sh --print-conf`):
-#   url:            Direct GitHub Pages URL, fully resolved at install time:
+# THE CONF (single source of truth — byte-identical to `build-repo.sh --print-conf`,
+# `build-repo-portable.py --print-conf`, and what the rc.d hook writes):
+#   url:            Direct GitHub Pages URL, fully resolved by the hook for this box:
 #                   https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>
-#                   where <varver>/<arch> are detected from the box (ADR-39).
-#                   On a pfSense OS upgrade the self-heal rc.d hook rewrites only
-#                   the <varver>/<arch> segment (see /usr/local/etc/rc.d/).
 #   mirror_type:    none.
 #   signature_type: none — NONE-signed; trust anchor is HTTPS to the host (no CI
 #                   signing key). pfSense honors per-repo `none` (ADR §1 Context 4).
@@ -40,7 +44,7 @@
 #                   build win. 100 clears pfSense's 0 with margin.
 #   enabled:        yes.
 #
-# IDEMPOTENT: re-running rewrites the conf and hook (safe to run again at any time).
+# IDEMPOTENT: re-running reinstalls the hook and re-runs it (safe at any time).
 #
 # Usage:
 #   add-repo.sh                       # set up the release repo (stable + devel), pkg update, verify
@@ -54,9 +58,7 @@
 #   PFBLOCKERNG_ROOT  filesystem root prefix (default: /); override in tests to
 #                     redirect conf/hook writes to a temp dir.
 #   PKG_BIN           pkg binary path (default: /usr/local/sbin/pkg); override
-#                     in tests to stub out pkg (conf write happens before any pkg call).
-#   PFB_GLOBALS_PLUS_INC / PFB_VERSION_FILE / PFB_PKG_CMD — overridable paths for
-#                     detect_variant.sh (see that file); used by tests for box mocking.
+#                     in tests to stub out pkg.
 
 set -eu
 
@@ -66,24 +68,25 @@ PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 
 # PFBLOCKERNG_ROOT: filesystem root prefix (tests override to a tmpdir).
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
-REPOS_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/etc/pkg/repos"
+ROOT="${PFBLOCKERNG_ROOT%/}"
+REPOS_DIR="${ROOT}/usr/local/etc/pkg/repos"
 
-# On-box installed paths for the detection helper and the self-heal hook.
-# These must be absolute paths on the target pfSense box.
-ON_BOX_RCD_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/etc/rc.d"
-ON_BOX_LIB_DIR="${PFBLOCKERNG_ROOT%/}/usr/local/lib/pfblockerng"
-ON_BOX_DETECT_HELPER="${ON_BOX_LIB_DIR}/detect_variant.sh"
-ON_BOX_HOOK="${ON_BOX_RCD_DIR}/pfblockerng_repo_selfheal.sh"
+# On-box installed path for the boot-time generator hook (no /lib helper — the
+# hook is fully self-contained; detection is folded in, ADR-39).
+ON_BOX_RCD_DIR="${ROOT}/usr/local/etc/rc.d"
+ON_BOX_HOOK="${ON_BOX_RCD_DIR}/pfblockerng_repo_generate.sh"
 
-# The detection helper and self-heal hook source scripts live next to this file.
-# Resolve relative to this script's directory so it works regardless of cwd.
+# The hook source script lives next to this file. Resolve relative to this
+# script's directory so it works regardless of cwd.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DETECT_VARIANT_SRC="${SCRIPT_DIR}/lib/detect_variant.sh"
-HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_selfheal.sh"
+HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 
 # Direct GitHub Pages catalog base (ADR-39; no Cloudflare Worker).
 DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
+
+# The marker the hook writes as the conf's first line (the verify target).
+CONF_MARKER="Generated at boot by pfblockerng_repo_generate"
 
 CHANNEL="release"
 PRINT_CONF=0
@@ -147,42 +150,18 @@ case "$CHANNEL" in
 esac
 CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
 
-# ── Variant detection (on-box) ─────────────────────────────────────────────────
-# Source the detection helper on demand (when CATALOG_PATH is not explicitly
-# provided). In tests, PFB_GLOBALS_PLUS_INC / PFB_VERSION_FILE / PFB_PKG_CMD
-# are injected via the environment; detect_variant.sh respects those overrides.
-_DETECT_SOURCED=0
-_source_detect_helper() {
-    if [ "${_DETECT_SOURCED}" -eq 0 ]; then
-        # shellcheck disable=SC1090
-        . "${DETECT_VARIANT_SRC}"
-        _DETECT_SOURCED=1
-    fi
-}
-
-# Resolve the <varver>/<arch> catalog path: explicit --catalog-path wins (tests/forks);
-# otherwise source the helper and detect from the live box.
-detect_catalog() {
-    if [ -n "${CATALOG_PATH}" ]; then
-        printf '%s' "${CATALOG_PATH}"
-    else
-        _source_detect_helper
-        pfb_detect_catalog
-    fi
-}
-
-# ── The conf body (single source of truth; matches build-repo.sh --print-conf) ──
-# $1 = fully-resolved URL (no trailing slash).
-# The URL is a STATIC, directly-resolved string — no ${ABI} token anywhere.
-# One run of add-repo.sh writes one resolved conf for this box's edition/version/arch.
-# The self-heal rc.d hook rewrites only the <varver>/<arch> segment on a pfSense
-# OS upgrade (ADR-39).
+# ── The conf body (single source of truth; byte-identical to the hook + the
+#    build-repo[-portable] --print-conf generators) ──────────────────────────────
+# $1 = fully-resolved URL (no trailing slash). The URL is a STATIC, directly-resolved
+# string — no ${ABI} token. One run writes one resolved conf for this box's variant.
+# The boot rc.d hook regenerates it on a pfSense OS upgrade (ADR-39).
 print_conf() {
     _pc_url="${1%/}"
     cat <<EOF
+# ${CONF_MARKER} (ADR-39) — do not edit; re-run add-repo.sh to change.
 # pfBlockerNG (${CHANNEL} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# fully resolved for this box's edition/version/arch (ADR-39); the boot
 # rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects our build.
@@ -197,9 +176,10 @@ EOF
 }
 
 # ── --print-conf: emit and exit, no side effects (the test + a dry-run use this) ─
+# A resolved URL needs --catalog-path <varver>/<arch> (the live bootstrap leaves
+# detection to the hook; --print-conf is a documentation/dry-run aid).
 if [ "$PRINT_CONF" -eq 1 ]; then
-    _catalog="$(detect_catalog)"
-    _url="${BASE_URL%/}/${CHANNEL}/${_catalog}"
+    _url="${BASE_URL%/}/${CHANNEL}/${CATALOG_PATH}"
     print_conf "${_url}"
     exit 0
 fi
@@ -210,38 +190,51 @@ command -v "$PKG_BIN" >/dev/null 2>&1 || {
     exit 1
 }
 
-# Resolve the catalog path from the live box (sources detect_variant.sh on demand).
-CATALOG="$(detect_catalog)"
-RESOLVED_URL="${BASE_URL%/}/${CHANNEL}/${CATALOG}"
-
-printf '==> Writing %s repo conf to %s\n' "${CHANNEL}" "${CONF_PATH}"
-mkdir -p "${REPOS_DIR}"
-# Rewrite unconditionally => idempotent (a re-run refreshes the conf in place).
-print_conf "${RESOLVED_URL}" > "${CONF_PATH}"
-
-# ── Install the self-heal rc.d hook and detection helper ──────────────────────
-printf '==> Installing self-heal hook to %s\n' "${ON_BOX_HOOK}"
+# 1. Install the boot-time generator rc.d hook (the only file we install).
+printf '==> Installing boot-time generator hook to %s\n' "${ON_BOX_HOOK}"
 mkdir -p "${ON_BOX_RCD_DIR}"
-mkdir -p "${ON_BOX_LIB_DIR}"
-
-# Install the detection helper so the hook can source it on-box.
-cp "${DETECT_VARIANT_SRC}" "${ON_BOX_DETECT_HELPER}"
-chmod 644 "${ON_BOX_DETECT_HELPER}"
-
-# Install the self-heal rc.d hook from the source tree.
 cp "${HOOK_SRC}" "${ON_BOX_HOOK}"
 chmod 755 "${ON_BOX_HOOK}"
-printf '==> Self-heal hook installed: %s\n' "${ON_BOX_HOOK}"
-printf '==> Detection helper installed: %s\n' "${ON_BOX_DETECT_HELPER}"
 
+# 2. Stub the conf so the hook regenerates it (the hook only rewrites confs that
+#    already exist — an absent channel stays absent). The stub is overwritten in
+#    place by the hook in step 3; it is left intact only if detection fails, in
+#    which case the marker check below fails loud.
+printf '==> Staging %s conf at %s (hook will resolve it)\n' "${CHANNEL}" "${CONF_PATH}"
+mkdir -p "${REPOS_DIR}"
+printf '# pfBlockerNG %s repo conf — pending boot-time generation (ADR-39).\n' "${CHANNEL}" > "${CONF_PATH}"
+
+# 3. Run the hook once now to resolve the conf for THIS box (it also runs every
+#    boot via rc.d). Pass the box paths explicitly so a non-default
+#    PFBLOCKERNG_ROOT (tests) and --base-url (forks/staging) are honored.
+printf '==> Running the generator hook to resolve the conf now\n'
+PFB_RELEASE_CONF="${REPOS_DIR}/pfblockerng.conf" \
+PFB_NIGHTLY_CONF="${REPOS_DIR}/pfblockerng-nightly.conf" \
+PFB_BASE_URL="${BASE_URL}" \
+PFB_PKG_BIN="${PKG_BIN}" \
+PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
+PFB_VERSION_FILE="${ROOT}/etc/version" \
+    sh "${ON_BOX_HOOK}" onestart || true
+
+# 4. Verify the hook resolved the conf (the marker line is present). If detection
+#    failed the stub from step 2 survives (no marker) — fail loud.
+if ! grep -q "${CONF_MARKER}" "${CONF_PATH}" 2>/dev/null; then
+    printf 'add-repo: the generator hook did not resolve %s (no marker line).\n' "${CONF_PATH}" >&2
+    printf '  Variant detection may have failed. Inspect: sh %s onestart\n' "${ON_BOX_HOOK}" >&2
+    exit 1
+fi
+printf '==> Conf resolved:\n'
+sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
+
+# 5. pkg update (refresh catalogs, including our repo).
 printf '==> pkg update (refreshing catalogs, including our repo)\n'
 env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null
 
-# VERIFY a pfBlockerNG package is visible FROM OUR repo (not merely that pkg update
-# ran). `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit means our catalog
-# loaded and carries the package. The release repo carries two packages (stable may not
-# be published yet) — finding EITHER proves the repo loaded; nightly carries one. Exit
-# non-zero (fail loud) only if NONE is present.
+# 6. VERIFY a pfBlockerNG package is visible FROM OUR repo (not merely that pkg
+#    update ran). `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit
+#    means our catalog loaded and carries the package. The release repo carries
+#    two (stable may not be published yet) — finding EITHER proves the repo
+#    loaded; nightly carries one. Exit non-zero (fail loud) only if NONE present.
 printf '==> Verifying pfBlockerNG package(s) are visible from repo '\''%s'\''\n' "${REPO_NAME}"
 found_any=0
 # Word-splitting the space-separated package list is intentional.
