@@ -901,7 +901,7 @@ prompt file + parser are reused). **Nightly builds get no GitHub Release.**
 simulate (e.g. `v4.0.0.alpha.1`) with `dry_run=true` (default) to validate the scheme, build the
 `.pkg` artifacts, and render the body (the GitHub Models draft runs — no secret needed — and the
 real body shows in the run summary) — **publishing nothing** (no Release, port bump, pkg-repo poke,
-Worker deploy, or notes persist). Dispatchable only from the default branch once merged.
+or notes persist). Dispatchable only from the default branch once merged.
 
 ### Self-hosted `pkg` repository (ADR-17)
 
