@@ -19,7 +19,7 @@
 # OVERRIDABLE PATHS (set before sourcing, or export before calling):
 #   PFB_GLOBALS_PLUS_INC  — path to globals.plus.inc (default: /etc/inc/globals.plus.inc)
 #   PFB_VERSION_FILE      — path to /etc/version     (default: /etc/version)
-#   PFB_PKG_CMD           — pkg binary                (default: pkg)
+#   PFB_PKG_CMD           — pkg binary                (default: /usr/local/sbin/pkg)
 #
 # These knobs exist solely for testing (fixture injection); production code leaves
 # them unset so the real system paths are used.
@@ -31,7 +31,7 @@
 # ── Detection defaults (overridable for tests) ─────────────────────────────── #
 : "${PFB_GLOBALS_PLUS_INC:=/etc/inc/globals.plus.inc}"
 : "${PFB_VERSION_FILE:=/etc/version}"
-: "${PFB_PKG_CMD:=pkg}"
+: "${PFB_PKG_CMD:=/usr/local/sbin/pkg}"
 
 # pfb_detect_edition — prints "Plus" if globals.plus.inc is present, else "CE".
 #   Detection method: [ -f <path> ] as confirmed live in ADR-20 Phase 1 (2026-06-09).
