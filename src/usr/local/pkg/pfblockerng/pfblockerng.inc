@@ -31,6 +31,9 @@ require_once('service-utils.inc');
 if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc')) {
 	require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');	// 'include functions' not yet merged into pfSense
 }
+if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc')) {
+	require_once('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc');	// ADR-35: firewall-object ownership/marker layer
+}
 
 define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
 
