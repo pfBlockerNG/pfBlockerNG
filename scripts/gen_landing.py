@@ -222,7 +222,7 @@ header h1{margin:0 0 .25rem;font-size:2rem}
 header p{margin:0;color:var(--mut)}
 h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);padding-bottom:.4rem}
 h3{margin:1.6rem 0 .5rem;font-size:1.05rem}
-.cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.cards{display:grid;gap:1rem;grid-template-columns:1fr}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
 .card h3{margin:0 0 .15rem;font-size:1.1rem}
 .card .ver{color:var(--mut);font-size:.9rem;margin:0 0 .6rem}
