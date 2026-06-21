@@ -99,9 +99,19 @@ catalog — add our self-hosted FreeBSD `pkg` repository
 [ADR-20](.ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md)). It resolves dependencies
 normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
 
+From a **checkout** (over SSH, cloned onto the box):
+
 ```sh
 ./scripts/add-repo.sh                       # adds the shared `pfblockerng` repo (stable + devel)
 pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
+```
+
+Or run the **published one-file bootstrap** (no checkout needed — safe to pipe; the hook
+is embedded so it works when the script is not run from a file on disk):
+
+```sh
+fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh
+pkg install pfSense-pkg-pfBlockerNG-devel
 ```
 
 `add-repo.sh` with no argument installs a small boot-time `rc.d` hook
@@ -143,7 +153,8 @@ channel — a distinct package `pfSense-pkg-pfBlockerNG-nightly` served from a
 `nightly/` catalog subtree:
 
 ```sh
-./scripts/add-repo.sh --nightly
+./scripts/add-repo.sh --nightly             # from a checkout, or:
+# fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --nightly
 pkg install pfSense-pkg-pfBlockerNG-nightly
 ```
 

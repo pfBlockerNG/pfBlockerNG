@@ -195,4 +195,30 @@ Phase 3 deliverables per 03_Retire_Worker_And_Metapkg.txt:
   - Update build-repo-portable.py routing logic if the Worker is removed.
   - CI / smoke test wiring for the self-heal hook (if applicable).
 
+
+## 10. Post-ADR follow-up — piped-invocation fix (branch fix/add-repo-embed-hook)
+
+The Phase-2 note above ("add-repo.sh installs the hook via `cp` — the hook lives as a
+standalone file") describes the checkout case correctly, but the published one-file
+bootstrap breaks when piped: `$0` is `sh` (not the script path), so
+`dirname "$0"` resolves to the shell's directory (`/root`, `/tmp`, etc.) and
+`HOOK_SRC` points at a non-existent path → `cp` fails with "No such file or directory".
+
+Fix committed on branch fix/add-repo-embed-hook:
+
+  scripts/add-repo.sh        — pfb_emit_embedded_hook() stub; install block now
+                               `if [ -f "${HOOK_SRC}" ]; then cp ...; else emit > ...; fi`
+  scripts/gen_landing.py     — write_add_repo() splices the hook via a single-quoted
+                               heredoc between PFB_EMBED_{BEGIN,END} markers;
+                               write_site() calls it → site/add-repo.sh is self-contained
+  tests/test_gen_landing.py  — BDD test: pipes published add-repo.sh via stdin to sh,
+                               asserts hook installed + conf written with the marker
+
+Public landing page one-liners updated from:
+  fetch -qo - https://raw.githubusercontent.com/.../scripts/add-repo.sh | sh
+to:
+  fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh
+
+(self-hosted, self-contained, always in sync with the published catalog).
+
 Phase 3 is NOT blocked on any Phase 2 item.

@@ -81,6 +81,19 @@ ON_BOX_HOOK="${ON_BOX_RCD_DIR}/pfblockerng_repo_generate.sh"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 
+# pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
+# copy this is a STUB that fails loud: the standalone scripts/rc.d/pfblockerng_repo_generate.sh
+# is the source of truth, used directly from a checkout. The website build (gen_landing.py)
+# replaces the body between the PFB_EMBED markers with the hook in a single-quoted heredoc,
+# producing the one-file add-repo.sh served at <base>/add-repo.sh for `fetch | sh`.
+pfb_emit_embedded_hook() {
+    # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by gen_landing.py at website-build time.
+    printf 'add-repo: no embedded hook in this copy. Run from a checkout, or use the\n' >&2
+    printf '  published one-file bootstrap: fetch -qo - %s/add-repo.sh | sh\n' "${DEFAULT_BASE_URL}" >&2
+    return 1
+    # PFB_EMBED_HOOK_END
+}
+
 # Direct GitHub Pages catalog base (ADR-39; no Cloudflare Worker).
 DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
@@ -194,10 +207,16 @@ command -v "$PKG_BIN" >/dev/null 2>&1 || {
     exit 1
 }
 
-# 1. Install the boot-time generator rc.d hook (the only file we install).
+# 1. Install the boot-time generator rc.d hook (the only file we install). From a git
+#    checkout the hook is the sibling file (HOOK_SRC); the published one-file bootstrap
+#    (served at <base>/add-repo.sh) carries it embedded — see pfb_emit_embedded_hook.
 printf '==> Installing boot-time generator hook to %s\n' "${ON_BOX_HOOK}"
 mkdir -p "${ON_BOX_RCD_DIR}"
-cp "${HOOK_SRC}" "${ON_BOX_HOOK}"
+if [ -f "${HOOK_SRC}" ]; then
+    cp "${HOOK_SRC}" "${ON_BOX_HOOK}"
+else
+    pfb_emit_embedded_hook > "${ON_BOX_HOOK}"
+fi
 chmod 755 "${ON_BOX_HOOK}"
 
 # 2. Stub the conf so the hook regenerates it (the hook only rewrites confs that
