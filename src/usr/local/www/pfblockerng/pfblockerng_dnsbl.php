@@ -23,6 +23,9 @@
 require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc')) {
+	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc');
+}
 
 global $pfb;
 pfb_global();
@@ -126,6 +129,12 @@ $pconfig['tldblacklist']	= base64_decode($pfb['dconfig']['tldblacklist'])	?: '';
 $pconfig['safesearch_doh']		= PfbConfig::read('safesearch_doh');
 $pconfig['safesearch_doh_list']		= explode(',', PfbConfig::read('safesearch_doh_list'));
 
+// [ ADR-36 ] DNS Redirect — stored in pfblockerngdnsblsettings; read via gateway.
+$pconfig['dnsbl_redir']			= PfbConfig::read('dnsbl_redir');
+$pfb_redir_int_raw			= (string) PfbConfig::read('dnsbl_redir_int');
+$pconfig['dnsbl_redir_int']		= ($pfb_redir_int_raw !== '') ? explode(',', $pfb_redir_int_raw) : [];
+$pconfig['dnsbl_redir_exclude']		= (string) PfbConfig::read('dnsbl_redir_exclude');
+
 // Select field options
 
 $options_dnsbl_interface	= pfb_build_if_list(FALSE, FALSE);
@@ -133,6 +142,9 @@ $options_dnsbl_interface_all	= array_merge(array('lo0' => 'Localhost'), $options
 $options_dnsbl_interface_cnt	= count($options_dnsbl_interface) ?: '1';
 
 $options_dnsbl_allow_int	= $options_dnsbl_interface;
+
+// [ ADR-36 ] DNS Redirect: WAN-excluded interface list (same filter as Permit Firewall Rules).
+$options_dnsbl_redir_int	= $options_dnsbl_interface;
 
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
@@ -699,6 +711,18 @@ if ($_POST) {
 			$_POST['safesearch_doh_list'] = '';
 		}
 
+		// [ ADR-36 ] Validate DNS Redirect fields.
+		$redir_ifaces_raw = (array)($_POST['dnsbl_redir_int'] ?? []);
+		$redir_alias_raw  = trim((string)($_POST['dnsbl_redir_exclude'] ?? ''));
+		if (function_exists('pfb_validate_dns_redirect_post')) {
+			$redir_errors = pfb_validate_dns_redirect_post(
+				$redir_ifaces_raw,
+				array_keys($options_dnsbl_redir_int),
+				$redir_alias_raw
+			);
+			$input_errors = array_merge($input_errors, $redir_errors);
+		}
+
 		if (!$input_errors) {
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -817,6 +841,11 @@ if ($_POST) {
 			// Save DoH/DoT/DoQ blocking fields via gateway (registered keys in pfblockerngsafesearch)
 			PfbConfig::write('safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
 			PfbConfig::write('safesearch_doh_list', implode(',', (array)$_POST['safesearch_doh_list']) ?: '');
+
+			// [ ADR-36 ] Save DNS Redirect fields via gateway (registered keys in pfblockerngdnsblsettings)
+			PfbConfig::write('dnsbl_redir', pfb_filter($_POST['dnsbl_redir'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+			PfbConfig::write('dnsbl_redir_int', implode(',', $redir_ifaces_raw));
+			PfbConfig::write('dnsbl_redir_exclude', $redir_alias_raw);
 
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
@@ -2747,6 +2776,58 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
+// [ ADR-36 ] DNS Redirect section — placed adjacent to the DoH/DoT/DoQ section.
+// Redirects outbound port-53 DNS traffic on the selected interfaces to the
+// firewall's own resolver. DoH/DoT bypass is NOT covered.
+$section = new Form_Section('DNS Redirect');
+
+$group = new Form_Group('DNS Redirect');
+$group->add(new Form_Checkbox(
+	'dnsbl_redir',
+	NULL,
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['dnsbl_redir']) === PfbToggle::On,
+	'on'
+))->setWidth(7)
+  ->setHelp('Redirects outbound port-53 DNS traffic on the selected interface(s) to the firewall\'s own resolver.<br />'
+		. 'Keeps clients on the local DNS resolver so DNSBL stays effective.<br />'
+		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the section above for that).');
+
+// [ ADR-36 ] Build the quick-fill interface union (inbound + outbound from IP settings).
+// These are the pfBlockerNG firewall-rule interfaces; the quick-fill populates the
+// DNS Redirect select to match that set with one click.
+$pfb_ipconfig_raw = config_get_path('installedpackages/pfblockerngipsettings/config/0', []);
+$pfb_redir_fill_ifaces = array_unique(array_filter(array_merge(
+	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['inbound_interface'] ?? ''))),
+	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['outbound_interface'] ?? '')))
+)));
+// Restrict to only interfaces present in the DNS Redirect option list.
+$pfb_redir_fill_ifaces = array_values(array_intersect($pfb_redir_fill_ifaces, array_keys($options_dnsbl_redir_int)));
+$pfb_redir_fill_json   = json_encode($pfb_redir_fill_ifaces);
+
+$group->add(new Form_Select(
+	'dnsbl_redir_int',
+	NULL,
+	$pconfig['dnsbl_redir_int'],
+	$options_dnsbl_redir_int,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', $options_dnsbl_interface_cnt);
+$group->setHelp('<a href="#" id="pfb_redir_fill" onclick="pfb_redir_fill_interfaces(); return false;">'
+	. 'Fill from IP Interfaces</a> — select the union of pfBlockerNG Inbound + Outbound interfaces.');
+$section->add($group);
+
+$section->addInput(new Form_Input(
+	'dnsbl_redir_exclude',
+	gettext('Exception Alias'),
+	'text',
+	$pconfig['dnsbl_redir_exclude'],
+	['placeholder' => 'Firewall alias name (optional)']
+))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DNS redirect.<br />'
+		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a>.');
+
+$form->add($section);
+
 $section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
@@ -3309,6 +3390,18 @@ var networksarray = nlist.split(',');
 
 // Disable GeoIP/ASN Autocomplete as not required for the DNSBL page
 var geoiparray = 'disabled';
+
+// [ ADR-36 ] DNS Redirect quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
+// When clicked, selects those interfaces in the #dnsbl_redir_int multi-select.
+var pfb_redir_fill_ifaces = <?=$pfb_redir_fill_json?>;
+
+function pfb_redir_fill_interfaces() {
+	var $sel = $('#dnsbl_redir_int');
+	$sel.find('option').prop('selected', false);
+	$.each(pfb_redir_fill_ifaces, function(i, val) {
+		$sel.find('option[value="' + val + '"]').prop('selected', true);
+	});
+}
 
 // [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so
 // the "Create VIPs automatically" checkbox can pre-fill the (display-only) VIP fields.

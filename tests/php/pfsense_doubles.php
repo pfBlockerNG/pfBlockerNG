@@ -675,3 +675,25 @@ if (!function_exists('where_is_ipaddr_configured')) {
 		return [];
 	}
 }
+
+if (!function_exists('is_validaliasname')) {
+	// pfSense util.inc: alias names are alphanumeric + underscore, max 32 chars,
+	// must not start with a digit.
+	function is_validaliasname($name, $return_message = false, $object = 'alias') {
+		if (!is_string($name) || $name === '') {
+			return FALSE;
+		}
+		if (strlen($name) > 32) {
+			return FALSE;
+		}
+		return (bool) preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name);
+	}
+}
+
+if (!function_exists('get_configured_interface_with_descr')) {
+	// pfSense interfaces.inc: returns a map of interface_name => friendly description.
+	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.
+	function get_configured_interface_with_descr($all = FALSE, $filter = FALSE) {
+		return $GLOBALS['pfb_test_interfaces'] ?? [];
+	}
+}

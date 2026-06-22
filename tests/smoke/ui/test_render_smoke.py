@@ -69,7 +69,12 @@ PAGE_TABLE: tuple[Page, ...] = (
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
     Page("ip", "/pfblockerng/pfblockerng_ip.php", ("IP Configuration", "ASN configuration", "Aggregated Aliases")),
-    Page("dnsbl", "/pfblockerng/pfblockerng_dnsbl.php", ("DNSBL Webserver Configuration", "DNSBL Configuration")),
+    # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
+    Page(
+        "dnsbl",
+        "/pfblockerng/pfblockerng_dnsbl.php",
+        ("DNSBL Webserver Configuration", "DNSBL Configuration", "DNS Redirect"),
+    ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
     # StaticText label ("IPv4 Alias name(s):" etc.), which renders ONLY for the active

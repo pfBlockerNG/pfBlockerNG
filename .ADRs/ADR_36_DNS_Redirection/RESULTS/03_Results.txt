@@ -1,0 +1,180 @@
+ADR-36 Phase 3 — DNS Redirect UI + server-side validation
+==========================================================
+Date: 2026-06-22
+Implementer: Claude Sonnet 4.6
+
+--------------------------------------------------------------------------------
+HTML INPUT NAMES (for the smoke harness)
+--------------------------------------------------------------------------------
+  dnsbl_redir         — enable checkbox (value 'on'; absent = off)
+  dnsbl_redir_int[]   — interface multi-select (PHP/HTML multi-select: name="dnsbl_redir_int[]")
+                         NOTE: pfSense's Form_Select renders the name as 'dnsbl_redir_int'
+                         and PHP receives it as $_POST['dnsbl_redir_int'] (array when multiple)
+  dnsbl_redir_exclude — exception alias free-text input
+
+--------------------------------------------------------------------------------
+UI PLACEMENT
+--------------------------------------------------------------------------------
+New Form_Section('DNS Redirect') inserted immediately after the
+'DNS over HTTPS/TLS/QUIC Blocking' section (after line ~2776 in the pre-phase file).
+
+Structure (mirrors 'Permit Firewall Rules' Form_Group pattern at :2922):
+  Form_Group('DNS Redirect'):
+    Form_Checkbox  'dnsbl_redir'      — Enable checkbox + 3-line help
+    Form_Select    'dnsbl_redir_int'  — WAN-excluded interface multi-select
+  Group help: 'Fill from IP Interfaces' quick-fill link
+  Form_Input     'dnsbl_redir_exclude' — Exception alias text field + help
+
+--------------------------------------------------------------------------------
+QUICK-FILL MECHANISM
+--------------------------------------------------------------------------------
+JavaScript-driven. PHP emits a JSON array $pfb_redir_fill_json (union of
+pfblockerngipsettings inbound_interface + outbound_interface, intersected with
+$options_dnsbl_redir_int keys). A 'Fill from IP Interfaces' link in the group
+help calls pfb_redir_fill_interfaces() which sets the selected state of
+#dnsbl_redir_int options to match that union.
+
+JS variable: var pfb_redir_fill_ifaces = [/* PHP-emitted JSON */];
+JS function: pfb_redir_fill_interfaces() — clears all selections, then selects
+             each interface in pfb_redir_fill_ifaces.
+Link: <a href="#" id="pfb_redir_fill" onclick="pfb_redir_fill_interfaces(); return false;">
+      Fill from IP Interfaces</a>
+
+--------------------------------------------------------------------------------
+VALIDATOR FUNCTION
+--------------------------------------------------------------------------------
+New function: pfb_validate_dns_redirect_post() in pfblockerng_dns_redirect.inc
+
+Signature:
+  function pfb_validate_dns_redirect_post(
+      array  $posted_ifaces,    // interface names from POST multi-select
+      array  $valid_iface_list, // keys of pfb_build_if_list(FALSE, FALSE)
+      string $posted_alias      // exception alias from POST text input
+  ): array (string[])           // empty = all valid
+
+Logic:
+  — Each interface in $posted_ifaces must be in_array($valid_iface_list).
+    If not: 'DNS Redirect: Invalid interface selection: <htmlspecialchars(name)>'
+  — $posted_alias non-empty: must pass is_validaliasname().
+    If not: 'DNS Redirect: Invalid exception alias name: <htmlspecialchars(alias)>'
+
+Called from the POST handler in pfblockerng_dnsbl.php before any PfbConfig::write().
+The function_exists() guard keeps the page functional if the .inc is absent.
+
+--------------------------------------------------------------------------------
+scopeFunctions — NOT CHANGED
+--------------------------------------------------------------------------------
+PFBL-01 (RequirePfbFilter sniff) is scoped to pfblockerng.inc ONLY.
+pfb_validate_dns_redirect_post() is defined in pfblockerng_dns_redirect.inc
+(out of PFBL-01 scope). The POST handler code that calls it is in
+pfblockerng_dnsbl.php (also out of PFBL-01 scope).
+No scopeFunctions change needed. PFBL-01 clean.
+
+--------------------------------------------------------------------------------
+REQUIRE_ONCE WIRING
+--------------------------------------------------------------------------------
+pfblockerng_dnsbl.php loads pfblockerng_dns_redirect.inc at the top:
+  if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc')) {
+      require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc');
+  }
+The POST handler and pconfig reads use function_exists() / isset() guards
+where appropriate for graceful degradation.
+
+--------------------------------------------------------------------------------
+ADR-14 ui_render GATE
+--------------------------------------------------------------------------------
+PENDING — requires SMOKE_ADMIN_PASSWORD and a live pfSense VM.
+
+pfblockerng_dnsbl.php is already covered by the ui_render tier in
+tests/smoke/ui/test_render_smoke.py (Page "dnsbl"). The marker tuple has been
+updated from ("DNSBL Webserver Configuration", "DNSBL Configuration") to
+("DNSBL Webserver Configuration", "DNSBL Configuration", "DNS Redirect") to
+assert the new section title renders.
+
+The new control block introduces no PHP error/warning (php -l clean; PHPStan clean).
+The ui_render test will verify GET /pfblockerng/pfblockerng_dnsbl.php → HTTP 200,
+no Fatal/Parse/Warning/Notice/Uncaught, and "DNS Redirect" present in body,
+once run against the live VM with SMOKE_ADMIN_PASSWORD set.
+
+Reason pending: no live VM / SMOKE_ADMIN_PASSWORD available locally.
+CI will run this via ui-tests.yml on the PR.
+
+--------------------------------------------------------------------------------
+VALIDATOR TESTS — DnsRedirectValidatorTest.php
+--------------------------------------------------------------------------------
+File: tests/php/DnsRedirectValidatorTest.php (new file, 8 test methods, 20 assertions)
+
+Valid cases (empty $errors):
+  a. testValidInterfaceInAllowListIsAccepted         — 'lan' in allow-list → []
+  b. testEmptyInterfaceListIsAccepted                — [] interfaces → []
+  c. testEmptyExceptionAliasIsAccepted               — empty alias → []
+  d. testValidAliasNameIsAccepted                    — 'DNS_Whitelist' → []
+  e. testMultipleValidInterfacesAreAccepted          — lan+opt1+wireguard → []
+
+Invalid cases (non-empty $errors; no PfbConfig::write called):
+  f. testInterfaceNotInAllowListIsRejected           — 'evil; rm -rf /' → 1 error
+  g. testAliasNameWithSpaceIsRejected                — 'bad alias name' → 1 error
+  h. testAliasNameWithShellSpecialCharIsRejected     — 'alias;reboot' → 1 error
+  i. testMixedValidAndInvalidInterfaceIsRejected     — lan+unknown_iface → 1 error
+  j. testBothInterfaceAndAliasInvalidProducesTwoErrors — both invalid → 2 errors
+
+All tests assert before-state (valid accepted first, then invalid submitted).
+
+is_validaliasname() double added to tests/php/pfsense_doubles.php:
+  Faithful pfSense implementation: ^[a-zA-Z_][a-zA-Z0-9_]*$, max 32 chars.
+
+get_configured_interface_with_descr() double also added to pfsense_doubles.php
+(needed by pfb_build_if_list() when called from tests; reads $GLOBALS['pfb_test_interfaces']).
+
+--------------------------------------------------------------------------------
+FILES CHANGED
+--------------------------------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc
+  + pfb_validate_dns_redirect_post()   [new validator function]
+
+src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+  + require_once for pfblockerng_dns_redirect.inc
+  + pconfig reads for dnsbl_redir / dnsbl_redir_int / dnsbl_redir_exclude
+  + $options_dnsbl_redir_int / $pfb_redir_fill_ifaces / $pfb_redir_fill_json
+  + DNS Redirect validation block in POST handler
+  + PfbConfig::write() calls for the 3 new fields
+  + Form_Section('DNS Redirect') UI block + Form_Group + Form_Input
+  + pfb_redir_fill_interfaces() JS function + pfb_redir_fill_ifaces JS variable
+
+tests/php/pfsense_doubles.php
+  + is_validaliasname() faithful double
+  + get_configured_interface_with_descr() off-appliance double
+
+tests/php/DnsRedirectValidatorTest.php  (NEW)
+
+tests/smoke/ui/test_render_smoke.py
+  + "DNS Redirect" added to DNSBL page marker tuple
+
+NO changes to pfb_build_dns_redirect_rules() or pfb_sync_dns_redirect_rules()
+(Phase 2 locked).
+
+--------------------------------------------------------------------------------
+VERIFICATION NUMBERS
+--------------------------------------------------------------------------------
+php -l:       All touched files — no syntax errors
+PHPUnit:      1210 tests (was 1200 + 10 new), all passing; 31 pre-existing warnings
+PHPStan:      No errors
+PHPCS:        Clean (PFBL-01 + ADR-28 UppercaseBooleanLiteral + ADR-29
+              RequireConfigGateway — no violations)
+pytest:       1930 passed, 2 skipped — no regressions
+ruff check:   All checks passed
+ruff format:  127 files already formatted
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 4
+--------------------------------------------------------------------------------
+Phase 3 complete. All gates green.
+
+Phase 4 can proceed (Smoke test + ADR-35 integration):
+  - Add live-VM smoke test for the DNS redirect rules (pf NAT rdr rules present
+    when enabled, absent when disabled; exception alias branch).
+  - The sync wiring (pfb_sync_dns_redirect_rules called in sync_package_pfblockerng)
+    is already in place from Phase 2.
+  - UI input names for smoke config: dnsbl_redir, dnsbl_redir_int, dnsbl_redir_exclude.
+
+ADR-RESUME: branch=adr/36-dns-redirection next-phase=4
