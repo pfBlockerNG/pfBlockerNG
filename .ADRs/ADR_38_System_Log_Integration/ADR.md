@@ -1,6 +1,6 @@
 # ADR-38: Integrated syslog export of pfBlockerNG security events
 
-- **Status:** **Proposed** (2026-06-20)
+- **Status:** **Implemented (pending smoke fan-out)** (2026-06-22)
 - **Date:** 2026-06-20
 - **Branch:** `adr/38-system-log-integration` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
