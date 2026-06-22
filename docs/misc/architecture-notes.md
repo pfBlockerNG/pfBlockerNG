@@ -380,3 +380,19 @@ two registrations, demonstrating the seam. User objects (no pfB marker) are **ne
 remove or sweep — asserted by unit tests that seed sibling user rows and prove they survive.
 
 Live-VM smoke: `tests/smoke/test_smoke_fwobj.py` (marker `smoke`).
+
+## Optional NAT DNS-redirection (ADR-36)
+
+When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules per
+selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`,
+target `::1:53`) — that redirect all outbound port-53 DNS traffic to the firewall's own
+resolver. The firewall itself is structurally exempt: every generated rule carries a negated
+`(self)` destination so the firewall's own outbound DNS queries are never intercepted, making
+upstream resolution immune to the redirect. All four config.xml entries per interface (2 NAT
+rdr + 2 associated filter PASS rules) carry a `pfB_DNS_Redirect_<iface>_{v4,v6}` marker and
+are registered via `pfb_fwobj_register()` (ADR-35), so the reconcile / remove / sweep
+machinery handles their full lifecycle without bespoke teardown code. The feature is
+complementary to DoH/DoT domain-level NXDOMAIN blocking (DNSBL feeds) and to ADR-37's
+port-853 blocking: this ADR closes only the plaintext port-53 bypass path.
+
+Live-VM smoke: `tests/smoke/test_dns_redirect.py` (marker `smoke`).
