@@ -697,3 +697,15 @@ if (!function_exists('get_configured_interface_with_descr')) {
 		return $GLOBALS['pfb_test_interfaces'] ?? [];
 	}
 }
+
+// --- ADR-38 Phase 3 doubles ---
+
+if (!function_exists('system_syslogd_start')) {
+	// pfSense syslog.inc: (re)start syslogd, processing package <logging> elements
+	// to add extra sockets and routing drop-ins.  Off-appliance this is a no-op:
+	// we never assert syslogd restarts in the unit-test suite (that is the live-VM
+	// smoke's job).  The call in pfblockerng_install.inc therefore resolves safely.
+	function system_syslogd_start(bool $sighup = false): void {
+		// No-op off-appliance.
+	}
+}

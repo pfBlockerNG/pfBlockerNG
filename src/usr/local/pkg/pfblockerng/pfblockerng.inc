@@ -9353,6 +9353,52 @@ function pfb_daemon_filterlog() {
 				}
 				@file_put_contents("{$iplog}", "{$log},{$details},{$dup_entry}\n", FILE_APPEND | LOCK_EX);
 
+				// ADR-38 §2.1: emit one syslog record per CSV line when the toggle is on.
+				// The toggle is cached by pfb_syslog_event() (static, read once per process).
+				// Build the field array only when log_syslog is enabled; skip otherwise.
+				// Emitted EXACTLY ONCE here — not again for the unified-log copy below.
+				if (PfbConfig::read('log_syslog') === PfbToggle::On) {
+					// Map $d[6] back to the canonical act value.
+					// At this point $d[6] is 'block'|'pass'|'unkn(%u)' (match was reversed).
+					$pfb_syslog_act = ($d[6] === 'unkn(%u)') ? 'match' : $d[6];
+					if ($d[8] == 4) {
+						$pfb_syslog_fields = [
+							'act'   => $pfb_syslog_act,
+							'dir'   => $dir,
+							'if'    => $int,
+							'proto' => $d[16],
+							'src'   => $d[18],
+							'dst'   => $d[19],
+							'sport' => $d[20],
+							'dport' => $d[21],
+							'ipver' => '4',
+							'geoip' => $geoip,
+							'alias' => $pfb_alias,
+							'feed'  => $pfb_query[0],
+							'host'  => $resolved_host,
+							'asn'   => $asn,
+						];
+					} else {
+						$pfb_syslog_fields = [
+							'act'   => $pfb_syslog_act,
+							'dir'   => $dir,
+							'if'    => $int,
+							'proto' => $d[12],
+							'src'   => $d[15],
+							'dst'   => $d[16],
+							'sport' => $d[17],
+							'dport' => $d[18],
+							'ipver' => '6',
+							'geoip' => $geoip,
+							'alias' => $pfb_alias,
+							'feed'  => $pfb_query[0],
+							'host'  => $resolved_host,
+							'asn'   => $asn,
+						];
+					}
+					pfb_syslog_event(pfb_syslog_format_ip($pfb_syslog_fields));
+				}
+
 				// Write to Unified Log
 				if ($dup_entry == '+') {
 					@file_put_contents("{$pfb['unilog']}", "{$l_type},{$log},{$details},{$dup_entry}\n", FILE_APPEND | LOCK_EX);

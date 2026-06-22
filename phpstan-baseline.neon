@@ -109,21 +109,15 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$DDG might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$PIX might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$alias might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$asn might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -163,9 +157,27 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
+			message: '#^Variable \$dir might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
 			message: '#^Variable \$folder might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$geoip might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$int might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -207,7 +219,7 @@ parameters:
 		-
 			message: '#^Variable \$log might not be defined\.$#'
 			identifier: variable.undefined
-			count: 3
+			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -241,14 +253,14 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$pfb_include in empty\(\) always exists and is not falsy\.$#'
-			identifier: empty.variable
-			count: 1
+			message: '#^Variable \$pfb_alias might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$pfb_localsub might not be defined\.$#'
-			identifier: variable.undefined
+			message: '#^Variable \$pfb_include in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
@@ -256,6 +268,12 @@ parameters:
 			message: '#^Variable \$pfb_output might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$pfb_query might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -274,6 +292,12 @@ parameters:
 			message: '#^Variable \$pfbfolder might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$resolved_host might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -312,23 +336,10 @@ parameters:
 			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
-
 		-
 			message: '#^Variable \$src_ip in empty\(\) is never defined\.$#'
 			identifier: empty.variable
 			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$ss_cname might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$ss_ex might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -389,12 +400,6 @@ parameters:
 			message: '#^Undefined variable\: \$options6$#'
 			identifier: variable.undefined
 			count: 4
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$argv might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
@@ -632,12 +637,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$title_hostname might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$v4suppression_dat might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
@@ -832,12 +831,6 @@ parameters:
 		-
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$a_key follows optional parameter \$alt_register\.$#'
 			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Variable \$alt_feeds might not be defined\.$#'
-			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 

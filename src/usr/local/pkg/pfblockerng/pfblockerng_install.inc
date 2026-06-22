@@ -749,6 +749,17 @@ if ($ufound) {
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");
 
+// ADR-38 §2.1: Ensure the Unbound chroot log socket directory exists before
+// (re)starting syslogd.  syslogd uses the <logging><logsocket> element
+// (/var/unbound/var/run/log) to bind an extra unix socket reachable inside the
+// Unbound chroot.  The directory must exist and be owned by unbound BEFORE
+// system_syslogd_start() is called, because syslogd will try to create the
+// socket there.  safe_mkdir() is a no-op when the directory already exists
+// (idempotent); @chown() likewise silently succeeds or no-ops on re-install.
+safe_mkdir('/var/unbound/var/run');
+@chown('/var/unbound/var/run', 'unbound');
+system_syslogd_start(TRUE);
+
 write_config('[pfBlockerNG] Save installation settings');
 return TRUE;
 

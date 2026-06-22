@@ -1,0 +1,143 @@
+ADR-38 Phase 3 — PHP IP-Leg Syslog Emission
+============================================
+
+Phase:    3 of 4 (Php_Leg_And_Logging)
+Branch:   adr/38-system-log-integration
+Worktree: /home/user/pfBlockerNG/.claude/worktrees/adr-38
+Date:     2026-06-22
+
+ADR-RESUME: branch=adr/38-system-log-integration next-phase=4
+
+─────────────────────────────────────────────
+OBJECTIVES vs DELIVERABLES
+─────────────────────────────────────────────
+
+1. <logging> block in pfblockerng.xml — DONE
+   - facilityname=pfblockerng
+   - logfilename=pfblockerng_syslog.log
+   - logsocket=/var/unbound/var/run/log  (chroot socket path)
+   - Added to both install and resync commands: safe_mkdir + @chown + system_syslogd_start(TRUE)
+
+2. pfblockerng_install.inc — DONE
+   - safe_mkdir('/var/unbound/var/run') before system_syslogd_start(TRUE)
+   - @chown('/var/unbound/var/run', 'unbound') to set correct ownership
+   - Added near end of install sequence, after unset($g['pfblockerng_install']),
+     before write_config(...)
+
+3. pfblockerng_extra.inc — pfb_syslog_event(string $body): void — DONE
+   - Static cache: toggle/facility/severity read ONCE per PHP process
+   - Cache reset via $GLOBALS['pfb_test_syslog_reset'] for tests
+   - Toggle off → early return, zero side effects
+   - Toggle on → openlog('pfblockerng', LOG_PID, $facility) / syslog($severity, $body) / closelog()
+   - Test-spy seam: $GLOBALS['pfb_test_syslog_spy'] intercepts all calls into
+     $GLOBALS['pfb_test_syslog_calls'] (PHP built-ins cannot be function_exists()-guarded)
+   - Placed after pfb_syslog_priority_constant() map, before logger() fallback
+
+4. pfblockerng.inc write site (~:9354) — DONE
+   - Emit block added AFTER the main @file_put_contents (all events), BEFORE unified-log copy
+   - Gated on PfbConfig::read('log_syslog') === PfbToggle::On
+   - $d[6] at write time is 'block'|'pass'|'unkn(%u)' — mapped back to 'match' for unkn(%u)
+   - IPv4 ($d[8]==4): proto=$d[16], src=$d[18], dst=$d[19], sport=$d[20], dport=$d[21]
+   - IPv6: proto=$d[12], src=$d[15], dst=$d[16], sport=$d[17], dport=$d[18]
+   - Calls pfb_syslog_format_ip() then pfb_syslog_event() — EXACTLY ONCE per CSV line
+
+5. stubs/pfsense/system.php — DONE
+   - Hand-added system_syslogd_start(bool $sighup = false): mixed
+   - Signature verified against pfSense/src/etc/inc/syslog.inc master
+
+6. tests/php/pfsense_doubles.php — DONE
+   - No-op double for system_syslogd_start (function_exists guarded)
+
+7. tests/php/SyslogEventTest.php — NEW — DONE
+   7 tests, 18 assertions:
+   - testToggleOffProducesNoSyslogCall
+   - testToggleAbsentProducesNoSyslogCall
+   - testToggleOnEmitsExactlyOneCallWithCorrectBody  (body/ident/facility/severity asserted;
+                                                      before-state also asserted)
+   - testConfiguredFacilityIsUsed  (LOG_LOCAL2)
+   - testConfiguredSeverityIsUsed  (LOG_WARNING)
+   - testMultipleCallsEachEmitOneRecord  (2 calls → 2 records, bodies checked)
+   - testToggleFlipOffToOnChangesEmission  (before: off→no call; after: on→1 call)
+
+8. phpstan-baseline.neon — regenerated
+   - Our new emit block references $dir, $int, $geoip, $pfb_alias, $pfb_query,
+     $resolved_host, $asn — all used as count:2 (original site + new emit block)
+   - Same pattern as pre-existing variable.undefined suppressions in pfblockerng.inc
+   - Total baseline entries: 275 (up from ~261 pre-phase)
+
+─────────────────────────────────────────────
+VERIFICATION RESULTS
+─────────────────────────────────────────────
+
+php -l (all touched PHP files):
+  pfblockerng_extra.inc   — No syntax errors
+  pfblockerng.inc         — No syntax errors
+  pfblockerng_install.inc — No syntax errors
+  (pfblockerng.xml is XML, not PHP — clean)
+
+vendor/bin/phpunit:
+  Tests: 1308, Assertions: 5364, Warnings: 31
+  SyslogEventTest: 7/7 PASS
+  All 31 warnings are pre-existing (same set as Phase 2)
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors (PFBL-01 + RequireConfigGateway + UppercaseBooleanLiteral all clean)
+  Fixed: system_syslogd_start(true) → system_syslogd_start(TRUE) in install.inc
+
+vendor/bin/phpstan analyse:
+  OK — No errors (baseline regenerated with 14 new suppressions for new emit block)
+
+ruff check .:
+  All checks passed
+
+python -m pytest:
+  1944 passed, 2 skipped
+
+─────────────────────────────────────────────
+KEY DESIGN DECISIONS
+─────────────────────────────────────────────
+
+• PHP built-in interception: syslog/openlog/closelog cannot be stubbed with
+  function_exists() guards (they're C-level built-ins). Test spy via $GLOBALS
+  'pfb_test_syslog_spy' / 'pfb_test_syslog_calls' / 'pfb_test_syslog_reset'.
+
+• Static cache reset: PHP static vars persist within a process across test runs.
+  $GLOBALS['pfb_test_syslog_reset'] flushes the cache so each test starts clean.
+
+• Single-emit placement: after first @file_put_contents (logs ALL events),
+  BEFORE unified-log copy (gated on $dup_entry == '+'). Ensures exactly one
+  syslog record per event line, regardless of dedup state.
+
+• $d[6] reversion: at write site, $d[6] 'match' was already reverted to
+  'unkn(%u)' by earlier code. The emit block maps back: 'unkn(%u)' → 'match'.
+
+• <logging> declared unconditionally (per ADR §1.2.2): the chroot socket
+  registration must always be active; the toggle controls PHP emission only.
+
+─────────────────────────────────────────────
+COMMIT
+─────────────────────────────────────────────
+
+Message: pfblockerng: emit IP security events to syslog + register log facility (ADR-38 P3)
+
+Files changed (7):
+  M phpstan-baseline.neon
+  M src/usr/local/pkg/pfblockerng.xml
+  M src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  M src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  M src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+  M stubs/pfsense/system.php
+  M tests/php/pfsense_doubles.php
+  A tests/php/SyslogEventTest.php
+
+─────────────────────────────────────────────
+NEXT PHASE
+─────────────────────────────────────────────
+
+Phase 4: Web UI + final ADR acceptance gates
+  Prompt: .ADRs/ADR_38_System_Log_Integration/04_Web_Ui_And_Acceptance.txt
+  Prerequisites from this phase:
+    - pfb_syslog_event() exists and is callable
+    - log_syslog / log_syslog_facility / log_syslog_priority registered (Phase 2)
+    - pfblockerng.xml has <logging> block
+    - All tests green
