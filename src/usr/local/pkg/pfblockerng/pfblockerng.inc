@@ -14107,8 +14107,14 @@ function sync_package_pfblockerng($cron='') {
 	#################################
 
 	// Uncheck reusing existing downloads check box
-	if (!$pfb['save'] && $pfb['enable'] == 'on' && $pfb['config']['pfb_reuse'] == 'on') {
-		$pfb_config['installedpackages']['pfblockerng']['config'][0]['pfb_reuse'] = '';
+	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
+	    pfb_cfg_toggle_read($pfb['config']['pfb_reuse']) === PfbToggle::On) {
+		// Stage the off-value via the ADR-28 write adapter (legacy stored '')
+		// rather than a hardcoded literal. This is a deferred staged-merge write:
+		// it rides $pfb_config through the config_read_file() + array_replace_recursive()
+		// merge below, NOT PfbConfig::write() — whose immediate config_set_path() the
+		// reload on the save path would discard.
+		$pfb_config['installedpackages']['pfblockerng']['config'][0]['pfb_reuse'] = pfb_cfg_toggle_write(PfbToggle::Off);
 		$pfb['conf_mod'] = TRUE;
 	}
 
