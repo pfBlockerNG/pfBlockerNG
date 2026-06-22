@@ -65,16 +65,12 @@ echo "==> Copying $(basename "$PKGFILE") to ${SSH_TARGET}:${REMOTE}"
 # shellcheck disable=SC2086
 scp ${SCP_OPTS} "$PKGFILE" "${SSH_TARGET}:${REMOTE}"
 
-# `pkg add -f` of a LOCAL file resolves RUN_DEPENDS from the LOCAL pkg db — it
-# does not reach the repos when the deps are already installed. The smoke image
-# bakes pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then
-# executes the package's POST-INSTALL hooks. A "Missing dependency" error here =
-# bad image. The -f (force) flag reinstalls even when the same version is already
-# present, ensuring POST-INSTALL re-runs on every deploy; without it a repeat
-# deploy is a silent no-op ("already installed") and POST-INSTALL never reruns,
-# leaving Unbound in whatever state the previous module left it.
-echo "==> pkg add -f ${REMOTE} (deps pre-baked; offline; -f forces POST-INSTALL)"
-ssh_t "env ASSUME_ALWAYS_YES=yes pkg add -f '${REMOTE}'"
+# `pkg add` of a LOCAL file resolves RUN_DEPENDS from the LOCAL pkg db — it does
+# not reach the repos when the deps are already installed. The smoke image bakes
+# pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then executes
+# the package's POST-INSTALL hooks. A "Missing dependency" error here = bad image.
+echo "==> pkg add ${REMOTE} (deps pre-baked; offline)"
+ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${REMOTE}'"
 
 # POST-INSTALL restarts Unbound asynchronously; wait for it before the caller
 # queries the resolver (see feedback: poll the real readiness signal).
@@ -84,14 +80,6 @@ until ssh_t '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status
     i=$((i + 1))
     if [ "$i" -ge 30 ]; then
         echo "install-pkg: Unbound did not become ready after install" >&2
-        echo "---- diagnostics: unbound-checkconf ----" >&2
-        ssh_t '/usr/local/sbin/unbound-checkconf /var/unbound/unbound.conf 2>&1 | tail -n 40' >&2 || true
-        echo "---- diagnostics: unbound-control status ----" >&2
-        ssh_t '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status 2>&1 | tail -n 20' >&2 || true
-        echo "---- diagnostics: resolver.log tail ----" >&2
-        ssh_t 'tail -n 40 /var/log/resolver.log 2>&1' >&2 || true
-        echo "---- diagnostics: unbound process ----" >&2
-        ssh_t 'ps auxww | grep -i "[u]nbound" 2>&1' >&2 || true
         exit 1
     fi
     sleep 2
