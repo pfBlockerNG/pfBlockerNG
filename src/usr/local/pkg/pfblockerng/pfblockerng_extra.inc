@@ -1712,6 +1712,89 @@ function pfb_syslog_format_ip(array $fields): string
 	return implode(' ', $parts);
 }
 
+// ---------------------------------------------------------------------------
+// ADR-38 Phase 3 — PHP syslog event emitter.
+//
+// pfb_syslog_event(string $body): void
+//   Emits ONE syslog record tagged 'pfblockerng' at the configured facility and
+//   severity.  The toggle, facility, and severity are read from PfbConfig once
+//   per PHP process (static cache) to avoid repeated config lookups on the hot
+//   filterlog path.
+//
+//   Behaviour:
+//     - No-op when log_syslog is off (PfbToggle::Off / '').
+//     - openlog() sets the ident and the facility; syslog() emits at the
+//       configured severity; closelog() releases the connection.  This mirrors
+//       the pattern the existing logger() fallback uses.
+//     - Called AT MOST ONCE per filterlog CSV line (the caller gates on the
+//       toggle BEFORE building the field array, so the toggle is not re-checked
+//       here — defence in depth).
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_syslog_event — emit a single syslog record for one IP security event.
+ *
+ * Reads log_syslog / log_syslog_facility / log_syslog_priority from PfbConfig
+ * once per process (static cache).  No-op when the toggle is off.
+ *
+ * TEST SEAM: when $GLOBALS['pfb_test_syslog_spy'] is set (to any callable or
+ * non-null value), calls to syslog() are redirected to the spy instead of the
+ * real built-in.  The spy receives ($severity, $body, $facility).  The static
+ * cache can be reset between tests by setting $GLOBALS['pfb_test_syslog_reset']
+ * to TRUE before calling (cleared on re-init).
+ *
+ * @param  string $body  The key=value message body (output of pfb_syslog_format_ip()).
+ * @return void
+ */
+function pfb_syslog_event(string $body): void
+{
+	// Static cache: read toggle + facility + severity ONCE per process.
+	// Tests reset via $GLOBALS['pfb_test_syslog_reset'] = TRUE.
+	static $initialised = FALSE;
+	static $enabled     = FALSE;
+	static $facility    = LOG_LOCAL6;
+	static $severity    = LOG_NOTICE;
+
+	// Allow tests to reset the cache between runs.
+	if (!empty($GLOBALS['pfb_test_syslog_reset'])) {
+		$initialised = FALSE;
+		$enabled     = FALSE;
+		$facility    = LOG_LOCAL6;
+		$severity    = LOG_NOTICE;
+		unset($GLOBALS['pfb_test_syslog_reset']);
+	}
+
+	if (!$initialised) {
+		$initialised = TRUE;
+		$enabled = (PfbConfig::read('log_syslog') === PfbToggle::On);
+		if ($enabled) {
+			$facility = pfb_syslog_facility_constant(PfbConfig::read('log_syslog_facility'));
+			$severity = pfb_syslog_priority_constant(PfbConfig::read('log_syslog_priority'));
+		}
+	}
+
+	if (!$enabled) {
+		return;
+	}
+
+	// Production path: openlog / syslog / closelog via PHP built-ins.
+	// Test spy path: record the call in $GLOBALS['pfb_test_syslog_calls'] when a
+	// spy is installed (never calls the real built-ins in test mode).
+	if (isset($GLOBALS['pfb_test_syslog_spy'])) {
+		$GLOBALS['pfb_test_syslog_calls'][] = [
+			'ident'    => 'pfblockerng',
+			'facility' => $facility,
+			'severity' => $severity,
+			'body'     => $body,
+		];
+		return;
+	}
+
+	openlog('pfblockerng', LOG_PID, $facility);
+	syslog($severity, $body);
+	closelog();
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

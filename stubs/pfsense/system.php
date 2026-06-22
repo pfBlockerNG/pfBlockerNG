@@ -370,3 +370,9 @@ function _getHostName($mac, $ip) {}
 
 /** @return mixed */
 function check_dnsavailable($proto='inet') {}
+
+// Hand-added (not auto-generated): system_syslogd_start() is in system.inc,
+// absent from the 2.7.2 snapshot used for the bulk-generated stubs.
+// Signature verified against pfSense/src/etc/inc/syslog.inc master.
+/** @return mixed */
+function system_syslogd_start(bool $sighup = false) {}
