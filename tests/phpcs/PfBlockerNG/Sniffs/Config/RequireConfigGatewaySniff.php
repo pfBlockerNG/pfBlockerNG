@@ -148,6 +148,10 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude',
+		// ADR-37: DoT/DoQ block fields
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block',
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_int',
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_exclude',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)
 		'installedpackages/pfblockerngsafesearch/safesearch_enable',
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',
