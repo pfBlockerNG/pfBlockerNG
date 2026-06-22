@@ -1,6 +1,6 @@
 # ADR-35: Unify ownership + teardown of pfBlockerNG-managed firewall objects
 
-- **Status:** **Proposed** (2026-06-20)
+- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
 - **Date:** 2026-06-20
 - **Branch:** `adr/35-managed-firewall-objects` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):** new `src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc` (ownership +
@@ -206,16 +206,17 @@ constants in one new include**, not a class/registry hierarchy (see Alternatives
 
 ## 7. Definition of done
 
-- [ ] `pfblockerng_fwobj.inc` layer (is_owned/find/remove/sweep/register), pure parts unit-tested
+- [x] `pfblockerng_fwobj.inc` layer (is_owned/find/remove/sweep/register), pure parts unit-tested
       (branch coverage: each legacy marker + new prefix; guard on/off; user-row survival).
-- [ ] VIP + DNSBL NAT retrofitted with **no** persisted marker/string change; Phase-1 golden
+- [x] VIP + DNSBL NAT retrofitted with **no** persisted marker/string change; Phase-1 golden
       suite green (behaviour identical, before/after).
-- [ ] Deinstall + disable marker sweep wired before bulk config delete; orphan removed; user
+- [x] Deinstall + disable marker sweep wired before bulk config delete; orphan removed; user
       objects untouched; clean-config sweep is a no-op (asserted).
-- [ ] Registration seam in place and demonstrated (VIP + NAT registered through it); ready for
+- [x] Registration seam in place and demonstrated (VIP + NAT registered through it); ready for
       ADR-36/37.
 - [ ] All gates green: `vendor/bin/phpunit`, PHPStan, PHPCS (PFBL-01 + ADR-28 + ADR-29 sniffs),
       `php -l`, `python -m pytest`; live-VM smoke proves add→remove→uninstall + orphan sweep.
+      *(Off-box gates all green (P1–P4). Live-VM smoke authored — pending dispatch.)*
 
 **Manual smoke (owner: maintainer):**
 
