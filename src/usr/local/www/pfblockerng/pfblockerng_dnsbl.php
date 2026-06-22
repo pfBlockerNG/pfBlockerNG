@@ -23,8 +23,8 @@
 require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
-if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc')) {
-	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc');
+if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc')) {
+	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc');
 }
 
 global $pfb;

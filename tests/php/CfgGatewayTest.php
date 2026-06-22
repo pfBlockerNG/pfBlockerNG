@@ -495,6 +495,10 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_redir',
 			'dnsbl_redir_int',
 			'dnsbl_redir_exclude',
+			// ADR-37: DoT/DoQ block fields
+			'dnsbl_dot_block',
+			'dnsbl_dot_block_int',
+			'dnsbl_dot_block_exclude',
 
 			// pfblockerngsafesearch scalars
 			'safesearch_enable',
@@ -1391,6 +1395,212 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::read('dnsbl_redir_exclude');
 		$this->assertSame('', $result,
 			"dnsbl_redir_exclude absent -> '' (registered default)"
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// ADR-37 — dnsbl_dot_block / dnsbl_dot_block_int / dnsbl_dot_block_exclude
+	// -----------------------------------------------------------------------
+
+	/**
+	 * dnsbl_dot_block (toggle): 'on' and '' both round-trip losslessly.
+	 *
+	 * Scenario:
+	 *   Background: dnsbl_dot_block stored as 'on' (enabled) or '' (disabled).
+	 *     Given canonical stored value v in {'on', ''}.
+	 *     When PfbConfig::write('dnsbl_dot_block', PfbConfig::read('dnsbl_dot_block')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblDotBlockToggleRoundTripOn(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block';
+
+		// Given: canonical 'on'.
+		$this->seedConfig($path, 'on');
+
+		// Before: raw 'on'.
+		$this->assertSame('on', config_get_path($path),
+			'before: dnsbl_dot_block seed must be on'
+		);
+
+		// When: read -> write.
+		$enum = PfbConfig::read('dnsbl_dot_block');
+		$this->assertSame(PfbToggle::On, $enum, 'read: on -> PfbToggle::On');
+
+		PfbConfig::write('dnsbl_dot_block', $enum);
+
+		// After: stored as 'on'.
+		$this->assertSame('on', config_get_path($path),
+			'write(read(on)) == on for dnsbl_dot_block'
+		);
+	}
+
+	public function testDnsblDotBlockToggleRoundTripOff(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block';
+
+		// Given: canonical '' (checkbox unchecked).
+		$this->seedConfig($path, '');
+
+		// Before: raw ''.
+		$this->assertSame('', config_get_path($path),
+			"before: dnsbl_dot_block seed must be ''"
+		);
+
+		// When: read -> write.
+		$enum = PfbConfig::read('dnsbl_dot_block');
+		$this->assertSame(PfbToggle::Off, $enum, "read: '' -> PfbToggle::Off");
+
+		PfbConfig::write('dnsbl_dot_block', $enum);
+
+		// After: stored as ''.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_dot_block"
+		);
+	}
+
+	/**
+	 * dnsbl_dot_block absent key returns the registered default '' (Off).
+	 *
+	 * Scenario:
+	 *   Background: key absent from config (feature never enabled).
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_dot_block').
+	 *     Then PfbToggle::Off is returned (default '').
+	 */
+	public function testDnsblDotBlockAbsentKeyReturnsOff(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_dot_block must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_dot_block');
+		$this->assertSame(PfbToggle::Off, $result,
+			"dnsbl_dot_block absent -> PfbToggle::Off (default '')"
+		);
+	}
+
+	/**
+	 * dnsbl_dot_block_int (plain): arbitrary strings round-trip as identity.
+	 *
+	 * Scenario:
+	 *   Background: plain adapter — any stored string passes through unchanged.
+	 *     Given stored value v.
+	 *     When PfbConfig::write('dnsbl_dot_block_int', PfbConfig::read('dnsbl_dot_block_int')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblDotBlockIntPlainRoundTripNonEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_int';
+
+		// Given: comma-joined interface names.
+		$this->seedConfig($path, 'lan,opt1');
+
+		// Before.
+		$this->assertSame('lan,opt1', config_get_path($path),
+			'before: dnsbl_dot_block_int seed must be lan,opt1'
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_dot_block_int');
+		$this->assertSame('lan,opt1', $value,
+			'read: plain adapter returns raw stored string'
+		);
+
+		PfbConfig::write('dnsbl_dot_block_int', $value);
+
+		// After.
+		$this->assertSame('lan,opt1', config_get_path($path),
+			'write(read(lan,opt1)) == lan,opt1 for dnsbl_dot_block_int'
+		);
+	}
+
+	/**
+	 * dnsbl_dot_block_int absent key returns the registered default ''.
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_dot_block_int').
+	 *     Then '' is returned (registered default).
+	 */
+	public function testDnsblDotBlockIntAbsentKeyReturnsDefaultEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_int';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_dot_block_int must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_dot_block_int');
+		$this->assertSame('', $result,
+			"dnsbl_dot_block_int absent -> '' (registered default)"
+		);
+	}
+
+	/**
+	 * dnsbl_dot_block_exclude (plain): arbitrary strings round-trip as identity.
+	 *
+	 * Scenario:
+	 *   Background: plain adapter — any stored string passes through unchanged.
+	 *     Given stored value v.
+	 *     When PfbConfig::write('dnsbl_dot_block_exclude', PfbConfig::read('dnsbl_dot_block_exclude')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblDotBlockExcludePlainRoundTripNonEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_exclude';
+
+		// Given: alias name.
+		$this->seedConfig($path, 'DoT_Exceptions');
+
+		// Before.
+		$this->assertSame('DoT_Exceptions', config_get_path($path),
+			'before: dnsbl_dot_block_exclude seed must be DoT_Exceptions'
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_dot_block_exclude');
+		$this->assertSame('DoT_Exceptions', $value,
+			'read: plain adapter returns raw stored string'
+		);
+
+		PfbConfig::write('dnsbl_dot_block_exclude', $value);
+
+		// After.
+		$this->assertSame('DoT_Exceptions', config_get_path($path),
+			'write(read(DoT_Exceptions)) == DoT_Exceptions for dnsbl_dot_block_exclude'
+		);
+	}
+
+	/**
+	 * dnsbl_dot_block_exclude absent key returns the registered default ''.
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_dot_block_exclude').
+	 *     Then '' is returned (registered default).
+	 */
+	public function testDnsblDotBlockExcludeAbsentKeyReturnsDefaultEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_exclude';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_dot_block_exclude must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_dot_block_exclude');
+		$this->assertSame('', $result,
+			"dnsbl_dot_block_exclude absent -> '' (registered default)"
 		);
 	}
 }

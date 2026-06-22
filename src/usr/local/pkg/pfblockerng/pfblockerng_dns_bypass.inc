@@ -2,7 +2,10 @@
 
 declare(strict_types=1);
 
-// [ ADR-36 ] Optional NAT DNS-redirection rule set (DNS hijack).
+// [ ADR-36 / ADR-37 ] DNS-bypass containment — firewall controls that keep
+// clients on the pfSense resolver:
+//   * ADR-36: optional NAT redirect of plaintext port-53 DNS to the resolver.
+//   * ADR-37: optional filter BLOCK of DoT (TCP 853) / DoQ (UDP 853).
 //
 // Pure builder helpers — no shell/exec, no write_config calls.
 // write_config() is always the CALLER'S responsibility.
@@ -175,7 +178,7 @@ function pfb_build_dns_redirect_rules(string $iface, string $ipprotocol, string 
  *   pfB_DNS_Redirect_lan_v4, pfB_DNS_Redirect_lan_v6,
  *   pfB_DNS_Redirect_opt1_v4, pfB_DNS_Redirect_opt1_v6, …
  *
- * Call at any point after pfblockerng_dns_redirect.inc is loaded — before
+ * Call at any point after pfblockerng_dns_bypass.inc is loaded — before
  * pfb_fwobj_sweep() or pfb_fwobj_remove() targets DNS-redirect objects.
  * Idempotent (pfb_fwobj_register replaces the prior entry by key).
  *
@@ -402,4 +405,40 @@ function pfb_sync_dns_redirect_rules(): bool
 	}
 
 	return $changed;
+}
+
+// ---------------------------------------------------------------------------
+// ADR-37 — DoT/DoQ BLOCK rule builder (skeleton; Phase 2 implements)
+//
+// pfb_build_dot_block_rule — build one filter/rule BLOCK entry for a single
+// interface, blocking TCP+UDP port 853 (DoT/DoQ) on both IPv4 and IPv6.
+//
+// The rule shape (ground truth from §2.2 of ADR.md):
+//   type         => 'block'
+//   interface    => $iface
+//   ipprotocol   => 'inet46'
+//   protocol     => 'tcp/udp'
+//   source       => <any/> when $exclude_alias is empty;
+//                   <address>ALIAS</address><not/> when non-empty.
+//   destination  => <network>(self)</network><not/><port>853</port>
+//                   (self-exempt always on — cannot be disabled)
+//   statetype    => 'keep state'
+//   descr        => 'pfB_DoT_Block_' . $iface  (ADR-35 ownership marker)
+//
+// Phase 2 replaces this stub with the full implementation.
+//
+// @param string $iface          Interface name (e.g. 'lan', 'opt1').
+// @param string $exclude_alias  Optional exception alias name (or '').
+//                               When non-empty, the source is negated
+//                               (exception hosts bypass the block rule).
+// @return array{}               Phase 2: returns the filter/rule array.
+//                               Phase 1 skeleton: throws LogicException.
+// ---------------------------------------------------------------------------
+function pfb_build_dot_block_rule(string $iface, string $exclude_alias): array
+{
+	// Phase 1 skeleton — replaced in Phase 2.
+	// Returns an empty array so callers do not crash; the golden tests in
+	// DotDoQBlockRuleTest FAIL (not error) against this stub, which is the
+	// oracle-first discipline: tests specify the contract, not the implementation.
+	return [];
 }
