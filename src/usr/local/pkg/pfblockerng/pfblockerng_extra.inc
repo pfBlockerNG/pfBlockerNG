@@ -1482,6 +1482,113 @@ function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): 
 	return $period !== $last_key;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-38 Phase 1 — Pure key=value syslog event formatters.
+//
+// pfb_syslog_format_ip(array $fields): string
+//   Maps the already-computed IP Block/Permit/Match event fields to a single
+//   space-separated "key=value ..." string suitable for emission as a syslog
+//   message body.  The key order is fixed and documented below; this is the
+//   stable contract that later phases wire to syslog(3) and that tests pin.
+//
+// Key vocabulary (fixed order):
+//   act   — action:   'block'|'pass'|'match'
+//   dir   — direction: 'in'|'out'
+//   if    — friendly interface name (e.g. 'em0', 'LAN')
+//   proto — protocol string (e.g. 'TCP', 'UDP', 'TCP-SA')
+//   src   — source IP address
+//   dst   — destination IP address
+//   sport — source port (omitted when empty)
+//   dport — destination port (omitted when empty)
+//   ipver — IP version: '4' or '6'
+//   geoip — GeoIP ISO country code (omitted when empty or 'Unk'/'Unknown')
+//   alias — pfBlockerNG alias name (omitted when empty or 'Unknown')
+//   feed  — feed name (omitted when empty or 'Unknown')
+//   host  — resolved hostname of the external IP (omitted when empty/'Unknown')
+//   asn   — ASN string (omitted when empty or 'Unknown'/'null')
+//
+// Empty-value convention:
+//   Required fields (act/dir/if/proto/src/dst/ipver) are always present.
+//   Optional fields (sport/dport/geoip/alias/feed/host/asn) are OMITTED
+//   entirely when the value is empty, 'Unknown', 'Unk', or 'null'.
+//
+// Escaping rule:
+//   A value containing a space, '=', or '"' is double-quoted; internal '"'
+//   characters are backslash-escaped (\").  Newlines (\n, \r) are replaced
+//   with a space before quoting to keep the message single-line.
+//   Other punctuation (e.g. '|', ':', '/') is not quoted.
+//
+// PURE — no globals, no I/O, no config reads.
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_syslog_format_ip — format an IP security event as a key=value string.
+ *
+ * @param array<string,string> $fields  Associative array of event fields.
+ *                                      Keys: act, dir, if, proto, src, dst,
+ *                                      sport, dport, ipver, geoip, alias,
+ *                                      feed, host, asn.
+ * @return string  Space-separated "k=v ..." body; never multi-line.
+ */
+function pfb_syslog_format_ip(array $fields): string
+{
+	// Sentinels treated as "absent" for optional fields.
+	static $absent_sentinels = ['', 'Unknown', 'Unk', 'null'];
+
+	/**
+	 * Escape a single value: strip newlines, then quote if needed.
+	 *
+	 * @param string $v  Raw value.
+	 * @return string    Escaped/quoted value.
+	 */
+	$escape = static function (string $v): string {
+		// Strip embedded newlines to keep the message single-line.
+		$v = str_replace(["\r\n", "\r", "\n"], ' ', $v);
+		// Quote if the value contains space, '=', or '"'.
+		if (strpos($v, ' ') !== FALSE || strpos($v, '=') !== FALSE || strpos($v, '"') !== FALSE) {
+			$v = '"' . str_replace('"', '\\"', $v) . '"';
+		}
+		return $v;
+	};
+
+	$get = static function (string $key) use ($fields): string {
+		return $fields[$key] ?? '';
+	};
+
+	$parts = [];
+
+	// Required fields — always emitted.
+	$parts[] = 'act='   . $escape($get('act'));
+	$parts[] = 'dir='   . $escape($get('dir'));
+	$parts[] = 'if='    . $escape($get('if'));
+	$parts[] = 'proto=' . $escape($get('proto'));
+	$parts[] = 'src='   . $escape($get('src'));
+	$parts[] = 'dst='   . $escape($get('dst'));
+
+	// Optional integer-ish fields — omit when empty.
+	$sport = $get('sport');
+	if ($sport !== '') {
+		$parts[] = 'sport=' . $escape($sport);
+	}
+	$dport = $get('dport');
+	if ($dport !== '') {
+		$parts[] = 'dport=' . $escape($dport);
+	}
+
+	// Required IP version.
+	$parts[] = 'ipver=' . $escape($get('ipver'));
+
+	// Optional enrichment fields — omit when empty or a known absent-sentinel.
+	foreach (['geoip', 'alias', 'feed', 'host', 'asn'] as $key) {
+		$val = $get($key);
+		if (!in_array($val, $absent_sentinels, TRUE)) {
+			$parts[] = $key . '=' . $escape($val);
+		}
+	}
+
+	return implode(' ', $parts);
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
