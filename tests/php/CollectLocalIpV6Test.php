@@ -205,4 +205,58 @@ final class CollectLocalIpV6Test extends TestCase
 			)
 		);
 	}
+
+	// -------------------------------------------------------------------------
+	// Case D — #461 regression guard: empty-string interface node is skipped
+	// -------------------------------------------------------------------------
+
+	public function testEmptyStringInterfaceNodeIsSkippedWithoutFatal(): void
+	{
+		// Scenario: pfb_collect_localip() must not fatal when an interfaces config
+		//           entry is an empty string (pfSense parses <lan></lan> as "").
+		//
+		// Background:
+		//   pfSense's XML parser stores an EMPTY element (e.g. <opt1></opt1>) as the
+		//   empty string "" rather than an array. Core get_interfaces_with_gateway()
+		//   dereferences $ifcfg['ipaddr'] on every node without an array guard, which
+		//   throws "Cannot access offset of type string on string" under PHP 8 (#461).
+		//   The fix enumerates interfaces directly and skips any non-array node.
+		//
+		// Given  a config with a well-formed dynamic-WAN interface ('wan' => dhcp)
+		//        and a malformed empty-string node ('opt1' => '')
+		// When   pfb_collect_localip() runs
+		// Then   it does NOT fatal (reaching the asserts proves no exception)
+		//        AND the gateway interface's IP is collected into $pfb_local
+		//        AND the empty-string node is silently skipped (no error)
+
+		// Override the config for this specific test case.
+		$GLOBALS['config']['interfaces'] = [
+			'wan'  => ['if' => 'vtnet0', 'ipaddr' => 'dhcp'],
+			'lan'  => ['if' => 'vtnet1', 'ipaddr' => '192.168.1.1', 'subnet' => '24'],
+			'opt1' => '',
+		];
+		$GLOBALS['pfb_test_interface_ip'] = ['wan' => '203.0.113.5'];
+
+		// When: call the function under test (a fatal/TypeError would abort here)
+		[$pfb_local, ] = pfb_collect_localip();
+
+		// Then: the gateway WAN IP must appear in $pfb_local (keyed by IP value)
+		$this->assertArrayHasKey(
+			'203.0.113.5',
+			$pfb_local,
+			"The dynamic-WAN IP 203.0.113.5 must be collected into \$pfb_local "
+			. "even when an empty-string interface node ('opt1' => '') is present. "
+			. "pfb_local keys: " . implode(', ', array_keys($pfb_local))
+		);
+
+		// The empty-string 'opt1' node must not surface as an IP or cause a crash —
+		// reaching this line without a TypeError is the primary regression guard.
+		// (No explicit assertNotContains needed: the key '' cannot be a valid IP address,
+		// and reaching this assertion with $pfb_local populated proves the walk completed.)
+		$this->assertNotContains(
+			'',
+			array_keys($pfb_local),
+			"The empty-string 'opt1' node must not produce a '' key in \$pfb_local"
+		);
+	}
 }
