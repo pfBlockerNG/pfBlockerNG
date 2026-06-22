@@ -80,6 +80,8 @@ until ssh_t '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status
     i=$((i + 1))
     if [ "$i" -ge 30 ]; then
         echo "install-pkg: Unbound did not become ready after install" >&2
+        echo "==> Unbound readiness diagnostics (resolver did not come up):" >&2
+        ssh_t 'echo "---- unbound-checkconf ----"; /usr/local/sbin/unbound-checkconf /var/unbound/unbound.conf 2>&1; echo "---- unbound-control status ----"; /usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status 2>&1; echo "---- ls -la /var/unbound ----"; ls -la /var/unbound 2>&1; echo "---- unbound.conf python block ----"; grep -nE "python|module-config" /var/unbound/unbound.conf 2>&1; echo "---- config unbound/python flag ----"; /usr/local/sbin/read_xml_tag.sh string unbound/python 2>&1; /usr/local/sbin/read_xml_tag.sh string unbound/python_script 2>&1; echo "---- resolver.log tail ----"; tail -n 40 /var/log/resolver.log 2>&1; echo "---- unbound processes ----"; ps auxww | grep -i "[u]nbound" 2>&1' >&2 || true
         exit 1
     fi
     sleep 2
