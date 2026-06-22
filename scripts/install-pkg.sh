@@ -43,9 +43,9 @@ done
 # shellcheck disable=SC2015
 [ -n "$PKGFILE" ] && [ -f "$PKGFILE" ] || { echo "install-pkg: --pkg file not found: ${PKGFILE}" >&2; exit 1; }
 
-SSH_OPTS="-p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+SSH_OPTS="-p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 # scp uses -P (capital) for the port; -p means "preserve times" there.
-SCP_OPTS="-P ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+SCP_OPTS="-P ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 if [ -n "$SSH_KEY" ]; then
     SSH_OPTS="-i ${SSH_KEY} ${SSH_OPTS}"
     SCP_OPTS="-i ${SSH_KEY} ${SCP_OPTS}"
