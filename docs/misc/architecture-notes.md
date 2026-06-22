@@ -354,3 +354,29 @@ The published file lives at `pfblockerng.github.io/pkg/add-repo.sh` and is what 
 landing page's copy-paste one-liners point to.
 
 Full design: ADR-39.
+
+## Managed firewall object ownership and teardown (ADR-35)
+
+`pfblockerng_fwobj.inc` provides a small shared ownership-and-teardown layer for pfBlockerNG-managed
+objects in pfSense-core sections (`virtualip/vip`, `nat/rule`, `filter/rule`). A pfBlockerNG object
+is **owned** if and only if its `descr` carries a recognised marker. Marker recognition is the union
+of the `pfB_` prefix (new convention, already in use on the filter side) plus the exact legacy strings
+(`pfB_AUTO_VIP_v4`, `pfB_AUTO_VIP_v6`, `pfB DNSBL`, `pfB DNSBL - DO NOT EDIT`) — never rewritten,
+because stored values are frozen (ADR-28). `pfb_fwobj_is_owned()` is the single recognition predicate;
+`pfb_fwobj_sweep()` removes every owned entry from a given section by marker alone, without consulting
+any secondary guard.
+
+The sweep runs in two places: (1) **on disable**, as a defensive pass after `pfb_manage_dnsbl_vip` and
+`pfb_create_dnsbl` have already run their own teardown — catching any half-written state those paths
+may have left; (2) **on deinstall**, before `pfb_remove_config_settings()` wipes the
+`installedpackages/pfblockerng*` reference data. This ordering is load-bearing: the sweep reads the
+pfBlockerNG config sections to resolve the VIP double-guard reference; if the config were wiped first,
+the reference would be gone and the guard would skip orphans.
+
+`pfb_fwobj_register()` is the registration seam ADR-36 and ADR-37 plug into. A feature declares
+`{ type, section, marker, builder, guard? }` once; the reconcile / remove / sweep machinery covers
+it without per-feature boilerplate. The existing VIP and DNSBL-NAT objects are expressed as the first
+two registrations, demonstrating the seam. User objects (no pfB marker) are **never** touched by any
+remove or sweep — asserted by unit tests that seed sibling user rows and prove they survive.
+
+Live-VM smoke: `tests/smoke/test_smoke_fwobj.py` (marker `smoke`).
