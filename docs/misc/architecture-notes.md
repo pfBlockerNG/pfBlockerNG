@@ -418,3 +418,41 @@ IP-alias feeds such as the Dibdot DoH-IP feed that block known DoH resolver IPs 
 DoT/DoQ also remains uncovered by this rule; that limitation is documented in the UI help text.
 
 Live-VM smoke: `tests/smoke/test_dot_doq_block.py` (marker `smoke`).
+
+## Syslog export of security events (ADR-38)
+
+pfBlockerNG can export IP Block/Permit/Match and DNSBL block events to syslog in `key=value`
+form, tagged `pfblockerng`. The feature is **opt-in** (default off) via the **Log Settings →
+Send Security Events to System Log** toggle (`log_syslog`), with companion selects for facility
+(`log_syslog_facility`, default `local6`) and severity (`log_syslog_priority`, default `notice`).
+
+**Dedicated log** — pfSense's `<logging>` block in `pfblockerng.xml` routes `!pfblockerng`
+tagged messages to `/var/log/pfblockerng_syslog.log` exclusively, keeping them out of
+`/var/log/system.log`. The logsocket entry (`/var/unbound/var/run/log`) gives the Unbound
+Python module a chroot-local socket path to deliver DNSBL records.
+
+**Two emit paths:**
+
+- **IP events** — `pfblockerng.inc` calls `pfb_syslog_event(pfb_syslog_format_ip($fields))` at
+  the CSV write site when `log_syslog = PfbToggle::On`. PHP `openlog()` / `syslog()` with the
+  resolved facility + severity constants. Fields: `act`, `dir`, `if`, `proto`, `src`, `dst`,
+  `sport`, `dport`, `ipver`, `geoip`, `alias`, `feed`.
+- **DNSBL events** — `pfb_unbound.py` calls `_emit_dnsbl_syslog(msg)` at the DNSBL match site
+  when `syslog_enable = on` (written to `py_unbound.ini` by `pfblockerng.inc` at reload time).
+  Uses stdlib `logging.handlers.SysLogHandler` with `address="/var/run/log"` (resolves in the
+  Unbound chroot to `/var/unbound/var/run/log`). The handler degrades silently on socket failure
+  — it never raises into the Unbound request path. Fields: `act=dnsbl`, `qname`, `qip`, `qtype`,
+  `group`, `feed`, `btype` (VIP or NULL), `eval`.
+
+**Remote delivery** — no in-package remote syslog target. Use pfSense
+*Status → System Logs → Settings → Remote Logging → "Everything"* to forward the facility.
+
+**Config keys** (all registered in `PfbConfig` / `pfb_cfg_registry()`):
+
+| Key | Type | Default | Notes |
+| --- | ---- | ------- | ----- |
+| `log_syslog` | `toggle` | `''` (off) | PfbToggle; `'on'` enables both paths |
+| `log_syslog_facility` | `plain` | `'log_local6'` | Maps to PHP `LOG_LOCAL6` constant |
+| `log_syslog_priority` | `plain` | `'log_notice'` | Maps to PHP `LOG_NOTICE` constant |
+
+Live-VM smoke: `tests/smoke/test_syslog_export.py` (marker `smoke`).
