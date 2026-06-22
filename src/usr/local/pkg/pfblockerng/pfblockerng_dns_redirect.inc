@@ -160,3 +160,198 @@ function pfb_build_dns_redirect_rules(string $iface, string $ipprotocol, string 
 
 	return [$nat_rule, $filter_rule];
 }
+
+// ---------------------------------------------------------------------------
+// pfb_fwobj_init_dns_redirect_registrations — register DNS-redirect spec
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers the DNS-redirect NAT and filter objects into the ADR-35 registry.
+ *
+ * Two registrations — one per pfSense-core section — both keyed on the shared
+ * PFB_DNS_REDIR_DESCR_V4_PFX prefix. Because pfb_fwobj_remove() / pfb_fwobj_sweep()
+ * use str_starts_with() for pfB_-prefixed markers, a single prefix registration
+ * covers every per-interface / per-family descr variant:
+ *   pfB_DNS_Redirect_lan_v4, pfB_DNS_Redirect_lan_v6,
+ *   pfB_DNS_Redirect_opt1_v4, pfB_DNS_Redirect_opt1_v6, …
+ *
+ * Call at any point after pfblockerng_dns_redirect.inc is loaded — before
+ * pfb_fwobj_sweep() or pfb_fwobj_remove() targets DNS-redirect objects.
+ * Idempotent (pfb_fwobj_register replaces the prior entry by key).
+ *
+ * write_config() is NEVER called here — callers own the flush.
+ */
+function pfb_fwobj_init_dns_redirect_registrations(): void
+{
+	// NAT rdr rules — one per interface/family, marker prefix covers all variants.
+	pfb_fwobj_register([
+		'type'    => 'nat',
+		'section' => 'nat/rule',
+		'marker'  => PFB_DNS_REDIR_DESCR_V4_PFX,
+		'builder' => NULL,	// rules built by pfb_sync_dns_redirect_rules(); NULL = seam-only
+		'guard'   => NULL,
+	]);
+
+	// Associated filter PASS rules — same prefix covers all variants.
+	pfb_fwobj_register([
+		'type'    => 'filter',
+		'section' => 'filter/rule',
+		'marker'  => PFB_DNS_REDIR_DESCR_V4_PFX,
+		'builder' => NULL,	// rules built by pfb_sync_dns_redirect_rules(); NULL = seam-only
+		'guard'   => NULL,
+	]);
+}
+
+// ---------------------------------------------------------------------------
+// pfb_sync_dns_redirect_rules — lifecycle: create / reconcile / prune / remove
+// ---------------------------------------------------------------------------
+
+/**
+ * Create, reconcile, prune-stale, or remove all pfB_DNS_Redirect_* NAT + filter rules.
+ *
+ * Called from sync_package_pfblockerng() after pfb_create_dnsbl(). Reads the three
+ * registered PfbConfig fields and manages nat/rule + filter/rule via direct
+ * config_*_path (pfSense-core foreign sections — ADR-29 exclusion list).
+ *
+ * Lifecycle:
+ *   ENABLED + interfaces selected:
+ *     1. For each validated interface, call pfb_build_dns_redirect_rules() for inet
+ *        and inet6.  Upsert each rule set: if the rule already exists (idempotent
+ *        reconcile), skip; otherwise append.
+ *     2. Stale-interface prune: remove rules for interfaces that are no longer in the
+ *        selected set (marker scan with guard on current iface set).
+ *
+ *   DISABLED or no interfaces:
+ *     Remove ALL pfB_DNS_Redirect_* rules via pfb_fwobj_remove() on both sections.
+ *
+ * Returns TRUE iff config was mutated (caller may choose to write_config).
+ * write_config() is NEVER called here — caller decides when to flush.
+ *
+ * Validation: each interface name is pfb_filter(PFB_FILTER_WORD) -validated before
+ * use. Invalid names are logged and skipped (defence-in-depth; the UI also validates).
+ *
+ * @return bool  TRUE if nat/rule or filter/rule was changed.
+ */
+function pfb_sync_dns_redirect_rules(): bool
+{
+	$changed = FALSE;
+
+	// [ ADR-29 ] Read registered fields through the PfbConfig gateway.
+	$redir_toggle = PfbConfig::read('dnsbl_redir');
+
+	// PfbToggle::On means 'on' stored value; anything else is off.
+	// The toggle adapter returns a PfbToggle enum; compare .value to the stored string.
+	$enabled = ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
+
+	if (!$enabled) {
+		// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
+		if (pfb_fwobj_remove('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+			$changed = TRUE;
+		}
+		// Remove all pfB_DNS_Redirect_* filter rules.
+		if (pfb_fwobj_remove('filter/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+			$changed = TRUE;
+		}
+		return $changed;
+	}
+
+	// ENABLED: read interfaces (comma-separated) and exception alias.
+	$iface_raw = (string) PfbConfig::read('dnsbl_redir_int');
+	$exception  = trim((string) PfbConfig::read('dnsbl_redir_exclude'));
+
+	// Split, trim, filter empty entries.
+	$ifaces_raw = array_filter(array_map('trim', explode(',', $iface_raw)), 'strlen');
+
+	// Validate and collect known-good interfaces via PFB_FILTER_WORD.
+	$ifaces = [];
+	foreach ($ifaces_raw as $iface_entry) {
+		$validated = pfb_filter($iface_entry, PFB_FILTER_WORD, 'pfb_sync_dns_redirect_rules');
+		if (empty($validated)) {
+			// Interface name failed validation — skip with a log entry.
+			pfb_logger(
+				"\npfb_sync_dns_redirect_rules: interface failed validation [ " .
+				substr(htmlspecialchars((string) $iface_entry), 0, 100) . " ] *skipping*", 2
+			);
+			continue;
+		}
+		$ifaces[] = $validated;
+	}
+
+	// If no valid interfaces remain, remove all rules and return.
+	if (empty($ifaces)) {
+		if (pfb_fwobj_remove('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+			$changed = TRUE;
+		}
+		if (pfb_fwobj_remove('filter/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+			$changed = TRUE;
+		}
+		return $changed;
+	}
+
+	// -----------------------------------------------------------------------
+	// Build the expected marker set for the current iface × family grid.
+	// -----------------------------------------------------------------------
+	$expected_descrs = [];
+	foreach ($ifaces as $iface) {
+		$expected_descrs[] = PFB_DNS_REDIR_DESCR_V4_PFX . $iface . PFB_DNS_REDIR_DESCR_V4_SFX;
+		$expected_descrs[] = PFB_DNS_REDIR_DESCR_V4_PFX . $iface . PFB_DNS_REDIR_DESCR_V6_SFX;
+	}
+
+	// -----------------------------------------------------------------------
+	// Stale-interface prune: remove pfB_DNS_Redirect_* rows whose descr is NOT
+	// in the expected set (i.e. they belong to a previously-selected interface).
+	// -----------------------------------------------------------------------
+	$stale_guard = static function (array $row) use ($expected_descrs): bool {
+		$descr = $row['descr'] ?? '';
+		// Remove if it is a DNS-redirect marker not in the current expected set.
+		return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
+			&& !in_array($descr, $expected_descrs, TRUE);
+	};
+
+	if (pfb_fwobj_remove('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX, $stale_guard)) {
+		$changed = TRUE;
+	}
+	if (pfb_fwobj_remove('filter/rule', PFB_DNS_REDIR_DESCR_V4_PFX, $stale_guard)) {
+		$changed = TRUE;
+	}
+
+	// -----------------------------------------------------------------------
+	// Idempotent upsert: for each interface × family, write the rule set if
+	// the marker is not already present in the config section.
+	// -----------------------------------------------------------------------
+	foreach ($ifaces as $iface) {
+		foreach (['inet', 'inet6'] as $family) {
+			$suffix = ($family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
+			$marker = PFB_DNS_REDIR_DESCR_V4_PFX . $iface . $suffix;
+
+			// Check existence in nat/rule.
+			$nat_exists = (pfb_fwobj_find('nat/rule', $marker) !== FALSE);
+			// Check existence in filter/rule.
+			$filter_exists = (pfb_fwobj_find('filter/rule', $marker) !== FALSE);
+
+			if ($nat_exists && $filter_exists) {
+				// Both present — idempotent; skip.
+				continue;
+			}
+
+			// Build the rule pair.
+			[$nat_rule, $filter_rule] = pfb_build_dns_redirect_rules($iface, $family, $exception);
+
+			if (!$nat_exists) {
+				$nat_rows   = config_get_path('nat/rule', []);
+				$nat_rows[] = $nat_rule;
+				config_set_path('nat/rule', $nat_rows);
+				$changed = TRUE;
+			}
+
+			if (!$filter_exists) {
+				$filter_rows   = config_get_path('filter/rule', []);
+				$filter_rows[] = $filter_rule;
+				config_set_path('filter/rule', $filter_rows);
+				$changed = TRUE;
+			}
+		}
+	}
+
+	return $changed;
+}
