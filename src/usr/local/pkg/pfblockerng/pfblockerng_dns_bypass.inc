@@ -408,37 +408,255 @@ function pfb_sync_dns_redirect_rules(): bool
 }
 
 // ---------------------------------------------------------------------------
-// ADR-37 — DoT/DoQ BLOCK rule builder (skeleton; Phase 2 implements)
-//
-// pfb_build_dot_block_rule — build one filter/rule BLOCK entry for a single
-// interface, blocking TCP+UDP port 853 (DoT/DoQ) on both IPv4 and IPv6.
-//
-// The rule shape (ground truth from §2.2 of ADR.md):
-//   type         => 'block'
-//   interface    => $iface
-//   ipprotocol   => 'inet46'
-//   protocol     => 'tcp/udp'
-//   source       => <any/> when $exclude_alias is empty;
-//                   <address>ALIAS</address><not/> when non-empty.
-//   destination  => <network>(self)</network><not/><port>853</port>
-//                   (self-exempt always on — cannot be disabled)
-//   statetype    => 'keep state'
-//   descr        => 'pfB_DoT_Block_' . $iface  (ADR-35 ownership marker)
-//
-// Phase 2 replaces this stub with the full implementation.
-//
-// @param string $iface          Interface name (e.g. 'lan', 'opt1').
-// @param string $exclude_alias  Optional exception alias name (or '').
-//                               When non-empty, the source is negated
-//                               (exception hosts bypass the block rule).
-// @return array{}               Phase 2: returns the filter/rule array.
-//                               Phase 1 skeleton: throws LogicException.
+// ADR-37 — DoT/DoQ BLOCK rule builder + registration + sync
 // ---------------------------------------------------------------------------
+
+/**
+ * Descr prefix for DoT/DoQ block filter rules.
+ * Pattern: pfB_DoT_Block_<iface>
+ * Must start with 'pfB_' so pfb_fwobj_is_owned() recognises it.
+ * Must NOT contain 'pfB DNSBL' (space) — pfb_create_dnsbl() would
+ * incorrectly bucket the rule as a DNSBL rule and attempt to remove it.
+ */
+define('PFB_DOT_BLOCK_DESCR_PFX', 'pfB_DoT_Block_');
+
+/**
+ * Build one filter/rule BLOCK entry for a single interface, blocking
+ * TCP+UDP port 853 (DoT/DoQ) on both IPv4 and IPv6.
+ *
+ * Ground-truth rule shape (ADR-37 §2.2):
+ *
+ *   <rule>
+ *     <type>block</type>
+ *     <interface>{iface}</interface>
+ *     <ipprotocol>inet46</ipprotocol>
+ *     <protocol>tcp/udp</protocol>
+ *     <!-- when $exclude_alias is empty: -->
+ *     <source><any/></source>
+ *     <!-- when $exclude_alias is non-empty: -->
+ *     <!-- <source><address>ALIAS</address><not/></source> -->
+ *     <destination>
+ *       <network>(self)</network><not/>
+ *       <port>853</port>
+ *     </destination>
+ *     <statetype>keep state</statetype>
+ *     <descr><![CDATA[pfB_DoT_Block_{iface}]]></descr>
+ *   </rule>
+ *
+ * Invariants (all asserted by PHPUnit golden tests in DotDoQBlockRuleTest.php):
+ *   • type is always 'block'.
+ *   • ipprotocol is 'inet46' (single rule covers both IPv4 and IPv6).
+ *   • protocol is 'tcp/udp' (covers DoT on TCP 853 and DoQ on UDP 853).
+ *   • destination is always negated (self) + port 853 — firewall-self-exempt
+ *     is structural and cannot be disabled.
+ *   • source is <any/> when $exclude_alias is empty; negated-alias when set.
+ *   • statetype is 'keep state'.
+ *   • descr is 'pfB_DoT_Block_' . $iface (ADR-35 ownership marker).
+ *
+ * Pure function — no config reads, no shell/exec, no write_config calls.
+ *
+ * @param  string $iface          Interface name (e.g. 'lan', 'opt1').
+ * @param  string $exclude_alias  Exception alias name, or '' for no exception.
+ *                                When non-empty, the source is a negated alias
+ *                                so exception hosts bypass the block rule.
+ *
+ * @return array<string,mixed>  The filter/rule config array.
+ */
 function pfb_build_dot_block_rule(string $iface, string $exclude_alias): array
 {
-	// Phase 1 skeleton — replaced in Phase 2.
-	// Returns an empty array so callers do not crash; the golden tests in
-	// DotDoQBlockRuleTest FAIL (not error) against this stub, which is the
-	// oracle-first discipline: tests specify the contract, not the implementation.
-	return [];
+	// -----------------------------------------------------------------------
+	// Source element:
+	//   When $exclude_alias is set: <source><address>ALIAS</address><not/></source>
+	//   When $exclude_alias is empty: <source><any/></source>
+	// -----------------------------------------------------------------------
+	if ($exclude_alias !== '') {
+		$source = [
+			'address' => $exclude_alias,
+			'not'     => '',
+		];
+	} else {
+		$source = [
+			'any' => '',
+		];
+	}
+
+	// -----------------------------------------------------------------------
+	// Destination: always negated (self) + port 853.
+	// The firewall-self exemption is structural — cannot be disabled.
+	//   <destination><network>(self)</network><not/><port>853</port></destination>
+	// -----------------------------------------------------------------------
+	$destination = [
+		'network' => '(self)',
+		'not'     => '',
+		'port'    => '853',
+	];
+
+	return [
+		'type'        => 'block',
+		'interface'   => $iface,
+		'ipprotocol'  => 'inet46',
+		'protocol'    => 'tcp/udp',
+		'source'      => $source,
+		'destination' => $destination,
+		'statetype'   => 'keep state',
+		'descr'       => PFB_DOT_BLOCK_DESCR_PFX . $iface,
+	];
+}
+
+// ---------------------------------------------------------------------------
+// pfb_fwobj_init_dot_block_registrations — register DoT/DoQ block spec
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers the DoT/DoQ block filter rule objects into the ADR-35 registry.
+ *
+ * One registration — the filter/rule section — keyed on PFB_DOT_BLOCK_DESCR_PFX.
+ * Because pfb_fwobj_remove() / pfb_fwobj_sweep() use str_starts_with() for
+ * pfB_-prefixed markers, a single prefix registration covers every per-interface
+ * descr variant:
+ *   pfB_DoT_Block_lan, pfB_DoT_Block_opt1, pfB_DoT_Block_opt2, …
+ *
+ * Call at any point after pfblockerng_dns_bypass.inc is loaded — before
+ * pfb_fwobj_sweep() or pfb_fwobj_remove() targets DoT/DoQ block objects.
+ * Idempotent (pfb_fwobj_register replaces the prior entry by key).
+ *
+ * write_config() is NEVER called here — callers own the flush.
+ */
+function pfb_fwobj_init_dot_block_registrations(): void
+{
+	// Filter block rules — one per interface, marker prefix covers all variants.
+	pfb_fwobj_register([
+		'type'    => 'filter',
+		'section' => 'filter/rule',
+		'marker'  => PFB_DOT_BLOCK_DESCR_PFX,
+		'builder' => NULL,	// rules built by pfb_sync_dot_block_rules(); NULL = seam-only
+		'guard'   => NULL,
+	]);
+}
+
+// ---------------------------------------------------------------------------
+// pfb_sync_dot_block_rules — lifecycle: create / reconcile / prune / remove
+// ---------------------------------------------------------------------------
+
+/**
+ * Create, reconcile, prune-stale, or remove all pfB_DoT_Block_* filter rules.
+ *
+ * Called from sync_package_pfblockerng() after pfb_sync_dns_redirect_rules().
+ * Reads the three registered PfbConfig fields and manages filter/rule via direct
+ * config_*_path (pfSense-core foreign section — ADR-29 exclusion list).
+ *
+ * Lifecycle:
+ *   ENABLED + interfaces selected:
+ *     1. For each validated interface, call pfb_build_dot_block_rule().
+ *        Upsert: if the rule already exists (idempotent reconcile), skip;
+ *        otherwise append.
+ *     2. Stale-interface prune: remove rules for interfaces no longer in the
+ *        selected set (marker scan with guard on current iface set).
+ *
+ *   DISABLED or no interfaces:
+ *     Remove ALL pfB_DoT_Block_* rules via pfb_fwobj_remove().
+ *
+ * Returns TRUE iff config was mutated (caller may choose to write_config).
+ * write_config() is NEVER called here — caller decides when to flush.
+ *
+ * Validation: each interface name is pfb_filter(PFB_FILTER_WORD)-validated before
+ * use. Invalid names are logged and skipped (defence-in-depth; the UI also validates).
+ *
+ * @return bool  TRUE if filter/rule was changed.
+ */
+function pfb_sync_dot_block_rules(): bool
+{
+	$changed = FALSE;
+
+	// [ ADR-29 ] Read registered fields through the PfbConfig gateway.
+	$dot_toggle = PfbConfig::read('dnsbl_dot_block');
+
+	// PfbToggle::On means 'on' stored value; anything else is off.
+	$enabled = ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
+
+	if (!$enabled) {
+		// DISABLED: remove all pfB_DoT_Block_* filter rules.
+		if (pfb_fwobj_remove('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+			$changed = TRUE;
+		}
+		return $changed;
+	}
+
+	// ENABLED: read interfaces (comma-separated) and exception alias.
+	$iface_raw      = (string) PfbConfig::read('dnsbl_dot_block_int');
+	$exclude_alias  = trim((string) PfbConfig::read('dnsbl_dot_block_exclude'));
+
+	// Split, trim, filter empty entries.
+	$ifaces_raw = array_filter(array_map('trim', explode(',', $iface_raw)), 'strlen');
+
+	// Validate and collect known-good interfaces via PFB_FILTER_WORD.
+	$ifaces = [];
+	foreach ($ifaces_raw as $iface_entry) {
+		$validated = pfb_filter($iface_entry, PFB_FILTER_WORD, 'pfb_sync_dot_block_rules');
+		if (empty($validated)) {
+			// Interface name failed validation — skip with a log entry.
+			pfb_logger(
+				"\npfb_sync_dot_block_rules: interface failed validation [ " .
+				substr(htmlspecialchars((string) $iface_entry), 0, 100) . " ] *skipping*", 2
+			);
+			continue;
+		}
+		$ifaces[] = $validated;
+	}
+
+	// If no valid interfaces remain, remove all rules and return.
+	if (empty($ifaces)) {
+		if (pfb_fwobj_remove('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+			$changed = TRUE;
+		}
+		return $changed;
+	}
+
+	// -----------------------------------------------------------------------
+	// Build the expected marker set for the current iface set.
+	// -----------------------------------------------------------------------
+	$expected_descrs = [];
+	foreach ($ifaces as $iface) {
+		$expected_descrs[] = PFB_DOT_BLOCK_DESCR_PFX . $iface;
+	}
+
+	// -----------------------------------------------------------------------
+	// Stale-interface prune: remove pfB_DoT_Block_* rows whose descr is NOT
+	// in the expected set (i.e. they belong to a previously-selected interface).
+	// -----------------------------------------------------------------------
+	$stale_guard = static function (array $row) use ($expected_descrs): bool {
+		$descr = $row['descr'] ?? '';
+		// Remove if it is a DoT block marker not in the current expected set.
+		return str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX)
+			&& !in_array($descr, $expected_descrs, TRUE);
+	};
+
+	if (pfb_fwobj_remove('filter/rule', PFB_DOT_BLOCK_DESCR_PFX, $stale_guard)) {
+		$changed = TRUE;
+	}
+
+	// -----------------------------------------------------------------------
+	// Idempotent upsert: for each interface, write the rule if the marker
+	// is not already present in filter/rule.
+	// -----------------------------------------------------------------------
+	foreach ($ifaces as $iface) {
+		$marker = PFB_DOT_BLOCK_DESCR_PFX . $iface;
+
+		// Check existence in filter/rule.
+		$filter_exists = (pfb_fwobj_find('filter/rule', $marker) !== FALSE);
+
+		if ($filter_exists) {
+			// Already present — idempotent; skip.
+			continue;
+		}
+
+		// Build the rule and append.
+		$filter_rule    = pfb_build_dot_block_rule($iface, $exclude_alias);
+		$filter_rows    = config_get_path('filter/rule', []);
+		$filter_rows[]  = $filter_rule;
+		config_set_path('filter/rule', $filter_rows);
+		$changed = TRUE;
+	}
+
+	return $changed;
 }

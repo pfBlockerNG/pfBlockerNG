@@ -12516,6 +12516,17 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 
+	// [ ADR-37 ] Sync DoT/DoQ block filter rules (create / reconcile / prune / remove).
+	// Reads dnsbl_dot_block (toggle) via PfbConfig; manages filter/rule directly
+	// (pfSense-core foreign section). No write_config() here — each sync flushes itself.
+	if (function_exists('pfb_fwobj_init_dot_block_registrations') &&
+	    function_exists('pfb_sync_dot_block_rules')) {
+		pfb_fwobj_init_dot_block_registrations();
+		if (pfb_sync_dot_block_rules()) {
+			write_config('pfBlockerNG: saving DoT/DoQ block rule changes');
+		}
+	}
+
 	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
 	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
 	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
@@ -14529,6 +14540,10 @@ function pfblockerng_php_pre_deinstall_command() {
 		// [ ADR-36 ] Also register DNS-redirect objects so the sweep covers pfB_DNS_Redirect_* entries.
 		if (function_exists('pfb_fwobj_init_dns_redirect_registrations')) {
 			pfb_fwobj_init_dns_redirect_registrations();
+		}
+		// [ ADR-37 ] Also register DoT/DoQ block objects so the sweep covers pfB_DoT_Block_* entries.
+		if (function_exists('pfb_fwobj_init_dot_block_registrations')) {
+			pfb_fwobj_init_dot_block_registrations();
 		}
 		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
 			write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
