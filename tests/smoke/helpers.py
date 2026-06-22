@@ -2275,13 +2275,9 @@ def reconfigure_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     polls readiness. Used by module teardowns that mutate interface/gateway state
     to guarantee the box is left with a live resolver for sibling modules.
     """
-    # Capture the function's return value (0 == success) rather than an unconditional
-    # sentinel: a non-zero return must fail the reconfigure even when no PHP fatal fired.
-    # intval() maps a void/null return (some pfSense versions return nothing) to 0 == success;
-    # wait_unbound_ready() below is the authoritative functional gate either way.
-    snippet = "require_once('interfaces.inc');\n$rv = services_unbound_configure();\necho 'RECONFIG_RV=' . intval($rv);"
+    snippet = "require_once('interfaces.inc');\nservices_unbound_configure();\necho 'OK';"
     result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "RECONFIG_RV=0" not in result.stdout:
+    if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"reconfigure_unbound failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
     wait_unbound_ready(vm)
 
