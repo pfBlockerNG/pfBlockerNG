@@ -88,7 +88,7 @@
 		// before (re)starting syslogd so the package log socket is reachable.
 		safe_mkdir('/var/unbound/var/run');
 		@chown('/var/unbound/var/run', 'unbound');
-		system_syslogd_start(true);
+		system_syslogd_start(TRUE);
 		]]>
 	</custom_php_resync_config_command>
 </packagegui>
