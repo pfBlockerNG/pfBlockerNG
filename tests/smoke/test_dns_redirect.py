@@ -2,10 +2,10 @@
 
 Proves on a real pfSense CE VM that:
 
-* **Case 1 (Enable path):** enabling DNS redirect on LAN creates 2 ``nat/rule``
-  entries (``pfB_DNS_Redirect_lan_v4`` + ``pfB_DNS_Redirect_lan_v6``) and 2
-  ``filter/rule`` entries, each with the correct §2.2 field values; ``pfctl -sn``
-  confirms the rdr rules are active.
+* **Case 1 (Enable path):** enabling DNS redirect on the primary non-WAN interface
+  creates 2 ``nat/rule`` entries (``pfB_DNS_Redirect_<iface>_v4`` +
+  ``pfB_DNS_Redirect_<iface>_v6``) and 2 ``filter/rule`` entries, each with the
+  correct §2.2 field values; ``pfctl -sn`` confirms the rdr rules are active.
 * **Case 2 (Disable path):** disabling removes all ``pfB_DNS_Redirect_*`` entries
   from both sections; ``pfctl -sn`` shows no pfBlockerNG rdr rules for port 53.
 * **Case 3 (User-rule survival):** a user ``nat/rule`` entry (no pfB marker)
@@ -19,6 +19,10 @@ Proves on a real pfSense CE VM that:
 * **Case 6 (Uninstall sweep):** uninstalling the package with redirect enabled
   sweeps all ``pfB_DNS_Redirect_*`` entries while a user NAT rule survives and
   ``installedpackages/pfblockerng*`` sections are removed.
+
+Cases 1–3 and 5–6 require at least one non-WAN interface and skip cleanly on a
+WAN-only VM (e.g. the default smoke image). The interface is discovered at runtime
+via ``_discover_non_wan_ifaces()`` — never hardcoded.
 
 All cases use config.xml reads via the pfSense config API (``php_eval`` /
 ``config_get_path``). ``pfctl -sn`` rdr confirmation is the on-box live gate for
@@ -89,6 +93,20 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     finally:
         h.unblock_egress()
         h.collect_host_diagnostics(smoke_vm)
+
+
+@pytest.fixture(scope="module")
+def primary_iface(deployed_vm: SmokeVM) -> str:
+    """Return the first discovered non-WAN interface short name.
+
+    Skips the test (and any test that uses this fixture) when the VM has no
+    non-WAN interfaces — e.g. the default smoke image which has WAN only.
+    The set matches what ``pfb_build_if_list(FALSE, FALSE)`` returns.
+    """
+    available = _discover_non_wan_ifaces(deployed_vm)
+    if not available:
+        pytest.skip("requires ≥1 non-WAN interface; VM is WAN-only")
+    return available[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -302,20 +320,20 @@ def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM) -> None:
-    """ADR-36 Case 1: enabling redirect on LAN creates pfB-owned NAT + filter rules.
+def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-36 Case 1: enabling redirect on the primary non-WAN interface creates pfB-owned NAT + filter rules.
 
     Scenario: enable path — both IP families created, pfctl -sn confirms rdr.
 
       Background: pfBlockerNG installed; DNS redirect disabled.
 
-      Given no pfB_DNS_Redirect_lan_* entries in nat/rule or filter/rule (before-state),
-        And pfctl -sn shows no rdr rules for port 53 on LAN (before-state),
+      Given no pfB_DNS_Redirect_* entries in nat/rule or filter/rule (before-state),
+        And pfctl -sn shows no rdr rules for port 53 on the primary interface (before-state),
 
-      When DNS redirect is enabled on LAN and a full reload runs,
+      When DNS redirect is enabled on the primary non-WAN interface and a full reload runs,
 
-      Then nat/rule contains exactly 2 pfB_DNS_Redirect_lan_* entries (v4 + v6).
-        And filter/rule contains exactly 2 corresponding pfB_DNS_Redirect_lan_* entries.
+      Then nat/rule contains exactly 2 pfB_DNS_Redirect_<iface>_* entries (v4 + v6).
+        And filter/rule contains exactly 2 corresponding pfB_DNS_Redirect_<iface>_* entries.
         And each nat/rule entry carries the correct §2.2 field values:
             - ipprotocol: inet (v4) / inet6 (v6)
             - target: 127.0.0.1 (v4) / ::1 (v6)
@@ -323,10 +341,10 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM) 
             - local-port: 53
             - natreflection: disable
             - destination: (self) network, not-negated, port 53
-        And pfctl -sn shows rdr rules on LAN for port 53.
+        And pfctl -sn shows rdr rules on the primary interface for port 53.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
     descr_v4 = _redir_descr_for(iface, "inet")
     descr_v6 = _redir_descr_for(iface, "inet6")
 
@@ -342,21 +360,21 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM) 
             "pfB_DNS_Redirect_* filter/rule entries present before enable — before-state not clean"
         )
         assert not _pfctl_sn_has_redir(vm, iface), (
-            "pfctl -sn shows rdr rule on LAN before enable — before-state not clean"
+            f"pfctl -sn shows rdr rule on {iface} before enable — before-state not clean"
         )
 
-        # WHEN — enable on LAN and reload.
+        # WHEN — enable on the primary interface and reload.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
         # THEN — exactly 2 nat/rule entries (v4 + v6).
         nat_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
-        assert nat_count == 2, f"Expected 2 pfB_DNS_Redirect_lan_* nat/rule entries after enable, got {nat_count}"
+        assert nat_count == 2, f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries after enable, got {nat_count}"
 
         # THEN — exactly 2 filter/rule entries.
         filter_count = _filter_redir_count(vm, _REDIR_DESCR_PFX + iface)
         assert filter_count == 2, (
-            f"Expected 2 pfB_DNS_Redirect_lan_* filter/rule entries after enable, got {filter_count}"
+            f"Expected 2 pfB_DNS_Redirect_{iface}_* filter/rule entries after enable, got {filter_count}"
         )
 
         # THEN — field-by-field verification on the v4 rule.
@@ -393,7 +411,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM) 
         )
 
         # THEN — pfctl -sn confirms the rdr rules are active.
-        assert _pfctl_sn_has_redir(vm, iface), "pfctl -sn shows no rdr rule on LAN for port 53 after enable"
+        assert _pfctl_sn_has_redir(vm, iface), f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable"
 
     finally:
         _cleanup_redirect(vm)
@@ -404,37 +422,37 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM) 
 # --------------------------------------------------------------------------- #
 
 
-def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM) -> None:
+def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-36 Case 2: disabling redirect removes all pfB_DNS_Redirect_* rules.
 
     Scenario: disable path — rules removed from config.xml and pfctl.
 
-      Given DNS redirect is enabled on LAN,
-        And pfB_DNS_Redirect_lan_* entries are present in nat/rule (before-state),
-        And pfB_DNS_Redirect_lan_* entries are present in filter/rule (before-state),
-        And pfctl -sn shows rdr rules on LAN for port 53 (before-state),
+      Given DNS redirect is enabled on the primary non-WAN interface,
+        And pfB_DNS_Redirect_<iface>_* entries are present in nat/rule (before-state),
+        And pfB_DNS_Redirect_<iface>_* entries are present in filter/rule (before-state),
+        And pfctl -sn shows rdr rules on the primary interface for port 53 (before-state),
 
       When DNS redirect is disabled and a full reload runs,
 
       Then nat/rule has no pfB_DNS_Redirect_* entries.
         And filter/rule has no pfB_DNS_Redirect_* entries.
-        And pfctl -sn shows no rdr rules on LAN for port 53.
+        And pfctl -sn shows no rdr rules on the primary interface for port 53.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
     try:
-        # GIVEN — enable on LAN; assert before-state with rules present.
+        # GIVEN — enable on the primary interface; assert before-state with rules present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-            "pfB_DNS_Redirect_lan_* nat/rule entries absent before disable — setup failed"
+            f"pfB_DNS_Redirect_{iface}_* nat/rule entries absent before disable — setup failed"
         )
         assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-            "pfB_DNS_Redirect_lan_* filter/rule entries absent before disable — setup failed"
+            f"pfB_DNS_Redirect_{iface}_* filter/rule entries absent before disable — setup failed"
         )
-        assert _pfctl_sn_has_redir(vm, iface), "pfctl -sn shows no rdr on LAN before disable — setup failed"
+        assert _pfctl_sn_has_redir(vm, iface), f"pfctl -sn shows no rdr on {iface} before disable — setup failed"
 
         # WHEN — disable and reload.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
@@ -448,8 +466,10 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM)
             "pfB_DNS_Redirect_* filter/rule entries still present after disable"
         )
 
-        # THEN — pfctl -sn must show no rdr rule for port 53 on LAN.
-        assert not _pfctl_sn_has_redir(vm, iface), "pfctl -sn still shows rdr rule on LAN for port 53 after disable"
+        # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface.
+        assert not _pfctl_sn_has_redir(vm, iface), (
+            f"pfctl -sn still shows rdr rule on {iface} for port 53 after disable"
+        )
 
     finally:
         _cleanup_redirect(vm)
@@ -460,7 +480,7 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM)
 # --------------------------------------------------------------------------- #
 
 
-def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM) -> None:
+def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-36 Case 3: a user nat/rule without a pfB marker is never touched.
 
     Scenario: user-rule survival — enable then disable does not modify user rules.
@@ -469,14 +489,14 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
             marker) is present in config.xml,
         And DNS redirect is disabled initially (before-state),
 
-      When DNS redirect is enabled on LAN and a reload runs (pfB rules appear),
+      When DNS redirect is enabled on the primary non-WAN interface and a reload runs (pfB rules appear),
         Then the user nat/rule is still present (survives enable).
 
       When DNS redirect is disabled and a reload runs (pfB rules removed),
         Then the user nat/rule is still present (survives disable).
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
     try:
         # GIVEN — seed the user NAT rule; assert redirect is disabled.
@@ -486,16 +506,16 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
 
         assert _nat_rule_present(vm, _USER_NAT_DESCR), "user NAT rule not present before enable — seeding failed"
         assert not _nat_rule_present(vm, _redir_descr_for(iface, "inet")), (
-            "pfB_DNS_Redirect_lan_v4 already present before enable — state not clean"
+            f"{_redir_descr_for(iface, 'inet')} already present before enable — state not clean"
         )
 
-        # WHEN — enable on LAN.
+        # WHEN — enable on the primary interface.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
         # THEN — pfB rules appear; user rule survives.
         assert _nat_rule_present(vm, _redir_descr_for(iface, "inet")), (
-            "pfB_DNS_Redirect_lan_v4 not created after enable"
+            f"{_redir_descr_for(iface, 'inet')} not created after enable"
         )
         assert _nat_rule_present(vm, _USER_NAT_DESCR), (
             "user NAT rule was removed during enable — should never be touched"
@@ -507,7 +527,7 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
 
         # THEN — pfB rules gone; user rule still present.
         assert not _nat_rule_present(vm, _redir_descr_for(iface, "inet")), (
-            "pfB_DNS_Redirect_lan_v4 still present after disable"
+            f"{_redir_descr_for(iface, 'inet')} still present after disable"
         )
         assert _nat_rule_present(vm, _USER_NAT_DESCR), (
             "user NAT rule was removed during disable — should never be touched"
@@ -529,14 +549,16 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
 
       Background: VM has at least two non-WAN interfaces available.
 
-      Given redirect enabled on LAN + OPT1 (two interfaces),
-        And pfB_DNS_Redirect_lan_* rules present (before-state),
-        And pfB_DNS_Redirect_opt1_* rules present (before-state),
+      Given redirect enabled on the first two discovered non-WAN interfaces
+        (e.g. lan + opt1 — names are discovered, never assumed),
+        And the first interface's pfB_DNS_Redirect_* rules present (before-state),
+        And the second interface's pfB_DNS_Redirect_* rules present (before-state),
 
-      When the selection is reduced to LAN only and a reload runs,
+      When the selection is reduced to the first interface only and a reload runs,
 
-      Then pfB_DNS_Redirect_opt1_* entries are GONE from nat/rule and filter/rule.
-        And pfB_DNS_Redirect_lan_* entries are STILL PRESENT (both families).
+      Then the second interface's pfB_DNS_Redirect_* entries are GONE from nat/rule
+        and filter/rule.
+        And the first interface's pfB_DNS_Redirect_* entries are STILL PRESENT (both families).
     """
     vm = deployed_vm
 
@@ -597,14 +619,14 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
 # --------------------------------------------------------------------------- #
 
 
-def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM) -> None:
+def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-36 Case 5: exception alias wires negated-alias source; empty = <any>.
 
     Scenario: exception alias branch — both states, both IP families.
 
       Given redirect is disabled.
 
-      When redirect is enabled on LAN with dnsbl_redir_exclude = 'DNS_Exceptions_Test',
+      When redirect is enabled on the primary non-WAN interface with dnsbl_redir_exclude = 'DNS_Exceptions_Test',
 
       Then each nat/rule entry (v4 + v6) has:
             - source.address == 'DNS_Exceptions_Test'
@@ -616,7 +638,7 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM) -> None:
             and source.address is absent.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
     descr_v4 = _redir_descr_for(iface, "inet")
     descr_v6 = _redir_descr_for(iface, "inet6")
 
@@ -681,13 +703,14 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_vm: SmokeVM) -> None:
+def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-36 Case 6: uninstall sweeps all pfB_DNS_Redirect_* entries; user NAT survives.
 
     Scenario: uninstall sweep — owned rules gone, user rule and sections gone.
 
-      Given DNS redirect is enabled on LAN (pfB_DNS_Redirect_lan_* in nat/rule
-            + filter/rule, confirmed in config.xml as before-state),
+      Given DNS redirect is enabled on the primary non-WAN interface
+            (pfB_DNS_Redirect_<iface>_* in nat/rule + filter/rule, confirmed in
+            config.xml as before-state),
         And a user nat/rule entry (no pfB marker) is present in config.xml,
         And installedpackages/pfblockerng* sections are present (before-state),
 
@@ -700,19 +723,19 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
         And installedpackages/pfblockerng* sections are GONE from config.xml.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
-    # GIVEN — enable redirect on LAN and seed a user NAT rule.
+    # GIVEN — enable redirect on the primary interface and seed a user NAT rule.
     _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
     h.reload(vm, "update")
     _seed_user_nat(vm, _USER_NAT_DESCR)
 
     # BEFORE-STATE: assert all objects are present before uninstall.
     assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-        "pfB_DNS_Redirect_lan_* nat/rule entries absent before uninstall — setup failed"
+        f"pfB_DNS_Redirect_{iface}_* nat/rule entries absent before uninstall — setup failed"
     )
     assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-        "pfB_DNS_Redirect_lan_* filter/rule entries absent before uninstall — setup failed"
+        f"pfB_DNS_Redirect_{iface}_* filter/rule entries absent before uninstall — setup failed"
     )
     assert _nat_rule_present(vm, _USER_NAT_DESCR), "user NAT rule absent before uninstall — seeding failed"
     assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"

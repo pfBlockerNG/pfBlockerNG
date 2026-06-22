@@ -2,9 +2,10 @@
 
 Proves on a real pfSense CE VM that:
 
-* **Case 1 (Enable path):** enabling DoT/DoQ block on LAN creates exactly one
-  ``filter/rule`` entry (``pfB_DoT_Block_lan``) with the correct §2.2 field values;
-  ``pfctl -sr`` confirms the block rule is active with the self-exempt guard.
+* **Case 1 (Enable path):** enabling DoT/DoQ block on the primary non-WAN interface
+  creates exactly one ``filter/rule`` entry (``pfB_DoT_Block_<iface>``) with the
+  correct §2.2 field values; ``pfctl -sr`` confirms the block rule is active with
+  the self-exempt guard.
 * **Case 2 (Disable path):** disabling removes all ``pfB_DoT_Block_*`` entries
   from ``filter/rule``; ``pfctl -sr`` shows no pfBlockerNG port-853 block rules.
 * **Case 3 (User-rule survival):** a user ``filter/rule`` entry (no pfB marker)
@@ -21,6 +22,10 @@ Proves on a real pfSense CE VM that:
 * **Case 7 (Self-exempt guard):** ``pfctl -sr`` output contains the block rule for
   port 853 and the rule includes the ``self``-negation token confirming the
   firewall-self exemption is active.
+
+Cases 1–3 and 5–7 require at least one non-WAN interface and skip cleanly on a
+WAN-only VM (e.g. the default smoke image). The interface is discovered at runtime
+via ``_discover_non_wan_ifaces()`` — never hardcoded.
 
 All cases use config.xml reads via the pfSense config API (``php_eval`` /
 ``config_get_path``). ``pfctl -sr`` confirmation is the on-box live gate for
@@ -87,6 +92,20 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     finally:
         h.unblock_egress()
         h.collect_host_diagnostics(smoke_vm)
+
+
+@pytest.fixture(scope="module")
+def primary_iface(deployed_vm: SmokeVM) -> str:
+    """Return the first discovered non-WAN interface short name.
+
+    Skips the test (and any test that uses this fixture) when the VM has no
+    non-WAN interfaces — e.g. the default smoke image which has WAN only.
+    The set matches what ``pfb_build_if_list(FALSE, FALSE)`` returns.
+    """
+    available = _discover_non_wan_ifaces(deployed_vm)
+    if not available:
+        pytest.skip("requires ≥1 non-WAN interface; VM is WAN-only")
+    return available[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -290,8 +309,8 @@ def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM) -> None:
-    """ADR-37 Case 1: enabling DoT/DoQ block on LAN creates the pfB-owned filter rule.
+def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37 Case 1: enabling DoT/DoQ block on the primary non-WAN interface creates the pfB-owned filter rule.
 
     Scenario: enable path — block rule created with correct §2.2 field values.
 
@@ -300,9 +319,9 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM) -> None:
       Given no pfB_DoT_Block_* entries in filter/rule (before-state),
         And pfctl -sr shows no pfBlockerNG port-853 block rule (before-state),
 
-      When DoT/DoQ block is enabled on LAN and a full reload runs,
+      When DoT/DoQ block is enabled on the primary non-WAN interface and a full reload runs,
 
-      Then filter/rule contains exactly 1 pfB_DoT_Block_lan entry.
+      Then filter/rule contains exactly 1 pfB_DoT_Block_<iface> entry.
         And the entry carries the correct §2.2 field values:
             - type: block
             - ipprotocol: inet46
@@ -313,7 +332,7 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM) -> None:
         And pfctl -sr shows the block rule active for port 853.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
     descr = _DOT_BLOCK_DESCR_PFX + iface
 
     try:
@@ -328,13 +347,13 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM) -> None:
             "pfctl -sr shows a port-853 block rule before enable — before-state not clean"
         )
 
-        # WHEN — enable on LAN and reload.
+        # WHEN — enable on the primary interface and reload.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
-        # THEN — exactly 1 filter/rule entry for LAN.
+        # THEN — exactly 1 filter/rule entry for the primary interface.
         count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
-        assert count == 1, f"Expected 1 pfB_DoT_Block_lan filter/rule entry after enable, got {count}"
+        assert count == 1, f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry after enable, got {count}"
 
         # THEN — field-by-field verification.
         assert _filter_rule_field(vm, descr, "type") == "block", f"{descr}: type != 'block'"
@@ -365,13 +384,13 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM) -> None:
+def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 Case 2: disabling DoT/DoQ block removes all pfB_DoT_Block_* rules.
 
     Scenario: disable path — rule removed from config.xml and pfctl.
 
-      Given DoT/DoQ block is enabled on LAN,
-        And pfB_DoT_Block_lan entry is present in filter/rule (before-state),
+      Given DoT/DoQ block is enabled on the primary non-WAN interface,
+        And pfB_DoT_Block_<iface> entry is present in filter/rule (before-state),
         And pfctl -sr shows a port-853 block rule (before-state),
 
       When DoT/DoQ block is disabled and a full reload runs,
@@ -380,15 +399,15 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM) -> None:
         And pfctl -sr shows no pfBlockerNG port-853 block rules.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
     try:
-        # GIVEN — enable on LAN; assert before-state with rule present.
+        # GIVEN — enable on the primary interface; assert before-state with rule present.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
-            "pfB_DoT_Block_lan filter/rule entry absent before disable — setup failed"
+            f"pfB_DoT_Block_{iface} filter/rule entry absent before disable — setup failed"
         )
         assert _pfctl_sr_has_block_853(vm), "pfctl -sr shows no port-853 block before disable — setup failed"
 
@@ -413,7 +432,7 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -> None:
+def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 Case 3: a user filter/rule without a pfB marker is never touched.
 
     Scenario: user-rule survival — enable, disable, uninstall do not modify user rules.
@@ -422,7 +441,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
             marker) is present in config.xml,
         And DoT/DoQ block is disabled initially (before-state),
 
-      When DoT/DoQ block is enabled on LAN and a reload runs (pfB rule appears),
+      When DoT/DoQ block is enabled on the primary non-WAN interface and a reload runs (pfB rule appears),
         Then the user filter/rule is still present (survives enable).
 
       When DoT/DoQ block is disabled and a reload runs (pfB rule removed),
@@ -434,7 +453,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
         And installedpackages/pfblockerng* sections are gone.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
     try:
         # GIVEN — seed the user filter rule; assert block is disabled.
@@ -446,15 +465,15 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
             "user filter rule not present before enable — seeding failed"
         )
         assert not _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
-            "pfB_DoT_Block_lan already present before enable — state not clean"
+            f"pfB_DoT_Block_{iface} already present before enable — state not clean"
         )
 
-        # WHEN — enable on LAN.
+        # WHEN — enable on the primary interface.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
         # THEN — pfB rule appears; user rule survives enable.
-        assert _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), "pfB_DoT_Block_lan not created after enable"
+        assert _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), f"pfB_DoT_Block_{iface} not created after enable"
         assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
             "user filter rule was removed during enable — should never be touched"
         )
@@ -465,7 +484,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
 
         # THEN — pfB rule gone; user rule survives disable.
         assert not _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
-            "pfB_DoT_Block_lan still present after disable"
+            f"pfB_DoT_Block_{iface} still present after disable"
         )
         assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
             "user filter rule was removed during disable — should never be touched"
@@ -475,7 +494,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
         assert _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
-            "pfB_DoT_Block_lan not recreated before uninstall step"
+            f"pfB_DoT_Block_{iface} not recreated before uninstall step"
         )
 
         # WHEN — uninstall.
@@ -483,7 +502,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM) -
 
         # THEN — pfB rules gone; user rule survives; pfblockerng sections gone.
         assert not _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
-            "pfB_DoT_Block_lan still present after uninstall — ADR-35/37 sweep did not run"
+            f"pfB_DoT_Block_{iface} still present after uninstall — ADR-35/37 sweep did not run"
         )
         assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
             "user filter rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
@@ -513,14 +532,15 @@ def test_stale_interface_rule_pruned_on_reconcile(deployed_vm: SmokeVM) -> None:
 
       Background: VM has at least two non-WAN interfaces available.
 
-      Given DoT/DoQ block enabled on LAN + OPT1 (two interfaces),
-        And pfB_DoT_Block_lan rule present (before-state),
-        And pfB_DoT_Block_opt1 rule present (before-state),
+      Given DoT/DoQ block enabled on the first two discovered non-WAN interfaces
+        (e.g. lan + opt1 — names are discovered, never assumed),
+        And the first interface's pfB_DoT_Block_ rule present (before-state),
+        And the second interface's pfB_DoT_Block_ rule present (before-state),
 
-      When the selection is reduced to LAN only and a reload runs,
+      When the selection is reduced to the first interface only and a reload runs,
 
-      Then pfB_DoT_Block_opt1 entry is GONE from filter/rule.
-        And pfB_DoT_Block_lan entry is STILL PRESENT.
+      Then the second interface's pfB_DoT_Block_ entry is GONE from filter/rule.
+        And the first interface's pfB_DoT_Block_ entry is STILL PRESENT.
     """
     vm = deployed_vm
 
@@ -567,14 +587,15 @@ def test_stale_interface_rule_pruned_on_reconcile(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM) -> None:
+def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 Case 5: exception alias wires negated-alias source; empty gives <any>.
 
     Scenario: exception alias branch — both states asserted (before and after).
 
       Given DoT/DoQ block is disabled.
 
-      When DoT/DoQ block is enabled on LAN with dnsbl_dot_block_exclude = 'DoT_Exceptions_Test',
+      When DoT/DoQ block is enabled on the primary non-WAN interface
+            with dnsbl_dot_block_exclude = 'DoT_Exceptions_Test',
 
       Then filter/rule entry has:
             - source.address == 'DoT_Exceptions_Test'
@@ -585,7 +606,7 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM) -> 
       Then filter/rule entry source is <any> (source.any key present; address absent).
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
     descr = _DOT_BLOCK_DESCR_PFX + iface
 
     try:
@@ -629,13 +650,14 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM) -> 
 # --------------------------------------------------------------------------- #
 
 
-def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM) -> None:
+def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 Case 6: uninstall sweeps all pfB_DoT_Block_* entries; user rule survives.
 
     Scenario: uninstall sweep — owned rules gone, user rule preserved, sections gone.
 
-      Given DoT/DoQ block is enabled on LAN (pfB_DoT_Block_lan in filter/rule,
-            confirmed in config.xml as before-state),
+      Given DoT/DoQ block is enabled on the primary non-WAN interface
+            (pfB_DoT_Block_<iface> in filter/rule, confirmed in config.xml as
+            before-state),
         And a user filter/rule entry (no pfB marker) is present in config.xml,
         And installedpackages/pfblockerng* sections are present (before-state),
 
@@ -647,16 +669,16 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM) -> No
         And installedpackages/pfblockerng* sections are GONE from config.xml.
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
-    # GIVEN — enable DoT block on LAN and seed a user filter rule.
+    # GIVEN — enable DoT block on the primary interface and seed a user filter rule.
     _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
     h.reload(vm, "update")
     _seed_user_filter(vm, _USER_FILTER_DESCR)
 
     # BEFORE-STATE: assert all objects are present before uninstall.
     assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
-        "pfB_DoT_Block_lan filter/rule entry absent before uninstall — setup failed"
+        f"pfB_DoT_Block_{iface} filter/rule entry absent before uninstall — setup failed"
     )
     assert _filter_rule_present(vm, _USER_FILTER_DESCR), "user filter rule absent before uninstall — seeding failed"
     assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
@@ -686,7 +708,7 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM) -> No
 # --------------------------------------------------------------------------- #
 
 
-def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM) -> None:
+def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 Case 7: pfctl -sr confirms the port-853 block rule carries self-exempt.
 
     Scenario: self-exempt guard — on-box pfctl output proves the guard is active.
@@ -696,18 +718,18 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM) -> None:
       Given no pfB_DoT_Block_* entries in filter/rule (before-state),
         And pfctl -sr shows no port-853 block rule with self-exempt (before-state),
 
-      When DoT/DoQ block is enabled on LAN and a full reload runs,
+      When DoT/DoQ block is enabled on the primary non-WAN interface and a full reload runs,
 
       Then pfctl -sr contains a block rule for port 853.
         And the rule in pfctl -sr carries the self-exempt negation token ('!' + 'self'),
             confirming the firewall itself is excluded from the block.
 
-      NOTE: full client-to-:853 block behaviour (a LAN client being prevented from
+      NOTE: full client-to-:853 block behaviour (a client being prevented from
       opening a TCP/UDP connection to an external :853 server) requires a second host
       on the network and is a documented maintainer manual-smoke item (ADR-37 §7).
     """
     vm = deployed_vm
-    iface = "lan"
+    iface = primary_iface
 
     try:
         # GIVEN — disable DoT block; assert before-state clean.
@@ -721,7 +743,7 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM) -> None:
             "pfctl -sr shows self-exempt port-853 rule before enable — before-state not clean"
         )
 
-        # WHEN — enable on LAN and reload.
+        # WHEN — enable on the primary interface and reload.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
