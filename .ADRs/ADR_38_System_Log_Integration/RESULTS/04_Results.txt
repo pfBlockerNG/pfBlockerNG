@@ -1,0 +1,170 @@
+ADR-38 Phase 4 — Python Leg DNSBL Syslog Emission
+===================================================
+
+Phase:    4 of 4 (Python_Leg)
+Branch:   adr/38-system-log-integration
+Worktree: /home/user/pfBlockerNG/.claude/worktrees/adr-38
+Date:     2026-06-22
+
+ADR-RESUME: branch=adr/38-system-log-integration next-phase=DONE
+
+─────────────────────────────────────────────
+OBJECTIVES vs DELIVERABLES
+─────────────────────────────────────────────
+
+1. PHP writes syslog keys to py_unbound.ini — DONE
+   - pfblockerng.inc pfb_unbound_python(): computed $syslog_enable/$syslog_facility/$syslog_priority
+     and written into [MAIN] section of the heredoc ini.
+   - syslog_facility: raw facility int (PHP LOG_LOCAL6 = 176 = 22<<3; written as 22 = 176>>3
+     so Python SysLogHandler receives the raw value directly, no shift needed).
+   - syslog_priority: byte-identical between PHP and Python (LOG_NOTICE = 5, etc.).
+   - syslog_enable: 'on'/'off' string read via config.getboolean() by Python.
+   - All three keys read via PfbConfig::read() — RequireConfigGateway stays green.
+
+2. Python reads syslog keys at config-load boundary (init_standard) — DONE
+   - pfb["syslog_enable"] = False (default off)
+   - pfb["syslog_facility"] = 22 (LOG_LOCAL6 raw)
+   - pfb["syslog_priority"] = 5  (LOG_NOTICE)
+   - Guarded has_option() + getboolean()/getint() with try/except ValueError for
+     malformed values (safe-degrade to defaults).
+
+3. Module-level syslog handler + silent-degrade contract — DONE
+   - _syslog_handler: Any = None  (lazy; created on first enabled emit)
+   - _syslog_failed: bool = False (latched on any constructor or emit exception)
+   - _PfbSysLogHandler(SysLogHandler): overrides mapPriority() to return raw int from
+     pfb["syslog_priority"]; encodePriority() then accepts the int directly (no name lookup).
+   - address="/var/run/log" — chroot-relative socket (host path /var/unbound/var/run/log,
+     registered via <logging><logsocket> in pfblockerng.xml, Phase 3).
+   - Python 3.11 has no `ident` constructor parameter (added 3.12); ident prepended directly
+     to message string as "pfblockerng: <msg>" inside _emit_dnsbl_syslog().
+   - Any exception from constructor OR emit latches _syslog_failed=True → subsequent calls
+     return immediately without touching the handler (no retry-storm).
+
+4. _emit_dnsbl_syslog(msg) — DONE
+   - Early return when syslog_enable is False OR _syslog_failed is True.
+   - Lazy handler creation on first call.
+   - Emits via handler.emit(LogRecord) — stdlib only, no external deps.
+   - Called ONCE per DNSBL event from get_details_dnsbl(), after CSV write.
+   - Outer gate at call site: `if pfb.get("syslog_enable") and not _syslog_failed:`
+     before syslog_format_dnsbl() — zero formatting overhead when disabled.
+
+5. conftest.py reset fixtures — DONE
+   - pfb dict initialised with syslog_enable=False, syslog_facility=22, syslog_priority=5.
+   - pfb_unbound._syslog_handler = None and pfb_unbound._syslog_failed = False reset
+     between each test so no state leaks across tests.
+
+6. tests/test_syslog_emit_dnsbl.py — NEW — DONE
+   9 tests across 3 classes:
+
+   TestSyslogEmitToggleBranch (3 tests):
+   - test_disabled_no_syslog_emit_before_enabled: BEFORE-STATE first — asserts no emit
+     when disabled; then enables and asserts emit. Proves gate is real.
+   - test_enabled_emits_exactly_once_with_correct_body: handler called exactly once;
+     message contains "pfblockerng:" ident prefix.
+   - test_toggle_flip_off_then_on_proves_real_branch: flip from off→on mid-test;
+     before and after counts both asserted.
+
+   TestSyslogEmitSilentDegrade (4 tests):
+   - test_socket_absent_raises_no_exception_and_csv_still_written: constructor raises
+     OSError; _syslog_failed latched; CSV written; return True (resolve path unaffected).
+   - test_socket_absent_subsequent_calls_are_no_ops: after latch, second emit is a
+     complete no-op (no second constructor call).
+   - test_emit_exception_latches_failure_and_does_not_propagate: handler.emit() raises;
+     _syslog_failed latched; no exception propagates to caller.
+   - test_get_details_dnsbl_returns_true_when_syslog_raises: full get_details_dnsbl()
+     call returns True even when emit path raises.
+
+   TestSyslogEmitBody (2 tests):
+   - test_message_has_pfblockerng_ident_prefix: emitted record msg starts with
+     "pfblockerng: " (ident tag for Phase-3 !pfblockerng syslog routing).
+   - test_disabled_emit_is_zero_cost_no_handler_creation: when disabled, _syslog_handler
+     remains None (no constructor call, truly zero-cost gate).
+
+─────────────────────────────────────────────
+KEY DESIGN DECISIONS
+─────────────────────────────────────────────
+
+• Facility shift: PHP LOG_LOCAL6 = 176 (= 22 << 3); Python SysLogHandler.LOG_LOCAL6 = 22
+  (raw facility). Writing `pfb_syslog_facility_constant($tok) >> 3` to ini means Python reads
+  the raw value directly — no shift in Python code needed.
+
+• Python 3.11 ident: SysLogHandler gained `ident=` constructor param in Python 3.12;
+  pfSense CE 2.8 ships Python 3.11. Workaround: prepend "pfblockerng: " to the message
+  string inside _emit_dnsbl_syslog() — functionally identical for syslog routing.
+
+• mapPriority() override: SysLogHandler.mapPriority() normally maps a logging level name
+  string to a syslog priority name string, then encodePriority() does a second lookup.
+  Overriding to return a raw int causes encodePriority() to use it directly (it checks
+  `isinstance(priority, int)` first). This gives full numeric control without monkey-patching
+  encodePriority() itself.
+
+• Outer gate before formatting: `if pfb.get("syslog_enable") and not _syslog_failed:` at the
+  call site in get_details_dnsbl() guards syslog_format_dnsbl() as well as _emit_dnsbl_syslog().
+  When syslog is disabled, zero string formatting occurs (per-query overhead truly zero).
+
+• Persistent socket: _syslog_handler is module-level; created once, reused forever.
+  No reconnect per event — matches spec constraint.
+
+• Single emit per event: called once in get_details_dnsbl() after the CSV write, before
+  return. Does not replace CSV; additive.
+
+─────────────────────────────────────────────
+VERIFICATION RESULTS
+─────────────────────────────────────────────
+
+ruff check .:
+  All checks passed (131 files)
+
+ruff format --check .:
+  131 files already formatted
+
+python -m mypy tests/:
+  Success: no issues found in 55 source files
+
+python -m pytest:
+  1953 passed, 2 skipped
+
+php -l pfblockerng.inc:
+  No syntax errors detected
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors
+
+vendor/bin/phpstan analyse:
+  OK — No errors
+
+─────────────────────────────────────────────
+FILES CHANGED (Phase 4 additions)
+─────────────────────────────────────────────
+
+  M src/usr/local/pkg/pfblockerng/pfblockerng.inc
+      syslog_enable/facility/priority computed + written to ini heredoc
+
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py
+      _syslog_handler/_syslog_failed globals; pfb defaults; config-load boundary reads;
+      _PfbSysLogHandler class; _emit_dnsbl_syslog(); call site in get_details_dnsbl()
+
+  M tests/conftest.py
+      reset_pfb_globals(): syslog pfb keys + handler/failed reset
+
+  A tests/test_syslog_emit_dnsbl.py
+      9 tests, 3 classes, full toggle/degrade/body coverage
+
+─────────────────────────────────────────────
+COMMIT
+─────────────────────────────────────────────
+
+Message: pfblockerng: emit DNSBL block events to syslog from the unbound module (ADR-38 P4)
+
+─────────────────────────────────────────────
+PHASE COMPLETE — ADR-38 ALL PHASES DONE
+─────────────────────────────────────────────
+
+All 4 implementation phases delivered:
+  Phase 1: pfb_syslog_format_dnsbl() + pfb_syslog_format_ip() formatters
+  Phase 2: config fields (log_syslog, log_syslog_facility, log_syslog_priority) + PfbConfig registry
+  Phase 3: PHP IP-leg syslog emission + <logging> facility registration
+  Phase 4: Python DNSBL-leg syslog emission (this phase)
+
+Remaining: Phase 5 (Web UI — 05_Ui.txt) and Phase 6 (Smoke + ADR acceptance — 06_Smoke_And_Docs.txt)
+are out of scope for this implementer task.
