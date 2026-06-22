@@ -1,0 +1,185 @@
+ADR-37 Phase 3 Results — DoT/DoQ Block UI + Server-Side Validation
+===================================================================
+Branch: adr/37-dot-doq-block
+Implemented by Phase 3 agent (Sonnet 4.6)
+
+
+1. UI BLOCK LOCATION
+---------------------
+File: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+Inserted a new Form_Section('DoT/DoQ Block') immediately after the ADR-36
+DNS Redirect section (line ~2830 post-insertion, before DNSBL Group Policy).
+
+HTML input names (POST field names):
+  dnsbl_dot_block           — Form_Checkbox (enable/disable toggle; value 'on')
+  dnsbl_dot_block_int       — Form_Select[multiple] (interface multi-select)
+  dnsbl_dot_block_exclude   — Form_Input type=text (exception alias)
+
+The Form_Group('DoT/DoQ Block') contains:
+  - Enable checkbox (dnsbl_dot_block) with inline help text (all 4 required notes)
+  - Interface multi-select (dnsbl_dot_block_int) with quick-fill link
+  - Group help: 'Fill from IP Interfaces' anchor (id="pfb_dot_block_fill")
+  - Exception alias text input (dnsbl_dot_block_exclude)
+
+
+2. QUICK-FILL MECHANISM
+------------------------
+Same pattern as ADR-36 DNS Redirect:
+
+PHP side (at the UI rendering block):
+  $pfb_ipconfig_raw is already set by the ADR-36 block above (reused).
+  $pfb_dot_block_fill_ifaces = unique union of inbound_interface + outbound_interface
+  values from installedpackages/pfblockerngipsettings/config/0, intersected with
+  array_keys($options_dnsbl_dot_block_int) to reject any stale WAN iface.
+  $pfb_dot_block_fill_json = json_encode($pfb_dot_block_fill_ifaces) (PHP → JS bridge).
+
+JS side (in the inline <script> block, after the ADR-36 pfb_redir_fill_interfaces fn):
+  var pfb_dot_block_fill_ifaces = <?=$pfb_dot_block_fill_json?>;
+  function pfb_dot_block_fill_interfaces() {
+      var $sel = $('#dnsbl_dot_block_int');
+      $sel.find('option').prop('selected', false);
+      $.each(pfb_dot_block_fill_ifaces, function(i, val) {
+          $sel.find('option[value="' + val + '"]').prop('selected', true);
+      });
+  }
+  Triggered by: onclick="pfb_dot_block_fill_interfaces(); return false;" on the anchor.
+
+
+3. VALIDATOR FUNCTION
+----------------------
+File:     src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc
+Function: pfb_validate_dot_block_post(array $posted_ifaces, array $valid_iface_list, string $posted_alias): array
+
+Mirrors pfb_validate_dns_redirect_post() exactly:
+  - Each interface in $posted_ifaces validated via in_array(..., TRUE) against $valid_iface_list.
+  - $posted_alias validated via is_validaliasname() when non-empty; empty is always accepted.
+  - Returns string[] of error messages; empty = all valid.
+
+Called in the POST handler with:
+  pfb_validate_dot_block_post(
+      $dot_block_ifaces_raw,          // (array)($_POST['dnsbl_dot_block_int'] ?? [])
+      array_keys($options_dnsbl_dot_block_int),
+      $dot_block_alias_raw            // trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''))
+  )
+  Errors merged into $input_errors; PfbConfig::write() only called when $input_errors is empty.
+
+
+4. SCOPEFUNCTIONS — NO CHANGE
+-------------------------------
+PFBL-01 (RequirePfbFilter) is scoped to pfblockerng.inc only (phpcs.xml.dist
+include-pattern: pfblockerng\.inc$). pfblockerng_dns_bypass.inc is out of scope —
+same as the ADR-36 pfb_validate_dns_redirect_post() sibling. No scopeFunctions
+change was made. PHPCS clean confirmed.
+
+
+5. POST HANDLER CHANGES
+------------------------
+Validation (before the !$input_errors gate):
+  $dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
+  $dot_block_alias_raw  = trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
+  if (function_exists('pfb_validate_dot_block_post')) { ... merge errors ... }
+
+Save (inside the !$input_errors block, after ADR-36 writes):
+  PfbConfig::write('dnsbl_dot_block', pfb_filter($_POST['dnsbl_dot_block'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+  PfbConfig::write('dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
+  PfbConfig::write('dnsbl_dot_block_exclude', $dot_block_alias_raw);
+
+All 3 fields via PfbConfig::write() only — RequireConfigGateway sniff clean.
+
+
+6. NEW PHPUNIT TEST METHODS
+-----------------------------
+File: tests/php/DotDoQBlockUiValidatorTest.php  (new, 10 tests)
+
+  testValidInterfaceInAllowListIsAccepted
+    — A name in the allow-list + empty alias → [] (no errors).
+
+  testEmptyInterfaceListIsAccepted
+    — Empty interface array → [] (no errors; feature enabled, no ifaces = valid state).
+
+  testEmptyExceptionAliasIsAccepted
+    — Valid iface + empty alias → [] (optional field; empty always accepted).
+
+  testValidAliasNameIsAccepted
+    — Valid iface + alias 'DoT_Exceptions' (alphanumeric+underscore) → [].
+
+  testMultipleValidInterfacesAreAccepted
+    — ['lan', 'opt1', 'wireguard'] all in allow-list → [].
+
+  testInterfaceNotInAllowListIsRejected
+    — Before: lan accepted → []. When: inject 'evil; rm -rf /' → 1 error containing 'DoT/DoQ Block'.
+
+  testAliasNameWithSpaceIsRejected
+    — Before: empty alias accepted → []. When: 'bad alias name' → 1 error containing
+      'DoT/DoQ Block' and 'alias'.
+
+  testAliasNameWithShellSpecialCharIsRejected
+    — Before: 'Good_Alias' accepted → []. When: 'alias;reboot' → 1 error.
+
+  testMixedValidAndInvalidInterfaceIsRejected
+    — Before: ['lan','opt1'] accepted → []. When: add 'unknown_iface' → exactly 1 error.
+
+  testBothInterfaceAndAliasInvalidProducesTwoErrors
+    — Invalid iface + invalid alias → 2 errors (one per field), both naming 'DoT/DoQ Block'.
+
+Before-state assertions: all rejection tests assert the valid-input case first,
+proving the flip causes the error — CLAUDE.md test-coverage mandate satisfied.
+
+
+7. UI_RENDER STATUS
+--------------------
+tests/smoke/ui/test_render_smoke.py PAGE_TABLE updated:
+  Old markers: ("DNSBL Webserver Configuration", "DNSBL Configuration", "DNS Redirect")
+  New markers: ("DNSBL Webserver Configuration", "DNSBL Configuration", "DNS Redirect", "DoT/DoQ Block")
+
+SKIP reason: SMOKE_ADMIN_PASSWORD is not set in the local environment — the ui_render
+fixture skips cleanly (never fails on missing credentials). The test will run on CI
+when the smoke VM is available. The marker "DoT/DoQ Block" is the Form_Section title
+rendered verbatim by pfSense's Form_Section → it appears in the page body.
+
+
+8. VERIFICATION RESULTS
+------------------------
+  php -l (touched files)      CLEAN (both dnsbl.php and pfblockerng_dns_bypass.inc)
+  PHPUnit:                    1244 tests, 5014 assertions, 31 warnings (pre-existing),
+                              3 skipped (pre-existing) — ZERO failures / errors.
+                              All 10 DotDoQBlockUiValidatorTest methods GREEN.
+                              All prior Phase 1 + 2 tests still GREEN.
+  PHPStan:                    OK — No errors
+  PHPCS:                      CLEAN (no output; all 3 sniffs pass; no scopeFunctions change)
+  pytest:                     1930 passed, 2 skipped
+  ruff check:                 All checks passed
+  ruff format --check:        128 files already formatted
+
+
+9. FILES CHANGED
+-----------------
+  src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php   — pconfig reads, options var,
+    POST validation, POST save, UI section, JS quick-fill
+  src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc — pfb_validate_dot_block_post()
+  tests/php/DotDoQBlockUiValidatorTest.php               — new (10 tests)
+  tests/smoke/ui/test_render_smoke.py                    — "DoT/DoQ Block" marker added
+
+No changes to: builder (Phase 2 locked), sync (Phase 2 locked), phpcs.xml.dist (no
+scopeFunctions change needed), any ADR-36 code.
+
+
+10. GO-AHEAD FOR PHASE 4
+--------------------------
+Phase 4 (smoke test) may proceed. Key facts:
+
+  Section title:        'DoT/DoQ Block' (Form_Section)
+  POST field names:     dnsbl_dot_block (checkbox), dnsbl_dot_block_int (multi-select),
+                        dnsbl_dot_block_exclude (text input)
+  Config keys:          dnsbl_dot_block, dnsbl_dot_block_int, dnsbl_dot_block_exclude
+                        (all in pfblockerngdnsblsettings/config/0 via PfbConfig)
+  Builder:              pfb_build_dot_block_rule() in pfblockerng_dns_bypass.inc
+  Sync:                 pfb_sync_dot_block_rules() in pfblockerng_dns_bypass.inc
+  Marker prefix:        PFB_DOT_BLOCK_DESCR_PFX = 'pfB_DoT_Block_'
+  Validator:            pfb_validate_dot_block_post() in pfblockerng_dns_bypass.inc
+
+  Prior handoffs:
+    .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/01_Results.txt
+    .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/02_Results.txt
+  This handoff: .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/03_Results.txt

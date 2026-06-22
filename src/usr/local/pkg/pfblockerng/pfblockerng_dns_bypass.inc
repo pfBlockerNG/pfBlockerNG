@@ -254,6 +254,54 @@ function pfb_validate_dns_redirect_post(
 }
 
 // ---------------------------------------------------------------------------
+// pfb_validate_dot_block_post — server-side validator (PFBL-01 surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate the DoT/DoQ-block fields submitted via the DNSBL settings POST form.
+ *
+ * Called by the POST handler in pfblockerng_dnsbl.php before any PfbConfig::write()
+ * call. Performs the PFBL-01 semantic validation that escapeshellarg() alone cannot
+ * provide: each interface name is checked against the allow-list returned by
+ * pfb_build_if_list(); the exception alias name is validated by is_validaliasname()
+ * when non-empty.
+ *
+ * @param  array  $posted_ifaces    Array of interface names from the POST multi-select
+ *                                  (may be empty when no interfaces selected).
+ * @param  array  $valid_iface_list Flat array of valid interface keys (keys of the array
+ *                                  returned by pfb_build_if_list(FALSE, FALSE)).
+ * @param  string $posted_alias     Exception alias name from the POST text input.
+ *                                  Empty string is accepted.
+ *
+ * @return string[]  Validation error messages. Empty array = all inputs valid.
+ */
+function pfb_validate_dot_block_post(
+	array $posted_ifaces,
+	array $valid_iface_list,
+	string $posted_alias
+): array {
+	$errors = [];
+
+	// Validate each selected interface against the allow-list.
+	foreach ($posted_ifaces as $iface) {
+		if (!in_array($iface, $valid_iface_list, TRUE)) {
+			$errors[] = 'DoT/DoQ Block: Invalid interface selection: ' .
+				htmlspecialchars((string) $iface, ENT_QUOTES);
+		}
+	}
+
+	// Validate the exception alias name when non-empty.
+	if ($posted_alias !== '') {
+		if (!is_validaliasname($posted_alias)) {
+			$errors[] = 'DoT/DoQ Block: Invalid exception alias name: ' .
+				htmlspecialchars($posted_alias, ENT_QUOTES);
+		}
+	}
+
+	return $errors;
+}
+
+// ---------------------------------------------------------------------------
 // pfb_sync_dns_redirect_rules — lifecycle: create / reconcile / prune / remove
 // ---------------------------------------------------------------------------
 

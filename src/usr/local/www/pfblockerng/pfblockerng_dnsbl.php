@@ -135,6 +135,12 @@ $pfb_redir_int_raw			= (string) PfbConfig::read('dnsbl_redir_int');
 $pconfig['dnsbl_redir_int']		= ($pfb_redir_int_raw !== '') ? explode(',', $pfb_redir_int_raw) : [];
 $pconfig['dnsbl_redir_exclude']		= (string) PfbConfig::read('dnsbl_redir_exclude');
 
+// [ ADR-37 ] DoT/DoQ Block — stored in pfblockerngdnsblsettings; read via gateway.
+$pconfig['dnsbl_dot_block']		= PfbConfig::read('dnsbl_dot_block');
+$pfb_dot_block_int_raw			= (string) PfbConfig::read('dnsbl_dot_block_int');
+$pconfig['dnsbl_dot_block_int']		= ($pfb_dot_block_int_raw !== '') ? explode(',', $pfb_dot_block_int_raw) : [];
+$pconfig['dnsbl_dot_block_exclude']	= (string) PfbConfig::read('dnsbl_dot_block_exclude');
+
 // Select field options
 
 $options_dnsbl_interface	= pfb_build_if_list(FALSE, FALSE);
@@ -145,6 +151,9 @@ $options_dnsbl_allow_int	= $options_dnsbl_interface;
 
 // [ ADR-36 ] DNS Redirect: WAN-excluded interface list (same filter as Permit Firewall Rules).
 $options_dnsbl_redir_int	= $options_dnsbl_interface;
+
+// [ ADR-37 ] DoT/DoQ Block: WAN-excluded interface list (same filter as Permit Firewall Rules).
+$options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
@@ -723,6 +732,18 @@ if ($_POST) {
 			$input_errors = array_merge($input_errors, $redir_errors);
 		}
 
+		// [ ADR-37 ] Validate DoT/DoQ Block fields.
+		$dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
+		$dot_block_alias_raw  = trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
+		if (function_exists('pfb_validate_dot_block_post')) {
+			$dot_block_errors = pfb_validate_dot_block_post(
+				$dot_block_ifaces_raw,
+				array_keys($options_dnsbl_dot_block_int),
+				$dot_block_alias_raw
+			);
+			$input_errors = array_merge($input_errors, $dot_block_errors);
+		}
+
 		if (!$input_errors) {
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -846,6 +867,11 @@ if ($_POST) {
 			PfbConfig::write('dnsbl_redir', pfb_filter($_POST['dnsbl_redir'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 			PfbConfig::write('dnsbl_redir_int', implode(',', $redir_ifaces_raw));
 			PfbConfig::write('dnsbl_redir_exclude', $redir_alias_raw);
+
+			// [ ADR-37 ] Save DoT/DoQ Block fields via gateway (registered keys in pfblockerngdnsblsettings)
+			PfbConfig::write('dnsbl_dot_block', pfb_filter($_POST['dnsbl_dot_block'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+			PfbConfig::write('dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
+			PfbConfig::write('dnsbl_dot_block_exclude', $dot_block_alias_raw);
 
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
@@ -2828,6 +2854,59 @@ $section->addInput(new Form_Input(
 
 $form->add($section);
 
+// [ ADR-37 ] DoT/DoQ Block section — placed adjacent to DNS Redirect.
+// Blocks port-853 DoT (TCP) and DoQ (UDP) traffic on the selected interfaces.
+// DoH (port 443) is not covered here; it is addressed by the DoH-IP feed and DNSBL domain blocking.
+$section = new Form_Section('DoT/DoQ Block');
+
+$group = new Form_Group('DoT/DoQ Block');
+$group->add(new Form_Checkbox(
+	'dnsbl_dot_block',
+	NULL,
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['dnsbl_dot_block']) === PfbToggle::On,
+	'on'
+))->setWidth(7)
+  ->setHelp('Blocks DNS-over-TLS (TCP 853) and DNS-over-QUIC (UDP 853) on the selected interface(s).<br />'
+		. 'DoH (port 443) is <strong>not</strong> blocked here — blocking 443 would break all HTTPS. '
+		. 'DoH is addressed by the DoH-IP feed and DNSBL domain blocking.<br />'
+		. 'The firewall itself is always exempt. Hosts in the exception alias are also exempt.<br />'
+		. 'The exception alias must exist at '
+		. '<a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a> before use.');
+
+// [ ADR-37 ] Build the quick-fill interface union (inbound + outbound from IP settings).
+// Reuses the same $pfb_ipconfig_raw already fetched for the ADR-36 DNS Redirect block above.
+$pfb_dot_block_fill_ifaces = array_unique(array_filter(array_merge(
+	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['inbound_interface'] ?? ''))),
+	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['outbound_interface'] ?? '')))
+)));
+// Restrict to only interfaces present in the DoT/DoQ Block option list.
+$pfb_dot_block_fill_ifaces = array_values(array_intersect($pfb_dot_block_fill_ifaces, array_keys($options_dnsbl_dot_block_int)));
+$pfb_dot_block_fill_json   = json_encode($pfb_dot_block_fill_ifaces);
+
+$group->add(new Form_Select(
+	'dnsbl_dot_block_int',
+	NULL,
+	$pconfig['dnsbl_dot_block_int'],
+	$options_dnsbl_dot_block_int,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', $options_dnsbl_interface_cnt);
+$group->setHelp('<a href="#" id="pfb_dot_block_fill" onclick="pfb_dot_block_fill_interfaces(); return false;">'
+	. 'Fill from IP Interfaces</a> — select the union of pfBlockerNG Inbound + Outbound interfaces.');
+$section->add($group);
+
+$section->addInput(new Form_Input(
+	'dnsbl_dot_block_exclude',
+	gettext('DoT/DoQ Exception Alias'),
+	'text',
+	$pconfig['dnsbl_dot_block_exclude'],
+	['placeholder' => 'Firewall alias name (optional)']
+))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DoT/DoQ block.<br />'
+		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a>.');
+
+$form->add($section);
+
 $section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
@@ -3399,6 +3478,18 @@ function pfb_redir_fill_interfaces() {
 	var $sel = $('#dnsbl_redir_int');
 	$sel.find('option').prop('selected', false);
 	$.each(pfb_redir_fill_ifaces, function(i, val) {
+		$sel.find('option[value="' + val + '"]').prop('selected', true);
+	});
+}
+
+// [ ADR-37 ] DoT/DoQ Block quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
+// When clicked, selects those interfaces in the #dnsbl_dot_block_int multi-select.
+var pfb_dot_block_fill_ifaces = <?=$pfb_dot_block_fill_json?>;
+
+function pfb_dot_block_fill_interfaces() {
+	var $sel = $('#dnsbl_dot_block_int');
+	$sel.find('option').prop('selected', false);
+	$.each(pfb_dot_block_fill_ifaces, function(i, val) {
 		$sel.find('option[value="' + val + '"]').prop('selected', true);
 	});
 }
