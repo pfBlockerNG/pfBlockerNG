@@ -94,6 +94,10 @@ def reset_pfb_globals() -> None:
         # test can read the stable names without spinning up the watcher.
         "pfb_py_control": "pfb_py_control",
         "pfb_py_control_applied": "pfb_py_control.applied",
+        # ADR-38 Phase 4: syslog export defaults (off, LOG_LOCAL6, LOG_NOTICE).
+        "syslog_enable": False,
+        "syslog_facility": 22,
+        "syslog_priority": 5,
     }
     pfb_unbound.dataDB = defaultdict(list)
     pfb_unbound.zoneDB = defaultdict(list)
@@ -139,6 +143,11 @@ def reset_pfb_globals() -> None:
     for _db in list(pfb_unbound._db_conns.keys()):
         pfb_unbound._db_close(_db)
     pfb_unbound._db_conns.clear()
+
+    # ADR-38 Phase 4: reset the module-level syslog handler state so each test
+    # starts with no active handler and no failure latch.
+    pfb_unbound._syslog_handler = None
+    pfb_unbound._syslog_failed = False
 
     # Reset the logging pipeline between tests (stop a leaked QueueListener thread
     # and drop the cached per-file loggers so the synchronous fallback is used by

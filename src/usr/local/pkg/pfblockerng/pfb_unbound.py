@@ -152,6 +152,14 @@ pfb_reload_stop: Any
 pfb_control_watcher_thread: Any
 pfb_control_stop: Any
 
+# ADR-38 Phase 4: module-level SysLogHandler for the chrooted DNSBL syslog leg.
+# Created ONCE (lazily, on first enabled emit) and reused for every subsequent event.
+# _syslog_failed: set True on any constructor or emit exception; all further emit
+# attempts are suppressed (no retry-storm).  Both are None/False at import time and
+# reset to that state by the test fixture.
+_syslog_handler: Any = None
+_syslog_failed: bool = False
+
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
     # unconditionally so static checkers treat them as always bound (the runtime
@@ -963,6 +971,13 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_control_legacy"] = False
     pfb["python_maxmind"] = False
     pfb["python_blocking"] = False
+    # ADR-38 Phase 4: syslog export defaults. syslog_enable is False (off) by
+    # default — the feature is opt-in. syslog_facility and syslog_priority carry
+    # the raw numeric values used by SysLogHandler (not PHP's shifted constants):
+    # LOG_LOCAL6 raw = 22; LOG_NOTICE raw = 5. The ini-writer overwrites these.
+    pfb["syslog_enable"] = False
+    pfb["syslog_facility"] = 22  # LOG_LOCAL6 raw
+    pfb["syslog_priority"] = 5  # LOG_NOTICE raw
     pfb["python_blacklist"] = False
     pfb["sqlite3_dnsbl_con"] = False
     pfb["sqlite3_resolver_con"] = False
@@ -1159,6 +1174,23 @@ def init_standard(id: int, env: module_env) -> bool:
 
             if config.has_option("MAIN", "forwarding"):
                 pfb["forwarding"] = config.getboolean("MAIN", "forwarding")
+
+            # ADR-38 Phase 4: syslog export keys for the DNSBL leg.
+            # syslog_enable: boolean gate (default False / off when absent).
+            # syslog_facility: raw facility number for SysLogHandler (default 22 = LOG_LOCAL6).
+            # syslog_priority: severity number (default 5 = LOG_NOTICE).
+            if config.has_option("MAIN", "syslog_enable"):
+                pfb["syslog_enable"] = config.getboolean("MAIN", "syslog_enable")
+            if config.has_option("MAIN", "syslog_facility"):
+                try:
+                    pfb["syslog_facility"] = config.getint("MAIN", "syslog_facility")
+                except ValueError:
+                    pass
+            if config.has_option("MAIN", "syslog_priority"):
+                try:
+                    pfb["syslog_priority"] = config.getint("MAIN", "syslog_priority")
+                except ValueError:
+                    pass
 
             # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
             # long/complex regex" static pre-filter (drops over-long/nested-quantifier
@@ -2486,6 +2518,84 @@ def syslog_format_dnsbl(
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# ADR-38 Phase 4 — DNSBL syslog emitter (chroot-aware, silent-degrade).
+#
+# _emit_dnsbl_syslog(msg: str) -> None
+#   Emit one syslog record via the module-level _PfbSysLogHandler.
+#
+#   Gate: pfb["syslog_enable"] must be True; checked BEFORE any formatting
+#   work is done (zero overhead when disabled — the common case).
+#
+#   Lazy init: the handler is created on the first enabled call (not at
+#   import or init time) so a mis-configured or absent socket fails locally,
+#   not during module load. The handler is then reused for every subsequent
+#   emit (persistent socket — one sendto() per event, hot-path safe).
+#
+#   Silent-degrade contract (ADR §2.2.4): any exception from the constructor
+#   OR from emit sets _syslog_failed=True, which disables ALL further attempts
+#   in this process lifetime.  Resolution and CSV writing are never affected.
+#
+#   Ident: prepend "pfblockerng: " to every message so the syslogd
+#   !pfblockerng tag filter routes it correctly.  Python 3.11's SysLogHandler
+#   has no ident constructor parameter (added in 3.12); prepend in the
+#   message string instead.
+#
+#   Priority: _PfbSysLogHandler overrides mapPriority() to return the raw
+#   syslog priority int from pfb["syslog_priority"].  SysLogHandler.encodePriority
+#   accepts an int directly (no priority_names lookup) so (facility << 3) | priority
+#   is computed exactly as required — matching what PHP's openlog()/syslog() does.
+# ---------------------------------------------------------------------------
+
+
+class _PfbSysLogHandler(logging.handlers.SysLogHandler):
+    """SysLogHandler that emits at a fixed raw syslog priority from pfb config."""
+
+    def mapPriority(self, levelname: str) -> int:  # type: ignore[override]
+        # Return the raw syslog priority int; encodePriority accepts an int
+        # directly (bypasses the priority_names string lookup).
+        return int(pfb.get("syslog_priority", 5))
+
+
+def _emit_dnsbl_syslog(msg: str) -> None:
+    """Emit one DNSBL syslog record; silent no-op when disabled or after any error.
+
+    Args:
+        msg: Pre-formatted key=value body from syslog_format_dnsbl().
+    """
+    global _syslog_handler, _syslog_failed
+
+    # Cheap gate — checked before any formatting/handler work.
+    if not pfb.get("syslog_enable") or _syslog_failed:
+        return
+
+    # Lazy constructor: create the handler once on the first enabled call.
+    if _syslog_handler is None:
+        try:
+            _syslog_handler = _PfbSysLogHandler(
+                address="/var/run/log",
+                facility=pfb.get("syslog_facility", 22),
+            )
+        except Exception:
+            _syslog_failed = True
+            return
+
+    # Emit: prepend ident so the !pfblockerng syslogd tag filter matches.
+    try:
+        record = logging.LogRecord(
+            name="pfblockerng",
+            level=logging.NOTSET,
+            pathname="",
+            lineno=0,
+            msg="pfblockerng: " + msg,
+            args=(),
+            exc_info=None,
+        )
+        _syslog_handler.emit(record)
+    except Exception:
+        _syslog_failed = True
+
+
 def get_details_dnsbl(
     m_type: str,
     qinfo: query_info | None,
@@ -2575,6 +2685,22 @@ def get_details_dnsbl(
         )
         pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
         pfb_log("/var/log/pfblockerng/unified.log", csv_line)
+        # ADR-38 Phase 4: emit once to syslog via the chroot log socket.
+        # Runs ALONGSIDE the CSV write (not replacing it).  The gate check is
+        # here (before syslog_format_dnsbl) so disabled callers pay zero cost.
+        # _emit_dnsbl_syslog never raises into the DNSBL path (silent-degrade).
+        if pfb.get("syslog_enable") and not _syslog_failed:
+            _emit_dnsbl_syslog(
+                syslog_format_dnsbl(
+                    q_name=q_name,
+                    q_ip=q_ip,
+                    q_type=q_type,
+                    group=dnsbl.group,
+                    feed=dnsbl.feed,
+                    b_type=dnsbl.b_type,
+                    b_eval=dnsbl.b_eval,
+                )
+            )
 
     return True
 

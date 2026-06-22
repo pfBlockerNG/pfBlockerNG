@@ -5372,6 +5372,16 @@ function pfb_unbound_python($mode) {
 
 		$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
 
+		// ADR-38: syslog export keys for the chrooted python leg.
+		// syslog_enable: boolean on/off gate (master toggle).
+		// syslog_facility: raw facility number (LOG_LOCAL6 raw = 22; PHP's LOG_LOCAL6
+		//   constant is (22 << 3) = 176, so >> 3 converts to the raw SysLogHandler int).
+		// syslog_priority: severity number (byte-identical between PHP and Python).
+		// Safe defaults (disabled) when the keys are absent from the ini.
+		$syslog_enable   = (PfbConfig::read('log_syslog') === PfbToggle::On) ? 'on' : 'off';
+		$syslog_facility = pfb_syslog_facility_constant(PfbConfig::read('log_syslog_facility')) >> 3;
+		$syslog_priority = pfb_syslog_priority_constant(PfbConfig::read('log_syslog_priority'));
+
 		$now = date('m/j/y H:i:s', time());
 
 		$pfb_py_conf = <<<EOF
@@ -5398,6 +5408,9 @@ python_control	= {$python_control}
 python_control_legacy	= {$python_control_legacy}
 regex_cap	= {$regex_cap}
 forwarding	= {$forwarding}
+syslog_enable	= {$syslog_enable}
+syslog_facility	= {$syslog_facility}
+syslog_priority	= {$syslog_priority}
 
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
