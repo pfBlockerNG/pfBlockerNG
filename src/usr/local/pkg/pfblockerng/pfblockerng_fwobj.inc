@@ -304,3 +304,53 @@ function pfb_fwobj_reconcile(string $marker): void
 	$rows[]  = $new_row;
 	config_set_path($spec['section'], $rows);
 }
+
+// ---------------------------------------------------------------------------
+// pfb_fwobj_init_registrations — express owned objects as the first registrations
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers the VIP (V4 + V6) and DNSBL NAT specs into the internal registry.
+ *
+ * This is the registration seam that ADR-36/37 will mirror for their own objects.
+ * Registering these specs demonstrates the pattern; pfb_fwobj_reconcile() may be
+ * called subsequently to ensure presence (or the objects may be managed through
+ * the normal pfb_manage_dnsbl_vip / pfb_create_dnsbl paths — either is valid).
+ *
+ * Idempotent: calling this multiple times replaces the existing registrations for
+ * the same markers (pfb_fwobj_register replaces by key).
+ *
+ * write_config() is NEVER called here — callers own the flush.
+ *
+ * NOTE: PFB_AUTO_VIP_DESCR_V4, PFB_AUTO_VIP_DESCR_V6 are defined in
+ * pfblockerng.inc and available here (pfblockerng_fwobj.inc is included AFTER it).
+ */
+function pfb_fwobj_init_registrations(): void
+{
+	// VIP V4 — the sinkhole IPv4 VIP managed by pfb_manage_dnsbl_vip().
+	pfb_fwobj_register([
+		'type'    => 'vip',
+		'section' => 'virtualip/vip',
+		'marker'  => PFB_AUTO_VIP_DESCR_V4,
+		'builder' => 'pfb_manage_dnsbl_vip',	// builder = reconcile caller invokes pfb_manage_dnsbl_vip
+		'guard'   => NULL,						// guard applied at reconcile time via the stored IP
+	]);
+
+	// VIP V6 — the sinkhole IPv6 VIP (provisioned alongside V4 when DNSBL listens on IPv6).
+	pfb_fwobj_register([
+		'type'    => 'vip',
+		'section' => 'virtualip/vip',
+		'marker'  => PFB_AUTO_VIP_DESCR_V6,
+		'builder' => 'pfb_manage_dnsbl_vip',	// builder = same pattern; V6 provisioned in same call
+		'guard'   => NULL,
+	]);
+
+	// DNSBL NAT — managed by pfb_create_dnsbl(); registration proves the seam for ADR-36/37.
+	pfb_fwobj_register([
+		'type'    => 'nat',
+		'section' => 'nat/rule',
+		'marker'  => PFB_FWOBJ_NAT_LEGACY_PFX,
+		'builder' => NULL,						// NAT is managed by pfb_create_dnsbl; NULL = seam-only
+		'guard'   => NULL,
+	]);
+}

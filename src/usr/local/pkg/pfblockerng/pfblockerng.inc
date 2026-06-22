@@ -12483,6 +12483,17 @@ function sync_package_pfblockerng($cron='') {
 	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required.
 	pfb_create_dnsbl($mode);
 
+	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
+	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
+	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
+	// idempotent: returns FALSE (no write) when everything was already cleaned.
+	if ($mode === 'disabled') {
+		pfb_fwobj_init_registrations();
+		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+			write_config('pfBlockerNG: sweep orphan firewall objects on disable');
+		}
+	}
+
 	// Load new DNSBL updates to Unbound Resolver, as required. ADR-06 (#51): a pending
 	// temporary-unlock store ($pfb['dnsbl_unlock']) also forces the reload so a Cron/
 	// Force re-locks it even when no feed changed -- parity with main, where the
@@ -14471,6 +14482,17 @@ function pfblockerng_php_pre_deinstall_command() {
 			if (strpos($shellcmd['cmd'], 'pfblockerng.sh aliastables') !== FALSE) {
 				config_del_path("installedpackages/shellcmdsettings/config/{$key}");
 			}
+		}
+
+		// [ ADR-35 P4 ] Sweep owned firewall objects (VIP, NAT, filter rules) BEFORE the
+		// config reference data is wiped by pfb_remove_config_settings(). The sweep is
+		// marker-only — it does not rely on the double-guard IP reference — so it catches
+		// orphans that the normal disable teardown missed (e.g. VIP reference cleared but
+		// entry not yet removed). If nothing was swept (normal case: disable already cleaned
+		// up) the call is a no-op and write_config() is NOT called (idempotent).
+		pfb_fwobj_init_registrations();
+		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+			write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
 		}
 
 		// Remove settings from config.xml
