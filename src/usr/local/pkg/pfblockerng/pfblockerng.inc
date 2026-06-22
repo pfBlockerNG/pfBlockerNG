@@ -8560,11 +8560,25 @@ function pfb_local_ip($subnet, $pfb_localsub) {
 function pfb_collect_localip() {
 	$pfb_local = $pfb_localsub = array();
 
-	// Collect gateway IP addresses for inbound/outbound list matching
-	$int_gateway = get_interfaces_with_gateway();
-	if (isset($int_gateway)) {
-		foreach ($int_gateway as $gateway) {
-			$pfb_local[] = get_interface_ip($gateway) ?: 'Disabled';
+	// Collect gateway IP addresses for inbound/outbound list matching.
+	// Enumerate interfaces locally rather than calling core get_interfaces_with_gateway():
+	// pfSense's XML parser stores an EMPTY interface element (e.g. <lan></lan>) as an empty
+	// STRING, not an array, and core dereferences $ifcfg['ipaddr'] on every node -- a fatal
+	// "Cannot access offset of type string on string" under PHP 8. Skip any non-array node so
+	// a malformed/empty interface cannot abort the whole walk; behaviour is otherwise identical
+	// to core for well-formed configs (dynamic-WAN ipaddr types, ovpn/ipsec, or an explicit gateway).
+	foreach (config_get_path('interfaces', []) as $ifname => $ifcfg) {
+		if (!is_array($ifcfg)) {
+			continue;
+		}
+		$ipaddr = $ifcfg['ipaddr'] ?? '';
+		$if     = $ifcfg['if'] ?? '';
+		$has_gateway = in_array($ipaddr, array('dhcp', 'pppoe', 'pptp', 'l2tp', 'ppp'), TRUE)
+			|| substr($if, 0, 4) == 'ovpn'
+			|| substr($if, 0, 5) == 'ipsec'
+			|| !empty($ifcfg['gateway']);
+		if ($has_gateway) {
+			$pfb_local[] = get_interface_ip($ifname) ?: 'Disabled';
 		}
 	}
 
@@ -8613,6 +8627,9 @@ function pfb_collect_localip() {
 
 	// Collect all interface addresses for inbound/outbound list matching
 	foreach (config_get_path('interfaces', []) as $int) {
+		if (!is_array($int)) {
+			continue;
+		}
 		if ($int['ipaddr'] != 'dhcp') {
 			if (!empty($int['ipaddr']) && !empty($int['subnet']) && is_subnet("{$int['ipaddr']}/{$int['subnet']}")) {
 				if (is_ipaddrv4($int['ipaddr'])) {
