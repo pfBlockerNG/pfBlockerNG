@@ -299,6 +299,14 @@ function pfb_fwobj_reconcile(string $marker): void
 	}
 
 	// Object absent — call the builder to create the row and insert it.
+	// A registration may carry a NULL builder (seam-only, e.g. the DNSBL NAT
+	// whose rows are built by pfb_create_dnsbl) — reconciling such a marker is a
+	// programming error, so fail loudly rather than invoking NULL.
+	if (!is_callable($spec['builder'])) {
+		throw new \LogicException(
+			"pfb_fwobj_reconcile: marker '" . $marker . "' has no callable builder"
+		);
+	}
 	$new_row = ($spec['builder'])();
 	$rows    = config_get_path($spec['section'], []);
 	$rows[]  = $new_row;

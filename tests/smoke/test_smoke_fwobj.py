@@ -2,9 +2,11 @@
 
 Proves on a real pfSense CE VM that:
 
-* Enable → pfBlockerNG-owned VIP (``pfB_AUTO_VIP_v4/v6``) and DNSBL NAT rule
-  (``pfB DNSBL - DO NOT EDIT``) are created in config.xml.
-* Disable → both are removed from config.xml.
+* Enable → the pfBlockerNG-owned sinkhole VIP (``pfB_AUTO_VIP_v4``) and DNSBL NAT
+  rule (``pfB DNSBL - DO NOT EDIT``) are created in config.xml. (The harness
+  provisions only the v4 auto-VIP; the symmetric v6 path is pinned off-box by
+  ``FwobjCurrentBehaviourTest::testVipFindByMarkerV6``.)
+* Disable → the VIP and NAT are removed; no pfB-owned VIP of either family remains.
 * Uninstall → a seeded ORPHAN VIP is swept (before-and-after); user-created VIP
   and NAT rule survive; ``installedpackages/pfblockerng*`` sections are gone.
 
