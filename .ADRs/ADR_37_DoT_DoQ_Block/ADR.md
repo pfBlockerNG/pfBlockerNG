@@ -1,6 +1,6 @@
 # ADR-37: Optional firewall BLOCK of DNS-over-TLS and DNS-over-QUIC (port 853)
 
-- **Status:** **Proposed** (2026-06-20)
+- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
 - **Date:** 2026-06-20
 - **Branch:** `adr/37-dot-doq-block` (off `devel`)
 - **Folds in maintainer's working config** (config.xml filter "Block DNS-over-TLS (DoT)" —
@@ -352,17 +352,17 @@ designed to be upgraded to floating cleanly (a single field change in the rule a
 
 ## 7. Definition of done
 
-- [ ] `pfb_build_dot_block_rule()` passes all golden tests — exact §2.2 rule shape, all
+- [x] `pfb_build_dot_block_rule()` passes all golden tests — exact §2.2 rule shape, all
       branches (alias set/empty, multiple interfaces, type/ipprotocol/protocol/destination/
       statetype/marker all asserted).
-- [ ] Three `PfbConfig`-registered fields (`dnsbl_dot_block`, `dnsbl_dot_block_int`,
+- [x] Three `PfbConfig`-registered fields (`dnsbl_dot_block`, `dnsbl_dot_block_int`,
       `dnsbl_dot_block_exclude`) with ADR-29 round-trip + forward/backward invariants green
       (`CfgGatewayTest.php`, `RollbackContractTest.php`).
-- [ ] ADR-35 registration in place; create/reconcile/remove/sweep exercised for the DoT/DoQ
+- [x] ADR-35 registration in place; create/reconcile/remove/sweep exercised for the DoT/DoQ
       block rule set (idempotent, stale-prune, user-rule survival — all asserted).
-- [ ] UI control block on `pfblockerng_dnsbl.php`: enable + multi-select + quick-fill +
+- [x] UI control block on `pfblockerng_dnsbl.php`: enable + multi-select + quick-fill +
       exception alias + help text (DoH/443 note included); server-side PFBL-01 validation.
-- [ ] All gates green: `vendor/bin/phpunit`, PHPStan, PHPCS (PFBL-01 + ADR-28 + ADR-29 sniffs),
+- [x] All gates green: `vendor/bin/phpunit`, PHPStan, PHPCS (PFBL-01 + ADR-28 + ADR-29 sniffs),
       `php -l`, `python -m pytest`, ADR-14 `ui_render`.
 - [ ] Live-VM smoke proves: block rule appears on enable with correct shape + `pfctl -sr`
       confirms active; rule removed on disable; user rule survives uninstall; stale-interface

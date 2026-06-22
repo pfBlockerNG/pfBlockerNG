@@ -396,3 +396,25 @@ complementary to DoH/DoT domain-level NXDOMAIN blocking (DNSBL feeds) and to ADR
 port-853 blocking: this ADR closes only the plaintext port-53 bypass path.
 
 Live-VM smoke: `tests/smoke/test_dns_redirect.py` (marker `smoke`).
+
+## Optional DoT/DoQ BLOCK on port 853 (ADR-37)
+
+When enabled, pfBlockerNG creates and maintains one `filter/rule` BLOCK entry per selected
+interface that drops all TCP and UDP traffic destined for port 853 — the IANA-assigned port for
+DNS-over-TLS (DoT, RFC 7858) and DNS-over-QUIC (DoQ, RFC 9250). A single `inet46` rule covers
+both IPv4 and IPv6 clients without a per-family split: unlike NAT redirect (ADR-36), a BLOCK rule
+carries no family-specific redirect target, so one rule is both simpler and correct. The firewall
+itself is always exempt: every generated rule carries a negated `(self)` destination
+(`<network>(self)</network><not/>`) so the firewall's own outbound port-853 connections are never
+blocked, regardless of any future pfSense DoT/DoQ server role. Each rule is registered via
+`pfb_fwobj_register()` (ADR-35) with the `pfB_DoT_Block_<iface>` marker, giving the reconcile /
+remove / sweep machinery full lifecycle coverage — no bespoke teardown code.
+
+ADR-36 (DNS-redirect) closes the plaintext port-53 bypass; ADR-37 (this feature) closes the
+standard-port encrypted-DNS bypass (DoT/DoQ on port 853). For DNS-over-HTTPS (DoH, port 443),
+the complementary approach is the DNSBL domain-block layer (known DoH hostnames) together with
+IP-alias feeds such as the Dibdot DoH-IP feed that block known DoH resolver IPs — blocking port
+443 directly would break all HTTPS traffic and is explicitly out of scope. Non-standard-port
+DoT/DoQ also remains uncovered by this rule; that limitation is documented in the UI help text.
+
+Live-VM smoke: `tests/smoke/test_dot_doq_block.py` (marker `smoke`).
