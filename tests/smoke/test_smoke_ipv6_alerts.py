@@ -97,6 +97,13 @@ def ipv6_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
                 )
                 if fb.returncode != 0:
                     print(f"WARNING: raw Unbound restart also failed: rc={fb.returncode} {fb.stderr!r} {fb.stdout!r}")
+                else:
+                    # Confirm the resolver is actually live before handing the box to the next
+                    # module — a clean exit code alone does not prove Unbound came back up.
+                    try:
+                        h.wait_unbound_ready(smoke_vm)
+                    except Exception as ready_exc:
+                        print(f"WARNING: raw restart completed but Unbound is not ready: {ready_exc!r}")
             except Exception as fb_exc:
                 print(f"WARNING: raw Unbound restart raised: {fb_exc!r}")
         h.collect_host_diagnostics(smoke_vm)
