@@ -10347,7 +10347,6 @@ function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
 
-	$pfb['conf_mod']		= FALSE;	// Flag to check for mods to the config.xml file. ('$pfb_config' array to hold changes)
 	$pfb['filter_configure']	= FALSE;	// Flag to call filter_configure once
 
 	// ADR-12 Phase 6: TWO pass-scoped accumulators of the names UPDATED this pass,
@@ -14106,25 +14105,21 @@ function sync_package_pfblockerng($cron='') {
 	#	SAVE CONFIGURATION	#
 	#################################
 
-	// Uncheck reusing existing downloads check box
+	// Uncheck the "reuse existing downloads" flag — this update consumed the request,
+	// so clear the one-shot. It is the only setting pfBlockerNG persists on the way out
+	// of the update, so the save is gated directly on it (no staging array needed).
 	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
 	    pfb_cfg_toggle_read($pfb['config']['pfb_reuse']) === PfbToggle::On) {
-		// Stage the off-value via the ADR-28 write adapter (legacy stored '')
-		// rather than a hardcoded literal. This is a deferred staged-merge write:
-		// it rides $pfb_config through the config_read_file() + array_replace_recursive()
-		// merge below, NOT PfbConfig::write() — whose immediate config_set_path() the
-		// reload on the save path would discard.
-		$pfb_config['installedpackages']['pfblockerng']['config'][0]['pfb_reuse'] = pfb_cfg_toggle_write(PfbToggle::Off);
-		$pfb['conf_mod'] = TRUE;
-	}
 
-	// Only save config.xml, if changes are found.
-	if ($pfb['conf_mod'] && isset($pfb_config)) {
 		pfb_logger("\nSaving config changes", 1);
 
-		// Reload config.xml to get any recent changes and merge/save changes.
+		// Reload config.xml FIRST to pick up edits made concurrently during this
+		// (long-running) update, THEN clear the flag through the gateway so the write
+		// lands on the freshly-reloaded config. Writing before the reload would be
+		// discarded by it; a single registered-key write needs no whole-config
+		// array_replace_recursive() merge. ADR-29: registered key -> PfbConfig.
 		config_read_file(FALSE, TRUE);
-		config_set_path('', array_replace_recursive(config_get_path(''), $pfb_config));
+		PfbConfig::write('pfb_reuse', PfbToggle::Off);
 		write_config('pfBlockerNG: save settings');
 
 		pfb_logger("... completed", 1);
