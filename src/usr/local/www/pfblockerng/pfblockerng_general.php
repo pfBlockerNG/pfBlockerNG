@@ -305,15 +305,41 @@ if ($_POST) {
 			// ADR-38: persist syslog export settings. Written into $pfb['gconfig'] so the
 			// writeSection() call below includes them; a bare PfbConfig::write() before
 			// writeSection() would be clobbered by the section-level write.
-			$pfb['gconfig']['log_syslog']			= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
-			$pfb['gconfig']['log_syslog_facility']		= $_POST['log_syslog_facility']	?: 'log_local6';
-			$pfb['gconfig']['log_syslog_priority']		= $_POST['log_syslog_priority']	?: 'log_notice';
+			//
+			// Capture the pre-save values so we can detect a syslog change after the
+			// write and restart pfb_filter (its static cache would otherwise hold stale
+			// settings for the lifetime of the process).
+			$pfb_old_log_syslog		= $pfb['gconfig']['log_syslog']			?? '';
+			$pfb_old_log_facility		= $pfb['gconfig']['log_syslog_facility']	?? '';
+			$pfb_old_log_priority		= $pfb['gconfig']['log_syslog_priority']	?? '';
+
+			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
+
+			// The facility and priority selects are disabled (greyed-out) when the
+			// toggle is off, so the browser does not submit them. Preserve the
+			// previously stored values in that case rather than overwriting with the
+			// absent POST fields (mirrors the allowlist-textarea pattern above).
+			if ($pfb['gconfig']['log_syslog'] === 'on') {
+				$pfb['gconfig']['log_syslog_facility']	= $_POST['log_syslog_facility']	?: 'log_local6';
+				$pfb['gconfig']['log_syslog_priority']	= $_POST['log_syslog_priority']	?: 'log_notice';
+			}
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
 
 			$pfb['save'] = TRUE;
 			sync_package_pfblockerng();
+
+			// If any syslog key changed, restart pfb_filter so its per-process static
+			// cache (in pfb_syslog_event()) picks up the new settings immediately.
+			if (($pfb['gconfig']['log_syslog']		!== $pfb_old_log_syslog)	||
+			    ($pfb['gconfig']['log_syslog_facility']	!== $pfb_old_log_facility)	||
+			    ($pfb['gconfig']['log_syslog_priority']	!== $pfb_old_log_priority)) {
+				if (is_service_running('pfb_filter')) {
+					restart_service('pfb_filter');
+				}
+			}
+
 			header('Location: /pfblockerng/pfblockerng_general.php');
 			exit;
 		}
@@ -643,8 +669,8 @@ events.push(function() {
 	pfb_sync_internal_filter();
 
 	// ADR-38: grey out facility/severity selects when the syslog toggle is off.
-	// Selects are always submitted (not disabled on POST); they remain configured
-	// so the user's choice is preserved when re-enabling.
+	// Disabled selects are not submitted by the browser; the POST handler preserves
+	// the stored values across an off-save so the user's choice is intact on re-enable.
 	function pfb_sync_syslog() {
 		var enabled = $('#log_syslog').prop('checked');
 		disableInput('log_syslog_facility', !enabled);
