@@ -876,6 +876,33 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
+		// ADR-36: NAT DNS-redirect enable: 'on' | '' (checkbox). Default '' (off).
+		'dnsbl_redir' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'since'         => '4.0.0',
+		],
+
+		// ADR-36: NAT DNS-redirect interface multi-select (comma-joined string). Default ''.
+		'dnsbl_redir_int' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
+		// ADR-36: NAT DNS-redirect exception alias/IP string. Default ''.
+		'dnsbl_redir_exclude' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
 		// -------------------------------------------------------------------
 		// SafeSearch section (pfblockerngsafesearch — flat, no /config/0)
 		// -------------------------------------------------------------------

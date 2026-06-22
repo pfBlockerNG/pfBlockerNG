@@ -34,6 +34,9 @@ if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc')) {
 if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc')) {
 	require_once('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc');	// ADR-35: firewall-object ownership/marker layer
 }
+if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc')) {
+	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc');	// ADR-36: NAT DNS-redirect rule builder
+}
 
 define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
 

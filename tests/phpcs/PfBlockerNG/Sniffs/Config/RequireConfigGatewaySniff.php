@@ -144,6 +144,10 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_tld',
 		'installedpackages/pfblockerngdnsblsettings/config/0/aliaslog',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsblwebpage',
+		// ADR-36: NAT DNS-redirect fields
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir',
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int',
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)
 		'installedpackages/pfblockerngsafesearch/safesearch_enable',
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',
