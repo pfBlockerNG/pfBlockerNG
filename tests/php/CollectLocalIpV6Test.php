@@ -92,7 +92,6 @@ final class CollectLocalIpV6Test extends TestCase
 		];
 
 		// Seed the test-visible globals the doubles key on.
-		$GLOBALS['pfb_test_interfaces_with_gateway'] = [];
 		$GLOBALS['pfb_test_interface_ip']            = [];
 		$GLOBALS['pfb_test_configured_ipv6']         = ['lan' => self::LAN_IPV6_ADDR];
 		$GLOBALS['pfb_test_interface_subnetv6']      = ['lan' => (string) self::LAN_IPV6_BITS];
@@ -106,7 +105,6 @@ final class CollectLocalIpV6Test extends TestCase
 			unset($GLOBALS['config']);
 		}
 		unset(
-			$GLOBALS['pfb_test_interfaces_with_gateway'],
 			$GLOBALS['pfb_test_interface_ip'],
 			$GLOBALS['pfb_test_configured_ipv6'],
 			$GLOBALS['pfb_test_interface_subnetv6'],
