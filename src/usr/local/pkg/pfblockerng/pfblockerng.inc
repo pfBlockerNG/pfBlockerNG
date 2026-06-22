@@ -3814,7 +3814,10 @@ function pfb_create_dnsbl($mode) {
 		if ($mode == 'enabled') {
 			// Collect existing pfSense NAT rules for comparison.
 			foreach (config_get_path('nat/rule', []) as $ex_nat) {
-				if (pfb_fwobj_is_owned($ex_nat['descr'] ?? '')) {
+				// Bucket only DNSBL-owned NAT (descr carries 'pfB DNSBL') for rebuild,
+				// matching the original strpos() detection — other pfBlockerNG-owned
+				// NAT (e.g. a future managed rule) stays in the preserved 'other' bucket.
+				if (str_contains($ex_nat['descr'] ?? '', PFB_FWOBJ_NAT_LEGACY_PFX)) {
 					// Collect DNSBL NAT rules
 					$dnsbl_ex_nat[] = $ex_nat;
 				} else {

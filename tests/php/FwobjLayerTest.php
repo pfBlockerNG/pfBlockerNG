@@ -585,4 +585,36 @@ final class FwobjLayerTest extends TestCase
 		$this->assertSame('pfB_Deny_v4', $after[0]['descr'],
 			'After: existing rule descr must be unchanged');
 	}
+
+	/**
+	 * v. pfb_fwobj_reconcile fails loud on a seam-only (NULL-builder) marker.
+	 *
+	 * A registration may carry builder => NULL when its rows are built elsewhere
+	 * (e.g. the DNSBL NAT, built by pfb_create_dnsbl) — reconciling such a marker
+	 * is a programming error and must throw, never invoke NULL and fatal.
+	 *
+	 * Given:  a marker registered with builder = NULL; its section is empty.
+	 * When:   pfb_fwobj_reconcile is called for that marker (object absent).
+	 * Then:   a LogicException is thrown (the NULL builder is never invoked).
+	 */
+	public function testReconcileThrowsWhenBuilderNotCallable(): void
+	{
+		// Given: empty nat/rule section + a seam-only registration (NULL builder).
+		$this->seedConfig(['nat' => ['rule' => []]]);
+
+		pfb_fwobj_register([
+			'type'    => 'nat',
+			'section' => 'nat/rule',
+			'marker'  => PFB_FWOBJ_NAT_LEGACY_PFX,
+			'builder' => NULL,
+			'guard'   => NULL,
+		]);
+
+		// Assert before: object absent, so reconcile reaches the builder branch.
+		$this->assertCount(0, $this->getSection('nat/rule'), 'Before: no NAT rules present');
+
+		// When/Then: reconciling a NULL-builder marker must throw, not fatal on NULL().
+		$this->expectException(\LogicException::class);
+		pfb_fwobj_reconcile(PFB_FWOBJ_NAT_LEGACY_PFX);
+	}
 }
