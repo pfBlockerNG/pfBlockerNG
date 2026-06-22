@@ -1,0 +1,156 @@
+ADR-38 Phase 2 — Register syslog export settings via PfbConfig (COMPLETE)
+=========================================================================
+
+Branch: adr/38-system-log-integration (canonical branch; no managed-remote pin override)
+
+------------------------------------------------------------------------
+REGISTRY ENTRIES ADDED
+------------------------------------------------------------------------
+
+Section path (all three): installedpackages/pfblockerng/config/0
+  (the $gen section — same as the log_max_* / log_rotate_* / log_reset_keep_* siblings)
+
+Since version: '4.0.0'
+  (confirmed from ADR-36/ADR-37 sibling entries; the current devel series)
+
+Fields:
+  log_syslog
+    adapter: pfb_cfg_toggle_read / pfb_cfg_toggle_write (PfbToggle)
+    default: '' (off)
+    vocabulary: {'on', ''}
+
+  log_syslog_facility
+    adapter: NULL / NULL (plain-string identity)
+    default: 'log_local6'
+    vocabulary: Snort-style facility tokens (18 tokens):
+      'log_kern', 'log_user', 'log_mail', 'log_daemon', 'log_auth', 'log_syslog',
+      'log_lpr', 'log_news', 'log_uucp', 'log_cron',
+      'log_local0', 'log_local1', 'log_local2', 'log_local3',
+      'log_local4', 'log_local5', 'log_local6', 'log_local7'
+
+  log_syslog_priority
+    adapter: NULL / NULL (plain-string identity)
+    default: 'log_notice'
+    vocabulary: Snort-style severity tokens (8 tokens):
+      'log_emerg', 'log_alert', 'log_crit', 'log_err',
+      'log_warning', 'log_notice', 'log_info', 'log_debug'
+
+------------------------------------------------------------------------
+SNIFF — RequireConfigGatewaySniff $registeredPaths
+------------------------------------------------------------------------
+
+Three paths added (after ADR-37 block):
+  'installedpackages/pfblockerng/config/0/log_syslog'
+  'installedpackages/pfblockerng/config/0/log_syslog_facility'
+  'installedpackages/pfblockerng/config/0/log_syslog_priority'
+
+------------------------------------------------------------------------
+TOKEN→CONSTANT MAP HELPER
+------------------------------------------------------------------------
+
+Functions added to pfblockerng_extra.inc:
+
+  pfb_syslog_facility_constant(string $token): int
+    Maps 'log_local6' → LOG_LOCAL6, etc. for all 18 facility tokens.
+    Unknown token → LOG_LOCAL6 (safe default; the registered field default).
+    Empty string → LOG_LOCAL6.
+
+  pfb_syslog_priority_constant(string $token): int
+    Maps 'log_notice' → LOG_NOTICE, etc. for all 8 severity tokens.
+    Unknown token → LOG_NOTICE (safe default; the registered field default).
+    Empty string → LOG_NOTICE.
+
+Both functions are PURE (no globals, no I/O) and DORMANT (no call sites in
+production code this phase).
+
+------------------------------------------------------------------------
+TEST FILES TOUCHED
+------------------------------------------------------------------------
+
+NEW:
+  tests/php/SyslogFacilityMapTest.php
+    Tests: 22 (18 facility tokens + 2 unknown-default tests +
+               8 severity tokens + 2 unknown-default tests +
+               1 disjoint-vocabulary test + 2 existence checks)
+
+MODIFIED:
+  tests/php/CfgGatewayTest.php
+    Added: 9 new tests:
+      testLogSyslogRoundTripOn
+      testLogSyslogRoundTripOff
+      testLogSyslogAbsentKeyReturnsOffDefault
+      testLogSyslogFacilityRoundTripDefaultValue
+      testLogSyslogFacilityRoundTripAlternateValues
+      testLogSyslogFacilityAbsentKeyReturnsLogLocal6Default
+      testLogSyslogPriorityRoundTripDefaultValue
+      testLogSyslogPriorityRoundTripAllVocabularyValues
+      testLogSyslogPriorityAbsentKeyReturnsLogNoticeDefault
+    Added: 3 keys to inventory list (log_syslog, log_syslog_facility, log_syslog_priority)
+
+  tests/php/RollbackContractTest.php
+    Added: 6 new tests (Section H — ADR-38 Phase 2):
+      testLogSyslogForwardAndBackwardForEveryVocabToken
+      testLogSyslogFacilityForwardAndBackwardForEveryVocabToken
+      testLogSyslogFacilityAbsentKeyReturnsLogLocal6Default
+      testLogSyslogPriorityForwardAndBackwardForEveryVocabToken
+      testLogSyslogPriorityAbsentKeyReturnsLogNoticeDefault
+      (plus existing toggleAdaptedKeys() automatically covers log_syslog
+       in testAllToggleFieldsForwardAndBackwardForEveryVocabToken)
+
+------------------------------------------------------------------------
+VERIFICATION RESULTS
+------------------------------------------------------------------------
+
+vendor/bin/phpunit:
+  Tests: 1301, Assertions: 5346, Warnings: 31 (pre-existing, unrelated)
+  Failures: 0, Errors: 0
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  Clean (0 errors, 0 warnings)
+
+vendor/bin/phpstan:
+  [OK] No errors
+
+python -m pytest:
+  1944 passed, 2 skipped
+
+ruff check . && ruff format --check .:
+  All checks passed; 130 files already formatted
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:
+  No syntax errors detected
+
+Dormancy check (grep src/ for call sites):
+  log_syslog / log_syslog_facility / log_syslog_priority — registry entries only;
+  pfb_syslog_facility_constant / pfb_syslog_priority_constant — defined in
+  pfblockerng_extra.inc only; no PfbConfig::read('log_syslog*') calls in
+  daemon/python/UI.
+
+------------------------------------------------------------------------
+PHP STANDARDS CHECK
+------------------------------------------------------------------------
+
+Tabs: confirmed (file indented with tabs throughout).
+Uppercase TRUE/FALSE: no boolean literals added.
+No die()/exit() in library code.
+PHPCS UppercaseBooleanLiteral: clean.
+PHPCS RequireConfigGateway: clean (three new paths in $registeredPaths).
+
+------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 3
+------------------------------------------------------------------------
+
+Phase 2 is complete and verified:
+  - Three fields registered in pfb_cfg_registry() under installedpackages/pfblockerng/config/0,
+    since='4.0.0', with correct adapters and defaults.
+  - Round-trip write(read(v))==v confirmed for every vocabulary value of all three fields.
+  - sniff $registeredPaths updated (3 new paths).
+  - Inventory test updated (3 new keys).
+  - Map helpers (pfb_syslog_facility_constant / pfb_syslog_priority_constant) added,
+    covering full vocabularies + unknown→safe-default.
+  - All five verification gates pass.
+  - Feature remains dormant: no PfbConfig::read/write of new keys anywhere in production code.
+
+Phase 3 may proceed: add the <logging> block to pfblockerng.xml, create
+pfb_syslog_event() in pfblockerng_extra.inc, and call it at the filterlog
+write site (pfblockerng.inc:9319-9324), gated by PfbConfig::read('log_syslog').
