@@ -931,6 +931,43 @@ function pfb_cfg_registry(): array
 		],
 
 		// -------------------------------------------------------------------
+		// ADR-38: syslog export settings (General / Log Settings section, $gen)
+		// -------------------------------------------------------------------
+
+		// Master toggle — emit security events to syslog: 'on' | '' (checkbox).
+		// Default '' (off) — zero impact on existing installs.
+		'log_syslog' => [
+			'section'       => $gen,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'since'         => '4.0.0',
+		],
+
+		// syslog facility (Snort-style token string). Default 'log_local6'.
+		// Vocabulary: 'log_local0'..'log_local7', 'log_daemon', 'log_user',
+		// 'log_auth', 'log_kern', 'log_lpr', 'log_mail', 'log_news',
+		// 'log_syslog', 'log_uucp', 'log_cron'. Plain-string identity adapter.
+		'log_syslog_facility' => [
+			'section'       => $gen,
+			'default'       => 'log_local6',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
+		// syslog severity / priority (Snort-style token string). Default 'log_notice'.
+		// Vocabulary: 'log_emerg', 'log_alert', 'log_crit', 'log_err',
+		// 'log_warning', 'log_notice', 'log_info', 'log_debug'. Plain-string identity adapter.
+		'log_syslog_priority' => [
+			'section'       => $gen,
+			'default'       => 'log_notice',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
+		// -------------------------------------------------------------------
 		// SafeSearch section (pfblockerngsafesearch — flat, no /config/0)
 		// -------------------------------------------------------------------
 
@@ -1480,6 +1517,92 @@ function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): 
 	}
 	// Reset when the period has changed (or when the log has never been reset).
 	return $period !== $last_key;
+}
+
+// ---------------------------------------------------------------------------
+// ADR-38 Phase 2 — syslog facility / severity token → PHP constant maps.
+//
+// pfb_syslog_facility_constant(string $token): int
+//   Maps a stored Snort-style facility token (e.g. 'log_local6') to the
+//   corresponding PHP LOG_* integer constant.  Unknown tokens → LOG_LOCAL6
+//   (the safe default).  The full vocabulary is the Snort-style set:
+//     'log_kern'   → LOG_KERN    'log_user'   → LOG_USER
+//     'log_mail'   → LOG_MAIL    'log_daemon' → LOG_DAEMON
+//     'log_auth'   → LOG_AUTH    'log_syslog' → LOG_SYSLOG
+//     'log_lpr'    → LOG_LPR     'log_news'   → LOG_NEWS
+//     'log_uucp'   → LOG_UUCP   'log_cron'   → LOG_CRON
+//     'log_local0' → LOG_LOCAL0  'log_local1' → LOG_LOCAL1
+//     'log_local2' → LOG_LOCAL2  'log_local3' → LOG_LOCAL3
+//     'log_local4' → LOG_LOCAL4  'log_local5' → LOG_LOCAL5
+//     'log_local6' → LOG_LOCAL6  'log_local7' → LOG_LOCAL7
+//   Default (unknown) → LOG_LOCAL6.
+//
+// pfb_syslog_priority_constant(string $token): int
+//   Maps a stored Snort-style severity token (e.g. 'log_notice') to the
+//   corresponding PHP LOG_* integer constant.  Unknown tokens → LOG_NOTICE
+//   (the safe default).  The full vocabulary:
+//     'log_emerg'   → LOG_EMERG   'log_alert'  → LOG_ALERT
+//     'log_crit'    → LOG_CRIT    'log_err'    → LOG_ERR
+//     'log_warning' → LOG_WARNING 'log_notice' → LOG_NOTICE
+//     'log_info'    → LOG_INFO    'log_debug'  → LOG_DEBUG
+//   Default (unknown) → LOG_NOTICE.
+//
+// Both functions are PURE (no globals, no I/O, no side effects) and DORMANT
+// (uncalled from production code this phase).
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_syslog_facility_constant — map a stored Snort-style facility token to a PHP constant.
+ *
+ * @param  string $token  Stored token (e.g. 'log_local6').
+ * @return int            PHP LOG_* constant; LOG_LOCAL6 for unknown tokens.
+ */
+function pfb_syslog_facility_constant(string $token): int
+{
+	static $map = [
+		'log_kern'   => LOG_KERN,
+		'log_user'   => LOG_USER,
+		'log_mail'   => LOG_MAIL,
+		'log_daemon' => LOG_DAEMON,
+		'log_auth'   => LOG_AUTH,
+		'log_syslog' => LOG_SYSLOG,
+		'log_lpr'    => LOG_LPR,
+		'log_news'   => LOG_NEWS,
+		'log_uucp'   => LOG_UUCP,
+		'log_cron'   => LOG_CRON,
+		'log_local0' => LOG_LOCAL0,
+		'log_local1' => LOG_LOCAL1,
+		'log_local2' => LOG_LOCAL2,
+		'log_local3' => LOG_LOCAL3,
+		'log_local4' => LOG_LOCAL4,
+		'log_local5' => LOG_LOCAL5,
+		'log_local6' => LOG_LOCAL6,
+		'log_local7' => LOG_LOCAL7,
+	];
+
+	return $map[$token] ?? LOG_LOCAL6;
+}
+
+/**
+ * pfb_syslog_priority_constant — map a stored Snort-style severity token to a PHP constant.
+ *
+ * @param  string $token  Stored token (e.g. 'log_notice').
+ * @return int            PHP LOG_* constant; LOG_NOTICE for unknown tokens.
+ */
+function pfb_syslog_priority_constant(string $token): int
+{
+	static $map = [
+		'log_emerg'   => LOG_EMERG,
+		'log_alert'   => LOG_ALERT,
+		'log_crit'    => LOG_CRIT,
+		'log_err'     => LOG_ERR,
+		'log_warning' => LOG_WARNING,
+		'log_notice'  => LOG_NOTICE,
+		'log_info'    => LOG_INFO,
+		'log_debug'   => LOG_DEBUG,
+	];
+
+	return $map[$token] ?? LOG_NOTICE;
 }
 
 // ---------------------------------------------------------------------------
