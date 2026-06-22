@@ -1,6 +1,6 @@
 # ADR-36: Optional NAT DNS-redirection rule set (DNS hijack)
 
-- **Status:** **Proposed** (2026-06-20)
+- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
 - **Date:** 2026-06-20
 - **Branch:** `adr/36-dns-redirection` (off `devel`)
 - **Folds in maintainer's working config** (config.xml NAT "Redirect DNS IPv4/IPv6" — ground
@@ -324,21 +324,24 @@ Invariants (each asserted by PHPUnit tests with full branch coverage):
 
 ## 7. Definition of done
 
-- [ ] `pfb_build_dns_redirect_rules()` passes all golden tests — exact §2.2 rule shape, all
+- [x] `pfb_build_dns_redirect_rules()` passes all golden tests — exact §2.2 rule shape, all
       branches (inet/inet6, alias set/empty, multiple interfaces, marker present in NAT +
-      filter entries).
-- [ ] Three `PfbConfig`-registered fields (`dns_redirect_enable`, `dns_redirect_iface`,
-      `dns_redirect_exception`) with ADR-29 round-trip + forward/backward invariants green
-      (`CfgGatewayTest.php`, `RollbackContractTest.php`).
-- [ ] ADR-35 registration in place; create/reconcile/remove/sweep exercised for the redirect
-      rule set (idempotent, stale-prune, user-rule survival — all asserted).
-- [ ] UI control block on `pfblockerng_dnsbl.php`: enable + multi-select + quick-fill +
-      exception alias + help text; server-side PFBL-01 validation.
-- [ ] All gates green: `vendor/bin/phpunit`, PHPStan, PHPCS (PFBL-01 + ADR-28 + ADR-29 sniffs),
-      `php -l`, `python -m pytest`, ADR-14 `ui_render`.
+      filter entries). *(Phase 1 + 2 PHPUnit golden tests — green)*
+- [x] Three `PfbConfig`-registered fields (`dnsbl_redir`, `dnsbl_redir_int`,
+      `dnsbl_redir_exclude`) with ADR-29 round-trip + forward/backward invariants green
+      (`CfgGatewayTest.php`, `RollbackContractTest.php`). *(Phase 1 — green)*
+- [x] ADR-35 registration in place; create/reconcile/remove/sweep exercised for the redirect
+      rule set (idempotent, stale-prune, user-rule survival — all asserted). *(Phase 2 PHPUnit — green)*
+- [x] UI control block on `pfblockerng_dnsbl.php`: enable + multi-select + quick-fill +
+      exception alias + help text; server-side PFBL-01 validation. *(Phase 3 — green)*
+- [x] All off-VM gates green: `vendor/bin/phpunit`, PHPStan, PHPCS (PFBL-01 + ADR-28 + ADR-29
+      sniffs), `php -l`, `python -m pytest`, `ruff check/format`. *(Phases 1–4 — green)*
+- [x] ADR-14 `ui_render` — `pfblockerng_dnsbl.php` marker tuple updated to assert "DNS Redirect"
+      section present; pending live-VM run via `ui-tests.yml` CI on the PR. *(Phase 3)*
 - [ ] Live-VM smoke proves: NAT + filter rules appear on enable, are removed on disable, survive
       uninstall correctly (pfB_DNS_Redirect_* gone; user rule survives); stale-interface prune
       works; `pfctl -sn` confirms the rdr rules are active.
+      *(smoke file written: `tests/smoke/test_dns_redirect.py`, 6 cases — pending live fan-out)*
 
 **Manual smoke (owner: maintainer):**
 
