@@ -1,0 +1,188 @@
+ADR-38 Phase 1 — Pure key=value syslog event formatters (COMPLETE)
+===================================================================
+
+Branch: adr/38-system-log-integration (canonical branch; no managed-remote pin override needed)
+
+------------------------------------------------------------------------
+FUNCTION SIGNATURES
+------------------------------------------------------------------------
+
+PHP (pfblockerng_extra.inc):
+  function pfb_syslog_format_ip(array $fields): string
+
+Python (pfb_unbound.py):
+  def syslog_format_dnsbl(
+      q_name: str,
+      q_ip: str,
+      q_type: str,
+      group: str,
+      feed: str,
+      b_type: str,
+      b_eval: str,
+  ) -> str
+
+Both functions are PURE (no globals, no I/O, no side effects) and DORMANT
+(uncalled from production code this phase).
+
+------------------------------------------------------------------------
+KEY VOCABULARY — IP body (pfb_syslog_format_ip)
+------------------------------------------------------------------------
+
+Fixed key order (14 keys):
+  act     — action:       'block' | 'pass' | 'match'
+  dir     — direction:    'in' | 'out'
+  if      — friendly interface name
+  proto   — protocol string (e.g. 'TCP', 'UDP', 'TCP-SA')
+  src     — source IP address
+  dst     — destination IP address
+  sport   — source port   (optional — omitted when empty)
+  dport   — destination port  (optional — omitted when empty)
+  ipver   — IP version:   '4' | '6'
+  geoip   — GeoIP ISO country code  (optional)
+  alias   — pfBlockerNG alias name  (optional)
+  feed    — feed name               (optional)
+  host    — resolved hostname       (optional)
+  asn     — ASN string              (optional)
+
+Required keys (always present): act, dir, if, proto, src, dst, ipver.
+
+------------------------------------------------------------------------
+KEY VOCABULARY — DNSBL body (syslog_format_dnsbl)
+------------------------------------------------------------------------
+
+Fixed key order (8 keys, 2 optional):
+  act     — always 'dnsbl' (identifies the event class)
+  qname   — queried domain name
+  qip     — client IP address
+  qtype   — DNS record type string (e.g. 'A', 'AAAA', 'CNAME')
+  group   — DNSBL group name  (optional — omitted when empty string)
+  feed    — feed name         (optional — omitted when empty string)
+  btype   — block type string (e.g. 'VIP', 'NULL', 'TLD', 'DNSBL', 'Python')
+  eval    — evaluated/matched value
+
+Required keys (always present): act, qname, qip, qtype, btype, eval.
+
+------------------------------------------------------------------------
+EMPTY-VALUE CONVENTION
+------------------------------------------------------------------------
+
+IP formatter:
+  - sport and dport are omitted when the value is the empty string.
+  - geoip, alias, feed, host, asn are omitted when the value is any of:
+    '' | 'Unknown' | 'Unk' | 'null'
+    These are the sentinel values the CSV pipeline emits when a field is
+    unavailable, matching the source exactly so the two cannot drift.
+
+DNSBL formatter:
+  - group and feed are omitted when the value is the empty string.
+  - All other keys are always present (required).
+
+------------------------------------------------------------------------
+ESCAPING RULE (same for both formatters)
+------------------------------------------------------------------------
+
+1. Strip embedded newlines (\n, \r, \r\n): replace with a space.
+   This keeps the syslog message single-line (mandatory).
+2. If the resulting value contains a space, '=', or '"':
+   - Wrap the value in double-quotes: "value".
+   - Escape any internal '"' as \".
+3. Other punctuation ('|', ':', '/', '-', '.', etc.) is NOT quoted.
+
+Examples:
+  'TCP-SA'              → TCP-SA         (no quoting needed)
+  'TCP FLAGS'           → "TCP FLAGS"    (space → quoted)
+  'pfB_Deny=v4'         → "pfB_Deny=v4" ('=' → quoted)
+  'bad"host.example'    → "bad\"host..."  ('"' → quoted+escaped)
+  |AS1234:CHINANET|     → |AS1234:CHINANET| (no quoting; '|' not a trigger)
+  "multi\nline"         → "multi line"   (newline → space → quoted)
+
+------------------------------------------------------------------------
+TEST FILES
+------------------------------------------------------------------------
+
+PHP unit tests:
+  tests/php/SyslogFormatTest.php
+  Tests: 13, Assertions: 26
+
+Python tests:
+  tests/test_syslog_format.py
+  Tests: 14
+
+------------------------------------------------------------------------
+TEST COVERAGE
+------------------------------------------------------------------------
+
+PHP (SyslogFormatTest):
+  - IPv4 Block, all optional fields: exact golden string
+  - IPv6 Permit, all optional fields: exact golden string
+  - IPv4 Match, required fields only (all sentinels absent): minimal string
+  - geoip='Unknown' omitted vs geoip='DE' present (before/after)
+  - geoip='Unk' omitted vs geoip='JP' present (before/after)
+  - asn='null' omitted vs real ASN with space quoted (before/after)
+  - IPv6 Match, required fields only (empty optionals)
+  - Value with space → double-quoted
+  - Value with '=' → double-quoted
+  - Value with '"' → quoted + inner \" escaped
+  - Newline in value → stripped + quoted, output single-line
+  - Fixed key order (required keys)
+  - Fixed key order (optional enrichment keys after ipver)
+
+Python (test_syslog_format):
+  - VIP block, all fields: exact golden string
+  - NULL block, all fields: exact golden string
+  - VIP vs NULL differ (before/after on btype)
+  - CNAME q_type: exact golden string
+  - Empty group omitted vs non-empty present (before/after)
+  - Empty group exact string (feed present, group absent)
+  - Empty feed omitted vs non-empty present (before/after)
+  - Both group and feed empty: minimal exact string
+  - Value with space → quoted
+  - Value with '=' → quoted
+  - Value with '"' → quoted + escaped
+  - Newline in value → stripped, output single-line
+  - Fixed key order (required fields only)
+  - Fixed key order (with optional group/feed)
+
+------------------------------------------------------------------------
+VERIFICATION RESULTS
+------------------------------------------------------------------------
+
+vendor/bin/phpunit:
+  Tests: 1258, Assertions: 5046, Warnings: 31 (pre-existing, unrelated)
+  Failures: 0, Errors: 0
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  Clean (0 errors, 0 warnings)
+
+vendor/bin/phpstan:
+  [OK] No errors
+
+python -m pytest:
+  1944 passed, 2 skipped (pre-existing skip conditions)
+
+ruff check . && ruff format --check .:
+  All checks passed; 130 files already formatted
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:
+  No syntax errors detected
+
+Dormant check (grep src/ for call sites):
+  pfb_syslog_format_ip  — defined in pfblockerng_extra.inc only; no call sites
+  syslog_format_dnsbl   — defined in pfb_unbound.py only; no call sites
+
+------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 2
+------------------------------------------------------------------------
+
+Phase 1 is complete and verified:
+  - Both formatters exist, are pure, and are dormant.
+  - Tests assert exact golden strings and cover every listed branch/edge.
+  - All five verification gates pass.
+  - PHP standards (tabs, PHP 8.3, uppercase TRUE/FALSE, no die/exit) hold.
+  - Python standards (4-space, stdlib-only, no bare except) hold.
+  - Scope is clean: no CSV/emission/config/UI changes.
+
+Phase 2 may proceed: register log_syslog / log_syslog_facility /
+log_syslog_priority in pfb_cfg_registry(); add a facility/severity
+token→constant map helper; extend CfgGatewayTest + RollbackContractTest
++ inventory. No call site wiring in Phase 2 (still dormant).

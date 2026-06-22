@@ -2398,6 +2398,94 @@ def pfb_db_enqueue(task: tuple) -> None:
     _db_apply(task)
 
 
+# ---------------------------------------------------------------------------
+# ADR-38 Phase 1 — Pure key=value syslog DNSBL event formatter.
+#
+# syslog_format_dnsbl(...) -> str
+#   Maps the already-computed DNSBL block event fields to a single
+#   space-separated "key=value ..." string for use as a syslog message body.
+#   Key order is fixed; this is the stable contract later phases wire to
+#   SysLogHandler and that tests pin.
+#
+# Key vocabulary (fixed order):
+#   act   — always 'dnsbl' (identifies the event class)
+#   qname — queried domain name
+#   qip   — client IP address
+#   qtype — DNS record type string (e.g. 'A', 'AAAA', 'CNAME')
+#   group — DNSBL group name (omitted when empty)
+#   feed  — feed name (omitted when empty)
+#   btype — block type string (e.g. 'VIP', 'NULL', 'TLD', 'DNSBL', 'Python')
+#   eval  — evaluated/matched value (e.g. the domain that matched)
+#
+# Empty-value convention:
+#   Required fields (act/qname/qip/qtype/btype/eval) are always present.
+#   Optional fields (group/feed) are OMITTED entirely when empty ('').
+#
+# Escaping rule (same as the PHP formatter):
+#   A value containing a space, '=', or '"' is double-quoted; internal '"'
+#   characters are backslash-escaped (\").  Newlines are stripped (replaced
+#   with a space) before quoting to keep the message single-line.
+#
+# PURE — no globals, no I/O, no side effects. stdlib only.
+# ---------------------------------------------------------------------------
+
+
+def _syslog_escape_value(value: str) -> str:
+    """Escape a single syslog key=value field value.
+
+    Strips embedded newlines, then wraps in double-quotes if the value
+    contains a space, '=', or '"'.  Internal quotes are backslash-escaped.
+    """
+    # Strip embedded newlines to keep the message single-line.
+    value = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    if " " in value or "=" in value or '"' in value:
+        value = '"' + value.replace('"', '\\"') + '"'
+    return value
+
+
+def syslog_format_dnsbl(
+    q_name: str,
+    q_ip: str,
+    q_type: str,
+    group: str,
+    feed: str,
+    b_type: str,
+    b_eval: str,
+) -> str:
+    """Format a DNSBL block event as a space-separated key=value string.
+
+    Maps the fields the DNSBL CSV line is built from to a stable syslog body.
+    Pure: no globals, no I/O, no side effects.
+
+    Args:
+        q_name: Queried domain name.
+        q_ip:   Client IP address.
+        q_type: DNS record type string (e.g. 'A', 'AAAA', 'CNAME').
+        group:  DNSBL group name; omitted from output when empty.
+        feed:   Feed name; omitted from output when empty.
+        b_type: Block type string (e.g. 'VIP', 'NULL', 'TLD', 'DNSBL').
+        b_eval: Evaluated/matched value (e.g. the domain that triggered the block).
+
+    Returns:
+        Space-separated "k=v ..." body string; never multi-line.
+    """
+    esc = _syslog_escape_value
+    parts = [
+        "act=dnsbl",
+        "qname=" + esc(q_name),
+        "qip=" + esc(q_ip),
+        "qtype=" + esc(q_type),
+    ]
+    # Optional fields: omit when empty.
+    if group:
+        parts.append("group=" + esc(group))
+    if feed:
+        parts.append("feed=" + esc(feed))
+    parts.append("btype=" + esc(b_type))
+    parts.append("eval=" + esc(b_eval))
+    return " ".join(parts)
+
+
 def get_details_dnsbl(
     m_type: str,
     qinfo: query_info | None,
