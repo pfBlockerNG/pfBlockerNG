@@ -17,7 +17,8 @@ pyproject.toml). Run only by the smoke workflow::
     python -m pytest tests/smoke -m smoke --override-ini="addopts="
 
 Needs the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``), and
-the ``stub_dns`` + ``mock_feeds`` fixtures. Without them all cases skip cleanly.
+the ``stub_dns`` fixture. Feeds are written on-box via ``helpers.write_local_feed``
+(no HTTP mock-feed server needed). Without these all cases skip cleanly.
 """
 
 from __future__ import annotations
@@ -71,7 +72,6 @@ FILTERLOG_SETTLE_SECS = 5.0
 def deployed_vm(
     smoke_vm: SmokeVM,
     stub_dns: _StubDnsServer,
-    mock_feeds: h._MockFeedServer,  # type: ignore[type-arg]
 ) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for this module; wire DNSBL + IP + syslog.
 
