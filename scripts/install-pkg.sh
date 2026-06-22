@@ -65,16 +65,18 @@ echo "==> Copying $(basename "$PKGFILE") to ${SSH_TARGET}:${REMOTE}"
 # shellcheck disable=SC2086
 scp ${SCP_OPTS} "$PKGFILE" "${SSH_TARGET}:${REMOTE}"
 
-# `pkg add -f` of a LOCAL file resolves RUN_DEPENDS from the LOCAL pkg db — it
-# does not reach the repos when the deps are already installed. The smoke image
-# bakes pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then
-# executes the package's POST-INSTALL hooks. A "Missing dependency" error here =
-# bad image. The -f (force) flag reinstalls even when the same version is already
-# present, ensuring POST-INSTALL re-runs on every deploy; without it a repeat
-# deploy is a silent no-op ("already installed") and POST-INSTALL never reruns,
-# leaving Unbound in whatever state the previous module left it.
-echo "==> pkg add -f ${REMOTE} (deps pre-baked; offline; -f forces POST-INSTALL)"
-ssh_t "env ASSUME_ALWAYS_YES=yes pkg add -f '${REMOTE}'"
+# `pkg add` of a LOCAL file resolves RUN_DEPENDS from the LOCAL pkg db — it does
+# not reach the repos when the deps are already installed. The smoke image bakes
+# pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then executes
+# the package's POST-INSTALL hooks. A "Missing dependency" error here = bad image.
+# Do NOT add -f to force a same-version reinstall: a forced reinstall mid-suite
+# disrupts the chroot copy of pfb_unbound.py that Unbound's python module loads,
+# so unbound-checkconf then fails ("pythonmod: can't open file pfb_unbound.py")
+# and the resolver won't start. Keeping a same-version redeploy a no-op leaves the
+# working chroot intact; per-module Unbound recovery is the test teardown's job
+# (see tests/smoke/helpers.py::reconfigure_unbound).
+echo "==> pkg add ${REMOTE} (deps pre-baked; offline)"
+ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${REMOTE}'"
 
 # POST-INSTALL restarts Unbound asynchronously; wait for it before the caller
 # queries the resolver (see feedback: poll the real readiness signal).
