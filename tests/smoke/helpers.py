@@ -3206,6 +3206,11 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         '/usr/bin/sockstat > "$D/sockstat.txt" 2>&1; /usr/bin/netstat -rn > "$D/netstat_rn.txt" 2>&1; '
         'cp /var/unbound/*.conf /var/unbound/*.ini "$D/unbound/" 2>/dev/null; '
         'cp /var/unbound/pfb_py_* "$D/unbound/" 2>/dev/null; '
+        # The chroot python script + its include — NOT matched by the globs above, yet
+        # central to a "pythonmod: can't open file" resolver failure, so capture them
+        # explicitly (their presence/absence is the ground truth for a staging desync).
+        'cp /var/unbound/pfb_unbound.py "$D/unbound/" 2>/dev/null; '
+        'cp /var/unbound/pfb_unbound_include.inc "$D/unbound/" 2>/dev/null; '
         # pfBlockerNG database (feeds / masterfiles / orig / deny / dnsbl / …) and
         # pfSense's pf alias-table files — the IP/domain state behind the rules.
         'tar czf "$D/var_db_pfblockerng.tgz" -C /var/db pfblockerng 2>/dev/null; '
