@@ -12488,6 +12488,17 @@ function sync_package_pfblockerng($cron='') {
 	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required.
 	pfb_create_dnsbl($mode);
 
+	// [ ADR-36 ] Sync DNS-redirect NAT + filter rules (create / reconcile / prune / remove).
+	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule + filter/rule directly
+	// (pfSense-core foreign sections). No write_config() here — a single flush below covers both.
+	if (function_exists('pfb_fwobj_init_dns_redirect_registrations') &&
+	    function_exists('pfb_sync_dns_redirect_rules')) {
+		pfb_fwobj_init_dns_redirect_registrations();
+		if (pfb_sync_dns_redirect_rules()) {
+			write_config('pfBlockerNG: saving DNS-redirect rule changes');
+		}
+	}
+
 	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
 	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
 	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
@@ -14498,6 +14509,10 @@ function pfblockerng_php_pre_deinstall_command() {
 		// entry not yet removed). If nothing was swept (normal case: disable already cleaned
 		// up) the call is a no-op and write_config() is NOT called (idempotent).
 		pfb_fwobj_init_registrations();
+		// [ ADR-36 ] Also register DNS-redirect objects so the sweep covers pfB_DNS_Redirect_* entries.
+		if (function_exists('pfb_fwobj_init_dns_redirect_registrations')) {
+			pfb_fwobj_init_dns_redirect_registrations();
+		}
 		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
 			write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
 		}

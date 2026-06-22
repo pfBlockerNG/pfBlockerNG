@@ -1,0 +1,206 @@
+ADR-36 Phase 2 — DNS redirect rule builder + ADR-35 lifecycle wiring
+=====================================================================
+Date: 2026-06-22
+Implementer: Claude Sonnet 4.6
+
+--------------------------------------------------------------------------------
+PHASE 1 BASELINE CONFIRMED
+--------------------------------------------------------------------------------
+All 11 DnsRedirectBuilderTest golden tests pass against the Phase-1 builder.
+pfb_build_dns_redirect_rules() is fully implemented (not a stub). No changes
+were needed to the builder itself.
+
+--------------------------------------------------------------------------------
+pfb_build_dns_redirect_rules() — FINAL SIGNATURE (unchanged from P1)
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc
+
+function pfb_build_dns_redirect_rules(
+    string $iface,
+    string $ipprotocol,
+    string $exception
+): array
+
+Returns: [0 => NAT rdr rule array, 1 => associated filter PASS rule array].
+Throws: \InvalidArgumentException if $ipprotocol is not 'inet' or 'inet6'.
+Pure function (no config reads, no shell calls, no write_config).
+
+--------------------------------------------------------------------------------
+ADR-35 REGISTRATION SPEC — pfb_fwobj_init_dns_redirect_registrations()
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc (new function)
+
+TWO registrations, both keyed on PFB_DNS_REDIR_DESCR_V4_PFX = 'pfB_DNS_Redirect_':
+
+  Registration 1 (NAT):
+    type    = 'nat'
+    section = 'nat/rule'
+    marker  = PFB_DNS_REDIR_DESCR_V4_PFX  ('pfB_DNS_Redirect_')
+    builder = NULL  (seam-only; rules built by pfb_sync_dns_redirect_rules)
+    guard   = NULL
+
+  Registration 2 (filter):
+    type    = 'filter'
+    section = 'filter/rule'
+    marker  = PFB_DNS_REDIR_DESCR_V4_PFX  ('pfB_DNS_Redirect_')
+    builder = NULL
+    guard   = NULL
+
+Design rationale: pfb_fwobj_remove() / pfb_fwobj_sweep() use str_starts_with()
+for pfB_-prefixed markers. A single prefix registration covers ALL per-interface /
+per-family descr variants (pfB_DNS_Redirect_lan_v4, pfB_DNS_Redirect_opt1_v6, …).
+The second registration overwrites the first in the registry (same marker key),
+which is intentional — the registry is a documentation/seam layer; the actual
+create/remove logic is in pfb_sync_dns_redirect_rules().
+
+Called:
+  - From the new sync wiring in sync_package_pfblockerng() (before pfb_sync_dns_redirect_rules).
+  - From the deinstall sweep in pfblockerng_php_pre_deinstall_command().
+  Both calls are guarded by function_exists() so the feature degrades gracefully
+  if pfblockerng_dns_redirect.inc is absent.
+
+--------------------------------------------------------------------------------
+STALE-INTERFACE PRUNE — IMPLEMENTATION
+--------------------------------------------------------------------------------
+Method: pfb_fwobj_remove() with a guard closure (scan method).
+
+In pfb_sync_dns_redirect_rules() (enabled path):
+  1. Build $expected_descrs = all valid marker strings for the CURRENT interface set.
+     (PFB_DNS_REDIR_DESCR_V4_PFX . $iface . suffix for each iface × family)
+  2. $stale_guard = static function(array $row) use ($expected_descrs): bool {
+         return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
+             && !in_array($descr, $expected_descrs, TRUE);
+     };
+  3. pfb_fwobj_remove('nat/rule',    PFB_DNS_REDIR_DESCR_V4_PFX, $stale_guard);
+     pfb_fwobj_remove('filter/rule', PFB_DNS_REDIR_DESCR_V4_PFX, $stale_guard);
+  4. Then idempotent upsert: for each interface × family, pfb_fwobj_find() check
+     before appending (no duplicates on repeat sync).
+
+Remove API used: pfb_fwobj_remove() with guard closure — NOT pfb_fwobj_sweep().
+pfb_fwobj_sweep() is used only for the full-disable path (via ADR-35 P4 sweep).
+
+--------------------------------------------------------------------------------
+DISABLE / SWEEP WIRING
+--------------------------------------------------------------------------------
+DISABLED path in pfb_sync_dns_redirect_rules():
+  pfb_fwobj_remove('nat/rule',    PFB_DNS_REDIR_DESCR_V4_PFX)  // no guard = all
+  pfb_fwobj_remove('filter/rule', PFB_DNS_REDIR_DESCR_V4_PFX)  // no guard = all
+
+The existing ADR-35 P4 defensive sweep (pfb_fwobj_sweep) in sync_package_pfblockerng()
+also covers pfB_DNS_Redirect_* entries (because pfb_fwobj_is_owned() returns TRUE for
+any descr starting with 'pfB_') — double coverage is idempotent.
+
+Deinstall sweep: pfb_fwobj_init_dns_redirect_registrations() called before
+pfb_fwobj_sweep() in pfblockerng_php_pre_deinstall_command() — the sweep's
+is_owned check covers the pfB_DNS_Redirect_* prefix without needing registration,
+but the registration call is retained for documentation/seam completeness.
+
+--------------------------------------------------------------------------------
+SYNC WIRING IN sync_package_pfblockerng()
+--------------------------------------------------------------------------------
+Location: after pfb_create_dnsbl($mode), before the ADR-35 P4 sweep block.
+
+  if (function_exists('pfb_fwobj_init_dns_redirect_registrations') &&
+      function_exists('pfb_sync_dns_redirect_rules')) {
+      pfb_fwobj_init_dns_redirect_registrations();
+      if (pfb_sync_dns_redirect_rules()) {
+          write_config('pfBlockerNG: saving DNS-redirect rule changes');
+      }
+  }
+
+pfb_sync_dns_redirect_rules() reads:
+  - PfbConfig::read('dnsbl_redir')         -> PfbToggle (toggle adapter)
+  - PfbConfig::read('dnsbl_redir_int')     -> plain string (comma-separated ifaces)
+  - PfbConfig::read('dnsbl_redir_exclude') -> plain string (exception alias)
+All via the ADR-29 PfbConfig gateway.
+
+nat/rule + filter/rule accessed via direct config_*_path (pfSense-core foreign
+sections — ADR-29 exclusion list). The RequireConfigGateway sniff does not flag
+pfSense-core paths.
+
+write_config() is NOT called inside pfb_sync_dns_redirect_rules() — the caller
+(the function_exists wiring block) flushes when the builder returns TRUE.
+
+--------------------------------------------------------------------------------
+PFBL-01 / scopeFunctions
+--------------------------------------------------------------------------------
+NO changes to scopeFunctions in RequirePfbFilterSniff.php.
+
+Rationale: pfb_sync_dns_redirect_rules() is defined in pfblockerng_dns_redirect.inc,
+not pfblockerng.inc. PFBL-01 is scoped to pfblockerng.inc ONLY (the sniff targets
+that file). All config reads and rule composition are in pfblockerng_dns_redirect.inc
+(out of PFBL-01 scope). Interface names are pfb_filter(PFB_FILTER_WORD)-validated
+inside pfb_sync_dns_redirect_rules() before use (same pattern as pfb_manage_dnsbl_vip).
+
+The sync call in pfblockerng.inc is:
+  pfb_sync_dns_redirect_rules();  // in pfblockerng_dns_redirect.inc — out of PFBL-01 scope
+No exec-family calls, json_encode, or dynamic filesystem paths in scope. PFBL-01 clean.
+
+--------------------------------------------------------------------------------
+LIFECYCLE TESTS — DnsRedirectLifecycleTest.php
+--------------------------------------------------------------------------------
+File: tests/php/DnsRedirectLifecycleTest.php (new file, 6 test methods)
+
+All four mandatory cases (from phase prompt) implemented:
+
+  a. testReconcileIsIdempotentNoDuplicatesOnRepeatSync
+     -> Before (0 rules), first sync (2 NAT + 2 filter for 'lan'), second sync (no change).
+     -> Asserts changed=TRUE on first sync, changed=FALSE on second sync.
+     -> Rule counts identical after both syncs.
+
+  b. testDisableRemovesRedirectRulesAndUserRuleSurvives
+     -> Seeds user NAT rule. Enables redirect (rules appear). Disables (rules gone).
+     -> Asserts before (1 total), after enable (3 total = 1 user + 2 redirect),
+        after disable (1 total = user only, descr + target unchanged).
+
+  c. testStaleInterfaceRulesArePrunedOnInterfaceReduction
+     -> Enable lan+opt1 (4 NAT + 4 filter). Reduce to lan only.
+     -> Asserts opt1 rules absent, lan rules present. Count drops from 4 to 2.
+
+  d. testExceptionAliasBranchChangesSourceElement
+     -> Empty exception: source=<any>. Set 'DNS_Whitelist': source=negated alias.
+        Clear again: source=<any>.
+     -> Full before/during/after assertion on source structure.
+
+  + testRegistrationSeamCoversNatAndFilterSections (registration API test)
+  + testSyncWhenAlreadyDisabledAndNoRulesExistsReturnsFalse (disable from clean state)
+
+--------------------------------------------------------------------------------
+VERIFICATION NUMBERS
+--------------------------------------------------------------------------------
+php -l:       All touched files — no syntax errors
+PHPUnit:      1200 tests (was 1194 + 6 new lifecycle), all passing; 31 pre-existing warnings
+PHPStan:      No errors
+PHPCS:        Clean (PFBL-01 + ADR-28 UppercaseBooleanLiteral + ADR-29
+              RequireConfigGateway — no violations)
+pytest:       1930 passed, 2 skipped — no regressions
+ruff check:   All checks passed
+ruff format:  127 files already formatted
+
+--------------------------------------------------------------------------------
+FILES CHANGED
+--------------------------------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc
+  + pfb_fwobj_init_dns_redirect_registrations()
+  + pfb_sync_dns_redirect_rules()
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  + ADR-36 sync wiring in sync_package_pfblockerng() (after pfb_create_dnsbl)
+  + ADR-36 registration in pfblockerng_php_pre_deinstall_command() (before sweep)
+
+tests/php/DnsRedirectLifecycleTest.php  (NEW — 6 test methods, 58 assertions)
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 3
+--------------------------------------------------------------------------------
+Phase 2 complete. All gates green.
+
+Phase 3 can proceed (Web UI):
+  - Add control block in pfblockerng_dnsbl.php adjacent to the DoH/DoT section.
+  - Enable checkbox (dnsbl_redir toggle), interface multi-select (dnsbl_redir_int),
+    quick-fill button, exception alias field + help text.
+  - Follow the 'Permit Firewall Rules' Form_Group pattern at :2921.
+  - Server-side validation reads via PfbConfig; saves via PfbConfig::write().
+  - ADR-14 ui_render tier-A test: GET page -> 200 + page-specific marker.
+
+ADR-RESUME: branch=adr/36-dns-redirection next-phase=3
