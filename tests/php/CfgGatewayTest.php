@@ -491,6 +491,10 @@ final class CfgGatewayTest extends TestCase
 			'pfb_tld',
 			'aliaslog',
 			'dnsblwebpage',
+			// ADR-36: NAT DNS-redirect fields
+			'dnsbl_redir',
+			'dnsbl_redir_int',
+			'dnsbl_redir_exclude',
 
 			// pfblockerngsafesearch scalars
 			'safesearch_enable',
@@ -1134,5 +1138,259 @@ final class CfgGatewayTest extends TestCase
 				"{$key} absent must return '0' (registered default)"
 			);
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// ADR-36 — dnsbl_redir / dnsbl_redir_int / dnsbl_redir_exclude
+	// -----------------------------------------------------------------------
+
+	/**
+	 * dnsbl_redir (toggle): 'on' and '' both round-trip losslessly.
+	 *
+	 * Scenario:
+	 *   Background: dnsbl_redir stored as 'on' (enabled) or '' (disabled).
+	 *     Given canonical stored value v in {'on', ''}.
+	 *     When PfbConfig::write('dnsbl_redir', PfbConfig::read('dnsbl_redir')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblRedirToggleRoundTripOn(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir';
+
+		// Given: canonical 'on'.
+		$this->seedConfig($path, 'on');
+
+		// Before: raw 'on'.
+		$this->assertSame('on', config_get_path($path),
+			'before: dnsbl_redir seed must be on'
+		);
+
+		// When: read -> write.
+		$enum = PfbConfig::read('dnsbl_redir');
+		$this->assertSame(PfbToggle::On, $enum, 'read: on -> PfbToggle::On');
+
+		PfbConfig::write('dnsbl_redir', $enum);
+
+		// After: stored as 'on'.
+		$this->assertSame('on', config_get_path($path),
+			'write(read(on)) == on for dnsbl_redir'
+		);
+	}
+
+	public function testDnsblRedirToggleRoundTripOff(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir';
+
+		// Given: canonical '' (checkbox unchecked).
+		$this->seedConfig($path, '');
+
+		// Before: raw ''.
+		$this->assertSame('', config_get_path($path),
+			"before: dnsbl_redir seed must be ''"
+		);
+
+		// When: read -> write.
+		$enum = PfbConfig::read('dnsbl_redir');
+		$this->assertSame(PfbToggle::Off, $enum, "read: '' -> PfbToggle::Off");
+
+		PfbConfig::write('dnsbl_redir', $enum);
+
+		// After: stored as ''.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_redir"
+		);
+	}
+
+	/**
+	 * dnsbl_redir absent key returns the registered default '' (Off).
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_redir').
+	 *     Then PfbToggle::Off is returned (default '').
+	 */
+	public function testDnsblRedirAbsentKeyReturnsOff(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_redir must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_redir');
+		$this->assertSame(PfbToggle::Off, $result,
+			"dnsbl_redir absent -> PfbToggle::Off (default '')"
+		);
+	}
+
+	/**
+	 * dnsbl_redir_int (plain): arbitrary strings round-trip as identity.
+	 *
+	 * Scenario:
+	 *   Background: plain adapter — any stored string passes through unchanged.
+	 *     Given stored value v.
+	 *     When PfbConfig::write('dnsbl_redir_int', PfbConfig::read('dnsbl_redir_int')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblRedirIntPlainRoundTripNonEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int';
+
+		// Given: comma-joined interface names.
+		$this->seedConfig($path, 'lan,opt1');
+
+		// Before.
+		$this->assertSame('lan,opt1', config_get_path($path),
+			'before: dnsbl_redir_int seed must be lan,opt1'
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_redir_int');
+		$this->assertSame('lan,opt1', $value,
+			'read: plain adapter returns raw stored string'
+		);
+
+		PfbConfig::write('dnsbl_redir_int', $value);
+
+		// After.
+		$this->assertSame('lan,opt1', config_get_path($path),
+			'write(read(lan,opt1)) == lan,opt1 for dnsbl_redir_int'
+		);
+	}
+
+	public function testDnsblRedirIntPlainRoundTripEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int';
+
+		// Given: '' (no interfaces selected).
+		$this->seedConfig($path, '');
+
+		// Before.
+		$this->assertSame('', config_get_path($path),
+			"before: dnsbl_redir_int seed must be ''"
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_redir_int');
+		$this->assertSame('', $value, "read: '' returns ''");
+
+		PfbConfig::write('dnsbl_redir_int', $value);
+
+		// After.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_redir_int"
+		);
+	}
+
+	/**
+	 * dnsbl_redir_int absent key returns the registered default ''.
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_redir_int').
+	 *     Then '' is returned (registered default).
+	 */
+	public function testDnsblRedirIntAbsentKeyReturnsDefaultEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_redir_int must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_redir_int');
+		$this->assertSame('', $result,
+			"dnsbl_redir_int absent -> '' (registered default)"
+		);
+	}
+
+	/**
+	 * dnsbl_redir_exclude (plain): arbitrary strings round-trip as identity.
+	 *
+	 * Scenario:
+	 *   Background: plain adapter — any stored string passes through unchanged.
+	 *     Given stored value v.
+	 *     When PfbConfig::write('dnsbl_redir_exclude', PfbConfig::read('dnsbl_redir_exclude')).
+	 *     Then stored string equals v (write(read(v)) == v).
+	 */
+	public function testDnsblRedirExcludePlainRoundTripNonEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude';
+
+		// Given: alias name.
+		$this->seedConfig($path, 'DNS_Whitelist');
+
+		// Before.
+		$this->assertSame('DNS_Whitelist', config_get_path($path),
+			'before: dnsbl_redir_exclude seed must be DNS_Whitelist'
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_redir_exclude');
+		$this->assertSame('DNS_Whitelist', $value,
+			'read: plain adapter returns raw stored string'
+		);
+
+		PfbConfig::write('dnsbl_redir_exclude', $value);
+
+		// After.
+		$this->assertSame('DNS_Whitelist', config_get_path($path),
+			'write(read(DNS_Whitelist)) == DNS_Whitelist for dnsbl_redir_exclude'
+		);
+	}
+
+	public function testDnsblRedirExcludePlainRoundTripEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude';
+
+		// Given: '' (no exception).
+		$this->seedConfig($path, '');
+
+		// Before.
+		$this->assertSame('', config_get_path($path),
+			"before: dnsbl_redir_exclude seed must be ''"
+		);
+
+		// When.
+		$value = PfbConfig::read('dnsbl_redir_exclude');
+		$this->assertSame('', $value, "read: '' returns ''");
+
+		PfbConfig::write('dnsbl_redir_exclude', $value);
+
+		// After.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_redir_exclude"
+		);
+	}
+
+	/**
+	 * dnsbl_redir_exclude absent key returns the registered default ''.
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.
+	 *     Given no seed.
+	 *     When PfbConfig::read('dnsbl_redir_exclude').
+	 *     Then '' is returned (registered default).
+	 */
+	public function testDnsblRedirExcludeAbsentKeyReturnsDefaultEmpty(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path),
+			'before: dnsbl_redir_exclude must be absent'
+		);
+
+		// When/Then.
+		$result = PfbConfig::read('dnsbl_redir_exclude');
+		$this->assertSame('', $result,
+			"dnsbl_redir_exclude absent -> '' (registered default)"
+		);
 	}
 }
