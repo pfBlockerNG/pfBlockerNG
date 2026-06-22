@@ -2267,21 +2267,6 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -
     raise RuntimeError("Unbound did not become ready after reload")
 
 
-def reconfigure_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Regenerate the Unbound config + restart it, then wait until it is ready.
-
-    Runs ``services_unbound_configure()`` in the fully-bootstrapped pfSense env
-    via pfSsh.php (it stops Unbound, regenerates the config, and starts it), then
-    polls readiness. Used by module teardowns that mutate interface/gateway state
-    to guarantee the box is left with a live resolver for sibling modules.
-    """
-    snippet = "require_once('interfaces.inc');\nservices_unbound_configure();\necho 'OK';"
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"reconfigure_unbound failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-    wait_unbound_ready(vm)
-
-
 # --------------------------------------------------------------------------- #
 # ADR-10 zero-downtime swap — no-restart readiness + invariants
 # --------------------------------------------------------------------------- #
