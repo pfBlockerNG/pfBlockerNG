@@ -50,8 +50,12 @@ pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def ipv6_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
+def ipv6_vm(smoke_vm: SmokeVM, lan_interface: SmokeVM) -> Iterator[SmokeVM]:  # noqa: ARG001
     """Deploy the branch .pkg once; yield the VM for the locality tests.
+
+    Depends on ``lan_interface`` to ensure a LAN VLAN subinterface is
+    provisioned before these tests run (the single-NIC smoke image boots with
+    no LAN assigned; IPv6 locality tests set an IPv6 address on LAN).
 
     No DNSBL config is required — ``pfb_collect_localip()`` runs before any
     reload and has no dependency on the DNSBL pipeline being active.  The

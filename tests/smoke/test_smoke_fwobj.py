@@ -55,8 +55,16 @@ _USER_NAT_DESCR = "my-test-user-nat-do-not-delete"
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+def deployed_vm(  # noqa: ARG001
+    smoke_vm: SmokeVM,
+    stub_dns: _StubDnsServer,
+    lan_interface: SmokeVM,
+) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the fwobj module.
+
+    Depends on ``lan_interface`` to ensure a LAN VLAN subinterface is
+    provisioned before these tests run (the single-NIC smoke image boots with
+    no LAN assigned; fwobj tests create LAN-scoped VIP and NAT rules).
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS and the
     DNSBL update path runs ``pfb_create_dnsbl`` which touches pfSense state.

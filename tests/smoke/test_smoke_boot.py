@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import SmokeVM, expected_control_answer, resolve_a
+from . import helpers as h
+from .conftest import SmokeVM, expected_control_answer
 
 pytestmark = pytest.mark.smoke
 
@@ -32,7 +33,7 @@ def test_pfctl_ruleset_nonempty(smoke_vm: SmokeVM) -> None:
     assert rules, f"pfctl returned no rules; stdout was: {result.stdout!r}"
 
 
-def test_control_name_resolves(smoke_vm: SmokeVM) -> None:
+def test_control_name_resolves(smoke_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """A baked local-data control name resolves to its known answer.
 
     Optional: only the maintainer's image *may* bake a control name. The matrix
@@ -42,7 +43,7 @@ def test_control_name_resolves(smoke_vm: SmokeVM) -> None:
     name, expected_ip = expected_control_answer()
     if not name:
         pytest.skip("no baked control name (SMOKE_CONTROL_NAME unset); matrix injects per-case")
-    answers = resolve_a(name, smoke_vm.host, smoke_vm.dns_port)
-    assert answers, f"control name {name!r} returned no A record"
+    answer = h.dns_probe_client(client_vm, name)
+    assert answer.records, f"control name {name!r} returned no A record"
     if expected_ip is not None:
-        assert expected_ip in answers, f"{name!r} resolved to {answers}, expected {expected_ip!r}"
+        assert expected_ip in answer.records, f"{name!r} resolved to {answer.records}, expected {expected_ip!r}"

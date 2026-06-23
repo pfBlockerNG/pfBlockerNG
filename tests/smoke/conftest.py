@@ -25,7 +25,7 @@ What this module provides:
 * ``mock_feeds`` — a FUNCTION-scoped fixture serving files from
   ``tests/smoke/fixtures/`` (plus per-test registered content) over stdlib
   ``http.server`` on the runner, reachable by the guest at
-  ``http://10.0.2.2:<port>/<name>`` via the QEMU user-net (SLIRP) host alias.
+  ``http://10.10.0.2:<port>/<name>`` via the QEMU WAN user-net (SLIRP) host alias.
 
 The boot+probe core lives in :func:`boot_and_probe`, separate from the pytest
 fixtures, so it can double as a reusable health/sanity gate (ADR-09 fans the
@@ -40,6 +40,7 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Generator, Iterator, Mapping
@@ -69,8 +70,13 @@ DEFAULT_SSH_PORT = 2222  # host -> guest 22
 DEFAULT_WEB_PORT = 8080  # host -> guest 80
 DEFAULT_DNS_PORT = 5353  # host -> guest 53 (tcp+udp)
 
-# The SLIRP host alias the guest uses to reach the runner (mock feed server).
-GUEST_TO_HOST_ALIAS = "10.0.2.2"
+# The WAN SLIRP host alias the guest uses to reach the runner (mock feed server,
+# stub DNS, webhook sink). Corresponds to boot_vm.sh net0: net=10.10.0.0/24,
+# host=10.10.0.2. The old 10.0.2.2 was the classic libslirp default; the two-VM
+# topology uses 10.10.0.0/24 — it avoids the management net (10.0.0.0/16) AND
+# leaves the DNSBL sinkhole VIP 10.10.10.1 outside the WAN subnet (an overlap
+# makes pfBlockerNG disable DNSBL).
+GUEST_TO_HOST_ALIAS = "10.10.0.2"
 
 # Sentinel answers the runner-side stub upstream returns for any forwarded query
 # (see _StubDnsServer / helpers.configure_upstream). Distinct from every DNSBL
@@ -82,6 +88,16 @@ STUB_DNS_AAAA = stub_responses.STUB_DNS_AAAA  # RFC 3849 documentation range
 
 # Hard readiness ceiling; wait_ready.sh polls (no fixed sleep) up to this.
 DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
+
+# civm client VM ssh host-forward port (host -> civm:22). Matches boot_vm.sh
+# SMOKE_CLIENT_SSH_HOSTPORT default.
+DEFAULT_CLIENT_SSH_PORT = 2223  # host -> civm 22
+
+# The address civm uses to reach pfSense (pfSense LAN side of the socket crossover).
+PFSENSE_LAN_IP = "192.168.1.1"  # pfSense LAN IP baked in the two-VM image
+
+# civm's pfSense static-DHCP lease address (informational; keyed by SMOKE_CLIENT_MAC_ADDRESS).
+CLIENT_LAN_IP = "192.168.1.10"  # civm's static lease on the pfSense LAN
 
 
 # --------------------------------------------------------------------------- #
@@ -107,8 +123,8 @@ class SmokeVM:
     # once mock_feeds is up (it allocates the port); None until then.
     feed_base_url: str | None = None
     # Runner-side port of the stub DNS upstream (reached by the guest at
-    # 10.0.2.2:<port> via SLIRP). Set once the stub_dns fixture is up; None
-    # otherwise. Unbound is pointed here so it never recurses into dark egress.
+    # 10.10.0.2:<port> via the WAN SLIRP alias). Set once the stub_dns fixture is
+    # up; None otherwise. Unbound is pointed here so it never recurses into dark egress.
     upstream_dns_port: int | None = None
     # qemu PID + overlay are bookkeeping for teardown.
     vm_pid: int | None = None
@@ -209,6 +225,7 @@ def boot_and_probe(
     web_port: int = DEFAULT_WEB_PORT,
     dns_port: int = DEFAULT_DNS_PORT,
     boot_timeout: int = DEFAULT_BOOT_TIMEOUT,
+    diag_name: str = "pfsense",
 ) -> BootHandle:
     """Boot ``base_image`` and block until the guest is usable.
 
@@ -224,12 +241,17 @@ def boot_and_probe(
     image sanity gate).
     """
     log_file = log_path.open("wb")
+    # Expose a QMP control socket so a wedged, no-serial boot can be screendumped
+    # (the only diagnostic window when SSH/web never come up). boot_vm.sh keeps
+    # the serial console on stdio (-> log_file) alongside QMP.
+    qmp_sock = _qmp_sock_path(diag_name)
     # boot_vm.sh backgrounds nothing itself (it execs qemu); we background it
     # via Popen and pass its PID to wait_ready.sh so a dead boot is caught fast.
     process: subprocess.Popen[bytes] = subprocess.Popen(
         ["sh", str(BOOT_VM_SH), str(base_image)],
         stdout=log_file,
         stderr=subprocess.STDOUT,
+        env={**os.environ, "QMP_SOCK": qmp_sock},
     )
 
     vm = SmokeVM(
@@ -261,11 +283,13 @@ def boot_and_probe(
             check=False,
         )
     except Exception:
+        _capture_boot_failure(diag_name, qmp_sock, log_path, process)
         _kill(process)
         log_file.close()
         raise
 
     if result.returncode != 0:
+        _capture_boot_failure(diag_name, qmp_sock, log_path, process)
         _kill(process)
         log_file.close()
         tail = _tail(log_path)
@@ -299,13 +323,102 @@ def _tail(path: Path, lines: int = 40) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
+# Diagnostics for a wedged boot are written here, RELATIVE to the workspace cwd
+# (where pytest runs). The smoke workflow's "Upload diagnostics" step globs
+# ``smoke-diag/**`` + ``**/screen-*.png`` — so anything dropped here is uploaded.
+# This is the ONLY window into a setup-time boot failure: the session VM fixture
+# errors before any test runs, so the on-failure ``_dump_vm_on_failure`` hook
+# (which needs SSH) never fires, and the boot log otherwise lives under pytest's
+# tmp dir (outside the artifact globs).
+DIAG_DIR = Path("smoke-diag")
+
+
+def _qmp_sock_path(tag: str) -> str:
+    """A short unix-socket path for QEMU's QMP control channel.
+
+    Unix socket paths are capped at ~108 bytes, so we anchor under RUNNER_TEMP
+    (or /tmp), NOT pytest's deep tmp_path_factory dir. boot_vm.sh ``rm -f``s and
+    recreates it; we only need a unique, short name.
+    """
+    base = os.environ.get("RUNNER_TEMP") or "/tmp"
+    return tempfile.mktemp(prefix=f"pfb-qmp-{tag}-", suffix=".sock", dir=base)
+
+
+def _capture_boot_failure(tag: str, qmp_sock: str | None, log_path: Path, process: subprocess.Popen[bytes]) -> None:
+    """Snapshot a wedged boot into ``smoke-diag/`` before the VM is killed.
+
+    These images may have NO serial console (screendump.py's whole reason for
+    being), so the boot log can be empty and the VGA framebuffer is the only
+    window into a stuck/unreachable boot. Captures both, best-effort, into the
+    workflow-uploaded ``smoke-diag/`` dir:
+
+      * ``boot-<tag>.log`` — whatever the guest wrote to the serial/stdio channel;
+      * ``screen-<tag>.png`` — the VGA framebuffer via QEMU's QMP ``screendump``
+        (the same mechanism ``build-image.yml`` uses for a stuck headless boot).
+
+    MUST run BEFORE the qemu process is killed — QMP needs the process alive.
+    """
+    with contextlib.suppress(Exception):
+        DIAG_DIR.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(Exception):
+        shutil.copyfile(log_path, DIAG_DIR / f"boot-{tag}.log")
+    if qmp_sock and process.poll() is None and Path(qmp_sock).exists():
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["python3", str(SMOKE_DIR / "screendump.py"), qmp_sock, str(DIAG_DIR / f"screen-{tag}.png")],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+
+
+# --------------------------------------------------------------------------- #
+# LAN socket port allocation — shared by pfSense (LISTENER) and civm (CONNECTOR)
+# --------------------------------------------------------------------------- #
+
+
+def _alloc_free_tcp_port() -> int:
+    """Allocate one free TCP port on 127.0.0.1 and release it.
+
+    Binds a TCP socket to port 0 (OS picks a free ephemeral port), reads the
+    assigned port, closes the socket, and returns the port number. The caller
+    is responsible for using the port quickly before something else claims it;
+    for the boot_vm.sh socket crossover this window is fine because the port is
+    consumed moments later by QEMU's socket LISTENER.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+@pytest.fixture(scope="session")
+def lan_socket_port() -> Iterator[int]:
+    """Allocate the shared TCP port for the pfSense<->civm LAN socket crossover.
+
+    Picks one free port, sets ``SMOKE_LAN_SOCKET_PORT`` so BOTH boot_vm.sh
+    invocations (pfSense LISTENER, civm CONNECTOR) inherit the same value, yields
+    the port, and removes the env var on teardown. Must be acquired BEFORE pfSense
+    boots (so the LISTENER uses it) — ``smoke_vm`` depends on this fixture.
+    """
+    port = _alloc_free_tcp_port()
+    os.environ["SMOKE_LAN_SOCKET_PORT"] = str(port)
+    try:
+        yield port
+    finally:
+        os.environ.pop("SMOKE_LAN_SOCKET_PORT", None)
+
+
 # --------------------------------------------------------------------------- #
 # Session-scoped VM fixture
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture(scope="session")
-def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
+def smoke_vm(lan_socket_port: int, tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     """Pull -> boot -> wait-ready -> yield -> teardown, once per session.
 
     Per-case isolation (Phase 4 provides the reset verbs): cases run against
@@ -375,6 +488,144 @@ def smoke_vm(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
 
 
 # --------------------------------------------------------------------------- #
+# Client VM fixture (civm — the Debian behind-the-firewall client)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session")
+def client_vm(
+    smoke_vm: SmokeVM,
+    lan_socket_port: int,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[SmokeVM]:
+    """Boot the civm Debian client and yield its SSH connection object, once per session.
+
+    Ordering is critical: pfSense (the LAN socket LISTENER) MUST be up before
+    civm (the CONNECTOR) tries to connect — hence the ``smoke_vm`` dependency.
+    Without pfSense's LISTENER the civm QEMU socket CONNECT would fail
+    immediately. The ``lan_socket_port`` dependency guarantees the shared TCP port
+    is set in ``SMOKE_LAN_SOCKET_PORT`` before either VM boots.
+
+    NIC topology (from boot_vm.sh --role client):
+      net0 MGMT — SLIRP user-net; host->guest SSH forward at
+                  host:``DEFAULT_CLIENT_SSH_PORT`` (2223). This is the harness
+                  control path for running ``dig`` probes on civm.
+      net1 DATA — QEMU socket CONNECTOR to the pfSense LAN LISTENER; its MAC is
+                  ``SMOKE_CLIENT_MAC_ADDRESS``, which pfSense matches to a static
+                  DHCP lease handing civm ``CLIENT_LAN_IP`` (192.168.1.10).
+
+    Readiness: SSH-only (no web server on civm). ``wait_ready.sh`` is called
+    WITHOUT a web-port argument so the gate is SSH-only.
+
+    The ``SmokeVM`` object's DNS-specific fields (``dns_port``, ``feed_base_url``,
+    ``upstream_dns_port``) are unused for the client VM; its ``ssh()`` method is
+    what matters for running ``dig @192.168.1.1`` probes.
+
+    The civm data-NIC MAC (the pfSense static-lease key) defaults in boot_vm.sh,
+    so ``SMOKE_CLIENT_MAC_ADDRESS`` is an OVERRIDE (CI sets it from the secret),
+    not a precondition.
+
+    Skips (not fails) when:
+      * ``SMOKE_CLIENT_IMAGE_DIR``/``SMOKE_CLIENT_IMAGE_REF`` are both unset
+        (pfSense-only suites can run without a client image).
+      * The same prerequisites as ``smoke_vm`` (KVM, ssh, qemu binaries).
+    """
+    client_image_dir = os.environ.get("SMOKE_CLIENT_IMAGE_DIR")
+    client_image_ref = os.environ.get("SMOKE_CLIENT_IMAGE_REF")
+    if not client_image_dir and not client_image_ref:
+        pytest.skip("no civm client image (SMOKE_CLIENT_IMAGE_DIR/REF unset)")
+
+    # The civm data-NIC MAC (static-lease key) has a committed default in
+    # boot_vm.sh, so SMOKE_CLIENT_MAC_ADDRESS is an OVERRIDE, not a requirement;
+    # CI still sets it from the secret. No skip on its absence.
+
+    ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
+    if not ssh_key_path or not Path(ssh_key_path).is_file():
+        pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
+
+    if not Path("/dev/kvm").exists():
+        pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
+
+    required: tuple[str, ...] = ("qemu-system-x86_64", "qemu-img", "ssh")
+    if not client_image_dir:
+        required = ("oras", *required)
+    for binary in required:
+        if shutil.which(binary) is None:
+            pytest.skip(f"required binary `{binary}` not on PATH")
+
+    work = tmp_path_factory.mktemp("client-vm")
+    if client_image_dir:
+        qcows = sorted(Path(client_image_dir).glob("*.qcow2"))
+        if len(qcows) != 1:
+            raise RuntimeError(f"SMOKE_CLIENT_IMAGE_DIR must hold exactly one .qcow2, found {len(qcows)}: {qcows}")
+        client_image = qcows[0]
+    else:
+        client_image = oras_pull_image(client_image_ref, work / "image")  # type: ignore[arg-type]
+
+    log_path = work / "client-vm.log"
+    log_file = log_path.open("wb")
+    qmp_sock = _qmp_sock_path("civm")
+
+    # pfSense (LISTENER) is already up (smoke_vm dependency); boot civm (CONNECTOR).
+    process: subprocess.Popen[bytes] = subprocess.Popen(
+        ["sh", str(BOOT_VM_SH), "--role", "client", str(client_image)],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env={**os.environ, "QMP_SOCK": qmp_sock},
+    )
+
+    try:
+        # SSH-only readiness: omit web-port arg so wait_ready.sh uses SSH gate only.
+        result = subprocess.run(
+            [
+                "sh",
+                str(WAIT_READY_SH),
+                ssh_key_path,
+                DEFAULT_HOST,
+                str(DEFAULT_CLIENT_SSH_PORT),
+                str(DEFAULT_BOOT_TIMEOUT),
+                str(process.pid),
+                # No web-port arg → SSH-only readiness gate.
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        _capture_boot_failure("civm", qmp_sock, log_path, process)
+        _kill(process)
+        log_file.close()
+        raise
+
+    if result.returncode != 0:
+        _capture_boot_failure("civm", qmp_sock, log_path, process)
+        _kill(process)
+        log_file.close()
+        tail = _tail(log_path)
+        raise RuntimeError(
+            f"civm never became ready (wait_ready exit {result.returncode}).\n"
+            f"wait_ready stderr:\n{result.stderr}\n--- client boot log tail ---\n{tail}"
+        )
+
+    print(result.stdout.strip())
+
+    vm = SmokeVM(
+        ssh_key_path=ssh_key_path,
+        host=DEFAULT_HOST,
+        ssh_port=DEFAULT_CLIENT_SSH_PORT,
+        vm_pid=process.pid,
+        log_path=str(log_path),
+    )
+
+    try:
+        yield vm
+    finally:
+        _kill(process)
+        with contextlib.suppress(Exception):
+            log_file.close()
+
+
+# --------------------------------------------------------------------------- #
 # Mock HTTP feed server (stdlib only)
 # --------------------------------------------------------------------------- #
 
@@ -384,7 +635,7 @@ class _MockFeedServer:
 
     Files under ``tests/smoke/fixtures/`` are served by name; a test may also
     register ad-hoc content in memory via :meth:`register`. The guest fetches
-    them at ``feed_url(name)`` (``http://10.0.2.2:<port>/<name>``).
+    them at ``feed_url(name)`` (``http://10.10.0.2:<port>/<name>``).
     """
 
     def __init__(self, root: Path) -> None:
@@ -410,8 +661,8 @@ class _MockFeedServer:
                 # Stay quiet in pytest output; failures surface via assertions.
                 return
 
-        # Bind to all interfaces so the SLIRP alias 10.0.2.2 (which maps to the
-        # runner) can reach it; port 0 lets the OS pick a free port.
+        # Bind to all interfaces so the WAN SLIRP alias 10.10.0.2 (which maps to
+        # the runner) can reach it; port 0 lets the OS pick a free port.
         handler = partial(Handler, directory=str(root))
         self._httpd = ThreadingHTTPServer(("0.0.0.0", 0), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
@@ -463,9 +714,9 @@ class _MockCallbackSink:
     HAProxy): a recipe-shaped ``post`` hook ``curl``s this sink and forwards the
     url-encoded changed-alias env vars. The sink is OBSERVE-ONLY — it parses the
     body/query into a thread-safe :class:`CallbackRecord` list and answers ``200``,
-    nothing more (no side effect on the guest). Bound to ``0.0.0.0`` so the SLIRP
-    host alias ``10.0.2.2`` reaches it, exactly like :class:`_MockFeedServer`; the
-    guest hits :meth:`guest_url`.
+    nothing more (no side effect on the guest). Bound to ``0.0.0.0`` so the WAN
+    SLIRP host alias ``10.10.0.2`` reaches it, exactly like :class:`_MockFeedServer`;
+    the guest hits :meth:`guest_url`.
     """
 
     def __init__(self) -> None:
@@ -551,12 +802,12 @@ class _StubDnsServer:
     """A controlled, OBSERVABLE DNS upstream for the guest's Unbound (over SLIRP).
 
     This is the smoke matrix's upstream: pfSense forwards every non-local query to its
-    System DNS server ``10.0.2.2`` (QEMU/libslirp's host alias — see
-    ``helpers.use_system_dns_upstream``), and libslirp NATs guest->10.0.2.2:53 straight
+    System DNS server ``10.10.0.2`` (QEMU/libslirp's WAN host alias — see
+    ``helpers.use_system_dns_upstream``), and libslirp NATs guest->10.10.0.2:53 straight
     to this server on the RUNNER's loopback (``127.0.0.1:53``), port-preserving — the
-    same host-alias path the mock-feed HTTP server already rides, and the runner's own
-    ``/etc/resolv.conf`` is never touched. So what reaches this server is EXACTLY what
-    Unbound did not answer locally. That makes
+    same WAN host-alias path the mock-feed HTTP server already rides, and the runner's
+    own ``/etc/resolv.conf`` is never touched. So what reaches this server is EXACTLY
+    what Unbound did not answer locally. That makes
     blocking VERIFIABLE from the upstream side rather than inferred from a bare
     SERVFAIL: every query is recorded (:meth:`received`), so a DNSBL-blocked name must
     NEVER appear here, while a not-blocked name DOES — and resolves to a known answer,
@@ -624,13 +875,14 @@ class _StubDnsServer:
     def __init__(self, *, port: int | None = None) -> None:
         # Bind address/port are env-overridable so the smoke workflow can put the session
         # mock on the runner's loopback :53 — the System-DNS host-alias path: pfSense
-        # forwards to 10.0.2.2 (libslirp's host alias), which NATs guest->10.0.2.2:53 to
-        # the runner's 127.0.0.1:53 (this mock), port-preserving. The runner's own
-        # /etc/resolv.conf is NEVER touched. ``net.ipv4.ip_unprivileged_port_start`` is
-        # lowered by the workflow so this non-root process can bind :53; binding
-        # 127.0.0.1 (not 0.0.0.0) avoids clashing with systemd-resolved on 127.0.0.53:53.
-        # ``port`` overrides the env (the pure unit tests pass ``port=0`` to force an
-        # ephemeral port, so they never collide with the session mock holding :53).
+        # forwards to 10.10.0.2 (libslirp's WAN host alias), which NATs
+        # guest->10.10.0.2:53 to the runner's 127.0.0.1:53 (this mock), port-preserving.
+        # The runner's own /etc/resolv.conf is NEVER touched.
+        # ``net.ipv4.ip_unprivileged_port_start`` is lowered by the workflow so this
+        # non-root process can bind :53; binding 127.0.0.1 (not 0.0.0.0) avoids clashing
+        # with systemd-resolved on 127.0.0.53:53. ``port`` overrides the env (the pure
+        # unit tests pass ``port=0`` to force an ephemeral port, so they never collide
+        # with the session mock holding :53).
         addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or "127.0.0.1"
         if port is None:
             port = int(os.environ.get("SMOKE_STUB_DNS_PORT") or "0")
@@ -821,11 +1073,33 @@ class _StubDnsServer:
 
 
 @pytest.fixture(scope="session")
+def lan_interface(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[SmokeVM]:
+    """Gate on civm being connected so the pfSense LAN link has carrier, then yield the VM.
+
+    In the two-VM topology the LAN (net2) is a baked QEMU socket crossover between
+    pfSense and civm — 192.168.1.1/24 on pfSense, 192.168.1.10 on civm (static DHCP
+    lease keyed by ``SMOKE_CLIENT_MAC_ADDRESS``). No VLAN provisioning is needed: the
+    LAN interface is configured in the image and is live once both VMs are booted and
+    the socket link is connected.
+
+    Depending on ``client_vm`` guarantees civm is up and its data NIC is connected
+    (the QEMU socket CONNECTOR has joined the pfSense LISTENER) before any test that
+    needs a LAN client runs. Yields the pfSense ``SmokeVM`` object so callers use the
+    same reference they always have.
+
+    Inherits both fixtures' skip behaviour: if either ``smoke_vm`` or ``client_vm``
+    skips (no image, no KVM, no MAC), this fixture is never entered.
+    """
+    yield smoke_vm
+
+
+@pytest.fixture(scope="session")
 def stub_dns(smoke_vm: SmokeVM) -> Iterator[_StubDnsServer]:
     """Run the stub DNS upstream and record its port on the VM object.
 
-    Reachable by the guest at 10.0.2.2:<port> via SLIRP (survives the egress
-    block, same as mock_feeds). helpers.configure_upstream() points Unbound here.
+    Reachable by the guest at 10.10.0.2:<port> via the WAN SLIRP alias (survives
+    the egress block, same as mock_feeds). helpers.configure_upstream() points
+    Unbound here.
     """
     server = _StubDnsServer()
     server.start()
@@ -843,8 +1117,8 @@ def mock_feeds(smoke_vm: SmokeVM) -> Iterator[_MockFeedServer]:
 
     Hermeticity note (ADR §2): the egress block is sequenced pull -> block ->
     run and is wired by Phase 6 (the workflow blocks the runner's outbound
-    after the GHCR pull). SLIRP-internal ``10.0.2.2`` feeds survive the block,
-    so this server stays reachable; do NOT assume real internet egress.
+    after the GHCR pull). WAN SLIRP-internal ``10.10.0.2`` feeds survive the
+    block, so this server stays reachable; do NOT assume real internet egress.
     """
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     server = _MockFeedServer(FIXTURES_DIR)
@@ -863,8 +1137,8 @@ def webhook_sink(smoke_vm: SmokeVM) -> Iterator[_MockCallbackSink]:
 
     FUNCTION-scoped for per-test isolation: each case gets a fresh sink (empty
     callback list, its own ephemeral port). Reachable from the guest at
-    ``sink.guest_url(path)`` (``http://10.0.2.2:<port><path>``) via the SLIRP host
-    alias — the same path the mock-feed server rides, so it survives the egress
+    ``sink.guest_url(path)`` (``http://10.10.0.2:<port><path>``) via the WAN SLIRP
+    host alias — the same path the mock-feed server rides, so it survives the egress
     block. Shut down on teardown.
     """
     server = _MockCallbackSink()
@@ -958,6 +1232,10 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
             print(f"  {entry['client']:>15}  {entry['type']:<5} {entry['name']}")
         print("========== END STUB DNS UPSTREAM ==========")
     vm = request.node.funcargs.get("deployed_vm") or request.node.funcargs.get("smoke_vm")
+    # Some deployed_vm fixtures yield a (pfSense, civm) tuple in the two-VM topology;
+    # dump_diagnostics wants the pfSense SmokeVM, so unwrap to the first element.
+    if isinstance(vm, tuple):
+        vm = vm[0] if vm else None
     if vm is None:
         return
     from . import helpers  # local import: helpers imports from conftest (avoid cycle)

@@ -4,7 +4,7 @@
 # blocks that exactly covers a..b; those CIDRs populate the pfB_<alias>_v4 table.
 # RFC 5737 documentation range (TEST-NET-3) ONLY; never a real/abusable host.
 #
-# Served by mock_feeds at http://10.0.2.2:<port>/ip_range.txt
+# Served by mock_feeds at http://10.10.0.2:<port>/ip_range.txt
 #
 # 198.51.100.10-198.51.100.20 expands to 10/31,12/30,16/30,20/32 -> covers exactly
 # .10 through .20 inclusive.

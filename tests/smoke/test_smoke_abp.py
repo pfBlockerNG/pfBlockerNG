@@ -73,13 +73,13 @@ PASS_IP2 = "198.51.100.61"
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
+def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the ABP matrix (mirrors the ADR-04 matrix).
 
     Egress is managed per-case by ``CaseContext``; the DNSBL VIP is injected once
     (DNSBL force-disables itself without one). pfSense forwards to the runner-side mock
     via its real System-DNS path (``use_system_dns_upstream``: System DNS = the SLIRP
-    host alias 10.0.2.2, which libslirp NATs to the runner-loopback mock) so a not-blocked name resolves to
+    host alias 10.10.0.2, which libslirp NATs to the runner-loopback mock) so a not-blocked name resolves to
     a known answer AND is recorded on the mock. A full guest snapshot is collected on
     teardown for the workflow to upload.
     """
@@ -88,6 +88,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
         yield smoke_vm
     finally:
@@ -111,7 +112,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_exception_unblocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_exception_unblocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """An ABP feed that blocks ``||base^`` and exempts ``@@||good.base^``:
     ``good.base`` resolves; ``base`` and a non-exempt subdomain stay VIP-blocked.
 
@@ -134,11 +135,11 @@ def test_abp_exception_unblocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServe
         control_local_data={good: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans_base = h.dns_probe(deployed_vm, base, "A")
+        ans_base = h.dns_probe_client(client_vm, base, "A")
         assert h.is_vip(ans_base), f"{base} expected VIP block, got {ans_base}"
-        ans_bad = h.dns_probe(deployed_vm, bad, "A")
+        ans_bad = h.dns_probe_client(client_vm, bad, "A")
         assert h.is_vip(ans_bad), f"{bad} (non-exempt subdomain) expected VIP block, got {ans_bad}"
-        ans_good = h.dns_probe(deployed_vm, good, "A")
+        ans_good = h.dns_probe_client(client_vm, good, "A")
         assert h.resolves_to(ans_good, PASS_IP), f"exempted {good} should resolve to {PASS_IP}, got {ans_good}"
         assert not h.is_vip(ans_good), f"exempted {good} wrongly VIP-blocked: {ans_good}"
 
@@ -148,7 +149,7 @@ def test_abp_exception_unblocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServe
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_cross_feed_exception(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_cross_feed_exception(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Feed A blocks ``||base^``; feed B exempts ``@@||base^`` → ``base`` resolves.
 
     The two feeds are two ROWS of ONE DNSBL group (each header-sniffed ABP
@@ -167,7 +168,7 @@ def test_abp_cross_feed_exception(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
         control_local_data={base: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, base, "A")
+        ans = h.dns_probe_client(client_vm, base, "A")
         assert h.resolves_to(ans, PASS_IP), f"cross-feed @@ should un-block {base} -> {PASS_IP}, got {ans}"
         assert not h.is_vip(ans), f"{base} wrongly VIP-blocked despite cross-feed @@: {ans}"
 
@@ -177,7 +178,9 @@ def test_abp_cross_feed_exception(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_important_block_beats_feed_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_important_block_beats_feed_allow(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """Feed ``||x^$important`` (band 3) beats a feed ``@@||x^`` (band 2): x stays blocked.
 
     block_band 3 > allow_band 2 → block wins → VIP. (The ``@@`` makes the numeric
@@ -188,11 +191,11 @@ def test_abp_important_block_beats_feed_allow(deployed_vm: SmokeVM, mock_feeds: 
     feed_url = h.write_local_feed(deployed_vm, "smoke_abp_important.txt", body)
     spec = h.DnsblCase(aliasname="smokeabpimp", feed_url=feed_url, header="smokeabpimp", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, x, "A")
+        ans = h.dns_probe_client(client_vm, x, "A")
         assert h.is_vip(ans), f"{x}: $important block must beat feed @@ (VIP), got {ans}"
 
 
-def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Feed ``||y^$badfilter`` prunes the matching feed ``||y^`` → y resolves.
 
     ``$badfilter`` removes every FEED rule with the matching signature (``(y, ())``),
@@ -211,7 +214,7 @@ def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, mock_feeds: _Mock
         control_local_data={y: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, y, "A")
+        ans = h.dns_probe_client(client_vm, y, "A")
         assert h.resolves_to(ans, PASS_IP), f"$badfilter should prune the block on {y} -> {PASS_IP}, got {ans}"
         assert not h.is_vip(ans), f"{y} wrongly VIP-blocked despite $badfilter: {ans}"
 
@@ -221,7 +224,7 @@ def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, mock_feeds: _Mock
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """An ABP feed regex blocks a matching name; an ``@@/re/`` allow un-blocks an
     also-matching name.
 
@@ -243,9 +246,9 @@ def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
         control_local_data={unblocked: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans_block = h.dns_probe(deployed_vm, blocked, "A")
+        ans_block = h.dns_probe_client(client_vm, blocked, "A")
         assert h.is_vip(ans_block), f"regex-matched {blocked} expected VIP, got {ans_block}"
-        ans_allow = h.dns_probe(deployed_vm, unblocked, "A")
+        ans_allow = h.dns_probe_client(client_vm, unblocked, "A")
         assert h.resolves_to(ans_allow, PASS_IP), f"@@ regex should un-block {unblocked} -> {PASS_IP}, got {ans_allow}"
 
 
@@ -318,7 +321,9 @@ def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, mock_feeds: _MockF
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_whitelist_sovereign_over_important(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_whitelist_sovereign_over_important(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """A whitelisted name resolves even against a feed ``||w^$important``.
 
     The settings whitelist (``suppression``) loads into whiteDB as a user allow
@@ -339,12 +344,12 @@ def test_abp_whitelist_sovereign_over_important(deployed_vm: SmokeVM, mock_feeds
         control_local_data={w: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, w, "A")
+        ans = h.dns_probe_client(client_vm, w, "A")
         assert h.resolves_to(ans, PASS_IP), f"whitelisted {w} must resolve to {PASS_IP} despite $important, got {ans}"
         assert not h.is_vip(ans), f"whitelisted {w} wrongly VIP-blocked: {ans}"
 
 
-def test_user_regex_blocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_user_regex_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A user "Python Regex List" pattern blocks a matching name (VIP shape).
 
     The user regex loads into regexDB (bare compiled pattern); a regex block forces
@@ -364,11 +369,13 @@ def test_user_regex_blocks(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) ->
         user_regex=[r"trackerx-"],
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, blocked, "A")
+        ans = h.dns_probe_client(client_vm, blocked, "A")
         assert h.is_vip(ans), f"user-regex-matched {blocked} expected VIP block, got {ans}"
 
 
-def test_user_regex_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_user_regex_beats_feed_important_allow(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """A user regex is SOVEREIGN over an ABP feed allow — even ``@@…$important``.
 
     A user ``pfb_regex_list`` pattern matching the name (band 5, user block) vs a feed
@@ -389,11 +396,13 @@ def test_user_regex_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds:
         user_regex=[r"trackerx-"],
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(client_vm, name, "A")
         assert h.is_vip(ans), f"user regex (band 5) must beat feed @@$important (band 4): {name} -> {ans}"
 
 
-def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_custom_list_block_beats_feed_important_allow(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """A DNSBL Group Custom_List entry is SOVEREIGN over a feed ``@@…$important``.
 
     The user is the sovereign: an explicit Custom_List block (band 5, the
@@ -414,7 +423,7 @@ def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock
         custom_domains=[name],
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(client_vm, name, "A")
         assert h.is_vip(ans), f"Custom_List block (band 5) must beat feed @@$important (band 4): {name} -> {ans}"
 
 
@@ -423,7 +432,9 @@ def test_custom_list_block_beats_feed_important_allow(deployed_vm: SmokeVM, mock
 # --------------------------------------------------------------------------- #
 
 
-def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer, stub_dns: _StubDnsServer) -> None:
+def test_cname_validation_on_off(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer, stub_dns: _StubDnsServer
+) -> None:
     """A→CNAME→B with B blocklisted: A blocks IFF CNAME validation is ON; B always blocks.
 
     Proves a REAL Unbound populates ``qstate.return_msg.rep`` with the CNAME chain
@@ -437,7 +448,7 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
     Unbound ``local-data`` CNAME does NOT work either: Unbound returns the bare CNAME
     without chasing it (a single rrset, so ``an_numrrsets`` stays 1 and the walk never
     runs). So the mock — pfSense's upstream via its System-DNS path
-    (``use_system_dns_upstream``: forward to 10.0.2.2 → libslirp host-alias NAT → mock) — crafts
+    (``use_system_dns_upstream``: forward to 10.10.0.2 → libslirp host-alias NAT → mock) — crafts
     the 2-rrset chain: ``stub_dns.register_cname(A, B)`` answers a forwarded query for A
     with ``A CNAME B`` + ``B A <addr>``, which Unbound forwards whole.
 
@@ -475,7 +486,7 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
         )
         with h.CaseContext(deployed_vm, spec_off):
             stub_dns.reset_queries()
-            ans_src = h.dns_probe(deployed_vm, src, "A")
+            ans_src = h.dns_probe_client(client_vm, src, "A")
             assert h.resolves_to(ans_src, tgt_ip), (
                 f"CNAME validation OFF: {src} should resolve to its CNAME target's address {tgt_ip}, got {ans_src}"
             )
@@ -488,7 +499,7 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
             # Reset the stub log too, so received(B) reflects only this direct query.
             h.flush_unbound_cache(deployed_vm)
             stub_dns.reset_queries()
-            ans_tgt = h.dns_probe(deployed_vm, tgt, "A")
+            ans_tgt = h.dns_probe_client(client_vm, tgt, "A")
             assert h.is_vip(ans_tgt), f"listed target {tgt} expected VIP block (validation OFF), got {ans_tgt}"
             assert not stub_dns.received(tgt), f"blocked {tgt} must NOT reach the upstream: {stub_dns.received(tgt)}"
 
@@ -502,13 +513,13 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
         )
         with h.CaseContext(deployed_vm, spec_on):
             h.flush_unbound_cache(deployed_vm)
-            ans_src = h.dns_probe(deployed_vm, src, "A")
+            ans_src = h.dns_probe_client(client_vm, src, "A")
             assert h.is_vip(ans_src), (
                 f"CNAME validation ON: {src} must be VIP-blocked via its CNAME target {tgt}, got {ans_src}"
             )
             # Flush so the direct B probe is evaluated fresh (not served A's cached chain).
             h.flush_unbound_cache(deployed_vm)
-            ans_tgt = h.dns_probe(deployed_vm, tgt, "A")
+            ans_tgt = h.dns_probe_client(client_vm, tgt, "A")
             assert h.is_vip(ans_tgt), f"listed target {tgt} expected VIP block (validation ON), got {ans_tgt}"
     finally:
         stub_dns.clear_cname()
@@ -519,7 +530,7 @@ def test_cname_validation_on_off(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_no_regression_plain_feed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_no_regression_plain_feed(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A plain (non-ABP) feed blocks exactly as before and pfb_py_count renders.
 
     The body carries no ABP header, so it is NOT tagged ABP — it takes the ADR-06
@@ -530,7 +541,7 @@ def test_abp_no_regression_plain_feed(deployed_vm: SmokeVM, mock_feeds: _MockFee
     feed_url = h.write_local_feed(deployed_vm, "smoke_plain_noreg.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokenoreg", feed_url=feed_url, header="smokenoreg", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, domain, "A")
+        ans = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(ans), f"plain feed {domain} expected VIP block (no regression), got {ans}"
         count = h.py_loaded_count(deployed_vm)
         assert count is not None and count >= 1, f"pfb_py_count must render >=1, got {count!r}"

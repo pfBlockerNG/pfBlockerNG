@@ -44,6 +44,7 @@ import ipaddress
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
@@ -378,6 +379,106 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         )
 
 
+def pkg_installed(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
+    """True iff the pfBlockerNG package files are present on the guest.
+
+    A test that uninstalls the package (``pkg delete``) removes
+    ``/usr/local/www/pfblockerng/pfblockerng.php``; a later test in the same
+    (module-scoped) deploy then fails to reload. Used by the redeploy guard to
+    detect that state. Probes the CLI entrypoint file, not pkg's DB, so it is a
+    cheap single SSH round-trip.
+    """
+    result = vm.ssh("/bin/test", "-f", PFB_CLI, timeout=timeout)
+    return result.returncode == 0
+
+
+def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Return a layered pf snapshot that localises where a bypass rule is lost.
+
+    A redirect/DoT rule can vanish at three stages: config.xml (the sync wrote
+    it) -> /tmp/rules.debug (filter_configure emitted it) -> live pf (pfctl
+    loaded it). This dumps all three so the pytest log shows the exact stage:
+
+      * CONFIG  — count of pfB_DNS_Redirect_*/pfB_DoT_Block_* rows in
+                  config.xml nat/rule + filter/rule (the sync's output);
+      * RULES.DEBUG — port-53/853 lines in the generated ruleset
+                  (what filter_configure produced for pf);
+      * LIVE PF — rdr (``pfctl -sn``) + block (``pfctl -sr``) 53/853 lines.
+
+    A rule in CONFIG but absent from RULES.DEBUG => the pfSense rule generator
+    dropped it (rule-shape problem). Present in RULES.DEBUG but absent from
+    LIVE PF => a pfctl load error. Absent from CONFIG => the sync did not run.
+    """
+    # CONFIG: enumerate the pfB redirect/DoT rows (descr|type|interface|ipprotocol)
+    # through pfSsh.php (fully bootstrapped — a bare `php -r` cannot read config).
+    snippet = (
+        "$o=array();\n"
+        "foreach(config_get_path('nat/rule',array()) as $r){\n"
+        "  $d=(string)($r['descr']??'');\n"
+        "  if(strpos($d,'pfB_DNS_Redirect_')===0){\n"
+        "    $o[]='NAT '.$d.'|'.($r['interface']??'').'|'.($r['ipprotocol']??'').'|tgt='.($r['target']??'');}\n"
+        "}\n"
+        "foreach(config_get_path('filter/rule',array()) as $r){\n"
+        "  $d=(string)($r['descr']??'');\n"
+        "  if(strpos($d,'pfB_DNS_Redirect_')===0||strpos($d,'pfB_DoT_Block_')===0){\n"
+        "    $o[]='FILT '.$d.'|'.($r['type']??'').'|'.($r['interface']??'').'|'.($r['ipprotocol']??'')\n"
+        "      .'|disabled='.(isset($r['disabled'])?'1':'0').'|tracker='.($r['tracker']??'-');}\n"
+        "}\n"
+        "echo '<<CFG>>'.implode(' ## ',$o).'<<END>>';"
+    )
+    cfg_res = php_eval(vm, snippet, timeout=timeout)
+    cfg = ""
+    if "<<CFG>>" in cfg_res.stdout and "<<END>>" in cfg_res.stdout:
+        cfg = cfg_res.stdout.split("<<CFG>>", 1)[1].split("<<END>>", 1)[0]
+    # rules.debug freshness (mtime + total lines) tells us whether filter_configure()
+    # actually re-ran this reload, plus the LAN/rdr/self lines so we see if the rule
+    # was emitted at all.
+    meta = vm.ssh(
+        "/bin/sh",
+        "-c",
+        "ls -l --time-style=+%s /tmp/rules.debug 2>&1; date +%s; wc -l /tmp/rules.debug",
+        timeout=timeout,
+    )
+    dbg = vm.ssh(
+        "/usr/bin/grep",
+        "-nE",
+        "Redirect|DoT|rdr|\\(self\\)|port (= )?(53|853)|on \\$LAN|on \\$OPT",
+        "/tmp/rules.debug",
+        timeout=timeout,
+    )
+    sn = vm.ssh(PFCTL, "-sn", timeout=timeout)
+    sr = vm.ssh(PFCTL, "-sr", timeout=timeout)
+    rdr = [ln for ln in sn.stdout.splitlines() if "rdr" in ln and ("53" in ln or "853" in ln)]
+    blk = [ln for ln in sr.stdout.splitlines() if "block" in ln and ("53" in ln or "853" in ln)]
+    dbg_lines = [ln for ln in dbg.stdout.splitlines() if ln.strip()]
+    return (
+        f"[CONFIG rows] {cfg.strip()}\n"
+        f"[rules.debug meta] {' '.join(meta.stdout.split())}\n"
+        f"[RULES.DEBUG lan/rdr/self/53/853: {len(dbg_lines)}] " + " || ".join(dbg_lines[:12]) + "\n"
+        f"[LIVE PF rdr: {len(rdr)}] " + " || ".join(rdr[:6]) + "\n"
+        f"[LIVE PF block: {len(blk)}] " + " || ".join(blk[:6])
+    )
+
+
+def deinstall_debug(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Return deinstall-sweep evidence for the uninstall-survival failures.
+
+    After ``pkg delete`` the pfBlockerNG log persists at /var/log/pfblockerng.
+    Surfaces the deinstall/sweep lines so a 'rule survived uninstall' failure
+    shows whether pfblockerng_php_pre_deinstall_command + pfb_fwobj_sweep ran at
+    all (vs ran but missed the rows). Best-effort; tolerates a missing log.
+    """
+    log = vm.ssh(
+        "/usr/bin/grep",
+        "-iE",
+        "deinstall|sweep|orphan firewall",
+        "/var/log/pfblockerng/pfblockerng.log",
+        timeout=timeout,
+    )
+    lines = [ln for ln in log.stdout.splitlines() if ln.strip()]
+    return f"[deinstall/sweep log lines: {len(lines)}]\n" + "\n".join(lines[-12:])
+
+
 # --------------------------------------------------------------------------- #
 # Local feed file — write a list directly under /var/db/pfblockerng/<name> and
 # use its PATH as the source (pfBlockerNG accepts a local path in a source's URL
@@ -497,7 +598,7 @@ def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
 # SLIRP NAT — so blocking the runner's egress before the package is installed
 # hangs the install. Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local
 # `pytest -m smoke` never touches the dev machine's firewall. Loopback stays up
-# (the mock feed server is reached via SLIRP 10.0.2.2 -> runner 127.0.0.1) and
+# (the mock feed server is reached via SLIRP 10.10.0.2 -> runner 127.0.0.1) and
 # established flows (the live SSH session) are kept.
 
 
@@ -899,10 +1000,10 @@ def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.
     The feed-host filter (``pfb_feed_internal_filter``, default-ON SSRF guard) rejects a feed
     whose host resolves to an internal/private address — but EXEMPTS any IP covered by this
     allowlist (IPs/CIDRs, whitespace/comma-separated, stored base64-encoded; ``pfb_feed_internal_allowlist()``
-    parses it, ``pfb_ip_in_allowlist()`` matches by CIDR). The smoke mock feed server is the SLIRP
-    host alias ``10.0.2.2`` (RFC1918, and NOT the box's own IP, so the self-exemption does not
-    apply), so the HTTP-feed smoke allowlists the SLIRP test network ``10.0.2.0/24`` — keeping the
-    filter ON while letting the mock fetch through.
+    parses it, ``pfb_ip_in_allowlist()`` matches by CIDR). The smoke mock feed server is the WAN
+    SLIRP host alias ``10.10.0.2`` (RFC1918, and NOT the box's own IP, so the self-exemption does
+    not apply), so the HTTP-feed smoke allowlists the WAN SLIRP test network ``10.10.0.0/16`` —
+    keeping the filter ON while letting the mock fetch through.
 
     The field is stored base64-encoded (the pfBlockerNG textarea convention; the reader
     base64_decodes it), so ``value`` is encoded here before it is written.
@@ -923,22 +1024,22 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
     The realistic wiring: pfSense forwards (forwarding mode) to its System DNS server
-    ``10.0.2.2`` — QEMU/libslirp's host alias — which NATs ``guest->10.0.2.2:53`` straight
-    to the mock on the runner's loopback (``127.0.0.1:53``), port-preserving. This is the
-    SAME host-alias path the in-runner mock-feed HTTP server already rides
-    (``http://10.0.2.2:<port>/...``), so the chain is:
+    ``10.10.0.2`` — QEMU/libslirp's WAN host alias — which NATs ``guest->10.10.0.2:53``
+    straight to the mock on the runner's loopback (``127.0.0.1:53``), port-preserving.
+    This is the SAME WAN host-alias path the in-runner mock-feed HTTP server already rides
+    (``http://10.10.0.2:<port>/...``), so the chain is:
 
-        guest Unbound --(forward)--> 10.0.2.2:53 (SLIRP host alias) --(NAT)--> 127.0.0.1:53 (mock)
+        guest Unbound --(forward)--> 10.10.0.2:53 (WAN SLIRP alias) --(NAT)--> 127.0.0.1:53 (mock)
 
     Crucially this needs NO ``/etc/resolv.conf`` override on the runner (the SLIRP virtual
-    DNS at 10.0.2.3 would read resolv.conf; the 10.0.2.2 host alias does not) — the runner's
+    DNS at 10.10.0.3 would read resolv.conf; the 10.10.0.2 host alias does not) — the runner's
     own resolver is left fully intact, so nothing on the host loses DNS during the run and
     there is no teardown to restore. No custom ``forward-zone`` and no guestfwd either. The
     mock records every query (``stub.received(...)``), so blocking is read off the upstream.
     Loopback survives the per-case egress block (``-o lo ACCEPT``), so it stays hermetic.
 
     Config set (idempotent; written + ``services_unbound_configure``):
-      * ``system/dnsserver = [10.0.2.2]`` and DHCP-override OFF — so ``10.0.2.2`` is the
+      * ``system/dnsserver = [10.10.0.2]`` and DHCP-override OFF — so ``10.10.0.2`` is the
         SOLE forwarder (drops the baked image's dead 1.1.1.1/1.0.0.1, which egress-block
         makes unreachable and would only add forward timeouts).
       * ``unbound/forwarding = on`` — forward to the System DNS server.
@@ -949,7 +1050,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
-        # Disable 'Allow DNS server list to be overridden by DHCP' so only 10.0.2.2 is used.
+        # Disable 'Allow DNS server list to be overridden by DHCP' so only 10.10.0.2 is used.
         "unset($s['dnsallowoverride']);\n"
         "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
@@ -970,7 +1071,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     wait_unbound_ready(vm)
     # READINESS + RELAY SELF-CHECK (fail fast, don't let the matrix hang): resolve one
     # throwaway name on-box. With the mock as upstream it MUST come back as the sentinel
-    # (pfSense -> 10.0.2.2 SLIRP host alias -> runner 127.0.0.1:53 mock). The FIRST response
+    # (pfSense -> 10.10.0.2 WAN SLIRP alias -> runner 127.0.0.1:53 mock). The FIRST response
     # is authoritative; if it isn't the sentinel, the relay isn't wired — raise NOW with
     # the answer, rather than letting every per-case forward time out (~300s each).
     probe = unique_domain("sysdnsselfcheck")
@@ -978,8 +1079,8 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     if not resolves_to(ans, STUB_DNS_A):
         raise RuntimeError(
             f"System-DNS relay self-check FAILED: {probe} -> {ans} (expected the mock sentinel "
-            f"{STUB_DNS_A}). pfSense's 10.0.2.2 host alias -> runner 127.0.0.1:53 mock path is not "
-            f"working (libslirp not NATing the host alias to the mock, or unbound not forwarding)."
+            f"{STUB_DNS_A}). pfSense's 10.10.0.2 WAN alias -> runner 127.0.0.1:53 mock path is not "
+            f"working (libslirp not NATing the WAN host alias to the mock, or unbound not forwarding)."
         )
 
 
@@ -1035,14 +1136,14 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     the stub wiring:
 
     ``forwarding_on=True`` (FORWARDING mode): delegates to the same config as
-    :func:`use_system_dns_upstream` — sets ``system/dnsserver = [10.0.2.2]``,
+    :func:`use_system_dns_upstream` — sets ``system/dnsserver = [10.10.0.2]``,
     ``unbound/forwarding = on``, clears ``dnssec`` and ``custom_options``.
-    Queries forward to ``10.0.2.2`` (the SLIRP host alias), which NATs
-    ``guest->10.0.2.2:53`` to the stub on the runner's loopback.
+    Queries forward to ``10.10.0.2`` (the WAN SLIRP host alias), which NATs
+    ``guest->10.10.0.2:53`` to the stub on the runner's loopback.
 
     ``forwarding_on=False`` (RECURSIVE mode): keeps ``unbound/forwarding`` UNSET
     (Unbound recurses normally) but injects a catch-all ``forward-zone`` in
-    ``unbound/custom_options`` pointing every query at ``10.0.2.2``, so the stub
+    ``unbound/custom_options`` pointing every query at ``10.10.0.2``, so the stub
     still answers all queries while Unbound operates in recursive mode.
     ``custom_options`` is stored base64-encoded in ``config.xml`` (the pfBlockerNG
     textarea convention: the GUI base64-encodes on save, the renderer decodes on
@@ -1068,7 +1169,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     # via a catch-all forward-zone in custom_options.  pfSense stores
     # custom_options base64-encoded (pfbng_text_area_decode / base64_encode on
     # save), so encode before writing.
-    forward_zone = 'forward-zone:\n    name: "."\n    forward-addr: 10.0.2.2\n'
+    forward_zone = f'forward-zone:\n    name: "."\n    forward-addr: {GUEST_TO_HOST_ALIAS}\n'
     encoded = base64.b64encode(forward_zone.encode()).decode()
     snippet = (
         "$s = config_get_path('system', array());\n"
@@ -1100,7 +1201,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
         raise RuntimeError(
             f"SafeSearch stub relay self-check FAILED (recursive mode): "
             f"{probe} -> {ans} (expected sentinel {STUB_DNS_A}). "
-            f"The catch-all forward-zone -> 10.0.2.2 -> runner 127.0.0.1:53 path is not working."
+            f"The catch-all forward-zone -> 10.10.0.2 -> runner 127.0.0.1:53 path is not working."
         )
 
 
@@ -2187,7 +2288,7 @@ def unbound_access_control(vm: SmokeVM, *, timeout: float = 30.0) -> set[str]:
 
     This is the authoritative source (includes resolved, live state) — not a
     grep of one generated file. Returns the normalised set of access-control
-    entries (e.g. ``{"10.0.2.0/24 allow", ...}``).
+    entries (e.g. ``{"10.10.0.0/24 allow", ...}``).
     """
     result = vm.ssh(
         "/usr/local/sbin/unbound-control",
@@ -2632,6 +2733,187 @@ def dns_probe_until(
     raise RuntimeError(
         f"dns_probe_until({name}, {rtype}) predicate never held within {timeout}s "
         f"(last answer: {last}) — the zero-downtime swap decision did not apply in budget"
+    )
+
+
+def _parse_dig(output: str, rtype: str) -> DnsAnswer:
+    """Parse ``dig`` text output into an rcode + the records of ``rtype``.
+
+    Mirrors :func:`_parse_drill` for the Debian client VM where ``dig`` (from
+    bind-tools) is the default query tool. ``dig`` prints the status token in
+    the header line::
+
+        ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 12345
+
+    and the answer section as::
+
+        ;; ANSWER SECTION:
+        name. ttl IN <type> <rdata>
+
+    Extracts rcode from the ``status:`` token and the rdata of records whose
+    type matches ``rtype``. Stops collecting at the first blank line or ``;;``
+    comment after the ANSWER header, identical to :func:`_parse_drill`'s stop
+    condition.
+    """
+    rcode = "UNKNOWN"
+    records: list[str] = []
+    in_answer = False
+    for line in output.splitlines():
+        # Header line: ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: ..."
+        if "status:" in line:
+            m = re.search(r"status:\s*([A-Z]+)", line)
+            if m:
+                rcode = m.group(1)
+        if line.startswith(";; ANSWER SECTION"):
+            in_answer = True
+            continue
+        if in_answer:
+            stripped = line.strip()
+            if not stripped or line.startswith(";;"):
+                in_answer = False
+                continue
+            # "<name>. <ttl> IN <type> <rdata>"
+            parts = stripped.split()
+            if len(parts) >= 5 and parts[3] == rtype:
+                records.append(parts[4])
+    return DnsAnswer(rcode=rcode, records=records)
+
+
+def dns_probe_client(
+    client_vm: SmokeVM,
+    name: str,
+    rtype: str = "A",
+    *,
+    server: str = "192.168.1.1",
+    timeout: float = 30.0,
+    attempts: int = 3,
+    delay: float = 5.0,
+) -> DnsAnswer:
+    """Resolve ``(name, rtype)`` FROM civm via ``dig`` over SSH, querying pfSense's LAN IP.
+
+    The realistic behind-the-firewall DNS path: civm runs ``dig`` on 192.168.1.1
+    (pfSense LAN, ``PFSENSE_LAN_IP``) over its data NIC (net1, the socket crossover).
+    This is the probe that proves pfBlockerNG's DNSBL actually affects traffic from a
+    real LAN client — not just on-box queries.
+
+    Probe semantics: identical to :func:`dns_probe` — the first parsed DNS response is
+    authoritative (caller has already ensured Unbound is ready). Retry only when ``dig``
+    produced NO DNS response at all (e.g. the LAN socket link is still settling), bounded
+    at ``attempts`` × ``delay`` (~5 s). A response that came back but contains an
+    unexpected answer is returned as-is for the caller to assert — we never re-query
+    hoping for a "better" answer.
+
+    ``server`` is the resolver civm queries — defaults to ``PFSENSE_LAN_IP`` (192.168.1.1).
+    Override to probe a different resolver (e.g. a secondary DNS).
+
+    Caller MUST use a non-RFC-6761, non-HSTS-preload domain (see :func:`unique_domain`)
+    for the same reasons as :func:`dns_probe`.
+    """
+    cmd = f"dig +tries=1 +time=5 {shlex.quote(rtype)} {shlex.quote(name)} @{shlex.quote(server)}"
+    last = ""
+    for attempt in range(attempts):
+        result = client_vm.ssh(cmd, timeout=timeout)
+        if "status:" in result.stdout:
+            # dig returned a DNS response — authoritative; return as-is.
+            return _parse_dig(result.stdout, rtype)
+        # No DNS response (dig produced no status line) — only here do we retry.
+        last = f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    raise RuntimeError(
+        f"dns_probe_client({name}, {rtype}) got no dig answer from {server} after {attempts} attempts: {last}"
+    )
+
+
+def dns_probe_client_until(
+    client_vm: SmokeVM,
+    name: str,
+    predicate: Callable[[DnsAnswer], bool],
+    rtype: str = "A",
+    *,
+    server: str = "192.168.1.1",
+    timeout: float = 60.0,
+    interval: float = 3.0,
+) -> DnsAnswer:
+    """Poll ``dig @server <name> <rtype>`` from civm until ``predicate(answer)`` holds; raise on timeout.
+
+    The client-side analog of :func:`dns_probe_until` — for the zero-downtime swap
+    transition (ADR-10) observed from a real LAN client. Polls with bounded backoff and
+    raises on timeout (a genuine failure, never a silent infinite loop).
+
+    Use ONLY for swap/toggle transitions. Keep :func:`dns_probe_client` for steady-state
+    reads. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see :func:`unique_domain`).
+    """
+    deadline = time.time() + timeout
+    last: DnsAnswer | None = None
+    while time.time() < deadline:
+        last = dns_probe_client(client_vm, name, rtype, server=server, timeout=15.0, attempts=2, delay=2.0)
+        if predicate(last):
+            return last
+        time.sleep(interval)
+    raise RuntimeError(
+        f"dns_probe_client_until({name}, {rtype}) predicate never held within {timeout}s "
+        f"(last answer: {last}) — the zero-downtime swap decision did not apply in budget"
+    )
+
+
+def assert_link_health(
+    client_vm: SmokeVM,
+    vm: SmokeVM,
+    *,
+    control_name: str,
+    timeout: float = 60.0,
+) -> None:
+    """Assert the pfSense LAN → civm link is healthy by probing a known-good control name.
+
+    Polls until civm can get ANY DNS response (any rcode) from pfSense's LAN IP
+    (192.168.1.1 / ``PFSENSE_LAN_IP``) for ``control_name``. On timeout, runs an
+    ON-BOX :func:`dns_probe` as a differentiator to localise the fault:
+
+    * If the on-box probe answers: pfSense is healthy — the fault is in the civm/LAN
+      link (QEMU socket crossover not carrying traffic, civm data NIC not configured,
+      or pfSense DHCP not handing out the static lease).
+    * If the on-box probe also fails: pfSense itself is not answering DNS — the fault
+      is in Unbound or pfBlockerNG, not the link.
+
+    ``control_name`` MUST resolve to a real DNS answer on-box (use a name that is in
+    Unbound's local data or that the stub upstream will answer). Typically the baked
+    control name from :func:`tests.smoke.conftest.expected_control_answer`.
+
+    This is a one-time link gate — call it at the start of any test that relies on
+    the client path, not in a polling loop.
+    """
+    from .conftest import PFSENSE_LAN_IP  # local import; avoids a circular reference at module level
+
+    deadline = time.time() + timeout
+    last_client_error = ""
+    while time.time() < deadline:
+        try:
+            answer = dns_probe_client(
+                client_vm, control_name, server=PFSENSE_LAN_IP, timeout=10.0, attempts=1, delay=0.0
+            )
+            if answer.rcode != "UNKNOWN":
+                # Any real DNS response from pfSense means the link is up.
+                return
+        except RuntimeError as exc:
+            last_client_error = str(exc)
+        time.sleep(3.0)
+
+    # Timeout — run on-box differentiator.
+    try:
+        on_box = dns_probe(vm, control_name, timeout=10.0, attempts=2, delay=2.0)
+        on_box_summary = f"on-box answered: {on_box}"
+        fault = "civm/LAN link (pfSense Unbound is healthy on-box but civm cannot reach it)"
+    except RuntimeError as exc:
+        on_box_summary = f"on-box also failed: {exc}"
+        fault = "pfSense Unbound or pfBlockerNG (on-box probe also failed)"
+
+    raise RuntimeError(
+        f"assert_link_health: civm could not get a DNS response from {PFSENSE_LAN_IP} "
+        f"for {control_name!r} within {timeout}s. "
+        f"Fault localised to: {fault}. "
+        f"On-box differentiator — {on_box_summary}. "
+        f"Last client error: {last_client_error}"
     )
 
 
@@ -3202,6 +3484,10 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         + var_log_capture
         + '/sbin/dmesg > "$D/dmesg.txt" 2>&1; cp /var/run/dmesg.boot "$D/dmesg.boot" 2>/dev/null; '
         '/sbin/pfctl -sa > "$D/pfctl_sa.txt" 2>&1; '
+        # The generated pf ruleset — ground truth for whether filter_configure()
+        # emitted a rule (a config row that never reaches here was dropped by the
+        # pfSense rule generator; ADR-36/37 DNS-bypass debugging).
+        'cp /tmp/rules.debug "$D/rules.debug" 2>/dev/null; '
         '/sbin/ifconfig -a > "$D/ifconfig.txt" 2>&1; '
         '/usr/bin/sockstat > "$D/sockstat.txt" 2>&1; /usr/bin/netstat -rn > "$D/netstat_rn.txt" 2>&1; '
         'cp /var/unbound/*.conf /var/unbound/*.ini "$D/unbound/" 2>/dev/null; '
@@ -3248,6 +3534,19 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
             print(f"[smoke] collected full guest diagnostics -> {dest_dir}/pfb_smoke_diag.tgz")
         else:
             print(f"[smoke] guest-diagnostics scp failed (non-fatal): {result.stderr!r}")
+        # Surface the VM SERIAL CONSOLE in the uploaded artifact. boot_vm.sh runs
+        # QEMU with ``-serial stdio`` into this log, but it lives under the runner
+        # tmp dir — OUTSIDE the workflow's artifact globs — so a TEST failure (as
+        # opposed to a boot failure, which _capture_boot_failure already snapshots)
+        # never carried it. Copy it into dest_dir named ``vm-*.log`` so BOTH the
+        # ``**/vm*.log`` upload glob picks it up AND the Plus secret-scrub step
+        # (``find . -name 'vm*.log'``) redacts it. Best-effort; never fatal.
+        if vm.log_path and os.path.exists(vm.log_path):
+            try:
+                shutil.copy(vm.log_path, os.path.join(dest_dir, "vm-serial.log"))
+                print(f"[smoke] copied VM serial console -> {dest_dir}/vm-serial.log")
+            except OSError as exc:
+                print(f"[smoke] vm serial-console copy failed (non-fatal): {exc!r}")
     except Exception as exc:  # noqa: BLE001
         print(f"[smoke] collect_host_diagnostics failed (non-fatal): {exc!r}")
 
