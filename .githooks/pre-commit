@@ -1,13 +1,19 @@
 #!/bin/sh
-# Runs the project's fast linters (and the unit suite) before each commit and
-# blocks the commit on any failure. Mirrors the commands in CLAUDE.md and
+# Runs the project's fast linters / static-analysis gates before each commit and
+# blocks the commit on any failure. Mirrors the lint commands in CLAUDE.md and
 # .github/workflows/test.yml.
 #
-# Each check runs only when its tool is available: a contributor missing a tool
-# is warned and that check is skipped, never blocked (CI is the hard gate).
-# PHPStan is run only when the Composer vendor tree is present (too heavy to
-# require locally). All checks run even after one fails, so every problem is
-# reported in a single pass. Bypass in an emergency with `git commit --no-verify`.
+# Two deliberate scoping rules keep this hook fast:
+#   1. The UNIT SUITES are NOT run here (no `pytest`, no `phpunit`) — too slow for
+#      a per-commit gate. CI (test.yml) is the correctness gate for both suites;
+#      run `python -m pytest` / `vendor/bin/phpunit` yourself while iterating.
+#   2. Each language's gates run ONLY when this commit stages a file of that type
+#      (a PHP-only commit doesn't pay for the markdown/python/shell linters, etc.).
+#
+# Each check also runs only when its tool is available: a contributor missing a
+# tool is warned and that check is skipped, never blocked (CI is the hard gate).
+# All applicable checks run even after one fails, so every problem is reported in
+# a single pass. Bypass in an emergency with `git commit --no-verify`.
 #
 # Enable: git config core.hooksPath .githooks
 
@@ -39,23 +45,51 @@ step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
 skip() { skipped="${skipped} $1"; }
 
-# --- Python: ruff lint + format (canonical per CLAUDE.md; also enforced in CI) ---
-ruff_bin=''
-if [ -x .venv/bin/ruff ]; then
-	ruff_bin=.venv/bin/ruff
-elif have ruff; then
-	ruff_bin=ruff
-fi
-if [ -n "$ruff_bin" ]; then
-	step 'ruff check'
-	"$ruff_bin" check . || failed 'ruff check .'
-	step 'ruff format --check'
-	"$ruff_bin" format --check . || failed 'ruff format --check .'
-else
-	skip ruff
+# --- Stage classification: run a language's gates ONLY when this commit stages a
+#     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
+#     deletion stages nothing to lint.) Nothing staged -> nothing to do. ---
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
+staged_py=0;  staged_has '\.py$'        && staged_py=1
+staged_md=0;  staged_has '\.md$'        && staged_md=1
+staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
+staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
+
+# =============================== Python (*.py) =============================== #
+if [ "$staged_py" = 1 ]; then
+	# ruff lint + format (canonical per CLAUDE.md; also enforced in CI).
+	ruff_bin=''
+	if [ -x .venv/bin/ruff ]; then
+		ruff_bin=.venv/bin/ruff
+	elif have ruff; then
+		ruff_bin=ruff
+	fi
+	if [ -n "$ruff_bin" ]; then
+		step 'ruff check'
+		"$ruff_bin" check . || failed 'ruff check .'
+		step 'ruff format --check'
+		"$ruff_bin" format --check . || failed 'ruff format --check .'
+	else
+		skip ruff
+	fi
+
+	# mypy: type-check the test suite (config + tests.* strictness in pyproject.toml).
+	mypy_bin=''
+	if [ -x .venv/bin/mypy ]; then
+		mypy_bin=.venv/bin/mypy
+	elif have mypy; then
+		mypy_bin=mypy
+	fi
+	if [ -n "$mypy_bin" ]; then
+		step 'mypy tests/'
+		"$mypy_bin" tests/ || failed 'mypy tests/'
+	else
+		skip mypy
+	fi
 fi
 
-# --- Python: unit suite (fast; the CI correctness gate) ---
+# Python interpreter resolution (used by the URL-encoding check below).
 py_bin=''
 if [ -x .venv/bin/python ]; then
 	py_bin=.venv/bin/python
@@ -64,114 +98,95 @@ elif have python; then
 elif have python3; then
 	py_bin=python3
 fi
-if [ -n "$py_bin" ]; then
-	step 'pytest'
-	"$py_bin" -m pytest -q || failed 'python -m pytest'
-else
-	skip pytest
+
+# =============================== Markdown (*.md) ============================= #
+if [ "$staged_md" = 1 ]; then
+	if have npx; then
+		step 'markdownlint'
+		npx --yes markdownlint-cli2 || failed 'markdownlint-cli2'
+	else
+		skip markdownlint
+	fi
 fi
 
-# --- Python: type-check the test suite (mypy; config + tests.* strictness in
-#     pyproject.toml). Heavy-ish and not always installed locally -> run only when
-#     present (CI is the hard gate). ---
-mypy_bin=''
-if [ -x .venv/bin/mypy ]; then
-	mypy_bin=.venv/bin/mypy
-elif have mypy; then
-	mypy_bin=mypy
-fi
-if [ -n "$mypy_bin" ]; then
-	step 'mypy tests/'
-	"$mypy_bin" tests/ || failed 'mypy tests/'
-else
-	skip mypy
-fi
+# =============================== Shell (*.sh) =============================== #
+if [ "$staged_sh" = 1 ]; then
+	# Forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense target
+	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
+	# files, so it also covers tests/ (not lint-globbed below).
+	step 'shebang policy (no #!bash)'
+	git ls-files | while IFS= read -r f; do
+		case $(head -n1 "$f" 2>/dev/null) in
+		'#!'*bash*)
+			printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2
+			exit 1
+			;;
+		esac
+	done || failed 'shebang policy'
 
-# --- Markdown: markdownlint-cli2 (reads .markdownlint*.jsonc) ---
-if have npx; then
-	step 'markdownlint'
-	npx --yes markdownlint-cli2 || failed 'markdownlint-cli2'
-else
-	skip markdownlint
+	# sh -n parse gate (src + scripts + tests; cheap, tool-free).
+	step 'shell (sh -n)'
+	find src scripts tests -name '*.sh' | sort | while IFS= read -r f; do
+		sh -n "$f" || exit 1
+	done || failed 'sh -n'
+
+	# shellcheck (src + scripts only; tests/ shellspec specs trip SC2034
+	# false-positives — tracked as a separate cleanup).
+	if have shellcheck; then
+		step 'shellcheck'
+		find src scripts -name '*.sh' | sort \
+			| xargs shellcheck --severity=info || failed 'shellcheck'
+	else
+		skip shellcheck
+	fi
+
+	# shellspec functional suite (gated on the tool, like shellcheck).
+	if have shellspec; then
+		step 'shellspec'
+		shellspec || failed 'shellspec'
+	else
+		skip shellspec
+	fi
 fi
-
-# --- Shell: forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense
-#     target has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL
-#     tracked files, so it also covers tests/ (not lint-globbed below). ---
-step 'shebang policy (no #!bash)'
-git ls-files | while IFS= read -r f; do
-	case $(head -n1 "$f" 2>/dev/null) in
-	'#!'*bash*)
-		printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2
-		exit 1
-		;;
-	esac
-done || failed 'shebang policy'
-
-# --- Shell: sh -n parse gate (src + scripts + tests; cheap, tool-free) ---
-step 'shell (sh -n)'
-find src scripts tests -name '*.sh' | sort | while IFS= read -r f; do
-	sh -n "$f" || exit 1
-done || failed 'sh -n'
 
 # --- Shell + docs: forbid naked $var interpolation into curl/wget/fetch URLs.
-#     Reuses the python found above for pytest (CI is the hard gate when absent).
-#     Scans tracked src shell + Markdown shell fences via the checker's defaults. ---
-if [ -n "$py_bin" ]; then
-	step 'url-encoding (no naked $var in curl URLs)'
-	"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
-else
-	skip url-encoding
+#     Relevant to shell scripts AND Markdown shell fences, so it runs when either
+#     is staged. Reuses the python resolved above (CI is the hard gate when absent). ---
+if [ "$staged_sh" = 1 ] || [ "$staged_md" = 1 ]; then
+	if [ -n "$py_bin" ]; then
+		step 'url-encoding (no naked $var in curl URLs)'
+		"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
+	else
+		skip url-encoding
+	fi
 fi
 
-# --- Shell: shellcheck (src + scripts only; tests/ shellspec specs trip SC2034
-#     false-positives — tracked as a separate cleanup) ---
-if have shellcheck; then
-	step 'shellcheck'
-	find src scripts -name '*.sh' | sort \
-		| xargs shellcheck --severity=info || failed 'shellcheck'
-else
-	skip shellcheck
-fi
+# =============================== PHP (*.php, *.inc) ========================== #
+if [ "$staged_php" = 1 ]; then
+	# php -l syntax check (output shown only for files that fail).
+	if have php; then
+		step 'php -l'
+		find src \( -name '*.php' -o -name '*.inc' \) | sort | while IFS= read -r f; do
+			out=$(php -l "$f" 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
+		done || failed 'php -l'
+	else
+		skip php
+	fi
 
-# --- Shell: shellspec functional suite (gated on the tool, like shellcheck) ---
-if have shellspec; then
-	step 'shellspec'
-	shellspec || failed 'shellspec'
-else
-	skip shellspec
-fi
+	# PHPStan (heavy; only when the Composer vendor tree is installed).
+	if [ -x vendor/bin/phpstan ]; then
+		step 'phpstan'
+		vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
+	fi
 
-# --- PHP: php -l syntax check (output shown only for files that fail) ---
-if have php; then
-	step 'php -l'
-	find src \( -name '*.php' -o -name '*.inc' \) | sort | while IFS= read -r f; do
-		out=$(php -l "$f" 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
-	done || failed 'php -l'
-else
-	skip php
-fi
-
-# --- PHP: PHPStan (heavy; only when the Composer vendor tree is installed) ---
-if [ -x vendor/bin/phpstan ]; then
-	step 'phpstan'
-	vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
-fi
-
-# --- PHP: PHPCS PFBL-01 RequirePfbFilter sniff (only when the vendor tree is installed).
-#     Config auto-discovered from phpcs.xml.dist (the RequirePfbFilter rule over the
-#     in-scope package include). ---
-if [ -x vendor/bin/phpcs ]; then
-	step 'phpcs (PFBL-01)'
-	vendor/bin/phpcs || failed 'phpcs'
-else
-	skip phpcs
-fi
-
-# --- PHP: PHPUnit (only when the Composer vendor tree is installed) ---
-if [ -x vendor/bin/phpunit ]; then
-	step 'phpunit'
-	vendor/bin/phpunit || failed 'phpunit'
+	# PHPCS sniffs (only when the vendor tree is installed). Config auto-discovered
+	# from phpcs.xml.dist.
+	if [ -x vendor/bin/phpcs ]; then
+		step 'phpcs'
+		vendor/bin/phpcs || failed 'phpcs'
+	else
+		skip phpcs
+	fi
 fi
 
 [ -n "$skipped" ] && printf '[pre-commit] skipped (tool not found):%s\n' "$skipped" >&2
