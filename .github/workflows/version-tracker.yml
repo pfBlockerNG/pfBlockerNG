@@ -187,49 +187,34 @@ jobs:
             fi
           done
 
-          # ── Iterate over CI matrix (ci:true CE entries only) ───────────────
-          # For each CI-eligible entry:
-          #   b) Trigger image-refresh.yml (Phase 5) — upgrade-in-place + sanity gate.
-          #   c) Trigger smoke.yml (Phase 6) — live-VM smoke across all CE images.
-          #
-          # NOTE ON FORWARD REFERENCES:
-          #   image-refresh.yml and smoke.yml do NOT yet exist on this branch.
-          #   They will be created by Phases 5 and 6 respectively.  The dispatch calls
-          #   below are wired now; they become live when those phases land.
-          #   The exact workflow names and their expected dispatch inputs are documented
-          #   in RESULTS/04_Results.txt (handoff section).
+          # ── CI image refresh + smoke fan-out ───────────────────────────────
+          #   b) Trigger image-refresh.yml — upgrade the CE + Plus smoke images.
+          #      It reads ci-metadata itself and refreshes only the variants whose
+          #      upgrade.available flag is set (a curated signal that a public
+          #      pre-release / GA / patch exists), so most days this is a clean no-op.
+          #   c) Trigger smoke.yml — live-VM smoke across all ci:true images.
           echo ""
-          echo "--- Step B: CI image refresh (image-refresh.yml, Phase 5) ---"
+          echo "--- Step B: CI image refresh (image-refresh.yml) ---"
           CI_COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
-          if [ "$CI_COUNT" -eq 0 ]; then
-            echo "  [skip] No ci:true CE entries — CI image refresh not triggered."
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "  [DRY-RUN] WOULD dispatch image-refresh.yml${TARGET_VERSION:+ (pfsense_version=$TARGET_VERSION)}"
+            echo "    (reads ci-metadata; refreshes each variant whose upgrade.available is true)"
           else
-            printf '%s\n' "$CI_MATRIX" | jq -c '.[]' | while IFS= read -r ENTRY; do
-              PFSENSE=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version')
-              FREEBSD_VERSION=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_version')
-              MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
-
-              if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
-                echo "  [skip] ${PFSENSE} — does not match target '${TARGET_VERSION}'"
-                continue
-              fi
-
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "  [DRY-RUN] WOULD dispatch image-refresh.yml:"
-                echo "    pfsense_version=${PFSENSE}  freebsd_version=${FREEBSD_VERSION}  freebsd_major=${MAJOR}"
-              else
-                echo "  [TRIGGER] image-refresh.yml for CE ${PFSENSE} (FreeBSD ${MAJOR})"
-                # Phase 5 contract: image-refresh.yml accepts pfsense_version and
-                # freebsd_version as workflow_dispatch inputs.
-                # See RESULTS/04_Results.txt for the exact expected input contract.
-                gh workflow run image-refresh.yml \
-                  --repo "$REPO" \
-                  --ref "$REF" \
-                  --field "pfsense_version=${PFSENSE}" \
-                  --field "freebsd_version=${FREEBSD_VERSION}" \
-                  || echo "  ::warning::Dispatch of image-refresh.yml for ${PFSENSE} failed — Phase 5 may not yet be landed"
-              fi
-            done
+            echo "  [TRIGGER] image-refresh.yml (CE + Plus; gated on upgrade.available)"
+            # Pass the narrow filter only when a target version was requested; the
+            # workflow defaults to all eligible variants when none is given.
+            if [ -n "$TARGET_VERSION" ]; then
+              gh workflow run image-refresh.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                --field "pfsense_version=${TARGET_VERSION}" \
+                || echo "  ::warning::Dispatch of image-refresh.yml failed"
+            else
+              gh workflow run image-refresh.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                || echo "  ::warning::Dispatch of image-refresh.yml failed"
+            fi
           fi
 
           echo ""

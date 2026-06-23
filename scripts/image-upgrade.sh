@@ -89,6 +89,19 @@
 #                    Default OFF; pass this flag to enable. build-image.yml does NOT
 #                    pass this flag (it calls this script directly), so callers that
 #                    only want the pfSense-upgrade step are unaffected.
+#   --branch NAME    switch the pfSense update branch to NAME before running the OS
+#                    upgrade. pfSense stores the selected branch in config.xml key
+#                    system/pkg_repo_conf_path; applying the change calls
+#                    pkg_switch_repo() (runs pfSense-repo-setup -U and refreshes pkg
+#                    metadata), followed by an explicit `pkg update -f` so the
+#                    subsequent pfSense-upgrade -c check sees the new branch's
+#                    versions. Use this to upgrade TO a pre-release or development
+#                    build. Branch names are dynamic — use the exact name reported by
+#                    pkg_list_repos() on that pfSense version. The script validates
+#                    NAME against the list of available repos on the booted image and
+#                    fails if it is not found. Default empty = leave the image's
+#                    configured branch unchanged. Example (Plus pre-release):
+#                    --branch pfSense-plus-v26.07-DEVTEST
 #   --keep           keep the work dirs (image copies, console log) afterwards
 #   --force          overwrite the target tag if it already exists
 #
@@ -141,6 +154,7 @@ SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-}"
 COMPRESSION=zstd
 UPGRADE_TIMEOUT=1200
 UPGRADE_PKGS=0
+BRANCH=""
 KEEP=0
 FORCE=0
 
@@ -181,9 +195,10 @@ while [ $# -gt 0 ]; do
         --compression)     COMPRESSION="$2"; shift 2 ;;
         --upgrade-timeout) UPGRADE_TIMEOUT="$2"; shift 2 ;;
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
+        --branch)          BRANCH="$2"; shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,95p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,108p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
@@ -416,6 +431,55 @@ if [ "$UPGRADE_PKGS" -eq 1 ]; then
         wait_guest_ssh 300
         log "box is back after pkg-upgrade reboot"
     fi
+fi
+
+# --- optional: switch the pfSense update branch ----------------------------
+# When --branch is given, validate the name against the repos available on the
+# booted image, write it into config.xml via pkg_switch_repo(), then refresh
+# the pkg catalogue so the subsequent pfSense-upgrade -c check sees the new
+# branch's versions. Fail-closed: a wrong/missing branch name aborts the run
+# rather than silently upgrading on the wrong (stable) branch.
+if [ -n "$BRANCH" ]; then
+    # Guard against a branch name containing a single quote (it would break the
+    # PHP string literal below). Branch names from ci-metadata are safe, but
+    # reject anything surprising rather than silently truncating or injecting.
+    case "$BRANCH" in
+        *\'*) die "--branch name must not contain a single quote: $BRANCH" ;;
+    esac
+
+    log "switching pfSense update branch to '$BRANCH' (via pkg_switch_repo)"
+
+    # Build the pfSsh.php snippet. pfSsh.php reads PHP statements on stdin,
+    # then the literal line "exec", then "exit". It runs the snippet inside the
+    # pfSense PHP environment with all pfSense functions available.
+    _php=$(printf '%s\n' \
+        "require_once('pkg-utils.inc');" \
+        "\$repos = pkg_list_repos();" \
+        "\$names = array_column(\$repos, 'name');" \
+        "\$avail = implode(' ', \$names);" \
+        "if (!in_array('$BRANCH', \$names, true)) {" \
+        "    echo 'PFB_BRANCH_NOT_FOUND available=' . \$avail . PHP_EOL;" \
+        "} else {" \
+        "    config_set_path('system/pkg_repo_conf_path', '$BRANCH');" \
+        "    write_config('image-upgrade: switch update branch to $BRANCH');" \
+        "    pkg_switch_repo();" \
+        "    echo 'PFB_BRANCH_OK' . PHP_EOL;" \
+        "}" \
+        "exec" \
+        "exit")
+
+    _branch_out=$(printf '%s\n' "$_php" | ssh_guest 'pfSsh.php' 2>&1 | tee "$LOCAL_DIR/branch-switch.log" || true)
+
+    if printf '%s' "$_branch_out" | grep -q 'PFB_BRANCH_NOT_FOUND'; then
+        _avail=$(printf '%s' "$_branch_out" | grep 'PFB_BRANCH_NOT_FOUND' | sed 's/.*available=//')
+        die "branch '$BRANCH' not found on this image. Available repos: ${_avail:-<none listed; see $LOCAL_DIR/branch-switch.log>}"
+    fi
+    if ! printf '%s' "$_branch_out" | grep -q 'PFB_BRANCH_OK'; then
+        die "branch switch to '$BRANCH' did not confirm success (PFB_BRANCH_OK not in output; see $LOCAL_DIR/branch-switch.log)"
+    fi
+
+    log "branch switch confirmed — refreshing pkg catalogue (pkg update -f)"
+    ssh_guest 'pkg update -f' 2>&1 | tee "$LOCAL_DIR/pkg-update-branch.log" || true
 fi
 
 # --- check whether an OS upgrade is available ------------------------------

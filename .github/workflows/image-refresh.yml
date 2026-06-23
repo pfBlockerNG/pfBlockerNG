@@ -1,8 +1,19 @@
-name: Refresh CE smoke image
+name: Upgrade pfSense smoke images
 
-# Upgrade a published pfSense CE GHCR image to a new CE release and publish the
-# result. Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST
-# be left untouched.
+# Upgrade published pfSense CE and Plus GHCR smoke base images to new releases and
+# publish the results as new tags. Runs as a matrix fan-out: one parallel leg per
+# entry in ci-metadata that has upgrade.available == true (CE and Plus alike). Fail-
+# closed: a bad upgrade MUST NEVER be published and the old tag MUST be left untouched.
+#
+# AVAILABILITY FLAG:
+#   Each supported-versions.json entry MAY carry an optional "upgrade" block:
+#     "upgrade": {
+#       "available": true,           # absent or false → skip this variant
+#       "branch":    "devel-x",      # optional: pfSense update branch (default: image's own)
+#       "target":    "2.8.1",        # informational: full version string being targeted
+#       "from":      "2.8"           # optional: GHCR floating tag to pull FROM (default: same as pfsense_version)
+#     }
+#   Today no entry has this block, so the workflow skips everything — correct default.
 #
 # PUBLISH GUARD (inside scripts/image-upgrade.sh):
 #   1. Prior GHCR tag pulled and booted writable under QEMU/KVM.
@@ -28,13 +39,13 @@ name: Refresh CE smoke image
 # manual seed) to publish the image for that version.
 #
 # Required secrets/vars (shared with build-image.yml and smoke-single.yml):
-#   SMOKE_GHCR_USER     username for `oras login ghcr.io` (defaults to github.actor)
-#   SMOKE_GHCR_TOKEN    token with write:packages (publish) / read:packages (defaults to GITHUB_TOKEN)
-#   SMOKE_SSH_PRIV_KEY  guest SSH private key baked into the image          (secret)
-#   SMOKE_IMAGE_REPO    GHCR namespace, e.g. ghcr.io/pfblockerng            (variable)
-#                       (default ghcr.io/<owner-lowercased>); the untagged image
-#                       is ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}.
-#   SMOKE_IMAGE_NAME    image name appended to it (default pfsense-ce)        (variable)
+#   SMOKE_GHCR_USER         username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN        token with write:packages (publish) / read:packages (defaults to GITHUB_TOKEN)
+#   SMOKE_SSH_PRIV_KEY      guest SSH private key baked into the image            (secret)
+#   SMOKE_PLUS_MAC          Plus VM: newline-separated list of 8 MAC addresses    (secret)
+#   SMOKE_PLUS_SMBIOS_UUID  Plus VM: SMBIOS type-1 UUID (Netgate Device ID key)   (secret)
+#   SMOKE_IMAGE_REPO        GHCR namespace, e.g. ghcr.io/pfblockerng             (variable)
+#                           (default ghcr.io/<owner-lowercased>)
 #
 # INVARIANT: this workflow NEVER writes to main/devel/next or any channel branch.
 # It writes ONLY to GHCR (packages). The tracker dispatches it; it publishes or fails.
@@ -43,15 +54,7 @@ on:
   workflow_dispatch:
     inputs:
       pfsense_version:
-        description: "Target pfSense CE floating tag (e.g. 2.8). The tracker passes the exact version from supported-versions.json."
-        required: true
-        type: string
-      freebsd_version:
-        description: "FreeBSD base version for this CE release (e.g. 15.0-RELEASE). The tracker reads this from supported-versions.json."
-        required: true
-        type: string
-      from_version:
-        description: "Prior published CE floating tag to upgrade from (e.g. 2.7). Leave empty to auto-detect from the matrix (the most recent prior CE tag, or self for a patch refresh)."
+        description: "Optional filter: only the entry whose pfsense_version matches. Leave blank to run all entries with upgrade.available == true."
         required: false
         default: ""
         type: string
@@ -81,81 +84,82 @@ permissions:
   packages: write
 
 jobs:
-  # ── Resolve prior published tag (from_version) ─────────────────────────────
-  # Determine which existing GHCR tag to upgrade FROM, and whether --force is
-  # needed (patch refresh: target tag already exists and will be overwritten).
-  #
-  # With the floating-tag scheme, pfsense_version IS the GHCR tag (e.g. "2.8").
-  # Two cases:
-  #   New minor/major (e.g. "2.9"): upgrade FROM the previous version (e.g. "2.8").
-  #   Patch refresh (e.g. "2.8" is the only/oldest entry): upgrade FROM itself,
-  #     overwriting :2.8 in place (--force required since the tag already exists).
-  resolve-from:
-    name: Resolve upgrade source tag
+  # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
+  # Read ci-metadata, filter entries with upgrade.available == true (and optionally
+  # by pfsense_version input), and emit the matrix include array for the refresh job.
+  # If no entry qualifies (the common case today) the include array is empty and the
+  # refresh job runs zero legs — a clean no-op.
+  plan:
+    name: Resolve refresh matrix (CE + Plus)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      from_tag: ${{ steps.resolve.outputs.from_tag }}
-      force_flag: ${{ steps.resolve.outputs.force_flag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
     steps:
-      - name: Checkout (for read-version-matrix action)
+      - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Resolve prior CE tag to upgrade from
-        id: resolve
+      - name: Build refresh matrix from ci-metadata
+        id: plan
         env:
-          FROM_VERSION: ${{ inputs.from_version }}
-          TARGET_VERSION: ${{ inputs.pfsense_version }}
+          FILTER_VERSION: ${{ inputs.pfsense_version }}
         run: |
           set -eu
-          if [ -n "$FROM_VERSION" ]; then
-            # Caller supplied an explicit prior tag — use it directly.
-            # Self-refresh (same tag) still needs --force.
-            FORCE=""
-            [ "$FROM_VERSION" = "$TARGET_VERSION" ] && FORCE="--force"
-            printf 'from_tag=%s\n' "$FROM_VERSION" >> "$GITHUB_OUTPUT"
-            printf 'force_flag=%s\n' "$FORCE" >> "$GITHUB_OUTPUT"
-            printf 'Using caller-supplied from_version: %s%s\n' "$FROM_VERSION" \
-              "${FORCE:+ (self-refresh, --force)}"
-            exit 0
-          fi
-
-          # Auto-detect: read all CE entries sorted by version, find the one
-          # immediately before TARGET_VERSION. Uses sort -V (version sort) so
-          # "2.9" < "2.10" is handled correctly regardless of jq string ordering.
-          git fetch origin ci-metadata
+          git fetch origin ci-metadata -q
           MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
 
-          ALL_CE="$(printf '%s' "$MATRIX_JSON" | jq -r '
-            .versions[] | select(.channel == "CE") | .pfsense_version
-          ' | sort -V)"
-
-          FROM_TAG="$(printf '%s\n' "$ALL_CE" | awk -v target="$TARGET_VERSION" '
-            prev != "" && $0 == target { print prev; exit }
-            { prev = $0 }
+          # Build the include array: one entry per ci==true version with upgrade.available==true.
+          # from defaults to pfsense_version (self); force_flag is "--force" when from==pfsense_version.
+          INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
+            [
+              .versions[]
+              | select(.ci == true)
+              | select((.upgrade.available // false) == true)
+              | select($filter == "" or .pfsense_version == $filter)
+              | {
+                  variant:          (.channel | ascii_downcase),
+                  label:            .channel,
+                  pfsense_version:  .pfsense_version,
+                  freebsd_version:  .freebsd_version,
+                  image_name:       ("pfsense-" + (.channel | ascii_downcase)),
+                  branch:           (.upgrade.branch // ""),
+                  target:           (.upgrade.target // .pfsense_version),
+                  from:             (.upgrade.from // .pfsense_version),
+                  force_flag:       (if ((.upgrade.from // .pfsense_version) == .pfsense_version) then "--force" else "" end)
+                }
+            ]
           ')"
 
-          # Patch-refresh fallback: target is the oldest/only CE entry — upgrade
-          # in-place, overwriting the floating tag (--force required).
-          FORCE=""
-          if [ -z "$FROM_TAG" ] || [ "$FROM_TAG" = "null" ]; then
-            FROM_TAG="$TARGET_VERSION"
-            FORCE="--force"
-            printf 'Patch refresh: self-upgrade %s -> %s (--force)\n' \
-              "$FROM_TAG" "$TARGET_VERSION"
-          else
-            printf 'New-version upgrade: %s -> %s\n' "$FROM_TAG" "$TARGET_VERSION"
-          fi
+          printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
+          # Count of eligible legs — the refresh job is gated on this so an empty
+          # matrix (the common case) is an unambiguous clean skip, not a matrix edge case.
+          printf 'count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
 
-          printf 'from_tag=%s\n' "$FROM_TAG" >> "$GITHUB_OUTPUT"
-          printf 'force_flag=%s\n' "$FORCE" >> "$GITHUB_OUTPUT"
+          # Human-readable summary for the run log.
+          printf '%s' "$MATRIX_JSON" | jq -r --arg filter "$FILTER_VERSION" '
+            .versions[] |
+            if .ci != true then
+              "  \(.channel) \(.pfsense_version): skip (ci != true)"
+            elif ((.upgrade.available // false) != true) then
+              "  \(.channel) \(.pfsense_version): skip (upgrade.available != true)"
+            elif ($filter != "" and .pfsense_version != $filter) then
+              "  \(.channel) \(.pfsense_version): skip (filtered out by pfsense_version input)"
+            else
+              "  \(.channel) \(.pfsense_version): WILL RUN (from=\(.upgrade.from // .pfsense_version) target=\(.upgrade.target // .pfsense_version) branch=\(.upgrade.branch // "(image default)"))"
+            end
+          '
 
   # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
   refresh:
-    name: Refresh CE ${{ inputs.pfsense_version }} image
-    needs: resolve-from
+    name: Upgrade pfSense ${{ matrix.label }} Smoke Image
+    needs: plan
+    if: ${{ needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout (for scripts/ + tests/smoke/)
         uses: actions/checkout@v6
@@ -197,13 +201,12 @@ jobs:
         id: ref
         env:
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
-          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
         run: |
           set -eu
-          # Compose the untagged image from the namespace + name vars (org-transfer
-          # scheme). Fallback: lowercased owner (GHCR refs MUST be lowercase).
+          # Compose the untagged image from the namespace var + per-matrix image_name.
+          # Fallback: lowercased owner (GHCR refs MUST be lowercase).
           REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
+          IMAGE="${REPO%/}/${{ matrix.image_name }}"
           printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
           printf 'Image base ref: %s\n' "$IMAGE"
 
@@ -219,23 +222,31 @@ jobs:
       #   5. Shuts down cleanly, compresses to qcow2 (zstd), oras-pushes new tag.
       # The published image is a CLEAN upgraded qcow2; pfBlockerNG is NEVER
       # installed on it (the non-blocking step below uses a discarded overlay).
-      - name: Upgrade in place + health gate + publish (${{ needs.resolve-from.outputs.from_tag }} -> ${{ inputs.pfsense_version }})
+      - name: >-
+          Upgrade ${{ matrix.label }} in place + publish
+          (${{ matrix.from }} -> ${{ matrix.pfsense_version }}${{ matrix.branch != '' && format(' @ {0}', matrix.branch) || '' }})
         id: upgrade
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          FROM_TAG: ${{ needs.resolve-from.outputs.from_tag }}
-          TARGET: ${{ inputs.pfsense_version }}
-          FORCE_FLAG: ${{ needs.resolve-from.outputs.force_flag }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          FROM_TAG: ${{ matrix.from }}
+          TARGET_TAG: ${{ matrix.pfsense_version }}
+          VARIANT: ${{ matrix.variant }}
+          FORCE_FLAG: ${{ matrix.force_flag }}
+          BRANCH: ${{ matrix.branch }}
         run: |
           set -eu
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
-            --to "$TARGET" \
-            --image "${{ steps.ref.outputs.image }}" \
+            --to "$TARGET_TAG" \
+            --type "$VARIANT" \
+            ${BRANCH:+--branch "$BRANCH"} \
+            --image "$SMOKE_IMAGE" \
             --ssh-key "$PWD/smoke_key" \
             --compression "${{ inputs.compression }}" \
             --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
@@ -248,6 +259,13 @@ jobs:
       # continue-on-error: true + post-publish overlay → can NEVER pollute the
       # published image and can NEVER fail the refresh job.
       # The authoritative pfBlockerNG validation is smoke.yml.
+      #
+      # CE: single NIC, standard SLIRP hostfwd to 127.0.0.1:$GUEST_PORT.
+      # Plus: 8-NIC topology matching image-upgrade.sh + smoke boot_vm.sh; full
+      #       Plus identity (SMBIOS + 8 MACs from SMOKE_PLUS_MAC) required — NEVER
+      #       boot Plus with wrong identity (Netgate Device ID derives from MAC +
+      #       SMBIOS uuid; a mismatch breaks licensing). If identity secrets are
+      #       absent or the MAC list is malformed the step warns and exits cleanly.
       - name: pfBlockerNG smoke (non-blocking)
         continue-on-error: true
         env:
@@ -255,16 +273,32 @@ jobs:
           SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -eu
           LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
           LOCAL_DATA_IP="${{ inputs.sanity_local_data_ip }}"
           IMAGE="${SMOKE_IMAGE}"
-          TAG="${{ inputs.pfsense_version }}"
+          TAG="${{ matrix.pfsense_version }}"
           GUEST_PORT=2223
-          MAC="BC:24:11:37:9C:AC"
           WORK_DIR="$(mktemp -d)"
           printf 'SMOKE_WORK_DIR=%s\n' "$WORK_DIR" >> "$GITHUB_ENV"
+
+          # Plus: validate identity secrets before booting (wrong identity breaks licensing).
+          if [ "$VARIANT" = "plus" ]; then
+            if [ -z "${SMOKE_PLUS_MAC:-}" ] || [ -z "${SMOKE_PLUS_SMBIOS_UUID:-}" ]; then
+              printf '::warning::[non-blocking smoke] Plus identity secrets absent — skipping Plus post-publish smoke\n'
+              exit 0
+            fi
+            # Count non-empty MAC lines.
+            _mac_count="$(printf '%s\n' "$SMOKE_PLUS_MAC" | grep -c '[^[:space:]]' || true)"
+            if [ "${_mac_count:-0}" -ne 8 ]; then
+              printf '::warning::[non-blocking smoke] Plus identity secrets absent/invalid — skipping Plus post-publish smoke\n'
+              exit 0
+            fi
+          fi
 
           # Pull the just-published image.
           printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
@@ -278,19 +312,66 @@ jobs:
           OVERLAY="${WORK_DIR}/smoke-overlay.qcow2"
           qemu-img create -b "$BASE_IMG" -F qcow2 -f qcow2 "$OVERLAY"
 
-          printf '==> [non-blocking smoke] booting overlay (guest :%d -> 127.0.0.1:%d)\n' 22 "$GUEST_PORT"
-          qemu-system-x86_64 \
-            -enable-kvm -machine pc -cpu host \
-            -smp 2,sockets=1,cores=2 -m 4096 \
-            -device virtio-scsi-pci,id=virtioscsi0 \
-            -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
-            -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-:22" \
-            -device "virtio-net-pci,mac=${MAC},netdev=net0,id=net0" \
-            -display none \
-            -serial "file:${WORK_DIR}/smoke-console.log" \
-            -pidfile "${WORK_DIR}/smoke-qemu.pid" \
-            -daemonize
+          printf '==> [non-blocking smoke] booting overlay (%s, guest :%d -> 127.0.0.1:%d)\n' "$VARIANT" 22 "$GUEST_PORT"
+
+          if [ "$VARIANT" = "ce" ]; then
+            # CE: single NIC, standard SLIRP.
+            CE_MAC="BC:24:11:37:9C:AC"
+            qemu-system-x86_64 \
+              -enable-kvm -machine pc -cpu host \
+              -smp 2,sockets=1,cores=2 -m 4096 \
+              -device virtio-scsi-pci,id=virtioscsi0 \
+              -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
+              -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
+              -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-:22" \
+              -device "virtio-net-pci,mac=${CE_MAC},netdev=net0,id=net0" \
+              -display none \
+              -serial "file:${WORK_DIR}/smoke-console.log" \
+              -pidfile "${WORK_DIR}/smoke-qemu.pid" \
+              -daemonize
+          else
+            # Plus: 8-NIC topology matching image-upgrade.sh + boot_vm.sh.
+            # net0 WAN  10.10.0.0/24 (internet egress for pfSense-upgrade downloads)
+            # net1 MGMT 10.0.0.0/16  (SSH hostfwd → static MGMT IP 10.0.0.20)
+            # net2..net7 isolated stub NICs (must be present; unassigned in image)
+            SMBIOS_UUID="${SMOKE_PLUS_SMBIOS_UUID}"
+            _mac0="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '1p')"
+            _mac1="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '2p')"
+            _mac2="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '3p')"
+            _mac3="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '4p')"
+            _mac4="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '5p')"
+            _mac5="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '6p')"
+            _mac6="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '7p')"
+            _mac7="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '8p')"
+            qemu-system-x86_64 \
+              -enable-kvm -machine pc -cpu host \
+              -smp 2,sockets=1,cores=2 -m 4096 \
+              -smbios "type=1,uuid=${SMBIOS_UUID}" \
+              -device virtio-scsi-pci,id=virtioscsi0 \
+              -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
+              -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
+              -netdev "user,id=net0,net=10.10.0.0/24,host=10.10.0.2" \
+              -device "virtio-net-pci,mac=${_mac0},netdev=net0,id=nic0" \
+              -netdev "user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-10.0.0.20:22" \
+              -device "virtio-net-pci,mac=${_mac1},netdev=net1,id=nic1" \
+              -netdev "user,id=net2,net=10.20.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac2},netdev=net2,id=nic2" \
+              -netdev "user,id=net3,net=10.30.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac3},netdev=net3,id=nic3" \
+              -netdev "user,id=net4,net=10.40.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac4},netdev=net4,id=nic4" \
+              -netdev "user,id=net5,net=10.50.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac5},netdev=net5,id=nic5" \
+              -netdev "user,id=net6,net=10.60.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac6},netdev=net6,id=nic6" \
+              -netdev "user,id=net7,net=10.70.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac7},netdev=net7,id=nic7" \
+              -display none \
+              -serial "file:${WORK_DIR}/smoke-console.log" \
+              -pidfile "${WORK_DIR}/smoke-qemu.pid" \
+              -daemonize
+          fi
+
           SMOKE_QPID="$(cat "${WORK_DIR}/smoke-qemu.pid" 2>/dev/null | tr -d '\r' || true)"
 
           # Wait for SSH (180 s).
@@ -375,7 +456,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: image-refresh-diagnostics-${{ inputs.pfsense_version }}
+          name: image-refresh-diagnostics-${{ matrix.variant }}-${{ matrix.pfsense_version }}
           path: |
             ${{ env.SMOKE_WORK_DIR }}/smoke-console.log
           if-no-files-found: ignore

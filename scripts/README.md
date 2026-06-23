@@ -135,18 +135,24 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
 
 1. **`build-pkg-linux.yml`** — validates the new entry's `(freebsd_version, php_version)`
    pair by building an installable `.pkg`. One dispatch per BUILD entry.
-2. **`image-refresh.yml`** — upgrade-in-place: pulls the current GHCR tag for the CE
-   version, runs `pfSense-upgrade`, applies the **six-check sanity gate**, and publishes
-   the new tag to GHCR **only on gate pass** (fail-closed — a bad image is never
-   published). One dispatch per `ci: true` CE entry.
+2. **`image-refresh.yml`** (`Upgrade pfSense smoke images`) — a **CE + Plus matrix
+   fan-out**. A `plan` job reads `ci-metadata` and refreshes each `ci: true` variant
+   **only when its `upgrade.available` flag is set** (a curated signal that a public
+   pre-release / GA / patch exists); absent/`false` → that variant is skipped, so most
+   days the run is a clean no-op. Each leg runs `scripts/image-upgrade.sh --type ce|plus`
+   (plus `--branch <id>` when `upgrade.branch` is set, to reach a pre-release/development
+   build), applies the health gate, and publishes the new tag to GHCR **only on gate pass**
+   (fail-closed). GA/patches self-replace the floating tag; a new Major.Minor gets a new tag.
 3. **`smoke.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
    entries — **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The
    **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
    whole gate red, no partial pass.
 
-The tracker dispatches step 1 (build) and step 3 (smoke) for every `ci: true` entry,
-CE and Plus. Step 2 (`image-refresh.yml`) is **CE-only** — the Plus image is refreshed
-**manually** with `scripts/image-publish.sh` (re-export + push the licensed qcow2).
+The tracker dispatches step 1 (build), step 2 (image refresh), and step 3 (smoke). Step 2
+now covers **CE and Plus** in one run (gated per variant on `upgrade.available`); the Plus
+leg takes its license/NDI identity from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID`
+secrets. `scripts/image-publish.sh` remains the manual fallback (gate failure, or the
+initial Plus image seed).
 
 ### ADR-04 §2 reconciliation (flagged — not edited here)
 
