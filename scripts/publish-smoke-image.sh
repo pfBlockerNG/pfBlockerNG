@@ -61,10 +61,11 @@ while [ -z "$VERSION" ]; do
     [ -n "$VERSION" ] || printf 'A version/tag is required.\n' >&2
 done
 
-# 3. VM id — civm conventionally lives on 104, the pfSense VMs on 103.
+# 3. VM id — conventional per-type slots: ce 103, plus 104, civm 105.
 case "$TYPE" in
-    civm) _vmid_default=104 ;;
-    *)    _vmid_default=103 ;;
+    ce)   _vmid_default=103 ;;
+    plus) _vmid_default=104 ;;
+    civm) _vmid_default=105 ;;
 esac
 ask VMID "Proxmox VM id" "$_vmid_default"
 

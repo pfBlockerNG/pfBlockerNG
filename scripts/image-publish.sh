@@ -63,7 +63,8 @@
 # Options:
 #   --type T         image type: ce | plus | civm. Derives --image, the qcow2
 #                    filename, --description and --artifact-type from T + version.
-#   --vmid N         Proxmox VM id (default: 103)
+#   --vmid N         Proxmox VM id (default by --type: ce 103, plus 104, civm 105;
+#                    103 when no --type)
 #   --disk KEY       disk config key to export (default: scsi0)
 #   --registry REF   GHCR namespace for the derived --type ref (default:
 #                    $SMOKE_IMAGE_REPO or ghcr.io/pfblockerng)
@@ -91,7 +92,9 @@ log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-VMID=103
+# VM id default is per --type (ce 103, plus 104, civm 105; else 103) — applied
+# after --type is known, unless --vmid was given. Empty here = "not set".
+VMID=""
 DISK=scsi0
 # Registry NAMESPACE only (no hard-coded image name). The image name comes from
 # --type (derived) or --image (explicit) — never from an environment variable.
@@ -135,7 +138,7 @@ while [ $# -gt 0 ]; do
         --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
         --description)     DESCRIPTION="$2"; shift 2 ;;
         --print-identity)  PRINT_IDENTITY=1; shift ;;
-        -h|--help)         sed -n '2,86p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,87p' "$0"; exit 0 ;;
         -*)                die "unknown option: $1" ;;
         *)
             [ -z "$VERSION" ] || die "unexpected argument: $1"
@@ -164,16 +167,20 @@ case "$COMPRESSION" in zstd|zlib|off) ;; *) die "--compression must be zstd|zlib
 # ---------------------------------------------------------------------------
 if [ -n "$TYPE" ]; then
     case "$TYPE" in
-        ce)   _name=pfsense-ce;   _pretty=pfSense-CE;   _desc="pfSense CE";                 _atype="application/vnd.netgate.pfsense-ce.disk.v1" ;;
-        plus) _name=pfsense-plus; _pretty=pfSense-Plus; _desc="pfSense Plus";               _atype="application/vnd.netgate.pfsense-plus.disk.v1" ;;
-        civm) _name=civm;         _pretty=civm;         _desc="pfBlockerNG smoke client VM"; _atype="application/vnd.pfblockerng.smoke-client.disk.v1" ;;
+        ce)   _name=pfsense-ce;   _pretty=pfSense-CE;   _desc="pfSense CE";                 _atype="application/vnd.netgate.pfsense-ce.disk.v1";        _vmid=103 ;;
+        plus) _name=pfsense-plus; _pretty=pfSense-Plus; _desc="pfSense Plus";               _atype="application/vnd.netgate.pfsense-plus.disk.v1";      _vmid=104 ;;
+        civm) _name=civm;         _pretty=civm;         _desc="pfBlockerNG smoke client VM"; _atype="application/vnd.pfblockerng.smoke-client.disk.v1";  _vmid=105 ;;
         *)    die "--type must be ce|plus|civm (got '$TYPE')" ;;
     esac
     [ -n "$IMAGE" ]         || IMAGE="${REGISTRY%/}/${_name}"
     [ -n "$DESCRIPTION" ]   || DESCRIPTION="${_desc} ${VERSION}"
     [ -n "$ARTIFACT_TYPE" ] || ARTIFACT_TYPE="$_atype"
     [ -n "$QCOW_NAME" ]     || QCOW_NAME="${_pretty}_${VERSION}.qcow2"
+    [ -n "$VMID" ]          || VMID="$_vmid"
 fi
+
+# VM id fallback for the custom (no --type) and --print-identity paths.
+[ -n "$VMID" ] || VMID=103
 
 # A real publish needs the image-shaped fields. With --type they are filled in
 # above; without it they MUST be provided explicitly (no guessing).
