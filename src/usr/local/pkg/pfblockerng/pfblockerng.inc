@@ -12793,10 +12793,13 @@ function sync_package_pfblockerng($cron='') {
 	// manages the companion firewall pass automatically; no filter/rule entry is written.
 	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule directly
 	// (pfSense-core foreign section — ADR-29 exclusion list).
+	// Coupled to DNSBL being enabled: rules are created only when $mode === 'enabled'
+	// (master enable + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
+	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$redir_changed = FALSE;
 		$redir_toggle  = PfbConfig::read('dnsbl_redir');
-		$redir_enabled = ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
+		$redir_enabled = (($mode ?? '') === 'enabled') && ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
 
 		if (!$redir_enabled) {
 			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
@@ -12898,10 +12901,13 @@ function sync_package_pfblockerng($cron='') {
 	// Sync DoT/DoQ block filter rules (create / reconcile / prune / remove).
 	// Reads dnsbl_dot_block (toggle) via PfbConfig; manages filter/rule directly
 	// (pfSense-core foreign section — ADR-29 exclusion list).
+	// Coupled to DNSBL being enabled: rules are created only when $mode === 'enabled'
+	// (master enable + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
+	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$dot_changed = FALSE;
 		$dot_toggle  = PfbConfig::read('dnsbl_dot_block');
-		$dot_enabled = ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
+		$dot_enabled = (($mode ?? '') === 'enabled') && ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
 
 		if (!$dot_enabled) {
 			// DISABLED: remove all pfB_DoT_Block_* filter rules.
@@ -14983,6 +14989,92 @@ function pfblockerng_php_pre_deinstall_command() {
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
 
+	// Live-object teardown always runs regardless of $pfb['keep'], so that uninstalling
+	// with the default keep=on still removes active pf tables, boot hooks, owned firewall
+	// objects, generated DNSBL files, Unbound chroot module, and the dashboard widget.
+	update_status(" Removing live firewall objects and generated files...");
+
+	// Remove all pfB aliastables
+	exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
+	if (isset($pfb_tables)) {
+		foreach ($pfb_tables as $pfb_table) {
+			$pfb_table_esc = escapeshellarg($pfb_table);
+			exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T kill 2>&1", $result);
+		}
+	}
+
+	// Remove aliastables archive and earlyshellcmd if found.
+	@unlink_if_exists("{$pfb['aliasarchive']}");
+	if (config_get_path('system/earlyshellcmd') !== null) {
+		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
+		if (preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd)) {
+			config_set_path('system/earlyshellcmd',
+							preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd, PREG_GREP_INVERT));
+		}
+	}
+	foreach (config_get_path('installedpackages/shellcmdsettings/config', []) as $key => $shellcmd) {
+		if (strpos($shellcmd['cmd'], 'pfblockerng.sh aliastables') !== FALSE) {
+			config_del_path("installedpackages/shellcmdsettings/config/{$key}");
+		}
+	}
+
+	// Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config
+	// reference data is wiped by pfb_remove_config_settings(). Catches orphans that
+	// the normal disable teardown missed. Idempotent — no write when nothing found.
+	$swept = FALSE;
+	// Sweep all pfB_-owned VIPs, NAT rules, and filter rules.
+	foreach (['virtualip/vip', 'nat/rule', 'filter/rule'] as $deinstall_section) {
+		$deinstall_rows     = config_get_path($deinstall_section, []);
+		$deinstall_filtered = [];
+		$deinstall_removed  = FALSE;
+		foreach ($deinstall_rows as $deinstall_row) {
+			if (pfb_is_managed_obj($deinstall_row['descr'] ?? '')) {
+				$deinstall_removed = TRUE;
+			} else {
+				$deinstall_filtered[] = $deinstall_row;
+			}
+		}
+		if ($deinstall_removed) {
+			config_set_path($deinstall_section, $deinstall_filtered);
+			$swept = TRUE;
+		}
+	}
+	// Also explicitly remove DNS-redirect NAT rules and DoT/DoQ block filter rules
+	// by marker prefix (covers the inline-managed objects).
+	if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+		$swept = TRUE;
+	}
+	if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+		$swept = TRUE;
+	}
+
+	if ($swept) {
+		write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
+	}
+
+	unlink_if_exists("{$pfb['dnsbl_conf']}");
+	unlink_if_exists("{$pfb['dnsbl_cert']}");
+	unlink_if_exists("{$pfb['aliasarchive']}");
+	unlink_if_exists("{$pfb['dnsbl_info']}");
+	unlink_if_exists("{$pfb['dnsbl_resolver']}");
+
+	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
+	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
+	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
+
+	// Remove widget (code from Snort deinstall)
+	$pfb['widgets'] = config_get_path('widgets/sequence', '');
+	if (!empty($pfb['widgets'])) {
+		$widgetlist = explode(',', $pfb['widgets']);
+		foreach ($widgetlist as $key => $widget) {
+			if (strpos($widget, 'pfblockerng') !== FALSE) {
+				unset($widgetlist[$key]);
+			}
+		}
+		config_set_path('widgets/sequence', implode(',', $widgetlist));
+		write_config('pfBlockerNG: Remove widget', FALSE);
+	}
+
 	// Maintain pfBlockerNG settings and database files if $pfb['keep'] is ON.
 	if ($pfb['keep'] != 'on') {
 		update_status(" Removing all customizations/data...");
@@ -14990,89 +15082,8 @@ function pfblockerng_php_pre_deinstall_command() {
 		rmdir_recursive("{$pfb['dbdir']}");
 		rmdir_recursive("{$pfb['logdir']}");
 
-		// Remove all pfB aliastables
-		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
-		if (isset($pfb_tables)) {
-			foreach ($pfb_tables as $pfb_table) {
-				$pfb_table_esc = escapeshellarg($pfb_table);
-				exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T kill 2>&1", $result);
-			}
-		}
-
-		// Remove aliastables archive and earlyshellcmd if found.
-		@unlink_if_exists("{$pfb['aliasarchive']}");
-		if (config_get_path('system/earlyshellcmd') !== null) {
-			$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
-			if (preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd)) {
-				config_set_path('system/earlyshellcmd',
-								preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd, PREG_GREP_INVERT));
-			}
-		}
-		foreach (config_get_path('installedpackages/shellcmdsettings/config', []) as $key => $shellcmd) {
-			if (strpos($shellcmd['cmd'], 'pfblockerng.sh aliastables') !== FALSE) {
-				config_del_path("installedpackages/shellcmdsettings/config/{$key}");
-			}
-		}
-
-		// Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config
-		// reference data is wiped by pfb_remove_config_settings(). Catches orphans that
-		// the normal disable teardown missed. Idempotent — no write when nothing found.
-		$swept = FALSE;
-		// Sweep all pfB_-owned VIPs, NAT rules, and filter rules.
-		foreach (['virtualip/vip', 'nat/rule', 'filter/rule'] as $deinstall_section) {
-			$deinstall_rows     = config_get_path($deinstall_section, []);
-			$deinstall_filtered = [];
-			$deinstall_removed  = FALSE;
-			foreach ($deinstall_rows as $deinstall_row) {
-				if (pfb_is_managed_obj($deinstall_row['descr'] ?? '')) {
-					$deinstall_removed = TRUE;
-				} else {
-					$deinstall_filtered[] = $deinstall_row;
-				}
-			}
-			if ($deinstall_removed) {
-				config_set_path($deinstall_section, $deinstall_filtered);
-				$swept = TRUE;
-			}
-		}
-		// Also explicitly remove DNS-redirect NAT rules and DoT/DoQ block filter rules
-		// by marker prefix (covers the inline-managed objects).
-		if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
-			$swept = TRUE;
-		}
-		if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
-			$swept = TRUE;
-		}
-
-		if ($swept) {
-			write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
-		}
-
 		// Remove settings from config.xml
 		pfb_remove_config_settings();
-
-		unlink_if_exists("{$pfb['dnsbl_conf']}");
-		unlink_if_exists("{$pfb['dnsbl_cert']}");
-		unlink_if_exists("{$pfb['aliasarchive']}");
-		unlink_if_exists("{$pfb['dnsbl_info']}");
-		unlink_if_exists("{$pfb['dnsbl_resolver']}");
-
-		unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
-		unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
-		unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
-
-		// Remove widget (code from Snort deinstall)
-		$pfb['widgets'] = config_get_path('widgets/sequence', '');
-		if (!empty($pfb['widgets'])) {
-			$widgetlist = explode(',', $pfb['widgets']);
-			foreach ($widgetlist as $key => $widget) {
-				if (strpos($widget, 'pfblockerng') !== FALSE) {
-					unset($widgetlist[$key]);
-				}
-			}
-			config_set_path('widgets/sequence', implode(',', $widgetlist));
-			write_config('pfBlockerNG: Remove widget', FALSE);
-		}
 	}
 	else {
 		update_status(" All customizations/data will be retained...");
