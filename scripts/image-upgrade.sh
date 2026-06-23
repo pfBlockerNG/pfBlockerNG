@@ -44,7 +44,12 @@
 #   --ssh-key PATH   GUEST SSH private key (default: $SMOKE_SSH_KEY) — its public
 #                    half is baked into the image's root authorized_keys
 #   --ssh-port N     Proxmox-local port forwarded to the guest's :22 (default: 2222)
-#   --mac ADDR       guest NIC MAC (default: BC:24:11:37:9C:AC — must match the image)
+#   --mac ADDR       guest NIC MAC (default: $SMOKE_VM_MAC or BC:24:11:37:9C:AC —
+#                    must match the image; mirror of boot_vm.sh's SMOKE_VM_MAC)
+#   --smbios-uuid U  SMBIOS type-1 uuid (default: $SMOKE_VM_SMBIOS_UUID or the CE
+#                    pin — must match the image; mirror of boot_vm.sh). The
+#                    Netgate Device ID (Plus) derives from MAC + this uuid, so a
+#                    Plus image MUST set both --mac and --smbios-uuid to its own.
 #   --compression T  qcow2 compression for the published image: zstd|zlib|off (default: zstd)
 #   --upgrade-timeout S  MAX seconds to wait for the pfSense-upgrade+reboot
 #                    (default: 1200). The poll exits the instant /etc/version
@@ -75,7 +80,11 @@ IMAGE="${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}"
 IMAGE="${IMAGE%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
 GUEST_KEY="${SMOKE_SSH_KEY:-}"
 GUEST_PORT=2222
-MAC="BC:24:11:37:9C:AC"
+# Source-VM hardware identity — MUST match the image (mirror of boot_vm.sh's
+# SMOKE_VM_MAC / SMOKE_VM_SMBIOS_UUID). The Netgate Device ID (Plus) derives from
+# MAC + SMBIOS uuid, so a Plus image MUST override both; CE pins by default.
+MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
+SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-58fd7964-c40c-4f47-bf02-3fdad18f8b00}"
 COMPRESSION=zstd
 UPGRADE_TIMEOUT=1200
 UPGRADE_PKGS=0
@@ -111,12 +120,13 @@ while [ $# -gt 0 ]; do
         --ssh-key)         GUEST_KEY="$2"; shift 2 ;;
         --ssh-port)        GUEST_PORT="$2"; shift 2 ;;
         --mac)             MAC="$2"; shift 2 ;;
+        --smbios-uuid)     SMBIOS_UUID="$2"; shift 2 ;;
         --compression)     COMPRESSION="$2"; shift 2 ;;
         --upgrade-timeout) UPGRADE_TIMEOUT="$2"; shift 2 ;;
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,62p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,67p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
@@ -232,15 +242,42 @@ px "cat > '$REMOTE_DIR/work.qcow2'" < "$BASE"
 px "test -s '$REMOTE_DIR/work.qcow2'" || die "streamed image is empty on the KVM host"
 
 # --- boot under QEMU on the KVM host (internet ON for the upgrade) ----------
-log "booting VM on the KVM host (guest :22 -> 127.0.0.1:$GUEST_PORT there)"
+# Mirror the smoke 8-NIC topology (tests/smoke/boot_vm.sh) so the image boots
+# without pfSense re-detecting hardware and dropping to the interface-reassignment
+# console prompt. Only the first three are assigned in the image:
+#   net0 WAN  — SLIRP 10.10.0.0/24, NATs to the internet (the upgrade download).
+#   net1 MGMT — SLIRP 10.0.0.0/16; the ssh host-forward targets the static
+#               management IP 10.0.0.20 (the upgrade's control path). WAN uses
+#               10.10.0.0/24 so it overlaps neither mgmt 10.0/16 nor the DNSBL
+#               sinkhole VIP 10.10.10.1 (matches tests/smoke/boot_vm.sh).
+#   net2 LAN  — present but isolated (no civm peer during an upgrade).
+#   net3..7   — unassigned; present only so the 8-NIC image sees no change.
+# CE identity is don't-care, so only net0 carries the (cosmetic) --mac value;
+# the rest take QEMU defaults.
+log "booting VM on the KVM host (guest mgmt :22 -> 127.0.0.1:$GUEST_PORT there)"
 QEMU_CMD="$QEMU_BIN \
     -enable-kvm -machine pc -cpu host \
     -smp 2,sockets=1,cores=2 -m 4096 \
+    -smbios type=1,uuid=$SMBIOS_UUID \
     -device virtio-scsi-pci,id=virtioscsi0 \
     -drive file=$REMOTE_DIR/work.qcow2,if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap \
     -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:$GUEST_PORT-:22 \
-    -device virtio-net-pci,mac=$MAC,netdev=net0,id=net0 \
+    -netdev user,id=net0,net=10.10.0.0/24,host=10.10.0.2 \
+    -device virtio-net-pci,mac=$MAC,netdev=net0,id=nic0 \
+    -netdev user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp:127.0.0.1:$GUEST_PORT-10.0.0.20:22 \
+    -device virtio-net-pci,netdev=net1,id=nic1 \
+    -netdev user,id=net2,net=10.20.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net2,id=nic2 \
+    -netdev user,id=net3,net=10.30.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net3,id=nic3 \
+    -netdev user,id=net4,net=10.40.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net4,id=nic4 \
+    -netdev user,id=net5,net=10.50.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net5,id=nic5 \
+    -netdev user,id=net6,net=10.60.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net6,id=nic6 \
+    -netdev user,id=net7,net=10.70.0.0/24,restrict=on \
+    -device virtio-net-pci,netdev=net7,id=nic7 \
     -display none -serial file:$REMOTE_DIR/console.log \
     -pidfile $REMOTE_DIR/qemu.pid -daemonize"
 px "$QEMU_CMD"
