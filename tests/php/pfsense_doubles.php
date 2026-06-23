@@ -672,9 +672,39 @@ if (!function_exists('get_specialnet')) {
 
 if (!function_exists('where_is_ipaddr_configured')) {
 	// pfSense interfaces.inc: returns a list of interface names where $addr is configured
-	// (including subnet membership). Used by pfb_validate_vips() to detect VIP overlap.
-	// Always returns [] off-appliance: no real interfaces exist, so no VIP overlaps.
-	function where_is_ipaddr_configured($ip, $ignore_if = '', $check_localip = false, $check_subnets = false, $cidrprefix = '') {
+	// (including subnet membership). Used by pfb_validate_vips() and pfb_pick_free_dnsbl_vip()
+	// to detect VIP/subnet overlap.
+	//
+	// Seedable for picker tests: if $GLOBALS['pfb_test_configured_subnets'] is set to an
+	// array of CIDR strings (e.g. ['10.0.0.0/8']), returns ['seeded'] (non-empty = "conflict")
+	// when $ip falls inside any of them; otherwise returns [] (no conflict). When the global
+	// is unset, always returns [] — preserving the off-appliance default so existing tests
+	// are unaffected. Only IPv4 CIDRs are supported for seeding (the picker test is v4-only).
+	function where_is_ipaddr_configured($ip, $ignore_if = '', $check_localip = FALSE, $check_subnets = FALSE, $cidrprefix = '') {
+		$subnets = $GLOBALS['pfb_test_configured_subnets'] ?? null;
+		if ($subnets === null) {
+			return [];
+		}
+		$ip_long = ip2long($ip);
+		if ($ip_long === FALSE) {
+			// IPv6 address or unparseable — no subnet seed support; treat as free.
+			return [];
+		}
+		foreach ($subnets as $cidr) {
+			[$net, $bits] = explode('/', $cidr, 2) + [1 => '32'];
+			$net_long = ip2long($net);
+			if ($net_long === FALSE) {
+				continue;
+			}
+			$mask = $bits === '32' ? 0xFFFFFFFF : ~((1 << (32 - (int) $bits)) - 1);
+			// Cast to unsigned 32-bit via sprintf round-trip to avoid sign-bit issues.
+			$mask      = (int) sprintf('%u', $mask & 0xFFFFFFFF);
+			$net_long  = (int) sprintf('%u', $net_long & 0xFFFFFFFF);
+			$ip_masked = (int) sprintf('%u', $ip_long & 0xFFFFFFFF);
+			if (($ip_masked & $mask) === ($net_long & $mask)) {
+				return ['seeded'];
+			}
+		}
 		return [];
 	}
 }

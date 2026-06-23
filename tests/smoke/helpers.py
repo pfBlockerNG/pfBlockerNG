@@ -1045,7 +1045,12 @@ def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
         "  if (strpos($dsc, 'pfB') !== FALSE) { $out .= ' [' . $dsc . ']'; }\n"
         "}"
     )
-    return _php_read_scalar(vm, pre, "$out", timeout=timeout)
+    try:
+        return _php_read_scalar(vm, pre, "$out", timeout=timeout)
+    except Exception as exc:
+        # Best-effort: a probe failure must never replace the real assertion
+        # error with a RuntimeError raised from the failure-message path.
+        return f"fwobj_state_snapshot_error={exc!r}"
 
 
 def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:

@@ -199,7 +199,10 @@ def syslog_export_state_snapshot(vm: SmokeVM) -> str:
     of :data:`SYSLOG_LOG`, whether the filterlog daemon is running, and the
     current line count.  Never raises — best-effort (a missing file yields '').
     """
-    log_syslog = h.config_get(vm, CFG_GENERAL + "/log_syslog")
+    try:
+        log_syslog = h.config_get(vm, CFG_GENERAL + "/log_syslog")
+    except Exception:
+        log_syslog = "(error)"
     try:
         ls_result = vm.ssh("/bin/ls", "-l", SYSLOG_LOG, timeout=10.0)
         ls_out = ls_result.stdout.strip() if ls_result.returncode == 0 else "(absent)"
