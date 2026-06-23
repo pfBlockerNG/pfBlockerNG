@@ -1,4 +1,4 @@
-name: UI tests (live pfSense VM)
+name: UI tests fan-out (all CI legs, live pfSense VM)
 
 # Reusable, matrix-parametric Web-UI test harness (ADR-14). Boots the SAME
 # ADR-04 smoke pfSense CE VM under KVM, installs the branch-under-test .pkg, and
