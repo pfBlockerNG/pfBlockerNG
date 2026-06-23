@@ -1,39 +1,57 @@
 #!/bin/sh
-# boot_vm.sh — boot a hand-built pfSense CE qcow2 headless under QEMU/KVM
-# for the ADR-04 Phase-1 de-risking spike.
+# boot_vm.sh — boot a smoke-test qcow2 headless under QEMU/KVM.
+#
+# Two roles (ADR-04 two-VM topology):
+#
+#   --role pfsense  (default) — the pfSense appliance, 8 virtio-net NICs that
+#       MIRROR the source VM so pfSense does not re-detect hardware and drop to
+#       the interface-reassignment console prompt. Only the first three are
+#       assigned in the image:
+#         net0 WAN  — SLIRP user-net, 10.10.0.0/24, host alias 10.10.0.2 (the
+#                     guest reaches the runner-side mock feed / stub-DNS /
+#                     sinkhole servers here); DHCP; egress for `pkg add`.
+#         net1 MGMT — SLIRP user-net, 10.0.0.0/16; the host->guest forwards
+#                     (ssh, web) target the image's static management IP
+#                     10.0.0.20. This is the harness control path.
+#         net2 LAN  — a QEMU `socket` LISTENER (point-to-point L2 "crossover"
+#                     to the civm data NIC); pfSense LAN is 192.168.1.1/24.
+#         net3..7   — unassigned; present only so the 8-NIC image sees no
+#                     hardware change. Isolated (restrict=on), no host access.
+#
+#   --role client — the Debian client VM ("civm"), 2 virtio-net NICs:
+#         net0 MGMT — SLIRP user-net; host->guest ssh forward (the harness runs
+#                     `dig @192.168.1.1` here). DHCP; MAC is don't-care.
+#         net1 DATA — a QEMU `socket` CONNECTOR to the pfSense LAN listener; its
+#                     MAC is SMOKE_CLIENT_MAC_ADDRESS so pfSense's static DHCP
+#                     lease hands it 192.168.1.10.
 #
 # Usage:
-#   tests/smoke/boot_vm.sh <base-image.qcow2> [overlay.qcow2]
+#   tests/smoke/boot_vm.sh [--role pfsense|client] <base-image.qcow2> [overlay.qcow2]
 #
-# Boots the image headless with KVM acceleration and a QEMU user-net
-# (SLIRP) host-forward map so the runner can reach the guest:
-#   host 2222/tcp -> guest 22   (SSH)
-#   host 8080/tcp -> guest 80   (WebUI, HTTP)
-#   host 5353/tcp -> guest 53   (DNS, TCP)
-#   host 5353/udp -> guest 53   (DNS, UDP)
-# The guest reaches the runner at the SLIRP host alias 10.0.2.2.
+# Boots headless with KVM acceleration. The base qcow2 is NEVER mutated: an
+# ephemeral copy-on-write overlay is created over it and the guest writes only to
+# the overlay (removed on a clean exit; pass an explicit overlay path to keep it).
 #
-# Hardware MIRRORS the source Proxmox VM (qm showcmd 103 --pretty) so the
-# published qcow2 boots without pfSense re-detecting hardware and dropping
-# to the interface-reassignment console prompt:
-#   - single virtio-net-pci NIC, MAC pinned to BC:24:11:37:9C:AC
-#     (the CE source VM's MAC; a MAC is not sensitive). The MAC is per-image
-#     and defaults to the CE pin; override it with SMOKE_VM_MAC. A pfSense Plus
-#     image MUST set SMOKE_VM_MAC to its OWN source-VM MAC: the Plus license/NDI
-#     registration is keyed to it, so the CE pin would deregister/reassign it
-#     (see ADR-24 and scripts/README.md § "pfSense Plus images").
-#   - SMBIOS type-1 uuid pinned, per-image. The Plus Netgate Device ID (NDI) is
-#     derived from the source VM's MAC + this SMBIOS uuid, so the uuid is as
-#     license-keyed as the MAC. CE defaults to the public CE source-VM uuid;
-#     a Plus image MUST set SMOKE_VM_SMBIOS_UUID to its OWN source-VM uuid (held
-#     in a secret, NOT the public ci-metadata matrix — license/NDI-keyed).
-#   - VirtIO-SCSI disk (guest sees da0)
-#   - machine type pc (i440fx; Proxmox pc+pve0), -cpu host, 2 vCPU, 4 GB RAM
+# Identity (per-image; ADR-24). pfSense:
+#   - SMOKE_VM_MAC — the NIC MAC(s), NEWLINE-SEPARATED, one MAC per NIC in order
+#     (net0..net7); NIC i takes line i. Defaults to the CE source-VM's own 8 MACs
+#     (committed below — a MAC is not sensitive). A pfSense Plus image overrides
+#     it with its license/NDI-keyed source-VM MAC list (from a secret).
+#   - SMOKE_VM_SMBIOS_UUID — SMBIOS type-1 uuid (Plus: the source-VM uuid, held
+#     in a secret; CE: the public pin). The Plus Netgate Device ID derives from
+#     MAC + uuid, so a Plus image MUST set both.
+# civm: net MACs default to the civm source VM's own (committed below — net0
+#   management, net1 data). The data-NIC MAC (SMOKE_CLIENT_MAC_ADDRESS) keys
+#   pfSense's static-lease mapping, so it must match the pfSense image's lease.
+#   SMBIOS type-1 uuid also defaults to the civm source VM's (SMOKE_CLIENT_SMBIOS_UUID).
 #
-# The base image is NEVER mutated: an ephemeral copy-on-write overlay is
-# created over it and the guest writes only to the overlay. The overlay is
-# removed on a clean exit; pass an explicit overlay path to keep it for
-# post-mortem. The base qcow2 stays read-only.
+# Shared:
+#   - SMOKE_LAN_SOCKET_PORT — TCP port (on 127.0.0.1) for the pfSense<->civm LAN
+#     socket link. pfSense LISTENs, civm CONNECTs; both roles must use the same
+#     port. Default 12340 (a lone pfSense boot just has no LAN carrier).
+#   - SMOKE_SSH_HOSTPORT / SMOKE_WEB_HOSTPORT — pfSense host-forward ports
+#     (defaults 2222 / 8080). SMOKE_CLIENT_SSH_HOSTPORT — civm ssh host port
+#     (default 2223).
 #
 # POSIX sh; quoted expansions; absolute binary paths (pfSense convention).
 
@@ -43,21 +61,67 @@ QEMU=/usr/bin/qemu-system-x86_64
 QEMU_IMG=/usr/bin/qemu-img
 
 # Source-VM hardware profile (mirror — do not change without re-baking image).
-# MAC + SMBIOS uuid are per-image: CE pins by default, SMOKE_VM_MAC /
-# SMOKE_VM_SMBIOS_UUID override (Plus MUST set both — its NDI is derived from
-# MAC + uuid, so both are license-keyed and come from secrets, not the matrix).
-VM_MAC="${SMOKE_VM_MAC:-BC:24:11:37:9C:AC}"
+# DEFAULT_CE_MAC is the CE source VM's own 8 NIC MACs (net0..net7, in order),
+# committed as non-secret defaults so a CE boot mirrors the source hardware. A
+# Plus image overrides via SMOKE_VM_MAC (its NDI-keyed secret list); an empty or
+# unset SMOKE_VM_MAC falls back to these.
+DEFAULT_CE_MAC="$(printf '%s\n' \
+    BC:24:11:37:9C:AC \
+    BC:24:11:80:42:35 \
+    BC:24:11:D6:90:DD \
+    BC:24:11:FB:41:8A \
+    BC:24:11:2D:95:0A \
+    BC:24:11:36:D3:34 \
+    BC:24:11:02:0B:68 \
+    BC:24:11:46:D1:DE)"
+VM_MAC="${SMOKE_VM_MAC:-$DEFAULT_CE_MAC}"
 VM_SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-58fd7964-c40c-4f47-bf02-3fdad18f8b00}"
 VM_SMP="2,sockets=1,cores=2"
 VM_MEM="4096"
 
+# civm is a lightweight client — fewer resources than the appliance.
+CLIENT_SMP="1,sockets=1,cores=1"
+CLIENT_MEM="1024"
+# civm source-VM NIC MACs (committed non-secret defaults): net0 management, net1
+# data. The data MAC keys pfSense's static DHCP lease (-> 192.168.1.10), so it
+# must match the lease baked into the pfSense image. Override either via env.
+CLIENT_MGMT_MAC="${SMOKE_CLIENT_MGMT_MAC:-BC:24:11:29:A4:1B}"
+CLIENT_MAC="${SMOKE_CLIENT_MAC_ADDRESS:-02:49:E4:CE:92:72}"
+# civm SMBIOS type-1 uuid (committed non-secret default — the civm source VM's
+# own uuid; keeps machine-id / DHCP identity stable across overlay boots).
+CLIENT_SMBIOS_UUID="${SMOKE_CLIENT_SMBIOS_UUID:-7dc13783-e65c-4f62-8fd8-45eeae4c77b9}"
+
+# Host<->guest exposure (mirrors conftest's DEFAULT_*_PORT + the management IP).
+SSH_HOSTPORT="${SMOKE_SSH_HOSTPORT:-2222}"
+WEB_HOSTPORT="${SMOKE_WEB_HOSTPORT:-8080}"
+CLIENT_SSH_HOSTPORT="${SMOKE_CLIENT_SSH_HOSTPORT:-2223}"
+PFSENSE_MGMT_IP="10.0.0.20"   # static management IP baked into the pfSense image
+
+# pfSense<->civm LAN crossover socket (point-to-point; pfSense listens, civm connects).
+LAN_SOCKET_PORT="${SMOKE_LAN_SOCKET_PORT:-12340}"
+
+ROLE=pfsense
+
 usage() {
-    echo "Usage: $0 <base-image.qcow2> [overlay.qcow2]" >&2
+    echo "Usage: $0 [--role pfsense|client] <base-image.qcow2> [overlay.qcow2]" >&2
     exit 2
 }
 
-[ "$#" -ge 1 ] || usage
+# --- option parsing (optional --role, then positionals) --------------------- #
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --role) [ "$#" -ge 2 ] || usage; ROLE="$2"; shift 2 ;;
+        --)     shift; break ;;
+        -*)     echo "boot_vm: unknown option: $1" >&2; usage ;;
+        *)      break ;;
+    esac
+done
+case "$ROLE" in
+    pfsense|client) ;;
+    *) echo "boot_vm: --role must be 'pfsense' or 'client'" >&2; exit 2 ;;
+esac
 
+[ "$#" -ge 1 ] || usage
 BASE_IMG="$1"
 OVERLAY="${2:-}"
 
@@ -110,28 +174,81 @@ trap cleanup EXIT INT TERM
 # never written. (Equivalent to -snapshot, but explicit + inspectable.)
 "$QEMU_IMG" create -q -f qcow2 -b "$BASE_IMG" -F qcow2 "$OVERLAY" >/dev/null
 
-echo "boot_vm: booting $BASE_IMG via overlay $OVERLAY" >&2
-echo "boot_vm: hostfwd ssh=2222->22 web=8080->80 dns=5353->53(tcp+udp)" >&2
+echo "boot_vm: role=$ROLE booting $BASE_IMG via overlay $OVERLAY" >&2
 
-# KVM acceleration is required for a FreeBSD guest at usable speed. The
-# caller (workflow) asserts /dev/kvm before invoking this helper.
-#
-# Build the arg list incrementally so the control/diagnostic channel is
-# optional. If QMP_SOCK is set in the environment, expose a QMP control socket
-# there (used by screendump.py to capture the VGA framebuffer of a wedged,
-# headless boot) and keep the serial console on stdio for the run log. If it is
-# unset (local interactive use), mux the monitor + serial on stdio as before.
+# nth_mac N — echo the Nth line (0-based) of the newline-separated VM_MAC, or
+# nothing when that line is absent (CE: empty list -> QEMU default per NIC).
+nth_mac() {
+    printf '%s\n' "$VM_MAC" | sed -n "$(($1 + 1))p"
+}
+
+# Machine + disk args (identical for both roles, aside from CPU/RAM sizing).
+if [ "$ROLE" = client ]; then
+    SMP="$CLIENT_SMP"; MEM="$CLIENT_MEM"
+else
+    SMP="$VM_SMP"; MEM="$VM_MEM"
+fi
+
 set -- \
     -enable-kvm -machine pc -cpu host \
-    -smp "$VM_SMP" -m "$VM_MEM" \
-    -smbios "type=1,uuid=${VM_SMBIOS_UUID}" \
+    -smp "$SMP" -m "$MEM" \
     -device virtio-scsi-pci,id=virtioscsi0 \
     -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,cache=unsafe,discard=unmap,detect-zeroes=unmap" \
-    -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-    -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80,hostfwd=tcp::5353-:53,hostfwd=udp::5353-:53 \
-    -device "virtio-net-pci,mac=${VM_MAC},netdev=net0,id=nic0" \
-    -display none
+    -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1
 
+if [ "$ROLE" = pfsense ]; then
+    # SMBIOS identity (license/NDI-keyed for Plus; public pin for CE).
+    set -- "$@" -smbios "type=1,uuid=${VM_SMBIOS_UUID}"
+
+    echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGMT_IP}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGMT_IP}:80 (mgmt net1)" >&2
+    echo "boot_vm: pfsense LAN socket LISTEN 127.0.0.1:${LAN_SOCKET_PORT} (net2)" >&2
+
+    i=0
+    while [ "$i" -lt 8 ]; do
+        case "$i" in
+            # net0 WAN: a /24 (NOT a /16). It must NOT contain the DNSBL sinkhole
+            # VIP (10.10.10.1) or the auto-VIP (10.10.10.53) — pfBlockerNG refuses
+            # a VIP that overlaps an interface subnet and disables DNSBL wholesale.
+            # 10.10.0.0/24 keeps the host alias 10.10.0.2 while leaving 10.10.10.x free.
+            0) netdev="user,id=net0,net=10.10.0.0/24,host=10.10.0.2" ;;
+            1) netdev="user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGMT_IP}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGMT_IP}:80" ;;
+            2) netdev="socket,id=net2,listen=127.0.0.1:${LAN_SOCKET_PORT}" ;;
+            # net3..7: present so the 8-NIC image sees no hardware change, but
+            # isolated (restrict=on) with distinct dummy subnets — pfSense leaves
+            # them unassigned so they never get an IP.
+            *) netdev="user,id=net${i},net=10.${i}0.0.0/24,restrict=on" ;;
+        esac
+        mac="$(nth_mac "$i")"
+        if [ -n "$mac" ]; then
+            dev="virtio-net-pci,mac=${mac},netdev=net${i},id=nic${i}"
+        else
+            dev="virtio-net-pci,netdev=net${i},id=nic${i}"
+        fi
+        set -- "$@" -netdev "$netdev" -device "$dev"
+        i=$((i + 1))
+    done
+else
+    # civm: net0 management (ssh hostfwd, DHCP, don't-care MAC); net1 data
+    # (socket CONNECT to the pfSense LAN listener, MAC = static-lease key).
+    set -- "$@" -smbios "type=1,uuid=${CLIENT_SMBIOS_UUID}"
+    echo "boot_vm: client hostfwd ssh=${CLIENT_SSH_HOSTPORT}->:22 (mgmt net0)" >&2
+    echo "boot_vm: client DATA socket CONNECT 127.0.0.1:${LAN_SOCKET_PORT} mac=${CLIENT_MAC} (net1)" >&2
+    set -- "$@" \
+        -netdev "user,id=net0,hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22" \
+        -device "virtio-net-pci,mac=${CLIENT_MGMT_MAC},netdev=net0,id=nic0" \
+        -netdev "socket,id=net1,connect=127.0.0.1:${LAN_SOCKET_PORT}" \
+        -device "virtio-net-pci,mac=${CLIENT_MAC},netdev=net1,id=nic1"
+fi
+
+set -- "$@" -display none
+
+# KVM acceleration is required for a FreeBSD guest at usable speed. The caller
+# (workflow) asserts /dev/kvm before invoking this helper.
+#
+# If QMP_SOCK is set, expose a QMP control socket there (used by screendump.py to
+# capture the VGA framebuffer of a wedged, headless boot) and keep the serial
+# console on stdio for the run log. If unset (local interactive use), mux the
+# monitor + serial on stdio as before.
 if [ -n "${QMP_SOCK:-}" ]; then
     rm -f "$QMP_SOCK"
     set -- "$@" -qmp "unix:${QMP_SOCK},server,nowait" -serial stdio

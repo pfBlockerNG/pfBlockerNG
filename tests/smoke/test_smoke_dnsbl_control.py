@@ -37,13 +37,13 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM
+from .conftest import CLIENT_LAN_IP, SmokeVM
 
 pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def control_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, str]]:
+def control_vm(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[tuple[SmokeVM, str]]:
     """Deploy once with DNSBL + DNSBL Control on and a single feed-listed blocked domain.
 
     DNSBL Control is enabled (``pfb_control`` -> ini ``python_control`` on) so the reader
@@ -70,6 +70,7 @@ def control_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, str]]:
 
     # Guard the gate: the reader thread is enabled and the DNS-TXT path is inert by default.
     h.assert_control_ini(smoke_vm, control=True, legacy=False)
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
         yield smoke_vm, blocked
     finally:
@@ -81,7 +82,7 @@ def control_vm(smoke_vm: SmokeVM) -> Iterator[tuple[SmokeVM, str]]:
         h.collect_host_diagnostics(smoke_vm)
 
 
-def test_cli_disable_then_enable_drives_dnsbl(control_vm: tuple[SmokeVM, str]) -> None:
+def test_cli_disable_then_enable_drives_dnsbl(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
     """Scenario: the CLI disable/enable toggles DNSBL blocking at runtime.
 
     Background: DNSBL Control is on (reader thread running) and ``blocked`` is feed-listed.
@@ -96,7 +97,7 @@ def test_cli_disable_then_enable_drives_dnsbl(control_vm: tuple[SmokeVM, str]) -
     vm, blocked = control_vm
 
     # GIVEN: blocked first (the before-state, so the disable's effect is causal).
-    before = h.dns_probe(vm, blocked, "A")
+    before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block before disable, got {before}"
     applied0 = h.read_control_applied(vm)
 
@@ -104,14 +105,14 @@ def test_cli_disable_then_enable_drives_dnsbl(control_vm: tuple[SmokeVM, str]) -
     seq_disable = h.dnsbl_control_cli(vm, "disable")
     h.wait_control_applied(vm, seq_disable)
     h.flush_unbound_cache(vm)
-    disabled = h.dns_probe(vm, blocked, "A")
+    disabled = h.dns_probe_client(client_vm, blocked, "A")
     assert not h.is_vip(disabled), f"{blocked} should resolve clean after disable, still VIP-blocked: {disabled}"
 
     # WHEN: enable. THEN: VIP-blocked again.
     seq_enable = h.dnsbl_control_cli(vm, "enable")
     h.wait_control_applied(vm, seq_enable)
     h.flush_unbound_cache(vm)
-    reenabled = h.dns_probe(vm, blocked, "A")
+    reenabled = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(reenabled), f"{blocked} should be VIP-blocked again after enable, got {reenabled}"
 
     # AND: the applied marker advanced across both commands.
@@ -123,29 +124,29 @@ def test_cli_disable_then_enable_drives_dnsbl(control_vm: tuple[SmokeVM, str]) -
     )
 
 
-def test_cli_addbypass_then_removebypass_exempts_client(control_vm: tuple[SmokeVM, str]) -> None:
-    """Scenario: the CLI add/remove a per-client DNSBL bypass for the on-box client.
+def test_cli_addbypass_then_removebypass_exempts_client(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
+    """Scenario: the CLI add/remove a per-client DNSBL bypass for the civm client.
 
-    Background: DNSBL Control is on and ``blocked`` is feed-listed; an on-box drill
-    presents as client 127.0.0.1, and the bypass keys on the client IP.
+    Background: DNSBL Control is on and ``blocked`` is feed-listed; the civm queries
+    pfSense DNS from CLIENT_LAN_IP (192.168.1.10), and the bypass keys on the client IP.
     Given the domain is VIP-blocked for that client,
-    When ``dnsbl-control addbypass 127.0.0.1`` is applied,
+    When ``dnsbl-control addbypass <CLIENT_LAN_IP>`` is applied,
     Then the domain resolves clean for that client (the bypass stands);
-    When ``dnsbl-control removebypass 127.0.0.1`` is applied,
+    When ``dnsbl-control removebypass <CLIENT_LAN_IP>`` is applied,
     Then it is VIP-blocked again.
     """
     vm, blocked = control_vm
-    client = "127.0.0.1"
+    client = CLIENT_LAN_IP
 
-    # GIVEN: blocked first for the on-box client (the before-state).
-    before = h.dns_probe(vm, blocked, "A")
+    # GIVEN: blocked first for the civm client (the before-state).
+    before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block before addbypass, got {before}"
 
-    # WHEN: addbypass the on-box client. THEN: resolves clean for it.
+    # WHEN: addbypass the civm client. THEN: resolves clean for it.
     seq_add = h.dnsbl_control_cli(vm, "addbypass", client)
     h.wait_control_applied(vm, seq_add)
     h.flush_unbound_cache(vm)
-    bypassed = h.dns_probe(vm, blocked, "A")
+    bypassed = h.dns_probe_client(client_vm, blocked, "A")
     assert not h.is_vip(bypassed), (
         f"{blocked} should resolve clean for bypassed client {client}, still VIP-blocked: {bypassed}"
     )
@@ -154,12 +155,12 @@ def test_cli_addbypass_then_removebypass_exempts_client(control_vm: tuple[SmokeV
     seq_remove = h.dnsbl_control_cli(vm, "removebypass", client)
     h.wait_control_applied(vm, seq_remove)
     h.flush_unbound_cache(vm)
-    restored = h.dns_probe(vm, blocked, "A")
+    restored = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(restored), f"{blocked} should be VIP-blocked again after removebypass, got {restored}"
     assert seq_remove > seq_add, f"removebypass seq {seq_remove} did not advance past addbypass seq {seq_add}"
 
 
-def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str]) -> None:
+def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
     """Scenario: the deprecated DNS-TXT control path is inert by default.
 
     Background: DNSBL Control is on but the legacy DNS-TXT sub-toggle is OFF (its default),
@@ -173,19 +174,19 @@ def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str]
 
     # GIVEN: the gate is off and the domain is blocked.
     h.assert_control_ini(vm, control=True, legacy=False)
-    before = h.dns_probe(vm, blocked, "A")
+    before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block before the TXT query, got {before}"
 
     # WHEN: issue the in-band TXT control query. THEN: still VIP-blocked (path inert).
     h.drill_txt(vm, "python_control.disable")
     h.flush_unbound_cache(vm)
-    after = h.dns_probe(vm, blocked, "A")
+    after = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(after), (
         f"{blocked} should STAY VIP-blocked — the legacy DNS-TXT control path must be inert by default, got {after}"
     )
 
 
-def test_legacy_dns_txt_control_active_when_enabled(control_vm: tuple[SmokeVM, str]) -> None:
+def test_legacy_dns_txt_control_active_when_enabled(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
     """Scenario (branch coverage): turning the legacy sub-toggle on re-activates DNS-TXT control.
 
     Background: the same VM, but the legacy DNS-TXT sub-toggle is flipped ON (ini
@@ -208,13 +209,13 @@ def test_legacy_dns_txt_control_active_when_enabled(control_vm: tuple[SmokeVM, s
     h.assert_control_ini(vm, control=True, legacy=True)
 
     # GIVEN: blocked first (the reload re-enabled blocking).
-    before = h.dns_probe(vm, blocked, "A")
+    before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block after legacy-on reload, got {before}"
 
     # WHEN: the in-band TXT control query. THEN: blocking is disabled — resolves clean.
     h.drill_txt(vm, "python_control.disable")
     h.flush_unbound_cache(vm)
-    after = h.dns_probe(vm, blocked, "A")
+    after = h.dns_probe_client(client_vm, blocked, "A")
     assert not h.is_vip(after), (
         f"{blocked} should resolve clean — with the legacy sub-toggle ON the DNS-TXT control path "
         f"must disable DNSBL, still blocked: {after}"

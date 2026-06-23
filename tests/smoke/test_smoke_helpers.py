@@ -29,13 +29,14 @@ pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
+def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> SmokeVM:
     """Deploy the branch .pkg once for the helper self-tests; configure the System-DNS
-    upstream (``use_system_dns_upstream`` -> the mock via the 10.0.2.2 host alias)."""
+    upstream (``use_system_dns_upstream`` -> the mock via the 10.10.0.2 host alias)."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     return smoke_vm
 
 
@@ -71,14 +72,14 @@ def test_inject_value_roundtrips(deployed_vm: SmokeVM) -> None:
     assert back.strip() == "on", f"read-back mismatch: {back!r}"
 
 
-def test_inject_control_record_resolves(deployed_vm: SmokeVM) -> None:
+def test_inject_control_record_resolves(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """A control local-data injected in CONFIG resolves after a reload."""
     name = h.unique_domain("selftest-control")
     ip = "192.0.2.250"
     h.set_control_records(deployed_vm, {name: {"A": ip}}, {})
     # The reload regenerates unbound.conf; the config-baked record must survive.
     h.reload(deployed_vm, "update")
-    answer = h.dns_probe(deployed_vm, name, "A")
+    answer = h.dns_probe_client(client_vm, name, "A")
     assert h.resolves_to(answer, ip), f"{name} -> {answer.records}, expected {ip}"
 
 
@@ -87,14 +88,14 @@ def test_inject_control_record_resolves(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_reset_returns_to_baseline(deployed_vm: SmokeVM) -> None:
+def test_reset_returns_to_baseline(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """reset() runs clear* + a forced update and leaves Unbound ready."""
     h.reset(deployed_vm)
     # The baked control name still resolves (reset didn't break the resolver).
     name, expected_ip = expected_control_answer()
     if not name:
         pytest.skip("no baked control name (SMOKE_CONTROL_NAME unset)")
-    answer = h.dns_probe(deployed_vm, name, "A")
+    answer = h.dns_probe_client(client_vm, name, "A")
     assert answer.records, f"baked control {name!r} gone after reset"
     if expected_ip is not None:
         assert h.resolves_to(answer, expected_ip)
@@ -132,7 +133,7 @@ def test_false_green_guard() -> None:
     assert not h.is_nxdomain(real_pass)
 
 
-def test_dns_probe_absent_resolves_via_stub(deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+def test_dns_probe_absent_resolves_via_stub(deployed_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
     """An otherwise-unknown name resolves to the STUB SENTINEL and is recorded upstream.
 
     With the stub as Unbound's sole upstream, a name with no local-data / block is
@@ -142,7 +143,7 @@ def test_dns_probe_absent_resolves_via_stub(deployed_vm: SmokeVM, stub_dns: _Stu
     """
     name = h.unique_domain("definitely-absent")
     stub_dns.reset_queries()
-    answer = h.dns_probe(deployed_vm, name, "A")
+    answer = h.dns_probe_client(client_vm, name, "A")
     assert h.resolves_to(answer, STUB_DNS_A), f"absent name should resolve to the stub sentinel, got {answer}"
     assert stub_dns.received(name), f"{name} should have been forwarded to the stub upstream"
 

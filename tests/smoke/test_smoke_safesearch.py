@@ -16,7 +16,7 @@ Both resolver modes are covered (the fixture is parametrized):
 
 * **recursive** — Unbound recurses; a catch-all ``forward-zone`` in
   ``custom_options`` redirects all queries to the stub.
-* **forwarding** — Unbound forwards to ``10.0.2.2`` (SLIRP host alias → stub).
+* **forwarding** — Unbound forwards to ``10.10.0.2`` (SLIRP host alias → stub).
 
 All heavy setup (Unbound reconfigure + pfBlockerNG reloads) lives in the fixture
 so the 30 s per-test-body cap (``smoke.yml: timeout_func_only``) does not bite.
@@ -44,6 +44,7 @@ class _SSFixture(NamedTuple):
     """Everything the SafeSearch tests need, yielded by :func:`safesearch_vm`."""
 
     vm: SmokeVM
+    client_vm: SmokeVM
     forwarding_on: bool
     src_chase: str  # the CNAME-redirect source name for the #1 chase test
     target_chase: str  # the CNAME target name served with SS_TARGET_A/AAAA by the stub
@@ -52,25 +53,26 @@ class _SSFixture(NamedTuple):
 
 
 @pytest.fixture(scope="module")
-def _ss_deployed(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
+def _ss_deployed(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[tuple[SmokeVM, SmokeVM]]:
     """One-time deploy + DNSBL VIP (shared by both resolver-mode parametrizations)."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
-    yield smoke_vm
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
+    yield smoke_vm, client_vm
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["recursive", "forwarding"])
 def safesearch_vm(
-    _ss_deployed: SmokeVM,
+    _ss_deployed: tuple[SmokeVM, SmokeVM],
     stub_dns: _StubDnsServer,
     request: pytest.FixtureRequest,
 ) -> Iterator[_SSFixture]:
     """Wire Unbound to the stub, inject fabricated SafeSearch CNAME rows, yield fixture.
 
     Parametrized on ``forwarding_on``.  Egress is BLOCKED for the duration so the
-    test is hermetic; the stub is reachable via the SLIRP ``10.0.2.2`` loopback path
+    test is hermetic; the stub is reachable via the SLIRP ``10.10.0.2`` loopback path
     regardless.
 
     Sequence:
@@ -92,7 +94,7 @@ def safesearch_vm(
     9. Yield the :class:`_SSFixture`.
     10. Teardown: drop stub records, restore egress, collect diagnostics.
     """
-    vm: SmokeVM = _ss_deployed
+    vm, cvm = _ss_deployed
     forwarding_on: bool = request.param
 
     # Step 1: block egress — all DNS must route through the stub.
@@ -128,7 +130,7 @@ def safesearch_vm(
         # Step 6: capture the BEFORE answer (redirect not active yet).
         # src_chase is an unregistered name -> stub sentinel STUB_DNS_A.
         # This is DISTINCT from SS_TARGET_A so the before≠after transition is provable.
-        before = h.dns_probe(vm, src_chase, "A")
+        before = h.dns_probe_client(cvm, src_chase, "A")
 
         # Step 7: inject the fabricated SafeSearch CNAME rows and bounce Unbound.
         h.inject_safesearch_cname_entries(
@@ -145,6 +147,7 @@ def safesearch_vm(
 
         yield _SSFixture(
             vm=vm,
+            client_vm=cvm,
             forwarding_on=forwarding_on,
             src_chase=src_chase,
             target_chase=target_chase,
@@ -174,7 +177,7 @@ def test_safesearch_cname_redirect_takes_effect(safesearch_vm: _SSFixture) -> No
         would mean the synthesized CNAME hop went DNSSEC-bogus), and DIFFERS from the
         BEFORE sentinel — proving the redirect CAUSED the change.
     """
-    vm, forwarding_on, src_chase, _target_chase, _src_fallback, before = safesearch_vm
+    vm, cvm, forwarding_on, src_chase, _target_chase, _src_fallback, before = safesearch_vm
 
     # Given: assert the before-state (sentinel) so green proves the redirect CAUSED the change.
     assert h.resolves_to(before, STUB_DNS_A), (
@@ -183,7 +186,7 @@ def test_safesearch_cname_redirect_takes_effect(safesearch_vm: _SSFixture) -> No
     )
 
     # When: redirect is active (injected in the fixture).
-    after = h.dns_probe(vm, src_chase, "A")
+    after = h.dns_probe_client(cvm, src_chase, "A")
 
     # Then: NOERROR with records, not SERVFAIL, and different from the sentinel before-state.
     assert after.rcode != "SERVFAIL", (
@@ -215,10 +218,10 @@ def test_safesearch_cname_chase_reaches_target(safesearch_vm: _SSFixture) -> Non
     And a direct lookup of target_chase returns the same fixture address (cache-population
         / chase-consistency check: the iterator populated target_chase's cache entry).
     """
-    vm, forwarding_on, src_chase, target_chase, _src_fallback, _before = safesearch_vm
+    vm, cvm, forwarding_on, src_chase, target_chase, _src_fallback, _before = safesearch_vm
 
     for rtype, expected in (("A", h.SS_TARGET_A), ("AAAA", h.SS_TARGET_AAAA)):
-        redirected = h.dns_probe(vm, src_chase, rtype)
+        redirected = h.dns_probe_client(cvm, src_chase, rtype)
         assert redirected.rcode == "NOERROR" and redirected.records, (
             f"[forwarding={forwarding_on}] {src_chase} {rtype} did not resolve after redirect: {redirected}"
         )
@@ -230,7 +233,7 @@ def test_safesearch_cname_chase_reaches_target(safesearch_vm: _SSFixture) -> Non
         )
 
         # Cache-population check: target_chase itself resolves to the same fixture address.
-        target_ans = h.dns_probe(vm, target_chase, rtype)
+        target_ans = h.dns_probe_client(cvm, target_chase, rtype)
         assert target_ans.rcode == "NOERROR" and target_ans.records, (
             f"[forwarding={forwarding_on}] {target_chase} {rtype} did not resolve "
             f"(expected cache hit from the chase): {target_ans}"
@@ -261,13 +264,13 @@ def test_safesearch_cname_fallback_to_baked_ip(safesearch_vm: _SSFixture) -> Non
     This test pairs with test_safesearch_cname_chase_reaches_target to prove #1 (chase)
     and #2 (baked fallback) are DISTINCT real branches — not the same code path.
     """
-    vm, forwarding_on, _src_chase, _target_chase, src_fallback, _before = safesearch_vm
+    vm, cvm, forwarding_on, _src_chase, _target_chase, src_fallback, _before = safesearch_vm
 
     for rtype, expected, not_expected_label, not_expected in (
         ("A", h.SS_BAKED_A, "chase/sentinel", {h.SS_TARGET_A, STUB_DNS_A}),
         ("AAAA", h.SS_BAKED_AAAA, "chase/sentinel", {h.SS_TARGET_AAAA}),
     ):
-        ans = h.dns_probe(vm, src_fallback, rtype)
+        ans = h.dns_probe_client(cvm, src_fallback, rtype)
         assert ans.rcode == "NOERROR" and ans.records, (
             f"[forwarding={forwarding_on}] {src_fallback} {rtype} should resolve via baked "
             f"fallback (NODATA target); got {ans}"

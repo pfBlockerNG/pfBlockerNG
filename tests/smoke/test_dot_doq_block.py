@@ -94,6 +94,22 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         h.collect_host_diagnostics(smoke_vm)
 
 
+@pytest.fixture(autouse=True)
+def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
+    """Redeploy the package if a prior test in this module uninstalled it.
+
+    The uninstall cases ``pkg delete`` the package mid-module; without this,
+    every subsequent test under the module-scoped ``deployed_vm`` would fail to
+    reload ('Could not open input file ... pfblockerng.php'). Cheap install-state
+    probe; redeploy + re-seed only when the package is actually missing.
+    """
+    if not h.pkg_installed(deployed_vm):
+        h.deploy(deployed_vm)
+        h.snapshot_unbound_conf(deployed_vm)
+        h.ensure_dnsbl_vip(deployed_vm)
+        h.use_system_dns_upstream(deployed_vm)
+
+
 @pytest.fixture(scope="module")
 def primary_iface(deployed_vm: SmokeVM) -> str:
     """Return the first discovered non-WAN interface short name.
@@ -373,7 +389,9 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
         )
 
         # THEN — pfctl -sr confirms the block rule is active.
-        assert _pfctl_sr_has_block_853(vm), "pfctl -sr shows no block rule for port 853 after enable"
+        assert _pfctl_sr_has_block_853(vm), (
+            "pfctl -sr shows no block rule for port 853 after enable\n" + h.pf_state_dump(vm)
+        )
 
     finally:
         _cleanup_dot_block(vm)
@@ -502,7 +520,8 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
 
         # THEN — pfB rules gone; user rule survives; pfblockerng sections gone.
         assert not _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
-            f"pfB_DoT_Block_{iface} still present after uninstall — ADR-35/37 sweep did not run"
+            f"pfB_DoT_Block_{iface} still present after uninstall — ADR-35/37 sweep did not run\n"
+            + h.deinstall_debug(vm)
         )
         assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
             "user filter rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
@@ -689,7 +708,8 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
 
     # THEN — all pfB_DoT_Block_* entries are gone.
     assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
-        "pfB_DoT_Block_* filter/rule entries still present after uninstall — ADR-35/37 sweep did not run"
+        "pfB_DoT_Block_* filter/rule entries still present after uninstall — ADR-35/37 sweep did not run\n"
+        + h.deinstall_debug(vm)
     )
 
     # THEN — user filter rule survives.
@@ -748,7 +768,9 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
         h.reload(vm, "update")
 
         # THEN — pfctl -sr contains the block rule for port 853.
-        assert _pfctl_sr_has_block_853(vm), "pfctl -sr shows no block rule for port 853 after enable"
+        assert _pfctl_sr_has_block_853(vm), (
+            "pfctl -sr shows no block rule for port 853 after enable\n" + h.pf_state_dump(vm)
+        )
 
         # THEN — the rule carries the self-exempt guard ('!' + 'self' on the block line).
         assert _pfctl_sr_block_853_has_self_exempt(vm), (

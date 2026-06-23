@@ -5,7 +5,7 @@
 # uuid-style '.com' names ONLY (smoke-domain rule: never RFC-6761 .test/.example/
 # .invalid -> Unbound built-in local-zones shadow them; never HSTS-preload names).
 #
-# Served by mock_feeds at http://10.0.2.2:<port>/dnsbl_plain.txt
+# Served by mock_feeds at http://10.10.0.2:<port>/dnsbl_plain.txt
 #
 # Phase 5 asserts (dns_probe block-shape on the box):
 #   MEMBER (must BLOCK - VIP/NULL per list logging):  uuid-a344db4286a4.com

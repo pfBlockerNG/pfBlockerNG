@@ -2,7 +2,7 @@
 
 Inert sample feed bodies served to the live pfSense smoke VM by `_MockFeedServer`
 (`tests/smoke/conftest.py`, the `mock_feeds` fixture). Each file is the raw body
-`curl` fetches; the guest reaches it at `http://10.0.2.2:<port>/<filename>` over
+`curl` fetches; the guest reaches it at `http://10.10.0.2:<port>/<filename>` over
 SLIRP. **Phase 4 authors these fixtures only** — Phase 5 registers them on an
 `IpCase`/`DnsblCase`, runs Force Update, and asserts the load on the box.
 

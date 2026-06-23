@@ -5,7 +5,7 @@
 # A full-line '#' comment and blank lines are dropped.
 # uuid-style '.com' names ONLY (smoke-domain rule, see dnsbl_plain.txt).
 #
-# Served by mock_feeds at http://10.0.2.2:<port>/dnsbl_hosts.txt
+# Served by mock_feeds at http://10.10.0.2:<port>/dnsbl_hosts.txt
 #
 # Phase 5 asserts (dns_probe block-shape on the box):
 #   MEMBER (must BLOCK - VIP/NULL per list logging):  uuid-947e69114606.com

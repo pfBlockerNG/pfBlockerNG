@@ -72,7 +72,7 @@ pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
+def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the matrix; the per-case egress block is
     managed by ``CaseContext``, NOT here.
 
@@ -83,7 +83,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     the forwarder, and a control/whitelist name answers from its injected host
     override — so the probe never needs the real internet. A not-blocked,
     no-control name resolves via the runner-side mock (``use_system_dns_upstream``:
-    pfSense forwards to the SLIRP host alias 10.0.2.2, which libslirp NATs to the mock) — a known
+    pfSense forwards to the SLIRP host alias 10.10.0.2, which libslirp NATs to the mock) — a known
     answer, AND recorded, so "was it blocked?" is read off the upstream, not inferred
     from a SERVFAIL. deploy() needs no egress for dependencies either — the pre-baked
     image ships pfBlockerNG's RUN_DEPENDS, so ``pkg add`` resolves them from the local
@@ -107,6 +107,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     # config is part of the baseline and the DNSBL reload still adds only python.
     h.use_system_dns_upstream(smoke_vm)
     h.snap_state(smoke_vm, "vip")
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
         yield smoke_vm
     finally:
@@ -178,7 +179,7 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
         )
 
 
-def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Python-mode exact block: NOERROR + VIP for the listed domain; subdomain passes.
 
     Verified on the live box: python mode writes the feed to ``pfb_py_data.txt``
@@ -201,15 +202,15 @@ def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServe
         control_local_data={sub: {"A": sub_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
         # EXACT match: subdomain NOT in dataDB, resolves to its control answer.
-        passed = h.dns_probe(deployed_vm, sub, "A")
+        passed = h.dns_probe_client(client_vm, sub, "A")
         assert h.resolves_to(passed, sub_ip), f"{sub} should resolve to {sub_ip} (exact != wildcard), got {passed}"
         assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
 
 
-def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Python-mode null sinkhole: NOERROR + 0.0.0.0/::0 for a logging='disabled' feed.
 
     ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True`` →
@@ -226,15 +227,15 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
         mode=h.DnsblMode.NULL,
     )
     with h.CaseContext(deployed_vm, spec):
-        a = h.dns_probe(deployed_vm, domain, "A")
+        a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(a), f"{domain} A expected {h.NULL_IP4}, got {a}"
-        aaaa = h.dns_probe(deployed_vm, domain, "AAAA")
+        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
         assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
             f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
         )
 
 
-def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Python-mode NXDOMAIN block (issue #31): a bare NXDOMAIN, no records.
 
     ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns
@@ -255,14 +256,14 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         mode=h.DnsblMode.NXDOMAIN,
     )
     with h.CaseContext(deployed_vm, spec):
-        a = h.dns_probe(deployed_vm, domain, "A")
+        a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_nxdomain(a), f"{domain} A expected NXDOMAIN (no records), got {a}"
         assert not h.is_vip(a) and not h.is_null_ip(a), f"{domain} must be a bare NXDOMAIN, not a VIP/null record: {a}"
-        aaaa = h.dns_probe(deployed_vm, domain, "AAAA")
+        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
         assert h.is_nxdomain(aaaa), f"{domain} AAAA expected NXDOMAIN (no records), got {aaaa}"
 
 
-def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """HSTS override: a VIP-mode block on an HSTS-preload name is forced to NULL.
 
     The load-bearing branch the rest of the matrix deliberately avoids. For a
@@ -296,16 +297,16 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, mock_feeds: _Mock
         h.add_hsts_name(deployed_vm, domain)
         h.reload(deployed_vm, "updatednsbl")
         h.assert_hsts_loaded(deployed_vm, domain)
-        a = h.dns_probe(deployed_vm, domain, "A")
+        a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(a), f"HSTS override should force A=0.0.0.0, got {a} (VIP leak?)"
         assert not h.is_vip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.DEFAULT_DNSBL_VIP4}: {a}"
-        aaaa = h.dns_probe(deployed_vm, domain, "AAAA")
+        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
         assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
             f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
         )
 
 
-def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Non-tautology guard: the SAME VIP-list HSTS-listed name, HSTS OFF → VIP.
 
     With ``pfb_hsts`` off → ini ``python_hsts=off``, pfb_unbound.py never loads
@@ -329,7 +330,7 @@ def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, mock_feeds: _MockFe
         # only delta vs the positive case is pfb_hsts.
         h.add_hsts_name(deployed_vm, domain)
         h.reload(deployed_vm, "updatednsbl")
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"HSTS off: VIP-list block should be the VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
         assert not h.is_null_ip(blocked), f"HSTS off must NOT force NULL: {blocked}"
 
@@ -341,7 +342,7 @@ def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, mock_feeds: _MockFe
 
 
 def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
-    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
     """Confusable mode blocks a cross-script homoglyph (VIP) but resolves a legit IDN.
 
@@ -371,18 +372,18 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
     )
     with h.CaseContext(deployed_vm, spec):
         # Before-state: the legit single-script IDN is NOT blocked — it resolves.
-        legit_ans = h.dns_probe(deployed_vm, legit, "A")
+        legit_ans = h.dns_probe_client(client_vm, legit, "A")
         assert h.resolves_to(legit_ans, legit_ip), f"legit IDN {legit} should resolve to {legit_ip}, got {legit_ans}"
         assert not h.is_vip(legit_ans), f"legit IDN {legit} must NOT be homoglyph-blocked (FALSE POSITIVE): {legit_ans}"
         # The confusable homograph blocks with the DNSBL VIP.
-        blocked = h.dns_probe(deployed_vm, homoglyph, "A")
+        blocked = h.dns_probe_client(client_vm, homoglyph, "A")
         assert h.is_vip(blocked), (
             f"homoglyph {homoglyph} (Latin+Cyrillic) expected VIP {h.DEFAULT_DNSBL_VIP4}, got {blocked}"
         )
 
 
 def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
-    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
     """The ``block_malicious`` sub-toggle is a real branch: OFF → the SAME homograph
     only alerts (resolves), not blocks.
@@ -406,14 +407,14 @@ def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
         control_local_data={homoglyph: {"A": homoglyph_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
-        ans = h.dns_probe(deployed_vm, homoglyph, "A")
+        ans = h.dns_probe_client(client_vm, homoglyph, "A")
         assert h.resolves_to(ans, homoglyph_ip), (
             f"block_malicious OFF: {homoglyph} should resolve to {homoglyph_ip}, got {ans}"
         )
         assert not h.is_vip(ans), f"block_malicious OFF must NOT block the homograph (alert only): {ans}"
 
 
-def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """WHITELIST: a domain on the whitelist AND in the block feed RESOLVES.
 
     ``suppression`` short-circuits before any block shape, so the name resolves
@@ -431,7 +432,7 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeed
         control_local_data={domain: {"A": pass_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
-        answer = h.dns_probe(deployed_vm, domain, "A")
+        answer = h.dns_probe_client(client_vm, domain, "A")
         assert h.resolves_to(answer, pass_ip), f"whitelisted {domain} should resolve to {pass_ip}, got {answer}"
         assert not h.is_vip(answer), f"whitelisted {domain} wrongly VIP-blocked: {answer}"
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
@@ -441,7 +442,9 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, mock_feeds: _MockFeed
 # until the watcher confirms the applied generation -- seconds, not the old async poll)
 # plus per-case setup exceed the smoke harness's 30s per-test cap; override it.
 @pytest.mark.timeout(120)
-def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_resolve_block_unlock_relock_lifecycle(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """#51 FULL lifecycle, asserting the ACTUAL resolution at every transition:
 
       (a) BEFORE any list  -> the domain RESOLVES (forwarded to the stub sentinel);
@@ -478,7 +481,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
 
     # (a) BEFORE any blocklist: forwarded to the controlled stub -> resolves to the
     #     sentinel (a real, observable baseline — not yet on any feed, not blocked).
-    before = h.dns_probe(deployed_vm, domain, "A")
+    before = h.dns_probe_client(client_vm, domain, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before) and not h.is_null_ip(before), f"{domain} unexpectedly blocked before any feed: {before}"
 
@@ -494,7 +497,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
         # cached real answer would serve past the swap; clear that one name (mirroring a
         # #51 Lock's targeted delta-flush) then poll until the swapped VIP block lands.
         h.flush_unbound_name(deployed_vm, domain)
-        blocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
 
         # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
@@ -506,14 +509,14 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
         #     The swap is async, so poll until the decision flips (bounded; raises on
         #     timeout) — the block->allow direction is immediate (blocks not cached, #43).
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe_until(deployed_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        unlocked = h.dns_probe_client_until(client_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
 
         # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
         #     here clears the prior resolved answer via the production targeted C-cache
         #     delta-flush inside pfb_reload_unbound, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
-        relocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
+        relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
         # The whole Unlock/Lock sequence applied with NO restart: pid unchanged.
@@ -525,7 +528,9 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(deployed_vm: SmokeVM, mock_
 
 
 @pytest.mark.timeout(120)  # ADR-10: multiple wait-for-apply round-trips > the 30s smoke cap.
-def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_temp_unlock_cleared_by_force_update(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """#51: a temporary Unlock is re-locked by a Cron/Force update — even with NO feed
     change (parity with main).
 
@@ -558,7 +563,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         # locally, so there is no false-green from leaving egress open.
         h.unblock_egress()
         # Blocked by the feed -> VIP (the "before" of the Unlock operation).
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
 
         # NO-RESTART invariant: capture pid before the Unlock + Force-update re-lock.
@@ -567,7 +572,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         # Unlock -> resolves again (forwarded to the stub sentinel). Async swap: poll until
         # the block->allow flip lands (immediate direction since blocks aren't C-cached, #43).
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe_until(deployed_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        unlocked = h.dns_probe_client_until(client_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
 
         # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock store
@@ -579,7 +584,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
         # prior resolved answer (cached by the unlock probe above) would serve until TTL.
         # Clear it, then observe the swapped re-block (mirrors test_dnsbl_feed_update).
         h.flush_unbound_name(deployed_vm, domain)
-        relocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
+        relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
         # Both the Unlock and the Force-update re-lock applied with NO restart: pid unchanged.
@@ -600,7 +605,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(deployed_vm: SmokeVM, mock_fe
 
 
 @pytest.mark.timeout(120)  # ADR-10: setup restart + a wait-for-apply swap > the 30s smoke cap.
-def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A feed-content DNSBL update applies WITHOUT restarting Unbound (ADR-10 zero-downtime).
 
     Branch-coverage partner of ``test_dnsbl_config_change_restarts`` (data fork vs config
@@ -637,7 +642,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFee
         h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
 
         # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.
-        before = h.dns_probe(deployed_vm, domain, "A")
+        before = h.dns_probe_client(client_vm, domain, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE the feed edit, got {before}"
         assert not h.is_vip(before), f"{domain} unexpectedly VIP-blocked before being listed: {before}"
 
@@ -658,7 +663,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFee
         # Clear the target's TTL-bounded prior resolved answer (feed/cron allow->block is
         # not targeted-flushed by PHP — RESULTS/05 SS3), then observe the swapped block.
         h.flush_unbound_name(deployed_vm, domain)
-        blocked = h.dns_probe_until(deployed_vm, domain, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
 
         # AFTER: pid unchanged (no restart) AND a fresh fast-path swap line was logged.
@@ -675,7 +680,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, mock_feeds: _MockFee
 
 
 @pytest.mark.timeout(120)  # ADR-10: two full Unbound restarts (disable + enable) > the 30s cap.
-def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A CONFIG change DOES restart Unbound — the other fork of the data/config split.
 
     Branch-coverage partner of ``test_dnsbl_feed_update_no_restart``: ADR-10 keeps the
@@ -703,7 +708,7 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFee
     spec = h.DnsblCase(aliasname="smokecfgrestart", feed_url=feed_url, header="smokecfgrestart", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
         # BEFORE: the name is blocked (VIP) and DNSBL is live. Capture the running pid.
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block before the config change, got {blocked}"
         pid_before = h.unbound_pid(deployed_vm)
 
@@ -726,12 +731,14 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, mock_feeds: _MockFee
             f"re-enabling DNSBL is a config change and MUST restart Unbound, but pid was unchanged ({pid_mid})"
         )
         # The list is restored: the name blocks again after the config round-trip.
-        reblocked = h.dns_probe(deployed_vm, domain, "A")
+        reblocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(reblocked), f"{domain} expected VIP block after re-enabling DNSBL, got {reblocked}"
 
 
 @pytest.mark.timeout(120)  # ADR-10: setup + a watcher build-fail observation window > the 30s cap.
-def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_fail_closed_broken_manifest(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """A broken manifest does NOT swap — the last-good lists keep serving (ADR-10 fail-closed).
 
     The ADR-10 safety contract: if a rebuild fails (bad/partial manifest), the watcher keeps
@@ -758,7 +765,7 @@ def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _Mo
     spec = h.DnsblCase(aliasname="smokefailclosed", feed_url=feed_url, header="smokefailclosed", mode=h.DnsblMode.VIP)
     with h.CaseContext(deployed_vm, spec):
         # BEFORE: the name is blocked (VIP) by the last-good snapshot.
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block before corrupting the manifest, got {blocked}"
         pid_before = h.unbound_pid(deployed_vm)
         pyerr_before = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
@@ -790,10 +797,10 @@ def test_dnsbl_fail_closed_broken_manifest(deployed_vm: SmokeVM, mock_feeds: _Mo
             now = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
             return now > pyerr_before
 
-        # dns_probe_until polls the (still-blocked) name; the predicate also confirms the
-        # py_error line appeared — both must hold within the window (raises otherwise).
-        still = h.dns_probe_until(
-            deployed_vm,
+        # dns_probe_client_until polls the (still-blocked) name; the predicate also confirms
+        # the py_error line appeared — both must hold within the window (raises otherwise).
+        still = h.dns_probe_client_until(
+            client_vm,
             domain,
             lambda a: h.is_vip(a) and _pyerr_logged(a),
             timeout=45.0,
@@ -889,7 +896,7 @@ def _is_v4_literal(member: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-13 'Create VIPs automatically': provision a marked sinkhole VIP on
     enable, sink a block to it, remove ONLY it on disable.
 
@@ -923,7 +930,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
         assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
             "pfB_AUTO_VIP_v4 present before auto-create was ever enabled"
         )
-        pre = h.dns_probe(vm, domain, "A")
+        pre = h.dns_probe_client(client_vm, domain, "A")
         assert pre.records, f"{domain} did not resolve before listing: {pre}"
         assert not h.is_vip(pre, vip=h.AUTO_VIP_IP4), f"{domain} already sinks to the auto VIP before enable: {pre}"
 
@@ -938,7 +945,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
             assert h.dnsvip4_address(vm) == h.AUTO_VIP_IP4, (
                 f"pfb_dnsvip4 does not point at the auto VIP: {h.dnsvip4_address(vm)!r}"
             )
-            blocked = h.dns_probe(vm, domain, "A")
+            blocked = h.dns_probe_client(client_vm, domain, "A")
             assert h.is_vip(blocked, vip=h.AUTO_VIP_IP4), f"{domain} expected auto VIP {h.AUTO_VIP_IP4}, got {blocked}"
             assert not h.is_vip(blocked, vip=h.DEFAULT_DNSBL_VIP4), (
                 f"block leaked to the manual VIP {h.DEFAULT_DNSBL_VIP4} instead of the auto VIP: {blocked}"
@@ -963,7 +970,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 
 
 @pytest.mark.xfail(strict=True, reason="deliberately-wrong expectation: a real VIP block is NOT a pass")
-def test_false_green_guard_vm(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_false_green_guard_vm(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """STRICT-xfail guard: assert a real block RESOLVES — it must NOT.
 
     Blocks a unique domain (VIP) then asserts it resolves to a pass IP.
@@ -983,7 +990,7 @@ def test_false_green_guard_vm(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         mode=h.DnsblMode.VIP,
     )
     with h.CaseContext(deployed_vm, spec):
-        answer = h.dns_probe(deployed_vm, domain, "A")
+        answer = h.dns_probe_client(client_vm, domain, "A")
         # WRONG on purpose: a VIP block does not resolve to a pass IP.
         assert h.resolves_to(answer, "198.51.100.250"), "expected (wrongly) to resolve — must fail"
 
@@ -1017,7 +1024,9 @@ def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
     return sum(int(tok) for tok in res.stdout.split() if tok.isdigit())
 
 
-def test_dnsbl_block_writes_persistent_log_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_block_writes_persistent_log_line(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """ADR-03: a VIP (``log_type='1'``) block is written to ``dnsbl.log`` via the persistent handle.
 
     Scenario: ADR-03 replaced per-call open/close with a persistent ``WatchedFileHandler``
@@ -1039,7 +1048,7 @@ def test_dnsbl_block_writes_persistent_log_line(deployed_vm: SmokeVM, mock_feeds
     assert _dnsbl_log_hits(deployed_vm, domain) == 0, f"{domain} already in dnsbl.log before listing"
 
     with h.CaseContext(deployed_vm, spec):
-        blocked = h.dns_probe(deployed_vm, domain, "A")
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
         # The log write rides the async QueueListener -> poll briefly for the line.
         deadline = time.monotonic() + 20.0

@@ -5,7 +5,7 @@ LOCAL file (``write_local_feed``) — chosen partly for HTTP-fetch reliability (
 Context 5). This module is the one place the suite drives the REAL HTTP feed-fetch
 path: each case points a ``IpCase``/``DnsblCase`` at a ``mock_feeds.feed_url(<name>)``
 URL (the stdlib ``_MockFeedServer`` serving ``tests/smoke/fixtures/``, reachable by
-the guest at ``http://10.0.2.2:<port>/<name>`` over SLIRP — survives the egress
+the guest at ``http://10.10.0.2:<port>/<name>`` over SLIRP — survives the egress
 block), runs a real Force Update, and asserts the feed loaded on the box. This
 exercises pfBlockerNG's ``curl`` contract (gzip / redirects / no-304) end-to-end —
 the gap Part C closes.
@@ -60,7 +60,7 @@ pytestmark = pytest.mark.smoke
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
+def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the HTTP-feed-load matrix (mirrors the ADR-04
     matrix / ABP modules).
 
@@ -73,14 +73,15 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    # The mock feed server is the SLIRP host alias 10.0.2.2 (RFC1918) — the default-ON
+    # The mock feed server is the SLIRP host alias 10.10.0.2 (RFC1918) — the default-ON
     # feed-host internal-address filter (SSRF guard, pfb_feed_internal_filter) would reject
     # every HTTP mock fetch as an internal-resolving host. Allowlist the SLIRP test network
     # so the filter stays ON yet the mock is reachable (the fix for the regression these
     # HTTP-feed tests hit after the filter landed default-on).
-    h.set_feed_internal_allowlist(smoke_vm, "10.0.2.0/24")
+    h.set_feed_internal_allowlist(smoke_vm, "10.10.0.0/24")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
         yield smoke_vm
     finally:
@@ -145,7 +146,7 @@ def test_ip_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
         assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
-def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """KILL-GATE (DNSBL): a plain-domain feed served over HTTP loads into the matcher.
 
     Scenario: the Phase-4 ``dnsbl_plain.txt`` fixture is fetched by a real Force
@@ -165,7 +166,7 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
     spec = h.DnsblCase(aliasname="smokefeeddnsbl", feed_url=feed_url, header="smokefeeddnsbl", mode=h.DnsblMode.VIP)
 
     # BEFORE: the member is not on any feed yet -> it resolves via the stub sentinel.
-    before = h.dns_probe(deployed_vm, member, "A")
+    before = h.dns_probe_client(client_vm, member, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{member} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before), f"{member} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -179,9 +180,9 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
         # name (as test_smoke_matrix.py's unlock lifecycle does), then poll until the
         # async swap's VIP block lands.
         h.flush_unbound_name(deployed_vm, member)
-        blocked = h.dns_probe_until(deployed_vm, member, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, member, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
-        passed = h.dns_probe(deployed_vm, non_member, "A")
+        passed = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
         assert not h.is_vip(passed), f"non-member {non_member} wrongly VIP-blocked: {passed}"
 
@@ -194,16 +195,16 @@ def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
 def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """The default-ON feed-host filter BLOCKS an internal-resolving feed; the allowlist EXEMPTS it.
 
-    The mock feed server is the SLIRP host alias 10.0.2.2 (RFC1918) — exactly the
+    The mock feed server is the SLIRP host alias 10.10.0.2 (RFC1918) — exactly the
     internal-pivot the filter (``pfb_feed_internal_filter``, default ON) guards against.
     This pins BOTH branches end to end over the live box (the module fixture allowlists
-    10.0.2.0/24 so the other HTTP-feed cases load at all; this test brackets it).
+    10.10.0.0/24 so the other HTTP-feed cases load at all; this test brackets it).
 
     Scenario:
-      Given the filter ON and the allowlist EMPTY (so 10.0.2.2 is not exempt),
+      Given the filter ON and the allowlist EMPTY (so 10.10.0.2 is not exempt),
       When  the mock IP feed is Force-Updated,
       Then  the download is REFUSED and the pf table is never built (the block branch).
-      When  the SLIRP net 10.0.2.0/24 is then allowlisted and re-updated,
+      When  the SLIRP net 10.10.0.0/24 is then allowlisted and re-updated,
       Then  the SAME feed downloads and its pf table IS built (the exempt branch).
     """
     feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
@@ -226,7 +227,7 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         )
 
         # EXEMPT branch: allowlist the SLIRP net => the SAME feed now downloads + loads.
-        h.set_feed_internal_allowlist(deployed_vm, "10.0.2.0/24")
+        h.set_feed_internal_allowlist(deployed_vm, "10.10.0.0/24")
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
         members = h.pfctl_table_members(deployed_vm, spec.alias)
@@ -234,7 +235,7 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         assert h.member_present(members, "203.0.113.5"), f"listed host missing after exemption: {members}"
     finally:
         # Restore the module-default allowlist (siblings rely on it) and baseline the box.
-        h.set_feed_internal_allowlist(deployed_vm, "10.0.2.0/24")
+        h.set_feed_internal_allowlist(deployed_vm, "10.10.0.0/24")
         h.reset(deployed_vm)
 
 
@@ -298,7 +299,7 @@ def test_ipv6_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
-def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """DNSBL hosts format over HTTP: ``dnsbl_hosts.txt`` (``0.0.0.0 <domain>``) blocks.
 
     The leading sink IP is stripped, leaving the domain to block. Before-state: the
@@ -312,7 +313,7 @@ def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeed
     feed_url = mock_feeds.feed_url("dnsbl_hosts.txt")
     spec = h.DnsblCase(aliasname="smokefeedhosts", feed_url=feed_url, header="smokefeedhosts", mode=h.DnsblMode.VIP)
 
-    before = h.dns_probe(deployed_vm, member, "A")
+    before = h.dns_probe_client(client_vm, member, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{member} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before), f"{member} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -320,14 +321,14 @@ def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeed
         h.unblock_egress()  # the non-member "resolves" probe must reach the stub upstream
         # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
         h.flush_unbound_name(deployed_vm, member)
-        blocked = h.dns_probe_until(deployed_vm, member, h.is_vip)
+        blocked = h.dns_probe_client_until(client_vm, member, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{member} still resolving after the feed block: {blocked}"
-        passed = h.dns_probe(deployed_vm, non_member, "A")
+        passed = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(passed, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {passed}"
         assert not h.is_vip(passed), f"non-member {non_member} wrongly VIP-blocked: {passed}"
 
 
-def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """DNSBL ABP/EasyList over HTTP: ``dnsbl_abp.txt`` is header-sniffed ABP and loads.
 
     The body starts with ``[Adblock Plus 2.0]`` -> pfBlockerNG sniffs it as ABP
@@ -354,7 +355,7 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
     spec = h.DnsblCase(aliasname="smokefeedabp", feed_url=feed_url, header="smokefeedabp", mode=h.DnsblMode.VIP)
 
     # BEFORE: the ||-only name is not yet on any feed -> it resolves via the stub.
-    before = h.dns_probe(deployed_vm, blocked_name, "A")
+    before = h.dns_probe_client(client_vm, blocked_name, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{blocked_name} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -365,16 +366,16 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
         h.unblock_egress()
         # before-probe warmed the C-cache; a feed swap is TTL-bounded (see kill-gate) -> flush + poll.
         h.flush_unbound_name(deployed_vm, blocked_name)
-        ans_blocked = h.dns_probe_until(deployed_vm, blocked_name, h.is_vip)
+        ans_blocked = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
         assert not h.resolves_to(ans_blocked, STUB_DNS_A), (
             f"{blocked_name} still resolving after the || block: {ans_blocked}"
         )
-        ans_allow = h.dns_probe(deployed_vm, allow_exception, "A")
+        ans_allow = h.dns_probe_client(client_vm, allow_exception, "A")
         assert h.resolves_to(ans_allow, STUB_DNS_A), (
             f"ABP @@ allow-exception {allow_exception} must RESOLVE via the stub (@@ beats ||), got {ans_allow}"
         )
         assert not h.is_vip(ans_allow), f"ABP @@ allow-exception {allow_exception} wrongly VIP-blocked: {ans_allow}"
-        ans_non = h.dns_probe(deployed_vm, non_member, "A")
+        ans_non = h.dns_probe_client(client_vm, non_member, "A")
         assert h.resolves_to(ans_non, STUB_DNS_A), f"non-member {non_member} should resolve via stub, got {ans_non}"
         assert not h.is_vip(ans_non), f"non-member {non_member} wrongly VIP-blocked: {ans_non}"
 
@@ -392,7 +393,9 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSe
 
 
 @pytest.mark.timeout(300)
-def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_perline_detection_in_plain_feed(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """ADR-21: ``||block^`` / ``@@||allow^`` in a HEADER-LESS feed resolve correctly.
 
     Scenario: a header-less DNSBL feed row (NOT whole-feed ABP — ``format_hint='plain'``)
@@ -442,7 +445,7 @@ def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _
 
     # BEFORE: none of the three names is on any feed yet -> each resolves via the stub.
     for name in (block_name, allow_name, plain_name):
-        before = h.dns_probe(deployed_vm, name, "A")
+        before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
         assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -456,13 +459,13 @@ def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _
         for name in (block_name, allow_name, plain_name):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_block = h.dns_probe_until(deployed_vm, block_name, h.is_vip)
+        ans_block = h.dns_probe_client_until(client_vm, block_name, h.is_vip)
         assert not h.resolves_to(ans_block, STUB_DNS_A), f"{block_name} still resolving after ||block^: {ans_block}"
 
-        ans_plain = h.dns_probe_until(deployed_vm, plain_name, h.is_vip)
+        ans_plain = h.dns_probe_client_until(client_vm, plain_name, h.is_vip)
         assert not h.resolves_to(ans_plain, STUB_DNS_A), f"{plain_name} still resolving after plain block: {ans_plain}"
 
-        ans_allow = h.dns_probe(deployed_vm, allow_name, "A")
+        ans_allow = h.dns_probe_client(client_vm, allow_name, "A")
         assert h.resolves_to(ans_allow, STUB_DNS_A), (
             f"@@||{allow_name}^ must RESOLVE via the stub (its @@ allow beats the same-feed plain block): {ans_allow}"
         )
@@ -479,7 +482,7 @@ def test_abp_perline_detection_in_plain_feed(deployed_vm: SmokeVM, mock_feeds: _
 
 
 @pytest.mark.timeout(300)
-def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-21: a UTF-8 BOM before ``[Adblock Plus 2.0]`` must not mask ABP detection.
 
     Scenario: a feed whose first bytes are a UTF-8 BOM (``EF BB BF``) followed by the
@@ -503,7 +506,7 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, mock_feeds: _MockFe
     spec = h.DnsblCase(aliasname="smokeadr21bom", feed_url=feed_url, header="smokeadr21bom", mode=h.DnsblMode.VIP)
 
     # BEFORE: the name is on no feed yet -> it resolves via the stub sentinel.
-    before = h.dns_probe(deployed_vm, blocked, "A")
+    before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{blocked} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before), f"{blocked} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -512,7 +515,7 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, mock_feeds: _MockFe
         # contrast is real (a would-be resolve still reaches the stub, no false-green).
         h.unblock_egress()
         h.flush_unbound_name(deployed_vm, blocked)
-        ans = h.dns_probe_until(deployed_vm, blocked, h.is_vip)
+        ans = h.dns_probe_client_until(client_vm, blocked, h.is_vip)
         assert not h.resolves_to(ans, STUB_DNS_A), (
             f"{blocked} still resolving after a BOM-led ABP feed regex block "
             f"(a BOM-masked header would leave the feed 'plain' and drop the regex): {ans}"
@@ -520,7 +523,9 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, mock_feeds: _MockFe
 
 
 @pytest.mark.timeout(300)
-def test_abp_perline_path_anchor_not_overblocked(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_perline_path_anchor_not_overblocked(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """ADR-21: a path-anchored ``||domain/path^`` in a plain feed must NOT block the domain.
 
     Per-line ABP capture writes the anchor VERBATIM ahead of the plain pipeline's
@@ -544,7 +549,7 @@ def test_abp_perline_path_anchor_not_overblocked(deployed_vm: SmokeVM, mock_feed
 
     # BEFORE: neither name is on any feed yet -> each resolves via the stub sentinel.
     for name in (blk, path_dom):
-        before = h.dns_probe(deployed_vm, name, "A")
+        before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
         assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
 
@@ -555,10 +560,10 @@ def test_abp_perline_path_anchor_not_overblocked(deployed_vm: SmokeVM, mock_feed
         for name in (blk, path_dom):
             h.flush_unbound_name(deployed_vm, name)
 
-        ans_blk = h.dns_probe_until(deployed_vm, blk, h.is_vip)
+        ans_blk = h.dns_probe_client_until(client_vm, blk, h.is_vip)
         assert not h.resolves_to(ans_blk, STUB_DNS_A), f"{blk} still resolving after ||{blk}^: {ans_blk}"
 
-        ans_path = h.dns_probe(deployed_vm, path_dom, "A")
+        ans_path = h.dns_probe_client(client_vm, path_dom, "A")
         assert h.resolves_to(ans_path, STUB_DNS_A), (
             f"||{path_dom}/ads^ is a PATH anchor -> parse_abp must skip it, so {path_dom} must RESOLVE "
             f"(pre-fix truncation to ||{path_dom} would over-block it): {ans_path}"
@@ -599,7 +604,7 @@ def _scheme_feed_path(vm: SmokeVM, name: str, lines: list[str]) -> str:
 
 
 @pytest.mark.timeout(300)
-def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM) -> None:
+def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """ADR-22 strict (lenient OFF): invalid-scheme + path lines are skipped AND logged.
 
     Scenario: a DNSBL feed mixes two well-formed scheme lines (a valid RFC 3986 scheme,
@@ -641,7 +646,7 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM) -> 
         # BEFORE: none of the four is on a feed yet -> each resolves via the stub.
         h.unblock_egress()
         for name in (http_dom, evil_dom, bad_dom, path_dom):
-            before = h.dns_probe(deployed_vm, name, "A")
+            before = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
             assert not _blocked(before), f"{name} unexpectedly blocked before any feed: {before}"
 
@@ -659,20 +664,20 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM) -> 
         # blocked names; the skipped names were never listed so they keep resolving.
         h.flush_unbound_name(deployed_vm, http_dom)
         h.flush_unbound_name(deployed_vm, evil_dom)
-        ans_http = h.dns_probe_until(deployed_vm, http_dom, _blocked)
+        ans_http = h.dns_probe_client_until(client_vm, http_dom, _blocked)
         assert not h.resolves_to(ans_http, STUB_DNS_A), (
             f"http://{http_dom} still resolving after strict load: {ans_http}"
         )
-        ans_evil = h.dns_probe_until(deployed_vm, evil_dom, _blocked)
+        ans_evil = h.dns_probe_client_until(client_vm, evil_dom, _blocked)
         assert not h.resolves_to(ans_evil, STUB_DNS_A), (
             f"evil://{evil_dom} still resolving after strict load: {ans_evil}"
         )
-        ans_bad = h.dns_probe(deployed_vm, bad_dom, "A")
+        ans_bad = h.dns_probe_client(client_vm, bad_dom, "A")
         assert h.resolves_to(ans_bad, STUB_DNS_A), (
             f"123://{bad_dom} must be SKIPPED under strict (digit-start scheme) -> still resolves, got {ans_bad}"
         )
         assert not _blocked(ans_bad), f"123://{bad_dom} wrongly blocked under strict (should be skipped): {ans_bad}"
-        ans_path = h.dns_probe(deployed_vm, path_dom, "A")
+        ans_path = h.dns_probe_client(client_vm, path_dom, "A")
         assert h.resolves_to(ans_path, STUB_DNS_A), (
             f"http://{path_dom}/path must be SKIPPED under strict (URL path) -> still resolves, got {ans_path}"
         )
@@ -697,7 +702,7 @@ def test_strict_skips_invalid_scheme_and_path_and_logs(deployed_vm: SmokeVM) -> 
 
 
 @pytest.mark.timeout(300)
-def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM) -> None:
+def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """ADR-22 lenient (ON): invalid-scheme + path lines are BLOCKED, no WARNING (today's behaviour).
 
     The lenient counterpart of the strict test: with ``pfb_dnsbl_lenient='on'`` the SAME
@@ -731,7 +736,7 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM) -> None:
         # BEFORE: neither host is on a feed yet -> each resolves via the stub.
         h.unblock_egress()
         for name in (bad_dom, path_dom):
-            before = h.dns_probe(deployed_vm, name, "A")
+            before = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
             assert not _blocked(before), f"{name} unexpectedly blocked before any feed: {before}"
 
@@ -750,11 +755,11 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM) -> None:
         # THEN (DNS shapes): both malformed lines are now BLOCKED (today's behaviour).
         for name in (bad_dom, path_dom):
             h.flush_unbound_name(deployed_vm, name)
-        ans_bad = h.dns_probe_until(deployed_vm, bad_dom, _blocked)
+        ans_bad = h.dns_probe_client_until(client_vm, bad_dom, _blocked)
         assert not h.resolves_to(ans_bad, STUB_DNS_A), (
             f"123://{bad_dom} must be BLOCKED under lenient (today's strip), still resolving: {ans_bad}"
         )
-        ans_path = h.dns_probe_until(deployed_vm, path_dom, _blocked)
+        ans_path = h.dns_probe_client_until(client_vm, path_dom, _blocked)
         assert not h.resolves_to(ans_path, STUB_DNS_A), (
             f"http://{path_dom}/path must be BLOCKED under lenient (path stripped downstream), got {ans_path}"
         )
@@ -869,7 +874,7 @@ def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) ->
 
 
 @pytest.mark.timeout(600)
-def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> None:
+def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """ADR-31 §2.2 end-to-end: a Permit feed allow-overrides a block feed and teardown re-blocks.
 
     All test domains use :func:`helpers.unique_domain` (uuid-*.com) — never RFC 6761
@@ -946,7 +951,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         # GIVEN — before-state: nothing is on any feed yet, all names RESOLVE.
         # ------------------------------------------------------------------ #
         for name in (s_domain, b_domain, m_domain, p_domain, child_p, x_domain):
-            before = h.dns_probe(deployed_vm, name, "A")
+            before = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(before, STUB_DNS_A), (
                 f"{name} should resolve via stub BEFORE any feed is loaded, got {before}"
             )
@@ -966,26 +971,26 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
             h.flush_unbound_name(deployed_vm, name)
 
         # §2.2.1: S is blocked by the block feed (no permit feed yet).
-        ans_s_blk = h.dns_probe_until(deployed_vm, s_domain, h.is_vip)
+        ans_s_blk = h.dns_probe_client_until(client_vm, s_domain, h.is_vip)
         assert not h.resolves_to(ans_s_blk, STUB_DNS_A), (
             f"§2.2.1: {s_domain} should be VIP-blocked by the block feed (no permit feed yet): {ans_s_blk}"
         )
 
         # §2.2.1: B is blocked by the block feed (block-only, never on permit).
-        ans_b_blk = h.dns_probe_until(deployed_vm, b_domain, h.is_vip)
+        ans_b_blk = h.dns_probe_client_until(client_vm, b_domain, h.is_vip)
         assert not h.resolves_to(ans_b_blk, STUB_DNS_A), (
             f"§2.2.1: {b_domain} should be VIP-blocked by the block feed: {ans_b_blk}"
         )
 
         # §2.2.1/§2.2.3: M is blocked via the block feed AND via band-5 Custom_List.
-        ans_m_blk = h.dns_probe_until(deployed_vm, m_domain, h.is_vip)
+        ans_m_blk = h.dns_probe_client_until(client_vm, m_domain, h.is_vip)
         assert not h.resolves_to(ans_m_blk, STUB_DNS_A), (
             f"§2.2.3: {m_domain} should be VIP-blocked (Custom_List band-5 + block feed): {ans_m_blk}"
         )
 
         # §2.2.4: P and child.P RESOLVE (not on any block feed); X RESOLVES (not listed).
         for name in (p_domain, child_p, x_domain):
-            ans = h.dns_probe(deployed_vm, name, "A")
+            ans = h.dns_probe_client(client_vm, name, "A")
             assert h.resolves_to(ans, STUB_DNS_A), (
                 f"§2.2.4/non-listed: {name} should RESOLVE via stub (not on block feed): {ans}"
             )
@@ -1015,7 +1020,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         h.flush_unbound_name(deployed_vm, child_p)
 
         # §2.2.2: S RESOLVES — permit feed (band 2) overrides block feed (band 1).
-        ans_s_pmt = h.dns_probe_until(deployed_vm, s_domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        ans_s_pmt = h.dns_probe_client_until(client_vm, s_domain, lambda a: h.resolves_to(a, STUB_DNS_A))
         assert h.resolves_to(ans_s_pmt, STUB_DNS_A), (
             f"§2.2.2: {s_domain} must RESOLVE via stub (permit feed band 2 beats block band 1): {ans_s_pmt}"
         )
@@ -1024,7 +1029,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         )
 
         # §2.2.2: B remains VIP-blocked — only on the block feed, not the permit feed.
-        ans_b_pmt = h.dns_probe(deployed_vm, b_domain, "A")
+        ans_b_pmt = h.dns_probe_client(client_vm, b_domain, "A")
         assert h.is_vip(ans_b_pmt), (
             f"§2.2.2: {b_domain} must remain VIP-blocked (only on block feed, not on permit feed): {ans_b_pmt}"
         )
@@ -1033,7 +1038,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         )
 
         # §2.2.3: M remains VIP-blocked — Custom_List (band 5) beats permit (band 2).
-        ans_m_pmt = h.dns_probe(deployed_vm, m_domain, "A")
+        ans_m_pmt = h.dns_probe_client(client_vm, m_domain, "A")
         assert h.is_vip(ans_m_pmt), (
             f"§2.2.3: {m_domain} must remain VIP-blocked (Custom_List band 5 > permit band 2): {ans_m_pmt}"
         )
@@ -1042,13 +1047,13 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         )
 
         # §2.2.4: P RESOLVES — on the permit feed; child.P RESOLVES — subdomain covering.
-        ans_p = h.dns_probe(deployed_vm, p_domain, "A")
+        ans_p = h.dns_probe_client(client_vm, p_domain, "A")
         assert h.resolves_to(ans_p, STUB_DNS_A), (
             f"§2.2.4: {p_domain} must RESOLVE via stub (permit feed allow): {ans_p}"
         )
         assert not h.is_vip(ans_p), f"§2.2.4: {p_domain} wrongly VIP-blocked despite permit feed: {ans_p}"
 
-        ans_child = h.dns_probe(deployed_vm, child_p, "A")
+        ans_child = h.dns_probe_client(client_vm, child_p, "A")
         assert h.resolves_to(ans_child, STUB_DNS_A), (
             f"§2.2.4: {child_p} must RESOLVE via stub (subdomain of permit-listed parent): {ans_child}"
         )
@@ -1057,7 +1062,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         )
 
         # §2.2.4 (non-listed unaffected): X still RESOLVES — no feed entry for X.
-        ans_x = h.dns_probe(deployed_vm, x_domain, "A")
+        ans_x = h.dns_probe_client(client_vm, x_domain, "A")
         assert h.resolves_to(ans_x, STUB_DNS_A), (
             f"§2.2.4: non-listed {x_domain} must RESOLVE via stub (not on any feed): {ans_x}"
         )
@@ -1075,7 +1080,7 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM) -> N
         # gone so S should now be VIP-blocked. ADR-10 allow->block is TTL-bounded ->
         # flush S then poll until the block lands.
         h.flush_unbound_name(deployed_vm, s_domain)
-        ans_s_teardown = h.dns_probe_until(deployed_vm, s_domain, h.is_vip)
+        ans_s_teardown = h.dns_probe_client_until(client_vm, s_domain, h.is_vip)
         assert h.is_vip(ans_s_teardown), (
             f"teardown: {s_domain} must be VIP-blocked again after removing the permit feed "
             f"(no whiteDB residue): {ans_s_teardown}"

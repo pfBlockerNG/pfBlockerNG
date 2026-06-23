@@ -74,8 +74,16 @@ _EXCEPTION_ALIAS = "DNS_Exceptions_Test"
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+def deployed_vm(  # noqa: ARG001
+    smoke_vm: SmokeVM,
+    stub_dns: _StubDnsServer,
+    lan_interface: SmokeVM,
+) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the dns_redirect module.
+
+    Depends on ``lan_interface`` to ensure a LAN VLAN subinterface is
+    provisioned before these tests run (the single-NIC smoke image boots with
+    no LAN assigned; DNS redirect tests create LAN-scoped NAT/VIP rules).
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS from the
     pfSense repo. ``ensure_dnsbl_vip`` gives DNSBL a sinkhole VIP (required for
@@ -411,7 +419,9 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         )
 
         # THEN — pfctl -sn confirms the rdr rules are active.
-        assert _pfctl_sn_has_redir(vm, iface), f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable"
+        assert _pfctl_sn_has_redir(vm, iface), (
+            f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable\n" + h.pf_state_dump(vm)
+        )
 
     finally:
         _cleanup_redirect(vm)
@@ -746,7 +756,8 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
 
     # THEN — all pfB_DNS_Redirect_* entries are gone.
     assert _nat_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
-        "pfB_DNS_Redirect_* nat/rule entries still present after uninstall — ADR-35/36 sweep did not run"
+        "pfB_DNS_Redirect_* nat/rule entries still present after uninstall — ADR-35/36 sweep did not run\n"
+        + h.deinstall_debug(vm)
     )
     assert _filter_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
         "pfB_DNS_Redirect_* filter/rule entries still present after uninstall"

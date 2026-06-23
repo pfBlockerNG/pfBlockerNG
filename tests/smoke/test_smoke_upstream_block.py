@@ -53,11 +53,11 @@ pytestmark = [pytest.mark.smoke, pytest.mark.upstream]
 
 
 @pytest.fixture(scope="module")
-def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[tuple[SmokeVM, SmokeVM]]:  # noqa: ARG001
     """Deploy the branch .pkg once with DNSBL/python active and forwarding to the stub.
 
     ``use_system_dns_upstream`` wires forwarding:
-      guest Unbound → 10.0.2.2:53 (SLIRP NAT) → runner 127.0.0.1:53 (stub).
+      guest Unbound → 10.10.0.2:53 (SLIRP NAT) → runner 127.0.0.1:53 (stub).
 
     pfBlockerNG force-disables DNSBL — and so never injects the Unbound ``python:``
     module, meaning ``inplace_cb_query_response`` is never registered — unless at least
@@ -83,8 +83,9 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     )
     h.reload(smoke_vm, "update")
     h.wait_unbound_ready(smoke_vm)
+    h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
-        yield smoke_vm
+        yield smoke_vm, client_vm
     finally:
         h.unblock_egress()
         h.collect_host_diagnostics(smoke_vm)
@@ -143,7 +144,9 @@ class TestUpstreamBlockNXRA:
     The classifier detects this as NXRA and logs it.
     """
 
-    def test_nxra_block_detected_and_logged(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_nxra_block_detected_and_logged(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: Unbound forwards to the stub; stub answers NXDOMAIN (RA=0, AA=0) for a name.
         When: the on-box resolver resolves that name.
@@ -151,17 +154,18 @@ class TestUpstreamBlockNXRA:
           - Client gets NXDOMAIN (upstream answer passed through).
           - A log line with b_type=Upstream_Block and b_eval=NXRA appears in dnsbl.log.
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-nxra")
         stub_dns.register_nxdomain(name)  # default: RA=0, AA=0
 
-        # Resolve on-box; first response is authoritative.
-        ans = h.dns_probe(deployed_vm, name, "A")
+        # Resolve via civm; first response is authoritative.
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        lines = _wait_for_upstream_block_lines(deployed_vm, name)
+        lines = _wait_for_upstream_block_lines(vm, name)
         assert lines, (
             f"No Upstream_Block log line for {name} after NXRA probe.\n"
-            f"Log excerpt (last 3000 chars):\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
+            f"Log excerpt (last 3000 chars):\n{_read_dnsbl_log(vm)[-3000:]}"
         )
         assert any("NXRA" in line for line in lines), (
             f"Upstream_Block line found but b_eval is not NXRA.\nLines: {lines}"
@@ -171,7 +175,9 @@ class TestUpstreamBlockNXRA:
 class TestUpstreamBlockEDE15:
     """EDE 15 (Blocked) signal: upstream NXDOMAIN with RFC 8914 EDE option."""
 
-    def test_ede15_block_detected_with_provider(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_ede15_block_detected_with_provider(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: stub answers NXDOMAIN + EDE INFO-CODE 15 with EXTRA-TEXT "Quad9".
         When: the on-box resolver resolves that name.
@@ -180,16 +186,15 @@ class TestUpstreamBlockEDE15:
           - b_eval is "EDE15 (Blocked)".
           - feed/provider column contains "Quad9".
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-ede15")
         stub_dns.register_nxdomain(name, ede_info_code=15, ede_text="Quad9")
 
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        lines = _wait_for_upstream_block_lines(deployed_vm, name)
-        assert lines, (
-            f"No Upstream_Block log line for {name} (EDE15).\nLog excerpt:\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
-        )
+        lines = _wait_for_upstream_block_lines(vm, name)
+        assert lines, f"No Upstream_Block log line for {name} (EDE15).\nLog excerpt:\n{_read_dnsbl_log(vm)[-3000:]}"
         assert any("EDE15 (Blocked)" in line for line in lines), f"b_eval is not 'EDE15 (Blocked)'.\nLines: {lines}"
         assert any("Quad9" in line for line in lines), (
             f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
@@ -203,7 +208,9 @@ class TestUpstreamBlockEDE17:
     signals are exercised on the live-VM path (test-coverage mandate: every branch).
     """
 
-    def test_ede17_block_detected_with_provider(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_ede17_block_detected_with_provider(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: stub answers NXDOMAIN + EDE INFO-CODE 17 (Filtered) with EXTRA-TEXT "Quad9".
         When: the on-box resolver resolves that name.
@@ -212,16 +219,15 @@ class TestUpstreamBlockEDE17:
           - b_eval is "EDE17 (Filtered)".
           - feed/provider column contains "Quad9".
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-ede17")
         stub_dns.register_nxdomain(name, ede_info_code=17, ede_text="Quad9")
 
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        lines = _wait_for_upstream_block_lines(deployed_vm, name)
-        assert lines, (
-            f"No Upstream_Block log line for {name} (EDE17).\nLog excerpt:\n{_read_dnsbl_log(deployed_vm)[-3000:]}"
-        )
+        lines = _wait_for_upstream_block_lines(vm, name)
+        assert lines, f"No Upstream_Block log line for {name} (EDE17).\nLog excerpt:\n{_read_dnsbl_log(vm)[-3000:]}"
         assert any("EDE17 (Filtered)" in line for line in lines), f"b_eval is not 'EDE17 (Filtered)'.\nLines: {lines}"
         assert any("Quad9" in line for line in lines), (
             f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
@@ -236,7 +242,9 @@ class TestUpstreamBlockAuthoritativeControl:
     resolver. The classifier must return None.
     """
 
-    def test_authoritative_nxdomain_not_logged(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_authoritative_nxdomain_not_logged(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: stub answers NXDOMAIN with AA=1, RA=0 (authoritative NXDOMAIN).
         When: the on-box resolver resolves that name.
@@ -246,15 +254,16 @@ class TestUpstreamBlockAuthoritativeControl:
 
         Before-state: same name would be detected if AA=0 (the NXRA case above).
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-auth")
         stub_dns.register_nxdomain(name, authoritative=True)  # AA=1, RA=0
 
         # Before: confirm the name returns NXDOMAIN (the upstream answered).
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         time.sleep(2)
-        log = _read_dnsbl_log(deployed_vm)
+        log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
             f"Authoritative NXDOMAIN (AA=1) produced an Upstream_Block line — "
@@ -269,7 +278,9 @@ class TestUpstreamBlockForwarderNaturalControl:
     (a recursive resolver relaying a real NXDOMAIN). The classifier must return None.
     """
 
-    def test_forwarder_natural_nxdomain_not_logged(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_forwarder_natural_nxdomain_not_logged(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: stub answers NXDOMAIN with RA=1, AA=0 (forwarder-relayed natural NXDOMAIN).
         When: the on-box resolver resolves that name.
@@ -277,14 +288,15 @@ class TestUpstreamBlockForwarderNaturalControl:
           - Client gets NXDOMAIN.
           - NO Upstream_Block log line appears (RA=1 excludes it).
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-fwdnat")
         stub_dns.register_nxdomain(name, recursion_available=True)  # RA=1, AA=0
 
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         time.sleep(2)
-        log = _read_dnsbl_log(deployed_vm)
+        log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
             f"Forwarder-natural NXDOMAIN (RA=1) produced an Upstream_Block line — "
@@ -295,7 +307,7 @@ class TestUpstreamBlockForwarderNaturalControl:
 class TestUpstreamBlockNormalControl:
     """Control: a name resolving normally must NOT produce an Upstream_Block line."""
 
-    def test_normal_resolution_not_logged(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_normal_resolution_not_logged(self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer) -> None:
         """
         Given: an unregistered name (stub answers NOERROR with sentinel A record).
         When: the on-box resolver resolves it.
@@ -304,15 +316,16 @@ class TestUpstreamBlockNormalControl:
         Before-state: the name resolves to the stub sentinel, proving the forwarding
         path works. After: no Upstream_Block line in the log.
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-ctrl")
         # Not registered → stub answers NOERROR + sentinel STUB_DNS_A.
 
         # Before: confirm normal resolution works (forwarding active, stub reachable).
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert h.resolves_to(ans, h.STUB_DNS_A), f"Control name should resolve to sentinel {h.STUB_DNS_A}, got {ans}"
 
         time.sleep(2)
-        log = _read_dnsbl_log(deployed_vm)
+        log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
             f"Normal resolution produced Upstream_Block lines — over-triggering.\n"
@@ -390,18 +403,21 @@ class TestUpstreamCounterIncrement:
     strict increase so that the test fails if the counter is stuck.
     """
 
-    def test_upstream_counter_increments_on_nxra_block(self, deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    def test_upstream_counter_increments_on_nxra_block(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+    ) -> None:
         """
         Given: DNSBL active, forwarding to stub, dnsbl table seeded with Upstream row.
         When: stub answers NXDOMAIN (RA=0, AA=0) — an NXRA upstream block is logged.
         Then: the on-box dnsbl counter for groupname='Upstream' strictly increases.
         """
+        vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-ctr")
         stub_dns.register_nxdomain(name)  # RA=0, AA=0 -> NXRA block
 
         # Before: record the baseline counter (row may already have a count from
         # earlier tests in this session).
-        baseline = _read_upstream_counter(deployed_vm)
+        baseline = _read_upstream_counter(vm)
         assert baseline >= 0, (
             "Upstream row not found in dnsbl table before probe — "
             "the Python DB-init seed (_db_create) did not create it. "
@@ -409,20 +425,20 @@ class TestUpstreamCounterIncrement:
         )
 
         # When: trigger a block (first response is authoritative — assert it arrived).
-        ans = h.dns_probe(deployed_vm, name, "A")
+        ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         # Confirm the block line was logged (proves the detection fired, not just a
         # natural NXDOMAIN — the counter increment is meaningless without this).
-        lines = _wait_for_upstream_block_lines(deployed_vm, name)
+        lines = _wait_for_upstream_block_lines(vm, name)
         assert lines, (
             f"No Upstream_Block log line for {name} — detection did not fire; "
             f"counter increment cannot be attributed to an upstream block.\n"
-            f"Log excerpt:\n{_read_dnsbl_log(deployed_vm)[-2000:]}"
+            f"Log excerpt:\n{_read_dnsbl_log(vm)[-2000:]}"
         )
 
         # Then: wait for the async flush and assert strict increase.
-        final = _wait_for_counter_above(deployed_vm, baseline)
+        final = _wait_for_counter_above(vm, baseline)
         assert final > baseline, (
             f"Upstream counter did not increase after NXRA block: "
             f"baseline={baseline}, final={final}. "
