@@ -45,7 +45,7 @@ $pfb['err']	= '<i class="fa-solid fa-minus-circle text-danger" title="pf Errors 
 
 // Widget customizations
 $wglobal_array = array ('popup' => 'off', 'sortcolumn' => 'none', 'sortmix' => 'off', 'sortdir' => 'asc', 'dnsblquery' => 5,
-			'maxfails' => 3, 'maxheight' => 2500, 'clearip' => 'never', 'cleardnsbl' => 'never');
+			'maxfails' => 3, 'maxheight' => 2500, 'clearip' => 'never', 'cleardnsbl' => 'never', 'show_agg' => 'off');
 
 $pfb['wglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 foreach ($wglobal_array as $type => $value) {
@@ -74,10 +74,13 @@ if ($_POST) {
 	if (isset($_POST['pfb_submit'])) {
 		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'], PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'], PFB_FILTER_ON_OFF, 'widget');
+		$pfb['wglobal']['widget-show_agg']		= pfb_filter($_POST['pfb_show_agg'], PFB_FILTER_ON_OFF, 'widget');
 		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-popup', $pfb['wglobal']['widget-popup']);
 		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-sortmix', $pfb['wglobal']['widget-sortmix']);
+		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
+		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', $pfb['wglobal']['widget-show_agg']);
 
 		if (in_array($_POST['pfb_sortcolumn'], array('none', 'alias', 'count', 'packets', 'update'))) {
 			$pfb['wglobal']['widget-sortcolumn']	= $_POST['pfb_sortcolumn'];
@@ -263,10 +266,18 @@ function pfbsort(&$array, $subkey, $sort_ascending) {
 //     by their source lists. <Type> is exactly Deny|Permit|Match|Native; GeoIP folds into
 //     those action types, so there is no separate pfB_Geo_Aggregated alias to match.
 //
-// Hides from display only -- the aliases / pf tables stay wired and functional.
-function pfb_widget_alias_hidden($pfb_alias) {
-	return empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs' ||
-	    preg_match('/^pfB_(Deny|Permit|Match|Native)_Aggregated_v[46]$/', $pfb_alias) === 1;
+// The aggregate aliases are revealed when $show_agg is TRUE (the widget's
+// "Show Aggregated Aliases" setting); pfB_DNSBL_VIPs and empty names stay hidden
+// regardless. Hides from display only -- the aliases / pf tables stay wired and
+// functional.
+function pfb_widget_alias_hidden($pfb_alias, $show_agg = FALSE) {
+	if (empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs') {
+		return TRUE;
+	}
+	if (preg_match('/^pfB_(Deny|Permit|Match|Native)_Aggregated_v[46]$/', $pfb_alias) === 1) {
+		return $show_agg !== TRUE;
+	}
+	return FALSE;
 }
 
 // Collect all pfBlockerNG statistics
@@ -274,6 +285,9 @@ function pfBlockerNG_update_table() {
 	global $pfb;
 	$pfb_table = $pfb_dtable = array();
 	$pfb['pfctlerr'] = FALSE;
+
+	// Reveal the ADR-11 aggregate aliases only when the widget setting opts in.
+	$show_agg = (($pfb['show_agg'] ?? 'off') == 'on');
 
 	/* Alias Table Definitions -	'update'	- Last Updated Timestamp
 					'rule'		- Total number of Firewall rules per alias
@@ -288,7 +302,7 @@ function pfBlockerNG_update_table() {
 			$line = trim(str_replace(array( '[', ']' ), '', $line));
 			if (substr($line, 0, 1) == '-') {
 				$pfb_alias = trim(strstr($line, 'pfB', FALSE));
-				if (pfb_widget_alias_hidden($pfb_alias)) {
+				if (pfb_widget_alias_hidden($pfb_alias, $show_agg)) {
 					unset($pfb_alias);
 					continue;
 				}
@@ -1078,6 +1092,13 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 		<div class="col-sm-2 checkbox">
 			<label><input type="checkbox" name="pfb_popup" value="on"
 				<?=($pfb['popup'] == "on" ? 'checked' : '')?> /></label>
+		</div>
+	</div>
+	<div class="form-group">
+		<label for="pfb_show_agg" class="col-sm-8 control-label"><?=gettext('Show Aggregated Aliases')?></label>
+		<div class="col-sm-2 checkbox">
+			<label><input type="checkbox" name="pfb_show_agg" value="on"
+				<?=($pfb['show_agg'] == "on" ? 'checked' : '')?> /></label>
 		</div>
 	</div>
 	<div class="form-group">
