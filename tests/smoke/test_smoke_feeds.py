@@ -139,7 +139,10 @@ def test_ip_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
 
     with h.CaseContext(deployed_vm, spec):
-        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        # Use wait_pfctl_table instead of the single-shot pfctl_table_members:
+        # filter_configure is async so the pf table may not be populated immediately
+        # after CaseContext.__enter__ completes the reload.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
         assert h.member_present(members, member_host), f"{member_host} not in {spec.alias}: {members}"
         assert _covered_by(members, member_in_cidr), f"{member_in_cidr} not covered by {spec.alias}: {members}"
         assert not _covered_by(members, non_member), f"{non_member} unexpectedly in {spec.alias}: {members}"
@@ -230,7 +233,9 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         h.set_feed_internal_allowlist(deployed_vm, "10.10.0.0/24")
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
-        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        # Use wait_pfctl_table: filter_configure is async; the table may not be
+        # populated immediately after the reloads complete.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
         assert members, "allowlisting the SLIRP CIDR must EXEMPT the feed (pf table built)"
         assert h.member_present(members, "203.0.113.5"), f"listed host missing after exemption: {members}"
     finally:
@@ -265,7 +270,7 @@ def test_ip_http_range_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
 
     with h.CaseContext(deployed_vm, spec):
-        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
         assert _covered_by(members, inside), f"{inside} not covered by the range in {spec.alias}: {members}"
         assert not _covered_by(members, just_past), (
             f"{just_past} (one past the range) unexpectedly in {spec.alias}: {members}"

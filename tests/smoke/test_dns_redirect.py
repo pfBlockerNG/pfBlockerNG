@@ -3,11 +3,12 @@
 Proves on a real pfSense CE VM that:
 
 * **Case 1 (Enable path):** enabling DNS redirect on the primary non-WAN interface
-  creates 2 ``nat/rule`` entries (``pfB_DNS_Redirect_<iface>_v4`` +
-  ``pfB_DNS_Redirect_<iface>_v6``) and 2 ``filter/rule`` entries, each with the
+  creates exactly 2 ``nat/rule`` entries (``pfB_DNS_Redirect_<iface>_v4`` +
+  ``pfB_DNS_Redirect_<iface>_v6``) using ``associated-rule-id='pass'`` (pfSense-native
+  inline ``rdr pass`` — no hand-rolled filter/rule companion needed), each with the
   correct §2.2 field values; ``pfctl -sn`` confirms the rdr rules are active.
 * **Case 2 (Disable path):** disabling removes all ``pfB_DNS_Redirect_*`` entries
-  from both sections; ``pfctl -sn`` shows no pfBlockerNG rdr rules for port 53.
+  from ``nat/rule``; ``pfctl -sn`` shows no pfBlockerNG rdr rules for port 53.
 * **Case 3 (User-rule survival):** a user ``nat/rule`` entry (no pfB marker)
   survives enable → disable without modification.
 * **Case 4 (Stale-interface prune):** enabling on two interfaces then reducing to
@@ -15,7 +16,9 @@ Proves on a real pfSense CE VM that:
   Skipped when the VM exposes fewer than two non-WAN interfaces.
 * **Case 5 (Exception alias branch):** enabling with a non-empty alias name wires
   a negated-alias source in config.xml; clearing the alias switches the source to
-  ``<any>`` — both branches asserted for both IP families.
+  ``<any>`` — both branches asserted for both IP families.  A real pfSense network
+  alias is created before the reload so pfctl can resolve ``from !<alias>`` without
+  a syntax error.
 * **Case 6 (Uninstall sweep):** uninstalling the package with redirect enabled
   sweeps all ``pfB_DNS_Redirect_*`` entries while a user NAT rule survives and
   ``installedpackages/pfblockerng*`` sections are removed.
@@ -51,7 +54,7 @@ from .conftest import SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
-# Package name on the devel channel (matches test_smoke_fwobj.py).
+# Package name on the devel channel (matches test_smoke_managed_objects.py).
 _PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
 
 # Marker prefix for DNS-redirect owned rules (mirrors PFB_DNS_REDIR_DESCR_V4_PFX).
@@ -210,17 +213,72 @@ def _nat_rule_present(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> bool
     return h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'", timeout=timeout) == "yes"
 
 
+def _real_iface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> str:
+    """Resolve a pfSense config interface name (e.g. 'lan') to its device (e.g. 'vtnet2').
+
+    ``pfctl -sn`` renders a loaded rdr rule on the PHYSICAL device, never the config
+    name, so the live-pf gate must compare against the resolved device.
+    """
+    return h._php_read_scalar(vm, "", f"get_real_interface({h._php_str(iface)})", timeout=timeout).strip()
+
+
 def _pfctl_sn_has_redir(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bool:
-    """True iff ``pfctl -sn`` output contains an rdr rule referencing ``iface`` and port 53."""
+    """True iff ``pfctl -sn`` shows a pfBlockerNG DNS-redirect rdr rule on ``iface`` for port 53.
+
+    Matches the LOADED form, which differs from the config / rules.debug form twice over:
+
+      * the rule is on the interface's PHYSICAL device (e.g. ``vtnet2``), not the config
+        name (``lan``) — resolved via :func:`_real_iface`;
+      * ``pfctl`` renders destination port 53 as the ``/etc/services`` name ``domain``,
+        not the literal ``53``.
+
+    A matching line looks like::
+
+        rdr pass on vtnet2 inet proto tcp from any to ! (self) port = domain -> 127.0.0.1
+
+    so the redirect hallmark is the ``to ! (self)`` self-exemption on the resolved device,
+    with the port rendered as ``domain`` (or numerically, defensively).
+    """
+    dev = _real_iface(vm, iface)
     result = vm.ssh(h.PFCTL, "-sn", timeout=timeout)
     if result.returncode != 0:
         return False
     for line in result.stdout.splitlines():
-        # An active rdr rule looks like: rdr on em1 proto tcp/udp from any to !<em1> port 53 -> 127.0.0.1 port 53
-        # Match by interface name and port 53 being the destination.
-        if "rdr" in line and iface in line and "port 53" in line:
+        # Match the redirect hallmark explicitly: an rdr `on <device>` whose destination is
+        # the negated self (`to ! (self)`). The anchored ` on {dev} ` (not a bare substring)
+        # avoids a device-name prefix false match (e.g. vtnet2 vs vtnet20), and `to ! (self)`
+        # is the redirect's self-exemption — together they keep the gate specific.
+        if "rdr" not in line or not dev or f" on {dev} " not in line or "to ! (self)" not in line:
+            continue
+        if "domain" in line or "port = 53" in line or "port 53" in line:
             return True
     return False
+
+
+def _redir_match_report(vm: SmokeVM, iface: str, *, expected_present: bool, timeout: float = 30.0) -> str:
+    """Expected-vs-actual report for the DNS-redirect live-pf gate (printed on failure).
+
+    The harness has no assertion framework, so a failing live-pf check must put the
+    comparison on the terminal itself — what the matcher EXPECTED next to what
+    ``pfctl -sn`` ACTUALLY held — so a reader never has to guess. Resolves the config
+    iface to its device and lists the live rdr rules on that device verbatim.
+    """
+    dev = _real_iface(vm, iface, timeout=timeout)
+    result = vm.ssh(h.PFCTL, "-sn", timeout=timeout)
+    if result.returncode != 0:
+        actual = [f"<pfctl -sn failed: rc={result.returncode} {result.stderr.strip()}>"]
+    else:
+        actual = [ln.strip() for ln in result.stdout.splitlines() if "rdr" in ln and dev and dev in ln]
+    want = "PRESENT" if expected_present else "ABSENT"
+    body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no rdr rules on this device)"
+    return (
+        f"  Expecting a pfBlockerNG DNS-redirect rdr rule to be {want} in the live nat ruleset:\n"
+        f"    device      : {dev}  (config iface {iface!r})\n"
+        f"    destination : ! (self)\n"
+        f"    dest port   : domain (53)\n"
+        f"  Actual rdr rules on {dev} (pfctl -sn):\n"
+        f"{body}"
+    )
 
 
 def _pfb_sections_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
@@ -281,6 +339,28 @@ def _set_dns_redirect(
         raise RuntimeError(f"_set_dns_redirect failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+def _set_pfb_keep(vm: SmokeVM, *, keep: bool, timeout: float = 60.0) -> None:
+    """Set the ``pfb_keep`` flag ('on' retains settings/data on disable+uninstall).
+
+    The uninstall sweep that removes pfBlockerNG-owned firewall objects runs only on
+    the full-removal path (``pfb_keep != 'on'``). ``pfb_keep`` defaults to 'on' (issue
+    #281), so a test that asserts the owned objects are swept must select the
+    full-removal path explicitly. The ``keep='on'`` uninstall path (owned objects must
+    still be removed while settings are retained) is tracked in issue #484.
+    """
+    value = "on" if keep else "off"
+    snippet = (
+        f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"
+        f"$g['pfb_keep'] = {h._php_str(value)};\n"
+        f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: set pfb_keep');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_pfb_keep failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def _seed_user_nat(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
     """Inject a minimal user NAT rule (no pfB marker) — must survive enable/disable/uninstall."""
     snippet = (
@@ -309,6 +389,51 @@ def _seed_user_nat(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"_seed_user_nat({descr!r}) failed: rc={result.returncode} {result.stderr!r}")
 
 
+def _seed_pf_alias(vm: SmokeVM, name: str, cidr: str = "192.0.2.0/24", *, timeout: float = 60.0) -> None:
+    """Create a pfSense network alias so pfctl can resolve 'from !<name>' without a syntax error.
+
+    Writes one entry to ``aliases/alias`` (type=network, address=cidr) and persists
+    config.xml.  Idempotent: skips creation when an alias with ``name`` already exists.
+    """
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$found = FALSE;\n"
+        f"foreach ($aliases as $a) {{\n"
+        f"  if (($a['name'] ?? '') === {h._php_str(name)}) {{ $found = TRUE; break; }}\n"
+        "}\n"
+        "if (!$found) {\n"
+        "  $aliases[] = array(\n"
+        f"    'name'    => {h._php_str(name)},\n"
+        "    'type'    => 'network',\n"
+        f"    'address' => {h._php_str(cidr)},\n"
+        "    'descr'   => 'pfBlockerNG smoke: exception alias',\n"
+        "    'detail'  => '',\n"
+        "  );\n"
+        "  config_set_path('aliases/alias', $aliases);\n"
+        "  write_config('pfBlockerNG smoke: seed pfSense alias for dns redirect exception');\n"
+        "}\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_seed_pf_alias({name!r}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+def _remove_pf_alias(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> None:
+    """Remove the pfSense alias with ``name`` from ``aliases/alias`` (best-effort; ignores missing)."""
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$out = array();\n"
+        "foreach ($aliases as $a) {\n"
+        f"  if (($a['name'] ?? '') !== {h._php_str(name)}) {{ $out[] = $a; }}\n"
+        "}\n"
+        "config_set_path('aliases/alias', $out);\n"
+        "write_config('pfBlockerNG smoke: remove pfSense alias for dns redirect exception');\n"
+        "echo 'OK';"
+    )
+    h.php_eval(vm, snippet, timeout=timeout)  # best-effort; ignore rc/stdout
+
+
 def _cleanup_redirect(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Disable redirect and reload — shared teardown used by finally blocks."""
     try:
@@ -319,8 +444,27 @@ def _cleanup_redirect(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 
 
 def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
-    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep)."""
-    vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep).
+
+    Captures stdout/stderr, asserts rc==0, and prints output on failure so
+    diagnostics are visible in CI logs.
+    """
+    # Dump pkg info before delete so diagnostics show what was installed.
+    info = vm.ssh("pkg", "info", _PKG_NAME, timeout=30.0)
+    if info.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg info {_PKG_NAME!r} before delete — not registered"
+            f" (rc={info.returncode}):\n{info.stdout}\n{info.stderr}"
+        )
+
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    if result.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg delete failed rc={result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}"
+        )
+        raise AssertionError(f"pkg delete {_PKG_NAME!r} returned rc={result.returncode} (expected 0)")
 
 
 # --------------------------------------------------------------------------- #
@@ -329,9 +473,9 @@ def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 
 
 def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, primary_iface: str) -> None:
-    """ADR-36 Case 1: enabling redirect on the primary non-WAN interface creates pfB-owned NAT + filter rules.
+    """ADR-36 Case 1: enabling redirect on the primary non-WAN interface creates pfB-owned NAT rules.
 
-    Scenario: enable path — both IP families created, pfctl -sn confirms rdr.
+    Scenario: enable path — both IP families created, pfctl -sn confirms rdr renders.
 
       Background: pfBlockerNG installed; DNS redirect disabled.
 
@@ -341,15 +485,18 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
       When DNS redirect is enabled on the primary non-WAN interface and a full reload runs,
 
       Then nat/rule contains exactly 2 pfB_DNS_Redirect_<iface>_* entries (v4 + v6).
-        And filter/rule contains exactly 2 corresponding pfB_DNS_Redirect_<iface>_* entries.
+        And filter/rule contains 0 pfB_DNS_Redirect_<iface>_* entries (associated-rule-id='pass'
+            causes pfSense to emit an inline rdr pass — no hand-rolled companion needed).
         And each nat/rule entry carries the correct §2.2 field values:
+            - associated-rule-id: 'pass'
             - ipprotocol: inet (v4) / inet6 (v6)
             - target: 127.0.0.1 (v4) / ::1 (v6)
             - protocol: tcp/udp
             - local-port: 53
             - natreflection: disable
             - destination: (self) network, not-negated, port 53
-        And pfctl -sn shows rdr rules on the primary interface for port 53.
+        And pfctl -sn shows rdr rules on the primary interface for port 53
+            (proving the rules actually render in the live pf ruleset).
     """
     vm = deployed_vm
     iface = primary_iface
@@ -367,22 +514,38 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         assert _filter_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* filter/rule entries present before enable — before-state not clean"
         )
-        assert not _pfctl_sn_has_redir(vm, iface), (
-            f"pfctl -sn shows rdr rule on {iface} before enable — before-state not clean"
+        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn shows an rdr rule on {iface} before enable — before-state not clean\n"
+            + _redir_match_report(vm, iface, expected_present=False)
         )
 
         # WHEN — enable on the primary interface and reload.
+        # Snapshot before/after so the per-step state diff (SMOKE_STATE_DIFF, end of
+        # log) shows config.xml gaining the rdr rows, whether /tmp/rules.debug gains
+        # the rdr, the interface IPs (ifconfig.txt), and any rdr in pf_nat.txt —
+        # localising where a "in config, absent from pf" failure happens on the VM.
+        h.snap_state(vm, "redir_pre")
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
+        h.snap_state(vm, "redir_enabled")
 
         # THEN — exactly 2 nat/rule entries (v4 + v6).
         nat_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
         assert nat_count == 2, f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries after enable, got {nat_count}"
 
-        # THEN — exactly 2 filter/rule entries.
+        # THEN — 0 hand-rolled filter/rule PASS companion entries.
+        # The NAT rules use associated-rule-id='pass' — pfSense emits an inline rdr pass
+        # and manages the companion firewall pass automatically. No separate filter/rule entry.
         filter_count = _filter_redir_count(vm, _REDIR_DESCR_PFX + iface)
-        assert filter_count == 2, (
-            f"Expected 2 pfB_DNS_Redirect_{iface}_* filter/rule entries after enable, got {filter_count}"
+        assert filter_count == 0, (
+            f"Expected 0 pfB_DNS_Redirect_{iface}_* filter/rule entries after enable "
+            f"(associated-rule-id='pass' — no hand-rolled companion), got {filter_count}"
+        )
+
+        # THEN — associated-rule-id='pass' on the v4 NAT rule.
+        rid_v4 = _nat_rule_field(vm, descr_v4, "associated-rule-id")
+        assert rid_v4 == "pass", (
+            f"{descr_v4}: associated-rule-id == {rid_v4!r}, expected 'pass' (causes pfSense to emit inline rdr pass)"
         )
 
         # THEN — field-by-field verification on the v4 rule.
@@ -402,6 +565,10 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
             f"{descr_v4}: destination.port != '53'"
         )
 
+        # THEN — associated-rule-id='pass' on the v6 NAT rule.
+        rid_v6 = _nat_rule_field(vm, descr_v6, "associated-rule-id")
+        assert rid_v6 == "pass", f"{descr_v6}: associated-rule-id == {rid_v6!r}, expected 'pass'"
+
         # THEN — field-by-field verification on the v6 rule.
         assert _nat_rule_field(vm, descr_v6, "ipprotocol") == "inet6", f"{descr_v6}: ipprotocol != 'inet6'"
         assert _nat_rule_field(vm, descr_v6, "target") == "::1", f"{descr_v6}: target != '::1'"
@@ -418,9 +585,14 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
             f"{descr_v6}: destination.port != '53'"
         )
 
-        # THEN — pfctl -sn confirms the rdr rules are active.
-        assert _pfctl_sn_has_redir(vm, iface), (
-            f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable\n" + h.pf_state_dump(vm)
+        # THEN — pfctl -sn confirms the rdr rules are ACTIVE in the live pf ruleset.
+        # This is the key gate that proves associated-rule-id='pass' actually renders.
+        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable — "
+            f"associated-rule-id='pass' did NOT render in the live pf ruleset\n"
+            + _redir_match_report(vm, iface, expected_present=True)
+            + "\n"
+            + h.pf_state_dump(vm)
         )
 
     finally:
@@ -439,13 +611,14 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
 
       Given DNS redirect is enabled on the primary non-WAN interface,
         And pfB_DNS_Redirect_<iface>_* entries are present in nat/rule (before-state),
-        And pfB_DNS_Redirect_<iface>_* entries are present in filter/rule (before-state),
+        And filter/rule has 0 pfB_DNS_Redirect_<iface>_* entries (associated-rule-id='pass' —
+            pfSense manages the companion automatically; no hand-rolled entries stored),
         And pfctl -sn shows rdr rules on the primary interface for port 53 (before-state),
 
       When DNS redirect is disabled and a full reload runs,
 
       Then nat/rule has no pfB_DNS_Redirect_* entries.
-        And filter/rule has no pfB_DNS_Redirect_* entries.
+        And filter/rule has no pfB_DNS_Redirect_* entries (was already 0).
         And pfctl -sn shows no rdr rules on the primary interface for port 53.
     """
     vm = deployed_vm
@@ -459,10 +632,16 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
             f"pfB_DNS_Redirect_{iface}_* nat/rule entries absent before disable — setup failed"
         )
-        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-            f"pfB_DNS_Redirect_{iface}_* filter/rule entries absent before disable — setup failed"
+        # No filter/rule entries: associated-rule-id='pass' — pfSense emits inline rdr pass
+        # without any hand-rolled companion stored in config.xml.
+        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 0, (
+            f"pfB_DNS_Redirect_{iface}_* filter/rule entries present before disable — unexpected "
+            f"(associated-rule-id='pass' means no hand-rolled companions should exist)"
         )
-        assert _pfctl_sn_has_redir(vm, iface), f"pfctl -sn shows no rdr on {iface} before disable — setup failed"
+        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn shows no rdr on {iface} before disable — setup failed\n"
+            + _redir_match_report(vm, iface, expected_present=True)
+        )
 
         # WHEN — disable and reload.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
@@ -476,9 +655,10 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
             "pfB_DNS_Redirect_* filter/rule entries still present after disable"
         )
 
-        # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface.
-        assert not _pfctl_sn_has_redir(vm, iface), (
-            f"pfctl -sn still shows rdr rule on {iface} for port 53 after disable"
+        # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn still shows an rdr rule on {iface} after disable\n"
+            + _redir_match_report(vm, iface, expected_present=False)
         )
 
     finally:
@@ -561,14 +741,15 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
 
       Given redirect enabled on the first two discovered non-WAN interfaces
         (e.g. lan + opt1 — names are discovered, never assumed),
-        And the first interface's pfB_DNS_Redirect_* rules present (before-state),
-        And the second interface's pfB_DNS_Redirect_* rules present (before-state),
+        And both interfaces' pfB_DNS_Redirect_* nat/rule entries present (before-state),
+        And both interfaces' filter/rule counts are 0 (associated-rule-id='pass';
+            no hand-rolled companion entries),
 
       When the selection is reduced to the first interface only and a reload runs,
 
-      Then the second interface's pfB_DNS_Redirect_* entries are GONE from nat/rule
-        and filter/rule.
+      Then the second interface's pfB_DNS_Redirect_* entries are GONE from nat/rule.
         And the first interface's pfB_DNS_Redirect_* entries are STILL PRESENT (both families).
+        And filter/rule has 0 pfB_DNS_Redirect_* entries for either interface throughout.
     """
     vm = deployed_vm
 
@@ -581,28 +762,31 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
     iface_drop = available[1]  # typically 'opt1'
 
     try:
-        # GIVEN — enable on both interfaces; assert both rule sets present.
+        # GIVEN — enable on both interfaces; assert both nat/rule sets present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface_keep, iface_drop], exception="")
         h.reload(vm, "update")
 
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_keep) == 2, (
-            f"pfB_DNS_Redirect_{iface_keep}_* rules absent before prune — setup failed"
+            f"pfB_DNS_Redirect_{iface_keep}_* nat/rule entries absent before prune — setup failed"
         )
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_drop) == 2, (
-            f"pfB_DNS_Redirect_{iface_drop}_* rules absent before prune — setup failed"
+            f"pfB_DNS_Redirect_{iface_drop}_* nat/rule entries absent before prune — setup failed"
         )
-        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_keep) == 2, (
-            f"pfB_DNS_Redirect_{iface_keep}_* filter entries absent before prune"
+        # No filter/rule entries: associated-rule-id='pass' — no hand-rolled companions.
+        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_keep) == 0, (
+            f"pfB_DNS_Redirect_{iface_keep}_* filter/rule entries present before prune — unexpected "
+            f"(associated-rule-id='pass' means no hand-rolled companions should exist)"
         )
-        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_drop) == 2, (
-            f"pfB_DNS_Redirect_{iface_drop}_* filter entries absent before prune"
+        assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_drop) == 0, (
+            f"pfB_DNS_Redirect_{iface_drop}_* filter/rule entries present before prune — unexpected "
+            f"(associated-rule-id='pass' means no hand-rolled companions should exist)"
         )
 
         # WHEN — reduce to keep-interface only.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface_keep], exception="")
         h.reload(vm, "update")
 
-        # THEN — drop-interface rules removed.
+        # THEN — drop-interface nat/rule entries removed; filter/rule was and remains 0.
         drop_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_drop)
         assert drop_nat == 0, f"pfB_DNS_Redirect_{iface_drop}_* nat/rule entries ({drop_nat}) still present after prune"
         drop_filter = _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_drop)
@@ -610,14 +794,15 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
             f"pfB_DNS_Redirect_{iface_drop}_* filter/rule entries ({drop_filter}) still present after prune"
         )
 
-        # THEN — keep-interface rules remain (both families = 2 nat + 2 filter).
+        # THEN — keep-interface rules remain: 2 NAT (inet + inet6); filter/rule still 0.
         keep_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_keep)
         assert keep_nat == 2, (
             f"pfB_DNS_Redirect_{iface_keep}_* nat/rule entries reduced to {keep_nat} after prune (expected 2)"
         )
         keep_filter = _filter_redir_count(vm, _REDIR_DESCR_PFX + iface_keep)
-        assert keep_filter == 2, (
-            f"pfB_DNS_Redirect_{iface_keep}_* filter/rule entries reduced to {keep_filter} after prune (expected 2)"
+        assert keep_filter == 0, (
+            f"pfB_DNS_Redirect_{iface_keep}_* filter/rule entries is {keep_filter} after prune "
+            f"(expected 0 — associated-rule-id='pass', no hand-rolled companions)"
         )
 
     finally:
@@ -659,6 +844,10 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* entries present before Case 5 — state not clean"
         )
+
+        # Create a real pfSense network alias so pfctl can resolve 'from !<alias>'
+        # without a syntax error when the ruleset is applied after reload.
+        _seed_pf_alias(vm, _EXCEPTION_ALIAS, "192.0.2.0/24")
 
         # WHEN — enable with exception alias set.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception=_EXCEPTION_ALIAS)
@@ -705,6 +894,7 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
         )
 
     finally:
+        _remove_pf_alias(vm, _EXCEPTION_ALIAS)
         _cleanup_redirect(vm)
 
 
@@ -719,15 +909,15 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
     Scenario: uninstall sweep — owned rules gone, user rule and sections gone.
 
       Given DNS redirect is enabled on the primary non-WAN interface
-            (pfB_DNS_Redirect_<iface>_* in nat/rule + filter/rule, confirmed in
-            config.xml as before-state),
+            (pfB_DNS_Redirect_<iface>_* in nat/rule, confirmed in config.xml as
+            before-state; filter/rule has 0 pfB entries — associated-rule-id='pass'),
         And a user nat/rule entry (no pfB marker) is present in config.xml,
         And installedpackages/pfblockerng* sections are present (before-state),
 
       When pfBlockerNG is uninstalled via 'pkg delete',
 
       Then all pfB_DNS_Redirect_* entries are GONE from nat/rule.
-        And all pfB_DNS_Redirect_* entries are GONE from filter/rule.
+        And filter/rule has 0 pfB_DNS_Redirect_* entries (was already 0; stays 0).
         And no pfBlockerNG nat/rule entries remain.
         And the user nat/rule entry is STILL PRESENT and unchanged.
         And installedpackages/pfblockerng* sections are GONE from config.xml.
@@ -736,22 +926,28 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
     iface = primary_iface
 
     # GIVEN — enable redirect on the primary interface and seed a user NAT rule.
+    # Select the full-removal uninstall path: the owned-object sweep runs only when
+    # pfb_keep != 'on', and pfb_keep defaults to 'on' (issue #281). The keep='on'
+    # uninstall path (owned objects swept, settings retained) is tracked in #484.
+    _set_pfb_keep(vm, keep=False)
     _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
     h.reload(vm, "update")
     _seed_user_nat(vm, _USER_NAT_DESCR)
 
-    # BEFORE-STATE: assert all objects are present before uninstall.
+    # BEFORE-STATE: assert nat/rule entries present; filter/rule entries are 0 (no companions).
     assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
         f"pfB_DNS_Redirect_{iface}_* nat/rule entries absent before uninstall — setup failed"
     )
-    assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
-        f"pfB_DNS_Redirect_{iface}_* filter/rule entries absent before uninstall — setup failed"
+    # associated-rule-id='pass' — no hand-rolled filter/rule companions are stored.
+    assert _filter_redir_count(vm, _REDIR_DESCR_PFX + iface) == 0, (
+        f"pfB_DNS_Redirect_{iface}_* filter/rule entries present before uninstall — unexpected "
+        f"(associated-rule-id='pass' means no hand-rolled companions should exist)"
     )
     assert _nat_rule_present(vm, _USER_NAT_DESCR), "user NAT rule absent before uninstall — seeding failed"
     assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
 
     # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
-    # pfb_fwobj_sweep before pfb_remove_config_settings).
+    # owned-object sweep before pfb_remove_config_settings).
     _pkg_delete(vm)
 
     # THEN — all pfB_DNS_Redirect_* entries are gone.

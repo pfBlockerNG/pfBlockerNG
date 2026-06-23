@@ -432,16 +432,16 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
         cfg = cfg_res.stdout.split("<<CFG>>", 1)[1].split("<<END>>", 1)[0]
     # rules.debug freshness (mtime + total lines) tells us whether filter_configure()
     # actually re-ran this reload, plus the LAN/rdr/self lines so we see if the rule
-    # was emitted at all.
-    meta = vm.ssh(
-        "/bin/sh",
-        "-c",
-        # BSD stat (pfSense/FreeBSD): %m = mtime epoch, %z = size. GNU `ls
-        # --time-style` is not portable here ('Illegal option'). `now=` is the
-        # epoch at capture so the mtime can be read as fresh-vs-stale.
-        "stat -f 'mtime=%m size=%z' /tmp/rules.debug 2>&1; echo now=$(date +%s); wc -l /tmp/rules.debug",
-        timeout=timeout,
-    )
+    # was emitted at all. `SmokeVM.ssh` routes every command through `/bin/sh -c`
+    # (the remote argv is re-quoted into one POSIX-sh command line), so these tokens
+    # — including the grep ERE with `|`/`(`/`$` — reach the program intact rather
+    # than being re-parsed by pfSense root's tcsh login shell. BSD stat
+    # (pfSense/FreeBSD): %m = mtime epoch, %z = size — joined with no space so the
+    # one field stays readable. `now=` is the capture epoch for fresh-vs-stale reads.
+    st = vm.ssh("/usr/bin/stat", "-f", "mtime=%m_size=%z", "/tmp/rules.debug", timeout=timeout)
+    now = vm.ssh("/bin/date", "+now=%s", timeout=timeout)
+    wc = vm.ssh("/usr/bin/wc", "-l", "/tmp/rules.debug", timeout=timeout)
+    meta_str = " ".join(f"{st.stdout} {now.stdout} {wc.stdout}".split())
     dbg = vm.ssh(
         "/usr/bin/grep",
         "-nE",
@@ -451,13 +451,29 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     )
     sn = vm.ssh(PFCTL, "-sn", timeout=timeout)
     sr = vm.ssh(PFCTL, "-sr", timeout=timeout)
-    rdr = [ln for ln in sn.stdout.splitlines() if "rdr" in ln and ("53" in ln or "853" in ln)]
-    blk = [ln for ln in sr.stdout.splitlines() if "block" in ln and ("53" in ln or "853" in ln)]
+
+    # pfctl renders port 53 as the /etc/services name `domain` (853 likewise may render by
+    # name), so match the service name as well as the numeric form. A numeric-only filter
+    # reports a misleading "rdr: 0" when the rule IS loaded — it bit this very test.
+    def _port53ish(ln: str) -> bool:
+        return "53" in ln or "853" in ln or "domain" in ln
+
+    rdr = [ln for ln in sn.stdout.splitlines() if "rdr" in ln and _port53ish(ln)]
+    blk = [ln for ln in sr.stdout.splitlines() if "block" in ln and _port53ish(ln)]
     dbg_lines = [ln for ln in dbg.stdout.splitlines() if ln.strip()]
+    # Dry-run the generated ruleset (parse-only, never loads). This DISTINGUISHES
+    # the two ways a rule "in rules.debug" fails to reach live pf: a clean dry-run
+    # means filter_configure's pf load succeeded and the rule simply was not emitted
+    # (rule-shape/generator skip); a non-zero dry-run with a parse error means pf
+    # REJECTED the ruleset (e.g. a `to ! (self)` redirect pfctl won't accept), so the
+    # kernel kept the prior rule set and the whole reload was a silent no-op.
+    nf = vm.ssh(PFCTL, "-nf", "/tmp/rules.debug", timeout=timeout)
+    nf_msg = " ".join((nf.stderr or nf.stdout or "").split()) or "(clean)"
     return (
         f"[CONFIG rows] {cfg.strip()}\n"
-        f"[rules.debug meta] {' '.join(meta.stdout.split())}\n"
+        f"[rules.debug meta] {meta_str}\n"
         f"[RULES.DEBUG lan/rdr/self/53/853: {len(dbg_lines)}] " + " || ".join(dbg_lines[:12]) + "\n"
+        f"[pfctl -nf dry-run] rc={nf.returncode} {nf_msg[:400]}\n"
         f"[LIVE PF rdr: {len(rdr)}] " + " || ".join(rdr[:6]) + "\n"
         f"[LIVE PF block: {len(blk)}] " + " || ".join(blk[:6])
     )
@@ -468,8 +484,8 @@ def deinstall_debug(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 
     After ``pkg delete`` the pfBlockerNG log persists at /var/log/pfblockerng.
     Surfaces the deinstall/sweep lines so a 'rule survived uninstall' failure
-    shows whether pfblockerng_php_pre_deinstall_command + pfb_fwobj_sweep ran at
-    all (vs ran but missed the rows). Best-effort; tolerates a missing log.
+    shows whether pfblockerng_php_pre_deinstall_command + the owned-object sweep
+    ran at all (vs ran but missed the rows). Best-effort; tolerates a missing log.
     """
     log = vm.ssh(
         "/usr/bin/grep",
@@ -505,11 +521,9 @@ def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 
     ``tee: …: No such file or directory``.
     """
     path = f"{PFB_DBDIR}/{name}"
-    # Ensure the data dir exists FIRST, as its own simple round-trip. Do NOT fold it
-    # into the tee with `sh -c "mkdir … && tee …"`: ssh space-joins the remote argv
-    # and the remote LOGIN shell (tcsh for pfSense root) re-parses it, so `sh -c`
-    # would capture only the first token (and tcsh chokes on the POSIX `'\''` idiom).
-    # A bare `mkdir -p <dir>` argv (no &&/redirect/nested quotes) is shell-agnostic.
+    # Ensure the data dir exists FIRST, as its own simple round-trip, so the tee
+    # below keeps stdin free for the file contents (no `mkdir … && tee …` pipeline
+    # competing for stdin). `SmokeVM.ssh` already routes the argv through `/bin/sh`.
     mk = subprocess.run(
         vm.ssh_argv("/bin/mkdir", "-p", PFB_DBDIR),
         capture_output=True,
@@ -895,6 +909,28 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(
             f"set_dnsbl_enabled({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
+    """Set the DNSBL interface (``dnsbl_interface``) in the DNSBL-settings section.
+
+    ``iface`` is the pfSense friendly interface name, e.g. ``'lo0'`` (the default)
+    or ``'lan'``.  The DNSBL NAT redirect rule is only emitted when this is not
+    ``'lo0'``, so tests that assert NAT creation must set it to a real LAN interface
+    before the reload that enables DNSBL.
+    """
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['dnsbl_interface'] = {_php_str(iface)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: set dnsbl_interface');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_interface({iface!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
 
 
@@ -2222,37 +2258,66 @@ PFB_LOGDIR = "/var/log/pfblockerng"
 
 
 def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
-    """Snapshot full state into SNAP_DIR/<NN>_<tag>/ (best-effort).
+    """Snapshot full state into SNAP_DIR/<NN>_<tag>/ (best-effort), SECRET-SCRUBBED.
 
-    Captures config.xml, unbound.conf AND every pfBlockerNG log file
-    (/var/log/pfblockerng/*) so dump_state_diffs can recursively diff consecutive
-    steps — showing config/unbound changes AND each log's appended lines (incl.
-    py_error.log for python-mode failures). No-op unless SMOKE_STATE_DIFF is set.
+    Captures a scrubbed config.xml (bcrypt-hash / prv / authorizedkeys /
+    tls_certificate + Actuator-style sensitive-tag pass — same scrub as
+    :func:`collect_host_diagnostics`), unbound.conf, pfb_unbound.ini,
+    pfb_dnsbl.conf, pfb_py_data.txt, every pfBlockerNG log file
+    (/var/log/pfblockerng/*), /tmp/rules.debug, and live runtime state (pfctl
+    rules/NAT/tables, ifconfig, :53 listeners).
+
+    After all files are captured, applies the same value-redaction pass as
+    :func:`collect_host_diagnostics` over every text file in the snapshot dir
+    — catching the Plus MAC/SMBIOS uuid that can appear in ifconfig.txt or logs.
+    The pass is a strict no-op for CE legs (``SMOKE_REDACT_VALUES`` unset or empty).
+
+    :func:`dump_state_diffs` diffs consecutive snapshot dirs, showing config /
+    unbound / log changes AND the generated ruleset (/tmp/rules.debug) at each step.
+    No-op unless ``SMOKE_STATE_DIFF`` is set.
     """
     if not os.environ.get("SMOKE_STATE_DIFF"):
         return
     global _snap_seq
     dest = f"{SNAP_DIR}/{_snap_seq:02d}_{tag}"
     _snap_seq += 1
+    # Build the config-scrub sed invocation (ERE; same program as collect_host_diagnostics).
+    scrub_prog = _config_xml_scrub_sed_program()
+    # Value-redaction: mirrors collect_host_diagnostics — no-op for CE (empty set).
+    redact_values_set = parse_redact_values(os.environ.get("SMOKE_REDACT_VALUES"))
+    # dest is a literal path (no shell variable needed); quote it for the shell.
+    dest_sh = shlex.quote(dest)
+    build_redact_sed, redact_bundle = _build_value_redact_shell(dest_sh, redact_values_set)
+
     # Files + every pfBlockerNG log + live runtime state (firewall rules/NAT/
-    # tables, interface aliases incl. the DNSBL VIP, :53 listeners). All land in
-    # one per-step dir so the recursive diff shows every change at each step.
+    # tables, the generated ruleset, interface aliases incl. the DNSBL VIP,
+    # :53 listeners). All land in one per-step dir so the recursive diff shows
+    # every change at each step.
+    # config.xml is written through the secret-scrub sed — NEVER a plain cp.
     cmd = (
-        f"/bin/mkdir -p {dest} && "
-        f"cp {CONFIG_XML} {dest}/config.xml 2>/dev/null; "
-        f"cp {UNBOUND_CONF} {dest}/unbound.conf 2>/dev/null; "
+        f"/bin/mkdir -p {dest_sh} && "
+        # Secret-scrub config.xml: the same sed program as collect_host_diagnostics.
+        f"sed -E '{scrub_prog}' {CONFIG_XML} > {dest_sh}/config.xml 2>/dev/null; "
+        f"cp {UNBOUND_CONF} {dest_sh}/unbound.conf 2>/dev/null; "
         # The DNSBL python ini (python_blocking flag the module reads) + the
         # unbound-mode block file (local-zone/local-data) + the python blocklist.
-        f"cp /var/unbound/pfb_unbound.ini {dest}/ 2>/dev/null; "
-        f"cp /var/unbound/pfb_dnsbl.conf {dest}/ 2>/dev/null; "
-        f"cp /var/unbound/pfb_py_data.txt {dest}/ 2>/dev/null; "
-        f"cp -p {PFB_LOGDIR}/* {dest}/ 2>/dev/null; "
-        f"/sbin/pfctl -sr  > {dest}/pf_rules.txt   2>/dev/null; "
-        f"/sbin/pfctl -sn  > {dest}/pf_nat.txt     2>/dev/null; "
-        f"/sbin/pfctl -sTables > {dest}/pf_tables.txt 2>/dev/null; "
-        f"/sbin/ifconfig > {dest}/ifconfig.txt 2>/dev/null; "
-        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound|lighttpd' > {dest}/sockets.txt 2>/dev/null; "
-        "true"
+        f"cp /var/unbound/pfb_unbound.ini {dest_sh}/ 2>/dev/null; "
+        f"cp /var/unbound/pfb_dnsbl.conf {dest_sh}/ 2>/dev/null; "
+        f"cp /var/unbound/pfb_py_data.txt {dest_sh}/ 2>/dev/null; "
+        f"cp -p {PFB_LOGDIR}/* {dest_sh}/ 2>/dev/null; "
+        # The generated pf ruleset — ground truth for whether filter_configure()
+        # emitted a rule; key artifact for per-step "did the rule render" diffs.
+        f"cp /tmp/rules.debug {dest_sh}/rules.debug 2>/dev/null; "
+        f"/sbin/pfctl -sr  > {dest_sh}/pf_rules.txt   2>/dev/null; "
+        f"/sbin/pfctl -sn  > {dest_sh}/pf_nat.txt     2>/dev/null; "
+        f"/sbin/pfctl -sTables > {dest_sh}/pf_tables.txt 2>/dev/null; "
+        f"/sbin/ifconfig > {dest_sh}/ifconfig.txt 2>/dev/null; "
+        f"/usr/bin/sockstat | /usr/bin/grep -E ':53|unbound|lighttpd' > {dest_sh}/sockets.txt 2>/dev/null; "
+        # Value-redaction over ALL text files in the snapshot dir (Plus only — no-op
+        # for CE). Must run AFTER all files are captured so it covers ifconfig.txt too.
+        + build_redact_sed
+        + redact_bundle
+        + "true"
     )
     vm.ssh(cmd, timeout=timeout)
 
@@ -3204,6 +3269,41 @@ def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts:
     return False
 
 
+def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
+    """Poll ``predicate()`` until it returns truthy, or until ``timeout`` elapses.
+
+    Returns the final ``bool(predicate())``. A BOUNDED poll for the same documented
+    reason as :func:`rule_references` / :func:`wait_pfctl_table`: pfBlockerNG's
+    ``filter_configure`` is ASYNC (``send_event("filter reload")``), so a pf-level
+    rule (rdr / block) lands a few seconds AFTER ``reload()`` returns — a single-shot
+    ``pfctl -sr``/``-sn`` read right after the reload races the event and reads the
+    pre-reload ruleset. Wrap such an assertion in ``wait_until`` so green proves the
+    rule actually landed (and, for an absence check, that it was actually removed),
+    not that the read happened to win/lose the race.
+
+    Default ``timeout`` is deliberately well under the smoke harness's 30s per-test
+    body cap (``smoke.yml`` ``--timeout=30 --timeout-method=signal``,
+    ``timeout_func_only=true``): the test body has already spent time in ``reload()``,
+    so a 30s poll here would trip the body timeout FIRST and kill the test before its
+    assertion (and the ``pf_state_dump`` it prints) can run — turning a real "rule did
+    not load" into an opaque ``Timeout``. A short poll gives up in time for the
+    assertion to fire with diagnostics. The async lag is a few seconds; if the rule is
+    not present within this window it is genuinely absent, which is what we want to see.
+    The predicate is re-evaluated once more at the deadline so a slow box still gets a
+    final, authoritative read.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if predicate():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return bool(predicate())
+        # Clamp the sleep to the time left so the poll never overshoots `timeout` by a
+        # full interval (keeps the "well under the body timeout" guarantee in the docstring).
+        time.sleep(min(interval, remaining))
+
+
 def member_present(members: list[str], ip: str) -> bool:
     """True iff ``ip`` appears in a table's members (CIDR-tolerant exact/prefix)."""
     return ip in members or any(m.split("/", 1)[0] == ip for m in members)
@@ -3299,6 +3399,83 @@ def sensitive_tag_sed_program() -> str:
     (in-guest) and GNU ``sed`` — mirroring the Python pattern's ``re.IGNORECASE``.
     """
     return "s#(<[a-z0-9_:-]*(" + _SENSITIVE_TAG_ALTERNATION + ")s?>)[^<]*#\\1" + REDACTED + "#gI"
+
+
+def _config_xml_scrub_sed_program() -> str:
+    """Return the full ``sed -E`` PROGRAM (not the invocation) that scrubs secrets
+    from config.xml — the same program used by both :func:`snap_state` (per-step
+    diff snapshots) and :func:`collect_host_diagnostics` (the full diagnostics
+    bundle).
+
+    Combines four explicit credential substitutions (bcrypt-hash / prv /
+    authorizedkeys / tls_certificate — these are NOT caught by the tag-name pass)
+    with the Actuator-style sensitive-tag pass from
+    :func:`sensitive_tag_sed_program`, joined into one ``sed -E`` program so a
+    single ``sed`` invocation handles both layers. The two callers share this
+    builder so they cannot drift.
+    """
+    return (
+        "s#(<bcrypt-hash>)[^<]*#\\1REDACTED#g; s#(<prv>)[^<]*#\\1REDACTED#g; "
+        "s#(<authorizedkeys>)[^<]*#\\1REDACTED#g; s#(<tls_certificate>)[^<]*#\\1REDACTED#g; "
+        + sensitive_tag_sed_program()
+    )
+
+
+def _build_value_redact_shell(dir_ref: str, redact_values_set: list[str]) -> tuple[str, str]:
+    """Build the pair of shell fragments that value-redact all text files under
+    ``dir_ref`` using the Plus secret identity from ``redact_values_set``.
+
+    ``dir_ref`` is the shell expression for the directory — e.g. ``'"$D"'`` when
+    the caller uses a shell variable, or a ``shlex.quote``-d literal path when the
+    directory is known at call time.
+
+    Returns ``(build_redact_sed, redact_bundle)`` — two shell-script fragments
+    meant to be concatenated into a larger script:
+
+    * ``build_redact_sed`` — writes ``{dir_ref}/redact.sed`` (one
+      ``s#…#REDACTED#gI;`` per secret value, plus the live in-guest SMBIOS serial
+      appended with the same escaping).
+    * ``redact_bundle`` — runs ``sed -i '' -f redact.sed`` over every TEXT file in
+      ``{dir_ref}`` (text detected by ``grep -Iq .``), then removes ``redact.sed``
+      so the program itself (which embeds the secret literals) is never shipped.
+
+    When ``redact_values_set`` is empty (CE leg) BOTH strings are empty — the
+    caller's script is byte-identical to the no-redaction path (strict no-op).
+
+    Shared by :func:`snap_state` and :func:`collect_host_diagnostics` so the two
+    callers cannot drift.
+    """
+    if not redact_values_set:
+        return "", ""
+    # `I` flag = case-insensitive so an upper-case secret matches lower-case
+    # rendering in ifconfig/dmesg/logs (supported by both FreeBSD and GNU sed).
+    sed_prog = "".join(f"s#{_sed_escape_literal(v)}#{REDACTED}#gI;" for v in redact_values_set)
+    # In-guest BRE-escape of the live SMBIOS serial — SAME metachar set + order as
+    # _sed_escape_literal (`\` first, then `. * [ ] ^ $ #`), one `-e` per
+    # metachar (NOT a bracket-class: `[\.*[]^$#]` closes early at the first `]`).
+    serial_esc = (
+        "sed -e 's/\\\\/\\\\\\\\/g' -e 's/\\./\\\\./g' -e 's/\\*/\\\\*/g' "
+        "-e 's/\\[/\\\\[/g' -e 's/\\]/\\\\]/g' -e 's/\\^/\\\\^/g' "
+        "-e 's/\\$/\\\\$/g' -e 's/#/\\\\#/g'"
+    )
+    build_redact_sed = (
+        f"printf '%s' {shlex.quote(sed_prog)} > {dir_ref}/redact.sed; "
+        "S=$(kenv -q smbios.system.serial 2>/dev/null); "
+        # Drop generic SMBIOS placeholders (mirror parse_redact_values).
+        "SL=$(printf '%s' \"$S\" | tr '[:upper:]' '[:lower:]'); "
+        "case \"$SL\" in 'not specified'|'to be filled by o.e.m.'|'0'|'none'|'default string'|'') S='' ;; esac; "
+        'if [ -n "$S" ]; then '
+        f"ES=$(printf '%s' \"$S\" | {serial_esc}); "
+        f"printf 's#%s#REDACTED#gI;' \"$ES\" >> {dir_ref}/redact.sed; "
+        "fi; "
+    )
+    redact_bundle = (
+        f"find {dir_ref} -type f ! -name redact.sed 2>/dev/null | while IFS= read -r f; do "
+        f'LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i \'\' -f {dir_ref}/redact.sed "$f" 2>/dev/null; '
+        "done; "
+        f"rm -f {dir_ref}/redact.sed 2>/dev/null; "
+    )
+    return build_redact_sed, redact_bundle
 
 
 # --------------------------------------------------------------------------- #
@@ -3418,12 +3595,9 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
     # NOT name-matched by the sensitive-tag pass. ADR-24: the Actuator-style
     # sensitive-TAG pass (sensitive_tag_sed_program) is APPENDED to the SAME single
     # sed invocation, after the explicit ones, so it runs for EVERY leg.
+    # Shared builder — same program as snap_state; they cannot drift.
     config_scrub = (
-        "sed -E 's#(<bcrypt-hash>)[^<]*#\\1REDACTED#g; s#(<prv>)[^<]*#\\1REDACTED#g; "
-        "s#(<authorizedkeys>)[^<]*#\\1REDACTED#g; s#(<tls_certificate>)[^<]*#\\1REDACTED#g; "
-        + sensitive_tag_sed_program()
-        + "' "
-        '/conf/config.xml > "$D/config.scrubbed.xml" 2>/dev/null; '
+        "sed -E '" + _config_xml_scrub_sed_program() + '\' /conf/config.xml > "$D/config.scrubbed.xml" 2>/dev/null; '
     )
 
     # /var/log: tarred directly when value-redaction is OFF; when ON it is STAGED
@@ -3435,51 +3609,21 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
     # uuid in dmesg.txt, and either can land in the staged /var/log — so the WHOLE
     # bundle (config.scrubbed.xml, the var_log stage, ifconfig/dmesg/ps/sockstat/
     # netstat, the unbound *.conf copies, …) is scrubbed, not just config + logs.
-    # A redact.sed program (one literal s###REDACTED### per maintainer value, BRE-
-    # escaped) is emitted once, the live in-guest serial appended (escaped the same
-    # way), then run over every TEXT file in $D (grep -Iq . detects text).
-    build_redact_sed = ""
-    redact_bundle = ""
+    # Shared builder with snap_state — they cannot drift.
+    build_redact_sed, redact_bundle_base = _build_value_redact_shell('"$D"', redact_values_set)
     if redact_values_set:
-        # `I` flag = case-insensitive (supported by both FreeBSD sed in-guest and GNU
-        # sed on the runner), so an upper-case secret still matches the lower-case
-        # MAC/uuid that ifconfig/dmesg/logs emit.
-        sed_prog = "".join(f"s#{_sed_escape_literal(v)}#{REDACTED}#gI;" for v in redact_values_set)
-        # In-guest BRE-escape of the live serial — SAME metachar set + order as
-        # _sed_escape_literal (`\` first, then `. * [ ] ^ $ #`), one `-e` per
-        # metachar (NOT a bracket-class: a class like `[\.*[]^$#]` closes early at
-        # the first `]` and escapes nothing) — so the shell and Python redactors
-        # agree (pinned by the parity test).
-        serial_esc = (
-            "sed -e 's/\\\\/\\\\\\\\/g' -e 's/\\./\\\\./g' -e 's/\\*/\\\\*/g' "
-            "-e 's/\\[/\\\\[/g' -e 's/\\]/\\\\]/g' -e 's/\\^/\\\\^/g' "
-            "-e 's/\\$/\\\\$/g' -e 's/#/\\\\#/g'"
-        )
-        build_redact_sed = (
-            f"printf '%s' {shlex.quote(sed_prog)} > \"$D/redact.sed\"; "
-            "S=$(kenv -q smbios.system.serial 2>/dev/null); "
-            # Drop generic SMBIOS placeholders case-insensitively (mirror parse_redact_values).
-            "SL=$(printf '%s' \"$S\" | tr '[:upper:]' '[:lower:]'); "
-            "case \"$SL\" in 'not specified'|'to be filled by o.e.m.'|'0'|'none'|'default string'|'') S='' ;; esac; "
-            'if [ -n "$S" ]; then '
-            f"ES=$(printf '%s' \"$S\" | {serial_esc}); "
-            # `I` flag → case-insensitive, so a differently-cased serial rendering scrubs too.
-            'printf \'s#%s#REDACTED#gI;\' "$ES" >> "$D/redact.sed"; '
-            "fi; "
-        )
         var_log_capture = 'cp -a /var/log "$D/var_log_stage" 2>/dev/null; '
         # Run AFTER every file is collected (so it also catches the var_log stage,
         # ifconfig.txt, dmesg.txt, the unbound confs, …) and BEFORE the final tar.
         # redact.sed itself is removed so the program (which embeds the literals) is
         # never shipped in the bundle. Then the staged /var/log is tarred + dropped.
         redact_bundle = (
-            'find "$D" -type f ! -name redact.sed 2>/dev/null | while IFS= read -r f; do '
-            'LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i \'\' -f "$D/redact.sed" "$f" 2>/dev/null; '
-            "done; "
-            'rm -f "$D/redact.sed" 2>/dev/null; '
-            'tar czf "$D/var_log.tgz" -C "$D" var_log_stage 2>/dev/null; '
-            'rm -rf "$D/var_log_stage" 2>/dev/null; '
+            redact_bundle_base
+            + 'tar czf "$D/var_log.tgz" -C "$D" var_log_stage 2>/dev/null; '
+            + 'rm -rf "$D/var_log_stage" 2>/dev/null; '
         )
+    else:
+        redact_bundle = ""
 
     script = (
         'set +e; D=/tmp/pfb_smoke_diag; rm -rf "$D"; mkdir -p "$D/unbound"; '
@@ -3663,6 +3807,33 @@ def dump_diagnostics(vm: SmokeVM) -> None:
         ),
         ("pfBlockerNG log tail", "tail -n 120 /var/log/pfblockerng/pfblockerng.log 2>/dev/null || true"),
         ("pfBlockerNG error log tail", "tail -n 40 /var/log/pfblockerng/error.log 2>/dev/null || true"),
+        # --- bypass-rule render diagnostics (ADR-36/37): a rule can be in config.xml
+        # yet dropped by filter_*_rules_generate when its interface has no usable IP /
+        # is absent from $FilterIflist. These show interface reality + whether ANY rdr
+        # renders, so a "in config, absent from rules.debug" failure is localised.
+        (
+            "interface addrs (which real-ifs are UP + carry an IP)",
+            "/sbin/ifconfig -a 2>/dev/null | grep -E '^[a-z0-9_]+:|inet ' | head -50 || true",
+        ),
+        ("up interfaces (ifconfig -lu)", "/sbin/ifconfig -lu 2>/dev/null || true"),
+        (
+            "friendly->real iface assignments (config.xml <interfaces>)",
+            "sed -n '/<interfaces>/,/<\\/interfaces>/p' /conf/config.xml 2>/dev/null | "
+            "grep -nE '<lan>|<wan>|<opt|<if>|<ipaddr>|<enable>' | head -40 || true",
+        ),
+        (
+            "rules.debug rdr/nat lines (does ANY rdr render at all?)",
+            "grep -nE 'rdr|^nat |Redirect|DoT|pfB_DNS|\\(self\\)' /tmp/rules.debug 2>/dev/null | head -40 || true",
+        ),
+        (
+            "config nat/rule redirect rows (sync wrote them?)",
+            "sed -n '/<nat>/,/<\\/nat>/p' /conf/config.xml 2>/dev/null | "
+            "grep -nE 'Redirect|associated-rule-id|<network>|<interface>|<target>' | head -30 || true",
+        ),
+        (
+            "config filter DoT block row + tracker",
+            "grep -nE 'DoT_Block|853' /conf/config.xml 2>/dev/null | head -10 || true",
+        ),
     ]
     # Stub-upstream reachability: can the guest reach the runner-side stub, and
     # does forwarding through it resolve a random (non-blocked, non-local) name
@@ -3775,7 +3946,7 @@ class CaseContext:
 IPV6_LOCAL_IFACE = "lan"  # LAN — never touches the WAN/SSH path
 IPV6_LOCAL_ADDR = "2001:db8:51:1::1"  # static address on the LAN interface
 IPV6_LOCAL_BITS = 64  # prefix length → /64
-IPV6_LOCAL_SUBNET = "2001:db8:51:1::"  # network address of the /64
+IPV6_LOCAL_SUBNET = "2001:db8:51:1::/64"  # network address of the /64, CIDR notation
 IPV6_LOCAL_HOST = "2001:db8:51:1::1234"  # a host INSIDE the /64
 IPV6_FOREIGN = "2001:db8:dead:beef::1"  # OUTSIDE the /64 → must be foreign
 

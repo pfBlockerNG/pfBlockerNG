@@ -35,6 +35,7 @@ import pytest
 
 from tests.smoke.helpers import (
     REDACTED,
+    _config_xml_scrub_sed_program,
     _sed_escape_literal,
     parse_redact_values,
     redact_sensitive_xml_tags,
@@ -389,3 +390,95 @@ def test_value_redactor_python_matches_sed() -> None:
     for v in values:
         assert v not in result.stdout
     assert "untouched: plain text line" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# _config_xml_scrub_sed_program — shared config.xml secret scrub
+# (used by both snap_state and collect_host_diagnostics)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("xml_fragment", "secret"),
+    [
+        # Four explicit credential substitutions — NOT caught by tag-name match.
+        ("<bcrypt-hash>$2y$10$abc123</bcrypt-hash>", "$2y$10$abc123"),
+        ("<prv>-----BEGIN PRIVATE KEY-----\nMIIE...</prv>", "-----BEGIN PRIVATE KEY-----\nMIIE..."),
+        ("<authorizedkeys>ssh-rsa AAAA... user@host</authorizedkeys>", "ssh-rsa AAAA... user@host"),
+        ("<tls_certificate>MIIB...</tls_certificate>", "MIIB..."),
+        # Actuator-style tag-name matches (sensitive_tag_sed_program layer).
+        ("<password>hunter2</password>", "hunter2"),
+        ("<psk>my-preshared-key</psk>", "my-preshared-key"),
+    ],
+)
+def test_config_xml_scrub_sed_program_covers_explicit_and_tag_secrets(xml_fragment: str, secret: str) -> None:
+    """Given a config.xml element containing a well-known secret type
+    When _config_xml_scrub_sed_program() is used as an ERE sed program
+    Then the secret value is replaced with REDACTED — both the explicit credential
+         substitutions (bcrypt-hash / prv / authorizedkeys / tls_certificate) AND the
+         Actuator-style sensitive-tag pass (password, psk, …) are covered.
+
+    Pre-state asserted (secret present, REDACTED absent) so green proves the scrub
+    CAUSED the removal, not that the secret was never there.
+    """
+    # Pre-state
+    assert secret in xml_fragment
+    assert REDACTED not in xml_fragment
+
+    if shutil.which("sed") is None:
+        pytest.skip("sed not available")
+
+    prog = _config_xml_scrub_sed_program()
+    result = subprocess.run(
+        ["sed", "-E", prog],
+        input=xml_fragment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    # Post-state: secret gone, REDACTED present, overall structure intact.
+    assert secret not in result.stdout
+    assert REDACTED in result.stdout
+
+
+def test_config_xml_scrub_sed_program_leaves_non_sensitive_tags_intact() -> None:
+    """LOAD-BEARING NEGATIVE: non-sensitive config.xml content survives the scrub
+    byte-for-byte.
+
+    Given a config.xml fragment with only non-sensitive elements
+    When _config_xml_scrub_sed_program() runs over it
+    Then the output is identical to the input — the scrub does not over-redact.
+    """
+    if shutil.which("sed") is None:
+        pytest.skip("sed not available")
+
+    fragment = "<hostname>fw1</hostname>\n<version>2.8.0</version>\n<ipaddr>192.0.2.1</ipaddr>\n"
+    prog = _config_xml_scrub_sed_program()
+    result = subprocess.run(
+        ["sed", "-E", prog],
+        input=fragment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == fragment
+
+
+def test_config_xml_scrub_sed_program_is_same_program_as_collect_host_diagnostics() -> None:
+    """The sed program returned by _config_xml_scrub_sed_program() must be the shared
+    program used by BOTH snap_state and collect_host_diagnostics — i.e. it embeds
+    the sensitive_tag_sed_program() suffix, so they cannot silently diverge.
+
+    Given _config_xml_scrub_sed_program() and sensitive_tag_sed_program()
+    When we inspect the returned string
+    Then the full program ends with sensitive_tag_sed_program() (the Actuator-style
+         pass) and contains all four explicit credential tag names.
+    """
+    prog = _config_xml_scrub_sed_program()
+    for tag in ("bcrypt-hash", "prv", "authorizedkeys", "tls_certificate"):
+        assert tag in prog, f"explicit tag {tag!r} missing from config scrub program"
+    assert prog.endswith(sensitive_tag_sed_program()), (
+        "config scrub program must end with sensitive_tag_sed_program() — "
+        "snap_state and collect_host_diagnostics must share the exact same tail"
+    )

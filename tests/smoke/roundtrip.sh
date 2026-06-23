@@ -66,9 +66,27 @@ fi
 
 SSH_OPTS="-i ${SSH_KEY} -p ${SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
+# Always run the remote command under /bin/sh. pfSense's root login shell is
+# tcsh, and sshd re-parses the command string with it; tcsh mangles POSIX
+# constructs (this script sends `if ...; then ...; fi`, `||`, redirects) and
+# shell metacharacters. Mirror the Python harness (conftest SmokeVM.ssh_argv):
+# one argument is already a sh command line; multiple are argv tokens re-quoted
+# into one. Then single-quote the whole thing so tcsh sees just
+# `/bin/sh -c '<blob>'` (one token) and hands the blob to sh for real parsing.
 run_ssh() {
+    if [ "$#" -eq 1 ]; then
+        _cmd=$1
+    else
+        _cmd=""
+        for _a in "$@"; do
+            _q=$(printf '%s' "$_a" | sed "s/'/'\\\\''/g")
+            _cmd="${_cmd:+$_cmd }'${_q}'"
+        done
+    fi
+    # Wrap _cmd as a single-quoted token for tcsh (inner ' -> '\'' ).
+    _sq="'$(printf '%s' "$_cmd" | sed "s/'/'\\\\''/g")'"
     # shellcheck disable=SC2086
-    "$SSH" $SSH_OPTS "root@${HOST}" "$@"
+    "$SSH" $SSH_OPTS "root@${HOST}" /bin/sh -c "$_sq"
 }
 
 FAILED=0

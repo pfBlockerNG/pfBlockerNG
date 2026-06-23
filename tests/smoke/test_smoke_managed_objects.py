@@ -5,7 +5,7 @@ Proves on a real pfSense CE VM that:
 * Enable → the pfBlockerNG-owned sinkhole VIP (``pfB_AUTO_VIP_v4``) and DNSBL NAT
   rule (``pfB DNSBL - DO NOT EDIT``) are created in config.xml. (The harness
   provisions only the v4 auto-VIP; the symmetric v6 path is pinned off-box by
-  ``FwobjCurrentBehaviourTest::testVipFindByMarkerV6``.)
+  ``DnsblMarkedVipTest``.)
 * Disable → the VIP and NAT are removed; no pfB-owned VIP of either family remains.
 * Uninstall → a seeded ORPHAN VIP is swept (before-and-after); user-created VIP
   and NAT rule survive; ``installedpackages/pfblockerng*`` sections are gone.
@@ -39,7 +39,7 @@ pytestmark = pytest.mark.smoke
 # Package name on the devel channel (matches test_repo_install.py's PKG_NAME).
 _PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
 
-# Descr markers that identify pfBlockerNG-owned objects (mirrors pfblockerng_fwobj.inc).
+# Descr markers that identify pfBlockerNG-owned objects (mirrors pfb_is_managed_obj in pfblockerng.inc).
 _AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
 _AUTO_VIP_DESCR_V6 = "pfB_AUTO_VIP_v6"
 _DNSBL_NAT_DESCR_PFX = "pfB DNSBL"  # pfb_create_dnsbl uses 'pfB DNSBL - DO NOT EDIT'
@@ -60,11 +60,11 @@ def deployed_vm(  # noqa: ARG001
     stub_dns: _StubDnsServer,
     lan_interface: SmokeVM,
 ) -> Iterator[SmokeVM]:
-    """Deploy the branch .pkg once for the fwobj module.
+    """Deploy the branch .pkg once for the managed-objects module.
 
     Depends on ``lan_interface`` to ensure a LAN VLAN subinterface is
     provisioned before these tests run (the single-NIC smoke image boots with
-    no LAN assigned; fwobj tests create LAN-scoped VIP and NAT rules).
+    no LAN assigned; these tests create LAN-scoped VIP and NAT rules).
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS and the
     DNSBL update path runs ``pfb_create_dnsbl`` which touches pfSense state.
@@ -217,8 +217,27 @@ def _seed_orphan_vip(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
 
 
 def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
-    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep)."""
-    vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep).
+
+    Captures stdout/stderr, asserts rc==0, and prints output on failure so
+    diagnostics are visible in CI logs.
+    """
+    # Dump pkg info before delete so diagnostics show what was installed.
+    info = vm.ssh("pkg", "info", _PKG_NAME, timeout=30.0)
+    if info.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg info {_PKG_NAME!r} before delete — not registered"
+            f" (rc={info.returncode}):\n{info.stdout}\n{info.stderr}"
+        )
+
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    if result.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg delete failed rc={result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}"
+        )
+        raise AssertionError(f"pkg delete {_PKG_NAME!r} returned rc={result.returncode} (expected 0)")
 
 
 # --------------------------------------------------------------------------- #
@@ -226,7 +245,7 @@ def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_fwobj_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
+def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
     """ADR-35 Scenario A: enabling DNSBL with pfb_dnsvip_auto creates pfB-owned objects.
 
     Scenario: enable creates pfB-owned VIP and DNSBL NAT.
@@ -253,7 +272,9 @@ def test_fwobj_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
         )
         assert not _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT rule present before enable — before-state is not clean"
 
-        # WHEN — enable auto-VIP + DNSBL, run a full reload.
+        # WHEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
+        # enable auto-VIP + DNSBL, and run a full reload.
+        h.set_dnsbl_interface(vm, "lan")
         h.set_dnsvip_auto(vm, True)
         h.set_dnsbl_enabled(vm, True)
         h.reload(vm, "update")
@@ -265,6 +286,7 @@ def test_fwobj_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
         assert _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT rule not created in nat/rule after enabling DNSBL"
     finally:
         # Restore to a known baseline so Scenario B and C start clean.
+        h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
         h.ensure_dnsbl_vip(vm)
@@ -276,7 +298,7 @@ def test_fwobj_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_fwobj_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
+def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
     """ADR-35 Scenario B: disabling DNSBL removes pfB-owned VIP and DNSBL NAT.
 
     Scenario: disable removes pfB-owned VIP and DNSBL NAT.
@@ -292,7 +314,9 @@ def test_fwobj_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
     """
     vm = deployed_vm
     try:
-        # GIVEN — enable auto-VIP + DNSBL; assert both objects present (before-state).
+        # GIVEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
+        # enable auto-VIP + DNSBL; assert both objects present (before-state).
+        h.set_dnsbl_interface(vm, "lan")
         h.set_dnsvip_auto(vm, True)
         h.set_dnsbl_enabled(vm, True)
         h.reload(vm, "update")
@@ -315,6 +339,7 @@ def test_fwobj_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
         )
         assert not _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT still present in nat/rule after disabling DNSBL"
     finally:
+        h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
         h.ensure_dnsbl_vip(vm)
@@ -326,7 +351,7 @@ def test_fwobj_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_fwobj_uninstall_sweeps_orphan_preserves_user_objects(deployed_vm: SmokeVM) -> None:
+def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed_vm: SmokeVM) -> None:
     """ADR-35 Scenario C: uninstall sweeps the orphan VIP; user VIP and NAT survive.
 
     Scenario: uninstall sweeps orphan, preserves user objects.
@@ -378,12 +403,12 @@ def test_fwobj_uninstall_sweeps_orphan_preserves_user_objects(deployed_vm: Smoke
     # Assert installedpackages/pfblockerng* sections exist before uninstall.
     assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
 
-    # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command ->
-    # pfb_fwobj_sweep before pfb_remove_config_settings).
+    # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
+    # owned-object sweep before pfb_remove_config_settings).
     _pkg_delete(vm)
 
     # THEN — read config.xml state after uninstall.
-    # The orphan VIP must be swept by the ADR-35 marker sweep.
+    # The orphan VIP must be swept by the owned-object sweep.
     assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
         "orphan pfB_AUTO_VIP_v4 still present after uninstall — ADR-35 sweep did not run"
     )

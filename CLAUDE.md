@@ -436,6 +436,17 @@ the **intent** (behaviour pinned), not the mechanics. All three required:
   smoke journeys) gets a **Scenario / Background + Given–When–Then** spec, the body split into
   explicit **Given** (arrange) / **When** (act) / **Then** (assert).
 
+- **On failure, print expected vs actual — no guessing.** Every assertion/matcher (and every
+  poll/`wait_until`) that can fail or time out MUST put the comparison on the terminal: what it
+  **expected** next to what was **actually** there (the file contents, the `pfctl`/CLI output,
+  the config value), formatted AssertJ-style and **redacted** against the usual secrets. We roll
+  our own harness — there is no framework giving this for free, so **implement it where it's
+  missing**: a bare boolean matcher that only says "False" is not acceptable. A diagnostic that
+  filters by a token must also match the value's **rendered** form (e.g. `pfctl` prints port 53
+  as `domain`) or it under-reports and misleads. Exemplar: `_redir_match_report` in
+  `tests/smoke/test_dns_redirect.py`. This cost a whole misdiagnosis once — a present rule read
+  as absent because nothing printed the actual ruleset.
+
 ### ADR acceptance — automated tests, not a manual sign-off
 
 An ADR flips to **Accepted** on **green automated coverage alone — no manual maintainer
