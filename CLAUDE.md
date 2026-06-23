@@ -601,12 +601,15 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath` 
 Actions workflow that commits code must run it after checkout, before commit/push** — so
 automated commits hit the same checks (subject to the runner's installed tools).
 
-- **`.githooks/pre-commit`** runs the fast linters + unit suites, blocking on failure:
-  `ruff check`/`ruff format --check`, `python -m pytest`, `mypy tests/` (the suite is fully
-  typed — `tests.*` is `disallow_untyped_defs`; `tests/smoke` excluded), `markdownlint-cli2`,
-  `sh -n` + `shellcheck`, `php -l`. Each runs only when its tool is installed (missing =
-  reported + skipped; CI is the hard gate); PHPStan/PHPCS/PHPUnit run only when `vendor/bin/`
-  has them. Emergency bypass: `git commit --no-verify`.
+- **`.githooks/pre-commit`** runs the fast **linters / static-analysis gates** — **not** the
+  unit suites (no `pytest`, no `phpunit`: too slow for a commit gate; CI is their correctness
+  gate). It is **path-scoped to the staged file types** so a commit only pays for the languages
+  it touches: **`*.py`** → `ruff check`/`ruff format --check` + `mypy tests/`; **`*.md`** →
+  `markdownlint-cli2`; **`*.sh`** → the no-`#!bash` shebang gate + `sh -n` + `shellcheck` +
+  `shellspec`; **`*.php`/`*.inc`** → `php -l` + PHPStan + PHPCS; the URL-encoding check runs when
+  `*.sh` or `*.md` is staged. Each check still runs only when its tool is installed (missing =
+  reported + skipped; CI is the hard gate); PHPStan/PHPCS run only when `vendor/bin/` has them.
+  Emergency bypass: `git commit --no-verify`.
 - **`.githooks/prepare-commit-msg`** appends a `Co-authored-by:` trailer for the human owner so
   GitHub credits them even when an agent is the committer (see *Commit style → Author, committer,
   and signing*). It resolves the owner generically — `coauthor.email`/`coauthor.name` git config,
@@ -626,8 +629,9 @@ python -m pytest
 ```
 
 From repo root (`pyproject.toml` sets `testpaths` + `-v`; no `cd` needed). Run after **any**
-change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or `tests/`. The pre-commit hook
-re-runs it and CI is final, so no separate manual pre-commit run is needed.
+change to `src/usr/local/pkg/pfblockerng/pfb_unbound.py` or `tests/`. The pre-commit hook does
+**not** run the unit suite (linters only — too slow for a commit gate), so run `python -m pytest`
+yourself while iterating; CI is the hard correctness gate.
 
 PHP — the fast PHPUnit suite for the pure/extractable helpers of `pfblockerng.inc` (issue #39):
 
