@@ -15054,7 +15054,7 @@ function pfblockerng_php_pre_deinstall_command() {
 
 	unlink_if_exists("{$pfb['dnsbl_conf']}");
 	unlink_if_exists("{$pfb['dnsbl_cert']}");
-	unlink_if_exists("{$pfb['aliasarchive']}");
+	// aliasarchive already removed above (co-located with the aliastables boot-hook teardown).
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
 

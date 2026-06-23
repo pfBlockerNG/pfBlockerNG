@@ -938,7 +938,11 @@ def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None
 
 def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     """Set ``pfb_keep`` at ``CFG_GLOBAL``: ``True`` → ``'on'`` (retain settings + data on
-    uninstall); ``False`` → ``'off'`` (full removal — live objects + settings + data all gone).
+    uninstall); ``False`` → ``''`` (full removal — live objects + settings + data all gone).
+
+    ``pfb_keep`` is a toggle whose stored vocabulary is ``{'on', ''}`` (off is the empty
+    string, matching ``PfbToggle::Off``), so the off case writes ``''`` — the canonical
+    value, like ``set_package_enabled`` / ``set_dnsbl_enabled``.
 
     ``pfb_keep`` defaults to ``'on'`` (issue #281), so a test that asserts sections are
     swept after uninstall MUST call ``set_pfb_keep(vm, False)`` explicitly to select the
@@ -946,7 +950,7 @@ def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     #484 fix) uses ``set_pfb_keep(vm, True)`` (or relies on the default, but explicit
     is clearer).
     """
-    val = "on" if keep else "off"
+    val = "on" if keep else ""
     snippet = (
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         f"$g['pfb_keep'] = {_php_str(val)};\n"
