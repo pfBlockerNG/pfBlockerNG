@@ -118,7 +118,11 @@ jobs:
         # authority. coverage knobs (branch=true, TYPE_CHECKING exclude) live in
         # pyproject.toml [tool.coverage.*].
         continue-on-error: true
-        run: python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
+        # Swallow a non-zero exit (e.g. a timing-sensitive test that flakes only under
+        # the slower coverage instrumentation): this run is informational and the
+        # canonical `python -m pytest` step above is the authority + gate. Keeping the
+        # step at exit 0 avoids a spurious error annotation on a green job.
+        run: python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
 
   test-typing:
     name: Test type checking (mypy)
@@ -230,15 +234,23 @@ jobs:
         run: shellspec
 
       - name: Install kcov (coverage; best-effort)
-        # Coverage is informational; if kcov is unavailable on the runner, skip it
-        # rather than fail the gating job.
+        # Coverage is informational. kcov is no longer packaged for current
+        # ubuntu-latest, so a bare `apt-get install` exits non-zero and leaves a
+        # spurious error annotation on an otherwise-green run. Swallow the failure
+        # (exit 0); the coverage step below skips cleanly when kcov is absent.
         continue-on-error: true
-        run: sudo apt-get install -y kcov
+        run: sudo apt-get install -y kcov || echo "kcov unavailable on this runner; shell coverage will be skipped (informational)"
 
       - name: Coverage (kcov) — informational
-        # Informational only (no floor yet, mirroring #38); never gates CI.
+        # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
+        # kcov being present so a missing tool does not leave an error annotation.
         continue-on-error: true
-        run: shellspec --kcov
+        run: |
+          if command -v kcov >/dev/null 2>&1; then
+            shellspec --kcov
+          else
+            echo "kcov absent; skipping informational shell coverage"
+          fi
 
       - name: Upload coverage report
         if: always()
