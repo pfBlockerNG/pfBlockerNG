@@ -524,4 +524,114 @@ final class DotDoQBlockLifecycleTest extends TestCase
 		$this->assertFalse($changed, 'sync when disabled with no rules must return FALSE');
 		$this->assertSame(0, $this->countDotBlockFilterRules(), 'after: still no DoT block filter rules');
 	}
+
+	// -----------------------------------------------------------------------
+	// Regression: the DNSBL "disable" sweep must run BEFORE the DoT-block sync.
+	//
+	// pfb_fwobj_sweep() removes EVERY pfB_-owned row (pfb_fwobj_is_owned matches
+	// the shared 'pfB_' prefix), so it also matches pfB_DoT_Block_* rows. The
+	// DoT/DoQ-block feature is independent of DNSBL mode (it can be ON while DNSBL
+	// is disabled — mode 'disabled'), so when sync_package_pfblockerng() runs its
+	// defensive disable-sweep it MUST do so before this sync re-asserts its rules;
+	// otherwise the sweep wipes the freshly-created block rules. Pinned both ways.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario: the hazard — a broad disable-sweep AFTER the sync wipes the block rule.
+	 *   Background: DoT block enabled on 'lan', DNSBL disabled (only block rows exist).
+	 *     Given the DoT sync has created its filter rule.
+	 *     When the broad pfB_ disable-sweep runs afterwards.
+	 *     Then the block rule is gone — the ordering bug this fix prevents.
+	 */
+	public function testDisableSweepAfterSyncWipesDotBlockRuleHazard(): void
+	{
+		// Given: DoT block enabled on 'lan'; the sync creates its rule.
+		$this->seedDotBlockEnable('on');
+		$this->seedDotBlockInt('lan');
+		$this->seedDotBlockExclude('');
+		$this->runSync();
+		$this->assertSame(1, $this->countDotBlockFilterRules(), 'precondition: 1 DoT block filter rule created');
+
+		// When: the broad disable-sweep runs AFTER the sync.
+		$swept = pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule']);
+
+		// Then: the block rule was wiped (demonstrates why the sweep must precede the sync).
+		$this->assertTrue($swept, 'sweep after sync must report a removal');
+		$this->assertSame(0, $this->countDotBlockFilterRules(),
+			'hazard: a disable-sweep AFTER the sync wipes the DoT block filter rule'
+		);
+	}
+
+	/**
+	 * Scenario: the fix — the disable-sweep runs BEFORE the sync, the block rule survives.
+	 *   Background: DoT block enabled on 'lan', DNSBL disabled, plus a stale pfB DNSBL NAT row.
+	 *     Given a stale 'pfB DNSBL' NAT row in config (the orphan the sweep targets).
+	 *     When the disable-sweep runs FIRST (removing the stale DNSBL row),
+	 *       And the DoT sync then re-asserts its own rule.
+	 *     Then the block rule is present and the stale DNSBL row stays gone.
+	 */
+	public function testDisableSweepBeforeSyncLeavesDotBlockRuleIntactFix(): void
+	{
+		// Given: DoT block enabled on 'lan' and a stale pfB-owned DNSBL NAT row.
+		$this->seedDotBlockEnable('on');
+		$this->seedDotBlockInt('lan');
+		$this->seedDotBlockExclude('');
+		config_set_path('nat/rule', [
+			['descr' => 'pfB DNSBL - DO NOT EDIT', 'interface' => 'lan'],
+		]);
+
+		// When: the disable-sweep runs FIRST (the fixed sync_package_pfblockerng order).
+		$swept = pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule']);
+		$this->assertTrue($swept, 'sweep must remove the stale DNSBL NAT row');
+		$this->assertSame(0, $this->countDotBlockFilterRules(), 'after sweep, before sync: no block rule yet');
+
+		// And: the DoT sync re-asserts its rule.
+		$this->runSync();
+
+		// Then: the block rule survives and the stale DNSBL NAT row stays gone.
+		$this->assertSame(1, $this->countDotBlockFilterRules(),
+			'fixed order: DoT block filter rule survives when the sweep precedes the sync'
+		);
+		foreach (config_get_path('nat/rule', []) as $rule) {
+			$this->assertStringNotContainsString(
+				'pfB DNSBL', $rule['descr'] ?? '',
+				'fixed order: the stale DNSBL NAT row remains swept'
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Regression: the emitted block rule carries the pfSense rule metadata
+	// (a positive 'tracker' + created/updated). Without a tracker the pfSense
+	// rule generator drops the row from /tmp/rules.debug and it never reaches
+	// pf — the live-VM failure this feature hit on first run.
+	// -----------------------------------------------------------------------
+
+	public function testSyncedDotBlockRuleIsStampedWithTrackerAndProvenance(): void
+	{
+		// Given DoT block enabled on one interface.
+		$this->seedDotBlockEnable('on');
+		$this->seedDotBlockInt('lan');
+		$this->seedDotBlockExclude('');
+
+		// When the sync builds + writes the rule.
+		$this->runSync();
+
+		// Then the block row carries a positive integer tracker + provenance.
+		$marker = PFB_DOT_BLOCK_DESCR_PFX . 'lan';
+		$rule = NULL;
+		foreach ($this->getFilterRules() as $r) {
+			if (($r['descr'] ?? '') === $marker) {
+				$rule = $r;
+				break;
+			}
+		}
+		$this->assertNotNull($rule, 'lan DoT block rule must exist');
+		$this->assertArrayHasKey('tracker', $rule, 'block rule must carry a tracker (else filter_configure drops it)');
+		$this->assertIsInt($rule['tracker'], 'tracker must be an int');
+		$this->assertGreaterThan(0, $rule['tracker'], 'tracker must be a positive id');
+		$this->assertArrayHasKey('created', $rule, 'block rule must carry created provenance');
+		$this->assertArrayHasKey('time', $rule['created'] ?? [], 'created must carry a time');
+		$this->assertArrayHasKey('updated', $rule, 'block rule must carry updated provenance');
+	}
 }

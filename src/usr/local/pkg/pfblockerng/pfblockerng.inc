@@ -12564,6 +12564,23 @@ function sync_package_pfblockerng($cron='') {
 	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required.
 	pfb_create_dnsbl($mode);
 
+	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
+	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
+	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
+	// idempotent: returns FALSE (no write) when everything was already cleaned.
+	//
+	// MUST run BEFORE the ADR-36/37 syncs below: pfb_fwobj_sweep() removes EVERY pfB_-owned row
+	// (pfb_fwobj_is_owned matches the shared 'pfB_' prefix), which includes the pfB_DNS_Redirect_*
+	// and pfB_DoT_Block_* rules. Those features are independent of DNSBL mode (they can be enabled
+	// while DNSBL is disabled), so the sweep would otherwise clobber rules the syncs just created.
+	// Running the sweep first lets each feature's sync re-assert its own objects last.
+	if ($mode === 'disabled') {
+		pfb_fwobj_init_registrations();
+		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+			write_config('pfBlockerNG: sweep orphan firewall objects on disable');
+		}
+	}
+
 	// [ ADR-36 ] Sync DNS-redirect NAT + filter rules (create / reconcile / prune / remove).
 	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule + filter/rule directly
 	// (pfSense-core foreign sections). No write_config() here — a single flush below covers both.
@@ -12572,6 +12589,10 @@ function sync_package_pfblockerng($cron='') {
 		pfb_fwobj_init_dns_redirect_registrations();
 		if (pfb_sync_dns_redirect_rules()) {
 			write_config('pfBlockerNG: saving DNS-redirect rule changes');
+			// The rdr/filter rows changed in config — flag a pf reload so
+			// filter_configure() (below) actually loads them into the ruleset;
+			// the legacy auto-rule diff does not see these foreign-section edits.
+			$pfb['filter_configure'] = TRUE;
 		}
 	}
 
@@ -12583,17 +12604,8 @@ function sync_package_pfblockerng($cron='') {
 		pfb_fwobj_init_dot_block_registrations();
 		if (pfb_sync_dot_block_rules()) {
 			write_config('pfBlockerNG: saving DoT/DoQ block rule changes');
-		}
-	}
-
-	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
-	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
-	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
-	// idempotent: returns FALSE (no write) when everything was already cleaned.
-	if ($mode === 'disabled') {
-		pfb_fwobj_init_registrations();
-		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
-			write_config('pfBlockerNG: sweep orphan firewall objects on disable');
+			// As above — the block rule changed; force a pf reload so it loads.
+			$pfb['filter_configure'] = TRUE;
 		}
 	}
 
@@ -13802,8 +13814,19 @@ function sync_package_pfblockerng($cron='') {
 			if (!empty($rules)) {
 				foreach ($rules as $rule) {
 
+					// The ADR-36/37 DNS-bypass filter rules (DNS redirect + DoT/DoQ block)
+					// carry a 'pfB_' descr but are owned by pfb_sync_dns_redirect_rules() /
+					// pfb_sync_dot_block_rules(), NOT this legacy auto-rule rebuild. Preserve
+					// them like user rules so the rebuild below does not strip them.
+					$descr = $rule['descr'] ?? '';
+					$is_dns_bypass_rule =
+					    (defined('PFB_DNS_REDIR_DESCR_V4_PFX') && str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)) ||
+					    (defined('PFB_DOT_BLOCK_DESCR_PFX') && str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX));
+
 					// Remove all existing rules that start with 'pfB_' in the Rule Description
-					if (substr($rule['descr'], 0, 4) != 'pfB_') {
+					// (the legacy auto-rules this region rebuilds) — but keep user rules and
+					// the DNS-bypass rules above.
+					if (substr($rule['descr'], 0, 4) != 'pfB_' || $is_dns_bypass_rule) {
 
 						// Upgrade previous IPv4 pfBlockerNG 'alias type' aliasnames to new '_v4' suffix format
 						foreach (array('source', 'destination') as $rtype) {

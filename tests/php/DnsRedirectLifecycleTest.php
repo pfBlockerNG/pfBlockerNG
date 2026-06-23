@@ -536,4 +536,134 @@ final class DnsRedirectLifecycleTest extends TestCase
 		$this->assertSame(0, $this->countRedirNatRules(), 'after: still no redirect NAT rules');
 		$this->assertSame(0, $this->countRedirFilterRules(), 'after: still no redirect filter rules');
 	}
+
+	// -----------------------------------------------------------------------
+	// Regression: the DNSBL "disable" sweep must run BEFORE the redirect sync.
+	//
+	// pfb_fwobj_sweep() removes EVERY pfB_-owned row (pfb_fwobj_is_owned matches
+	// the shared 'pfB_' prefix), so it also matches pfB_DNS_Redirect_* rows. The
+	// DNS-redirect feature is independent of DNSBL mode (it can be ON while DNSBL
+	// is disabled — mode 'disabled'), so when sync_package_pfblockerng() runs its
+	// defensive disable-sweep it MUST do so before this sync re-asserts its rules;
+	// otherwise the sweep wipes the freshly-created redirect rules. The two tests
+	// pin the contract from both directions.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario: the hazard — a broad disable-sweep AFTER the sync wipes redirect rules.
+	 *   Background: redirect enabled on 'lan', DNSBL disabled (only redirect rows exist).
+	 *     Given the redirect sync has created its 2 NAT + 2 filter rules.
+	 *     When the broad pfB_ disable-sweep runs afterwards.
+	 *     Then the redirect rules are gone — the ordering bug this fix prevents.
+	 */
+	public function testDisableSweepAfterSyncWipesRedirectRulesHazard(): void
+	{
+		// Given: redirect enabled on 'lan'; the sync creates its rules.
+		$this->seedRedirEnable('on');
+		$this->seedRedirInt('lan');
+		$this->seedRedirExclude('');
+		$this->runSync();
+		$this->assertSame(2, $this->countRedirNatRules(), 'precondition: 2 redirect NAT rules created');
+		$this->assertSame(2, $this->countRedirFilterRules(), 'precondition: 2 redirect filter rules created');
+
+		// When: the broad disable-sweep runs AFTER the sync.
+		$swept = pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule']);
+
+		// Then: the redirect rules were wiped (demonstrates why the sweep must precede the sync).
+		$this->assertTrue($swept, 'sweep after sync must report a removal');
+		$this->assertSame(0, $this->countRedirNatRules(),
+			'hazard: a disable-sweep AFTER the sync wipes the redirect NAT rules'
+		);
+		$this->assertSame(0, $this->countRedirFilterRules(),
+			'hazard: a disable-sweep AFTER the sync wipes the redirect filter rules'
+		);
+	}
+
+	/**
+	 * Scenario: the fix — the disable-sweep runs BEFORE the sync, redirect rules survive.
+	 *   Background: redirect enabled on 'lan', DNSBL disabled, plus a stale pfB DNSBL NAT row.
+	 *     Given a stale 'pfB DNSBL' NAT row in config (the orphan the sweep targets).
+	 *     When the disable-sweep runs FIRST (removing the stale DNSBL row),
+	 *       And the redirect sync then re-asserts its own rules.
+	 *     Then the redirect rules are present and the stale DNSBL row stays gone.
+	 */
+	public function testDisableSweepBeforeSyncLeavesRedirectRulesIntactFix(): void
+	{
+		// Given: redirect enabled on 'lan' and a stale pfB-owned DNSBL NAT row.
+		$this->seedRedirEnable('on');
+		$this->seedRedirInt('lan');
+		$this->seedRedirExclude('');
+		config_set_path('nat/rule', [
+			['descr' => 'pfB DNSBL - DO NOT EDIT', 'interface' => 'lan'],
+		]);
+
+		// When: the disable-sweep runs FIRST (the fixed sync_package_pfblockerng order).
+		$swept = pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule']);
+		$this->assertTrue($swept, 'sweep must remove the stale DNSBL NAT row');
+		$this->assertSame(0, $this->countRedirNatRules(), 'after sweep, before sync: no redirect rules yet');
+		$this->assertCount(0, $this->getNatRules(), 'after sweep: stale DNSBL NAT row removed too');
+
+		// And: the redirect sync re-asserts its rules.
+		$this->runSync();
+
+		// Then: the redirect rules survive; only redirect rows remain.
+		$this->assertSame(2, $this->countRedirNatRules(),
+			'fixed order: redirect NAT rules survive when the sweep precedes the sync'
+		);
+		$this->assertSame(2, $this->countRedirFilterRules(),
+			'fixed order: redirect filter rules survive when the sweep precedes the sync'
+		);
+		foreach ($this->getNatRules() as $rule) {
+			$this->assertStringStartsWith(
+				PFB_DNS_REDIR_DESCR_V4_PFX, $rule['descr'] ?? '',
+				'fixed order: only redirect rows remain (stale DNSBL NAT row swept)'
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Regression: every emitted rule carries the pfSense rule metadata
+	// (a unique 'tracker' + created/updated provenance). Without a tracker the
+	// pfSense rule generator drops the row from /tmp/rules.debug and it never
+	// reaches pf — the live-VM failure these features hit on first run.
+	// -----------------------------------------------------------------------
+
+	public function testSyncedRedirectRulesAreStampedWithUniqueTrackerAndProvenance(): void
+	{
+		// Given redirect enabled on one interface.
+		$this->seedRedirEnable('on');
+		$this->seedRedirInt('lan');
+		$this->seedRedirExclude('');
+
+		// When the sync builds + writes the rules.
+		$this->runSync();
+
+		// Then the NAT row carries a positive integer tracker + provenance.
+		$nat = $this->findNatRule('lan', 'inet');
+		$this->assertNotNull($nat, 'lan/inet NAT rule must exist');
+		$this->assertArrayHasKey('tracker', $nat, 'NAT rule must carry a tracker (else filter_configure drops it)');
+		$this->assertIsInt($nat['tracker'], 'tracker must be an int');
+		$this->assertGreaterThan(0, $nat['tracker'], 'tracker must be a positive id');
+		$this->assertArrayHasKey('created', $nat, 'NAT rule must carry created provenance');
+		$this->assertArrayHasKey('time', $nat['created'] ?? [], 'created must carry a time');
+		$this->assertArrayHasKey('updated', $nat, 'NAT rule must carry updated provenance');
+
+		// And the paired filter row is stamped with a DISTINCT tracker (the
+		// generator keys on it, so a collision would coalesce/drop a rule).
+		$marker = PFB_DNS_REDIR_DESCR_V4_PFX . 'lan' . PFB_DNS_REDIR_DESCR_V4_SFX;
+		$filter = NULL;
+		foreach ($this->getFilterRules() as $r) {
+			if (($r['descr'] ?? '') === $marker) {
+				$filter = $r;
+				break;
+			}
+		}
+		$this->assertNotNull($filter, 'lan/inet filter rule must exist');
+		$this->assertArrayHasKey('tracker', $filter, 'filter rule must carry a tracker');
+		$this->assertNotSame(
+			$nat['tracker'],
+			$filter['tracker'],
+			'each emitted rule must get a UNIQUE tracker'
+		);
+	}
 }

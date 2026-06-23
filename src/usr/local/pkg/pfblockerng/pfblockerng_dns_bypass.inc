@@ -44,6 +44,46 @@ define('PFB_DNS_REDIR_DESCR_V4_SFX', '_v4');
 define('PFB_DNS_REDIR_DESCR_V6_SFX', '_v6');
 
 // ---------------------------------------------------------------------------
+// pfb_dns_bypass_stamp_rule — add the pfSense rule metadata a hand-built
+// nat/rule or filter/rule row needs to be EMITTED by filter_configure().
+// ---------------------------------------------------------------------------
+
+/**
+ * Stamp a rule with a unique 'tracker' plus 'created'/'updated' provenance.
+ *
+ * pfSense's rule generator (filter_generate_user_rule_arr) keys every rule on
+ * its 'tracker' (the ridentifier / "id:" label); a row written to
+ * config.xml WITHOUT one is silently dropped from /tmp/rules.debug and never
+ * reaches pf. pfBlockerNG's own auto-rules already stamp a tracker (pfb_tracker)
+ * + created — the ADR-36/37 DNS-bypass rows must do the same to load.
+ *
+ * Uniqueness uses pfSense's canonical filter_get_next_tracker() when present
+ * (on-box); off-appliance it falls back to a monotonic microtime-based id so
+ * the same builder/sync paths work under PHPUnit without a stub.
+ *
+ * @param  array<string,mixed> $rule
+ * @return array<string,mixed>
+ */
+function pfb_dns_bypass_stamp_rule(array $rule): array
+{
+	if (function_exists('filter_get_next_tracker')) {
+		$tracker = (int) filter_get_next_tracker();
+	} else {
+		// Off-box fallback: monotonic, unique within a pass (microtime collides
+		// for rows built back-to-back, so add a per-call sequence).
+		static $seq = 0;
+		$tracker = (int) (microtime(TRUE) * 1000) + ($seq++);
+	}
+
+	$rule['tracker'] = $tracker;
+	$stamp = ['time' => (int) microtime(TRUE), 'username' => 'pfBlockerNG'];
+	$rule['created'] = $stamp;
+	$rule['updated'] = $stamp;
+
+	return $rule;
+}
+
+// ---------------------------------------------------------------------------
 // pfb_build_dns_redirect_rules — per-interface, per-family rule-set builder
 // ---------------------------------------------------------------------------
 
@@ -433,8 +473,11 @@ function pfb_sync_dns_redirect_rules(): bool
 				continue;
 			}
 
-			// Build the rule pair.
+			// Build the rule pair, then stamp each with the tracker + provenance
+			// pfSense needs to actually emit it into the ruleset.
 			[$nat_rule, $filter_rule] = pfb_build_dns_redirect_rules($iface, $family, $exception);
+			$nat_rule    = pfb_dns_bypass_stamp_rule($nat_rule);
+			$filter_rule = pfb_dns_bypass_stamp_rule($filter_rule);
 
 			if (!$nat_exists) {
 				$nat_rows   = config_get_path('nat/rule', []);
@@ -698,8 +741,9 @@ function pfb_sync_dot_block_rules(): bool
 			continue;
 		}
 
-		// Build the rule and append.
-		$filter_rule    = pfb_build_dot_block_rule($iface, $exclude_alias);
+		// Build the rule, stamp it with the tracker + provenance pfSense needs to
+		// emit it, then append.
+		$filter_rule    = pfb_dns_bypass_stamp_rule(pfb_build_dot_block_rule($iface, $exclude_alias));
 		$filter_rows    = config_get_path('filter/rule', []);
 		$filter_rows[]  = $filter_rule;
 		config_set_path('filter/rule', $filter_rows);
