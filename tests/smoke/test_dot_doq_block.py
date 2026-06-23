@@ -444,6 +444,10 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
     descr = _DOT_BLOCK_DESCR_PFX + iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable DoT block; assert before-state clean.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -516,6 +520,10 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_ifa
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on the primary interface; assert before-state with rule present.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
@@ -576,6 +584,10 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test that
         # asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
         h.set_pfb_keep(vm, False)
@@ -677,6 +689,10 @@ def test_stale_interface_rule_pruned_on_reconcile(deployed_vm: SmokeVM) -> None:
     iface_drop = available[1]  # typically 'opt1'
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on both interfaces; assert both rules present.
         _set_dot_block(vm, enabled=True, ifaces=[iface_keep, iface_drop], exception="")
         h.reload(vm, "update")
@@ -734,6 +750,10 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
     descr = _DOT_BLOCK_DESCR_PFX + iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — start from disabled state.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -800,6 +820,10 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     vm = deployed_vm
     iface = primary_iface
 
+    # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+    # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+    h.set_package_enabled(vm, True)
+    h.set_dnsbl_enabled(vm, True)
     # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test
     # that asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
     h.set_pfb_keep(vm, False)
@@ -865,6 +889,10 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable DoT block; assert before-state clean.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -1068,6 +1096,10 @@ def test_dot_block_uninstall_keep_on_removes_rules_retains_sections(deployed_vm:
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DoT/DoQ block filter rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — set keep=on; enable DoT block; seed user filter; assert all before-states.
         h.set_pfb_keep(vm, True)
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
