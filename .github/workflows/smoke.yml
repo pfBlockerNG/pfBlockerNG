@@ -183,7 +183,7 @@ jobs:
     name: pytest -m smoke (live pfSense VM)
     needs: build-pkg
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -325,6 +325,65 @@ jobs:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
 
+      # The civm client VM (ADR-04 two-VM topology) — the realistic LAN client the
+      # DNS probes run on. Resolve its digest (cache key), restore-or-pull, and
+      # cache it exactly like the pfSense image. The oras login from the digest
+      # step above persists in-job. SMOKE_CLIENT_IMAGE_NAME/_TAG are repo VARIABLES
+      # (default civm:v1).
+      - name: Resolve civm image ref + digest (cache key)
+        id: civm
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          CLIENT_NAME: ${{ vars.SMOKE_CLIENT_IMAGE_NAME }}
+          CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
+        run: |
+          set -eu
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          NAME="${CLIENT_NAME:-civm}"
+          TAG="${CLIENT_TAG:-v1}"
+          REF="${REPO%/}/${NAME}:${TAG}"
+          DIGEST="$(oras resolve "$REF" 2>/dev/null || true)"
+          if [ -z "$DIGEST" ]; then
+            # Fallback for oras builds without `resolve`: read the descriptor.
+            DIGEST="$(oras manifest fetch "$REF" --descriptor | jq -r '.digest')"
+          fi
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::could not resolve a sha256 digest for ${REF} (got '${DIGEST}')"; exit 1 ;;
+          esac
+          {
+            echo "ref=${REF}"
+            echo "digest=${DIGEST}"
+            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved ${REF} -> ${DIGEST}"
+
+      - name: Restore cached civm image
+        id: civmcache
+        uses: actions/cache/restore@v5
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
+      - name: Pull civm image from GHCR (by digest)
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        env:
+          CIVM_REF: ${{ steps.civm.outputs.ref }}
+          DIGEST: ${{ steps.civm.outputs.digest }}
+        run: |
+          set -eu
+          mkdir -p client-image
+          # Pull by digest (content matches the cache key exactly — no tag race).
+          oras pull "${CIVM_REF%@*}@${DIGEST}" --output client-image
+          ls -l client-image
+
+      - name: Save civm image to cache
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
       - name: Write private SSH key (mode 600)
         env:
           SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
@@ -404,6 +463,9 @@ jobs:
           PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
           PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
           PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
+          # The civm data-NIC MAC is a secret in BOTH editions (it keys pfSense's
+          # static DHCP lease for the client). Mask + redact it regardless of edition.
+          CLIENT_MAC: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
         run: |
           set -eu
           # Resolve the EXACT image name (strip ghcr path, @digest, :tag) — a substring
@@ -412,22 +474,35 @@ jobs:
           if [ -n "${IMAGE_REF:-}" ]; then
             REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
           fi
+          # The civm data MAC is secret in every edition — mask it now and seed the
+          # diagnostics redaction set (REDACT_EXTRA, folded into both branches below).
+          REDACT_EXTRA=""
+          if [ -n "${CLIENT_MAC:-}" ]; then
+            printf '::add-mask::%s\n' "$CLIENT_MAC"
+            REDACT_EXTRA="$CLIENT_MAC"
+          fi
           case "$IMG_NAME" in
             pfsense-ce)
-              # CE: the public pin. No identity is secret -> nothing to redact.
-              echo "RESOLVED_VM_MAC=${INPUT_MAC:-BC:24:11:37:9C:AC}" >> "$GITHUB_ENV"
+              # CE identity is don't-care: empty MAC -> QEMU assigns each NIC a
+              # default. Only the (secret) civm MAC needs redacting.
+              echo "RESOLVED_VM_MAC=" >> "$GITHUB_ENV"
               echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
-              echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
-            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix
+              { printf 'RESOLVED_REDACT<<__EOF__\n'; [ -n "$REDACT_EXTRA" ] && printf '%s\n' "$REDACT_EXTRA"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
+            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix.
+                # SMOKE_PLUS_MAC is the NEWLINE-separated 8-MAC list (one per NIC, in order).
               if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
                 echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
               fi
-              # Mask before anything echoes them; NDI optional.
-              printf '::add-mask::%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
-              echo "RESOLVED_VM_MAC=$PLUS_MAC" >> "$GITHUB_ENV"
+              # Mask each MAC line individually — a multiline mask value would not
+              # match a single MAC in the logs. NDI optional.
+              printf '%s\n' "$PLUS_MAC" | while IFS= read -r _m; do [ -n "$_m" ] && printf '::add-mask::%s\n' "$_m"; done
+              printf '::add-mask::%s\n' "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
+              # RESOLVED_VM_MAC carries the full newline-separated list (heredoc env);
+              # boot_vm.sh splits it per NIC.
+              { printf 'RESOLVED_VM_MAC<<__MAC_EOF__\n%s\n__MAC_EOF__\n' "$PLUS_MAC"; } >> "$GITHUB_ENV"
               echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
-              # newline-joined redaction set for the diagnostics scrub (MAC + uuid [+ NDI])
-              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
+              # newline-joined redaction set for the scrub (MACs + uuid [+ NDI] [+ civm MAC])
+              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; [ -n "$REDACT_EXTRA" ] && printf '%s\n' "$REDACT_EXTRA"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
           esac
 
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
@@ -460,6 +535,11 @@ jobs:
           SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
           SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+          # civm client VM (ADR-04): the pre-pulled image dir + its data-NIC MAC
+          # (the static-lease key). conftest's client_vm fixture boots it after
+          # pfSense and auto-allocates the shared LAN socket port.
+          SMOKE_CLIENT_IMAGE_DIR: ${{ github.workspace }}/client-image
+          SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
           # Matrix-derived build target (ADR-24): the per-leg ABI / PHP / Python flavor

@@ -367,19 +367,24 @@ jobs:
           fi
           case "$IMG_NAME" in
             pfsense-ce)
-              # CE: the public pin. No identity is secret -> nothing to redact.
-              echo "RESOLVED_VM_MAC=BC:24:11:37:9C:AC" >> "$GITHUB_ENV"
+              # CE identity is don't-care: empty MAC -> QEMU assigns each NIC a default.
+              echo "RESOLVED_VM_MAC=" >> "$GITHUB_ENV"
               echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
               echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
-            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix
+            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix.
+                # SMOKE_PLUS_MAC is the NEWLINE-separated 8-MAC list (one per NIC, in order).
               if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
                 echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
               fi
-              # Mask before anything echoes them; NDI optional.
-              printf '::add-mask::%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
-              echo "RESOLVED_VM_MAC=$PLUS_MAC" >> "$GITHUB_ENV"
+              # Mask each MAC line individually — a multiline mask value would not
+              # match a single MAC in the logs/screenshots. NDI optional.
+              printf '%s\n' "$PLUS_MAC" | while IFS= read -r _m; do [ -n "$_m" ] && printf '::add-mask::%s\n' "$_m"; done
+              printf '::add-mask::%s\n' "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
+              # RESOLVED_VM_MAC carries the full newline-separated list (heredoc env);
+              # boot_vm.sh splits it per NIC.
+              { printf 'RESOLVED_VM_MAC<<__MAC_EOF__\n%s\n__MAC_EOF__\n' "$PLUS_MAC"; } >> "$GITHUB_ENV"
               echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
-              # newline-joined redaction set for the diagnostics scrub (MAC + uuid [+ NDI])
+              # newline-joined redaction set for the diagnostics scrub (MACs + uuid [+ NDI])
               { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
           esac
 
