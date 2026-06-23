@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -141,7 +142,29 @@ class SmokeVM:
 
         Throwaway VM: skip host-key verification but keep the private key
         private. Mirrors wait_ready.sh's SSH options.
+
+        Always fire up ``/bin/sh`` on the guest. pfSense's root login shell is
+        ``tcsh``, and ``sshd`` runs the remote command as
+        ``$SHELL -c "<argv joined by spaces>"``; letting tcsh parse that string is
+        the bug we are avoiding — tcsh is finicky and mangles any token containing
+        a shell metacharacter (``|``, ``$``, ``(``, ``)``, ``!`` …), e.g. a
+        ``grep -nE 'a|b'`` pattern collapses because tcsh reads the ``|`` as a pipe.
+
+        Callers use one of two conventions, matched here:
+
+        * **one argument** — already a POSIX-sh command line (``"pfctl -sr | grep x"``);
+          run it verbatim under ``sh``.
+        * **multiple arguments** — the command's argv (``"grep", "-nE", "a|b", p``);
+          ``shlex.join`` re-quotes them into one sh command line so each token
+          reaches the program intact (no shell splitting of ``a|b``).
+
+        Either way the result runs as ``/bin/sh -c '<cmd>'``. ``shlex.quote`` makes
+        the whole ``<cmd>`` a single tcsh token, so tcsh only sees the trivial,
+        metacharacter-free sequence ``/bin/sh -c '<blob>'``, strips the outer quotes,
+        and hands the blob to ``/bin/sh -c`` which does the real parsing. ``stdin``
+        is untouched, so callers that pipe data (``tee``, ``pfSsh.php``) keep working.
         """
+        sh_command = remote[0] if len(remote) == 1 else shlex.join(remote)
         return [
             "ssh",
             "-i",
@@ -159,7 +182,9 @@ class SmokeVM:
             "-o",
             "LogLevel=ERROR",
             self.ssh_target,
-            *remote,
+            "/bin/sh",
+            "-c",
+            shlex.quote(sh_command),
         ]
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:

@@ -74,15 +74,6 @@ error_reporting($pfb_prev_er);
 //    file_exists() check that is not satisfied off-appliance, so we load it explicitly
 //    here by its repo-relative path.
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
-// 7. Load the ADR-35 firewall-object ownership layer (pfblockerng_fwobj.inc). On-appliance
-//    pfblockerng.inc loads it via a host-absolute file_exists() check that is not satisfied
-//    off-appliance (no /usr/local/pkg/pfblockerng/ here), so load it explicitly by repo path.
-require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc';
-// 8. Load the ADR-36 DNS-redirect rule builder (pfblockerng_dns_bypass.inc). Same pattern
-//    as step 7 — host-absolute file_exists() guard in pfblockerng.inc is not satisfied
-//    off-appliance, so load by repo path.
-require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc';
-
 if (!function_exists('step3_submitphpaction')) {
 	$pfb_wizard_src = file_get_contents(
 		dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc'

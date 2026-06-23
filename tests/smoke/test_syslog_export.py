@@ -213,6 +213,31 @@ def _trigger_ip_block(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     )
 
 
+def _ensure_syslog_chroot_socket(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Create the Unbound chroot syslog socket directory and restart syslogd.
+
+    ``pfb_unbound.py`` (running inside the Unbound chroot at ``/var/unbound``)
+    writes syslog events via ``SysLogHandler(address="/var/run/log")``, which
+    resolves to ``/var/unbound/var/run/log`` on the host.  That directory is
+    normally created by ``custom_php_resync_config_command`` in pfblockerng.xml,
+    which only fires on a GUI config save — not during CLI-driven test reloads.
+    Replicate it here before enabling syslog export so the socket exists when
+    ``pfb_unbound.py`` first tries to connect.
+    """
+    snippet = (
+        "require_once('/etc/inc/syslog.inc');\n"
+        "safe_mkdir('/var/unbound/var/run');\n"
+        "chown('/var/unbound/var/run', 'unbound');\n"
+        "system_syslogd_start(TRUE);\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_ensure_syslog_chroot_socket() failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def _assert_syslog_line(lines: list[str], tag: str, **required_kv: str) -> str:
     """Assert at least one line contains ``tag`` and all ``key=value`` pairs.
 
@@ -268,8 +293,13 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM) -> None:
     dnsbl_before = h.count_log_marker(vm, DNSBL_LOG, domain)
 
     # ------------------------------------------------------------------ #
-    # When: enable syslog export + reload DNSBL (re-builds pfb_unbound.ini)
+    # When: ensure chroot syslog socket exists, then enable syslog export
+    #       and reload DNSBL (re-builds pfb_unbound.ini with syslog_enable=on).
+    #       The socket dir is normally created by pfblockerng.xml's
+    #       custom_php_resync_config_command (GUI save only) — we replicate
+    #       that setup here for CLI-driven test reloads.
     # ------------------------------------------------------------------ #
+    _ensure_syslog_chroot_socket(vm)
     _set_syslog_enabled(vm, on=True)
     h.reload(vm, "updatednsbl")
 

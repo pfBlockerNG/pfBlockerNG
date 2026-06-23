@@ -596,8 +596,13 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     # Both patterns were observed under load -- a genuine generational swap, both ways.
     assert total_gen1 > 0, "no gen1 pattern observed (baseline + odd flips)"
     assert total_gen2 > 0, "no gen2 pattern observed under load"
-    # Queries kept flowing (no stall) -- every thread did real, repeated work.
-    assert total_n > n_threads * 50, "suspiciously few scans ({}) -- a stall?".format(total_n)
+    # Queries kept flowing (no stall) -- every thread did real, repeated work. The
+    # floor is deliberately conservative (>= ~10 scans/thread): a genuine stall leaves
+    # total_n on the order of n_threads (each loop ran once or twice before blocking),
+    # which this still catches, while the previous 50/thread floor was timing-fragile
+    # and flaked under the slower coverage-instrumented run on a busy CI runner. The
+    # per-thread liveness guarantee is pinned exactly by the next assertion.
+    assert total_n > n_threads * 10, "suspiciously few scans ({}) -- a stall?".format(total_n)
     assert all(s["n"] > 0 for s in stats), "a query thread never ran"
 
     # FINAL state: the watcher applied the LAST published generation, and the live

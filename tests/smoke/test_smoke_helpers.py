@@ -160,7 +160,10 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
     feed_url = h.write_local_feed(deployed_vm, "smoke_ip_selftest.txt", f"{fed_ip}\n")
     spec = h.IpCase(aliasname="smokeipself", feed_url=feed_url, header="smokeipself")
     with h.CaseContext(deployed_vm, spec):
-        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        # Use wait_pfctl_table rather than the single-shot pfctl_table_members:
+        # filter_configure is async, so the pf table may not yet be populated
+        # immediately after CaseContext.__enter__ completes the reload.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
         assert h.member_present(members, fed_ip), f"{fed_ip} not in {spec.alias}: {members}"
         assert not h.member_present(members, non_fed), f"{non_fed} unexpectedly in {spec.alias}"
         assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"

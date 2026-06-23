@@ -205,6 +205,100 @@ final class CollectLocalIpV6Test extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
+	// Case E — static IPv6 on an interface (literal ipaddr in config.xml)
+	// -------------------------------------------------------------------------
+
+	public function testStaticIpv6InterfaceSubnetIsRecognisedAsLocal(): void
+	{
+		// Scenario: An interface carrying a literal static IPv6 address and subnet must
+		//           be recognised as local via $pfb_localsub in CIDR notation.
+		//
+		// Background:
+		//   pfb_collect_localip() processes config interfaces.  When 'ipaddr' holds a
+		//   literal IPv6 address (static assignment, not a keyword like 'track6'), it
+		//   calls gen_subnetv6(addr, bits) and MUST append "/{bits}" to form CIDR
+		//   notation before storing in $pfb_localsub.  Before the fix the bare network
+		//   address was stored (e.g. "2001:db8:1:2::"), so ip_in_subnet() failed to
+		//   match hosts inside the prefix.
+		//
+		// Given  a LAN interface with a static IPv6 2001:db8:99:1::1/64
+		// When   pfb_collect_localip() is called
+		// Then   a host inside the /64 (e.g. 2001:db8:99:1::abcd) is recognised as local
+
+		$GLOBALS['config']['interfaces']['lan'] = [
+			'enable'  => '',
+			'ipaddrv6' => 'static',
+			'ipv6addr' => '2001:db8:99:1::1',
+			'subnetv6' => '64',
+			// Literal IPv6 in the 'ipaddr' field (pfSense stores static IPv6 here):
+			'ipaddr'   => '2001:db8:99:1::1',
+			'subnet'   => '64',
+		];
+		// No runtime configured-ipv6 needed — this goes through the config loop.
+		$GLOBALS['pfb_test_configured_ipv6'] = [];
+
+		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
+
+		$host = '2001:db8:99:1::abcd';
+		$isLocal = isset($pfb_local[$host]) || pfb_local_ip($host, $pfb_localsub);
+
+		$this->assertTrue(
+			$isLocal,
+			sprintf(
+				"Host %s inside static IPv6 /64 must be recognised as local.\n"
+				. "pfb_localsub: %s",
+				$host,
+				implode(', ', $pfb_localsub),
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case F — IPv6 VIP subnet recognised as local
+	// -------------------------------------------------------------------------
+
+	public function testIpv6VipSubnetIsRecognisedAsLocal(): void
+	{
+		// Scenario: A virtual-IP entry carrying an IPv6 subnet must contribute a valid
+		//           CIDR entry to $pfb_localsub so hosts inside it are recognised local.
+		//
+		// Background:
+		//   pfb_collect_localip() also processes config virtualip/vip[].  For an IPv6
+		//   subnet entry it calls gen_subnetv6(subnet, bits) and MUST append "/{bits}".
+		//   Before the fix the bare network address was stored, breaking ip_in_subnet().
+		//
+		// Given  a VIP entry with subnet 2001:db8:cafe:: / bits 48
+		// When   pfb_collect_localip() is called
+		// Then   a host inside the /48 (e.g. 2001:db8:cafe:1::1) is recognised as local
+
+		$GLOBALS['config']['virtualip']['vip'] = [
+			[
+				'mode'        => 'ipalias',
+				'subnet'      => '2001:db8:cafe::',
+				'subnet_bits' => '48',
+			],
+		];
+		// Clear interfaces so no IPv4 paths contaminate the check.
+		$GLOBALS['config']['interfaces']     = [];
+		$GLOBALS['pfb_test_configured_ipv6'] = [];
+
+		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
+
+		$host = '2001:db8:cafe:1::1';
+		$isLocal = isset($pfb_local[$host]) || pfb_local_ip($host, $pfb_localsub);
+
+		$this->assertTrue(
+			$isLocal,
+			sprintf(
+				"Host %s inside IPv6 VIP /48 must be recognised as local.\n"
+				. "pfb_localsub: %s",
+				$host,
+				implode(', ', $pfb_localsub),
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
 	// Case D — #461 regression guard: empty-string interface node is skipped
 	// -------------------------------------------------------------------------
 

@@ -466,8 +466,10 @@ if (!function_exists('get_configured_ipv6_addresses')) {
 
 if (!function_exists('gen_subnetv6')) {
 	// pfSense util.inc: given an IPv6 address and a prefix-length integer/string,
-	// return the network address in 'addr/bits' notation. Faithful implementation
-	// using PHP's inet_pton/inet_ntop to mask out host bits.
+	// return the BARE network address (no prefix-length suffix). This matches the
+	// real pfSense gen_subnetv6() behaviour — it returns just the masked address
+	// (e.g. "2001:db8:1:2::"), NOT "addr/bits".  Callers that need CIDR notation
+	// must append "/{$bits}" themselves (see pfb_collect_localip()).
 	function gen_subnetv6($ipaddr, $bits) {
 		$bits = (int) $bits;
 		if ($bits < 0 || $bits > 128) {
@@ -489,7 +491,8 @@ if (!function_exists('gen_subnetv6')) {
 		for ($i = 0; $i < 16; $i++) {
 			$net .= chr(ord($packed[$i]) & ord($mask[$i]));
 		}
-		return inet_ntop($net) . '/' . $bits;
+		// Return bare network address only — NO "/{$bits}" suffix (matches pfSense).
+		return inet_ntop($net);
 	}
 }
 
@@ -577,7 +580,7 @@ if (!defined('SPECIALNET_VIPS')) {
 // pfb_create_dnsbl() calls is_service_running(), restart_service(), stop_service(),
 // and pfb_create_dnsbl_cert() which in turn calls cert_create().
 // These are all pfSense runtime functions absent off-appliance; doubles here make
-// the VIP/NAT oracle tests in FwobjCurrentBehaviourTest runnable without a live box.
+// the VIP/NAT oracle tests in DnsblMarkedVipTest runnable without a live box.
 
 if (!function_exists('interface_vip_bring_down')) {
 	// pfSense interfaces.inc: un-apply a VIP alias from the interface (live pf change).

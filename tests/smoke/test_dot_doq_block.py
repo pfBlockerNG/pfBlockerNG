@@ -198,32 +198,60 @@ def _filter_rule_present(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> b
     return h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'", timeout=timeout) == "yes"
 
 
+def _is_block_853_line(line: str) -> bool:
+    """True iff a ``pfctl -sr`` line is a block rule for port 853.
+
+    pfctl renders port 853 as the ``/etc/services`` name ``domain-s`` (DoT/DoQ), not the
+    literal ``853`` — so a ``"853" in line`` test alone misses a correctly-loaded rule.
+    """
+    return "block" in line and ("853" in line or "domain-s" in line)
+
+
 def _pfctl_sr_has_block_853(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
     """True iff ``pfctl -sr`` output contains a block rule for port 853."""
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
     if result.returncode != 0:
         return False
-    for line in result.stdout.splitlines():
-        # A block rule looks like: block ... port 853
-        if "block" in line and "853" in line:
-            return True
-    return False
+    return any(_is_block_853_line(line) for line in result.stdout.splitlines())
 
 
 def _pfctl_sr_block_853_has_self_exempt(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
     """True iff the port-853 block rule in ``pfctl -sr`` carries a self-exempt guard.
 
-    pfSense renders the negated ``(self)`` destination as ``! <self>`` or similar
-    in ``pfctl -sr`` output. We look for both ``self`` and the negation indicator
-    ``!`` on the same line as the block rule for port 853.
+    pfSense renders the negated ``(self)`` destination as ``! (self)`` and port 853 as the
+    service name ``domain-s``. We look for the negation indicator ``!`` and ``self`` on the
+    same line as the block rule for port 853.
     """
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
     if result.returncode != 0:
         return False
     for line in result.stdout.splitlines():
-        if "block" in line and "853" in line and "self" in line and "!" in line:
+        if _is_block_853_line(line) and "self" in line and "!" in line:
             return True
     return False
+
+
+def _dot_block_match_report(vm: SmokeVM, *, expected_present: bool, timeout: float = 30.0) -> str:
+    """Expected-vs-actual report for the DoT/DoQ block live-pf gate (printed on failure).
+
+    The harness has no assertion framework, so a failing live-pf check must put the
+    comparison on the terminal — what was EXPECTED next to what ``pfctl -sr`` ACTUALLY held.
+    Lists the live block rules that mention port 853 / ``domain-s`` verbatim.
+    """
+    result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
+    if result.returncode != 0:
+        actual = [f"<pfctl -sr failed: rc={result.returncode} {result.stderr.strip()}>"]
+    else:
+        actual = [ln.strip() for ln in result.stdout.splitlines() if _is_block_853_line(ln)]
+    want = "PRESENT" if expected_present else "ABSENT"
+    body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no block rule for port 853 / domain-s)"
+    return (
+        f"  Expecting a pfBlockerNG DoT/DoQ block rule to be {want} in the live filter ruleset:\n"
+        f"    destination : ! (self)\n"
+        f"    dest port   : domain-s (853)\n"
+        f"  Actual port-853 block rules (pfctl -sr):\n"
+        f"{body}"
+    )
 
 
 def _pfb_sections_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
@@ -306,6 +334,51 @@ def _seed_user_filter(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None
         raise RuntimeError(f"_seed_user_filter({descr!r}) failed: rc={result.returncode} {result.stderr!r}")
 
 
+def _seed_pf_alias(vm: SmokeVM, name: str, cidr: str = "192.0.2.0/24", *, timeout: float = 60.0) -> None:
+    """Create a pfSense network alias so pfctl can resolve 'from !<name>' without a syntax error.
+
+    Writes one entry to ``aliases/alias`` (type=network, address=cidr) and persists
+    config.xml.  Idempotent: skips creation when an alias with ``name`` already exists.
+    """
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$found = FALSE;\n"
+        f"foreach ($aliases as $a) {{\n"
+        f"  if (($a['name'] ?? '') === {h._php_str(name)}) {{ $found = TRUE; break; }}\n"
+        "}\n"
+        "if (!$found) {\n"
+        "  $aliases[] = array(\n"
+        f"    'name'    => {h._php_str(name)},\n"
+        "    'type'    => 'network',\n"
+        f"    'address' => {h._php_str(cidr)},\n"
+        "    'descr'   => 'pfBlockerNG smoke: exception alias',\n"
+        "    'detail'  => '',\n"
+        "  );\n"
+        "  config_set_path('aliases/alias', $aliases);\n"
+        "  write_config('pfBlockerNG smoke: seed pfSense alias for exception');\n"
+        "}\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_seed_pf_alias({name!r}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+def _remove_pf_alias(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> None:
+    """Remove the pfSense alias with ``name`` from ``aliases/alias`` (best-effort; ignores missing)."""
+    snippet = (
+        "$aliases = config_get_path('aliases/alias', array());\n"
+        "$out = array();\n"
+        "foreach ($aliases as $a) {\n"
+        f"  if (($a['name'] ?? '') !== {h._php_str(name)}) {{ $out[] = $a; }}\n"
+        "}\n"
+        "config_set_path('aliases/alias', $out);\n"
+        "write_config('pfBlockerNG smoke: remove pfSense alias for exception');\n"
+        "echo 'OK';"
+    )
+    h.php_eval(vm, snippet, timeout=timeout)  # best-effort; ignore rc/stdout
+
+
 def _cleanup_dot_block(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Disable DoT/DoQ block and reload — shared teardown used by finally blocks."""
     try:
@@ -316,8 +389,27 @@ def _cleanup_dot_block(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 
 
 def _pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
-    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep)."""
-    vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    """Uninstall the package via ``pkg delete`` (triggers pre-deinstall sweep).
+
+    Captures stdout/stderr, asserts rc==0, and prints output on failure so
+    diagnostics are visible in CI logs.
+    """
+    # Dump pkg info before delete so diagnostics show what was installed.
+    info = vm.ssh("pkg", "info", _PKG_NAME, timeout=30.0)
+    if info.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg info {_PKG_NAME!r} before delete — not registered"
+            f" (rc={info.returncode}):\n{info.stdout}\n{info.stderr}"
+        )
+
+    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", _PKG_NAME, timeout=timeout)
+    if result.returncode != 0:
+        print(
+            f"[_pkg_delete] pkg delete failed rc={result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}"
+        )
+        raise AssertionError(f"pkg delete {_PKG_NAME!r} returned rc={result.returncode} (expected 0)")
 
 
 # --------------------------------------------------------------------------- #
@@ -359,8 +451,9 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
             "pfB_DoT_Block_* filter/rule entries present before enable — before-state not clean"
         )
-        assert not _pfctl_sr_has_block_853(vm), (
-            "pfctl -sr shows a port-853 block rule before enable — before-state not clean"
+        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
+            + _dot_block_match_report(vm, expected_present=False)
         )
 
         # WHEN — enable on the primary interface and reload.
@@ -388,9 +481,12 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
             f"{descr}: destination.port != '853'"
         )
 
-        # THEN — pfctl -sr confirms the block rule is active.
-        assert _pfctl_sr_has_block_853(vm), (
-            "pfctl -sr shows no block rule for port 853 after enable\n" + h.pf_state_dump(vm)
+        # THEN — pfctl -sr confirms the block rule is active (async: poll until present).
+        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows no block rule for port 853 after enable\n"
+            + _dot_block_match_report(vm, expected_present=True)
+            + "\n"
+            + h.pf_state_dump(vm)
         )
 
     finally:
@@ -427,7 +523,10 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_ifa
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
             f"pfB_DoT_Block_{iface} filter/rule entry absent before disable — setup failed"
         )
-        assert _pfctl_sr_has_block_853(vm), "pfctl -sr shows no port-853 block before disable — setup failed"
+        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows no port-853 block before disable — setup failed\n"
+            + _dot_block_match_report(vm, expected_present=True)
+        )
 
         # WHEN — disable and reload.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
@@ -438,8 +537,11 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_ifa
             "pfB_DoT_Block_* filter/rule entries still present after disable"
         )
 
-        # THEN — pfctl -sr must show no port-853 block rule.
-        assert not _pfctl_sr_has_block_853(vm), "pfctl -sr still shows port-853 block rule after disable"
+        # THEN — pfctl -sr must show no port-853 block rule (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr still shows port-853 block rule after disable\n"
+            + _dot_block_match_report(vm, expected_present=False)
+        )
 
     finally:
         _cleanup_dot_block(vm)
@@ -636,6 +738,10 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
             "pfB_DoT_Block_* entries present before Case 5 — state not clean"
         )
 
+        # Create a real pfSense network alias so pfctl can resolve 'from !<alias>'
+        # without a syntax error when the ruleset is applied after reload.
+        _seed_pf_alias(vm, _EXCEPTION_ALIAS, "192.0.2.0/24")
+
         # WHEN — enable with exception alias set.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception=_EXCEPTION_ALIAS)
         h.reload(vm, "update")
@@ -661,6 +767,7 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
         )
 
     finally:
+        _remove_pf_alias(vm, _EXCEPTION_ALIAS)
         _cleanup_dot_block(vm)
 
 
@@ -703,7 +810,7 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
 
     # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
-    # pfb_fwobj_sweep before pfb_remove_config_settings).
+    # owned-object sweep before pfb_remove_config_settings).
     _pkg_delete(vm)
 
     # THEN — all pfB_DoT_Block_* entries are gone.
@@ -756,26 +863,32 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
 
-        assert not _pfctl_sr_has_block_853(vm), (
-            "pfctl -sr shows a port-853 block rule before enable — before-state not clean"
+        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
+            + _dot_block_match_report(vm, expected_present=False)
         )
-        assert not _pfctl_sr_block_853_has_self_exempt(vm), (
-            "pfctl -sr shows self-exempt port-853 rule before enable — before-state not clean"
+        assert h.wait_until(lambda: not _pfctl_sr_block_853_has_self_exempt(vm)), (
+            "pfctl -sr shows self-exempt port-853 rule before enable — before-state not clean\n"
+            + _dot_block_match_report(vm, expected_present=False)
         )
 
         # WHEN — enable on the primary interface and reload.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
 
-        # THEN — pfctl -sr contains the block rule for port 853.
-        assert _pfctl_sr_has_block_853(vm), (
-            "pfctl -sr shows no block rule for port 853 after enable\n" + h.pf_state_dump(vm)
+        # THEN — pfctl -sr contains the block rule for port 853 (async: poll until present).
+        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows no block rule for port 853 after enable\n"
+            + _dot_block_match_report(vm, expected_present=True)
+            + "\n"
+            + h.pf_state_dump(vm)
         )
 
         # THEN — the rule carries the self-exempt guard ('!' + 'self' on the block line).
-        assert _pfctl_sr_block_853_has_self_exempt(vm), (
+        assert h.wait_until(lambda: _pfctl_sr_block_853_has_self_exempt(vm)), (
             "pfctl -sr block rule for port 853 does not carry the self-exempt negation guard "
-            "('!' + 'self' tokens absent on the block-853 line) — the firewall is NOT exempt from its own rule"
+            "('!' + 'self' tokens absent on the block-853 line) — the firewall is NOT exempt from its own rule\n"
+            + _dot_block_match_report(vm, expected_present=True)
         )
 
     finally:
