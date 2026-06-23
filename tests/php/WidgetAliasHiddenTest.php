@@ -42,9 +42,9 @@ final class WidgetAliasHiddenTest extends TestCase
 		}
 
 		// Extract just the function definition (signature through its closing brace).
-		// The body is a single return statement, so the first '}' after the signature
-		// closes the function.
-		if (!preg_match('/function\s+pfb_widget_alias_hidden\s*\([^)]*\)\s*\{.*?\}/s', $src, $m)) {
+		// The body's inner braces are tab-indented, so the function's own closing brace
+		// is the first '}' at the start of a line (\n followed by '}').
+		if (!preg_match('/function\s+pfb_widget_alias_hidden\s*\([^)]*\).*?\n\}/s', $src, $m)) {
 			throw new RuntimeException('test bootstrap: pfb_widget_alias_hidden() not found in widget source');
 		}
 		eval($m[0]);
@@ -76,10 +76,13 @@ final class WidgetAliasHiddenTest extends TestCase
 			pfb_widget_alias_hidden($alias),
 			"alias {$alias} should be displayed in the widget"
 		);
+		// The toggle governs aggregates only — an ordinary alias is shown either way.
+		$this->assertFalse(pfb_widget_alias_hidden($alias, TRUE));
 	}
 
 	/**
-	 * Every one of the eight ADR-11 aggregate aliases is HIDDEN.
+	 * The eight ADR-11 aggregate aliases — used to assert BOTH branches of the
+	 * "Show Aggregated Aliases" widget setting (issue #494).
 	 *
 	 * @return list<array{string}>
 	 */
@@ -94,24 +97,42 @@ final class WidgetAliasHiddenTest extends TestCase
 		return $out;
 	}
 
+	// Default (setting OFF, $show_agg defaults to false): every aggregate is HIDDEN —
+	// the "before" state that proves the toggle actually changes behaviour.
 	#[\PHPUnit\Framework\Attributes\DataProvider('aggregateAliasProvider')]
-	public function testAggregateAliasIsHidden(string $alias): void
+	public function testAggregateAliasIsHiddenByDefault(string $alias): void
 	{
 		$this->assertTrue(
 			pfb_widget_alias_hidden($alias),
-			"aggregate alias {$alias} must be hidden from the widget"
+			"aggregate alias {$alias} must be hidden when the setting is off"
+		);
+		// Explicit false is identical to the default.
+		$this->assertTrue(pfb_widget_alias_hidden($alias, FALSE));
+	}
+
+	// Setting ON ($show_agg = true): the same aggregate is now SHOWN — the "after"
+	// state, proving the flip is caused by the toggle and not an always-hidden path.
+	#[\PHPUnit\Framework\Attributes\DataProvider('aggregateAliasProvider')]
+	public function testAggregateAliasIsShownWhenSettingEnabled(string $alias): void
+	{
+		$this->assertFalse(
+			pfb_widget_alias_hidden($alias, TRUE),
+			"aggregate alias {$alias} must be shown when the setting is on"
 		);
 	}
 
-	// The pre-existing DNSBL VIP exclusion is preserved by the refactor.
-	public function testDnsblVipsIsHidden(): void
+	// The pre-existing DNSBL VIP exclusion is preserved by the refactor and is NOT
+	// governed by the toggle — it stays hidden whether the setting is off or on.
+	public function testDnsblVipsIsHiddenRegardlessOfSetting(): void
 	{
 		$this->assertTrue(pfb_widget_alias_hidden('pfB_DNSBL_VIPs'));
+		$this->assertTrue(pfb_widget_alias_hidden('pfB_DNSBL_VIPs', TRUE));
 	}
 
-	// An empty alias name (strstr() found no 'pfB' token) is hidden, as before.
-	public function testEmptyAliasIsHidden(): void
+	// An empty alias name (strstr() found no 'pfB' token) is hidden either way.
+	public function testEmptyAliasIsHiddenRegardlessOfSetting(): void
 	{
 		$this->assertTrue(pfb_widget_alias_hidden(''));
+		$this->assertTrue(pfb_widget_alias_hidden('', TRUE));
 	}
 }
