@@ -59,12 +59,15 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_keep: OLD pfb_global() = $pfb['config']['pfb_keep'] ?? 'on' = 'on' when absent.
-	 * Via gateway: PfbConfig::read('pfb_keep')->value = 'on' (PfbToggle::On).
+	 * Via gateway: PfbConfig::read('pfb_keep')->value = 'on' (PfbLenient::On, #484 fix).
 	 *
 	 * #281 DEFAULT REPAIR: This is the canonical defect class. The registry default
 	 * is 'on', matching the old ?? 'on' fallback. Both old code and gateway agree.
 	 * The issue #281 migration (pfb_keep_migrate) seeds this into config.xml for
 	 * EXISTING installs; new installs and the runtime both default to 'on'.
+	 *
+	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
+	 * 'off' for unchecked-save — distinguishable from absent (default 'on').
 	 */
 	public function testParityPfbKeepAbsentYieldsOn(): void
 	{
@@ -75,9 +78,8 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_keep');
 
 		// Then: 'on' — matches OLD ?? 'on' AND the repaired registry default.
-		// Deliberate note: the old pfb_global() code had ?? 'on' which is now
-		// the formal registry default 'on'. No behaviour change — same value.
-		$this->assertSame(PfbToggle::On, $result);
+		// Adapter is now PfbLenient (not PfbToggle), but the value is unchanged.
+		$this->assertSame(PfbLenient::On, $result);
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> "on" (#281: default repaired via registry)');
 	}
 
@@ -469,6 +471,10 @@ final class PfbGlobalParityTest extends TestCase
 	 * The structural fix: the default is now FORMAL (in the registry) instead of
 	 * a scattered per-site ?? fallback. The pfb_keep_migrate() migration seeds
 	 * this into config.xml for existing installs; the runtime default is identical.
+	 *
+	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
+	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). The legacy
+	 * '' token (written by old GUI) still reads as PfbLenient::Off — backward-safe.
 	 */
 	public function testRepair281PfbKeepDefaultIsFormallyOn(): void
 	{
@@ -481,14 +487,16 @@ final class PfbGlobalParityTest extends TestCase
 		// Then: value is 'on' — same as old ?? 'on' fallback.
 		// The #281 class is now structurally closed: the default is formal,
 		// not scattered, and a missing key cannot diverge from the GUI default.
-		$this->assertSame(PfbToggle::On, $result);
+		// Adapter is now PfbLenient (not PfbToggle); value is unchanged.
+		$this->assertSame(PfbLenient::On, $result);
 		$this->assertSame('on', $result->value);
 
-		// Also prove that with an explicit '' (user opted out), the gateway
-		// returns PfbToggle::Off -> '' — a deliberate opt-out is still honoured.
+		// Also prove that with an explicit '' (pre-#484 legacy opt-out), the gateway
+		// returns PfbLenient::Off -> value 'off' — a deliberate opt-out is still honoured.
+		// (Write emits 'off', not '' — normalises the legacy empty-string token.)
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
 		$result_off = PfbConfig::read('pfb_keep');
-		$this->assertSame(PfbToggle::Off, $result_off);
-		$this->assertSame('', $result_off->value, 'explicit "" pfb_keep -> off (user opt-out honoured)');
+		$this->assertSame(PfbLenient::Off, $result_off);
+		$this->assertSame('off', $result_off->value, "legacy '' pfb_keep -> PfbLenient::Off (value 'off')");
 	}
 }

@@ -6398,7 +6398,8 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	}
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.
-	if ($pfb['enable'] == '' && $pfb['keep'] == '' && !$pfb['install']) {
+	// pfb['keep'] is now 'on'/'off' (PfbLenient); != 'on' covers both 'off' and legacy ''.
+	if ($pfb['enable'] == '' && $pfb['keep'] != 'on' && !$pfb['install']) {
 		unlink_if_exists("{$pfb['dnsbl_file']}{$ext}");
 	}
 
@@ -11273,7 +11274,8 @@ function sync_package_pfblockerng($cron='') {
 	#########################################################
 
 	// When pfBlockerNG is Disabled and 'Keep Blocklists' is Disabled.
-	if ($pfb['enable'] == '' && $pfb['keep'] == '' && !$pfb['install']) {
+	// pfb['keep'] is now 'on'/'off' (PfbLenient); != 'on' covers both 'off' and legacy ''.
+	if ($pfb['enable'] == '' && $pfb['keep'] != 'on' && !$pfb['install']) {
 		$log = "\n  Removing DB Files/Folders \n";
 		pfb_logger("{$log}", 1);
 		pfb_clear_contents();

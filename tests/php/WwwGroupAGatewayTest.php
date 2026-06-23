@@ -53,9 +53,10 @@ final class WwwGroupAGatewayTest extends TestCase
 
 	/**
 	 * pfb_keep: page used `isset($pfb['gconfig']['pfb_keep']) ? ... : 'on'` — default 'on'.
-	 * Registry default = 'on' (PfbToggle::On). Page default REMOVED; gateway owns it.
+	 * Registry default = 'on' (PfbLenient::On after #484 fix). Page default REMOVED; gateway owns it.
 	 *
 	 * Parity: absent key → PfbConfig::read('pfb_keep')->value === 'on' (was: 'on').
+	 * (#484: adapter changed from PfbToggle to PfbLenient; value unchanged.)
 	 */
 	public function testGeneralPfbKeepAbsentDefaultMatchesPriorPageDefault(): void
 	{
@@ -67,8 +68,9 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
 		$result = PfbConfig::read('pfb_keep');
 
-		// Then: PfbToggle::On, value 'on' — matches prior page default 'on'.
-		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On');
+		// Then: PfbLenient::On, value 'on' — matches prior page default 'on'.
+		// (#484 fix: pfb_keep now uses the lenient adapter; the value is unchanged.)
+		$this->assertSame(PfbLenient::On, $result, 'pfb_keep absent -> PfbLenient::On');
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> value "on" (parity with prior isset default)');
 	}
 
