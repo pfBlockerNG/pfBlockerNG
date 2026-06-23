@@ -268,9 +268,11 @@ def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> Non
         h.reload(vm, "update")
 
         assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 present before enable — before-state is not clean"
+            "pfB_AUTO_VIP_v4 present before enable — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
         )
-        assert not _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT rule present before enable — before-state is not clean"
+        assert not _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT rule present before enable — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
 
         # WHEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
         # enable auto-VIP + DNSBL, and run a full reload.
@@ -282,8 +284,11 @@ def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> Non
         # THEN — both owned objects must now be present.
         assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
             "pfB_AUTO_VIP_v4 not created in virtualip/vip after enabling DNSBL + auto-VIP"
+            + f"\n{h.fwobj_state_snapshot(vm)}"
         )
-        assert _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT rule not created in nat/rule after enabling DNSBL"
+        assert _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT rule not created in nat/rule after enabling DNSBL" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
     finally:
         # Restore to a known baseline so Scenario B and C start clean.
         h.set_dnsbl_interface(vm, "lo0")
@@ -322,9 +327,11 @@ def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> No
         h.reload(vm, "update")
 
         assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-            "pfB_AUTO_VIP_v4 absent before disable — before-state setup failed"
+            "pfB_AUTO_VIP_v4 absent before disable — before-state setup failed" + f"\n{h.fwobj_state_snapshot(vm)}"
         )
-        assert _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT absent before disable — before-state setup failed"
+        assert _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT absent before disable — before-state setup failed" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
 
         # WHEN — disable DNSBL and reload.
         h.set_dnsbl_enabled(vm, False)

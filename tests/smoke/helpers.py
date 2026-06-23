@@ -1015,6 +1015,39 @@ def dnsvip4_address(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     return _php_read_scalar(vm, pre, "get_configured_vip_ipv4($d['pfb_dnsvip4'] ?? '') ?? ''", timeout=timeout)
 
 
+def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
+    """On-box DNSBL-mode inputs + pfB-owned firewall objects, for failure diagnostics.
+
+    Reports the resolved DNSBL ``mode`` and the five inputs that decide whether
+    ``pfb_manage_dnsbl_vip`` / ``pfb_create_dnsbl`` create the auto-VIP and DNSBL
+    NAT (pfblockerng.inc:12542 mode gate; :3834 NAT iface gate), plus the live
+    ``virtualip/vip`` and pfB-owned ``nat/rule`` rows. Embed in a 'setup failed'
+    / before-state assertion message so a red leg shows WHY an object was (not)
+    created instead of asserting a bare boolean.
+    """
+    pre = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$enable = ($g['enable_cb'] ?? '');\n"
+        "$dnsbl = ($d['pfb_dnsbl'] ?? '');\n"
+        "$unb = config_path_enabled('unbound') ? 'on' : '';\n"
+        "$mode = ($enable === 'on' && $dnsbl === 'on' && $unb === 'on') ? 'enabled' : 'disabled';\n"
+        "$out = 'mode=' . $mode . ' enable_cb=' . $enable . ' pfb_dnsbl=' . $dnsbl"
+        " . ' unbound=' . $unb . ' pfb_dnsvip_auto=' . ($d['pfb_dnsvip_auto'] ?? '')"
+        " . ' dnsbl_interface=' . ($d['dnsbl_interface'] ?? 'lo0')"
+        " . ' pfb_dnsvip4=' . ($d['pfb_dnsvip4'] ?? '') . \"\\nVIPs:\";\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        "  $out .= ' [' . ($v['descr'] ?? '') . '@' . ($v['subnet'] ?? '') . '/' . ($v['interface'] ?? '') . ']';\n"
+        "}\n"
+        '$out .= "\\nNAT:";\n'
+        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+        "  $dsc = (string) ($r['descr'] ?? '');\n"
+        "  if (strpos($dsc, 'pfB') !== FALSE) { $out .= ' [' . $dsc . ']'; }\n"
+        "}"
+    )
+    return _php_read_scalar(vm, pre, "$out", timeout=timeout)
+
+
 def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:
     """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP).
 

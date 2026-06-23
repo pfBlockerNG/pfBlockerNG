@@ -192,6 +192,31 @@ def _read_syslog_lines(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     return [ln for ln in content.splitlines() if ln.strip()]
 
 
+def syslog_export_state_snapshot(vm: SmokeVM) -> str:
+    """On-box syslog-export state for failure diagnostics.
+
+    Returns a single string with the ``log_syslog`` config value, the ``ls -l``
+    of :data:`SYSLOG_LOG`, whether the filterlog daemon is running, and the
+    current line count.  Never raises — best-effort (a missing file yields '').
+    """
+    log_syslog = h.config_get(vm, CFG_GENERAL + "/log_syslog")
+    try:
+        ls_result = vm.ssh("/bin/ls", "-l", SYSLOG_LOG, timeout=10.0)
+        ls_out = ls_result.stdout.strip() if ls_result.returncode == 0 else "(absent)"
+    except Exception:
+        ls_out = "(error)"
+    try:
+        ps_result = vm.ssh("/bin/ps", "-wax", timeout=10.0)
+        daemon_running = "pfblockerng.inc filterlog" in ps_result.stdout or "tail_pfb" in ps_result.stdout
+    except Exception:
+        daemon_running = False
+    line_count = _count_syslog_lines(vm)
+    return (
+        f"log_syslog={log_syslog!r} filterlog_running={daemon_running}"
+        f" syslog_lines={line_count}\n{SYSLOG_LOG}: {ls_out}"
+    )
+
+
 def _trigger_ip_block(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     """Attempt a TCP connection to a blocked IP to generate a pf block log event.
 
@@ -324,7 +349,7 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM) -> None:
     after_lines = _read_syslog_lines(vm)
     assert len(after_lines) > before_count, (
         f"No new syslog lines appeared after enabling export and probing {domain} "
-        f"(before {before_count}, after {len(after_lines)})"
+        f"(before {before_count}, after {len(after_lines)})" + f"\n{syslog_export_state_snapshot(vm)}"
     )
 
     _assert_syslog_line(after_lines, "pfblockerng", act="dnsbl", btype="VIP")
@@ -474,7 +499,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM) -> None:
     count_while_on = _count_syslog_lines(vm)
     assert count_while_on > 0, (
         "Precondition: expected syslog records from prior ON tests, but "
-        f"SYSLOG_LOG has {count_while_on} lines — prior tests may have failed"
+        f"SYSLOG_LOG has {count_while_on} lines — prior tests may have failed" + f"\n{syslog_export_state_snapshot(vm)}"
     )
 
     dnsbl_csv_before = h.count_log_marker(vm, DNSBL_LOG, domain)
