@@ -92,6 +92,13 @@ log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# Shared type/tag/push helpers — sourced so this script's published artifact is
+# byte-identical to image-upgrade.sh's for the same (type, version).
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+[ -f "$SCRIPT_DIR/image-lib.sh" ] || die "image-lib.sh not found next to this script: $SCRIPT_DIR/image-lib.sh"
+# shellcheck source=scripts/image-lib.sh
+. "$SCRIPT_DIR/image-lib.sh"
+
 # VM id default is per --type (ce 103, plus 104, civm 105; else 103) — applied
 # after --type is known, unless --vmid was given. Empty here = "not set".
 VMID=""
@@ -166,17 +173,12 @@ case "$COMPRESSION" in zstd|zlib|off) ;; *) die "--compression must be zstd|zlib
 # fields are required and validated below.
 # ---------------------------------------------------------------------------
 if [ -n "$TYPE" ]; then
-    case "$TYPE" in
-        ce)   _name=pfsense-ce;   _pretty=pfSense-CE;   _desc="pfSense CE";                 _atype="application/vnd.netgate.pfsense-ce.disk.v1";        _vmid=103 ;;
-        plus) _name=pfsense-plus; _pretty=pfSense-Plus; _desc="pfSense Plus";               _atype="application/vnd.netgate.pfsense-plus.disk.v1";      _vmid=104 ;;
-        civm) _name=civm;         _pretty=civm;         _desc="pfBlockerNG smoke client VM"; _atype="application/vnd.pfblockerng.smoke-client.disk.v1";  _vmid=105 ;;
-        *)    die "--type must be ce|plus|civm (got '$TYPE')" ;;
-    esac
-    [ -n "$IMAGE" ]         || IMAGE="${REGISTRY%/}/${_name}"
-    [ -n "$DESCRIPTION" ]   || DESCRIPTION="${_desc} ${VERSION}"
-    [ -n "$ARTIFACT_TYPE" ] || ARTIFACT_TYPE="$_atype"
-    [ -n "$QCOW_NAME" ]     || QCOW_NAME="${_pretty}_${VERSION}.qcow2"
-    [ -n "$VMID" ]          || VMID="$_vmid"
+    image_type_fields "$TYPE" || die "--type must be ce|plus|civm (got '$TYPE')"
+    [ -n "$IMAGE" ]         || IMAGE="${REGISTRY%/}/${IMG_NAME}"
+    [ -n "$DESCRIPTION" ]   || DESCRIPTION="${IMG_DESC} ${VERSION}"
+    [ -n "$ARTIFACT_TYPE" ] || ARTIFACT_TYPE="$IMG_ATYPE"
+    [ -n "$QCOW_NAME" ]     || QCOW_NAME="${IMG_PRETTY}_${VERSION}.qcow2"
+    [ -n "$VMID" ]          || VMID="$IMG_VMID"
 fi
 
 # VM id fallback for the custom (no --type) and --print-identity paths.
@@ -332,17 +334,8 @@ px "cat '$REMOTE_TMP'" > "$OUT"
 log "local image: $(qemu-img info --output=human "$OUT" 2>/dev/null | sed -n 's/^disk size: /qcow2 size /p' || echo "$(wc -c < "$OUT") bytes")"
 
 log "pushing ${IMAGE}:${VERSION}"
-# cd so the stored layer title is the bare filename (predictable on pull).
-(
-    cd "$(dirname "$OUT")"
-    oras push \
-        --artifact-type "$ARTIFACT_TYPE" \
-        --annotation "org.opencontainers.image.title=$(basename "$OUT")" \
-        --annotation "org.opencontainers.image.version=${VERSION}" \
-        --annotation "org.opencontainers.image.description=${DESCRIPTION}" \
-        "${IMAGE}:${VERSION}" \
-        "$(basename "$OUT"):application/vnd.qemu.qcow2"
-)
+# Shared push — the layer title is the resolved qcow2 basename (predictable on pull).
+image_oci_push "$OUT" "$IMAGE" "$VERSION" "$ARTIFACT_TYPE" "$DESCRIPTION" "$(basename "$OUT")"
 
 if [ "$KEEP" -eq 1 ] || [ "$CREATED_OUT" -eq 0 ]; then
     log "local image kept at: $OUT"

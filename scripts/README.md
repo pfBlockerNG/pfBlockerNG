@@ -265,8 +265,10 @@ machine. Omit `--proxmox` to run directly on the host, as before.
 # publish the seed image (driving a remote Proxmox host)
 ./scripts/image-publish.sh 2.8.1 --type ce --proxmox root@pve.lan
 
-# bump a published image to a newer CE release
+# bump a published CE image to a newer release (CE is the default --type)
 ./scripts/image-upgrade.sh --from 2.8.1 --proxmox pve.lan --ssh-key ~/.ssh/smoke_key
+# bump a Plus image (its 8-MAC + SMBIOS identity comes from the SMOKE_PLUS_* secrets)
+./scripts/image-upgrade.sh --from 26.03 --type plus --proxmox pve.lan --ssh-key ~/.ssh/smoke_key
 
 # or set the host once and call bare
 export PROXMOX_SSH_HOST=pve.lan PROXMOX_SSH_USER=root
@@ -288,26 +290,30 @@ Plus images publish with the same scripts, with these deltas:
 
 - **Image name is all-lowercase** — an OCI/GHCR repository name MUST be lowercase:
   `ghcr.io/pfblockerng/pfsense-plus`. Tags use the Plus version scheme `YY.MM`
-  (e.g. `26.03`). Select it with `--type plus` (which derives that lowercase ref,
-  the description and the artifact-type); `image-upgrade.sh` still uses `--image`.
+  (e.g. `26.03`). Select it with `--type plus` on either `image-publish.sh` or
+  `image-upgrade.sh` (it derives that lowercase ref, the description and the
+  artifact-type).
 - **Keep the GHCR package PRIVATE.** The Plus image is Netgate-licensed; verify the
   package's visibility is private after the first push and never make it public.
   CI **pulls** this private image (never publishes it) — the smoke fan-out runs Plus
   from it (`ci: true`, ADR-24), authenticating with the `SMOKE_GHCR_*` creds.
-- **MAC pinning (license-critical).** The qcow2 carries no MAC — the MAC lives in the
+- **MAC pinning (license-critical).** The qcow2 carries no MAC — the MACs live in the
   VM/QEMU config, so publishing is unaffected — but **every boot of the Plus image
-  must reuse the Plus source-VM's MAC**: pfSense matches interface assignment by MAC,
-  and the Plus license/NDI registration is keyed to it too. It is NOT the CE pin
-  (`BC:24:11:37:9C:AC`, the public default of `tests/smoke/boot_vm.sh`'s `SMOKE_VM_MAC`
-  and of `image-upgrade.sh --mac`). For a manual publish/upgrade, read it off the source
-  VM (`qm config <vmid>`, the `net0` line) and pass it explicitly: `image-upgrade.sh --mac
-  <plus-mac>`. In CI it is **never** hardcoded or in the matrix — `boot_vm.sh` takes it
-  from `SMOKE_VM_MAC`, which the smoke/UI workflows set from the `SMOKE_PLUS_MAC` secret
-  (with `SMOKE_PLUS_SMBIOS_UUID`) and redact from diagnostics (ADR-24).
+  must reuse the Plus source-VM's full identity**: pfSense assigns interfaces by MAC,
+  and the Plus license/NDI registration is keyed to **all 8 NIC MACs + the SMBIOS uuid**.
+  `boot_vm.sh` and `image-upgrade.sh` take the MACs from `SMOKE_VM_MAC` (a NEWLINE-separated
+  8-MAC list, one per NIC net0..net7) and the uuid from `SMOKE_VM_SMBIOS_UUID`; CE defaults
+  to the committed public list (net0 `BC:24:11:37:9C:AC`). For **Plus**, `image-upgrade.sh
+  --type plus` takes the identity from the `SMOKE_PLUS_MAC` (8-MAC list) + `SMOKE_PLUS_SMBIOS_UUID`
+  secrets and **REFUSES to boot unless the effective MAC set and uuid equal those secrets**
+  (a wrong NDI can burn the license). In CI it is **never** hardcoded or in the matrix — the
+  smoke/UI workflows set `SMOKE_VM_MAC`/`SMOKE_VM_SMBIOS_UUID` from the `SMOKE_PLUS_*` secrets
+  and redact them from diagnostics (ADR-24).
 - With `--type plus` the description, artifact-type and stored qcow2 filename
   (`pfSense-Plus_<tag>.qcow2`) are all labelled for Plus automatically — no `--out`
-  override needed. (`image-upgrade.sh` is the CE upgrade path and still annotates CE;
-  every consumer locates the layer by a `*.qcow2` glob, so that is cosmetic.)
+  override needed. `image-publish.sh` and `image-upgrade.sh` share `scripts/image-lib.sh`,
+  so an upgrade-and-publish produces a **byte-identical** artifact to `image-publish.sh
+  --type plus <tag>` run by hand.
 
 ## Two install paths: CI/local vs release
 
