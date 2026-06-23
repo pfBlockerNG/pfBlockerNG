@@ -859,19 +859,27 @@ When the min CE version changes, also:
    from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` (+ optional `SMOKE_PLUS_NDI`) secrets —
    **never** the matrix — and the harness redacts it from diagnostics. Adding the entry + letting
    **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
-   `build-pkg-linux.yml`, `image-refresh.yml` (CE only — see step 2), `smoke.yml`
+   `build-pkg-linux.yml`, `image-refresh.yml` (CE **and** Plus — see step 2), `smoke.yml`
    automatically — **no workflow YAML edit needed**.
-2. **Refresh the CE smoke image** (ADR-04 + ADR-09) — dispatch `image-refresh.yml` with
-   `pfsense_version` + `freebsd_version` from the new entry. It runs `scripts/image-upgrade.sh
-   --upgrade-pkgs`: pulls the current GHCR tag, conditionally upgrades baked deps (`pkg upgrade
-   -n` dry-run gate; `pkg upgrade -y` + reboot only if pending), runs `pfSense-upgrade` (any bump
-   incl. major), then an **alive health gate** (polls ≤300 s for the webConfigurator to answer
-   HTTP or `pfctl` to show a live ruleset) and publishes only when healthy — fail-closed. A
-   non-blocking post-publish smoke (`continue-on-error`) runs on a discarded overlay
-   (informational; authoritative validation is the fan-out, step 3). Manual seed via
-   `scripts/image-publish.sh` is the fallback when the gate fails. **`image-refresh.yml` is
-   CE-only** — the **Plus** image is refreshed **manually** with `scripts/image-publish.sh`
-   (re-export + push the licensed qcow2; the MAC/SMBIOS uuid must stay constant — ADR-24). See
+2. **Refresh the smoke images** (ADR-04 + ADR-09) — `image-refresh.yml` (`Upgrade pfSense smoke
+   images`) is a **CE + Plus matrix fan-out**: a `plan` job reads `ci-metadata`, and each
+   `ci:true` variant is refreshed **only when its `upgrade.available` flag is set** (a curated
+   per-variant signal that a public pre-release / GA / patch exists). Absent/`false` → that
+   variant is skipped, so most days the run is a clean no-op. Each leg runs
+   `scripts/image-upgrade.sh --type ce|plus --upgrade-pkgs` (and `--branch <id>` when
+   `upgrade.branch` is set, to reach a **pre-release / development** build — the branch is stored
+   in pfSense's `system/pkg_repo_conf_path` and applied via `pkg_switch_repo()`): pulls the
+   current GHCR tag, conditionally upgrades baked deps, runs `pfSense-upgrade`, then an **alive
+   health gate** (≤300 s for webConfigurator HTTP or a live `pfctl` ruleset) and publishes only
+   when healthy — fail-closed. GA/patches within a floating tag (2.8.0→2.8.1, both tag `2.8`)
+   self-replace that tag (`--force`); a new Major.Minor publishes a new tag. The **Plus** leg
+   takes its license/NDI identity from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` secrets and
+   refuses to boot on mismatch. A non-blocking post-publish smoke runs per variant on a discarded
+   overlay (informational; authoritative validation is the fan-out, step 3; the Plus post-smoke
+   skips cleanly if the Plus secrets are absent). Manual seed via `scripts/image-publish.sh`
+   remains the fallback when the gate fails (and for the initial Plus image seed). To enable an
+   upgrade, set the entry's `upgrade` block in `ci-metadata` (`{available, branch, target, from}`;
+   `from` defaults to the entry's own floating tag = self-replace). See
    `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`. (ADR-09 supersedes ADR-04 §2's "re-baseline on
    a major jump": `image-refresh.yml` handles all jumps via upgrade-in-place; a fresh re-seed is
    triggered only by a gate failure. Reconciling the ADR-04 §2 text is a tracked follow-up.)
