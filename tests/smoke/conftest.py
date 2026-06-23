@@ -89,9 +89,10 @@ STUB_DNS_AAAA = stub_responses.STUB_DNS_AAAA  # RFC 3849 documentation range
 # Hard readiness ceiling; wait_ready.sh polls (no fixed sleep) up to this.
 DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
 
-# civm client VM ssh host-forward port (host -> civm:22). Matches boot_vm.sh
-# SMOKE_CLIENT_SSH_HOSTPORT default.
-DEFAULT_CLIENT_SSH_PORT = 2223  # host -> civm 22
+# civm client VM ssh host-forward port (host -> civm:22). Honour the same
+# SMOKE_CLIENT_SSH_HOSTPORT override boot_vm.sh reads (default 2223), so a custom
+# host port reaches the client instead of a hardcoded 2223.
+DEFAULT_CLIENT_SSH_PORT = int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPORT", "2223"))  # host -> civm 22
 
 # The address civm uses to reach pfSense (pfSense LAN side of the socket crossover).
 PFSENSE_LAN_IP = "192.168.1.1"  # pfSense LAN IP baked in the two-VM image

@@ -12577,6 +12577,10 @@ function sync_package_pfblockerng($cron='') {
 	if ($mode === 'disabled') {
 		pfb_fwobj_init_registrations();
 		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+			// Removed owned nat/rule + filter/rule rows — flag a pf reload so the
+			// live ruleset drops them too (the disabled mode does not always reach
+			// the auto-rule region that would otherwise set this flag).
+			$pfb['filter_configure'] = TRUE;
 			write_config('pfBlockerNG: sweep orphan firewall objects on disable');
 		}
 	}
