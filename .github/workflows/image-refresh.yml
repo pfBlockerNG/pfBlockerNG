@@ -114,6 +114,7 @@ jobs:
           INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
             [
               .versions[]
+              | select((.role // "build") != "route-only")
               | select(.ci == true)
               | select((.upgrade.available // false) == true)
               | select($filter == "" or .pfsense_version == $filter)
@@ -122,7 +123,7 @@ jobs:
                   label:            .channel,
                   pfsense_version:  .pfsense_version,
                   freebsd_version:  .freebsd_version,
-                  image_name:       ("pfsense-" + (.channel | ascii_downcase)),
+                  image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
                   branch:           (.upgrade.branch // ""),
                   target:           (.upgrade.target // .pfsense_version),
                   from:             (.upgrade.from // .pfsense_version),
@@ -139,7 +140,9 @@ jobs:
           # Human-readable summary for the run log.
           printf '%s' "$MATRIX_JSON" | jq -r --arg filter "$FILTER_VERSION" '
             .versions[] |
-            if .ci != true then
+            if ((.role // "build") == "route-only") then
+              "  \(.channel) \(.pfsense_version): skip (role == route-only)"
+            elif .ci != true then
               "  \(.channel) \(.pfsense_version): skip (ci != true)"
             elif ((.upgrade.available // false) != true) then
               "  \(.channel) \(.pfsense_version): skip (upgrade.available != true)"
@@ -201,12 +204,21 @@ jobs:
         id: ref
         env:
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          # Pass the matrix value through env (never interpolate ${{ }} into the
+          # shell body — template-injection hardening), then validate before use.
+          MATRIX_IMAGE_NAME: ${{ matrix.image_name }}
         run: |
           set -eu
           # Compose the untagged image from the namespace var + per-matrix image_name.
           # Fallback: lowercased owner (GHCR refs MUST be lowercase).
+          case "$MATRIX_IMAGE_NAME" in
+            ''|*[!a-z0-9._-]*)
+              echo "::error::invalid matrix.image_name: '$MATRIX_IMAGE_NAME'"
+              exit 1
+              ;;
+          esac
           REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-          IMAGE="${REPO%/}/${{ matrix.image_name }}"
+          IMAGE="${REPO%/}/${MATRIX_IMAGE_NAME}"
           printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
           printf 'Image base ref: %s\n' "$IMAGE"
 
