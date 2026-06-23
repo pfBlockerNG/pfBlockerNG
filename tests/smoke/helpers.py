@@ -436,7 +436,10 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     meta = vm.ssh(
         "/bin/sh",
         "-c",
-        "ls -l --time-style=+%s /tmp/rules.debug 2>&1; date +%s; wc -l /tmp/rules.debug",
+        # BSD stat (pfSense/FreeBSD): %m = mtime epoch, %z = size. GNU `ls
+        # --time-style` is not portable here ('Illegal option'). `now=` is the
+        # epoch at capture so the mtime can be read as fresh-vs-stale.
+        "stat -f 'mtime=%m size=%z' /tmp/rules.debug 2>&1; echo now=$(date +%s); wc -l /tmp/rules.debug",
         timeout=timeout,
     )
     dbg = vm.ssh(

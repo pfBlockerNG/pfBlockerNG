@@ -3,11 +3,11 @@
 ``tests/smoke/conftest.py`` boots exclusively via ``boot_vm.sh``, which takes a
 ``--role pfsense|client`` selector and is parameterized by env:
 
-* ``SMOKE_VM_MAC`` — the pfSense NIC MAC(s). CE identity is don't-care, so the
-  default is EMPTY (QEMU assigns each NIC a default MAC). A pfSense Plus image
-  sets it to the license/NDI-keyed, NEWLINE-separated 8-MAC list (one per NIC in
-  order), split per-NIC by ``nth_mac``. The Plus values come from the
-  SMOKE_PLUS_* secrets, never the public matrix.
+* ``SMOKE_VM_MAC`` — the pfSense NIC MAC(s). CE identity is don't-care, so when
+  unset it falls back to the pinned CE source-VM 8-MAC list (``DEFAULT_CE_MAC``,
+  one per NIC in order). A pfSense Plus image overrides it with the
+  license/NDI-keyed, NEWLINE-separated 8-MAC list, split per-NIC by ``nth_mac``.
+  The Plus values come from the SMOKE_PLUS_* secrets, never the public matrix.
 * ``SMOKE_VM_SMBIOS_UUID`` — SMBIOS type-1 uuid. CE pins the public source-VM
   uuid; a Plus image overrides it (its NDI is derived from MAC + uuid).
 * ``SMOKE_CLIENT_MAC_ADDRESS`` — the civm data-NIC MAC, matched by pfSense's
@@ -130,7 +130,7 @@ def test_pfsense_management_path_targets_static_ip() -> None:
 
 
 def test_pfsense_wan_and_lan_topology() -> None:
-    """WAN is the 10.10.0.0/16 runner-services net; LAN is the socket crossover.
+    """WAN is the 10.10.0.0/24 runner-services net; LAN is the socket crossover.
 
     The guest reaches the runner-side mock servers via the WAN host alias
     10.10.0.2; the LAN (net2) is a QEMU socket LISTENER that the civm data NIC

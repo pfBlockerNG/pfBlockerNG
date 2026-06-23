@@ -880,8 +880,9 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
     All test domains use :func:`helpers.unique_domain` (uuid-*.com) — never RFC 6761
     TLDs (.test/.example/.invalid) which Unbound's built-in local-zones shadow before
     pfBlockerNG runs, and never HSTS-preload names (HSTS default-ON forces NULL on a
-    VIP block, masking whether a name actually resolved). Probed on-box via
-    ``drill @127.0.0.1``; the first response after each reload is authoritative.
+    VIP block, masking whether a name actually resolved). Probed from the civm
+    LAN client via :func:`helpers.dns_probe_client` (pfSense's LAN resolver); the
+    first response after each reload is authoritative.
 
     Background — the feed layout used:
       * Block feed  (Deny action, aliasname=smokednyblk):  S, B, M (+ M in Custom_List -> band 5)

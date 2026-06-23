@@ -660,6 +660,9 @@ final class DnsRedirectLifecycleTest extends TestCase
 		}
 		$this->assertNotNull($filter, 'lan/inet filter rule must exist');
 		$this->assertArrayHasKey('tracker', $filter, 'filter rule must carry a tracker');
+		$this->assertArrayHasKey('created', $filter, 'filter rule must carry created provenance');
+		$this->assertArrayHasKey('time', $filter['created'] ?? [], 'filter created must carry a time');
+		$this->assertArrayHasKey('updated', $filter, 'filter rule must carry updated provenance');
 		$this->assertNotSame(
 			$nat['tracker'],
 			$filter['tracker'],
