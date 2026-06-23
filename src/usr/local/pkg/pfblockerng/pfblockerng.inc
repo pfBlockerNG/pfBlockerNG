@@ -1120,26 +1120,38 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	return [TRUE, null];
 }
 
-// [ ADR-13 ] Ordered, preferred-first list of DNS-themed candidate sinkhole VIP
-// addresses for a family. Pure (no side effects). The bounded third group/hextet
-// sweep keeps the '.53' (DNS port) homage:
-//   AF_INET  -> 10.10.0.53 .. 10.10.15.53  (preferred 10.10.10.53 listed first)
-//   AF_INET6 -> fd00::53, fd00:1::53 .. fd00:15::53  (ULA fc00::/7; preferred first)
-// Returns [] for any other family. The picker (pfb_pick_free_dnsbl_vip) walks this
-// list and returns the first address that does not conflict.
+// [ ADR-13 / issue #487 ] Ordered, preferred-first list of DNS-themed candidate
+// sinkhole VIP addresses for a family. Pure (no side effects).
+//
+// The primary sweep keeps the '.53' (DNS port) homage and back-compat ordering:
+//   AF_INET  -> 10.10.10.53 (preferred, back-compat), then 10.10.X.53 (X=0..15)
+//   AF_INET6 -> fd00::53 (preferred), then fd00:1::53 .. fd00:15::53  (ULA fc00::/7)
+//
+// Disjoint-range fallbacks follow the sweep so that a single common RFC1918 /
+// ULA aggregate can never exhaust the entire pool:
+//   AF_INET  -> 172.31.255.53, 172.31.254.53 (172.16/12 — survives a 10/8 LAN),
+//               192.0.2.53, 198.51.100.53, 203.0.113.53 (RFC 5737 docs — never a
+//               real LAN, ideal sinkhole), 100.64.0.53 (RFC 6598 CGNAT).
+//   AF_INET6 -> 2001:db8::53, 2001:db8:1::53 (RFC 3849 docs — disjoint from fd00::/8).
+//
+// Under any single common aggregate (10/8, 172.16/12, 192.168/16, or fd00::/8) at
+// least one fallback stays non-overlapping. The conflict-aware picker
+// (pfb_pick_free_dnsbl_vip) selects the first free one.
+//
+// Returns [] for any other family.
 function pfb_dnsbl_vip_candidates(int $family): array {
 
 	// Bounded sweep range for the variable group/hextet (16 candidates).
 	$sweep_max = 15;
 
-	// The preferred third octet/hextet (the '10' in 10.10.10.53 / no-op for v6).
+	// The preferred third octet (the '10' in 10.10.10.53).
 	$preferred_v4_octet = 10;
 
 	$candidates = [];
 
 	if ($family === AF_INET) {
-		// Preferred address first, then the rest of the 10.10.X.53 sweep in order,
-		// skipping the preferred octet so it is never duplicated.
+		// Preferred address first (back-compat — existing boxes keep this address),
+		// then the rest of the 10.10.X.53 sweep, skipping the preferred octet.
 		$candidates[] = "10.10.{$preferred_v4_octet}.53";
 		for ($x = 0; $x <= $sweep_max; $x++) {
 			if ($x === $preferred_v4_octet) {
@@ -1147,12 +1159,22 @@ function pfb_dnsbl_vip_candidates(int $family): array {
 			}
 			$candidates[] = "10.10.{$x}.53";
 		}
+		// Disjoint-range fallbacks: survive a 10/8, 172.16/12, or 192.168/16 LAN.
+		$candidates[] = '172.31.255.53';	// 172.16/12 — disjoint from 10/8
+		$candidates[] = '172.31.254.53';
+		$candidates[] = '192.0.2.53';		// RFC 5737 TEST-NET-1 — never a real LAN
+		$candidates[] = '198.51.100.53';	// RFC 5737 TEST-NET-2
+		$candidates[] = '203.0.113.53';		// RFC 5737 TEST-NET-3
+		$candidates[] = '100.64.0.53';		// RFC 6598 CGNAT shared space
 	} elseif ($family === AF_INET6) {
 		// Preferred fd00::53 first, then fd00:1::53 .. fd00:15::53 in order.
 		$candidates[] = 'fd00::53';
 		for ($x = 1; $x <= $sweep_max; $x++) {
 			$candidates[] = "fd00:{$x}::53";
 		}
+		// Disjoint-range fallbacks: survive a fd00::/8 ULA aggregate.
+		$candidates[] = '2001:db8::53';		// RFC 3849 documentation prefix
+		$candidates[] = '2001:db8:1::53';
 	}
 
 	return $candidates;
@@ -1601,13 +1623,24 @@ function pfb_global() {
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
 	if (!empty($pfb['dnsbl'])) {
-		// VIP validation is unchanged from before ADR-13: force-disable DNSBL only on a
-		// genuinely invalid/missing/overlapping VIP. A missing IPv6 VIP is NOT such a case.
+		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
+		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
+		// owns provisioning and will (re)create a valid VIP during this same update pass.
+		// Disabling DNSBL here in auto mode would prevent the bootstrap from ever running.
 		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6']);
 		if (!$vips_valid_result[0]) {
-			// Force DNSBL to be disabled if VIPs are invalid.
-			$pfb['dnsbl'] = '';
-			pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+			if ($pfb['dnsbl_vip_auto'] === 'on') {
+				// [ ADR-13 / issue #487 ] Auto-create OWNS the DNSBL sinkhole VIP:
+				// pfb_manage_dnsbl_vip() (re)provisions a valid VIP on the configured
+				// interface during this same update pass. A stale / missing / wrong-interface
+				// manual reference must NOT force-disable DNSBL here, or the auto bootstrap
+				// can never run (mode would compute to 'disabled' and creation would be skipped).
+				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})", 1);
+			} else {
+				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
+				$pfb['dnsbl'] = '';
+				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+			}
 		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
 			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
 			// sinkhole VIP is configured (manual mode). DNSBL stays enabled on IPv4;
