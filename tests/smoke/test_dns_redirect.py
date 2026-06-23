@@ -1195,10 +1195,9 @@ def test_dns_redirect_uninstall_keep_on_removes_rules_retains_sections(
             "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
         )
 
-    except Exception:
-        # Best-effort teardown: package may already be gone after uninstall.
-        try:
-            _cleanup_redirect(vm)
-        except Exception:
-            pass
-        raise
+    finally:
+        # Best-effort teardown — runs on success too so the retained config (keep=on leaves
+        # the DNSBL section in place) does not bleed the redirect toggle into the next module.
+        # _cleanup_redirect is internally best-effort: its config write turns the toggle off
+        # even with the package uninstalled, and its reload no-ops when the package is gone.
+        _cleanup_redirect(vm)
