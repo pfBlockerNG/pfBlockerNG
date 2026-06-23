@@ -67,15 +67,13 @@ final class CfgGatewayTest extends TestCase
 	 */
 	public function testToggleFieldsRoundTripOn(): void
 	{
-		// All toggle-adapted fields: we pick a representative one (pfb_keep) and
-		// also verify pfb_dnsbl and pfb_dnsvip_auto to cover every adapter instance.
+		// Representative toggle-adapted fields (pfb_keep is now lenient — see below).
 		$toggle_fields = [
-			'enable_cb'     => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_keep'      => 'installedpackages/pfblockerng/config/0/pfb_keep',
-			'pfb_dnsbl'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
+			'enable_cb'       => 'installedpackages/pfblockerng/config/0/enable_cb',
+			'pfb_dnsbl'       => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 			'pfb_dnsvip_auto' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'pfb_reuse'     => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'pfb_hsts'      => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'pfb_reuse'       => 'installedpackages/pfblockerng/config/0/pfb_reuse',
+			'pfb_hsts'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -97,9 +95,9 @@ final class CfgGatewayTest extends TestCase
 
 	public function testToggleFieldsRoundTripOff(): void
 	{
+		// pfb_keep is now lenient — see testPfbKeepLenientRoundTrip*() below.
 		$toggle_fields = [
 			'enable_cb'       => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_keep'        => 'installedpackages/pfblockerng/config/0/pfb_keep',
 			'pfb_dnsbl'       => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 			'pfb_dnsvip_auto' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
 			'pfb_reuse'       => 'installedpackages/pfblockerng/config/0/pfb_reuse',
@@ -187,6 +185,70 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path));
 	}
 
+	/**
+	 * pfb_keep (lenient adapter): 'on'/'off'/'' round-trips and legacy '' normalises.
+	 *
+	 * Scenario:
+	 *   Background: pfb_keep stored as 'on', 'off', or '' (pre-#484-fix legacy empty).
+	 *     Given v.  When read/write.
+	 *     Then 'on' round-trips to 'on'; 'off' round-trips to 'off'.
+	 *     And '' (legacy) normalises to 'off' on write (backward-safe).
+	 */
+	public function testPfbKeepLenientRoundTripOn(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: canonical 'on'.
+		$this->seedConfig($path, 'on');
+
+		// Before: raw 'on'.
+		$this->assertSame('on', config_get_path($path), 'before: pfb_keep seed is on');
+
+		// When/After: read -> PfbLenient::On; write -> 'on'.
+		$enum = PfbConfig::read('pfb_keep');
+		$this->assertSame(PfbLenient::On, $enum, "read: pfb_keep 'on' -> PfbLenient::On");
+
+		PfbConfig::write('pfb_keep', $enum);
+		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_keep");
+	}
+
+	public function testPfbKeepLenientRoundTripOff(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: canonical 'off' (the new stored value for unchecked-save after #484 fix).
+		$this->seedConfig($path, 'off');
+
+		// Before: raw 'off'.
+		$this->assertSame('off', config_get_path($path), 'before: pfb_keep seed is off');
+
+		// When/After: read -> PfbLenient::Off; write -> 'off'.
+		$enum = PfbConfig::read('pfb_keep');
+		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep 'off' -> PfbLenient::Off");
+
+		PfbConfig::write('pfb_keep', $enum);
+		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_keep");
+	}
+
+	public function testPfbKeepLenientLegacyEmptyNormalisesToOff(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: '' (pre-#484 install — toggle OFF value written by old GUI).
+		$this->seedConfig($path, '');
+
+		// Before: raw ''.
+		$this->assertSame('', config_get_path($path), 'before: pfb_keep seed is empty string');
+
+		// When: read maps '' to PfbLenient::Off (legacy token, same as 'off').
+		$enum = PfbConfig::read('pfb_keep');
+		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep '' -> PfbLenient::Off (legacy)");
+
+		// After: write emits 'off' (not ''); normalises the legacy token.
+		PfbConfig::write('pfb_keep', $enum);
+		$this->assertSame('off', config_get_path($path), "write(read(''))==off for pfb_keep");
+	}
+
 	// -----------------------------------------------------------------------
 	// B — Default on absent key
 	// -----------------------------------------------------------------------
@@ -213,14 +275,15 @@ final class CfgGatewayTest extends TestCase
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
 	{
 		// pfb_keep default is 'on' (On enum) — the #281 canonical default.
+		// Uses the lenient adapter so absent key → PfbLenient::On (not PfbToggle::On).
 		// Before: key absent.
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 
 		// When: read with no seed.
 		$result = PfbConfig::read('pfb_keep');
 
-		// Then: returns On (the registered default 'on', applied through toggle adapter).
-		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> On (default on)');
+		// Then: returns On (the registered default 'on', applied through lenient adapter).
+		$this->assertSame(PfbLenient::On, $result, 'pfb_keep absent -> PfbLenient::On (default on)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForLenientAbsentKey(): void
@@ -1119,6 +1182,33 @@ final class CfgGatewayTest extends TestCase
 			// since must be a non-empty string.
 			$this->assertIsString($entry['since'],    "'{$field_key}'.since must be a string");
 			$this->assertNotEmpty($entry['since'],    "'{$field_key}'.since must not be empty");
+		}
+	}
+
+	/**
+	 * No registered field may be a TOGGLE adapter (off-value '') while defaulting
+	 * to 'on'. Such a field cannot represent "off" on a live pfSense config: an
+	 * empty stored value does not persist distinguishably from absent, and an
+	 * absent value re-applies the registry default 'on' — silently flipping a
+	 * deliberate "off" back to "on". (This is the pfb_keep bug: #484 fan-out.)
+	 *
+	 * A default-'on' field MUST therefore use the LENIENT adapter (off persists as
+	 * the explicit 'off' token) or a PLAIN field that writes an explicit 'on'/'off'
+	 * (as pfb_feed_internal_filter does). This guard makes the rule mechanical so
+	 * the class of bug cannot recur — the off-box config doubles round-trip ''
+	 * faithfully and would otherwise never catch it.
+	 */
+	public function testNoToggleFieldDefaultsToOn(): void
+	{
+		foreach (pfb_cfg_registry() as $field_key => $entry) {
+			if ($entry['read_adapter'] === 'pfb_cfg_toggle_read') {
+				$this->assertNotSame(
+					'on', $entry['default'],
+					"'{$field_key}': a TOGGLE field must not default to 'on' — its '' off-value "
+					. "cannot survive the live config round-trip (becomes absent -> default 'on'). "
+					. "Use the lenient adapter (explicit 'off') or a plain explicit-on/off field."
+				);
+			}
 		}
 	}
 

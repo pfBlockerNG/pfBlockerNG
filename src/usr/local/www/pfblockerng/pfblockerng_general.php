@@ -240,7 +240,10 @@ if ($_POST) {
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
-			$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'], PFB_FILTER_ON_OFF, 'general', '');
+			// Store as explicit 'on'/'off' (not '' for unchecked) so an unchecked save
+			// (off) is distinguishable from a never-configured install (key absent =>
+			// default on). Mirrors the pfb_feed_internal_filter precedent.
+			$pfb['gconfig']['pfb_keep']			= (($_POST['pfb_keep'] ?? '') === 'on') ? 'on' : 'off';
 
 			// Store the master feed-host filter toggle as an explicit 'on'/'off' (a
 			// checkbox submits 'on' when checked, nothing when unchecked) so the
@@ -403,7 +406,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_keep',
 	'Keep Settings',
 	gettext('Enable'),
-	pfb_cfg_toggle_read($pconfig['pfb_keep']) === PfbToggle::On,
+	pfb_cfg_lenient_read($pconfig['pfb_keep']) === PfbLenient::On,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'

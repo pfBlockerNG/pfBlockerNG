@@ -278,6 +278,83 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
+	 * pfb_keep (lenient adapter, #484 fix): 'on' -> PfbLenient::On (no crash).
+	 *
+	 * Scenario:
+	 *   Background: pfb_keep vocabulary = {'on', 'off', ''} ('' = pre-#484 legacy).
+	 *     Given stored = 'on'.
+	 *     When PfbConfig::read('pfb_keep').
+	 *     Then PfbLenient::On is returned.
+	 */
+	public function testForwardPfbKeepOnYieldsOnEnum(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: 'on' stored (keep=enabled — retain settings on uninstall).
+		config_set_path($path, 'on');
+
+		// Before.
+		$this->assertSame('on', config_get_path($path));
+
+		// When/Then.
+		$result = PfbConfig::read('pfb_keep');
+		$this->assertInstanceOf(PfbLenient::class, $result);
+		$this->assertSame(PfbLenient::On, $result, "FORWARD: pfb_keep 'on' must yield PfbLenient::On");
+	}
+
+	/**
+	 * pfb_keep (lenient adapter, #484 fix): 'off' -> PfbLenient::Off (no crash).
+	 *
+	 * Scenario:
+	 *   Background: 'off' is the canonical disabled value written by the GUI after #484.
+	 *     Given stored = 'off'.
+	 *     When PfbConfig::read('pfb_keep').
+	 *     Then PfbLenient::Off is returned.
+	 */
+	public function testForwardPfbKeepOffYieldsOffEnum(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: 'off' stored (new canonical value for unchecked-save after #484 fix).
+		config_set_path($path, 'off');
+
+		// Before.
+		$this->assertSame('off', config_get_path($path));
+
+		// When/Then.
+		$result = PfbConfig::read('pfb_keep');
+		$this->assertInstanceOf(PfbLenient::class, $result);
+		$this->assertSame(PfbLenient::Off, $result, "FORWARD: pfb_keep 'off' must yield PfbLenient::Off");
+	}
+
+	/**
+	 * pfb_keep (lenient adapter, #484 fix): '' -> PfbLenient::Off (pre-#484 legacy empty).
+	 *
+	 * Scenario:
+	 *   Background: '' is the old toggle-OFF value written by the GUI before the #484 fix.
+	 *     Given stored = '' (pre-#484 install — toggle::Off empty string).
+	 *     When PfbConfig::read('pfb_keep').
+	 *     Then PfbLenient::Off is returned (normalised; same as 'off').
+	 *
+	 * Backward-safety: pfb['keep'] != 'on' in the deinstall gate covers both 'off' and ''.
+	 */
+	public function testForwardPfbKeepLegacyEmptyYieldsOffEnum(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		// Given: '' stored (pre-#484 toggle-OFF value).
+		config_set_path($path, '');
+
+		// Before.
+		$this->assertSame('', config_get_path($path));
+
+		// When/Then: '' normalises to Off — the deinstall gate (keep != 'on') fires correctly.
+		$result = PfbConfig::read('pfb_keep');
+		$this->assertInstanceOf(PfbLenient::class, $result);
+		$this->assertSame(PfbLenient::Off, $result, "FORWARD: pfb_keep '' must yield PfbLenient::Off (legacy token)");
+	}
+
+	/**
 	 * Plain-string fields: legacy stored value passes through unchanged (no crash).
 	 *
 	 * Scenario:
@@ -492,6 +569,66 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
+	 * pfb_keep (lenient, #484 fix): write(On) emits 'on' -- a legacy token.
+	 *
+	 * Scenario:
+	 *   Background: pfb_keep legacy vocabulary = {'on', 'off', ''}.
+	 *     Given PfbLenient::On.
+	 *     When PfbConfig::write('pfb_keep', PfbLenient::On).
+	 *     Then stored == 'on' (in vocabulary; no novel token).
+	 */
+	public function testBackwardPfbKeepOnEmitsLegacyToken(): void
+	{
+		$path          = 'installedpackages/pfblockerng/config/0/pfb_keep';
+		$lenient_vocab = pfb_cfg_field_vocab()['lenient'];
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), "before backward pfb_keep On: absent");
+
+		// When: write On.
+		PfbConfig::write('pfb_keep', PfbLenient::On);
+
+		// Then: 'on' -- in vocabulary; no novel token.
+		$stored = (string) config_get_path($path);
+		$this->assertContains($stored, $lenient_vocab,
+			"BACKWARD: pfb_keep write(On) stored='{$stored}' not in vocab"
+		);
+		$this->assertSame('on', $stored, "BACKWARD: pfb_keep write(On) must store 'on'");
+	}
+
+	/**
+	 * pfb_keep (lenient, #484 fix): write(Off) emits 'off' -- a legacy token.
+	 *
+	 * Scenario:
+	 *   Background: pfb_keep legacy vocabulary = {'on', 'off', ''}.
+	 *     Given PfbLenient::Off.
+	 *     When PfbConfig::write('pfb_keep', PfbLenient::Off).
+	 *     Then stored == 'off' (in vocabulary; backward-safe — older releases treat 'off'
+	 *     as "disabled", which is the correct interpretation for pfb_keep=Off).
+	 */
+	public function testBackwardPfbKeepOffEmitsLegacyToken(): void
+	{
+		$path          = 'installedpackages/pfblockerng/config/0/pfb_keep';
+		$lenient_vocab = pfb_cfg_field_vocab()['lenient'];
+
+		// Before: seed 'on' so we see the write actually changes it.
+		config_set_path($path, 'on');
+		$this->assertSame('on', config_get_path($path), "before backward pfb_keep Off: is 'on'");
+
+		// When: write Off.
+		PfbConfig::write('pfb_keep', PfbLenient::Off);
+
+		// Then: 'off' -- in the legacy vocabulary (no novel token introduced).
+		// Older releases read '' for PfbToggle::Off (disable path). 'off' was previously
+		// stored by pfb_feed_internal_filter — a pre-existing legacy vocabulary member.
+		$stored = (string) config_get_path($path);
+		$this->assertContains($stored, $lenient_vocab,
+			"BACKWARD: pfb_keep write(Off) stored='{$stored}' not in vocab"
+		);
+		$this->assertSame('off', $stored, "BACKWARD: pfb_keep write(Off) must store 'off'");
+	}
+
+	/**
 	 * Plain-string fields: write($str) emits $str (identity -- no novel token possible).
 	 *
 	 * Scenario:
@@ -589,13 +726,13 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
-	 * pfb_cfg_field_adapter_type() assigns 'lenient' only to pfb_dnsbl_lenient.
+	 * pfb_cfg_field_adapter_type() assigns 'lenient' to pfb_keep and pfb_dnsbl_lenient.
 	 *
 	 * Scenario:
-	 *   Background: only pfb_dnsbl_lenient uses the lenient adapter.
+	 *   Background: pfb_keep (#484 fix) and pfb_dnsbl_lenient use the lenient adapter.
 	 *     Given the full registry.
 	 *     When collecting all fields whose type is 'lenient'.
-	 *     Then only 'pfb_dnsbl_lenient' appears.
+	 *     Then exactly 'pfb_keep' and 'pfb_dnsbl_lenient' appear (registry insertion order).
 	 */
 	public function testAdapterTypeHelperLenientAssignedOnlyToPfbDnsblLenient(): void
 	{
@@ -607,11 +744,9 @@ final class RollbackContractTest extends TestCase
 			}
 		}
 
-		$this->assertSame(
-			['pfb_dnsbl_lenient'],
-			$lenient_fields,
-			'Only pfb_dnsbl_lenient should have adapter type "lenient"'
-		);
+		$this->assertContains('pfb_keep',        $lenient_fields, 'pfb_keep must be lenient (#484 fix)');
+		$this->assertContains('pfb_dnsbl_lenient', $lenient_fields, 'pfb_dnsbl_lenient must be lenient');
+		$this->assertCount(2, $lenient_fields, 'Exactly two lenient fields: pfb_keep + pfb_dnsbl_lenient');
 	}
 
 	/**
@@ -727,6 +862,47 @@ final class RollbackContractTest extends TestCase
 			$stored = (string) config_get_path($path);
 			$this->assertContains($stored, $vocab,
 				"BACKWARD: pfb_dnsbl_lenient token='{$token}' write(read) stored='{$stored}' not in vocab"
+			);
+		}
+	}
+
+	/**
+	 * pfb_keep (lenient, #484 fix) satisfies both invariants for all three legacy tokens.
+	 *
+	 * Scenario:
+	 *   Background: pfb_keep vocabulary = {'on', 'off', ''} ('' = pre-#484 legacy).
+	 *     Given each token.
+	 *     When read + write.
+	 *     Then FORWARD: PfbLenient enum.
+	 *     And BACKWARD: stored value is in {'on', 'off', ''}.
+	 *     Note: '' (pre-#484) read->Off; write->Off emits 'off'; 'off' in vocab -> BACKWARD passes.
+	 */
+	public function testPfbKeepForwardAndBackwardForEveryVocabToken(): void
+	{
+		$vocab = pfb_cfg_field_vocab()['lenient'];
+		$path  = 'installedpackages/pfblockerng/config/0/pfb_keep';
+
+		foreach ($vocab as $token) {
+			// Reset.
+			$GLOBALS['config'] = [];
+			config_set_path($path, $token);
+
+			// BEFORE.
+			$this->assertSame($token, config_get_path($path),
+				"before forward+backward: pfb_keep token='{$token}'"
+			);
+
+			// FORWARD.
+			$runtime = PfbConfig::read('pfb_keep');
+			$this->assertInstanceOf(PfbLenient::class, $runtime,
+				"FORWARD: pfb_keep token='{$token}' must yield PfbLenient"
+			);
+
+			// BACKWARD: write(runtime) stored value is in vocabulary.
+			PfbConfig::write('pfb_keep', $runtime);
+			$stored = (string) config_get_path($path);
+			$this->assertContains($stored, $vocab,
+				"BACKWARD: pfb_keep token='{$token}' write(read) stored='{$stored}' not in vocab"
 			);
 		}
 	}

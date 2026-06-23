@@ -296,13 +296,19 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// Keep blocklists when pfBlockerNG is disabled: 'on' | '' (checkbox).
+		// Keep blocklists when pfBlockerNG is disabled: 'on' | 'off' | ''.
 		// Default ON — the #281 canonical default; GUI and pfb_global() agree.
+		// Uses the lenient adapter so an unchecked-save (off) is stored as the
+		// explicit 'off' token, distinguishable from a never-configured install
+		// (key absent) which the registry default returns as 'on'. The empty-string
+		// '' is a LEGACY READ token for installs written before this fix; it maps
+		// to Off on read, same as 'off'. Write always emits 'off' (backward-safe:
+		// older releases that read 'off' for pfb_keep treat it as "disabled").
 		'pfb_keep' => [
 			'section'       => $gen,
 			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_toggle_read',
-			'write_adapter' => 'pfb_cfg_toggle_write',
+			'read_adapter'  => 'pfb_cfg_lenient_read',
+			'write_adapter' => 'pfb_cfg_lenient_write',
 			'since'         => '2.1.0',
 		],
 
