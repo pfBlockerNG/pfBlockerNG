@@ -20,6 +20,12 @@
 #   ./scripts/image-publish.sh 2.8.1 --proxmox root@pve.lan
 #   ./scripts/image-publish.sh 2.8.1 --proxmox pve.lan --proxmox-port 2222 --vmid 103
 #   ./scripts/image-publish.sh 2.8.1            # run locally, on the Proxmox host
+#   # a non-pfSense image (e.g. the smoke client VM):
+#   ./scripts/image-publish.sh v1 --vmid 104 --image ghcr.io/pfblockerng/civm \
+#       --artifact-type application/vnd.pfblockerng.smoke-client.disk.v1 \
+#       --description "pfBlockerNG smoke client VM v1"
+#   # just print the VM's NIC MACs + SMBIOS UUID (no export/push):
+#   ./scripts/image-publish.sh --vmid 104 --print-identity
 #
 # Proxmox connection (where the disk lives):
 #   --proxmox [USER@]HOST   SSH target of the Proxmox host. If omitted (and
@@ -40,6 +46,10 @@
 #   --out FILE       local working qcow2 path (default: a temp file, removed after)
 #   --keep           keep the local qcow2 after publishing
 #   --force          overwrite the tag if it already exists
+#   --artifact-type T  OCI artifact-type annotation (default: the pfSense CE type)
+#   --description D    OCI image-description annotation (default: pfSense CE wording)
+#   --print-identity   print every NIC's MAC + the SMBIOS UUID from the VM config,
+#                      then exit (no export/push). <version> is not required.
 #
 # Auth: be logged in to GHCR (`oras login ghcr.io -u USER -p TOKEN`), or export
 # SMOKE_GHCR_USER + SMOKE_GHCR_TOKEN to have this script log in for you. The
@@ -62,6 +72,11 @@ OUT=""
 KEEP=0
 FORCE=0
 VERSION=""
+PRINT_IDENTITY=0
+# Default OCI annotations describe the pfSense CE base image. Shared with
+# image-upgrade.sh + IMAGE_RUNBOOK.md — keep this default in sync there.
+ARTIFACT_TYPE="application/vnd.netgate.pfsense-ce.disk.v1"
+DESCRIPTION=""
 
 # Proxmox SSH coordinates (env fallbacks; --proxmox overrides).
 PX_HOST="${PROXMOX_SSH_HOST:-}"
@@ -83,7 +98,10 @@ while [ $# -gt 0 ]; do
         --out)             OUT="$2"; shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,45p' "$0"; exit 0 ;;
+        --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
+        --description)     DESCRIPTION="$2"; shift 2 ;;
+        --print-identity)  PRINT_IDENTITY=1; shift ;;
+        -h|--help)         sed -n '2,56p' "$0"; exit 0 ;;
         -*)                die "unknown option: $1" ;;
         *)
             [ -z "$VERSION" ] || die "unexpected argument: $1"
@@ -99,7 +117,8 @@ if [ -n "${PX_TARGET:-}" ]; then
     esac
 fi
 
-[ -n "$VERSION" ] || die "missing <pfsense-ce-version> (e.g. 2.8.1)"
+# --print-identity needs only a VM id; a version tag is required for a real publish.
+[ "$PRINT_IDENTITY" -eq 1 ] || [ -n "$VERSION" ] || die "missing <pfsense-ce-version> (e.g. 2.8.1); or use --print-identity"
 case "$COMPRESSION" in zstd|zlib|off) ;; *) die "--compression must be zstd|zlib|off" ;; esac
 
 # Remote when a Proxmox host is given, else everything runs locally.
@@ -122,8 +141,22 @@ px() {
     fi
 }
 
-# Local tooling: oras always; ssh only when driving a remote host.
-command -v oras >/dev/null 2>&1 || die "required local tool not found: oras"
+# print_vm_identity QMCFG — print every NIC's MAC + the SMBIOS UUID from a
+# `qm config <vmid>` dump. These feed the fixed-MAC-series + SMBIOS-UUID secrets
+# that keep the Netgate Device ID (Plus licensing) constant across re-publishes.
+print_vm_identity() {
+    log "VM $VMID identity (capture for your MAC-series + SMBIOS UUID secrets):"
+    printf '%s\n' "$1" | grep -E '^net[0-9]+:' | sort -V | while IFS= read -r line; do
+        ifc=${line%%:*}
+        mac=$(printf '%s\n' "$line" | grep -oE '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | head -1)
+        printf '    %s  MAC %s\n' "$ifc" "$mac"
+    done
+    uuid=$(printf '%s\n' "$1" | sed -n 's/^smbios1:.*uuid=\([0-9A-Fa-f-]*\).*/\1/p' | head -1)
+    printf '    SMBIOS UUID: %s\n' "${uuid:-<not set in VM config>}"
+}
+
+# Local tooling: oras for a real publish; ssh only when driving a remote host.
+[ "$PRINT_IDENTITY" -eq 1 ] || command -v oras >/dev/null 2>&1 || die "required local tool not found: oras"
 if [ "$PX_REMOTE" -eq 1 ]; then
     command -v ssh >/dev/null 2>&1 || die "required local tool not found: ssh"
     log "Proxmox host: ${PX_USER}@${PX_HOST}${PX_PORT:+:$PX_PORT} (native steps run there over SSH)"
@@ -131,10 +164,23 @@ else
     log "running locally (assuming this IS the Proxmox host)"
 fi
 
-# Proxmox-side tooling (all native to Proxmox VE — nothing to install).
-for bin in qm pvesm qemu-img; do
-    px "command -v $bin >/dev/null 2>&1" || die "tool not found on Proxmox host: $bin"
-done
+# Proxmox-side tooling (all native to Proxmox VE — nothing to install). A real
+# publish needs the full export chain; --print-identity only reads `qm config`.
+if [ "$PRINT_IDENTITY" -eq 1 ]; then
+    px "command -v qm >/dev/null 2>&1" || die "tool not found on Proxmox host: qm"
+else
+    for bin in qm pvesm qemu-img; do
+        px "command -v $bin >/dev/null 2>&1" || die "tool not found on Proxmox host: $bin"
+    done
+fi
+
+# Read the VM config once — both --print-identity and the VOLID resolve use it.
+QMCFG=$(px "qm config $VMID") || die "could not read 'qm config $VMID'"
+
+if [ "$PRINT_IDENTITY" -eq 1 ]; then
+    print_vm_identity "$QMCFG"
+    exit 0
+fi
 
 # Optional non-interactive GHCR login (local oras).
 if [ -n "${SMOKE_GHCR_TOKEN:-}" ] && [ -n "${SMOKE_GHCR_USER:-}" ]; then
@@ -153,12 +199,16 @@ if ! px "qm status $VMID 2>/dev/null" | grep -q 'status: stopped'; then
 fi
 
 # Resolve the disk's backing device (e.g. /dev/zvol/rpool/data/vm-103-disk-1).
-VOLID=$(px "qm config $VMID" | sed -n "s/^${DISK}: \\([^,]*\\).*/\\1/p")
+VOLID=$(printf '%s\n' "$QMCFG" | sed -n "s/^${DISK}: \\([^,]*\\).*/\\1/p")
 [ -n "$VOLID" ] || die "disk '$DISK' not found in VM $VMID config"
 DEV=$(px "pvesm path '$VOLID'")
 [ -n "$DEV" ] || die "could not resolve a device for $VOLID"
 px "test -e '$DEV'" || die "resolved device does not exist on Proxmox: $DEV"
 log "source: VM $VMID $DISK -> $VOLID -> $DEV"
+
+# Informational: surface the NIC MACs + SMBIOS UUID so a re-publish can confirm
+# the VM identity (Netgate Device ID inputs) is unchanged.
+print_vm_identity "$QMCFG"
 
 # Local output path for the streamed-back qcow2.
 CREATED_OUT=0
@@ -198,15 +248,18 @@ px "cat '$REMOTE_TMP'" > "$OUT"
 [ -s "$OUT" ] || die "streamed image is empty: $OUT"
 log "local image: $(qemu-img info --output=human "$OUT" 2>/dev/null | sed -n 's/^disk size: /qcow2 size /p' || echo "$(wc -c < "$OUT") bytes")"
 
+# Default the description to the pfSense CE wording unless overridden.
+[ -n "$DESCRIPTION" ] || DESCRIPTION="pfSense CE ${VERSION} pfBlockerNG smoke-test base"
+
 log "pushing ${IMAGE}:${VERSION}"
 # cd so the stored layer title is the bare filename (predictable on pull).
 (
     cd "$(dirname "$OUT")"
     oras push \
-        --artifact-type application/vnd.netgate.pfsense-ce.disk.v1 \
+        --artifact-type "$ARTIFACT_TYPE" \
         --annotation "org.opencontainers.image.title=$(basename "$OUT")" \
         --annotation "org.opencontainers.image.version=${VERSION}" \
-        --annotation "org.opencontainers.image.description=pfSense CE ${VERSION} pfBlockerNG smoke-test base" \
+        --annotation "org.opencontainers.image.description=${DESCRIPTION}" \
         "${IMAGE}:${VERSION}" \
         "$(basename "$OUT"):application/vnd.qemu.qcow2"
 )
