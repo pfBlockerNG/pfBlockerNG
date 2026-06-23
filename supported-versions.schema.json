@@ -82,6 +82,7 @@
           "upgrade": {
             "type": "object",
             "description": "Image-refresh control for image-refresh.yml (Upgrade pfSense smoke images). Absent or available=false => this variant's published GHCR image is left untouched (the common case). 'available' is a transient 'a newer public build exists than what we publish' signal — NOT 'this version is released'.",
+            "required": ["available"],
             "additionalProperties": false,
             "properties": {
               "available": {
