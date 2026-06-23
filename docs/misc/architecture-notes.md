@@ -357,29 +357,33 @@ Full design: ADR-39.
 
 ## Managed firewall object ownership and teardown (ADR-35)
 
-`pfblockerng_fwobj.inc` provides a small shared ownership-and-teardown layer for pfBlockerNG-managed
-objects in pfSense-core sections (`virtualip/vip`, `nat/rule`, `filter/rule`). A pfBlockerNG object
-is **owned** if and only if its `descr` carries a recognised marker. Marker recognition is the union
-of the `pfB_` prefix (new convention, already in use on the filter side) plus the exact legacy strings
-(`pfB_AUTO_VIP_v4`, `pfB_AUTO_VIP_v6`, `pfB DNSBL`, `pfB DNSBL - DO NOT EDIT`) — never rewritten,
-because stored values are frozen (ADR-28). `pfb_fwobj_is_owned()` is the single recognition predicate;
-`pfb_fwobj_sweep()` removes every owned entry from a given section by marker alone, without consulting
-any secondary guard.
+A small shared ownership-and-teardown layer for pfBlockerNG-managed objects in pfSense-core sections
+(`virtualip/vip`, `nat/rule`, `filter/rule`) lives inlined in `pfblockerng.inc` (it originated as
+ADR-35's `pfblockerng_fwobj.inc`, since folded into the main include — there is no separate file).
+A pfBlockerNG object is **owned** if and only if its `descr` carries a recognised marker. Marker
+recognition is the union of the `pfB_` prefix (new convention, already in use on the filter side) plus
+the exact legacy strings (`pfB_AUTO_VIP_v4`, `pfB_AUTO_VIP_v6`, `pfB DNSBL`, `pfB DNSBL - DO NOT EDIT`)
+— never rewritten, because stored values are frozen (ADR-28). Three pure helpers express the layer:
+`pfb_is_managed_obj()` is the single recognition predicate; `pfb_find_managed_obj($section, $marker,
+$guard?)` returns the first owned row matching a marker, with an optional secondary guard (e.g. the
+VIP's `subnet == stored IP`); `pfb_remove_managed_obj($section, $marker, $guard?)` filters OUT every
+owned row matching a marker and writes the section back — the teardown/sweep primitive. A row that
+fails the ownership check is NEVER removed (user-safety invariant).
 
-The sweep runs in two places: (1) **on disable**, as a defensive pass after `pfb_manage_dnsbl_vip` and
-`pfb_create_dnsbl` have already run their own teardown — catching any half-written state those paths
-may have left; (2) **on deinstall**, before `pfb_remove_config_settings()` wipes the
-`installedpackages/pfblockerng*` reference data. This ordering is load-bearing: the sweep reads the
-pfBlockerNG config sections to resolve the VIP double-guard reference; if the config were wiped first,
-the reference would be gone and the guard would skip orphans.
+The remove-by-marker pass runs in two places: (1) **on disable**, as a defensive teardown after
+`pfb_manage_dnsbl_vip` and `pfb_create_dnsbl` have already run their own removal — catching any
+half-written state those paths may have left; (2) **on deinstall**, before
+`pfb_remove_config_settings()` wipes the `installedpackages/pfblockerng*` reference data. This ordering
+is load-bearing: the VIP teardown reads the pfBlockerNG config sections to resolve the VIP double-guard
+reference; if the config were wiped first, the reference would be gone and the guard would skip orphans.
 
-`pfb_fwobj_register()` is the registration seam ADR-36 and ADR-37 plug into. A feature declares
-`{ type, section, marker, builder, guard? }` once; the reconcile / remove / sweep machinery covers
-it without per-feature boilerplate. The existing VIP and DNSBL-NAT objects are expressed as the first
-two registrations, demonstrating the seam. User objects (no pfB marker) are **never** touched by any
-remove or sweep — asserted by unit tests that seed sibling user rows and prove they survive.
+There is no per-feature registration seam. ADR-36 (DNS-redirect) and ADR-37 (DoT/DoQ block) reuse this
+layer directly: each builds its rules inline and calls `pfb_find_managed_obj` / `pfb_remove_managed_obj`
+with its own `pfB_DNS_Redirect_<iface>_{v4,v6}` or `pfB_DoT_Block_<iface>` marker for reconcile and
+teardown. User objects (no pfB marker) are **never** touched by any remove pass — asserted by smoke
+tests that seed sibling user rows and prove they survive.
 
-Live-VM smoke: `tests/smoke/test_smoke_fwobj.py` (marker `smoke`).
+Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 
 ## Optional NAT DNS-redirection (ADR-36)
 
@@ -390,8 +394,8 @@ resolver. The firewall itself is structurally exempt: every generated rule carri
 `(self)` destination so the firewall's own outbound DNS queries are never intercepted, making
 upstream resolution immune to the redirect. All four config.xml entries per interface (2 NAT
 rdr + 2 associated filter PASS rules) carry a `pfB_DNS_Redirect_<iface>_{v4,v6}` marker and
-are registered via `pfb_fwobj_register()` (ADR-35), so the reconcile / remove / sweep
-machinery handles their full lifecycle without bespoke teardown code. The feature is
+are reconciled / torn down via the ADR-35 managed-object helpers (`pfb_find_managed_obj` /
+`pfb_remove_managed_obj`), so their full lifecycle is handled without bespoke teardown code. The feature is
 complementary to DoH/DoT domain-level NXDOMAIN blocking (DNSBL feeds) and to ADR-37's
 port-853 blocking: this ADR closes only the plaintext port-53 bypass path.
 
@@ -406,9 +410,9 @@ both IPv4 and IPv6 clients without a per-family split: unlike NAT redirect (ADR-
 carries no family-specific redirect target, so one rule is both simpler and correct. The firewall
 itself is always exempt: every generated rule carries a negated `(self)` destination
 (`<network>(self)</network><not/>`) so the firewall's own outbound port-853 connections are never
-blocked, regardless of any future pfSense DoT/DoQ server role. Each rule is registered via
-`pfb_fwobj_register()` (ADR-35) with the `pfB_DoT_Block_<iface>` marker, giving the reconcile /
-remove / sweep machinery full lifecycle coverage — no bespoke teardown code.
+blocked, regardless of any future pfSense DoT/DoQ server role. Each rule carries the
+`pfB_DoT_Block_<iface>` marker and is reconciled / torn down via the ADR-35 managed-object helpers
+(`pfb_find_managed_obj` / `pfb_remove_managed_obj`) — no bespoke teardown code.
 
 ADR-36 (DNS-redirect) closes the plaintext port-53 bypass; ADR-37 (this feature) closes the
 standard-port encrypted-DNS bypass (DoT/DoQ on port 853). For DNS-over-HTTPS (DoH, port 443),

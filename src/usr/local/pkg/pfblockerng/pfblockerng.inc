@@ -31,13 +31,6 @@ require_once('service-utils.inc');
 if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc')) {
 	require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');	// 'include functions' not yet merged into pfSense
 }
-if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc')) {
-	require_once('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc');	// ADR-35: firewall-object ownership/marker layer
-}
-if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc')) {
-	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc');	// ADR-36/37: DNS-bypass containment (redirect + DoT/DoQ block)
-}
-
 define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
 
 global $g, $pfb;
@@ -320,6 +313,156 @@ define('PFB_DOWNLOAD_MAXREDIRS', 10);
 // never touched. Single source of truth for the ownership marker.
 define('PFB_AUTO_VIP_DESCR_V4', 'pfB_AUTO_VIP_v4');
 define('PFB_AUTO_VIP_DESCR_V6', 'pfB_AUTO_VIP_v6');
+
+// Firewall-object ownership/marker constants.
+// Filter-rule prefix: any rule descr that starts with this prefix is owned by pfBlockerNG.
+define('PFB_MANAGED_FILTER_PFX', 'pfB_');
+// Full NAT rule description written by pfBlockerNG for DNSBL.
+define('PFB_MANAGED_NAT_DESCR', 'pfB DNSBL - DO NOT EDIT');
+// Legacy NAT prefix: any descr containing this prefix is owned (covers bare 'pfB DNSBL'
+// and any variant suffixed with extra text, e.g. the ' - DO NOT EDIT' form above).
+define('PFB_MANAGED_NAT_LEGACY_PFX', 'pfB DNSBL');
+
+// NAT rdr rule descr prefix for inet (IPv4) DNS-redirect rules.
+// Pattern: pfB_DNS_Redirect_<iface>_v4
+define('PFB_DNS_REDIR_DESCR_V4_PFX', 'pfB_DNS_Redirect_');
+// Suffix for inet (IPv4) DNS-redirect descr markers.
+define('PFB_DNS_REDIR_DESCR_V4_SFX', '_v4');
+// Suffix for inet6 (IPv6) DNS-redirect descr markers.
+define('PFB_DNS_REDIR_DESCR_V6_SFX', '_v6');
+// Descr prefix for DoT/DoQ block filter rules. Pattern: pfB_DoT_Block_<iface>
+define('PFB_DOT_BLOCK_DESCR_PFX', 'pfB_DoT_Block_');
+
+// Returns TRUE iff $descr indicates pfBlockerNG ownership.
+// Recognised patterns (UNION — any one match → owned):
+//   • str_starts_with($descr, 'pfB_')    — new prefix (covers PFB_AUTO_VIP_DESCR_V4/V6)
+//   • str_contains($descr, 'pfB DNSBL') — legacy NAT marker
+function pfb_is_managed_obj(string $descr): bool {
+	if ($descr === '') {
+		return FALSE;
+	}
+	if (str_starts_with($descr, PFB_MANAGED_FILTER_PFX)) {
+		return TRUE;
+	}
+	if (str_contains($descr, PFB_MANAGED_NAT_LEGACY_PFX)) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+// Reads config_get_path($section, []) and returns the FIRST row whose 'descr'
+// satisfies pfb_is_managed_obj() AND matches $marker:
+//   • If $marker starts with PFB_MANAGED_FILTER_PFX ('pfB_'): str_starts_with match.
+//   • Otherwise: str_contains match.
+// If $guard is provided it is called with the candidate row and must return TRUE to accept.
+// Returns the matching row array, or FALSE if no row matches.
+function pfb_find_managed_obj(string $section, string $marker, ?callable $guard = NULL): array|false {
+	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
+	foreach (config_get_path($section, []) as $row) {
+		$descr = $row['descr'] ?? '';
+		if (!pfb_is_managed_obj($descr)) {
+			continue;
+		}
+		if ($use_prefix) {
+			if (!str_starts_with($descr, $marker)) {
+				continue;
+			}
+		} else {
+			if (!str_contains($descr, $marker)) {
+				continue;
+			}
+		}
+		if ($guard !== NULL && !$guard($row)) {
+			continue;
+		}
+		return $row;
+	}
+	return FALSE;
+}
+
+// Reads config_get_path($section, []), filters OUT every owned row matching $marker.
+// Any row that fails the ownership check is NEVER removed — user-safety invariant.
+// When at least one row was removed the filtered array is written back via config_set_path().
+// Returns TRUE if at least one row was removed, FALSE if nothing matched.
+function pfb_remove_managed_obj(string $section, string $marker, ?callable $guard = NULL): bool {
+	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
+	$rows       = config_get_path($section, []);
+	$filtered   = [];
+	$removed    = FALSE;
+	foreach ($rows as $row) {
+		$descr = $row['descr'] ?? '';
+		if (!pfb_is_managed_obj($descr)) {
+			$filtered[] = $row;
+			continue;
+		}
+		$marker_match = $use_prefix
+			? str_starts_with($descr, $marker)
+			: str_contains($descr, $marker);
+		if (!$marker_match) {
+			$filtered[] = $row;
+			continue;
+		}
+		if ($guard !== NULL && !$guard($row)) {
+			$filtered[] = $row;
+			continue;
+		}
+		$removed = TRUE;
+	}
+	if ($removed) {
+		config_set_path($section, $filtered);
+	}
+	return $removed;
+}
+
+// Validate the DNS-redirect fields submitted via the DNSBL settings POST form.
+// Each interface name is checked against the allow-list; the exception alias is
+// validated by is_validaliasname() when non-empty.
+// Returns an array of validation error messages (empty = all inputs valid).
+function pfb_validate_dns_redirect_post(
+	array $posted_ifaces,
+	array $valid_iface_list,
+	string $posted_alias
+): array {
+	$errors = [];
+	foreach ($posted_ifaces as $iface) {
+		if (!in_array($iface, $valid_iface_list, TRUE)) {
+			$errors[] = 'DNS Redirect: Invalid interface selection: ' .
+				htmlspecialchars((string) $iface, ENT_QUOTES);
+		}
+	}
+	if ($posted_alias !== '') {
+		if (!is_validaliasname($posted_alias)) {
+			$errors[] = 'DNS Redirect: Invalid exception alias name: ' .
+				htmlspecialchars($posted_alias, ENT_QUOTES);
+		}
+	}
+	return $errors;
+}
+
+// Validate the DoT/DoQ-block fields submitted via the DNSBL settings POST form.
+// Each interface name is checked against the allow-list; the exception alias is
+// validated by is_validaliasname() when non-empty.
+// Returns an array of validation error messages (empty = all inputs valid).
+function pfb_validate_dot_block_post(
+	array $posted_ifaces,
+	array $valid_iface_list,
+	string $posted_alias
+): array {
+	$errors = [];
+	foreach ($posted_ifaces as $iface) {
+		if (!in_array($iface, $valid_iface_list, TRUE)) {
+			$errors[] = 'DoT/DoQ Block: Invalid interface selection: ' .
+				htmlspecialchars((string) $iface, ENT_QUOTES);
+		}
+	}
+	if ($posted_alias !== '') {
+		if (!is_validaliasname($posted_alias)) {
+			$errors[] = 'DoT/DoQ Block: Invalid exception alias name: ' .
+				htmlspecialchars($posted_alias, ENT_QUOTES);
+		}
+	}
+	return $errors;
+}
 
 // Allowlist the alias-type suffix ($vtype) before it is interpolated into an
 // alias name or filesystem path. The only legitimate values are '_v4' and '_v6';
@@ -1129,9 +1272,9 @@ function pfb_unbound_listens_v6(): bool {
 // [ ADR-13 ] Locate the index of the auto-managed DNSBL VIP this package owns inside a
 // virtualip/vip array. Pure (no side effects). Ownership is decided by TWO predicates,
 // both required, mirroring the lifecycle contract:
-//   (1) MARKER  : pfb_fwobj_is_owned($vip['descr']) AND marker match via the same
-//                 prefix/contains logic as pfb_fwobj_find (ADR-35 P3 retrofit). VIP
-//                 markers (PFB_AUTO_VIP_DESCR_V4/V6) start with 'pfB_' → str_starts_with.
+//   (1) MARKER  : pfb_is_managed_obj($vip['descr']) AND marker match via the same
+//                 prefix/contains logic as pfb_find_managed_obj. VIP markers
+//                 (PFB_AUTO_VIP_DESCR_V4/V6) start with 'pfB_' → str_starts_with.
 //   (2) IP MATCH: when $match_ip is a non-empty string, $vip['subnet'] must equal it.
 //                 Used on delete to bind removal to the address currently resolved from
 //                 the stored pfb_dnsvip4/6 config, so we never delete a marked VIP whose
@@ -1139,10 +1282,10 @@ function pfb_unbound_listens_v6(): bool {
 //                 marker alone (idempotent reuse on create, before any id is stored).
 // Returns the integer key of the first matching entry, or null if none matches.
 function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
-	$use_prefix = str_starts_with($marker, PFB_FWOBJ_FILTER_PFX);
+	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
 	foreach ($vips_config as $idx => $vip) {
 		$descr = $vip['descr'] ?? '';
-		if (!pfb_fwobj_is_owned($descr)) {
+		if (!pfb_is_managed_obj($descr)) {
 			continue;
 		}
 		$marker_match = $use_prefix
@@ -1307,12 +1450,12 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 			}
 
 			// Double-guard: marker match AND subnet must equal the stored resolved IP.
-			// [ ADR-35 P3 ] Use pfb_fwobj_find with the guard to locate the row, then
-			// pfb_fwobj_remove with the same guard to strip it from config.
+			// Use pfb_find_managed_obj with the guard to locate the row, then
+			// pfb_remove_managed_obj with the same guard to strip it from config.
 			$guard     = static function(array $row) use ($match_ip): bool {
 				return ($row['subnet'] ?? '') === $match_ip;
 			};
-			$found_row = pfb_fwobj_find('virtualip/vip', $fam['marker'], $guard);
+			$found_row = pfb_find_managed_obj('virtualip/vip', $fam['marker'], $guard);
 			if ($found_row === FALSE) {
 				continue;
 			}
@@ -1320,8 +1463,8 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 			// Bring the alias down live, then drop it from config via the shared helper.
 			interface_vip_bring_down($found_row);
 			pfb_logger("\nDNSBL auto-VIP: removed {$fam['marker']} at {$match_ip}", 1);
-			pfb_fwobj_remove('virtualip/vip', $fam['marker'], $guard);
-			// Re-sync $vips_config from global config (pfb_fwobj_remove wrote it back).
+			pfb_remove_managed_obj('virtualip/vip', $fam['marker'], $guard);
+			// Re-sync $vips_config from global config (pfb_remove_managed_obj wrote it back).
 			$vips_config = config_get_path('virtualip/vip', []);
 
 			if (!empty($dnsblconfig[$fam['idkey']])) {
@@ -3820,7 +3963,7 @@ function pfb_create_dnsbl($mode) {
 				// Bucket only DNSBL-owned NAT (descr carries 'pfB DNSBL') for rebuild,
 				// matching the original strpos() detection — other pfBlockerNG-owned
 				// NAT (e.g. a future managed rule) stays in the preserved 'other' bucket.
-				if (str_contains($ex_nat['descr'] ?? '', PFB_FWOBJ_NAT_LEGACY_PFX)) {
+				if (str_contains($ex_nat['descr'] ?? '', PFB_MANAGED_NAT_LEGACY_PFX)) {
 					// Collect DNSBL NAT rules
 					$dnsbl_ex_nat[] = $ex_nat;
 				} else {
@@ -3872,10 +4015,9 @@ function pfb_create_dnsbl($mode) {
 				$new_nat = array_merge($pfb_ex_nat, $dnsbl_ex_nat);
 			}
 		} else {
-			// [ ADR-35 P3 ] DISABLE: strip pfB DNSBL NAT rules via the shared ownership
-			// helper. pfb_fwobj_remove writes user-only rules back to config when any pfB
-			// rules are found; returns TRUE iff anything was removed.
-			if (pfb_fwobj_remove('nat/rule', PFB_FWOBJ_NAT_LEGACY_PFX)) {
+			// DISABLE: strip pfB DNSBL NAT rules; pfb_remove_managed_obj preserves user-owned
+			// rules and returns TRUE iff anything was removed.
+			if (pfb_remove_managed_obj('nat/rule', PFB_MANAGED_NAT_LEGACY_PFX)) {
 				$pfbupdate = TRUE;
 			}
 		}
@@ -3891,8 +4033,8 @@ function pfb_create_dnsbl($mode) {
 		}
 
 		// Update config.xml, if changes required.
-		// On enable: write the full new NAT set. On disable: pfb_fwobj_remove already
-		// wrote the config change; just persist via write_config.
+		// On enable: write the full new NAT set. On disable: pfb_remove_managed_obj wrote the
+		// config change; just persist via write_config.
 		if ($pfbupdate) {
 			if ($mode == 'enabled') {
 				config_set_path('nat/rule', $new_nat);
@@ -7862,6 +8004,55 @@ function pfb_tracker($alias, $int, $text) {
 }
 
 
+// Deterministic, IP-independent firewall-rule tracker for pfBlockerNG MANAGED
+// STATIC rules (ADR-37 DoT/DoQ block). Modelled on pfb_tracker() (feed rules) but
+// keyed on the rule's stable 'descr' ALONE -- no interface IP/subnet -- so the id
+// is identical across re-syncs and survives a DHCP renewal. That stability is the
+// point: a fresh-each-sync tracker (e.g. the GUI's (int)microtime()) would make the
+// rule's change-detection always fire, churning write_config()/filter_configure()
+// every sync. (ADR-36 NAT redirect rules need NO tracker -- pfSense NAT rules don't
+// carry one, and 'associated-rule-id=pass' has no companion filter rule to link.)
+//
+// Namespaced '176' to mark it as a pfBlockerNG MANAGED-rule tracker, distinct from
+// feed trackers ('177'). 176xxxxxxx is a PAST Unix epoch (~Oct 2025), so it can
+// never collide with a future GUI rule's (int)microtime() tracker, and it stays
+// well under 2^32 so pf's uint32 'ridentifier' never overflows. Duplicates (same
+// char-sum) step to a sequential id in the same namespace, registered like
+// pfb_tracker() so a managed tracker never clashes with a feed tracker in one sync.
+function pfb_managed_rule_tracker(string $descr): int {
+	global $pfb;
+
+	if (!isset($pfb['trackerids']) || !is_array($pfb['trackerids'])) {
+		$pfb['trackerids'] = array();
+	}
+
+	// Char-sum the descr (digit->word first, matching pfb_tracker()'s reduction so
+	// digits don't bias the sum), then '176' + 7-digit body = a 10-digit numeric id.
+	$search  = array('1', '2', '3', '4', '5', '6', '7', '8', '9', '0');
+	$replace = array('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero');
+	$line    = str_replace($search, $replace, $descr);
+	$sum     = 0;
+	for ($i = 0, $n = strlen($line); $i < $n; $i++) {
+		$sum += ord($line[$i]);
+	}
+	$tracker = (int) ('176' . str_pad((string) ($sum % 10000000), 7, '0', STR_PAD_LEFT));
+
+	// Collision -> probe DETERMINISTICALLY by re-deriving from the descr's char-sum
+	// (NOT a global running counter): a colliding descr maps to the SAME id on every
+	// re-sync given the same set of occupied ids — preserving the determinism this
+	// tracker exists for. Stays inside the '176' + 7-digit namespace (<= uint32) via
+	// the modulo, and loops past any further collision so it never returns a duplicate.
+	$probe = 0;
+	while (in_array($tracker, $pfb['trackerids'], TRUE)) {
+		$probe++;
+		$tracker = (int) ('176' . str_pad((string) (($sum + $probe) % 10000000), 7, '0', STR_PAD_LEFT));
+	}
+
+	$pfb['trackerids'][] = $tracker;
+	return $tracker;
+}
+
+
 // Define firewall rule settings
 function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='default', $agateway_out='default',
 	    $aaddrnot_in='', $adest_in='', $aports_in='', $aproto_in='', $anot_in='',
@@ -8606,7 +8797,7 @@ function pfb_collect_localip() {
 				}
 			}
 			elseif (is_ipaddrv6($list['subnet'])) {
-				$pfb_localsub[] = gen_subnetv6("{$list['subnet']}", "{$list['subnet_bits']}");
+				$pfb_localsub[] = gen_subnetv6("{$list['subnet']}", "{$list['subnet_bits']}") . "/{$list['subnet_bits']}";
 			}
 		}
 		elseif (is_ipaddr($list['subnet'])) {
@@ -8653,7 +8844,7 @@ function pfb_collect_localip() {
 					}
 				}
 				elseif (is_ipaddrv6($int['ipaddr'])) {
-					$pfb_localsub[] = gen_subnetv6("{$int['ipaddr']}", "{$int['subnet']}");
+					$pfb_localsub[] = gen_subnetv6("{$int['ipaddr']}", "{$int['subnet']}") . "/{$int['subnet']}";
 				}
 			}
 			elseif (is_ipaddr($int['ipaddr'])) {
@@ -8678,7 +8869,7 @@ function pfb_collect_localip() {
 			if ($bits !== null && $bits !== '') {
 				$subnet = gen_subnetv6($v6addr, (string) $bits);
 				if (!empty($subnet)) {
-					$pfb_localsub[] = $subnet;
+					$pfb_localsub[] = $subnet . "/{$bits}";
 				}
 			}
 		}
@@ -12564,51 +12755,225 @@ function sync_package_pfblockerng($cron='') {
 	// Modify DNSBL NAT and VIP and lighttpd web server conf, as required.
 	pfb_create_dnsbl($mode);
 
-	// [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip + pfb_create_dnsbl
-	// have removed VIP and NAT, ensure no owned objects remain (catches half-written state where
-	// the reference was cleared but the VIP/NAT entry survived). Sweep is marker-only and
-	// idempotent: returns FALSE (no write) when everything was already cleaned.
-	//
-	// MUST run BEFORE the ADR-36/37 syncs below: pfb_fwobj_sweep() removes EVERY pfB_-owned row
-	// (pfb_fwobj_is_owned matches the shared 'pfB_' prefix), which includes the pfB_DNS_Redirect_*
-	// and pfB_DoT_Block_* rules. Those features are independent of DNSBL mode (they can be enabled
-	// while DNSBL is disabled), so the sweep would otherwise clobber rules the syncs just created.
-	// Running the sweep first lets each feature's sync re-assert its own objects last.
-	if ($mode === 'disabled') {
-		pfb_fwobj_init_registrations();
-		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
-			// Removed owned nat/rule + filter/rule rows — flag a pf reload so the
-			// live ruleset drops them too (the disabled mode does not always reach
-			// the auto-rule region that would otherwise set this flag).
-			$pfb['filter_configure'] = TRUE;
-			write_config('pfBlockerNG: sweep orphan firewall objects on disable');
-		}
-	}
+	// Sync DNS-redirect NAT rules (create / reconcile / prune / remove).
+	// Each rule uses associated-rule-id='pass' — pfSense emits an inline rdr pass and
+	// manages the companion firewall pass automatically; no filter/rule entry is written.
+	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule directly
+	// (pfSense-core foreign section — ADR-29 exclusion list).
+	{
+		$redir_changed = FALSE;
+		$redir_toggle  = PfbConfig::read('dnsbl_redir');
+		$redir_enabled = ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
 
-	// [ ADR-36 ] Sync DNS-redirect NAT + filter rules (create / reconcile / prune / remove).
-	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule + filter/rule directly
-	// (pfSense-core foreign sections). No write_config() here — a single flush below covers both.
-	if (function_exists('pfb_fwobj_init_dns_redirect_registrations') &&
-	    function_exists('pfb_sync_dns_redirect_rules')) {
-		pfb_fwobj_init_dns_redirect_registrations();
-		if (pfb_sync_dns_redirect_rules()) {
+		if (!$redir_enabled) {
+			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
+			if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+				$redir_changed = TRUE;
+			}
+		} else {
+			// ENABLED: read interfaces (comma-separated) and exception alias.
+			$redir_iface_raw = (string) PfbConfig::read('dnsbl_redir_int');
+			$redir_exception = trim((string) PfbConfig::read('dnsbl_redir_exclude'));
+
+			$redir_ifaces_raw = array_filter(array_map('trim', explode(',', $redir_iface_raw)), 'strlen');
+			$redir_ifaces     = [];
+			foreach ($redir_ifaces_raw as $redir_iface_entry) {
+				$redir_validated = pfb_filter($redir_iface_entry, PFB_FILTER_WORD, 'dns_redirect_sync');
+				if (empty($redir_validated)) {
+					pfb_logger(
+						"\nDNS redirect: interface failed validation [ " .
+						substr(htmlspecialchars((string) $redir_iface_entry), 0, 100) . " ] *skipping*", 2
+					);
+					continue;
+				}
+				$redir_ifaces[] = $redir_validated;
+			}
+
+			if (empty($redir_ifaces)) {
+				// No valid interfaces remain — remove all rules.
+				if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+					$redir_changed = TRUE;
+				}
+			} else {
+				// Build the expected marker set for the current iface × family grid.
+				$redir_expected_descrs = [];
+				foreach ($redir_ifaces as $redir_iface) {
+					$redir_expected_descrs[] = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . PFB_DNS_REDIR_DESCR_V4_SFX;
+					$redir_expected_descrs[] = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . PFB_DNS_REDIR_DESCR_V6_SFX;
+				}
+
+				// Stale-interface prune: remove pfB_DNS_Redirect_* rows no longer in the expected set.
+				$redir_stale_guard = static function (array $row) use ($redir_expected_descrs): bool {
+					$descr = $row['descr'] ?? '';
+					return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
+						&& !in_array($descr, $redir_expected_descrs, TRUE);
+				};
+				if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX, $redir_stale_guard)) {
+					$redir_changed = TRUE;
+				}
+
+				// Bucket existing nat/rule rows: redirect-owned vs other.
+				$redir_ex_owned = $redir_ex_other = [];
+				foreach (config_get_path('nat/rule', []) as $redir_ex_nat) {
+					if (str_starts_with($redir_ex_nat['descr'] ?? '', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+						$redir_ex_owned[] = $redir_ex_nat;
+					} else {
+						$redir_ex_other[] = $redir_ex_nat;
+					}
+				}
+
+				// Build new NAT rdr rules for each interface × family.
+				$redir_new_owned = [];
+				foreach ($redir_ifaces as $redir_iface) {
+					foreach (['inet', 'inet6'] as $redir_family) {
+						$redir_sfx    = ($redir_family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
+						$redir_target = ($redir_family === 'inet') ? '127.0.0.1' : '::1';
+						$redir_descr  = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . $redir_sfx;
+						$redir_source = ($redir_exception !== '')
+							? ['address' => $redir_exception, 'not' => '']
+							: ['any' => ''];
+						$redir_new_owned[] = [
+							'source'             => $redir_source,
+							'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
+							'ipprotocol'         => $redir_family,
+							'protocol'           => 'tcp/udp',
+							'target'             => $redir_target,
+							'local-port'         => '53',
+							'interface'          => $redir_iface,
+							'descr'              => $redir_descr,
+							'associated-rule-id' => 'pass',
+							'natreflection'      => 'disable',
+						];
+					}
+				}
+
+				if ($redir_ex_owned !== $redir_new_owned) {
+					$redir_changed = TRUE;
+					config_set_path('nat/rule', array_merge($redir_ex_other, $redir_new_owned));
+				}
+			}
+		}
+
+		if ($redir_changed) {
 			write_config('pfBlockerNG: saving DNS-redirect rule changes');
-			// The rdr/filter rows changed in config — flag a pf reload so
-			// filter_configure() (below) actually loads them into the ruleset;
-			// the legacy auto-rule diff does not see these foreign-section edits.
+			// The NAT rdr rows changed — flag a pf reload so filter_configure()
+			// actually loads them into the ruleset.
 			$pfb['filter_configure'] = TRUE;
 		}
 	}
 
-	// [ ADR-37 ] Sync DoT/DoQ block filter rules (create / reconcile / prune / remove).
+	// Sync DoT/DoQ block filter rules (create / reconcile / prune / remove).
 	// Reads dnsbl_dot_block (toggle) via PfbConfig; manages filter/rule directly
-	// (pfSense-core foreign section). No write_config() here — each sync flushes itself.
-	if (function_exists('pfb_fwobj_init_dot_block_registrations') &&
-	    function_exists('pfb_sync_dot_block_rules')) {
-		pfb_fwobj_init_dot_block_registrations();
-		if (pfb_sync_dot_block_rules()) {
+	// (pfSense-core foreign section — ADR-29 exclusion list).
+	{
+		$dot_changed = FALSE;
+		$dot_toggle  = PfbConfig::read('dnsbl_dot_block');
+		$dot_enabled = ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
+
+		if (!$dot_enabled) {
+			// DISABLED: remove all pfB_DoT_Block_* filter rules.
+			if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+				$dot_changed = TRUE;
+			}
+		} else {
+			// ENABLED: read interfaces (comma-separated) and exception alias.
+			$dot_iface_raw    = (string) PfbConfig::read('dnsbl_dot_block_int');
+			$dot_exclude_alias = trim((string) PfbConfig::read('dnsbl_dot_block_exclude'));
+
+			$dot_ifaces_raw = array_filter(array_map('trim', explode(',', $dot_iface_raw)), 'strlen');
+			$dot_ifaces     = [];
+			foreach ($dot_ifaces_raw as $dot_iface_entry) {
+				$dot_validated = pfb_filter($dot_iface_entry, PFB_FILTER_WORD, 'dot_block_sync');
+				if (empty($dot_validated)) {
+					pfb_logger(
+						"\nDoT/DoQ block: interface failed validation [ " .
+						substr(htmlspecialchars((string) $dot_iface_entry), 0, 100) . " ] *skipping*", 2
+					);
+					continue;
+				}
+				$dot_ifaces[] = $dot_validated;
+			}
+
+			if (empty($dot_ifaces)) {
+				// No valid interfaces remain — remove all rules.
+				if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+					$dot_changed = TRUE;
+				}
+			} else {
+				// Build the expected marker set for the current iface set.
+				$dot_expected_descrs = [];
+				foreach ($dot_ifaces as $dot_iface) {
+					$dot_expected_descrs[] = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+				}
+
+				// Stale-interface prune: remove pfB_DoT_Block_* rows no longer in the expected set.
+				$dot_stale_guard = static function (array $row) use ($dot_expected_descrs): bool {
+					$descr = $row['descr'] ?? '';
+					return str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX)
+						&& !in_array($descr, $dot_expected_descrs, TRUE);
+				};
+				if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX, $dot_stale_guard)) {
+					$dot_changed = TRUE;
+				}
+
+				// Bucket existing filter/rule rows: dot-owned vs other.
+				$dot_ex_owned = $dot_ex_other = [];
+				foreach (config_get_path('filter/rule', []) as $dot_ex_rule) {
+					if (str_starts_with($dot_ex_rule['descr'] ?? '', PFB_DOT_BLOCK_DESCR_PFX)) {
+						$dot_ex_owned[] = $dot_ex_rule;
+					} else {
+						$dot_ex_other[] = $dot_ex_rule;
+					}
+				}
+
+				// Preserve each rule's existing tracker by descr so it is stable across
+				// re-syncs (the GUI keys rule edit/delete/separators on a unique numeric
+				// tracker); mint a deterministic one only for genuinely new rows. Stored
+				// as a STRING to match the config-roundtrip type, so the change-detection
+				// compare below stays an exact match when nothing changed.
+				$dot_existing_trackers = [];
+				foreach ($dot_ex_owned as $dot_existing_rule) {
+					if (!empty($dot_existing_rule['descr']) && isset($dot_existing_rule['tracker'])) {
+						$dot_tracker = (string) $dot_existing_rule['tracker'];
+						$dot_existing_trackers[$dot_existing_rule['descr']] = $dot_tracker;
+						// Register the preserved tracker so pfb_managed_rule_tracker() treats it as
+						// occupied — a newly-minted deterministic id can't then collide with it.
+						if (ctype_digit($dot_tracker)) {
+							$pfb['trackerids'][] = (int) $dot_tracker;
+						}
+					}
+				}
+
+				// Build new DoT/DoQ block filter rules for each interface.
+				$dot_new_owned = [];
+				foreach ($dot_ifaces as $dot_iface) {
+					$dot_descr  = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+					$dot_source = ($dot_exclude_alias !== '')
+						? ['address' => $dot_exclude_alias, 'not' => '']
+						: ['any' => ''];
+					$dot_new_owned[] = [
+						'type'        => 'block',
+						'interface'   => $dot_iface,
+						'ipprotocol'  => 'inet46',
+						'protocol'    => 'tcp/udp',
+						'source'      => $dot_source,
+						'destination' => ['network' => '(self)', 'not' => '', 'port' => '853'],
+						'statetype'   => 'keep state',
+						'descr'       => $dot_descr,
+						'tracker'     => $dot_existing_trackers[$dot_descr] ?? (string) pfb_managed_rule_tracker($dot_descr),
+					];
+				}
+
+				if ($dot_ex_owned !== $dot_new_owned) {
+					$dot_changed = TRUE;
+					config_set_path('filter/rule', array_merge($dot_ex_other, $dot_new_owned));
+				}
+			}
+		}
+
+		if ($dot_changed) {
 			write_config('pfBlockerNG: saving DoT/DoQ block rule changes');
-			// As above — the block rule changed; force a pf reload so it loads.
+			// The block rule changed — force a pf reload so it loads.
 			$pfb['filter_configure'] = TRUE;
 		}
 	}
@@ -13818,14 +14183,14 @@ function sync_package_pfblockerng($cron='') {
 			if (!empty($rules)) {
 				foreach ($rules as $rule) {
 
-					// The ADR-36/37 DNS-bypass filter rules (DNS redirect + DoT/DoQ block)
-					// carry a 'pfB_' descr but are owned by pfb_sync_dns_redirect_rules() /
-					// pfb_sync_dot_block_rules(), NOT this legacy auto-rule rebuild. Preserve
-					// them like user rules so the rebuild below does not strip them.
+					// The DNS-redirect NAT companion rules and DoT/DoQ block filter rules
+					// carry a 'pfB_' descr but are managed by the inline redirect/DoT sync
+					// above, NOT this legacy auto-rule rebuild. Preserve them like user rules
+					// so the rebuild below does not strip them.
 					$descr = $rule['descr'] ?? '';
 					$is_dns_bypass_rule =
-					    (defined('PFB_DNS_REDIR_DESCR_V4_PFX') && str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)) ||
-					    (defined('PFB_DOT_BLOCK_DESCR_PFX') && str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX));
+					    str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+					    str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
 
 					// Remove all existing rules that start with 'pfB_' in the Rule Description
 					// (the legacy auto-rules this region rebuilds) — but keep user rules and
@@ -14616,22 +14981,37 @@ function pfblockerng_php_pre_deinstall_command() {
 			}
 		}
 
-		// [ ADR-35 P4 ] Sweep owned firewall objects (VIP, NAT, filter rules) BEFORE the
-		// config reference data is wiped by pfb_remove_config_settings(). The sweep is
-		// marker-only — it does not rely on the double-guard IP reference — so it catches
-		// orphans that the normal disable teardown missed (e.g. VIP reference cleared but
-		// entry not yet removed). If nothing was swept (normal case: disable already cleaned
-		// up) the call is a no-op and write_config() is NOT called (idempotent).
-		pfb_fwobj_init_registrations();
-		// [ ADR-36 ] Also register DNS-redirect objects so the sweep covers pfB_DNS_Redirect_* entries.
-		if (function_exists('pfb_fwobj_init_dns_redirect_registrations')) {
-			pfb_fwobj_init_dns_redirect_registrations();
+		// Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config
+		// reference data is wiped by pfb_remove_config_settings(). Catches orphans that
+		// the normal disable teardown missed. Idempotent — no write when nothing found.
+		$swept = FALSE;
+		// Sweep all pfB_-owned VIPs, NAT rules, and filter rules.
+		foreach (['virtualip/vip', 'nat/rule', 'filter/rule'] as $deinstall_section) {
+			$deinstall_rows     = config_get_path($deinstall_section, []);
+			$deinstall_filtered = [];
+			$deinstall_removed  = FALSE;
+			foreach ($deinstall_rows as $deinstall_row) {
+				if (pfb_is_managed_obj($deinstall_row['descr'] ?? '')) {
+					$deinstall_removed = TRUE;
+				} else {
+					$deinstall_filtered[] = $deinstall_row;
+				}
+			}
+			if ($deinstall_removed) {
+				config_set_path($deinstall_section, $deinstall_filtered);
+				$swept = TRUE;
+			}
 		}
-		// [ ADR-37 ] Also register DoT/DoQ block objects so the sweep covers pfB_DoT_Block_* entries.
-		if (function_exists('pfb_fwobj_init_dot_block_registrations')) {
-			pfb_fwobj_init_dot_block_registrations();
+		// Also explicitly remove DNS-redirect NAT rules and DoT/DoQ block filter rules
+		// by marker prefix (covers the inline-managed objects).
+		if (pfb_remove_managed_obj('nat/rule', PFB_DNS_REDIR_DESCR_V4_PFX)) {
+			$swept = TRUE;
 		}
-		if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+		if (pfb_remove_managed_obj('filter/rule', PFB_DOT_BLOCK_DESCR_PFX)) {
+			$swept = TRUE;
+		}
+
+		if ($swept) {
 			write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
 		}
 

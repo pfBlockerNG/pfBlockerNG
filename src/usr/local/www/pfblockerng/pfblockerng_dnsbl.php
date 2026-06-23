@@ -23,9 +23,6 @@
 require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
-if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc')) {
-	require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc');
-}
 
 global $pfb;
 pfb_global();
@@ -720,29 +717,25 @@ if ($_POST) {
 			$_POST['safesearch_doh_list'] = '';
 		}
 
-		// [ ADR-36 ] Validate DNS Redirect fields.
+		// Validate DNS Redirect fields.
 		$redir_ifaces_raw = (array)($_POST['dnsbl_redir_int'] ?? []);
 		$redir_alias_raw  = trim((string)($_POST['dnsbl_redir_exclude'] ?? ''));
-		if (function_exists('pfb_validate_dns_redirect_post')) {
-			$redir_errors = pfb_validate_dns_redirect_post(
-				$redir_ifaces_raw,
-				array_keys($options_dnsbl_redir_int),
-				$redir_alias_raw
-			);
-			$input_errors = array_merge($input_errors, $redir_errors);
-		}
+		$redir_errors     = pfb_validate_dns_redirect_post(
+			$redir_ifaces_raw,
+			array_keys($options_dnsbl_redir_int),
+			$redir_alias_raw
+		);
+		$input_errors = array_merge($input_errors, $redir_errors);
 
-		// [ ADR-37 ] Validate DoT/DoQ Block fields.
+		// Validate DoT/DoQ Block fields.
 		$dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
 		$dot_block_alias_raw  = trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
-		if (function_exists('pfb_validate_dot_block_post')) {
-			$dot_block_errors = pfb_validate_dot_block_post(
-				$dot_block_ifaces_raw,
-				array_keys($options_dnsbl_dot_block_int),
-				$dot_block_alias_raw
-			);
-			$input_errors = array_merge($input_errors, $dot_block_errors);
-		}
+		$dot_block_errors     = pfb_validate_dot_block_post(
+			$dot_block_ifaces_raw,
+			array_keys($options_dnsbl_dot_block_int),
+			$dot_block_alias_raw
+		);
+		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
 

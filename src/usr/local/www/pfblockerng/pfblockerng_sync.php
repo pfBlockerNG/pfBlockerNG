@@ -99,7 +99,7 @@ if ($_POST) {
 					case 'varsyncipaddress':
 						// Validate IP Address/Hostname
 						if (($_POST['varsynconchanges'] == 'auto') && (mb_strlen(strval($value)) < 1)) {
-							continue;
+							continue 2;
 						}
 						$value = pfb_filter($value, PFB_FILTER_HOSTNAME, 'Sync');
 						if (empty($value)) {
@@ -119,8 +119,7 @@ if ($_POST) {
 						}
 						break;
 					default:
-						continue;
-						break;
+						continue 2;
 				}
 				$pfb['sconfig']['row'][$k_field[1]][$k_field[0]] = $value;
 				// foreign structure: pfblockerngsync/config/0/row is a dynamic XMLRPC row blob, not in registry
