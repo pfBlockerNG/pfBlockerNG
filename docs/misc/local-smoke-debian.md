@@ -86,6 +86,38 @@ python3 scripts/build-pkg-portable.py \
 `pkg add` checks a dep is PRESENT, not its version, so this `.pkg` installs on the
 baked-deps image.
 
+## Driving the pfSense guest — tcsh vs `/bin/sh`
+
+**pfSense `root`'s login shell is `tcsh`, not a POSIX `sh`.** A command sent to the bare
+login shell over SSH is therefore parsed by **tcsh**, and tcsh is *not* sh-compatible — so a
+script that works in your terminal can silently mis-parse on the guest, producing wrong output
+rather than an error. This bit a real investigation: a `grep -E` probe returned a false
+`rules.debug:0` (rule "absent") purely because tcsh mangled the command.
+
+**Rule: always wrap guest commands in `/bin/sh -c`.** Never assume the login shell is POSIX.
+
+```sh
+# WRONG — runs under tcsh:
+ssh root@pf "/usr/bin/grep -nE 'rdr|\\(self\\)|port (53|853)' /tmp/rules.debug"
+# RIGHT — force /bin/sh:
+ssh root@pf /bin/sh -c "'/usr/bin/grep -nE \"rdr|\\(self\\)|port (53|853)\" /tmp/rules.debug'"
+```
+
+tcsh specifically mishandles, vs `sh`:
+
+- redirection — `2>&1` is a syntax error in tcsh (it wants `>&`); a stray `2>&1` mis-parses;
+- here-documents and `$(...)` command substitution differ;
+- a `grep -E` / `awk` pattern containing `(`, `)`, `|`, `$`, `{` `}` — tcsh's history/glob/var
+  parsing can eat them before the program sees them;
+- quoting rules and `!` (history expansion) differ.
+
+In the harness this is already handled — `SmokeVM.ssh` routes **every** guest command through
+`/bin/sh -c` (the remote argv is re-quoted into one POSIX-sh command line; see
+`tests/smoke/conftest.py`). When you add a new on-box command (in the harness or by hand),
+keep that contract. The one exception is a **`pfSsh.php`** snippet, which is piped on **stdin**
+and ends with `exec` then `exit` (the pfSense developer-shell contract) — that is not a tcsh
+command line at all (see the `pfSsh.php` gotcha below).
+
 ## Gotchas that cost time
 
 - **Background VM boots get killed.** A plain `nohup boot_vm.sh ... &` from a tool/CI

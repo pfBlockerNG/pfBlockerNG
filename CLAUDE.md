@@ -701,6 +701,14 @@ relearn:
   (`::` == `::0`).
 - **Unbound is chrooted at `/var/unbound`** — files its python module reads must be
   chroot-relative; a host-absolute path silently fails to load.
+- **pfSense root's login shell is `tcsh`, not `sh` — always drive the guest via `/bin/sh`.**
+  A command sent to the bare login shell over SSH is parsed by **tcsh**, which mangles POSIX-sh
+  syntax (`2>&1`/`>&` redirection, here-docs, and a `grep -E` whose pattern contains `()`/`|`/`$`),
+  so it can silently mis-parse rather than error — it once produced a false `rules.debug:0` read
+  and sent an investigation down the wrong path. `SmokeVM.ssh` already wraps every guest command
+  in `/bin/sh -c`; when you add a new on-box command (or run one by hand), assume tcsh and force
+  `/bin/sh` — never rely on the login shell being POSIX. (`pfSsh.php` snippets are the separate
+  stdin/`exec`/`exit` contract, not a tcsh command line.)
 - **Enable chain:** DNSBL `mode=='enabled'` needs `enable_cb=on` + `pfb_dnsbl=on` + the DNS
   Resolver enabled (`unbound_state`). On `devel`, `dnsbl_mode`/`pfb_py_block` are dead keys
   (python is the only mode); on `main` they're still required.
