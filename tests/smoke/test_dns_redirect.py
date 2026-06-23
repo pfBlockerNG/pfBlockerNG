@@ -520,6 +520,10 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
     descr_v6 = _redir_descr_for(iface, "inet6")
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable redirect; assert before-state clean.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -641,6 +645,10 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on the primary interface; assert before-state with rules present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
         h.reload(vm, "update")
@@ -705,6 +713,10 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
     iface = primary_iface
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — seed the user NAT rule; assert redirect is disabled.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -778,6 +790,10 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
     iface_drop = available[1]  # typically 'opt1'
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on both interfaces; assert both nat/rule sets present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface_keep, iface_drop], exception="")
         h.reload(vm, "update")
@@ -854,6 +870,10 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
     descr_v6 = _redir_descr_for(iface, "inet6")
 
     try:
+        # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+        # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
         # GIVEN — start from disabled state.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -941,6 +961,10 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
     vm = deployed_vm
     iface = primary_iface
 
+    # GIVEN — establish $mode='enabled' (master ON + DNSBL ON + resolver up) so
+    # pfblockerng will create DNS-redirect NAT rules on reload (#484 coupling).
+    h.set_package_enabled(vm, True)
+    h.set_dnsbl_enabled(vm, True)
     # GIVEN — enable redirect on the primary interface and seed a user NAT rule.
     # Select the full-removal uninstall path: the owned-object sweep runs only when
     # pfb_keep != 'on', and pfb_keep defaults to 'on' (issue #281). The keep='on'
