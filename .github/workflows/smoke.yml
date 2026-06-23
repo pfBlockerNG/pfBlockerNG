@@ -560,8 +560,12 @@ jobs:
           # Turn on the in-test hermetic egress block (after deploy, see fixture).
           SMOKE_BLOCK_EGRESS: "1"
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
-          # pfctl) are available for debugging by setting SMOKE_STATE_DIFF=1; kept
-          # OFF here so normal runs stay lean.
+          # pfctl + rules.debug) — ON by default; snapshots are secret-scrubbed
+          # (same pass as the diagnostics bundle) before diffing, so the job log
+          # carries no secrets. SMOKE_REDACT_VALUES mirrors the diagnostics-bundle
+          # value-redaction (Plus MAC/uuid) — SMOKE_REDACT_VALUES is already exported
+          # above for this step; CE legs: empty -> strict no-op.
+          SMOKE_STATE_DIFF: "1"
           # Match the baked image (RESULTS/02); harmless if unset.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
           SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
