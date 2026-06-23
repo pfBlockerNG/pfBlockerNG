@@ -576,6 +576,9 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
     iface = primary_iface
 
     try:
+        # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test that
+        # asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+        h.set_pfb_keep(vm, False)
         # GIVEN — seed the user filter rule; assert block is disabled.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update")
@@ -797,6 +800,9 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     vm = deployed_vm
     iface = primary_iface
 
+    # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test
+    # that asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+    h.set_pfb_keep(vm, False)
     # GIVEN — enable DoT block on the primary interface and seed a user filter rule.
     _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
     h.reload(vm, "update")
@@ -893,3 +899,218 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
 
     finally:
         _cleanup_dot_block(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 8 — Master-disable coupling: DoT rules absent when master OFF
+# --------------------------------------------------------------------------- #
+
+
+def test_dot_block_master_disable_removes_rules_despite_toggle_on(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37 / issue #484 Case 8: master-disable forces DoT block rules absent even with toggle ON.
+
+    Scenario: $mode-coupling — master enable_cb=off removes DoT block rules unconditionally.
+
+      Background: pfBlockerNG installed; DoT block disabled; DNSBL enabled.
+
+      Given DoT block is enabled on the primary non-WAN interface (toggle ON),
+        And the master switch (enable_cb) is ON,
+        And 1 pfB_DoT_Block_<iface> filter/rule entry is present (before-state),
+        And pfctl -sr shows the port-853 block rule (before-state),
+
+      When the master switch is turned OFF (enable_cb='') and a full reload runs,
+
+      Then filter/rule has 0 pfB_DoT_Block_* entries (rules force-removed by $mode coupling).
+        And pfctl -sr shows no port-853 block rule.
+
+      Note: the DoT toggle (dnsbl_dot_block) remains ON throughout; the removal is caused
+      solely by the master switch, proving the $mode-coupling in pfb_create_dnsbl.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — ensure master ON; enable DoT block; assert before-state present.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+
+        before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
+        assert before_count == 1, (
+            f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry before master-disable, got {before_count}"
+        )
+        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows no port-853 block before master-disable — before-state setup failed\n"
+            + _dot_block_match_report(vm, expected_present=True)
+        )
+
+        # WHEN — turn master OFF; reload (dnsbl_dot_block toggle remains ON).
+        h.set_package_enabled(vm, False)
+        h.reload(vm, "update")
+
+        # THEN — all DoT block filter rules must be gone (force-removed by $mode coupling).
+        after_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX)
+        assert after_count == 0, (
+            f"pfB_DoT_Block_* filter/rule entries still present ({after_count}) after master-disable — "
+            f"$mode-coupling did not force-remove DoT block rules when enable_cb='' (master OFF)\n"
+            + _dot_block_match_report(vm, expected_present=False)
+        )
+
+        # THEN — pfctl confirms no port-853 block (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr still shows a port-853 block rule after master-disable\n"
+            + _dot_block_match_report(vm, expected_present=False)
+        )
+
+    finally:
+        # Restore baseline: master ON, DoT block disabled.
+        h.set_package_enabled(vm, True)
+        _cleanup_dot_block(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 9 — DNSBL-disable coupling: DoT rules absent when DNSBL toggle OFF
+# --------------------------------------------------------------------------- #
+
+
+def test_dot_block_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37 / issue #484 Case 9: DNSBL-off forces DoT block rules absent even with toggle ON.
+
+    Scenario: $mode-coupling — DNSBL toggle pfb_dnsbl='' removes DoT block rules unconditionally.
+
+      Background: pfBlockerNG installed; master ON; DoT block toggle ON.
+
+      Given master ON + DNSBL ON + DoT block ON → 1 pfB_DoT_Block_<iface> entry present
+        (before-state: positive guard — proves rules appear when all enablers are ON),
+
+      When DNSBL is turned OFF (pfb_dnsbl='') and a full reload runs
+        (master remains ON; dnsbl_dot_block toggle remains ON),
+
+      Then filter/rule has 0 pfB_DoT_Block_* entries (force-removed by $mode coupling).
+        And pfctl -sr shows no port-853 block rule.
+
+      Note: the positive guard (rule present when all enablers are ON) prevents this test
+      from masking a regression where rules are always absent.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — master ON + DNSBL ON + DoT block ON; assert before-state with rule present.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+
+        before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
+        assert before_count == 1, (
+            f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry before DNSBL-disable (positive guard), "
+            f"got {before_count} — rule absent even when all enablers are ON"
+        )
+        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr shows no port-853 block before DNSBL-disable — before-state setup failed\n"
+            + _dot_block_match_report(vm, expected_present=True)
+        )
+
+        # WHEN — turn DNSBL OFF; reload (master ON; dnsbl_dot_block toggle remains ON).
+        h.set_dnsbl_enabled(vm, False)
+        h.reload(vm, "update")
+
+        # THEN — all DoT block filter rules must be gone (force-removed by $mode coupling).
+        after_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX)
+        assert after_count == 0, (
+            f"pfB_DoT_Block_* filter/rule entries still present ({after_count}) after DNSBL-disable — "
+            f"$mode-coupling did not force-remove DoT block rules when pfb_dnsbl='' (DNSBL OFF)\n"
+            + _dot_block_match_report(vm, expected_present=False)
+        )
+
+        # THEN — pfctl confirms no port-853 block (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+            "pfctl -sr still shows a port-853 block rule after DNSBL-disable\n"
+            + _dot_block_match_report(vm, expected_present=False)
+        )
+
+    finally:
+        # Restore baseline: DNSBL ON, DoT block disabled.
+        h.set_dnsbl_enabled(vm, True)
+        _cleanup_dot_block(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 10 — Uninstall keep=on: live rules gone; sections retained (#484)
+# --------------------------------------------------------------------------- #
+
+
+def test_dot_block_uninstall_keep_on_removes_rules_retains_sections(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37 / issue #484 Case 10: uninstall with keep=on removes DoT rules but retains sections.
+
+    Scenario: uninstall keep=on — live firewall objects torn down unconditionally;
+    settings sections retained because pfb_keep=on.
+
+      Given pfb_keep is set to 'on' (retain settings + data on uninstall),
+        And DoT block is enabled on the primary non-WAN interface (toggle ON),
+        And 1 pfB_DoT_Block_<iface> filter/rule entry is present (before-state),
+        And a user filter/rule entry (no pfB marker) is present in config.xml (before-state),
+        And installedpackages/pfblockerng* sections are present (before-state),
+
+      When pfBlockerNG is uninstalled via 'pkg delete',
+
+      Then all pfB_DoT_Block_* filter/rule entries are GONE (live sweep is unconditional).
+        And the user filter/rule entry is STILL PRESENT (user objects never swept).
+        And installedpackages/pfblockerng* sections are STILL PRESENT (pfb_keep=on retains them).
+
+      This is the core #484 fix: before the fix the deinstall keep-gate blocked the live-object
+      sweep, so pfB-owned rules were left behind. After the fix, live-object teardown runs
+      unconditionally; pfb_keep gates only the settings/data removal.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — set keep=on; enable DoT block; seed user filter; assert all before-states.
+        h.set_pfb_keep(vm, True)
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+        _seed_user_filter(vm, _USER_FILTER_DESCR)
+
+        before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
+        assert before_count == 1, (
+            f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry before keep=on uninstall, got {before_count}"
+        )
+        assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
+            "user filter rule not present before keep=on uninstall — seeding failed"
+        )
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* absent before keep=on uninstall — unexpected clean state"
+        )
+
+        # WHEN — uninstall pfBlockerNG with pfb_keep=on.
+        _pkg_delete(vm)
+
+        # THEN — pfB-owned DoT block rules are GONE (live-object teardown is unconditional).
+        after_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX)
+        assert after_count == 0, (
+            f"pfB_DoT_Block_* filter/rule entries still present ({after_count}) after keep=on uninstall — "
+            f"live-object teardown did not run unconditionally (the #484 bug: keep-gate blocked the sweep)\n"
+            + h.deinstall_debug(vm)
+        )
+
+        # THEN — user filter rule survives (never swept).
+        assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
+            "user filter rule was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+        )
+
+        # THEN — pfblockerng* sections are STILL PRESENT (pfb_keep=on retains settings + data).
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* GONE after keep=on uninstall — "
+            "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
+        )
+
+    except Exception:
+        # Best-effort teardown: package may already be gone after uninstall.
+        try:
+            _cleanup_dot_block(vm)
+        except Exception:
+            pass
+        raise

@@ -84,6 +84,22 @@ def deployed_vm(  # noqa: ARG001
         h.collect_host_diagnostics(smoke_vm)
 
 
+@pytest.fixture(autouse=True)
+def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
+    """Redeploy the package if a prior test in this module uninstalled it.
+
+    The uninstall scenarios ``pkg delete`` the package mid-module; without this,
+    every subsequent test under the module-scoped ``deployed_vm`` would fail to
+    reload ('Could not open input file ... pfblockerng.php'). Cheap install-state
+    probe; redeploy + re-seed only when the package is actually missing.
+    """
+    if not h.pkg_installed(deployed_vm):
+        h.deploy(deployed_vm)
+        h.snapshot_unbound_conf(deployed_vm)
+        h.ensure_dnsbl_vip(deployed_vm)
+        h.use_system_dns_upstream(deployed_vm)
+
+
 # --------------------------------------------------------------------------- #
 # Internal helpers for config.xml VIP / NAT / section reads
 # --------------------------------------------------------------------------- #
@@ -378,6 +394,9 @@ def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed
     """
     vm = deployed_vm
 
+    # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test that
+    # asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+    h.set_pfb_keep(vm, False)
     # GIVEN — seed the three objects; first confirm DNSBL is disabled / clean.
     h.set_dnsbl_enabled(vm, False)
     h.set_dnsvip_auto(vm, False)
@@ -440,4 +459,98 @@ def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed
     # pfBlockerNG config sections must be gone.
     assert not _pfb_sections_present(vm), (
         "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Scenario D — uninstall keep=on: live objects gone; sections retained (#484)
+# --------------------------------------------------------------------------- #
+
+
+def test_managed_objects_uninstall_keep_on_removes_orphan_retains_sections(deployed_vm: SmokeVM) -> None:
+    """ADR-35 / issue #484 Scenario D: uninstall with keep=on removes orphan VIP but retains sections.
+
+    Scenario: uninstall keep=on — live pfB-owned objects torn down unconditionally;
+    user objects and settings sections retained because pfb_keep=on.
+
+      Given pfb_keep is set to 'on' (retain settings + data on uninstall),
+        And an ORPHAN VIP (descr='pfB_AUTO_VIP_v4', pfb_dnsvip4 cleared) is present in
+            virtualip/vip[] (before-state),
+        And a USER VIP (descr='my-test-user-vip-do-not-delete') is present (before-state),
+        And a USER NAT rule (descr='my-test-user-nat-do-not-delete') is present (before-state),
+        And installedpackages/pfblockerng* sections are present (before-state),
+
+      When pfBlockerNG is uninstalled via 'pkg delete',
+
+      Then the orphan VIP is GONE from virtualip/vip[] (live-object sweep is unconditional).
+        And the user VIP is STILL PRESENT in virtualip/vip[] (not a pfB marker; never swept).
+        And the user NAT rule is STILL PRESENT in nat/rule[] (not a pfB marker; never swept).
+        And installedpackages/pfblockerng* sections are STILL PRESENT (pfb_keep=on retains them).
+
+      This is the core #484 fix: before the fix the deinstall keep-gate blocked the live-object
+      sweep entirely, so pfB-owned objects were left behind on uninstall when keep='on'.
+      After the fix, live-object teardown runs unconditionally; pfb_keep gates only
+      the settings/data removal.
+    """
+    vm = deployed_vm
+
+    # GIVEN — set keep=on; confirm DNSBL is disabled; seed orphan + user objects.
+    h.set_pfb_keep(vm, True)
+    h.set_dnsbl_enabled(vm, False)
+    h.set_dnsvip_auto(vm, False)
+    h.reload(vm, "update")
+
+    _seed_orphan_vip(vm, _AUTO_VIP_DESCR_V4)
+    _seed_user_vip(vm, _USER_VIP_DESCR)
+    _seed_user_nat(vm, _USER_NAT_DESCR)
+
+    # BEFORE-STATE: assert all objects present.
+    assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+        "orphan VIP (pfB_AUTO_VIP_v4) not present before keep=on uninstall — seeding failed"
+    )
+    assert _vip_descr_present(vm, _USER_VIP_DESCR), "user VIP not present before keep=on uninstall — seeding failed"
+
+    pre_nat = (
+        "$found = FALSE;\n"
+        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+        "}"
+    )
+    assert h._php_read_scalar(vm, pre_nat, "$found ? 'yes' : 'no'") == "yes", (
+        "user NAT rule not present before keep=on uninstall — seeding failed"
+    )
+    assert _pfb_sections_present(vm), (
+        "installedpackages/pfblockerng* absent before keep=on uninstall — unexpected clean state"
+    )
+
+    # WHEN — uninstall pfBlockerNG with pfb_keep=on.
+    _pkg_delete(vm)
+
+    # THEN — orphan VIP is GONE (live-object sweep is unconditional, regardless of pfb_keep).
+    assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+        "orphan pfB_AUTO_VIP_v4 still present after keep=on uninstall — "
+        "live-object teardown did not run unconditionally (the #484 bug: keep-gate blocked the sweep)\n"
+        + h.deinstall_debug(vm)
+    )
+
+    # THEN — user VIP survives (not a pfB marker — never swept).
+    assert _vip_descr_present(vm, _USER_VIP_DESCR), (
+        "user VIP was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+    )
+
+    # THEN — user NAT rule survives.
+    post_nat = (
+        "$found = FALSE;\n"
+        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+        "}"
+    )
+    assert h._php_read_scalar(vm, post_nat, "$found ? 'yes' : 'no'") == "yes", (
+        "user NAT rule was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+    )
+
+    # THEN — pfblockerng* sections are STILL PRESENT (pfb_keep=on retains settings + data).
+    assert _pfb_sections_present(vm), (
+        "installedpackages/pfblockerng* GONE after keep=on uninstall — "
+        "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
     )

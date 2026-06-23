@@ -120,6 +120,22 @@ def primary_iface(deployed_vm: SmokeVM) -> str:
     return available[0]
 
 
+@pytest.fixture(autouse=True)
+def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
+    """Redeploy the package if a prior test in this module uninstalled it.
+
+    The uninstall cases ``pkg delete`` the package mid-module; without this,
+    every subsequent test under the module-scoped ``deployed_vm`` would fail to
+    reload ('Could not open input file ... pfblockerng.php'). Cheap install-state
+    probe; redeploy + re-seed only when the package is actually missing.
+    """
+    if not h.pkg_installed(deployed_vm):
+        h.deploy(deployed_vm)
+        h.snapshot_unbound_conf(deployed_vm)
+        h.ensure_dnsbl_vip(deployed_vm)
+        h.use_system_dns_upstream(deployed_vm)
+
+
 # --------------------------------------------------------------------------- #
 # Internal helpers — config.xml queries for DNS-redirect state
 # --------------------------------------------------------------------------- #
@@ -968,3 +984,221 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
     assert not _pfb_sections_present(vm), (
         "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Case 7 — Master-disable coupling: redirect rules absent when master OFF
+# --------------------------------------------------------------------------- #
+
+
+def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-36 / issue #484 Case 7: master-disable forces redirect rules absent even with toggle ON.
+
+    Scenario: $mode-coupling — master enable_cb=off removes redirect rules unconditionally.
+
+      Background: pfBlockerNG installed; DNS redirect disabled; DNSBL enabled.
+
+      Given DNS redirect is enabled on the primary non-WAN interface (toggle ON),
+        And the master switch (enable_cb) is ON,
+        And 2 pfB_DNS_Redirect_<iface>_* nat/rule entries are present (before-state),
+        And pfctl -sn shows rdr rules on the primary interface (before-state),
+
+      When the master switch is turned OFF (enable_cb='') and a full reload runs,
+
+      Then nat/rule has 0 pfB_DNS_Redirect_* entries (rules force-removed by $mode coupling).
+        And pfctl -sn shows no rdr rules on the primary interface for port 53.
+
+      Note: the redirect TOGGLE (dnsbl_redir) remains ON throughout; the removal is caused
+      solely by the master switch, proving the $mode-coupling in pfblockerng_php_pre_deinstall
+      and pfb_create_dnsbl (devel: DNS-redirect/DoT rules coupled to $mode==='enabled').
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — ensure master ON; enable redirect; assert before-state present.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+        _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+
+        before_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
+        assert before_count == 2, (
+            f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries before master-disable, got {before_count}"
+        )
+        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn shows no rdr on {iface} before master-disable — before-state setup failed\n"
+            + _redir_match_report(vm, iface, expected_present=True)
+        )
+
+        # WHEN — turn master OFF; reload (dnsbl_redir toggle remains ON).
+        h.set_package_enabled(vm, False)
+        h.reload(vm, "update")
+
+        # THEN — all redirect nat rules must be gone (force-removed by $mode coupling).
+        after_count = _nat_redir_count(vm, _REDIR_DESCR_PFX)
+        assert after_count == 0, (
+            f"pfB_DNS_Redirect_* nat/rule entries still present ({after_count}) after master-disable — "
+            f"$mode-coupling did not force-remove redirect rules when enable_cb='' (master OFF)\n"
+            + _redir_match_report(vm, iface, expected_present=False)
+        )
+
+        # THEN — pfctl confirms no rdr rule (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn still shows an rdr rule on {iface} after master-disable\n"
+            + _redir_match_report(vm, iface, expected_present=False)
+        )
+
+    finally:
+        # Restore baseline: master ON, redirect disabled.
+        h.set_package_enabled(vm, True)
+        _cleanup_redirect(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 8 — DNSBL-disable coupling: redirect rules absent when DNSBL toggle OFF
+# --------------------------------------------------------------------------- #
+
+
+def test_dns_redirect_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-36 / issue #484 Case 8: DNSBL-off forces redirect rules absent even with toggle ON.
+
+    Scenario: $mode-coupling — DNSBL toggle pfb_dnsbl='' removes redirect rules unconditionally.
+
+      Background: pfBlockerNG installed; master ON; DNS redirect toggle ON.
+
+      Given master ON + DNSBL ON + redirect ON → 2 pfB_DNS_Redirect_<iface>_* entries present
+        (before-state: prove all-ON produces rules — this is the positive guard),
+
+      When DNSBL is turned OFF (pfb_dnsbl='') and a full reload runs
+        (master remains ON; redirect toggle dnsbl_redir remains ON),
+
+      Then nat/rule has 0 pfB_DNS_Redirect_* entries (force-removed by $mode coupling).
+        And pfctl -sn shows no rdr rules on the primary interface for port 53.
+
+      Note: the positive guard (rules present when all enablers are ON) prevents this
+      test from masking a regression where rules are always absent regardless.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — master ON + DNSBL ON + redirect ON; assert before-state with rules present.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+        _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+
+        before_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
+        assert before_count == 2, (
+            f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries before DNSBL-disable (positive guard), "
+            f"got {before_count} — rules absent even when all enablers are ON"
+        )
+        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn shows no rdr on {iface} before DNSBL-disable — before-state setup failed\n"
+            + _redir_match_report(vm, iface, expected_present=True)
+        )
+
+        # WHEN — turn DNSBL OFF; reload (master ON; dnsbl_redir toggle remains ON).
+        h.set_dnsbl_enabled(vm, False)
+        h.reload(vm, "update")
+
+        # THEN — all redirect nat rules must be gone (force-removed by $mode coupling).
+        after_count = _nat_redir_count(vm, _REDIR_DESCR_PFX)
+        assert after_count == 0, (
+            f"pfB_DNS_Redirect_* nat/rule entries still present ({after_count}) after DNSBL-disable — "
+            f"$mode-coupling did not force-remove redirect rules when pfb_dnsbl='' (DNSBL OFF)\n"
+            + _redir_match_report(vm, iface, expected_present=False)
+        )
+
+        # THEN — pfctl confirms no rdr rule (async: poll until absent).
+        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+            f"pfctl -sn still shows an rdr rule on {iface} after DNSBL-disable\n"
+            + _redir_match_report(vm, iface, expected_present=False)
+        )
+
+    finally:
+        # Restore baseline: DNSBL ON, redirect disabled.
+        h.set_dnsbl_enabled(vm, True)
+        _cleanup_redirect(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 9 — Uninstall keep=on: live rules gone; sections + data retained (#484)
+# --------------------------------------------------------------------------- #
+
+
+def test_dns_redirect_uninstall_keep_on_removes_rules_retains_sections(
+    deployed_vm: SmokeVM, primary_iface: str
+) -> None:
+    """ADR-36 / issue #484 Case 9: uninstall with keep=on removes redirect rules but retains sections.
+
+    Scenario: uninstall keep=on — live firewall objects torn down unconditionally;
+    settings sections retained because pfb_keep=on.
+
+      Given pfb_keep is set to 'on' (retain settings + data on uninstall),
+        And DNS redirect is enabled on the primary non-WAN interface (redirect toggle ON),
+        And 2 pfB_DNS_Redirect_<iface>_* nat/rule entries are present (before-state),
+        And a user nat/rule entry (no pfB marker) is present in config.xml (before-state),
+        And installedpackages/pfblockerng* sections are present (before-state),
+
+      When pfBlockerNG is uninstalled via 'pkg delete',
+
+      Then all pfB_DNS_Redirect_* nat/rule entries are GONE (live sweep is unconditional).
+        And the user nat/rule entry is STILL PRESENT (user objects never swept).
+        And installedpackages/pfblockerng* sections are STILL PRESENT (pfb_keep=on retains them).
+
+      This is the core #484 fix: before the fix the deinstall keep-gate blocked the live-object
+      sweep, so pfB-owned rules were left behind. After the fix, live-object teardown runs
+      unconditionally; pfb_keep gates only the settings/data removal.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+
+    try:
+        # GIVEN — set keep=on; enable redirect; seed user NAT; assert all before-states.
+        h.set_pfb_keep(vm, True)
+        _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
+        h.reload(vm, "update")
+        _seed_user_nat(vm, _USER_NAT_DESCR)
+
+        before_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
+        assert before_nat == 2, (
+            f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries before keep=on uninstall, got {before_nat}"
+        )
+        assert _nat_rule_present(vm, _USER_NAT_DESCR), (
+            "user NAT rule not present before keep=on uninstall — seeding failed"
+        )
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* absent before keep=on uninstall — unexpected clean state"
+        )
+
+        # WHEN — uninstall pfBlockerNG with pfb_keep=on.
+        _pkg_delete(vm)
+
+        # THEN — pfB-owned redirect rules are GONE (live-object teardown is unconditional).
+        after_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX)
+        assert after_nat == 0, (
+            f"pfB_DNS_Redirect_* nat/rule entries still present ({after_nat}) after keep=on uninstall — "
+            f"live-object teardown did not run unconditionally (the #484 bug: keep-gate blocked the sweep)\n"
+            + h.deinstall_debug(vm)
+        )
+
+        # THEN — user NAT rule survives (never swept).
+        assert _nat_rule_present(vm, _USER_NAT_DESCR), (
+            "user NAT rule was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+        )
+
+        # THEN — pfblockerng* sections are STILL PRESENT (pfb_keep=on retains settings + data).
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* GONE after keep=on uninstall — "
+            "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
+        )
+
+    except Exception:
+        # Best-effort teardown: package may already be gone after uninstall.
+        try:
+            _cleanup_redirect(vm)
+        except Exception:
+            pass
+        raise
