@@ -71,10 +71,23 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("ip", "/pfblockerng/pfblockerng_ip.php", ("IP Configuration", "ASN configuration", "Aggregated Aliases")),
     # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
     # "DoT/DoQ Block" is the ADR-37 section title added to this page (Phase 3).
+    # "Permit Firewall Rules" + "Interface(s)" are the two field labels of the #478
+    # stacked layout (the toggle and the interface selector now render as separate
+    # rows) -- the markers prove both fields render; the *visual* stacking is the
+    # ui_browser/maintainer tier. "no-AAAA" is the #480 label/section text (verbatim
+    # hyphenated form, guarding the #480 text against a casing/hyphen regression).
     Page(
         "dnsbl",
         "/pfblockerng/pfblockerng_dnsbl.php",
-        ("DNSBL Webserver Configuration", "DNSBL Configuration", "DNS Redirect", "DoT/DoQ Block"),
+        (
+            "DNSBL Webserver Configuration",
+            "DNSBL Configuration",
+            "DNS Redirect",
+            "DoT/DoQ Block",
+            "Permit Firewall Rules",
+            "Interface(s)",
+            "no-AAAA",
+        ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
@@ -143,8 +156,14 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
-    # query param, so the plain GET exercises the full-render branch.
-    Page("widget", "/widgets/widgets/pfblockerng.widget.php", ('id="pfblockerngack"', "Alias")),
+    # query param, so the plain GET exercises the full-render branch. "Show Aggregated Aliases" is
+    # the #494 settings checkbox label (rendered in the widget's settings panel), proving the new
+    # toggle renders.
+    Page(
+        "widget",
+        "/widgets/widgets/pfblockerng.widget.php",
+        ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
+    ),
 )
 
 
