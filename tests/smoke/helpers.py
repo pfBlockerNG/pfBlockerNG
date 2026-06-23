@@ -912,6 +912,53 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         )
 
 
+def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle the pfBlockerNG MASTER switch (``enable_cb``) at ``CFG_GLOBAL``.
+
+    ``enable_cb='on'`` → master ON (``$pfb['enable']=='on'``; ``$mode=='enabled'``
+    when DNSBL is also on and the DNS resolver is up).
+    ``enable_cb=''`` → master OFF (``$mode`` never reaches ``'enabled'``).
+
+    Written via the same section-read/write pattern as :func:`set_dnsbl_enabled`.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        f"$g['enable_cb'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: toggle enable_cb');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_package_enabled({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
+    """Set ``pfb_keep`` at ``CFG_GLOBAL``: ``True`` → ``'on'`` (retain settings + data on
+    uninstall); ``False`` → ``'off'`` (full removal — live objects + settings + data all gone).
+
+    ``pfb_keep`` defaults to ``'on'`` (issue #281), so a test that asserts sections are
+    swept after uninstall MUST call ``set_pfb_keep(vm, False)`` explicitly to select the
+    full-removal path.  A test that asserts sections are RETAINED after uninstall (the
+    #484 fix) uses ``set_pfb_keep(vm, True)`` (or relies on the default, but explicit
+    is clearer).
+    """
+    val = "on" if keep else "off"
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        f"$g['pfb_keep'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: set pfb_keep');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_pfb_keep({keep}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
     """Set the DNSBL interface (``dnsbl_interface``) in the DNSBL-settings section.
 
