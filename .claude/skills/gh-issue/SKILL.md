@@ -208,8 +208,11 @@ Set up idempotently (mirrors `/adr-phase` Step 3):
   main checkout, e.g. `.claude/worktrees/issue-{NN}` (if that area isn't ignored,
   use a path outside the checkout so `git status` stays clean).
 - **Create or reuse** (`git worktree list` first; match `issue/{NN}-*` and the bare
-  `issue/{NN}`): reuse an existing one; else if the branch exists
-  `git worktree add <path> <branch>`; else
+  `issue/{NN}`): reuse an existing one **only if you created it earlier in THIS run** — if a
+  worktree exists at the path but you did **not** create it this run, it may be a live parallel
+  session's (`git -C <path> status`; foreign uncommitted changes ⇒ do **not** reuse or
+  `--force`-remove it, cut a fresh uniquely-named worktree with a `-{epoch}` suffix instead);
+  else if the branch exists `git worktree add <path> <branch>`; else
   `git worktree add <path> -b issue/{NN}-{slug} origin/devel`.
 - **On reuse, rebase the branch onto the freshly-fetched `origin/devel` (Step 0) before
   executing steps** — a branch cut earlier in (or before) this session must pick up commits

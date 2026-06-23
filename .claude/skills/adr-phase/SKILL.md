@@ -105,7 +105,10 @@ checkout is never edited by phases. Set it up idempotently:
 - **Create or reuse** (check `git worktree list` first; match this ADR's branch by the
   `adr/{NN}-*` prefix — and the legacy bare `adr/{NN}` — so a branch cut before the
   slug scheme is still picked up rather than duplicated):
-  - If a worktree for this ADR's branch already exists → reuse it.
+  - If a worktree for this ADR's branch already exists **and you created it earlier in THIS
+    run** → reuse it. If it exists but you did **not** create it this run, it may be a live
+    parallel session's — `git -C <path> status`; foreign uncommitted changes ⇒ do not touch
+    or `--force`-remove it, fall through to a fresh uniquely-named worktree (suffix `-{epoch}`).
   - Else if the branch exists → `git worktree add <path> <branch>`.
   - **On either reuse path, rebase the branch onto the freshly-fetched `origin/<base>` (Step 0)
     before running any phase** (`git -C <path> rebase origin/<base>`; `--force-with-lease` to

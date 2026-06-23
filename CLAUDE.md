@@ -582,9 +582,16 @@ CI — ADR *implementation* included — uses the full worktree + rebase-only-PR
 
 - Branch off the **current** base (`git fetch` first); a stale-tip worktree needs a rebase onto
   the base before it can land (PRs are rebase-only).
-- **Reuse, don't recreate.** A worktree is keyed to its branch/task — if you're already in this
-  branch's worktree (e.g. an ADR mid-implementation), work there. `/adr-all` and `/adr-phase`
-  reuse the per-ADR `adr/{NN}-{slug}` worktree across all phases; create it only when absent.
+- **Reuse only YOUR OWN worktree — never adopt one you merely found.** "Reuse" means resuming a
+  worktree *you yourself* created earlier in *this* run (e.g. an `/adr-phase` / `/gh-issue` run
+  continuing across phases/steps) — work there. A worktree already sitting at the conventional
+  path (`.claude/worktrees/{adr,issue}-NN`) that you did **not** create this run is **not** yours
+  to adopt: it may belong to a **live parallel session**. Before touching any worktree you didn't
+  just create, run `git -C <path> status` — foreign uncommitted changes ⇒ another session owns it;
+  do **not** reuse it and **never** `--force`-remove it. Cut your own uniquely-named worktree +
+  branch instead (collision suffix `-{epoch}`, see "Branch naming"). `/adr-all` and `/adr-phase`
+  reuse the per-ADR `adr/{NN}-{slug}` worktree across the phases of one run; create it only when
+  absent.
 - **Reuse a branch for a follow-up ONLY when no other session owns its PR.** Before reusing,
   `git fetch` and check for foreign activity: a commit/force-push you didn't make, or the
   branch's open PR showing activity that isn't yours (recent pushes, running CI, review

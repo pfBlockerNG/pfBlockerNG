@@ -53,8 +53,11 @@ Only continue when the PR is OPEN, ready, and mergeable.
 
 ## Step 3 — Rebase the head branch onto its base, push
 
-Do this in a **dedicated worktree** (never the primary checkout). Reuse the PR's
-worktree if one already exists for `HEAD`; otherwise create one:
+Do this in a **dedicated worktree** (never the primary checkout). Reuse a worktree for `HEAD`
+**only if you created it earlier in this run** — if one exists at the path but you did not
+create it (possibly a live parallel session's: `git -C <path> status` shows foreign uncommitted
+changes), do **not** touch or `--force`-remove it; create your own at a fresh path. Otherwise
+create one:
 
 ```sh
 git fetch origin
