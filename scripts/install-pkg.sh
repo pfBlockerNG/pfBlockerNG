@@ -51,12 +51,26 @@ if [ -n "$SSH_KEY" ]; then
     SCP_OPTS="-i ${SSH_KEY} ${SCP_OPTS}"
 fi
 
+# Always run the remote command under /bin/sh. pfSense's root login shell is tcsh,
+# and sshd re-parses the command string with it; tcsh mangles POSIX sh constructs
+# (`;` chains, `||`, `2>&1` redirects) and any `grep -E`/glob pattern containing
+# `|` `(` `)` `[` `$` — exactly what the diagnostic commands below use. Single-quote
+# the whole command into one token so tcsh only sees `/bin/sh -c '<blob>'` and hands
+# the blob to sh for real parsing. Mirrors roundtrip.sh / conftest SmokeVM.ssh_argv.
 ssh_t() {
+    if [ "$#" -eq 1 ]; then
+        _cmd=$1
+    else
+        _cmd=""
+        for _a in "$@"; do
+            _q=$(printf '%s' "$_a" | sed "s/'/'\\\\''/g")
+            _cmd="${_cmd:+$_cmd }'${_q}'"
+        done
+    fi
+    _sq="'$(printf '%s' "$_cmd" | sed "s/'/'\\\\''/g")'"
     # SC2086: SSH_OPTS is a deliberate word-split option list.
-    # SC2029: callers pass literal remote-command strings — client-side
-    # expansion of "$@" into the remote command is intended.
-    # shellcheck disable=SC2086,SC2029
-    ssh ${SSH_OPTS} "$SSH_TARGET" "$@"
+    # shellcheck disable=SC2086
+    ssh ${SSH_OPTS} "$SSH_TARGET" /bin/sh -c "$_sq"
 }
 
 REMOTE="/tmp/$(basename "$PKGFILE")"

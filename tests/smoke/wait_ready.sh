@@ -89,6 +89,10 @@ while :; do
     fi
 
     SSH_READY=0
+    # The probe is a bare `true` ON PURPOSE: pfSense root's login shell is tcsh, which
+    # sshd uses to parse the remote command, and tcsh mangles POSIX-sh syntax. `true` has
+    # no metacharacters so it is tcsh-safe; if this ever needs a richer command, wrap it in
+    # `/bin/sh -c '<single-quoted blob>'` (see scripts/install-pkg.sh / tests/smoke/roundtrip.sh).
     # shellcheck disable=SC2086
     if "$SSH" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
         SSH_READY=1
