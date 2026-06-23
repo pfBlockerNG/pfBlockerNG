@@ -928,7 +928,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
     try:
         # BEFORE: no auto VIP yet, and the name is not blocked to the auto address.
         assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == "", (
-            "pfB_AUTO_VIP_v4 present before auto-create was ever enabled"
+            "pfB_AUTO_VIP_v4 present before auto-create was ever enabled" + f"\n{h.fwobj_state_snapshot(vm)}"
         )
         pre = h.dns_probe_client(client_vm, domain, "A")
         assert pre.records, f"{domain} did not resolve before listing: {pre}"
@@ -940,6 +940,7 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
         with h.CaseContext(vm, spec, scope="update"):
             assert h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4) == h.AUTO_VIP_IP4, (
                 f"auto VIP not created at {h.AUTO_VIP_IP4}: got {h.marked_vip_subnet(vm, h.AUTO_VIP_DESCR_V4)!r}"
+                + f"\n{h.fwobj_state_snapshot(vm)}"
             )
             assert h.vip_alias_live(vm, h.AUTO_VIP_IP4), f"auto VIP {h.AUTO_VIP_IP4} not live on lo0 (ifconfig)"
             assert h.dnsvip4_address(vm) == h.AUTO_VIP_IP4, (
