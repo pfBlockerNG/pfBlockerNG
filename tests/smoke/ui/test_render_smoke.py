@@ -370,12 +370,12 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
 
 
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The ADR-22 'Lenient feed parsing' toggle renders cleanly on the DNSBL page — so a
+    """The ADR-22 'Lenient Feed Parsing' toggle renders cleanly on the DNSBL page — so a
     regression that drops or breaks the field is caught at the render tier (not only by the
     feed-parsing smoke).
 
     Asserts the page passes the clean-render oracle AND that the POST field name
-    (``pfb_dnsbl_lenient``) and its 'Lenient feed parsing' label are present in the body.
+    (``pfb_dnsbl_lenient``) and its 'Lenient Feed Parsing' label are present in the body.
     ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
@@ -385,7 +385,7 @@ def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: 
     body = resp.text
     for needle in (
         'name="pfb_dnsbl_lenient"',
-        "Lenient feed parsing",
+        "Lenient Feed Parsing",
     ):
         assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
 
