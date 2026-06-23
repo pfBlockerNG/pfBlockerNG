@@ -1,6 +1,6 @@
 # ADR-37: Optional firewall BLOCK of DNS-over-TLS and DNS-over-QUIC (port 853)
 
-- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
+- **Status:** **Implemented** (2026-06-23) — see the implementation note below.
 - **Date:** 2026-06-20
 - **Branch:** `adr/37-dot-doq-block` (off `devel`)
 - **Folds in maintainer's working config** (config.xml filter "Block DNS-over-TLS (DoT)" —
@@ -17,6 +17,14 @@
   ownership-by-descr-marker) must be in place before Phase 2 of this ADR.
 - **Sibling of:** ADR-36 (DNS Redirection) — same UI page, same interface-selector pattern,
   same PfbConfig approach; keep consistent.
+
+> **Implementation note (2026-06-23, issue #476).** The shipped DoT/DoQ block rule is built,
+> reconciled, and removed **inline in `pfblockerng.inc`** (`sync_package_pfblockerng()`), NOT
+> through the ADR-35 `pfb_fwobj_*` seam: that generic framework was retired and
+> `pfblockerng_fwobj.inc` / `pfblockerng_dns_bypass.inc` were deleted (#476). It ships as a single
+> `inet46` `filter/rule` per interface, carrying a deterministic managed-rule tracker so the GUI can
+> manage it and change-detection doesn't churn. The "Depends on: ADR-35" and `pfblockerng_fwobj.inc`
+> references above are historical; the object-shape decisions in §2 still hold and are what ships.
 
 ## 1. Context
 

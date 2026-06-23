@@ -1,6 +1,6 @@
 # ADR-36: Optional NAT DNS-redirection rule set (DNS hijack)
 
-- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
+- **Status:** **Implemented** (2026-06-23) — see the implementation note below.
 - **Date:** 2026-06-20
 - **Branch:** `adr/36-dns-redirection` (off `devel`)
 - **Folds in maintainer's working config** (config.xml NAT "Redirect DNS IPv4/IPv6" — ground
@@ -15,6 +15,15 @@
 - **Depends on:** ADR-35 (Managed Firewall Objects) — the ADR-35 seam
   (`pfb_fwobj_register` / `pfb_fwobj_find` / `pfb_fwobj_remove` / `pfb_fwobj_sweep`,
   ownership-by-descr-marker) must be in place before Phase 2 of this ADR.
+
+> **Implementation note (2026-06-23, issue #476).** The shipped redirect NAT is built, reconciled,
+> and removed **inline in `pfblockerng.inc`** (`sync_package_pfblockerng()`), NOT through the ADR-35
+> `pfb_fwobj_*` seam: that generic framework was retired and `pfblockerng_fwobj.inc` /
+> `pfblockerng_dns_bypass.inc` were deleted (#476). One NAT rdr per interface × family carries
+> `associated-rule-id => 'pass'`, so pfSense emits the inline `rdr pass` and owns the companion
+> firewall rule — no hand-rolled or separately-tracked filter rule. The "Depends on: ADR-35" and
+> `pfblockerng_fwobj.inc` references above are historical; the object-shape decisions in §2 still
+> hold and are what ships.
 
 ## 1. Context
 

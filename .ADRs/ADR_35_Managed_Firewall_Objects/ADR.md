@@ -1,6 +1,7 @@
 # ADR-35: Unify ownership + teardown of pfBlockerNG-managed firewall objects
 
-- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)
+- **Status:** **Superseded** (2026-06-23, issue #476) — the generic `pfb_fwobj_*` framework this
+  ADR introduced was retired; see the note below. Decision history retained.
 - **Date:** 2026-06-20
 - **Branch:** `adr/35-managed-firewall-objects` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):** new `src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc` (ownership +
@@ -11,6 +12,19 @@
 - **Test suite:** `tests/php/` (PHPUnit, off-appliance), `tests/smoke/` (live-VM, ADR-04)
 - **Enables:** ADR-36 (DNS Redirection NAT), ADR-37 (DoT/DoQ port block) — both register their
   rules through the seam this ADR establishes.
+
+> **Superseded (2026-06-23, issue #476).** The generic ownership/registration/sweep framework this
+> ADR introduced — `pfb_fwobj_register` / `_find` / `_remove` / `_sweep` / `_init_*_registrations`,
+> in `pfblockerng_fwobj.inc` + `pfblockerng_dns_bypass.inc` — was **retired**. In practice the
+> indirection cost more than it gained and contributed to several live-VM bugs (most visibly the
+> DNS-redirect rule never rendering into live pf). Each managed firewall object is now built and
+> torn down **directly in its own flow** inside `pfblockerng.inc`: the DNSBL VIP/NAT as before, the
+> DNS-redirect NAT with `associated-rule-id => 'pass'` (pfSense owns the companion filter rule), and
+> the DoT/DoQ block as a single `inet46` filter rule. Both `.inc` files are deleted (with the
+> matching FreeBSD-ports `pkg-plist` + Makefile removal on `pfblockerng/use-github`). The ADR's
+> *goal* — consistent ownership-by-`descr`-marker and teardown on disable/uninstall — still holds;
+> only the shared-framework *mechanism* was dropped in favour of per-feature code. Everything below
+> is retained as the original decision record.
 
 ## 1. Context
 
