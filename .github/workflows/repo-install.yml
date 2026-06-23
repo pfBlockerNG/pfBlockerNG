@@ -1,4 +1,4 @@
-name: Repo install (ADR-17, live pfSense VM)
+name: Repo install (live pfSense VM)
 
 # ADR-17 — the release -> repository -> install flow, validated on the live ADR-04
 # pfSense VM. This is DISTINCT from the smoke suite (Smoke / ADR-04): the smoke

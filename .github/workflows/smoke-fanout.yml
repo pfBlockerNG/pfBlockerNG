@@ -1,4 +1,4 @@
-name: Smoke Fan-out (all ci:true legs, ADR-09 P6 / ADR-24)
+name: Smoke fan-out (all CI legs, live pfSense VM)
 
 # Fan the ADR-04 smoke suite across every ci:true image in parallel — CE and
 # Plus alike (ADR-24). Each leg carries its own image_name + mac from the matrix;

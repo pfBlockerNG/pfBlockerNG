@@ -1,4 +1,4 @@
-name: Smoke (pfSense VM, ADR-04)
+name: Smoke (live pfSense VM)
 
 # End-to-end smoke harness (ADR-04): boot a real pfSense CE VM under KVM,
 # install the branch-under-test .pkg, and run the `pytest -m smoke` matrix
@@ -212,7 +212,7 @@ jobs:
           # Harmless for the default `smoke` marker (the helper just isn't called).
           sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv zstd
 
-      - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the ADR-20 variant topology)
+      - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the variant topology)
         # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
         # ci-metadata version matrix (no hardcoded CE/Plus). Resolve it HERE — at job start,
         # while egress is open — and export it. The test reads SMOKE_MATRIX_JSON; without it

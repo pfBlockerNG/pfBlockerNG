@@ -1,4 +1,4 @@
-name: Build pfSense CE image (ADR-04 P2)
+name: Build pfSense CE smoke image
 
 # Publish a version-tagged pfSense CE qcow2 to PRIVATE GHCR via oras, then
 # VERIFY the published image passes the Phase-1 round-trip. One output contract:

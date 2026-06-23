@@ -1,4 +1,4 @@
-name: CI image refresh (ADR-09 P5)
+name: Refresh CE smoke image
 
 # Upgrade a published pfSense CE GHCR image to a new CE release and publish the
 # result. Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST

@@ -316,7 +316,7 @@ jobs:
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
   php-codesniffer:
-    name: PHPCS PFBL-01 RequirePfbFilter sniff / PHP ${{ matrix.php-version }}
+    name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
 
@@ -341,8 +341,7 @@ jobs:
 
       - name: Run PHPCS
         # Config auto-discovered from phpcs.xml.dist: the custom PfBlockerNG standard
-        # (the RequirePfbFilter sniff) over the in-scope package include.
-        # PFBL-01 Requirement 4 — the mechanical enforcement of the filter contract.
+        # (RequirePfbFilter + UppercaseBooleanLiteral + RequireConfigGateway) over src/.
         run: vendor/bin/phpcs
 
   php-unit:
@@ -448,12 +447,12 @@ jobs:
         # the RAM kill-gate live in CI.
         run: pip install pympler
 
-      - name: ReDoS / regex-latency kill-gate (ADR-07)
+      - name: ReDoS / regex-latency kill-gate
         # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
         # first-hit). No `|| true` — the exit code IS the gate.
         run: python benchmarks/spike_adr07_regex.py
 
-      - name: Build init-time / peak-RAM kill-gate (ADR-06)
+      - name: Build init-time / peak-RAM kill-gate
         # Non-zero exit on NO-GO (build seconds / retained B/entry) at the default
         # 1M-entry un-pruned corpus.
         run: python benchmarks/spike_adr06_build.py
