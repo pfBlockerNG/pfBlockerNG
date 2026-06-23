@@ -4,9 +4,10 @@
   "lifecycle_policy": {
     "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
     "drop_ce": "Drop the oldest CE entry only when the newest CE goes GA. The supported window is always (previous GA CE + current GA CE), transiently +1 during an active beta.",
-    "plus": "Plus runs in CI from a PRIVATE, licensed GHCR image (ghcr.io/pfblockerng/pfsense-plus). To enable: set ci=true + image_name=pfsense-plus. The VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed to) comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets, NEVER this matrix; the smoke harness redacts that identity from the uploaded diagnostics. Image refresh is MANUAL (image-refresh.yml is CE-only) — republish via scripts/image-publish.sh (ADR-24).",
+    "plus": "Plus runs in CI from a PRIVATE, licensed GHCR image (ghcr.io/pfblockerng/pfsense-plus). To enable: set ci=true + image_name=pfsense-plus. The VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed to) comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets, NEVER this matrix; the smoke harness redacts that identity from the uploaded diagnostics. Image refresh covers CE AND Plus (image-refresh.yml is a CE+Plus matrix gated per variant on upgrade.available); scripts/image-publish.sh remains the manual fallback (gate failure, or the initial Plus image seed) (ADR-24).",
     "arm": "ARM (aarch64) is Plus-only (Netgate ARM appliances; pfSense CE is amd64-only). Add an entry with arch='aarch64' to produce a FreeBSD:<major>:aarch64 .pkg alongside the amd64 build (the build keys on (freebsd_major, arch)). There is no aarch64 CI image yet, so an aarch64 entry MUST be build-only (ci=false); promote to ci=true only once a licensed aarch64 Plus smoke image is baked (issue #199).",
     "eol_route_only": "ADR-27 Part 2: when a pfSense version is EOL'd but still has installs in the field, set role='route-only' (instead of dropping the entry) + ci=false + last_tag=<the GitHub Release tag holding its last .pkg>. It is then no longer built or smoked, but its last .pkg stays served from a frozen catalog so existing installs keep receiving it; the reader keeps it out of --print-build/-ci/-test and only in --print-route. Absent role = 'build' (normal). No route-only entry exists yet — this is forward-looking.",
+    "image_upgrade": "Set upgrade.available=true on an entry to make image-refresh.yml (Upgrade pfSense smoke images) upgrade that variant's published GHCR image. 'available' does NOT mean 'this version is released' — it means a NEWER public build (pre-release/GA/patch) exists than the image we currently publish for this floating tag; set it when such a build appears and reset to false once the refresh has published it (so most days the refresh is a no-op). Optional sub-fields: upgrade.branch = a pfSense update-branch name (from pkg_list_repos()) to switch to for a pre-release/development build (omit = stay on the configured stable branch); upgrade.target = informational target version; upgrade.from = source floating tag to upgrade FROM (defaults to this entry's own tag = self-replace; set to the prior Major.Minor only when bootstrapping a brand-new image). Absent block or available=false => the variant is skipped.",
     "ci_metadata_pr": "Changes to this file should be made via a PR against ci-metadata (branch-protected) so there is a git audit trail (diff/blame/rollback) without touching main/devel.",
     "future_migration": "If CI infrastructure grows, this file can move to a dedicated public pfBlockerNG-ci-infra repo (read via raw URL, no token) — a mechanical swap."
   },
@@ -20,7 +21,8 @@
       "py_flavor": "py311",
       "variant": "CE",
       "status": "active",
-      "ci": true
+      "ci": true,
+      "upgrade": { "available": false }
     },
     {
       "pfsense_version": "26.03",
@@ -32,7 +34,8 @@
       "variant": "Plus",
       "status": "active",
       "ci": true,
-      "image_name": "pfsense-plus"
+      "image_name": "pfsense-plus",
+      "upgrade": { "available": false }
     },
     {
       "pfsense_version": "26.03",
@@ -44,7 +47,8 @@
       "variant": "Plus",
       "status": "active",
       "ci": false,
-      "arch": "aarch64"
+      "arch": "aarch64",
+      "upgrade": { "available": false }
     }
   ]
 }
