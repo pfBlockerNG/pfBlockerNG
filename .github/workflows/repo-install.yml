@@ -8,11 +8,11 @@ name: Repo install (live pfSense VM)
 # cross-repo version precedence favours our build.
 #
 # FANS OUT OVER EVERY ci:true LEG, CE AND PLUS (ADR-24): the self-hosted repo must
-# install on Plus exactly as on CE, so — like smoke-fanout.yml — this reads the
+# install on Plus exactly as on CE, so — like smoke.yml — this reads the
 # ci-metadata CI matrix and runs one repo-install leg per ci:true entry in parallel
 # (fail-fast: false), with an AND-gate that is green only if every leg passed.
 #
-# REUSE, NOT DUPLICATION: each leg calls the smoke harness (smoke.yml as a reusable
+# REUSE, NOT DUPLICATION: each leg calls the smoke harness (smoke-single.yml as a reusable
 # workflow) so the VM boot / image pull / branch-.pkg build / SSH wiring are shared,
 # but selects the `repo` pytest marker (tests/smoke/test_repo_install.py) instead of
 # `smoke`. The `repo` tests are deselected from `-m smoke`, so the smoke gate never
@@ -23,7 +23,7 @@ name: Repo install (live pfSense VM)
 # is GATED — it only proceeds when `devel` actually moved since the previous nightly
 # (no point rebuilding the branch .pkg + booting VMs to re-test unchanged code; the
 # real version push, repo-publish, runs only on release tags). Not an every-PR gate (a
-# live VM under KVM is ~15 min/leg). Secrets + required config are smoke.yml's
+# live VM under KVM is ~15 min/leg). Secrets + required config are smoke-single.yml's
 # (SMOKE_IMAGE_* / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY, plus the Plus-leg SMOKE_PLUS_*
 # identity secrets); `secrets: inherit` forwards them.
 
@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
   schedule:
     # 08:00 UTC nightly — staggered after ui-tests (05), version-tracker (06) and
-    # smoke-fanout (07) so the KVM runs don't pile up. Gated on `devel` having changed.
+    # the smoke fan-out (07) so the KVM runs don't pile up. Gated on `devel` having changed.
     - cron: "0 8 * * *"
 
 permissions:
@@ -92,7 +92,7 @@ jobs:
           fi
 
   # Read the ci:true legs (CE + Plus) from the ci-metadata CI matrix — the SAME source
-  # smoke-fanout.yml fans out over (ADR-24). Emits `ci_matrix` (JSON array) as the
+  # smoke.yml fans out over (ADR-24). Emits `ci_matrix` (JSON array) as the
   # `include` list for the repo-install job's strategy.matrix. ci:false entries are
   # NEVER present; the CI GUARD below hard-fails any ci != true leak (schema fail-safe).
   prepare:
@@ -139,7 +139,7 @@ jobs:
           fi
 
   # One repo-install leg per ci:true entry (CE + Plus), in parallel. Each calls the
-  # ADR-04 smoke workflow (smoke.yml) as a reusable callee with pytest_marker=repo,
+  # ADR-04 smoke workflow (smoke-single.yml) as a reusable callee with pytest_marker=repo,
   # passing the per-leg image ref + ABI/dep target. `fail-fast: false` ensures EVERY
   # leg runs to completion regardless of whether another leg has already failed.
   repo-install:
@@ -151,10 +151,10 @@ jobs:
       fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
-    uses: ./.github/workflows/smoke.yml
+    uses: ./.github/workflows/smoke-single.yml
     with:
       # Per-leg version/name/mac — pfsense_version IS the GHCR floating tag (e.g. "2.8"),
-      # image_name selects the image (Plus = pfsense-plus), mac is the boot MAC (smoke.yml
+      # image_name selects the image (Plus = pfsense-plus), mac is the boot MAC (smoke-single.yml
       # ignores it for a Plus leg and uses the SMOKE_PLUS_MAC secret instead).
       pfsense_version: ${{ matrix.pfsense_version }}
       image_name: ${{ matrix.image_name }}

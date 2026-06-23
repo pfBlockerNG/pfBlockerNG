@@ -139,7 +139,7 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
    version, runs `pfSense-upgrade`, applies the **six-check sanity gate**, and publishes
    the new tag to GHCR **only on gate pass** (fail-closed — a bad image is never
    published). One dispatch per `ci: true` CE entry.
-3. **`smoke-fanout.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
+3. **`smoke.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
    entries — **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The
    **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
    whole gate red, no partial pass.

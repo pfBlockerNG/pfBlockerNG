@@ -17,7 +17,7 @@ name: Version Tracker
 # │ step triggers OTHER workflows — it does not write to the repo.      │
 # └─────────────────────────────────────────────────────────────────────┘
 #
-# Phase 5 (image-refresh.yml) and Phase 6 (smoke-fanout.yml) are wired
+# Phase 5 (image-refresh.yml) and Phase 6 (smoke.yml) are wired
 # here by name.  They do not exist yet on this branch; the trigger is
 # live and will activate as soon as each phase lands.  See HANDOFF at:
 #   .ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt
@@ -96,7 +96,7 @@ jobs:
   #      This workflow is not yet on this branch; the dispatch is wired now and
   #      becomes live when Phase 5 lands.
   #
-  #   c) Triggers the smoke fan-out workflow (smoke-fanout.yml, Phase 6).
+  #   c) Triggers the smoke fan-out workflow (smoke.yml, Phase 6).
   #      Runs the live-VM smoke suite across every ci:true CE image in parallel.
   #      This workflow is not yet on this branch; the dispatch is wired now and
   #      becomes live when Phase 6 lands.
@@ -190,10 +190,10 @@ jobs:
           # ── Iterate over CI matrix (ci:true CE entries only) ───────────────
           # For each CI-eligible entry:
           #   b) Trigger image-refresh.yml (Phase 5) — upgrade-in-place + sanity gate.
-          #   c) Trigger smoke-fanout.yml (Phase 6) — live-VM smoke across all CE images.
+          #   c) Trigger smoke.yml (Phase 6) — live-VM smoke across all CE images.
           #
           # NOTE ON FORWARD REFERENCES:
-          #   image-refresh.yml and smoke-fanout.yml do NOT yet exist on this branch.
+          #   image-refresh.yml and smoke.yml do NOT yet exist on this branch.
           #   They will be created by Phases 5 and 6 respectively.  The dispatch calls
           #   below are wired now; they become live when those phases land.
           #   The exact workflow names and their expected dispatch inputs are documented
@@ -233,24 +233,24 @@ jobs:
           fi
 
           echo ""
-          echo "--- Step C: CI smoke fan-out (smoke-fanout.yml, Phase 6) ---"
+          echo "--- Step C: CI smoke fan-out (smoke.yml, Phase 6) ---"
           if [ "$CI_COUNT" -eq 0 ]; then
             echo "  [skip] No ci:true CE entries — smoke fan-out not triggered."
           else
             if [ "$DRY_RUN" = "true" ]; then
-              echo "  [DRY-RUN] WOULD dispatch smoke-fanout.yml with ci_matrix:"
+              echo "  [DRY-RUN] WOULD dispatch smoke.yml with ci_matrix:"
               printf '%s\n' "$CI_MATRIX" | jq .
             else
-              echo "  [TRIGGER] smoke-fanout.yml (all ci:true CE entries)"
-              # Phase 6 contract: smoke-fanout.yml accepts no explicit version inputs —
+              echo "  [TRIGGER] smoke.yml (all ci:true CE entries)"
+              # Phase 6 contract: smoke.yml accepts no explicit version inputs —
               # it reads the ci_matrix from the version-matrix reader itself.
               # The tracker triggers it once; the fan-out workflow reads and expands
               # the matrix internally into parallel strategy.matrix legs.
               # See RESULTS/04_Results.txt for the exact expected input contract.
-              gh workflow run smoke-fanout.yml \
+              gh workflow run smoke.yml \
                 --repo "$REPO" \
                 --ref "$REF" \
-                || echo "  ::warning::Dispatch of smoke-fanout.yml failed — Phase 6 may not yet be landed"
+                || echo "  ::warning::Dispatch of smoke.yml failed — Phase 6 may not yet be landed"
             fi
           fi
 

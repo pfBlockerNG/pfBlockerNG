@@ -19,7 +19,7 @@ Both resolver modes are covered (the fixture is parametrized):
 * **forwarding** — Unbound forwards to ``10.10.0.2`` (SLIRP host alias → stub).
 
 All heavy setup (Unbound reconfigure + pfBlockerNG reloads) lives in the fixture
-so the 30 s per-test-body cap (``smoke.yml: timeout_func_only``) does not bite.
+so the 30 s per-test-body cap (``smoke-single.yml: timeout_func_only``) does not bite.
 
 This replaces the former live-DNS dependency on real ``duckduckgo.com`` /
 ``pixabay.com`` redirects, which drifted and made the test flaky (issue #238).

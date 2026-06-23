@@ -795,7 +795,7 @@ so the normal unit run is unaffected.
 
 ### Running it in CI
 
-The **default full run is the fan-out**: `.github/workflows/smoke-fanout.yml`
+The **default full run is the fan-out**: `.github/workflows/smoke.yml`
 runs the ADR-04 suite across **every `ci:true` image — CE *and* Plus** (ADR-24) —
 in parallel (`fail-fast: false`), gated by the `all-smoke-passed` AND-check. It
 takes **no inputs** (it reads the CI matrix from the `ci-metadata` branch), is the
@@ -804,7 +804,7 @@ a version bump (plus a nightly `schedule`). This is the canonical "run the smoke
 suite" command:
 
 ```sh
-gh workflow run smoke-fanout.yml                  # all ci:true legs (CE + Plus) — the default
+gh workflow run smoke.yml                  # all ci:true legs (CE + Plus) — the default
 ```
 
 Both it and the single-leg callee are **gated** — `workflow_dispatch` +
@@ -813,12 +813,12 @@ per-run wall-time has not been measured against §7's ~20 min/job budget.
 
 For a **narrow, single-leg run** — one image, or a non-default `pytest_marker` the
 fan-out can't select (e.g. the ADR-17 `repo` flow) — drive the reusable callee
-`.github/workflows/smoke.yml` directly (it is also what the fan-out invokes per leg):
+`.github/workflows/smoke-single.yml` directly (it is also what the fan-out invokes per leg):
 
 ```sh
-gh workflow run smoke.yml                          # single CE leg (composes the ref from the SMOKE_IMAGE_* vars)
-gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
-gh workflow run smoke.yml -f pytest_marker=repo    # ADR-17 repo-install flow (single leg)
+gh workflow run smoke-single.yml                          # single CE leg (composes the ref from the SMOKE_IMAGE_* vars)
+gh workflow run smoke-single.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+gh workflow run smoke-single.yml -f pytest_marker=repo    # ADR-17 repo-install flow (single leg)
 ```
 
 The ADR-17 repository-install flow has its **own** fan-out too —
@@ -890,7 +890,7 @@ private qcow2 — the MAC/SMBIOS uuid must stay constant, ADR-24). The seed and 
 snapshot are retained as immutable GHCR tags; the GHCR package is **private**.
 
 **Step 3 — Run the smoke fan-out.**
-Dispatch `.github/workflows/smoke-fanout.yml` (no inputs — it reads the CI matrix
+Dispatch `.github/workflows/smoke.yml` (no inputs — it reads the CI matrix
 itself). The fan-out runs the ADR-04 smoke suite across **all** `ci: true` images —
 **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The `all-smoke-passed`
 AND-gate fails if any single leg fails — one red leg makes the whole gate red, no partial pass.

@@ -2,7 +2,7 @@
 
 Dev-only notes for running `tests/smoke/` (ADR-04) on a plain Debian/KVM box, outside
 GitHub Actions. These are the things that cost real time to (re)learn; the CI workflow
-(`.github/workflows/smoke.yml`) is the source of truth for the canonical invocation.
+(`.github/workflows/smoke-single.yml`) is the source of truth for the canonical invocation.
 
 ## Prerequisites
 

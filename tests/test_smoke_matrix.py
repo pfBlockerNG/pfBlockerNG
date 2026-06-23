@@ -130,7 +130,7 @@ def test_topology_skips_when_matrix_absent(monkeypatch: pytest.MonkeyPatch) -> N
         mx.matrix_variants()
 
 
-# Build-only matrix (the shape smoke.yml always injects via --print-build, which excludes
+# Build-only matrix (the shape smoke-single.yml always injects via --print-build, which excludes
 # route-only entries). This documents how route-only entries are kept out of the topology:
 # they never reach SMOKE_MATRIX_JSON because --print-build filters them at the reader level.
 # The _matrix.py:build_matrix() function trusts the injected JSON, so CI-injected
@@ -144,7 +144,7 @@ _BUILD_ONLY_MATRIX = (
 def test_smoke_topology_excludes_route_only_via_build_matrix_injection(monkeypatch: pytest.MonkeyPatch) -> None:
     """The smoke topology never produces a variant for a route-only pfSense version.
 
-    Protection mechanism: smoke.yml injects SMOKE_MATRIX_JSON from
+    Protection mechanism: smoke-single.yml injects SMOKE_MATRIX_JSON from
     ``read-version-matrix.sh --print-build``, which excludes ``role=route-only``
     entries. _matrix.py:build_matrix() reads the injected JSON as-is. So the
     topology never sees route-only entries — the exclusion is at the reader level.

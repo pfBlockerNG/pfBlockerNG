@@ -1258,7 +1258,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 #                                                                              #
 # Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).  #
 # Deselected from default `python -m pytest` — dispatched via:                #
-#     gh workflow run smoke.yml -f pytest_marker=repo                          #
+#     gh workflow run smoke-single.yml -f pytest_marker=repo                          #
 # =========================================================================== #
 
 # Base dir for ADR-20 variant catalogs on the guest (isolated from the ADR-17 spike dir).
@@ -1721,7 +1721,7 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
 # 1 degrades to docs-only (raw `pkg add` path only).                           #
 #                                                                               #
 # Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).   #
-# Dispatched via:  gh workflow run smoke.yml -f pytest_marker=repo             #
+# Dispatched via:  gh workflow run smoke-single.yml -f pytest_marker=repo             #
 # =========================================================================== #
 
 
@@ -1896,7 +1896,7 @@ def test_release_rollback_to_retained_older_version(repo_vm: SmokeVM, tmp_path: 
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark = pytest.mark.repo).   #
 # Deselected from default `python -m pytest` — dispatched via:                #
-#     gh workflow run smoke.yml -f pytest_marker=repo                          #
+#     gh workflow run smoke-single.yml -f pytest_marker=repo                          #
 # =========================================================================== #
 
 
@@ -2105,7 +2105,7 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 # catalog without modifying the production script. NO pkg call, NO network.   #
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark).                      #
-# Dispatch: gh workflow run smoke.yml -f pytest_marker=repo                   #
+# Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo                   #
 # =========================================================================== #
 
 # Working directory on the guest for the generator-hook test.

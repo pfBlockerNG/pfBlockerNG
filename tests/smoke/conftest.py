@@ -1220,7 +1220,7 @@ def expected_control_answer(env: Mapping[str, str] = os.environ) -> tuple[str, s
     baked image: defaults match what RESULTS/02 records as baked.
     """
     # Empty/absent SMOKE_CONTROL_NAME => no baked control => callers skip. Use
-    # `or` (not get's default): smoke.yml SETS the var to "" when the secret/var
+    # `or` (not get's default): smoke-single.yml SETS the var to "" when the secret/var
     # is unset, AND a truly-absent var must also skip — a hardcoded default name
     # would make the optional probe FAIL (instead of skip) on a local run with no
     # baked control. ip defaults only matter when a name IS configured.

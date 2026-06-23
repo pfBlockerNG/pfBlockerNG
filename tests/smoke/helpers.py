@@ -88,7 +88,7 @@ CFG_UNBOUND_HOSTS = "unbound/hosts"
 
 # The configured DNSBL VIP a "vip" block answers with == the IPv4 the harness-
 # injected lo0 IP-Alias VIP carries (ensure_dnsbl_vip). Env-overridable, but
-# `or` (not get's default): smoke.yml SETS this var to "" when the secret/var is
+# `or` (not get's default): smoke-single.yml SETS this var to "" when the secret/var is
 # unset, and get(key, default) returns "" for a set-but-empty var — which left
 # the VIP subnet blank ("invalid IPv4 VIP"). Treat empty as unset.
 DEFAULT_DNSBL_VIP4 = os.environ.get("SMOKE_DNSBL_VIP4") or "10.10.10.1"
@@ -3371,7 +3371,7 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
     not that the read happened to win/lose the race.
 
     Default ``timeout`` is deliberately well under the smoke harness's 30s per-test
-    body cap (``smoke.yml`` ``--timeout=30 --timeout-method=signal``,
+    body cap (``smoke-single.yml`` ``--timeout=30 --timeout-method=signal``,
     ``timeout_func_only=true``): the test body has already spent time in ``reload()``,
     so a 30s poll here would trip the body timeout FIRST and kill the test before its
     assertion (and the ``pf_state_dump`` it prints) can run — turning a real "rule did
@@ -3577,7 +3577,7 @@ def _build_value_redact_shell(dir_ref: str, redact_values_set: list[str]) -> tup
 # the diagnostics bundle (the MAC lands in ifconfig.txt, the uuid in dmesg.txt,
 # both can surface in /var/log), so a live Plus run would otherwise LEAK them in an
 # uploaded artifact. The set is supplied newline-/comma-joined via
-# SMOKE_REDACT_VALUES (smoke.yml builds it for the Plus leg only) plus the live
+# SMOKE_REDACT_VALUES (smoke-single.yml builds it for the Plus leg only) plus the live
 # in-guest serial; a CE leg sets it empty -> the parsed set is empty -> every
 # redactor below is a strict no-op and the CE bundle stays byte-identical.
 

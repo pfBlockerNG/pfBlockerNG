@@ -22,12 +22,12 @@ name: Refresh CE smoke image
 #   pfblockerng.php update, and digs the sanity control record — purely informational.
 #   Because it runs on a discarded overlay AFTER publish and with continue-on-error:
 #   true, it CANNOT pollute the published image and CANNOT fail the refresh job.
-#   The authoritative pfBlockerNG validation is the smoke fan-out (smoke-fanout.yml).
+#   The authoritative pfBlockerNG validation is the smoke fan-out (smoke.yml).
 #
 # FALLBACK: when the health gate fails, use scripts/image-publish.sh (off-runner
 # manual seed) to publish the image for that version.
 #
-# Required secrets/vars (shared with build-image.yml and smoke.yml):
+# Required secrets/vars (shared with build-image.yml and smoke-single.yml):
 #   SMOKE_GHCR_USER     username for `oras login ghcr.io` (defaults to github.actor)
 #   SMOKE_GHCR_TOKEN    token with write:packages (publish) / read:packages (defaults to GITHUB_TOKEN)
 #   SMOKE_SSH_PRIV_KEY  guest SSH private key baked into the image          (secret)
@@ -162,7 +162,7 @@ jobs:
 
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm; the `runner` user is not in
-        # the kvm group by default. Same fix as build-image.yml / smoke.yml.
+        # the kvm group by default. Same fix as build-image.yml / smoke-single.yml.
         run: |
           set -eu
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -247,7 +247,7 @@ jobs:
       # pfblockerng.php update, and digs the sanity control record.
       # continue-on-error: true + post-publish overlay → can NEVER pollute the
       # published image and can NEVER fail the refresh job.
-      # The authoritative pfBlockerNG validation is smoke-fanout.yml.
+      # The authoritative pfBlockerNG validation is smoke.yml.
       - name: pfBlockerNG smoke (non-blocking)
         continue-on-error: true
         env:

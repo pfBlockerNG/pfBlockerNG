@@ -172,7 +172,7 @@ jobs:
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
         # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. The
-        # canonical fix (same as smoke.yml's KVM jobs): a udev rule
+        # canonical fix (same as smoke-single.yml's KVM jobs): a udev rule
         # making /dev/kvm world-RW, applied in-job.
         run: |
           set -eu

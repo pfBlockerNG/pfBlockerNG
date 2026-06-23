@@ -689,7 +689,7 @@ maintainer smoke.
 
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`
 
-`tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI (`smoke.yml`,
+`tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI (`smoke-single.yml`,
 workflow_dispatch) and asserts pfBlockerNG end-to-end. Non-obvious truths, each costly to
 relearn:
 
@@ -859,7 +859,7 @@ When the min CE version changes, also:
    from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` (+ optional `SMOKE_PLUS_NDI`) secrets —
    **never** the matrix — and the harness redacts it from diagnostics. Adding the entry + letting
    **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
-   `build-pkg-linux.yml`, `image-refresh.yml` (CE only — see step 2), `smoke-fanout.yml`
+   `build-pkg-linux.yml`, `image-refresh.yml` (CE only — see step 2), `smoke.yml`
    automatically — **no workflow YAML edit needed**.
 2. **Refresh the CE smoke image** (ADR-04 + ADR-09) — dispatch `image-refresh.yml` with
    `pfsense_version` + `freebsd_version` from the new entry. It runs `scripts/image-upgrade.sh
@@ -875,7 +875,7 @@ When the min CE version changes, also:
    `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`. (ADR-09 supersedes ADR-04 §2's "re-baseline on
    a major jump": `image-refresh.yml` handles all jumps via upgrade-in-place; a fresh re-seed is
    triggered only by a gate failure. Reconciling the ADR-04 §2 text is a tracked follow-up.)
-3. **Run the smoke fan-out** — dispatch `smoke-fanout.yml` (no inputs; reads the CI matrix).
+3. **Run the smoke fan-out** — dispatch `smoke.yml` (no inputs; reads the CI matrix).
    Runs the ADR-04 suite against **all** `ci: true` entries — **CE and Plus** (ADR-24) — in
    parallel (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if **any** leg fails.
    version-tracker triggers it daily; dispatch manually to verify a new image.
@@ -983,11 +983,11 @@ consequence: `docs/misc/architecture-notes.md` → "Self-hosted pkg distribution
   accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
   catalog, and the opposite-edition guard) is **derived entirely from the version matrix** — never
   hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
-  reads `SMOKE_MATRIX_JSON` (smoke.yml injects `read-version-matrix.sh --print-build` at job start,
+  reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-build` at job start,
   egress open), falls back to running that script, and SKIPs the topology cases when neither is
   available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it; adding a
   pfSense version needs no edit here. (`scripts/install-from-repo.sh` likewise derives its
-  `py3xx-*` deps from the matrix via the box's ABI.) Dispatch: `gh workflow run smoke.yml -f
+  `py3xx-*` deps from the matrix via the box's ABI.) Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
   `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pfblockerng.github.io`
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default

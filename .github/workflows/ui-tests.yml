@@ -9,10 +9,10 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 #   tier=browser     -> pytest -m ui_browser  (Tier B: headless Playwright/Chromium + screenshots)
 #   tier=all         -> render + functional + browser (one job per tier)
 #
-# This MIRRORS smoke.yml's scaffolding exactly — the same build-pkg-linux.yml
+# This MIRRORS smoke-single.yml's scaffolding exactly — the same build-pkg-linux.yml
 # build, the GHCR image pull + content-keyed (digest) cache, the KVM-perms udev
 # fix, the SSH-key/secret handling, and the diagnostics upload `if: always()`.
-# It is the ADR-14 sibling of smoke.yml; the assertions live in tests/smoke/ui/.
+# It is the ADR-14 sibling of smoke-single.yml; the assertions live in tests/smoke/ui/.
 #
 # TIERING (ADR §2):
 #   * Tier A (render) is the cheap/hermetic PR gate — test.yml runs it per-PR on
@@ -31,7 +31,7 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 # a fixed sleep.
 #
 # MATRIX AXIS (ADR-24): the version axis is now read from the ci-metadata CI
-# matrix (read-version-matrix action — the SAME source smoke-fanout.yml fans out
+# matrix (read-version-matrix action — the SAME source smoke.yml fans out
 # over), so the UI tiers run across EVERY ci:true leg (CE + Plus), not a hardcoded
 # CE label. Each leg carries its pfsense_version (the GHCR floating tag),
 # image_name (pfsense-ce / pfsense-plus) and channel; the matrix include is
@@ -40,12 +40,12 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 #
 # PLUS IDENTITY + REDACTION (ADR-24): a non-CE (Plus) leg is LICENSE/NDI-keyed to a
 # SECRET source-VM identity (SMOKE_PLUS_MAC / SMOKE_PLUS_SMBIOS_UUID [/ NDI]); the
-# `ui` job resolves it exactly like smoke.yml (fail-closed, masked), feeds it to
+# `ui` job resolves it exactly like smoke-single.yml (fail-closed, masked), feeds it to
 # pytest, and scrubs the diagnostics before upload. A CE leg uses the public pin
 # and an empty redaction set, so its `ui-diagnostics` artifact is byte-identical to
 # today.
 #
-# Required config (Actions secrets/variables) — same set as smoke.yml, plus the
+# Required config (Actions secrets/variables) — same set as smoke-single.yml, plus the
 # baked admin password the UI tier needs to log in:
 #   SMOKE_IMAGE_REPO/_NAME/_TAG  compose the GHCR ref (variables): the pull ref is
 #                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
@@ -178,7 +178,7 @@ jobs:
           fetch-depth: 0   # need history to detect "commits in the last day" for the schedule guard
 
       # Read the ci:true legs (CE + Plus) from the ci-metadata CI matrix — the
-      # SAME source smoke-fanout.yml fans out over (ADR-24). Each leg carries
+      # SAME source smoke.yml fans out over (ADR-24). Each leg carries
       # pfsense_version, channel, image_name, mac, ci.
       - name: Read CI matrix from ci-metadata
         id: matrix
@@ -297,7 +297,7 @@ jobs:
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
         # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
         # rule making /dev/kvm world-RW fixes it in the same login session.
-        # Identical fix to smoke.yml.
+        # Identical fix to smoke-single.yml.
         run: |
           set -eu
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -318,7 +318,7 @@ jobs:
           # image_ref input (full ref) wins. Otherwise compose from the
           # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars; the per-leg matrix.image_name
           # (pfsense-ce / pfsense-plus) overrides the NAME var and matrix.version
-          # (= pfsense_version) overrides the TAG. Same resolution as smoke.yml.
+          # (= pfsense_version) overrides the TAG. Same resolution as smoke-single.yml.
           INPUT_REF: ${{ inputs.image_ref }}
           MATRIX_VERSION: ${{ matrix.version }}
           MATRIX_IMAGE_NAME: ${{ matrix.image_name }}
@@ -349,7 +349,7 @@ jobs:
       # ci-metadata matrix (the NDI is derived from MAC + uuid, so both are as
       # license-keyed as the MAC). This resolves the effective identity and, for
       # Plus, masks it + emits the diagnostics redaction set. Fail closed if a
-      # non-CE image is selected without those secrets. Mirrors smoke.yml exactly.
+      # non-CE image is selected without those secrets. Mirrors smoke-single.yml exactly.
       - name: Resolve VM identity (MAC + SMBIOS uuid)
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
@@ -393,7 +393,7 @@ jobs:
 
       # Key the image cache on the RESOLVED MANIFEST DIGEST (not the ref string),
       # so a re-push to a moving tag invalidates the cache automatically. Needs a
-      # GHCR login first; it persists to the pull step (same job). Same as smoke.yml.
+      # GHCR login first; it persists to the pull step (same job). Same as smoke-single.yml.
       - name: Resolve image digest (cache key)
         id: digest
         env:
@@ -546,7 +546,7 @@ jobs:
       # uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text file under
       # smoke-diag/ AND test-results/. CE: RESOLVED_REDACT is empty -> no screenshots
       # dropped, no redaction (the artifact is byte-identical to today). The literal
-      # escape mirrors smoke.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
+      # escape mirrors smoke-single.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
       # so a regex-special value is matched literally; the `I` flag is case-insensitive.
       - name: Scrub Plus secret identity from diagnostics (runner side)
         if: always()

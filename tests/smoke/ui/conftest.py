@@ -7,7 +7,7 @@ touches a default ``python -m pytest`` run.
 
 Credentials: the pfSense ``admin`` password is the ADR-04 baked
 ``SMOKE_ADMIN_PASSWORD`` (bcrypt in ``config.xml``, plaintext in the secret).
-It is NOT yet exported to pytest by ``smoke.yml`` (ADR-04 used SSH-key auth and
+It is NOT yet exported to pytest by ``smoke-single.yml`` (ADR-04 used SSH-key auth and
 reachability-only WebUI). :func:`admin_credentials` reads it from the
 environment and SKIPS (not fails) when absent, so a local ``pytest -m ui_render``
 without the secret skips cleanly. Phase 5 wires ``SMOKE_ADMIN_PASSWORD`` (and an

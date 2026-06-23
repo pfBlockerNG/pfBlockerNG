@@ -28,7 +28,7 @@ egress-open wiring, ``build_guest_repo``, ``reversion_pkg``). Needs the booted V
 plus a builder-produced nightly ``.pkg`` (``SMOKE_NIGHTLY_PKG``) and the branch
 ``-devel`` ``.pkg`` (``SMOKE_PKG``); without either it SKIPS cleanly.
 
-Run: ``gh workflow run smoke.yml -f pytest_marker=repo``.
+Run: ``gh workflow run smoke-single.yml -f pytest_marker=repo``.
 """
 
 from __future__ import annotations

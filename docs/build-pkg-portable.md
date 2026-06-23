@@ -327,7 +327,7 @@ python3 scripts/build-pkg-portable.py \
   --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out
 ```
 
-It publishes the same `pfBlockerNG-pkg` artifact (`out/*.pkg`) that `smoke.yml`
+It publishes the same `pfBlockerNG-pkg` artifact (`out/*.pkg`) that `smoke-single.yml`
 installs, with no FreeBSD VM / KVM / image cache — so it is far faster than the
 FreeBSD build it replaced. Because `pkg add` checks a dependency is *present* (not
 its version), the portable `.pkg` installs on the baked-deps smoke image
