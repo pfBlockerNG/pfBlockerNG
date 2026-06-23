@@ -371,7 +371,7 @@ jobs:
   # release. Re-enable by removing `if: false` here AND re-adding `ui-suite` to
   # the `release` job's `needs:` below, once the harness runs green.
   ui-suite:
-    name: UI suite (live pfSense VM)
+    name: UI fan-out (all CI legs, live pfSense VM)
     if: false
     uses: ./.github/workflows/ui-tests.yml
     with:

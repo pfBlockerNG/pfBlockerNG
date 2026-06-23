@@ -1,8 +1,10 @@
 name: UI tests fan-out (all CI legs, live pfSense VM)
 
-# Reusable, matrix-parametric Web-UI test harness (ADR-14). Boots the SAME
-# ADR-04 smoke pfSense CE VM under KVM, installs the branch-under-test .pkg, and
-# runs a SELECTED Web-UI tier against the live webConfigurator:
+# Web-UI test FAN-OUT (ADR-14): a reusable, matrix-parametric harness that, by
+# default, fans out across EVERY ci:true leg (CE + Plus) — one job per (tier ×
+# leg). Each leg boots the SAME ADR-04 smoke pfSense VM under KVM, installs the
+# branch-under-test .pkg, and runs a SELECTED Web-UI tier against the live
+# webConfigurator:
 #
 #   tier=render      -> pytest -m ui_render   (Tier A: authenticated HTTP render-smoke; hermetic, cheap)
 #   tier=functional  -> pytest -m ui_e2e      (Tier B: CSRF-POST flows, effective-state oracle)

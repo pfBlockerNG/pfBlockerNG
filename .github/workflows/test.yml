@@ -472,7 +472,7 @@ jobs:
   # FUTURE: auto-run + block Tier A (render) on PHP/JS PRs without a label, once
   # its reliability/speed warrant it — tracked as a follow-up issue.
   ui-suite:
-    name: UI suite (live pfSense VM)
+    name: UI fan-out (all CI legs, live pfSense VM)
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ui-tests')
     uses: ./.github/workflows/ui-tests.yml
     with:
