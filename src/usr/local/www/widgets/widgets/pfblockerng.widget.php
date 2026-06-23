@@ -253,6 +253,22 @@ function pfbsort(&$array, $subkey, $sort_ascending) {
 }
 
 
+// Decide whether a pfB alias must be hidden from the dashboard widget.
+//
+//   - pfB_DNSBL_VIPs       : the DNSBL sinkhole VIP table, not a feed list.
+//   - pfB_<Type>_Aggregated_v4/v6 : the ADR-11 aggregate ("Uber") aliases. They are
+//     internal Native reference IP-sets (deduped unions, no firewall rule of their own)
+//     consumed by the aggregate feature / HAProxy input, not user-facing block/permit
+//     lists -- listing them clutters the widget and double-counts entries already shown
+//     by their source lists. <Type> is exactly Deny|Permit|Match|Native; GeoIP folds into
+//     those action types, so there is no separate pfB_Geo_Aggregated alias to match.
+//
+// Hides from display only -- the aliases / pf tables stay wired and functional.
+function pfb_widget_alias_hidden($pfb_alias) {
+	return empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs' ||
+	    preg_match('/^pfB_(Deny|Permit|Match|Native)_Aggregated_v[46]$/', $pfb_alias) === 1;
+}
+
 // Collect all pfBlockerNG statistics
 function pfBlockerNG_update_table() {
 	global $pfb;
@@ -272,7 +288,7 @@ function pfBlockerNG_update_table() {
 			$line = trim(str_replace(array( '[', ']' ), '', $line));
 			if (substr($line, 0, 1) == '-') {
 				$pfb_alias = trim(strstr($line, 'pfB', FALSE));
-				if (empty($pfb_alias) || $pfb_alias == 'pfB_DNSBL_VIPs') {
+				if (pfb_widget_alias_hidden($pfb_alias)) {
 					unset($pfb_alias);
 					continue;
 				}
