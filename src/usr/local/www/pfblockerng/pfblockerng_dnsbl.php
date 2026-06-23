@@ -2746,7 +2746,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_lenient',
-	gettext('Lenient feed parsing'),
+	gettext('Lenient Feed Parsing'),
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_lenient']) === PfbToggle::On,
 	'on'
@@ -2756,11 +2756,11 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_noaaaa',
-	gettext('no AAAA'),
+	gettext('no-AAAA'),
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_noaaaa']) === PfbToggle::On,
 	'on'
-))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no AAAA List below.');
+))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no-AAAA List below.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_gp',
@@ -2943,10 +2943,10 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-$noaaaa_text = 'List of no AAAA domains to block the (IPv6) AAAA DNS Resolution.<br /><br />
+$noaaaa_text = 'List of no-AAAA domains to block the (IPv6) AAAA DNS Resolution.<br /><br />
 		Enter a single domain per line.<br />
-		Prefix domain with a "." to apply wildcard no AAAA to all Sub-Domains. &emsp;IE: (.example.com)<br /><br />
-		Any domain added to the no AAAA list, will never be filtered by any DNSBL blocking.<br /><br />
+		Prefix domain with a "." to apply wildcard no-AAAA to all Sub-Domains. &emsp;IE: (.example.com)<br /><br />
+		Any domain added to the no-AAAA list, will never be filtered by any DNSBL blocking.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes to this option will require a Force Update to take effect.';
 
@@ -3072,29 +3072,27 @@ $form->add($section);
 
 $section = new Form_Section('DNSBL Configuration');
 
-$group = new Form_Group('Permit Firewall Rules');
-$group->add(new Form_Checkbox(
+$section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_rule',
-	NULL,
+	gettext('Permit Firewall Rules'),
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_rule']) === PfbToggle::On,
 	'on'
-))->setWidth(7)
-  ->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access<br />'
+))->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access<br />'
 		. 'the <strong>DNSBL Webserver</strong>. (ICMP and Webserver ports only).'
 		. '<br /><br />'
 		. 'This option is not designed to bypass DNSBL for the non-selected LAN segments<br />'
 		. 'This option is only required for networks with multiple LAN Segments.');
 
-$group->add(new Form_Select(
+$section->addInput(new Form_Select(
 	'dnsbl_allow_int',
-	NULL,
+	gettext('Interface(s)'),
 	$pconfig['dnsbl_allow_int'],
 	$options_dnsbl_interface,
 	TRUE
 ))->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_dnsbl_interface_cnt);
-$section->add($group);
+  ->setAttribute('size', $options_dnsbl_interface_cnt)
+  ->setHelp('Interface(s) permitted to reach the DNSBL Webserver by the Permit Firewall Rules above.');
 
 $section->addInput(new Form_Select(
 	'global_log',
