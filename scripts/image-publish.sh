@@ -1,6 +1,6 @@
 #!/bin/sh
 # image-publish.sh — export a Proxmox VM's disk to a compressed qcow2 and
-# publish it to GHCR as the pfSense CE smoke-test base image (ADR-04, Phase 2).
+# publish it to GHCR as a pfBlockerNG smoke-test base image (ADR-04, Phase 2).
 #
 # Drive it FROM YOUR MACHINE: pass the Proxmox SSH coordinates and the script
 # runs the native steps (qm/pvesm/qemu-img — all shipped with Proxmox VE) over
@@ -13,17 +13,41 @@
 # This is the "maintainer-provided qcow2, wholesale" path: no Packer. Each call
 # publishes one version tag; older tags are left untouched (kept).
 #
+# IMAGE TYPE (--type) — the easy path for the three real images. Pass --type and
+# everything else (image name, qcow2 filename, description, artifact-type) is
+# DERIVED from the type + version, so the common publish is just:
+#
+#       ./scripts/image-publish.sh <version> --type ce   --vmid 103 [--proxmox …]
+#       ./scripts/image-publish.sh <version> --type plus --vmid 103 [--proxmox …]
+#       ./scripts/image-publish.sh <version> --type civm --vmid 104 [--proxmox …]
+#
+#   type   image ref                          qcow2 / OCI title      description
+#   ----   --------------------------------   --------------------   ------------------------------
+#   ce     ghcr.io/pfblockerng/pfsense-ce     pfSense-CE_<v>.qcow2    pfSense CE <v>
+#   plus   ghcr.io/pfblockerng/pfsense-plus   pfSense-Plus_<v>.qcow2  pfSense Plus <v>
+#   civm   ghcr.io/pfblockerng/civm           civm_<v>.qcow2          pfBlockerNG smoke client VM <v>
+#
+# Without --type there are NO image-shaped defaults: --image, --description and
+# --artifact-type are all REQUIRED (the script will not guess them). The
+# tag/version is always a positional argument. The registry namespace defaults
+# to ghcr.io/pfblockerng (override with SMOKE_IMAGE_REPO or --registry).
+#
+# For the friendly interactive front-end that only asks the few things that
+# change, use scripts/publish-smoke-image.sh.
+#
 # Usage:
-#   ./scripts/image-publish.sh <pfsense-ce-version> [options]
+#   ./scripts/image-publish.sh <version> --type <ce|plus|civm> [options]
+#   ./scripts/image-publish.sh <version> --image REF --description D \
+#                              --artifact-type T [options]      # custom image
 #
 # Examples:
-#   ./scripts/image-publish.sh 2.8.1 --proxmox root@pve.lan
-#   ./scripts/image-publish.sh 2.8.1 --proxmox pve.lan --proxmox-port 2222 --vmid 103
-#   ./scripts/image-publish.sh 2.8.1            # run locally, on the Proxmox host
-#   # a non-pfSense image (e.g. the smoke client VM):
-#   ./scripts/image-publish.sh v1 --vmid 104 --image ghcr.io/pfblockerng/civm \
-#       --artifact-type application/vnd.pfblockerng.smoke-client.disk.v1 \
-#       --description "pfBlockerNG smoke client VM v1"
+#   ./scripts/image-publish.sh 2.8.1 --type ce --proxmox root@pve.lan
+#   ./scripts/image-publish.sh 2.8.1 --type ce --proxmox pve.lan --proxmox-port 2222 --vmid 103
+#   ./scripts/image-publish.sh 2.8.1 --type ce          # run locally, on the Proxmox host
+#   ./scripts/image-publish.sh v1    --type civm --vmid 104
+#   # a fully-custom image (every image field explicit, no --type):
+#   ./scripts/image-publish.sh v1 --vmid 104 --image ghcr.io/pfblockerng/other \
+#       --artifact-type application/vnd.example.disk.v1 --description "Some image v1"
 #   # just print the VM's NIC MACs + SMBIOS UUID (no export/push):
 #   ./scripts/image-publish.sh --vmid 104 --print-identity
 #
@@ -37,17 +61,23 @@
 #   USER defaults to $PROXMOX_SSH_USER or root.
 #
 # Options:
+#   --type T         image type: ce | plus | civm. Derives --image, the qcow2
+#                    filename, --description and --artifact-type from T + version.
 #   --vmid N         Proxmox VM id (default: 103)
 #   --disk KEY       disk config key to export (default: scsi0)
-#   --image REF      GHCR image ref without tag (default composed from the
-#                    SMOKE_IMAGE_REPO + SMOKE_IMAGE_NAME env vars:
-#                    ${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}/${SMOKE_IMAGE_NAME:-pfsense-ce})
+#   --registry REF   GHCR namespace for the derived --type ref (default:
+#                    $SMOKE_IMAGE_REPO or ghcr.io/pfblockerng)
+#   --image REF      GHCR image ref WITHOUT tag. Required unless --type is given;
+#                    overrides the --type-derived ref when both are present.
 #   --compression T  qcow2 compression: zstd | zlib | off (default: zstd)
-#   --out FILE       local working qcow2 path (default: a temp file, removed after)
+#   --out FILE       local working qcow2 path (default: a temp file named from
+#                    the type/image, removed after)
 #   --keep           keep the local qcow2 after publishing
 #   --force          overwrite the tag if it already exists
-#   --artifact-type T  OCI artifact-type annotation (default: the pfSense CE type)
-#   --description D    OCI image-description annotation (default: pfSense CE wording)
+#   --artifact-type T  OCI artifact-type annotation. Required unless --type
+#                      derives it; overrides the derived value when present.
+#   --description D    OCI image-description annotation. Required unless --type is
+#                      given; overrides the derived value when present.
 #   --print-identity   print every NIC's MAC + the SMBIOS UUID from the VM config,
 #                      then exit (no export/push). <version> is not required.
 #
@@ -63,20 +93,22 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 VMID=103
 DISK=scsi0
-# Compose the untagged image ref from the namespace + name vars (org-transfer
-# scheme; supports pfsense-ce, pfsense-plus, … under one namespace). --image overrides.
-IMAGE="${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}"
-IMAGE="${IMAGE%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
+# Registry NAMESPACE only (no hard-coded image name). The image name comes from
+# --type (derived) or --image (explicit) — never from an environment variable.
+REGISTRY="${SMOKE_IMAGE_REPO:-ghcr.io/pfblockerng}"
+TYPE=""
+IMAGE=""
 COMPRESSION=zstd
 OUT=""
 KEEP=0
 FORCE=0
 VERSION=""
 PRINT_IDENTITY=0
-# Default OCI annotations describe the pfSense CE base image. Shared with
-# image-upgrade.sh + IMAGE_RUNBOOK.md — keep this default in sync there.
-ARTIFACT_TYPE="application/vnd.netgate.pfsense-ce.disk.v1"
+# NO image-shaped defaults: these are derived from --type, or required explicitly.
+ARTIFACT_TYPE=""
 DESCRIPTION=""
+# Derived qcow2 basename (the OCI layer title); set from --type / --image / --out.
+QCOW_NAME=""
 
 # Proxmox SSH coordinates (env fallbacks; --proxmox overrides).
 PX_HOST="${PROXMOX_SSH_HOST:-}"
@@ -91,8 +123,10 @@ while [ $# -gt 0 ]; do
         --proxmox-port)    PX_PORT="$2"; shift 2 ;;
         --proxmox-ssh-key) PX_KEY="$2"; shift 2 ;;
         --remote-tmpdir)   REMOTE_TMPDIR="$2"; shift 2 ;;
+        --type)            TYPE="$2"; shift 2 ;;
         --vmid)            VMID="$2"; shift 2 ;;
         --disk)            DISK="$2"; shift 2 ;;
+        --registry)        REGISTRY="$2"; shift 2 ;;
         --image)           IMAGE="$2"; shift 2 ;;
         --compression)     COMPRESSION="$2"; shift 2 ;;
         --out)             OUT="$2"; shift 2 ;;
@@ -101,7 +135,7 @@ while [ $# -gt 0 ]; do
         --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
         --description)     DESCRIPTION="$2"; shift 2 ;;
         --print-identity)  PRINT_IDENTITY=1; shift ;;
-        -h|--help)         sed -n '2,56p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,86p' "$0"; exit 0 ;;
         -*)                die "unknown option: $1" ;;
         *)
             [ -z "$VERSION" ] || die "unexpected argument: $1"
@@ -118,8 +152,47 @@ if [ -n "${PX_TARGET:-}" ]; then
 fi
 
 # --print-identity needs only a VM id; a version tag is required for a real publish.
-[ "$PRINT_IDENTITY" -eq 1 ] || [ -n "$VERSION" ] || die "missing <pfsense-ce-version> (e.g. 2.8.1); or use --print-identity"
+[ "$PRINT_IDENTITY" -eq 1 ] || [ -n "$VERSION" ] || die "missing <version> (e.g. 2.8.1, or v1 for civm); or use --print-identity"
 case "$COMPRESSION" in zstd|zlib|off) ;; *) die "--compression must be zstd|zlib|off" ;; esac
+
+# ---------------------------------------------------------------------------
+# Derive the image-shaped fields from --type (ce|plus|civm), unless overridden.
+# Every field a real publish needs (image ref, qcow2 filename, description,
+# artifact-type) comes from here for the three common images. An explicit flag
+# always wins over the derived value. Without --type there is NO default — the
+# fields are required and validated below.
+# ---------------------------------------------------------------------------
+if [ -n "$TYPE" ]; then
+    case "$TYPE" in
+        ce)   _name=pfsense-ce;   _pretty=pfSense-CE;   _desc="pfSense CE";                 _atype="application/vnd.netgate.pfsense-ce.disk.v1" ;;
+        plus) _name=pfsense-plus; _pretty=pfSense-Plus; _desc="pfSense Plus";               _atype="application/vnd.netgate.pfsense-plus.disk.v1" ;;
+        civm) _name=civm;         _pretty=civm;         _desc="pfBlockerNG smoke client VM"; _atype="application/vnd.pfblockerng.smoke-client.disk.v1" ;;
+        *)    die "--type must be ce|plus|civm (got '$TYPE')" ;;
+    esac
+    [ -n "$IMAGE" ]         || IMAGE="${REGISTRY%/}/${_name}"
+    [ -n "$DESCRIPTION" ]   || DESCRIPTION="${_desc} ${VERSION}"
+    [ -n "$ARTIFACT_TYPE" ] || ARTIFACT_TYPE="$_atype"
+    [ -n "$QCOW_NAME" ]     || QCOW_NAME="${_pretty}_${VERSION}.qcow2"
+fi
+
+# A real publish needs the image-shaped fields. With --type they are filled in
+# above; without it they MUST be provided explicitly (no guessing).
+if [ "$PRINT_IDENTITY" -eq 0 ]; then
+    _missing=""
+    [ -n "$IMAGE" ]         || _missing="$_missing --image"
+    [ -n "$DESCRIPTION" ]   || _missing="$_missing --description"
+    [ -n "$ARTIFACT_TYPE" ] || _missing="$_missing --artifact-type"
+    [ -z "$_missing" ] || die "missing required option(s):${_missing}. Pass --type ce|plus|civm to derive them, or set each explicitly."
+fi
+
+# Resolve the qcow2 basename (the OCI layer title, predictable on pull):
+#   --out wins (its basename) -> --type-derived name -> last path component of
+#   the image ref. Never a hard-coded 'pfSense-CE' string.
+if [ -n "$OUT" ]; then
+    QCOW_NAME="$(basename "$OUT")"
+elif [ -z "$QCOW_NAME" ]; then
+    QCOW_NAME="${IMAGE##*/}_${VERSION}.qcow2"
+fi
 
 # Remote when a Proxmox host is given, else everything runs locally.
 PX_REMOTE=0
@@ -205,22 +278,25 @@ DEV=$(px "pvesm path '$VOLID'")
 [ -n "$DEV" ] || die "could not resolve a device for $VOLID"
 px "test -e '$DEV'" || die "resolved device does not exist on Proxmox: $DEV"
 log "source: VM $VMID $DISK -> $VOLID -> $DEV"
+log "target: ${IMAGE}:${VERSION}  (qcow2: ${QCOW_NAME})"
 
 # Informational: surface the NIC MACs + SMBIOS UUID so a re-publish can confirm
 # the VM identity (Netgate Device ID inputs) is unchanged.
 print_vm_identity "$QMCFG"
 
-# Local output path for the streamed-back qcow2.
+# Local output path for the streamed-back qcow2, named from the resolved qcow2
+# basename (so the stored OCI layer title is predictable on pull).
 CREATED_OUT=0
 if [ -z "$OUT" ]; then
-    OUT="${TMPDIR:-/tmp}/pfSense-CE-${VERSION}.qcow2"
+    OUT="${TMPDIR:-/tmp}/${QCOW_NAME}"
     CREATED_OUT=1
 fi
 rm -f "$OUT"
 
-# Remote temp the conversion writes to (then streamed back, then removed).
+# Remote temp the conversion writes to (then streamed back, then removed). Named
+# from the qcow2 basename so concurrent publishes of different images don't clash.
 px "mkdir -p '$REMOTE_TMPDIR'" || die "cannot create remote tmpdir on Proxmox: $REMOTE_TMPDIR"
-REMOTE_TMP="${REMOTE_TMPDIR%/}/pfb-publish-${VERSION}.$$.qcow2"
+REMOTE_TMP="${REMOTE_TMPDIR%/}/pfb-publish-${QCOW_NAME%.qcow2}.$$.qcow2"
 
 cleanup() {
     px "rm -f '$REMOTE_TMP'" >/dev/null 2>&1 || true
@@ -247,9 +323,6 @@ log "streaming image back -> $OUT"
 px "cat '$REMOTE_TMP'" > "$OUT"
 [ -s "$OUT" ] || die "streamed image is empty: $OUT"
 log "local image: $(qemu-img info --output=human "$OUT" 2>/dev/null | sed -n 's/^disk size: /qcow2 size /p' || echo "$(wc -c < "$OUT") bytes")"
-
-# Default the description to the pfSense CE wording unless overridden.
-[ -n "$DESCRIPTION" ] || DESCRIPTION="pfSense CE ${VERSION} pfBlockerNG smoke-test base"
 
 log "pushing ${IMAGE}:${VERSION}"
 # cd so the stored layer title is the bare filename (predictable on pull).

@@ -54,10 +54,13 @@ ADR-04 §2. Two layers, one output contract.
 
    ```sh
    export SMOKE_GHCR_USER=<user> SMOKE_GHCR_TOKEN=<write:packages token>
-   ./scripts/image-publish.sh 2.8.1 --proxmox root@pve.lan --vmid 103
+   ./scripts/image-publish.sh 2.8.1 --type ce --proxmox root@pve.lan --vmid 103
+   # Plus: --type plus (YY.MM tag); the smoke client VM: --type civm (e.g. v1)
+   # …or run scripts/publish-smoke-image.sh and answer the prompts.
    ```
 
-   `image-publish.sh` exports the powered-off VM's disk
+   `--type` derives the image ref, qcow2 filename, description and artifact-type
+   from the type + version. `image-publish.sh` exports the powered-off VM's disk
    (`qm config` → `pvesm path` → `qemu-img convert -c` zstd) on the Proxmox host
    over SSH, streams the compressed qcow2 back, and `oras push`es it. `oras` runs
    locally — no GHCR creds on Proxmox.

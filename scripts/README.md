@@ -245,7 +245,8 @@ boots a real pfSense CE VM. **No Packer**: pfBlockerNG compiles nothing.
 
 | Script | Use |
 | --- | --- |
-| [`image-publish.sh`](image-publish.sh) | Export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR by CE version. Old tags kept. |
+| [`image-publish.sh`](image-publish.sh) | Export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR. `--type ce\|plus\|civm` derives the image ref, qcow2 filename, description + artifact-type from the type + version. Old tags kept. |
+| [`publish-smoke-image.sh`](publish-smoke-image.sh) | Interactive front-end for `image-publish.sh` — asks only type, version, VM id and Proxmox host/port; derives everything else. |
 | [`image-upgrade.sh`](image-upgrade.sh) | Pull a tag → boot a **copy** → `pfSense-upgrade` → power off → publish a new version tag. Source image untouched. |
 
 ### Driving from your machine
@@ -262,15 +263,24 @@ machine. Omit `--proxmox` to run directly on the host, as before.
 
 ```sh
 # publish the seed image (driving a remote Proxmox host)
-./scripts/image-publish.sh 2.8.1 --proxmox root@pve.lan
+./scripts/image-publish.sh 2.8.1 --type ce --proxmox root@pve.lan
 
 # bump a published image to a newer CE release
 ./scripts/image-upgrade.sh --from 2.8.1 --proxmox pve.lan --ssh-key ~/.ssh/smoke_key
 
 # or set the host once and call bare
 export PROXMOX_SSH_HOST=pve.lan PROXMOX_SSH_USER=root
-./scripts/image-publish.sh 2.8.1
+./scripts/image-publish.sh 2.8.1 --type ce
+
+# …or just answer the prompts (type, version, VM id, host/port)
+./scripts/publish-smoke-image.sh
 ```
+
+`image-publish.sh` always takes the version as a positional argument and, for the
+three real images, a `--type ce|plus|civm` that derives the image ref
+(`ghcr.io/pfblockerng/<name>`), the qcow2 filename (`pfSense-CE_2.8.qcow2`, …),
+the description (`pfSense CE 2.8`, …) and the OCI artifact-type. Without `--type`,
+`--image`, `--description` and `--artifact-type` are all required (no defaults).
 
 ### pfSense Plus images (private — licensed)
 
@@ -278,7 +288,8 @@ Plus images publish with the same scripts, with these deltas:
 
 - **Image name is all-lowercase** — an OCI/GHCR repository name MUST be lowercase:
   `ghcr.io/pfblockerng/pfsense-plus`. Tags use the Plus version scheme `YY.MM`
-  (e.g. `26.03`). Select it with `SMOKE_IMAGE_NAME=pfsense-plus` (or `--image`).
+  (e.g. `26.03`). Select it with `--type plus` (which derives that lowercase ref,
+  the description and the artifact-type); `image-upgrade.sh` still uses `--image`.
 - **Keep the GHCR package PRIVATE.** The Plus image is Netgate-licensed; verify the
   package's visibility is private after the first push and never make it public.
   CI **pulls** this private image (never publishes it) — the smoke fan-out runs Plus
@@ -293,10 +304,10 @@ Plus images publish with the same scripts, with these deltas:
   <plus-mac>`. In CI it is **never** hardcoded or in the matrix — `boot_vm.sh` takes it
   from `SMOKE_VM_MAC`, which the smoke/UI workflows set from the `SMOKE_PLUS_MAC` secret
   (with `SMOKE_PLUS_SMBIOS_UUID`) and redact from diagnostics (ADR-24).
-- `image-publish.sh`'s artifact-type/description annotations say "CE" — cosmetic
-  only; every consumer locates the layer by a `*.qcow2` glob. Pass
-  `--out /tmp/pfSense-Plus-<tag>.qcow2` so the stored filename is labelled
-  correctly (the default is `pfSense-CE-<tag>.qcow2`).
+- With `--type plus` the description, artifact-type and stored qcow2 filename
+  (`pfSense-Plus_<tag>.qcow2`) are all labelled for Plus automatically — no `--out`
+  override needed. (`image-upgrade.sh` is the CE upgrade path and still annotates CE;
+  every consumer locates the layer by a `*.qcow2` glob, so that is cosmetic.)
 
 ## Two install paths: CI/local vs release
 
