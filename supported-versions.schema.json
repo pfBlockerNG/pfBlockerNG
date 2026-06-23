@@ -78,6 +78,29 @@
           "last_tag": {
             "type": "string",
             "description": "ADR-27 Part 2 (route-only only): the GitHub Release tag whose assets hold the LAST .pkg built for this EOL pfSense version, e.g. 'v3.1.0_5'. The pfBlockerNG/pkg publish workflow downloads that tag's .pkg and serves it as this version's frozen catalog. Ignored for build entries."
+          },
+          "upgrade": {
+            "type": "object",
+            "description": "Image-refresh control for image-refresh.yml (Upgrade pfSense smoke images). Absent or available=false => this variant's published GHCR image is left untouched (the common case). 'available' is a transient 'a newer public build exists than what we publish' signal — NOT 'this version is released'.",
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "boolean",
+                "description": "true = a newer public build (pre-release/GA/patch) exists to upgrade this image to; the refresh runs for this variant. false/absent = skip. Reset to false once the newer build has been published."
+              },
+              "branch": {
+                "type": "string",
+                "description": "Optional pfSense update-branch name (as listed by pkg_list_repos()) to switch to before pfSense-upgrade, to reach a pre-release/development build (stored in system/pkg_repo_conf_path via pkg_switch_repo()). Empty/omitted = keep the image's configured (stable) branch."
+              },
+              "target": {
+                "type": "string",
+                "description": "Optional informational target version label, e.g. '2.8.1'. The published GHCR tag is derived from pfsense_version (the floating Major.Minor), not from this."
+              },
+              "from": {
+                "type": "string",
+                "description": "Optional source floating tag to upgrade FROM. Defaults to this entry's pfsense_version (self-replace, --force). Set to the prior Major.Minor only when bootstrapping a brand-new Major.Minor image (new tag)."
+              }
+            }
           }
         },
         "additionalProperties": false
