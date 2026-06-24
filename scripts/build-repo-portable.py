@@ -105,6 +105,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from pfb_pkg import PkgError, read_compact_manifest
+
 # --------------------------------------------------------------------------- #
 # Catalog descriptor (meta.conf / meta) — byte-identical to real `pkg repo`.
 # --------------------------------------------------------------------------- #
@@ -176,51 +178,9 @@ def pkg_checksum(pkg_bytes: bytes) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Pure-Python .pkg reader (no libpkg) — read the +COMPACT_MANIFEST JSON.
-#
-# A .pkg is a zstd-compressed tar whose first member is +COMPACT_MANIFEST (UCL,
-# which is JSON for our packages). build-pkg-portable.py writes exactly this; this
-# is the inverse read. ABI/name/version/flavor all come from that manifest — never
-# guessed from the filename (matches build-repo.sh's `pkg query -F`).
+# .pkg reading (zstd framing + +COMPACT_MANIFEST) lives in pfb_pkg, shared with
+# gen_landing.py. zstd_decompress / read_compact_manifest are imported above.
 # --------------------------------------------------------------------------- #
-
-
-def _zstd_decompress(data: bytes) -> bytes:
-    if data[:4] != b"\x28\xb5\x2f\xfd":
-        # Not zstd-framed: assume an already-uncompressed tar (defensive).
-        return data
-    try:
-        import zstandard
-
-        return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
-    except ImportError:
-        zstd = shutil.which("zstd")
-        if not zstd:
-            raise BuildRepoError(
-                "a .pkg is zstd-compressed; install the `zstd` binary or the python `zstandard` module"
-            ) from None
-        return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
-
-
-def read_compact_manifest(pkg_path: Path) -> dict:
-    """Return the +COMPACT_MANIFEST JSON object of a .pkg (pure Python, no libpkg)."""
-    raw = pkg_path.read_bytes()
-    tar_bytes = _zstd_decompress(raw)
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-        try:
-            member = tf.extractfile("+COMPACT_MANIFEST")
-        except KeyError:
-            member = None
-        if member is None:
-            raise BuildRepoError(f"{pkg_path.name}: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
-        data = member.read()
-    try:
-        obj = json.loads(data)
-    except ValueError as e:
-        raise BuildRepoError(f"{pkg_path.name}: +COMPACT_MANIFEST is not valid JSON/UCL: {e}") from None
-    if not isinstance(obj, dict):
-        raise BuildRepoError(f"{pkg_path.name}: +COMPACT_MANIFEST is not an object")
-    return obj
 
 
 # --------------------------------------------------------------------------- #
@@ -1138,7 +1098,7 @@ def main(argv: list[str]) -> int:
 
     try:
         abis = build_repo(in_dir, Path(args.out_dir), catalog_name=args.catalog_name)
-    except BuildRepoError as e:
+    except (BuildRepoError, PkgError) as e:
         sys.stderr.write(f"build-repo-portable: {e}\n")
         return 1
     sys.stderr.write(f"==> built catalogs for ABI: {' '.join(abis)}\n")

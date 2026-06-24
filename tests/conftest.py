@@ -20,6 +20,11 @@ for _name in unboundmodule.__all__:
 # Make pfb_unbound importable from its installed location within the repo.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "usr", "local", "pkg", "pfblockerng"))
 
+# Put scripts/ on sys.path so the hyphen-named tools loaded by path in the
+# build-repo / gen_landing tests can resolve their shared `import pfb_pkg`
+# (at CI runtime that dir is sys.path[0] because the tools are run directly).
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
 import pytest  # noqa: E402
 
 import pfb_unbound  # noqa: E402

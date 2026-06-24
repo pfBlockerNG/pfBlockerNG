@@ -118,15 +118,9 @@ def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:
     assert "href" not in gl.commit_cell("../../evil")
 
 
-def test_read_manifest_requires_zstd(monkeypatch: Any) -> None:
-    """A clear error (not a generic FileNotFoundError) when the zstd binary is absent."""
-    monkeypatch.setattr(gl.shutil, "which", lambda _name: None)
-    try:
-        gl.read_manifest_zstd("whatever.pkg")
-    except RuntimeError as exc:
-        assert "zstd" in str(exc)
-    else:  # pragma: no cover - the guard must fire
-        raise AssertionError("expected RuntimeError when zstd is missing")
+# Manifest reading now lives in the shared pfb_pkg module (gen_landing imports
+# read_compact_manifest); its zstd-decoder-absent error is covered in
+# tests/test_pfb_pkg.py.
 
 
 # ── collect_packages: walk + classify + exclude plumbing ──────────────────────
@@ -623,7 +617,7 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
     _touch(site / "meta.json")
 
     manifest = {"name": "pfSense-pkg-pfBlockerNG-devel", "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
-    monkeypatch.setattr(gl, "read_manifest_zstd", lambda p: manifest)
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
 
     n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
@@ -674,7 +668,7 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
         abi = "FreeBSD:16:riscv64" if "experimental" in path else "FreeBSD:99:powerpc64"
         return {"name": name, "version": "9.9.9", "abi": abi}
 
-    monkeypatch.setattr(gl, "read_manifest_zstd", fake_manifest)
+    monkeypatch.setattr(gl, "read_compact_manifest", fake_manifest)
     monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
 
     n = gl.write_site(str(site), "https://x/pkg/", str(_ADD_REPO_REAL))

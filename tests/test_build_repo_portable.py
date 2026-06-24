@@ -109,7 +109,9 @@ def make_pkg(
 
 
 def _read_member(zstd_tar: Path, member: str) -> bytes:
-    data = brp._zstd_decompress(zstd_tar.read_bytes())
+    import pfb_pkg
+
+    data = pfb_pkg.zstd_decompress(zstd_tar.read_bytes())
     with tarfile.open(fileobj=io.BytesIO(data)) as tf:
         f = tf.extractfile(member)
         assert f is not None
