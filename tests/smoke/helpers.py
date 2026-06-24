@@ -547,16 +547,18 @@ def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 
 
 
 # --------------------------------------------------------------------------- #
-# HSTS preload set — pin a name into the in-chroot list pfb_unbound.py reads
+# HSTS preload set — pin a name into the shipped list pfb_unbound.py reads
 # --------------------------------------------------------------------------- #
 # pfb_unbound.py loads /var/unbound/pfb_py_hsts.txt (chroot-relative
-# ``pfb_py_hsts.txt``, init line ~752) into hstsDB on every reload. pfBlockerNG
-# copies the shipped list into the chroot ONLY when it is missing
-# (inc:2238 ``if (!file_exists(...))``), so a name appended here SURVIVES a DNSBL
-# reload — letting a test put an arbitrary domain into the EFFECTIVE HSTS set
-# instead of coupling to whatever the shipped preload list happens to contain.
+# ``pfb_py_hsts.txt``, init line ~752) into hstsDB on every reload.
+# dnsbl_cache_stage() (pfblockerng.sh) uses ``cp -f`` to ALWAYS overwrite the
+# chroot copy from the shipped source at /usr/local/pkg/pfblockerng/pfb_py_hsts.txt
+# — so any name appended directly to the chroot file is LOST on the next reload.
+# A test domain must be written to the SHIPPED SOURCE so ``cp -f`` propagates it.
 
 UNBOUND_HSTS_FILE = "/var/unbound/pfb_py_hsts.txt"
+# Shipped source that dnsbl_cache_stage() copies into the chroot via cp -f.
+SHIPPED_HSTS_FILE = "/usr/local/pkg/pfblockerng/pfb_py_hsts.txt"
 UNBOUND_PFB_INI = "/var/unbound/pfb_unbound.ini"
 # pfb_unbound.py loads SafeSearch redirect entries from this chroot-relative CSV
 # (5-col format: domain,cname,target,baked_v4,baked_v6; see inject_safesearch_cname_entries).
@@ -572,15 +574,16 @@ SS_BAKED_AAAA = "2001:db8:5350::20"  # RFC 3849 (≠ STUB_DNS_AAAA ::99): baked 
 
 
 def add_hsts_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
-    """Append ``name`` (one line) to the in-chroot HSTS preload list.
+    """Append ``name`` (one line) to the shipped HSTS preload source.
 
-    Use AFTER the case's first reload has (re)created ``pfb_py_hsts.txt`` from the
-    shipped list, then reload again so the module re-reads hstsDB with ``name``
-    included (copy-if-missing won't clobber the now-existing file). ``tee -a``
-    appends and creates the file if absent (mirrors :func:`write_local_feed`).
+    dnsbl_cache_stage() uses ``cp -f`` to overwrite the chroot copy from
+    ``SHIPPED_HSTS_FILE`` on every reload, so the test name must live in the
+    shipped source — not in the chroot file — to survive a DNSBL reload.
+    ``assert_hsts_loaded`` still checks the chroot copy to verify that
+    ``cp -f`` propagated the entry into the file the module actually reads.
     """
     result = subprocess.run(
-        vm.ssh_argv("tee", "-a", UNBOUND_HSTS_FILE),
+        vm.ssh_argv("tee", "-a", SHIPPED_HSTS_FILE),
         input=f"{name}\n",
         capture_output=True,
         text=True,

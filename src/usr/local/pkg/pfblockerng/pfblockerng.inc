@@ -115,6 +115,7 @@ $pfb['unbound_py_wh']	= '/var/unbound/pfb_py_whitelist.txt';
 $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
+$pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07 P8: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
@@ -1120,6 +1121,9 @@ function pfb_resolve_list_script($name, $dirs = null) {
 
 /* Return the ordered list of input paths the Python DNSBL module loads.
    These are fingerprinted before/after a pass to detect real changes.
+   Includes unbound_py_hsts: the shipped HSTS preload list re-staged by dnsbl_cache_stage()
+   via cp -f between the two fingerprint snapshots, so a package update that ships a new
+   list is detected (old chroot copy vs freshly staged copy differ) and triggers a reload.
    Excluded: unbound_py_count / unbound_py_regex_count (Python-emitted outputs —
    including them makes every pass look changed) and unbound_py_ss (has its own
    md5 gate via $safesearch_update; double-gating would suppress SafeSearch restarts).
@@ -1128,7 +1132,7 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$raw_files = glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array();
 	sort($raw_files, SORT_STRING);
 	return array_merge(
-		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources']),
+		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts']),
 		$raw_files
 	);
 }
@@ -13373,6 +13377,12 @@ function sync_package_pfblockerng($cron='') {
 		// the next reboot. Gated like the IP side (archive only inside the change branch):
 		// DNSBL active ($mode === 'enabled', i.e. enable + dnsbl + resolver on) +
 		// use_mfs_tmpvar. Read $pfb directly (not $mode) to keep the gate self-contained.
+		// #520 NOTE: an HSTS-only change now enters this branch too ($pfb_data_changed
+		// fingerprints the shipped pfb_py_hsts.txt), so the archive is re-saved even
+		// though it EXCLUDES the shipped files -- a harmless no-op re-compress of
+		// identical generated content. Deliberately NOT separately gated: the shipped
+		// HSTS list ships per-release (changes ~never), so the rare extra save isn't
+		// worth a second generated-only fingerprint.
 		if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on' &&
 		    config_path_enabled('system', 'use_mfs_tmpvar')) {
 			pfb_dnsbl_cache('save');
