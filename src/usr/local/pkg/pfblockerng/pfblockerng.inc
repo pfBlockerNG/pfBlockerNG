@@ -1112,17 +1112,35 @@ function pfb_resolve_list_script($name, $dirs = null) {
 	return FALSE;
 }
 
-/* Return TRUE if any DNSBL artifact path exists on disk. Used to decide whether the
-   empty-feeds pass (no feeds subscribed) has anything to clear: TRUE => clear + restart
-   once; FALSE => suppress the feed-blind reuse_dnsbl/.reload reload that otherwise
-   restarted Unbound every pass. Pure (file_exists only) so PHPUnit pins both branches. */
-function pfb_dnsbl_artifacts_exist(array $paths): bool {
+/* Return the ordered list of input paths the Python DNSBL module loads.
+   These are fingerprinted before/after a pass to detect real changes.
+   Excluded: unbound_py_count / unbound_py_regex_count (Python-emitted outputs —
+   including them makes every pass look changed) and unbound_py_ss (has its own
+   md5 gate via $safesearch_update; double-gating would suppress SafeSearch restarts).
+   Pure (no global access): caller passes $pfb explicitly so tests can inject any paths. */
+function pfb_dnsbl_loaded_input_paths(array $pfb): array {
+	$raw_files = glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array();
+	sort($raw_files, SORT_STRING);
+	return array_merge(
+		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources']),
+		$raw_files
+	);
+}
+
+/* Return a stable fingerprint of the given input-file set.
+   A missing/unreadable file contributes '-' so that all-missing == all-missing (equal),
+   and a first-seen file vs no-file produces a difference. Path list is sorted so
+   glob order differences never cause false positives. Pure (read-only fs). */
+function pfb_dnsbl_loaded_fingerprint(array $paths): string {
+	sort($paths, SORT_STRING);
+	$parts = array();
 	foreach ($paths as $path) {
-		if ($path !== '' && file_exists($path)) {
-			return TRUE;
+		if ($path === '') {
+			continue;
 		}
+		$parts[] = $path . ':' . (@md5_file($path) ?: '-');
 	}
-	return FALSE;
+	return md5(implode("\n", $parts));
 }
 
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
@@ -11336,6 +11354,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
 	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
+	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => TLD mode or DNSBL not active)
 
 	$dnsbl_error = FALSE;
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
@@ -11563,6 +11582,12 @@ function sync_package_pfblockerng($cron='') {
 				$s_log = ' enabled';
 			}
 			pfb_logger("{$s_log}{$CNAME_LOG}", 1);
+
+			// Fingerprint the Python-loaded input files BEFORE this pass rewrites them.
+			// TLD mode builds data/zone inside pfb_update_unbound (after the gate), so
+			// the fingerprint can't see those writes yet — leave null and fall back to the
+			// domain_update / domain_clear flags for the gate decision.
+			$pfb_fp_old = $pfb['dnsbl_tld'] ? null : pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
 
 			// Collect Whitelist, create string, and save to file (for grep -vF -f cmd)
 			pfb_logger("\n Loading DNSBL Whitelist...", 1);
@@ -12766,27 +12791,23 @@ function sync_package_pfblockerng($cron='') {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
-				// The Unbound DNSBL artifacts this branch clears. NOTE: the stats DB
-				// ($pfb['dnsbl_info']) is intentionally NOT listed — the clear below
-				// never deleted it, so gating on it would keep it perpetually present
-				// and reintroduce the every-pass restart this fix removes. A stale stats
-				// DB with no active feeds is harmless and is overwritten on next subscribe.
-				$pfb_artifact_paths = array(
-					$pfb['unbound_py_data'],
-					$pfb['unbound_py_zone'],
-					$pfb['unbound_py_wh'],
-					$pfb['unbound_py_count'],
-					$pfb['unbound_py_regex_count'],
-					$pfb['unbound_py_sources'],
-					$pfb['unbound_py_rawdir'],	// dir; file_exists() is TRUE for it too, so a lingering rawdir still triggers the clear
-				);
-				if (pfb_dnsbl_artifacts_exist($pfb_artifact_paths)) {
-					// First pass after the last feed is removed — artifacts exist; clear and
-					// restart once so Unbound stops serving stale DNSBL data.
+				// Only clear (and flag domain_clear) when something is actually loaded;
+				// otherwise a no-feeds DNSBL setup would log "Clearing all DNSBL Feeds"
+				// and churn every cron. The fingerprint gate below is the reload authority
+				// (empty→empty => equal fingerprints => skip); domain_clear stays for the
+				// TLD-mode fallback path, where the fingerprint is not computed.
+				$pfb_loaded = FALSE;
+				foreach (pfb_dnsbl_loaded_input_paths($pfb) as $pfb_lf) {
+					if (file_exists($pfb_lf)) {
+						$pfb_loaded = TRUE;
+						break;
+					}
+				}
+				if ($pfb_loaded) {
 					pfb_logger("\nClearing all DNSBL Feeds", 1);
 					$pfb['domain_clear'] = TRUE;
 
-					// Clear out Unbound pfb_dnsbl.conf file
+					// Clear out Unbound DNSBL files
 					unlink_if_exists($pfb['unbound_py_data']);
 					unlink_if_exists($pfb['unbound_py_zone']);
 					unlink_if_exists($pfb['unbound_py_wh']);
@@ -12794,12 +12815,6 @@ function sync_package_pfblockerng($cron='') {
 					unlink_if_exists($pfb['unbound_py_regex_count']);	// ADR-07 P8
 					unlink_if_exists($pfb['unbound_py_sources']);
 					rmdir_recursive("{$pfb['unbound_py_rawdir']}");
-				} else {
-					// Steady state: no feeds subscribed AND nothing on disk — suppress the
-					// feed-blind reuse_dnsbl/.reload flags set by the $dnsbl_missing check
-					// above so this pass is a no-op and Unbound is not restarted.
-					$pfb['reuse_dnsbl'] = '';
-					unlink_if_exists("{$pfb['dnsbl_file']}.reload");
 				}
 			}
 		}
@@ -13074,13 +13089,36 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 
+	// Fingerprint the loaded input files AFTER this pass rebuilt them.
+	// Equal fingerprints => Python would produce a byte-identical blocklist => skip reload.
+	// TLD mode (fp_old === null): tld_analysis() writes data/zone INSIDE pfb_update_unbound
+	// (after this gate), so the post fingerprint can't see those writes yet — fall back to
+	// domain_update / domain_clear as before.
+	// The all-missing stable sentinel means empty→empty always yields equal fingerprints,
+	// so an unchanged no-feeds steady state no longer triggers a reload every pass.
+	$pfb_fp_new = ($pfb_fp_old === null) ? null : pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
+	$pfb_data_changed = ($pfb_fp_old === null || $pfb_fp_new === null)
+		? ($pfb['domain_update'] || $pfb['domain_clear'])
+		: ($pfb_fp_old !== $pfb_fp_new);
+
+	// An explicit "Force Reload DNSBL" (the updatednsbl trigger) must ALWAYS reload — the
+	// operator forces it to apply a change the fingerprint can't see, e.g. an out-of-band
+	// edit to the HSTS list (pfb_py_hsts.txt is loaded at module init and is NOT part of
+	// the fingerprinted feed data). reuse_dnsbl / the .reload marker can't serve as this
+	// signal — cron-reuse mode and the dnsbl-missing path also set them, which would
+	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY
+	// by the Force-Reload-DNSBL path (see the $cron switch).
+	if (!empty($pfb['updatednsbl'])) {
+		$pfb_data_changed = TRUE;
+	}
+
 	// Load new DNSBL updates to Unbound Resolver, as required. ADR-06 (#51): a pending
 	// temporary-unlock store ($pfb['dnsbl_unlock']) also forces the reload so a Cron/
 	// Force re-locks it even when no feed changed -- parity with main, where the
 	// ungated whitelist regeneration sets $pfbpython for the same effect. The reload
 	// path (pfb_update_unbound) then drops the store and clears the manifest's
 	// user_unlock.
-	if ($pfb['domain_update'] || $pfbupdate || $pfbpython ||$pfb['domain_clear'] || $safesearch_update ||
+	if ($pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update ||
 	    file_exists($pfb['dnsbl_unlock'])) {
 
 		// Create backup of existing DNSBL Unbound database
@@ -14983,13 +15021,12 @@ function sync_package_pfblockerng($cron='') {
 	// (no new tracking):
 	//   PFB_IP_CHANGED    = $pfb['filter_configure'] -- set TRUE when firewall rule/
 	//       aliastable changes were found and a filter reload was applied (the IP side).
-	//   PFB_DNSBL_CHANGED = the SAME signal set that gates the DNSBL rebuild above
-	//       ($pfbupdate || $pfbpython || $pfb['domain_update'] || $pfb['domain_clear']
-	//       || $safesearch_update -- see the rebuild condition earlier in this pass):
-	//       the builder return values catch feed/data changes, while domain_update/
-	//       domain_clear/safesearch_update catch data-only rebuilds (alert add/remove,
-	//       clear, SafeSearch) that leave the builders untouched. !empty() reads as 0
-	//       for any flag whose block did not run -- no undefined-variable warning.
+	//   PFB_DNSBL_CHANGED = mirrors the gate that drives pfb_update_unbound above:
+	//       $pfb_data_changed (fingerprint-derived, or domain_update/domain_clear when
+	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update.
+	//       Reports '1' only when a reload actually fired, so a skipped pass (unchanged
+	//       blocklist, fingerprints equal) correctly emits '0'. !empty() guards any flag
+	//       whose block did not run — no undefined-variable warning.
 	//   PFB_TRIGGER       = pfb_hook_trigger($cron).
 	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
 	//       this pass (ADR-12 Phase 6) = $pfb_alias_lists (the genuinely-updated set --
@@ -15015,8 +15052,8 @@ function sync_package_pfblockerng($cron='') {
 	pfb_run_hooks('post', array(
 		'TRIGGER'		=> pfb_hook_trigger($cron),
 		'IP_CHANGED'		=> !empty($pfb['filter_configure'])	? '1' : '0',
-		'DNSBL_CHANGED'		=> (!empty($pfbupdate) || !empty($pfbpython) || !empty($pfb['domain_update']) ||
-						!empty($pfb['domain_clear']) || !empty($safesearch_update)) ? '1' : '0',
+		'DNSBL_CHANGED'		=> (!empty($pfb_data_changed) || !empty($pfbupdate) || !empty($pfbpython) ||
+						!empty($safesearch_update)) ? '1' : '0',
 		'STATUS'		=> 'ok',
 		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
 		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),
