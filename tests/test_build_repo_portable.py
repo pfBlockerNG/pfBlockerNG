@@ -1024,6 +1024,24 @@ def test_cli_build_matrix_unwraps_versions(tmp_path: Path, monkeypatch: pytest.M
     assert captured["kw"]["build_nightly"] is False
 
 
+def test_cli_build_matrix_catches_pkg_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PkgError reading a malformed .pkg in the --build-matrix path (the publish
+    pipeline's entry point) must exit 1 cleanly, not escape as an uncaught traceback.
+
+    PkgError now comes from the shared pfb_pkg reader; the matrix handler must catch
+    it just like the BuildRepoError it replaced for these paths.
+    """
+
+    def boom(matrix: list[dict], out_dir: Path, **kw: Any) -> dict:
+        raise brp.PkgError("bad.pkg: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
+
+    monkeypatch.setattr(brp, "build_repo_matrix", boom)
+    mfile = tmp_path / "m.json"
+    mfile.write_text("[]")
+    rc = brp.main(["--build-matrix", "--matrix-json", str(mfile), "--out", str(tmp_path / "site")])
+    assert rc == 1  # caught + reported, not propagated
+
+
 def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
     """annotate kwargs reach every builder call (so publish.yml's commit/created stamp lands).
 
