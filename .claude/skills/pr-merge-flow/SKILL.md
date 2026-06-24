@@ -129,7 +129,10 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    not just the hunk), and return structured findings — each with a severity
    (`blocking` / `nitpick` / `outside-diff`), `file:line`, a grounded explanation,
    and a concrete suggested fix — plus a short "considered-and-fine" list. Tell it
-   the result IS its final message and not to edit anything.
+   the result IS its final message and not to edit anything. If `ponytail` is active in this
+   session, the brief's first instruction is `Run /ponytail:ponytail <level>` (the level active
+   here — full/lite/ultra; CLAUDE.md "Plan with a higher model"), so the reviewer matches the
+   parent's ponytail mode.
 2. **When the sub-agent finishes, re-check the PR for CodeRabbit.** If it has now
    posted anything (it acknowledged late, during the Sonnet review), treat it as
    available after all: wait for its review to finish (the `pr-comments`

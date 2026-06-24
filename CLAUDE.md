@@ -177,6 +177,12 @@ non-trivial `src/`/`tests/`/CI work.
 - **The planner's brief to Sonnet must be self-contained, accurate, and well-referenced** — the
   exact objective, the files/symbols to read and change (paths, `file:line`), the constraints,
   the verification gates, and the prior step's handoff. A vague or wrong brief is a planner bug.
+- **Propagate an active ponytail level to every delegate.** If the `ponytail` plugin is installed
+  and active in the orchestrator's session (e.g. `/ponytail:ponytail full`), every spawned
+  sub-agent MUST run at the **same level** — make the **first** line of its brief
+  `Run /ponytail:ponytail <level>` (the level active here: full/lite/ultra) before any other work,
+  so the delegate inherits the same laziness discipline. This is part of the mandatory handoff,
+  not optional; skip it only when ponytail is not active in this session.
 - **Sonnet follows every directive in this file** — communication, the working principles
   (investigate / "don't assume, read" / confirm ambiguity), code standards (style, naming,
   per-language rules), the test-coverage mandate, and how to work with the specific

@@ -244,7 +244,9 @@ run the verification gates and not proceed red, to **self-review the diff agains
 step objective and the issue** before finishing, then to make a focused commit
 (`<scope>: <imperative summary>`, CLAUDE.md commit style; reference the issue), and
 to **return the handoff document** in the Step-5 format. Tell it its returned message
-IS the handoff.
+IS the handoff. If `ponytail` is active in this session, the brief's **first** instruction is
+`Run /ponytail:ponytail <level>` (the level active here — full/lite/ultra; CLAUDE.md "Plan with
+a higher model"), so the implementer matches the parent's ponytail mode.
 
 **7b. Orchestrator gate (independent — you verify the transaction, you don't
 re-implement it).** When the agent returns, in `<path>`: confirm the commit exists

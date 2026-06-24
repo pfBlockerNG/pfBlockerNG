@@ -180,6 +180,10 @@ is only safe because you gate every step). Give it a **self-contained** brief �
 carry-over from this conversation, though it has the full worktree (the whole codebase) to
 read and edit:
 
+- **If `ponytail` is active in THIS session, the brief's FIRST line is
+  `Run /ponytail:ponytail <level>`** (the level active here — full/lite/ultra; CLAUDE.md "Plan
+  with a higher model"), so the implementer matches the parent's ponytail mode. Omit only when
+  ponytail is not active.
 - The **full text** of the phase prompt `{ADR_DIR}/{MM}_*.txt`.
 - "Work **entirely inside** the worktree at `<path>` — all edits and all git
   commands there (`git -C <path> …`). Do not touch the main checkout."
