@@ -274,11 +274,10 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeV
     explicitly. Rationale: a browser refuses the plaintext VIP sinkhole for an
     HSTS host, so NULL is the correct block.
 
-    Self-contained: we pin a unique ``.com`` into the in-chroot HSTS set
-    (``add_hsts_name``) rather than depend on the shipped preload list. The case's
-    first reload (in ``CaseContext``) recreates ``pfb_py_hsts.txt`` from the shipped
-    list; we then append our name and reload again — copy-if-missing leaves the now-
-    existing file alone, so the module reloads hstsDB WITH our name. Paired with
+    Self-contained: we pin a unique ``.com`` into the shipped HSTS source
+    (``add_hsts_name`` → ``SHIPPED_HSTS_FILE``) rather than depend on the preload list.
+    ``dnsbl_cache_stage()`` ``cp -f`` propagates it into the chroot on the reload, which
+    the module re-reads hstsDB WITH our name. Paired with
     ``test_dnsbl_hsts_disabled_keeps_vip`` (same name, same VIP list, HSTS off →
     VIP) to prove this is the override, not an always-null path.
     """
