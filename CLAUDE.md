@@ -286,23 +286,10 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
   token round-trips (`write(read(v)) == v`); a legacy token reads to the right runtime value
   and writes to its behaviour-equivalent canonical token (itself a legacy-valid token, so no
   novel on-disk value reaches an older release).
-- **PHP adapters / enums** (`PfbToggle`, `PfbLenient`, `PfbIdnMode` + the thin
-  `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
-  - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
-    `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
-  - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
-    `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
-    token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading
-    `'on'` still blocks all IDN. `PfbConfig::read('pfb_idn')` returns the enum;
-    `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
-    `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
-    (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
-    vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
-- **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
-  `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
-  legacy `python_idn` fallback is retained for a config predating the key). Toggle/lenient enums
-  have **no Python consumer** (`config.getboolean()` reads all bool toggles), so they are
-  PHP-only adapters.
+- **Per-field adapter inventory** — which field maps to `PfbToggle` / `PfbLenient` /
+  `PfbIdnMode`, the `pfb_idn`→`PfbIdnMode` token reuse (`All` = legacy `'on'`, so it round-trips
+  with no migration), and the shared Python `IdnMode` vocabulary — lives in
+  [`docs/misc/config-gateway.md`](docs/misc/config-gateway.md).
 
 #### Explicitly out of scope (ADR-28 §2.4)
 
@@ -463,39 +450,24 @@ gates (pulled by `composer install`, enforced in CI `test.yml` + the pre-commit 
 `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
 `tests/php/pfsense_doubles.php`).
 
-**PHPCS — three targeted sniffs** (in `tests/phpcs/PfBlockerNG/`), all wired via `phpcs.xml.dist`,
-each with its own scope:
+**PHPCS — three targeted sniffs** (`tests/phpcs/PfBlockerNG/`, wired via `phpcs.xml.dist`; each
+behaviour-pinned by its own `*SniffTest.php`, where the precise scope/exclusion mechanics live):
 
-- **PFBL-01 `RequirePfbFilter`** (`PfBlockerNG.Validation.RequirePfbFilter`, scoped to
-  `pfblockerng.inc` only): inside an **in-scope (allow-listed) function** — the
-  ADR-06/07/10/13 input-handling surfaces — no `exec`-family call, `json_encode` manifest
-  write, or dynamic filesystem-path build may appear **without a preceding semantic-validation
-  call** (`pfb_filter()` / `pfb_sanitise_feed_header()` / `sanitize_ipaddr()`) in the same
-  scope — the *semantic* layer `escapeshellarg()` can't provide (both required). Scope is an
-  explicit allow-list (the `scopeFunctions` property); add a function name there when a new
-  in-scope surface lands. Behaviour pinned by `tests/php/RequirePfbFilterSniffTest.php`.
+- **PFBL-01 `PfBlockerNG.Validation.RequirePfbFilter`** (scope: `pfblockerng.inc`) — inside an
+  allow-listed input-handling function (the `scopeFunctions` property), an `exec`-family call,
+  `json_encode` manifest write, or dynamic filesystem-path build must be **preceded by a
+  semantic-validation call** (`pfb_filter()` / `pfb_sanitise_feed_header()` / `sanitize_ipaddr()`)
+  — the layer `escapeshellarg()` can't provide. Add a new in-scope surface to `scopeFunctions`.
+- **`PfBlockerNG.CodeStyle.UppercaseBooleanLiteral`** (scope: all `src/` PHP) — boolean **value**
+  literals must be uppercase `TRUE`/`FALSE`; type-declaration positions, strings, and `null` are
+  out of scope.
+- **`PfBlockerNG.Config.RequireConfigGateway`** (scope: all `src/` PHP except
+  `pfblockerng_extra.inc` / `pfblockerng_migrate.inc`) — a `config_*_path` call whose first arg is
+  a static literal resolving to a **registered** key must go through `PfbConfig` instead; dynamic
+  paths, foreign keys, and section-level reads are not flagged. Adding a registered key ⇒ also add
+  its path to the sniff's `$registeredPaths`.
 
-- **ADR-28 `UppercaseBooleanLiteral`** (`PfBlockerNG.CodeStyle.UppercaseBooleanLiteral`,
-  scoped to **all `src/` PHP** — all `.inc` files + `www/`): flags any `true`, `false`,
-  `True`, `False` (etc.) boolean **value** literal that is not exactly uppercase `TRUE`/`FALSE`.
-  Type-declaration positions (`string|false`, `?true`, `: false` return types, param types) are
-  **excluded** — PHPCS's tokenizer converts them to `T_STRING` before the sniff fires. Strings
-  (`'true'`/`"false"`), identifiers, and `null` are out of scope. Behaviour pinned by
-  `tests/php/UppercaseBooleanLiteralSniffTest.php` against `tests/phpcs/fixtures/`.
-
-- **ADR-29 `RequireConfigGateway`** (`PfBlockerNG.Config.RequireConfigGateway`, scoped to
-  **all `src/` PHP** except `pfblockerng_extra.inc` and `pfblockerng_migrate.inc`): flags any
-  `config_get_path` / `config_set_path` / `config_del_path` call whose first argument is a
-  **static string literal** resolving to a **registered** `installedpackages/pfblockerng*` key
-  (from `pfb_cfg_registry()`). All registered keys must go through `PfbConfig::read/write/delete`.
-  Precise by design — does NOT flag: dynamic paths (`$var` interpolation), non-registered
-  (foreign) keys, section-level reads (path ends at the section, no scalar key suffix), or
-  pfSense-core sections. `pfblockerng_extra.inc` is excluded (the gateway itself). When adding a
-  new registered key to `pfb_cfg_registry()`, also add its full path to the `$registeredPaths`
-  property in `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php`. Behaviour
-  pinned by `tests/php/RequireConfigGatewaySniffTest.php` against `tests/phpcs/fixtures/`.
-
-Run `vendor/bin/phpcs --standard=phpcs.xml.dist src/` (config from `phpcs.xml.dist`).
+Run `vendor/bin/phpcs --standard=phpcs.xml.dist src/`.
 
 ### Shell
 

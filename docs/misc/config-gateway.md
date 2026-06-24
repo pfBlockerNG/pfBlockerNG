@@ -5,6 +5,26 @@ Deep reference for the ADR-28/29 config-storage adapters and the `PfbConfig` gat
 → "Config gateway — PfbConfig". This file holds the mechanics a change needs only when adding a
 field, reasoning about rollback/downgrade, or checking the foreign-key exclusions.
 
+## Adapter inventory (field → enum)
+
+- **PHP adapters / enums** (`PfbToggle`, `PfbLenient`, `PfbIdnMode` + the thin
+  `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
+  - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
+    `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
+  - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
+    `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
+    token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading
+    `'on'` still blocks all IDN. `PfbConfig::read('pfb_idn')` returns the enum;
+    `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
+    `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
+    (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
+    vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
+- **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
+  `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
+  legacy `python_idn` fallback is retained for a config predating the key). Toggle/lenient enums
+  have **no Python consumer** (`config.getboolean()` reads all bool toggles), so they are
+  PHP-only adapters.
+
 ## Adding a new registered field
 
 1. Add an entry to `pfb_cfg_registry()` with the exact `config.xml` key, its section path,
