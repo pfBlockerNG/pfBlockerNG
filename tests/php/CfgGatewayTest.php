@@ -1200,8 +1200,10 @@ final class CfgGatewayTest extends TestCase
 	 */
 	public function testNoToggleFieldDefaultsToOn(): void
 	{
+		$toggle_count = 0;
 		foreach (pfb_cfg_registry() as $field_key => $entry) {
 			if ($entry['read_adapter'] === 'pfb_cfg_toggle_read') {
+				$toggle_count++;
 				$this->assertNotSame(
 					'on', $entry['default'],
 					"'{$field_key}': a TOGGLE field must not default to 'on' — its '' off-value "
@@ -1210,6 +1212,11 @@ final class CfgGatewayTest extends TestCase
 				);
 			}
 		}
+		// Anchor against a vacuous pass: if no toggle field exists the loop above
+		// asserts nothing, so this guard would silently stop guarding.
+		$this->assertGreaterThan(0, $toggle_count,
+			'Registry must contain at least one toggle-adapter field for this guard to be meaningful'
+		);
 	}
 
 	/**

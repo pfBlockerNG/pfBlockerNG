@@ -55,10 +55,12 @@ enum PfbToggle: string
 	}
 }
 
-// PfbLenient — the ADR-22 scheme-parsing leniency flag.
+// PfbLenient — a tri-state {on, off, legacy ''} flag (the explicit 'off' token
+// survives the live config round-trip where a toggle's '' off-value would not).
 //
-// Used by: pfb_dnsbl_lenient (pfb_dnsblconfig['pfb_dnsbl_lenient']).
-//   Stored vocabulary: 'on' | 'off' | '' (missing pre-ADR-22 install).
+// Used by: pfb_dnsbl_lenient (pfb_dnsblconfig['pfb_dnsbl_lenient'], ADR-22 scheme-parsing
+//   leniency) and pfb_keep (#484 — so a default-on keep flag can store 'off' explicitly).
+//   Stored vocabulary: 'on' | 'off' | '' (legacy: a missing pre-ADR-22 / pre-#484 install).
 //   pfb_global() normalisation at :1364:
 //     pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value
 //   Note: '' (missing key) maps to Off ('off'), NOT to the PfbToggle '' value.
