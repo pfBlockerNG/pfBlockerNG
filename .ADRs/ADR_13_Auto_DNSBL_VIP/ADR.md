@@ -187,3 +187,42 @@ Prompt: `05_Docs_Smoke_DoD.txt`
 - [ ] **IPv6 recommendation (softened — §7 pivot).** With the resolver listening on IPv6: auto mode provisions `pfB_AUTO_VIP_v6` `fd00::53/128`; manual mode without a v6 VIP does **not** force-disable — DNSBL keeps running on IPv4 and `pfb_global` logs the non-blocking warning. *(CI-proven that the predicate fires on the smoke box — the resolver listens on `lo0` `::1`; the live smoke matrix confirms manual-mode DNSBL is NOT force-disabled. On-box still worth confirming the auto v6 VIP is created + a real AAAA block sinks to it.)*
 - [ ] **HA sync.** On a CARP pair, the flag + VIP replicate and each node creates/removes its own lo0 VIP on its own enable/disable.
 - [ ] **Uninstall.** Removing the package deletes the marked VIP(s); no orphan alias on lo0.
+
+---
+
+## Amendment (#473) — fixed Class-B/C/A candidate list
+
+**Status:** Accepted (2026-06-24). Supersedes the §2 `10.10.X.53` / `fd00:X::53`
+bounded sweep *and* the interim #487 disjoint-fallback pool.
+
+**Motivation.** The original preferred address `10.10.10.53` (and its `10.10.X.53`
+sweep) sits inside `10/8` — the RFC1918 range almost every install routes via a
+`/8`, so it conflicts on a large share of deployments (issue #473; the two-VM smoke
+topology, WAN `10.10.0.0/24`, exposed it). #487 widened the pool with documentation
+(RFC 5737) and CGNAT fallbacks, but those are awkward sinkhole homes and over-built
+for the need.
+
+**Decision.** `pfb_dnsbl_vip_candidates()` returns a small fixed ordered list,
+least-collision-first:
+
+- IPv4: `172.16.53.53` (Class B, least-used on end-user LANs) → `192.168.53.53`
+  (Class C) → `10.53.53.53` (Class A, most-used, last). Each a `/32` `.53` host.
+- IPv6: a single ULA candidate `fd00:53:53:53:53:53:53:53/128`.
+
+`pfb_pick_free_dnsbl_vip()` is unchanged — it still returns the first candidate free
+of VIP/subnet conflict, else `null`.
+
+**Contract preserved (§2 "Semantics that MUST be preserved").** Unchanged: marker
+reuse on upgrade (existing auto-VIPs keep their address), the `null` → checkbox
+disabled + warning ("warn and ask") last resort, and teardown. Only the candidate
+set and its order change. An IPv6 user already on `fd00:53:53:.../…` resolves the
+single-candidate conflict manually (manual VIP) — by design, no larger v6 pool.
+
+**Alternatives rejected.** A per-base /16 sweep or 48-candidate pool — over-built;
+three well-chosen RFC1918 hosts plus warn-and-ask cover all realistic topologies.
+RFC 5737 / CGNAT sinkholes (#487) — non-RFC1918, awkward as a routed sinkhole home.
+
+**Coverage.** `tests/php/DnsblVipCandidatesTest.php` (exact list + order) and
+`tests/php/DnsblPickFreeVipTest.php` (first-free, skip-to-second, skip-to-tertiary,
+all-conflict → `null`, v6 free + v6-taken → `null`). The live-VM matrix
+(`test_smoke_matrix.py`) now expects `172.16.53.53` as the elected auto address.
