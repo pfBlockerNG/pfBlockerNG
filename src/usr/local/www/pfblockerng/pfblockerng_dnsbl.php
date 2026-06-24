@@ -47,6 +47,7 @@ $pconfig['pfb_control_legacy']	= $pfb['dconfig']['pfb_control_legacy']			?: '';
 $pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
 $pconfig['pfb_dnsvip6'] = $pfb['dconfig']['pfb_dnsvip6'] ?: 'none';
 $pconfig['pfb_dnsvip_auto']	= $pfb['dconfig']['pfb_dnsvip_auto']			?: '';
+$pconfig['pfb_dnsbl_nonat']	= $pfb['dconfig']['pfb_dnsbl_nonat']			?: '';
 $pconfig['pfb_dnsport']		= $pfb['dconfig']['pfb_dnsport']			?: '8081';
 $pconfig['pfb_dnsport_ssl']	= $pfb['dconfig']['pfb_dnsport_ssl']			?: '8443';
 $pconfig['dnsbl_interface']	= $pfb['dconfig']['dnsbl_interface']			?: 'lo0';
@@ -747,6 +748,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_tld']		= pfb_filter($_POST['pfb_tld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['pfb_dnsbl_nonat']	= pfb_filter($_POST['pfb_dnsbl_nonat'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// [ ADR-13 ] Persist the auto-create decision. When ON, leave the stored
 			// pfb_dnsvip4/6 ids untouched here (the manual dropdowns are disabled): the
@@ -2974,6 +2976,14 @@ $section->addInput(new Form_Select(
 	$options_dnsbl_interface_all
 ))->setHelp('Select the interface which DNSBL Web Server will Listen on.<br />'
 	. 'Default: <strong>Localhost (ports 80/443)</strong> - Selected Interface should be a Local Interface only.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dnsbl_nonat',
+	gettext('Auto NAT'),
+	gettext('Disable automatic NAT rule creation'),
+	($pconfig['pfb_dnsbl_nonat'] == 'on'),
+	'on'
+))->setHelp('When set, pfBlockerNG will not auto-create the DNSBL NAT port-forward rules (non-Localhost interface only); manage them manually.');
 
 // [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
 // selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
