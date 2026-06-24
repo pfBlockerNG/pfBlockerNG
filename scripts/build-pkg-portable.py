@@ -386,53 +386,19 @@ class Recipe:
         # (installed scripts/binaries are not writable) — NOT 0755.
         self._install(args, "0555")
 
-    def _cmd_install_program(self, args: list[str]) -> None:
-        # INSTALL_PROGRAM also uses ${BINMODE} = 0555.
-        self._install(args, "0555")
-
     def _cmd_mv(self, args: list[str]) -> None:
-        srcs, dest = self._copy_args(args)
-        for s in srcs:
-            shutil.move(s, dest)
-
-    def _cmd_cp(self, args: list[str]) -> None:
-        srcs, dest = self._copy_args(args)
-        dest_p = Path(dest)
-        multi = len(srcs) > 1 or dest_p.is_dir()
-        for s in srcs:
-            sp = Path(s)
-            if sp.is_dir():
-                shutil.copytree(sp, dest_p / sp.name, dirs_exist_ok=True)
-                continue
-            target = dest_p / sp.name if multi else dest_p
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(sp, target)
-
-    @staticmethod
-    def _copy_args(args: list[str]) -> tuple[list[str], str]:
-        # Drop flags (e.g. -R, -p), then split into (sources, dest).
+        # Drop flags (e.g. -f), then split into (sources, dest).
         paths = [a for a in args if not a.startswith("-")]
         if len(paths) < 2:
-            raise BuildError(f"copy/move with too few paths: {args!r}")
-        return paths[:-1], paths[-1]
+            raise BuildError(f"mv with too few paths: {args!r}")
+        for s in paths[:-1]:
+            shutil.move(s, paths[-1])
 
-    def _cmd_ln(self, args: list[str]) -> None:
-        srcs, link = self._copy_args(args)  # validates: raises on too few paths
-        target = srcs[-1]
-        Path(link).parent.mkdir(parents=True, exist_ok=True)
-        if Path(link).exists() or Path(link).is_symlink():
-            Path(link).unlink()
-        os.symlink(target, link)
-
-    def _cmd_rm(self, args: list[str]) -> None:
-        for a in args:
-            if a.startswith("-"):
-                continue
-            p = Path(a)
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-            elif p.exists():
-                p.unlink()
+    # NB: cp / ln / rm / install_program are intentionally NOT implemented. The
+    # three pfBlockerNG port Makefiles drive only MKDIR / INSTALL_DATA /
+    # INSTALL_SCRIPT / SED / REINPLACE_CMD (plus MV, handled above); an unknown
+    # ${MACRO} is a hard error (see _exec), so re-add a command the day a port
+    # actually needs it.
 
     def _cmd_reinplace_cmd(self, args: list[str]) -> None:
         self._sed_inplace(args)
