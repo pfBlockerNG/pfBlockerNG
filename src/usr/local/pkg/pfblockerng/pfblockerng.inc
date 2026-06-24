@@ -1664,8 +1664,8 @@ function pfb_global() {
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
 	$pfb['dnsbl_hsts']	= PfbConfig::read('pfb_hsts')->value;			// DNSBL Resolver python block HSTS via Null Blocking mode
 	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
-	// registry adapter: legacy 'on' -> All (preserves block-all-IDN on upgrade);
-	// 'all' -> All; 'confusable' -> Confusable; '' / 'off' / absent -> Off. Downstream
+	// registry adapter: 'on' -> All (preserves block-all-IDN on upgrade); 'confusable'
+	// -> Confusable; '' / 'off' / absent / the dropped 4.0.0-alpha 'all' -> Off. Downstream
 	// consumers compare against the enum; the ini build serialises the canonical token.
 	$pfb['dnsbl_idn']	= PfbConfig::read('pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')

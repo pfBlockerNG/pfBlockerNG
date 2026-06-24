@@ -150,8 +150,9 @@ contract, scoped per field by `since-version`:
 ### 2.5 Explicitly kept / out of scope
 
 - **`config.xml` stored format** — no versioned schema or migration pass (ADR-28 §2.2); the
-  gateway writes canonical (behaviour-equivalent) tokens; it never introduces a novel on-disk
-  token an older release would misread.
+  gateway writes canonical (behaviour-equivalent) tokens within each field's vocabulary. A newer
+  feature value (e.g. `'confusable'`) is naturally unknown to an older release, which degrades it
+  safely to off — it is never misread into a different setting.
 - **`py_unbound.ini`, manifests, and any serialized/wire value** read by Python or shell — those are
   generated artifacts / inter-process contracts, not `config.xml`; unchanged.
 - **Non-pfBlockerNG config** (`system/*`, `installedpackages/shellcmdsettings`, widgets sequence,
@@ -216,8 +217,9 @@ contract, scoped per field by `since-version`:
 - **PHP** — tabs; PHP 8.3; uppercase `TRUE`/`FALSE`/`NULL` (ADR-28 sniff); no `die()`/`exit()` in
   library code; keep the PFBL-01 `RequirePfbFilter` sniff green; stub any newly-reached pfSense
   function from upstream.
-- **Behaviour-preserving writes** — writes emit canonical (downgrade-safe) tokens; never a novel
-  on-disk token an older release would misread (ADR-28 §2.2).
+- **Behaviour-preserving writes** — writes emit canonical tokens from each field's vocabulary; an
+  older release either understands the token or degrades an unknown one safely to off — never a
+  misread into a different setting (ADR-28 §2.2).
 - **Clean the diff** — each phase minimal and intentional; no gratuitous reformatting of untouched
   lines; alignment opportunistic within touched blocks only.
 - **Plan with a higher model, implement with Sonnet** — each phase executed by a Sonnet sub-agent

@@ -59,8 +59,8 @@ $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
-// PfbIdnMode enum (legacy 'on'/'all' -> All, '' -> Off); toStored() gives the canonical
-// config token ('on' | 'confusable' | 'off') that the <select> options below carry.
+// PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all' and '' -> Off); toStored() gives the
+// canonical config token ('on' | 'confusable' | 'off') that the <select> options below carry.
 $pconfig['pfb_idn']		= PfbConfig::read('pfb_idn')->toStored();
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
@@ -603,6 +603,14 @@ if ($_POST) {
 		// Non-ascii characters are not allowed for DNSBL Regex
 		if (!mb_detect_encoding($_POST['pfb_regex_list'], 'ASCII', TRUE)) {
 			$input_errors[] = 'DNSBL Regex list contains non-ascii characters';
+		}
+
+		// ADR-08: IDN Blocking mode must be one of the <select> options. PFB_FILTER_WORD
+		// only checks shape, so without this an out-of-vocabulary value (e.g. a tampered
+		// POST) would canonicalise to 'off' and silently disable IDN blocking.
+		if (!in_array(pfb_filter($_POST['pfb_idn'] ?? '', PFB_FILTER_WORD, 'dnsbl'),
+			array('off', 'confusable', 'on'), TRUE)) {
+			$input_errors[] = 'DNSBL IDN Blocking mode is invalid!';
 		}
 
 		// Validate customlists

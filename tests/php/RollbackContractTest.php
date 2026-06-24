@@ -30,10 +30,10 @@ use PHPUnit\Framework\TestCase;
  *   addition cannot silently break the contract.
  *
  * pfb_idn (ADR-28 reframe): now uses the PfbIdnMode adapter (NOT null/null).
- *   PfbIdnMode::All backing value is 'on' — the original pre-ADR-08 block-all token.
- *   Legacy transitional devel token 'all' normalises to 'on' on write-back (migration;
- *   behaviour-preserving + downgrade-safe). Backward vocabulary: {'on', 'confusable',
- *   'off'} — no novel token introduced; see testPfbIdnModeAdapterForwardAndBackward().
+ *   PfbIdnMode::All backing value is 'on' — the original pre-ADR-08 block-all token, so
+ *   an older release reading 'on' still blocks all IDN (downgrade-safe). The 4.0.0-alpha
+ *   'all' token is dropped (unrecognised -> Off -> 'off'). Backward vocabulary: {'on',
+ *   'confusable', 'off'} — no novel token; see testPfbIdnModeAdapterForwardAndBackward().
  *
  * NOTE on pfb_cfg_field_adapter_type():
  *   It classifies pfb_idn ('pfb_cfg_idn_mode_read' adapter) as type 'idn', so it is
@@ -687,12 +687,12 @@ final class RollbackContractTest extends TestCase
 	 *
 	 * ADR-28 reframe: pfb_idn now uses the PfbIdnMode adapter. PfbIdnMode::All
 	 * backing value is 'on' (canonical; reuses the original block-all token so older
-	 * releases reading 'on' still block all IDN — downgrade-safe). The transitional
-	 * devel token 'all' normalises to 'on' on write-back (behaviour-equivalent).
+	 * releases reading 'on' still block all IDN — downgrade-safe). The 4.0.0-alpha
+	 * 'all' token is dropped (unrecognised -> Off -> 'off').
 	 *
 	 * Backward vocabulary (tokens an older release might have stored / might read back):
 	 *   'on'         -> All -> 'on'  (canonical identity; downgrade-safe)
-	 *   'all'        -> All -> 'on'  (transitional devel token; behaviour-equivalent)
+	 *   'all'        -> Off -> 'off' (dropped 4.0.0-alpha token; unrecognised)
 	 *   'confusable' -> Confusable -> 'confusable' (identity; new token, old code treats
 	 *                                               as off — acceptable, same as unset)
 	 *   'off'        -> Off  -> 'off' (identity)
@@ -774,6 +774,23 @@ final class RollbackContractTest extends TestCase
 				"pfb_cfg_field_adapter_type({$key}) returned unknown type: '{$type}'"
 			);
 		}
+	}
+
+	/**
+	 * Every adapter type a registered field can resolve to (toggle / lenient / idn)
+	 * has a non-empty vocabulary in pfb_cfg_field_vocab(). Guards against a missing or
+	 * empty entry (e.g. the 'idn' vocabulary added with the PfbIdnMode adoption).
+	 */
+	public function testFieldVocabNonEmptyForEveryAdapterTypeInUse(): void
+	{
+		$vocab = pfb_cfg_field_vocab();
+		foreach (pfb_cfg_registry() as $key => $entry) {
+			$type = pfb_cfg_field_adapter_type($entry);
+			$this->assertArrayHasKey($type, $vocab, "no vocabulary for adapter type '{$type}' (field {$key})");
+			$this->assertNotEmpty($vocab[$type], "vocabulary for adapter type '{$type}' is empty (field {$key})");
+		}
+		// The 'idn' adoption must contribute its canonical write tokens.
+		$this->assertSame(['on', 'confusable', 'off'], $vocab['idn']);
 	}
 
 	/**
@@ -1355,12 +1372,10 @@ final class RollbackContractTest extends TestCase
 	/**
 	 * Return all toggle-adapted keys with their full config.xml paths.
 	 *
-	 * IMPORTANT: pfb_idn is EXCLUDED here even though pfb_cfg_field_adapter_type()
-	 * returns 'toggle' for it (the production helper uses 'toggle' as its fallback for
-	 * any adapter that is neither NULL nor 'pfb_cfg_lenient_read', including the new
-	 * 'pfb_cfg_idn_mode_read' idn adapter). pfb_idn uses the PfbIdnMode adapter and
-	 * returns a PfbIdnMode enum, not a PfbToggle. It is covered by the dedicated
-	 * testPfbIdnModeAdapterForwardAndBackward() test instead.
+	 * pfb_idn is excluded here because pfb_cfg_field_adapter_type() classifies it as
+	 * type 'idn' (its 'pfb_cfg_idn_mode_read' adapter), not 'toggle' — so the type
+	 * filter below skips it naturally. pfb_idn returns a PfbIdnMode enum (not a
+	 * PfbToggle) and is covered by testPfbIdnModeAdapterForwardAndBackward() instead.
 	 *
 	 * @return array<string,string>  key => full config path
 	 */

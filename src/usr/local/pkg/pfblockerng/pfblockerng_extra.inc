@@ -35,10 +35,10 @@
 //
 // Policy (ADR-28 §2.2, reframed): the goal is PRESERVE BEHAVIOUR ON UPGRADE, not
 // byte-identical storage. A write may persist a normalised canonical token when it
-// is behaviour-equivalent to the legacy one (e.g. pfb_idn 'on' -> 'all', which
-// reproduces the prior block-all-IDN behaviour). Downgrade is tolerated: older
-// releases string-compared these values, so an unknown token falls through to the
-// safe default there.
+// is behaviour-equivalent to the legacy one (e.g. pfb_idn All persists the legacy
+// 'on' token, reproducing the prior block-all-IDN behaviour). Downgrade is tolerated:
+// older releases string-compared these values, so an unknown token falls through to
+// the safe default there.
 //
 // Tests: tests/php/CfgAdaptersTest.php, tests/php/RollbackContractTest.php.
 // Naming follows pfb_* conventions (CLAUDE.md "Naming").
@@ -196,8 +196,8 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 
 /**
  * Write a PfbIdnMode (enum or legacy string) back to its canonical stored token
- * ('all' | 'confusable' | 'off'). Legacy 'on' normalises to 'all' (one-way; it
- * reproduces the prior block-all-IDN behaviour on upgrade).
+ * ('on' | 'confusable' | 'off'). All persists as the legacy 'on' token (reproduces
+ * the prior block-all-IDN behaviour); the 4.0.0-alpha 'all' token is dropped to 'off'.
  */
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
@@ -1259,11 +1259,11 @@ function pfb_run_migrations(): void
 //     field's legacy stored vocabulary.  The gateway always writes legacy
 //     tokens, so downgrades leave older code reading values it already
 //     understands.
-//   - A field EXCLUDED from backward-safety testing is one where write()
-//     CANNOT guarantee a legacy token — those are excluded from adapter
-//     adoption entirely (like pfb_idn's 'on'→'all' normalisation at the
-//     pfb_global() seam, which bypasses PfbConfig).  At the PfbConfig level,
-//     no field is excluded because all write adapters emit legacy tokens.
+//   - At the PfbConfig level no field is excluded: every write adapter emits a
+//     token from the field's known vocabulary. A write may NORMALISE a legacy
+//     token to a behaviour-equivalent canonical one (e.g. pfb_idn: All persists
+//     the legacy 'on' token, and the dropped 4.0.0-alpha 'all' normalises to
+//     'off') — the emitted token is always one an older release understands.
 //
 // SINCE-VERSION CONVENTION:
 //   The 'since' field in pfb_cfg_registry() records the package release that
@@ -1297,9 +1297,10 @@ function pfb_run_migrations(): void
  *   'lenient' — PfbLenient fields: 'on' | 'off' | '' ('' = pre-ADR-22 absent).
  *   'plain'   — null/null adapters: any string; identity through (no novel token).
  *
- * The idn-mode adapter (pfb_cfg_idn_mode_read/write) is NOT wired at PfbConfig
- * level for pfb_idn (excluded; legacy 'on' cannot round-trip through the adapter
- * without normalisation — pfb_idn uses null adapters and is backward-safe as-is).
+ * The idn-mode adapter (pfb_cfg_idn_mode_read/write) IS wired at PfbConfig level
+ * for pfb_idn. All canonicalises to the legacy 'on' token, so writes only emit the
+ * idn vocabulary ('on'|'confusable'|'off'); the dropped 4.0.0-alpha 'all' token is
+ * read as Off and never written.
  *
  * @return array<string,list<string>>
  */

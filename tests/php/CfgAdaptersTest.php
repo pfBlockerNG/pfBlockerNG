@@ -26,16 +26,16 @@ use PHPUnit\Framework\TestCase;
  *     Then write(read(v)) == v for 'on'/'off'; '' maps to 'off' (normalised default).
  *
  * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/'off'.
- *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'.
- *     Legacy transitional devel token 'all' normalises to 'on' (behaviour-equivalent;
- *     older releases reading 'on' still block all IDN — downgrade-safe).
- *     '' (absent/disabled) normalises to 'off'.
+ *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'. 'on'
+ *     reuses the pre-4.0.0 block-all token, so older releases reading it still block all
+ *     IDN (downgrade-safe). The 4.0.0-alpha-only 'all' token is dropped (unrecognised ->
+ *     Off), and '' (absent/disabled) is Off.
  *     Given a raw stored value v.
  *     When pfb_cfg_idn_mode_read(v) -> enum, pfb_cfg_idn_mode_write(enum) -> stored.
  *     Then write(read('on')) == 'on'  (canonical identity).
- *     And write(read('all')) == 'on'  (transitional devel token migrates to canonical).
  *     And write(read('confusable')) == 'confusable'  (identity).
  *     And write(read('off')) == 'off'  (identity).
+ *     And write(read('all')) == 'off'  (dropped alpha token -> Off).
  *     And write(read('')) == 'off'    (normalised default).
  */
 final class CfgAdaptersTest extends TestCase
