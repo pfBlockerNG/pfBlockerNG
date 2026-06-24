@@ -14870,6 +14870,8 @@ function sync_package_pfblockerng($cron='') {
 	#################################
 
 	// If 'Rule Changes' are found, utilize the 'filter_configure()' function, if not, utilize 'pfctl replace' command
+	// Captured here (before the if/else) so it is always defined at the post-hook emit.
+	$pfb_ip_unlock_forced = FALSE;
 	if ($pfb['autorules'] && $orig_rules_nocreated != $new_rules_nocreated || $pfb['enable'] == '' || $pfb['remove']) {
 
 		if (!$pfb['save']) {
@@ -14926,6 +14928,10 @@ function sync_package_pfblockerng($cron='') {
 
 			// Remove Alerts IP unlock file and force Reload of all Aliastables
 			if (file_exists("{$pfb['ip_unlock']}")) {
+				// Captured BEFORE unlink: flag that a temporary unlock forced a re-block this
+				// pass, so PFB_IP_CHANGED reports '1' even though filter_configure() did NOT
+				// run (issue #519 -- mirrors $pfb_dnsbl_unlock_forced / issue #517 on the DNSBL side).
+				$pfb_ip_unlock_forced = TRUE;
 				unlink_if_exists("{$pfb['ip_unlock']}");
 				$pfb['repcheck'] = TRUE;
 			}
@@ -15273,8 +15279,11 @@ function sync_package_pfblockerng($cron='') {
 	// reloads, filter_configure(), and the FINAL REPORTING 'closing' step above --
 	// so the change flags are final. Context is derived ONLY from existing flags
 	// (no new tracking):
-	//   PFB_IP_CHANGED    = $pfb['filter_configure'] -- set TRUE when firewall rule/
-	//       aliastable changes were found and a filter reload was applied (the IP side).
+	//   PFB_IP_CHANGED    = $pfb['filter_configure'] || $pfb_ip_unlock_forced -- set TRUE
+	//       when firewall rule/aliastable changes were found and a filter reload was
+	//       applied (the IP side), OR when a pending /tmp/ip_unlock file forced a
+	//       pfctl-replace re-block without a filter reload -- captured before the unlink,
+	//       issue #519 (mirrors $pfb_dnsbl_unlock_forced / issue #517 on the DNSBL side).
 	//   PFB_DNSBL_CHANGED = mirrors the gate that drives pfb_update_unbound above:
 	//       $pfb_data_changed (fingerprint-derived, or domain_update/domain_clear when
 	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update,
@@ -15307,7 +15316,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 	pfb_run_hooks('post', array(
 		'TRIGGER'		=> pfb_hook_trigger($cron),
-		'IP_CHANGED'		=> !empty($pfb['filter_configure'])	? '1' : '0',
+		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
 		'DNSBL_CHANGED'		=> (!empty($pfb_data_changed) || !empty($pfbupdate) || !empty($pfbpython) ||
 						!empty($safesearch_update) || !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
 		'STATUS'		=> 'ok',
