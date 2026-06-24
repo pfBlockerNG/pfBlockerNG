@@ -1,4 +1,4 @@
-"""Tests for scripts/redmine_to_github.py — pure helper functions.
+"""Tests for archive/redmine_to_github.py — pure helper functions.
 
 All network/env I/O is excluded: only the pure helpers are covered here.
 The test suite honours CLAUDE.md's coverage mandate:
@@ -42,7 +42,7 @@ from typing import Any
 
 # ── Load the script as a module (hyphened name → importlib) ───────────────────
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "redmine_to_github.py"
+_SCRIPT = Path(__file__).resolve().parent / "redmine_to_github.py"
 _spec = importlib.util.spec_from_file_location("redmine_to_github", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 rtg = importlib.util.module_from_spec(_spec)

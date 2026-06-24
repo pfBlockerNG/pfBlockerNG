@@ -109,4 +109,4 @@ jobs:
           if [ -n "$ISSUE_IDS" ]; then
             ARGS+=(--issue-ids "$ISSUE_IDS")
           fi
-          python scripts/redmine_to_github.py "${ARGS[@]}"
+          python archive/redmine_to_github.py "${ARGS[@]}"
