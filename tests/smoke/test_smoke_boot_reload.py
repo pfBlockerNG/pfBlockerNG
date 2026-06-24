@@ -135,7 +135,7 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
 
     before_members = h.wait_pfctl_table(vm, spec.alias)
     before_rule = h.rule_references(vm, spec.alias)
-    archive_present = ramdisk and vm.ssh("test", "-f", h.ALIASARCHIVE).returncode == 0
+    archive_present = ramdisk and h.archive_exists(vm, h.ALIASARCHIVE)
 
     # ramdisk leg: drop a /var sentinel so the post-reboot check can PROVE /var came up
     # as a memory filesystem (the sentinel is wiped) rather than persisting on disk.
@@ -199,8 +199,8 @@ def test_ip_alias_and_rule_survive_reboot(reboot_observation: RebootObservation)
     assert obs.before_rule, f"precondition [{leg}]: a pf rule must reference {obs.alias} after reload"
     if obs.ramdisk:
         assert obs.archive_present, (
-            f"precondition [ramdisk]: {h.ALIASARCHIVE} must exist pre-reboot (the earlyshellcmd "
-            "restore source) — else the ramdisk path is not actually exercised"
+            f"precondition [ramdisk]: {h.ALIASARCHIVE}.{{zst,bz2}} must exist pre-reboot (the "
+            "earlyshellcmd restore source) — else the ramdisk path is not actually exercised"
         )
         # The sentinel must have been created pre-reboot, else the wipe check below is a
         # false green (a sentinel that never existed also reads as "gone" after reboot).
