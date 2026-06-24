@@ -635,8 +635,15 @@ maintainer smoke.
 ## Smoke tests (ADR-04 — live pfSense VM) — READ BEFORE TOUCHING `tests/smoke/`
 
 `tests/smoke/` installs the branch `.pkg` on a REAL pfSense CE VM in CI (`smoke-single.yml`,
-workflow_dispatch) and asserts pfBlockerNG end-to-end. Non-obvious truths, each costly to
-relearn:
+workflow_dispatch) and asserts pfBlockerNG end-to-end.
+
+**Run it LOCALLY (no workflow spent) on a Debian/KVM box** — the supported runbook is
+[`docs/misc/local-smoke-debian.md`](docs/misc/local-smoke-debian.md), wrapped by
+`scripts/local-smoke.sh` (handles the stub-DNS-on-:53 relay, the civm client image, and the
+`SMOKE_*` vars). Prefer this over a CI dispatch when iterating. Reach for it before asking how
+to run smoke locally — it already exists.
+
+Non-obvious truths, each costly to relearn:
 
 - **Probe ON-BOX** (`drill @127.0.0.1` over SSH), NOT the runner-side SLIRP hostfwd (the
   WAN-hostfwd DNS path isn't answered in CI). Python-mode DNSBL has **no localhost exemption** —
