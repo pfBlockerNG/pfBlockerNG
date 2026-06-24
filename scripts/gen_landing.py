@@ -442,10 +442,28 @@ def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[
     return out
 
 
-def _edition_table_html(rows: list[dict]) -> str:
-    body = "".join(
-        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
-        f"<td>{_esc(r['channel'])}</td>"
+def _versions_table_html(rows: list[dict], *, with_channel: bool) -> str:
+    """One versions table for a single edition. Columns:
+    pfSense [| Channel] | Version | ABI | PHP | Python | Published | Commit | Size.
+
+    The Channel column appears only where devel and stable can both occur (the
+    per-edition and older-releases tables); nightlies and EOL omit it (every row
+    there is, by construction, the same channel)."""
+    channel_th = "<th>Channel</th>" if with_channel else ""
+    body = "".join(_row_html(r, with_channel=with_channel) for r in rows)
+    # overflow-x wrapper: a narrow (mobile) viewport scrolls the table, not the page.
+    return (
+        '<div class="tablewrap"><table><thead><tr>'
+        f"<th>pfSense</th>{channel_th}<th>Version</th><th>ABI</th>"
+        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _row_html(r: dict, *, with_channel: bool) -> str:
+    channel_td = f"<td>{_esc(r['channel'])}</td>" if with_channel else ""
+    return (
+        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>{channel_td}"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
         f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
@@ -453,14 +471,6 @@ def _edition_table_html(rows: list[dict]) -> str:
         f'<td class="num">{_esc(r.get("published", ""))}</td>'
         f"<td>{commit_cell(r.get('commit', ''))}</td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
-        for r in rows
-    )
-    # overflow-x wrapper: a narrow (mobile) viewport scrolls the table, not the page.
-    return (
-        '<div class="tablewrap"><table><thead><tr>'
-        "<th>pfSense</th><th>Channel</th><th>Version</th><th>ABI</th>"
-        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
-        f"</tr></thead><tbody>{body}</tbody></table></div>"
     )
 
 
@@ -475,7 +485,7 @@ def _packages_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
     older_nightlies_by_edition = _older_nightlies_by_edition(pkgs, matrix)
     return "".join(
         f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>"
-        f"{_edition_table_html(rows)}"
+        f"{_versions_table_html(rows, with_channel=True)}"
         f"{_older_releases_details(older_releases_by_edition.get(k, []))}"
         f"{_older_nightlies_details(older_nightlies_by_edition.get(k, []))}"
         for k, rows in sections
@@ -496,29 +506,6 @@ def older_nightlies(pkgs: list[dict]) -> list[dict]:
     return rows
 
 
-def _older_nightlies_table_html(rows: list[dict]) -> str:
-    """One older-nightlies table for a single edition: the same columns as the per-edition
-    tables (matrix-joined pfSense version + PHP/Python), minus Channel — every row here is,
-    by construction, a nightly."""
-    body = "".join(
-        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
-        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
-        f"<td><code>{_esc(r['abi'])}</code></td>"
-        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
-        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
-        f'<td class="num">{_esc(r.get("published", ""))}</td>'
-        f"<td>{commit_cell(r.get('commit', ''))}</td>"
-        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
-        for r in rows
-    )
-    return (
-        '<div class="tablewrap"><table><thead><tr>'
-        "<th>pfSense</th><th>Version</th><th>ABI</th>"
-        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
-        f"</tr></thead><tbody>{body}</tbody></table></div>"
-    )
-
-
 def _older_nightlies_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
     """The retained older nightlies grouped by edition key (matrix-joined by ABI), so each
     edition's disclosure folds in directly under that edition's table. Empty when none."""
@@ -533,7 +520,10 @@ def _older_nightlies_details(rows: list[dict]) -> str:
     that edition has none. Same columns as the edition table, minus Channel (all nightlies)."""
     if not rows:
         return ""
-    return f"<details><summary>Older nightlies ({len(rows)})</summary>{_older_nightlies_table_html(rows)}</details>"
+    return (
+        f"<details><summary>Older nightlies ({len(rows)})</summary>"
+        f"{_versions_table_html(rows, with_channel=False)}</details>"
+    )
 
 
 def older_releases(pkgs: list[dict]) -> list[dict]:
@@ -551,30 +541,6 @@ def older_releases(pkgs: list[dict]) -> list[dict]:
     return rows
 
 
-def _older_releases_table_html(rows: list[dict]) -> str:
-    """One older-releases table for a single edition: same columns as the per-edition
-    tables (matrix-joined pfSense version + PHP/Python), WITH Channel — devel and stable
-    can both appear, so the channel column distinguishes them."""
-    body = "".join(
-        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
-        f"<td>{_esc(r['channel'])}</td>"
-        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
-        f"<td><code>{_esc(r['abi'])}</code></td>"
-        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
-        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
-        f'<td class="num">{_esc(r.get("published", ""))}</td>'
-        f"<td>{commit_cell(r.get('commit', ''))}</td>"
-        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
-        for r in rows
-    )
-    return (
-        '<div class="tablewrap"><table><thead><tr>'
-        "<th>pfSense</th><th>Channel</th><th>Version</th><th>ABI</th>"
-        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
-        f"</tr></thead><tbody>{body}</tbody></table></div>"
-    )
-
-
 def _older_releases_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
     """The retained older releases grouped by edition key (matrix-joined by ABI), so each
     edition's disclosure folds in directly under that edition's table. Empty when none."""
@@ -589,7 +555,10 @@ def _older_releases_details(rows: list[dict]) -> str:
     that edition has none. Includes Channel column (devel and stable can both appear)."""
     if not rows:
         return ""
-    return f"<details><summary>Older releases ({len(rows)})</summary>{_older_releases_table_html(rows)}</details>"
+    return (
+        f"<details><summary>Older releases ({len(rows)})</summary>"
+        f"{_versions_table_html(rows, with_channel=True)}</details>"
+    )
 
 
 def _eol_varver(pfsense_version: str, variant: str) -> str:
@@ -669,31 +638,6 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     return out
 
 
-def _eol_table_html(rows: list[dict]) -> str:
-    """One EOL-versions table for a single edition.
-
-    Columns mirror the older-nightlies table shape (no Channel — irrelevant for EOL):
-    pfSense | Version | ABI | PHP | Python | Published | Commit | Size.
-    """
-    body = "".join(
-        f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>"
-        f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
-        f"<td><code>{_esc(r['abi'])}</code></td>"
-        f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
-        f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
-        f'<td class="num">{_esc(r.get("published", ""))}</td>'
-        f"<td>{commit_cell(r.get('commit', ''))}</td>"
-        f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
-        for r in rows
-    )
-    return (
-        '<div class="tablewrap"><table><thead><tr>'
-        "<th>pfSense</th><th>Version</th><th>ABI</th>"
-        "<th>PHP</th><th>Python</th><th>Published</th><th>Commit</th><th>Size</th>"
-        f"</tr></thead><tbody>{body}</tbody></table></div>"
-    )
-
-
 def _eol_versions_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
     """The EOL pfSense versions block: one table per edition (CE, Plus), each listing every
     route-only pfSense version and the last/highest .pkg still served for it.
@@ -715,7 +659,10 @@ def _eol_versions_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
     if "Other" in by_edition:
         ordered_keys.append("Other")
 
-    body = "".join(f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>{_eol_table_html(by_edition[k])}" for k in ordered_keys)
+    body = "".join(
+        f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>{_versions_table_html(by_edition[k], with_channel=False)}"
+        for k in ordered_keys
+    )
     return (
         "<h2>EOL pfSense versions</h2>"
         "<p>These pfSense versions have reached end-of-life. The last build we served for "
