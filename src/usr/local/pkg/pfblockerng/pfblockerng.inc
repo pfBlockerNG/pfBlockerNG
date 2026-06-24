@@ -1082,6 +1082,36 @@ function pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool {
 	return $listens_v6 && !$auto;
 }
 
+/*
+ * Resolve a per-feed list pre/post script (config-stored basename) to its
+ * absolute path, or FALSE. The script must be a regular file whose canonical
+ * path sits directly in one of the allowed list-script dirs (list_scripts/,
+ * with the legacy package root as upgrade fallback). realpath() + strict
+ * dirname containment = parity with pfb_filter() LOCALFILE, so a symlink
+ * escaping the dir is rejected. Executable bit is NOT required (presence in
+ * the dir is the authorization). $dirs is overridable for off-appliance tests.
+ */
+function pfb_resolve_list_script($name, $dirs = null) {
+	$name = basename((string) $name);	// traversal defense
+	if ($name === '') {
+		return FALSE;
+	}
+	if ($dirs === null) {
+		$dirs = array('/usr/local/pkg/pfblockerng/list_scripts', '/usr/local/pkg/pfblockerng');
+	}
+	foreach ($dirs as $dir) {
+		$real_dir = realpath($dir);
+		if ($real_dir === FALSE) {
+			continue;
+		}
+		$real = realpath("{$dir}/{$name}");
+		if ($real !== FALSE && dirname($real) === $real_dir && is_file($real)) {
+			return "{$dir}/{$name}";	// ponytail: in-dir path; exec follows the (contained) link
+		}
+	}
+	return FALSE;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -2398,6 +2428,11 @@ if (!defined('PFB_HOOK_TIMEOUT_DEFAULT')) {
 // Grace period (seconds) after SIGTERM before timeout(1) sends SIGKILL.
 if (!defined('PFB_HOOK_KILL_GRACE')) {
 	define('PFB_HOOK_KILL_GRACE', 5);
+}
+
+// Ceiling (seconds) for per-feed list pre/post transform scripts.
+if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
+	define('PFB_LIST_SCRIPT_TIMEOUT', 300);
 }
 
 // Directory holding the admin-authored hook scripts the picker offers and the
@@ -13417,27 +13452,14 @@ function sync_package_pfblockerng($cron='') {
 						$srcint = $list['srcint'] ?: FALSE;
 
 						// IP v4/6 Advanced Tunable - (Pre/Post Script processing)
-						// List scripts live under list_scripts/; fall back to the
-						// legacy package root so a not-yet-migrated custom script
-						// still runs during the upgrade transition.
-						$pfb_script_pre = FALSE;
-						if (isset($list['script_pre']) && !empty($list['script_pre'])) {
-							$script_pre = basename($list['script_pre']);
-							if (file_exists("/usr/local/pkg/pfblockerng/list_scripts/{$script_pre}")) {
-								$pfb_script_pre = "/usr/local/pkg/pfblockerng/list_scripts/{$script_pre}";
-							} elseif (file_exists("/usr/local/pkg/pfblockerng/{$script_pre}")) {
-								$pfb_script_pre = "/usr/local/pkg/pfblockerng/{$script_pre}";
-							}
-						}
-
+						// list_scripts/ first, legacy package root as upgrade fallback.
+						$pfb_script_pre  = FALSE;
 						$pfb_script_post = FALSE;
+						if (isset($list['script_pre']) && !empty($list['script_pre'])) {
+							$pfb_script_pre = pfb_resolve_list_script($list['script_pre']);
+						}
 						if (isset($list['script_post']) && !empty($list['script_post'])) {
-							$script_post = basename($list['script_post']);
-							if (file_exists("/usr/local/pkg/pfblockerng/list_scripts/{$script_post}")) {
-								$pfb_script_post = "/usr/local/pkg/pfblockerng/list_scripts/{$script_post}";
-							} elseif (file_exists("/usr/local/pkg/pfblockerng/{$script_post}")) {
-								$pfb_script_post = "/usr/local/pkg/pfblockerng/{$script_post}";
-							}
+							$pfb_script_post = pfb_resolve_list_script($list['script_post']);
 						}
 
 						// Determine 'list' details (return array $pfbarr)
@@ -13612,11 +13634,12 @@ function sync_package_pfblockerng($cron='') {
 							}
 
 							// IPv4/6 Advanced Tunable - (Pre Script processing)
-							if ($pfb_script_pre && file_exists("{$pfb_script_pre}")) {
+							if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {
 								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
 								$file_dwn_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.pre"); // Save original file for restoration
-								exec("{$pfb_script_pre} {$file_dwn_esc} {$list['vtype']} {$elog}");
+								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
+								exec("{$tmo}{$pfb_script_pre} {$file_dwn_esc} {$list['vtype']} {$elog}");
 							}
 
 							if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
@@ -13831,11 +13854,12 @@ function sync_package_pfblockerng($cron='') {
 							pfb_logger("\n", 1);
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
-							if ($pfb_script_post && file_exists("{$pfb_script_post}")) {
+							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
 								pfb_logger("\nExecuting post-script: {$list['script_pre']}\n", 1);
 								$file_org_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.post"); // Save original file for restoration
-								exec("{$pfb_script_post} {$file_org_esc} {$list['vtype']} {$elog}");
+								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
+								exec("{$tmo}{$pfb_script_post} {$file_org_esc} {$list['vtype']} {$elog}");
 							}
 
 							if (!$custom) {
