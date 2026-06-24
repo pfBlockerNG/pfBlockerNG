@@ -864,21 +864,15 @@ The **only** exemptions are the dev-only
 classes that go straight to `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills
 — see "Worktrees"); everything touching `src/`, `tests/`, or CI uses this flow.
 
-**`devel` advances out of band — rebase onto the latest remote before every push.** Parallel
-agents' commits replay on top of `devel`, so the tip moves under you. Before **any** commit/push
-(to `devel` or a PR branch): `git fetch origin`, rebase onto the latest tip (`git rebase
-origin/devel`, or `origin/<pr-base>`), resolve, push (`--force-with-lease` if rewritten). Never
-reconcile with a merge commit. Same rule for each follow-up commit on an open PR.
-
-**Rebase onto the latest base BEFORE opening a PR or dispatching CI/smoke on a branch.** CI runs
-against your branch tip, so a stale base re-runs bugs the base has *already fixed* — most
-painfully a flaky/broken test someone else fixed on `devel` still fails on your stale-based
-branch, sending you to chase a "regression" that is not yours (it bit ADR-29: an upstream-block
-smoke test was already fixed on `devel`, but the PR branch, cut from an older tip, still carried
-the broken copy and failed CI). So the *first* step of opening a PR — and of any
-`workflow_dispatch` smoke/fan-out on a feature branch — is `git fetch origin` + `git rebase
-origin/devel` (resolve, `--force-with-lease`). Validate against the base you will merge into, not
-a stale snapshot; if a freshly-rebased branch still fails, the failure is genuinely yours.
+**Rebase onto the latest base before every push, PR, or CI/smoke dispatch.** `devel` advances out
+of band — parallel agents replay on top, so the tip moves under you, **and** CI runs against your
+branch tip. Before any commit/push, before opening a PR, and before any `workflow_dispatch`
+smoke/fan-out: `git fetch origin` + `git rebase origin/devel` (or `origin/<pr-base>`), resolve,
+`--force-with-lease` if rewritten — same for every follow-up commit on an open PR. **Never**
+reconcile with a merge commit. A stale base re-runs bugs the base *already fixed* — most painfully
+a flaky/broken test someone else fixed on `devel` still fails on your stale-based branch, sending
+you to chase a phantom regression (it bit ADR-29). Validate against the base you will merge into;
+a freshly-rebased branch that still fails is genuinely your bug.
 
 **Clean the diff before you push/PR.** Diff the branch against its base (`git diff
 origin/devel...HEAD`) and reduce it to **only what the change requires** — the substantive edit
