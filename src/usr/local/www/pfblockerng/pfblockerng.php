@@ -1452,7 +1452,7 @@ function pfblockerng_get_countries() {
 				while (($line = @fgets($handle)) !== FALSE) {
 
 					$line = trim($line);
-					if (substr($line, 0, 1) == '#') {
+					if (str_starts_with($line, '#')) {
 						if ($pfb['complete']) {
 							if (file_exists("{$pfb['ccdir']}/{$isocode}_v{$type}.txt")) {
 
@@ -1496,7 +1496,7 @@ function pfblockerng_get_countries() {
 						}
 					}
 
-					elseif (substr($line, 0, 1) != '#') {
+					elseif (!str_starts_with($line, '#')) {
 						if (!empty(pfb_filter($isocode, PFB_FILTER_WORD, 'php'))) {
 							if ($cont == 'Top Spammers') {
 								$isocode_esc = escapeshellarg("{$pfb['ccdir']}/{$isocode}_v{$type}.txt");

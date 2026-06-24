@@ -101,7 +101,7 @@ if (isset($_GET)) {
 	}
 	if (isset($_GET['atype']) && !empty($_GET['atype'])) {
 		$raw_atype = $_GET['atype'];
-		if (substr($raw_atype, 0, 10) === 'Whitelist|') {
+		if (str_starts_with($raw_atype, 'Whitelist|')) {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
 		} else {
 			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
@@ -140,7 +140,7 @@ if (isset($_POST)) {
 	}
 	if (isset($_POST['atype']) && !empty($_POST['atype'])) {
 		$raw_atype = $_POST['atype'];
-		if (substr($raw_atype, 0, 10) === 'Whitelist|') {
+		if (str_starts_with($raw_atype, 'Whitelist|')) {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
 		} else {
 			$temp_value = pfb_filter($raw_atype, PFB_FILTER_ATYPE, 'Category_edit');
@@ -203,7 +203,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 
 	$feed_info = convert_feeds_json();			// Load/convert Feeds (w/alternative aliasname(s), if user-configured
 	if (is_array($feed_info) &&
-	    substr($atype, 0, 9) != 'Whitelist') {
+	    !str_starts_with($atype, 'Whitelist')) {
 		foreach ($feed_info as $ftype => $info) {
 
 			if (empty($info) || $gtype != $ftype) {
@@ -294,7 +294,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 		$rowid = count($rowdata);
 
 		// Create new IP Whitelist Alias via Reports Tab
-		if (substr($atype, 0, 9) == 'Whitelist') {
+		if (str_starts_with($atype, 'Whitelist')) {
 			$rowdata[$rowid]['aliasname']	= 'Whitelist';
 			$rowdata[$rowid]['description']	= 'pfBlockerNG Whitelist';
 			$rowdata[$rowid]['cron']	= 'EveryDay';
@@ -674,7 +674,7 @@ if ($_POST && isset($_POST['save'])) {
 		if (!empty($customlist)) {
 			foreach ($customlist as $line) {
 
-				if (substr($line, 0, 1) == '#' || empty($line)) {
+				if (str_starts_with($line, '#') || empty($line)) {
 					continue;
 				}
 				$value = array_map('trim', preg_split('/(?=#)/', $line));

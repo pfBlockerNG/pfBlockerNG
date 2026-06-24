@@ -521,8 +521,8 @@ function pfb_iso_timestamp(string $raw): string {
 // fixes issue #360: a 'pfB_*_v6' alias must never become 'pfB_*_v6_v4').
 function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
 	return str_starts_with((string) $address, 'pfB_') &&
-	       substr((string) $address, -3) !== '_v4' &&
-	       substr((string) $address, -3) !== '_v6' &&
+	       !str_ends_with((string) $address, '_v4') &&
+	       !str_ends_with((string) $address, '_v6') &&
 	       $ipprotocol === 'inet';
 }
 
@@ -1989,7 +1989,7 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 	$customlist = explode("\r\n", base64_decode($text));
 	if (!empty($customlist)) {
 		foreach ($customlist as $line) {
-			if (substr(trim($line), 0, 1) != '#' && !empty($line)) {
+			if (!str_starts_with(trim($line), '#') && !empty($line)) {
 				if ($idn && !ctype_print($line)) {
 					$line_old = $line;
 					// Convert encodings to UTF-8
@@ -1997,7 +1997,7 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 						mb_detect_encoding($line, 'UTF-8, ASCII, ISO-8859-1'));
 					if (strpos($line, '#') !== FALSE) {
 						$tmpline = preg_split('/(?=#)/', $line);
-						if (substr($tmpline[0], 0, 1) == '.') {
+						if (str_starts_with($tmpline[0], '.')) {
 							// idn_to_ascii() returns empty string if it starts with '.' 
 							$tmpline[0] = idn_to_ascii(ltrim($tmpline[0], '.'));
 							if (!empty($tmpline[0])) {
@@ -2013,7 +2013,7 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 						}
 						$line = implode(' ', $tmpline);
 					} else {
-						if (substr($line, 0, 1) == '.') {
+						if (str_starts_with($line, '.')) {
 							$line = idn_to_ascii(ltrim($line, '.'));
 							if (!empty($line)) {
 								$line = '.' . $line;
@@ -4466,7 +4466,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	if (!empty($dnsbl_white)) {
 		foreach ($dnsbl_white as $key => $line) {
 			if (!empty($line)) {
-				if (substr($line, 0, 4) == 'www.') {
+				if (str_starts_with($line, 'www.')) {
 					$line = substr($line, 4);
 				}
 
@@ -4476,7 +4476,7 @@ function pfb_unbound_python_whitelist($mode='') {
 				}
 				$tld_segments = @min((array((substr_count($line, '.') +1), $tld_segments) ?: 1));
 
-				if (substr($line, 0, 1) == '.') {
+				if (str_starts_with($line, '.')) {
 					$line = ltrim($line, '.');
 					$dnsbl_whitelist .= "{$line},1\n";
 				} else {
@@ -4589,7 +4589,7 @@ function pfb_dnsbl_abp_extract_ip($line) {
 	}
 
 	// ABP network anchor: ||host^[$options]
-	if (substr($s, 0, 2) == '||') {
+	if (str_starts_with($s, '||')) {
 		$rest	= substr($s, 2);
 		// Drop any $options modifier suffix.
 		if (($dpos = strpos($rest, '$')) !== FALSE) {
@@ -5671,7 +5671,7 @@ EOF;
 			$noaaaa_list = pfbng_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
 			if (!empty($noaaaa_list)) {
 				foreach ($noaaaa_list as $key => $list) {
-					if (substr($list[0], 0, 1) == '.') {
+					if (str_starts_with($list[0], '.')) {
 						$list[0] = ltrim($list[0], '.');
 						$noaaaa .= "{$key} = {$list[0]},1\n";
 					} else {
@@ -6551,7 +6551,7 @@ function pfblockerng_top1m() {
 
 			if (isset($pfb_include[$tld])) {
 				// Whitelist both 'www.example.com' and 'example.com'
-				if (substr($csvline[1], 0, 4) == 'www.') {
+				if (str_starts_with($csvline[1], 'www.')) {
 					$csvline[1] = substr($csvline[1], 4);
 				}
 				$x++;
@@ -6883,7 +6883,7 @@ function pfb_ip_is_internal($ip) {
 
 	// Unwrap an IPv4-mapped IPv6 address (::ffff:0:0/96) to its IPv4 form so it is
 	// vetted against the IPv4 ranges, not skipped by the v6 set.
-	if (strlen($bin) === 16 && substr($bin, 0, 12) === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
+	if (strlen($bin) === 16 && str_starts_with($bin, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff")) {
 		$ip = inet_ntop(substr($bin, 12));
 		$bin = substr($bin, 12);
 	}
@@ -8601,7 +8601,7 @@ function pfb_filterrules() {
 	exec("{$pfb['pfctl']} -vvsr 2>&1", $results);
 	if (!empty($results)) {
 		foreach ($results as $result) {
-			if (substr($result, 0, 1) == '@') {
+			if (str_starts_with($result, '@')) {
 
 				$type = strstr(ltrim(strstr($result, ' ', FALSE), ' '), ' ', TRUE);
 				if (in_array($type, array('block', 'pass', 'match'))) {
@@ -8960,8 +8960,8 @@ function pfb_collect_localip() {
 		$ipaddr = $ifcfg['ipaddr'] ?? '';
 		$if     = $ifcfg['if'] ?? '';
 		$has_gateway = in_array($ipaddr, array('dhcp', 'pppoe', 'pptp', 'l2tp', 'ppp'), TRUE)
-			|| substr($if, 0, 4) == 'ovpn'
-			|| substr($if, 0, 5) == 'ipsec'
+			|| str_starts_with($if, 'ovpn')
+			|| str_starts_with($if, 'ipsec')
 			|| !empty($ifcfg['gateway']);
 		if ($has_gateway) {
 			$pfb_local[] = get_interface_ip($ifname) ?: 'Disabled';
@@ -9505,7 +9505,7 @@ function pfb_daemon_filterlog() {
 
 			$log_type = 'BSD';
 			$f_pos = 5;
-			if (substr($line, 0, 1) == '<') {
+			if (str_starts_with($line, '<')) {
 				$log_type = 'syslog';
 				$f_pos = 7;
 			}
@@ -10219,7 +10219,7 @@ function pfb_daemon_dnsbl_index() {
 			$pfb_buffer = @fgets($i_handle);
 			$pfb_buffer = str_replace($p1, $p2, $pfb_buffer);
 
-			if (substr($pfb_buffer, 0, 6) == 'INDEX,' && substr_count($pfb_buffer, ',') == 4) {
+			if (str_starts_with($pfb_buffer, 'INDEX,') && substr_count($pfb_buffer, ',') == 4) {
 				$csvline = str_getcsv($pfb_buffer, ',', '"', '"');
 
 				// Determine blocked domain type (Full, 1x1 or JS)
@@ -11737,14 +11737,14 @@ function sync_package_pfblockerng($cron='') {
 					if (!empty($safesearch_file)) {
 						foreach ($safesearch_file as $host) {
 
-							if (substr($host, 0, 1) == '#') {
+							if (str_starts_with($host, '#')) {
 								continue;
 							}
 
 							$line = str_replace('"', '', strstr($host, '"', FALSE));
 							$host_ip = trim(str_replace('A ', '', strstr($line, 'A ', FALSE)));
 							$domain = strstr($line, ' ', TRUE);
-							if (substr($domain, 0, 4) == 'www.') {
+							if (str_starts_with($domain, 'www.')) {
 								$domain = substr($domain, 4);
 							}
 
@@ -11830,13 +11830,13 @@ function sync_package_pfblockerng($cron='') {
 				foreach ($pfb_white as $line) {
 					if (!empty($line)) {
 						$wildcard = FALSE;
-						if (substr($line, 0, 1) == '.') {
+						if (str_starts_with($line, '.')) {
 							$line = ltrim($line, '.');
 							$wildcard = TRUE;
 						}
 
 						// Remove 'www.' prefix
-						if (substr($line, 0, 4) == 'www.') {
+						if (str_starts_with($line, 'www.')) {
 							$line = substr($line, 4);
 						}
 
@@ -12245,7 +12245,7 @@ function sync_package_pfblockerng($cron='') {
 													$easylist = $validate_header = TRUE;
 													continue;
 												}
-												elseif (substr($line, 0, 1) === '!') {
+												elseif (str_starts_with($line, '!')) {
 													continue;
 												}
 												else {
@@ -12318,8 +12318,8 @@ function sync_package_pfblockerng($cron='') {
 
 												// Skip ABP comment / control lines so the raw feed
 												// passed to Python is dense (Python skips them too).
-												if ($line === '' || substr($line, 0, 1) === '!' ||
-												    substr($line, 0, 1) === '[') {
+												if ($line === '' || str_starts_with($line, '!') ||
+												    str_starts_with($line, '[')) {
 													continue;
 												}
 
@@ -12342,7 +12342,7 @@ function sync_package_pfblockerng($cron='') {
 												}
 
 												// Remove comment lines and special format considerations
-												if (substr($line, 0, 1) == '#') {
+												if (str_starts_with($line, '#')) {
 													// Exit (hpHosts) when end of domain names found.
 													if (strpos($line, 'Append critical updates below') !== FALSE) {
 														break;
@@ -12362,7 +12362,7 @@ function sync_package_pfblockerng($cron='') {
 												}
 
 												// Remove slash comment lines
-												if (substr($line, 0, 2) == '//') {
+												if (str_starts_with($line, '//')) {
 													continue;
 												}
 
@@ -12647,7 +12647,7 @@ function sync_package_pfblockerng($cron='') {
 												$liteparser = FALSE;
 
 												// Skip yHost '@' prefixed lines
-												if (substr($line, 0, 1) == '@') {
+												if (str_starts_with($line, '@')) {
 													continue;
 												}
 
@@ -13947,7 +13947,7 @@ function sync_package_pfblockerng($cron='') {
 									$line = trim($line);
 
 									// Remove commentlines and blank lines
-									if (substr($line, 0, 1) == '#' || empty($line)) {
+									if (str_starts_with($line, '#') || empty($line)) {
 										continue;
 									}
 
@@ -14504,7 +14504,7 @@ function sync_package_pfblockerng($cron='') {
 	$exist_aliases = config_get_path('aliases/alias', []);
 	foreach ($exist_aliases as $cbalias) {
 
-		if (substr($cbalias['name'], 0, 4) == 'pfB_') {
+		if (str_starts_with($cbalias['name'], 'pfB_')) {
 			// Remove unreferenced pfB aliastable files
 			if (!in_array($cbalias['name'], $new_aliases_list)) {
 				unlink_if_exists("{$pfb['aliasdir']}/{$cbalias['name']}.*");
@@ -14572,7 +14572,7 @@ function sync_package_pfblockerng($cron='') {
 					// Remove all existing rules that start with 'pfB_' in the Rule Description
 					// (the legacy auto-rules this region rebuilds) — but keep user rules and
 					// the DNS-bypass rules above.
-					if (substr($rule['descr'], 0, 4) != 'pfB_' || $is_dns_bypass_rule) {
+					if (!str_starts_with($rule['descr'], 'pfB_') || $is_dns_bypass_rule) {
 
 						// Upgrade previous IPv4 pfBlockerNG 'alias type' aliasnames to new '_v4' suffix format
 						foreach (array('source', 'destination') as $rtype) {
@@ -14626,7 +14626,7 @@ function sync_package_pfblockerng($cron='') {
 
 					// Track pfB aliases referenced by rules.
 					foreach (array('source', 'destination') as $rtype) {
-						if ((substr($rule[$rtype]['address'], 0, 4) == 'pfB_') &&
+						if ((str_starts_with($rule[$rtype]['address'], 'pfB_')) &&
 						    !in_array($rule[$rtype]['address'], $pfb_active_aliases)) {
 							$pfb_active_aliases[] = $rule[$rtype]['address'];
 						}
@@ -15008,7 +15008,7 @@ function sync_package_pfblockerng($cron='') {
 
 	foreach (config_get_path('nat/rule', []) as $key => $ex_nat) {
 		foreach (array('source', 'destination') as $rtype) {
-			if (isset($ex_nat[$rtype]['address']) && substr($ex_nat[$rtype]['address'], 0, 4) == 'pfB_') {
+			if (isset($ex_nat[$rtype]['address']) && str_starts_with($ex_nat[$rtype]['address'], 'pfB_')) {
 				$pfb_suffix = substr($ex_nat[$rtype]['address'], -3);
 
 				if ($pfb_suffix == '_v6') {

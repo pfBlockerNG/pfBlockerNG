@@ -73,7 +73,7 @@ if (is_array($pfb['feeds_list']) && isset($pfb['feeds_list'][$gtype]) && is_arra
 $feed_alt_selected = array();
 if (is_array($fconfig)) {
 	foreach ($fconfig as $key => $line) {
-		if (substr($key, 0, 9) == 'feed_alt_') {
+		if (str_starts_with($key, 'feed_alt_')) {
 			$feed_alt_selected[] = str_replace('alt_', '', $line);
 		}
 	}

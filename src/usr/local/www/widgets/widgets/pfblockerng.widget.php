@@ -300,7 +300,7 @@ function pfBlockerNG_update_table() {
 	if (!empty($pfb_pfctl)) {
 		foreach($pfb_pfctl as $line) {
 			$line = trim(str_replace(array( '[', ']' ), '', $line));
-			if (substr($line, 0, 1) == '-') {
+			if (str_starts_with($line, '-')) {
 				$pfb_alias = trim(strstr($line, 'pfB', FALSE));
 				if (pfb_widget_alias_hidden($pfb_alias, $show_agg)) {
 					unset($pfb_alias);
@@ -320,7 +320,7 @@ function pfBlockerNG_update_table() {
 			}
 
 			if (isset($pfb_alias)) {
-				if (substr($line, 0, 9) == 'Addresses') {
+				if (str_starts_with($line, 'Addresses')) {
 					$addr = trim(exec_command(implode(' ', [
 						$pfb['pfctl'], '-t',
 						escapeshellarg($pfb_alias),
@@ -712,7 +712,7 @@ function pfBlockerNG_get_header($mode='') {
 
 				$gcount = 0;
 				foreach (pfbng_text_area_decode($config_path, TRUE, FALSE, TRUE) as $cline) {
-					if (substr(trim($cline), 0, 1) != '#' && !empty($cline)) {
+					if (!str_starts_with(trim($cline), '#') && !empty($cline)) {
 						$gcount++;
 					}
 				}

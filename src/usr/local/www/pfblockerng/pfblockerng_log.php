@@ -214,7 +214,7 @@ function pfb_validate_filepath($validate, $pfb_logtypes) {
 	$path = pathinfo($validate, PATHINFO_DIRNAME) . '/';
 	$file = basename($validate);
 
-	if ($path == '/var/unbound/' && substr($file, 0, 4) != 'pfb_' && !file_exists("{$file}")) {
+	if ($path == '/var/unbound/' && !str_starts_with($file, 'pfb_') && !file_exists("{$file}")) {
 		return FALSE;
 	}
 
