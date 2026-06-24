@@ -249,7 +249,7 @@ def test_recipe_bare_mv_and_unknown_command(tmp_path: Path) -> None:
 
 
 def test_recipe_unused_commands_are_unsupported(tmp_path: Path) -> None:
-    # cp / ln / rm / install_program were removed (#502 B2): the port Makefiles
+    # cp / ln / rm / install_program were removed (#502 B4): the port Makefiles
     # never emit them, so they must now fail as hard errors rather than silently
     # carrying a maintenance burden. mv stays (exercised above), so it is NOT here.
     for cmd in ("CP", "LN", "RM", "INSTALL_PROGRAM"):
