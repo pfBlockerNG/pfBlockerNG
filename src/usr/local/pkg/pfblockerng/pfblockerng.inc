@@ -15060,6 +15060,29 @@ function pfblockerng_php_pre_deinstall_command() {
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
 
+	// The chrooted Unbound python integration nullfs-mounts host dirs into the chroot
+	// (var/log/pfblockerng for the DNSBL logs, usr/local/share/GeoIP).  A disable goes
+	// through pfb_unbound_include.inc, which unmounts them; an uninstall instead just
+	// deletes that include (below) and only pfb_unbound_python_unmount()s bin/lib — so
+	// these data mounts are left ORPHANED on every uninstall.  A keep=off uninstall then
+	// rmdir's the host log source under the live mount, leaving it stale: chrooted
+	// dnsbl.log writes fail "No such file or directory" for the rest of the session
+	// (surfaced once #484 added the first live keep=off uninstall coverage).  Unmount
+	// them here, before the include is removed, so every uninstall (keep on or off) tears
+	// the chroot down as cleanly as a disable.  Bounded loop clears any stacked mounts.
+	foreach (array('var/log/pfblockerng', 'usr/local/share/GeoIP') as $pfb_cmnt) {
+		$pfb_cmnt_path = "{$g['unbound_chroot_path']}/{$pfb_cmnt}";
+		for ($pfb_cmnt_i = 0; $pfb_cmnt_i < 8; $pfb_cmnt_i++) {
+			if (empty(exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg($pfb_cmnt_path) . " 2>&1"))) {
+				break;
+			}
+			exec("/sbin/umount -t nullfs " . escapeshellarg($pfb_cmnt_path) . " 2>&1", $pfb_cmnt_out, $pfb_cmnt_rv);
+			if ($pfb_cmnt_rv != 0) {
+				break;
+			}
+		}
+	}
+
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
