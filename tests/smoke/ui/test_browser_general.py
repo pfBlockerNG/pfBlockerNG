@@ -183,23 +183,23 @@ def test_log_settings_grouped_layout(
 
     When the DOM is inspected for the new grouped-column structure,
 
-    Then each of the four category header texts ("General", "IP", "DNSBL", "DNS Reply") is
-      present in the page — proving the per-category header Form_Group rows were rendered;
+    Then the three column-header texts are visible on the page ("Max lines", "Schedule",
+      "Keep lines") — these are NEW elements (the per-category header ``Form_StaticText``
+      children); the old layout had no such header row, so this discriminates new from old;
     And the ``log_max_log`` control is present and its enclosing ``.form-group`` left label
       (``col-sm-2.control-label``) shows the log name "pfBlockerNG" — proving per-log rows
-      carry the individual log name as the left label, not the category name;
-    And the three column-header texts are visible on the page ("Max lines", "Schedule",
-      "Keep lines") — proving the header ``Form_StaticText`` children rendered.
+      carry the individual log name as the left label, where the OLD layout carried the
+      category name "General" on that group, so this too discriminates new from old.
+
+    (Category-name presence is deliberately NOT asserted: "General"/"IP"/"DNSBL" also appear
+    as top tabs and the old group labels, so they would pass on the old layout and add no
+    signal. The two checks above are the real before/after discriminators.)
 
     A full-page screenshot is saved as a human-review artifact (not an asserted baseline).
     """
     page = browser_page
     _open(page, webui, GENERAL_PAGE)
     _shot(page, screenshot_dir, "log_settings_grouped_layout")
-
-    # Category header texts present in the page (the Form_Group left labels for each category).
-    for cat in ("General", "IP", "DNSBL", "DNS Reply"):
-        expect(page.get_by_text(cat, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     # Column header texts visible (emitted by the header Form_Group's StaticText children).
     for col_header in ("Max lines", "Schedule", "Keep lines"):
