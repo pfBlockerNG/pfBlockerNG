@@ -593,6 +593,50 @@ def test_software_page_renders_when_override_forces_on(
         assert _SOFTWARE_TAB_HREF in general.text, "the Software tab must be PRESENT when the gate is forced on"
 
 
+def test_software_page_renders_uninstall_controls(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Software page renders the Uninstall confirm checkbox and button, button disabled by default.
+
+    Scenario: the Uninstall Controls (issue #485) are present in the forced-on render.
+      Given the override sentinel set to 'on' (so the provenance gate passes),
+      When the Software page is GET,
+      Then the confirm checkbox ``id="pfb_sw_uninstall_confirm"`` is in the body;
+      And the Uninstall button ``id="pfb_sw_uninstall"`` is in the body;
+      And the button tag carries a ``disabled`` attribute by default (JS enables it only
+          after the checkbox is ticked) — the OFF branch of the confirm gate;
+      And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
+
+    Fail-before / pass-after: the ids ``pfb_sw_uninstall_confirm`` / ``pfb_sw_uninstall``
+    and the ``disabled`` attribute on the button were added in issue #485 Step 1. Running
+    against the pre-Step-1 Software page yields a 200 but the ids are absent, failing
+    the ``in body`` assertions.
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed: {result.detail}"
+        body = resp.text
+
+        assert 'id="pfb_sw_uninstall_confirm"' in body, (
+            f"confirm checkbox id='pfb_sw_uninstall_confirm' not found in {_SOFTWARE_PAGE} body"
+        )
+        assert 'id="pfb_sw_uninstall"' in body, (
+            f"Uninstall button id='pfb_sw_uninstall' not found in {_SOFTWARE_PAGE} body"
+        )
+        # The button must carry the `disabled` attribute on initial render (JS enables it
+        # only after the confirm checkbox is ticked). Match the button tag itself to avoid
+        # false-matching the id string in an unrelated attribute or script block.
+        import re as _re
+
+        btn_tag_match = _re.search(r'<button\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
+        assert btn_tag_match is not None, f"Uninstall button tag not found in {_SOFTWARE_PAGE} body"
+        btn_tag = btn_tag_match.group(0)
+        assert "disabled" in btn_tag, (
+            f"Uninstall button expected 'disabled' attribute on initial render, got: {btn_tag!r}"
+        )
+
+
 def test_software_page_hidden_when_override_forces_off(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:

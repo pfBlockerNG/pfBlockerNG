@@ -345,3 +345,55 @@ def test_software_panel_screenshot_when_enabled(
         _open(browser_page, webui, SOFTWARE_PAGE)
         assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
         _shot(browser_page, screenshot_dir, "software_panel_enabled")
+
+
+def test_software_uninstall_confirm_gate(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Ticking the confirm checkbox enables the (initially disabled) Uninstall button.
+
+    Scenario: the JS confirm gate (``pfb_sw_uninstall_sync``) wires the button's
+    enabled/disabled state to the checkbox (issue #485).
+
+      Given the Software page forced on and loaded in the browser,
+
+      Then ``#pfb_sw_uninstall`` is DISABLED while ``#pfb_sw_uninstall_confirm`` is
+        unchecked (OFF branch — the initial state on page load);
+
+      When ``#pfb_sw_uninstall_confirm`` is checked,
+
+      Then ``#pfb_sw_uninstall`` becomes ENABLED (ON branch — JS handler fired).
+
+    The Uninstall button is NOT clicked — clicking it would trigger an uninstall,
+    removing the package from the smoke VM and breaking subsequent tests. Only the
+    disabled→enabled JS transition is verified here.
+
+    Fail-before / pass-after: the confirm checkbox, the Uninstall button, and the
+    ``pfb_sw_uninstall_sync`` JS handler were all added in issue #485 Step 1. Pre-Step-1,
+    neither id exists on the page, so the locator assertions would fail.
+    """
+    page = browser_page
+    with software_panel_forced(smoke_vm, "on"):
+        _open(page, webui, SOFTWARE_PAGE)
+
+        confirm_cb = page.locator("#pfb_sw_uninstall_confirm")
+        uninstall_btn = page.locator("#pfb_sw_uninstall")
+
+        expect(confirm_cb).to_be_attached(timeout=JS_TIMEOUT_MS)
+        expect(uninstall_btn).to_be_attached(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "software_uninstall_before_confirm")
+
+        # BEFORE: checkbox unchecked -> button disabled (OFF branch).
+        expect(confirm_cb).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+        expect(uninstall_btn).to_be_disabled(timeout=JS_TIMEOUT_MS)
+
+        # FLIP: tick the confirm checkbox -> JS fires -> button enabled (ON branch).
+        confirm_cb.check()
+        expect(confirm_cb).to_be_checked(timeout=JS_TIMEOUT_MS)
+        expect(uninstall_btn).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "software_uninstall_after_confirm")
+        # DO NOT click uninstall_btn — clicking it would uninstall the package and
+        # break every subsequent test in this smoke run.
