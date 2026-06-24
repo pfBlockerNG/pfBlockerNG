@@ -13347,9 +13347,11 @@ function sync_package_pfblockerng($cron='') {
 	// Force re-locks it even when no feed changed -- parity with main, where the
 	// ungated whitelist regeneration sets $pfbpython for the same effect. The reload
 	// path (pfb_update_unbound) then drops the store and clears the manifest's
-	// user_unlock.
+	// user_unlock. Captured BEFORE the reload: pfb_update_unbound() unlinks the file,
+	// so a post-reload file_exists() would always return false (issue #517).
+	$pfb_dnsbl_unlock_forced = file_exists($pfb['dnsbl_unlock']);
 	if ($pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update ||
-	    file_exists($pfb['dnsbl_unlock'])) {
+	    $pfb_dnsbl_unlock_forced) {
 
 		// Create backup of existing DNSBL Unbound database
 
@@ -15264,7 +15266,9 @@ function sync_package_pfblockerng($cron='') {
 	//       aliastable changes were found and a filter reload was applied (the IP side).
 	//   PFB_DNSBL_CHANGED = mirrors the gate that drives pfb_update_unbound above:
 	//       $pfb_data_changed (fingerprint-derived, or domain_update/domain_clear when
-	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update.
+	//       TLD mode / DNSBL inactive), || $pfbupdate || $pfbpython || $safesearch_update,
+	//       || $pfb_dnsbl_unlock_forced (a pending /tmp/dnsbl_unlock file forced the
+	//       reload — captured before pfb_update_unbound() unlinks it, issue #517).
 	//       Reports '1' only when a reload actually fired, so a skipped pass (unchanged
 	//       blocklist, fingerprints equal) correctly emits '0'. !empty() guards any flag
 	//       whose block did not run — no undefined-variable warning.
@@ -15294,7 +15298,7 @@ function sync_package_pfblockerng($cron='') {
 		'TRIGGER'		=> pfb_hook_trigger($cron),
 		'IP_CHANGED'		=> !empty($pfb['filter_configure'])	? '1' : '0',
 		'DNSBL_CHANGED'		=> (!empty($pfb_data_changed) || !empty($pfbupdate) || !empty($pfbpython) ||
-						!empty($safesearch_update)) ? '1' : '0',
+						!empty($safesearch_update) || !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
 		'STATUS'		=> 'ok',
 		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
 		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),

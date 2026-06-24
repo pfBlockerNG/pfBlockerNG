@@ -747,3 +747,99 @@ def test_hooks_webhook_dnsbl_guard_branch(
         )
 
     h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 11) issue #517 — unlock-forced DNSBL reload must report PFB_DNSBL_CHANGED=1
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_dnsbl_changed_unlock_forced(deployed_vm: SmokeVM) -> None:
+    """An unlock-forced DNSBL reload (sole trigger: /tmp/dnsbl_unlock) reports
+    ``PFB_DNSBL_CHANGED='1'`` to post-hooks (issue #517).
+
+    Scenario: the reload gate in ``sync_package_pfblockerng`` fires because
+    ``file_exists($pfb['dnsbl_unlock'])`` is true — no feed change, no fingerprint
+    delta.  Before the fix, ``PFB_DNSBL_CHANGED`` was built from
+    ``$pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update`` only,
+    omitting the unlock condition, so the post-hook saw ``'0'`` even though the
+    reload did fire.  A HAProxy-style recipe keyed on ``PFB_DNSBL_CHANGED`` would
+    therefore MISS the re-lock.
+
+    **Given** a post env-dump hook is enabled; DNSBL has been deployed (``deployed_vm``
+    fixture guarantees this); there is NO pending feed change (a prior settling
+    ``updatednsbl`` leaves the blocklist stable so ``$pfb_data_changed``,
+    ``$pfbupdate``, ``$pfbpython``, and ``$safesearch_update`` are all false on the
+    test pass).
+
+    **And** a ``/tmp/dnsbl_unlock`` file is written on the guest with a valid
+    ``domain,type`` row so the gate's ``file_exists($pfb['dnsbl_unlock'])`` is true.
+
+    **When** ``helpers.reload(vm, 'updatednsbl')`` fires the pass.
+
+    **Then** the captured ``PFB_DNSBL_CHANGED`` from the post-hook env == ``'1'``
+    (the unlock-forced reload is reported as a DNSBL change to post-hooks).
+
+    FAILS on pre-fix code (``PFB_DNSBL_CHANGED`` is ``'0'``); PASSES after the fix.
+    """
+    import subprocess
+
+    token = "unlkchg"
+    marker = h.hook_marker_path(token, "post")
+
+    h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
+
+    # Settle: run a pass so the blocklist is stable and no feed change is pending.
+    # 'updatednsbl' reloads DNSBL from cache (reuse_dnsbl), which is exactly the
+    # no-feed-change pass we need for the subsequent assertion.
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "updatednsbl")
+    env_settle = h.read_hook_env(deployed_vm, marker)
+    assert env_settle is not None, "post hook did not run during the settling pass"
+
+    # Before-state: after settle, no unlock file present => PFB_DNSBL_CHANGED must be
+    # '0' (the four feed-change flags are all false, and no unlock file is present).
+    # This proves the *subsequent* '1' is caused by the unlock file, not leftover state.
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "updatednsbl")
+    env_before = h.read_hook_env(deployed_vm, marker)
+    assert env_before is not None, "post hook did not run for the before-state pass"
+    assert env_before.get("PFB_DNSBL_CHANGED") == "0", (
+        "before-state: expected PFB_DNSBL_CHANGED='0' with no feed change and no unlock file, "
+        f"got {env_before.get('PFB_DNSBL_CHANGED')!r} — {env_before}"
+    )
+
+    # Write /tmp/dnsbl_unlock on the guest with a valid domain,type row.
+    # SmokeVM.ssh routes through /bin/sh (CLAUDE.md tcsh rule) so tee is safe here.
+    domain = h.unique_domain("unlkchg")
+    unlock_path = "/tmp/dnsbl_unlock"
+    unlock_content = f"{domain},DNSBL\n"
+    result = subprocess.run(
+        deployed_vm.ssh_argv("tee", unlock_path),
+        input=unlock_content,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"test_hooks_dnsbl_changed_unlock_forced: failed to write {unlock_path}: "
+            f"rc={result.returncode} {result.stderr!r}"
+        )
+
+    # After-state: reload with the unlock file present; the gate fires solely on
+    # file_exists($pfb['dnsbl_unlock']). pfb_update_unbound() unlinks the file
+    # during the reload, so the post-hook expression must have been captured before
+    # the reload (the fix: $pfb_dnsbl_unlock_forced local var).
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "updatednsbl")
+    env_after = h.read_hook_env(deployed_vm, marker)
+    assert env_after is not None, "post hook did not run for the unlock-forced pass"
+    got = env_after.get("PFB_DNSBL_CHANGED")
+    assert got == "1", (
+        "unlock-forced DNSBL reload must set PFB_DNSBL_CHANGED='1' to post-hooks (issue #517): "
+        f"expected '1', got {got!r}\nfull hook env: {env_after}"
+    )
+
+    h.clear_update_hooks(deployed_vm)
