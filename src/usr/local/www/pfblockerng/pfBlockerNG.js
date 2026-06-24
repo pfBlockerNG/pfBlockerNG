@@ -113,10 +113,7 @@ function pfb_autocomplete() {
 
 // Remove label columns that contain 'XXXX' (To gain full page width)
 function pfb_remove_label() {
-
-	$('label[class="col-sm-2 control-label"]').each(function() {
-		$("label:contains('XXXX')").remove();
-	});
+	$("label:contains('XXXX')").remove();
 }
 
 

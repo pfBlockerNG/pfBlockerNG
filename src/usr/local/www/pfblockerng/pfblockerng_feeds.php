@@ -160,8 +160,8 @@ if ($_POST) {
 
 // Render the Feed Settings alias-name override inputs for a single $type
 // ('ipv4'|'ipv6'|'dnsbl'). Emits that type's StaticText label + its 'feed_<alias>'
-// Form_Input set into $section, identical to the inline loops it replaces. The page
-// calls it for ipv4, ipv6, dnsbl in turn (Phase 3 calls it for the active type only).
+// Form_Input set into $section. The page calls it once, for the active (?type=)
+// tab only (ADR-16 type-scoped UI).
 function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfig) {
 
 	$labels = array(
@@ -284,8 +284,8 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 // per-type block it replaces. The cross-type accumulators ($alt_selected CSV,
 // $feed_info_row separator counter, $aliasname_found) and the state shared with
 // url_compare ($ex_feeds, $alt_feeds, $icon) live at page (global) scope and are bound
-// via `global` so calling this once per type reproduces the original interleaved render.
-// The page loops it for ipv4+ipv6+dnsbl today; Phase 3 calls it for the active type only.
+// via `global`. The page calls it once, for the active (?type=) tab only
+// (ADR-16 type-scoped UI).
 function pfb_feeds_render_predefined_type($ftype, $info) {
 
 	global $ex_feeds, $alt_feeds, $icon, $fconfig, $feed_alt_selected;
