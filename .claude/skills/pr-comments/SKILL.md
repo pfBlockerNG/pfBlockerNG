@@ -55,13 +55,13 @@ typically run the instant you push the PR). Block here until `<handle>` has
 
 **Multiple handles** (`--wait-for=coderabbitai,snyk`): run the wait below **once per handle**
 and continue only when **all engaged** reviewers have finished. **Tolerate an absent reviewer:**
-if a handle shows **no engagement at all** on the PR within a short presence window (no review,
-comment, or — for Snyk — PR check; ~5 min), it is not reviewing this PR — **skip it and don't
-block** (a `TIMEOUT` with zero prior activity = not-present, not a stall). The
-`DECLINE`/`PAUSE`/`@coderabbitai`-nudge machinery below is **CodeRabbit-specific**; other handles
-(**Snyk**, human reviewers) use only the plain `FINISHED`/`TIMEOUT` path. For **Snyk**, "finished"
-also counts its **PR check** reaching a terminal state (`code/snyk` success/failure/neutral on the
-head SHA), not just review comments.
+the loop emits **`NOTPRESENT`** for a handle with zero engagement (no review, comment, or — for
+Snyk — PR check) after the presence window (`PRESENCE` polls, ~5 min) — that handle isn't
+reviewing this PR, so **skip it and don't block**. The `DECLINE`/`PAUSE`/`@coderabbitai`-nudge
+machinery below is **CodeRabbit-specific**; other handles (**Snyk**, human reviewers) use only
+`FINISHED` / `NOTPRESENT` / `TIMEOUT`. For **Snyk**, `FINISHED` also counts its **PR check**
+reaching a terminal state (a completed `code/snyk` check-run on the head SHA), not just review
+comments.
 
 - **"Finished" = the reviewer has posted its findings in the PR** — inline review
   comments and/or a final summary message. It does **not** mean any code/commit
@@ -84,10 +84,12 @@ true gives you a single wake — do not use a foreground `sleep`), then read
 `$RESULT` when it wakes you:
 
 ```sh
-# Set first: OWNER_REPO  PR  HANDLE(lowercased)  MODE(full|finished)  SINCE(ISO8601)  RESULT(tmpfile)
-# First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`
-#             (anchors on the current code, so a stale prior review doesn't satisfy the wait).
-i=0
+# Set first: OWNER_REPO  PR  HANDLE(lowercased)  MODE(full|finished)  SINCE(ISO8601)
+#            SHA(head sha, for Snyk's check-run)  PRESENCE(polls before "not present"; ~10 for a
+#            bot, raise/disable for a human who may start late)  RESULT(tmpfile)
+# First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`,
+#             SHA=`gh pr view "$PR" --json headRefOid -q .headRefOid` (anchors on the current code).
+i=0; seen=0
 while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
   inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
     -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
@@ -95,27 +97,38 @@ while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
     -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.submitted_at > \"$SINCE\") | (.body // \"x\")" 2>/dev/null)
   issuec=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
     -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.updated_at > \"$SINCE\") | (.body // \"\")" 2>/dev/null)
-  # FINISHED = a TERMINAL review result: an inline comment, a submitted review, the
-  # "Actionable comments posted: N" header, OR a clean pass ("No actionable comments
-  # were generated"). A clean pass IS a success — nothing to apply. An ERROR message
-  # (rate limit / service failure) matches none of these, so it falls through and the
-  # poll keeps waiting → TIMEOUT (surfaced to the user) — never reported as success.
-  if [ -n "$inline" ] || [ -n "$review" ] \
+  # Snyk often posts ONLY a PR check, no comment: a completed Snyk check-run = finished; ANY Snyk
+  # check (even in-progress) = engaged. (ponytail: one completed check ⇒ done; a Snyk that finishes
+  # piecemeal across several checks is close enough — tighten only if it ever misfires.)
+  scheck=""
+  if [ "$HANDLE" = snyk ]; then
+    runs=$(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
+      -q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | .status' 2>/dev/null)
+    [ -n "$runs" ] && seen=1
+    printf '%s' "$runs" | grep -q '^completed$' && scheck=1
+  fi
+  [ -n "$inline$review$issuec" ] && seen=1
+  # FINISHED = a TERMINAL result: an inline comment, a submitted review, a completed Snyk check, the
+  # "Actionable comments posted: N" header, OR a clean pass ("No actionable comments were
+  # generated"). A clean pass IS success — nothing to apply. An ERROR (rate limit / service
+  # failure) matches none of these → falls through → eventually TIMEOUT (surfaced), never success.
+  if [ -n "$inline" ] || [ -n "$review" ] || [ -n "$scheck" ] \
        || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
     { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
-  # DECLINE (only when MODE=full) = "Review skipped" because the base isn't the default branch
+  # DECLINE (MODE=full) = "Review skipped" because the base isn't the default branch.
   if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -qi 'review skipped' \
        && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
     { echo DECLINE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
-  # PAUSE (only when MODE=full) = CodeRabbit PAUSED reviews because the branch is too
-  # active (many pushes in a short window). It posts a "Reviews paused" notice and will
-  # NOT review again until resumed — so without this branch the poll would TIMEOUT with
-  # the review never coming. Resolve like DECLINE: ask it to resume, then re-arm.
+  # PAUSE (MODE=full) = CodeRabbit paused reviews (branch too active); it won't review again until
+  # resumed, so without this it would just TIMEOUT. Resolve like DECLINE (ask it to resume).
   if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused|⏸'; then
     { echo PAUSE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
+  # NOTPRESENT = zero engagement after the presence window ⇒ this handle isn't reviewing the PR
+  # (typically a Snyk that isn't enabled here). Skip it instead of blocking out to TIMEOUT.
+  [ "$seen" -eq 0 ] && [ "$i" -ge "$PRESENCE" ] && { echo NOTPRESENT > "$RESULT"; exit 0; }
   i=$((i + 1)); sleep 30
 done
 echo TIMEOUT > "$RESULT"
@@ -132,6 +145,9 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
   success with nothing to apply; Steps 4–5 will simply find no actionable items and
   Step 9 reports it clean. (An error/rate-limit message is deliberately NOT treated
   as finished — it falls through to `TIMEOUT`, which is surfaced to the user.)
+- **`NOTPRESENT`** → no engagement within the presence window — this handle isn't
+  reviewing the PR. **Skip it** (in a multi-handle wait, drop this handle and continue
+  with the others); it is not a stall, so don't report it as a failure.
 - **`DECLINE`** → CodeRabbit refused because the PR's base isn't the default branch.
   Post **one** top-level comment to trigger a full review, then **re-arm the poll in
   finished-only mode** (`MODE=finished`, `SINCE=now` = `date -u +%Y-%m-%dT%H:%M:%SZ`)

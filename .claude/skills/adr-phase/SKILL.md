@@ -150,8 +150,10 @@ Bring `adr/{NN}-{slug}` to a clean transaction boundary:
    recognizably ADR-`NN` phase work; else **STOP and ask**. This is safe against
    force-pushes because only completed phases are ever pushed — interrupted work is
    never on the remote.
-4. **Confirm baseline green:** run `python -m pytest` and `ruff check .` in
-   `<path>`. If red, **STOP and report** — a completed phase is broken.
+4. **Confirm baseline green:** run the gates for the ADR's languages in `<path>` —
+   always `python -m pytest` + `ruff check .`, plus `vendor/bin/phpunit`
+   (+ `vendor/bin/phpstan` / `vendor/bin/phpcs`) for a PHP ADR and `shellcheck` /
+   `shellspec` for a shell one. If red, **STOP and report** — a completed phase is broken.
 5. Resume point = phase `L+1`.
 
 ## Step 5 — Decide which phase(s) to run
@@ -203,8 +205,11 @@ read and edit:
 **6b. Orchestrator gate (independent; keep it light to stay context-lean).** When
 the agent returns, in `<path>`: confirm `RESULTS/{MM}_Results.txt` is **committed
 and pushed** (`git -C <path> log`, `git -C <path> status`, remote ref updated),
-re-run `python -m pytest` + `ruff check .` once to independently confirm green, and
-sanity-check the phase's EXPECTED RESULT against `git -C <path> show --stat`. If the
+independently re-run the gates for the languages this phase touched (always
+`python -m pytest` + `ruff check .`; plus `php -l` / `vendor/bin/phpunit` /
+`vendor/bin/phpstan` / `vendor/bin/phpcs` for PHP, `shellcheck` for shell) to
+confirm green, and sanity-check the phase's EXPECTED RESULT against
+`git -C <path> show --stat`. If the
 agent reported a STOP/failure, the handoff is missing, or a gate fails → **HALT and
 report**; do not start `M+1`. (You verify the transaction; you do not re-implement
 it.)
@@ -227,10 +232,12 @@ user** (AskUserQuestion) how to land it — confirm the base if unclear:
   --base <base>`; if none, `gh pr create --base <base> --head adr/{NN}-{slug}
   --title "ADR-NN: <ADR title>" --body-file <tmpfile>` (always `--body-file`; seed
   from `ADR.md`).
-- **Rebase onto base and push:** `git -C <path> fetch origin <base>`,
-  `git -C <path> rebase origin/<base>`, then land the commits on top of the base
-  (fast-forward base to the rebased tip and push). On conflicts, stop and surface
-  them — never force blindly.
+- **Rebase the branch onto base and push the branch (no merge):** `git -C <path>
+  fetch origin <base>`, `git -C <path> rebase origin/<base>`, then push the rebased
+  **`adr/{NN}-{slug}`** branch — `git -C <path> push --force-with-lease`. This updates
+  the agent's own branch only; it **never** pushes to `<base>`. Leaves a clean, current
+  branch ready to land (via `/pr-merge-flow` or the user's merge). On conflicts, stop
+  and surface them — never force blindly.
 
 After landing, offer to remove the worktree (`git worktree remove <path>`) once the
 PR is merged / commits have landed; otherwise leave it for follow-up.
