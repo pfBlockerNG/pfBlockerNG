@@ -314,7 +314,11 @@ def test_older_nightlies_empty_when_only_latest() -> None:
     only = _pkg("nightly", "n", "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
     assert gl.older_nightlies([only, _pkg("devel", "d", "3.2.16", "FreeBSD:16:amd64", "d.pkg")]) == []
     # …and the packages block omits the disclosure entirely (no empty 'Older nightlies' affordance).
-    assert "Older nightlies" not in gl._packages_html([only], None)
+    html = gl._packages_html([only], None)
+    assert "Older nightlies" not in html
+    # With no disclosures present, the edition table is the SOLE table here, so its own
+    # Channel column is isolated: it must carry one (pins the edition call site's with_channel=True).
+    assert "<th>Channel</th>" in html
 
 
 def test_older_nightlies_fold_under_each_edition() -> None:
@@ -844,6 +848,9 @@ def test_eol_versions_ce_and_plus_split_into_separate_tables() -> None:
 
     # Live build version absent from both sections.
     assert "3.2.16" not in html[html.index("EOL pfSense versions") :]
+
+    # EOL tables omit the Channel column (pins the EOL call site's with_channel=False).
+    assert "<th>Channel</th>" not in html
 
 
 def test_eol_versions_section_absent_from_rendered_page_when_no_route_only() -> None:
