@@ -58,14 +58,10 @@ $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']
 
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
-// ADR-08: IDN mode selector (Off | All-IDN | Confusable). Legacy on/off migrates:
-// 'on' -> 'all' (today's block-all-IDN), empty/'off' -> '' (Off).
-$pconfig['pfb_idn']		= $pfb['dconfig']['pfb_idn']				?: '';
-if ($pconfig['pfb_idn'] === 'on') {
-	$pconfig['pfb_idn'] = 'all';
-} elseif ($pconfig['pfb_idn'] === 'off') {
-	$pconfig['pfb_idn'] = '';
-}
+// ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
+// PfbIdnMode enum (legacy 'on'/'all' -> All, '' -> Off); toStored() gives the canonical
+// config token ('on' | 'confusable' | 'off') that the <select> options below carry.
+$pconfig['pfb_idn']		= PfbConfig::read('pfb_idn')->toStored();
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
 // Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
@@ -763,13 +759,10 @@ if ($_POST) {
 
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			// ADR-08: IDN mode selector. Validate the raw word, migrate legacy 'on' -> 'all',
-			// then whitelist to Off ('') | All-IDN ('all') | Confusable ('confusable').
+			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
+			// PfbIdnMode adapter to the stored config token ('on' = All | 'confusable' | 'off').
 			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
-			if ($pfb_idn_mode === 'on') {
-				$pfb_idn_mode = 'all';
-			}
-			$pfb['dconfig']['pfb_idn']		= in_array($pfb_idn_mode, array('all', 'confusable'), TRUE) ? $pfb_idn_mode : '';
+			$pfb['dconfig']['pfb_idn']		= pfb_cfg_idn_mode_write($pfb_idn_mode);
 			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -2692,9 +2685,9 @@ $section->addInput(new Form_Select(
 	gettext('IDN Blocking'),
 	$pconfig['pfb_idn'],
 	array(
-		''		=> 'Off',
+		'off'		=> 'Off',
 		'confusable'	=> 'Confusable',
-		'all'		=> 'Always',
+		'on'		=> 'Always',
 	)
 ))->setHelp('IDN handling (not Regex based).<ul>'
 		. '<li><strong>Off</strong> - no IDN action.</li>'

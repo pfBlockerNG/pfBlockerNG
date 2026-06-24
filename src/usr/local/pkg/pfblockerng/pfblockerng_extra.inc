@@ -23,33 +23,82 @@
 // This file is used to 'include functions' not yet merged into pfSense
 
 // ---------------------------------------------------------------------------
-// ADR-28 Phase 1 — field-aware config adapters.
+// ADR-28 — config field enums + the PfbStoredEnum adapter contract.
 //
-// Internal backed enums for recurring config flags + field-aware read/write
-// adapter helpers.  Rule (ADR-28 §2.2):
-//   - config.xml stored values NEVER change (no migration routine exists).
-//   - Enums are an INTERNAL runtime representation only.
-//   - read adapter: Enum::tryFrom($stored) ?? Enum::default()
-//   - write adapter: $enum->value  (equals the exact legacy stored string)
-//   - A field whose "off" is '' for one field and 'off' for another uses a
-//     FIELD-SPECIFIC default — there is no single global toggle.
+// Backed string enums for recurring config flags. Each enum OWNS its stored-value
+// semantics (the PfbStoredEnum interface + PfbStoredEnumAdapter trait) so the
+// PfbConfig gateway and the pfb_cfg_* helpers stay trivial:
+//   - read : EnumClass::fromStored($raw)   — the NULL/absent default is the registry's
+//             $entry['default'] (applied by PfbConfig::read() BEFORE the adapter);
+//             '', legacy aliases, and junk are resolved by the enum itself.
+//   - write: $enum->toStored()             — the canonical persisted token.
 //
-// Round-trip tests: tests/php/CfgAdaptersTest.php.
+// Policy (ADR-28 §2.2, reframed): the goal is PRESERVE BEHAVIOUR ON UPGRADE, not
+// byte-identical storage. A write may persist a normalised canonical token when it
+// is behaviour-equivalent to the legacy one (e.g. pfb_idn 'on' -> 'all', which
+// reproduces the prior block-all-IDN behaviour). Downgrade is tolerated: older
+// releases string-compared these values, so an unknown token falls through to the
+// safe default there.
+//
+// Tests: tests/php/CfgAdaptersTest.php, tests/php/RollbackContractTest.php.
 // Naming follows pfb_* conventions (CLAUDE.md "Naming").
 // ---------------------------------------------------------------------------
 
-// PfbToggle — checkbox fields stored as 'on' (checked) or '' (unchecked).
-//
-// Used by: pfb_dnsvip_auto (pfb_dnsblconfig['pfb_dnsvip_auto']).
-//   Stored vocabulary: 'on' | '' (missing/unchecked = '').
-//   pfb_global() normalisation at :1334:
-//     pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value
-enum PfbToggle: string
+// PfbStoredEnum — the contract every config-backed enum implements. Keeps the
+// reader/writer dumb: read = EnumClass::fromStored($raw), write = $enum->toStored().
+interface PfbStoredEnum
 {
+	// Parse-fallback for unknown/non-scalar input. NOT the per-field absent default
+	// (that is the registry's $entry['default'], applied by PfbConfig::read()).
+	public static function default(): static;
+
+	// Stored config value (string, NULL, or non-scalar) -> enum. The enum owns its
+	// '' (EMPTY), legacy-alias, and junk handling.
+	public static function fromStored(mixed $stored): static;
+
+	// Enum -> the canonical token persisted to config.xml / py_unbound.ini.
+	public function toStored(): string;
+}
+
+// PfbStoredEnumAdapter — shared fromStored/toStored mechanics. An enum customises
+// its semantics by setting default() (fallback) and overriding fromLegacy() (aliases).
+trait PfbStoredEnumAdapter
+{
+	public static function fromStored(mixed $stored): static
+	{
+		if (!is_scalar($stored) && $stored !== NULL) {
+			return static::default();		// subtree / non-scalar guard
+		}
+		// NULL collapses to '' here — a gateway read has already applied the registry
+		// per-field default, so NULL only reaches this path from direct callers.
+		$raw = (string) ($stored ?? '');
+		return self::tryFrom($raw) ?? static::fromLegacy($raw);
+	}
+
+	// '' (EMPTY) and any non-canonical token. Override per enum for legacy aliases.
+	protected static function fromLegacy(string $raw): static
+	{
+		return static::default();
+	}
+
+	public function toStored(): string
+	{
+		return $this->value;
+	}
+}
+
+// PfbToggle — checkbox fields stored as 'on' (checked) or '' (unchecked).
+//   Stored vocabulary: 'on' | '' (missing/unchecked = ''). '' is the Off case, so
+//   tryFrom('') resolves it directly; the per-field absent default is the registry's.
+enum PfbToggle: string implements PfbStoredEnum
+{
+	use PfbStoredEnumAdapter;
+
 	case On  = 'on';
 	case Off = '';
 
-	public static function default(): self
+	// Parse-fallback ONLY (unknown/non-scalar -> "not On"). NOT the absent default.
+	public static function default(): static
 	{
 		return self::Off;
 	}
@@ -61,161 +110,98 @@ enum PfbToggle: string
 // Used by: pfb_dnsbl_lenient (pfb_dnsblconfig['pfb_dnsbl_lenient'], ADR-22 scheme-parsing
 //   leniency) and pfb_keep (#484 — so a default-on keep flag can store 'off' explicitly).
 //   Stored vocabulary: 'on' | 'off' | '' (legacy: a missing pre-ADR-22 / pre-#484 install).
-//   pfb_global() normalisation at :1364:
-//     pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value
+//   pfb_global() reads pfb_dnsbl_lenient as a PfbLenient enum via PfbConfig::read()
+//   (the registry wires pfb_cfg_lenient_read/write); consumers compare === PfbLenient::On.
 //   Note: '' (missing key) maps to Off ('off'), NOT to the PfbToggle '' value.
 //   This field's "off" stored value is 'off', distinct from PfbToggle::Off = ''.
-enum PfbLenient: string
+enum PfbLenient: string implements PfbStoredEnum
 {
+	use PfbStoredEnumAdapter;
+
 	case On  = 'on';
 	case Off = 'off';
 
-	public static function default(): self
+	// NULL/absent -> registry default; '' (legacy missing) and junk -> Off (via fromLegacy).
+	public static function default(): static
 	{
 		return self::Off;
 	}
 }
 
-// PfbIdnMode — ADR-08 IDN-feature mode selector.
+// PfbIdnMode — ADR-08 IDN-feature mode selector. Adopted into the PfbConfig gateway.
 //
-// Used by: dnsbl_idn (pfb_dnsblconfig['pfb_idn']).
-//   Stored vocabulary: 'all' | 'confusable' | 'off' | '' | 'on' (legacy).
-//   pfb_global() :1372-1373 passes the raw value through unchanged EXCEPT
-//   for the legacy 'on' -> 'all' migration.  Because '' passes through as ''
-//   (not 'off'), the seam for dnsbl_idn is kept as-is (excluded from adapter
-//   adoption); PfbIdnMode is still used via the adapter at call sites that
-//   need the normalised canonical value — see ADR-28 Phase 4 handoff.
-//   IMPORTANT: 'on' is a LEGACY stored value — new saves always write 'all'.
-//   The adapter read fn below replicates the pfb_global() normalisation so
-//   downstream code sees the canonical value ('all'/'off'/'confusable').
-//   The write fn returns the canonical stored string (never 'on').
-//   Round-trip note: read('on') -> All -> write -> 'all' != 'on'.
-//   This is the INTENDED behaviour: the legacy value is normalised on read
-//   and the canonical value is stored on write (a one-way migration for 'on').
-//   This field is therefore EXCLUDED from write(read(v))==v for v='on' only;
-//   all other values round-trip losslessly.  Documented in 01_Results.txt.
-enum PfbIdnMode: string
+// Used by: pfb_idn (config key) / $pfb['dnsbl_idn'] (runtime).
+//   Canonical tokens (config.xml AND py_unbound.ini AND the Python IdnMode enum, all the
+//   same vocabulary): 'on' (= All), 'confusable', 'off'. '' / unknown -> Off.
+//   Reusing the original 'on' token for All is the key move — pre-4.0.0 installs round-trip
+//   with no migration and an older release reading 'on' still blocks all IDN (behaviour
+//   preserved on downgrade). 'confusable' is the only genuinely new token; an old release
+//   treats it as off (acceptable). PfbConfig::read('pfb_idn') returns the enum;
+//   PfbConfig::write() persists toStored(); the ini build emits the same toStored() token.
+enum PfbIdnMode: string implements PfbStoredEnum
 {
-	case All        = 'all';
+	use PfbStoredEnumAdapter;
+
+	// All reuses the original 'on' token (pre-ADR-08 block-all-IDN) as its backing value:
+	// it round-trips with ZERO migration AND is downgrade-safe — an older release reading
+	// 'on' still blocks all IDN. Only Confusable is a genuinely new token (an old release
+	// treats it as off, which is acceptable). The SAME token feeds config.xml, py_unbound.ini,
+	// and the Python IdnMode enum — one canonical vocabulary, no per-consumer serialisation.
+	case All        = 'on';
 	case Confusable = 'confusable';
 	case Off        = 'off';
 
-	public static function default(): self
+	// Parse-fallback (unknown / '' -> Off via the trait); the per-field absent default is
+	// the registry's. No legacy alias: the only other historical token was the 4.0.0-alpha
+	// 'all', and breaking alpha-only compatibility is acceptable.
+	public static function default(): static
 	{
 		return self::Off;
 	}
 }
 
-/**
- * pfb_cfg_toggle_read — read a PfbToggle from a raw stored value.
- *
- * Maps 'on' -> On, anything else -> Off (matches pfb_global() :1334 logic).
- *
- * @param mixed $stored  Raw value from config_get_path / $pfb['dnsblconfig'][...].
- */
+// Thin delegations to the enum adapters (PfbStoredEnum::fromStored / toStored).
+// Kept so the registry callables + the direct www/ callers have a free-function
+// handle; all semantics live on the enums.
+
+/** Read a PfbToggle from a raw stored value. */
 function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 {
-	if (!is_scalar($stored) && $stored !== null) {
-		return PfbToggle::default();
-	}
-	return PfbToggle::tryFrom((string) ($stored ?? '')) ?? PfbToggle::default();
+	return PfbToggle::fromStored($stored);
 }
 
-/**
- * pfb_cfg_toggle_write — write a PfbToggle back to its stored string.
- *
- * Returns the exact legacy stored string ('on' or '').  Accepts either the
- * runtime enum or a raw legacy string (normalised through the read adapter),
- * matching the PfbConfig::write() "enum or string" contract.
- *
- * @param PfbToggle|string $toggle  Runtime enum or raw stored string.
- */
+/** Write a PfbToggle (enum or legacy string) back to its stored string. */
 function pfb_cfg_toggle_write(PfbToggle|string $toggle): string
 {
-	if (is_string($toggle)) {
-		$toggle = pfb_cfg_toggle_read($toggle);
-	}
-	return $toggle->value;
+	return ($toggle instanceof PfbToggle ? $toggle : PfbToggle::fromStored($toggle))->toStored();
 }
 
-/**
- * pfb_cfg_lenient_read — read a PfbLenient from a raw stored value.
- *
- * Maps 'on' -> On, anything else (incl. '', missing, 'off') -> Off.
- * Replicates pfb_global() :1364 normalisation.
- *
- * @param mixed $stored  Raw value from config_get_path / $pfb['dnsblconfig'][...].
- */
+/** Read a PfbLenient from a raw stored value. */
 function pfb_cfg_lenient_read(mixed $stored): PfbLenient
 {
-	if (!is_scalar($stored) && $stored !== null) {
-		return PfbLenient::default();
-	}
-	if ((string) ($stored ?? '') === 'on') {
-		return PfbLenient::On;
-	}
-	return PfbLenient::default();
+	return PfbLenient::fromStored($stored);
 }
 
-/**
- * pfb_cfg_lenient_write — write a PfbLenient back to its stored string.
- *
- * Returns 'on' or 'off' (never '').  Accepts either the runtime enum or a raw
- * legacy string (normalised through the read adapter), matching the
- * PfbConfig::write() "enum or string" contract.
- *
- * @param PfbLenient|string $lenient  Runtime enum or raw stored string.
- */
+/** Write a PfbLenient (enum or legacy string) back to its stored string. */
 function pfb_cfg_lenient_write(PfbLenient|string $lenient): string
 {
-	if (is_string($lenient)) {
-		$lenient = pfb_cfg_lenient_read($lenient);
-	}
-	return $lenient->value;
+	return ($lenient instanceof PfbLenient ? $lenient : PfbLenient::fromStored($lenient))->toStored();
 }
 
-/**
- * pfb_cfg_idn_mode_read — read a PfbIdnMode from a raw stored value.
- *
- * Replicates pfb_global() :1372-1373 normalisation:
- *   'on'         -> All (legacy migration — new saves write 'all')
- *   'all'        -> All
- *   'confusable' -> Confusable
- *   anything else (incl. '', 'off', missing) -> Off
- *
- * @param mixed $stored  Raw value from config_get_path / $pfb['dnsblconfig'][...].
- */
+/** Read a PfbIdnMode from a raw stored value (legacy 'on' -> All). */
 function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 {
-	if (!is_scalar($stored) && $stored !== null) {
-		return PfbIdnMode::default();
-	}
-	$raw = (string) ($stored ?? '');
-	if ($raw === 'on') {
-		// Legacy: 'on' migrates to All at runtime; canonical stored value is 'all'.
-		return PfbIdnMode::All;
-	}
-	return PfbIdnMode::tryFrom($raw) ?? PfbIdnMode::default();
+	return PfbIdnMode::fromStored($stored);
 }
 
 /**
- * pfb_cfg_idn_mode_write — write a PfbIdnMode back to its stored string.
- *
- * Returns the canonical stored string ('all', 'confusable', or 'off').
- * NOTE: 'on' (legacy) is never re-emitted; it normalises to 'all' on read
- * and is stored as 'all' on write.  This is the intended one-way migration.
- *
- * Accepts either the runtime enum or a raw legacy string (normalised through
- * the read adapter), matching the PfbConfig::write() "enum or string" contract.
- *
- * @param PfbIdnMode|string $mode  Runtime enum or raw stored string.
+ * Write a PfbIdnMode (enum or legacy string) back to its canonical stored token
+ * ('all' | 'confusable' | 'off'). Legacy 'on' normalises to 'all' (one-way; it
+ * reproduces the prior block-all-IDN behaviour on upgrade).
  */
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
-	if (is_string($mode)) {
-		$mode = pfb_cfg_idn_mode_read($mode);
-	}
-	return $mode->value;
+	return ($mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode))->toStored();
 }
 
 // ---------------------------------------------------------------------------
@@ -656,15 +642,18 @@ function pfb_cfg_registry(): array
 			'since'         => '3.0.0',
 		],
 
-		// ADR-08: IDN mode — EXCLUDED from adapter adoption (legacy 'on' cannot
-		// round-trip; write(read('on')) == 'all' != 'on'). Kept as plain string.
-		// The pfb_cfg_idn_mode_read/write adapters exist but are NOT wired here.
-		// See ADR-28 §2.2 + CfgAdaptersTest testIdnModeLegacyOnNormalisesToAll.
+		// ADR-08: IDN mode — adopted into the gateway as a PfbIdnMode enum (ADR-28
+		// reframe: preserve behaviour on upgrade, not byte-identical storage). Read
+		// normalises legacy 'on' -> All; write persists the canonical token
+		// ('all'|'confusable'|'off'), so a stored legacy 'on'/'' migrates on next save
+		// to a behaviour-equivalent value. Downgrade-safe: older releases string-compared
+		// these tokens, so an unknown token falls through to their off default.
+		// See ADR-28 §2.2 + CfgAdaptersTest + RollbackContractTest.
 		'pfb_idn' => [
 			'section'       => $dnsbl,
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_idn_mode_read',
+			'write_adapter' => 'pfb_cfg_idn_mode_write',
 			'since'         => '3.0.0',
 		],
 
@@ -1327,6 +1316,12 @@ function pfb_cfg_field_vocab(): array
 		// older release that reads 'off' treats it as "disabled", which is correct.
 		'lenient' => ['on', 'off', ''],
 
+		// IDN mode (PfbIdnMode): the tokens a write can emit. 'on' = All (reuses the
+		// pre-4.0.0 block-all token, so it round-trips and an older release still blocks
+		// all IDN), 'confusable', 'off'. Legacy reads '' / 'all' (4.0.0-alpha) -> Off, but
+		// neither is ever WRITTEN, so they are not in the backward (write) vocabulary.
+		'idn'     => ['on', 'confusable', 'off'],
+
 		// Plain string (null/null adapters): identity. Backward-safe by construction.
 		// The 'plain' vocabulary contains the sentinel empty string; individual
 		// field values are arbitrary strings (numeric, named option, etc.) but the
@@ -1352,6 +1347,9 @@ function pfb_cfg_field_adapter_type(array $entry): string
 	}
 	if ($read === 'pfb_cfg_lenient_read') {
 		return 'lenient';
+	}
+	if ($read === 'pfb_cfg_idn_mode_read') {
+		return 'idn';
 	}
 	// All other adapters are toggle (pfb_cfg_toggle_read).
 	return 'toggle';

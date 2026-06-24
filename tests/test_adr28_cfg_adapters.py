@@ -182,13 +182,17 @@ class TestIdnModeDecisionEnum:
 _TRUTH_TABLE: list[tuple[str | None, bool, IdnMode, str]] = [
     # (ini_value, python_idn, expected_IdnMode, pre_adoption_string)
     # Canonical ini values — python_idn is IGNORED when ini is recognised.
+    # 'on' (reused legacy token) is the canonical block-all value (IdnMode.All).
     ("off", True, IdnMode.Off, IDN_MODE_OFF),
     ("off", False, IdnMode.Off, IDN_MODE_OFF),
-    ("all", True, IdnMode.All, IDN_MODE_ALL),
-    ("all", False, IdnMode.All, IDN_MODE_ALL),
+    ("on", True, IdnMode.All, IDN_MODE_ALL),
+    ("on", False, IdnMode.All, IDN_MODE_ALL),
     ("confusable", True, IdnMode.Confusable, IDN_MODE_CONFUSABLE),
     ("confusable", False, IdnMode.Confusable, IDN_MODE_CONFUSABLE),
-    # Unrecognised string -> legacy fallback (python_idn decides).
+    # Unrecognised string -> legacy fallback (python_idn decides). Includes the dropped
+    # 4.0.0-alpha 'all' token: no longer canonical, so it falls back via python_idn.
+    ("all", True, IdnMode.All, IDN_MODE_ALL),
+    ("all", False, IdnMode.Off, IDN_MODE_OFF),
     ("bogus", True, IdnMode.All, IDN_MODE_ALL),
     ("bogus", False, IdnMode.Off, IDN_MODE_OFF),
     # Empty string -> treated as unrecognised (not in canonical set) -> legacy fallback.

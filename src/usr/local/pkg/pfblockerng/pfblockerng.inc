@@ -1659,16 +1659,15 @@ function pfb_global() {
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
-	$pfb['dnsbl_lenient']	= PfbConfig::read('pfb_dnsbl_lenient')->value;						// DNSBL scheme-parsing leniency
+	$pfb['dnsbl_lenient']	= PfbConfig::read('pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbLenient enum)
 
 	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
 	$pfb['dnsbl_hsts']	= PfbConfig::read('pfb_hsts')->value;			// DNSBL Resolver python block HSTS via Null Blocking mode
-	// ADR-08: IDN mode selector (off | all | confusable). Legacy on/off migrates:
-	// 'on' -> 'all' (today's block-all-IDN). Downstream consumers see the normalized value.
-	// Null-coalesce the source: a config predating the key (dnsblconfig loaded via
-	// config_get_path(..., [])) must read as '' (Off) without an undefined-key warning.
-	$pfb_idn_raw		= PfbConfig::read('pfb_idn');
-	$pfb['dnsbl_idn']	= ($pfb_idn_raw === 'on') ? 'all' : $pfb_idn_raw;	// DNSBL Resolver python IDN mode (legacy 'on' -> 'all')
+	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
+	// registry adapter: legacy 'on' -> All (preserves block-all-IDN on upgrade);
+	// 'all' -> All; 'confusable' -> Confusable; '' / 'off' / absent -> Off. Downstream
+	// consumers compare against the enum; the ini build serialises the canonical token.
+	$pfb['dnsbl_idn']	= PfbConfig::read('pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
@@ -5476,11 +5475,13 @@ function pfb_unbound_python($mode) {
 		// ADR-08: emit the IDN mode + the legacy python_idn flag + the Confusable sub-toggles.
 		// python_idn = on ONLY for All-IDN, so the legacy flag (and its blacklist side-effect)
 		// stays byte-identical to today; Confusable rides the explicit idn_mode key instead.
-		$idn_mode = in_array($pfb['dnsbl_idn'], array('all', 'confusable'), TRUE) ? $pfb['dnsbl_idn'] : 'off';
-		$python_idn = ($idn_mode == 'all') ? 'on' : 'off';
+		// py_unbound.ini IDN mode: the SAME canonical token as config.xml (toStored):
+		// 'on' (= All) | 'confusable' | 'off'. The Python IdnMode enum reads it directly.
+		$idn_mode = $pfb['dnsbl_idn']->toStored();
+		$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
 
-		$python_idn_block_malicious = ($pfb['dnsbl_idn_block_malicious'] == 'on') ? 'on' : 'off';
-		$python_idn_escalate_suspicious = ($pfb['dnsbl_idn_escalate_suspicious'] == 'on') ? 'on' : 'off';
+		$python_idn_block_malicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_block_malicious']) === PfbToggle::On) ? 'on' : 'off';
+		$python_idn_escalate_suspicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_escalate_suspicious']) === PfbToggle::On) ? 'on' : 'off';
 
 		$python_cname = 'off';
 		if ($pfb['dnsbl_cname'] == 'on') {
@@ -12266,7 +12267,7 @@ function sync_package_pfblockerng($cron='') {
 												// scheme against RFC 3986 and rejects URL paths -- a rejected
 												// line is skipped, recorded per-line in the parse-error log, and
 												// counted for the once-per-feed summary WARNING below.
-												$strict = ($pfb['dnsbl_lenient'] !== 'on');
+												$strict = ($pfb['dnsbl_lenient'] !== PfbLenient::On);
 												$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline,
 													$pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
 												if ($line === FALSE) {
@@ -12549,12 +12550,12 @@ function sync_package_pfblockerng($cron='') {
 		// DNSBL_IDN alias exactly as before; Confusable mode surfaces the homoglyph +
 		// suspect groups so the Reports/Alerts pages render their counts. Counts are
 		// symbolic (=1) markers -- the Python matcher decides per-query at runtime.
-		if ($pfb['dnsbl_idn'] == 'all') {
+		if ($pfb['dnsbl_idn'] === PfbIdnMode::All) {
 			$idn_cnt = 1;
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
 			dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt);
 		}
-		elseif ($pfb['dnsbl_idn'] == 'confusable') {
+		elseif ($pfb['dnsbl_idn'] === PfbIdnMode::Confusable) {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph';
 			dnsbl_alias_update('update', 'DNSBL_Homoglyph', '', '', 1);
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph_Suspect';

@@ -1072,61 +1072,66 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// D (extra) — pfb_idn exclusion from adapter adoption is documented and enforced
+	// D (extra) — pfb_idn PfbIdnMode adapter adoption is documented and enforced
 	// -----------------------------------------------------------------------
 
 	/**
-	 * pfb_idn is excluded from adapter adoption: stored plain (no PfbIdnMode adapter).
+	 * pfb_idn is now adapted via PfbIdnMode: read returns an enum, write persists
+	 * the canonical stored token.
 	 *
-	 * The legacy 'on' value cannot round-trip (write(read('on')) == 'all' != 'on').
-	 * The registry entry uses null adapters (plain string) to preserve the stored value.
-	 * This test documents and pins the exclusion.
+	 * ADR-28 reframe: PfbIdnMode::All backing value is 'on' — the original
+	 * pre-ADR-08 block-all token.  This reuse means 'on' round-trips losslessly
+	 * AND old releases reading 'on' still block all IDN (downgrade-safe).
 	 *
 	 * Scenario:
-	 *   Background: pfb_idn stored as 'on' (legacy) or 'all'/'confusable'/'off'.
+	 *   Background: pfb_idn stored as 'on' (canonical, = All).
 	 *     Given pfb_idn = 'on'.
 	 *     When PfbConfig::read('pfb_idn').
-	 *     Then the raw string 'on' is returned (no adapter normalisation).
-	 *     And write(read('on')) == 'on' (identity — NOT 'all').
+	 *     Then PfbIdnMode::All is returned (adapter is wired).
+	 *     And write(read('on')) stores 'on' (canonical identity — the backing value).
 	 */
-	public function testIdnFieldExcludedFromAdapterReturnsRawStringOn(): void
+	public function testIdnFieldAdaptedReturnsEnumForCanonicalOn(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn';
 
-		// Given: legacy 'on' stored.
+		// Given: canonical 'on' stored (= block-all-IDN).
 		$this->seedConfig($path, 'on');
 
 		// Before: raw 'on'.
 		$this->assertSame('on', config_get_path($path));
 
 		// When: read.
-		$raw = PfbConfig::read('pfb_idn');
+		$result = PfbConfig::read('pfb_idn');
 
-		// Then: raw string 'on' (NOT PfbIdnMode::All — the adapter is NOT wired).
-		$this->assertSame('on', $raw, 'pfb_idn returns raw string, not adapted enum');
-		$this->assertNotInstanceOf(PfbIdnMode::class, $raw, 'pfb_idn must not return an enum');
+		// Then: PfbIdnMode::All (adapter IS wired — NOT raw string).
+		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn must return a PfbIdnMode enum');
+		$this->assertSame(PfbIdnMode::All, $result, "pfb_idn 'on' -> PfbIdnMode::All");
 
-		// And: write(read('on')) == 'on' (lossless identity — exclusion confirmed).
-		PfbConfig::write('pfb_idn', $raw);
-		$this->assertSame('on', config_get_path($path), 'write(read("on")) == "on" for pfb_idn');
+		// And: write(read('on')) stores 'on' — canonical identity.
+		PfbConfig::write('pfb_idn', $result);
+		$this->assertSame('on', config_get_path($path), "write(read('on')) == 'on' for pfb_idn");
 	}
 
-	public function testIdnFieldExcludedFromAdapterReturnsRawStringAll(): void
+	public function testIdnFieldAdaptedDroppedAlphaAllNormalisesToOff(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn';
 
-		// Given: canonical 'all'.
+		// Given: the 4.0.0-alpha-only token 'all' (alpha compatibility intentionally dropped).
 		$this->seedConfig($path, 'all');
 
 		// Before: raw 'all'.
 		$this->assertSame('all', config_get_path($path));
 
-		// When/After: identity — 'all' stays 'all'.
-		$raw = PfbConfig::read('pfb_idn');
-		$this->assertSame('all', $raw);
+		// When/Then: 'all' is unrecognised -> PfbIdnMode::Off (canonical block-all is 'on').
+		$result = PfbConfig::read('pfb_idn');
+		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn must return a PfbIdnMode enum');
+		$this->assertSame(PfbIdnMode::Off, $result, "pfb_idn 'all' (dropped alpha token) -> PfbIdnMode::Off");
 
-		PfbConfig::write('pfb_idn', $raw);
-		$this->assertSame('all', config_get_path($path));
+		// Write emits the canonical 'off' — 'all' is not re-emitted.
+		PfbConfig::write('pfb_idn', $result);
+		$stored = config_get_path($path);
+		$this->assertSame('off', $stored, "write(read('all')) == 'off' for pfb_idn");
+		$this->assertNotSame('all', $stored, "'all' must not be re-emitted");
 	}
 
 	// -----------------------------------------------------------------------

@@ -7,11 +7,11 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-28 Phase 1 — round-trip identity tests for the field-aware config adapters.
  *
- * Rule (ADR-28 §2.2): for every adapted field, every existing stored value
- * (incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v
- * for canonical values, or must map to the documented canonical value for
- * legacy migration values.  Any field that cannot round-trip losslessly is
- * excluded (documented in 01_Results.txt).
+ * Rule (ADR-28 §2.2 reframe): for every adapted field, every existing stored value
+ * (incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v for
+ * canonical values, or must map to a behaviour-equivalent canonical token for legacy
+ * migration values (behaviour preserved on upgrade, downgrade-safe).  Fields that
+ * cannot satisfy this are excluded (documented in 01_Results.txt).
  *
  * Scenario A — PfbToggle (pfb_dnsvip_auto): 'on' / '' checkbox.
  *   Background: stored as 'on' (checked) or '' (unchecked / missing key).
@@ -25,13 +25,17 @@ use PHPUnit\Framework\TestCase;
  *     When pfb_cfg_lenient_read(v) -> enum, pfb_cfg_lenient_write(enum) -> stored.
  *     Then write(read(v)) == v for 'on'/'off'; '' maps to 'off' (normalised default).
  *
- * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): 'all'/'confusable'/'off'/''/'on'.
- *   Background: stored as 'all', 'confusable', 'off', '' (off/absent), or 'on' (legacy).
+ * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/'off'.
+ *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'.
+ *     Legacy transitional devel token 'all' normalises to 'on' (behaviour-equivalent;
+ *     older releases reading 'on' still block all IDN — downgrade-safe).
+ *     '' (absent/disabled) normalises to 'off'.
  *     Given a raw stored value v.
  *     When pfb_cfg_idn_mode_read(v) -> enum, pfb_cfg_idn_mode_write(enum) -> stored.
- *     Then write(read(v)) == v for canonical values ('all','confusable','off').
- *     And write(read('on')) == 'all'  (documented one-way legacy migration — excluded
- *     from strict round-trip; 'on' never re-emitted; see ADR-28 §2.2 + 01_Results.txt).
+ *     Then write(read('on')) == 'on'  (canonical identity).
+ *     And write(read('all')) == 'on'  (transitional devel token migrates to canonical).
+ *     And write(read('confusable')) == 'confusable'  (identity).
+ *     And write(read('off')) == 'off'  (identity).
  *     And write(read('')) == 'off'    (normalised default).
  */
 final class CfgAdaptersTest extends TestCase
@@ -218,11 +222,18 @@ final class CfgAdaptersTest extends TestCase
 	// Scenario C — PfbIdnMode
 	// -----------------------------------------------------------------------
 
-	public function testIdnModeReadAllReturnsAll(): void
+	public function testIdnModeReadCanonicalOnReturnsAll(): void
 	{
-		// Given canonical 'all'.
-		$enum = pfb_cfg_idn_mode_read('all');
-		$this->assertSame(PfbIdnMode::All, $enum);
+		// 'on' is the canonical block-all token (PfbIdnMode::All backing value), reused
+		// from the pre-4.0.0 binary IDN toggle.
+		$this->assertSame(PfbIdnMode::All, pfb_cfg_idn_mode_read('on'));
+	}
+
+	public function testIdnModeReadTransitionalAllReturnsOff(): void
+	{
+		// 'all' was the 4.0.0-alpha transitional token; alpha compatibility is not
+		// maintained, so it is now an unrecognised token -> Off.
+		$this->assertSame(PfbIdnMode::Off, pfb_cfg_idn_mode_read('all'));
 	}
 
 	public function testIdnModeReadConfusableReturnsConfusable(): void
@@ -248,21 +259,6 @@ final class CfgAdaptersTest extends TestCase
 	{
 		$enum = pfb_cfg_idn_mode_read(null);
 		$this->assertSame(PfbIdnMode::Off, $enum);
-	}
-
-	public function testIdnModeReadLegacyOnReturnsAll(): void
-	{
-		// 'on' is the LEGACY stored value (pre-ADR-08 UI). pfb_global() maps
-		// 'on' -> 'all' at runtime; the adapter replicates that normalisation.
-		// Before: legacy value.
-		$raw = 'on';
-		$this->assertSame('on', $raw);
-
-		// When read.
-		$enum = pfb_cfg_idn_mode_read($raw);
-
-		// Then All (normalised).
-		$this->assertSame(PfbIdnMode::All, $enum);
 	}
 
 	public function testIdnModeReadJunkReturnsDefault(): void
@@ -298,14 +294,20 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(PfbIdnMode::Off, pfb_cfg_idn_mode_read(['all']));
 	}
 
-	public function testIdnModeRoundTripAll(): void
+	public function testIdnModeDroppedAlphaAllNormalisesToOff(): void
 	{
-		// Canonical 'all' round-trips losslessly.
+		// 'all' (4.0.0-alpha only; compatibility intentionally dropped) is unrecognised
+		// -> Off, so a write-back emits 'off' — NOT the legacy 'all'.
 		$v = 'all';
 		// Before: raw.
 		$this->assertSame('all', $v);
-		// After.
-		$this->assertSame($v, pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v)));
+
+		// When round-tripped.
+		$result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v));
+
+		// Then: 'off' (unrecognised -> Off).
+		$this->assertSame('off', $result);
+		$this->assertNotSame('all', $result);
 	}
 
 	public function testIdnModeRoundTripConfusable(): void
@@ -320,18 +322,22 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame($v, pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v)));
 	}
 
-	public function testIdnModeLegacyOnNormalisesToAll(): void
+	public function testIdnModeCanonicalOnRoundTripsLosslessly(): void
 	{
-		// 'on' (legacy) normalises to 'all' on write — documented one-way migration.
-		// This is the ONLY non-lossless case; all canonical values round-trip.
-		// Before: raw legacy value.
+		// 'on' is now the CANONICAL stored token for PfbIdnMode::All (the backing
+		// value). It reads back as All and writes as 'on' — perfect identity.
+		// (Previously 'on' was treated as "legacy" and normalised to 'all'; the
+		// ADR-28 reframe reclaimed 'on' as the canonical token: older releases reading
+		// 'on' still block all IDN, so this is behaviour-preserving + downgrade-safe.)
+		// Before: raw canonical value.
 		$raw = 'on';
 		$this->assertSame('on', $raw);
 
-		// After: canonical 'all' (one-way migration — 'on' is never re-emitted).
+		// When round-tripped.
 		$result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($raw));
-		$this->assertSame('all', $result);
-		$this->assertNotSame('on', $result);
+
+		// Then: 'on' — canonical identity.
+		$this->assertSame('on', $result, "'on' is the canonical token for All — round-trips losslessly");
 	}
 
 	public function testIdnModeEmptyNormalisesToOff(): void
@@ -349,21 +355,25 @@ final class CfgAdaptersTest extends TestCase
 
 	public function testIdnModeWriteValues(): void
 	{
-		$this->assertSame('all', pfb_cfg_idn_mode_write(PfbIdnMode::All));
+		// PfbIdnMode::All backing value is 'on' (the original pre-ADR-08 block-all
+		// token, reused for round-trip correctness + downgrade safety).
+		$this->assertSame('on', pfb_cfg_idn_mode_write(PfbIdnMode::All));
 		$this->assertSame('confusable', pfb_cfg_idn_mode_write(PfbIdnMode::Confusable));
 		$this->assertSame('off', pfb_cfg_idn_mode_write(PfbIdnMode::Off));
 	}
 
 	public function testIdnModeWriteAcceptsLegacyString(): void
 	{
-		// "enum or string" contract: raw legacy string normalises through read.
-		// Canonical values round-trip; legacy 'on' -> 'all'; '' and junk -> 'off'.
-		$this->assertSame('all', pfb_cfg_idn_mode_write('all'));
-		$this->assertSame('confusable', pfb_cfg_idn_mode_write('confusable'));
-		$this->assertSame('off', pfb_cfg_idn_mode_write('off'));
-		$this->assertSame('all', pfb_cfg_idn_mode_write('on'));
-		$this->assertSame('off', pfb_cfg_idn_mode_write(''));
-		$this->assertSame('off', pfb_cfg_idn_mode_write('yes'));
+		// "enum or string" contract: raw string normalises through read adapter.
+		// 'on'  -> All (canonical) — round-trips losslessly.
+		// 'confusable' and 'off' are canonical and round-trip.
+		// '', junk, and the dropped 4.0.0-alpha 'all' normalise to Off -> 'off'.
+		$this->assertSame('on',          pfb_cfg_idn_mode_write('on'));
+		$this->assertSame('confusable',  pfb_cfg_idn_mode_write('confusable'));
+		$this->assertSame('off',         pfb_cfg_idn_mode_write('off'));
+		$this->assertSame('off',         pfb_cfg_idn_mode_write(''));
+		$this->assertSame('off',         pfb_cfg_idn_mode_write('yes'));
+		$this->assertSame('off',         pfb_cfg_idn_mode_write('all'));   // dropped alpha token
 	}
 
 	// -----------------------------------------------------------------------
