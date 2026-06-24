@@ -87,6 +87,7 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Permit Firewall Rules",
             "Interface(s)",
             "no-AAAA",
+            "pfb_dnsbl_nonat",  # issue-#381 NAT opt-out checkbox (name= attr in rendered HTML)
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
