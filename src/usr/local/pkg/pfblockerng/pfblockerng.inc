@@ -1112,6 +1112,19 @@ function pfb_resolve_list_script($name, $dirs = null) {
 	return FALSE;
 }
 
+/* Return TRUE if any DNSBL artifact path exists on disk. Used to decide whether the
+   empty-feeds pass (no feeds subscribed) has anything to clear: TRUE => clear + restart
+   once; FALSE => suppress the feed-blind reuse_dnsbl/.reload reload that otherwise
+   restarted Unbound every pass. Pure (file_exists only) so PHPUnit pins both branches. */
+function pfb_dnsbl_artifacts_exist(array $paths): bool {
+	foreach ($paths as $path) {
+		if ($path !== '' && file_exists($path)) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -12786,17 +12799,36 @@ function sync_package_pfblockerng($cron='') {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
-				pfb_logger("\nClearing all DNSBL Feeds", 1);
-				$pfb['domain_clear'] = TRUE;
+				$pfb_artifact_paths = array(
+					$pfb['unbound_py_data'],
+					$pfb['unbound_py_zone'],
+					$pfb['unbound_py_wh'],
+					$pfb['unbound_py_count'],
+					$pfb['unbound_py_regex_count'],
+					$pfb['unbound_py_sources'],
+					$pfb['unbound_py_rawdir'],	// dir; file_exists() is TRUE for it too, so a lingering rawdir still triggers the clear
+				);
+				if (pfb_dnsbl_artifacts_exist($pfb_artifact_paths)) {
+					// First pass after the last feed is removed — artifacts exist; clear and
+					// restart once so Unbound stops serving stale DNSBL data.
+					pfb_logger("\nClearing all DNSBL Feeds", 1);
+					$pfb['domain_clear'] = TRUE;
 
-				// Clear out Unbound pfb_dnsbl.conf file
-				unlink_if_exists($pfb['unbound_py_data']);
-				unlink_if_exists($pfb['unbound_py_zone']);
-				unlink_if_exists($pfb['unbound_py_wh']);
-				unlink_if_exists($pfb['unbound_py_count']);
-				unlink_if_exists($pfb['unbound_py_regex_count']);	// ADR-07 P8
-				unlink_if_exists($pfb['unbound_py_sources']);
-				rmdir_recursive("{$pfb['unbound_py_rawdir']}");
+					// Clear out Unbound pfb_dnsbl.conf file
+					unlink_if_exists($pfb['unbound_py_data']);
+					unlink_if_exists($pfb['unbound_py_zone']);
+					unlink_if_exists($pfb['unbound_py_wh']);
+					unlink_if_exists($pfb['unbound_py_count']);
+					unlink_if_exists($pfb['unbound_py_regex_count']);	// ADR-07 P8
+					unlink_if_exists($pfb['unbound_py_sources']);
+					rmdir_recursive("{$pfb['unbound_py_rawdir']}");
+				} else {
+					// Steady state: no feeds subscribed AND nothing on disk — suppress the
+					// feed-blind reuse_dnsbl/.reload flags set by the $dnsbl_missing check
+					// above so this pass is a no-op and Unbound is not restarted.
+					$pfb['reuse_dnsbl'] = '';
+					unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+				}
 			}
 		}
 		else {
