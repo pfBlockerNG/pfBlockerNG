@@ -17,15 +17,14 @@ from __future__ import annotations
 
 import argparse
 import html
-import io
 import json
 import os
 import re
-import shutil
 import subprocess
-import tarfile
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
+
+from pfb_pkg import read_compact_manifest
 
 # Display order for the published-packages table (newest per channel). The channel of a
 # package is read from its name suffix (channel_of); the install CARDS are rendered
@@ -149,22 +148,10 @@ def _or_dash(value: str) -> str:
     return _esc(value) if value else '<span class="empty">&mdash;</span>'
 
 
-def read_manifest_zstd(path: str) -> dict:
-    """Read a .pkg's +COMPACT_MANIFEST (a libpkg .pkg is a zstd-compressed tar)."""
-    if shutil.which("zstd") is None:
-        raise RuntimeError("gen_landing.py needs the zstd binary to read .pkg manifests (e.g. pkg/apt install zstd)")
-    raw = subprocess.run(["zstd", "-dc", path], capture_output=True, check=True).stdout
-    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
-        member = tar.extractfile("+COMPACT_MANIFEST")
-        if member is None:
-            raise ValueError(f"{path}: no +COMPACT_MANIFEST member")
-        return json.loads(member.read())
-
-
 def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = None) -> list[dict]:
     """Walk <site>/, returning one row per published package (channel/name/version/abi/size/rel)."""
     if read_manifest is None:
-        read_manifest = read_manifest_zstd
+        read_manifest = read_compact_manifest
     pkgs: list[dict] = []
     for dirpath, _dirs, files in os.walk(site):
         for fname in sorted(files):
