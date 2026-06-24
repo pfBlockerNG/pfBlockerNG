@@ -38,7 +38,9 @@ final class InstallDnsblMoveRestartGuardTest extends TestCase
 		$src = self::installSource();
 
 		// The section runs from its "Move dnsbl_levent.sqlite" header to the guarded
-		// pfb_stop_start_unbound() call.
+		// pfb_stop_start_unbound() call. NOTE: this header string is load-bearing — it
+		// bounds the window this test inspects; testNoOrphanUfoundTypo() is the
+		// header-independent backstop for the exact regression class.
 		$start = strpos($src, '// Move dnsbl_levent.sqlite');
 		$this->assertNotFalse($start, 'the "Move dnsbl_levent.sqlite" migration block is missing');
 		$guard = strpos($src, 'pfb_stop_start_unbound', $start);
