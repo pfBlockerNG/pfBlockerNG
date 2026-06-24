@@ -98,14 +98,13 @@ $pfb['ip_cache']	= "{$pfb['dbdir']}/ip_cache.sqlite";
 
 $pfb['script']		= '/usr/local/pkg/pfblockerng/pfblockerng.sh';
 $pfb['feeds']		= '/usr/local/www/pfblockerng/pfblockerng_feeds.json';
-// #468: zstd archive (.tar.zst); aliasarchive_legacy is the pre-#468 bzip2 path,
-// read on restore and retired after a verified zst write.
-$pfb['aliasarchive']		= '/usr/local/etc/aliastables.tar.zst';
-$pfb['aliasarchive_legacy']	= '/usr/local/etc/aliastables.tar.bz2';
-// #468: DNSBL python-integration archive (RAM-disk /var restore). SEPARATE from the IP
+// #468: extension-less BASES. pfb_archive_{compress,extract} (pfblockerng.sh) append
+// .zst (zstd) or .bz2 (bzip2 fallback / pre-#468 legacy) and pick the codec by what is
+// available; teardown removes both extensions.
+$pfb['aliasarchive']	= '/usr/local/etc/aliastables.tar';
+// #468: DNSBL python-integration cache (RAM-disk /var restore). SEPARATE base from the IP
 // aliastables archive -- managed by pfb_dnsbl_cache() / 'pfblockerng.sh dnsbl_cache'.
-// NEW file -- no legacy bz2 to read.
-$pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar.zst';
+$pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
 
 $pfb['dnsbl_tld_txt']	= "{$pfb['dnsdir']}/DNSBL_TLD.txt";
 $pfb['dnsbl_tld_data']	= '/usr/local/pkg/pfblockerng/dnsbl_tld';
@@ -8409,12 +8408,12 @@ function pfb_aliastables($mode) {
 			}
 
 			// Archive IP Aliastables as required. #468: route through the shell
-			// pfb_compress helper so compression (zstd) stays single-sourced; it
-			// writes the verified .tar.zst and retires the legacy .tar.bz2 only after.
+			// pfb_compress helper so the codec choice (zstd, else bzip2) stays
+			// single-sourced; it appends .zst/.bz2 to the base and retires a stale
+			// .bz2 after a verified zstd write.
 			if (!empty($files_to_backup)) {
 				exec(escapeshellarg($pfb['script']) . ' pfb_compress ' .
-					escapeshellarg($pfb['aliasarchive']) . ' ' .
-					escapeshellarg($pfb['aliasarchive_legacy']) . " {$files_to_backup} >/dev/null 2>&1");
+					escapeshellarg($pfb['aliasarchive']) . " {$files_to_backup} >/dev/null 2>&1");
 				pfb_logger("\nArchiving selected pfBlockerNG files.\n", 1);
 			} else {
 				pfb_logger("\nNo Files to archive.\n", 1);
@@ -8458,9 +8457,9 @@ function pfb_aliastables($mode) {
 		}
 	}
 	else {
-		// Remove aliastables archive (both the zst and the legacy bz2) if found
-		unlink_if_exists("{$pfb['aliasarchive']}");
-		unlink_if_exists("{$pfb['aliasarchive_legacy']}");
+		// Remove aliastables archive (both .zst and .bz2) if found
+		unlink_if_exists("{$pfb['aliasarchive']}.zst");
+		unlink_if_exists("{$pfb['aliasarchive']}.bz2");
 
 		// Remove earlyshellcmd settings
 		if (!empty($a_earlyshellcmd)) {
@@ -8554,10 +8553,9 @@ function pfb_dnsbl_cache($mode) {
 		}
 	}
 	else {
-		// Remove DNSBL cache archive if found
-		if (file_exists("{$pfb['dnsblarchive']}")) {
-			unlink_if_exists("{$pfb['dnsblarchive']}");
-		}
+		// Remove DNSBL cache archive (both .zst and .bz2) if found
+		unlink_if_exists("{$pfb['dnsblarchive']}.zst");
+		unlink_if_exists("{$pfb['dnsblarchive']}.bz2");
 
 		// Remove earlyshellcmd settings
 		if (!empty($a_earlyshellcmd)) {
@@ -15329,9 +15327,9 @@ function pfblockerng_php_pre_deinstall_command() {
 		}
 	}
 
-	// Remove aliastables archive (zst + legacy bz2) and earlyshellcmd if found.
-	@unlink_if_exists("{$pfb['aliasarchive']}");
-	@unlink_if_exists("{$pfb['aliasarchive_legacy']}");
+	// Remove aliastables archive (.zst + .bz2) and earlyshellcmd if found.
+	@unlink_if_exists("{$pfb['aliasarchive']}.zst");
+	@unlink_if_exists("{$pfb['aliasarchive']}.bz2");
 	if (config_get_path('system/earlyshellcmd') !== null) {
 		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
 		if (preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd)) {
@@ -15345,9 +15343,10 @@ function pfblockerng_php_pre_deinstall_command() {
 		}
 	}
 
-	// #468: Remove DNSBL cache archive + restore earlyshellcmd if found (separate
-	// 'dnsbl_cache restore' string from the IP aliastables hook above).
-	@unlink_if_exists("{$pfb['dnsblarchive']}");
+	// #468: Remove DNSBL cache archive (.zst + .bz2) + restore earlyshellcmd if found
+	// (separate 'dnsbl_cache restore' string from the IP aliastables hook above).
+	@unlink_if_exists("{$pfb['dnsblarchive']}.zst");
+	@unlink_if_exists("{$pfb['dnsblarchive']}.bz2");
 	if (config_get_path('system/earlyshellcmd') !== null) {
 		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
 		if (preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd)) {

@@ -55,14 +55,12 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	etmatch="$(echo "${9}" | sed 's/,/, /g')"
 
 	# File Locations
-	# #468: zstd archive (.tar.zst); aliasarchive_legacy is the pre-#468 bzip2 path,
-	# read on restore and retired after a verified zst write.
-	aliasarchive="/usr/local/etc/aliastables.tar.zst"
-	aliasarchive_legacy="/usr/local/etc/aliastables.tar.bz2"
-	# DNSBL python-integration archive (#468). SEPARATE from the IP aliastables
+	# #468: extension-less BASES -- pfb_archive_{compress,extract} append .zst (zstd)
+	# or .bz2 (bzip2 fallback / pre-#468 legacy) and pick the codec by availability.
+	aliasarchive="/usr/local/etc/aliastables.tar"
+	# DNSBL python-integration cache (#468). SEPARATE base from the IP aliastables
 	# archive above -- different lifecycle (DNSBL changes, not IP-rule changes).
-	# NEW file -- no legacy bz2 to read.
-	dnsblarchive="/usr/local/etc/pfb_dnsbl_cache.tar.zst"
+	dnsblarchive="/usr/local/etc/pfb_dnsbl_cache.tar"
 	pathgeoipdat="/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 	pathasndat="/usr/local/share/GeoIP/asn.mmdb"
 	pathasncsv="/usr/local/share/GeoIP/asn.csv"
@@ -224,41 +222,37 @@ pfb_zstd_threads() {
 	echo "${_t}"
 }
 
-# Compress files into a .tar.zst, then verify integrity and retire the legacy
-# archive only on a verified write. Args: <archive.zst> <legacy_or_empty> <files...>
-# Returns non-zero (leaving the legacy intact) if compress or verify fails.
+# Compress <files...> into an archive, choosing the format by what is available:
+# zstd present -> "<base>.zst" (zstd, multi-thread); else -> "<base>.bz2" (bzip2).
+# The helper owns the extension + compressor; callers pass the extension-less <base>.
+# On a verified zstd write, retire a stale "<base>.bz2" (e.g. a pre-upgrade install).
+# Args: <base> <files...>. Returns non-zero (leaving any .bz2 intact) on zstd failure.
 pfb_archive_compress() {
-	_arc="$1"
-	_legacy="$2"
-	shift 2
-	if command -v zstd >/dev/null 2>&1; then
-		if "${pathtar}" -Pcf - "$@" | zstd -q -f -T"$(pfb_zstd_threads)" -o "${_arc}" \
-			&& zstd -tq "${_arc}"; then
-			[ -n "${_legacy}" ] && [ "${_legacy}" != "${_arc}" ] && rm -f "${_legacy}"
-			return 0
-		fi
-		return 1
+	_base="$1"
+	shift
+	# No availability probe: just attempt zstd. If the binary is missing OR errors, the
+	# pipeline fails and we fall through -- the attempt IS the check. On a verified write
+	# retire a stale .bz2.
+	if "${pathtar}" -Pcf - "$@" | zstd -q -f -T"$(pfb_zstd_threads)" -o "${_base}.zst" 2>/dev/null \
+		&& zstd -tq "${_base}.zst" 2>/dev/null; then
+		rm -f "${_base}.bz2"
+		return 0
 	fi
-	# Defensive fallback: no zstd -> bzip2 into the legacy path (or the archive
-	# path when no legacy was given).
-	"${pathtar}" -Pjcf "${_legacy:-${_arc}}" "$@"
+	# zstd unavailable or errored: drop any partial/stale .zst, fall back to bzip2
+	# ("who knows what the future holds").
+	rm -f "${_base}.zst"
+	"${pathtar}" -Pjcf "${_base}.bz2" "$@"
 }
 
-# Extract a .tar.zst (or, if absent, a legacy .tar.bz2). Pure extract, no reload.
-# Args: <archive.zst> <legacy_or_empty>
+# Extract "<base>.zst" (zstd) or "<base>.bz2" (bzip2) -- whichever exists. No reload.
+# Args: <base>.
 pfb_archive_extract() {
-	_arc="$1"
-	_legacy="$2"
-	if [ -f "${_arc}" ]; then
-		if command -v zstd >/dev/null 2>&1; then
-			cd / && zstd -dc "${_arc}" | "${pathtar}" -Pxf -
-		else
-			# bsdtar -P auto-detects the compression format.
-			cd / && "${pathtar}" -Pxf "${_arc}"
-		fi
-	elif [ -n "${_legacy}" ] && [ -f "${_legacy}" ]; then
-		# bsdtar auto-detects the legacy bzip2 archive.
-		cd / && "${pathtar}" -Pxf "${_legacy}"
+	_base="$1"
+	# bsdtar -P auto-detects the compression (zstd or bzip2); no zstd binary needed.
+	if [ -f "${_base}.zst" ]; then
+		cd / && "${pathtar}" -Pxf "${_base}.zst"
+	elif [ -f "${_base}.bz2" ]; then
+		cd / && "${pathtar}" -Pxf "${_base}.bz2"
 	fi
 }
 
@@ -271,7 +265,7 @@ aliastables() {
 			chown -f unbound:unbound /var/unbound
 			chgrp -f unbound /var/unbound
 		fi
-		pfb_archive_extract "${aliasarchive}" "${aliasarchive_legacy}"
+		pfb_archive_extract "${aliasarchive}"
 	fi
 }
 
@@ -300,7 +294,7 @@ dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
 	pfbpkgdir="${pfbpkgdir:-/usr/local/pkg/pfblockerng}"
-	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar.zst}"
+	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
 	# The shipped (static) DNSBL python files -- the ONE definition of the set.
@@ -342,11 +336,11 @@ dnsbl_cache() {
 			done
 			if [ "$#" -gt 0 ]; then
 				# NEW file -- no legacy archive to retire (empty 2nd arg).
-				pfb_archive_compress "${dnsblarchive}" '' "$@"
+				pfb_archive_compress "${dnsblarchive}" "$@"
 			fi
 			;;
 		restore)
-			pfb_archive_extract "${dnsblarchive}" ''
+			pfb_archive_extract "${dnsblarchive}"
 			dnsbl_cache_stage
 			;;
 	esac

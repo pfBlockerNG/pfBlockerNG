@@ -2269,7 +2269,15 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float
 # pfBlockerNG archives its IP aliastables + DNSBL DB here for RAMDISK installs; the
 # earlyshellcmd `pfblockerng.sh aliastables` restores it on boot (pfblockerng.inc:7791,
 # pfblockerng.sh:208). Present only after an `update` runs with use_mfs_tmpvar enabled.
-ALIASARCHIVE = "/usr/local/etc/aliastables.tar.zst"
+# Extension-less BASE: pfblockerng.sh's archive helper appends .zst (zstd) or .bz2
+# (bzip2 fallback / pre-#468 legacy). Use archive_exists() to check it codec-agnostically.
+ALIASARCHIVE = "/usr/local/etc/aliastables.tar"
+
+
+def archive_exists(vm: SmokeVM, base: str) -> bool:
+    """True if a pfBlockerNG MFS restore archive exists for ``base`` — either codec
+    (``<base>.zst`` or ``<base>.bz2``); the helper picks the codec, so never assume one."""
+    return vm.ssh("test", "-f", f"{base}.zst", "-o", "-f", f"{base}.bz2").returncode == 0
 
 
 def set_ramdisk(vm: SmokeVM, on: bool, *, var_size: int = 512, tmp_size: int = 128, timeout: float = 60.0) -> None:

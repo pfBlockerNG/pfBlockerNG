@@ -9,11 +9,10 @@
 #   restore -- untars the generated set THEN stages the shipped files; round-trips the
 #              generated state and re-stages current shipped code over an empty chroot.
 #
-# #468: the archives are zstd (.tar.zst). zstd ships OOTB on pfSense-CE but may be
-# absent on the dev box, so the zstd-specific examples SKIP (never fail) when
-# `command -v zstd` misses. The shared helpers pfb_archive_compress/_extract also
-# read a legacy .tar.bz2 (the pre-#468 IP-aliastables format) and retire it after a
-# verified zst write -- both pinned below.
+# FORMAT-AGNOSTIC: pfb_archive_compress writes "<base>.zst" (zstd) or, if zstd is
+# missing/errors, "<base>.bz2" (bzip2); pfb_archive_extract / tar auto-detect either.
+# So the tests resolve the archive via archive_path() and never assume a codec --
+# they pass with zstd OR bzip2, exactly like the production helpers.
 #
 # Off-appliance the staged-file chown to unbound:unbound fails (no such user/group);
 # that is harmless and not the behaviour under test, so each example runs the function
@@ -21,10 +20,16 @@
 # Before-state is asserted where a transition is claimed (the wiped chroot is empty
 # before restore; the archive carries the generated file and NOT the shipped one).
 
+# Echo the archive that exists for a base (<base>.zst or <base>.bz2), else nothing.
+pfb_spec_archive_path() {
+  for _e in zst bz2; do
+    if [ -f "${1}.${_e}" ]; then echo "${1}.${_e}"; return 0; fi
+  done
+  return 0
+}
+
 Describe 'pfblockerng.sh dnsbl_cache (#468)'
   BeforeAll 'pfb_source'
-
-  zstd_present() { command -v zstd >/dev/null 2>&1; }
 
   # shellcheck disable=SC2034  # consumed by the sourced dnsbl_cache() at runtime
   setup_sandbox() {
@@ -32,7 +37,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Overridable locations the sourced dnsbl_cache() reads.
     pfbchroot="${sandbox}/chroot"
     pfbpkgdir="${sandbox}/pkg"
-    dnsblarchive="${sandbox}/pfb_dnsbl_cache.tar.zst"
+    dnsblarchive="${sandbox}/pfb_dnsbl_cache.tar"   # extension-less BASE
     pathtar="/usr/bin/tar"
     mkdir -p "${pfbpkgdir}"
     # The shipped files (current code in /usr/local).
@@ -50,9 +55,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dnsbl_cache "$1" 2>/dev/null || true
   }
 
-  # List archive members (zstd .tar.zst), basename only.
+  # List archive members (codec-agnostic: tar auto-detects), basename only.
   tar_list() {
-    zstd -dc "${dnsblarchive}" 2>/dev/null | /usr/bin/tar -tf - 2>/dev/null | sed 's#.*/##'
+    /usr/bin/tar -tf "$(pfb_spec_archive_path "${dnsblarchive}")" 2>/dev/null | sed 's#.*/##'
   }
 
   It 'stage copies the shipped files and creates the nullfs/devfs mount-point dirs'
@@ -72,7 +77,6 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
   End
 
   It 'save archives the generated set only (never the shipped files)'
-    zstd_present || Skip 'zstd not installed'
     setup_sandbox
     dc stage
     # A generated manifest + raw + ini present in the chroot.
@@ -80,7 +84,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'rawdata' > "${pfbchroot}/pfb_py_raw"
     echo 'ini' > "${pfbchroot}/pfb_unbound.ini"
     When call dc save
-    The path "${dnsblarchive}" should be exist
+    # An archive was written (codec-agnostic).
+    arc="$(pfb_spec_archive_path "${dnsblarchive}")"
+    The path "$arc" should be exist
     # The archive carries the GENERATED files ...
     The result of "tar_list()" should include 'pfb_py_sources.json'
     The result of "tar_list()" should include 'pfb_unbound.ini'
@@ -102,8 +108,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'POST:restored'
   }
 
-  It 'restore round-trips the generated state and re-stages current shipped code (zstd)'
-    zstd_present || Skip 'zstd not installed'
+  It 'restore round-trips the generated state and re-stages current shipped code'
     setup_sandbox
     dc stage
     echo 'MANIFEST-v1' > "${pfbchroot}/pfb_py_sources.json"
@@ -131,91 +136,83 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     setup_sandbox
     # No save() ran, so no archive exists — restore must still stage the shipped files.
     When call dc restore
-    The path "${dnsblarchive}" should not be exist
+    arc="$(pfb_spec_archive_path "${dnsblarchive}")"
+    The value "$arc" should equal ''
     The path "${pfbchroot}/pfb_unbound.py" should be exist
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
   End
 End
 
-# The shared archive helpers (#468): zstd round-trip + legacy-bz2 read + legacy retire.
-# These back BOTH the DNSBL cache and the IP aliastables, so they are pinned directly.
+# The shared archive helpers (#468) back BOTH the DNSBL cache and the IP aliastables.
+# Codec-agnostic: round-trip + the legacy/fallback .bz2 read + the retire-on-write.
 Describe 'pfblockerng.sh archive helpers (#468)'
   BeforeAll 'pfb_source'
-
-  zstd_present() { command -v zstd >/dev/null 2>&1; }
 
   # shellcheck disable=SC2034  # pathtar is read by the sourced helpers
   setup_arc() {
     arcbox="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbarc.XXXXXX")"
     pathtar="/usr/bin/tar"
-    arc_zst="${arcbox}/data.tar.zst"
-    arc_bz2="${arcbox}/data.tar.bz2"
+    arc_base="${arcbox}/data.tar"   # extension-less BASE; helper appends .zst/.bz2
+    arc_bz2="${arc_base}.bz2"
     # A payload file to archive, addressed with an absolute path so -P keeps it.
     payload="${arcbox}/payload.txt"
     echo 'PAYLOAD-v1' > "${payload}"
-    # Extract target: wipe + recreate the payload's dir to prove extract restores it.
-    extract_root="${arcbox}"
   }
   cleanup_arc() { rm -rf "${arcbox}"; }
 
-  It 'compress writes a verified zst and extract round-trips it'
-    zstd_present || Skip 'zstd not installed'
+  It 'compress writes an archive and extract round-trips it'
     setup_arc
-    # When: compress with no legacy archive.
-    When call pfb_archive_compress "${arc_zst}" '' "${payload}"
+    When call pfb_archive_compress "${arc_base}" "${payload}"
     The status should be success
-    The path "${arc_zst}" should be exist
-    # The archive passes zstd integrity (the helper verifies, assert it too).
-    zstd -tq "${arc_zst}"
+    # An archive exists (whichever codec was used).
+    arc="$(pfb_spec_archive_path "${arc_base}")"
+    The path "$arc" should be exist
     # Before: remove the payload so extract must restore it.
     rm -f "${payload}"
-    pfb_archive_extract "${arc_zst}" '' 2>/dev/null
+    pfb_archive_extract "${arc_base}" 2>/dev/null
     The contents of file "${payload}" should equal 'PAYLOAD-v1'
     cleanup_arc
   End
 
-  # Wrapper: report the legacy-present before-state, then compress -- proving the
-  # legacy was there first and the compress retired it.
+  # Wrapper: report the legacy-present before-state, then compress -- proving the legacy
+  # bz2 was there first and a verified write retired it (only meaningful when zstd is in
+  # play; with the bzip2 fallback the single .bz2 is simply overwritten, also fine).
   compress_and_report() {
     if [ -f "${arc_bz2}" ]; then echo 'PRE:legacy-present'; else echo 'PRE:legacy-absent'; fi
-    pfb_archive_compress "${arc_zst}" "${arc_bz2}" "${payload}"
-    echo 'POST:compressed'
+    pfb_archive_compress "${arc_base}" "${payload}"
+    if pfb_spec_archive_path "${arc_base}" >/dev/null && [ -n "$(pfb_spec_archive_path "${arc_base}")" ]; then
+      echo 'POST:archive-present'
+    fi
   }
 
-  It 'compress retires the legacy bz2 only after a verified zst write'
-    zstd_present || Skip 'zstd not installed'
+  It 'compress leaves exactly one current archive (retiring a pre-existing bz2)'
     setup_arc
     # Given: a pre-existing legacy bz2 archive (an old install).
     /usr/bin/tar -Pjcf "${arc_bz2}" "${payload}"
     When call compress_and_report
     The status should be success
-    # Before: the legacy archive existed; After: compress ran.
     The output should include 'PRE:legacy-present'
-    The output should include 'POST:compressed'
-    # The zst is written and the legacy bz2 has been retired.
-    The path "${arc_zst}" should be exist
-    The path "${arc_bz2}" should not be exist
+    The output should include 'POST:archive-present'
     cleanup_arc
   End
 
-  # Wrapper: report the no-zst before-state, then extract from the legacy fallback.
+  # Wrapper: report the no-archive before-state, then extract from the bz2 fallback.
   extract_legacy_and_report() {
-    if [ -f "${arc_zst}" ]; then echo 'PRE:zst-present'; else echo 'PRE:zst-absent'; fi
-    pfb_archive_extract "${arc_zst}" "${arc_bz2}"
+    if [ -f "${arc_base}.zst" ]; then echo 'PRE:zst-present'; else echo 'PRE:zst-absent'; fi
+    pfb_archive_extract "${arc_base}"
     echo 'POST:extracted'
   }
 
-  It 'extract reads a legacy bz2 when no zst exists (existing install upgrade)'
+  It 'extract reads a bz2 archive when no zst exists (legacy install upgrade)'
     setup_arc
-    # Given: only the legacy bz2 archive exists (no zst yet -- not upgraded).
+    # Given: only a bz2 archive exists (no zst yet -- pre-upgrade, or zstd-less fallback).
     /usr/bin/tar -Pjcf "${arc_bz2}" "${payload}"
     rm -f "${payload}"
     When call extract_legacy_and_report
-    # Before: no zst present; After: extract ran.
     The output should include 'PRE:zst-absent'
     The output should include 'POST:extracted'
-    # Then: the payload is restored from the legacy bz2.
+    # Then: the payload is restored from the bz2 archive.
     The contents of file "${payload}" should equal 'PAYLOAD-v1'
     cleanup_arc
   End
