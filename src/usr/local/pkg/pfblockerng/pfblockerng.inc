@@ -1657,6 +1657,7 @@ function pfb_global() {
 
 	$pfb['dnsbl']		= PfbConfig::read('pfb_dnsbl')->value;							// Enabled state of DNSBL
 	$pfb['dnsbl_vip_auto']	= PfbConfig::read('pfb_dnsvip_auto')->value;						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
+	$pfb['dnsbl_nonat']	= PfbConfig::read('pfb_dnsbl_nonat')->value;						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
@@ -4034,6 +4035,13 @@ function pfb_create_dnsbl_cert() {
 }
 
 
+// [ #381 ] DNSBL sinkhole NAT generation is gated on a real (non-lo0) listening
+// interface AND the user not having opted out via pfb_dnsbl_nonat. Pure predicate so
+// the branch is unit-testable off-appliance (PfbDnsblNatEnabledTest).
+function pfb_dnsbl_nat_enabled(string $iface, $nonat): bool {
+	return $iface !== 'lo0' && empty($nonat);
+}
+
 // Create DNSBL VIP and NAT rules, lighttpd conf and services
 function pfb_create_dnsbl($mode) {
 	global $pfb;
@@ -4069,7 +4077,7 @@ function pfb_create_dnsbl($mode) {
 
 			// Generate new DNSBL NAT per DNSBL listening ports except for 'localhost' interface setting.
 			$dnsbl_new_nat = array();
-			if ($pfb['dnsbl_iface'] != 'lo0') {
+			if (pfb_dnsbl_nat_enabled($pfb['dnsbl_iface'], $pfb['dnsbl_nonat'])) {
 				$selected_ports = array("{$pfb['dnsbl_port']}" => '80', "{$pfb['dnsbl_port_ssl']}" => '443');
 				foreach ($selected_ports as $port => $lport) {
 
