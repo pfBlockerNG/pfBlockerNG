@@ -1,8 +1,10 @@
 """Tests for scripts/pfb_pkg.py — the shared libpkg .pkg manifest reader.
 
-Covers both branches of the zstd decoder (module fast-path vs binary fallback vs
-neither) and every error path of read_compact_manifest, so the helper both
-build-repo-portable.py and gen_landing.py now depend on is pinned in one place.
+Pins every error path of read_compact_manifest and the zstd decoder's fallback
+chain: the roundtrip uses whichever decoder the environment has (the `zstandard`
+module if installed, else the `zstd` binary), and the no-decoder case is forced
+deterministically to assert the PkgError. This is the single copy of the reader
+that both build-repo-portable.py and gen_landing.py now depend on.
 """
 
 from __future__ import annotations

@@ -1084,7 +1084,7 @@ def main(argv: list[str]) -> int:
                 release_pkgs=release_pkgs_arg,
                 annotate=annotate or None,
             )
-        except (BuildRepoError, subprocess.CalledProcessError) as e:
+        except (BuildRepoError, PkgError, subprocess.CalledProcessError) as e:
             sys.stderr.write(f"build-repo-portable: {e}\n")
             return 1
         return 0
