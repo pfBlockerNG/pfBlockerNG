@@ -610,6 +610,79 @@ def test_software_page_hidden_when_override_forces_off(
         assert _SOFTWARE_PANEL_MARKER not in resp.text, "forced-off must NOT render the Software panel"
 
 
+def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """The Log Settings section was regrouped into aligned per-log rows with a single 3-item
+    column-help intro and category header rows (issue #489).
+
+    Scenario: Log Settings section redesigned — grouped by category, aligned columns.
+      Background: pfBlockerNG deployed; General page renders cleanly.
+
+    Given the General page renders via the clean-render oracle (200, no Fatal/Warning/Notice,
+      "General Settings" section marker present),
+
+    When the body is inspected for the new grouped-column structure,
+
+    Then the three column-header texts are present in the body, emitted by the per-category
+      header ``Form_Group`` rows (PRESENT: new design);
+    And the 3-item intro wording markers are present (the column-purpose ``<ul>`` sentences
+      written in issue #489's intro ``Form_StaticText``);
+    And a representative set of field names spanning all four categories are present —
+      proving no control was dropped by the redesign;
+    And the old repeated per-field help suffix ("</strong> Log", the pattern emitted by
+      ``setHelp("Default: <strong>20000<br />{$descr}</strong> Log")`` on every row) is
+      ABSENT — the repetition was removed (ABSENT: old design, before/after evidence);
+    And the old "Unified Log" label is ABSENT — the trailing " Log" was dropped to "Unified"
+      (ABSENT: old design, before/after evidence). ``php_error_log_guard`` enrolls this GET
+      in the module-level no-growth sweep.
+
+    Source-inspection proof of fail-before/pass-after:
+    - PRESENT markers ("rolling cap", "discards that period", "cushion for remote log
+      shippers", ">Max lines<", ">Schedule<", ">Keep lines<") exist ONLY in the new
+      PHP code (the intro ``Form_StaticText`` and header ``Form_Group`` rows); they are
+      absent from ``origin/devel``, so the test FAILS on the old code and PASSES after.
+    - ABSENT markers ("</strong> Log", "Unified Log") exist ONLY in the old
+      ``setHelp("Default: <strong>20000<br />{$descr}</strong> Log")`` calls and the old
+      ``'Unified Log'`` key; they are absent from the new code, so the test PASSES after
+      the change and would FAIL if the old code were reinstated.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, resp.text, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+    body = resp.text
+
+    # PRESENT: new 3-item intro wording (emitted by the intro Form_StaticText).
+    for needle in (
+        "rolling cap",
+        "discards that period",
+        "cushion for remote log shippers",
+    ):
+        assert needle in body, f"Log Settings intro wording {needle!r} missing — redesign intro not rendered"
+
+    # PRESENT: column headers (emitted by the per-category header Form_Group rows).
+    for needle in (">Max lines<", ">Schedule<", ">Keep lines<"):
+        assert needle in body, f"Log Settings column header {needle!r} missing — header rows not rendered"
+
+    # PRESENT: field names spanning all four categories — no control dropped.
+    for field_name in (
+        'name="log_max_log"',  # General: pfBlockerNG
+        'name="log_rotate_dnslog"',  # DNSBL
+        'name="log_reset_keep_unilog"',  # General: Unified
+        'name="log_max_ip_blocklog"',  # IP
+        'name="log_rotate_dnsreplylog"',  # DNS Reply
+    ):
+        assert field_name in body, f"Log Settings field {field_name!r} missing — control dropped by redesign"
+
+    # ABSENT: old repeated per-field help suffix (was emitted by every row in the old code).
+    assert "</strong> Log" not in body, (
+        'old repeated per-field help suffix "</strong> Log" still present — setHelp repetition not removed'
+    )
+
+    # ABSENT: old "Unified Log" label (renamed to "Unified" in the redesign).
+    assert "Unified Log" not in body, (
+        '"Unified Log" label still present — label not updated to "Unified" (issue #489 rename)'
+    )
+
+
 def test_page_table_covers_every_pfblockerng_page() -> None:
     """Guard: the table (plus the recorded exclusions) covers the on-disk page set.
 
