@@ -734,7 +734,7 @@ final class RollbackContractTest extends TestCase
 	 *     When collecting all fields whose type is 'lenient'.
 	 *     Then exactly 'pfb_keep' and 'pfb_dnsbl_lenient' appear (registry insertion order).
 	 */
-	public function testAdapterTypeHelperLenientAssignedOnlyToPfbDnsblLenient(): void
+	public function testAdapterTypeHelperLenientAssignedToPfbKeepAndPfbDnsblLenient(): void
 	{
 		$registry       = pfb_cfg_registry();
 		$lenient_fields = [];
