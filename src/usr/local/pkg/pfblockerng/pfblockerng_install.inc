@@ -573,14 +573,11 @@ if (file_exists('/var/db/pfblockerng/dnsbl.sqlite') && !file_exists($pfb['dnsbl_
 }
 unlink_if_exists('/var/db/pfblockerng/dnsbl.sqlite');
 
-/* Update unbound python files.
- * The target directory may not exist yet e.g. after an upgrade with
- * RAM Disks enabled; defer the file copy to pfb_unbound_dnsbl(). */
-if (is_dir(g_get('unbound_chroot_path'))) {
-	@copy("/usr/local/pkg/pfblockerng/pfb_unbound.py", "{$g['unbound_chroot_path']}/pfb_unbound.py");
-	@copy("/usr/local/pkg/pfblockerng/pfb_unbound_include.inc", "{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
-	@copy("/usr/local/pkg/pfblockerng/pfb_py_hsts.txt", "{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
-}
+/* Update unbound python files. #468: the shipped-file list lives ONLY in
+ * 'pfblockerng.sh dnsbl_cache stage' (single source of truth); it also mkdirs the
+ * chroot + nullfs mount-point dirs, so a fresh RAM-disk /var (e.g. after an upgrade
+ * with RAM Disks enabled) can't make the copy fail. */
+exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
