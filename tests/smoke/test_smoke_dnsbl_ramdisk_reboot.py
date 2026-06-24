@@ -1,11 +1,12 @@
 """Issue #468 — DNSBL survives a RAM-disk /var reboot (python integration re-staged).
 
-On a RAM-disk /var (``use_mfs_tmpvar``) a reboot wipes ``/var/unbound``. The MFS
-restore archive (``pfb_aliastables``) already globs ``/var/unbound/pfb_unbound*`` +
-``pfb_py_*`` and the boot ``earlyshellcmd`` untars it — but the archive was only
-(re)built on IP-alias/firewall-rule changes, so a DNSBL-only config never archived
-the python integration and DNSBL came up dead after every reboot. The fix builds
-the archive on DNSBL-only updates too.
+On a RAM-disk /var (``use_mfs_tmpvar``) a reboot wipes ``/var/unbound``, so DNSBL
+came up dead after every reboot. The fix adds a DEDICATED DNSBL cache, independent
+of the IP-alias archive: ``pfb_dnsbl_cache('save')`` archives the generated python
+integration (``/var/unbound/pfb_unbound*`` + ``pfb_py_*``) whenever DNSBL actually
+changes, and a separate boot ``earlyshellcmd`` (``pfblockerng.sh dnsbl_cache
+restore``) untars it then re-stages the shipped files — pure file ops, no reload.
+Unbound's normal start then loads the restored files.
 
 REPRODUCE-FIRST: assert the domain sinkholes BEFORE the reboot, then require it to
 still sinkhole AFTER a RAM-disk reboot (pfb_unbound.py re-staged + matcher rebuilt
