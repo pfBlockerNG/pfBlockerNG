@@ -140,12 +140,17 @@ resolved. Keep it minimal and proportionate to Step 4 — most bugs are
 
 1. **Pin the bug with a failing test** (TDD): add the unit/smoke/UI coverage that
    FAILS on today's code for the reason the issue describes — per CLAUDE.md "Test
-   coverage" (every branch, assert before-and-after, no coverage theater).
+   coverage" (the five non-negotiables: fail-before/pass-after as evidence, every
+   branch, no coverage theater, intent-named).
 2. **Implement the fix** so that test passes, matching the established patterns
    (CLAUDE.md "Code standards / Naming"), diff kept minimal.
 3. **Verify + harden**: full gate run, edge cases, docs/labels, self-review of the
    diff against the issue (optionally `/code-review` the diff, `/security-review` if
    security-adjacent).
+
+Every step obeys CLAUDE.md **Test coverage** — the five non-negotiables are hard gates. In
+particular: a fix that touches **front-end** behaviour (`www/`) MUST add **Tier A** UI
+coverage, and **Tier B** only if the change is observable *only* in that tier.
 
 Split or merge steps to fit the actual defect; a one-line fix may be a single
 implement+test step. For **each** step write a **self-contained delegate prompt** —
@@ -255,7 +260,8 @@ gates relevant to what changed (`python -m pytest`, `ruff check .`, plus
 `php -l` / `shellcheck` / `vendor/bin/phpunit` for the touched languages), and
 sanity-check the diff (`git -C <path> show --stat`) against the step's expected
 result and the issue. For a fix step, confirm the pinning test **fails without** the
-fix and **passes with** it (the before/after the handoff claims). If the agent
+fix and **passes with** it (the before/after the handoff claims); for a `www/`-touching
+fix, confirm **Tier A** UI coverage is present (CLAUDE.md "Test coverage" #4). If the agent
 reported BLOCKED, the handoff is missing, a gate fails, or the diff doesn't match the
 objective → **HALT and report**; do not start `M+1`. Carry the validated handoff into
 the next step's brief.

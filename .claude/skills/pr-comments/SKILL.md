@@ -260,6 +260,9 @@ For every finding, decide a verdict — do **not** auto-apply:
 ## Step 6 — Apply the valid fixes
 
 - Minimal changes, matching repo conventions (see `CLAUDE.md`).
+- **A fix that changes behaviour carries its own test** — CLAUDE.md "Test coverage" applies
+  to review fixes too: fail-before/pass-after, no coverage theater, and **Tier A** UI coverage
+  for a `www/` change. (A pure-comment/lint nit needs none.)
 - Re-run the gates: `python -m pytest`, `ruff check .` / `ruff format .`, `php -l`
   / ShellCheck for any PHP/shell touched. Nothing red.
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch (direct

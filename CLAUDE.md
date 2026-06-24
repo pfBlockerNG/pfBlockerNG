@@ -436,11 +436,36 @@ registered path set). Each annotation is committed in the relevant source file.
 
 ## Test coverage (mandatory)
 
-When writing tests — **unit, integration, E2E, or smoke** — cover **every branch** and assert
-the state **before** a change as well as after. **A test must validate that the code is
-correct, not merely execute it:** asserting nothing that would *fail* on a regression is
-coverage theater and is **not acceptable**, even at 100% line coverage. Name/comments state
-the **intent** (behaviour pinned), not the mechanics. All three required:
+Tests are how a change proves itself. **Five non-negotiable principles govern every change —
+unit, integration, E2E, smoke, or UI. Each is a hard gate: a change that violates any one is
+NOT done, no matter what the line-coverage number says.**
+
+1. **A test is EVIDENCE the change works — for a behaviour change it MUST fail before and pass
+   after.** When a change adds, modifies, or fixes behaviour, write/extend the test so that, run
+   against the **pre-change** code it **FAILS** (for the exact reason the change addresses), and
+   against the **post-change** code it **PASSES**. Prove *both* directions — watch it go red on
+   the old code, green on the new (revert/stash the change, or land the test first, TDD-style).
+   A test already green before the change is evidence of nothing. **Sole exception:**
+   behaviour-**PRESERVING** work (refactors, the ADR prep phases) pins the *existing* behaviour
+   as an oracle and stays green across the change — a regression guarantee, deliberately not
+   red→green, and still mandatory.
+2. **Every change ships WITH its tests.** No behaviour, feature, fix, or modified behaviour
+   lands without the test(s) that exercise it. "The existing suite still passes" is **not**
+   coverage of a new change.
+3. **NEVER coverage theater.** A test must *validate* the code, not merely *execute* it — it
+   carries an assertion that would **fail on a regression**. Green at 100% line coverage with no
+   failable assertion is **rejected**.
+4. **Front-end changes REQUIRE front-end tests.** A change touching front-end behaviour (`www/`)
+   must carry UI tests (ADR-14; see "Smoke tests" / "Web-UI tiers" below): **Tier A
+   (`ui_render`) is always required.** **Tier B (`ui_e2e`/`ui_browser`) is highly encouraged,
+   and REQUIRED IFF the change produces behaviour or visual changes that can be observed *only*
+   in Tier B** (i.e. not already caught by Tier A).
+5. **Tests express the change's INTENT — they are documentation, not just coverage.** The test
+   name and comments state the **intended outcome** (the behaviour being pinned), so a reader
+   learns what the change is *for* — never the mechanics of how it is coded.
+
+The five above are the **law**; the rest of this section is **how** to satisfy them — apply all
+of it:
 
 - **Branch coverage — test every condition, not one side.** When a result depends on a
   toggle/flag/mode/input-class, assert the outcome for **each** value: a boolean gets **off**

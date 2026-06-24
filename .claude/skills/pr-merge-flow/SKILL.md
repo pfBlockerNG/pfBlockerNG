@@ -146,10 +146,11 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    in the same public repo; a confirmed-real finding is never just acknowledged);
    mirror `pr-comments` Step 5 and reply on every CodeRabbit thread. Honour the repo's
    lint config and `CLAUDE.md`.
-4. **Apply the valid fixes**, re-run the relevant gates (`php -l` / PHPUnit / PHPStan
-   for PHP, `python -m pytest` / `ruff` / `mypy` for Python, ShellCheck for shell —
-   whatever the change touches), commit (`<scope>: <imperative summary>`) and push to
-   the PR head branch.
+4. **Apply the valid fixes** — a fix that changes behaviour carries its own test per CLAUDE.md
+   "Test coverage" (fail-before/pass-after; **Tier A** UI coverage for a `www/` change) — re-run
+   the relevant gates (`php -l` / PHPUnit / PHPStan for PHP, `python -m pytest` / `ruff` / `mypy`
+   for Python, ShellCheck for shell — whatever the change touches), commit
+   (`<scope>: <imperative summary>`) and push to the PR head branch.
 5. **Record the review on the PR** — post one comment summarising the Sonnet substitute
    review (and noting CodeRabbit's, if it was folded in) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an

@@ -194,6 +194,12 @@ read and edit:
 - "Run the verification gates (`python -m pytest`, `ruff check .`,
   `ruff format .`, plus `php -l` / ShellCheck for any PHP/shell). Do not proceed
   red."
+- "Honour CLAUDE.md **Test coverage** — the five non-negotiables. For any behaviour this
+  phase **adds/changes**, the new test MUST **fail on the pre-change code and pass after**
+  (prove red→green; record the red result in the handoff); a **behaviour-preserving** phase
+  instead pins existing behaviour as an oracle that stays green. A phase touching `www/` MUST
+  add **Tier A** UI coverage (Tier B only if the change is observable *only* there). No change
+  without its test; no coverage theater; tests state intent."
 - "**Review your own work against the phase objectives BEFORE writing the
   handoff:** read your actual `git diff`; confirm the phase added the test cases it
   should (new/preserved behaviour + edge cases, not just 'existing tests pass'),
@@ -213,7 +219,10 @@ independently re-run the gates for the languages this phase touched (always
 `python -m pytest` + `ruff check .`; plus `php -l` / `vendor/bin/phpunit` /
 `vendor/bin/phpstan` / `vendor/bin/phpcs` for PHP, `shellcheck` for shell) to
 confirm green, and sanity-check the phase's EXPECTED RESULT against
-`git -C <path> show --stat`. If the
+`git -C <path> show --stat`. For a **behaviour-changing** phase, confirm the handoff records
+the **red→green evidence** (the new test failed on the pre-change code, passes now) and
+spot-check it if in doubt; for a `www/`-touching phase, confirm **Tier A** UI coverage is
+present (CLAUDE.md "Test coverage"). If the
 agent reported a STOP/failure, the handoff is missing, or a gate fails → **HALT and
 report**; do not start `M+1`. (You verify the transaction; you do not re-implement
 it.)

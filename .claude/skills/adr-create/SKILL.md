@@ -98,11 +98,16 @@ claims and cite real symbols + `file:line`:
 6. **The contract.** Enumerate the semantics that MUST be preserved, each one
    pinned by a test *before* any swap. These are the things a silent regression
    would break.
-7. **Validation strategy.** Concrete and falsifiable: golden/property tests with
-   the current implementation as the oracle; a benchmark *with methodology and a
-   kill-threshold* if the claim is perf/memory; and a **manual smoke checklist**
-   for whatever CI cannot cover (no live Unbound). Define the **Definition of
-   Done** and, explicitly, **what evidence would cause the ADR to be REJECTED.**
+7. **Validation strategy.** Concrete and falsifiable, and bound by CLAUDE.md **Test
+   coverage** — the five non-negotiables. Encode them into the plan: every
+   **behaviour-changing** phase pins a test that **fails before / passes after** the change;
+   every **behaviour-preserving** phase pins the current behaviour as an **oracle** that stays
+   green; **no phase without tests**; intent-named, never coverage theater. Front-end (`www/`)
+   phases include **Tier A** UI coverage (Tier B only when the change is observable *only*
+   there). Use golden/property tests with the current implementation as the oracle; a benchmark
+   *with methodology and a kill-threshold* if the claim is perf/memory; and a **manual smoke
+   checklist** for whatever CI cannot cover (no live Unbound). Define the **Definition of Done**
+   and, explicitly, **what evidence would cause the ADR to be REJECTED.**
 8. **Preparatory de-risking & simplification (the "pre-ADR" pass).** Before the
    core change, deliberately hunt for **behaviour-preserving** prep that makes the
    implementation **safer, simpler, faster, or leaner** — the more axes at once,
