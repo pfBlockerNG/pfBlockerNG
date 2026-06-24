@@ -456,10 +456,17 @@ NOT done, no matter what the line-coverage number says.**
    carries an assertion that would **fail on a regression**. Green at 100% line coverage with no
    failable assertion is **rejected**.
 4. **Front-end changes REQUIRE front-end tests.** A change touching front-end behaviour (`www/`)
-   must carry UI tests (ADR-14; see "Smoke tests" / "Web-UI tiers" below): **Tier A
-   (`ui_render`) is always required.** **Tier B (`ui_e2e`/`ui_browser`) is highly encouraged,
-   and REQUIRED IFF the change produces behaviour or visual changes that can be observed *only*
-   in Tier B** (i.e. not already caught by Tier A).
+   must carry UI tests (ADR-14; see "Smoke tests" / "Web-UI tiers" below). **Tier A (`ui_render`)
+   is always required.** **Tier B (`ui_e2e`/`ui_browser`) is highly encouraged, and REQUIRED IFF
+   the change produces behaviour or visual changes observable *only* in Tier B** (not already
+   caught by Tier A's render/marker check). "Only in Tier B" explicitly **includes**:
+   - a **new page**;
+   - a **multi-step flow** — anything spanning more than one request/interaction (e.g. fill an
+     element's data → save → navigate back → confirm it persisted);
+   - **visual / structural** changes — element positioning, addition, or removal; page layout;
+     and the like.
+
+   When in doubt, add Tier B.
 5. **Tests express the change's INTENT — they are documentation, not just coverage.** The test
    name and comments state the **intended outcome** (the behaviour being pinned), so a reader
    learns what the change is *for* — never the mechanics of how it is coded.
