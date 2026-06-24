@@ -162,3 +162,52 @@ def test_gateway_pfb_keep_save_roundtrip(
                 {"pfb_keep": original} if original == "on" else {"pfb_keep": original},
                 timeout=_GENERAL_POST_TIMEOUT,
             )
+
+
+# --------------------------------------------------------------------------- #
+# issue #489 — Log Settings grouped-column layout (Tier B structural check)
+# --------------------------------------------------------------------------- #
+
+
+def test_log_settings_grouped_layout(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Log Settings section renders with aligned per-category grouped rows in the live DOM.
+
+    Scenario: Log Settings regrouped into aligned per-log rows with category headers (issue #489).
+      Background: pfBlockerNG deployed; General page authenticated and settled.
+
+    Given the General page is loaded in the authenticated browser,
+
+    When the DOM is inspected for the new grouped-column structure,
+
+    Then each of the four category header texts ("General", "IP", "DNSBL", "DNS Reply") is
+      present in the page — proving the per-category header Form_Group rows were rendered;
+    And the ``log_max_log`` control is present and its enclosing ``.form-group`` left label
+      (``col-sm-2.control-label``) shows the log name "pfBlockerNG" — proving per-log rows
+      carry the individual log name as the left label, not the category name;
+    And the three column-header texts are visible on the page ("Max lines", "Schedule",
+      "Keep lines") — proving the header ``Form_StaticText`` children rendered.
+
+    A full-page screenshot is saved as a human-review artifact (not an asserted baseline).
+    """
+    page = browser_page
+    _open(page, webui, GENERAL_PAGE)
+    _shot(page, screenshot_dir, "log_settings_grouped_layout")
+
+    # Category header texts present in the page (the Form_Group left labels for each category).
+    for cat in ("General", "IP", "DNSBL", "DNS Reply"):
+        expect(page.get_by_text(cat, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+    # Column header texts visible (emitted by the header Form_Group's StaticText children).
+    for col_header in ("Max lines", "Schedule", "Keep lines"):
+        expect(page.get_by_text(col_header).first).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+    # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
+    log_max_log = page.locator('select[name="log_max_log"]')
+    expect(log_max_log).to_be_attached(timeout=JS_TIMEOUT_MS)
+    form_group = log_max_log.locator("xpath=ancestor::div[contains(@class,'form-group')]")
+    label = form_group.locator(".control-label")
+    expect(label).to_contain_text("pfBlockerNG", timeout=JS_TIMEOUT_MS)

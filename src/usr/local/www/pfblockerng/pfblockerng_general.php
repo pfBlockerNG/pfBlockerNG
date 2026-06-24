@@ -476,57 +476,61 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
-// ADR-30: section title includes "(max lines)" for backward-compat label; schedule
-// and reset-keep controls are added inline per log, with a single help note shown per group.
-$section = new Form_Section('Log Settings (max lines / rotation schedule)');
-$log_types = array (	'General'	=> array('pfBlockerNG' => 'log', 'Unified Log' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
-			'IP'		=> array('IP Block' => 'ip_blocklog', 'IP Permit' => 'ip_permitlog', 'IP Match' => 'ip_matchlog'),
-			'DNSBL'		=> array('DNSBL' => 'dnslog', 'DNSBL Parse Error' => 'dnsbl_parse_err'),
-			'DNS Reply'	=> array('DNS Reply' => 'dnsreplylog')
-			);
+// issue #489: Log Settings redesigned — grouped by category with aligned column headers.
+// Three columns (Max lines / Schedule / Keep lines) are explained once in an intro row;
+// each category has a header row then one row per log. No per-field repeated help.
+$section = new Form_Section('Log Settings');
+$log_types = array(
+	'General'	=> array('pfBlockerNG' => 'log', 'Unified' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
+	'IP'		=> array('IP Block' => 'ip_blocklog', 'IP Permit' => 'ip_permitlog', 'IP Match' => 'ip_matchlog'),
+	'DNSBL'		=> array('DNSBL' => 'dnslog', 'DNSBL Parse Error' => 'dnsbl_parse_err'),
+	'DNS Reply'	=> array('DNS Reply' => 'dnsreplylog'),
+);
 
-// Help text for the schedule column — shown once per group (first log in each group).
-$rotate_help = 'Resets this log at the start of each calendar period (day/week/month) so '
-	. 'statistics reflect the current period only. Independent of the max-lines limit. '
-	. '<strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.';
-// Help text for the keep-lines column — shown once per group (first log in each group).
-$reset_keep_help = 'Lines to retain at the tail of this log when the scheduled reset fires. '
-	. 'Default: <strong>0</strong> (clear fully). '
-	. 'Set &gt; 0 as an opt-in cushion for remote log shippers that need a few moments to drain the file.';
+// Single intro explaining all three columns — replaces the former per-field repeated help.
+$section->addInput(new Form_StaticText(
+	'',
+	'<ul style="margin-bottom:0">'
+	. '<li><strong>Max lines</strong> &mdash; rolling cap; the log keeps only its most recent N lines.</li>'
+	. '<li><strong>Schedule</strong> &mdash; resets the log at the start of each calendar period '
+	. '(Daily/Weekly/Monthly); independent of Max lines. '
+	. '<strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.</li>'
+	. '<li><strong>Keep lines</strong> &mdash; lines retained at the tail on a scheduled reset '
+	. '(default 0 = clear fully); set &gt; 0 as a cushion for remote log shippers.</li>'
+	. '</ul>'
+));
 
 foreach ($log_types as $logdescr => $logtype) {
-	$group    = new Form_Group($logdescr);
-	$first    = TRUE;
+	// Header row: left label = category name; three StaticText children label the columns.
+	$header = new Form_Group($logdescr);
+	$header->add(new Form_StaticText('', '<strong>Max lines</strong>'))->setWidth(4);
+	$header->add(new Form_StaticText('', '<strong>Schedule</strong>'))->setWidth(3);
+	$header->add(new Form_StaticText('', '<strong>Keep lines</strong>'))->setWidth(3);
+	$section->add($header);
+
+	// One row per log in this category.
 	foreach ($logtype as $descr => $type) {
+		$group = new Form_Group($descr);
 		$group->add(new Form_Select(
 			'log_max_' . $type,
-			$descr,
+			'',
 			$pconfig['log_max_' . $type],
 			$options_log_types
-		))->setHelp("Default: <strong>20000<br />{$descr}</strong> Log")
-		  ->setWidth(2);
-		$rotate_sel = $group->add(new Form_Select(
+		))->setWidth(4);
+		$group->add(new Form_Select(
 			'log_rotate_' . $type,
-			'Schedule',
+			'',
 			$pconfig['log_rotate_' . $type],
 			$options_log_rotate
-		))->setWidth(2);
-		if ($first) {
-			$rotate_sel->setHelp($rotate_help);
-		}
-		$keep_inp = $group->add(new Form_Input(
+		))->setWidth(3);
+		$group->add((new Form_Input(
 			'log_reset_keep_' . $type,
-			'Keep lines',
+			'',
 			'number',
 			$pconfig['log_reset_keep_' . $type]
-		))->setAttribute('min', '0')
-		  ->setWidth(2);
-		if ($first) {
-			$keep_inp->setHelp($reset_keep_help);
-			$first = FALSE;
-		}
+		))->setAttribute('min', '0'))->setWidth(3);
+		$section->add($group);
 	}
-	$section->add($group);
 }
 
 // ADR-38: syslog export controls — appended at the end of the Log Settings section.
