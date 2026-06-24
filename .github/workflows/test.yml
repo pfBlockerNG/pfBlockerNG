@@ -245,6 +245,7 @@ jobs:
       - name: Build kcov from source (cache miss)
         # Only runs when the cache is cold. best-effort: a compile failure still
         # leaves CI green (coverage is informational).
+        id: build-kcov
         if: steps.cache-kcov.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
@@ -252,12 +253,14 @@ jobs:
             binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
           git clone --depth 1 --branch v43 https://github.com/SimonKagstrom/kcov
           cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
-          cmake --build kcov/build
+          cmake --build kcov/build --parallel "$(nproc)"
           cmake --install kcov/build
 
       - name: Save kcov binary to cache
         # Persist the install dir so the next run restores instead of rebuilding.
-        if: steps.cache-kcov.outputs.cache-hit != 'true'
+        # Gate on build success: a failed (swallowed) build would otherwise cache an
+        # empty/partial dir and poison the key until the runner image rolls over.
+        if: steps.cache-kcov.outputs.cache-hit != 'true' && steps.build-kcov.outcome == 'success'
         uses: actions/cache/save@v5
         with:
           path: ~/.local/kcov
