@@ -12799,6 +12799,11 @@ function sync_package_pfblockerng($cron='') {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
+				// The Unbound DNSBL artifacts this branch clears. NOTE: the stats DB
+				// ($pfb['dnsbl_info']) is intentionally NOT listed — the clear below
+				// never deleted it, so gating on it would keep it perpetually present
+				// and reintroduce the every-pass restart this fix removes. A stale stats
+				// DB with no active feeds is harmless and is overwritten on next subscribe.
 				$pfb_artifact_paths = array(
 					$pfb['unbound_py_data'],
 					$pfb['unbound_py_zone'],
