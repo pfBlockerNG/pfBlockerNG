@@ -845,3 +845,115 @@ def test_hooks_dnsbl_changed_unlock_forced(deployed_vm: SmokeVM) -> None:
     )
 
     h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 12) issue #519 — unlock-forced IP re-block must report PFB_IP_CHANGED=1
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_ip_changed_unlock_forced(deployed_vm: SmokeVM) -> None:
+    """An unlock-forced IP re-block (sole trigger: /tmp/ip_unlock) reports
+    ``PFB_IP_CHANGED='1'`` to post-hooks (issue #519).
+
+    Scenario: the no-rule-change ``else`` branch in ``sync_package_pfblockerng``
+    fires because ``file_exists($pfb['ip_unlock'])`` is true — no feed change, no
+    firewall rule change.  Before the fix, ``PFB_IP_CHANGED`` was emitted as
+    ``!empty($pfb['filter_configure'])`` only (``inc:15310``), which is FALSE in the
+    ``else`` branch, so the post-hook saw ``'0'`` even though the ``pfctl -T
+    replace`` re-block did run.  A HAProxy-style recipe keyed on ``PFB_IP_CHANGED``
+    would therefore MISS the re-lock.
+
+    **Given** a post env-dump hook is enabled; an IP feed has been injected and
+    settled so the pf aliastable ``pfB_smokehookilkchg_v4`` is active on the guest;
+    there is NO pending feed change — a full ``update`` over the UNCHANGED on-disk
+    feed reuse-caches the IP alias (``$pfbreuse`` path, ``inc:10211``), so
+    ``$pfb['filter_configure']`` is FALSE (the before-state asserts
+    ``PFB_IP_CHANGED='0'``).
+
+    **And** a ``/tmp/ip_unlock`` file is written on the guest with a valid
+    ``ip,table`` CSV row (RFC 5737 IP ``192.0.2.123`` and the settled table
+    ``pfB_smokehookilkchg_v4``) so the ``else`` branch's
+    ``file_exists($pfb['ip_unlock'])`` gate is true.
+
+    **When** ``helpers.reload(vm, 'update')`` fires the pass (still no feed
+    change, so the unlock file is the SOLE trigger).
+
+    **Then** the captured ``PFB_IP_CHANGED`` from the post-hook env == ``'1'``
+    (the unlock-forced re-block is reported as an IP change to post-hooks).
+
+    FAILS on pre-fix code (``PFB_IP_CHANGED`` is ``'0'`` because the emit keys
+    only on ``filter_configure``); PASSES after the fix adds a separate
+    ``$pfb_ip_unlock_forced`` flag captured before the ``else`` branch unlinks the
+    file and emits it alongside ``filter_configure``.
+    """
+    import subprocess
+
+    token = "iulkchg"
+    marker = h.hook_marker_path(token, "post")
+
+    # Inject and settle an IP feed so the pf aliastable is active on the guest.
+    # RFC 5737 test address; the table is the one this feed creates.
+    inert_ip = "192.0.2.123"
+    ip_feed = h.write_local_feed(deployed_vm, "smoke_hook_iulkchg_ip.txt", f"{inert_ip}\n")
+    ip_spec = h.IpCase(aliasname="smokehookilkchg", feed_url=ip_feed, header="smokehookilkchg")
+    h.inject(deployed_vm, ip_spec)
+    h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
+
+    # Settle: a full 'update' lands the IP feed and creates the pf aliastable.
+    # After this pass, the on-disk feed is reuse-cached (inc:10211) so subsequent
+    # 'update' runs over the same unchanged feed do NOT set filter_configure.
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+    env_settle = h.read_hook_env(deployed_vm, marker)
+    assert env_settle is not None, "post hook did not run during the settling pass"
+
+    # Before-state: no unlock file present => PFB_IP_CHANGED must be '0'.
+    # filter_configure is FALSE (feed is reuse-cached, no rule change), and no
+    # unlock file exists to trigger the else-branch re-block.  This proves the
+    # subsequent '1' is caused by the unlock file, not leftover state.
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+    env_before = h.read_hook_env(deployed_vm, marker)
+    assert env_before is not None, "post hook did not run for the before-state pass"
+    assert env_before.get("PFB_IP_CHANGED") == "0", (
+        "before-state: expected PFB_IP_CHANGED='0' with no feed change and no unlock file, "
+        f"got {env_before.get('PFB_IP_CHANGED')!r} — {env_before}"
+    )
+
+    # Write /tmp/ip_unlock on the guest with a valid ip,table CSV row.
+    # Format: "<ip>,<aliastable>\n" — matches pfb_unlock() fwrite at inc:10844.
+    # SmokeVM.ssh routes through /bin/sh (CLAUDE.md tcsh rule) so tee is safe here.
+    unlock_path = "/tmp/ip_unlock"
+    unlock_content = f"{inert_ip},{ip_spec.alias}\n"
+    result = subprocess.run(
+        deployed_vm.ssh_argv("tee", unlock_path),
+        input=unlock_content,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"test_hooks_ip_changed_unlock_forced: failed to write {unlock_path}: "
+            f"rc={result.returncode} {result.stderr!r}"
+        )
+
+    # After-state: same no-feed-change 'update', but now the unlock file is present,
+    # so the else branch sets $pfb['repcheck']=TRUE (inc:14930) and runs
+    # pfctl -T replace for the active aliastable, re-inserting the IP.  The unlock
+    # file is unlinked during the pass (inc:14929), so the fix must capture the
+    # forced-re-block flag BEFORE the unlink and include it in the PFB_IP_CHANGED
+    # expression at the emit site (the fix: $pfb_ip_unlock_forced local var).
+    h.clear_hook_markers(deployed_vm, token)
+    h.reload(deployed_vm, "update")
+    env_after = h.read_hook_env(deployed_vm, marker)
+    assert env_after is not None, "post hook did not run for the unlock-forced pass"
+    got = env_after.get("PFB_IP_CHANGED")
+    assert got == "1", (
+        "unlock-forced IP re-block must set PFB_IP_CHANGED='1' to post-hooks (issue #519): "
+        f"expected '1', got {got!r}\nfull hook env: {env_after}"
+    )
+
+    h.clear_update_hooks(deployed_vm)
