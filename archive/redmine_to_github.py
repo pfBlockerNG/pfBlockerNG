@@ -13,10 +13,13 @@
 # Existing GH issues are discovered via the "redmine-imported" label; existing
 # comments are discovered by parsing their journal-id markers.
 #
-# Run via the workflow:
-#   .github/workflows/redmine-import.yml
-# or locally (requires REDMINE_API_KEY + GITHUB_TOKEN in env):
-#   python scripts/redmine_to_github.py [--dry-run] [--limit N] ...
+# ARCHIVED: the one-shot migration is complete (see archive/README.md). This
+# file and its workflow are kept for provenance only; the workflow no longer
+# lives under .github/workflows so it cannot be dispatched.
+#
+# To run it again, move archive/redmine-import.yml back under
+# .github/workflows/ (requires REDMINE_API_KEY + GITHUB_TOKEN in env):
+#   python archive/redmine_to_github.py [--dry-run] [--limit N] ...
 """
 Migrate open pfBlockerNG Redmine issues to GitHub, preserving comment threads.
 
@@ -25,9 +28,9 @@ and date.  Re-runs are idempotent: issues are not duplicated, and any missing
 comments are posted.
 
 Usage:
-  REDMINE_API_KEY=... GITHUB_TOKEN=... python scripts/redmine_to_github.py
-  python scripts/redmine_to_github.py --dry-run
-  python scripts/redmine_to_github.py --issue 12345 --dry-run
+  REDMINE_API_KEY=... GITHUB_TOKEN=... python archive/redmine_to_github.py
+  python archive/redmine_to_github.py --dry-run
+  python archive/redmine_to_github.py --issue 12345 --dry-run
 """
 
 from __future__ import annotations
