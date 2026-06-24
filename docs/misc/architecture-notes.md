@@ -355,6 +355,47 @@ landing page's copy-paste one-liners point to.
 
 Full design: ADR-39.
 
+### Publish pipeline, generators, and repo smoke (ADR-17/20)
+
+- **Publish pipeline:** the catalog is hosted + deployed by the **separate `pfBlockerNG/pkg`
+  repo** (its `.github/workflows/publish.yml`), NOT this repo. Each run it builds the current
+  **devel** `.pkg` by running this repo's own `scripts/build-pkg-portable.py` against a checkout
+  of the source (a reusable workflow can't be reused cross-repo — it runs in the caller's context
+  — so it runs the *script*), folds in **every** Release `.pkg`, regenerates the per-ABI catalog
+  with `scripts/build-repo-portable.py`, and deploys to its **own** GitHub Pages via same-repo
+  OIDC `actions/deploy-pages` → `pfblockerng.github.io/pkg`. **No deploy key, no cross-repo
+  secret** — everything it reads from here is public. Triggers: daily `schedule` +
+  `workflow_dispatch`. This repo's `release.yml` `repo-publish` job just fires `gh workflow run
+  publish.yml -R pfBlockerNG/pkg` (auth: a GitHub App token via
+  `actions/create-github-app-token@v3`, secrets **`PKG_GITHUB_APP_ID`** +
+  **`PKG_GITHUB_APP_PRIVATE_KEY`** — `Actions:write` on `pfBlockerNG/pkg` only) so a release
+  publishes within seconds; additive + isolated (`needs: [release]`), so its failure never breaks
+  `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
+  (`scripts/build-repo.sh`) is retained as a script only.
+- **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
+  `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
+  `scripts/add-repo.sh` (client bootstrap — channel is a FLAG: no-arg = release repo, `--nightly`
+  = nightly repo; `priority: 100`, `pkg update` + verify). The default writes the shared release
+  conf `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng` carries BOTH stable and
+  devel packages, Netgate-style — pick at install time); only `--nightly` writes its own
+  `pfblockerng-nightly.conf`. The emitted conf is byte-identical across all three (drift-pinned in
+  `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
+- **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`** (a
+  distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
+  precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog
+  accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
+  catalog, and the opposite-edition guard) is **derived entirely from the version matrix** — never
+  hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
+  reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-build` at job start,
+  egress open), falls back to running that script, and SKIPs the topology cases when neither is
+  available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it; adding a
+  pfSense version needs no edit here. (`scripts/install-from-repo.sh` likewise derives its
+  `py3xx-*` deps from the matrix via the box's ABI.) Dispatch: `gh workflow run smoke-single.yml -f
+  pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
+  `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pfblockerng.github.io`
+  URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
+  branch).
+
 ## Managed firewall object ownership and teardown (ADR-35)
 
 A small shared ownership-and-teardown layer for pfBlockerNG-managed objects in pfSense-core sections

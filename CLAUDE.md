@@ -857,62 +857,22 @@ or notes persist). Dispatchable only from the default branch once merged.
 ### Self-hosted `pkg` repository (ADR-17)
 
 Beyond the Netgate ports channel we publish a **self-hosted FreeBSD `pkg` repository on GitHub
-Pages** — a **derived index** (no stateful store): each deploy enumerates **all** Releases,
-downloads their `.pkg`, buckets by ABI, regenerates the catalog per `<ABI>/`, and deploys to
-`pfblockerng.github.io/pkg/${ABI}` (NONE-signed, TLS-anchored; the `${ABI}` conf auto-follows an
-OS upgrade). Cross-repo selection is keyed on repo **`priority:`** (it **dominates version** —
-Phase-1 live finding), so our above-Netgate `priority: 100` makes `pkg install`/`upgrade` and the
-stock GUI **Install** pull our build. GUI discovery + the update badge stay Netgate-bound; a GUI
-"Updates/Channel" panel is deferred (would touch `src/`).
+Pages** (`pfblockerng.github.io/pkg`; NONE-signed, TLS-anchored; a derived index rebuilt from
+**all** Releases each deploy). Cross-repo selection is keyed on repo **`priority:`** — it
+**dominates version** — so our `priority: 100` (set by `add-repo.sh`) makes `pkg install`/`upgrade`
+and the stock GUI **Install** pull our build over Netgate's. GUI discovery + the update badge stay
+Netgate-bound; a GUI "Updates/Channel" panel is deferred (ADR-19; would touch `src/`).
 
-**Hard rule — the catalog is keyed by *varver* (`ce-2.8` / `plus-26.03`), NOT by `${ABI}`.** (ADR-20
-superseded ADR-17's `${ABI}` bucketing described in the paragraph above.) A pfSense `${ABI}`
-(`FreeBSD:<major>:<arch>`) is **NOT in 1:1 correspondence** with a pfSense version or its
-`php<XY>`/`py3<XY>` build inputs: two versions/editions can share one FreeBSD major — one `${ABI}` —
-yet need different builds. Netgate's own conf proves it (it bakes the full `pfSense_plus_v26_03_1`
-version in the URL, never the bare ABI). The current matrix being *incidentally* 1:1
-(CE→FreeBSD15, Plus→FreeBSD16) is **not** a licence to "simplify" back to an `${ABI}`-keyed conf —
-that 1:1 is not guaranteed. **Never make that simplification.** Full rationale + the upgrade-lag
-consequence: `docs/misc/architecture-notes.md` → "Self-hosted pkg distribution — ABI is NOT 1:1".
+**Hard rule — the catalog is keyed by *varver* (`ce-2.8` / `plus-26.03`), NOT by `${ABI}`** (ADR-20).
+A pfSense `${ABI}` (`FreeBSD:<major>:<arch>`) is **not** 1:1 with a version/edition's `php`/`py3`
+build inputs — two versions can share one FreeBSD major yet need different builds. The incidental
+CE→FreeBSD15 / Plus→FreeBSD16 split is **not** a licence to key by `${ABI}`. **Never make that
+simplification.**
 
-- **Publish pipeline:** the catalog is hosted + deployed by the **separate `pfBlockerNG/pkg`
-  repo** (its `.github/workflows/publish.yml`), NOT this repo. Each run it builds the current
-  **devel** `.pkg` by running this repo's own `scripts/build-pkg-portable.py` against a checkout
-  of the source (a reusable workflow can't be reused cross-repo — it runs in the caller's context
-  — so it runs the *script*), folds in **every** Release `.pkg`, regenerates the per-ABI catalog
-  with `scripts/build-repo-portable.py`, and deploys to its **own** GitHub Pages via same-repo
-  OIDC `actions/deploy-pages` → `pfblockerng.github.io/pkg`. **No deploy key, no cross-repo
-  secret** — everything it reads from here is public. Triggers: daily `schedule` +
-  `workflow_dispatch`. This repo's `release.yml` `repo-publish` job just fires `gh workflow run
-  publish.yml -R pfBlockerNG/pkg` (auth: a GitHub App token via
-  `actions/create-github-app-token@v3`, secrets **`PKG_GITHUB_APP_ID`** +
-  **`PKG_GITHUB_APP_PRIVATE_KEY`** — `Actions:write` on `pfBlockerNG/pkg` only) so a release
-  publishes within seconds; additive + isolated (`needs: [release]`), so its failure never breaks
-  `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
-  (`scripts/build-repo.sh`) is retained as a script only.
-- **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
-  `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
-  `scripts/add-repo.sh` (client bootstrap — channel is a FLAG: no-arg = release repo, `--nightly`
-  = nightly repo; `priority: 100`, `pkg update` + verify). The default writes the shared release
-  conf `/usr/local/etc/pkg/repos/pfblockerng.conf` (repo `pfblockerng` carries BOTH stable and
-  devel packages, Netgate-style — pick at install time); only `--nightly` writes its own
-  `pfblockerng-nightly.conf`. The emitted conf is byte-identical across all three (drift-pinned in
-  `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
-- **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`** (a
-  distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
-  precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog
-  accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
-  catalog, and the opposite-edition guard) is **derived entirely from the version matrix** — never
-  hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
-  reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-build` at job start,
-  egress open), falls back to running that script, and SKIPs the topology cases when neither is
-  available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it; adding a
-  pfSense version needs no edit here. (`scripts/install-from-repo.sh` likewise derives its
-  `py3xx-*` deps from the matrix via the box's ABI.) Dispatch: `gh workflow run smoke-single.yml -f
-  pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
-  `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pfblockerng.github.io`
-  URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
-  branch).
+**Mechanics → [`docs/misc/architecture-notes.md`](docs/misc/architecture-notes.md)** ("Self-hosted
+pkg distribution"): the full varver/ABI rationale + live proof + upgrade-lag, the boot-time `rc.d`
+conf regenerator (ADR-39), the publish pipeline (the separate `pfBlockerNG/pkg` repo + its OIDC
+deploy), the generators + `add-repo.sh` bootstrap, and the `repo`-marker smoke flow.
 
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase` (or "Rebase and merge"); never a merge
 commit, never squash. History across `main` ← `devel` stays strictly linear (`main` always an
