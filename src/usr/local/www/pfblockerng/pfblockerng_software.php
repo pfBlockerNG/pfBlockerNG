@@ -44,6 +44,20 @@ if (!pfb_software_provenance_ok()) {
 	exit;
 }
 
+// SECONDARY PRIVILEGE GATE (issue #485). The framework page-guard already requires
+// page-firewall-pfblockerng to reach here; this page can now UNINSTALL the package, so
+// additionally require the Package Manager "Installed" privilege — the priv pfSense uses for
+// its own package-Remove page (page-system-packagemanager-installed, match 'pkg_mgr_installed.php*').
+// pfSense match-based privilege is OR across groups, so this AND can only be enforced by an
+// explicit in-page check. Use isAllowedPage() against that page, NOT userHasPrivilege() with the
+// raw priv id: isAllowedPage honours the admin (uid 0) short-circuit AND the 'page-all' wildcard
+// match, whereas userHasPrivilege does an exact priv-id membership test that wrongly excludes a
+// page-all admin (who lacks the literal '…-installed' priv) — that would lock admins out.
+if (!isAllowedPage('pkg_mgr_installed.php')) {
+	header('Location: /index.php');
+	exit;
+}
+
 // Resolve the installed package + channel ONCE (used by display + the actions).
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
@@ -103,10 +117,10 @@ function pfb_software_run_stream($cmd) {
 // status are shown. Navigates (GET) to the page URL rather than reloading the current
 // request, so the Update POST is never resubmitted. The delay lets the final terminal
 // output settle on screen first.
-function pfb_software_reload() {
+function pfb_software_reload($url = '/pfblockerng/pfblockerng_software.php') {
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
-	print("\nsetTimeout(function(){ window.location.assign('/pfblockerng/pfblockerng_software.php'); }, 1500);");
+	print("\nsetTimeout(function(){ window.location.assign(" . json_encode($url) . "); }, 1500);");
 	print("\n//]]>");
 	print("\n</script>");
 	ob_flush();
@@ -244,6 +258,24 @@ if (!$update_available) {
 }
 $section->addInput(new Form_StaticText(null, $btn_update))
 	->setHelp('Install the latest version. Available only when an update is found.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_sw_uninstall_confirm',
+	'Confirm uninstall',
+	'Confirm I want to uninstall pfBlockerNG',
+	FALSE
+))->setHelp('Required before the Uninstall button is enabled. Uninstalling removes pfBlockerNG entirely.');
+
+$btn_uninstall = new Form_Button(
+	'pfb_sw_uninstall',
+	'Uninstall',
+	null,
+	'fa-solid fa-trash-can'
+);
+$btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWidth(2);
+$btn_uninstall->setAttribute('disabled', 'disabled');
+$section->addInput(new Form_StaticText(null, $btn_uninstall))
+	->setHelp('Remove pfBlockerNG from this firewall. Enabled only after the confirmation box is checked.');
 $form->add($section);
 
 // Live terminal window (shown when an Update is streaming).
@@ -289,6 +321,30 @@ if ($pfb_sw_action === 'update') {
 		}
 	}
 }
+
+// Uninstall streams AFTER the form renders (textareas must exist for the JS). POST-guarded.
+if ($pfb_sw_action === 'uninstall') {
+	// Defense-in-depth: the Uninstall button is only disabled client-side, so re-check the
+	// confirmation server-side and refuse without it. (CSRF token enforces request authenticity.)
+	if (!isset($_POST['pfb_sw_uninstall_confirm'])) {
+		pfb_software_status(gettext('Uninstall not confirmed — tick the confirmation box first.'));
+	} elseif ($pfb_sw_pkgname === '') {
+		pfb_software_status(gettext('No pfBlockerNG package detected — cannot uninstall.'));
+	} else {
+		pfb_software_status(gettext('Uninstalling pfBlockerNG...'));
+		$bin = escapeshellarg(PFB_PKG_BIN);
+		$pkg = escapeshellarg($pfb_sw_pkgname);
+		$pfb_sw_rc = pfb_software_run_stream("{$bin} delete -y {$pkg}");
+		// Success removes the very package serving this page; redirect somewhere safe instead
+		// of leaving the user on a now-404 tab. Failure leaves the log on screen to inspect.
+		if ($pfb_sw_rc === 0) {
+			pfb_software_status(gettext('Uninstall complete — redirecting...'));
+			pfb_software_reload('/pkg_mgr_installed.php');
+		} else {
+			pfb_software_status(gettext('Uninstall task finished with errors — see the log above.'));
+		}
+	}
+}
 ?>
 
 <script type="text/javascript">
@@ -315,6 +371,19 @@ events.push(function() {
 		e.preventDefault();
 		if (confirm('Update pfBlockerNG to the latest version now?')) {
 			pfb_sw_submit('update');
+		}
+	});
+
+	function pfb_sw_uninstall_sync() {
+		document.getElementById('pfb_sw_uninstall').disabled = !document.getElementById('pfb_sw_uninstall_confirm').checked;
+	}
+	$('#pfb_sw_uninstall_confirm').on('change', pfb_sw_uninstall_sync);
+	pfb_sw_uninstall_sync();
+
+	$('#pfb_sw_uninstall').click(function(e) {
+		e.preventDefault();
+		if (confirm('Uninstall pfBlockerNG from this firewall? This cannot be undone.')) {
+			pfb_sw_submit('uninstall');
 		}
 	});
 });
