@@ -24,10 +24,11 @@ a rule about *this package's mechanics* is local; a rule about *how we work* is 
 
 ## Communication
 
-**Mandatory: activate the `/caveman` skill at the start of every session** — terse, no
-filler, full technical accuracy. Enforced by a `SessionStart` hook in `.claude/settings.json`
-(project, shared) and `~/.claude/settings.json` (user); the hook is the mechanism, this line
-is the rule.
+**Mandatory at the start of every session — this step CANNOT be skipped:** if the `ponytail`
+plugin is installed, activation of its **full** mode is mandatory (run `/ponytail:ponytail
+full`); otherwise, run the `/caveman` skill (terse, no filler, full technical accuracy).
+Enforced by a `SessionStart` hook in `.claude/settings.json` (project, shared) and
+`~/.claude/settings.json` (user); the hook is the mechanism, this line is the rule.
 
 Two style exceptions — both stay concise and to the point, but drop the caveman register for
 **normal professional grammar**:
