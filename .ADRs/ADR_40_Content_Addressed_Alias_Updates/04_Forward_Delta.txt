@@ -1,0 +1,88 @@
+================================================================================
+PHASE 4 PROMPT — Forward-delta apply (-T add / -T delete) — GATED on Phase 2
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md   (read §2 "Apply mechanism"/"Force", §3 atomicity risk, §6 Phase 4 first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session; otherwise run /caveman. You are the Phase-4 implementer for ADR-40 on branch
+`adr/40-content-addressed-alias`. This phase CHANGES BEHAVIOUR (apply mechanism) — red→green. It is
+GATED: build it ONLY if RESULTS/02 said the delta beats replace. You implement; you do NOT
+re-delegate. Inline on the branch, one commit, push directly (PR only if the direct push is
+rejected).
+
+GATE CHECK (do this FIRST)
+Read RESULTS/02_Results.txt. If its verdict is "drop Phase 4" (delta does not materially beat
+replace at scale), DO NOT implement: write RESULTS/04_Results.txt recording that Phase 4 is
+intentionally skipped per the benchmark, leave Phase 3's `-T replace` as the final apply, and
+report completion. Only proceed below if the verdict is "build Phase 4".
+
+WHY THIS PHASE EXISTS
+`pfctl -T replace` re-ingests the WHOLE table and holds pf's rules write lock O(table size); a
+single-IP change re-ingests millions of entries. Applying only the delta — `-T add` the additions,
+`-T delete` the removals (the exact primitive Alerts already uses, pfblockerng_alerts.php:1499/
+:1506) — makes lock-hold O(churn). "Force" then collapses to recompute+diff: no change ⇒ empty
+delta ⇒ no-op.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/03_Results.txt — confirm the content-diff
+  set + last-applied mirror are in place and how the set-diff is computed. If missing, Phase 3 is
+  not complete; STOP and report. ALSO read RESULTS/02_Results.txt for the gate verdict + the churn
+  threshold where replace becomes cheaper.
+- .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md  (§2 "Apply mechanism" / "Force" rows;
+  contract items 1 (end-state == replace), 5 (empty-table), 8 (idempotence); §3 atomicity).
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php:1499/:1506/:1303/:1321/:1549 — the in-tree
+  `-T add`/`-T delete` usage patterns + how output ("1/1 addresses deleted") is parsed.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the Phase-3 reload site; the escapeshellarg
+  usage on table/file paths.
+- CLAUDE.md — test-coverage mandate; PFBL-01 sniff (validate before exec); ADR-26.
+
+ACTION PLAN (ordered — write the failing test FIRST)
+1. Write red→green tests FIRST:
+   - end-state: after applying a computed add/delete delta, the table membership == the canonical
+     desired set (== what `-T replace` would load). Pin against a replace oracle.
+   - small churn applies as `-T add`/`-T delete` (NOT replace); assert the apply path taken.
+   - large churn (above the RESULTS/02 threshold) FALLS BACK to atomic `-T replace`; assert the
+     fallback path taken.
+   - idempotence: identical inputs ⇒ empty delta ⇒ no pfctl mutation.
+2. At the Phase-3 reload site, compute delta = desired △ last-applied:
+   adds = desired − last-applied, dels = last-applied − desired (LC_ALL=C set ops). Apply adds via
+   `pfctl -t <t> -T add -f <addsfile>`, dels via `-T delete -f <delsfile>`. Persist the new
+   canonical set as the last-applied mirror (/var/db/aliastables/<alias>.txt).
+3. Fallback: if |delta| / |table| exceeds the RESULTS/02 churn-ratio threshold (or atomicity is
+   required), use atomic `-T replace` instead. Make the threshold a named constant.
+4. Keep empty-table repopulation, PFB_IP_CHANGED / changed_ip_aliases, and the #519 signal working
+   (a delta that adds entries is still "changed"). filter_configure() still rule-changes only.
+5. Wrap pfctl delta calls so a failure logs and the pass does not wedge; validate inputs before
+   exec (PFBL-01).
+
+CONSTRAINTS
+- The table end-state after a delta MUST equal a full replace (contract item 1) — this is the
+  hard invariant; the end-to-end smoke must prove `-T show` membership identical.
+- Two-ioctl atomicity window is accepted for blocklists per ADR §3; the large-churn replace
+  fallback is the escape hatch — keep it.
+- escapeshellarg all table names / file paths; validate before exec (PFBL-01 sniff scope).
+- PHP tabs/8.3; LC_ALL=C inline on every set op; do NOT touch DNSBL (ADR-10) or config.xml.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit            → green incl. end-state==replace, add/delete-vs-fallback, idempotence
+- The end-state test FAILS if the delta is computed wrong (prove it catches a deliberate off-by-one)
+- php -l / phpcs (incl. PFBL-01) / phpstan   → clean
+- Live smoke: a single-IP feed change applies as a one-entry `-T add` (not a full replace) and the
+  data-plane stall drops vs the Phase-2 baseline; large-churn change uses the replace fallback.
+- diff-read: the reload apply is delta-first with a replace fallback; last-applied mirror persisted.
+
+EXPECTED RESULT
+Changed tables update by forward delta (lock-hold O(churn)); large churn falls back to atomic
+replace; end-state identical to replace; "force" is recompute+diff with empty-delta no-op.
+
+COMMIT (single)
+    pfblockerng: apply alias-table changes as forward deltas, not full replace (ADR-40 P4)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/04_Results.txt` (plain .txt)
+Record: whether Phase 4 was BUILT or SKIPPED-per-gate (and why); if built — the delta-apply site +
+the churn-ratio threshold constant + its value; how end-state==replace is pinned; the measured
+stall reduction vs Phase 2; verification output; and the go-ahead for Phase 5.

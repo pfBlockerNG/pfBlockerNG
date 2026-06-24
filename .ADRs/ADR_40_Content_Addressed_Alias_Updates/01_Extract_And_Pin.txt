@@ -1,0 +1,84 @@
+================================================================================
+PHASE 1 PROMPT — Extract + oracle-pin the reload-scope decision and final-set construction
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md   (read §1, §2, §6 Phase 1 first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session (inherit the same level); otherwise run /caveman. You are the Phase-1
+implementer for ADR-40, working in the ADR's worktree on branch `adr/40-content-addressed-alias`.
+This phase is BEHAVIOUR-PRESERVING prep: extract logic into testable helpers and pin TODAY's
+behaviour as an oracle — change no observable behaviour. You implement; you do NOT re-delegate.
+Inline on the branch, one commit, push directly (PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The reload-scope decision and the final alias-file construction are inline in the giant
+`sync_package_pfblockerng()`. Before swapping the gate to content-addressing (Phase 3) and the
+apply to deltas (Phase 4), extract the stable pieces into named helpers and lock their current
+behaviour with tests, so the later swaps apply to a small, pinned surface and cannot silently
+regress. (ADR-01's Phases 1–3 did exactly this and were retained even after the core idea was
+rejected — prep has standalone value.)
+
+REQUIRED READING
+- .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md  (§1.1 Today, §1.3 facts, §2 table +
+  "Semantics that MUST be preserved", §6 Phase 1).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the alias-build + reload region of
+  sync_package_pfblockerng():
+  * reload-scope build: ~:14888–:14894 (rule-change branch) and ~:14936–:14942 (no-rule-change
+    branch) — $pfb_alias_lists / $pfb_alias_lists_all / repcheck → $final_alias.
+  * final-file construction: ~:14360–:14427 — the per-row concat ($alias_ips .= file_get_contents,
+    :14393) and the write (file_put_contents aliasdir/<alias>.txt, :14426; $pfbupdate gate).
+  * the two pfctl replace loops: :14903 and :14954 (DO NOT change behaviour yet — just understand).
+- tests/php/README.md, tests/php/bootstrap.php, tests/php/pfsense_doubles.php — how the REAL
+  pfblockerng.inc is loaded off-appliance and how to add a faithful double if a helper reaches a
+  new pfSense function.
+- CLAUDE.md — PHP standards (tabs, PHP 8.3, no die/exit in lib code), the test-coverage mandate,
+  the ADR-26 LC_ALL=C rule, commit style.
+
+ACTION PLAN (ordered — oracle tests FIRST; behaviour-preserving)
+1. Identify the exact inputs/outputs of (a) the reload-scope decision and (b) the final-file
+   construction as they stand. Write CHARACTERISATION (oracle) PHPUnit tests FIRST that pin
+   today's outputs for representative fixtures (multiple feeds → one alias; reputation on vs off;
+   a feed with no change). These must pass against UNMODIFIED code.
+2. Extract (a) into a named helper that returns the reload set from the existing inputs
+   ($pfb_alias_lists, $pfb_alias_lists_all, repcheck, drep/prep, $pfb_active_aliases). Pure
+   selection logic — no pfctl, no I/O. Keep the call sites byte-equivalent in behaviour.
+3. Extract (b) the final-file construction (member concat → string) into a named helper. Keep the
+   current concatenation semantics EXACTLY (no sort -u yet — that is Phase 3's canonicalisation).
+4. Add a NEW, NOT-YET-WIRED canonical-set helper: given a member union, return the
+   `LC_ALL=C sort -u` set (as an array or normalised string). It is dead code this phase except
+   for its own test. Do NOT call it from the live reload path.
+5. Run the full suite; confirm the oracle tests pass and nothing else moved.
+
+CONSTRAINTS
+- BEHAVIOUR-PRESERVING. The live reload path must produce the same reload set and the same
+  aliasdir file bytes as before this phase. The canonical helper is added but unused.
+- PHP: tabs; PHP 8.3; no die()/exit() in library code; match surrounding naming (pfB_* / $pfb[...]
+  conventions). If a helper reaches a pfSense function not yet doubled, add a faithful
+  function_exists()-guarded double to tests/php/pfsense_doubles.php (+ an empty include shim if
+  required) — never require_once a pfSense file in tests.
+- Do NOT touch: the pfctl replace loops' behaviour, pfblockerng.sh, the DNSBL path, config.xml.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit            → green, incl. the new oracle + canonical-helper tests
+- php -l on pfblockerng.inc      → clean
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   → clean (UppercaseBooleanLiteral, PFBL-01,
+  RequireConfigGateway)
+- vendor/bin/phpstan            → no new errors
+- diff-read: `git diff origin/devel...HEAD` shows ONLY extraction + tests + the unused canonical
+  helper — no behavioural change to the reload/apply path.
+
+EXPECTED RESULT
+Reload-scope selection and final-file construction live in named, off-appliance-tested helpers;
+their current behaviour is pinned by oracle tests; a canonical-set helper exists (tested, unused).
+No observable behaviour change.
+
+COMMIT (single)
+    pfblockerng: extract + oracle-pin alias reload-scope and final-set helpers (ADR-40 P1)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/01_Results.txt` (plain .txt)
+Record: the helper names + signatures + file:line; the exact fixtures used and what each oracle
+pins; the canonical-helper's interface (input/output shape) for Phase 3 to wire; any pfSense
+double added; the verification command lines + pass output; and the go-ahead for Phase 2.

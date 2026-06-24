@@ -1,0 +1,77 @@
+================================================================================
+PHASE 5 PROMPT — Smoke matrix + docs + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md   (read §4, §6 Phase 5, §7 first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session; otherwise run /caveman. You are the Phase-5 implementer for ADR-40 on branch
+`adr/40-content-addressed-alias`: lock the new behaviour with live-VM smoke and update the docs.
+You implement; you do NOT re-delegate. Inline on the branch, one commit, push directly (PR only if
+the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The content gate (Phase 3) and the optional delta apply (Phase 4) change real pf behaviour that is
+only observable on the live VM (no pf in CI). This phase pins that behaviour end-to-end as a
+regression guard and records the new model in the docs, so a future reader learns the gating+delta
+design instead of the retired feed-tracking one.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/04_Results.txt — whether Phase 4 was built
+  or skipped (so the smoke + docs describe the apply mechanism that actually shipped). If missing,
+  Phase 4 is not complete; STOP and report. (Also read RESULTS/02 + 03 for the benchmark verdict
+  and the decision-function details.)
+- .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md  (§4 requirements, §7 DoD + manual smoke +
+  reject criteria).
+- tests/smoke/test_smoke_hooks.py (the ADR-12 hook cases — the pattern to extend),
+  tests/smoke/helpers.py; CLAUDE.md "Smoke tests (ADR-04)".
+- docs/misc/architecture-notes.md — the DNSBL/ABP + alias-table notes (find the section that
+  describes the feed-tracking reload model; it must be updated to the content-gating model).
+- CLAUDE.md — the "alias-table update" mechanics description; the markdownlint rules.
+
+ACTION PLAN (ordered)
+1. Extend the ADR-12 hook smoke (tests/smoke/) into a matrix that pins, on the live VM:
+   - single-feed change with no cross-list feature → only that table reloads; PFB_IP_CHANGED=1.
+   - dedup ON across overlapping feeds → a removal in feed A that frees an IP realigns sibling
+     table B in the SAME pass (assert before-state: B stale under old behaviour is the bug; after:
+     B correct). Use helpers.unique_domain()/inert IPs (RFC 5737), ON-BOX probes, /bin/sh.
+   - reputation ON → a single-feed change reloads only moved tables, not all (observe the reload
+     set / per-table timing).
+   - if Phase 4 built: a single-IP change applies as a delta and the table end-state == a replace
+     (assert `-T show` membership); large churn uses the replace fallback.
+2. Update docs:
+   - docs/misc/architecture-notes.md: replace the feed-tracking reload description with the
+     content-addressed gate + forward-delta model (or content-gate-only if Phase 4 was skipped);
+     note the #517/#519 "signal-not-reload" precedent and the filter_configure()-is-rule-only rule.
+   - CLAUDE.md: update the alias-table update mechanics paragraph to the new model.
+   - If Phase 4 was skipped, make the docs say so (gate gated it out) — no aspirational claims.
+3. Verify the DoD (§7): requirements met, smoke matrix green on the fan-out, decision logic reduced
+   to the content-diff rule, determinism/idempotence pinned, signal fidelity preserved.
+
+CONSTRAINTS
+- Smoke: test domains via helpers.unique_domain() (never RFC 6761 TLDs / HSTS-preload names);
+  probe ON-BOX (drill @127.0.0.1 over SSH), /bin/sh (tcsh is root's login shell); inert IPs only.
+- Docs are professional prose (CLAUDE.md doc exception), terse; markdownlint clean.
+- Describe ONLY what shipped (respect the Phase-4 build/skip outcome).
+
+VERIFICATION (must all pass before the phase is done)
+- The smoke matrix passes on the live-VM fan-out (CE + Plus); local-smoke ok while iterating.
+- The dedup cross-list case demonstrably FAILS on pre-ADR-40 code and PASSES now (regression guard
+  with teeth).
+- npx markdownlint-cli2 → 0 errors on the changed Markdown.
+- python -m pytest (non-smoke) green; ruff clean for any added Python.
+
+EXPECTED RESULT
+A live-VM smoke matrix guarding the content-gating (and delta, if built) behaviour, plus docs that
+describe the shipped model. ADR-40's §7 DoD is satisfiable.
+
+COMMIT (single)
+    tests/smoke,docs: pin content-addressed alias reload behaviour + update model docs (ADR-40 P5)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/05_Results.txt` (plain .txt)
+Record: the smoke cases added + what each pins (with the dedup case's before/after), the docs
+updated, the fan-out run id + result, the DoD checklist status, and any item deferred to the
+maintainer manual-smoke checklist (§7). State whether ADR-40 is ready to flip Proposed → Accepted.
