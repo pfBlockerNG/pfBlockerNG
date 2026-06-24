@@ -84,9 +84,9 @@ final class PfbResolveListScriptTest extends TestCase
 	 * When:  pfb_resolve_list_script is called.
 	 * Then:  returns the path — exec bit is NOT a gate.
 	 *
-	 * Red→green: dropping the dirname containment check causes an escaping
-	 * symlink to resolve; similarly, adding an is_executable check here would
-	 * make this test fail. With containment+is_file only, 0644 files resolve.
+	 * Red→green: adding an is_executable($real) check to the resolver would make
+	 * this test fail — proving the exec bit is deliberately NOT a gate. With
+	 * containment + is_file only, a 0644 file in the dir resolves.
 	 */
 	public function testNonExecutableFileResolves(): void
 	{
