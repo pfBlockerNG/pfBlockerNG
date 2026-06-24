@@ -370,6 +370,69 @@ def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> No
 
 
 # --------------------------------------------------------------------------- #
+# Scenario B2 — pfb_dnsbl_nonat opt-out skips NAT creation (issue #381)
+# --------------------------------------------------------------------------- #
+
+
+def test_managed_objects_nonat_skips_nat(deployed_vm: SmokeVM) -> None:
+    """Issue #381 Scenario B2: pfb_dnsbl_nonat=on skips the managed DNSBL NAT rule.
+
+    Scenario: DNSBL NAT opt-out prevents pfB DNSBL port-forward creation.
+      Background: pfBlockerNG installed; DNSBL interface set to lan.
+
+      Given pfb_dnsbl_nonat is OFF, DNSBL is disabled, and interface is lo0,
+        Then no nat/rule[] entry starts with 'pfB DNSBL' (before-state is clean).
+
+      When pfb_dnsbl_nonat is OFF, interface=lan, auto-VIP ON, and DNSBL is enabled,
+        Then nat/rule[] CONTAINS a 'pfB DNSBL' entry — the NAT is created by default.
+        (This is the before-state for the opt-out; it would remain True on pre-fix code.)
+
+      Then (opt-out ON) pfb_dnsbl_nonat is set ON and a reload runs,
+        Then nat/rule[] has NO 'pfB DNSBL' entry — the managed NAT is removed.
+        (This assertion is RED on pre-fix code where the toggle is ignored.)
+    """
+    vm = deployed_vm
+    try:
+        # GIVEN — baseline: DNSBL off, opt-out cleared, interface lo0.
+        h.set_dnsbl_nonat(vm, False)
+        h.set_dnsbl_interface(vm, "lo0")
+        h.set_dnsbl_enabled(vm, False)
+        h.reload(vm, "update")
+
+        assert not _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT present before test — before-state is not clean" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
+
+        # WHEN (opt-out OFF) — enable DNSBL on lan with auto-VIP: NAT must be created.
+        h.set_dnsbl_interface(vm, "lan")
+        h.set_dnsvip_auto(vm, True)
+        h.set_dnsbl_nonat(vm, False)
+        h.set_dnsbl_enabled(vm, True)
+        h.reload(vm, "update")
+
+        assert _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT not created when pfb_dnsbl_nonat=off — default NAT path broken"
+            + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
+
+        # THEN (opt-out ON) — flip pfb_dnsbl_nonat and reload: NAT must be gone.
+        h.set_dnsbl_nonat(vm, True)
+        h.reload(vm, "update")
+
+        assert not _nat_pfb_dnsbl_present(vm), (
+            "pfB DNSBL NAT still present after pfb_dnsbl_nonat=on reload"
+            " — expected: no pfB DNSBL nat/rule[]; actual:" + f"\n{h.fwobj_state_snapshot(vm)}"
+        )
+    finally:
+        h.set_dnsbl_nonat(vm, False)
+        h.set_dnsbl_interface(vm, "lo0")
+        h.set_dnsvip_auto(vm, False)
+        h.set_dnsbl_enabled(vm, False)
+        h.ensure_dnsbl_vip(vm)
+        h.reload(vm, "update")
+
+
+# --------------------------------------------------------------------------- #
 # Scenario C — orphan + user objects on uninstall
 # --------------------------------------------------------------------------- #
 

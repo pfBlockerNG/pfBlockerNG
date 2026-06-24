@@ -991,6 +991,27 @@ def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> No
         )
 
 
+def set_dnsbl_nonat(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Set the issue-#381 DNSBL NAT opt-out toggle (``pfb_dnsbl_nonat``).
+
+    When ``on`` is True, the package skips creating the DNSBL
+    ``pfB DNSBL - DO NOT EDIT`` NAT port-forward rules and removes any existing
+    managed ``pfB DNSBL`` NAT on the next reload.  When False (the default),
+    the NAT is created whenever ``dnsbl_interface`` is not ``lo0``.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_dnsbl_nonat'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: set pfb_dnsbl_nonat');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_dnsbl_nonat({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Set the ADR-22 ``pfb_dnsbl_lenient`` toggle in the DNSBL-settings section.
 
