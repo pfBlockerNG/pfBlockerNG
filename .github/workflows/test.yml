@@ -233,13 +233,43 @@ jobs:
         # Config in .shellspec (--shell sh). Functional gate for the shell scripts.
         run: shellspec
 
-      - name: Install kcov (coverage; best-effort)
-        # Coverage is informational. kcov is no longer packaged for current
-        # ubuntu-latest, so a bare `apt-get install` exits non-zero and leaves a
-        # spurious error annotation on an otherwise-green run. Swallow the failure
-        # (exit 0); the coverage step below skips cleanly when kcov is absent.
+      - name: Restore cached kcov binary
+        # kcov was removed from ubuntu-latest's apt repos; build from source and
+        # cache the install dir so subsequent runs skip the compile step.
+        id: cache-kcov
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+
+      - name: Build kcov from source (cache miss)
+        # Only runs when the cache is cold. best-effort: a compile failure still
+        # leaves CI green (coverage is informational).
+        if: steps.cache-kcov.outputs.cache-hit != 'true'
         continue-on-error: true
-        run: sudo apt-get install -y kcov || echo "kcov unavailable on this runner; shell coverage will be skipped (informational)"
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
+          git clone --depth 1 --branch v43 https://github.com/SimonKagstrom/kcov
+          cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
+          cmake --build kcov/build
+          cmake --install kcov/build
+
+      - name: Save kcov binary to cache
+        # Persist the install dir so the next run restores instead of rebuilding.
+        if: steps.cache-kcov.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+
+      - name: Install kcov runtime deps and add to PATH
+        # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
+        # and fresh build; also adds the install dir to PATH for the coverage step.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y libcurl4 libelf1 libdw1
+          echo "$HOME/.local/kcov/bin" >> "$GITHUB_PATH"
 
       - name: Coverage (kcov) — informational
         # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
