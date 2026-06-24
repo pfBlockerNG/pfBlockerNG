@@ -13639,7 +13639,7 @@ function sync_package_pfblockerng($cron='') {
 								$file_dwn_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.pre"); // Save original file for restoration
 								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
-								exec("{$tmo}{$pfb_script_pre} {$file_dwn_esc} {$list['vtype']} {$elog}");
+								exec("{$tmo}" . escapeshellarg($pfb_script_pre) . " {$file_dwn_esc} {$list['vtype']} {$elog}");
 							}
 
 							if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
@@ -13855,11 +13855,11 @@ function sync_package_pfblockerng($cron='') {
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
 							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
-								pfb_logger("\nExecuting post-script: {$list['script_pre']}\n", 1);
+								pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 								$file_org_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.post"); // Save original file for restoration
 								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
-								exec("{$tmo}{$pfb_script_post} {$file_org_esc} {$list['vtype']} {$elog}");
+								exec("{$tmo}" . escapeshellarg($pfb_script_post) . " {$file_org_esc} {$list['vtype']} {$elog}");
 							}
 
 							if (!$custom) {
