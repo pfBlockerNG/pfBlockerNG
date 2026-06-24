@@ -55,10 +55,14 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	etmatch="$(echo "${9}" | sed 's/,/, /g')"
 
 	# File Locations
-	aliasarchive="/usr/local/etc/aliastables.tar.bz2"
+	# #468: zstd archive (.tar.zst); aliasarchive_legacy is the pre-#468 bzip2 path,
+	# read on restore and retired after a verified zst write.
+	aliasarchive="/usr/local/etc/aliastables.tar.zst"
+	aliasarchive_legacy="/usr/local/etc/aliastables.tar.bz2"
 	# DNSBL python-integration archive (#468). SEPARATE from the IP aliastables
 	# archive above -- different lifecycle (DNSBL changes, not IP-rule changes).
-	dnsblarchive="/usr/local/etc/pfb_dnsbl_cache.tar.bz2"
+	# NEW file -- no legacy bz2 to read.
+	dnsblarchive="/usr/local/etc/pfb_dnsbl_cache.tar.zst"
 	pathgeoipdat="/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 	pathasndat="/usr/local/share/GeoIP/asn.mmdb"
 	pathasncsv="/usr/local/share/GeoIP/asn.csv"
@@ -200,6 +204,65 @@ pfb_list_orig_by_mtime() {
 }
 
 
+# --- Shared MFS-restore archive helpers (#468) --------------------------------
+# Both the IP aliastables archive and the DNSBL cache archive are zstd-compressed
+# (.tar.zst). zstd ships OOTB on pfSense-CE, decompresses far faster than bzip2,
+# and bsdtar (-P) auto-detects the format on extract, so a legacy .tar.bz2 from a
+# prior install still restores. Single source of truth for compress/extract so the
+# two callers stay identical.
+
+# Worker thread count for zstd: ncpu-1, floored at 1, capped at 4 (leave a core
+# free; never oversubscribe). Non-numeric ncpu -> 1.
+pfb_zstd_threads() {
+	_n="$(/sbin/sysctl -n hw.ncpu 2>/dev/null)"
+	case "${_n}" in
+		''|*[!0-9]*) _n=1 ;;
+	esac
+	_t=$((_n - 1))
+	[ "${_t}" -lt 1 ] && _t=1
+	[ "${_t}" -gt 4 ] && _t=4
+	echo "${_t}"
+}
+
+# Compress files into a .tar.zst, then verify integrity and retire the legacy
+# archive only on a verified write. Args: <archive.zst> <legacy_or_empty> <files...>
+# Returns non-zero (leaving the legacy intact) if compress or verify fails.
+pfb_archive_compress() {
+	_arc="$1"
+	_legacy="$2"
+	shift 2
+	if command -v zstd >/dev/null 2>&1; then
+		if "${pathtar}" -Pcf - "$@" | zstd -q -f -T"$(pfb_zstd_threads)" -o "${_arc}" \
+			&& zstd -tq "${_arc}"; then
+			[ -n "${_legacy}" ] && [ "${_legacy}" != "${_arc}" ] && rm -f "${_legacy}"
+			return 0
+		fi
+		return 1
+	fi
+	# Defensive fallback: no zstd -> bzip2 into the legacy path (or the archive
+	# path when no legacy was given).
+	"${pathtar}" -Pjcf "${_legacy:-${_arc}}" "$@"
+}
+
+# Extract a .tar.zst (or, if absent, a legacy .tar.bz2). Pure extract, no reload.
+# Args: <archive.zst> <legacy_or_empty>
+pfb_archive_extract() {
+	_arc="$1"
+	_legacy="$2"
+	if [ -f "${_arc}" ]; then
+		if command -v zstd >/dev/null 2>&1; then
+			cd / && zstd -dc "${_arc}" | "${pathtar}" -Pxf -
+		else
+			# bsdtar -P auto-detects the compression format.
+			cd / && "${pathtar}" -Pxf "${_arc}"
+		fi
+	elif [ -n "${_legacy}" ] && [ -f "${_legacy}" ]; then
+		# bsdtar auto-detects the legacy bzip2 archive.
+		cd / && "${pathtar}" -Pxf "${_legacy}"
+	fi
+}
+
+
 # Function to restore IP aliastables and DNSBL database from archive on reboot. ( Ramdisk installations only )
 aliastables() {
 	if [ "${USE_MFS_TMPVAR}" -gt 0 ] || [ "${DISK_TYPE}" = 'md' ]; then
@@ -208,7 +271,7 @@ aliastables() {
 			chown -f unbound:unbound /var/unbound
 			chgrp -f unbound /var/unbound
 		fi
-		[ -f "${aliasarchive}" ] && cd / && /usr/bin/tar -Pxvf "${aliasarchive}"
+		pfb_archive_extract "${aliasarchive}" "${aliasarchive_legacy}"
 	fi
 }
 
@@ -237,7 +300,7 @@ dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
 	pfbpkgdir="${pfbpkgdir:-/usr/local/pkg/pfblockerng}"
-	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar.bz2}"
+	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar.zst}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
 	# The shipped (static) DNSBL python files -- the ONE definition of the set.
@@ -278,11 +341,12 @@ dnsbl_cache() {
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
 			done
 			if [ "$#" -gt 0 ]; then
-				"${pathtar}" -Pjcf "${dnsblarchive}" "$@"
+				# NEW file -- no legacy archive to retire (empty 2nd arg).
+				pfb_archive_compress "${dnsblarchive}" '' "$@"
 			fi
 			;;
 		restore)
-			[ -f "${dnsblarchive}" ] && "${pathtar}" -Pxf "${dnsblarchive}"
+			pfb_archive_extract "${dnsblarchive}" ''
 			dnsbl_cache_stage
 			;;
 	esac
@@ -1429,6 +1493,12 @@ case "${1}" in
 	dnsbl_cache)
 		# #468: DNSBL python-integration cache. $2 = stage | save | restore.
 		dnsbl_cache "${2}"
+		;;
+	pfb_compress)
+		# #468: single-sourced archive compression for callers (e.g. PHP
+		# pfb_aliastables). Args after the action: <archive.zst> <legacy_or_empty> <files...>
+		shift
+		pfb_archive_compress "$@"
 		;;
 	dnsbl-control)
 		# PFBL-03: root-only DNSBL-control CLI. Forwards the operator's command to the
