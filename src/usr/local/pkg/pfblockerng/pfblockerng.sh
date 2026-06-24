@@ -56,6 +56,9 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 
 	# File Locations
 	aliasarchive="/usr/local/etc/aliastables.tar.bz2"
+	# DNSBL python-integration archive (#468). SEPARATE from the IP aliastables
+	# archive above -- different lifecycle (DNSBL changes, not IP-rule changes).
+	dnsblarchive="/usr/local/etc/pfb_dnsbl_cache.tar.bz2"
 	pathgeoipdat="/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 	pathasndat="/usr/local/share/GeoIP/asn.mmdb"
 	pathasncsv="/usr/local/share/GeoIP/asn.csv"
@@ -207,6 +210,82 @@ aliastables() {
 		fi
 		[ -f "${aliasarchive}" ] && cd / && /usr/bin/tar -Pxvf "${aliasarchive}"
 	fi
+}
+
+
+# DNSBL python-integration cache (#468). On a RAM-disk /var (use_mfs_tmpvar) the
+# chroot is wiped on reboot, so DNSBL comes up dead. This keeps DNSBL alive across a
+# reboot with PURE FILE OPS (no reload/restart -- Unbound's normal start loads the
+# restored files). Kept SEPARATE from the IP aliastables flow above on purpose: the
+# two have different lifecycles (DNSBL state vs IP-rule state).
+#
+#   stage   -- single source of truth for the SHIPPED file set (PFB_PY_SHIPPED): copy
+#              each from /usr/local into the chroot, after making the chroot + the
+#              nullfs/devfs mount-point dirs (fresh MFS lacks them, which is what made
+#              pfb_python_mount fail). Re-run on every save/restore so the shipped code
+#              is always current from /usr/local (never restored stale from an archive).
+#   save    -- stage, then archive ONLY the GENERATED set (pfb_unbound*/pfb_py_* +
+#              pfb_unbound.ini: the manifest, raw feeds, caches, ini). Shipped files
+#              are NOT archived -- they come from /usr/local on restore.
+#   restore -- the boot earlyshellcmd: untar the generated set (if present) THEN stage.
+#
+# Naming contract: the generated archive set is matched by the pfb_unbound* / pfb_py_*
+# globs below; a new generated DNSBL file MUST keep that prefix to be carried across a
+# reboot. The shipped set is the explicit PFB_PY_SHIPPED list -- add a new shipped file
+# there (and to the pkg-plist / chroot-copy wiring) so it stays the one definition.
+dnsbl_cache() {
+	# Overridable for unit tests; default to the live locations.
+	pfbchroot="${pfbchroot:-/var/unbound}"
+	pfbpkgdir="${pfbpkgdir:-/usr/local/pkg/pfblockerng}"
+	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar.bz2}"
+	pathtar="${pathtar:-/usr/bin/tar}"
+
+	# The shipped (static) DNSBL python files -- the ONE definition of the set.
+	PFB_PY_SHIPPED='pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt'
+
+	dnsbl_cache_stage() {
+		mkdir -p "${pfbchroot}"
+		# The nullfs/devfs mount-point dirs pfb_python_mount expects (fresh-MFS safety).
+		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
+			mkdir -p "${pfbchroot}/${_d}"
+		done
+		# Copy the shipped files from /usr/local into the chroot (current code).
+		for _f in ${PFB_PY_SHIPPED}; do
+			if [ -f "${pfbpkgdir}/${_f}" ]; then
+				cp -f "${pfbpkgdir}/${_f}" "${pfbchroot}/${_f}"
+				chown -f unbound:unbound "${pfbchroot}/${_f}"
+			fi
+		done
+	}
+
+	case "${1}" in
+		stage)
+			dnsbl_cache_stage
+			;;
+		save)
+			dnsbl_cache_stage
+			# Archive ONLY the generated set: pfb_unbound* + pfb_py_* + pfb_unbound.ini,
+			# EXCLUDING the shipped files (PFB_PY_SHIPPED) -- those are re-staged from
+			# /usr/local on restore, so archiving them would reinstate stale code (e.g.
+			# pfb_py_hsts.txt matches the pfb_py_* glob but is shipped, not generated).
+			set --
+			for _g in "${pfbchroot}"/pfb_unbound* "${pfbchroot}"/pfb_py_*; do
+				[ -e "${_g}" ] || continue
+				_skip=''
+				for _s in ${PFB_PY_SHIPPED}; do
+					[ "${_g}" = "${pfbchroot}/${_s}" ] && _skip=1 && break
+				done
+				[ -z "${_skip}" ] && set -- "$@" "${_g}"
+			done
+			if [ "$#" -gt 0 ]; then
+				"${pathtar}" -Pjcf "${dnsblarchive}" "$@"
+			fi
+			;;
+		restore)
+			[ -f "${dnsblarchive}" ] && "${pathtar}" -Pxf "${dnsblarchive}"
+			dnsbl_cache_stage
+			;;
+	esac
 }
 
 
@@ -1346,6 +1425,10 @@ case "${1}" in
 		;;
 	aliastables)
 		aliastables
+		;;
+	dnsbl_cache)
+		# #468: DNSBL python-integration cache. $2 = stage | save | restore.
+		dnsbl_cache "${2}"
 		;;
 	dnsbl-control)
 		# PFBL-03: root-only DNSBL-control CLI. Forwards the operator's command to the

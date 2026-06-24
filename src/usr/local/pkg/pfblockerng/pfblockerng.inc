@@ -99,6 +99,9 @@ $pfb['ip_cache']	= "{$pfb['dbdir']}/ip_cache.sqlite";
 $pfb['script']		= '/usr/local/pkg/pfblockerng/pfblockerng.sh';
 $pfb['feeds']		= '/usr/local/www/pfblockerng/pfblockerng_feeds.json';
 $pfb['aliasarchive']	= '/usr/local/etc/aliastables.tar.bz2';
+// #468: DNSBL python-integration archive (RAM-disk /var restore). SEPARATE from the IP
+// aliastables archive -- managed by pfb_dnsbl_cache() / 'pfblockerng.sh dnsbl_cache'.
+$pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar.bz2';
 
 $pfb['dnsbl_tld_txt']	= "{$pfb['dnsdir']}/DNSBL_TLD.txt";
 $pfb['dnsbl_tld_data']	= '/usr/local/pkg/pfblockerng/dnsbl_tld';
@@ -4420,15 +4423,9 @@ function pfb_unbound_dnsbl($mode) {
 		}
 
 		if ($mode == 'enabled') {
-			if (!file_exists("{$g['unbound_chroot_path']}/pfb_unbound.py")) {
-				@copy("/usr/local/pkg/pfblockerng/pfb_unbound.py", "{$g['unbound_chroot_path']}/pfb_unbound.py");
-			}
-			if (!file_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc")) {
-				@copy("/usr/local/pkg/pfblockerng/pfb_unbound_include.inc", "{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
-			}
-			if (!file_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt")) {
-				@copy("/usr/local/pkg/pfblockerng/pfb_py_hsts.txt", "{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
-			}
+			// #468: the shipped-file list lives ONLY in 'dnsbl_cache stage' (single
+			// source of truth); it also mkdirs the chroot + nullfs mount-point dirs.
+			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 		} else {
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
@@ -8399,7 +8396,10 @@ function pfb_aliastables($mode) {
 			pfb_logger("\nArchiving Aliastable folder", 1);
 
 			$files_to_backup = '';
-			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf,/var/unbound/pfb_unbound*,/var/unbound/pfb_py_*}", GLOB_BRACE);
+			// #468: IP-only. The DNSBL python integration is archived separately by
+			// pfb_dnsbl_cache() (different lifecycle); ADR-08 had wrongly piggybacked
+			// the /var/unbound/pfb_unbound* + pfb_py_* files onto this IP archive.
+			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf}", GLOB_BRACE);
 			if (!empty($files)) {
 				$files_to_backup = implode(' ', array_map('escapeshellarg', array_filter($files)));
 			}
@@ -8479,6 +8479,103 @@ function pfb_aliastables($mode) {
 		config_set_path('system/earlyshellcmd', $a_earlyshellcmd);
 		config_set_path('installedpackages/shellcmdsettings/config', $a_shellcmdsettings);
 		write_config('pfBlockerNG: saving earlyshellcmd');
+	}
+}
+
+
+// #468: DNSBL python-integration cache for RAM-disk /var (use_mfs_tmpvar) installs.
+// SEPARATE from pfb_aliastables() on purpose -- the IP-alias archive and the DNSBL
+// archive have different lifecycles (DNSBL changes vs IP-rule changes). All file ops
+// live in 'pfblockerng.sh dnsbl_cache' (the shipped-file list has one home, in shell).
+//
+//   'conf' -- register the boot 'dnsbl_cache restore' earlyshellcmd when DNSBL is
+//             enabled AND /var is a RAM disk; otherwise remove it and delete the
+//             archive (DNSBL off or MFS off -> nothing to restore).
+//   'save' -- archive the current generated DNSBL state (called post-reload on a real
+//             DNSBL change; the caller gates on use_mfs_tmpvar + DNSBL enabled).
+function pfb_dnsbl_cache($mode) {
+	global $pfb;
+
+	$earlyshellcmd = '/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache restore';
+
+	if ($mode == 'save') {
+		exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache save >/dev/null 2>&1');
+		return;
+	}
+
+	// $mode == 'conf'
+	// Reload config.xml to get any recent changes (parity with pfb_aliastables()).
+	config_read_file(FALSE, TRUE);
+
+	$msg = '';
+	$a_earlyshellcmd = config_get_path('system/earlyshellcmd', []);
+	$a_shellcmdsettings = config_get_path('installedpackages/shellcmdsettings/config', []);
+
+	// Register only when DNSBL is enabled AND /var is a RAM disk; else deregister.
+	$want = ($pfb['dnsbl'] == 'on' && config_path_enabled('system', 'use_mfs_tmpvar'));
+
+	if ($want) {
+		// Add earlyshellcmd settings (distinct 'dnsbl_cache restore' string).
+		if (!empty($a_earlyshellcmd)) {
+			if (!preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd)) {
+				$a_earlyshellcmd[] = "{$earlyshellcmd}";
+				$msg = "\n** Adding DNSBL cache earlyshellcmd settings **\n";
+			}
+		} else {
+			$a_earlyshellcmd = "{$earlyshellcmd}";
+			$msg = "\n** Adding DNSBL cache earlyshellcmd settings **\n";
+		}
+
+		// Add shellcmd package settings
+		$found = FALSE;
+		if (!empty($a_shellcmdsettings)) {
+			foreach ($a_shellcmdsettings as $shellcmd) {
+				if (strpos($shellcmd['cmd'], 'pfblockerng.sh dnsbl_cache restore') !== FALSE) {
+					$found = TRUE;
+					break;
+				}
+			}
+		}
+
+		if (!$found) {
+			$add = array(	'cmd'		=> $earlyshellcmd,
+					'cmdtype'	=> 'earlyshellcmd',
+					'description'	=> 'pfBlockerNG DNSBL cache earlyshellcmd. DO NOT EDIT/DELETE!');
+
+			$a_shellcmdsettings[] = $add;
+			$msg .= "\n** Adding DNSBL cache shellcmd package settings **\n";
+		}
+	}
+	else {
+		// Remove DNSBL cache archive if found
+		if (file_exists("{$pfb['dnsblarchive']}")) {
+			unlink_if_exists("{$pfb['dnsblarchive']}");
+		}
+
+		// Remove earlyshellcmd settings
+		if (!empty($a_earlyshellcmd)) {
+			if (preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd)) {
+				$a_earlyshellcmd = preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd, PREG_GREP_INVERT);
+				$msg = "\n** Removing DNSBL cache earlyshellcmd settings **\n";
+			}
+		}
+
+		// Remove shellcmd package settings
+		if (!empty($a_shellcmdsettings)) {
+			foreach ($a_shellcmdsettings as $key => $shellcmd) {
+				if (strpos($shellcmd['cmd'], 'pfblockerng.sh dnsbl_cache restore') !== FALSE) {
+					unset($a_shellcmdsettings[$key]);
+					$msg .= "\n** Removing DNSBL cache shellcmd package settings **\n";
+				}
+			}
+		}
+	}
+
+	if (!empty($msg)) {
+		pfb_logger("{$msg}", 1);
+		config_set_path('system/earlyshellcmd', $a_earlyshellcmd);
+		config_set_path('installedpackages/shellcmdsettings/config', $a_shellcmdsettings);
+		write_config('pfBlockerNG: saving DNSBL cache earlyshellcmd');
 	}
 }
 
@@ -10908,6 +11005,10 @@ function sync_package_pfblockerng($cron='') {
 	// Call function for Ramdisk processes.
 	pfb_aliastables('conf');
 
+	// #468: keep the DNSBL RAM-disk restore earlyshellcmd in sync with DNSBL state
+	// (registered iff DNSBL enabled AND use_mfs_tmpvar; removed + archive deleted else).
+	pfb_dnsbl_cache('conf');
+
 	// If table limit not defined, set default to 2M
 	if (empty(config_get_path('system/maximumtableentries'))) {
 		config_set_path('system/maximumtableentries', '2000000');
@@ -13258,6 +13359,17 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		pfb_update_unbound($mode, $pfbupdate, $pfbpython);
+
+		// #468: DNSBL actually changed this pass and the reload above has applied (the
+		// zero-downtime swap waited / Unbound restarted). On a RAM-disk /var, re-archive
+		// the generated DNSBL state so the boot 'dnsbl_cache restore' brings it back after
+		// the next reboot. Gated like the IP side (archive only inside the change branch):
+		// DNSBL active ($mode === 'enabled', i.e. enable + dnsbl + resolver on) +
+		// use_mfs_tmpvar. Read $pfb directly (not $mode) to keep the gate self-contained.
+		if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on' &&
+		    config_path_enabled('system', 'use_mfs_tmpvar')) {
+			pfb_dnsbl_cache('save');
+		}
 	}
 
 
@@ -15221,6 +15333,22 @@ function pfblockerng_php_pre_deinstall_command() {
 	}
 	foreach (config_get_path('installedpackages/shellcmdsettings/config', []) as $key => $shellcmd) {
 		if (strpos($shellcmd['cmd'], 'pfblockerng.sh aliastables') !== FALSE) {
+			config_del_path("installedpackages/shellcmdsettings/config/{$key}");
+		}
+	}
+
+	// #468: Remove DNSBL cache archive + restore earlyshellcmd if found (separate
+	// 'dnsbl_cache restore' string from the IP aliastables hook above).
+	@unlink_if_exists("{$pfb['dnsblarchive']}");
+	if (config_get_path('system/earlyshellcmd') !== null) {
+		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
+		if (preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd)) {
+			config_set_path('system/earlyshellcmd',
+							preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd, PREG_GREP_INVERT));
+		}
+	}
+	foreach (config_get_path('installedpackages/shellcmdsettings/config', []) as $key => $shellcmd) {
+		if (strpos($shellcmd['cmd'], 'pfblockerng.sh dnsbl_cache restore') !== FALSE) {
 			config_del_path("installedpackages/shellcmdsettings/config/{$key}");
 		}
 	}
