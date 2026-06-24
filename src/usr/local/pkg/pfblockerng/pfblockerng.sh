@@ -335,7 +335,7 @@ dnsbl_cache() {
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
 			done
 			if [ "$#" -gt 0 ]; then
-				# NEW file -- no legacy archive to retire (empty 2nd arg).
+				# The helper appends .zst/.bz2 to the base and picks the codec.
 				pfb_archive_compress "${dnsblarchive}" "$@"
 			fi
 			;;
@@ -1490,7 +1490,8 @@ case "${1}" in
 		;;
 	pfb_compress)
 		# #468: single-sourced archive compression for callers (e.g. PHP
-		# pfb_aliastables). Args after the action: <archive.zst> <legacy_or_empty> <files...>
+		# pfb_aliastables). Args after the action: <base> <files...> (the helper
+		# appends .zst/.bz2 and picks the codec).
 		shift
 		pfb_archive_compress "$@"
 		;;
