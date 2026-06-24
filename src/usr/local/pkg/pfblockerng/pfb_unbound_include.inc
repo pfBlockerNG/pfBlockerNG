@@ -24,8 +24,6 @@
 require_once('config.inc');
 require_once('globals.inc');
 
-define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
-
 global $g;
 
 config_read_file(FALSE, TRUE);
@@ -105,7 +103,11 @@ function pfb_python_mount($python_mode, $verbose, $type_mount, $type_umount, $ty
 
 			if ($retval != 0) {
 				$log_err = "Failed to mount /{$folder}";
-				logger(LOG_ERR, "[Unbound-pymod]: {$log_err}", LOG_PREFIX_PKG_PFBLOCKERNG);
+				// #468: this file is require_once'd by pfSense core services_unbound_configure()
+				// on the NON-verbose boot path, where pfBlockerNG's logger() fallback is NOT
+				// loaded -- a bare logger() call is a FATAL that wedges rc.bootup. log_error()
+				// (pfSense core util.inc) is always present in that context.
+				log_error("[Unbound-pymod]: {$log_err}");
 				if ($verbose) {
 					pfb_logger("\n   {$log_err}", 1);
 				}
@@ -151,7 +153,9 @@ function pfb_python_mount($python_mode, $verbose, $type_mount, $type_umount, $ty
 		}
 		else {
 			$log_err = "Failed to unmount /{$folder}";
-			logger(LOG_ERR, "[Unbound-pymod]: {$log_err}", LOG_PREFIX_PKG_PFBLOCKERNG);
+			// #468: see the mount branch above -- bare logger() is fatal on the non-verbose
+			// boot path; log_error() (pfSense core) is always available here.
+			log_error("[Unbound-pymod]: {$log_err}");
 			if ($verbose) {
 				pfb_logger("\n   {$log_err}", 1);
 			}
