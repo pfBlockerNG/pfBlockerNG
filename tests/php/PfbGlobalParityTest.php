@@ -320,19 +320,34 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_idn: OLD = $pfb['dnsblconfig']['pfb_idn'] ?? '' = '' when absent.
-	 * Via gateway: PfbConfig::read('pfb_idn') = '' (plain string, identity adapter).
-	 * PARITY: identical (both '' — IDN excluded from adapter adoption, ADR-28 §2.2).
+	 * pfb_idn: OLD = $pfb['dnsblconfig']['pfb_idn'] ?? '' = '' when absent (null-coalesce).
+	 * Via gateway (ADR-28 reframe): PfbConfig::read('pfb_idn') = PfbIdnMode::Off when absent.
+	 *
+	 * PARITY: the registry default is '' which the PfbIdnMode adapter normalises to Off.
+	 * OLD code compared the raw string against 'on'/'all'/'confusable' — Off ('off') and
+	 * the old '' both result in IDN being disabled, so the effective behaviour is the same.
+	 * pfb_idn is now adapted (no longer excluded from adapter adoption, ADR-28 reframe).
 	 */
-	public function testParityPfbIdnAbsentYieldsEmpty(): void
+	public function testParityPfbIdnAbsentYieldsOff(): void
 	{
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn')
 		);
 
+		// Before: absent — old code produced null ?? '' = ''.
+		$old_result = config_get_path(
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn'
+		) ?? '';
+		$this->assertSame('', $old_result, 'before: old code produces empty string for absent pfb_idn');
+
+		// When: gateway read.
 		$result = PfbConfig::read('pfb_idn');
 
-		$this->assertSame('', $result, 'pfb_idn absent -> "" (plain string, excluded from adapter)');
+		// Then: PfbIdnMode::Off (adapted; '' normalises to Off — IDN disabled).
+		// Effective behaviour unchanged: both '' (old) and Off (new) mean IDN disabled.
+		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn absent -> PfbIdnMode enum');
+		$this->assertSame(PfbIdnMode::Off, $result, 'pfb_idn absent -> PfbIdnMode::Off');
+		$this->assertSame('off', $result->value, 'pfb_idn absent -> Off value is "off" (IDN disabled)');
 	}
 
 	/**

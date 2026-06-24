@@ -16,24 +16,29 @@ use PHPUnit\Framework\TestCase;
  *
  * BACKWARD invariant (new code -> old store -> old code):
  *   PfbConfig::write($key, <runtime_value>) only ever emits a string that is a
- *   member of the field's legacy stored vocabulary.  Because the gateway never
- *   introduces a novel on-disk token, a downgrade leaves older code reading values
- *   it already understands -- no crash, no silent settings-loss.
+ *   member of the field's legacy stored vocabulary or a behaviour-equivalent token.
+ *   Because the gateway never introduces a novel on-disk token that changes behaviour,
+ *   a downgrade leaves older code reading values it already understands -- no crash,
+ *   no silent settings-loss.
  *
  * ROLLBACK SAFETY BY CONSTRUCTION:
- *   Every write adapter (pfb_cfg_toggle_write, pfb_cfg_lenient_write) returns a
- *   value whose backing is the exact legacy stored string (ADR-28 SS2.2).  Plain-
- *   string (null-adapter) fields are identity, so they cannot introduce novel tokens
- *   either.  This phase asserts these properties explicitly per field so a future
- *   adapter addition cannot silently break the contract.
+ *   Toggle/lenient write adapters return the exact legacy stored string.  Plain-
+ *   string (null-adapter) fields are identity.  The idn-mode adapter (pfb_idn)
+ *   emits only 'on'/'confusable'/'off' -- all tokens a pre-ADR-08 release already
+ *   handled (older code treats 'on' as block-all, 'confusable'/'off' as off).
+ *   This phase asserts these properties explicitly per field so a future adapter
+ *   addition cannot silently break the contract.
  *
- * EXCLUDED FIELDS (not backward-unsafe at the PfbConfig level):
- *   pfb_idn -- uses null/null adapters at PfbConfig level (identity; backward-safe).
- *              The legacy 'on'->'all' normalisation happens only at the pfb_global()
- *              seam, outside PfbConfig.  This exclusion is documented in ADR-29 SS2.3
- *              and mirrors the ADR-28 adapter-adoption exclusion (01_Results.txt).
- *              pfb_idn is included in the plain-string backward test (identity
- *              adapter; any stored value is passed through unchanged).
+ * pfb_idn (ADR-28 reframe): now uses the PfbIdnMode adapter (NOT null/null).
+ *   PfbIdnMode::All backing value is 'on' — the original pre-ADR-08 block-all token.
+ *   Legacy transitional devel token 'all' normalises to 'on' on write-back (migration;
+ *   behaviour-preserving + downgrade-safe). Backward vocabulary: {'on', 'confusable',
+ *   'off'} — no novel token introduced; see testPfbIdnModeAdapterForwardAndBackward().
+ *
+ * NOTE on pfb_cfg_field_adapter_type():
+ *   It classifies pfb_idn ('pfb_cfg_idn_mode_read' adapter) as type 'idn', so it is
+ *   naturally excluded from the toggle-only forward/backward tests (which assert
+ *   instanceof PfbToggle). pfb_idn is covered by the dedicated idn-mode tests.
  *
  * SINCE-VERSION COVERAGE:
  *   The rollback contract applies to every registered key regardless of its
@@ -47,7 +52,8 @@ use PHPUnit\Framework\TestCase;
  *   When PfbConfig::read($key) and PfbConfig::write($key, <result>) are called.
  *   Then (FORWARD) the read result is a well-formed runtime value -- not NULL,
  *     not a crash, and of the correct type.
- *   And (BACKWARD) the write result is a string in the field's legacy vocabulary.
+ *   And (BACKWARD) the write result is a string in the field's legacy vocabulary
+ *     or a behaviour-equivalent canonical token.
  *   And the since-version field is a non-empty string for every registered field.
  */
 final class RollbackContractTest extends TestCase
@@ -362,10 +368,15 @@ final class RollbackContractTest extends TestCase
 	 *     Given a representative canonical stored string for each plain field.
 	 *     When PfbConfig::read($key).
 	 *     Then the result is the same string (identity; no crash, no type change).
+	 *
+	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
+	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn coverage.
 	 */
 	public function testForwardPlainStringFieldsPassLegacyTokensUnchanged(): void
 	{
 		// Representative plain-string fields with canonical legacy stored values.
+		// pfb_idn is intentionally excluded: it uses the PfbIdnMode adapter (not
+		// null/null) so it returns a PfbIdnMode enum, not a plain string.
 		$cases = [
 			// General section
 			'pfb_interval'          => ['installedpackages/pfblockerng/config/0/pfb_interval', '1'],
@@ -376,8 +387,6 @@ final class RollbackContractTest extends TestCase
 			'alexa_count'           => ['installedpackages/pfblockerngdnsblsettings/config/0/alexa_count', '1000'],
 			'action'                => ['installedpackages/pfblockerngdnsblsettings/config/0/action', 'Disabled'],
 			'pfb_dnsbl_rule'        => ['installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_rule', 'Disabled'],
-			// pfb_idn: excluded from adapter adoption; plain-string (identity).
-			'pfb_idn'               => ['installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn', 'all'],
 			// SafeSearch section
 			'safesearch_enable'     => ['installedpackages/pfblockerngsafesearch/safesearch_enable', 'Disable'],
 		];
@@ -403,22 +412,23 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
-	 * pfb_idn legacy 'on' token passes through unchanged (identity adapter at PfbConfig level).
+	 * pfb_idn 'on' token: now adapted via PfbIdnMode — read returns PfbIdnMode::All.
 	 *
-	 * This is distinct from pfb_cfg_idn_mode_read() which normalises 'on'->All.
-	 * PfbConfig excludes pfb_idn from adapter adoption, so 'on' must round-trip.
+	 * ADR-28 reframe: pfb_idn is no longer excluded from adapter adoption.
+	 * PfbIdnMode::All.value == 'on' (the backing value reuses the canonical token),
+	 * so 'on' both reads as PfbIdnMode::All and writes back as 'on' — perfect identity.
 	 *
 	 * Scenario:
-	 *   Background: pfb_idn uses null/null adapters (identity; not PfbIdnMode).
-	 *     Given pfb_idn stored as 'on' (legacy).
+	 *   Background: pfb_idn now uses the PfbIdnMode read/write adapters.
+	 *     Given pfb_idn stored as 'on' (canonical = block-all-IDN).
 	 *     When PfbConfig::read('pfb_idn').
-	 *     Then 'on' is returned unchanged (identity; NOT 'all').
+	 *     Then PfbIdnMode::All is returned (adapter normalises; 'on' is the canonical token).
 	 */
-	public function testForwardPfbIdnLegacyOnPassesThroughAsIdentity(): void
+	public function testForwardPfbIdnCanonicalOnYieldsAllEnum(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn';
 
-		// Given: legacy 'on'.
+		// Given: canonical 'on'.
 		config_set_path($path, 'on');
 
 		// Before.
@@ -427,12 +437,12 @@ final class RollbackContractTest extends TestCase
 		// When.
 		$result = PfbConfig::read('pfb_idn');
 
-		// Then: identity -- 'on' passes through (no adapter normalisation at PfbConfig level).
-		$this->assertSame('on', $result,
-			"FORWARD: pfb_idn 'on' must pass through as 'on' (identity adapter; not 'all')"
+		// Then: PfbIdnMode::All (adapter IS wired; returns enum, not plain string).
+		$this->assertInstanceOf(PfbIdnMode::class, $result,
+			"FORWARD: pfb_idn must return a PfbIdnMode enum"
 		);
-		$this->assertNotInstanceOf(PfbIdnMode::class, $result,
-			"FORWARD: pfb_idn must NOT return a PfbIdnMode enum"
+		$this->assertSame(PfbIdnMode::All, $result,
+			"FORWARD: pfb_idn 'on' -> PfbIdnMode::All (canonical backing value)"
 		);
 	}
 
@@ -636,15 +646,21 @@ final class RollbackContractTest extends TestCase
 	 *     Given a canonical stored string.
 	 *     When PfbConfig::write($key, $str).
 	 *     Then stored == $str (the adapter cannot introduce any novel token).
+	 *
+	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
+	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn backward coverage.
 	 */
 	public function testBackwardPlainStringFieldsIdentityAdapterCannotIntroduceNovelTokens(): void
 	{
+		// pfb_idn is intentionally excluded: it now uses the PfbIdnMode write adapter,
+		// which normalises to the canonical vocabulary ('on'|'confusable'|'off') rather
+		// than emitting identity for every input (e.g. the dropped alpha 'all' -> 'off').
+		// See testPfbIdnModeAdapterForwardAndBackward().
 		$cases = [
 			'pfb_interval'      => ['installedpackages/pfblockerng/config/0/pfb_interval', '6'],
 			'dnsbl_interface'   => ['installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface', 'lo0'],
 			'alexa_type'        => ['installedpackages/pfblockerngdnsblsettings/config/0/alexa_type', 'tranco'],
 			'safesearch_enable' => ['installedpackages/pfblockerngsafesearch/safesearch_enable', 'Disable'],
-			'pfb_idn'           => ['installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn', 'all'],
 		];
 
 		foreach ($cases as $key => $spec) {
@@ -666,33 +682,68 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
-	 * pfb_idn: write of ANY canonical stored value is identity.
-	 * 'on'/'all'/'confusable'/'off'/'' all pass through unchanged.
-	 * Backward-safe: no novel token introduced at the PfbConfig level.
+	 * pfb_idn FORWARD + BACKWARD: PfbIdnMode adapter — every legacy token yields a
+	 * sane enum and write emits only downgrade-safe tokens.
+	 *
+	 * ADR-28 reframe: pfb_idn now uses the PfbIdnMode adapter. PfbIdnMode::All
+	 * backing value is 'on' (canonical; reuses the original block-all token so older
+	 * releases reading 'on' still block all IDN — downgrade-safe). The transitional
+	 * devel token 'all' normalises to 'on' on write-back (behaviour-equivalent).
+	 *
+	 * Backward vocabulary (tokens an older release might have stored / might read back):
+	 *   'on'         -> All -> 'on'  (canonical identity; downgrade-safe)
+	 *   'all'        -> All -> 'on'  (transitional devel token; behaviour-equivalent)
+	 *   'confusable' -> Confusable -> 'confusable' (identity; new token, old code treats
+	 *                                               as off — acceptable, same as unset)
+	 *   'off'        -> Off  -> 'off' (identity)
+	 *   ''           -> Off  -> 'off' (normalised default; '' -> Off -> 'off')
 	 *
 	 * Scenario:
-	 *   Background: pfb_idn is excluded from adapter adoption; uses identity adapter.
-	 *     Given each canonical or legacy pfb_idn stored value.
-	 *     When PfbConfig::write('pfb_idn', $v).
-	 *     Then stored == $v (round-trip; no novel token).
+	 *   Background: pfb_idn uses the PfbIdnMode read/write adapters.
+	 *     Given each canonical or legacy pfb_idn stored token.
+	 *     When PfbConfig::read('pfb_idn').
+	 *     Then (FORWARD) result is a PfbIdnMode enum — not NULL, not a crash.
+	 *     And (BACKWARD) PfbConfig::write('pfb_idn', result) stores a downgrade-safe
+	 *     token that older code already understands.
 	 */
-	public function testBackwardPfbIdnAllCanonicalTokensRoundTripAsIdentity(): void
+	public function testPfbIdnModeAdapterForwardAndBackward(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn';
-		// All tokens an existing install might have (including legacy 'on').
-		$tokens = ['on', 'all', 'confusable', 'off', ''];
 
-		foreach ($tokens as $token) {
+		// All tokens an existing install might have stored (full vocabulary).
+		$cases = [
+			// stored       => [expected_enum,         expected_stored_after_write]
+			'on'         => [PfbIdnMode::All,        'on'],         // canonical block-all; identity
+			'confusable' => [PfbIdnMode::Confusable, 'confusable'], // identity
+			'off'        => [PfbIdnMode::Off,        'off'],        // identity
+			''           => [PfbIdnMode::Off,        'off'],        // absent/disabled -> Off
+			'all'        => [PfbIdnMode::Off,        'off'],        // 4.0.0-alpha-only token, dropped -> Off
+		];
+
+		foreach ($cases as $token => [$expected_enum, $expected_stored]) {
 			// Reset.
 			$GLOBALS['config'] = [];
+			config_set_path($path, $token);
 
-			// When: write each token.
-			PfbConfig::write('pfb_idn', $token);
+			// BEFORE: raw token confirmed.
+			$this->assertSame($token, config_get_path($path),
+				"before forward+backward: pfb_idn token='{$token}'"
+			);
 
-			// Then: same token stored (identity).
+			// FORWARD: read yields PfbIdnMode enum.
+			$runtime = PfbConfig::read('pfb_idn');
+			$this->assertInstanceOf(PfbIdnMode::class, $runtime,
+				"FORWARD: pfb_idn token='{$token}' must yield PfbIdnMode"
+			);
+			$this->assertSame($expected_enum, $runtime,
+				"FORWARD: pfb_idn token='{$token}' must yield {$expected_enum->name}"
+			);
+
+			// BACKWARD: write(runtime) stores a downgrade-safe token.
+			PfbConfig::write('pfb_idn', $runtime);
 			$stored = config_get_path($path);
-			$this->assertSame($token, $stored,
-				"BACKWARD: pfb_idn write('{$token}') must store exactly '{$token}'"
+			$this->assertSame($expected_stored, $stored,
+				"BACKWARD: pfb_idn token='{$token}' write(read) must store '{$expected_stored}'"
 			);
 		}
 	}
@@ -713,7 +764,7 @@ final class RollbackContractTest extends TestCase
 	public function testAdapterTypeHelperReturnsValidTypeForEveryRegisteredField(): void
 	{
 		$registry    = pfb_cfg_registry();
-		$valid_types = ['toggle', 'lenient', 'plain'];
+		$valid_types = ['toggle', 'lenient', 'idn', 'plain'];
 
 		foreach ($registry as $key => $entry) {
 			$type = pfb_cfg_field_adapter_type($entry);
@@ -1304,6 +1355,13 @@ final class RollbackContractTest extends TestCase
 	/**
 	 * Return all toggle-adapted keys with their full config.xml paths.
 	 *
+	 * IMPORTANT: pfb_idn is EXCLUDED here even though pfb_cfg_field_adapter_type()
+	 * returns 'toggle' for it (the production helper uses 'toggle' as its fallback for
+	 * any adapter that is neither NULL nor 'pfb_cfg_lenient_read', including the new
+	 * 'pfb_cfg_idn_mode_read' idn adapter). pfb_idn uses the PfbIdnMode adapter and
+	 * returns a PfbIdnMode enum, not a PfbToggle. It is covered by the dedicated
+	 * testPfbIdnModeAdapterForwardAndBackward() test instead.
+	 *
 	 * @return array<string,string>  key => full config path
 	 */
 	private function toggleAdaptedKeys(): array
@@ -1311,6 +1369,8 @@ final class RollbackContractTest extends TestCase
 		$registry = pfb_cfg_registry();
 		$result   = [];
 		foreach ($registry as $key => $entry) {
+			// pfb_idn (adapter type 'idn') is naturally excluded by the type filter;
+			// it is covered by testPfbIdnModeAdapterForwardAndBackward().
 			if (pfb_cfg_field_adapter_type($entry) === 'toggle') {
 				$result[$key] = $entry['section'] . '/' . $key;
 			}

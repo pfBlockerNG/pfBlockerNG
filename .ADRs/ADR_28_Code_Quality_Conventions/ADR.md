@@ -87,26 +87,38 @@ one commit, each leaving the full suite green, each reviewed before the next. Pe
 | 4 — string-ops over regex | `str_*`/`strpos`/`str_contains` over `preg_*` where equivalent; **hot loops first** | `str` methods over `re` in per-query/per-line paths | parameter-expansion / `case` over `grep -E`/`sed` where equivalent | `String.prototype` methods over `RegExp` |
 | 5 — uppercase `TRUE`/`FALSE` | **uppercase** literals | `True`/`False` (Python is correct as-is) | N/A | `true`/`false` (JS is lowercase) |
 
-### 2.2 Enums are internal; the config storage format is hard-frozen (the adapter rule)
+### 2.2 Enums are internal; the config storage adapter rule — preserve behaviour on upgrade
 
-- **`config.xml` stored values never change** — every checkbox `'on'`/`''` and every option string
-  stays byte-identical across upgrade. This is the contract from §1.3.
-- Enums/booleans are an **internal runtime representation only**. The conversion happens at a
-  **read-boundary adapter** (centred on `pfb_global()` and any sibling read site): stored string →
-  internal enum/bool on read; internal enum/bool → the **exact same legacy stored string** on write.
-- A **backed enum's backing value equals the stored string** where a direct map is natural
-  (`case On = 'on'`), so `Enum::tryFrom($stored) ?? Enum::default()` is the adapter and `$e->value`
-  is the writer. Where a field's "off" is `''` vs `'off'`, the adapter is **field-aware** of that
-  field's exact legacy vocabulary — there is no single global toggle.
-- **Round-trip identity is mandatory and pinned by tests**: for every adapted field, every existing
-  stored value (incl. empty / unset / any legacy variant) must satisfy `write(read(v)) == v`. **If a
-  field cannot round-trip losslessly, it is excluded** — it stays a string, documented as such. This
-  is the falsifiable gate (§7).
+- **Storage is NOT frozen — we keep it consistent for back-compat where practical, not
+  byte-for-byte.** There is no versioned migration routine. New options add new stored strings;
+  the read-boundary adapters absorb legacy tokens and writes emit a canonical token (which **may**
+  differ from the legacy one when behaviour-equivalent). The goal is to preserve *behaviour* on
+  upgrade, not bytes.
+- **Forward-compat (upgrade) has two cases:** an **existing config with the key absent** reads to a
+  value that **preserves that user's prior behaviour**; a **brand-new config** gets the **new
+  default**. When those differ, a one-time grandfather seed sets the key for existing installs at
+  upgrade (e.g. `pfb_rdns_seed_value`, `pfb_feed_filter_install_default`).
+- **Downgrade-tolerant.** Older releases string-compared these values, so an unknown token falls
+  through to that release's safe default. Reusing a legacy token as the canonical value keeps
+  downgrade behaviour intact; a genuinely new token (e.g. `'confusable'`) simply reads as off on
+  an old release — acceptable, the feature didn't exist there.
+- Enums/booleans are the **internal runtime representation**. Conversion at the boundary:
+  stored string → enum on read; enum → canonical stored string on write.
+- A **backed enum's backing value equals its canonical stored string** (`case On = 'on'`).
+  `EnumClass::fromStored($raw)` handles legacy → runtime; `$enum->toStored()` writes the
+  canonical token. Where a field's "off" is `''` vs `'off'`, the enum is **field-aware** — no
+  single global toggle.
+- **Round-trip of canonical tokens is mandatory and pinned by tests**: `write(read(v)) == v` for
+  every canonical stored token; a legacy token reads to the correct runtime value and writes to
+  its behaviour-equivalent canonical token. **If a field cannot satisfy this, it is excluded** —
+  kept as a string, documented as such. This is the falsifiable gate (§7).
 
 ### 2.3 Semantics that MUST be preserved (the contract — pinned before each swap)
 
-1. **Every `config.xml` stored value is byte-identical before/after** any phase — proven by the
-   per-field round-trip tests (§2.2) and the smoke upgrade check (§7).
+1. **Every adapted config field preserves its user's behaviour before/after** any phase — proven
+   by the per-field round-trip tests (§2.2): canonical tokens round-trip unchanged; legacy tokens
+   read to the correct runtime value and write to a behaviour-equivalent canonical token. Proven by
+   the smoke upgrade check (§7).
 2. **No behavioural change** from any enum adoption, conditional reorder, or regex→string swap —
    the DNSBL/IP/Geo decisions, UI output, and feed processing are identical. Proven by PHPUnit +
    pytest golden tests over touched logic and the ADR-04 smoke fan-out.
@@ -117,7 +129,9 @@ one commit, each leaving the full suite green, each reviewed before the next. Pe
 
 ### 2.4 Explicitly kept / out of scope
 
-- **`config.xml` storage format** (§2.2) — frozen, never migrated.
+- **`config.xml` storage format** (§2.2) — no versioned schema or migration pass; legacy tokens
+  are absorbed at the read-boundary adapter and writes emit the canonical (behaviour-equivalent)
+  token.
 - **`py_unbound.ini`** and any **manifest / serialized / wire** value the Python or shell side
   reads — these are contracts with other processes; kept as strings.
 - **ADR-26 shell locale prefixes** (`LC_ALL=C` on collation sinks) — untouched; the shell phase
@@ -160,7 +174,7 @@ one commit, each leaving the full suite green, each reviewed before the next. Pe
 ## 4. Requirements (acceptance)
 
 - All five conventions documented in `CLAUDE.md` as the policy of record, with the per-language
-  table (§2.1), the hard-freeze + adapter rule (§2.2), and the out-of-scope carve-outs (§2.4).
+  table (§2.1), the storage adapter rule (§2.2), and the out-of-scope carve-outs (§2.4).
 - The retroactive sweep completed across PHP, Python, and shell in the §6 phases, each
   behaviour-preserving and green.
 - A targeted PHPCS sniff enforcing uppercase PHP `TRUE`/`FALSE` (cheap, mechanical) added and
@@ -277,9 +291,10 @@ Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
 
 - Build an **automated upgrade-contract smoke case** (`tests/smoke`, `repo`/upgrade marker): install
   the prior release `.pkg` with a representative settings spread, capture `config.xml`, `pkg upgrade`
-  to the branch build, then assert every adapted field's stored value is **byte-identical** and a
-  representative runtime behaviour (a blocked DNSBL name, an IP block) is unchanged. This automates
-  the §7 contract proof so acceptance needs no manual sign-off (CLAUDE.md "ADR acceptance").
+  to the branch build, then assert every adapted field's **behaviour is preserved** (canonical tokens
+  round-trip; legacy tokens read to the correct runtime value) and a representative runtime behaviour
+  (a blocked DNSBL name, an IP block) is unchanged. This automates the §7 contract proof so
+  acceptance needs no manual sign-off (CLAUDE.md "ADR acceptance").
 - **Dispatch the live-VM validation:** `smoke-fanout.yml` (ADR-04 suite, **CE + Plus**, AND-gated)
   and the **UI tiers** (`ui_render` is the PR gate; dispatch `ui_e2e`/`ui_browser` too). Record the
   green run links. Confirm the full DoD (§7).
@@ -292,9 +307,11 @@ Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
 - The PHPCS uppercase-`TRUE`/`FALSE` sniff active and green.
 - **Automated upgrade-contract smoke (Phase 11)** green on the live-VM fan-out: install prior
   release → configure a representative settings spread (DNSBL on/off, IDN mode, lenient, auto-VIP, a
-  couple of feeds) → `pkg upgrade` to the branch build → assert every adapted field's `config.xml`
-  value is **byte-identical** and a representative runtime behaviour (blocked DNSBL name, IP block) is
-  unchanged. This automates the contract proof — **no manual sign-off** (CLAUDE.md "ADR acceptance").
+  couple of feeds) → `pkg upgrade` to the branch build → assert every adapted field's **behaviour is
+  preserved** (canonical tokens round-trip; legacy tokens read to the correct runtime value and write
+  to a behaviour-equivalent canonical token) and a representative runtime behaviour (blocked DNSBL
+  name, IP block) is unchanged. This automates the contract proof — **no manual sign-off** (CLAUDE.md
+  "ADR acceptance").
 - **Smoke fan-out (CE + Plus) + UI tiers green** — `smoke-fanout.yml` AND-gate passes; `ui_render`
   PR gate green; `ui_e2e`/`ui_browser` dispatched green.
 - **Residual manual check (owner: maintainer, out-of-CI):** true *visual* GUI correctness only — a

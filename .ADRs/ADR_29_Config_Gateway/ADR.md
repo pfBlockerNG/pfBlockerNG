@@ -18,8 +18,9 @@ Originates from **issue #281** (config-loss-on-upgrade) and its maintainer follo
 configuration reader/writer … all reads and writes go through it and it owns all
 migration/adapters required to ensure the configuration can be read … and to avoid as many
 contract breaks as possible (so rolling back is tentatively smooth)."* Builds directly on **ADR-28
-§2.2** (config storage hard-freeze + field-aware read/write adapters), which this ADR generalises
-from a per-call-site convention into a single enforced gateway. The #281 point-fix (a `pfb_keep`
+§2.2** (config storage adapter rule — preserve behaviour on upgrade — + field-aware read/write
+adapters), which this ADR generalises from a per-call-site convention into a single enforced
+gateway. The #281 point-fix (a `pfb_keep`
 default + seed migration) already landed (`1e2904f`); this ADR removes the *class* of bug.
 
 ---
@@ -54,10 +55,10 @@ default + seed migration) already landed (`1e2904f`); this ADR removes the *clas
 
 ### 1.2 Load-bearing constraints
 
-- **`config.xml` stored values are hard-frozen** (ADR-28 §1.3/§2.2): no config-version routine
-  exists; the stored representation **is** the upgrade contract. Any change that alters a stored
-  value is a silent settings-loss regression with no repair path. The gateway **must not** change
-  stored bytes.
+- **Behaviour must be preserved across upgrade** (ADR-28 §2.2): no config-version routine
+  exists. The read-boundary adapters absorb legacy tokens; writes emit canonical tokens that are
+  behaviour-equivalent (and downgrade-safe — recognised by older releases). The gateway must not
+  silently alter a stored value in a way that changes an existing user's behaviour.
 - **PHP is the sole writer.** No concurrent cross-language writer to coordinate (Python/shell read
   generated files). The gateway needs no locking beyond what pfSense's `write_config()` already
   provides.
@@ -70,7 +71,7 @@ There is **no performance premise** — per-key config reads are unmeasurably ch
 justification is **correctness and maintainability**: (a) a single canonical default per key
 removes the #281 class (divergent defaults between read sites); (b) an **explicit rollback /
 backward-compatibility contract** — older code reading values written by newer code — which ADR-28's
-*forward-only* freeze never addressed. The risk to weigh is **over-build** (ADR-01): a 204/132-site
+adapter rule (behaviour-on-upgrade) did not fully address for the downgrade direction. The risk to weigh is **over-build** (ADR-01): a 204/132-site
 refactor whose payoff is structural, not behavioural. Mitigation is the phasing discipline (§6) and
 a falsifiable rollback gate (§7) — and the explicit reject path (§7) to narrow scope if the churn
 cannot be contained.
@@ -92,8 +93,8 @@ phases** (§6). Adopt "all reads/writes go through the gateway" as **policy of r
   scattered call-site logic. The #281 `pfb_keep` default (`'on'`) becomes one registry default,
   defined **once**.
 - **Read** applies the registered default + read-adapter (stored string → runtime enum/bool/string).
-  **Write** applies the write-adapter (runtime value → the **exact legacy stored string**), upholding
-  the ADR-28 §2.2 byte-identity freeze and round-trip identity.
+  **Write** applies the write-adapter (runtime value → canonical stored string), upholding the
+  ADR-28 §2.2 behaviour-preserving round-trip and downgrade safety.
 - **Section-level helpers** for the bulk section read/write/delete the `www/` pages and
   `pfb_remove_config_settings()` use, so the broad wipe and the per-page `$pconfig` round-trips also
   flow through one place.
@@ -132,8 +133,10 @@ contract, scoped per field by `since-version`:
 
 ### 2.4 Semantics that MUST be preserved (the contract — pinned before each swap)
 
-1. **Every `config.xml` stored value is byte-identical** before/after every phase (the ADR-28
-   freeze) — proven per field by round-trip tests + the upgrade smoke (§7).
+1. **Every adapted config field preserves its user's behaviour** before/after every phase (the
+   ADR-28 §2.2 adapter rule) — canonical tokens round-trip unchanged; legacy tokens read to the
+   correct runtime value and write to a behaviour-equivalent canonical token — proven per field by
+   round-trip tests + the upgrade smoke (§7).
 2. **No behavioural change** from routing a read/write through the gateway — the DNSBL/IP/Geo
    decisions, UI page output, install/upgrade side effects, and the wipe surface are identical.
    Proven by PHPUnit golden tests over touched logic + the ADR-04 smoke fan-out + `ui_render`.
@@ -146,7 +149,9 @@ contract, scoped per field by `since-version`:
 
 ### 2.5 Explicitly kept / out of scope
 
-- **`config.xml` stored format** — frozen (ADR-28 §2.2); the gateway never migrates stored bytes.
+- **`config.xml` stored format** — no versioned schema or migration pass (ADR-28 §2.2); the
+  gateway writes canonical (behaviour-equivalent) tokens; it never introduces a novel on-disk
+  token an older release would misread.
 - **`py_unbound.ini`, manifests, and any serialized/wire value** read by Python or shell — those are
   generated artifacts / inter-process contracts, not `config.xml`; unchanged.
 - **Non-pfBlockerNG config** (`system/*`, `installedpackages/shellcmdsettings`, widgets sequence,
@@ -196,7 +201,7 @@ contract, scoped per field by `since-version`:
   in the §6 phases — `pfb_global()`, install/migrations, the wipe, and every `www/` page.
 - A **rollback/backward-compat** test gate: off-box per-field `since-version` invariants + the
   `tests/smoke/test_upgrade_config_stability.py` smoke extended with a **downgrade leg** (install
-  newer build, write settings, downgrade to older build, assert sane reads + byte-identical store).
+  newer build, write settings, downgrade to older build, assert sane reads + config values intact).
 - A targeted **enforcement sniff** (PHPCS/PHPStan) forbidding raw `config_*_path` on a registered
   key outside the gateway; wired into `phpcs.xml.dist` + CI; pinned by a fixture test.
 - Policy of record in `CLAUDE.md`; full suite green at every phase (`python -m pytest`,
@@ -211,7 +216,8 @@ contract, scoped per field by `since-version`:
 - **PHP** — tabs; PHP 8.3; uppercase `TRUE`/`FALSE`/`NULL` (ADR-28 sniff); no `die()`/`exit()` in
   library code; keep the PFBL-01 `RequirePfbFilter` sniff green; stub any newly-reached pfSense
   function from upstream.
-- **Hard-freeze** — never change a stored `config.xml` value/format (ADR-28 §2.2).
+- **Behaviour-preserving writes** — writes emit canonical (downgrade-safe) tokens; never a novel
+  on-disk token an older release would misread (ADR-28 §2.2).
 - **Clean the diff** — each phase minimal and intentional; no gratuitous reformatting of untouched
   lines; alignment opportunistic within touched blocks only.
 - **Plan with a higher model, implement with Sonnet** — each phase executed by a Sonnet sub-agent
@@ -255,7 +261,7 @@ Prompt: `03_Rollback_Contract.txt` — behaviour-preserving (tests + doc).
 
 - Encode each field's `since-version` and the forward+backward invariant (§2.3). Add off-box
   per-field rollback tests, and extend `tests/smoke/test_upgrade_config_stability.py` with a
-  **downgrade leg** (newer→older `pkg` install; assert sane reads + byte-identical store). Document
+  **downgrade leg** (newer→older `pkg` install; assert sane reads + config values preserved). Document
   any field excluded for rollback.
 
 ### Phase 4 — Route the high-risk seam: `pfb_global()` reads + the wipe + pre-deinstall
@@ -322,9 +328,10 @@ Prompt: `10_Smoke_And_Validation.txt` — the acceptance gate.
 - **Migration registry** reproduces the four legacy migrations' outcomes on representative install
   states (ordered, idempotent, run-once).
 - **Upgrade + rollback smoke green** on the live-VM fan-out: install older build → write a
-  representative settings spread → `pkg upgrade` to branch build → assert byte-identical store +
-  unchanged runtime behaviour (the #281 case); **and** the reverse downgrade leg → assert older code
-  reads sane values. No manual sign-off (CLAUDE.md "ADR acceptance").
+  representative settings spread → `pkg upgrade` to branch build → assert behaviour preserved
+  (canonical tokens round-trip; legacy tokens read correctly) + unchanged runtime behaviour (the
+  #281 case); **and** the reverse downgrade leg → assert older code reads sane values and config
+  values are intact. No manual sign-off (CLAUDE.md "ADR acceptance").
 - **Smoke fan-out (CE + Plus) + UI tiers green**; the enforcement sniff active and green.
 - **Residual manual check (owner: maintainer, out-of-CI):** true *visual* GUI correctness — a
   spot-check that the settings pages render unchanged. Documented out-of-CI limitation, not a

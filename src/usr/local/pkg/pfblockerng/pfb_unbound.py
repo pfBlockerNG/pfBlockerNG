@@ -1664,15 +1664,15 @@ def init_standard(id: int, env: module_env) -> bool:
 # a three-valued mode so a later phase can add a surgical cross-script-homoglyph tier
 # without disturbing the two behaviour-preserving modes:
 #   IDN_MODE_OFF        -- the IDN feed never fires (every xn-- query resolves normally).
-#   IDN_MODE_ALL        -- TODAY'S behaviour: EVERY xn-- query is blocked as feed="IDN"
-#                          (pure prefix match, no punycode decode).
-#   IDN_MODE_CONFUSABLE  -- reserved for the Phase-5 TR39 mixed-script analyzer. INERT
-#                          this phase: behaves exactly like OFF until the analyzer is wired
-#                          (no decode, no script work, no block).
-# Migration (RESULTS/01 SS1): the PHP ini still writes only python_idn=on|off, so 'on'
-# maps to IDN_MODE_ALL and off/absent to IDN_MODE_OFF -- byte-identical to today.
+#   IDN_MODE_ALL        -- block EVERY xn-- query as feed="IDN" (pure prefix match, no
+#                          punycode decode). Token "on" (reused from the pre-ADR-08 binary
+#                          IDN toggle): the PHP gateway, py_unbound.ini, and this enum all
+#                          share the one vocabulary 'on'|'confusable'|'off' (ADR-28).
+#   IDN_MODE_CONFUSABLE  -- the TR39 mixed-script analyzer tier.
+# Legacy: a config predating the idn_mode key (only python_idn=on|off) still maps via
+# idn_mode_from_legacy() -- on->All, off/absent->Off.
 IDN_MODE_OFF = "off"
-IDN_MODE_ALL = "all"
+IDN_MODE_ALL = "on"
 IDN_MODE_CONFUSABLE = "confusable"
 
 
@@ -1688,9 +1688,14 @@ IDN_MODE_CONFUSABLE = "confusable"
 
 
 class IdnMode(Enum):
-    """IDN-feature mode selector (ADR-08 §2.2, backed by canonical stored string)."""
+    """IDN-feature mode selector (ADR-08 §2.2, backed by canonical stored string).
 
-    All = "all"
+    The backing values are the single shared vocabulary used by config.xml, py_unbound.ini,
+    and the PHP PfbIdnMode enum: All reuses the legacy 'on' token (block-all-IDN), so a
+    pre-4.0.0 install round-trips with no migration.
+    """
+
+    All = "on"
     Confusable = "confusable"
     Off = "off"
 

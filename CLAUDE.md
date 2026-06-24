@@ -258,41 +258,56 @@ Five conventions adopted as policy of record. Apply across the codebase in progr
 | 4 — string-ops over regex | `str_*`/`strpos`/`str_contains` over `preg_*` where equivalent; **hot loops first** | `str` methods over `re` in per-query/per-line paths | parameter-expansion / `case` over `grep -E`/`sed` where equivalent | `String.prototype` methods over `RegExp` |
 | 5 — uppercase `TRUE`/`FALSE` | **uppercase** literals | `True`/`False` (already correct) | N/A | `true`/`false` (JS is lowercase) |
 
-#### Config storage hard-freeze + field-aware adapter rule (ADR-28 §2.2)
+#### Config storage adapter rule — preserve behaviour on upgrade (ADR-28 §2.2)
 
-- **`config.xml` stored values never change** — every checkbox `'on'`/`''` and every option
-  string stays byte-identical across upgrade. No migration routine exists in this package.
-- Enums/booleans are an **internal runtime representation only**. Conversion at the
-  **read-boundary** (`pfb_global()` and sibling read sites): stored string → enum on read;
-  enum → the **exact same legacy stored string** on write.
-- A **backed enum's backing value equals the stored string** (`case On = 'on'`) so
-  `Enum::tryFrom($stored) ?? Enum::default()` is the read adapter and `$e->value` is the
-  write adapter. Where a field's "off" is `''` vs `'off'` the adapter is **field-aware** of
-  that exact legacy vocabulary — no single global toggle.
-- **Round-trip identity mandatory and pinned by tests**: `write(read(v)) == v` for every
-  existing stored value. A field that cannot round-trip losslessly is **excluded** (kept as
-  a string). The legacy `'on'` value for `pfb_idn` is the only known exception: it
-  normalises to `'all'` on read (one-way migration, intentional — `pfb_idn` is excluded from
-  enum adoption on the PHP side; see below).
-- **PHP adapters** (`pfb_cfg_toggle_read/write`, `pfb_cfg_lenient_read/write`,
-  `pfb_cfg_idn_mode_read/write`) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
-  - **Adopted** (round-trip clean): `dnsbl_lenient` → `PfbLenient`; `dnsbl_vip_auto` and
-    ~76 other `'on'`/`''` checkbox fields read via `pfb_global()` → `PfbToggle`. Every
-    adapted field's full stored vocabulary passes `write(read(v)) == v`.
-  - **Excluded** (`pfb_idn` / config key `dnsbl_idn`): the stored vocabulary has a legacy
-    `'on'` value that cannot round-trip (it normalises to `'all'` on read); this field is
-    read/written as a plain string and **not** converted through `pfb_cfg_idn_mode_read/write`
-    on the PHP side. The `pfb_cfg_idn_mode_*` adapters exist but are not wired to this
-    config key to avoid the one-way migration.
-- **Python** (`pfb_unbound.py`): adopts the **`IdnMode` enum** internally — `pfb["idn_mode"]`
-  is converted from the ini string at the read boundary (preserving the legacy `python_idn`
-  fallback for absent/unrecognised keys; ini string contract unchanged). Toggle/lenient enums
-  have **no Python consumer** — `pfb_unbound.py` reads all boolean toggles via
-  `config.getboolean()` — so `PfbToggle`/`PfbLenient` are PHP-only adapters.
+- **Storage is NOT frozen — we keep it consistent for back-compat where practical, not byte-for-byte.**
+  There is no versioned migration routine. New options add new stored strings; the read-boundary
+  adapters absorb legacy tokens and writes emit a canonical token (which **may** differ from the
+  legacy one when **behaviour-equivalent**). The goal is to preserve *behaviour* on upgrade, not
+  bytes.
+- **Forward-compat (upgrade) has two cases:** an **existing config with the key absent** reads to a
+  value that **preserves that user's prior behaviour**; a **brand-new config** gets the **new
+  default**. When those differ, a one-time grandfather seed sets the key for existing installs at
+  upgrade (e.g. `pfb_rdns_seed_value`, `pfb_feed_filter_install_default`) so the absent-default
+  (= the new-install default) never silently changes an existing user's behaviour.
+- **Downgrade-tolerant.** Older releases string-compared these values, so an unknown token falls
+  through to that release's safe default. Reusing a legacy token as the canonical value (see
+  `pfb_idn`) keeps downgrade behaviour intact; a genuinely new token (e.g. `'confusable'`) simply
+  reads as off on an old release — acceptable, the feature didn't exist there.
+- Enums/booleans are the **internal runtime representation**. Conversion at the boundary:
+  stored string → enum on read; enum → canonical stored string on write.
+- **The enum owns its stored-value semantics** via the `PfbStoredEnum` interface +
+  `PfbStoredEnumAdapter` trait: `EnumClass::fromStored($raw)` (read) and `$enum->toStored()`
+  (write) — so the gateway and the `pfb_cfg_*` helpers stay trivial. The per-field **absent
+  default** is the registry's `$entry['default']` (applied by `PfbConfig::read()` *before* the
+  adapter); the enum's `default()` is only the **parse-fallback** for unknown/non-scalar
+  tokens, never the absent-default. A field's `''` vs `'off'` off-value is handled by its own enum.
+- **Round-trip pinned by tests** (`CfgAdaptersTest`, `RollbackContractTest`): every canonical
+  token round-trips (`write(read(v)) == v`); a legacy token reads to the right runtime value
+  and writes to its behaviour-equivalent canonical token (itself a legacy-valid token, so no
+  novel on-disk value reaches an older release).
+- **PHP adapters / enums** (`PfbToggle`, `PfbLenient`, `PfbIdnMode` + the thin
+  `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
+  - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
+    `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
+  - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
+    `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
+    token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading
+    `'on'` still blocks all IDN. `PfbConfig::read('pfb_idn')` returns the enum;
+    `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
+    `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
+    (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
+    vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
+- **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
+  `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
+  legacy `python_idn` fallback is retained for a config predating the key). Toggle/lenient enums
+  have **no Python consumer** (`config.getboolean()` reads all bool toggles), so they are
+  PHP-only adapters.
 
 #### Explicitly out of scope (ADR-28 §2.4)
 
-- `config.xml` storage format — frozen, never migrated.
+- `config.xml` — no versioned schema or migration pass; legacy tokens are absorbed at the
+  read-boundary adapter and writes emit the canonical (behaviour-equivalent) token.
 - `py_unbound.ini` and any manifest / serialized / wire value read by Python or shell.
 - ADR-26 shell locale prefixes (`LC_ALL=C`) — untouched by shell phase.
 - Genuine boolean predicates (yes/no functions) — return `bool`, not an enum.
@@ -344,10 +359,12 @@ registered field, asserted per-field by `tests/php/RollbackContractTest.php`:
 - **FORWARD invariant** (old store → new code): `PfbConfig::read($key)` on any legacy stored
   token returns a well-formed runtime value — no crash, correct type, sane default for absent.
 - **BACKWARD invariant** (new code → old store → old code): `PfbConfig::write($key, $v)` only
-  ever emits a string that is a member of the field's **legacy stored vocabulary** — it never
-  introduces a novel on-disk token that an older release wouldn't understand. This is guaranteed
-  by construction: backed enums use their backing value (the exact legacy stored string), and
-  plain-string fields use identity adapters.
+  ever emits a token from the field's **known vocabulary** — never a novel on-disk token an
+  older release wouldn't understand. A write **may normalise** a legacy token to a
+  behaviour-equivalent canonical one (e.g. `pfb_idn`: `All` persists as the legacy-understood
+  `'on'`, and the dropped `'all'` normalises to `'off'`); the emitted token is always one an
+  older release string-compares correctly. Guaranteed by construction: backed enums emit
+  `toStored()` (a member of the vocabulary), and plain-string fields use identity adapters.
 
 **Scope limit (no versioned schema).** This is *not* full backward compatibility — that needs a
 versioned config schema this package deliberately lacks (ADR-28 §1.3). The invariants cover the
@@ -360,18 +377,16 @@ migration.
 
 **Field vocabularies** (`pfb_cfg_field_vocab()`):
 
-| Adapter type | Legacy stored vocabulary |
-| ------------ | ------------------------ |
+| Adapter type | Stored vocabulary |
+| ------------ | ----------------- |
 | `toggle`     | `{'on', ''}` |
 | `lenient`    | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
+| `idn`        | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
 | `plain`      | identity — any stored value passes through unchanged |
 
-**Excluded fields** — backward-safe at the `PfbConfig` level (no novel token risk); documented
-exclusions from adapter adoption per ADR-28 §2.2:
-
-- **`pfb_idn`** — uses `NULL`/`NULL` adapters (identity). The `'on'→'all'` normalisation
-  happens only at the `pfb_global()` seam outside `PfbConfig`. All stored tokens (`'on'`,
-  `'all'`, `'confusable'`, `'off'`, `''`) round-trip unchanged through the gateway.
+**Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
+it is now adopted as `PfbIdnMode` (see ADR-28 §2.2 above). `All` reuses the legacy `'on'` token,
+so the adoption is migration-free and downgrade-safe.
 
 **Since-version convention:**
 
@@ -385,8 +400,9 @@ registry, the earliest still-shipped release is the baseline (`'1.0.0'` for orig
 
 `tests/smoke/test_upgrade_config_stability.py::test_pkg_downgrade_preserves_config_values`
 carries the `repo` marker (deselected from `-m smoke`). Install HIGHER build → write config →
-downgrade to LOWER build via `pkg delete` + reinstall → assert byte-identical store AND DNSBL
-probe still returns VIP. Skips cleanly when `SMOKE_PKG`/`repo_vm` is absent.
+downgrade to LOWER build via `pkg delete` + reinstall → assert the stored config values are
+preserved (sane reads, behaviour intact) AND the DNSBL probe still returns VIP. Skips cleanly
+when `SMOKE_PKG`/`repo_vm` is absent.
 
 **Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`):**
 
