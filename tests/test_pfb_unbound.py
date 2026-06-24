@@ -321,7 +321,7 @@ class TestLogEntry:
         assert log.read_text() == "line1\nline2\n"
 
     def test_file_created_when_missing(self, tmp_path: Any) -> None:
-        log = tmp_path / "sub" / "unified.log"
+        log = tmp_path / "sub" / "dnsbl.log"
         log.parent.mkdir()
         assert not log.exists()
         pfb_unbound._log_entry_direct("x", str(log))
@@ -537,28 +537,24 @@ class TestLogging:
     """Persistent-handle logging pipeline (ADR-03 P2): QueueHandler -> QueueListener
     -> WatchedFileHandler. Lines must be byte-identical to the old open/append."""
 
-    def _setup(self, tmp_path: Any, monkeypatch: Any) -> tuple[str, str, str]:
+    def _setup(self, tmp_path: Any, monkeypatch: Any) -> tuple[str, str]:
         paths = (
             str(tmp_path / "dnsbl.log"),
             str(tmp_path / "dns_reply.log"),
-            str(tmp_path / "unified.log"),
         )
         monkeypatch.setattr(pfb_unbound, "PFB_LOG_FILES", paths)
         pfb_unbound.pfb_setup_logging()
         return paths
 
     def test_pipeline_writes_exact_lines_to_correct_files(self, tmp_path: Any, monkeypatch: Any) -> None:
-        dnsbl, dns_reply, unified = self._setup(tmp_path, monkeypatch)
+        dnsbl, dns_reply = self._setup(tmp_path, monkeypatch)
         pfb_unbound.pfb_log(dnsbl, "a.com,blocked")
         pfb_unbound.pfb_log(dnsbl, "b.com,100%match")  # literal % must not be formatted
-        pfb_unbound.pfb_log(unified, "u-1")
         pfb_unbound.pfb_log(dns_reply, "r-1")
         pfb_unbound.pfb_log_listener.stop()  # flush + join
         pfb_unbound.pfb["log_listener"] = False
         with open(dnsbl) as f:
             assert f.read() == "a.com,blocked\nb.com,100%match\n"
-        with open(unified) as f:
-            assert f.read() == "u-1\n"
         with open(dns_reply) as f:
             assert f.read() == "r-1\n"
 
@@ -710,7 +706,6 @@ class TestGetDetailsDnsblQtype:
 
     @staticmethod
     def _dnsbl_fields(lines: list[tuple[str, str]]) -> list[list[str]]:
-        # get_details_dnsbl writes the same csv_line to dnsbl.log and unified.log.
         return [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
 
     def test_qtype_is_trailing_log_field(self, monkeypatch: Any) -> None:
@@ -830,7 +825,7 @@ class TestGetDetailsDnsblNxdomain:
         return lines
 
     def test_nxdomain_logging_writes_a_line(self, monkeypatch: Any) -> None:
-        # Then the "3" variant records the block to dnsbl.log + unified.log
+        # Then the "3" variant records the block to dnsbl.log
         lines = self._emit(monkeypatch, "3")
         assert any(path.endswith("dnsbl.log") for path, _ in lines)
 

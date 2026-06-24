@@ -353,7 +353,7 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// ADR-38 Phase 2 — log_syslog / log_syslog_facility / log_syslog_priority
+	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
 	// -----------------------------------------------------------------------
 
 	/**
@@ -431,157 +431,6 @@ final class CfgGatewayTest extends TestCase
 		// When/Then: default '' → PfbToggle::Off.
 		$result = PfbConfig::read('log_syslog');
 		$this->assertSame(PfbToggle::Off, $result, 'log_syslog absent -> Off (default)');
-	}
-
-	/**
-	 * log_syslog_facility plain field round-trips losslessly (identity adapter).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_facility uses null/null (plain-string identity) adapters.
-	 *     Given stored = 'log_local6' (the registered default) and 'log_local0' (alternate).
-	 *     When PfbConfig::write($key, PfbConfig::read($key)).
-	 *     Then stored == original (write(read(v)) == v for every vocabulary value).
-	 */
-	public function testLogSyslogFacilityRoundTripDefaultValue(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_facility';
-
-		// Given: default 'log_local6'.
-		$this->seedConfig($path, 'log_local6');
-
-		// Before.
-		$this->assertSame('log_local6', config_get_path($path));
-
-		// When/After.
-		$value = PfbConfig::read('log_syslog_facility');
-		$this->assertSame('log_local6', $value, "read: log_syslog_facility 'log_local6' -> 'log_local6'");
-
-		PfbConfig::write('log_syslog_facility', $value);
-		$this->assertSame('log_local6', config_get_path($path),
-			"write(read('log_local6'))=='log_local6' for log_syslog_facility"
-		);
-	}
-
-	public function testLogSyslogFacilityRoundTripAlternateValues(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_facility';
-
-		// Verify a selection of alternate vocabulary values round-trip losslessly.
-		$tokens = ['log_local0', 'log_local1', 'log_local2', 'log_local3',
-		           'log_local4', 'log_local5', 'log_local7',
-		           'log_daemon', 'log_user', 'log_auth', 'log_kern',
-		           'log_lpr', 'log_mail', 'log_news', 'log_syslog',
-		           'log_uucp', 'log_cron'];
-
-		foreach ($tokens as $token) {
-			$GLOBALS['config'] = [];
-			$this->seedConfig($path, $token);
-
-			$this->assertSame($token, config_get_path($path), "before: log_syslog_facility seed='{$token}'");
-
-			$value = PfbConfig::read('log_syslog_facility');
-			$this->assertSame($token, $value, "read: log_syslog_facility '{$token}' -> '{$token}'");
-
-			PfbConfig::write('log_syslog_facility', $value);
-			$this->assertSame($token, config_get_path($path),
-				"write(read('{$token}'))=='{$token}' for log_syslog_facility"
-			);
-		}
-	}
-
-	/**
-	 * log_syslog_facility absent key returns 'log_local6' (registered default).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_facility registered default is 'log_local6'.
-	 *     Given no stored value.
-	 *     When PfbConfig::read('log_syslog_facility').
-	 *     Then 'log_local6' is returned (registered default; no crash).
-	 */
-	public function testLogSyslogFacilityAbsentKeyReturnsLogLocal6Default(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_facility';
-
-		// Before: absent.
-		$this->assertNull(config_get_path($path), 'before: log_syslog_facility must be absent');
-
-		// When/Then.
-		$result = PfbConfig::read('log_syslog_facility');
-		$this->assertSame('log_local6', $result, "log_syslog_facility absent -> 'log_local6' (registered default)");
-	}
-
-	/**
-	 * log_syslog_priority plain field round-trips losslessly (identity adapter).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_priority uses null/null (plain-string identity) adapters.
-	 *     Given stored = 'log_notice' (the registered default) and other vocabulary tokens.
-	 *     When PfbConfig::write($key, PfbConfig::read($key)).
-	 *     Then stored == original (write(read(v)) == v for every vocabulary value).
-	 */
-	public function testLogSyslogPriorityRoundTripDefaultValue(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_priority';
-
-		// Given: default 'log_notice'.
-		$this->seedConfig($path, 'log_notice');
-
-		// Before.
-		$this->assertSame('log_notice', config_get_path($path));
-
-		// When/After.
-		$value = PfbConfig::read('log_syslog_priority');
-		$this->assertSame('log_notice', $value, "read: log_syslog_priority 'log_notice' -> 'log_notice'");
-
-		PfbConfig::write('log_syslog_priority', $value);
-		$this->assertSame('log_notice', config_get_path($path),
-			"write(read('log_notice'))=='log_notice' for log_syslog_priority"
-		);
-	}
-
-	public function testLogSyslogPriorityRoundTripAllVocabularyValues(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_priority';
-
-		// Verify every vocabulary value round-trips losslessly.
-		$tokens = ['log_emerg', 'log_alert', 'log_crit', 'log_err',
-		           'log_warning', 'log_notice', 'log_info', 'log_debug'];
-
-		foreach ($tokens as $token) {
-			$GLOBALS['config'] = [];
-			$this->seedConfig($path, $token);
-
-			$this->assertSame($token, config_get_path($path), "before: log_syslog_priority seed='{$token}'");
-
-			$value = PfbConfig::read('log_syslog_priority');
-			$this->assertSame($token, $value, "read: log_syslog_priority '{$token}' -> '{$token}'");
-
-			PfbConfig::write('log_syslog_priority', $value);
-			$this->assertSame($token, config_get_path($path),
-				"write(read('{$token}'))=='{$token}' for log_syslog_priority"
-			);
-		}
-	}
-
-	/**
-	 * log_syslog_priority absent key returns 'log_notice' (registered default).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_priority registered default is 'log_notice'.
-	 *     Given no stored value.
-	 *     When PfbConfig::read('log_syslog_priority').
-	 *     Then 'log_notice' is returned (registered default; no crash).
-	 */
-	public function testLogSyslogPriorityAbsentKeyReturnsLogNoticeDefault(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_priority';
-
-		// Before: absent.
-		$this->assertNull(config_get_path($path), 'before: log_syslog_priority must be absent');
-
-		// When/Then.
-		$result = PfbConfig::read('log_syslog_priority');
-		$this->assertSame('log_notice', $result, "log_syslog_priority absent -> 'log_notice' (registered default)");
 	}
 
 	// -----------------------------------------------------------------------
@@ -743,10 +592,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_feed_internal_filter',
 			'pfb_feed_internal_allowlist',
 			'pfb_reuse',
-			// ADR-38: syslog export settings
+			// ADR-38: syslog export toggle
 			'log_syslog',
-			'log_syslog_facility',
-			'log_syslog_priority',
 
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',

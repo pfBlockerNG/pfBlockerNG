@@ -5,46 +5,37 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-38 Phase 3 — pfb_syslog_event() tests.
+ * ADR-38 Amendment 1 — pfb_syslog_event() tests.
  *
- * pfb_syslog_event() is the PHP IP-leg syslog emitter.  It reads the toggle,
- * facility, and severity from PfbConfig once per process (static cache, resettable
- * via $GLOBALS['pfb_test_syslog_reset']).  The test-spy path records calls in
- * $GLOBALS['pfb_test_syslog_calls'] when $GLOBALS['pfb_test_syslog_spy'] is set.
+ * pfb_syslog_event() is the PHP IP-leg syslog emitter.  It reads the log_syslog
+ * toggle fresh on every call (no static cache).  When the toggle is on it records
+ * calls via $GLOBALS['pfb_test_syslog_spy'] using a hardcoded facility (LOG_LOCAL6)
+ * and severity (LOG_INFO).  log_syslog_facility and log_syslog_priority no longer
+ * exist as registered config keys; the function no longer reads them.
  *
- * Contract under test (ADR-38 §2.2):
- *   - Toggle OFF  ⇒ zero syslog calls (no emission, no side effect).
- *   - Toggle ON   ⇒ exactly one call per pfb_syslog_event() invocation, with the
- *                   exact body passed, the configured facility, and the configured
- *                   severity.
+ * Contract under test (ADR-38 Amendment 1):
+ *   - Toggle OFF  => zero syslog calls (no emission, no side effect).
+ *   - Toggle ON   => exactly one call per pfb_syslog_event() invocation, with the
+ *                    exact body passed, ident 'pfblockerng', facility LOG_LOCAL6,
+ *                    and severity LOG_INFO (both hardcoded — not configurable).
  */
 final class SyslogEventTest extends TestCase
 {
-	/** Seed config + reset the static cache between every test. */
+	/** Install the spy; no cache-reset needed (function reads fresh each call). */
 	protected function setUp(): void
 	{
-		// Install the spy so real syslog() is never called in tests.
 		$GLOBALS['pfb_test_syslog_spy']   = TRUE;
 		$GLOBALS['pfb_test_syslog_calls'] = [];
-		// Force the static cache to re-read from config on the next call.
-		$GLOBALS['pfb_test_syslog_reset'] = TRUE;
 	}
 
 	protected function tearDown(): void
 	{
 		unset(
 			$GLOBALS['pfb_test_syslog_spy'],
-			$GLOBALS['pfb_test_syslog_calls'],
-			$GLOBALS['pfb_test_syslog_reset']
+			$GLOBALS['pfb_test_syslog_calls']
 		);
-		// Wipe config seeded by individual tests.
+		// Wipe any log_syslog config seeded by individual tests.
 		config_del_path('installedpackages/pfblockerng/config/0/log_syslog');
-		config_del_path('installedpackages/pfblockerng/config/0/log_syslog_facility');
-		config_del_path('installedpackages/pfblockerng/config/0/log_syslog_priority');
-		// Reset the static cache one more time so next test starts clean.
-		$GLOBALS['pfb_test_syslog_reset'] = TRUE;
-		pfb_syslog_event('__teardown_reset__');
-		unset($GLOBALS['pfb_test_syslog_reset'], $GLOBALS['pfb_test_syslog_calls'], $GLOBALS['pfb_test_syslog_spy']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -62,11 +53,13 @@ final class SyslogEventTest extends TestCase
 	 */
 	public function testToggleOffProducesNoSyslogCall(): void
 	{
-		// Before: seed toggle explicitly as off; spy installed by setUp().
+		// Given: toggle explicitly off.
 		config_set_path('installedpackages/pfblockerng/config/0/log_syslog', '');
-		// Force re-read of config (cache was reset in setUp).
 
-		// When: call the emitter with a realistic body.
+		// Before: spy installed, no calls yet.
+		$this->assertSame([], $GLOBALS['pfb_test_syslog_calls'], 'before: no calls before event');
+
+		// When.
 		pfb_syslog_event('act=block dir=in if=em0 proto=TCP src=1.2.3.4 dst=5.6.7.8 ipver=4');
 
 		// Then: no syslog call.
@@ -94,30 +87,29 @@ final class SyslogEventTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Toggle ON — exactly one call, correct body + facility + severity
+	// Toggle ON — exactly one call, hardcoded facility LOG_LOCAL6 + severity LOG_INFO
 	// -----------------------------------------------------------------------
 
 	/**
 	 * pfb_syslog_event emits exactly one syslog call with the supplied body when on.
 	 *
 	 * Scenario:
-	 *   Background: toggle on, default facility (log_local6) and severity (log_notice).
+	 *   Background: toggle on; facility hardcoded to LOG_LOCAL6, severity to LOG_INFO.
 	 *     Given log_syslog is 'on' (PfbToggle::On).
 	 *     When  pfb_syslog_event('act=block dir=in ...') is called once.
 	 *     Then  exactly one syslog call is recorded.
 	 *     And   the recorded body equals the argument passed to pfb_syslog_event().
 	 *     And   the ident is 'pfblockerng'.
-	 *     And   the facility is LOG_LOCAL6 (the default).
-	 *     And   the severity is LOG_NOTICE (the default).
+	 *     And   the facility is LOG_LOCAL6 (hardcoded).
+	 *     And   the severity is LOG_INFO (hardcoded).
 	 */
 	public function testToggleOnEmitsExactlyOneCallWithCorrectBody(): void
 	{
 		// Before: confirm no calls before enabling.
 		$this->assertSame([], $GLOBALS['pfb_test_syslog_calls'], 'before: no calls before toggle on');
 
-		// Given: enable syslog with default facility/severity.
+		// Given: enable syslog toggle.
 		config_set_path('installedpackages/pfblockerng/config/0/log_syslog', 'on');
-		// log_syslog_facility and log_syslog_priority absent → defaults.
 
 		$body = 'act=block dir=in if=em0 proto=TCP src=203.0.113.1 dst=192.168.1.1 sport=54321 dport=80 ipver=4 geoip=US alias=pfB_DENY feed=EasyList';
 
@@ -134,53 +126,11 @@ final class SyslogEventTest extends TestCase
 		// And: correct ident.
 		$this->assertSame('pfblockerng', $calls[0]['ident'], 'toggle on: ident is pfblockerng');
 
-		// And: default facility (log_syslog_facility absent → LOG_LOCAL6).
-		$this->assertSame(LOG_LOCAL6, $calls[0]['facility'], 'toggle on: default facility is LOG_LOCAL6');
+		// And: hardcoded facility LOG_LOCAL6 (not configurable — Amendment 1).
+		$this->assertSame(LOG_LOCAL6, $calls[0]['facility'], 'toggle on: facility is hardcoded LOG_LOCAL6');
 
-		// And: default severity (log_syslog_priority absent → LOG_NOTICE).
-		$this->assertSame(LOG_NOTICE, $calls[0]['severity'], 'toggle on: default severity is LOG_NOTICE');
-	}
-
-	/**
-	 * pfb_syslog_event respects a non-default facility token.
-	 *
-	 * Scenario:
-	 *   Background: toggle on, facility overridden to log_local2.
-	 *     Given log_syslog_facility is 'log_local2'.
-	 *     When  pfb_syslog_event() is called.
-	 *     Then  the recorded facility is LOG_LOCAL2.
-	 */
-	public function testConfiguredFacilityIsUsed(): void
-	{
-		config_set_path('installedpackages/pfblockerng/config/0/log_syslog', 'on');
-		config_set_path('installedpackages/pfblockerng/config/0/log_syslog_facility', 'log_local2');
-
-		pfb_syslog_event('act=pass dir=out if=em0 proto=UDP src=192.168.1.10 dst=8.8.8.8 ipver=4');
-
-		$calls = $GLOBALS['pfb_test_syslog_calls'];
-		$this->assertCount(1, $calls, 'non-default facility: exactly one call');
-		$this->assertSame(LOG_LOCAL2, $calls[0]['facility'], 'non-default facility: LOG_LOCAL2 used');
-	}
-
-	/**
-	 * pfb_syslog_event respects a non-default severity token.
-	 *
-	 * Scenario:
-	 *   Background: toggle on, severity overridden to log_warning.
-	 *     Given log_syslog_priority is 'log_warning'.
-	 *     When  pfb_syslog_event() is called.
-	 *     Then  the recorded severity is LOG_WARNING.
-	 */
-	public function testConfiguredSeverityIsUsed(): void
-	{
-		config_set_path('installedpackages/pfblockerng/config/0/log_syslog', 'on');
-		config_set_path('installedpackages/pfblockerng/config/0/log_syslog_priority', 'log_warning');
-
-		pfb_syslog_event('act=block dir=in if=em0 proto=TCP src=198.51.100.5 dst=10.0.0.1 ipver=4');
-
-		$calls = $GLOBALS['pfb_test_syslog_calls'];
-		$this->assertCount(1, $calls, 'non-default severity: exactly one call');
-		$this->assertSame(LOG_WARNING, $calls[0]['severity'], 'non-default severity: LOG_WARNING used');
+		// And: hardcoded severity LOG_INFO (not configurable — Amendment 1).
+		$this->assertSame(LOG_INFO, $calls[0]['severity'], 'toggle on: severity is hardcoded LOG_INFO');
 	}
 
 	/**
@@ -199,11 +149,14 @@ final class SyslogEventTest extends TestCase
 		$body1 = 'act=block dir=in if=em0 proto=TCP src=203.0.113.1 dst=10.0.0.1 ipver=4';
 		$body2 = 'act=pass dir=out if=wan proto=UDP src=10.0.0.1 dst=8.8.8.8 sport=12345 dport=53 ipver=4';
 
+		// Before: no calls yet.
+		$this->assertSame([], $GLOBALS['pfb_test_syslog_calls'], 'before: no calls yet');
+
 		pfb_syslog_event($body1);
 		pfb_syslog_event($body2);
 
 		$calls = $GLOBALS['pfb_test_syslog_calls'];
-		$this->assertCount(2, $calls, 'two events → two syslog calls');
+		$this->assertCount(2, $calls, 'two events => two syslog calls');
 		$this->assertSame($body1, $calls[0]['body'], 'first call: correct body');
 		$this->assertSame($body2, $calls[1]['body'], 'second call: correct body');
 	}
@@ -215,12 +168,15 @@ final class SyslogEventTest extends TestCase
 	/**
 	 * Flipping the toggle from off to on changes emission — before/after asserted.
 	 *
+	 * Since pfb_syslog_event() reads the toggle fresh on every call (no static cache),
+	 * switching the stored value between calls is sufficient to change behaviour.
+	 *
 	 * Scenario:
-	 *   Background: static cache re-read after reset.
+	 *   Background: function reads log_syslog fresh each call.
 	 *     Given log_syslog starts as '' (off).
-	 *     When  pfb_syslog_event() is called → no emission (before).
-	 *     Then  toggle is set to 'on' and cache is reset.
-	 *     When  pfb_syslog_event() is called again → one emission (after).
+	 *     When  pfb_syslog_event() is called => no emission (before).
+	 *     Then  toggle is set to 'on'.
+	 *     When  pfb_syslog_event() is called again => one emission (after).
 	 *     Then  the change in emission was CAUSED by the toggle flip.
 	 */
 	public function testToggleFlipOffToOnChangesEmission(): void
@@ -233,11 +189,10 @@ final class SyslogEventTest extends TestCase
 		$calls_before = $GLOBALS['pfb_test_syslog_calls'];
 		$this->assertSame([], $calls_before, 'before flip: no emission when toggle is off');
 
-		// Reset for next state.
+		// Reset accumulated calls for the next assertion.
 		$GLOBALS['pfb_test_syslog_calls'] = [];
-		$GLOBALS['pfb_test_syslog_reset'] = TRUE;
 
-		// --- AFTER: toggle on ---
+		// --- AFTER: toggle on (fresh read, no reset flag needed) ---
 		config_set_path('installedpackages/pfblockerng/config/0/log_syslog', 'on');
 
 		$body = 'act=block dir=in if=em0 proto=TCP src=1.2.3.4 dst=5.6.7.8 ipver=4';
@@ -246,5 +201,7 @@ final class SyslogEventTest extends TestCase
 		$calls_after = $GLOBALS['pfb_test_syslog_calls'];
 		$this->assertCount(1, $calls_after, 'after flip: exactly one emission when toggle is on');
 		$this->assertSame($body, $calls_after[0]['body'], 'after flip: body matches');
+		$this->assertSame(LOG_LOCAL6, $calls_after[0]['facility'], 'after flip: facility is LOG_LOCAL6');
+		$this->assertSame(LOG_INFO, $calls_after[0]['severity'], 'after flip: severity is LOG_INFO');
 	}
 }

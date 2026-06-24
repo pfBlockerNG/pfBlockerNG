@@ -933,34 +933,16 @@ function pfb_cfg_registry(): array
 
 		// Master toggle — emit security events to syslog: 'on' | '' (checkbox).
 		// Default '' (off) — zero impact on existing installs.
+		// ADR-38 Amendment 1: only the master toggle is configurable. The export
+		// facility (LOG_LOCAL6) and severity (LOG_INFO) are fixed in
+		// pfb_syslog_event() — events route to the dedicated pfblockerng_syslog.log
+		// by program name, so facility never affects routing, and every event is
+		// the same class of informational record, so a severity picker is moot.
 		'log_syslog' => [
 			'section'       => $gen,
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
-		],
-
-		// syslog facility (Snort-style token string). Default 'log_local6'.
-		// Vocabulary: 'log_local0'..'log_local7', 'log_daemon', 'log_user',
-		// 'log_auth', 'log_kern', 'log_lpr', 'log_mail', 'log_news',
-		// 'log_syslog', 'log_uucp', 'log_cron'. Plain-string identity adapter.
-		'log_syslog_facility' => [
-			'section'       => $gen,
-			'default'       => 'log_local6',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'since'         => '4.0.0',
-		],
-
-		// syslog severity / priority (Snort-style token string). Default 'log_notice'.
-		// Vocabulary: 'log_emerg', 'log_alert', 'log_crit', 'log_err',
-		// 'log_warning', 'log_notice', 'log_info', 'log_debug'. Plain-string identity adapter.
-		'log_syslog_priority' => [
-			'section'       => $gen,
-			'default'       => 'log_notice',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
 			'since'         => '4.0.0',
 		],
 
@@ -1527,92 +1509,6 @@ function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): 
 }
 
 // ---------------------------------------------------------------------------
-// ADR-38 Phase 2 — syslog facility / severity token → PHP constant maps.
-//
-// pfb_syslog_facility_constant(string $token): int
-//   Maps a stored Snort-style facility token (e.g. 'log_local6') to the
-//   corresponding PHP LOG_* integer constant.  Unknown tokens → LOG_LOCAL6
-//   (the safe default).  The full vocabulary is the Snort-style set:
-//     'log_kern'   → LOG_KERN    'log_user'   → LOG_USER
-//     'log_mail'   → LOG_MAIL    'log_daemon' → LOG_DAEMON
-//     'log_auth'   → LOG_AUTH    'log_syslog' → LOG_SYSLOG
-//     'log_lpr'    → LOG_LPR     'log_news'   → LOG_NEWS
-//     'log_uucp'   → LOG_UUCP   'log_cron'   → LOG_CRON
-//     'log_local0' → LOG_LOCAL0  'log_local1' → LOG_LOCAL1
-//     'log_local2' → LOG_LOCAL2  'log_local3' → LOG_LOCAL3
-//     'log_local4' → LOG_LOCAL4  'log_local5' → LOG_LOCAL5
-//     'log_local6' → LOG_LOCAL6  'log_local7' → LOG_LOCAL7
-//   Default (unknown) → LOG_LOCAL6.
-//
-// pfb_syslog_priority_constant(string $token): int
-//   Maps a stored Snort-style severity token (e.g. 'log_notice') to the
-//   corresponding PHP LOG_* integer constant.  Unknown tokens → LOG_NOTICE
-//   (the safe default).  The full vocabulary:
-//     'log_emerg'   → LOG_EMERG   'log_alert'  → LOG_ALERT
-//     'log_crit'    → LOG_CRIT    'log_err'    → LOG_ERR
-//     'log_warning' → LOG_WARNING 'log_notice' → LOG_NOTICE
-//     'log_info'    → LOG_INFO    'log_debug'  → LOG_DEBUG
-//   Default (unknown) → LOG_NOTICE.
-//
-// Both functions are PURE (no globals, no I/O, no side effects) and DORMANT
-// (uncalled from production code this phase).
-// ---------------------------------------------------------------------------
-
-/**
- * pfb_syslog_facility_constant — map a stored Snort-style facility token to a PHP constant.
- *
- * @param  string $token  Stored token (e.g. 'log_local6').
- * @return int            PHP LOG_* constant; LOG_LOCAL6 for unknown tokens.
- */
-function pfb_syslog_facility_constant(string $token): int
-{
-	static $map = [
-		'log_kern'   => LOG_KERN,
-		'log_user'   => LOG_USER,
-		'log_mail'   => LOG_MAIL,
-		'log_daemon' => LOG_DAEMON,
-		'log_auth'   => LOG_AUTH,
-		'log_syslog' => LOG_SYSLOG,
-		'log_lpr'    => LOG_LPR,
-		'log_news'   => LOG_NEWS,
-		'log_uucp'   => LOG_UUCP,
-		'log_cron'   => LOG_CRON,
-		'log_local0' => LOG_LOCAL0,
-		'log_local1' => LOG_LOCAL1,
-		'log_local2' => LOG_LOCAL2,
-		'log_local3' => LOG_LOCAL3,
-		'log_local4' => LOG_LOCAL4,
-		'log_local5' => LOG_LOCAL5,
-		'log_local6' => LOG_LOCAL6,
-		'log_local7' => LOG_LOCAL7,
-	];
-
-	return $map[$token] ?? LOG_LOCAL6;
-}
-
-/**
- * pfb_syslog_priority_constant — map a stored Snort-style severity token to a PHP constant.
- *
- * @param  string $token  Stored token (e.g. 'log_notice').
- * @return int            PHP LOG_* constant; LOG_NOTICE for unknown tokens.
- */
-function pfb_syslog_priority_constant(string $token): int
-{
-	static $map = [
-		'log_emerg'   => LOG_EMERG,
-		'log_alert'   => LOG_ALERT,
-		'log_crit'    => LOG_CRIT,
-		'log_err'     => LOG_ERR,
-		'log_warning' => LOG_WARNING,
-		'log_notice'  => LOG_NOTICE,
-		'log_info'    => LOG_INFO,
-		'log_debug'   => LOG_DEBUG,
-	];
-
-	return $map[$token] ?? LOG_NOTICE;
-}
-
-// ---------------------------------------------------------------------------
 // ADR-38 Phase 1 — Pure key=value syslog event formatters.
 //
 // pfb_syslog_format_ip(array $fields): string
@@ -1720,67 +1616,217 @@ function pfb_syslog_format_ip(array $fields): string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-38 Phase 3 — PHP syslog event emitter.
+// ADR-38 Amendment 1 — DNSBL syslog + unified.log formatters.
 //
-// pfb_syslog_event(string $body): void
-//   Emits ONE syslog record tagged 'pfblockerng' at the configured facility and
-//   severity.  The toggle, facility, and severity are read from PfbConfig once
-//   per PHP process (static cache) to avoid repeated config lookups on the hot
-//   filterlog path.
+// pfb_syslog_format_dnsbl(array $fields): string
+//   PHP port of the (retired) Python syslog_format_dnsbl().  Formats a DNSBL
+//   block event as a space-separated key=value string for syslog emission.
+//   Fixed key order: act qname qip qtype [group] [feed] btype eval.
+//   group and feed are OPTIONAL — omitted entirely when the value is ''.
+//   Escaping rule is identical to pfb_syslog_format_ip (see above).
 //
-//   Behaviour:
-//     - No-op when log_syslog is off (PfbToggle::Off / '').
-//     - openlog() sets the ident and the facility; syslog() emits at the
-//       configured severity; closelog() releases the connection.  This mirrors
-//       the pattern the existing logger() fallback uses.
-//     - Called AT MOST ONCE per filterlog CSV line (the caller gates on the
-//       toggle BEFORE building the field array, so the toggle is not re-checked
-//       here — defence in depth).
+// pfb_unified_format_ip(array $fields): string
+//   Renders a unified.log IP row as a comma-joined string from 4 named fields:
+//   l_type, log, details, dup.  No escaping — raw passthrough join.
+//
+// pfb_unified_format_dnsbl(array $fields): string
+//   Renders a dnsbl.log CSV line as a comma-joined string from 11 named fields
+//   in the FIXED column order that dnsbl.log defines.  No escaping.
+//
+// pfb_unified_format_dnsreply(array $fields): string
+//   Renders a DNS-reply row for unified.log as a comma-joined string from 10
+//   named fields in fixed column order.  No escaping.
+//
+// All four are PURE — no globals, no I/O, no config reads.
 // ---------------------------------------------------------------------------
 
 /**
- * pfb_syslog_event — emit a single syslog record for one IP security event.
+ * pfb_syslog_format_dnsbl — format a DNSBL block event as a key=value string.
  *
- * Reads log_syslog / log_syslog_facility / log_syslog_priority from PfbConfig
- * once per process (static cache).  No-op when the toggle is off.
+ * PHP port of the retired Python syslog_format_dnsbl().  The escaping rule is
+ * identical to pfb_syslog_format_ip: values containing a space, '=', or '"'
+ * are double-quoted; internal '"' chars are backslash-escaped; newlines are
+ * replaced with a space.
  *
- * TEST SEAM: when $GLOBALS['pfb_test_syslog_spy'] is set (to any callable or
- * non-null value), calls to syslog() are redirected to the spy instead of the
- * real built-in.  The spy receives ($severity, $body, $facility).  The static
- * cache can be reset between tests by setting $GLOBALS['pfb_test_syslog_reset']
- * to TRUE before calling (cleared on re-init).
+ * Fixed key order: act qname qip qtype [group] [feed] btype eval.
+ * group/feed are omitted entirely when their value is ''.
+ *
+ * @param array<string,string> $fields  Keys: q_name, q_ip, q_type, group,
+ *                                      feed, b_type, b_eval.  Missing => ''.
+ * @return string  Space-separated "k=v ..." body; never multi-line.
+ */
+function pfb_syslog_format_dnsbl(array $fields): string
+{
+	/**
+	 * Escape a single value: strip newlines, then quote if needed.
+	 *
+	 * @param string $v  Raw value.
+	 * @return string    Escaped/quoted value.
+	 */
+	$escape = static function (string $v): string {
+		// Strip embedded newlines to keep the message single-line.
+		$v = str_replace(["\r\n", "\r", "\n"], ' ', $v);
+		// Quote if the value contains space, '=', or '"'.
+		if (strpos($v, ' ') !== FALSE || strpos($v, '=') !== FALSE || strpos($v, '"') !== FALSE) {
+			$v = '"' . str_replace('"', '\\"', $v) . '"';
+		}
+		return $v;
+	};
+
+	$get = static function (string $key) use ($fields): string {
+		return $fields[$key] ?? '';
+	};
+
+	$parts   = [];
+	$parts[] = 'act=dnsbl';
+	$parts[] = 'qname='  . $escape($get('q_name'));
+	$parts[] = 'qip='    . $escape($get('q_ip'));
+	$parts[] = 'qtype='  . $escape($get('q_type'));
+
+	// Optional fields — omit the token entirely when the value is ''.
+	$group = $get('group');
+	if ($group !== '') {
+		$parts[] = 'group=' . $escape($group);
+	}
+	$feed = $get('feed');
+	if ($feed !== '') {
+		$parts[] = 'feed=' . $escape($feed);
+	}
+
+	$parts[] = 'btype=' . $escape($get('b_type'));
+	$parts[] = 'eval='  . $escape($get('b_eval'));
+
+	return implode(' ', $parts);
+}
+
+/**
+ * pfb_unified_format_ip — render an IP unified.log row as a comma-joined string.
+ *
+ * Owns the column schema for IP rows in unified.log.  Raw passthrough — no
+ * escaping applied; the caller appends "\n".
+ *
+ * @param array<string,string> $fields  Keys (in column order): l_type, log,
+ *                                      details, dup.  Missing => ''.
+ * @return string  Comma-joined, no trailing newline.
+ */
+function pfb_unified_format_ip(array $fields): string
+{
+	return implode(',', [
+		$fields['l_type']   ?? '',
+		$fields['log']      ?? '',
+		$fields['details']  ?? '',
+		$fields['dup']      ?? '',
+	]);
+}
+
+/**
+ * pfb_unified_format_dnsbl — render a dnsbl.log CSV line as a comma-joined string.
+ *
+ * Owns the 11-column schema for DNSBL rows in unified.log (mirrors dnsbl.log
+ * exactly).  Raw passthrough — no escaping; the caller appends "\n".
+ *
+ * Column order: l_type, datetime, q_name, q_ip, p_type, b_type, group,
+ *               b_eval, feed, dup, q_type.
+ *
+ * @param array<string,string> $fields  Keys matching the column names above.
+ *                                      Missing => ''.
+ * @return string  Comma-joined, no trailing newline.
+ */
+function pfb_unified_format_dnsbl(array $fields): string
+{
+	return implode(',', [
+		$fields['l_type']    ?? '',
+		$fields['datetime']  ?? '',
+		$fields['q_name']    ?? '',
+		$fields['q_ip']      ?? '',
+		$fields['p_type']    ?? '',
+		$fields['b_type']    ?? '',
+		$fields['group']     ?? '',
+		$fields['b_eval']    ?? '',
+		$fields['feed']      ?? '',
+		$fields['dup']       ?? '',
+		$fields['q_type']    ?? '',
+	]);
+}
+
+/**
+ * pfb_unified_format_dnsreply — render a DNS-reply unified.log row as a comma-joined string.
+ *
+ * Owns the 10-column schema for DNS-reply rows in unified.log.  Raw
+ * passthrough — no escaping; the caller appends "\n".
+ *
+ * Column order: l_type, datetime, m_type, o_type, q_type, ttl, q_name,
+ *               q_ip, r_addr, iso_code.
+ *
+ * @param array<string,string> $fields  Keys matching the column names above.
+ *                                      Missing => ''.
+ * @return string  Comma-joined, no trailing newline.
+ */
+function pfb_unified_format_dnsreply(array $fields): string
+{
+	return implode(',', [
+		$fields['l_type']    ?? '',
+		$fields['datetime']  ?? '',
+		$fields['m_type']    ?? '',
+		$fields['o_type']    ?? '',
+		$fields['q_type']    ?? '',
+		$fields['ttl']       ?? '',
+		$fields['q_name']    ?? '',
+		$fields['q_ip']      ?? '',
+		$fields['r_addr']    ?? '',
+		$fields['iso_code']  ?? '',
+	]);
+}
+
+// ---------------------------------------------------------------------------
+// ADR-38 — PHP syslog event emitter.
+//
+// pfb_syslog_event(string $body): void
+//   Emits ONE syslog record with the syslog ident (program name) 'pfblockerng'
+//   at a FIXED facility (LOG_LOCAL6) and severity (LOG_INFO).
+//
+//   Facility/severity are NOT user-configurable (ADR-38 Amendment 1): the events
+//   are routed to the dedicated pfblockerng_syslog.log by the package <logging>
+//   block's PROGRAM-name filter (!pfblockerng), so the facility never affects
+//   where they land; and every exported event is the same class of record, so a
+//   severity picker would only ever set one fixed level. They are all
+//   informational security events -> LOG_INFO. The only user control is the
+//   log_syslog master toggle.
+//
+//   Behaviour:
+//     - Reads log_syslog FRESH on every call (no per-process cache). The
+//       long-running pfb_filter daemon is the sole caller and the user can
+//       toggle log_syslog live; a cached value would keep emitting (or stay
+//       silent) until a daemon restart. This fires only on block events (the
+//       caller gates on the event class), not per packet, so the PfbConfig
+//       array read is cheap. The daemon keeps $config current via
+//       pfb_filterlog_refresh_config() so PfbConfig sees the live value.
+//     - No-op when log_syslog is off (PfbToggle::Off / '').
+//     - openlog() sets ident + facility; syslog() emits at LOG_INFO; closelog()
+//       releases the connection.
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_syslog_event — emit a single syslog record for one security event.
+ *
+ * Reads log_syslog FRESH from PfbConfig on every call. Fixed facility LOG_LOCAL6
+ * and severity LOG_INFO. No-op when the toggle is off.
+ *
+ * TEST SEAM: when $GLOBALS['pfb_test_syslog_spy'] is set (to any non-null value),
+ * the call is recorded in $GLOBALS['pfb_test_syslog_calls'] instead of hitting
+ * the real built-ins. The legacy $GLOBALS['pfb_test_syslog_reset'] flag is
+ * accepted but inert (there is no longer a cache to reset).
  *
  * @param  string $body  The key=value message body (output of pfb_syslog_format_ip()).
  * @return void
  */
 function pfb_syslog_event(string $body): void
 {
-	// Static cache: read toggle + facility + severity ONCE per process.
-	// Tests reset via $GLOBALS['pfb_test_syslog_reset'] = TRUE.
-	static $initialised = FALSE;
-	static $enabled     = FALSE;
-	static $facility    = LOG_LOCAL6;
-	static $severity    = LOG_NOTICE;
+	// Legacy reset flag is a no-op now (no cache) — clear it so it cannot leak.
+	unset($GLOBALS['pfb_test_syslog_reset']);
 
-	// Allow tests to reset the cache between runs.
-	if (!empty($GLOBALS['pfb_test_syslog_reset'])) {
-		$initialised = FALSE;
-		$enabled     = FALSE;
-		$facility    = LOG_LOCAL6;
-		$severity    = LOG_NOTICE;
-		unset($GLOBALS['pfb_test_syslog_reset']);
-	}
-
-	if (!$initialised) {
-		$initialised = TRUE;
-		$enabled = (PfbConfig::read('log_syslog') === PfbToggle::On);
-		if ($enabled) {
-			$facility = pfb_syslog_facility_constant(PfbConfig::read('log_syslog_facility'));
-			$severity = pfb_syslog_priority_constant(PfbConfig::read('log_syslog_priority'));
-		}
-	}
-
-	if (!$enabled) {
+	// Fresh gate: read the current toggle on every call.
+	if (PfbConfig::read('log_syslog') !== PfbToggle::On) {
 		return;
 	}
 
@@ -1790,15 +1836,15 @@ function pfb_syslog_event(string $body): void
 	if (isset($GLOBALS['pfb_test_syslog_spy'])) {
 		$GLOBALS['pfb_test_syslog_calls'][] = [
 			'ident'    => 'pfblockerng',
-			'facility' => $facility,
-			'severity' => $severity,
+			'facility' => LOG_LOCAL6,
+			'severity' => LOG_INFO,
 			'body'     => $body,
 		];
 		return;
 	}
 
-	openlog('pfblockerng', LOG_PID, $facility);
-	syslog($severity, $body);
+	openlog('pfblockerng', LOG_PID, LOG_LOCAL6);
+	syslog(LOG_INFO, $body);
 	closelog();
 }
 

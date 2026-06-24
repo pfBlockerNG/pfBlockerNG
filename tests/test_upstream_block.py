@@ -385,7 +385,7 @@ class TestLogUpstreamBlockCounterEnqueue:
     """Scenario: _log_upstream_block enqueues a dnsbl counter task iff sqlite3_dnsbl_con is truthy.
 
     Background:
-        The function writes CSV to dnsbl.log + unified.log, then — when the SQLite
+        The function writes CSV to dnsbl.log, then — when the SQLite
         DNSBL connection is active — calls pfb_db_enqueue(("dnsbl", "Upstream")) to
         increment the aggregate Upstream row counter.  The guard ``if pfb["sqlite3_dnsbl_con"]``
         must be the discriminator: the enqueue fires when truthy and is suppressed when falsy.

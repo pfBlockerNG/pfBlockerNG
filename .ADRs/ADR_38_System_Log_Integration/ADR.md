@@ -322,3 +322,171 @@ footprint; or (c) emit-at-write-time measurably regresses DNS resolution latency
 Phase 6 lands `tests/smoke/test_syslog_export.py` (`pytest.mark.smoke`). Status flips to **Accepted**
 when `smoke-fanout.yml` runs green on the merged `devel` tip across the full CE + Plus matrix. The §7
 manual checklist covers the real remote-SIEM path CI cannot fully simulate — run it post-accept.
+
+---
+
+## Amendment 1 (2026-06-24) — Host-side DNSBL emit; retire the chroot-syslog apparatus
+
+**Scope.** Supersedes §2.1 rows *Python emit* and *Local routing + chroot socket*; §2.2.1's accepted
+"inert `<logging>` footprint"; §2.4's "tail the CSV files" rejection; and Phases 3–4 as they concern
+the `<logging>` registration and the chrooted python emitter. The **user-facing contract is
+unchanged** — opt-in master toggle + facility/severity, **blocks-only** (IP Block/Permit/Match +
+DNSBL block; never DNS-reply or operational logs), `key=value` body tagged `pfblockerng`, additive,
+default-off, remote delivery via pfSense *Remote Logging → Everything*.
+
+### A1.1 What forced it
+
+The original decision routed the DNSBL leg **from inside Unbound's chroot**, which *requires* an
+in-chroot syslog socket (`<logging><logsocket>`), which *requires* the static pfSense `<logging>`
+registration + `system_syslogd_start()` to materialise the source socket and the
+`pfblockerng_syslog.log` destination (§2.4's final bullet: the chroot socket was "the sole reason to
+accept a static `<logging>` block").
+
+That apparatus has a **lifecycle fault**: `system_syslogd_start()` runs only at **install** and the
+package **resync hook** — never on the ordinary reload/sync path, and it is not re-established after
+an Unbound restart or an uninstall→redeploy. On the lifecycle paths #484's coverage now exercises,
+the chrooted emitter's socket is connected yet `pfblockerng_syslog.log` is **absent** and the syslog
+smoke tests see **0 records** (both legs, since both shared that one dedicated destination). A latent
+fragility the install-time framing did not surface.
+
+### A1.2 The realisation
+
+The whole `<logging>` + chroot-socket + `system_syslogd_start()` apparatus exists **only** because
+the DNSBL emitter lives in the chroot. The **IP leg never needed any of it**: `pfb_daemon_filterlog`
+already runs host-side, *already tails `filter.log`*, and emits via `pfb_syslog_event()` (plain PHP
+`openlog/syslog` to the configured facility — independent of `<logging>`, which only *routed* what was
+emitted). Cross-package precedent agrees it is the outlier: Snort/Suricata register no `<logging>` and
+emit to a bare facility; HAProxy — also chrooted — emits to a syslog **address**, never an in-chroot
+file socket.
+
+### A1.3 New decision
+
+**Relocate the DNSBL syslog emit out of the chroot to the host-side daemon, symmetric with the IP
+leg.** `pfb_daemon_filterlog` additionally tails `dnsbl.log` (+ `dns_reply.log`), discriminates source
+by line shape, and per **block** line emits via the same `pfb_syslog_event()` + a new
+`pfb_syslog_format_dnsbl`. With no chrooted emitter, the chroot socket, the `<logging>` block, and
+`system_syslogd_start()` are all **removed** — and with them the lifecycle fault. Events land at the
+configured **facility** (default `local6`), routed by the box/admin exactly as Snort/Suricata's are.
+
+**Consolidation — single writer of `unified.log`.** Since the daemon now tails the DNS logs anyway,
+it becomes the **sole writer of `unified.log`**: it parses each feature-log line (IP←`filter.log`,
+DNSBL←`dnsbl.log`, DNS-reply←`dns_reply.log`) and emits the `unified.log` row via per-type
+`pfb_unified_format_{ip,dnsbl,dnsreply}` formatters, plus syslog for the two **block** classes only.
+The python module and the PHP DNSBL path **drop their `unified.log` writes entirely** — they write
+only their own feature logs and have no knowledge of `unified.log` or syslog. This **decouples the
+`unified.log` schema from the producers**: changing it touches only the daemon's formatters.
+
+### A1.4 Cleanups this unlocks
+
+- **Chroot file-prep:** `pfb_unbound_include.inc:42` `touch`/`chown`s `unified.log` to `unbound:unbound`
+  so the chrooted Python could write it. Python no longer writes it (the host daemon does, as root,
+  like `ip_block.log`), so `unified.log` is **dropped from that list** (keep `dnsbl.log` + `dns_reply.log`;
+  the line-169 loop already excludes it). The nullfs log-dir mount stays — Python still writes
+  `dnsbl.log`/`dns_reply.log` through it.
+- Removed entirely: the `<logging>` block in `pfblockerng.xml`; `system_syslogd_start()` + the
+  `/var/unbound/var/run` socket-dir setup in `install.inc` and the resync hook; the python
+  `_PfbSysLogHandler`/`_emit_dnsbl_syslog`/`syslog_format_dnsbl` + the `syslog_*` `py_unbound.ini`
+  keys and their generation.
+
+### A1.5 Reconciling §2.4 / §2.2
+
+- *"Tail the CSV files ⇒ a separate fragile shipper"* assumed a **new external** shipper
+  (syslog-ng/Telegraf). Reusing the **existing in-package `pfb_daemon_filterlog`** — already the
+  accepted IP-leg mechanism, already shipped, already tailing `filter.log` — is not that; it is the
+  same first-class emit-at-tail-time path, fed one more source.
+- *"UDP to 127.0.0.1:514 impossible (syslogd `-s`)"* and *"native engine plugin impossible"* — still
+  true, still respected; the new path uses neither.
+- §2.2.1's "inert `<logging>` footprint when off" exception is **void**: no block, no dedicated file,
+  no socket. Off ⇒ truly zero footprint.
+
+### A1.6 Contract deltas + new fidelity gate
+
+- The dedicated `pfblockerng_syslog.log` and its *Status → System Logs → Packages* entry are **gone**;
+  events appear at the facility's destination (general System log) + via Remote Logging. pfBlockerNG's
+  own Reports/Alerts UI is unaffected — it reads the CSVs, whose **content is unchanged**.
+- **Blocks-only is preserved exactly** (IP Block/Permit/Match + DNSBL block; never DNS-reply). Routing
+  off `dnsbl.log` means *every* DNSBL block syslogs uniformly — including the PHP-path block write
+  (`pfblockerng.inc:10181`) that the old python-only emitter missed; this is the intended, more
+  consistent behaviour.
+- **New fidelity contract:** the daemon's `pfb_unified_format_*` must reproduce today's `unified.log`
+  rows byte-for-byte (Reports UI parses them) — pinned by a before/after test, alongside the existing
+  §2.2 CSV↔`key=value` formatter tests (now extended with the DNSBL `key=value` mapping).
+- **Smoke rework:** `test_syslog_export.py` asserts records at the configured **facility**
+  (general System log) instead of the now-removed `pfblockerng_syslog.log`; both legs host-emitted.
+
+## Amendment 2 (2026-06-24) — Keep the dedicated file via `<logging>`; live toggle; fixed facility/severity
+
+**Scope.** Supersedes Amendment 1's destination decision (A1.3–A1.6): the events do **not** go to the
+general System log, and the `<logging>` block is **not** retired. Live-box investigation on real
+pfSense Plus 26.03 corrected two premises Amendment 1 got wrong. Everything else in Amendment 1 stands
+(host-side DNSBL emit, no chroot **socket**, the single-`unified.log`-writer consolidation, blocks-only,
+the fidelity gate).
+
+### A2.1 What the live box showed (the two corrected premises)
+
+1. **The `<logging>` block is the destination, not just the chroot socket.** Amendment 1 (A1.1) claimed
+   the chroot socket was "the sole reason to accept a static `<logging>` block." On the live box the
+   block's `<facilityname>` + `<logfilename>` are what pfSense **core** turns (in `syslog.inc`) into the
+   `!pfblockerng` syslog.d routing drop-in **→ `/var/log/pfblockerng_syslog.log`**, the
+   `newsyslog.conf.d` rotation entry, the *Status → System Logs → Packages* subtab, and the system.log
+   **exclusion** — and core **removes the drop-in on uninstall** (`pkg-utils.inc:1131`). The socket was
+   only the chrooted python leg's *source*; the routing/destination is independent of it.
+2. **The ecosystem uses a dedicated file, not the general System log.** HAProxy (the closest comparator
+   — also chrooted) routes to its own `/var/log/haproxy.log` via the same core mechanism and is excluded
+   from system.log; it even uses an in-chroot `/var/run/log` socket (`syslogd -l`), the exact pattern
+   Amendment 1 mistakenly called an oddity. `local6.notice` *does* reach system.log via the catch-all
+   (verified), but matching the ecosystem means a dedicated file.
+
+### A2.2 Final decision
+
+- **Keep the `<logging>` block, drop only `<logsocket>`.** `facilityname=pfblockerng`,
+  `logfilename=pfblockerng_syslog.log`, **no socket** (both legs emit host-side from
+  `pfb_daemon_filterlog`, so no in-chroot socket is needed — the simplification HAProxy *can't* make
+  because its producer is the chrooted process). Core gives the dedicated file + rotation + subtab +
+  uninstall-removal for free; it is **declarative**, not an imperative hook.
+- **Fix the #484 lifecycle at its root.** The original fault was `system_syslogd_start()` running only at
+  install/resync. `sync_package_pfblockerng()` now re-establishes the routing drop-in with a graceful
+  `system_syslogd_start(TRUE)` (SIGHUP, not a restart) when it is missing — so a CLI reload / redeploy
+  can no longer lose it.
+- **Live toggle, no restart.** The long-running filterlog daemon re-reads `log_syslog` on `config.xml`
+  change (`pfb_filterlog_refresh_config`, mtime-gated) and `pfb_syslog_event()` reads the toggle fresh
+  per call (no per-process cache). Enabling/disabling syslog takes effect on the next block event with
+  no service restart: pfBlockerNG-off ⇒ daemon stopped; syslog-off ⇒ gate emits nothing; both-on ⇒
+  events to the dedicated file.
+- **No facility/severity customization.** Routing is by **program name** (`!pfblockerng`), so the
+  facility never affects where events land; and every exported record is one informational class, so a
+  severity picker would only ever set one fixed value. Facility is fixed `LOG_LOCAL6`, severity fixed
+  `LOG_INFO`; the `log_syslog_facility` / `log_syslog_priority` keys + pickers + constant maps are
+  removed. Only the `log_syslog` master toggle remains. (These keys never shipped — devel-only.)
+
+### A2.3 Reconciliations
+
+- A1.6's "the dedicated file and its Packages subtab are gone; events at the general System log" is
+  **reversed**: the dedicated file + subtab are **kept** (core-managed). A1.4's "remove the `<logging>`
+  block" is **reversed** (keep it, minus the socket). A1.5's "off ⇒ truly zero footprint" is relaxed:
+  while installed, the declarative drop-in + (empty, rotated) file persist inert when syslog is off and
+  are removed on uninstall — exactly how HAProxy behaves.
+- **Smoke** targets `/var/log/pfblockerng_syslog.log`: proves live toggle (no restart), exclusion from
+  system.log, routing+rotation registration, and CSV-additive — via the **DNSBL leg** (civm-sourced).
+
+### A2.4 IP-block live leg — deferred (documented out-of-CI follow-up, §7)
+
+The IP-block syslog leg is **xfailed** in the smoke and tracked as an immediate follow-up. The syslog
+**mechanism** is identical to the DNSBL leg (the same host-side `pfb_syslog_event` + `pfb_daemon_filterlog`
+path, proven live) and `pfb_syslog_format_ip` is unit-tested — what is missing is a way to **trigger a
+pf-logged IP block from the civm client** in the single-runner smoke. Findings (live, on the local
+two-VM box):
+
+- A **LAN-interface** pfBlockerNG rule breaks **all** civm→pfSense traffic: adding any pfB rule to the
+  LAN interface triggers a filter rebuild that drops the LAN's permissive allow, so civm's DNS/ICMP fall
+  through to the default block (filterlog-confirmed: civm→`192.168.1.1:53` dropped by rule `1000000103`,
+  not the pfB rule). So the rule must NOT be on LAN.
+- A **WAN** rule to the unreachable TEST-NET target (`203.0.113.1`) never logs (the SYN never traverses
+  the WAN-outbound path), and that range also overlaps the stub-DNS sentinel.
+- The only IP civm can reach **through** pfSense is the runner (`10.10.0.2`) — the stub DNS + mock-feed
+  server — so blocking it breaks the harness.
+
+The follow-up adds a **reachable, non-infra victim target** for civm plus a **WAN or floating rule**
+(exercising floating `inbound`/`outbound`/`any` modes), then un-xfails the IP-block test. Per §7 this is
+a documented out-of-CI limitation, not an acceptance blocker — the live DNSBL proof + the IP unit test
+cover the syslog behaviour.

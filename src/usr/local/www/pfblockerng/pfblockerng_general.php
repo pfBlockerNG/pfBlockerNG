@@ -108,11 +108,9 @@ $pconfig['log_reset_keep_dnsbl_parse_err']	= PfbConfig::read('log_reset_keep_dns
 $pconfig['log_reset_keep_dnsreplylog']		= PfbConfig::read('log_reset_keep_dnsreplylog');
 $pconfig['log_reset_keep_unilog']		= PfbConfig::read('log_reset_keep_unilog');
 
-// ADR-38: syslog export controls. Read via PfbConfig::read so registered defaults apply.
+// ADR-38: syslog export toggle. Read via PfbConfig::read so registered default applies.
 // log_syslog uses the PfbToggle adapter — extract the scalar .value for pfb_cfg_toggle_read().
 $pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
-$pconfig['log_syslog_facility']		= PfbConfig::read('log_syslog_facility');
-$pconfig['log_syslog_priority']		= PfbConfig::read('log_syslog_priority');
 
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
@@ -136,21 +134,6 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 				'nolimit' => 'No Limit - Not recommended' ];
 // ADR-30: rotation schedule options for each per-log schedule select.
 $options_log_rotate	= [ 'off' => 'Off', 'daily' => 'Daily', 'weekly' => 'Weekly', 'monthly' => 'Monthly' ];
-
-// ADR-38: syslog facility and priority option lists (Snort-style token → display label).
-$options_log_syslog_facility = [
-	'log_local0' => 'local0', 'log_local1' => 'local1', 'log_local2' => 'local2', 'log_local3' => 'local3',
-	'log_local4' => 'local4', 'log_local5' => 'local5', 'log_local6' => 'local6 (default)', 'log_local7' => 'local7',
-	'log_daemon' => 'daemon', 'log_user'   => 'user',   'log_auth'   => 'auth',
-	'log_kern'   => 'kern',   'log_mail'   => 'mail',   'log_lpr'    => 'lpr',
-	'log_news'   => 'news',   'log_uucp'   => 'uucp',   'log_cron'   => 'cron',
-	'log_syslog' => 'syslog',
-];
-$options_log_syslog_priority = [
-	'log_emerg'   => 'emerg',   'log_alert'   => 'alert',   'log_crit'    => 'crit',
-	'log_err'     => 'err',     'log_warning' => 'warning',
-	'log_notice'  => 'notice (default)', 'log_info' => 'info', 'log_debug' => 'debug',
-];
 
 
 // $input_errors is read unconditionally in the render section below, so it must be
@@ -226,17 +209,6 @@ if ($_POST) {
 			}
 		}
 
-		// ADR-38: validate syslog facility and priority selects.
-		$_v = $_POST['log_syslog_facility'] ?? '';
-		if (is_array($_v) || !array_key_exists($_v, $options_log_syslog_facility)) {
-			$_POST['log_syslog_facility'] = 'log_local6';
-		}
-		$_v = $_POST['log_syslog_priority'] ?? '';
-		if (is_array($_v) || !array_key_exists($_v, $options_log_syslog_priority)) {
-			$_POST['log_syslog_priority'] = 'log_notice';
-		}
-		unset($_v);
-
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
@@ -305,43 +277,19 @@ if ($_POST) {
 			$pfb['gconfig']['log_reset_keep_dnsreplylog']		= $_POST['log_reset_keep_dnsreplylog']		?: '0';
 			$pfb['gconfig']['log_reset_keep_unilog']		= $_POST['log_reset_keep_unilog']		?: '0';
 
-			// ADR-38: persist syslog export settings. Written into $pfb['gconfig'] so the
-			// writeSection() call below includes them; a bare PfbConfig::write() before
+			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
+			// writeSection() call below includes it; a bare PfbConfig::write() before
 			// writeSection() would be clobbered by the section-level write.
-			//
-			// Capture the pre-save values so we can detect a syslog change after the
-			// write and restart pfb_filter (its static cache would otherwise hold stale
-			// settings for the lifetime of the process).
-			$pfb_old_log_syslog		= $pfb['gconfig']['log_syslog']			?? '';
-			$pfb_old_log_facility		= $pfb['gconfig']['log_syslog_facility']	?? '';
-			$pfb_old_log_priority		= $pfb['gconfig']['log_syslog_priority']	?? '';
-
+			// Facility and priority are fixed constants in pfb_syslog_event() and no
+			// longer stored; the daemon reads the toggle fresh on each event so no
+			// service restart is needed when the toggle changes.
 			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
-
-			// The facility and priority selects are disabled (greyed-out) when the
-			// toggle is off, so the browser does not submit them. Preserve the
-			// previously stored values in that case rather than overwriting with the
-			// absent POST fields (mirrors the allowlist-textarea pattern above).
-			if ($pfb['gconfig']['log_syslog'] === 'on') {
-				$pfb['gconfig']['log_syslog_facility']	= $_POST['log_syslog_facility']	?: 'log_local6';
-				$pfb['gconfig']['log_syslog_priority']	= $_POST['log_syslog_priority']	?: 'log_notice';
-			}
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
 
 			$pfb['save'] = TRUE;
 			sync_package_pfblockerng();
-
-			// If any syslog key changed, restart pfb_filter so its per-process static
-			// cache (in pfb_syslog_event()) picks up the new settings immediately.
-			if (($pfb['gconfig']['log_syslog']		!== $pfb_old_log_syslog)	||
-			    ($pfb['gconfig']['log_syslog_facility']	!== $pfb_old_log_facility)	||
-			    ($pfb['gconfig']['log_syslog_priority']	!== $pfb_old_log_priority)) {
-				if (is_service_running('pfb_filter')) {
-					restart_service('pfb_filter');
-				}
-			}
 
 			header('Location: /pfblockerng/pfblockerng_general.php');
 			exit;
@@ -542,27 +490,10 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('When enabled, every IP Block/Permit/Match and DNSBL block event is also '
 		. 'emitted to syslog (tagged <code>pfblockerng</code>, in <code>key=value</code> form) '
-		. 'at the selected facility and severity. Remote delivery: pfSense '
-		. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging &rarr; Everything</strong>. '
-		. 'Default facility: <strong>local6</strong>.'
+		. 'at facility <strong>local6</strong> and severity <strong>info</strong>. '
+		. 'Remote delivery: pfSense '
+		. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging &rarr; Everything</strong>.'
 );
-
-$section->addInput(new Form_Select(
-	'log_syslog_facility',
-	'Syslog Facility',
-	$pconfig['log_syslog_facility'],
-	$options_log_syslog_facility
-))->setHelp('Default: <strong>local6</strong><br />Syslog facility for pfBlockerNG security events. '
-		. 'Choose a facility not already used by another pfSense service.'
-)->setAttribute('id', 'log_syslog_facility');
-
-$section->addInput(new Form_Select(
-	'log_syslog_priority',
-	'Syslog Severity',
-	$pconfig['log_syslog_priority'],
-	$options_log_syslog_priority
-))->setHelp('Default: <strong>notice</strong><br />Severity level applied to all exported security events.'
-)->setAttribute('id', 'log_syslog_priority');
 
 $form->add($section);
 
@@ -675,17 +606,6 @@ events.push(function() {
 	$('#pfb_feed_internal_filter').click(pfb_sync_internal_filter);
 	pfb_sync_internal_filter();
 
-	// ADR-38: grey out facility/severity selects when the syslog toggle is off.
-	// Disabled selects are not submitted by the browser; the POST handler preserves
-	// the stored values across an off-save so the user's choice is intact on re-enable.
-	function pfb_sync_syslog() {
-		var enabled = $('#log_syslog').prop('checked');
-		disableInput('log_syslog_facility', !enabled);
-		disableInput('log_syslog_priority', !enabled);
-	}
-
-	$('#log_syslog').click(pfb_sync_syslog);
-	pfb_sync_syslog();
 });
 //]]>
 </script>

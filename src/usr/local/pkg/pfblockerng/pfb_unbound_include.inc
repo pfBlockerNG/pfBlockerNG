@@ -38,8 +38,11 @@ if ($g['pfblockerng_include_verbose']) {
 	pfb_global();
 }
 
-// Ensure log file permissions are set as 'unbound:unbound'
-foreach (array('dnsbl.log', 'dns_reply.log', 'unified.log') as $logfile) {
+// Ensure log file permissions are set as 'unbound:unbound'.
+// unified.log is excluded (ADR-38 Amendment 1): the host-side pfb_daemon_filterlog
+// is now its sole writer (as root, like ip_block.log); the chrooted python no
+// longer writes it, so it must not be pre-created/owned by unbound here.
+foreach (array('dnsbl.log', 'dns_reply.log') as $logfile) {
 
 	if (!file_exists("/var/log/pfblockerng/{$logfile}")) {
 		touch("/var/log/pfblockerng/{$logfile}");

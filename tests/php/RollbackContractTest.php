@@ -1180,7 +1180,7 @@ final class RollbackContractTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// H -- ADR-38 Phase 2: log_syslog / log_syslog_facility / log_syslog_priority
+	// H -- ADR-38 Amendment 1: log_syslog (toggle only — facility/priority removed)
 	// -----------------------------------------------------------------------
 
 	/**
@@ -1188,7 +1188,7 @@ final class RollbackContractTest extends TestCase
 	 *
 	 * Note: log_syslog is a toggle-adapted field and is automatically covered by
 	 * testAllToggleFieldsForwardAndBackwardForEveryVocabToken() via toggleAdaptedKeys().
-	 * This test explicitly pins the new field to make coverage visible.
+	 * This test explicitly pins the field to make ADR-38 coverage visible.
 	 *
 	 * Scenario:
 	 *   Background: log_syslog vocabulary = {'on', ''}.
@@ -1225,144 +1225,6 @@ final class RollbackContractTest extends TestCase
 				"BACKWARD: log_syslog token='{$token}' write(read) stored='{$stored}' not in vocab"
 			);
 		}
-	}
-
-	/**
-	 * log_syslog_facility: FORWARD + BACKWARD for the registered facility vocabulary.
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_facility uses null/null adapters (plain-string identity).
-	 *     Given each Snort-style facility token.
-	 *     When PfbConfig::read('log_syslog_facility').
-	 *     Then (FORWARD) result is the same string (no crash, identity).
-	 *     And (BACKWARD) write(read(v)) stores exactly v (no novel token).
-	 */
-	public function testLogSyslogFacilityForwardAndBackwardForEveryVocabToken(): void
-	{
-		$path  = 'installedpackages/pfblockerng/config/0/log_syslog_facility';
-		$vocab = [
-			'log_kern', 'log_user', 'log_mail', 'log_daemon', 'log_auth', 'log_syslog',
-			'log_lpr', 'log_news', 'log_uucp', 'log_cron',
-			'log_local0', 'log_local1', 'log_local2', 'log_local3',
-			'log_local4', 'log_local5', 'log_local6', 'log_local7',
-		];
-
-		foreach ($vocab as $token) {
-			// Reset.
-			$GLOBALS['config'] = [];
-			config_set_path($path, $token);
-
-			// BEFORE.
-			$this->assertSame($token, config_get_path($path),
-				"before forward+backward: log_syslog_facility token='{$token}'"
-			);
-
-			// FORWARD: identity adapter → same string.
-			$runtime = PfbConfig::read('log_syslog_facility');
-			$this->assertIsString($runtime,
-				"FORWARD: log_syslog_facility token='{$token}' must return a string"
-			);
-			$this->assertSame($token, $runtime,
-				"FORWARD: log_syslog_facility token='{$token}' identity adapter must return token unchanged"
-			);
-
-			// BACKWARD: write(runtime) stores exactly v.
-			PfbConfig::write('log_syslog_facility', $runtime);
-			$stored = config_get_path($path);
-			$this->assertSame($token, $stored,
-				"BACKWARD: log_syslog_facility token='{$token}' write(read) must store '{$token}' (identity)"
-			);
-		}
-	}
-
-	/**
-	 * log_syslog_facility: absent key returns 'log_local6' (registered default).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_facility registered default is 'log_local6'.
-	 *     Given no stored value.
-	 *     When PfbConfig::read('log_syslog_facility').
-	 *     Then 'log_local6' is returned (no crash).
-	 */
-	public function testLogSyslogFacilityAbsentKeyReturnsLogLocal6Default(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_facility';
-
-		// GIVEN: absent.
-		$this->assertNull(config_get_path($path), 'before: log_syslog_facility must be absent');
-
-		// FORWARD: registered default returned — no crash.
-		$result = PfbConfig::read('log_syslog_facility');
-		$this->assertSame('log_local6', $result,
-			'FORWARD: log_syslog_facility absent must return "log_local6" (registered default)'
-		);
-	}
-
-	/**
-	 * log_syslog_priority: FORWARD + BACKWARD for the registered severity vocabulary.
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_priority uses null/null adapters (plain-string identity).
-	 *     Given each Snort-style severity token.
-	 *     When PfbConfig::read('log_syslog_priority').
-	 *     Then (FORWARD) result is the same string (no crash, identity).
-	 *     And (BACKWARD) write(read(v)) stores exactly v (no novel token).
-	 */
-	public function testLogSyslogPriorityForwardAndBackwardForEveryVocabToken(): void
-	{
-		$path  = 'installedpackages/pfblockerng/config/0/log_syslog_priority';
-		$vocab = ['log_emerg', 'log_alert', 'log_crit', 'log_err',
-		          'log_warning', 'log_notice', 'log_info', 'log_debug'];
-
-		foreach ($vocab as $token) {
-			// Reset.
-			$GLOBALS['config'] = [];
-			config_set_path($path, $token);
-
-			// BEFORE.
-			$this->assertSame($token, config_get_path($path),
-				"before forward+backward: log_syslog_priority token='{$token}'"
-			);
-
-			// FORWARD: identity adapter → same string.
-			$runtime = PfbConfig::read('log_syslog_priority');
-			$this->assertIsString($runtime,
-				"FORWARD: log_syslog_priority token='{$token}' must return a string"
-			);
-			$this->assertSame($token, $runtime,
-				"FORWARD: log_syslog_priority token='{$token}' identity adapter must return token unchanged"
-			);
-
-			// BACKWARD: write(runtime) stores exactly v.
-			PfbConfig::write('log_syslog_priority', $runtime);
-			$stored = config_get_path($path);
-			$this->assertSame($token, $stored,
-				"BACKWARD: log_syslog_priority token='{$token}' write(read) must store '{$token}' (identity)"
-			);
-		}
-	}
-
-	/**
-	 * log_syslog_priority: absent key returns 'log_notice' (registered default).
-	 *
-	 * Scenario:
-	 *   Background: log_syslog_priority registered default is 'log_notice'.
-	 *     Given no stored value.
-	 *     When PfbConfig::read('log_syslog_priority').
-	 *     Then 'log_notice' is returned (no crash).
-	 */
-	public function testLogSyslogPriorityAbsentKeyReturnsLogNoticeDefault(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/log_syslog_priority';
-
-		// GIVEN: absent.
-		$this->assertNull(config_get_path($path), 'before: log_syslog_priority must be absent');
-
-		// FORWARD: registered default returned — no crash.
-		$result = PfbConfig::read('log_syslog_priority');
-		$this->assertSame('log_notice', $result,
-			'FORWARD: log_syslog_priority absent must return "log_notice" (registered default)'
-		);
 	}
 
 	// -----------------------------------------------------------------------
