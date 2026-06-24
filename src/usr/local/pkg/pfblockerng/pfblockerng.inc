@@ -9180,6 +9180,10 @@ function pfb_rdns_seed_value(array $gconfig, array $ipconfig): ?string {
 // per block event, a full read only on an actual change. Called on the block-emit
 // path (low volume), not per packet.
 function pfb_filterlog_refresh_config() {
+	// PHP caches filemtime() per process (the stat cache), so in this long-lived
+	// daemon a later config.xml write would otherwise read the STALE cached mtime and
+	// the live toggle would be missed. Clear the cache for this path before stat'ing.
+	clearstatcache(TRUE, '/conf/config.xml');
 	$cur = @filemtime('/conf/config.xml');
 	if ($cur === FALSE) {
 		return;
@@ -10810,18 +10814,23 @@ function sync_package_pfblockerng($cron='') {
 	// newsyslog rotation entry, and the Status->System Logs->Packages subtab. But the
 	// `pkg add` install path does NOT copy the package XML's <logging> block into that
 	// section (only a GUI install does), so register it here, keyed on the
-	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel). The
-	// 'on'-absent check makes this a one-time write.
+	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel).
 	$pfb_pkg_logged = FALSE;
+	$pfb_log_want = array('facilityname' => 'pfblockerng', 'logfilename' => 'pfblockerng_syslog.log');
 	foreach (config_get_path('installedpackages/package', array()) as $pfb_idx => $pfb_pkg) {
 		if (($pfb_pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
 			continue;
 		}
-		if (empty($pfb_pkg['logging']['logfilename'])) {
-			config_set_path("installedpackages/package/{$pfb_idx}/logging", array(
-				'facilityname'	=> 'pfblockerng',
-				'logfilename'	=> 'pfblockerng_syslog.log',
-			));
+		// Write the canonical block when it is missing OR carries STALE values — not
+		// only when empty. An upgrade from a pre-Amendment-2 config can leave a row with
+		// a wrong facility/filename or a leftover <logsocket> (which would make core
+		// regenerate the now-removed in-chroot socket). Replacing the whole block on any
+		// mismatch drops the stale logsocket; an already-canonical row is left untouched.
+		$pfb_log_cur = $pfb_pkg['logging'] ?? array();
+		if (($pfb_log_cur['facilityname'] ?? '') !== $pfb_log_want['facilityname'] ||
+		    ($pfb_log_cur['logfilename'] ?? '') !== $pfb_log_want['logfilename'] ||
+		    !empty($pfb_log_cur['logsocket'])) {
+			config_set_path("installedpackages/package/{$pfb_idx}/logging", $pfb_log_want);
 			write_config('[pfBlockerNG] register syslog routing');
 		}
 		$pfb_pkg_logged = TRUE;
