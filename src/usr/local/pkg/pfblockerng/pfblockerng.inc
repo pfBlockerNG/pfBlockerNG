@@ -15105,6 +15105,12 @@ function pfblockerng_php_pre_deinstall_command() {
 	// Remove incorrect xml setting
 	config_del_path('installedpackages/pfblockerngantartica');
 
+	// Persist the config-section removals above. config_del_path()/pfb_remove_config_settings()
+	// only mutate the in-memory config; without this final write the uninstall's section wipe
+	// (keep=off) and the legacy-misspelled-section cleanup are lost on disk — the package
+	// reads back as "still installed" in config.xml (#484 fan-out).
+	write_config('pfBlockerNG: remove package config sections on deinstall');
+
 	update_status(" done.\n");
 }
 
@@ -15113,31 +15119,21 @@ function pfblockerng_php_pre_deinstall_command() {
 function pfb_remove_config_settings() {
 	global $pfb;
 
-	foreach (array(	'pfblockerng',
-			'pfblockerngglobal',
-			'pfblockerngsync',
-			'pfblockerngreputation',
-			'pfblockerngipsettings',
-			'pfblockernglistsv4',
-			'pfblockernglistsv6',
-			'pfblockerngdnsbl',
-			'pfblockerngdnsblsettings',
-			'pfblockerngsafesearch',
-			'pfblockerngblacklist',
-			'pfblockerngafrica',
-			'pfblockerngantarctica',
-			'pfblockerngasia',
-			'pfblockerngeurope',
-			'pfblockerngnorthamerica',
-			'pfblockerngoceania',
-			'pfblockerngsouthamerica',
-			'pfblockerngtopspammers',
-			'pfblockerngproxyandsatellite' ) as $type) {
-
-		// ADR-29 foreign-key exclusion: a deinstall wipes whole package sections
-		// (dynamic per-row lists, blacklist, continent structures) — a section-level
-		// operation, not a registered scalar-field access. Use config_del_path directly.
-		config_del_path("installedpackages/{$type}");
+	// Sweep EVERY installedpackages/pfblockerng* section dynamically rather than a
+	// hardcoded list. A fixed list silently leaves behind any section a later feature
+	// adds — e.g. pfblockerngdnsbleasylist (ADR-07 ABP/EasyList), the wizard temp
+	// section, or the misspelled legacy 'pfblockerngantartica' — so a keep=off
+	// uninstall did not fully remove the package (#484 fan-out). Removing every
+	// pfblockerng-prefixed section is exactly the keep=off "full removal" contract and
+	// is future-proof.
+	//
+	// ADR-29 foreign-key exclusion: a deinstall wipes whole package sections
+	// (dynamic per-row lists, blacklist, continent structures) — a section-level
+	// operation, not a registered scalar-field access. Use config_del_path directly.
+	foreach (array_keys(config_get_path('installedpackages', array())) as $type) {
+		if (strpos((string) $type, 'pfblockerng') === 0) {
+			config_del_path("installedpackages/{$type}");
+		}
 	}
 }
 
