@@ -29,8 +29,9 @@ def _zstd_frame(data: bytes) -> bytes:
         return zstandard.ZstdCompressor().compress(data)
     except ImportError:
         zstd = shutil.which("zstd")
-        if not zstd:  # pragma: no cover - CI/dev always has one encoder
-            pytest.skip("no zstd encoder (binary or module) available to build the fixture")
+        # CI/dev always ships one encoder; the assert both guards and narrows
+        # str|None -> str for the type checker (pytest.skip isn't NoReturn under CI mypy).
+        assert zstd, "no zstd encoder (binary or module) available to build the fixture"
         return subprocess.run([zstd, "-q", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
 
 
