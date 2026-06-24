@@ -6688,15 +6688,6 @@ function validate_ipv6($ipaddr) {
 }
 
 
-// Validate IP addresses
-function validate_ip($ipaddr) {
-	if (strpos($ipaddr, '/') !== FALSE) {
-		return is_subnet($ipaddr);
-	}
-	return is_ipaddr($ipaddr);
-}
-
-
 // Function to check for loopback addresses (IPv4 range: 127.0.0.0/8, excluding IPv6)
 function FILTER_FLAG_NO_LOOPBACK_RANGE($value) {
 	// http://www.php.net/manual/en/filter.filters.flags.php
@@ -9902,17 +9893,6 @@ function pfb_parse_query($line) {
 	$rx = explode('.txt:', $line);
 	$rx[0] = ltrim(strrchr($rx[0], '/'), '/');
 	return $rx;
-}
-
-
-// Function to output Alias/Feed name string
-function pfb_parse_line($line) {
-	$match = strstr($line, ':local', TRUE);
-	if (strpos($match, '.txt') !== FALSE) {
-		$match = strstr($match, '.txt', TRUE);
-	}
-	$match = substr($match, strrpos($match, '/') + 1);
-	return $match;
 }
 
 
