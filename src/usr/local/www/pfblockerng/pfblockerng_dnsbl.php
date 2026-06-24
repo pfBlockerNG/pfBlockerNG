@@ -626,7 +626,7 @@ if ($_POST) {
 					if (!empty($customlist)) {
 						foreach ($customlist as $line) {
 
-							if (substr($line, 0, 1) == '#' || empty($line)) {
+							if (str_starts_with($line, '#') || empty($line)) {
 								continue;
 							}
 							$value = array_map('trim', preg_split('/(?=#)/', $line));

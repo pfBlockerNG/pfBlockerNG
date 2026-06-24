@@ -143,7 +143,7 @@ if ($_POST) {
 		if (!empty($v4suppression)) {
 			foreach ($v4suppression as $line) {
 
-				if (substr($line, 0, 1) == '#' || empty($line)) {
+				if (str_starts_with($line, '#') || empty($line)) {
 					continue;
 				}
 

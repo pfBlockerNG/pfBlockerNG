@@ -878,7 +878,7 @@ if (isset($_POST) && !empty($_POST)) {
 		// DNSBL structures from the manifest raws, never those legacy CSVs -- see
 		// pfb_unbound.py's 'if not dnsbl_built' guard.)
 		$wl_base = $domain;
-		if (substr($wl_base, 0, 4) == 'www.') {
+		if (str_starts_with($wl_base, 'www.')) {
 			$wl_base = substr($wl_base, 4);
 		}
 		$wl_variants = array($wl_base, "www.{$wl_base}");
@@ -995,7 +995,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Remove 'www.' prefix
-		if (substr($domain, 0, 4) == 'www.') {
+		if (str_starts_with($domain, 'www.')) {
 			$domain = substr($domain, 4);
 		}
 
@@ -1536,7 +1536,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Create new IP Whitelist Alias
-		if (substr($table, 0, 4) == 'NEW_') {
+		if (str_starts_with($table, 'NEW_')) {
 			$table = substr($table, 4);
 			header("Location: /pfblockerng/pfblockerng_category_edit.php?type=ipv{$vtype}&act=addgroup&atype=Whitelist|{$ip}|{$descr}#Customlist");
 			exit;
@@ -1938,7 +1938,7 @@ function pfb_match_filter_field($flent, $fields) {
 		foreach ($fields as $key => $field) {
 
 			$not_filter = FALSE;
-			if (substr($field, 0, 1) == '!') {
+			if (str_starts_with($field, '!')) {
 				$not_filter = TRUE;
 				$field = substr($field, 1);
 			}

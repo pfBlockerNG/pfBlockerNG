@@ -534,7 +534,7 @@ if (file_exists('/var/db/pfblockerng/dnsbl_info') &&
 		if (!empty($dnsbl_info)) {
 			foreach ($dnsbl_info as $group) {
 				$group = str_getcsv($group, ',', '"', "\\");
-				if (substr($group[0], 0, 1) != '#') {
+				if (!str_starts_with($group[0], '#')) {
 					$db_update = "INSERT INTO dnsbl ( groupname, timestamp, entries, counter )"
 							. " VALUES ( :group0, :group1, :group2, :group3 );\n";
 

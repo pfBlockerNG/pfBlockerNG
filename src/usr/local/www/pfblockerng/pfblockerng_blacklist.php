@@ -61,7 +61,7 @@ if (!empty($blacklist_types)) {
 			foreach ($list['CONTENTS'] as $line => $data) {
 
 				$data = trim($data);
-				if (substr($data, 0, 1) == '#' || empty($data)) {
+				if (str_starts_with($data, '#') || empty($data)) {
 					unset($list['CONTENTS'][$line]);
 					continue;
 				}
