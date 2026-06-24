@@ -515,6 +515,16 @@ function pfb_cfg_registry(): array
 			'since'         => '3.0.0',
 		],
 
+		// [ #381 ] Opt out of automatic DNSBL sinkhole NAT rule generation: 'on' | '' (checkbox).
+		// Default '' = NAT generated (current behaviour); 'on' = user manages NAT manually.
+		'pfb_dnsbl_nonat' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'since'         => '4.0.0',
+		],
+
 		// VIP interface for DNSBL sinkhole. Default 'lo0'.
 		'dnsbl_interface' => [
 			'section'       => $dnsbl,

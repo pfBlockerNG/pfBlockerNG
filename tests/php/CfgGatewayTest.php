@@ -69,11 +69,12 @@ final class CfgGatewayTest extends TestCase
 	{
 		// Representative toggle-adapted fields (pfb_keep is now lenient — see below).
 		$toggle_fields = [
-			'enable_cb'       => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_dnsbl'       => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'pfb_dnsvip_auto' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'pfb_reuse'       => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'pfb_hsts'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
+			'pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
+			'pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
+			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
+			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
+			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -97,11 +98,12 @@ final class CfgGatewayTest extends TestCase
 	{
 		// pfb_keep is now lenient — see testPfbKeepLenientRoundTrip*() below.
 		$toggle_fields = [
-			'enable_cb'       => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_dnsbl'       => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'pfb_dnsvip_auto' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'pfb_reuse'       => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'pfb_hsts'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
+			'pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
+			'pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
+			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
+			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
+			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -598,6 +600,7 @@ final class CfgGatewayTest extends TestCase
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',
 			'pfb_dnsvip_auto',
+			'pfb_dnsbl_nonat',
 			'dnsbl_interface',
 			'pfb_dnsvip4',
 			'pfb_dnsvip6',
