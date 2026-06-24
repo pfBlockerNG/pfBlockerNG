@@ -49,9 +49,17 @@ if (!function_exists('is_ipaddrv6')) {
 }
 
 if (!function_exists('is_ipaddr')) {
-	// pfSense util.inc: v4 OR v6.
+	// pfSense util.inc: returns 4 for an IPv4 address, 6 for an IPv6 address, FALSE
+	// otherwise (verbatim upstream semantics — pfb_get_vips() switches on case 4/6,
+	// so a bool double would mis-bucket every v6 VIP into v4 via loose TRUE==4).
 	function is_ipaddr($ipaddr) {
-		return (is_ipaddrv4($ipaddr) || is_ipaddrv6($ipaddr));
+		if (is_ipaddrv4($ipaddr)) {
+			return 4;
+		}
+		if (is_ipaddrv6($ipaddr)) {
+			return 6;
+		}
+		return FALSE;
 	}
 }
 

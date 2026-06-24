@@ -1163,64 +1163,31 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	return [TRUE, null];
 }
 
-// [ ADR-13 / issue #487 ] Ordered, preferred-first list of DNS-themed candidate
-// sinkhole VIP addresses for a family. Pure (no side effects).
+// [ ADR-13 / issue #473 / issue #487 ] Small fixed ordered list of DNS-themed
+// candidate sinkhole VIP addresses for a family. Pure (no side effects).
 //
-// The primary sweep keeps the '.53' (DNS port) homage and back-compat ordering:
-//   AF_INET  -> 10.10.10.53 (preferred, back-compat), then 10.10.X.53 (X=0..15)
-//   AF_INET6 -> fd00::53 (preferred), then fd00:1::53 .. fd00:15::53  (ULA fc00::/7)
+// IPv4 — three candidates, Class B first (least-used RFC1918 on end-user LANs),
+// then Class C, then Class A (most-used, so last). Each is a /32 .53 host
+// (DNS-port homage):
+//   172.16.53.53  (172.16/12)
+//   192.168.53.53 (192.168/16)
+//   10.53.53.53   (10/8)
 //
-// Disjoint-range fallbacks follow the sweep so that a single common RFC1918 /
-// ULA aggregate can never exhaust the entire pool:
-//   AF_INET  -> 172.31.255.53, 172.31.254.53 (172.16/12 — survives a 10/8 LAN),
-//               192.0.2.53, 198.51.100.53, 203.0.113.53 (RFC 5737 docs — never a
-//               real LAN, ideal sinkhole), 100.64.0.53 (RFC 6598 CGNAT).
-//   AF_INET6 -> 2001:db8::53, 2001:db8:1::53 (RFC 3849 docs — disjoint from fd00::/8).
+// IPv6 — single ULA candidate: fd00:53:53:53:53:53:53:53 (/128). On conflict
+// the picker returns null and the user resolves it manually (an IPv6 user on
+// that exact ULA can address it themselves without a larger pool).
 //
-// Under any single common aggregate (10/8, 172.16/12, 192.168/16, or fd00::/8) at
-// least one fallback stays non-overlapping. The conflict-aware picker
-// (pfb_pick_free_dnsbl_vip) selects the first free one.
-//
+// The conflict-aware picker (pfb_pick_free_dnsbl_vip) returns the first free one.
 // Returns [] for any other family.
 function pfb_dnsbl_vip_candidates(int $family): array {
 
-	// Bounded sweep range for the variable group/hextet (16 candidates).
-	$sweep_max = 15;
-
-	// The preferred third octet (the '10' in 10.10.10.53).
-	$preferred_v4_octet = 10;
-
-	$candidates = [];
-
 	if ($family === AF_INET) {
-		// Preferred address first (back-compat — existing boxes keep this address),
-		// then the rest of the 10.10.X.53 sweep, skipping the preferred octet.
-		$candidates[] = "10.10.{$preferred_v4_octet}.53";
-		for ($x = 0; $x <= $sweep_max; $x++) {
-			if ($x === $preferred_v4_octet) {
-				continue;
-			}
-			$candidates[] = "10.10.{$x}.53";
-		}
-		// Disjoint-range fallbacks: survive a 10/8, 172.16/12, or 192.168/16 LAN.
-		$candidates[] = '172.31.255.53';	// 172.16/12 — disjoint from 10/8
-		$candidates[] = '172.31.254.53';
-		$candidates[] = '192.0.2.53';		// RFC 5737 TEST-NET-1 — never a real LAN
-		$candidates[] = '198.51.100.53';	// RFC 5737 TEST-NET-2
-		$candidates[] = '203.0.113.53';		// RFC 5737 TEST-NET-3
-		$candidates[] = '100.64.0.53';		// RFC 6598 CGNAT shared space
+		return ['172.16.53.53', '192.168.53.53', '10.53.53.53'];
 	} elseif ($family === AF_INET6) {
-		// Preferred fd00::53 first, then fd00:1::53 .. fd00:15::53 in order.
-		$candidates[] = 'fd00::53';
-		for ($x = 1; $x <= $sweep_max; $x++) {
-			$candidates[] = "fd00:{$x}::53";
-		}
-		// Disjoint-range fallbacks: survive a fd00::/8 ULA aggregate.
-		$candidates[] = '2001:db8::53';		// RFC 3849 documentation prefix
-		$candidates[] = '2001:db8:1::53';
+		return ['fd00:53:53:53:53:53:53:53'];
 	}
 
-	return $candidates;
+	return [];
 }
 
 // [ ADR-13 ] Return the first candidate sinkhole address (pfb_dnsbl_vip_candidates)
