@@ -2269,7 +2269,7 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float
 # pfBlockerNG archives its IP aliastables + DNSBL DB here for RAMDISK installs; the
 # earlyshellcmd `pfblockerng.sh aliastables` restores it on boot (pfblockerng.inc:7791,
 # pfblockerng.sh:208). Present only after an `update` runs with use_mfs_tmpvar enabled.
-ALIASARCHIVE = "/usr/local/etc/aliastables.tar.bz2"
+ALIASARCHIVE = "/usr/local/etc/aliastables.tar.zst"
 
 
 def set_ramdisk(vm: SmokeVM, on: bool, *, var_size: int = 512, tmp_size: int = 128, timeout: float = 60.0) -> None:
