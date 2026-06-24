@@ -13336,9 +13336,10 @@ function sync_package_pfblockerng($cron='') {
 		: ($pfb_fp_old !== $pfb_fp_new);
 
 	// An explicit "Force Reload DNSBL" (the updatednsbl trigger) must ALWAYS reload — the
-	// operator forces it to apply a change the fingerprint can't see, e.g. an out-of-band
-	// edit to the HSTS list (pfb_py_hsts.txt is loaded at module init and is NOT part of
-	// the fingerprinted feed data). reuse_dnsbl / the .reload marker can't serve as this
+	// operator forces it to apply a change the fingerprint can't see (e.g. an out-of-band
+	// edit to a chroot file outside the fingerprinted input set, or to recover from
+	// suspected runtime drift), independent of the fingerprint. reuse_dnsbl / the .reload
+	// marker can't serve as this
 	// signal — cron-reuse mode and the dnsbl-missing path also set them, which would
 	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY
 	// by the Force-Reload-DNSBL path (see the $cron switch).
