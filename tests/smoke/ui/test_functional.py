@@ -1087,8 +1087,9 @@ def test_dnsbl_adv_inbound_proto_any_guard(
 # `set_dnsvip_auto`. The UI tier's DISTINCT value is proving the DNSBL settings
 # PAGE persists pfb_dnsvip_auto through a real CSRF form POST, with the same
 # package machinery (pfb_create_dnsbl -> pfb_manage_dnsbl_vip) then provisioning
-# the marked VIP end-to-end. Auto picks 10.10.10.53, free alongside the manual VIP
-# at 10.10.10.1 (dnsbl_vip_ready), so the two coexist on one VM.
+# the marked VIP end-to-end. Auto picks 172.16.53.53 (issue #473's first Class-B
+# candidate, free in this topology), distinct from the manual VIP at 10.10.10.1
+# (dnsbl_vip_ready), so the two coexist on one VM.
 #
 # TODO(ADR-12): add update-hooks UI coverage (add/toggle/remove a hook row + its
 # config persistence) once ADR-12 lands on devel -- it is not merged there yet.
@@ -1113,7 +1114,7 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
     * ENABLE via the form: the CSRF POST must PERSIST pfb_dnsvip_auto=on (the
       UI-specific assertion -- config.xml, not the HTTP body); the next Force
       Update runs pfb_create_dnsbl('enabled') -> pfb_manage_dnsbl_vip, which
-      creates the marked VIP at 10.10.10.53 and brings it up live on lo0.
+      creates the marked VIP at 172.16.53.53 and brings it up live on lo0.
     * DISABLE via the form: the POST persists it off; a Force Update removes the
       marked VIP from config AND lo0.
 

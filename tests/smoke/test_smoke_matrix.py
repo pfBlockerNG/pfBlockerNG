@@ -907,8 +907,8 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
       NOT blocked (it forwards to the stub upstream, so it resolves to a non-VIP
       address).
     * ENABLE (``pfb_dnsvip_auto`` on + DNSBL on): the package creates an IP-Alias
-      VIP at ``10.10.10.53/32`` on ``lo0`` (live in ``ifconfig``), points
-      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``10.10.10.53`` —
+      VIP at ``172.16.53.53/32`` on ``lo0`` (live in ``ifconfig``), points
+      ``pfb_dnsvip4`` at it, and the listed name now sinks to ``172.16.53.53`` —
       the AUTO address, NOT the harness's manual ``10.10.10.1`` VIP.
     * DISABLE: the marked VIP is removed from config AND ``lo0``.
 
@@ -916,10 +916,11 @@ def test_dnsbl_autovip_lifecycle(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_
     touched (only marker-owned VIPs are managed). Teardown restores the manual
     VIP + auto-off so the rest of the matrix runs against its own baseline.
 
-    Auto-create picks ``10.10.10.53`` precisely because the manual VIP holds
-    ``10.10.10.1`` — the first free ``.53`` candidate — so the two coexist and
-    this case needs no second VM. Uses ``scope='update'`` (a full Force Update)
-    so ``pfb_create_dnsbl`` -> ``pfb_manage_dnsbl_vip`` actually runs.
+    Auto-create picks ``172.16.53.53`` (issue #473's first Class-B candidate)
+    because this topology uses no 172.16/12 — it is free and distinct from the
+    manual ``10.10.10.1`` VIP, so the two coexist and this case needs no second
+    VM. Uses ``scope='update'`` (a full Force Update) so ``pfb_create_dnsbl`` ->
+    ``pfb_manage_dnsbl_vip`` actually runs.
     """
     vm = deployed_vm
     domain = h.unique_domain("autovip")
