@@ -56,10 +56,15 @@
 	</tabs>
 	<fields>
 	</fields>
+	<!-- ADR-38: declarative syslog routing. pfSense core turns this into a
+	     syslog.d drop-in (!pfblockerng -> /var/log/pfblockerng_syslog.log), a
+	     newsyslog rotation entry, and a Status->System Logs->Packages subtab,
+	     and removes the drop-in on uninstall. NO <logsocket>: both syslog legs
+	     emit host-side from pfb_daemon_filterlog (not from the Unbound chroot),
+	     so no in-chroot socket is needed (ADR-38 Amendment 1). -->
 	<logging>
 		<facilityname>pfblockerng</facilityname>
 		<logfilename>pfblockerng_syslog.log</logfilename>
-		<logsocket>/var/unbound/var/run/log</logsocket>
 	</logging>
 	<plugins>
 		<item>
@@ -84,11 +89,6 @@
 		global $pfb;
 		$pfb['save'] = TRUE;
 		sync_package_pfblockerng();
-		// Ensure the Unbound chroot log socket directory exists (ADR-38 §2.1)
-		// before (re)starting syslogd so the package log socket is reachable.
-		safe_mkdir('/var/unbound/var/run');
-		@chown('/var/unbound/var/run', 'unbound');
-		system_syslogd_start(TRUE);
 		]]>
 	</custom_php_resync_config_command>
 </packagegui>

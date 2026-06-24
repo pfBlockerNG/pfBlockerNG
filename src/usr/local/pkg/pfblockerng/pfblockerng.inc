@@ -1825,9 +1825,14 @@ function pfb_filter_service() {
 		/usr/bin/logger -p daemon.info -t "\${filter_type}" "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] Firewall Filter Service started"
 
 		if [ "\${filter_type}" == 'clog_pfb' ]; then
+			# clog_pfb is the pre-2.5 circular-log reader (below min CE 2.8); it reads
+			# only the filter.log clog. The DNSBL feature-log tail is tail_pfb-only.
 			/usr/local/sbin/clog_pfb -f /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog &
 		else
-			/usr/bin/tail_pfb -n0 -F /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog &
+			# ADR-38 Amendment 1: one daemon also tails the DNSBL feature logs so it
+			# can write unified.log + emit DNSBL syslog host-side. -q suppresses tail's
+			# per-file "==> name <==" headers; -F retries files that don't exist yet.
+			/usr/bin/tail_pfb -q -n0 -F /var/log/filter.log /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/dns_reply.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog &
 		fi
 	fi
 
@@ -1843,7 +1848,7 @@ EOF;
 	# Terminate pfBlockerNG Firewall filter Daemon (clog) and filter Daemon, if found
 	/usr/bin/logger -p daemon.info -t "\${filter_type}" "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] Firewall Filter Service stopped"
 	/usr/bin/logger -p daemon.info -t php_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] filterlog daemon stopped"
-	pidnum="\$(/bin/ps -wax | /usr/bin/grep '[c]log_pfb -f /var/log/filter.log\|[t]ail_pfb -n0 -F /var/log/filter.log\|[p]fblockerng.inc filterlog' | /usr/bin/awk '{print \$1}')"
+	pidnum="\$(/bin/ps -wax | /usr/bin/grep '[c]log_pfb -f /var/log/filter.log\|[t]ail_pfb -q -n0 -F /var/log/filter.log\|[p]fblockerng.inc filterlog' | /usr/bin/awk '{print \$1}')"
 	if [ ! -z "\${pidnum}" ]; then
 		for i in \${pidnum}; do
 			/bin/kill -9 "\${i}"
@@ -5458,8 +5463,9 @@ function pfb_unbound_python($mode) {
 
 	$pfbpython = FALSE;
 
-	// Ensure log file permissions are set as 'unbound:unbound'
-	foreach (array('dnsbl.log', 'dns_reply.log', 'unified.log') as $logfile) {
+	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
+	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
+	foreach (array('dnsbl.log', 'dns_reply.log') as $logfile) {
 
 		if (!file_exists("{$pfb['logdir']}/{$logfile}")) {
 			touch("{$pfb['logdir']}/{$logfile}");
@@ -5596,16 +5602,6 @@ function pfb_unbound_python($mode) {
 
 		$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
 
-		// ADR-38: syslog export keys for the chrooted python leg.
-		// syslog_enable: boolean on/off gate (master toggle).
-		// syslog_facility: raw facility number (LOG_LOCAL6 raw = 22; PHP's LOG_LOCAL6
-		//   constant is (22 << 3) = 176, so >> 3 converts to the raw SysLogHandler int).
-		// syslog_priority: severity number (byte-identical between PHP and Python).
-		// Safe defaults (disabled) when the keys are absent from the ini.
-		$syslog_enable   = (PfbConfig::read('log_syslog') === PfbToggle::On) ? 'on' : 'off';
-		$syslog_facility = pfb_syslog_facility_constant(PfbConfig::read('log_syslog_facility')) >> 3;
-		$syslog_priority = pfb_syslog_priority_constant(PfbConfig::read('log_syslog_priority'));
-
 		$now = date('m/j/y H:i:s', time());
 
 		$pfb_py_conf = <<<EOF
@@ -5632,9 +5628,6 @@ python_control	= {$python_control}
 python_control_legacy	= {$python_control_legacy}
 regex_cap	= {$regex_cap}
 forwarding	= {$forwarding}
-syslog_enable	= {$syslog_enable}
-syslog_facility	= {$syslog_facility}
-syslog_priority	= {$syslog_priority}
 
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
@@ -9178,9 +9171,38 @@ function pfb_rdns_seed_value(array $gconfig, array $ipconfig): ?string {
 }
 
 
+// ADR-38 Amendment 1: keep the long-running filterlog daemon's view of the
+// log_syslog toggle fresh. The daemon loads $config once at start; a live toggle
+// (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
+// so the syslog gate would not change until a restart (a bug: enabled+syslog-on
+// must emit; enabled+syslog-off must not, with no restart). Reload $config from
+// disk ONLY when config.xml actually changes (mtime-gated) — a cheap filemtime()
+// per block event, a full read only on an actual change. Called on the block-emit
+// path (low volume), not per packet.
+function pfb_filterlog_refresh_config() {
+	$cur = @filemtime('/conf/config.xml');
+	if ($cur === FALSE) {
+		return;
+	}
+	// Defensive: if the baseline was never captured (non-daemon caller), record it.
+	if (!isset($GLOBALS['pfb_daemon_config_mtime'])) {
+		$GLOBALS['pfb_daemon_config_mtime'] = $cur;
+		return;
+	}
+	if ($cur !== $GLOBALS['pfb_daemon_config_mtime']) {
+		$GLOBALS['pfb_daemon_config_mtime'] = $cur;
+		config_read_file(FALSE, TRUE);
+	}
+}
+
 // Firewall filter.log parser daemon
 function pfb_daemon_filterlog() {
 	global $pfb;
+
+	// ADR-38 Amendment 1: baseline mtime for the live log_syslog refresh (see
+	// pfb_filterlog_refresh_config). Captured at daemon start — when $config was
+	// loaded — so any later config.xml change is detected on the block path.
+	$GLOBALS['pfb_daemon_config_mtime'] = @filemtime('/conf/config.xml');
 
 	// ASN Reporting - cached setting
 	if ($pfb['asn_reporting'] != 'disabled') {
@@ -9303,6 +9325,67 @@ function pfb_daemon_filterlog() {
 		logger(LOG_NOTICE, localize_text('filterlog daemon started'), LOG_PREFIX_PKG_PFBLOCKERNG);
 		while (!feof($s_handle)) {
 			$line = @fgets($s_handle);
+
+				// ADR-38 Amendment 1: pfb_daemon_filterlog is the single writer of
+				// unified.log and the host-side DNSBL syslog emitter. The same stdin
+				// also carries the DNSBL feature logs (tail_pfb -F dnsbl.log dns_reply.log).
+				// Discriminate by the leading CSV token BEFORE the pf-filter parsing /
+				// htmlspecialchars below (those feature-log rows are written verbatim, so
+				// their bytes must not be altered — unified.log fidelity).
+				if (is_string($line)) {
+					if (strncmp($line, 'DNSBL-python,', 13) === 0) {
+						$dnsline = rtrim($line, "\r\n");
+						if ($dnsline !== '') {
+							$df = explode(',', $dnsline);
+							// Reformat through the schema-owning formatter when well-formed;
+							// fall back to the raw line otherwise so a malformed row is never
+							// dropped or corrupted.
+							if (count($df) === 11) {
+								$uni = pfb_unified_format_dnsbl(array(
+									'l_type' => $df[0], 'datetime' => $df[1], 'q_name' => $df[2],
+									'q_ip' => $df[3], 'p_type' => $df[4], 'b_type' => $df[5],
+									'group' => $df[6], 'b_eval' => $df[7], 'feed' => $df[8],
+									'dup' => $df[9], 'q_type' => $df[10],
+								));
+								@file_put_contents("{$pfb['unilog']}", "{$uni}\n", FILE_APPEND | LOCK_EX);
+								// Every DNSBL block line syslogs uniformly (incl. the PHP-path
+								// block the old python-only emitter missed). pfb_syslog_event
+								// no-ops when the toggle is off. Refresh the daemon's config
+								// first so a LIVE log_syslog toggle takes effect (no restart).
+								pfb_filterlog_refresh_config();
+								if (PfbConfig::read('log_syslog') === PfbToggle::On) {
+									pfb_syslog_event(pfb_syslog_format_dnsbl(array(
+										'q_name' => $df[2], 'q_ip' => $df[3], 'q_type' => $df[10],
+										'group' => $df[6], 'feed' => $df[8], 'b_type' => $df[5],
+										'b_eval' => $df[7],
+									)));
+								}
+							} else {
+								@file_put_contents("{$pfb['unilog']}", "{$dnsline}\n", FILE_APPEND | LOCK_EX);
+							}
+						}
+						continue;
+					}
+					if (strncmp($line, 'DNS-reply,', 10) === 0) {
+						$rpline = rtrim($line, "\r\n");
+						if ($rpline !== '') {
+							$rf = explode(',', $rpline);
+							// DNS-reply -> unified.log ONLY (blocks-only syslog: never here).
+							if (count($rf) === 10) {
+								$uni = pfb_unified_format_dnsreply(array(
+									'l_type' => $rf[0], 'datetime' => $rf[1], 'm_type' => $rf[2],
+									'o_type' => $rf[3], 'q_type' => $rf[4], 'ttl' => $rf[5],
+									'q_name' => $rf[6], 'q_ip' => $rf[7], 'r_addr' => $rf[8],
+									'iso_code' => $rf[9],
+								));
+								@file_put_contents("{$pfb['unilog']}", "{$uni}\n", FILE_APPEND | LOCK_EX);
+							} else {
+								@file_put_contents("{$pfb['unilog']}", "{$rpline}\n", FILE_APPEND | LOCK_EX);
+							}
+						}
+						continue;
+					}
+				}
 
 			// Only parse new filter events
 			if ($filter_cnt > 0 && $skip_cnt > 0) {
@@ -9640,10 +9723,12 @@ function pfb_daemon_filterlog() {
 				}
 				@file_put_contents("{$iplog}", "{$log},{$details},{$dup_entry}\n", FILE_APPEND | LOCK_EX);
 
-				// ADR-38 §2.1: emit one syslog record per CSV line when the toggle is on.
-				// The toggle is cached by pfb_syslog_event() (static, read once per process).
+				// ADR-38: emit one syslog record per CSV line when the toggle is on.
+				// Refresh the daemon's config first so a LIVE log_syslog toggle takes
+				// effect without a restart; pfb_syslog_event() then reads it fresh too.
 				// Build the field array only when log_syslog is enabled; skip otherwise.
 				// Emitted EXACTLY ONCE here — not again for the unified-log copy below.
+				pfb_filterlog_refresh_config();
 				if (PfbConfig::read('log_syslog') === PfbToggle::On) {
 					// Map $d[6] back to the canonical act value.
 					// At this point $d[6] is 'block'|'pass'|'unkn(%u)' (match was reversed).
@@ -9686,9 +9771,9 @@ function pfb_daemon_filterlog() {
 					pfb_syslog_event(pfb_syslog_format_ip($pfb_syslog_fields));
 				}
 
-				// Write to Unified Log
+				// Write to Unified Log (schema owned by pfb_unified_format_ip — ADR-38 Amendment 1)
 				if ($dup_entry == '+') {
-					@file_put_contents("{$pfb['unilog']}", "{$l_type},{$log},{$details},{$dup_entry}\n", FILE_APPEND | LOCK_EX);
+					@file_put_contents("{$pfb['unilog']}", pfb_unified_format_ip(array('l_type' => $l_type, 'log' => $log, 'details' => $details, 'dup' => $dup_entry)) . "\n", FILE_APPEND | LOCK_EX);
 				}
 			}
 		}
@@ -10226,9 +10311,6 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 
 	$log = "{$type},{$datereq},{$details},{$dup_entry}\n";
 	@file_put_contents($pfb['dnslog'], "{$log}", FILE_APPEND | LOCK_EX);
-	
-	// Write to Unified Log
-	@file_put_contents($pfb['unilog'], "{$log}", FILE_APPEND | LOCK_EX);
 
 	// Increment DNSBL Widget counter
 	if (!empty($pfb_group)) {
@@ -10721,6 +10803,39 @@ function sync_package_pfblockerng($cron='') {
 	// which rep mode inflates to all active aliases).
 	$pfb['changed_ip_aliases']	= array();
 	$pfb['changed_dnsbl_groups']	= array();
+
+	// ADR-38 Amendment 1: ensure the dedicated syslog routing is materialized.
+	// pfSense core turns a package's installedpackages/package/<n>/logging block into
+	// the syslog.d drop-in (!pfblockerng -> /var/log/pfblockerng_syslog.log), the
+	// newsyslog rotation entry, and the Status->System Logs->Packages subtab. But the
+	// `pkg add` install path does NOT copy the package XML's <logging> block into that
+	// section (only a GUI install does), so register it here, keyed on the
+	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel). The
+	// 'on'-absent check makes this a one-time write.
+	$pfb_pkg_logged = FALSE;
+	foreach (config_get_path('installedpackages/package', array()) as $pfb_idx => $pfb_pkg) {
+		if (($pfb_pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
+			continue;
+		}
+		if (empty($pfb_pkg['logging']['logfilename'])) {
+			config_set_path("installedpackages/package/{$pfb_idx}/logging", array(
+				'facilityname'	=> 'pfblockerng',
+				'logfilename'	=> 'pfblockerng_syslog.log',
+			));
+			write_config('[pfBlockerNG] register syslog routing');
+		}
+		$pfb_pkg_logged = TRUE;
+		break;
+	}
+
+	// Materialize/refresh the routing when the drop-in is missing — covers a fresh
+	// registration AND the #484 lifecycle gap (core runs system_syslogd_start only at
+	// install/resync, so a CLI reload / uninstall->redeploy could lose the drop-in).
+	// Graceful HUP, not a restart. Emission stays gated live by the log_syslog toggle.
+	if ($pfb_pkg_logged && !file_exists('/var/etc/syslog.d/pfblockerng_syslog.log.conf')) {
+		require_once('syslog.inc');
+		system_syslogd_start(TRUE);
+	}
 
 	// Detect boot process or package installation
 	if (is_platform_booting() || $g['pfblockerng_install']) {
@@ -15187,6 +15302,14 @@ function pfblockerng_php_pre_deinstall_command() {
 		// Remove pfBlockerNG log and DB folder
 		rmdir_recursive("{$pfb['dbdir']}");
 		rmdir_recursive("{$pfb['logdir']}");
+
+		// ADR-38: remove the dedicated syslog-export log + its newsyslog rotations.
+		// It lives at /var/log/pfblockerng_syslog.log (outside logdir), so it is not
+		// covered by the rmdir above. Core removes the syslog.d routing drop-in on
+		// uninstall; we own the log file itself.
+		foreach (glob('/var/log/pfblockerng_syslog.log*') ?: array() as $pfb_syslogfile) {
+			unlink_if_exists($pfb_syslogfile);
+		}
 
 		// Remove settings from config.xml
 		pfb_remove_config_settings();
