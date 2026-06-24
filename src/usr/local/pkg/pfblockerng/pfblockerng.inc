@@ -2976,15 +2976,30 @@ function pfb_hook_scripts($when, $dir = null) {
 	if ($dir === null) {
 		$dir = PFB_HOOK_SCRIPT_DIR;
 	}
+	// Resolve the allowed directory once. realpath() returns FALSE when the
+	// directory does not exist or is unresolvable — bail early.
+	$real_dir = realpath($dir);
+	if ($real_dir === FALSE) {
+		return array();
+	}
 	$out = array();
 	foreach (glob("{$dir}/hook_{$when}_*.{sh,py}", GLOB_BRACE) ?: array() as $path) {
-		// Only offer files the runner can actually exec: a regular, executable file
-		// (the runner runs it via its own shebang + execute bit). A directory or a
-		// non-executable file matching the glob would otherwise validate but fail
-		// at run time -- keep the picker, validator, and runner in agreement.
-		if (!is_file($path) || !is_executable($path)) {
+		// Canonicalize the candidate. realpath() follows symlinks and resolves
+		// '..'; FALSE means dangling symlink or unresolvable — skip.
+		// Parity with pfb_filter() LOCALFILE containment: dirname($real) must
+		// equal $real_dir so a symlink pointing outside the hook dir is excluded.
+		// is_file($real) rejects symlinks-to-directories.
+		// Executable bit is intentionally NOT gated here: presence as a regular
+		// file in the allowed dir is the authorization. A non-executable script
+		// will fail at run time (timeout(1) non-zero exit, logged by pfb_run_hooks),
+		// so the picker/validator authorize on containment + regular-file only.
+		$real = realpath($path);
+		if ($real === FALSE || dirname($real) !== $real_dir || !is_file($real)) {
 			continue;
 		}
+		// Key by the name as it appears in the dir (the symlink's own basename,
+		// not the target's), matching what the picker stores in config and what
+		// pfb_run_hooks() rebuilds the path from.
 		$base = basename($path);
 		$out[$base] = $base;
 	}
