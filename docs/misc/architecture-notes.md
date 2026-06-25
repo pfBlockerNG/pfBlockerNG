@@ -512,3 +512,74 @@ Python module a chroot-local socket path to deliver DNSBL records.
 | `log_syslog_priority` | `plain` | `'log_notice'` | Maps to PHP `LOG_NOTICE` constant |
 
 Live-VM smoke: `tests/smoke/test_syslog_export.py` (marker `smoke`).
+
+## Change detection / content hashing (ADR-42)
+
+Feed change detection is **content-addressed**, not mtime-based. The convention below is policy
+of record for every site in the codebase that decides "did this file/feed change". It is a
+sibling of ADR-40 (which gates IP **pf-table** reloads on radix-tree set membership, deliberately
+*not* file hashing) — different data, different mechanism; cross-reference only, no overlap. The
+deferred DNSBL structure-reuse ADR will build on this convention (persist each loaded file's hash
+to reuse an unchanged file's in-memory structure on a swap) but is out of scope here.
+
+**Per-side hash algorithm** — each side uses a hash native to it and compares only its own
+digests; **no cross-language digest is ever produced or compared**:
+
+| Side | Algorithm | API |
+| --- | --- | --- |
+| PHP (detector + download) | `xxh128` | `hash('xxh128', …)` / `hash_file('xxh128', …)` |
+| POSIX shell | `xxh128` | `xxh128sum` (writes the `.xxhash128` extension) |
+| Python (`pfb_unbound.py`) | `md5` | `hashlib.md5` — **policy only here; no Python code lands in ADR-42** (it ships with its first consumer, the deferred DNSBL structure-reuse ADR). `pfb_unbound.py` is stdlib-only + chrooted, and `hashlib` has no xxhash; `xxh128sum` would have to be copied into the jail. md5 is used only for Python's own self-comparisons. |
+
+PHP `hash('xxh128', X)` is byte-identical to the base-CLI `xxh128sum` (XXH128 frozen since
+xxHash 0.8.0). Pinned known-answer vector: `"pfBlockerNG"` → `4a2690170244f2e853151c59fbcb2105`
+(asserted in `tests/php/FeedChangeHashHelpersTest.php`; a future divergence is caught there).
+
+**The four comparison scenarios** — pick the lightest primitive that fits:
+
+1. **file-vs-file → `cmp -s`** (shell `cmp -s`; PHP a streamed compare or `cmp -s` shell-out;
+   Python `filecmp.cmp(a, b, shallow=False)`). Early-exits on the first differing byte, hashes
+   nothing. In-tree: the `pfblockerng.sh` aggregate member-list gate (the `cmp -s` site) — the
+   shell side already satisfies the convention this way; no `xxh128sum` call is introduced where
+   nothing needs a persisted digest.
+2. **memory-vs-file → streamed byte compare**, early-return where the language supports it; else
+   hash both.
+3. **hash-vs-file → hash the file** (`pfb_content_hash($path)`).
+4. **memory-vs-hash → hash the memory** (`pfb_content_hash($data, FALSE)`).
+
+**Persisted digests are self-describing by filename extension** — `{base}.xxhash128` (new) /
+`{base}.md5` (legacy). A bare/untagged digest reads as **md5**. The tag is mandatory: md5 and
+xxh128 are both 128-bit → both 32 hex chars, so the algorithm **cannot** be inferred from the
+digest length.
+
+**Migration — read legacy md5, write xxh128** (mirrors the ADR-28 read-boundary adapter): on read
+an `.md5`/untagged digest compares with md5; any new write computes xxh128, writes `.xxhash128`,
+and **deletes the superseded `.md5`**. No `config.xml` schema or migration — the digest is a
+sidecar file next to `.orig`. **Downgrade-safe / fail-safe:** an unreadable/unknown tag (e.g. an
+older release meeting a `.xxhash128` it cannot parse) is treated as **changed → re-ingest**, never
+a crash and never a false "unchanged".
+
+**Pre-download rule — conditional GET first.** A remote feed fetch sends a conditional request:
+`If-None-Match` (persisted `ETag`, primary) and, when no ETag is stored, `If-Modified-Since`
+(persisted `Last-Modified`). A **`304`** skips the body entirely and means "unchanged → no
+re-ingest". A **`200`** is hashed (xxh128 of the fetched bytes) against the persisted source hash
+and re-ingested **iff** the hash differs — so a spurious `200` (server ignored the validator) does
+**not** force a needless rebuild. Validators are persisted as `{base}.etag` / `{base}.lastmod`
+sidecars; the conditional request is sent only on the detector probe, so the sync ingest always
+receives the full body. **No path ever concludes "unchanged" on changed content; any ambiguity
+re-ingests.**
+
+**`xxh128sum` provenance (shell side):** confirmed present on the box, but on FreeBSD it is
+port-provided (`misc/xxhash`), not base. ADR-42 introduces **no** new shell `xxh128sum` call (the
+only shell change-detection site is `cmp -s`, which needs no binary), so no RUN_DEPENDS is declared
+yet. A future shell site that genuinely wants a persisted/portable digest must add a `pathxxh128`
+absolute-path var (per the shell standard for add-on binaries) **and** declare `xxhash` in the
+FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP needs no binary —
+`hash('xxh128')` is native.
+
+**Where it lives:** the detector + download (`pfblockerng.inc` `pfb_content_hash` / `pfb_hash_read`
+/ `pfb_hash_write` / `pfb_local_feed_changed` / `pfb_validator_read` / `pfb_validator_write` /
+`pfb_conditional_get_decision`; `pfb_download`) and `pfblockerng.php` (`pfb_update_check`).
+Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
+`tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
+ADR-04 smoke (`tests/smoke/test_smoke_feeds.py`).
