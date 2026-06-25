@@ -105,6 +105,8 @@ class RequireConfigGatewaySniff implements Sniff
 		// ADR-40: alias-table apply mode + batch size
 		'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode',
 		'installedpackages/pfblockerng/config/0/pfb_alias_delta_batch',
+		// ADR-43: tick-cron dispatch interval
+		'installedpackages/pfblockerng/config/0/pfb_tick_interval',
 		// installedpackages/pfblockerngdnsblsettings/config/0 (DNSBL settings)
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
