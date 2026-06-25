@@ -9,8 +9,9 @@ use PHPUnit\Framework\TestCase;
  * ADR-37 — DoT/DoQ block rule builder + action-normalisation unit tests.
  *
  * Functions under test:
- *   pfb_dot_block_action()  — normalise a stored/posted action to 'block' | 'reject'.
- *   pfb_dot_block_rule()    — build the per-interface filter/rule array.
+ *   pfb_dot_block_action()        — normalise a stored/posted action to 'block' | 'reject'.
+ *   pfb_dot_block_rule()          — build the per-interface filter/rule array.
+ *   pfb_dot_block_floating_rule() — build the single floating filter/rule (floating mode).
  *
  * Intent: the DoT/DoQ block rules are outbound (LAN->WAN) rules, so they DEFAULT to
  * Reject (fast-fail the client to plain DNS) — matching the outbound Rule Action
@@ -22,6 +23,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_dot_block_action')]
 #[CoversFunction('pfb_dot_block_rule')]
+#[CoversFunction('pfb_dot_block_floating_rule')]
 final class DotBlockRuleBuilderTest extends TestCase
 {
 	// -----------------------------------------------------------------------
@@ -134,5 +136,63 @@ final class DotBlockRuleBuilderTest extends TestCase
 		$rule = pfb_dot_block_rule('lan', '', 'reject');
 		$this->assertArrayNotHasKey('tracker', $rule, 'builder must not set tracker (caller appends it last)');
 		$this->assertSame('descr', array_key_last($rule), 'descr must be the last key before the tracker is appended');
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_dot_block_floating_rule() — single floating rule (floating mode)
+	// -----------------------------------------------------------------------
+
+	public function testFloatingRuleIsFloatingQuickDirectionIn(): void
+	{
+		// Given floating mode, the single rule must be floating + quick with direction 'in'
+		// (the direction ADR-37 mandates for a floating variant — matches client egress
+		// entering the firewall on the selected interfaces).
+		$rule = pfb_dot_block_floating_rule(['lan', 'opt1'], '', 'reject');
+
+		$this->assertSame('yes', $rule['floating'], 'floating rule must set floating=yes');
+		$this->assertSame('yes', $rule['quick'], 'floating rule must set quick=yes');
+		$this->assertSame('in', $rule['direction'], 'floating rule direction must be in');
+	}
+
+	public function testFloatingRuleJoinsAllInterfacesIntoOneRule(): void
+	{
+		// Given multiple interfaces, floating mode produces ONE rule whose interface field
+		// is the comma-joined list (not one rule per interface).
+		$rule = pfb_dot_block_floating_rule(['lan', 'opt1', 'opt2'], '', 'reject');
+		$this->assertSame('lan,opt1,opt2', $rule['interface'], 'interface = comma-joined selected ifaces');
+		$this->assertSame('pfB_DoT_Block_Floating', $rule['descr'], 'floating rule carries the single floating marker');
+	}
+
+	public function testFloatingRuleTypeFollowsActionBlock(): void
+	{
+		// Action drives the floating rule's disposition too (block branch).
+		$rule = pfb_dot_block_floating_rule(['lan'], '', 'block');
+		$this->assertSame('block', $rule['type'], 'floating action=block must yield a block rule');
+	}
+
+	public function testFloatingRuleTypeDefaultsToRejectForEmptyAction(): void
+	{
+		// And defaults to reject for an empty/unknown action (proves block above is a real branch).
+		$rule = pfb_dot_block_floating_rule(['lan'], '', '');
+		$this->assertSame('reject', $rule['type'], 'floating default (empty action) must be reject');
+	}
+
+	public function testFloatingRuleCarriesFixedDestinationAndSourceBranches(): void
+	{
+		// Destination is the same negated (self):853 as the per-interface rule.
+		$rule = pfb_dot_block_floating_rule(['lan'], '', 'reject');
+		$this->assertSame('(self)', $rule['destination']['network'], 'floating destination.network = (self)');
+		$this->assertSame('853', $rule['destination']['port'], 'floating destination.port = 853');
+		$this->assertSame('inet46', $rule['ipprotocol'], 'floating ipprotocol = inet46');
+		$this->assertSame('tcp/udp', $rule['protocol'], 'floating protocol = tcp/udp');
+		$this->assertSame(['any' => ''], $rule['source'], 'no alias -> source any');
+
+		// Exception alias negates the source, same as the per-interface rule.
+		$withAlias = pfb_dot_block_floating_rule(['lan'], 'DoT_Exceptions', 'reject');
+		$this->assertSame(
+			['address' => 'DoT_Exceptions', 'not' => ''],
+			$withAlias['source'],
+			'alias present -> negated alias source'
+		);
 	}
 }

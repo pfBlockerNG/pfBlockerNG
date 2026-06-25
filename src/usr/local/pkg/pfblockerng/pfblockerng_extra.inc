@@ -1015,6 +1015,17 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
+		// ADR-37: DoT/DoQ block floating mode: 'on' | '' (checkbox). Default '' (off).
+		// On = a single floating rule (direction 'in') over the selected interfaces
+		// instead of one rule per interface. Off preserves the per-interface default.
+		'dnsbl_dot_block_floating' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'since'         => '4.0.0',
+		],
+
 		// -------------------------------------------------------------------
 		// ADR-38: syslog export settings (General / Log Settings section, $gen)
 		// -------------------------------------------------------------------

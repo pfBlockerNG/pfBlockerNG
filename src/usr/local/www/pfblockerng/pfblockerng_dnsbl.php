@@ -135,6 +135,7 @@ $pfb_dot_block_int_raw			= (string) PfbConfig::read('dnsbl_dot_block_int');
 $pconfig['dnsbl_dot_block_int']		= ($pfb_dot_block_int_raw !== '') ? explode(',', $pfb_dot_block_int_raw) : [];
 $pconfig['dnsbl_dot_block_exclude']	= (string) PfbConfig::read('dnsbl_dot_block_exclude');
 $pconfig['dnsbl_dot_block_action']	= (string) PfbConfig::read('dnsbl_dot_block_action');
+$pconfig['dnsbl_dot_block_floating']	= PfbConfig::read('dnsbl_dot_block_floating');
 
 // Select field options
 
@@ -875,6 +876,7 @@ if ($_POST) {
 			PfbConfig::write('dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
 			PfbConfig::write('dnsbl_dot_block_exclude', $dot_block_alias_raw);
 			PfbConfig::write('dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
+			PfbConfig::write('dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
@@ -2918,6 +2920,17 @@ $section->addInput(new Form_Select(
 		. 'Select the action for the DoT/DoQ block rules. <strong>Reject</strong> fast-fails the client '
 		. '(so it falls back to plain DNS) while <strong>Block</strong> silently drops the connection.')
   ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Checkbox(
+	'dnsbl_dot_block_floating',
+	gettext('Floating Rule'),
+	gettext('Use a single floating rule instead of one rule per interface'),
+	pfb_cfg_toggle_read($pconfig['dnsbl_dot_block_floating']) === PfbToggle::On,
+	'on'
+))->setHelp('Default: <strong>off</strong> (one rule per selected interface).<br />'
+		. 'When enabled, a single floating rule (direction <strong>in</strong>, quick) is created over '
+		. 'all selected interfaces instead of a separate rule per interface. The action, interface '
+		. 'selection, and exception alias all apply unchanged.');
 
 $form->add($section);
 

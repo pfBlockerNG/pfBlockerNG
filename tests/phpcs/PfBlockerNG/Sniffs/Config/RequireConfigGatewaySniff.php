@@ -157,6 +157,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_int',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_exclude',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_action',
+		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_floating',
 		// ADR-38: syslog export toggle
 		'installedpackages/pfblockerng/config/0/log_syslog',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)

@@ -346,6 +346,18 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('reject', $result, 'dnsbl_dot_block_action absent -> reject (default)');
 	}
 
+	public function testReadReturnsOffDefaultForDotBlockFloatingAbsentKey(): void
+	{
+		// dnsbl_dot_block_floating default is '' -> PfbToggle::Off (ADR-37): absent key
+		// preserves the per-interface default; floating is strictly opt-in.
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_floating')
+		);
+
+		$result = PfbConfig::read('dnsbl_dot_block_floating');
+		$this->assertSame(PfbToggle::Off, $result, 'dnsbl_dot_block_floating absent -> Off (per-interface default)');
+	}
+
 	public function testReadReturnsRegisteredDefaultForSafeSearchAbsentKey(): void
 	{
 		// safesearch_enable default is 'Disable'.
@@ -664,6 +676,7 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_dot_block_int',
 			'dnsbl_dot_block_exclude',
 			'dnsbl_dot_block_action',
+			'dnsbl_dot_block_floating',
 
 			// pfblockerngsafesearch scalars
 			'safesearch_enable',

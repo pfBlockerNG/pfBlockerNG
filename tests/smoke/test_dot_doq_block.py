@@ -24,6 +24,8 @@ Proves on a real pfSense CE VM that:
   firewall-self exemption is active.
 * **Rule Action selector:** the action field flips the rule ``type`` — default
   ``reject`` (before-state) switches to ``block`` when the selector is set.
+* **Floating mode:** the Floating Rule option replaces the per-interface rule(s) with a
+  single floating rule (``floating=yes``, ``direction=in``) over the selected interfaces.
 
 Cases 1–3 and 5–7 require at least one non-WAN interface and skip cleanly on a
 WAN-only VM (e.g. the default smoke image). The interface is discovered at runtime
@@ -61,6 +63,9 @@ _PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
 
 # Marker prefix for DoT/DoQ-block owned rules (mirrors PFB_DOT_BLOCK_DESCR_PFX).
 _DOT_BLOCK_DESCR_PFX = "pfB_DoT_Block_"
+
+# Marker for the single floating DoT/DoQ-block rule (mirrors PFB_DOT_BLOCK_FLOATING_DESCR).
+_DOT_BLOCK_FLOATING_DESCR = "pfB_DoT_Block_Floating"
 
 # User filter rule descriptor seeded in Cases 3 and 6 to prove survival.
 _USER_FILTER_DESCR = "my-user-filter-dot-block-smoke"
@@ -296,6 +301,7 @@ def _set_dot_block(
     ifaces: list[str],
     exception: str = "",
     action: str | None = None,
+    floating: bool | None = None,
     timeout: float = 60.0,
 ) -> None:
     """Write the DoT/DoQ-block config fields and persist config.xml.
@@ -303,16 +309,24 @@ def _set_dot_block(
     ``action`` selects the rule disposition ('block' | 'reject'). When None the
     key is left ABSENT, so the gateway's registered default (reject) applies —
     exercising the default path an upgrading install takes.
+
+    ``floating`` selects the rule mode: True = a single floating rule, False =
+    one rule per interface. When None the key is left ABSENT (gateway default =
+    off = per-interface).
     """
     toggle = "on" if enabled else ""
     iface_val = ",".join(ifaces)
     action_line = f"$d['dnsbl_dot_block_action'] = {h._php_str(action)};\n" if action is not None else ""
+    floating_line = (
+        f"$d['dnsbl_dot_block_floating'] = {h._php_str('on' if floating else '')};\n" if floating is not None else ""
+    )
     snippet = (
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['dnsbl_dot_block']         = {h._php_str(toggle)};\n"
         f"$d['dnsbl_dot_block_int']     = {h._php_str(iface_val)};\n"
         f"$d['dnsbl_dot_block_exclude'] = {h._php_str(exception)};\n"
         f"{action_line}"
+        f"{floating_line}"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
         "write_config('pfBlockerNG smoke: set DoT/DoQ block config');\n"
         "echo 'OK';"
@@ -553,6 +567,66 @@ def test_dot_doq_block_action_selector_sets_rule_type(deployed_vm: SmokeVM, prim
         # THEN — the rule disposition follows the selector.
         assert _filter_rule_field(vm, descr, "type") == "block", (
             f"{descr}: type != 'block' after selecting the Block action"
+        )
+
+    finally:
+        _cleanup_dot_block(vm)
+
+
+def test_dot_doq_block_floating_mode_single_rule(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37: the Floating Rule option replaces per-interface rules with one floating rule.
+
+    Scenario: switching to floating mode prunes the per-interface rule and creates a single
+    floating rule (direction in) covering the selected interface(s).
+
+      Background: pfBlockerNG installed; master + DNSBL enabled.
+
+      Given DoT/DoQ block enabled per-interface (floating off),
+        And a pfB_DoT_Block_<iface> rule exists and no floating marker exists (before-state),
+
+      When the Floating Rule option is enabled and a full reload runs,
+
+      Then the per-interface rule is gone, replaced by a single pfB_DoT_Block_Floating rule
+        carrying floating=yes, direction=in, and the selected interface in its interface list.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+    per_iface_descr = _DOT_BLOCK_DESCR_PFX + iface
+
+    try:
+        # GIVEN — $mode='enabled' and per-interface DoT block; assert before-state.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="", floating=False)
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
+        assert _filter_dot_block_count(vm, per_iface_descr) == 1, (
+            f"{per_iface_descr}: per-interface rule absent before floating switch (before-state)"
+        )
+        assert _filter_dot_block_count(vm, _DOT_BLOCK_FLOATING_DESCR) == 0, (
+            "floating rule present before floating switch (before-state not clean)"
+        )
+
+        # WHEN — enable the floating option and reload.
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="", floating=True)
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
+
+        # THEN — per-interface rule pruned; exactly one floating rule with the right shape.
+        assert _filter_dot_block_count(vm, per_iface_descr) == 0, (
+            f"{per_iface_descr}: per-interface rule not pruned after switching to floating"
+        )
+        assert _filter_dot_block_count(vm, _DOT_BLOCK_FLOATING_DESCR) == 1, (
+            "expected exactly one pfB_DoT_Block_Floating rule after enabling floating mode"
+        )
+        assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "floating") == "yes", (
+            "floating rule must carry floating=yes"
+        )
+        assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "direction") == "in", (
+            "floating rule direction must be in"
+        )
+        assert iface in _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "interface").split(","), (
+            f"floating rule interface list must contain {iface}"
         )
 
     finally:
