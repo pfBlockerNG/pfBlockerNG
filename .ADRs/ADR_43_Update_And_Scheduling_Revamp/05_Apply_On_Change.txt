@@ -1,0 +1,75 @@
+================================================================================
+PHASE 5 PROMPT — Apply-on-change + optional quiet-hours window
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §2.D + contract #9; consumes ADR-40/10)
+================================================================================
+
+ROLE
+You implement Phase 5 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-CHANGING — a due job that detects a change applies it IMMEDIATELY (consuming
+ADR-40 for IP, ADR-10 for DNSBL), with an OPTIONAL quiet-hours window that defers apply. Work inline
+on the branch, one commit, push directly (open a PR only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+This is the payoff of sequencing after ADR-40 + ADR-10: apply is now CHEAP, so there is no reason to
+batch changes behind a separate apply schedule. Switch to apply-on-change and collapse the old
+explicit apply-schedule reconciliation to a single OPTIONAL "quiet hours / maintenance window" knob
+for operators who still want batching. CALL ADR-40/10's apply paths — do not reimplement them.
+
+REQUIRED READING
+- FIRST, read RESULTS/04_Results.txt (the tick + ledger drive jobs). If missing, STOP and report.
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§2.D, contract #9, §5; §7 reject-criterion: if
+  ADR-40/10 are not actually cheap/landed, STOP and flag — apply-on-change is unsafe without them)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — ADR-40's content-addressed IP apply entry and
+  ADR-10's zero-downtime DNSBL swap entry (grep for the symbols their ADRs document); the tick
+  dispatch from Phase 4; the ADR-42 detector verdict a due job already has.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig registry (register the quiet-hours
+  window knob; read docs/misc/config-gateway.md).
+- CLAUDE.md (PHP standards; ADR-29 config; the test-coverage mandate).
+
+ACTION PLAN (red→green)
+1. In the tick's per-job flow: when the ADR-42 detector reports a change for a due job, apply it
+   immediately via ADR-40 (IP scope) / ADR-10 (DNSBL scope). No change ⇒ no apply (unchanged from
+   the reuse contract).
+2. Add an OPTIONAL quiet-hours/maintenance-window knob (PfbConfig, ADR-29): when set and the current
+   time is OUTSIDE the window, a detected change is RECORDED as pending and DEFERRED; the next tick
+   inside the window applies it. Default: empty window ⇒ apply immediately.
+3. Remove the now-redundant explicit apply-schedule reconciliation that Phase 4 left in place (the old
+   separate "when to apply" path), keeping only the window knob.
+4. Tests (red→green):
+   - Change detected, no window (or inside window) ⇒ applied on the SAME tick (FAILS before:
+     deferred to the old apply schedule).
+   - Change detected OUTSIDE a configured window ⇒ deferred (pending recorded), then applied on the
+     first tick inside the window.
+   - No change ⇒ no apply (regression guard).
+   - Clock-injected window-boundary cases (just-before / just-after the window edge).
+   - Smoke (live): a real feed change applies on the tick WITHOUT a manual Force; with a window set
+     outside "now", apply is deferred until the window.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); the window knob via PfbConfig (ADR-29). CALL ADR-40/10
+  apply — do NOT reimplement. The window's "now"/boundary check must be clock-INJECTABLE for tests. Do
+  NOT touch the GUI (Phase 6). If ADR-40/10 cheap-apply is NOT actually available, STOP and flag the
+  §7 reject-criterion rather than forcing a costly apply on every tick.
+
+VERIFICATION
+- vendor/bin/phpunit → green (apply-now / defer / no-change / boundary tests)
+- php -l / phpstan / phpcs (phpcs.xml.dist) → clean
+- Live-VM smoke: apply-on-change (no Force) green; quiet-hours defer green
+- diff-read: the old explicit apply-schedule reconciliation is gone; only the window knob remains.
+
+EXPECTED RESULT
+A due job applies a detected change immediately via ADR-40/10; an optional quiet-hours window defers
+apply to the window; no change ⇒ no apply; the separate apply schedule is removed.
+
+COMMIT (single)
+    pfblockerng: apply-on-change via ADR-40/10 with optional quiet-hours window (ADR-43 P5)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/05_Results.txt`
+Record: the apply-on-change wiring (which ADR-40/10 entries you called); the quiet-hours knob (PfbConfig
+key, semantics, default); how deferral/pending is recorded; the boundary-case test results; the live
+apply-on-change result; the go-ahead for Phase 6.

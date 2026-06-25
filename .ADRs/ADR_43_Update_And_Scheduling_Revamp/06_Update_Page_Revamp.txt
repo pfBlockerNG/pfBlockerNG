@@ -1,0 +1,76 @@
+================================================================================
+PHASE 6 PROMPT — Update page revamp on the new API (www/ — Tier A + Tier B)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §2.F + §5 front-end constraint)
+================================================================================
+
+ROLE
+You implement Phase 6 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-CHANGING and touches the front end (`www/`) — it rebuilds the Update tab on
+the new {scope,force,trigger} API + the due-ledger. Work inline on the branch, one commit, push
+directly (open a PR only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+The Update tab's Force/Update/Cron/Reload controls inherited the verb overload — they don't reveal
+force-reparse-vs-reuse or which side. With the named API (Phase 3) + the ledger (Phase 2/4), the page
+can present explicit scope+force controls, a per-feed/job "next run" view, and a clean run-now. This
+is a FUNCTIONAL cleanup onto the new API, NOT a visual redesign.
+
+REQUIRED READING
+- FIRST, read RESULTS/05_Results.txt (apply-on-change live). If missing, STOP and report.
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§2.F, §5 "Tier A required, Tier B required")
+- src/usr/local/www/pfblockerng/pfblockerng.php — the Update tab markup + the control→verb POST
+  handlers (now route to the Phase-3 new API); the update-log pane.
+- The Phase-3 new entry signature (RESULTS/03_Results.txt) and the Phase-2 ledger read API
+  (RESULTS/02_Results.txt) for the "next run" view.
+- ADR-14 UI testing: tests/smoke/ui/ — helpers.py, an existing Tier-A `ui_render` test and a Tier-B
+  `ui_e2e`/`ui_browser` test to copy the idiom; docs/misc/architecture-notes.md (UI tiers); the
+  marker/oracle rules (200 + page marker + body free of Fatal/Warning/Notice/Parse/Uncaught + no new
+  php_error.log line — NEVER 200 alone).
+- CLAUDE.md (PHP + www/ help-text style: brief, match neighbouring help; the test-coverage mandate;
+  front-end changes REQUIRE Tier A, and Tier B when observable only there — this one is).
+
+ACTION PLAN
+1. Replace the opaque Force/Update/Cron/Reload buttons with explicit controls that build the new
+   request: a SCOPE selector (ip / dnsbl / both) + a FORCE toggle (reparse vs reuse), and a single
+   "Run now" that POSTs to the new API. Keep the deprecated verbs reachable only as internal mappings
+   (no new UI for them).
+2. Add a per-feed/job "NEXT RUN" view sourced from the due-ledger (read-only): show last-run +
+   next-due so the operator sees the schedule the tick will honour.
+3. Clean up the update-log pane presentation (no behaviour change to logging itself).
+4. Field/help text: brief, matching neighbouring help texts (do not out-prose them).
+5. Tests:
+   - Tier A (`ui_render`, REQUIRED, PR-gating): GET the Update page → 200, page-specific marker
+     present, body free of Fatal/Parse/Warning/Notice/Uncaught, no new on-box php_error.log line.
+   - Tier B (`ui_e2e`/`ui_browser`, REQUIRED here — multi-step + structural): a browser flow that
+     selects scope+force, clicks Run now, and asserts the EFFECTIVE result (config/state changed via
+     helpers.config_get / pfctl / the ledger), then re-renders and confirms the "next run" view
+     reflects the run. Use webui.url() + the existing fixtures.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); PFBL-01 green for any exec/path build in the handler;
+  www/ help-text brevity. POST to the Phase-3 new API — do NOT resurrect raw verb strings in the UI.
+  Do NOT change the scheduling logic (Phases 4/5) — the page only TRIGGERS and DISPLAYS. SMOKE_ADMIN_
+  PASSWORD must be set for the UI fixtures (else they SKIP, never fail).
+
+VERIFICATION
+- vendor/bin/phpunit / php -l / phpstan / phpcs (phpcs.xml.dist) → clean
+- python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="  → green (Tier A)
+- the Tier-B browser flow (ui_e2e/ui_browser) → green on the live VM
+- diff-read: the Update tab posts the new request; the next-run view reads the ledger; log pane tidy.
+
+EXPECTED RESULT
+A revamped Update tab with explicit scope+force controls, a ledger-sourced next-run view, a clean
+run-now and update-log pane — all on the new API; Tier A + Tier B green.
+
+COMMIT (single)
+    pfblockerng: revamp the Update page onto the scope/force API + ledger view (ADR-43 P6)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/06_Results.txt`
+Record: the new control set + how each maps to the request; the next-run view's data source; the Tier
+A marker used; the Tier B flow + what effective state it asserts; verification output; the go-ahead
+for Phase 7.
