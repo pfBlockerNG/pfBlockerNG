@@ -42,6 +42,7 @@ class RequirePfbFilterSniff implements Sniff
 		'pfb_unbound_py_ccache_flush_cmds',
 		'pfb_run_hooks',
 		'pfb_unbound_py_write_control',
+		'pfb_files_equal',
 	];
 
 	/**

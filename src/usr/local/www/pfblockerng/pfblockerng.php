@@ -471,7 +471,15 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		}
 
 		if ($localfile) {
-			$remote_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime("{$list_download}"));
+			// ADR-42 Phase 1: local-file change detection delegated to the extracted helper
+			// pfb_local_feed_changed() (pfblockerng.inc). Behaviour-preserving refactor:
+			// the helper encodes today's mtime + md5-confirm decision (Phase 2 will swap
+			// to xxh128 there without touching this call site).
+			$pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
+			if (!$pfb['cron_update']) {
+				$log = "  ( local feed unchanged )\tUpdate not required\n";
+				pfb_logger("{$log}", 1);
+			}
 		}
 		else {
 			// Download URL headers and compare previously downloaded file with remote timestamp
@@ -518,71 +526,54 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			if ($ch) {
 				curl_close($ch);
 			}
-		}
 
-		// If remote timestamp not found, Attempt md5 comparison
-		if ($remote_stamp_raw == -1) {
+			// If remote timestamp not found, Attempt md5 comparison
+			if ($remote_stamp_raw == -1) {
 
-			// Download Feed to compare md5's. If update required, downloaded md5 file will be used instead of downloading twice
-			if (pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint)) {
+				// Download Feed to compare md5's. If update required, downloaded md5 file will be used instead of downloading twice
+				if (pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint)) {
 
-				// Collect md5 checksums
-				$remote_md5	= @md5_file("{$pfborig}/{$header}.md5.raw");
-				$local_md5	= @md5_file($local_file);
+					// Collect md5 checksums
+					$remote_md5	= @md5_file("{$pfborig}/{$header}.md5.raw");
+					$local_md5	= @md5_file($local_file);
 
-				if ($remote_md5 != $local_md5) {
-					$log = "\n\t\t\t\t( md5 changed )\t\tUpdate found\n";
-					pfb_logger("{$log}", 1);
-					$pfb['update_cron'] = TRUE;
-					touch("{$pfbfolder}/{$header}.update");
-					return;
+					if ($remote_md5 != $local_md5) {
+						$log = "\n\t\t\t\t( md5 changed )\t\tUpdate found\n";
+						pfb_logger("{$log}", 1);
+						$pfb['update_cron'] = TRUE;
+						touch("{$pfbfolder}/{$header}.update");
+						return;
+					}
+					else {
+						$log = "\n\t\t\t\t( md5 unchanged )\tUpdate not required\n";
+						pfb_logger("{$log}", 1);
+						unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+						return;
+					}
 				}
 				else {
-					$log = "\n\t\t\t\t( md5 unchanged )\tUpdate not required\n";
-					pfb_logger("{$log}", 1);
+					$log = "\n\tFailed to download Feed for md5 comparison!\tUpdate skipped\n";
 					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+					touch("{$pfbfolder}/{$header}.fail");
+					pfb_logger("{$log}", 1);
 					return;
 				}
 			}
 			else {
-				$log = "\n\tFailed to download Feed for md5 comparison!\tUpdate skipped\n";
-				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-				touch("{$pfbfolder}/{$header}.fail");
+				$log = "  Remote timestamp: {$remote_tds}\n";
 				pfb_logger("{$log}", 1);
-				return;
-			}
-		}
-		else {
-			$log = "  Remote timestamp: {$remote_tds}\n";
-			pfb_logger("{$log}", 1);
-			$local_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime($local_file));
-			$log = "  Local  timestamp: {$local_tds}\t";
-			pfb_logger("{$log}", 1);
-	
-			if ("{$remote_tds}" != "{$local_tds}") {
-				// A differing mtime is only a HINT. For a local file the source is
-				// already on disk, so confirm the bytes actually changed with a cheap
-				// content hash before triggering a full re-ingest -- a touch/cp/rsync
-				// that bumps mtime without changing content must not force a needless
-				// re-download. Fail OPEN: if the source hash can't be read, fall back
-				// to the mtime decision (re-ingest) rather than risk missing a change.
-				// Remote feeds stay timestamp-primary -- hashing a remote feed means
-				// downloading it (the work this timestamp check avoids); its
-				// no-Last-Modified case already falls back to md5 above.
-				$src_md5 = @md5_file($list_download);
-				if ($localfile && $src_md5 !== FALSE && $src_md5 === @md5_file($local_file)) {
-					$log = "  ( mtime changed, content identical )\tUpdate not required\n";
+				$local_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime($local_file));
+				$log = "  Local  timestamp: {$local_tds}\t";
+				pfb_logger("{$log}", 1);
+
+				if ("{$remote_tds}" != "{$local_tds}") {
+					$pfb['cron_update'] = TRUE;
+				}
+				else {
+					$log = "Update not required\n";
 					pfb_logger("{$log}", 1);
 					$pfb['cron_update'] = FALSE;
 				}
-				else {
-					$pfb['cron_update'] = TRUE;
-				}
-			}
-			else {
-				$log = "Update not required\n";
-				pfb_logger("{$log}", 1);
-				$pfb['cron_update'] = FALSE;
 			}
 		}
 	} else {
