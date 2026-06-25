@@ -1004,6 +1004,17 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
+		// ADR-37: DoT/DoQ block rule action: 'reject' (default) | 'block'.
+		// Mirrors the IP-settings inbound/outbound Rule Action selector. Reject
+		// fast-fails the client (outbound LAN->WAN rule); block silently drops.
+		'dnsbl_dot_block_action' => [
+			'section'       => $dnsbl,
+			'default'       => 'reject',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
 		// -------------------------------------------------------------------
 		// ADR-38: syslog export settings (General / Log Settings section, $gen)
 		// -------------------------------------------------------------------

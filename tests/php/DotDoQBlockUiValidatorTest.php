@@ -179,4 +179,50 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
 		$this->assertStringContainsString('DoT/DoQ Block', $errors[1]);
 	}
+
+	// -----------------------------------------------------------------------
+	// RULE ACTION — block/reject selector (both directions + rejection)
+	// -----------------------------------------------------------------------
+
+	public function testActionRejectIsAccepted(): void
+	{
+		// Given the default rule action (reject)
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, '', 'reject');
+
+		// Then no errors are returned
+		$this->assertSame([], $errors, 'action=reject must be accepted');
+	}
+
+	public function testActionBlockIsAccepted(): void
+	{
+		// Given the user selected the Block action
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, '', 'block');
+
+		// Then no errors are returned
+		$this->assertSame([], $errors, 'action=block must be accepted');
+	}
+
+	public function testOmittedActionDefaultsToAcceptedReject(): void
+	{
+		// Given the action argument is omitted (defaults to reject)
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, '');
+
+		// Then the default action passes validation
+		$this->assertSame([], $errors, 'omitted action must default to an accepted value');
+	}
+
+	public function testInvalidActionIsRejected(): void
+	{
+		// Given: before -> a valid action is accepted
+		$errorsBefore = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, '', 'block');
+		$this->assertSame([], $errorsBefore, 'pre-condition: block is accepted');
+
+		// When an unknown action token is submitted
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, '', 'drop');
+
+		// Then an error naming the feature is returned
+		$this->assertNotEmpty($errors, 'an unknown rule action must be rejected');
+		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
+		$this->assertStringContainsString('action', $errors[0]);
+	}
 }

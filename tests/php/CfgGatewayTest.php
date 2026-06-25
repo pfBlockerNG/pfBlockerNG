@@ -334,6 +334,18 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('lo0', $result);
 	}
 
+	public function testReadReturnsRejectDefaultForDotBlockActionAbsentKey(): void
+	{
+		// dnsbl_dot_block_action default is 'reject' (ADR-37): an existing install
+		// upgrading with the key absent reads to Reject, the corrected outbound default.
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_action')
+		);
+
+		$result = PfbConfig::read('dnsbl_dot_block_action');
+		$this->assertSame('reject', $result, 'dnsbl_dot_block_action absent -> reject (default)');
+	}
+
 	public function testReadReturnsRegisteredDefaultForSafeSearchAbsentKey(): void
 	{
 		// safesearch_enable default is 'Disable'.
@@ -651,6 +663,7 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_dot_block',
 			'dnsbl_dot_block_int',
 			'dnsbl_dot_block_exclude',
+			'dnsbl_dot_block_action',
 
 			// pfblockerngsafesearch scalars
 			'safesearch_enable',
