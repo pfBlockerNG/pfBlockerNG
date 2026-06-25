@@ -383,7 +383,8 @@ def _cleanup_dot_block(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Disable DoT/DoQ block and reload — shared teardown used by finally blocks."""
     try:
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update", timeout=timeout)
+        h.reload(vm, "update", wait_unbound=False, timeout=timeout)
+        h.apply_filter_sync(vm)
     except Exception:
         pass  # best-effort in teardown; don't mask the test failure
 
@@ -450,19 +451,21 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable DoT block; assert before-state clean.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
             "pfB_DoT_Block_* filter/rule entries present before enable — before-state not clean"
         )
-        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+        assert not _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
 
         # WHEN — enable on the primary interface and reload.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — exactly 1 filter/rule entry for the primary interface.
         count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
@@ -485,8 +488,8 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
             f"{descr}: destination.port != '853'"
         )
 
-        # THEN — pfctl -sr confirms the block rule is active (async: poll until present).
-        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+        # THEN — pfctl -sr confirms the block rule is active.
+        assert _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows no block rule for port 853 after enable\n"
             + _dot_block_match_report(vm, expected_present=True)
             + "\n"
@@ -526,27 +529,29 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_ifa
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on the primary interface; assert before-state with rule present.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
             f"pfB_DoT_Block_{iface} filter/rule entry absent before disable — setup failed"
         )
-        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+        assert _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows no port-853 block before disable — setup failed\n"
             + _dot_block_match_report(vm, expected_present=True)
         )
 
         # WHEN — disable and reload.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all pfB_DoT_Block_* entries must be gone.
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
             "pfB_DoT_Block_* filter/rule entries still present after disable"
         )
 
-        # THEN — pfctl -sr must show no port-853 block rule (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+        # THEN — pfctl -sr must show no port-853 block rule.
+        assert not _pfctl_sr_has_block_853(vm), (
             "pfctl -sr still shows port-853 block rule after disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -593,7 +598,8 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
         h.set_pfb_keep(vm, False)
         # GIVEN — seed the user filter rule; assert block is disabled.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         _seed_user_filter(vm, _USER_FILTER_DESCR)
 
         assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
@@ -605,7 +611,8 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
 
         # WHEN — enable on the primary interface.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — pfB rule appears; user rule survives enable.
         assert _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), f"pfB_DoT_Block_{iface} not created after enable"
@@ -615,7 +622,8 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
 
         # WHEN — disable.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — pfB rule gone; user rule survives disable.
         assert not _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
@@ -627,7 +635,8 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
 
         # WHEN — re-enable for the uninstall step.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         assert _filter_rule_present(vm, _DOT_BLOCK_DESCR_PFX + iface), (
             f"pfB_DoT_Block_{iface} not recreated before uninstall step"
         )
@@ -695,7 +704,8 @@ def test_stale_interface_rule_pruned_on_reconcile(deployed_vm: SmokeVM) -> None:
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on both interfaces; assert both rules present.
         _set_dot_block(vm, enabled=True, ifaces=[iface_keep, iface_drop], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface_keep) == 1, (
             f"pfB_DoT_Block_{iface_keep} rule absent before prune — setup failed"
@@ -706,7 +716,8 @@ def test_stale_interface_rule_pruned_on_reconcile(deployed_vm: SmokeVM) -> None:
 
         # WHEN — reduce to keep-interface only.
         _set_dot_block(vm, enabled=True, ifaces=[iface_keep], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — drop-interface rule removed.
         drop_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface_drop)
@@ -756,7 +767,8 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — start from disabled state.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
             "pfB_DoT_Block_* entries present before Case 5 — state not clean"
         )
@@ -767,7 +779,8 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
 
         # WHEN — enable with exception alias set.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception=_EXCEPTION_ALIAS)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — rule has negated-alias source.
         src_addr = _filter_rule_nested_field(vm, descr, "source", "address")
@@ -778,7 +791,8 @@ def test_exception_alias_source_in_config_xml_when_set(deployed_vm: SmokeVM, pri
 
         # WHEN — clear the exception alias.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — rule source is <any> (source.any key present; address absent).
         assert _filter_rule_has_key(vm, descr, "source", "any"), (
@@ -829,7 +843,8 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     h.set_pfb_keep(vm, False)
     # GIVEN — enable DoT block on the primary interface and seed a user filter rule.
     _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-    h.reload(vm, "update")
+    h.reload(vm, "update", wait_unbound=False)
+    h.apply_filter_sync(vm)
     _seed_user_filter(vm, _USER_FILTER_DESCR)
 
     # BEFORE-STATE: assert all objects are present before uninstall.
@@ -895,23 +910,25 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable DoT block; assert before-state clean.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
-        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+        assert not _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
-        assert h.wait_until(lambda: not _pfctl_sr_block_853_has_self_exempt(vm)), (
+        assert not _pfctl_sr_block_853_has_self_exempt(vm), (
             "pfctl -sr shows self-exempt port-853 rule before enable — before-state not clean\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
 
         # WHEN — enable on the primary interface and reload.
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
-        # THEN — pfctl -sr contains the block rule for port 853 (async: poll until present).
-        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+        # THEN — pfctl -sr contains the block rule for port 853.
+        assert _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows no block rule for port 853 after enable\n"
             + _dot_block_match_report(vm, expected_present=True)
             + "\n"
@@ -919,7 +936,7 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
         )
 
         # THEN — the rule carries the self-exempt guard ('!' + 'self' on the block line).
-        assert h.wait_until(lambda: _pfctl_sr_block_853_has_self_exempt(vm)), (
+        assert _pfctl_sr_block_853_has_self_exempt(vm), (
             "pfctl -sr block rule for port 853 does not carry the self-exempt negation guard "
             "('!' + 'self' tokens absent on the block-853 line) — the firewall is NOT exempt from its own rule\n"
             + _dot_block_match_report(vm, expected_present=True)
@@ -962,20 +979,22 @@ def test_dot_block_master_disable_removes_rules_despite_toggle_on(deployed_vm: S
         h.set_package_enabled(vm, True)
         h.set_dnsbl_enabled(vm, True)
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
         assert before_count == 1, (
             f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry before master-disable, got {before_count}"
         )
-        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+        assert _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows no port-853 block before master-disable — before-state setup failed\n"
             + _dot_block_match_report(vm, expected_present=True)
         )
 
         # WHEN — turn master OFF; reload (dnsbl_dot_block toggle remains ON).
         h.set_package_enabled(vm, False)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all DoT block filter rules must be gone (force-removed by $mode coupling).
         after_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX)
@@ -985,8 +1004,8 @@ def test_dot_block_master_disable_removes_rules_despite_toggle_on(deployed_vm: S
             + _dot_block_match_report(vm, expected_present=False)
         )
 
-        # THEN — pfctl confirms no port-853 block (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+        # THEN — pfctl confirms no port-853 block.
+        assert not _pfctl_sr_has_block_853(vm), (
             "pfctl -sr still shows a port-853 block rule after master-disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -1029,21 +1048,23 @@ def test_dot_block_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: Sm
         h.set_package_enabled(vm, True)
         h.set_dnsbl_enabled(vm, True)
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
         assert before_count == 1, (
             f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry before DNSBL-disable (positive guard), "
             f"got {before_count} — rule absent even when all enablers are ON"
         )
-        assert h.wait_until(lambda: _pfctl_sr_has_block_853(vm)), (
+        assert _pfctl_sr_has_block_853(vm), (
             "pfctl -sr shows no port-853 block before DNSBL-disable — before-state setup failed\n"
             + _dot_block_match_report(vm, expected_present=True)
         )
 
         # WHEN — turn DNSBL OFF; reload (master ON; dnsbl_dot_block toggle remains ON).
         h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all DoT block filter rules must be gone (force-removed by $mode coupling).
         after_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX)
@@ -1053,8 +1074,8 @@ def test_dot_block_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: Sm
             + _dot_block_match_report(vm, expected_present=False)
         )
 
-        # THEN — pfctl confirms no port-853 block (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sr_has_block_853(vm)), (
+        # THEN — pfctl confirms no port-853 block.
+        assert not _pfctl_sr_has_block_853(vm), (
             "pfctl -sr still shows a port-853 block rule after DNSBL-disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -1103,7 +1124,8 @@ def test_dot_block_uninstall_keep_on_removes_rules_retains_sections(deployed_vm:
         # GIVEN — set keep=on; enable DoT block; seed user filter; assert all before-states.
         h.set_pfb_keep(vm, True)
         _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         _seed_user_filter(vm, _USER_FILTER_DESCR)
 
         before_count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)

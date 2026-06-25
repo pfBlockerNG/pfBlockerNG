@@ -454,7 +454,8 @@ def _cleanup_redirect(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Disable redirect and reload — shared teardown used by finally blocks."""
     try:
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update", timeout=timeout)
+        h.reload(vm, "update", timeout=timeout, wait_unbound=False)
+        h.apply_filter_sync(vm)
     except Exception:
         pass  # best-effort in teardown; don't mask the test failure
 
@@ -526,7 +527,8 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — disable redirect; assert before-state clean.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* nat/rule entries present before enable — before-state not clean"
@@ -534,7 +536,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         assert _filter_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* filter/rule entries present before enable — before-state not clean"
         )
-        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+        assert not _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn shows an rdr rule on {iface} before enable — before-state not clean\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -546,7 +548,8 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         # localising where a "in config, absent from pf" failure happens on the VM.
         h.snap_state(vm, "redir_pre")
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         h.snap_state(vm, "redir_enabled")
 
         # THEN — exactly 2 nat/rule entries (v4 + v6).
@@ -607,7 +610,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
 
         # THEN — pfctl -sn confirms the rdr rules are ACTIVE in the live pf ruleset.
         # This is the key gate that proves associated-rule-id='pass' actually renders.
-        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+        assert _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn shows no rdr rule on {iface} for port 53 after enable — "
             f"associated-rule-id='pass' did NOT render in the live pf ruleset\n"
             + _redir_match_report(vm, iface, expected_present=True)
@@ -651,7 +654,8 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on the primary interface; assert before-state with rules present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface) == 2, (
             f"pfB_DNS_Redirect_{iface}_* nat/rule entries absent before disable — setup failed"
@@ -662,14 +666,15 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
             f"pfB_DNS_Redirect_{iface}_* filter/rule entries present before disable — unexpected "
             f"(associated-rule-id='pass' means no hand-rolled companions should exist)"
         )
-        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+        assert _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn shows no rdr on {iface} before disable — setup failed\n"
             + _redir_match_report(vm, iface, expected_present=True)
         )
 
         # WHEN — disable and reload.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all pfB_DNS_Redirect_* entries must be gone.
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
@@ -679,8 +684,8 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
             "pfB_DNS_Redirect_* filter/rule entries still present after disable"
         )
 
-        # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+        # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface.
+        assert not _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -719,7 +724,8 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — seed the user NAT rule; assert redirect is disabled.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         _seed_user_nat(vm, _USER_NAT_DESCR)
 
         assert _nat_rule_present(vm, _USER_NAT_DESCR), "user NAT rule not present before enable — seeding failed"
@@ -729,7 +735,8 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
 
         # WHEN — enable on the primary interface.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — pfB rules appear; user rule survives.
         assert _nat_rule_present(vm, _redir_descr_for(iface, "inet")), (
@@ -741,7 +748,8 @@ def test_dns_redirect_user_nat_rule_survives_enable_disable(deployed_vm: SmokeVM
 
         # WHEN — disable.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — pfB rules gone; user rule still present.
         assert not _nat_rule_present(vm, _redir_descr_for(iface, "inet")), (
@@ -796,7 +804,8 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — enable on both interfaces; assert both nat/rule sets present.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface_keep, iface_drop], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_keep) == 2, (
             f"pfB_DNS_Redirect_{iface_keep}_* nat/rule entries absent before prune — setup failed"
@@ -816,7 +825,8 @@ def test_dns_redirect_stale_interface_pruned_on_reduce(deployed_vm: SmokeVM) -> 
 
         # WHEN — reduce to keep-interface only.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface_keep], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — drop-interface nat/rule entries removed; filter/rule was and remains 0.
         drop_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface_drop)
@@ -876,7 +886,8 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — start from disabled state.
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         assert _nat_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* entries present before Case 5 — state not clean"
         )
@@ -887,7 +898,8 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
 
         # WHEN — enable with exception alias set.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception=_EXCEPTION_ALIAS)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — v4 rule has negated-alias source.
         v4_src_addr = _nat_rule_nested_field(vm, descr_v4, "source", "address")
@@ -909,7 +921,8 @@ def test_dns_redirect_exception_alias_branch(deployed_vm: SmokeVM, primary_iface
 
         # WHEN — clear the exception alias.
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — v4 rule source is <any> (source.any key present; address absent).
         assert _nat_rule_has_key(vm, descr_v4, "source", "any"), (
@@ -971,7 +984,8 @@ def test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat(deployed_v
     # uninstall path (owned objects swept, settings retained) is tracked in #484.
     _set_pfb_keep(vm, keep=False)
     _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-    h.reload(vm, "update")
+    h.reload(vm, "update", wait_unbound=False)
+    h.apply_filter_sync(vm)
     _seed_user_nat(vm, _USER_NAT_DESCR)
 
     # BEFORE-STATE: assert nat/rule entries present; filter/rule entries are 0 (no companions).
@@ -1044,20 +1058,22 @@ def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm
         h.set_package_enabled(vm, True)
         h.set_dnsbl_enabled(vm, True)
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         before_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
         assert before_count == 2, (
             f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries before master-disable, got {before_count}"
         )
-        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+        assert _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn shows no rdr on {iface} before master-disable — before-state setup failed\n"
             + _redir_match_report(vm, iface, expected_present=True)
         )
 
         # WHEN — turn master OFF; reload (dnsbl_redir toggle remains ON).
         h.set_package_enabled(vm, False)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all redirect nat rules must be gone (force-removed by $mode coupling).
         after_count = _nat_redir_count(vm, _REDIR_DESCR_PFX)
@@ -1067,8 +1083,8 @@ def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm
             + _redir_match_report(vm, iface, expected_present=False)
         )
 
-        # THEN — pfctl confirms no rdr rule (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+        # THEN — pfctl confirms no rdr rule.
+        assert not _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after master-disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -1111,21 +1127,23 @@ def test_dns_redirect_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm:
         h.set_package_enabled(vm, True)
         h.set_dnsbl_enabled(vm, True)
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         before_count = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
         assert before_count == 2, (
             f"Expected 2 pfB_DNS_Redirect_{iface}_* nat/rule entries before DNSBL-disable (positive guard), "
             f"got {before_count} — rules absent even when all enablers are ON"
         )
-        assert h.wait_until(lambda: _pfctl_sn_has_redir(vm, iface)), (
+        assert _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn shows no rdr on {iface} before DNSBL-disable — before-state setup failed\n"
             + _redir_match_report(vm, iface, expected_present=True)
         )
 
         # WHEN — turn DNSBL OFF; reload (master ON; dnsbl_redir toggle remains ON).
         h.set_dnsbl_enabled(vm, False)
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
 
         # THEN — all redirect nat rules must be gone (force-removed by $mode coupling).
         after_count = _nat_redir_count(vm, _REDIR_DESCR_PFX)
@@ -1135,8 +1153,8 @@ def test_dns_redirect_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm:
             + _redir_match_report(vm, iface, expected_present=False)
         )
 
-        # THEN — pfctl confirms no rdr rule (async: poll until absent).
-        assert h.wait_until(lambda: not _pfctl_sn_has_redir(vm, iface)), (
+        # THEN — pfctl confirms no rdr rule.
+        assert not _pfctl_sn_has_redir(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after DNSBL-disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -1183,7 +1201,8 @@ def test_dns_redirect_uninstall_keep_on_removes_rules_retains_sections(
         # GIVEN — set keep=on; enable redirect; seed user NAT; assert all before-states.
         h.set_pfb_keep(vm, True)
         _set_dns_redirect(vm, enabled=True, ifaces=[iface], exception="")
-        h.reload(vm, "update")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
         _seed_user_nat(vm, _USER_NAT_DESCR)
 
         before_nat = _nat_redir_count(vm, _REDIR_DESCR_PFX + iface)
