@@ -98,7 +98,9 @@ start_ctrl_probe() {
 
 stop_ctrl_probe() {
     rm -f "${TMP}/ctrl_probe_run"
-    [ -n "${CTRL_PROBE_PID}" ] && wait "${CTRL_PROBE_PID}" 2>/dev/null || true
+    if [ -n "${CTRL_PROBE_PID}" ]; then
+        wait "${CTRL_PROBE_PID}" 2>/dev/null || true
+    fi
     CTRL_PROBE_PID=""
 }
 
