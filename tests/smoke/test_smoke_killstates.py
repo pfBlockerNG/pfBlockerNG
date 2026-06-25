@@ -191,18 +191,18 @@ def _unblock_baseline(vm: SmokeVM, *, kill_on: bool, timeout: float = 600.0) -> 
 
 
 # --------------------------------------------------------------------------- #
-# Module fixture: deploy once, configure a LAN reject IP rule (victim unblocked)
+# Module fixture: deploy once, wire a floating WAN Deny_Outbound rule (victim unblocked)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture(scope="module")
 def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
-    """Deploy the branch .pkg; wire a LAN Deny_Outbound (reject) IP rule, victim unblocked.
+    """Deploy the branch .pkg; wire a floating WAN Deny_Outbound (reject) rule, victim unblocked.
 
     Given: the smoke VM is booted and the branch .pkg is available; civm is up.
     When:  we deploy and inject one IP block feed (header ``pfbkillstates``) whose alias
            starts with only DUMMY (so the rule is built but the victim is NOT blocked),
-           on the LAN interface with logging on.
+           as a floating rule (enable_float) with logging on.
     Then:  the module VM is ready: the reject rule exists, the victim is reachable enough
            for civm to create a firewall state to it.
     """
@@ -234,8 +234,8 @@ def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
 def test_killstates_off_preserves_state_bypassing_new_block(ip_block_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """killstates OFF: a state created before the block SURVIVES the update (the gotcha).
 
-    Given: a LAN reject rule whose alias does NOT yet contain the victim, Clear-States OFF,
-           and a civm connection that created a firewall state to the victim.
+    Given: a floating WAN reject rule whose alias does NOT yet contain the victim, Clear-States
+           OFF, and a civm connection that created a firewall state to the victim.
     When:  the victim is added to the block alias and pfBlockerNG runs an Update.
     Then:  the pre-existing state is STILL present — pf matches it before rules, so that
            flow bypasses the brand-new block.
@@ -276,8 +276,8 @@ def test_killstates_off_preserves_state_bypassing_new_block(ip_block_vm: SmokeVM
 def test_killstates_on_clears_state_so_block_takes_effect(ip_block_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """killstates ON: pfBlockerNG kills the state on Update, so the block takes effect.
 
-    Given: a LAN reject rule whose alias does NOT yet contain the victim, Clear-States ON,
-           and a civm connection that created a firewall state to the victim.
+    Given: a floating WAN reject rule whose alias does NOT yet contain the victim, Clear-States
+           ON, and a civm connection that created a firewall state to the victim.
     When:  the victim is added to the block alias and pfBlockerNG runs an Update.
     Then:  the state for the victim is GONE — pfBlockerNG's pfb_remove_states killed it,
            so the existing flow now hits the reject too (no state to bypass the block).
