@@ -21,9 +21,10 @@ and ``src/usr/local/www/widgets/javascript/pfblockerng.js``:
 * the jQuery-UI autocomplete bound to ``#aliasports_in`` (pfBlockerNG.js:253-255,
   ``source: portsarray``): focusing the field and typing surfaces a
   ``.ui-autocomplete`` menu in the DOM.
-* ``pfb_chg_state_bkgd()`` (pfBlockerNG.js:124-138): a ``select[id^='state-']``
-  whose value is ``Disabled`` is greyed (``background-color: lightgrey``) on
-  load; selecting a non-``Disabled`` value and clicking the select clears it.
+* ``pfb_chg_state_bkgd()`` -> ``pfb_greyout()`` in ``pfBlockerNG.js``: a
+  ``select[id^='state-']`` whose value is ``Disabled`` is greyed
+  (``background-color: lightgrey``) on load; selecting a non-``Disabled`` value
+  and clicking the select clears it.
 * the dashboard widget (``widgets/widgets/pfblockerng.widget.php`` +
   ``widgets/javascript/pfblockerng.js``): the widget renders ``#pfblockerngack``,
   ``#formicons``, ``.PFBSTATUS`` and the ``#pfBNG-table`` body.
