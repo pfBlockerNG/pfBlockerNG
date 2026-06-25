@@ -1964,6 +1964,241 @@ function pfb_syslog_event(string $body): void
 	closelog();
 }
 
+// ---------------------------------------------------------------------------
+// ADR-43 Phase 2 — Due-ledger library (pure core + I/O helpers).
+//
+// A persisted per-job next-due ledger stored as a single JSON file
+// (pfb_due_ledger.json) under $pfb['dbdir']. This evolves the existing
+// .update/.last sentinel pattern: instead of flag files that only record
+// "needs update", each entry records {last_run, next_due, jitter} so a
+// single tick can decide what is due without reading the clock per-job.
+//
+// Design invariants (ADR-43 §2.C):
+//   - Absent entry (new install or wiped RAM-disk) ⇒ is_due returns TRUE.
+//     The stable seeded jitter is applied on mark_ran, spreading next_due.
+//   - next_due in the past                         ⇒ is_due returns TRUE (catch-up).
+//   - next_due in the future                       ⇒ is_due returns FALSE.
+//   - mark_ran sets next_due = now + interval + seeded_jitter(job, seed, max).
+//   - Corrupt or absent ledger file                ⇒ treated as absent (fail-safe).
+//
+// #468 persist/restore integration:
+//   pfb_due_ledger.json lives in $pfb['dbdir'] (= /var/db/pfblockerng on MFS).
+//   Phase 4 adds it to the earlyshellcmd archive set (alongside IP aliastables)
+//   so a clean reboot restores the schedule and avoids the boot stampede that the
+//   absent-entry rule guards against. Until Phase 4 wires this, the absent-⇒-due
+//   rule is the sole boot-stampede defence (jobs spread by their seeded jitter
+//   after the first post-boot mark_ran).
+//
+// On-disk layout (pfb_due_ledger.json under ledger_dir):
+//   {
+//     "dcc":  {"last_run": 1234567890, "next_due": 1234567890, "jitter": 35079},
+//     "bl":   {"last_run": 1234567890, "next_due": 1234567890, "jitter": 79870}
+//   }
+//   Writes are atomic: content assembled, written to .tmp with LOCK_EX, then
+//   renamed to the target (atomic on POSIX / FreeBSD same-filesystem rename).
+//
+// Clock and seed are INJECTABLE (passed as arguments to every function that needs
+// them) so PHPUnit can pin the date math without wall-clock or rand() flakiness.
+// Only a thin outer wrapper (Phase 4's tick) reads time() and the install seed.
+//
+// Tests: tests/php/DueLedgerTest.php
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_due_ledger_seeded_jitter — deterministic jitter offset for a job/seed pair.
+ *
+ * Returns a stable offset in [1, $max] for $max > 0, or 0 for $max === 0.
+ * The result is identical for the same ($job_key, $seed, $max) triple on every
+ * call, so the schedule is stable across reboots once the ledger is restored.
+ * Different $job_key values with the same $seed produce different offsets (with
+ * high probability for typical $max values), spreading concurrent jobs across
+ * time and preventing upstream stampedes that today's rand(0,23) jitter prevents.
+ *
+ * PURE — no I/O, no globals, never calls rand() or time().
+ *
+ * @param string $job_key  Job identifier (e.g. 'dcc', 'bl').
+ * @param string $seed     Per-install seed (e.g. derived from hostname or config).
+ * @param int    $max      Maximum jitter (seconds or any unit). 0 disables jitter.
+ * @return int             Jitter in [1, $max] when $max > 0; else 0.
+ */
+function pfb_due_ledger_seeded_jitter(string $job_key, string $seed, int $max): int
+{
+	if ($max <= 0) {
+		return 0;
+	}
+	// crc32() returns a signed 32-bit int stored as 64-bit on PHP 8 / 64-bit FreeBSD.
+	// abs() maps to [0, 2^31-1]; % $max gives [0, max-1]; +1 shifts to [1, max].
+	// Guarantees non-zero: every job gets a spread offset, preventing stampedes.
+	return (abs(crc32($seed . ':' . $job_key)) % $max) + 1;
+}
+
+/**
+ * pfb_due_ledger_is_due_from_entry — decide due/not-due from a pre-read entry.
+ *
+ * Separating the I/O from the decision enables deterministic unit tests:
+ * the caller reads the entry (or passes null for absent), this function decides.
+ *
+ * PURE — no I/O, no globals, no side effects.
+ *
+ * @param array|null $entry  {last_run: int, next_due: int, jitter: int} or NULL.
+ * @param int        $now    Current epoch timestamp (injectable in tests).
+ * @return bool              TRUE iff the job is due or the entry is absent.
+ */
+function pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
+{
+	if ($entry === NULL) {
+		// Absent (new install, wiped RAM-disk) ⇒ due now; jitter applied on mark_ran.
+		return TRUE;
+	}
+	return $entry['next_due'] <= $now;
+}
+
+/**
+ * pfb_due_ledger_read_entry — read one job entry from the on-disk ledger.
+ *
+ * Returns NULL on absent file, I/O error, or any corruption (fail-safe: absent
+ * is always treated as "due now" by pfb_due_ledger_is_due_from_entry).
+ *
+ * @param string $job_key     Job identifier (e.g. 'dcc', 'bl').
+ * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @return array|null         {last_run: int, next_due: int, jitter: int} or NULL.
+ */
+function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
+{
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	if (!is_file($path)) {
+		return NULL;
+	}
+	$fp = @fopen($path, 'r');
+	if ($fp === FALSE) {
+		return NULL;
+	}
+	if (!flock($fp, LOCK_SH)) {
+		fclose($fp);
+		return NULL;
+	}
+	$raw = stream_get_contents($fp);
+	flock($fp, LOCK_UN);
+	fclose($fp);
+	if ($raw === FALSE || $raw === '') {
+		return NULL;
+	}
+	$data = json_decode($raw, TRUE);
+	if (!is_array($data)) {
+		return NULL;	// corrupt or not a JSON object
+	}
+	$entry = $data[$job_key] ?? NULL;
+	if (!is_array($entry)) {
+		return NULL;	// key absent
+	}
+	// Validate structure: all three integer fields must be present.
+	if (!isset($entry['last_run'], $entry['next_due'], $entry['jitter'])
+		|| !is_int($entry['last_run'])
+		|| !is_int($entry['next_due'])
+		|| !is_int($entry['jitter'])) {
+		return NULL;	// malformed entry — fail-safe
+	}
+	return $entry;
+}
+
+/**
+ * pfb_due_ledger_write_entry — atomically persist one job entry to the ledger.
+ *
+ * Reads the existing ledger (to preserve other jobs' entries), merges $entry
+ * under $job_key, then writes to a .tmp file with LOCK_EX and renames to the
+ * target (atomic on POSIX / FreeBSD same-filesystem rename).
+ *
+ * @param string $job_key     Job identifier.
+ * @param array  $entry       {last_run: int, next_due: int, jitter: int}.
+ * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @return void
+ */
+function pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
+{
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	$tmp  = $path . '.tmp';
+
+	// Merge with existing data (tolerate absent/corrupt: start with empty object).
+	$data = [];
+	if (is_file($path)) {
+		$raw = @file_get_contents($path);
+		if ($raw !== FALSE && $raw !== '') {
+			$decoded = json_decode($raw, TRUE);
+			if (is_array($decoded)) {
+				$data = $decoded;
+			}
+		}
+	}
+	$data[$job_key] = $entry;
+	file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
+	rename($tmp, $path);
+}
+
+/**
+ * pfb_due_ledger_is_due — is the named job due to run on this tick?
+ *
+ * Reads the persisted entry for $job_key and applies the due rule. The $interval,
+ * $seed, and $jitter_max parameters are accepted for API parity with mark_ran but
+ * do not affect the is_due decision (the decision is based solely on next_due vs now).
+ *
+ * Absent or corrupt entry ⇒ TRUE (fail-safe: run now, jitter applied on mark_ran).
+ * next_due ≤ $now         ⇒ TRUE (catch-up: missed window runs on the next tick).
+ * next_due >  $now        ⇒ FALSE (not yet due).
+ *
+ * @param string $job_key     Job identifier (e.g. 'dcc', 'bl_weekly').
+ * @param int    $interval    Job cadence in seconds (for API parity; not used here).
+ * @param int    $now         Current epoch timestamp (injectable in tests).
+ * @param string $seed        Per-install seed (for API parity; not used here).
+ * @param int    $jitter_max  Max jitter in seconds (for API parity; not used here).
+ * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @return bool               TRUE iff the job should run this tick.
+ */
+function pfb_due_ledger_is_due(
+	string $job_key,
+	int    $interval,
+	int    $now,
+	string $seed,
+	int    $jitter_max,
+	string $ledger_dir
+): bool {
+	return pfb_due_ledger_is_due_from_entry(
+		pfb_due_ledger_read_entry($job_key, $ledger_dir),
+		$now
+	);
+}
+
+/**
+ * pfb_due_ledger_mark_ran — record that the job ran and schedule the next run.
+ *
+ * Persists {last_run: $now, next_due: $now+$interval+jitter, jitter: jitter}
+ * where jitter = pfb_due_ledger_seeded_jitter($job_key, $seed, $jitter_max).
+ * The same (job_key, seed, max) triple always produces the same jitter, so the
+ * per-job schedule spread is stable across reboots (given a stable install seed).
+ *
+ * @param string $job_key     Job identifier (e.g. 'dcc', 'bl').
+ * @param int    $interval    Job cadence in seconds.
+ * @param int    $now         Current epoch timestamp (injectable in tests).
+ * @param string $seed        Per-install seed.
+ * @param int    $jitter_max  Max jitter in seconds (0 = no jitter).
+ * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @return void
+ */
+function pfb_due_ledger_mark_ran(
+	string $job_key,
+	int    $interval,
+	int    $now,
+	string $seed,
+	int    $jitter_max,
+	string $ledger_dir
+): void {
+	$jitter = pfb_due_ledger_seeded_jitter($job_key, $seed, $jitter_max);
+	pfb_due_ledger_write_entry($job_key, [
+		'last_run' => $now,
+		'next_due' => $now + $interval + $jitter,
+		'jitter'   => $jitter,
+	], $ledger_dir);
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
