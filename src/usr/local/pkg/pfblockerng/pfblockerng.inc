@@ -11683,15 +11683,25 @@ function pfb_syslog_logging_needs_update($current, $want) {
 /**
  * pfb_build_autorule_list() — pure emission helper extracted from sync_package_pfblockerng().
  *
- * Keeps all non-pfB rules verbatim (same set, count, and original relative order) and splices
- * the regenerated pfB rules at a single anchor determined by pass_order. No user rule is ever
- * bucketed, filtered, duplicated, split, or reordered — the only operations are "keep in place"
- * for user rules and "regenerate at anchor" for pfB rules.
+ * Reconciles the firewall auto-rules by a STABLE bucket reorder: every surviving rule is sorted
+ * into one of four buckets — pfB pass/match, pfB block/reject, user pass/match, user block/reject
+ * — and the buckets are concatenated in the sequence the `pass_order` setting dictates. Whole
+ * buckets move; nothing INSIDE a bucket is reordered, and no user rule is ever duplicated,
+ * dropped, or content-mutated (the one exception is the legacy `_v4` alias-suffix upgrade). pfB
+ * rules are regenerated from $pfb_generated; user rules pass through verbatim.
  *
- * Anchor mapping (per-interface first-match semantics — ADR-41 Phase 2):
- *   order_1 / order_2           → pfB block AFTER kept user rules  (user pass wins)
- *   order_0 / order_3 / order_4 → pfB block BEFORE kept user rules (pfB wins)
- *   absent / unknown            → order_0 anchor / BEFORE           [subsumes #539]
+ * The reorder is applied INDEPENDENTLY to the two pf rule groups, because pf evaluates them
+ * separately: the FLOATING group (always carries the DNSBL/match pass rules; also the pfB
+ * permit/deny when float mode is on, since the call site then builds them from base_rule_float)
+ * and the INTERFACE group (the per-interface pfB permit/deny when float mode is off). Each group
+ * orders its own four buckets by the same ORDER table:
+ *
+ *   order_0 | pfB pass/match | pfB block/reject | user (not split) |
+ *   order_1 | user pass/match | pfB pass/match | pfB block/reject | user block/reject |
+ *   order_2 | pfB pass/match | user pass/match | pfB block/reject | user block/reject |
+ *   order_3 | pfB pass/match | pfB block/reject | user pass/match | user block/reject |
+ *   order_4 | pfB pass/match | pfB block/reject | user block/reject | user pass/match |
+ *   absent / unknown → order_0
  *
  * Returns the new filter/rule array. No I/O, no config writes, no pfctl — pure array logic.
  *
@@ -11723,100 +11733,165 @@ function pfb_build_autorule_list(
 	array   $out_ifaces
 ): array {
 	// $order/$float come straight from $pfb['order']/$pfb['float'], which are unset (null)
-	// until configured. The original inline code used those raw values in loose comparisons
+	// until configured. The historical inline code used those raw values in loose comparisons
 	// ('== on' / '== order_N'), where null simply matches nothing -- so a null is behaviour-
 	// equivalent to ''. Coerce here (the params are nullable) rather than let a strict string
 	// typehint TypeError on the null the call site legitimately passes (e.g. enable_float unset).
 	$order = $order ?? '';
 	$float = $float ?? '';
 
-	// Step 1: build $keep — all non-pfB-owned rules in original order, alias-upgraded.
-	// A rule is pfB-owned iff its descr starts with 'pfB_' AND it is NOT a bypass rule
-	// (DNS-redirect / DoT-block bypass rules keep their pfB_ prefix but stay user-managed).
-	$keep = [];
+	// Any value that is not a known order_1..4 behaves as order_0 -- the IP-settings default.
+	// An empty/unknown order must never drop a user rule (issue #532/#539): normalise up front so
+	// the bucketing and the order switch below always have a defined sequence.
+	if (!in_array($order, ['order_1', 'order_2', 'order_3', 'order_4'], TRUE)) {
+		$order = 'order_0';
+	}
+	$managed = array_merge($in_ifaces, $out_ifaces);
+
+	// --- Partition surviving user rules into stable buckets --------------------------------
+	// A rule is pfB-owned (regenerated below) iff its descr starts 'pfB_' AND it is not a
+	// DNS-redirect / DoT-block bypass rule (those keep the prefix but stay user-managed). Every
+	// surviving user rule lands in EXACTLY ONE bucket -- never duplicated -- and its content is
+	// left untouched bar the legacy _v4 alias-suffix upgrade. The split mirrors the historical
+	// sync_package_pfblockerng() "Assign Rules" logic verbatim; the four floating sub-buckets
+	// only fill when pfB float mode is on (so user floating rules order relative to the floating
+	// pfB rules), and $user_pm only fills when float mode is off (interface-group ordering).
+	$user_pm = [];   // user pass/match on a managed iface  (float off, order != order_0)
+	$user_br = [];   // every other non-floating user rule  (block/reject, order_0 catch-all, unmanaged)
+	$fpermit = [];   // user floating pass   (float on)
+	$fmatch  = [];   // user floating match  (float on)
+	$fother  = [];   // user floating other  (float-on block/reject; ALL floating user rules when float off)
+
 	foreach ($existing_rules as $rule) {
-		$descr      = $rule['descr'] ?? '';
-		$is_bypass  = str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
-		              str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
+		$descr     = $rule['descr'] ?? '';
+		$is_bypass = str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+		             str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
 
 		if (str_starts_with($descr, 'pfB_') && !$is_bypass) {
-			continue;  // pfB-owned — will be regenerated below
+			continue;  // pfB-owned — regenerated below
 		}
 
-		// Upgrade previous IPv4 pfBlockerNG alias names to '_v4' suffix format.
+		// Upgrade previous IPv4 pfBlockerNG alias names to '_v4' suffix format — the ONLY
+		// permitted content change to a user rule.
 		foreach (array('source', 'destination') as $rtype) {
 			if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
 				$rule[$rtype]['address'] = "{$rule[$rtype]['address']}_v4";
 			}
 		}
 
-		$keep[] = $rule;
+		$is_floating = ($rule['floating'] ?? '') === 'yes';
+		$type        = $rule['type'] ?? '';
+
+		if ($float === 'on') {
+			if ($order === 'order_0' && $is_floating) {
+				$fother[]  = $rule;
+			} elseif ($is_floating && $type === 'pass') {
+				$fpermit[] = $rule;
+			} elseif ($is_floating && $type === 'match') {
+				$fmatch[]  = $rule;
+			} elseif ($is_floating) {
+				$fother[]  = $rule;
+			} else {
+				$user_br[] = $rule;
+			}
+		} elseif ($is_floating) {
+			$fother[] = $rule;
+		} elseif (in_array($rule['interface'] ?? '', $managed, TRUE) &&
+		          ($type === 'pass' || isset($rule['associated-rule-id'])) &&
+		          $order !== 'order_0') {
+			$user_pm[] = $rule;
+		} else {
+			$user_br[] = $rule;
+		}
 	}
 
-	// Step 2: build the pfB block — same generation order as before (dnsbl_float first,
-	// then per-inbound permit/match/deny, then per-outbound permit/match/deny).
-	$pfb_block = [];
+	// --- Regenerate the pfB rule buckets ---------------------------------------------------
+	// DNSBL floating pass pair and the floating match rules ALWAYS belong to the floating pf
+	// group; the per-interface permit/deny join the floating group when float mode is on and the
+	// interface group otherwise (handled in the assembly below). The match rule is floating-only
+	// and emitted ONCE across all interfaces; it rides in the pass/match bucket. (Grouping it
+	// after the per-interface permits rather than mid-loop is inert: a match rule does not
+	// short-circuit, and interface-scoped permits on different interfaces never interact.)
+	$dnsbl   = [];   // pfB floating DNSBL pass (ping/permit pair, or empty)
+	$ppermit = [];   // pfB permit (per managed interface)
+	$pmatch  = [];   // pfB floating match (emitted once)
+	$pdeny   = [];   // pfB block/reject (per managed interface)
 
-	// DNSBL floating pass rules (ping + permit pair, or empty) — emitted before interface rules.
 	foreach ($pfb_generated['dnsbl_float'] as $cb_rules) {
-		$pfb_block[] = $cb_rules;
+		$dnsbl[] = $cb_rules;
 	}
 
-	// Inbound interface rules.
 	$pfbrunonce = TRUE;
 	foreach ($in_ifaces as $inbound_interface) {
 		foreach ($pfb_generated['permit_inbound'] as $cb_rules) {
 			$cb_rules['interface'] = $inbound_interface;
 			$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'permit_in');
-			$pfb_block[]           = $cb_rules;
+			$ppermit[]             = $cb_rules;
 		}
-		// Match inbound rules are floating-only (emit once across all inbound interfaces).
 		if ($pfbrunonce && !empty($pfb_generated['match_inbound'])) {
 			foreach ($pfb_generated['match_inbound'] as $cb_rules) {
 				$cb_rules['interface'] = $pfb_generated['inbound_floating'];
 				$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'match_in');
-				$pfb_block[]           = $cb_rules;
+				$pmatch[]              = $cb_rules;
 				$pfbrunonce            = FALSE;
 			}
 		}
 		foreach ($pfb_generated['deny_inbound'] as $cb_rules) {
 			$cb_rules['interface'] = $inbound_interface;
 			$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_in');
-			$pfb_block[]           = $cb_rules;
+			$pdeny[]               = $cb_rules;
 		}
 	}
 
-	// Outbound interface rules.
 	$pfbrunonce = TRUE;
 	foreach ($out_ifaces as $outbound_interface) {
 		foreach ($pfb_generated['permit_outbound'] as $cb_rules) {
 			$cb_rules['interface'] = $outbound_interface;
 			$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'permit_out');
-			$pfb_block[]           = $cb_rules;
+			$ppermit[]             = $cb_rules;
 		}
-		// Match outbound rules are floating-only (emit once across all outbound interfaces).
 		if ($pfbrunonce && !empty($pfb_generated['match_outbound'])) {
 			foreach ($pfb_generated['match_outbound'] as $cb_rules) {
 				$cb_rules['interface'] = $pfb_generated['outbound_floating'];
 				$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'match_out');
-				$pfb_block[]           = $cb_rules;
+				$pmatch[]              = $cb_rules;
 				$pfbrunonce            = FALSE;
 			}
 		}
 		foreach ($pfb_generated['deny_outbound'] as $cb_rules) {
 			$cb_rules['interface'] = $outbound_interface;
 			$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'deny_out');
-			$pfb_block[]           = $cb_rules;
+			$pdeny[]               = $cb_rules;
 		}
 	}
 
-	// Step 3: splice at anchor.
-	// order_1/order_2 → AFTER the kept user rules (user pass wins under per-iface first-match).
-	// Everything else (order_0/3/4, absent, unknown) → BEFORE (pfB wins). Subsumes #539.
-	if ($order === 'order_1' || $order === 'order_2') {
-		return array_values(array_merge($keep, $pfb_block));
+	// --- Assemble each pf group's four buckets in pass_order sequence -----------------------
+	// $apply moves whole buckets per the ORDER table; order_0 and order_3 share a sequence
+	// (order_0 leaves $upm empty by construction, so user pass/match is never split out).
+	$apply = static function (string $o, array $pm, array $br, array $upm, array $ubr): array {
+		return match ($o) {
+			'order_1' => array_merge($upm, $pm, $br, $ubr),
+			'order_2' => array_merge($pm, $upm, $br, $ubr),
+			'order_4' => array_merge($pm, $br, $ubr, $upm),
+			default   => array_merge($pm, $br, $upm, $ubr),  // order_0 / order_3
+		};
+	};
+
+	if ($float === 'on') {
+		// Float mode on: the pfB permit/deny are floating too, so the whole pass_order reorder
+		// happens in the floating group; the interface group carries only non-floating user rules.
+		$float_seq = $apply($order, array_merge($dnsbl, $ppermit, $pmatch), $pdeny,
+		                    array_merge($fpermit, $fmatch), $fother);
+		$iface_seq = $apply($order, [], [], [], $user_br);
+	} else {
+		// Float mode off: pfB permit/deny are interface rules; only DNSBL/match are floating.
+		// In the floating group the user's floating rules ($fother) historically lead for
+		// order_1 and trail otherwise — the $upm slot reproduces exactly that placement.
+		$float_seq = $apply($order, array_merge($dnsbl, $pmatch), [], $fother, []);
+		$iface_seq = $apply($order, $ppermit, $pdeny, $user_pm, $user_br);
 	}
-	return array_values(array_merge($pfb_block, $keep));
+
+	return array_values(array_merge($float_seq, $iface_seq));
 }
 
 // Main pfBlockerNG function
@@ -15641,14 +15716,14 @@ function sync_package_pfblockerng($cron='') {
 			#  ORDER 3 |	pfB (p/m)	| pfB (b/r) 	| pfSense (p/m)	| pfSense (b/r)	#
 			#  ORDER 4 |	pfB (p/m)	| pfB (b/r)	| pfSense (b/r)	| pfSense (p/m)	#
 			#################################################################################
-			# NOTE (ADR-41): the 4-column interleaving above is the ORIGINAL strip-and-rebuild
-			# intent. pfb_build_autorule_list() now keeps user rules IMMUTABLE and reduces this to a
-			# BINARY anchor for the contiguous pfB block:
-			#   order_1 / order_2        -> pfB block AFTER  the kept user rules (user pass wins)
-			#   order_0 / 3 / 4 / absent -> pfB block BEFORE the kept user rules (pfB wins)
-			# The pfB-p/m-vs-pfSense-p/m distinction is moot under per-interface first-match pf
-			# (interface rules are always `quick`; proven live in ADR-41 Phase 2 -> RESULTS/02), so
-			# it is no longer reproduced. order_4 no longer reorders the user's own rules.
+			# NOTE (ADR-41): pfb_build_autorule_list() implements this table as a STABLE bucket
+			# reorder -- it sorts every surviving rule into one of the four buckets (pfB p/m, pfB
+			# b/r, user p/m, user b/r) and concatenates them in the column order above, applied
+			# independently to the FLOATING and INTERFACE pf groups. Whole buckets move; nothing
+			# inside a bucket is reordered, and no user rule is duplicated, dropped, or mutated.
+			# All four columns are reproduced (a single before/after anchor cannot: order_1/order_2
+			# split the user rules around the pfB block, so a pfB Permit must precede a user Block;
+			# order_4 places the user's own Block before its Pass). Absent/unknown order -> order_0.
 
 			$new_rules = pfb_build_autorule_list(
 				$rules ?? [],
