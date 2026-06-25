@@ -1,0 +1,85 @@
+ADR-43 Phase 7 — Migration guide, scheduling docs, deprecation notices + DoD
+============================================================================
+Branch: adr/43-update-and-scheduling-revamp
+Status: COMPLETE (docs); live-VM fan-out is the remaining pre-Accepted gate (dispatch).
+
+## What was written
+
+1. docs/misc/architecture-notes.md — new section "Scheduling, trigger API & the Update
+   page (ADR-43)" appended after the ADR-42 change-detection section. It is the canonical
+   reference and holds:
+     - the {scope,force,trigger} request + pfb_req_to_hook_trigger() PFB_TRIGGER mapping;
+     - the DEPRECATED-VERB MIGRATION MAP (cron/update/updateip/updatednsbl/noupdates/'')
+       → new request → PFB_TRIGGER → whether the deprecation line is logged;
+     - the deprecation log text and the REMOVAL TIMELINE (verbs work through the current
+       major series; removal targeted for a future major release, announced in its notes);
+     - the one-tick + due-ledger model (pfb_due_ledger.json layout, seeded jitter, the
+       absent⇒due-now-jittered / next_due-past⇒catch-up / corrupt⇒fail-safe rules, the
+       #468 persist integration, legacy-knob seeding, no config.xml migration);
+     - apply-on-change via ADR-40/10 + the pfb_quiet_hours window;
+     - the Update-page control set + the two config-only knobs (pfb_tick_interval=15,
+       pfb_quiet_hours='') and their no-GUI rationale;
+     - the test inventory + the ADR-acceptance gate.
+
+2. CLAUDE.md — new "Scheduling, trigger API & verb routing (ADR-43)" paragraph in the
+   "Running tests" mechanics block (next to the ADR-42/ADR-40 paragraphs). Terse pointer
+   to the architecture-notes section; explicitly states it SUPERSEDES the old per-verb
+   cron/hour-gate routing model.
+
+3. Deprecation notices: user-visible via the log line emitted by
+   pfb_verb_deprecation_warning() (Phase 3) on every deprecated-verb call; the migration
+   map + removal timeline are documented in architecture-notes for operators/script authors.
+
+## Memory note supersession
+
+The session memory note `reference_pfb_verb_routing_feed_change_detection` describes the
+OLD model (cron→pfb_update_check hour-gate; update/updateip bypass). ADR-43 replaces that
+with the tick+ledger+request-API model. The repo docs now reflect the new reality; the
+memory note should be updated to point at the ADR-43 architecture-notes section.
+
+## DoD status (§7)
+
+Met now (off-appliance, all green in the worktree):
+  - vendor/bin/phpunit ....... green (TriggerRequestTest, TriggerAdaptersTest, DueLedgerTest,
+                                       TickCronTest, QuietHoursApplyTest, CfgGatewayTest)
+  - python -m pytest ......... green (unit; smoke collects cleanly, deselected by default)
+  - ruff / php -l / phpstan (--memory-limit=1G) / phpcs / markdownlint ... clean
+  - The verb-mapping oracle, cadence/jitter, catch-up, reuse-vs-force, quiet-hours boundary,
+    and config round-trips are pinned off-appliance.
+
+REMAINING (the pre-Accepted gate — cannot run from this orchestrator: no live VM reachable):
+  - Live-VM CE+Plus fan-out of the ADR-43 cases, dispatched via the smoke/UI workflows:
+      tests/smoke/test_smoke_tick.py        (-m tick ; reboot leg -m reboot)
+      tests/smoke/test_smoke_apply_on_change.py (-m apply_on_change)
+      tests/smoke/test_trigger_api.py       (new API + deprecation log + HA)
+      tests/smoke/ui/  Update-page Tier A (ui_render) + Tier B (ui_e2e)
+    Dispatch (selective): `gh workflow run smoke.yml -f pytest_marker="tick"` etc., or the
+    full fan-out for acceptance. Authored-but-not-run in Phases 3–6; this phase added none.
+
+  - Maintainer manual-smoke checklist (§7 — not fully CI-coverable):
+      * power off across a feed's due window → confirm catch-up on next tick, no dcc/bl
+        stampede against upstreams;
+      * upgrade from an old-verb build → scheduled cron + GUI Update still work, log the
+        deprecation, identical effective behaviour; HA-sync to secondary still reloads;
+      * apply-on-change on a real feed change (no manual Force) + a quiet-hours window
+        defers apply to the window.
+
+## Acceptance
+
+Per CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off": ADR-43 flips to
+Accepted on the GREEN CE+Plus live-VM fan-out of the cases above (the automated coverage is
+in place and properly implemented — real behaviour, every branch, before/after). Until that
+fan-out runs green, Status stays "Implemented (pending live-VM fan-out)".
+
+## Reject criteria — none triggered
+
+  - ADR-40 + ADR-42 are implemented on devel (prerequisite met); §2.B/§2.D footing holds.
+  - The verb→behaviour mapping IS a clean function (Phase 1: force_ip_refetch is a
+    config-layer concern, not a verb axis) — the unified API is safe.
+  - The cron consolidation preserved cadence + stable jitter and avoids the boot stampede
+    (Phase 4 pins green) — the full tick model stands, no fallback to per-job jobs needed.
+
+ADR-43 implementation complete on the branch. Ready to land via PR (rebase-only) and then
+dispatch the live-VM fan-out for acceptance.
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=DONE
