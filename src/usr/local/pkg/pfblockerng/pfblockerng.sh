@@ -1009,8 +1009,6 @@ EOF
 		elif [ "${ccblack}" = 'match' ]; then
 			sed 's/$/0\/24/' "${dupfile}" >> "${tempmatchfile}"
 			sed 's/^/\!/' "${tempfile2}" >> "${tempmatchfile}"
-		else
-			:
 		fi
 	fi
 
