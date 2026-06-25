@@ -328,6 +328,7 @@ if ($gtype == 'dnsbl') {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext($pgtype), gettext($type));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', "{$pg_url}", '@self');
+$shortcut_section = 'pfblockerng';
 
 include_once('head.inc');
 

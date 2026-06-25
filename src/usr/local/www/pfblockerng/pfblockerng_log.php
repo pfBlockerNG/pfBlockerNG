@@ -350,6 +350,7 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Log Browser'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 // Define default Alerts Tab href link (Top row)

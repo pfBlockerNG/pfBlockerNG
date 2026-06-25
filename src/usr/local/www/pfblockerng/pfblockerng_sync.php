@@ -160,6 +160,7 @@ if ($_POST) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Sync'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 if ($input_errors) {
