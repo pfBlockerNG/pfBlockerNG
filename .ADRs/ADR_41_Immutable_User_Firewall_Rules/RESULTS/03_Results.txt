@@ -1,0 +1,176 @@
+ADR-41 Phase 3 Results — Immutable-user-splice implementation
+=============================================================
+Branch: adr/41-immutable-user-firewall-rules   Phase: 3 (implementation)
+Verdict: GREEN — all gates pass; push to branch; no PR yet.
+
+
+1. WHAT WAS BUILT
+-----------------
+
+(A) pfb_build_autorule_list() rewritten in
+    src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+    Replaced the ~270-line bucketing + per-interface interleaving with an
+    ~80-line immutable-splice model (3 steps):
+
+      1. Build $keep: scan $existing_rules, strip pfB-owned rules
+         (descr starts 'pfB_' AND NOT a bypass rule), preserve everything
+         else verbatim in original order. Apply pfb_rule_alias_needs_v4_suffix()
+         upgrade in the same pass (no second loop).
+
+      2. Build $pfb_block: dnsbl_float first (unchanged), then per-inbound
+         loop (permit_in, match_in once via $pfbrunonce, deny_in), then
+         per-outbound loop (permit_out, match_out once, deny_out).
+         Rule templates and tracker assignment unchanged from Phase 1.
+
+      3. Splice: order_1/order_2 -> array_merge($keep, $pfb_block) (AFTER);
+         everything else -> array_merge($pfb_block, $keep) (BEFORE).
+         Unknown/absent order falls to BEFORE, making the #532 drop bug
+         structurally impossible.
+
+    Dead code removed: the 6 bucket variables ($permit_rules, $match_rules,
+    $other_rules, $fpermit_rules, $fmatch_rules, $fother_rules) and their
+    per-interface user re-emission loops are gone entirely.
+
+    PHP type hint: $order and $float are now ?string (nullable) — resolves the
+    Phase 1 TypeError on a live VM when $pfb['float'] or $pfb['order'] was
+    unset (null), which aborted `pfblockerng.php update` with a fatal.
+
+(B) tests/php/AutoruleListOracleTest.php reshaped
+
+    22 tests, all green (up from 21 — one renamed + method name updated).
+
+    Contract assertions added to every test:
+      - assertUserRulesPreserved($input, $output) — same non-pfB-owned multiset
+        and original relative order; prints before/after on failure.
+      - assertIdempotent($output, $gen, ...) — second pass on own output is a no-op;
+        prints first/second pass on failure.
+
+    KNOWN-BAD cases flipped (proven RED on old code, GREEN on new):
+      C: testOrder1FloatOffSingleIfaceDenyOnly — dup eliminated.
+      F: testOrder2FloatOffSingleIfaceDenyOnly — dup eliminated.
+      K: testOrder4FloatOffSingleIfaceDenyOnly — reorder gone (renamed from
+         testOrder4FloatOffSingleIfaceDenyOnlyKnownBadReorder).
+      L: testOrder4FloatOffTwoIfacesDenyOnly — reorder gone (renamed from
+         testOrder4FloatOffTwoIfacesKnownBadReorder).
+      N: testAbsentOrderTreatedAsBefore — was documenting the DROP of user rules
+         for unknown order; now asserts user rules are preserved (BEFORE anchor).
+      O: testOrder1FloatOffPermitAndDenyRulesPresent — expected output updated
+         from per-interface interleaving to single-anchor: keep first, pfB second.
+
+    Tests whose expected output was already correct now carry the new contract
+    assertions (A, B, D, E, G, H, I, J, M, P, Q, R, S, T, U + null test).
+
+    Deliberate behaviour change documented in test K/L docstrings:
+      order_4's user-block-before-user-pass reorder and the managed/non-managed
+      split go away. Functionally inert under per-interface first-match pf
+      (documented in Phase 2 Results §6).
+
+(C) tests/smoke/test_smoke_autorule_immutable.py written (NOT run)
+
+    4 live-VM oracle tests (marked ``immutable_autorule``):
+      T1 — user-rule fidelity: LAN pass rule survives Force-Update (before/after).
+      T2 — idempotence: second Force-Update produces identical rule list.
+      T3 — order_0 anchor: pfB block before user pass (pfB wins).
+      T4 — order_1 anchor: user pass before pfB block (user wins).
+
+    All 4 raise NotImplementedError via pfb_enabled_deny_only fixture until
+    Phase 4 wires the fixture. File structure and assertions are Phase-4-ready.
+    Live run deferred — box was flaky/occupied during Phase 3 session.
+
+
+2. GATE RESULTS
+---------------
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  -> No syntax errors detected (pre-existing E_DEPRECATED warnings, not introduced here)
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/
+  -> (no output = clean)
+
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+  -> No errors
+
+vendor/bin/phpunit --no-coverage
+  -> Tests: 1374, Assertions: 5284, Skipped: 3. OK
+     (1352 pre-existing + 22 oracle tests; +1 net from Phase 1 count due to rename)
+
+ruff check tests/smoke/test_smoke_autorule_immutable.py
+  -> All checks passed!
+
+ruff format --check tests/smoke/test_smoke_autorule_immutable.py
+  -> (reformatted once, then clean)
+
+mypy tests/
+  -> (no output = clean)
+
+
+3. FILES CHANGED
+----------------
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_build_autorule_list() rewritten (immutable-splice; ~270→~80 lines in body)
+  - $order/$float type hint: string -> ?string (null-safe; fixes live TypeError)
+
+tests/php/AutoruleListOracleTest.php
+  - KNOWN-BAD cases C, F, K, L, N, O: expected output updated + labels removed
+  - All tests: contract assertions added (assertUserRulesPreserved + assertIdempotent)
+  - Test M (absent order) renamed + docstring updated (drop -> BEFORE anchor)
+  - Test K/L renamed (KnownBadReorder suffix removed)
+  - Test T (non-managed iface) renamed + comment updated (no "other_rules" concept)
+  - Two new private helper methods: assertUserRulesPreserved, assertIdempotent
+
+tests/smoke/test_smoke_autorule_immutable.py  (new)
+  - Phase-4-ready live oracle; 4 tests; NotImplementedError until fixture wired
+
+.ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/03_Results.txt  (this file)
+
+
+4. DESIGN DECISIONS (record for Phase 4)
+-----------------------------------------
+
+Single anchor suffices: proven in Phase 2. order_1/2 need pfB block AFTER user
+pass; unknown-order falls to BEFORE. No user-list splitting needed.
+
+Null-safe hint: ?string on $order/$float absorbs the live null that came from an
+unset $pfb['float']. The old Phase 1 strict `string` hint TypeError'd on that
+path. The new code treats null as '' (BEFORE anchor), matching the prior behaviour
+of the loose == comparisons in the original inline code.
+
+order_4 reorder removed deliberately: the bucket code emitted user-block before
+user-pass for order_4, and the managed/non-managed split repositioned rules.
+Both gone — user list verbatim. Functionally inert under per-interface first-match
+(Phase 2 §6). Documented in test K/L docstrings.
+
+Bypass rule detection: `str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)` and
+`str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX)`. Both constants were already
+defined; no new strings.
+
+Alias upgrade inline: pfb_rule_alias_needs_v4_suffix() call moved into the $keep
+scan (Step 1). Equivalent to before — the old code called it in the same per-rule
+loop before bucketing.
+
+
+5. WHAT PHASE 4 MUST DO
+------------------------
+
+Phase 4 is the designated live-VM precedence sweep (ADR §7):
+
+  1. Wire pfb_enabled_deny_only fixture in test_smoke_autorule_immutable.py.
+     - h.write_local_feed() with RFC-5737 deny entries.
+     - h.deploy() + h.reload() to activate.
+     - Register h.force_update() in helpers.py (run pfblockerng.php update).
+
+  2. Assert T1/T2/T3/T4 live (the fixture raises NotImplementedError until wired).
+
+  3. Per-pass_order data-plane sweep:
+     - For each of order_0, order_1, order_2, order_3, order_4:
+       set pass_order via h.php_eval(), Force-Update, then probe:
+       * A domain in the deny list: must be blocked (T3 / T4).
+       * A domain NOT in the deny list: must resolve (sanity).
+     - This is the Phase 2 kill-gate completed live (Phase 2 §7 deferral note).
+
+  4. Flip ADR status to Accepted once Phase 4 smoke suite is green on CE + Plus.
+
+COMMIT (Phase 3):
+  pfblockerng: reconcile autorules without mutating user rules (ADR-41 P3, fixes #532 dup/reorder)

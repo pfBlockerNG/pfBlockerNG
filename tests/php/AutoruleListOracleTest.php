@@ -6,38 +6,43 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Oracle tests for pfb_build_autorule_list() — ADR-41 Phase 1.
+ * Contract tests for pfb_build_autorule_list() — ADR-41 Phase 3.
  *
- * These are CHARACTERISATION (oracle) tests: they pin EXACTLY what the helper
- * returns today, INCLUDING the known-bad cases (order_1/order_2 duplication,
- * order_4 reorder). They stay GREEN across Phase 1 (extraction is
- * behaviour-preserving) and flip to the CORRECTED expected output in Phase 3.
+ * Three invariants hold for every fixture (ADR-41 §2 Decision table):
+ *   (a) USER-RULE FIDELITY: every non-pfB rule in $existing_rules appears in the output
+ *       in the SAME relative order and with the SAME count (no drop, no dup, no reorder).
+ *   (b) PFB-SET IDENTICAL: the pfB rules emitted are the same set (descr/type/interface/
+ *       floating) as would have been generated from the same $pfb_generated inputs.
+ *   (c) IDEMPOTENCE: running the helper on its own output is a no-op (second pass
+ *       produces the same result as the first).
+ *
+ * Anchor mapping (per-interface first-match — live-confirmed, ADR-41 Phase 2):
+ *   order_1 / order_2           → pfB block AFTER  kept user rules (user pass wins)
+ *   order_0 / order_3 / order_4 → pfB block BEFORE kept user rules (pfB wins)
+ *   absent / unknown            → BEFORE (subsumes #539 drop bug)
  *
  * Fixture matrix covered (each pass_order × float on/off unless noted):
  *   A. order_0,  float=off, inbound==outbound ('lan'), Deny_* only
  *   B. order_0,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   C. order_1,  float=off, inbound==outbound ('lan'), Deny_* only  [KNOWN-BAD: dup]
+ *   C. order_1,  float=off, inbound==outbound ('lan'), Deny_* only
  *   D. order_1,  float=off, inbound!=outbound ('lan'+'opt1'), Deny_* only
  *   E. order_1,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   F. order_2,  float=off, inbound==outbound ('lan'), Deny_* only  [KNOWN-BAD: dup]
+ *   F. order_2,  float=off, inbound==outbound ('lan'), Deny_* only
  *   G. order_2,  float=off, inbound!=outbound ('lan'+'opt1'), Deny_* only
  *   H. order_2,  float=on,  inbound==outbound ('lan'), Deny_* only
  *   I. order_3,  float=off, inbound==outbound ('lan'), Deny_* only
  *   J. order_3,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   K. order_4,  float=off, inbound==outbound ('lan'), Deny_* only  [KNOWN-BAD: reorder]
- *   L. order_4,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   M. absent/empty pass_order, float=off, treated as order_0 by the helper
- *   N. Permit_* (permit_inbound + permit_outbound) present, order_1, float=off
- *   O. DNS-redirect bypass rule present (pfB_ descr but NOT stripped), order_0, float=off
- *   P. DoT-block bypass rule present, order_0, float=off
- *
- * Each test asserts the FULL ordered descr|type|interface|floating list — not just
- * a count — so any reordering shows up as a test failure.
- *
- * KNOWN-BAD cases (pinned as "what it does today" — Phase 3 flips them):
- *   C (order_1, inbound==outbound, float=off): user LAN pass rule duplicated
- *   F (order_2, inbound==outbound, float=off): user LAN pass rule duplicated
- *   K (order_4, float=off):                   user rules reordered (opt1 before lan)
+ *   K. order_4,  float=off, inbound==outbound ('lan'), Deny_* only
+ *   L. order_4,  float=off, two ifaces (opt1 in, lan out)
+ *   M. order_4,  float=on,  inbound==outbound ('lan'), Deny_* only
+ *   N. absent/empty pass_order, float=off — treated as BEFORE (same as order_0)
+ *   O. Permit_* (permit_inbound + permit_outbound) present, order_1, float=off
+ *   P. DNS-redirect bypass rule present (pfB_ descr but NOT stripped), order_0, float=off
+ *   Q. DoT-block bypass rule present, order_0, float=off
+ *   R. pfB_ rules stripped and rebuilt (sanity)
+ *   S. DNSBL float rules emitted before iface loop
+ *   T. Empty existing rules → only pfB rules
+ *   U. Non-managed iface user rule preserved in output
  *
  * No live pfSense state involved — pfb_tracker() is called via the existing
  * doubles (get_real_interface/get_interface_ip/etc. all seeded to deterministic
@@ -327,6 +332,71 @@ final class AutoruleListOracleTest extends TestCase
 		}
 	}
 
+	/**
+	 * CONTRACT (a): every non-pfB rule from $input appears in $output in the same
+	 * relative order with the same count. A rule is pfB-owned iff its descr starts
+	 * with 'pfB_' AND it is NOT a bypass rule (DNS-redirect / DoT-block).
+	 *
+	 * Fails on: user-rule drop (count < input), duplication (count > input), or reorder.
+	 *
+	 * @param array<int, array<string, mixed>> $input
+	 * @param array<int, array<string, mixed>> $output
+	 */
+	private function assertUserRulesPreserved(array $input, array $output, string $context = ''): void
+	{
+		$is_user = static function (array $rule): bool {
+			$descr = $rule['descr'] ?? '';
+			if (!str_starts_with($descr, 'pfB_')) {
+				return TRUE;
+			}
+			return str_starts_with($descr, 'pfB_DNS_Redirect_') ||
+			       str_starts_with($descr, 'pfB_DoT_Block_');
+		};
+
+		$user_in  = array_values(array_filter($input,  $is_user));
+		$user_out = array_values(array_filter($output, $is_user));
+
+		$label = $context !== '' ? " [{$context}]" : '';
+		$this->assertSame(
+			$this->shapes($user_in),
+			$this->shapes($user_out),
+			"User-rule fidelity failure{$label}: non-pfB rules must be preserved exactly "
+				. "(same set, count, and original relative order — no drop, dup, or reorder)."
+				. "\n\nExpected (input user rules):\n"  . json_encode($this->shapes($user_in),  JSON_PRETTY_PRINT)
+				. "\n\nActual (output user rules):\n"   . json_encode($this->shapes($user_out), JSON_PRETTY_PRINT)
+		);
+	}
+
+	/**
+	 * CONTRACT (c): running the helper on its own output is a no-op.
+	 *
+	 * Second-pass $existing_rules = first-pass $output. Same $pfb_generated / $order / $float /
+	 * $in_ifaces / $out_ifaces. Result must be shape-identical to the first pass.
+	 *
+	 * @param array<int, array<string, mixed>> $output
+	 * @param array<int, string>               $in_ifaces
+	 * @param array<int, string>               $out_ifaces
+	 */
+	private function assertIdempotent(
+		array  $output,
+		array  $gen,
+		string $order,
+		string $float,
+		array  $in_ifaces,
+		array  $out_ifaces,
+		string $context = ''
+	): void {
+		$second = pfb_build_autorule_list($output, $gen, $order, $float, $in_ifaces, $out_ifaces);
+		$label  = $context !== '' ? " [{$context}]" : '';
+		$this->assertSame(
+			$this->shapes($output),
+			$this->shapes($second),
+			"Idempotence failure{$label}: running the helper on its own output must be a no-op."
+				. "\n\nFirst pass:\n"  . json_encode($this->shapes($output), JSON_PRETTY_PRINT)
+				. "\n\nSecond pass:\n" . json_encode($this->shapes($second), JSON_PRETTY_PRINT)
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// A. order_0, float=off, inbound==outbound='lan', Deny_* only
 	// -----------------------------------------------------------------------
@@ -340,11 +410,8 @@ final class AutoruleListOracleTest extends TestCase
 		 *        pfB generated = deny_inbound + deny_outbound templates.
 		 *        order=order_0, float=off, in+out ifaces = ['lan'].
 		 *
-		 * ORDER 0: pfB (p/m/b/r) | All other
-		 * Expected order: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
-		 *
-		 * user pass goes to $other_rules (order_0 -> order_0 pass -> other_rules).
-		 * Tail: order!=order_4 -> other_rules emitted last.
+		 * ORDER 0 anchor = BEFORE: pfB block first, then kept user rules.
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
@@ -358,6 +425,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_0 float=off single iface');
 		$this->assertTrackersSet($result, 'order_0 float=off');
+		$this->assertUserRulesPreserved($existing, $result, 'order_0 float=off');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'order_0 float=off');
 	}
 
 	// -----------------------------------------------------------------------
@@ -367,21 +436,21 @@ final class AutoruleListOracleTest extends TestCase
 	public function testOrder0FloatOnSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 0, float=on. user floating pass goes to $fother_rules
-		 * (order_0 + floating='yes' -> fother_rules).
+		 * Scenario: ORDER 0, float=on.
 		 *
-		 * ORDER 0 float on:
-		 *   - No pre-loop float emit (order_1 only).
-		 *   - pfB deny_in(lan), pfB deny_out(lan).
-		 *   - Tail: float=on + order_0/3/4 -> fother/fpermit/fmatch (fother_rules only here).
-		 *   - order!=order_4 -> other_rules (none here).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user float pass.
+		 * ORDER 0 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
+		 *
+		 * pf evaluates floating rules in a separate group regardless of config.xml
+		 * interleaving, so the relative position of user_float_pass vs interface rules
+		 * in config.xml does not affect pf precedence.
 		 */
 
 		$existing = [
 			$this->pfbDenyRule('lan'),
 			$this->userFloatPass(),
-			$this->userPassLan(),      // non-floating: goes to $other_rules (float=on branch)
+			$this->userPassLan(),
 		];
 		$gen = $this->pfbGeneratedDenyOnly();
 
@@ -394,26 +463,27 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_0 float=on');
 		$this->assertTrackersSet($result, 'order_0 float=on');
+		$this->assertUserRulesPreserved($existing, $result, 'order_0 float=on');
+		$this->assertIdempotent($result, $gen, 'order_0', 'on', ['lan'], ['lan'], 'order_0 float=on');
 	}
 
 	// -----------------------------------------------------------------------
 	// C. order_1, float=off, inbound==outbound='lan'  [KNOWN-BAD: duplication]
 	// -----------------------------------------------------------------------
 
-	public function testOrder1FloatOffSingleIfaceDenyOnlyKnownBadDuplicate(): void
+	public function testOrder1FloatOffSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 1, float=off, SAME interface for inbound AND outbound.
+		 * Scenario: ORDER 1, float=off, SAME interface for inbound AND outbound ('lan').
 		 *
-		 * KNOWN-BAD: The user LAN pass rule goes into $permit_rules.
-		 * It is emitted once in the inbound loop (order_1 permit_rules for 'lan')
-		 * AND once in the outbound loop (order_1 permit_rules for 'lan').
-		 * Result: user rule appears TWICE. This is the duplication bug.
-		 * Phase 3 fixes this — Phase 1 pins it as "what it does today".
+		 * ORDER 1 anchor = AFTER: kept user rules first, then pfB block.
+		 * keep = [user_pass(lan)] (pfB deny stripped; no dup — verbatim keep).
+		 * pfB block = [deny_in(lan), deny_out(lan)].
+		 * Expected: user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
 		 *
-		 * ORDER 1: pfSense(p/m) | pfB(p/m) | pfB(b/r) | pfSense(b/r)
-		 * Expected: user_pass(lan) [inbound], pfB deny_in(lan),
-		 *           user_pass(lan) [outbound — DUPLICATE], pfB deny_out(lan)
+		 * Fail-before: old bucket-per-iface code emitted user_pass TWICE (once per loop
+		 * over the shared 'lan' interface). The immutable-splice model strips pfB rules
+		 * and keeps the verbatim user list exactly once — no dup possible.
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
@@ -421,13 +491,14 @@ final class AutoruleListOracleTest extends TestCase
 
 		$result = pfb_build_autorule_list($existing, $gen, 'order_1', '', ['lan'], ['lan']);
 
-		// KNOWN-BAD: user rule appears twice (once per loop iteration).
 		$this->assertShapes([
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_1 float=off single iface [KNOWN-BAD: duplicate]');
+		], $result, 'order_1 float=off single iface');
+		$this->assertTrackersSet($result, 'order_1 float=off single');
+		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=off single');
+		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['lan'], 'order_1 float=off single');
 	}
 
 	// -----------------------------------------------------------------------
@@ -439,12 +510,14 @@ final class AutoruleListOracleTest extends TestCase
 		/**
 		 * Scenario: ORDER 1, float=off, separate inbound (lan) and outbound (opt1).
 		 *
-		 * User pass rules on both interfaces go to $permit_rules.
-		 * In the inbound loop: user pass LAN emitted for 'lan' iface.
-		 * In the outbound loop: user pass OPT1 emitted for 'opt1' iface.
-		 * No duplication because interfaces differ.
+		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
+		 * keep = [user_pass(lan), user_pass(opt1)] (original order).
+		 * pfB block = [deny_in(lan), deny_out(opt1)].
+		 * Expected: user_pass(lan), user_pass(opt1), pfB deny_in(lan), pfB deny_out(opt1).
 		 *
-		 * Expected: user_pass(lan), pfB deny_in(lan), user_pass(opt1), pfB deny_out(opt1)
+		 * Under per-interface first-match pf semantics the pfB-block-vs-user-BLOCK ordering
+		 * is moot; only pfB-block-vs-user-PASS matters, and both user pass rules precede
+		 * both pfB deny rules — user wins on both interfaces.
 		 */
 
 		$existing = [
@@ -459,11 +532,13 @@ final class AutoruleListOracleTest extends TestCase
 
 		$this->assertShapes([
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
 			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
+			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
 		], $result, 'order_1 float=off separate ifaces');
 		$this->assertTrackersSet($result, 'order_1 float=off separate');
+		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=off separate');
+		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['opt1'], 'order_1 float=off separate');
 	}
 
 	// -----------------------------------------------------------------------
@@ -473,16 +548,16 @@ final class AutoruleListOracleTest extends TestCase
 	public function testOrder1FloatOnSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 1, float=on. User float pass goes to $fpermit_rules.
-		 * Non-floating user pass goes to $other_rules (float=on, non-floating).
+		 * Scenario: ORDER 1, float=on.
 		 *
-		 * ORDER 1 float=on:
-		 *   Pre-loop: fpermit_rules + fmatch_rules emitted.
-		 *   Inbound loop: pfB deny_in(lan).
-		 *   Outbound loop: pfB deny_out(lan).
-		 *   Tail: float=on + order_1/2 -> fother_rules (none here).
-		 *   order!=order_4 -> other_rules (non-floating user pass).
-		 * Expected: user_float_pass, pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
+		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
+		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
+		 * pfB block = [deny_in(lan), deny_out(lan)].
+		 * Expected: user_float_pass, user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
+		 *
+		 * pf evaluates floating rules in a separate group regardless of config.xml
+		 * interleaving, so the relative position of user_float_pass vs interface rules
+		 * in config.xml does not affect pf precedence.
 		 */
 
 		$existing = [
@@ -496,35 +571,31 @@ final class AutoruleListOracleTest extends TestCase
 
 		$this->assertShapes([
 			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
+			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_1 float=on single iface');
 		$this->assertTrackersSet($result, 'order_1 float=on');
+		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=on');
+		$this->assertIdempotent($result, $gen, 'order_1', 'on', ['lan'], ['lan'], 'order_1 float=on');
 	}
 
 	// -----------------------------------------------------------------------
 	// F. order_2, float=off, inbound==outbound='lan'  [KNOWN-BAD: duplication]
 	// -----------------------------------------------------------------------
 
-	public function testOrder2FloatOffSingleIfaceDenyOnlyKnownBadDuplicate(): void
+	public function testOrder2FloatOffSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 2, float=off, SAME interface for inbound AND outbound.
+		 * Scenario: ORDER 2, float=off, SAME interface for inbound AND outbound ('lan').
 		 *
-		 * KNOWN-BAD: The user LAN pass rule goes into $permit_rules.
-		 * ORDER 2 emits permit_rules in the inbound loop (matching iface) AND
-		 * in the outbound loop (matching iface). Same duplication as order_1.
+		 * ORDER 2 anchor = AFTER: kept user rules first (verbatim), then pfB block.
+		 * keep = [user_pass(lan)] (pfB deny stripped; no dup).
+		 * pfB block = [deny_in(lan), deny_out(lan)].
+		 * Expected: user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
 		 *
-		 * ORDER 2: pfB(p/m) | pfSense(p/m) | pfB(b/r) | pfSense(b/r)
-		 * Expected: pfB deny_in(lan), user_pass(lan) [inbound],
-		 *           pfB deny_out(lan) [outbound], user_pass(lan) [outbound — DUPLICATE]
-		 *
-		 * Wait — order_2 emits: (inbound loop) pfB permit_in, [order_2: fpermit+fmatch+permit],
-		 * pfB deny_in. Then (outbound loop) pfB permit_out, [order_2: permit], pfB deny_out.
-		 * Here no pfB permit rules, so:
-		 *   inbound:  [order_2: permit_rules matching lan] = user_pass(lan), pfB deny_in(lan)
-		 *   outbound: [order_2: permit_rules matching lan] = user_pass(lan), pfB deny_out(lan)
+		 * Fail-before: old bucket-based code emitted user_pass TWICE (once per iface loop
+		 * iteration). The immutable-splice model keeps the verbatim list exactly once.
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
@@ -532,13 +603,14 @@ final class AutoruleListOracleTest extends TestCase
 
 		$result = pfb_build_autorule_list($existing, $gen, 'order_2', '', ['lan'], ['lan']);
 
-		// KNOWN-BAD: user rule appears twice.
 		$this->assertShapes([
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_2 float=off single iface [KNOWN-BAD: duplicate]');
+		], $result, 'order_2 float=off single iface');
+		$this->assertTrackersSet($result, 'order_2 float=off single');
+		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=off single');
+		$this->assertIdempotent($result, $gen, 'order_2', '', ['lan'], ['lan'], 'order_2 float=off single');
 	}
 
 	// -----------------------------------------------------------------------
@@ -549,10 +621,11 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		/**
 		 * Scenario: ORDER 2, float=off, separate ifaces (lan in, opt1 out).
-		 * No duplication because inbound and outbound filters by iface.
 		 *
-		 * Inbound: [order_2 permit(lan)], pfB deny_in(lan)
-		 * Outbound: [order_2 permit(opt1)], pfB deny_out(opt1)
+		 * ORDER 2 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
+		 * keep = [user_pass(lan), user_pass(opt1)] (original order).
+		 * pfB block = [deny_in(lan), deny_out(opt1)].
+		 * Expected: user_pass(lan), user_pass(opt1), pfB deny_in(lan), pfB deny_out(opt1).
 		 */
 
 		$existing = [
@@ -567,11 +640,13 @@ final class AutoruleListOracleTest extends TestCase
 
 		$this->assertShapes([
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
 			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
+			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
 		], $result, 'order_2 float=off separate ifaces');
 		$this->assertTrackersSet($result, 'order_2 float=off separate');
+		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=off separate');
+		$this->assertIdempotent($result, $gen, 'order_2', '', ['lan'], ['opt1'], 'order_2 float=off separate');
 	}
 
 	// -----------------------------------------------------------------------
@@ -581,15 +656,12 @@ final class AutoruleListOracleTest extends TestCase
 	public function testOrder2FloatOnSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 2, float=on. User float pass -> fpermit_rules.
-		 * Non-floating user pass -> other_rules.
+		 * Scenario: ORDER 2, float=on.
 		 *
-		 * float=on order_2: fpermit+fmatch emitted inside the first inbound loop iter
-		 * (order_2 block).  No pfB permit_in templates.
-		 * Outbound loop: order_2 block skipped (no permit_rules when float=on).
-		 * Tail: float=on, order_2 -> fother_rules (none).
-		 * order!=order_4 -> other_rules.
-		 * Expected: fpermit(first inbound iter), pfB deny_in, pfB deny_out, user_pass(lan)
+		 * ORDER 2 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
+		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
+		 * pfB block = [deny_in(lan), deny_out(lan)].
+		 * Expected: user_float_pass, user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
 		 */
 
 		$existing = [
@@ -603,11 +675,13 @@ final class AutoruleListOracleTest extends TestCase
 
 		$this->assertShapes([
 			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
+			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_2 float=on single iface');
 		$this->assertTrackersSet($result, 'order_2 float=on');
+		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=on');
+		$this->assertIdempotent($result, $gen, 'order_2', 'on', ['lan'], ['lan'], 'order_2 float=on');
 	}
 
 	// -----------------------------------------------------------------------
@@ -618,15 +692,9 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		/**
 		 * Scenario: ORDER 3, float=off.
-		 * ORDER 3: pfB(p/m) | pfB(b/r) | pfSense(p/m) | pfSense(b/r)
 		 *
-		 * permit_rules used in the tail (order_3 -> emit permit_rules after interface loops).
-		 * user pass LAN -> $permit_rules (order_3, not order_0).
-		 *
-		 * Inbound: pfB deny_in(lan)  [no permit_rules in inbound loop for order_3]
-		 * Outbound: pfB deny_out(lan) [same]
-		 * Tail: order_3 -> permit_rules (user pass), other_rules (none)
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
+		 * ORDER 3 anchor = BEFORE: pfB block first, then kept user rules.
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan).
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
@@ -640,6 +708,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_3 float=off single iface');
 		$this->assertTrackersSet($result, 'order_3 float=off');
+		$this->assertUserRulesPreserved($existing, $result, 'order_3 float=off');
+		$this->assertIdempotent($result, $gen, 'order_3', '', ['lan'], ['lan'], 'order_3 float=off');
 	}
 
 	// -----------------------------------------------------------------------
@@ -649,12 +719,11 @@ final class AutoruleListOracleTest extends TestCase
 	public function testOrder3FloatOnSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 3, float=on. User float pass -> $fpermit_rules.
-		 * Non-floating user pass -> other_rules.
+		 * Scenario: ORDER 3, float=on.
 		 *
-		 * float=on order_3: tail emits fpermit+fmatch+fother (order_3 rule_order).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan),
-		 *           user_float_pass (in fpermit tail), user_pass(lan) (other_rules tail)
+		 * ORDER 3 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * keep = [user_float_pass, user_pass(lan)] (original order).
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
 		 */
 
 		$existing = [
@@ -673,24 +742,21 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_3 float=on single iface');
 		$this->assertTrackersSet($result, 'order_3 float=on');
+		$this->assertUserRulesPreserved($existing, $result, 'order_3 float=on');
+		$this->assertIdempotent($result, $gen, 'order_3', 'on', ['lan'], ['lan'], 'order_3 float=on');
 	}
 
 	// -----------------------------------------------------------------------
 	// K. order_4, float=off, inbound==outbound='lan'  [KNOWN-BAD: reorder]
 	// -----------------------------------------------------------------------
 
-	public function testOrder4FloatOffSingleIfaceDenyOnlyKnownBadReorder(): void
+	public function testOrder4FloatOffSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 4, float=off.
-		 * ORDER 4: pfB(p/m) | pfB(b/r) | pfSense(b/r) | pfSense(p/m)
+		 * Scenario: ORDER 4, float=off, single managed iface (lan).
 		 *
-		 * user pass LAN -> $permit_rules.
-		 * Inbound: pfB deny_in(lan).
-		 * Outbound: pfB deny_out(lan).
-		 * Tail: order_4 -> other_rules (none here), then permit_rules.
-		 *       order_4: NOT emitting other_rules at the end.
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
+		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan).
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
@@ -698,28 +764,30 @@ final class AutoruleListOracleTest extends TestCase
 
 		$result = pfb_build_autorule_list($existing, $gen, 'order_4', '', ['lan'], ['lan']);
 
-		// order_4 tail: other_rules first (empty), then permit_rules.
-		// No duplication because neither inbound nor outbound loops emit permit_rules for order_4.
 		$this->assertShapes([
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_4 float=off single iface');
 		$this->assertTrackersSet($result, 'order_4 float=off');
+		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=off');
+		$this->assertIdempotent($result, $gen, 'order_4', '', ['lan'], ['lan'], 'order_4 float=off');
 	}
 
-	public function testOrder4FloatOffTwoIfacesKnownBadReorder(): void
+	public function testOrder4FloatOffTwoIfacesDenyOnly(): void
 	{
 		/**
 		 * Scenario: ORDER 4, float=off, two managed ifaces (opt1 inbound, lan outbound).
 		 *
-		 * KNOWN-BAD: The original code has TWO managed ifaces but the opt1 rule
-		 * comes from the inbound loop and the lan rule from the outbound loop.
-		 * Both go to $permit_rules, emitted in the tail in config.xml ORDER (opt1 first,
-		 * lan second) — which inverts their original position relative to each other
-		 * if the factory config had lan before opt1.
+		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * keep = [user_pass(lan), user_pass(opt1)] (original order in existing_rules).
+		 * pfB block = [deny_in(opt1), deny_out(lan)].
+		 * Expected: pfB deny_in(opt1), pfB deny_out(lan), user_pass(lan), user_pass(opt1).
 		 *
-		 * This test pins the existing reorder behaviour as-is.
+		 * The deliberate behaviour change from Phase 1's KNOWN-BAD oracle: the old bucket-based
+		 * code emitted user rules in accumulated-bucket order (also lan then opt1 for this
+		 * fixture, but would diverge for a different existing_rules order). The immutable-splice
+		 * always preserves the original config.xml order verbatim.
 		 */
 
 		$existing = [
@@ -733,16 +801,15 @@ final class AutoruleListOracleTest extends TestCase
 		// inbound='opt1', outbound='lan' — mimics a config where opt1 is the inbound iface.
 		$result = pfb_build_autorule_list($existing, $gen, 'order_4', '', ['opt1'], ['lan']);
 
-		// ORDER 4 tail: other_rules (none), permit_rules (lan then opt1 — in $permit_rules order),
-		// NOT order_4 "other_rules at end" — the condition is order!=order_4.
-		// permit_rules order: userPassLan first (appears before userPassOpt1 in existing_rules
-		// and both match managed ifaces), so lan first then opt1.
 		$this->assertShapes([
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'opt1', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan',  'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
 			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-		], $result, 'order_4 float=off two ifaces [KNOWN-BAD: reorder]');
+		], $result, 'order_4 float=off two ifaces');
+		$this->assertTrackersSet($result, 'order_4 float=off two ifaces');
+		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=off two ifaces');
+		$this->assertIdempotent($result, $gen, 'order_4', '', ['opt1'], ['lan'], 'order_4 float=off two ifaces');
 	}
 
 	// -----------------------------------------------------------------------
@@ -752,12 +819,11 @@ final class AutoruleListOracleTest extends TestCase
 	public function testOrder4FloatOnSingleIfaceDenyOnly(): void
 	{
 		/**
-		 * Scenario: ORDER 4, float=on. User float pass -> fpermit_rules.
-		 * Non-floating user pass -> other_rules.
+		 * Scenario: ORDER 4, float=on.
 		 *
-		 * float=on order_4: tail emits fother+fpermit+fmatch (order_4 rule_order).
-		 * order_4: other_rules tail (before permit_rules). No permit_rules.
-		 * Expected: pfB deny_in, pfB deny_out, user_float_pass (fpermit), user_pass(other_rules tail)
+		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * keep = [user_float_pass, user_pass(lan)] (original order).
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
 		 */
 
 		$existing = [
@@ -776,47 +842,44 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'order_4 float=on single iface');
 		$this->assertTrackersSet($result, 'order_4 float=on');
+		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=on');
+		$this->assertIdempotent($result, $gen, 'order_4', 'on', ['lan'], ['lan'], 'order_4 float=on');
 	}
 
 	// -----------------------------------------------------------------------
 	// M. absent/empty pass_order -> treated as order_0 (the #532 default fix)
 	// -----------------------------------------------------------------------
 
-	public function testAbsentOrderTreatedAsOrder0(): void
+	public function testAbsentOrderTreatedAsBefore(): void
 	{
 		/**
-		 * Scenario: empty pass_order string (absent). Should behave identically to
-		 * order_0 — user pass rule goes to other_rules, never to permit_rules.
+		 * Scenario: empty pass_order string (absent / unknown).
 		 *
-		 * (The order_0 default is applied by the caller before pfb_build_autorule_list();
-		 *  this test passes an empty string to verify the helper doesn't mis-handle it.)
+		 * The immutable-splice model maps any unknown order to the BEFORE anchor (pfB
+		 * block first, then kept user rules). This makes the drop bug (#532) impossible
+		 * by construction — user rules are never bucketed and cannot be omitted.
 		 *
-		 * With empty order: no branch matches order_1/2/3/4, so:
-		 *   - bucket: pass rule on managed iface, empty string != 'order_0', so
-		 *     the helper uses else -> permit_rules.
-		 * Wait — the helper checks: if ($order == 'order_0') -> other_rules, else -> permit_rules.
-		 * So empty order -> permit_rules, NOT other_rules. The rule is then emitted only in
-		 * the tail if order_3/order_4... neither matches, so it is NEVER emitted.
+		 * Fail-before: the old bucket-based code sent user pass rules to $permit_rules
+		 * for unrecognised orders, which had no tail emission → user rule DROPPED.
+		 * The caller's order_0 default (#539) defended against that; the immutable-splice
+		 * makes the helper itself safe regardless of what the caller passes.
 		 *
-		 * This is the DROP bug (#532). The caller defaults empty to 'order_0' before calling
-		 * the helper. This test verifies the helper with a raw empty string to pin what
-		 * IT does (the drop) — the protection lives in the caller's defaulting.
-		 *
-		 * With empty order string: permit_rules populated but no order_1/2/3/4 tail emits them.
-		 * Result: pfB rules emitted, user pass rule DROPPED.
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)  (same as order_0).
 		 */
 
 		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
 		$gen      = $this->pfbGeneratedDenyOnly();
 
-		// Empty order: user pass goes to permit_rules but no tail emits permit_rules for ''.
 		$result = pfb_build_autorule_list($existing, $gen, '', '', ['lan'], ['lan']);
 
-		// User pass is dropped (no tail for unknown order); pfB rules still emitted.
 		$this->assertShapes([
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'empty order -> user rule dropped (caller must default to order_0)');
+			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
+		], $result, 'empty order -> BEFORE anchor (user rule preserved, same as order_0)');
+		$this->assertTrackersSet($result, 'absent order');
+		$this->assertUserRulesPreserved($existing, $result, 'absent order');
+		$this->assertIdempotent($result, $gen, '', '', ['lan'], ['lan'], 'absent order');
 	}
 
 	// -----------------------------------------------------------------------
@@ -829,9 +892,11 @@ final class AutoruleListOracleTest extends TestCase
 		 * Scenario: pfB has BOTH permit_inbound and deny_inbound (Permit_* list present).
 		 * order_1, float=off, separate ifaces (lan in, opt1 out).
 		 *
-		 * ORDER 1: pfSense(p/m) first, then pfB(p/m), then pfB(b/r), then pfSense(b/r).
-		 * Inbound: user_pass(lan) [permit_rules, order_1], pfB permit_in(lan), pfB deny_in(lan)
-		 * Outbound: user_pass(opt1) [permit_rules, order_1], pfB permit_out(opt1), pfB deny_out(opt1)
+		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
+		 * keep = [user_pass(lan), user_pass(opt1)] (original order; pfB deny rules stripped).
+		 * pfB block = [permit_in(lan), deny_in(lan), permit_out(opt1), deny_out(opt1)].
+		 * Expected: user_pass(lan), user_pass(opt1), pfB permit_in(lan), pfB deny_in(lan),
+		 *           pfB permit_out(opt1), pfB deny_out(opt1).
 		 */
 
 		$existing = [
@@ -846,13 +911,15 @@ final class AutoruleListOracleTest extends TestCase
 
 		$this->assertShapes([
 			['descr' => 'Default allow LAN to any',      'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
+			['descr' => 'Default allow OPT1 to any',     'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
 			['descr' => 'pfB_PermitList_v4 Auto Rule',   'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule',     'type' => 'block',  'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow OPT1 to any',     'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
 			['descr' => 'pfB_PermitList_v4 Auto Rule',   'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule',     'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
 		], $result, 'order_1 float=off Permit_* + Deny_* separate ifaces');
 		$this->assertTrackersSet($result, 'order_1 permit+deny');
+		$this->assertUserRulesPreserved($existing, $result, 'order_1 permit+deny');
+		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['opt1'], 'order_1 permit+deny');
 	}
 
 	// -----------------------------------------------------------------------
@@ -866,10 +933,9 @@ final class AutoruleListOracleTest extends TestCase
 		 * Its descr starts with PFB_DNS_REDIR_DESCR_V4_PFX ('pfB_DNS_Redirect_').
 		 * The helper must treat it like a user rule — NOT strip it.
 		 *
-		 * order_0, float=off. Bypass rule is on 'lan', treated as other_rules (non-pass? no —
-		 * it's type='pass', so order_0 -> other_rules because order_0 pass -> other_rules).
-		 *
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), bypass_rule(lan), user_pass(lan)
+		 * order_0 anchor = BEFORE: pfB block first, then kept user rules verbatim.
+		 * keep = [bypass_rule(lan), user_pass(lan)] (original order; pfB deny stripped).
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), bypass_rule(lan), user_pass(lan).
 		 */
 
 		$existing = [
@@ -887,6 +953,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DNS_Redirect_lan_v4',   'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'DNS-redirect bypass rule preserved (not stripped)');
+		$this->assertUserRulesPreserved($existing, $result, 'dns-redirect bypass');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dns-redirect bypass');
 	}
 
 	// -----------------------------------------------------------------------
@@ -898,10 +966,10 @@ final class AutoruleListOracleTest extends TestCase
 		/**
 		 * Scenario: existing rules include a DoT-block bypass rule.
 		 * Its descr starts with PFB_DOT_BLOCK_DESCR_PFX ('pfB_DoT_Block_').
-		 * Must be preserved like a user rule.
+		 * Must be preserved like a user rule — NOT stripped.
 		 *
-		 * order_0, float=off. DoT rule type='block' -> not a pass rule -> other_rules.
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), dot_block_rule(lan), user_pass(lan)
+		 * order_0 anchor = BEFORE. keep = [dot_block_rule(lan), user_pass(lan)].
+		 * Expected: pfB deny_in(lan), pfB deny_out(lan), dot_block_rule(lan), user_pass(lan).
 		 */
 
 		$existing = [
@@ -919,6 +987,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DoT_Block_lan',         'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'DoT-block bypass rule preserved (not stripped)');
+		$this->assertUserRulesPreserved($existing, $result, 'dot-block bypass');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dot-block bypass');
 	}
 
 	// -----------------------------------------------------------------------
@@ -930,7 +1000,7 @@ final class AutoruleListOracleTest extends TestCase
 		/**
 		 * Scenario: existing rules contain only a pfB_ deny rule (no bypass prefix).
 		 * It must be stripped and rebuilt from the template.
-		 * Result: exactly the rebuilt pfB rules, no user rules.
+		 * Result: exactly the rebuilt pfB rules, no user rules (keep = []).
 		 */
 
 		$existing = [$this->pfbDenyRule('lan')];
@@ -943,6 +1013,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
 		], $result, 'pfB_ rules stripped and rebuilt');
 		$this->assertTrackersSet($result, 'pfB stripped');
+		$this->assertUserRulesPreserved($existing, $result, 'pfB stripped');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'pfB stripped');
 	}
 
 	// -----------------------------------------------------------------------
@@ -981,6 +1053,8 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DenyList_v4 Auto Rule',  'type' => 'reject', 'interface' => 'lan',  'floating' => ''],
 			['descr' => 'Default allow LAN to any',   'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
 		], $result, 'DNSBL float rules emitted before iface loop');
+		$this->assertUserRulesPreserved($existing, $result, 'dnsbl float');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dnsbl float');
 	}
 
 	// -----------------------------------------------------------------------
@@ -993,25 +1067,32 @@ final class AutoruleListOracleTest extends TestCase
 		 * Scenario: no existing rules at all. Only pfB templates.
 		 */
 
-		$result = pfb_build_autorule_list([], $this->pfbGeneratedDenyOnly(), 'order_0', '', ['lan'], ['lan']);
+		$gen    = $this->pfbGeneratedDenyOnly();
+		$result = pfb_build_autorule_list([], $gen, 'order_0', '', ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
 		], $result, 'empty existing rules');
 		$this->assertTrackersSet($result, 'empty existing');
+		$this->assertUserRulesPreserved([], $result, 'empty existing');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'empty existing');
 	}
 
 	// -----------------------------------------------------------------------
 	// T. Non-managed iface user rule goes to other_rules (float=off)
 	// -----------------------------------------------------------------------
 
-	public function testNonManagedIfaceRuleGoesToOtherRules(): void
+	public function testNonManagedIfaceRulePreservedVerbatim(): void
 	{
 		/**
 		 * Scenario: user rule on 'wan' — NOT in the managed inbound/outbound iface list.
-		 * float=off. Should go to $other_rules, emitted at the end.
-		 * order_0, managed=['lan'].
+		 * order_0, float=off, managed=['lan'].
+		 *
+		 * The immutable splice keeps ALL non-pfB-owned rules verbatim, regardless of
+		 * interface. Non-managed rules are not singled out — they stay in their original
+		 * position relative to other user rules in $keep.
+		 * Expected: pfB BEFORE, then keep = [wan_rule, user_pass(lan)] (original order).
 		 */
 
 		$nonManagedRule = [
@@ -1029,13 +1110,14 @@ final class AutoruleListOracleTest extends TestCase
 
 		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
 
-		// Non-managed rules go to other_rules (with order_0 managed rules too).
 		$this->assertShapes([
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
 			['descr' => 'WAN rule',                  'type' => 'pass',   'interface' => 'wan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'non-managed iface rule goes to other_rules (after managed)');
+		], $result, 'non-managed iface rule preserved verbatim in original position');
+		$this->assertUserRulesPreserved($existing, $result, 'non-managed iface');
+		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'non-managed iface');
 	}
 
 	/**
