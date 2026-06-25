@@ -431,13 +431,19 @@ do_setup_rules() {
     # Catch-all pass: everything else (LAN↔LAN, management, probe driving).
     printf 'pass quick all\n' >> "${_rules_file}"
 
-    # Replace the entire main ruleset. pfctl -f - accepts <table_name> references
+    # Replace the entire main ruleset. pfctl -f accepts <table_name> references
     # for tables already persistent in the kernel — no table definition needed.
     "${PFCTL}" -f "${_rules_file}" 2>&1 || {
         printf 'error=ruleset_load_failed type=%s wan_if=%s lan_if=%s\n' \
             "${_type}" "${_wan}" "${_lan}"
         return 1
     }
+
+    # Kill existing pf states from civm's LAN IP after a ruleset change.
+    # pf evaluates states BEFORE rules, so stale states from the pfBlockerNG install
+    # (DNSBL setup, package install probes) can shadow the new block-return rules.
+    # Killing civm's states ensures every new probe connection gets rule-evaluated.
+    "${PFCTL}" -k 192.168.1.10 2>/dev/null || true
 
     printf 'rules_loaded=ok type=%s wan_if=%s lan_if=%s table_entries=%s\n' \
         "${_type}" "${_wan}" "${_lan}" "${_loaded}"
