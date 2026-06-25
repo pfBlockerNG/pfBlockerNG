@@ -69,6 +69,7 @@ class IcmpProbe:
 
     rtt_ms: float  # round-trip time in milliseconds
     seq: int  # ping sequence number
+    recv_epoch: float = 0.0  # Unix timestamp of packet receipt (from ping -D; 0 if unavailable)
 
 
 @dataclass
@@ -156,22 +157,29 @@ def _run_icmp_probe(
     count = max(1, int(duration_s / interval_s))
     # LC_ALL=C: pin locale so the ping summary and RTT lines match the regex
     # regardless of the civm Debian locale setting.
-    cmd = f"LC_ALL=C ping -c {count} -i {interval_s} -W 1 {shlex.quote(target)} 2>&1"
+    # -D: prefix each reply line with [unix_ts.us] for op-window slicing.
+    cmd = f"LC_ALL=C ping -D -c {count} -i {interval_s} -W 1 {shlex.quote(target)} 2>&1"
     result = client_vm.ssh(cmd, timeout=duration_s + 30.0)
     return _parse_ping(result.stdout)
 
 
 def _parse_ping(output: str) -> ProbeWindow:
-    """Parse ``ping`` output into per-packet RTT samples + loss count."""
+    """Parse ``ping -D`` output into per-packet RTT samples + loss count.
+
+    With ``-D``, each reply line is prefixed: ``[unix_ts.us] 64 bytes from ...``
+    We capture the timestamp for op-window slicing.  Falls back gracefully when
+    the prefix is absent (non-``-D`` output: recv_epoch=0.0).
+    """
     window = ProbeWindow()
-    # Match per-packet lines: "64 bytes from ...: icmp_seq=N ttl=T time=X ms"
-    for m in re.finditer(r"icmp_seq=(\d+).*?time=([\d.]+)\s+ms", output):
-        window.samples.append(IcmpProbe(seq=int(m.group(1)), rtt_ms=float(m.group(2))))
+    # Optional [timestamp] prefix from ping -D; rest is the standard reply line.
+    for m in re.finditer(r"(?:\[([\d.]+)\]\s+)?.*?icmp_seq=(\d+).*?time=([\d.]+)\s+ms", output):
+        recv_epoch = float(m.group(1)) if m.group(1) else 0.0
+        window.samples.append(IcmpProbe(seq=int(m.group(2)), rtt_ms=float(m.group(3)), recv_epoch=recv_epoch))
     # Loss from summary: "N packets transmitted, M received, P% packet loss"
-    m = re.search(r"(\d+) packets transmitted, (\d+) received", output)
-    if m:
-        sent = int(m.group(1))
-        recv = int(m.group(2))
+    summary = re.search(r"(\d+) packets transmitted, (\d+) received", output)
+    if summary:
+        sent = int(summary.group(1))
+        recv = int(summary.group(2))
         window.lost = max(0, sent - recv)
     return window
 
@@ -202,11 +210,12 @@ class _LiveProbe:
         self._thread.start()
 
     def _run(self) -> None:
-        # Fire batches of ~100 pings, collect, repeat until stopped.
+        # Fire batches of ~100 pings with per-packet timestamps (-D), collect, repeat until stopped.
         # LC_ALL=C: pin locale so ping output matches the RTT regex on any Debian locale.
+        # -D: per-packet [unix_ts.us] prefix enables op-window slicing in snapshot_since().
         batch_count = 100
         while not self._stop_evt.is_set():
-            cmd = f"LC_ALL=C ping -c {batch_count} -i {self._interval} -W 1 {shlex.quote(self._target)} 2>&1"
+            cmd = f"LC_ALL=C ping -D -c {batch_count} -i {self._interval} -W 1 {shlex.quote(self._target)} 2>&1"
             duration = batch_count * self._interval + 5.0
             result = self._client.ssh(cmd, timeout=duration + 10.0)
             pw = _parse_ping(result.stdout)
@@ -215,29 +224,37 @@ class _LiveProbe:
                 self._lost += pw.lost
 
     def snapshot_since(self, since_epoch: float) -> ProbeWindow:
-        """Return samples collected at or after since_epoch.
+        """Return samples whose recv_epoch >= since_epoch.
 
-        We do not have per-packet timestamps from the probe; the caller aligns
-        the "during" window to the op by recording ``epoch_start``/``epoch_end``
-        from the guest bench script and calling ``stop()`` (which bounds the
-        collection to the op duration).  ``snapshot_since`` is provided for
-        future callers that want a finer sub-window; it currently returns all
-        accumulated samples as a coarse approximation.
+        Uses the per-packet timestamps from ``ping -D`` (stored as
+        ``IcmpProbe.recv_epoch``).  When recv_epoch is 0.0 (non-``-D`` output),
+        all samples are included (graceful degradation).
         """
         with self._lock:
             pw = ProbeWindow()
-            pw.samples = list(self._samples)
+            pw.samples = [s for s in self._samples if s.recv_epoch == 0.0 or s.recv_epoch >= since_epoch]
+            # lost packets have no timestamp; conservatively include them all.
             pw.lost = self._lost
             return pw
 
-    def stop(self) -> ProbeWindow:
-        self._stop_evt.set()
-        self._thread.join(timeout=30.0)
+    def slice_window(self, t0: float, t1: float) -> ProbeWindow:
+        """Return samples whose recv_epoch falls in [t0, t1].
+
+        When recv_epoch is 0.0 (non-``-D`` output), all samples are included.
+        Used to build the op-aligned during-window from civm's own clock.
+        """
         with self._lock:
             pw = ProbeWindow()
-            pw.samples = list(self._samples)
-            pw.lost = self._lost
+            pw.samples = [
+                s for s in self._samples if s.recv_epoch == 0.0 or (s.recv_epoch >= t0 and s.recv_epoch <= t1)
+            ]
+            pw.lost = 0  # lost packets: not attributable to a window; omit from sliced window
             return pw
+
+    def stop(self) -> None:
+        """Signal the background thread to stop and wait for it to finish."""
+        self._stop_evt.set()
+        self._thread.join(timeout=30.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -368,13 +385,47 @@ def _measure_with_probe(
         probe = _LiveProbe(client_vm, PFSENSE_LAN_IP)
         probe.start()
 
+    # ---- bracket the op with civm's own clock (CR#12 fix) ---- #
+    # We capture t0/t1 on civm's clock — the same clock ping -D uses for
+    # recv_epoch — so the during-window is sliced to ONLY samples that arrived
+    # while the pfctl op was actually running.  This prevents idle pre/post
+    # batches from diluting the stall numbers.
+    t0_civm: float = 0.0
+    if client_vm is not None:
+        # date +%s.%N gives nanosecond epoch on Debian (GNU date).
+        res = client_vm.ssh("date +%s.%N", timeout=5.0)
+        try:
+            t0_civm = float(res.stdout.strip())
+        except ValueError:
+            t0_civm = 0.0
+
     # ---- run the pfctl op on the guest ---- #
     kv = _bench(smoke_vm, *bench_args, timeout=op_timeout_s)
 
-    # ---- stop background probe ---- #
+    # ---- record op-end on civm clock ---- #
+    t1_civm: float = 0.0
+    if client_vm is not None:
+        res = client_vm.ssh("date +%s.%N", timeout=5.0)
+        try:
+            t1_civm = float(res.stdout.strip())
+        except ValueError:
+            t1_civm = 0.0
+
+    # ---- stop background probe; build op-aligned during-window ---- #
     during_window = ProbeWindow()
     if probe is not None:
-        during_window = probe.stop()
+        probe.stop()  # flush all samples
+        if t0_civm > 0.0 and t1_civm > t0_civm:
+            during_window = probe.slice_window(t0_civm, t1_civm)
+            print(
+                f"\n  [probe-align] t0={t0_civm:.3f} t1={t1_civm:.3f}"
+                f" op_wall={(t1_civm - t0_civm) * 1000:.0f}ms"
+                f" during_samples={len(during_window.samples)}"
+                f" (expected ≈{(t1_civm - t0_civm) / probe._interval:.0f})"
+            )
+        else:
+            # Fallback: no civm clock captured; use all samples (degraded mode).
+            during_window = probe.slice_window(0.0, float("inf"))
 
     # ---- build result row ---- #
     gd = _parse_guest_row(kv)
