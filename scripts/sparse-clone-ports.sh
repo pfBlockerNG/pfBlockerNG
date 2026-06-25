@@ -36,23 +36,14 @@ CHANNEL="$4"
 PHP="$5"
 PYFLAVOR="$6"
 
-# Derive the pfBlockerNG port subdirectory for the channel so we can sparse-checkout
-# it first (its Makefile drives --print-build-origins for the rest of the dirs).
-case "$CHANNEL" in
-	stable)  PORT_SUB="pfSense-pkg-pfBlockerNG" ;;
-	devel)   PORT_SUB="pfSense-pkg-pfBlockerNG-devel" ;;
-	nightly) PORT_SUB="pfSense-pkg-pfBlockerNG-nightly" ;;
-	*)
-		printf 'sparse-clone-ports.sh: unknown channel: %s\n' "$CHANNEL" >&2
-		exit 1
-		;;
-esac
-PORT_DIR="net/${PORT_SUB}"
-
 # Resolve the repo root relative to this script so the builder can always be found
 # regardless of where the caller's CWD is.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILDER="${SCRIPT_DIR}/build-pkg-portable.py"
+
+# Derive the pfBlockerNG port dir for the channel — single source of truth in the
+# builder (_CHANNEL_PORT_SUB); validates the channel name and errors on unknown values.
+PORT_DIR="$(python3 "$BUILDER" --print-port-origin --channel "$CHANNEL")" || exit 1
 
 # 1. Blobless clone — no blobs fetched yet; git knows all tree paths.
 git clone --depth 1 --filter=blob:none --no-checkout -b "$REF" "$URL" "$DEST"

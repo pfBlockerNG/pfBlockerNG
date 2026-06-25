@@ -1461,7 +1461,12 @@ def main(argv: list[str]) -> int:
         ),
     )
     ap.add_argument(
-        "--ports", required=True, help="FreeBSD-ports checkout (contains net/pfSense-pkg-pfBlockerNG[-devel])"
+        "--ports",
+        default=None,
+        help=(
+            "FreeBSD-ports checkout (contains net/pfSense-pkg-pfBlockerNG[-devel]); "
+            "not required for --print-port-origin"
+        ),
     )
 
     g_port = ap.add_argument_group("port selection")
@@ -1539,8 +1544,28 @@ def main(argv: list[str]) -> int:
             "Used by scripts/sparse-clone-ports.sh to derive the sparse-checkout set."
         ),
     )
+    g_out.add_argument(
+        "--print-port-origin",
+        action="store_true",
+        help=(
+            "print the port origin dir (e.g. net/pfSense-pkg-pfBlockerNG-devel) for "
+            "--channel, then exit 0.  No --ports tree required.  Single source of truth "
+            "for the channel→origin mapping; used by scripts/sparse-clone-ports.sh."
+        ),
+    )
 
     args = ap.parse_args(argv)
+
+    if args.print_port_origin:
+        channel = args.channel
+        if channel not in _CHANNEL_PORT_SUB:
+            sys.stderr.write(f"build-pkg-portable: unknown channel: {channel!r}\n")
+            return 1
+        print(f"net/{_CHANNEL_PORT_SUB[channel]}")
+        return 0
+
+    if not args.ports:
+        ap.error("--ports is required")
 
     if args.print_build_origins:
         return print_build_origins(args)

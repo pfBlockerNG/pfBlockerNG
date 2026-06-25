@@ -435,6 +435,10 @@ jobs:
       # Only for the `repo` marker (the default `smoke` flow doesn't read it).
       - name: Build a nightly .pkg (repo-flow nightly smoke)
         if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
+        env:
+          PHP_VERSION: ${{ inputs.php_version }}
+          PY_FLAVOR: ${{ inputs.py_flavor }}
+          ABI: ${{ inputs.abi }}
         run: |
           set -eu
           sh scripts/sparse-clone-ports.sh \
@@ -442,12 +446,12 @@ jobs:
             pfblockerng/use-github \
             "${{ runner.temp }}/ports-nightly" \
             nightly \
-            '${{ inputs.php_version }}' \
-            '${{ inputs.py_flavor }}'
+            "$PHP_VERSION" \
+            "$PY_FLAVOR"
           mkdir -p out-nightly
           python3 scripts/build-pkg-portable.py \
             --ports "${{ runner.temp }}/ports-nightly" --channel nightly \
-            --local-src . --abi ${{ inputs.abi }} --py-flavor ${{ inputs.py_flavor }} --php ${{ inputs.php_version }} \
+            --local-src . --abi "$ABI" --py-flavor "$PY_FLAVOR" --php "$PHP_VERSION" \
             --pkgversion 3.2.16.20260606.2 --annotate commit=${{ github.sha }} \
             --out out-nightly
           echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"

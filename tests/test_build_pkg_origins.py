@@ -3,7 +3,7 @@ Scenario: --print-build-origins emits the correct set and a sparse build is byte
 
 Background:
     A local FreeBSD-ports clone is required.  The test discovers it via the env var
-    FREEBSD_PORTS_DIR or the default sibling path /Users/andre/git/FreeBSD-ports.
+    FREEBSD_PORTS_DIR, or falls back to a ``FreeBSD-ports`` sibling of the repo root.
     When neither is present the tests are skipped — this is a local-only test;
     CI uses the sparse-clone-ports.sh helper to produce a real sparse clone and
     relies on the release.yml / smoke-single.yml run to validate end-to-end.
@@ -20,8 +20,8 @@ Then (test 1):
 
 When (test 2):
     A sparse ports tree containing ONLY the printed origin dirs is assembled in a
-    temp dir (symlinks from the full clone), and the .pkg is built from both the
-    full tree and the sparse tree.
+    temp dir by copying those dirs from the full clone, and the .pkg is built from
+    both the full tree and the sparse copy.
 
 Then (test 2):
     The two .pkg files are byte-identical (cmp passes).
@@ -42,7 +42,8 @@ import pytest
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_PORTS = "/Users/andre/git/FreeBSD-ports"
+# Repo root → sibling FreeBSD-ports checkout (the conventional dev location).
+_DEFAULT_PORTS = Path(__file__).parent.parent.parent / "FreeBSD-ports"
 _BUILDER = Path(__file__).parent.parent / "scripts" / "build-pkg-portable.py"
 
 # Known-good origin set for (channel=devel, php=8.3, py_flavor=py311)
@@ -74,8 +75,8 @@ _ABI = "FreeBSD:15:amd64"
 
 
 def _ports_dir() -> Path | None:
-    d = os.environ.get("FREEBSD_PORTS_DIR", _DEFAULT_PORTS)
-    p = Path(d)
+    env = os.environ.get("FREEBSD_PORTS_DIR")
+    p = Path(env) if env else _DEFAULT_PORTS
     if p.is_dir() and (p / "net" / "pfSense-pkg-pfBlockerNG-devel" / "Makefile").is_file():
         return p
     return None
