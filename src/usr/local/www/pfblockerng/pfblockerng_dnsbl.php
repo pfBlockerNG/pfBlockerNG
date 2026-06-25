@@ -134,6 +134,7 @@ $pconfig['dnsbl_dot_block']		= PfbConfig::read('dnsbl_dot_block');
 $pfb_dot_block_int_raw			= (string) PfbConfig::read('dnsbl_dot_block_int');
 $pconfig['dnsbl_dot_block_int']		= ($pfb_dot_block_int_raw !== '') ? explode(',', $pfb_dot_block_int_raw) : [];
 $pconfig['dnsbl_dot_block_exclude']	= (string) PfbConfig::read('dnsbl_dot_block_exclude');
+$pconfig['dnsbl_dot_block_action']	= (string) PfbConfig::read('dnsbl_dot_block_action');
 
 // Select field options
 
@@ -148,6 +149,9 @@ $options_dnsbl_redir_int	= $options_dnsbl_interface;
 
 // [ ADR-37 ] DoT/DoQ Block: WAN-excluded interface list (same filter as Permit Firewall Rules).
 $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
+
+// [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
+$options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
 $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
@@ -735,10 +739,12 @@ if ($_POST) {
 		// Validate DoT/DoQ Block fields.
 		$dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
 		$dot_block_alias_raw  = trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
+		$dot_block_action_raw = (string)($_POST['dnsbl_dot_block_action'] ?? 'reject');
 		$dot_block_errors     = pfb_validate_dot_block_post(
 			$dot_block_ifaces_raw,
 			array_keys($options_dnsbl_dot_block_int),
-			$dot_block_alias_raw
+			$dot_block_alias_raw,
+			$dot_block_action_raw
 		);
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
@@ -868,6 +874,7 @@ if ($_POST) {
 			PfbConfig::write('dnsbl_dot_block', pfb_filter($_POST['dnsbl_dot_block'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 			PfbConfig::write('dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
 			PfbConfig::write('dnsbl_dot_block_exclude', $dot_block_alias_raw);
+			PfbConfig::write('dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
 
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
@@ -2901,6 +2908,16 @@ $section->addInput(new Form_Input(
 	['placeholder' => 'Firewall alias name (optional)']
 ))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DoT/DoQ block.<br />'
 		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a>.');
+
+$section->addInput(new Form_Select(
+	'dnsbl_dot_block_action',
+	gettext('Rule Action'),
+	pfb_dot_block_action($pconfig['dnsbl_dot_block_action']),
+	$options_dnsbl_dot_block_action
+))->setHelp('Default: <strong>Reject</strong><br />'
+		. 'Select the action for the DoT/DoQ block rules. <strong>Reject</strong> fast-fails the client '
+		. '(so it falls back to plain DNS) while <strong>Block</strong> silently drops the connection.')
+  ->setAttribute('style', 'width: auto');
 
 $form->add($section);
 

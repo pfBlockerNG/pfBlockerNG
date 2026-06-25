@@ -446,14 +446,28 @@ function pfb_validate_dns_redirect_post(
 	return $errors;
 }
 
+// The two valid dispositions for a DoT/DoQ block rule. 'reject' is the default
+// (an outbound LAN->WAN block, so Reject fast-fails the client to plain DNS rather
+// than letting the encrypted-DNS connection hang); 'block' silently drops. Mirrors
+// the inbound/outbound Rule Action selector on the IP settings page.
+define('PFB_DOT_BLOCK_ACTION_DEFAULT', 'reject');
+
+// Normalise a stored/posted DoT/DoQ-block action to one of the two valid
+// dispositions. Any unknown/empty value falls back to the default ('reject').
+function pfb_dot_block_action(string $action): string {
+	return ($action === 'block') ? 'block' : PFB_DOT_BLOCK_ACTION_DEFAULT;
+}
+
 // Validate the DoT/DoQ-block fields submitted via the DNSBL settings POST form.
 // Each interface name is checked against the allow-list; the exception alias is
-// validated by is_validaliasname() when non-empty.
+// validated by is_validaliasname() when non-empty; the rule action must be one of
+// the two known dispositions ('block' | 'reject').
 // Returns an array of validation error messages (empty = all inputs valid).
 function pfb_validate_dot_block_post(
 	array $posted_ifaces,
 	array $valid_iface_list,
-	string $posted_alias
+	string $posted_alias,
+	string $posted_action = PFB_DOT_BLOCK_ACTION_DEFAULT
 ): array {
 	$errors = [];
 	foreach ($posted_ifaces as $iface) {
@@ -468,7 +482,36 @@ function pfb_validate_dot_block_post(
 				htmlspecialchars($posted_alias, ENT_QUOTES);
 		}
 	}
+	if (!in_array($posted_action, ['block', 'reject'], TRUE)) {
+		$errors[] = 'DoT/DoQ Block: Invalid rule action: ' .
+			htmlspecialchars($posted_action, ENT_QUOTES);
+	}
 	return $errors;
+}
+
+// Build a single DoT/DoQ block filter/rule array for $iface. $action is the rule
+// disposition ('block' | 'reject'); any other value falls back to the default
+// (Reject) via pfb_dot_block_action(). When $exclude_alias is non-empty it becomes a
+// negated source so listed hosts bypass the block; empty -> source 'any'. The
+// destination is always the firewall itself ('(self)') on port 853, negated so the
+// box's own resolver is exempt. The caller assigns the 'tracker' (last key) after
+// build, preserving the stored key order so the sync change-detection compare stays
+// stable when nothing changed.
+function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action): array {
+	$source = ($exclude_alias !== '')
+		? ['address' => $exclude_alias, 'not' => '']
+		: ['any' => ''];
+
+	return [
+		'type'        => pfb_dot_block_action($action),
+		'interface'   => $iface,
+		'ipprotocol'  => 'inet46',
+		'protocol'    => 'tcp/udp',
+		'source'      => $source,
+		'destination' => ['network' => '(self)', 'not' => '', 'port' => '853'],
+		'statetype'   => 'keep state',
+		'descr'       => PFB_DOT_BLOCK_DESCR_PFX . $iface,
+	];
 }
 
 // Allowlist the alias-type suffix ($vtype) before it is interpolated into an
@@ -13985,9 +14028,10 @@ function sync_package_pfblockerng($cron='') {
 				$dot_changed = TRUE;
 			}
 		} else {
-			// ENABLED: read interfaces (comma-separated) and exception alias.
+			// ENABLED: read interfaces (comma-separated), exception alias, rule action.
 			$dot_iface_raw    = (string) PfbConfig::read('dnsbl_dot_block_int');
 			$dot_exclude_alias = trim((string) PfbConfig::read('dnsbl_dot_block_exclude'));
+			$dot_action       = pfb_dot_block_action((string) PfbConfig::read('dnsbl_dot_block_action'));
 
 			$dot_ifaces_raw = array_filter(array_map('trim', explode(',', $dot_iface_raw)), 'strlen');
 			$dot_ifaces     = [];
@@ -14053,24 +14097,16 @@ function sync_package_pfblockerng($cron='') {
 					}
 				}
 
-				// Build new DoT/DoQ block filter rules for each interface.
+				// Build new DoT/DoQ block filter rules for each interface. The rule
+				// shape (incl. the configurable block/reject disposition) is built by
+				// pfb_dot_block_rule(); the deterministic tracker is appended here
+				// (last key) so the change-detection compare below stays stable.
 				$dot_new_owned = [];
 				foreach ($dot_ifaces as $dot_iface) {
-					$dot_descr  = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
-					$dot_source = ($dot_exclude_alias !== '')
-						? ['address' => $dot_exclude_alias, 'not' => '']
-						: ['any' => ''];
-					$dot_new_owned[] = [
-						'type'        => 'block',
-						'interface'   => $dot_iface,
-						'ipprotocol'  => 'inet46',
-						'protocol'    => 'tcp/udp',
-						'source'      => $dot_source,
-						'destination' => ['network' => '(self)', 'not' => '', 'port' => '853'],
-						'statetype'   => 'keep state',
-						'descr'       => $dot_descr,
-						'tracker'     => $dot_existing_trackers[$dot_descr] ?? (string) pfb_managed_rule_tracker($dot_descr),
-					];
+					$dot_descr = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+					$dot_rule  = pfb_dot_block_rule($dot_iface, $dot_exclude_alias, $dot_action);
+					$dot_rule['tracker'] = $dot_existing_trackers[$dot_descr] ?? (string) pfb_managed_rule_tracker($dot_descr);
+					$dot_new_owned[] = $dot_rule;
 				}
 
 				if ($dot_ex_owned !== $dot_new_owned) {

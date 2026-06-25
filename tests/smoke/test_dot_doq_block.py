@@ -22,6 +22,8 @@ Proves on a real pfSense CE VM that:
 * **Case 7 (Self-exempt guard):** ``pfctl -sr`` output contains the block rule for
   port 853 and the rule includes the ``self``-negation token confirming the
   firewall-self exemption is active.
+* **Rule Action selector:** the action field flips the rule ``type`` — default
+  ``reject`` (before-state) switches to ``block`` when the selector is set.
 
 Cases 1–3 and 5–7 require at least one non-WAN interface and skip cleanly on a
 WAN-only VM (e.g. the default smoke image). The interface is discovered at runtime
@@ -288,16 +290,29 @@ def _discover_non_wan_ifaces(vm: SmokeVM, *, timeout: float = 60.0) -> list[str]
 
 
 def _set_dot_block(
-    vm: SmokeVM, *, enabled: bool, ifaces: list[str], exception: str = "", timeout: float = 60.0
+    vm: SmokeVM,
+    *,
+    enabled: bool,
+    ifaces: list[str],
+    exception: str = "",
+    action: str | None = None,
+    timeout: float = 60.0,
 ) -> None:
-    """Write the three DoT/DoQ-block config fields and persist config.xml."""
+    """Write the DoT/DoQ-block config fields and persist config.xml.
+
+    ``action`` selects the rule disposition ('block' | 'reject'). When None the
+    key is left ABSENT, so the gateway's registered default (reject) applies —
+    exercising the default path an upgrading install takes.
+    """
     toggle = "on" if enabled else ""
     iface_val = ",".join(ifaces)
+    action_line = f"$d['dnsbl_dot_block_action'] = {h._php_str(action)};\n" if action is not None else ""
     snippet = (
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['dnsbl_dot_block']         = {h._php_str(toggle)};\n"
         f"$d['dnsbl_dot_block_int']     = {h._php_str(iface_val)};\n"
         f"$d['dnsbl_dot_block_exclude'] = {h._php_str(exception)};\n"
+        f"{action_line}"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
         "write_config('pfBlockerNG smoke: set DoT/DoQ block config');\n"
         "echo 'OK';"
@@ -432,7 +447,7 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
 
       Then filter/rule contains exactly 1 pfB_DoT_Block_<iface> entry.
         And the entry carries the correct §2.2 field values:
-            - type: block
+            - type: reject (the default for the outbound LAN->WAN block rule)
             - ipprotocol: inet46
             - protocol: tcp/udp
             - destination.network: (self), not-negated
@@ -471,8 +486,9 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
         count = _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface)
         assert count == 1, f"Expected 1 pfB_DoT_Block_{iface} filter/rule entry after enable, got {count}"
 
-        # THEN — field-by-field verification.
-        assert _filter_rule_field(vm, descr, "type") == "block", f"{descr}: type != 'block'"
+        # THEN — field-by-field verification. Default action is Reject (the rule is an
+        # outbound LAN->WAN block, so Reject fast-fails the client to plain DNS).
+        assert _filter_rule_field(vm, descr, "type") == "reject", f"{descr}: type != 'reject' (default)"
         assert _filter_rule_field(vm, descr, "ipprotocol") == "inet46", f"{descr}: ipprotocol != 'inet46'"
         assert _filter_rule_field(vm, descr, "protocol") == "tcp/udp", f"{descr}: protocol != 'tcp/udp'"
         assert _filter_rule_field(vm, descr, "statetype") == "keep state", f"{descr}: statetype != 'keep state'"
@@ -494,6 +510,49 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
             + _dot_block_match_report(vm, expected_present=True)
             + "\n"
             + h.pf_state_dump(vm)
+        )
+
+    finally:
+        _cleanup_dot_block(vm)
+
+
+def test_dot_doq_block_action_selector_sets_rule_type(deployed_vm: SmokeVM, primary_iface: str) -> None:
+    """ADR-37: the Rule Action selector drives the DoT/DoQ block rule disposition.
+
+    Scenario: the action field flips the rule 'type' between reject and block.
+
+      Background: pfBlockerNG installed; master + DNSBL enabled.
+
+      Given DoT/DoQ block enabled with the default action (reject),
+        And the rule 'type' is 'reject' (before-state — proves the flip causes the change),
+
+      When the action is changed to 'block' and a full reload runs,
+
+      Then the same pfB_DoT_Block_<iface> rule now carries type 'block'.
+    """
+    vm = deployed_vm
+    iface = primary_iface
+    descr = _DOT_BLOCK_DESCR_PFX + iface
+
+    try:
+        # GIVEN — $mode='enabled' so DoT/DoQ block rules are created on reload.
+        h.set_package_enabled(vm, True)
+        h.set_dnsbl_enabled(vm, True)
+
+        # GIVEN — enable with the DEFAULT action (key absent → reject); assert before-state.
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="", action=None)
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
+        assert _filter_rule_field(vm, descr, "type") == "reject", f"{descr}: default type != 'reject' (before-state)"
+
+        # WHEN — switch the action to Block and reload.
+        _set_dot_block(vm, enabled=True, ifaces=[iface], exception="", action="block")
+        h.reload(vm, "update", wait_unbound=False)
+        h.apply_filter_sync(vm)
+
+        # THEN — the rule disposition follows the selector.
+        assert _filter_rule_field(vm, descr, "type") == "block", (
+            f"{descr}: type != 'block' after selecting the Block action"
         )
 
     finally:
