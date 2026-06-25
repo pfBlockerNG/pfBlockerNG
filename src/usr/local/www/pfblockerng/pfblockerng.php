@@ -560,7 +560,24 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			pfb_logger("{$log}", 1);
 	
 			if ("{$remote_tds}" != "{$local_tds}") {
-				$pfb['cron_update'] = TRUE;
+				// A differing mtime is only a HINT. For a local file the source is
+				// already on disk, so confirm the bytes actually changed with a cheap
+				// content hash before triggering a full re-ingest -- a touch/cp/rsync
+				// that bumps mtime without changing content must not force a needless
+				// re-download. Fail OPEN: if the source hash can't be read, fall back
+				// to the mtime decision (re-ingest) rather than risk missing a change.
+				// Remote feeds stay timestamp-primary -- hashing a remote feed means
+				// downloading it (the work this timestamp check avoids); its
+				// no-Last-Modified case already falls back to md5 above.
+				$src_md5 = @md5_file($list_download);
+				if ($localfile && $src_md5 !== FALSE && $src_md5 === @md5_file($local_file)) {
+					$log = "  ( mtime changed, content identical )\tUpdate not required\n";
+					pfb_logger("{$log}", 1);
+					$pfb['cron_update'] = FALSE;
+				}
+				else {
+					$pfb['cron_update'] = TRUE;
+				}
 			}
 			else {
 				$log = "Update not required\n";

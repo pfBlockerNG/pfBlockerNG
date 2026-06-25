@@ -1355,3 +1355,83 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
             deployed_vm.ssh("/bin/rm", "-f", feed_path)
         if reset_exc is not None:
             raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Local feed change detection: a bumped mtime with IDENTICAL content is NOT re-ingested.
+
+    A differing source mtime is only a hint; ``pfb_update_check`` now confirms the bytes actually
+    changed (md5 source vs ``.orig``) before re-ingesting a LOCAL feed, so a touch/cp/rsync that
+    bumps mtime without changing content takes the reuse path.
+
+    RED on pre-change code: a differing mtime alone logs "Update found" -> re-download
+    ("Downloading update"), and the "( mtime changed, content identical )" marker does not exist.
+    GREEN after the fix: that marker is logged and no re-ingest occurs.
+
+    Scenario (BDD):
+      Given the feed contains ``dom`` (initial ingest blocks it; ``.orig`` == source bytes);
+      When the source mtime is bumped LATER than ``.orig`` (``touch -r`` + ``touch -A``) WITHOUT changing content,
+        pfb_reuse is OFF and pfb_dailystart matches the guest hour, and the ``cron`` verb runs;
+      Then a new "( mtime changed, content identical )" verdict appears (md5 confirmed no change),
+        no "Downloading update" line appears for this header, and ``dom`` remains blocked.
+    """
+    dom = h.unique_domain("cronsame")
+    header = "smokecronsame"
+    feed_path: str | None = None
+    marker = "mtime changed, content identical"
+
+    try:
+        h.unblock_egress()
+
+        # GIVEN — write feed, ingest (a single updatednsbl creates the .orig baseline, a
+        # byte-identical copy of the source).
+        feed_path = h.write_local_feed(deployed_vm, "smoke_cronsame.txt", dom + "\n")
+        spec = h.DnsblCase(aliasname="smokecronsame", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE state: dom blocked.
+        h.flush_unbound_name(deployed_vm, dom)
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
+        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+
+        # WHEN — bump source mtime LATER than .orig WITHOUT changing content (timezone-free:
+        # copy orig's mtime onto the source, then advance it by +120s — no absolute touch -t).
+        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+        _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
+
+        # Pin pfb_reuse=off and dailystart=now (just before cron).
+        _pin_cron_due(deployed_vm)
+        marker_before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+
+        # WHEN — cron (the genuine detector path).
+        h.reload(deployed_vm, "cron")
+
+        # THEN — md5 content-confirm skipped the re-ingest: new marker present, no download.
+        marker_after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert marker_after > marker_before, (
+            f"Expected a new '{marker}' verdict after cron (before={marker_before}, after={marker_after}) "
+            f"— md5 content-confirm did not run (RED on pre-change code: a mtime diff re-ingests)"
+        )
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after == dl_before, (
+            f"Expected NO '[ {header} ] ... Downloading update' (content identical) "
+            f"(before={dl_before}, after={dl_after}) — feed was wrongly re-ingested"
+        )
+
+        # THEN — dom remains blocked (feed not cleared).
+        ans_after = h.dns_probe_client(client_vm, dom, "A")
+        assert h.is_vip(ans_after), f"AFTER cron: {dom} must remain VIP-blocked, got {ans_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if feed_path:
+            deployed_vm.ssh("/bin/rm", "-f", feed_path)
+        if reset_exc is not None:
+            raise reset_exc
