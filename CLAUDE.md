@@ -164,9 +164,10 @@ Substantial coding work is **planned and gated by a higher model** (Opus / Fable
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
 (`/adr-phase` and `/gh-issue --fix` spawn `model: sonnet` implementers under orchestrator
-gates); for ad-hoc coding, follow the same shape. The higher model may still make **trivial
-one-line edits** and handle **docs / config / settings / skills** directly — delegation is for
-non-trivial `src/`/`tests/`/CI work.
+gates); for ad-hoc coding, follow the same shape. The higher model may also implement a fix
+**directly** when it is estimated to be **relatively small and doable in one step** — not just
+trivial one-line edits — and always handles **docs / config / settings / skills** directly.
+Delegation is for non-trivial, multi-step `src/`/`tests/`/CI work.
 
 - **The implementer implements; it never re-delegates — the split is exactly one level deep.**
   A Sonnet implementer spawned for a step does the work itself with Read/Edit/Write/Bash and
