@@ -6501,7 +6501,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 		restart_service('pfb_dnsbl');
 	}
 
-	$dnsbl_cnt = exec("/bin/cat {$pfb['dnsdir']}/*.txt | {$pfb['grep']} -c ^ 2>&1");
+	$dnsbl_cnt = exec("/bin/cat {$pfb['dnsdir']}/*.txt 2>/dev/null | {$pfb['grep']} -c ^");
 
 	// ADR-06: pfb_py_count is now Python-emitted and means the LOADED entry total
 	// (len(dataDB)+len(zoneDB)), written by pfb_unbound.py dnsbl_emit_count(). The
