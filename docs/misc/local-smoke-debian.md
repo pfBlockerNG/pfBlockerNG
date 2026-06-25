@@ -69,7 +69,19 @@ SMOKE_STUB_DNS_ADDR=127.0.0.1 SMOKE_STUB_DNS_PORT=53 \
 `--ignore=tests/smoke`, so a plain `pytest` collects nothing here.
 
 `scripts/local-smoke.sh` wraps the env setup (sysctl, civm pull, defaults) — see its
-`--help`.
+`--help`. It **forwards any pytest args**, so selecting tests locally is pytest-native — no
+workflow involved:
+
+```sh
+# only specific tests (pytest -k is a boolean expr: `a or b`, `x and not y`)
+scripts/local-smoke.sh -k "test_dns_redirect or test_killstates"
+# a different marker — `-m smoke` is only a DEFAULT; your own -m is respected
+scripts/local-smoke.sh tests/smoke/ui -m ui_render -k test_dnsbl
+```
+
+The CI `scope=impacted` / min-CE / auto-derived-`-k` defaulting (see
+[architecture-notes.md](architecture-notes.md) "Selective dispatch") is **CI-only** — locally
+you pick the target and `-k` yourself.
 
 ## Building the `.pkg` off-FreeBSD
 

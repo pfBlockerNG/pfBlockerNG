@@ -157,6 +157,17 @@ The §7 browser reliability numbers are **CI-pending**; the
 browser leg has a one-line demote/drop switch (drop `browser` from `DEFAULT_SCHEDULE_TIERS` +
 run release `ui-suite` as `tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
 
+**Selective dispatch (ADR-14 + smoke).** A bare `gh workflow run ui-tests.yml` (and
+`smoke.yml`) defaults to **`scope=impacted`**: the **min CE leg only** plus, with no `-f
+pytest_k`, the test modules **changed vs `origin/devel`** (auto-derived by
+`scripts/impacted-tests.sh` from the `prepare`/`gen` step). `-f pytest_k="..."` **overrides** the
+auto-derivation — pass it for the tests covering changed *non-test* code, which a live-VM suite
+can't map automatically. `-f scope=full` restores the every-ci:true-leg whole-tier run.
+`schedule`, `workflow_call` (`test.yml` Tier-A gate, `release.yml` `tier: all`), and
+`version-tracker.yml`'s post-bump dispatch (which now passes `scope=full`) all stay **full** —
+only a bare `workflow_dispatch` is lean. Local runs are pytest-native: pass `-k`/`-m` straight
+through (`scripts/local-smoke.sh` forwards them and treats `-m smoke` as a default).
+
 ---
 
 ## HTTP mock-feed load smoke (ADR-16 Part C) — `tests/smoke/test_smoke_feeds.py`
