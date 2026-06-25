@@ -72,6 +72,10 @@ on:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
         default: "smoke"
+      pytest_k:
+        description: "pytest -k selector to run only a subset of the marker's tests (e.g. 'test_dns_redirect' or 'redirect and not browser'). Blank = the whole marker."
+        required: false
+        default: ""
       smoke_nightly_live_url:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pfblockerng.github.io/pkg/nightly). Blank -> SKIP."
         required: false
@@ -126,6 +130,11 @@ on:
         required: false
         type: string
         default: "smoke"
+      pytest_k:
+        description: "pytest -k selector to run only a subset of the marker's tests. Blank = the whole marker."
+        required: false
+        type: string
+        default: ""
       smoke_nightly_live_url:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url. Blank -> SKIP."
         required: false
@@ -531,6 +540,9 @@ jobs:
           # Selected marker: 'smoke' by default (byte-identical to before); 'repo'
           # for the ADR-17 repository-install flow (repo-install.yml calls in with it).
           PYTEST_MARKER: ${{ inputs.pytest_marker || 'smoke' }}
+          # Optional -k selector to run only a subset of the marker's tests
+          # (blank = the whole marker). Lets a dispatcher fire a specific set.
+          PYTEST_K: ${{ inputs.pytest_k }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
@@ -599,9 +611,14 @@ jobs:
           # (inject->reload->probe; slowest observed ~6s), NOT the slow module fixtures
           # (deploy ~1-2 min) — so a per-case stall fails fast (vs the old 300s -> job-
           # timeout wipe) while leaving comfortable margin over the real per-case time.
-          python3 -m pytest tests/smoke -m "${PYTEST_MARKER}" \
+          # Build the argv so an optional -k selector rides as a SINGLE arg (a
+          # bare-var splice would word-split a multi-token expression like
+          # "a and not b"). Blank PYTEST_K -> no -k, identical to before.
+          set -- tests/smoke -m "${PYTEST_MARKER}" \
             --override-ini="addopts=" --override-ini="timeout_func_only=true" \
             --timeout=30 --timeout-method=signal -v
+          [ -n "${PYTEST_K:-}" ] && set -- "$@" -k "${PYTEST_K}"
+          python3 -m pytest "$@"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop the console screenshots

@@ -102,11 +102,22 @@ pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 
 target="${SMOKE_PYTEST_TARGET:-tests/smoke}"
 
+# Inject `-m smoke` only as a DEFAULT — if the caller passed their own `-m`
+# (e.g. `-m ui_render` for a Tier-A run, `-m repo`), respect it instead of
+# silently appending a second, winning `-m smoke`. A `-k` selector and every
+# other pytest arg always pass straight through.
+# ponytail: bare `-m` token detection; refine only if someone needs the `-m=foo` form.
+marker_args="-m smoke"
+for a in "$@"; do
+	[ "$a" = "-m" ] && { marker_args=""; break; }
+done
+
 # Explicit pytest args (if any) override the default target; quote everything (repo
 # shell rule) and branch instead of relying on word-splitting an unquoted $target.
 if [ "$#" -gt 0 ]; then
-	echo "local-smoke: running smoke suite ($*)" >&2
-	exec "$PYTHON" -m pytest "$@" -m smoke --override-ini="addopts="
+	echo "local-smoke: running smoke suite ($* ${marker_args})" >&2
+	# shellcheck disable=SC2086  # marker_args is a deliberate 0-or-2-word default
+	exec "$PYTHON" -m pytest "$@" $marker_args --override-ini="addopts="
 fi
 echo "local-smoke: running smoke suite ($target)" >&2
 exec "$PYTHON" -m pytest "$target" -m smoke --override-ini="addopts="

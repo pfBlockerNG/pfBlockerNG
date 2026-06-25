@@ -226,15 +226,17 @@ jobs:
               echo "  [DRY-RUN] WOULD dispatch smoke.yml with ci_matrix:"
               printf '%s\n' "$CI_MATRIX" | jq .
             else
-              echo "  [TRIGGER] smoke.yml (all ci:true CE entries)"
-              # Phase 6 contract: smoke.yml accepts no explicit version inputs —
-              # it reads the ci_matrix from the version-matrix reader itself.
-              # The tracker triggers it once; the fan-out workflow reads and expands
-              # the matrix internally into parallel strategy.matrix legs.
-              # See RESULTS/04_Results.txt for the exact expected input contract.
+              echo "  [TRIGGER] smoke.yml (scope=full — all ci:true entries)"
+              # Phase 6 contract: smoke.yml reads the ci_matrix from the
+              # version-matrix reader itself and expands it into parallel legs.
+              # A bare dispatch now defaults to scope=impacted (min CE + only the
+              # tests changed vs origin/devel); a post-version-bump validation
+              # wants the WHOLE fan-out, so pass scope=full explicitly.
+              # See RESULTS/04_Results.txt for the input contract.
               gh workflow run smoke.yml \
                 --repo "$REPO" \
                 --ref "$REF" \
+                -f scope=full \
                 || echo "  ::warning::Dispatch of smoke.yml failed — Phase 6 may not yet be landed"
             fi
           fi
