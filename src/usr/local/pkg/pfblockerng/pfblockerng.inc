@@ -7538,7 +7538,6 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// away before the next hop so only the final 2xx body survives.
 				$redirect_location = '';
 				$response_etag     = '';
-				$response_lastmod_raw = -1;
 				curl_setopt($ch, CURLOPT_HEADERFUNCTION,
 					function ($curl_handle, $hdr_line) use (&$redirect_location, &$response_etag) {
 						$trimmed = trim($hdr_line);
@@ -7727,6 +7726,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
 	// Any 200 means the body was downloaded to {file_dwn}.raw; the caller hashes it.
 	// Any other status means the probe failed; the caller fails-safe to re-ingest.
+	//
+	// CONTRACT: the caller MUST pass $response_meta = array() (not NULL) to activate
+	// the fill block.  NULL is the sentinel for the two sync callers that do NOT want
+	// the block filled; NULL !== NULL is always FALSE, so NULL silently skips the fill.
 	if ($type == 'md5') {
 		if ($response_meta !== NULL) {
 			$response_meta = array(
@@ -9500,8 +9503,13 @@ function pfb_validator_read($base) {
 // $lastmod is the Last-Modified epoch (int > 0) or FALSE to skip.
 // Does nothing when neither value is meaningful — never writes an empty sidecar.
 function pfb_validator_write($base, $etag, $lastmod) {
+	// Strip CR/LF before storing: a malicious server ETag containing CRLF could inject
+	// headers when the value is echoed back in If-None-Match on the next request.
 	if (is_string($etag) && $etag !== '') {
-		@file_put_contents("{$base}.etag", $etag, LOCK_EX);
+		$etag = preg_replace('/[\r\n]/', '', $etag);
+		if ($etag !== '') {
+			@file_put_contents("{$base}.etag", $etag, LOCK_EX);
+		}
 	}
 	if (is_int($lastmod) && $lastmod > 0) {
 		@file_put_contents("{$base}.lastmod", (string) $lastmod, LOCK_EX);
@@ -9535,32 +9543,6 @@ function pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash)
 		return TRUE;	// No usable comparison — fail-safe.
 	}
 	return ($body_hash !== $persisted_hash);	// TRUE = changed, FALSE = spurious 200 (same bytes).
-}
-
-// Compare two files byte-for-byte using `cmp -s` (early-exit on first differing byte,
-// lighter than hashing both). Both paths must sit in pfBlockerNG's allowed directories.
-// Returns TRUE when the files are byte-identical, FALSE otherwise or on any error.
-//
-// Validation is required (PFBL-01): both paths are validated with pfb_filter before
-// the exec call to ensure no shell-injection vector reaches the sink.
-function pfb_files_equal($a, $b) {
-	// PFBL-01: validate both paths before the exec sink. pfb_filter PFB_FILTER_URL
-	// (non-URL branch) accepts paths inside pfBlockerNG's allowed directories
-	// (/var/db/pfblockerng/*) and rejects everything else.
-	if (!pfb_filter($a, PFB_FILTER_URL, 'pfb_files_equal')) {
-		return FALSE;
-	}
-	if (!pfb_filter($b, PFB_FILTER_URL, 'pfb_files_equal')) {
-		return FALSE;
-	}
-	if (!file_exists($a) || !file_exists($b)) {
-		return FALSE;
-	}
-	$a_esc = escapeshellarg($a);
-	$b_esc = escapeshellarg($b);
-	$retval = -1;
-	@exec("/usr/bin/cmp -s {$a_esc} {$b_esc}", $unused, $retval);
-	return ($retval === 0);
 }
 
 // Extract the local-feed change decision from pfb_update_check() as a named,
