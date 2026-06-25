@@ -77,6 +77,21 @@ def test_software_uninstall_server_rejects_without_confirm(
     ``pfb_sw_action=uninstall``, so the response body would NOT contain the refusal
     string, failing the ``in body`` assertion.
     """
+
+    def pfb_installed() -> tuple[bool, str]:
+        """(installed?, stdout) — rc 0 + non-empty `pkg query %n` stdout means installed."""
+        r = smoke_vm.ssh("/usr/local/sbin/pkg", "query", "-g", "%n", "pfSense-pkg-pfBlockerNG*")
+        return (r.returncode == 0 and bool(r.stdout.strip()), r.stdout.strip())
+
+    # Precondition (before-state, per the test-coverage mandate): the package MUST be installed
+    # before the unconfirmed POST, so a green after-state genuinely proves "pkg delete did not
+    # run" rather than "it was already gone".
+    pre_installed, pre_stdout = pfb_installed()
+    assert pre_installed, (
+        f"precondition: pfBlockerNG must be installed before testing the unconfirmed uninstall.\n"
+        f"  pkg query stdout: {pre_stdout!r}"
+    )
+
     with software_panel_forced(smoke_vm, "on"):
         resp = webui.post(
             _SOFTWARE_PAGE,
@@ -89,16 +104,7 @@ def test_software_uninstall_server_rejects_without_confirm(
     refusal_string = "Uninstall not confirmed"
     refusal_found = refusal_string in body
 
-    # pkg query for the installed package (rc 0 + non-empty stdout = still installed).
-    pkg_result = smoke_vm.ssh(
-        "/usr/local/sbin/pkg",
-        "query",
-        "-g",
-        "%n",
-        "pfSense-pkg-pfBlockerNG*",
-    )
-    pkg_installed = pkg_result.returncode == 0 and bool(pkg_result.stdout.strip())
-    pkg_stdout = pkg_result.stdout.strip()
+    pkg_installed, pkg_stdout = pfb_installed()
 
     assert refusal_found, (
         f"Expected refusal string {refusal_string!r} in POST response body but it was absent.\n"
@@ -107,7 +113,6 @@ def test_software_uninstall_server_rejects_without_confirm(
     )
     assert pkg_installed, (
         f"pfBlockerNG package unexpectedly gone after unconfirmed uninstall POST.\n"
-        f"  pkg query rc    : {pkg_result.returncode}\n"
         f"  pkg query stdout: {pkg_stdout!r}\n"
         f"  (Expected the package to still be installed; pkg delete must NOT have run.)"
     )

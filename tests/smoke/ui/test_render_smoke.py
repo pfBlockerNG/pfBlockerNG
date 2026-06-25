@@ -23,6 +23,7 @@ with the reason and the access note for Phase 5, NOT silently dropped.
 
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -627,9 +628,7 @@ def test_software_page_renders_uninstall_controls(
         # The button must carry the `disabled` attribute on initial render (JS enables it
         # only after the confirm checkbox is ticked). Match the button tag itself to avoid
         # false-matching the id string in an unrelated attribute or script block.
-        import re as _re
-
-        btn_tag_match = _re.search(r'<button\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
+        btn_tag_match = re.search(r'<button\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
         assert btn_tag_match is not None, f"Uninstall button tag not found in {_SOFTWARE_PAGE} body"
         btn_tag = btn_tag_match.group(0)
         assert "disabled" in btn_tag, (
