@@ -26,6 +26,10 @@
 #   bench_pfctl_tables.sh delta N CHURN BATCH  (BATCH=0 = single-giant-op)
 #   bench_pfctl_tables.sh recompute N
 #   bench_pfctl_tables.sh cleanup
+#   bench_pfctl_tables.sh get_interfaces
+#   bench_pfctl_tables.sh setup_rules [lan_if|floating|none]
+#   bench_pfctl_tables.sh teardown_rules
+#   bench_pfctl_tables.sh verify_reject
 #
 # Dependencies (stock pfSense): /sbin/pfctl, awk, LC_ALL=C sort, perl (Time::HiRes).
 
@@ -339,8 +343,6 @@ do_cleanup() {
 # so any mis-fire is recoverable by killing qemu on the host box; nevertheless
 # we document the invariant here.
 
-BENCH_ANCHOR="pfb_bench_reject"
-
 # Discover WAN and LAN interface names from pf's running rule state.
 # Returns via stdout: wan_if=<name> lan_if=<name>
 do_get_interfaces() {
@@ -358,7 +360,27 @@ do_get_interfaces() {
     printf 'wan_if=%s lan_if=%s\n' "${_wan}" "${_lan}"
 }
 
-# Load the reject anchor. TYPE is 'lan_if' or 'floating'.
+# Load the reject ruleset. TYPE is 'lan_if' or 'floating'. 'none' = WAN reject only.
+#
+# Root cause investigation revealed that pfSense's "Default Allow LAN to any" rule
+# is loaded as a DIRECT flat rule in the main pf ruleset, AFTER the anchor call
+# points (userrules/*, tftp-proxy/*). Any anchor-based approach fires too late and
+# the Default Allow LAN pass quick short-circuits first.
+#
+# Solution: replace the entire main ruleset with a minimal bench ruleset that:
+#   1. Protects the control SSH path (vtnet1 mgmt, port 22/80)
+#   2. Protects DHCP so civm stays on LAN
+#   3. Rejects in-table traffic from civm (LAN reject rule, floating or if-scoped)
+#   4. Rejects out-of-table traffic at WAN egress (WAN floating reject)
+#   5. Passes everything else (keeps civm reachable for probe driving)
+#
+# The bench table must already be loaded (do_replace/do_gen) before calling this.
+# The minimal ruleset references <pfb_bench_main> which is a persistent pf table —
+# pfctl -f - can reference any table already loaded in the kernel by name.
+#
+# Teardown ('none' type) loads the same ruleset WITHOUT the in-table block, leaving
+# only the WAN reject active (not-in-table baseline). A full restore of pfSense's
+# original ruleset is not needed: this is a throwaway benchmark VM.
 do_setup_rules() {
     _type="${1:-floating}"
 
@@ -369,87 +391,90 @@ do_setup_rules() {
     [ -z "${_lan}" ] && _lan="vtnet2"
 
     # Verify the bench table exists (must be loaded before we reference it in rules).
-    _loaded=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | grep -c . || echo 0)
+    _loaded=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | wc -l | tr -d ' ')
     if [ "${_loaded}" -eq 0 ]; then
         printf 'error=table_not_loaded wan_if=%s lan_if=%s\n' "${_wan}" "${_lan}"
         return 1
     fi
 
-    # Build the anchor ruleset.
-    _rules_file="${TMP}/bench_reject_rules.conf"
+    # Build the minimal ruleset file.
+    _rules_file="${TMP}/bench_minimal.conf"
 
-    # Rule 1: protect SSH control path — PASS port 22 on ALL interfaces, quick.
-    # This fires before any block, protecting the harness control channel.
-    printf 'pass quick proto tcp to port 22\n' > "${_rules_file}"
+    # Mgmt interface (vtnet1): always pass SSH + HTTP (harness control channel).
+    printf 'pass quick on %s proto tcp to port 22\n' "${_lan}" > "${_rules_file}"
+    printf 'pass quick on vtnet1 proto tcp to port 22\n' >> "${_rules_file}"
+    printf 'pass quick on vtnet1 proto tcp to port 80\n' >> "${_rules_file}"
 
-    # Rule 2: WAN-out floating reject — traffic NOT in the bench table that
-    # routes through pfSense will exit on WAN; this rule generates RST there.
-    # Matches OUTBOUND traffic on WAN (any source → any destination that made it
-    # past the LAN rule, i.e. not in the table).
-    printf 'block return out quick on %s all\n' "${_wan}" >> "${_rules_file}"
+    # DHCP on LAN: civm needs DHCP to keep its 192.168.1.10 address.
+    printf 'pass quick on %s proto udp from any port 68 to any port 67\n' "${_lan}" >> "${_rules_file}"
+    printf 'pass quick on %s proto udp from any port 67 to any port 68\n' "${_lan}" >> "${_rules_file}"
 
-    # Rule 3: LAN reject for in-table traffic.
+    # In-table reject: placed BEFORE the catch-all pass so it fires with quick.
     if [ "${_type}" = "lan_if" ]; then
-        # Interface rule: fires only on the LAN interface.
+        # Interface-scoped: fires only on the LAN interface (inbound from civm).
         printf 'block return quick on %s from 192.168.1.10 to <%s>\n' \
             "${_lan}" "${TABLE}" >> "${_rules_file}"
-    else
-        # Floating rule: fires on any interface (matches regardless of direction).
+    elif [ "${_type}" = "floating" ]; then
+        # Floating (no on clause): fires on any interface for any direction.
         printf 'block return quick from 192.168.1.10 to <%s>\n' \
             "${TABLE}" >> "${_rules_file}"
     fi
+    # 'none' type: no in-table reject rule (WAN reject only, for no-rule baseline).
 
-    # Load the anchor.
-    "${PFCTL}" -a "${BENCH_ANCHOR}" -f "${_rules_file}" 2>&1 || {
-        printf 'error=anchor_load_failed type=%s wan_if=%s lan_if=%s\n' \
+    # WAN egress reject: traffic NOT in the table routes toward WAN and is rejected
+    # here, generating an immediate RST for the not-in-table probe path.
+    printf 'block return out quick on %s all\n' "${_wan}" >> "${_rules_file}"
+
+    # pfSense-self outbound: pfSense must be able to exit WAN for DHCP renewals.
+    printf 'pass out quick on %s from (self) to any\n' "${_wan}" >> "${_rules_file}"
+
+    # Catch-all pass: everything else (LAN↔LAN, management, probe driving).
+    printf 'pass quick all\n' >> "${_rules_file}"
+
+    # Replace the entire main ruleset. pfctl -f - accepts <table_name> references
+    # for tables already persistent in the kernel — no table definition needed.
+    "${PFCTL}" -f "${_rules_file}" 2>&1 || {
+        printf 'error=ruleset_load_failed type=%s wan_if=%s lan_if=%s\n' \
             "${_type}" "${_wan}" "${_lan}"
         return 1
     }
-
-    # Activate the anchor in the main ruleset (add an anchor call if not present).
-    # pfctl -a loads the anchor rules but the main ruleset must reference the anchor.
-    # We do this by appending to the in-memory ruleset via a minimal pass-through.
-    # If the anchor is already referenced (e.g. from a prior run), this is a no-op.
-    # Strategy: use pfctl -sr to check, then add if absent.
-    if ! "${PFCTL}" -sr 2>/dev/null | grep -q "${BENCH_ANCHOR}"; then
-        ( "${PFCTL}" -sr 2>/dev/null; printf 'anchor "%s"\n' "${BENCH_ANCHOR}" ) \
-            | "${PFCTL}" -f - 2>/dev/null || true
-    fi
 
     printf 'rules_loaded=ok type=%s wan_if=%s lan_if=%s table_entries=%s\n' \
         "${_type}" "${_wan}" "${_lan}" "${_loaded}"
 }
 
 do_teardown_rules() {
-    # Flush the bench anchor rules.
-    printf '' | "${PFCTL}" -a "${BENCH_ANCHOR}" -f - 2>/dev/null || true
-    # Remove the anchor reference from the main ruleset by reloading it without the anchor line.
-    _main_rules=$("${PFCTL}" -sr 2>/dev/null | grep -v "${BENCH_ANCHOR}" || true)
-    if [ -n "${_main_rules}" ]; then
-        printf '%s\n' "${_main_rules}" | "${PFCTL}" -f - 2>/dev/null || true
-    fi
+    # Restore a pass-everything ruleset (no reject rules active).
+    # We do not restore pfSense's original complex ruleset (this is a throwaway VM).
+    # Load the setup_rules 'none' variant to clear in-table block while keeping
+    # the WAN reject active for the baseline measurement.
+    do_setup_rules none
     printf 'rules_torn_down=ok\n'
 }
 
-# Verify the reject loop: probe a single in-table IP and a single not-in-table IP
-# to confirm RST is returned promptly for both.  Emits: verify_in_table=ok/fail
-# verify_out_table=ok/fail with RTT observations.
+# Verify the reject loop: confirm table is loaded and rules reference it.
+# Table membership is checked via pfctl -T test (authoritative, not text-grep).
 do_verify_reject() {
-    # in-table: first entry of the bench table (11.0.0.1)
     _in_ip="11.0.0.1"
-    # not-in-table: first 13.x address (13.0.0.1)
     _out_ip="13.0.0.1"
 
-    # Use TCP SYN via nc -z (available on pfSense CE: nmap-netcat package is not
-    # standard, but nc from base is).  Actually nc -z may not work cross-VM.
-    # Use pfctl -t show to confirm table membership, which is unambiguous.
-    _in_member=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | grep -c "^${_in_ip}$" || echo 0)
-    _out_member=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | grep -c "^${_out_ip}$" || echo 0)
+    # pfctl -T test exits 0 if the address is matched by any table entry, 1 otherwise.
+    # Redirect stdout+stderr to suppress the "N/N addresses match." line.
+    if "${PFCTL}" -t "${TABLE}" -T test "${_in_ip}" >/dev/null 2>&1; then
+        _in_member=1
+    else
+        _in_member=0
+    fi
+    if "${PFCTL}" -t "${TABLE}" -T test "${_out_ip}" >/dev/null 2>&1; then
+        _out_member=1
+    else
+        _out_member=0
+    fi
 
     printf 'verify_in_ip=%s in_table=%s verify_out_ip=%s out_table=%s\n' \
         "${_in_ip}" "${_in_member}" "${_out_ip}" "${_out_member}"
-    printf 'verify_anchor_rules=%s\n' \
-        "$("${PFCTL}" -a "${BENCH_ANCHOR}" -sr 2>/dev/null | tr '\n' '|')"
+    printf 'verify_rules=%s\n' \
+        "$("${PFCTL}" -sr 2>/dev/null | grep -c 'block return' || echo 0)"
 }
 
 # --------------------------------------------------------------------------- #
