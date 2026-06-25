@@ -424,39 +424,52 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
-// issue #489: Log Settings redesigned — grouped by category with aligned column headers.
-// Three columns (Max lines / Schedule / Keep lines) are explained once in an intro row;
-// each category has a header row then one row per log. No per-field repeated help.
+// issue #489: Log Settings — grouped by category, one row per log. A shaded header row
+// opens each category; the three columns (Max lines / Schedule / Keep lines) are labelled
+// once per category on desktop (the header row) and per-control on mobile, where the
+// columns stack (the desktop header row is hidden on xs, the per-control labels shown).
 $section = new Form_Section('Log Settings');
 $log_types = array(
 	'General'	=> array('pfBlockerNG' => 'log', 'Unified' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
-	'IP'		=> array('IP Block' => 'ip_blocklog', 'IP Permit' => 'ip_permitlog', 'IP Match' => 'ip_matchlog'),
-	'DNSBL'		=> array('DNSBL' => 'dnslog', 'DNSBL Parse Error' => 'dnsbl_parse_err'),
-	'DNS Reply'	=> array('DNS Reply' => 'dnsreplylog'),
+	'IP'		=> array('Block' => 'ip_blocklog', 'Permit' => 'ip_permitlog', 'Match' => 'ip_matchlog'),
+	'DNS'		=> array('Block' => 'dnslog', 'Reply' => 'dnsreplylog', 'Parse Error' => 'dnsbl_parse_err'),
 );
 
 // Single intro explaining all three columns — replaces the former per-field repeated help.
+// ponytail: the media query is the whole responsive trick — per-control labels (Form_Input
+// label-start, class form-label) carry the columns on mobile; on >=sm the desktop header
+// row carries them, so the per-control copies are hidden to avoid double-labelling.
 $section->addInput(new Form_StaticText(
 	'',
-	'<ul style="margin-bottom:0">'
+	'<style>'
+	. '@media (min-width: 768px) { label.form-label { display: none; } }'
+	. '.pfb-loghdr { background-color: #f0f0f0; border-top: 1px solid #ddd; }'
+	. '.pfb-loghdr .control-label > span { font-weight: 700; }'
+	. '</style>'
+	. '<ul style="margin-bottom:0">'
 	. '<li><strong>Max lines</strong> &mdash; rolling cap; the log keeps only its most recent N lines.</li>'
 	. '<li><strong>Schedule</strong> &mdash; resets the log at the start of each calendar period '
-	. '(Daily/Weekly/Monthly); independent of Max lines. '
-	. '<strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.</li>'
+	. '(Daily/Weekly/Monthly); independent of Max lines.'
+	. '<ul><li><strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.</li></ul></li>'
 	. '<li><strong>Keep lines</strong> &mdash; lines retained at the tail on a scheduled reset '
 	. '(default 0 = clear fully); set &gt; 0 as a cushion for remote log shippers.</li>'
 	. '</ul>'
 ));
 
 foreach ($log_types as $logdescr => $logtype) {
-	// Header row: left label = category name; three StaticText children label the columns.
+	// Header row: shaded category divider; the StaticText children label the columns on
+	// desktop and are hidden on xs (where the columns stack and the labels would mislead).
 	$header = new Form_Group($logdescr);
-	$header->add(new Form_StaticText('', '<strong>Max lines</strong>'))->setWidth(4);
-	$header->add(new Form_StaticText('', '<strong>Schedule</strong>'))->setWidth(3);
-	$header->add(new Form_StaticText('', '<strong>Keep lines</strong>'))->setWidth(3);
+	$header->addClass('pfb-loghdr');
+	// form-control-static gives the column titles the same top padding as the category
+	// control-label, so the label and the titles sit on one line (hidden-xs: desktop only).
+	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max lines</strong></p>'))->setWidth(4);
+	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Schedule</strong></p>'))->setWidth(3);
+	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Keep lines</strong></p>'))->setWidth(3);
 	$section->add($header);
 
-	// One row per log in this category.
+	// One row per log in this category. Each control carries a label-start so the column is
+	// named on mobile (hidden on desktop via the media query above).
 	foreach ($logtype as $descr => $type) {
 		$group = new Form_Group($descr);
 		$group->add(new Form_Select(
@@ -464,19 +477,19 @@ foreach ($log_types as $logdescr => $logtype) {
 			'',
 			$pconfig['log_max_' . $type],
 			$options_log_types
-		))->setWidth(4);
+		))->setWidth(4)->setAttribute('label-start', 'Max lines');
 		$group->add(new Form_Select(
 			'log_rotate_' . $type,
 			'',
 			$pconfig['log_rotate_' . $type],
 			$options_log_rotate
-		))->setWidth(3);
+		))->setWidth(3)->setAttribute('label-start', 'Schedule');
 		$group->add((new Form_Input(
 			'log_reset_keep_' . $type,
 			'',
 			'number',
 			$pconfig['log_reset_keep_' . $type]
-		))->setAttribute('min', '0'))->setWidth(3);
+		))->setAttribute('min', '0'))->setWidth(3)->setAttribute('label-start', 'Keep lines');
 		$section->add($group);
 	}
 }
