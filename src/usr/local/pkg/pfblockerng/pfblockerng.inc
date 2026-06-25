@@ -8033,6 +8033,25 @@ function pfb_failures() {
 }
 
 
+// Collect tracker IDs from non-pfBlockerNG filter/rule rows so both tracker generators
+// can avoid minting an ID that collides with a GUI or third-party rule. Only filter/rule
+// is consulted -- NAT rules carry no tracker. Rows owned by pfBlockerNG (pfb_is_managed_obj)
+// are excluded so we never treat our own prior rules as foreign, preventing re-mint churn.
+function pfb_collect_foreign_trackers(): array {
+	$trackers = array();
+	foreach (config_get_path('filter/rule', array()) as $row) {
+		if (!isset($row['tracker']) || $row['tracker'] === '') {
+			continue;
+		}
+		if (pfb_is_managed_obj($row['descr'] ?? '')) {
+			continue;
+		}
+		$trackers[] = (int) $row['tracker'];
+	}
+	return $trackers;
+}
+
+
 // Convert unique Alias details (via ascii table number) and return a 10 digit tracker ID
 function pfb_tracker($alias, $int, $text) {
 	global $pfb;
@@ -8064,14 +8083,23 @@ function pfb_tracker($alias, $int, $text) {
         	$pfbtracker = substr($pfbtracker, 0, 10);
 	}
 	
-	// If duplicate Tracker ID found, pre-define a Tracker ID (Starts at 1700000010)
-	if (in_array($pfbtracker, $pfb['trackerids'])) {
+	// If duplicate Tracker ID found, pre-define a Tracker ID (Starts at 1700000010).
+	// Also skip IDs already in use by non-pfBlockerNG filter rules (foreign_trackerids).
+	if (in_array($pfbtracker, $pfb['trackerids']) || in_array($pfbtracker, $pfb['foreign_trackerids'] ?? [])) {
 		$pfbtracker = ($pfb['last_trackerid'] + 1);
-		
+
 		// Increment prefix (digits 1&2) and reset Last_tracker ID after 10 digits
 		if (strlen($pfbtracker) > 10) {
 			$tracker_prefix = substr($pfbtracker, 0, 2);
 			$pfbtracker	= ($tracker_prefix + 1) . '00000010';
+		}
+		// Keep bumping until free in both sets (handles runs of foreign collisions).
+		while (in_array($pfbtracker, $pfb['trackerids']) || in_array($pfbtracker, $pfb['foreign_trackerids'] ?? [])) {
+			$pfbtracker++;
+			if (strlen($pfbtracker) > 10) {
+				$tracker_prefix = substr($pfbtracker, 0, 2);
+				$pfbtracker	= ($tracker_prefix + 1) . '00000010';
+			}
 		}
 		$pfb['last_trackerid'] = $pfbtracker;
 	}
@@ -8120,7 +8148,7 @@ function pfb_managed_rule_tracker(string $descr): int {
 	// tracker exists for. Stays inside the '176' + 7-digit namespace (<= uint32) via
 	// the modulo, and loops past any further collision so it never returns a duplicate.
 	$probe = 0;
-	while (in_array($tracker, $pfb['trackerids'], TRUE)) {
+	while (in_array($tracker, $pfb['trackerids'], TRUE) || in_array($tracker, $pfb['foreign_trackerids'] ?? [], TRUE)) {
 		$probe++;
 		$tracker = (int) ('176' . str_pad((string) (($sum + $probe) % 10000000), 7, '0', STR_PAD_LEFT));
 	}
@@ -11116,8 +11144,9 @@ function sync_package_pfblockerng($cron='') {
 	#	Tracker IDs		#
 	#################################
 
-	$pfb['trackerids']	= array();		// An array of pfBlockerNG Firewall rule Tracker IDs.
-	$pfb['last_trackerid']	= 1700000009;		// Pre-defined 'starting' Tracker ID (Only used if duplicates found)
+	$pfb['trackerids']	    = array();					// An array of pfBlockerNG Firewall rule Tracker IDs.
+	$pfb['last_trackerid']	= 1700000009;				// Pre-defined 'starting' Tracker ID (Only used if duplicates found)
+	$pfb['foreign_trackerids'] = pfb_collect_foreign_trackers();	// Tracker IDs already in use by non-pfB rules.
 
 
 	#########################################
