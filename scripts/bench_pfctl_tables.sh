@@ -129,7 +129,11 @@ do_raise_limits() {
 }
 
 # Generate N unique synthetic IPv4s into /tmp/pfb_bench/table_N.txt.
-# RFC 5737 first (192.0.2/198.51.100/203.0.113), then 10.x.y.z.  Idempotent.
+#
+# Uses 11.0.0.0/8 (baseline block, ~16.7M addresses — enough for any table ≤1M).
+# Entries never overlap the harness probe path: skips 10.0.0.0/8 (harness nets),
+# 192.168.0.0/16 (pfSense LAN 192.168.1.1 + civm 192.168.1.10), loopback, etc.
+# Idempotent.
 do_gen() {
     _n="$1"
     _out="${TMP}/table_${_n}.txt"
@@ -139,12 +143,9 @@ do_gen() {
     fi
     awk -v n="${_n}" 'BEGIN {
         c = 0
-        for (x = 1; x <= 254 && c < n; x++) { print "192.0.2."    x; c++ }
-        for (x = 1; x <= 254 && c < n; x++) { print "198.51.100." x; c++ }
-        for (x = 1; x <= 254 && c < n; x++) { print "203.0.113."  x; c++ }
         for (a = 0; a <= 255 && c < n; a++)
             for (b = 0; b <= 255 && c < n; b++)
-                for (z = 1; z <= 254 && c < n; z++) { print "10." a "." b "." z; c++ }
+                for (z = 1; z <= 254 && c < n; z++) { print "11." a "." b "." z; c++ }
     }' > "${_out}"
     printf 'generated=%s count=%d\n' "${_out}" "${_n}"
 }
@@ -190,16 +191,15 @@ do_delta() {
     _file="${TMP}/table_${_n}.txt"
     [ -f "${_file}" ] || { printf 'error=table_%d_not_generated\n' "${_n}"; return 1; }
 
-    # Clamp churn to at most half table size.
+    # Clamp churn to at most table size (sanity, not address-space).
     _actual_churn="${_churn}"
-    _half=$(( _n / 2 ))
-    [ "${_churn}" -gt "${_half}" ] && _actual_churn="${_half}"
+    [ "${_churn}" -gt "${_n}" ] && _actual_churn="${_n}"
 
     # Build adds/dels.
     # _dels: last _actual_churn lines of the table (entries to remove from baseline).
-    # _adds: a DISJOINT set of _actual_churn entries NOT in the baseline table, so
-    #   that the -T add calls genuinely insert new entries (not no-ops on already-
-    #   loaded IPs).  Generated from 172.16.x.x, which do_gen() never uses.
+    # _adds: a DISJOINT set of _actual_churn entries from 13.0.0.0/8 (~16.7M addrs),
+    #   which do_gen() never touches (baseline uses 11.x), so -T add calls are real
+    #   insertions (never no-ops on already-loaded IPs).
     _adds="${TMP}/adds_${_n}_${_actual_churn}.txt"
     _dels="${TMP}/dels_${_n}_${_actual_churn}.txt"
     if [ ! -f "${_adds}" ]; then
@@ -207,7 +207,8 @@ do_delta() {
         awk -v n="${_actual_churn}" 'BEGIN {
             c = 0
             for (a = 0; a <= 255 && c < n; a++)
-                for (b = 1; b <= 254 && c < n; b++) { print "172.16." a "." b; c++ }
+                for (b = 0; b <= 255 && c < n; b++)
+                    for (z = 1; z <= 254 && c < n; z++) { print "13." a "." b "." z; c++ }
         }' > "${_adds}"
     fi
 
