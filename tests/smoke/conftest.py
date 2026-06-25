@@ -334,7 +334,16 @@ def boot_and_probe(
     # module cycle (helpers imports from conftest at module load).
     from . import helpers  # noqa: PLC0415
 
-    helpers.wait_boot_complete(vm)
+    try:
+        helpers.wait_boot_complete(vm)
+    except Exception:
+        # Route a boot-complete failure (its loud timeout, or an SSH/php_eval error) through the
+        # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
+        # otherwise a never-completing boot leaks the VM and produces no screendump/log tail.
+        _capture_boot_failure(diag_name, qmp_sock, log_path, process)
+        _kill(process)
+        log_file.close()
+        raise
     return BootHandle(process=process, vm=vm, log_file=log_file)
 
 
