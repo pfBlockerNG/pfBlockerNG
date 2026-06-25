@@ -63,6 +63,10 @@
 	     emit host-side from pfb_daemon_filterlog (not from the Unbound chroot),
 	     so no in-chroot socket is needed (ADR-38 Amendment 1). -->
 	<logging>
+		<!-- Pin the Status > System Logs > Packages subtab label to "pfBlockerNG" on
+		     both channels; core else falls back to the package short name, which reads
+		     "pfBlockerNG-devel" on the devel package. -->
+		<logtab>pfBlockerNG</logtab>
 		<facilityname>pfblockerng</facilityname>
 		<logfilename>pfblockerng_syslog.log</logfilename>
 	</logging>
