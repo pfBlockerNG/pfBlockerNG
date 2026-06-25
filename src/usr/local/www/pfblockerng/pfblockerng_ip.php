@@ -338,9 +338,10 @@ $section->addInput(new Form_Select(
 	$pconfig['pfb_alias_delta_mode'],
 	$options_pfb_alias_delta_mode
 ))->setHelp('Default: <strong>Auto</strong><br />'
-		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for incremental feed updates with small churn; '
-		. 'full replace for initial load or when churn exceeds ~20% of the table.<br />'
-		. '<strong>Delta:</strong> always use delta apply (large-churn replace fallback still active for safety).<br />'
+		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~20%); '
+		. 'full replace for initial load, boot, or large churn. Safe default.<br />'
+		. '<strong>Delta:</strong> always delta apply — no large-churn replace fallback. Power-user override; '
+		. 'can be slow on a full-table rebuild.<br />'
 		. '<strong>Replace:</strong> always full -T replace (pre-4.0 behaviour).')
   ->setAttribute('id', 'pfb_alias_delta_mode')
   ->setAttribute('style', 'width: auto');

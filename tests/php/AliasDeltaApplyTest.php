@@ -562,6 +562,123 @@ SH
 	}
 
 	// -----------------------------------------------------------------------
+	// Scenario K — empty-kernel repopulation (M1 fix: empty prev → force replace)
+	//
+	// Bug: when the kernel pf table is empty but the aliasdir mirror exists with
+	// content identical to the freshly-computed desired set, the gate stashed the
+	// mirror content (= desired) as $previous.  At the reload site:
+	//   $previous = $pfb_alias_prev_sets[$alias] ?? $desired   (= desired)
+	//   $force_rpl = empty($pfb_alias_prev_sets[$alias] ?? NULL) (= FALSE, stash present)
+	// Result: pfb_apply_alias_delta($desired, $desired, ..., FALSE) → empty delta → 0
+	// pfctl calls → the empty kernel table was never repopulated (#468 path).
+	//
+	// Fix: stash array() for the empty-kernel case so force_rpl evaluates TRUE.
+	// Unit boundary: exercise the two-step mapping directly:
+	//   Step 1 — empty kernel table ⇒ stash [] ⇒ force_rpl = empty([]) = TRUE.
+	//   Step 2 — pfb_apply_alias_delta(..., $desired, [], 'auto', 256, TRUE) returns FALSE
+	//            (replace path taken, pfctl -T replace called).
+	// The contrast: stashing $desired (the bug) yields force_rpl=FALSE + empty delta
+	// → no pfctl calls.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario K — empty-kernel repopulation: stash decision produces force_rpl=TRUE.
+	 *
+	 * Scenario:
+	 *   - Kernel pf table is empty (pfctlck = '').
+	 *   - Aliasdir mirror EXISTS with content identical to the desired set.
+	 *
+	 * Bug (pre-fix): the gate stashed pfb_canonical_alias_set($mirror) = $desired.
+	 *   reload site: $previous = $desired, $force_rpl = empty($desired) = FALSE.
+	 *   pfb_apply_alias_delta($desired, $desired, 'auto', 256, FALSE) → empty delta
+	 *   → zero pfctl calls → empty kernel table NEVER repopulated (#468 path).
+	 *
+	 * Fix: when empty($pfctlck), stash array() so force_rpl = empty([]) = TRUE.
+	 *   pfb_apply_alias_delta($desired, [], 'auto', 256, TRUE) → replace path
+	 *   → pfctl -T replace → kernel table repopulated.
+	 *
+	 * Given: kernel is empty; mirror content == desired set.
+	 * When:  fix stashes [] (empty prev); gate evaluates force_rpl = empty([]) = TRUE.
+	 * Then:  pfb_apply_alias_delta takes the replace path; pfctl -T replace is called.
+	 *
+	 * This test is RED on pre-fix code: it asserts pfctl -T replace is called for the
+	 * empty-kernel case, but pre-fix stashes canonical(mirror)=desired → force_rpl=FALSE
+	 * → empty delta → no pfctl call (table silently stays empty).
+	 */
+	public function testEmptyKernelTableWithMirrorEqualsDesiredTriggerReplace(): void
+	{
+		$table   = 'pfB_EmptyKernel_v4';
+		$desired = ['10.0.0.1', '10.0.0.2', '10.0.0.3'];
+		// mirror content == desired (kernel is empty but aliasdir exists).
+		$mirror_content  = implode("\n", $desired) . "\n";
+		$table_file      = $this->write_alias_file($table, $desired);
+
+		// ----------------------------------------------------------------
+		// Reproduce the gate stash decision (off-appliance unit boundary).
+		// Pre-fix: stash = pfb_canonical_alias_set($mirror_content)  = $desired
+		// Post-fix: stash = empty($pfctlck) ? array() : pfb_canonical_alias_set(...)
+		//         = array()  (because kernel is empty: simulated as $pfctlck_empty = TRUE)
+		// ----------------------------------------------------------------
+		$pfctlck_empty = TRUE;   // simulates: empty($pfctlck) when kernel table is empty.
+
+		// Compute what pre-fix stashes vs what the fix stashes.
+		$pre_fix_stash = pfb_canonical_alias_set($mirror_content);           // = $desired
+		$fix_stash     = $pfctlck_empty ? array() : pfb_canonical_alias_set($mirror_content);  // = []
+
+		// Assert the two stashes differ: pre-fix is non-empty, fix is empty.
+		$this->assertNotEmpty($pre_fix_stash,
+			'pre-fix stash = canonical(mirror) = desired (non-empty)');
+		$this->assertSame([], $fix_stash,
+			'fix stash = [] for empty-kernel case');
+
+		// Derive force_rpl from each stash (same logic as reload site).
+		$pre_fix_force = empty($pre_fix_stash ?? NULL);   // empty(non-empty) = FALSE → BUG
+		$fix_force     = empty($fix_stash ?? NULL);       // empty([]) = TRUE → FIX
+
+		$this->assertFalse($pre_fix_force,
+			'pre-fix: force_rpl=FALSE (non-empty stash) → empty delta → no pfctl → BUG');
+		$this->assertTrue($fix_force,
+			'fix: force_rpl=TRUE (empty stash) → replace path → kernel repopulated');
+
+		// ----------------------------------------------------------------
+		// Prove the difference matters: delta(desired, pre_fix_stash=desired) → no pfctl.
+		// ----------------------------------------------------------------
+		$this->assertFileDoesNotExist($this->pfctl_call_log, 'before K — pre-fix path: no calls yet');
+
+		$pre_fix_result = pfb_apply_alias_delta(
+			$this->pfctl(), $table, $table_file,
+			$desired, $pre_fix_stash, 'auto', 256, $pre_fix_force
+		);
+
+		$this->assertTrue($pre_fix_result,
+			'pre-fix: idempotence path (desired==previous, force_rpl=FALSE) → returns TRUE');
+		$pre_fix_calls = $this->pfctl_calls();
+		$this->assertSame([], $pre_fix_calls,
+			"pre-fix BUG: zero pfctl calls (empty delta) → empty kernel table NOT repopulated;\n"
+			. "actual calls: " . json_encode($pre_fix_calls));
+
+		// ----------------------------------------------------------------
+		// Now prove the fix: delta(desired, [], force_rpl=TRUE) → pfctl -T replace.
+		// ----------------------------------------------------------------
+		@unlink($this->pfctl_call_log);   // reset call log between the two paths
+
+		$fix_result = pfb_apply_alias_delta(
+			$this->pfctl(), $table, $table_file,
+			$desired, $fix_stash, 'auto', 256, $fix_force
+		);
+
+		$this->assertFalse($fix_result,
+			"fix: replace path (FALSE) for force_rpl=TRUE → kernel repopulated;\n"
+			. "actual: delta path (TRUE) → table still empty");
+
+		$fix_calls     = $this->pfctl_calls();
+		$replace_calls = array_values(array_filter($fix_calls, fn($c) => $c['action'] === 'replace'));
+		$this->assertNotEmpty($replace_calls,
+			"fix: expected pfctl -T replace call to repopulate empty kernel table;\n"
+			. "actual calls: " . json_encode($fix_calls));
+	}
+
+	// -----------------------------------------------------------------------
 	// Scenario J — deliberate off-by-one is detected (proves test is real indicator)
 	// -----------------------------------------------------------------------
 

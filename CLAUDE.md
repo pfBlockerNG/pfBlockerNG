@@ -695,12 +695,14 @@ ADR-40 (IP pf-table set-membership gating); the deferred DNSBL structure-reuse A
 membership set changed** — not iff a member feed was re-fetched (the old feed-tracking model).
 `pfb_alias_set_different()` compares the freshly computed canonical set against the last-applied
 mirror at `/var/db/aliastables/pfB_<Alias>_v{4,6}.txt`; only aliases whose set actually changed
-reload. For changed tables, pfBlockerNG applies the diff as `pfctl -T add` / `pfctl -T delete`
-(forward delta, lock-hold O(churn)) unless the churn ratio ≥ 20% or
-`pfb_alias_delta_mode='replace'` is set, in which case it falls back to `pfctl -T replace`. Both
-paths produce the same `pfctl -t <t> -T show` membership (end-state invariant). Two registered
-`PfbConfig` fields control the apply path: `pfb_alias_delta_mode` (enum `auto`/`delta`/`replace`,
-default `auto`) and `pfb_alias_delta_batch` (chunk size, default 256, clamped 64–4096). See
+reload. For changed tables, `pfb_alias_delta_mode` controls the apply path: `auto` (default)
+uses `pfctl -T add`/`-T delete` for small churn (< ~20%) and falls back to `pfctl -T replace`
+for large churn, boot, or enable/disable; `delta` always applies the forward delta with NO
+large-churn replace fallback (power-user override — can be slow on full-table rebuilds); `replace`
+always does a full `-T replace`. Both paths produce the same `pfctl -t <t> -T show` membership
+(end-state invariant). Two registered `PfbConfig` fields: `pfb_alias_delta_mode` (enum
+`auto`/`delta`/`replace`, default `auto`) and `pfb_alias_delta_batch` (chunk size, default 256,
+clamped 64–4096). See
 `docs/misc/architecture-notes.md` ("ADR-40") for the cross-list dedup/reputation scope rules.
 
 **Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
