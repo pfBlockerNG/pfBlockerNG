@@ -70,12 +70,21 @@ def deployed_vm(  # noqa: ARG001
     DNSBL update path runs ``pfb_create_dnsbl`` which touches pfSense state.
     ``ensure_dnsbl_vip`` + ``use_system_dns_upstream`` give DNSBL a sinkhole
     VIP and a reachable upstream so the full update completes cleanly.
+
+    The master switch ``enable_cb`` is turned ON here so DNSBL ``$mode`` can
+    reach ``'enabled'`` (the enable chain is ``enable_cb`` AND ``pfb_dnsbl`` AND
+    the resolver up). The per-test toggles then flip ``pfb_dnsbl`` /
+    ``pfb_dnsvip_auto`` / the interface. Without this the module silently relied
+    on an earlier test in the full fan-out leaking ``enable_cb='on'`` — so the
+    managed-object legs failed when run in isolation (the #487 selective-dispatch
+    leg).
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.snapshot_unbound_conf(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
+    h.set_package_enabled(smoke_vm, True)
     h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
@@ -97,6 +106,7 @@ def _ensure_pkg_installed(deployed_vm: SmokeVM) -> None:
         h.deploy(deployed_vm)
         h.snapshot_unbound_conf(deployed_vm)
         h.ensure_dnsbl_vip(deployed_vm)
+        h.set_package_enabled(deployed_vm, True)
         h.use_system_dns_upstream(deployed_vm)
 
 
