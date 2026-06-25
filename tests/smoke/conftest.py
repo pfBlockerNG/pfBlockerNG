@@ -662,26 +662,53 @@ class _MockFeedServer:
     Files under ``tests/smoke/fixtures/`` are served by name; a test may also
     register ad-hoc content in memory via :meth:`register`. The guest fetches
     them at ``feed_url(name)`` (``http://10.10.0.2:<port>/<name>``).
+
+    ADR-42 Phase 3: registered feeds emit ``ETag`` and ``Last-Modified`` response
+    headers on 200 replies, and answer ``304 Not Modified`` to a matching
+    ``If-None-Match`` request header.  Use :meth:`set_content` to update a feed's
+    body and bump its ETag atomically (simulates a real feed update).
     """
 
     def __init__(self, root: Path) -> None:
         self._root = root
         self._registered: dict[str, bytes] = {}
+        # ADR-42 Phase 3: per-name ETag map (opaque string). A name with no entry
+        # in this map serves no ETag (simulates a server that does not support
+        # conditional requests).
+        self._etag_map: dict[str, str] = {}
+        self._lock = threading.Lock()
         registered = self._registered
+        etag_map = self._etag_map
+        lock = self._lock
 
         class Handler(SimpleHTTPRequestHandler):
             # Serve fixtures dir by default; intercept registered names first.
             def do_GET(self) -> None:  # noqa: N802 (stdlib name)
                 name = self.path.lstrip("/")
-                if name in registered:
-                    body = registered[name]
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/plain")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                with lock:
+                    body = registered.get(name)
+                    etag = etag_map.get(name)
+                if body is None:
+                    super().do_GET()
                     return
-                super().do_GET()
+                # ADR-42 Phase 3: honour If-None-Match for conditional-GET.
+                if etag is not None:
+                    client_etag = self.headers.get("If-None-Match", "")
+                    if client_etag.strip() == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.end_headers()
+                        return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                if etag is not None:
+                    self.send_header("ETag", etag)
+                # Emit a fixed Last-Modified in the past so the guest also has a
+                # validator to store (epoch 1700000000 = 2023-11-14T22:13:20Z).
+                self.send_header("Last-Modified", "Tue, 14 Nov 2023 22:13:20 GMT")
+                self.end_headers()
+                self.wfile.write(body)
 
             def log_message(self, fmt: str, *args: object) -> None:
                 # Stay quiet in pytest output; failures surface via assertions.
@@ -706,10 +733,39 @@ class _MockFeedServer:
         self._thread.join(timeout=10)
 
     def register(self, name: str, content: str | bytes) -> str:
-        """Register an in-memory feed body and return its guest-reachable URL."""
+        """Register an in-memory feed body and return its guest-reachable URL.
+
+        The registered feed does NOT emit an ETag by default — it behaves like a
+        server that does not support conditional requests.  Call :meth:`set_content`
+        (or :meth:`enable_etag`) after :meth:`register` to opt into ETag behaviour.
+        """
         body = content.encode() if isinstance(content, str) else content
-        self._registered[name] = body
+        with self._lock:
+            self._registered[name] = body
         return self.feed_url(name)
+
+    def set_content(self, name: str, content: str | bytes, etag: str | None = None) -> None:
+        """Update the body of a registered feed and optionally bump its ETag.
+
+        ADR-42 Phase 3: call this to simulate a feed update on the server side.
+        When ``etag`` is given, the new ETag replaces the old one, so the next
+        conditional GET from the guest will see a 200 (the stored If-None-Match
+        no longer matches) and then re-learn the new ETag for future 304s.
+        """
+        body = content.encode() if isinstance(content, str) else content
+        with self._lock:
+            self._registered[name] = body
+            if etag is not None:
+                self._etag_map[name] = etag
+
+    def enable_etag(self, name: str, etag: str) -> None:
+        """Assign an ETag to a registered feed without changing its body.
+
+        After this call the feed emits ``ETag: <etag>`` on 200 responses and
+        returns 304 to a matching ``If-None-Match: <etag>`` request.
+        """
+        with self._lock:
+            self._etag_map[name] = etag
 
     def feed_url(self, name: str) -> str:
         """The URL the GUEST uses to fetch ``name`` (via the SLIRP host alias)."""

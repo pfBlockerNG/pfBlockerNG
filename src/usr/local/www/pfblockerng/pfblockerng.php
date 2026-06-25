@@ -482,99 +482,86 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			}
 		}
 		else {
-			// Download URL headers and compare previously downloaded file with remote timestamp
-			if (($ch = curl_init("{$list_download}"))) {
-				curl_setopt_array($ch, $pfb['curl_defaults']);		// Load curl default settings
-				curl_setopt($ch, CURLOPT_NOBODY, TRUE);			// Exclude the body from the output
-				curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-				curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-				curl_setopt($ch, CURLOPT_HEADER, 1);
+			// ADR-42 Phase 3: replace the HEAD+Last-Modified client-compare and the
+			// whole-feed md5 fallback with a single conditional GET.
+			//
+			// pfb_download() (probe mode, type='md5') downloads the body to
+			// {pfborig}/{header}.md5.raw and fills $probe_meta with the response HTTP
+			// status, the response ETag, and the response Last-Modified epoch.  Before
+			// the request it sends If-None-Match (from the stored .etag sidecar) or
+			// CURLOPT_TIMECONDITION/CURLOPT_TIMEVALUE (from the stored .lastmod sidecar),
+			// so a server that supports conditional requests can answer 304 (no body).
+			//
+			// Decision matrix (pfb_conditional_get_decision):
+			//   304 → unchanged (server confirmed; no body was sent; reuse cached .orig).
+			//   200, body_hash == persisted_hash → unchanged (spurious 200; same bytes).
+			//   200, body_hash != persisted_hash → changed (real update; re-ingest).
+			//   200, no persisted_hash → download+hash decides (first run or upgrade).
+			//   error / unknown status → fail-safe (re-ingest; never a false skip).
+			//
+			// The SSRF guard (pfb_feed_host_allowed + CURLOPT_RESOLVE IP-pin) and the
+			// manual redirect revalidation loop stay fully intact because the probe goes
+			// through pfb_download(), not a separate bare curl_init().
+			$probe_meta = NULL;
+			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint, $probe_meta);
 
-				// Allow downgrade of cURL settings if user configured
-				if ($pflex == 'Flex') {
-					curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
-					curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, FALSE);
-					curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'TLSv1.2, TLSv1, SSLv3');
-				}
-
-				// If source interface is specified (not 'default') set CURLOPT_INTERFACE
-				if ($srcint) {
-					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);
-					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
-				}
-
-				// Try up to 3 times to download the file before giving up
-				for ($retries = 1; $retries <= 3; $retries++) {
-					$remote_stamp_raw = -1;
-					if (curl_exec($ch)) {
-						$raw_filetime = curl_getinfo($ch, CURLINFO_FILETIME);
-						if ($raw_filetime == -1) {
-							$remote_stamp_raw = -1;
-						}
-						elseif(!empty(pfb_filter($raw_filetime, PFB_FILTER_NUM, 'php'))) {
-							$remote_stamp_raw = $raw_filetime;
-						}
-						break;	// Break on success
-					}
-					sleep(3);
-				}
-
-				if ($remote_stamp_raw != -1) {
-					$remote_tds = gmdate('D, j M Y H:i:s T', $remote_stamp_raw);
-				}
-			}
-			if ($ch) {
-				curl_close($ch);
+			if (!$probe_ok || $probe_meta === NULL) {
+				// Probe failed entirely (connection error, bad URL, etc.) → fail-safe.
+				$log = "\n\tFailed to probe feed for change detection!\tUpdate skipped\n";
+				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+				touch("{$pfbfolder}/{$header}.fail");
+				pfb_logger("{$log}", 1);
+				return;
 			}
 
-			// If remote timestamp not found, Attempt md5 comparison
-			if ($remote_stamp_raw == -1) {
+			$probe_status = $probe_meta['status'];
 
-				// Download Feed to compare md5's. If update required, downloaded md5 file will be used instead of downloading twice
-				if (pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint)) {
+			if ($probe_status === '304') {
+				// Server confirmed not-modified via conditional GET → no re-ingest needed.
+				$log = "\n\t\t\t\t( 304 not modified )\tUpdate not required\n";
+				pfb_logger("{$log}", 1);
+				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+				// Persist any refreshed validators from the 304 response.
+				pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
+				return;
+			}
 
-					// Collect md5 checksums
-					$remote_md5	= @md5_file("{$pfborig}/{$header}.md5.raw");
-					$local_md5	= @md5_file($local_file);
+			if ($probe_status === '200') {
+				// Compute the body hash and compare against the persisted .orig hash.
+				$body_hash      = pfb_content_hash("{$pfborig}/{$header}.md5.raw", TRUE);
+				$persisted_sidecar = pfb_hash_read($local_file);
+				$persisted_hash = ($persisted_sidecar['algo'] === 'xxh128') ? $persisted_sidecar['digest'] : '';
 
-					if ($remote_md5 != $local_md5) {
-						$log = "\n\t\t\t\t( md5 changed )\t\tUpdate found\n";
-						pfb_logger("{$log}", 1);
-						$pfb['update_cron'] = TRUE;
-						touch("{$pfbfolder}/{$header}.update");
-						return;
-					}
-					else {
-						$log = "\n\t\t\t\t( md5 unchanged )\tUpdate not required\n";
-						pfb_logger("{$log}", 1);
-						unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-						return;
-					}
+				$changed = pfb_conditional_get_decision($probe_status, $body_hash, $persisted_hash);
+
+				if ($changed) {
+					$log = "\n\t\t\t\t( content changed )\tUpdate found\n";
+					pfb_logger("{$log}", 1);
+					// Persist the validators from this 200 response so the next run
+					// can send a conditional GET.
+					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
+					$pfb['update_cron'] = TRUE;
+					touch("{$pfbfolder}/{$header}.update");
+					return;
 				}
 				else {
-					$log = "\n\tFailed to download Feed for md5 comparison!\tUpdate skipped\n";
-					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-					touch("{$pfbfolder}/{$header}.fail");
+					$log = "\n\t\t\t\t( content unchanged )\tUpdate not required\n";
 					pfb_logger("{$log}", 1);
+					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+					// Refresh validators even on a spurious 200 so the next run can
+					// go conditional (the server may start honouring ETags).
+					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
 					return;
 				}
 			}
-			else {
-				$log = "  Remote timestamp: {$remote_tds}\n";
-				pfb_logger("{$log}", 1);
-				$local_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime($local_file));
-				$log = "  Local  timestamp: {$local_tds}\t";
-				pfb_logger("{$log}", 1);
 
-				if ("{$remote_tds}" != "{$local_tds}") {
-					$pfb['cron_update'] = TRUE;
-				}
-				else {
-					$log = "Update not required\n";
-					pfb_logger("{$log}", 1);
-					$pfb['cron_update'] = FALSE;
-				}
-			}
+			// Any other status → fail-safe: treat as changed, re-ingest.
+			$log = "\n\tUnexpected probe status [{$probe_status}]!\tUpdate forced (fail-safe)\n";
+			unlink_if_exists("{$pfborig}/{$header}.md5.raw");
+			pfb_logger("{$log}", 1);
+			$pfb['update_cron'] = TRUE;
+			touch("{$pfbfolder}/{$header}.update");
+			return;
 		}
 	} else {
 		$pfb['cron_update'] = TRUE;

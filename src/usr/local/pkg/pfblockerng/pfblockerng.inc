@@ -7351,7 +7351,12 @@ function pfb_rsync_pin_url($list_url, $ip) {
 
 
 // Function to download feeds
-function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE) {
+//
+// Optional $response_meta — when a non-NULL reference is passed (detector probe mode), it is
+// filled with an array: ['status' => <http_status_string>, 'etag' => <ETag string or ''>,
+// 'lastmod' => <epoch int or 0>]. The two sync callers in pfblockerng.inc (lines ~12436 and
+// ~14096) do NOT pass this argument, so their behaviour is entirely unchanged.
+function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL) {
 	global $pfb;
 	$http_status = '';
 	$elog = ">> {$pfb['log']} 2>&1";
@@ -7527,20 +7532,39 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				curl_setopt($ch, CURLOPT_MAXREDIRS, $feed_filter ? 0 : PFB_DOWNLOAD_MAXREDIRS);
 
 				// Capture the response 'Location' header for the manual redirect
-				// follow. Reset per hop ($redirect_location is cleared before each
-				// curl_exec). Bodies are written to $fhandle; a redirect hop's body
-				// is truncated away before the next hop so only the final 2xx body
-				// survives.
+				// follow and the 'ETag' header for ADR-42 Phase 3 conditional-GET.
+				// Reset per hop ($redirect_location is cleared before each curl_exec).
+				// Bodies are written to $fhandle; a redirect hop's body is truncated
+				// away before the next hop so only the final 2xx body survives.
 				$redirect_location = '';
+				$response_etag     = '';
+				$response_lastmod_raw = -1;
 				curl_setopt($ch, CURLOPT_HEADERFUNCTION,
-					function ($curl_handle, $hdr_line) use (&$redirect_location) {
+					function ($curl_handle, $hdr_line) use (&$redirect_location, &$response_etag) {
 						$trimmed = trim($hdr_line);
 						if (stripos($trimmed, 'Location:') === 0) {
 							$redirect_location = trim(substr($trimmed, strlen('Location:')));
+						} elseif (stripos($trimmed, 'ETag:') === 0) {
+							$response_etag = trim(substr($trimmed, strlen('ETag:')));
 						}
 						return strlen($hdr_line);
 					}
 				);
+
+				// ADR-42 Phase 3: send a conditional GET when stored validators are
+				// available for this feed's .orig baseline.  ETag → If-None-Match
+				// (primary); Last-Modified epoch → CURLOPT_TIMECONDITION (fallback).
+				// Only applied to the probe ('md5') mode: the sync ingest callers pass
+				// $type == '' and must always receive the full body.
+				if ($type === 'md5') {
+					$validators = pfb_validator_read("{$orig_download}");
+					if (is_string($validators['etag']) && $validators['etag'] !== '') {
+						curl_setopt($ch, CURLOPT_HTTPHEADER, array("If-None-Match: {$validators['etag']}"));
+					} elseif (is_int($validators['lastmod']) && $validators['lastmod'] > 0) {
+						curl_setopt($ch, CURLOPT_TIMECONDITION, CURL_TIMECOND_IFMODSINCE);
+						curl_setopt($ch, CURLOPT_TIMEVALUE, $validators['lastmod']);
+					}
+				}
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
@@ -7697,9 +7721,21 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 	}
 
-	// Cron update function for md5 comparison
+	// Probe mode for the cron detector (type='md5'): fill $response_meta when
+	// the caller requested it (ADR-42 Phase 3 conditional-GET path), then return.
+	// A 304 means "not modified" — the server confirmed the feed unchanged; the
+	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
+	// Any 200 means the body was downloaded to {file_dwn}.raw; the caller hashes it.
+	// Any other status means the probe failed; the caller fails-safe to re-ingest.
 	if ($type == 'md5') {
-		if ($http_status == '200') {
+		if ($response_meta !== NULL) {
+			$response_meta = array(
+				'status'  => (string) $http_status,
+				'etag'    => isset($response_etag) ? $response_etag : '',
+				'lastmod' => isset($remote_stamp) && $remote_stamp > 0 ? (int) $remote_stamp : 0,
+			);
+		}
+		if ($http_status == '304' || $http_status == '200') {
 			return TRUE;
 		}
 		return FALSE;
@@ -9419,6 +9455,86 @@ function pfb_hash_write($base, $path) {
 		unlink_if_exists("{$base}.md5");
 	}
 	return $ok;
+}
+
+// ADR-42 Phase 3: read the per-feed HTTP validators (ETag + Last-Modified epoch)
+// stored as sidecars next to the .orig baseline.
+//
+// Returns an array with keys:
+//   'etag'     => string (the stored ETag header value) or FALSE if absent/unreadable.
+//   'lastmod'  => int (Unix epoch from the Last-Modified response header) or FALSE if absent.
+//
+// Side-car paths: {base}.etag, {base}.lastmod
+// Pure read — no I/O side effects beyond reading those two files.
+function pfb_validator_read($base) {
+	$etag = FALSE;
+	$etag_path = "{$base}.etag";
+	if (file_exists($etag_path)) {
+		$raw = @file_get_contents($etag_path);
+		if ($raw !== FALSE) {
+			$v = trim($raw);
+			if ($v !== '') {
+				$etag = $v;
+			}
+		}
+	}
+
+	$lastmod = FALSE;
+	$lm_path = "{$base}.lastmod";
+	if (file_exists($lm_path)) {
+		$raw = @file_get_contents($lm_path);
+		if ($raw !== FALSE) {
+			$v = trim($raw);
+			// A valid lastmod sidecar holds a decimal integer (Unix epoch).
+			if (preg_match('/^[0-9]+$/', $v)) {
+				$lastmod = (int) $v;
+			}
+		}
+	}
+
+	return array('etag' => $etag, 'lastmod' => $lastmod);
+}
+
+// ADR-42 Phase 3: persist the HTTP validators for a feed's .orig base path.
+// $etag is the ETag response header value (string) or FALSE/'' to skip.
+// $lastmod is the Last-Modified epoch (int > 0) or FALSE to skip.
+// Does nothing when neither value is meaningful — never writes an empty sidecar.
+function pfb_validator_write($base, $etag, $lastmod) {
+	if (is_string($etag) && $etag !== '') {
+		@file_put_contents("{$base}.etag", $etag, LOCK_EX);
+	}
+	if (is_int($lastmod) && $lastmod > 0) {
+		@file_put_contents("{$base}.lastmod", (string) $lastmod, LOCK_EX);
+	}
+}
+
+// ADR-42 Phase 3: pure decision helper for the remote conditional-GET result.
+// Called by the detector after pfb_download returns the probe response.
+//
+// Contract (ADR-42 §2 #5 and #6):
+//   304 → unchanged (server confirmed — body was not re-sent).
+//   200 with body_hash == persisted_hash → unchanged (spurious 200; same bytes as baseline).
+//   200 with body_hash != persisted_hash → changed (real update; re-ingest needed).
+//   200 with no persisted hash ('') or body_hash FALSE → changed (no baseline to compare;
+//     fail-safe: cannot confirm unchanged, so treat as changed).
+//   Any other status or body_hash FALSE → changed (ambiguous/error; fail-safe, never false skip).
+//
+// $http_status  — the HTTP status code string from pfb_download's $response_meta['status'].
+// $body_hash    — the xxh128 digest of the probe body (string) or FALSE if unreadable.
+// $persisted_hash — the stored xxh128 digest of the last-ingested .orig (string) or '' if absent.
+// Returns TRUE when re-ingest is needed, FALSE when the feed is confirmed unchanged.
+function pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash) {
+	if ($http_status === '304') {
+		return FALSE;	// Server confirmed: not modified.
+	}
+	if ($http_status !== '200') {
+		return TRUE;	// Ambiguous/error — fail-safe: re-ingest.
+	}
+	// 200: compare body hash vs baseline.
+	if ($body_hash === FALSE || $persisted_hash === '') {
+		return TRUE;	// No usable comparison — fail-safe.
+	}
+	return ($body_hash !== $persisted_hash);	// TRUE = changed, FALSE = spurious 200 (same bytes).
 }
 
 // Compare two files byte-for-byte using `cmp -s` (early-exit on first differing byte,
