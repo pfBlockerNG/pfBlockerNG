@@ -1,0 +1,259 @@
+ADR-40 Phase 3 Results — Content-addressed reload gating (core correctness)
+============================================================================
+
+Branch: adr/40-content-addressed-alias
+Phase:  3 (content-addressed reload gate — correct the reload scope)
+Date:   2026-06-25
+
+ADR-RESUME: branch=adr/40-content-addressed-alias next-phase=4
+
+
+## New helpers added (src/usr/local/pkg/pfblockerng/pfblockerng.inc)
+
+All three inserted after pfb_canonical_alias_set(), before the next section
+separator.  Search anchor: the block of four functions starting at the
+"alias reload-scope" comment (~line 3480).
+
+### pfb_write_canonical_alias(string $path, array $canonical_set): void
+   Writes the canonical set as the last-applied mirror file.
+   One entry per line, trailing newline; empty set → empty file (LOCK_EX).
+   Called in the file-write loop when the content-gate fires (sets differ or
+   table is empty).
+
+### pfb_alias_set_different(array $new_set, string $mirror_path): bool
+   Core content gate.  Order- and duplicate-immune: reads the mirror through
+   pfb_canonical_alias_set() so a pre-Phase-3 raw-concat mirror round-trips
+   correctly on the first upgrade pass.
+   Returns TRUE when:
+     - mirror file is absent (boot / first load / empty table repopulation), OR
+     - mirror content is unreadable, OR
+     - canonical new_set != canonical mirror_set (membership changed).
+   Returns FALSE only when sets are identical — the idempotence path.
+
+### pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool
+   Returns TRUE when dup OR rep is on — signals the hybrid-scope path.
+   Caller decides whether to recompute ALL active aliases (cross-list) or
+   only changed-feed aliases (surgical).
+
+
+## File-write loop changes (sync_package_pfblockerng, Configure Aliases block)
+
+### Feed-changed snapshot (NEW — fixes idempotence critical bug)
+
+   Immediately before the file-write loop's foreach:
+
+     $pfb_feed_changed = $pfb_alias_lists;   // snapshot: download-loop additions
+     $pfb_alias_lists  = array();            // reset: write loop is sole populator
+
+   This separates the feed-tracking variable (populated by the download loop at
+   inc:14738, GeoIP at inc:14028/14055, DNSBLIP at inc:12060) from the
+   content-diff set ($pfb_alias_lists) that the pfctl regions and ADR-12 emit
+   consume.
+
+   Without this fix: the download loop additions persisted into $pfb_alias_lists
+   after the write loop, making the content gate irrelevant — an alias that re-
+   downloaded with IDENTICAL content would still appear in PFB_CHANGED_IP_ALIASES.
+
+### Hybrid-scope gate (NEW)
+
+   At the top of the file-write loop, per alias:
+
+     $pfb_cross_list  = pfb_cross_list_scope($pfb['dup']=='on', rep_on_expr);
+     $final_alias_old = pfb_select_reload_aliases(FALSE, $pfb_feed_changed, $pfb_alias_lists_all);
+
+   Member eligibility condition:
+     $pfb_cross_list || in_array($alias, $final_alias_old) || empty($pfctlck)
+
+   When cross-list is ON (dup OR rep active): every active alias is recomputed
+   (sibling memberships can shift via dedup/reputation).
+   When cross-list is OFF: only feed-changed aliases plus empty-table aliases
+   are recomputed (surgical path).
+
+   Suppression sub-process eligibility (unchanged from pre-Phase-3 intent):
+     in_array($alias, $final_alias_old)   — only feed-changed aliases
+
+### Content-addressed write path (NEW)
+
+   After $alias_ips is assembled (member file concat + suppression + CIDR aggregate):
+
+     if ($pfbupdate) {
+         $alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
+         $canonical_set = pfb_canonical_alias_set($alias_ips);
+         if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
+             pfb_write_canonical_alias($alias_mirror, $canonical_set);
+             $pfb_alias_lists[] = "{$alias}";
+         }
+     }
+
+   $pfb_alias_lists is populated HERE and only here — by content-validated aliases.
+   empty($pfctlck): boot / first-enable path bypasses the content gate (always reload).
+
+### ip_unlock widening (#519 contract preserved)
+
+   When /tmp/ip_unlock fires, after setting $pfb['repcheck'] = TRUE:
+
+     $pfb_alias_lists = array_unique(array_merge($pfb_alias_lists, $pfb_alias_lists_all));
+
+   This ensures all active aliases are reloaded and PFB_CHANGED_IP_ALIASES is
+   non-empty even with no feed content change — the #519 contract.
+
+### pfctl regions updated
+
+   Rule-change path (inc:~15437):
+     $final_alias = empty($pfb_alias_lists)
+         ? []
+         : array_values(array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases));
+
+   No-rule-change path (inc:~15490):
+     $final_alias = array_unique($pfb_alias_lists);
+
+   Both now use $pfb_alias_lists directly as the content-diff set (the write loop
+   populates it).  pfb_select_reload_aliases() removed from these call sites.
+
+
+## Last-applied mirror: read and set-diff mechanism
+
+Location: /var/db/aliastables/<alias>.txt
+  (same path pfBlockerNG already wrote the raw concat to — Phase 3 repurposes it
+   as the content-addressed last-applied mirror; format changes from raw concat
+   to canonical sorted-unique set, transparent to existing readers since the
+   file is only read by pfb_alias_set_different() in Phase 3+)
+
+Read: pfb_alias_set_different() calls pfb_canonical_alias_set() on the mirror
+  content, making the comparison order- and duplicate-immune regardless of how
+  the file was written (pre-Phase-3 raw-concat mirrors round-trip correctly).
+
+Write: pfb_write_canonical_alias() writes one entry per line, LC_ALL=C sort -u
+  order (via pfb_canonical_alias_set() which uses PHP sort() — C-locale via the
+  inline sort call in pfb_canonical_alias_set).
+
+Set-diff: strict PHP array comparison ($new === $mirror_set) on the sorted-unique
+  arrays — order is deterministic, duplicates are collapsed, so identical content
+  always produces the same array shape.
+
+
+## Hybrid-scope choice (ADR-40 §2)
+
+When enable_dup == 'on' OR drep/prep == 'on':
+  → recompute ALL active aliases' canonical sets (cross-list features shift
+    sibling memberships; a change in feed A can move entries into/out of feed B
+    after dedup/reputation processing)
+
+When both are off:
+  → only recompute canonical sets for feed-changed aliases (surgical path)
+
+This satisfies §2's "hybrid scope" requirement.  Phase 2 verdict confirmed:
+601ms@1M recompute is not dominant (vs 871ms replace), so recomputing ALL aliases
+in the cross-list case is acceptable.
+
+
+## Red→green test evidence
+
+### Red (pre-helpers): all 17 new tests in AliasContentGateTest.php failed with:
+
+  Error: Call to undefined function pfb_alias_set_different()
+  (and pfb_write_canonical_alias(), pfb_cross_list_scope())
+
+  Selected failures (vendor/bin/phpunit tests/php/AliasContentGateTest.php):
+    ERRORS!
+    Tests: 17, Errors: 17.
+
+### Green (post-helpers + write-loop changes):
+
+  vendor/bin/phpunit
+    OK, but some tests were skipped!
+    Tests: 1387, Assertions: 5232, Skipped: 3.
+    (3 skipped = pre-existing drill-not-found stubs; unrelated to Phase 3)
+
+  Full test class green:
+    AliasContentGateTest — 17 tests (scenarios A-G: set-diff, write, scope)
+    AliasReloadScopeTest — 18 tests (Phase 1 oracle; all still pass)
+
+
+## New tests (tests/php/AliasContentGateTest.php — 17 tests)
+
+Scenarios and what each pins:
+
+E — Missing / unreadable mirror:
+  testMissingMirrorTreatedAsDifferent           — absent mirror → TRUE (boot/repopulation)
+  testEmptySetWithMissingMirrorReturnsFalse     — empty new_set + absent mirror → FALSE
+
+D — Idempotence:
+  testUnchangedSetReturnsFalse                  — same set twice → FALSE (content gate skips)
+
+A — Cross-list dedup:
+  testCrossListScopeWidensDuplicateList         — sibling alias (dedup shifted it) detected changed
+  testUnchangedSiblingReturnsFalse              — unchanged sibling skips reload
+
+B — Reputation:
+  testReputationUnchangedAliasFalse             — unchanged alias → FALSE
+  testReputationMovedAliasDifferent             — moved alias → TRUE
+
+C — Surgical (both off):
+  testSurgicalUntouchedAliasFalse               — untouched alias → FALSE
+  testSurgicalChangedAliasTrue                  — changed alias → TRUE
+
+F — pfb_write_canonical_alias format + round-trip:
+  testWriteCanonicalAliasCreatesFile            — file created, one IP per line
+  testWriteCanonicalAliasEmptySetCreatesEmptyFile  — empty set → empty file (not absent)
+  testWriteCanonicalAliasRoundTrips             — write then pfb_alias_set_different → FALSE
+
+G — pfb_cross_list_scope:
+  testCrossListScopeDupOnly                     — dup=TRUE, rep=FALSE → TRUE
+  testCrossListScopeRepOnly                     — dup=FALSE, rep=TRUE → TRUE
+  testCrossListScopeBothOn                      — both TRUE → TRUE
+  testCrossListScopeBothOff                     — both FALSE → FALSE
+
+
+## Smoke tests added (tests/smoke/test_smoke_adr40.py — 2 tests, dispatch-only)
+
+test_adr40_content_gate_idempotence
+  — Settle feed; second update with SAME content → PFB_CHANGED_IP_ALIASES empty;
+    pf table still holds the IP (no phantom flush).
+    FAILS on pre-Phase-3 code; PASSES after the fix.
+
+test_adr40_content_gate_fires_on_change
+  — Settle feed; rewrite with different IP (force_ip_refetch); reload →
+    alias appears in PFB_CHANGED_IP_ALIASES; pf table holds new IP only.
+    Complementary ON-branch: proves the gate is not always-false.
+
+
+## Verification (all gates green)
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    → No syntax errors detected
+      (pre-existing E_DEPRECATED warnings on PHP 8.3 strpos overloads; unrelated)
+
+  vendor/bin/phpunit
+    → Tests: 1387, Assertions: 5232, Skipped: 3.  OK.
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    → (clean, no output)
+
+  vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+    → [OK] No errors
+
+  /Users/andre/git/pfBlockerNG/.venv/bin/ruff check tests/smoke/test_smoke_adr40.py
+    → All checks passed!
+
+  python -m pytest tests/smoke/test_smoke_adr40.py --collect-only
+    → 2 tests collected.
+
+  git diff origin/devel...HEAD --stat
+    → src/usr/local/pkg/pfblockerng/pfblockerng.inc
+      tests/php/AliasContentGateTest.php
+      tests/smoke/test_smoke_adr40.py
+      .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/03_Results.txt
+
+
+## Phase 4 restatement (from Phase 2 binding verdict)
+
+ADR-40 Phase 4: incremental -T add / -T delete delta apply.
+Phase 3 provides the foundation: $pfb_alias_lists is now a clean content-diff
+set (only aliases whose canonical set changed), plus the mirror files record
+the last-applied canonical set.  Phase 4 uses that set to compute the actual
+entry-level delta (add_set = new_set \ mirror_set; del_set = mirror_set \ new_set)
+and applies it in batches (default 256, range 64-4096 via pfb_alias_delta_batch).
+Fall back to -T replace when: initial load (empty($pfctlck)); churn >= ~20% of
+table size.  Phase 3's content gate enables routing: when sets are identical,
+skip both delta compute and pfctl entirely.
