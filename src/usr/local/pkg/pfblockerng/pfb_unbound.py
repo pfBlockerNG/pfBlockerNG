@@ -4618,6 +4618,11 @@ def build(
     # below alongside the plain blocks. Each ABP rule carries its manifest-row
     # feed/group/log straight through parse_abp onto the Rule.
     abp_rules: list[Rule] = []
+    # ADR-31 §2.2.3: a permit feed that inserts a band-2 allow must engage the numeric
+    # band-aware resolution (exactly as any feed @@ allow does via reconcile, line ~4095),
+    # so a higher-band user/Custom_List block (band 5) still wins. Without it the fast path
+    # treats ANY whiteDB hit as an unconditional override -- a security fail-open.
+    permit_allow_inserted = False
 
     for feed_row in manifest.get("feeds", []):
         feed = feed_row["feed"]
@@ -4660,8 +4665,10 @@ def build(
                 existing = white_db.get(domain)
                 if existing is None:
                     white_db[domain] = new_entry
+                    permit_allow_inserted = True
                 elif _white_entry_band(existing) < PRIO_FEED_ALLOW:
                     white_db[domain] = new_entry
+                    permit_allow_inserted = True
                 # Same or higher band: keep existing (monotonic widen — never downgrade).
             continue
         # ADR-07: a DNSBL Group Custom_List (the {alias}_custom synthetic row, PHP
@@ -4716,11 +4723,11 @@ def build(
     # ---- Stage-B reconcile + Stage-C emit for the ABP rule stream -------------- #
     regex_db: dict[str, dict[str, Any]] = {}
     allow_regex_db: dict[str, dict[str, Any]] = {}
-    important_rules = False
+    important_rules = permit_allow_inserted
     regex_count = 0
     if abp_rules:
         result = reconcile(abp_rules, tlds, exclusion)
-        important_rules = result.important_rules
+        important_rules = important_rules or result.important_rules
 
         # Domain blocks -> dataDB/zoneDB (carry band + $important).
         for b in result.block_domains:
