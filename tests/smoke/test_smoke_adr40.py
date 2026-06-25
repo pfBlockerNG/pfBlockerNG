@@ -362,62 +362,70 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
     feed_file = "smoke_adr40_delta.txt"
 
     _set_delta_mode(adr40_vm, "delta")
-    h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
-    feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
-    ip_spec = h.IpCase(
-        aliasname="smokeadr40delta",
-        feed_url=feed_url,
-        header="smokeadr40delta",
-    )
-    h.inject(adr40_vm, ip_spec)
+    try:
+        h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
+        feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
+        ip_spec = h.IpCase(
+            aliasname="smokeadr40delta",
+            feed_url=feed_url,
+            header="smokeadr40delta",
+        )
+        h.inject(adr40_vm, ip_spec)
 
-    # Settle with OLD IP.
-    h.clear_hook_markers(adr40_vm, token)
-    h.reload(adr40_vm, "update")
-    env_settle = h.read_hook_env(adr40_vm, marker)
-    assert env_settle is not None, "post hook did not fire on settling update"
+        # Settle with OLD IP.
+        h.clear_hook_markers(adr40_vm, token)
+        h.reload(adr40_vm, "update")
+        env_settle = h.read_hook_env(adr40_vm, marker)
+        assert env_settle is not None, "post hook did not fire on settling update"
 
-    # Before-state: old_ip in table, new_ip absent.
-    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
-    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
-    assert any(old_ip in m for m in members_before), (
-        f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
-    )
-    assert not any(new_ip in m for m in members_before), (
-        f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
-    )
+        # Before-state: old_ip in table, new_ip absent.
+        # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
+        members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+        assert any(old_ip in m for m in members_before), (
+            f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
+        )
+        assert not any(new_ip in m for m in members_before), (
+            f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
+        )
 
-    # Change the feed; invalidate the reuse cache.
-    h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
-    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
+        # Change the feed; invalidate the reuse cache.
+        h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
+        h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
-    h.clear_hook_markers(adr40_vm, token)
-    h.reload(adr40_vm, "update")
-    env_changed = h.read_hook_env(adr40_vm, marker)
-    assert env_changed is not None, "post hook did not fire after feed content change (delta mode)"
+        h.clear_hook_markers(adr40_vm, token)
+        h.reload(adr40_vm, "update")
+        env_changed = h.read_hook_env(adr40_vm, marker)
+        assert env_changed is not None, "post hook did not fire after feed content change (delta mode)"
 
-    changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
-    assert ip_spec.alias in changed, (
-        f"ADR-40 P4 delta FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\n"
-        f"Got PFB_CHANGED_IP_ALIASES={changed!r}\n"
-        f"Feed changed from {old_ip!r} to {new_ip!r}; content-gate should have fired."
-    )
+        changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
+        assert ip_spec.alias in changed, (
+            f"ADR-40 P4 delta FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\n"
+            f"Got PFB_CHANGED_IP_ALIASES={changed!r}\n"
+            f"Feed changed from {old_ip!r} to {new_ip!r}; content-gate should have fired."
+        )
 
-    # End-state: new_ip only; old_ip removed by the delta delete.
-    members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
-    assert any(new_ip in m for m in members_after), (
-        f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\n"
-        f"Expected end-state to match the canonical desired set (new feed content).\n"
-        f"Got: {members_after}"
-    )
-    assert not any(old_ip in m for m in members_after), (
-        f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\n"
-        f"The delta delete (-T delete) should have removed the old IP.\n"
-        f"Got: {members_after}"
-    )
-
-    _set_delta_mode(adr40_vm, "auto")
-    h.clear_update_hooks(adr40_vm)
+        # End-state: exact table contents must equal the new feed (new_ip only; old_ip gone).
+        # This is the ADR-40 end-state invariant: delta apply == replace apply in membership.
+        members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+        assert any(new_ip in m for m in members_after), (
+            f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\n"
+            f"Expected end-state: [{new_ip}] (canonical desired set = new feed content).\n"
+            f"Got: {members_after}"
+        )
+        assert not any(old_ip in m for m in members_after), (
+            f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\n"
+            f"The delta delete (-T delete) should have removed the old IP.\n"
+            f"Expected end-state: [{new_ip}]; got: {members_after}"
+        )
+        # Exact membership: table holds exactly the one new IP (single-IP feed).
+        non_new = [m for m in members_after if new_ip not in m]
+        assert not non_new, (
+            f"ADR-40 P4 delta end-state FAILED: unexpected entries in table {ip_spec.alias}.\n"
+            f"Expected exactly [{new_ip}]; extra entries: {non_new}"
+        )
+    finally:
+        _set_delta_mode(adr40_vm, "auto")
+        h.clear_update_hooks(adr40_vm)
 
 
 # --------------------------------------------------------------------------- #
@@ -452,53 +460,63 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
     feed_file = "smoke_adr40_repl.txt"
 
     _set_delta_mode(adr40_vm, "replace")
-    h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
-    feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
-    ip_spec = h.IpCase(
-        aliasname="smokeadr40repl",
-        feed_url=feed_url,
-        header="smokeadr40repl",
-    )
-    h.inject(adr40_vm, ip_spec)
+    try:
+        h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
+        feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
+        ip_spec = h.IpCase(
+            aliasname="smokeadr40repl",
+            feed_url=feed_url,
+            header="smokeadr40repl",
+        )
+        h.inject(adr40_vm, ip_spec)
 
-    # Settle.
-    h.clear_hook_markers(adr40_vm, token)
-    h.reload(adr40_vm, "update")
-    env_settle = h.read_hook_env(adr40_vm, marker)
-    assert env_settle is not None, "post hook did not fire on settling update"
+        # Settle.
+        h.clear_hook_markers(adr40_vm, token)
+        h.reload(adr40_vm, "update")
+        env_settle = h.read_hook_env(adr40_vm, marker)
+        assert env_settle is not None, "post hook did not fire on settling update"
 
-    # Before-state: old_ip in table, new_ip absent.
-    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
-    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
-    assert any(old_ip in m for m in members_before), (
-        f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
-    )
-    assert not any(new_ip in m for m in members_before), (
-        f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
-    )
+        # Before-state: old_ip in table, new_ip absent.
+        # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
+        members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+        assert any(old_ip in m for m in members_before), (
+            f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
+        )
+        assert not any(new_ip in m for m in members_before), (
+            f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
+        )
 
-    # Change the feed; invalidate the reuse cache.
-    h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
-    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
+        # Change the feed; invalidate the reuse cache.
+        h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
+        h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
-    h.clear_hook_markers(adr40_vm, token)
-    h.reload(adr40_vm, "update")
-    env_changed = h.read_hook_env(adr40_vm, marker)
-    assert env_changed is not None, "post hook did not fire after feed change (replace mode)"
+        h.clear_hook_markers(adr40_vm, token)
+        h.reload(adr40_vm, "update")
+        env_changed = h.read_hook_env(adr40_vm, marker)
+        assert env_changed is not None, "post hook did not fire after feed change (replace mode)"
 
-    changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
-    assert ip_spec.alias in changed, (
-        f"ADR-40 P4 replace-mode FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\nGot {changed!r}"
-    )
+        changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
+        assert ip_spec.alias in changed, (
+            f"ADR-40 P4 replace-mode FAILED: alias {ip_spec.alias!r} absent from "
+            f"PFB_CHANGED_IP_ALIASES.\nGot {changed!r}"
+        )
 
-    # End-state: new_ip only; old_ip removed by the full replace.
-    members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
-    assert any(new_ip in m for m in members_after), (
-        f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\nGot: {members_after}"
-    )
-    assert not any(old_ip in m for m in members_after), (
-        f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\nGot: {members_after}"
-    )
-
-    _set_delta_mode(adr40_vm, "auto")
-    h.clear_update_hooks(adr40_vm)
+        # End-state: exact table contents must equal the new feed (new_ip only; old_ip gone).
+        members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+        assert any(new_ip in m for m in members_after), (
+            f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\n"
+            f"Expected end-state: [{new_ip}]; got: {members_after}"
+        )
+        assert not any(old_ip in m for m in members_after), (
+            f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\n"
+            f"Expected end-state: [{new_ip}]; got: {members_after}"
+        )
+        # Exact membership: table holds exactly the one new IP (single-IP feed).
+        non_new = [m for m in members_after if new_ip not in m]
+        assert not non_new, (
+            f"ADR-40 P4 replace-mode end-state FAILED: unexpected entries in table {ip_spec.alias}.\n"
+            f"Expected exactly [{new_ip}]; extra entries: {non_new}"
+        )
+    finally:
+        _set_delta_mode(adr40_vm, "auto")
+        h.clear_update_hooks(adr40_vm)

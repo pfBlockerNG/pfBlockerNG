@@ -194,18 +194,18 @@ C — Surgical (both off):
   testSurgicalChangedAliasTrue                  — changed alias → TRUE
 
 F — pfb_write_canonical_alias format + round-trip:
-  testWriteCanonicalAliasCreatesFile            — file created, one IP per line
+  testWriteCanonicalAliasProducesCanonicalFormat   — writes caller set as-is (one per line, trailing newline)
   testWriteCanonicalAliasEmptySetCreatesEmptyFile  — empty set → empty file (not absent)
-  testWriteCanonicalAliasRoundTrips             — write then pfb_alias_set_different → FALSE
+  testWriteThenReadIsIdempotent                    — write then pfb_alias_set_different → FALSE
 
 G — pfb_cross_list_scope:
-  testCrossListScopeDupOnly                     — dup=TRUE, rep=FALSE → TRUE
-  testCrossListScopeRepOnly                     — dup=FALSE, rep=TRUE → TRUE
-  testCrossListScopeBothOn                      — both TRUE → TRUE
-  testCrossListScopeBothOff                     — both FALSE → FALSE
+  testCrossListScopeWhenDupOn                   — dup=TRUE, rep=FALSE → TRUE
+  testCrossListScopeWhenRepOn                   — dup=FALSE, rep=TRUE → TRUE
+  testCrossListScopeWhenBothOn                  — both TRUE → TRUE
+  testCrossListScopeOffWhenBothOff              — both FALSE → FALSE
 
 
-## Smoke tests added (tests/smoke/test_smoke_adr40.py — 2 tests, dispatch-only)
+## Smoke tests added (tests/smoke/test_smoke_adr40.py — 4 tests, dispatch-only)
 
 test_adr40_content_gate_idempotence
   — Settle feed; second update with SAME content → PFB_CHANGED_IP_ALIASES empty;
@@ -216,6 +216,15 @@ test_adr40_content_gate_fires_on_change
   — Settle feed; rewrite with different IP (force_ip_refetch); reload →
     alias appears in PFB_CHANGED_IP_ALIASES; pf table holds new IP only.
     Complementary ON-branch: proves the gate is not always-false.
+
+test_adr40_delta_apply_small_churn
+  — mode=delta, 1-IP feed; change IP → delta add/delete applied; end-state ==
+    new feed (new IP only; old IP gone).  ADR-40 end-state invariant on delta path.
+
+test_adr40_delta_replace_mode
+  — mode=replace, 1-IP feed; change IP → full -T replace applied; end-state ==
+    new feed.  Complementary to delta test: proves both paths produce identical
+    end-state (ADR-40 contract item 1).
 
 
 ## Verification (all gates green)
@@ -233,7 +242,7 @@ test_adr40_content_gate_fires_on_change
   vendor/bin/phpstan analyse --no-progress --memory-limit=1G
     → [OK] No errors
 
-  /Users/andre/git/pfBlockerNG/.venv/bin/ruff check tests/smoke/test_smoke_adr40.py
+  ruff check tests/smoke/test_smoke_adr40.py
     → All checks passed!
 
   python -m pytest tests/smoke/test_smoke_adr40.py --collect-only
