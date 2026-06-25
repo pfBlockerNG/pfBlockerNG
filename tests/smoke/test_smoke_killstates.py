@@ -150,6 +150,24 @@ def _victim_states(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     return vm.ssh("/bin/sh", "-c", f"pfctl -ss 2>/dev/null | grep '{VICTIM}' || true", timeout=timeout).stdout.strip()
 
 
+def _rule_block_packets(vm: SmokeVM, *, timeout: float = 30.0) -> int:
+    """Packets the floating pfB reject rule has actually dropped (its pf counter).
+
+    ``pfctl -sr -vv`` prints each rule followed by a ``[ Evaluations: N Packets: M ... ]``
+    line; M is the count the rule has matched (= blocked, for this `block` rule). Reading it
+    before/after a connection attempt proves the rule DROPPED the traffic, not just that the
+    victim is listed in the alias. Returns -1 if the counter can't be read.
+    """
+    out = vm.ssh(
+        "/bin/sh",
+        "-c",
+        f"pfctl -sr -vv 2>/dev/null | grep -A1 '{ALIAS_TABLE}' "
+        "| grep -oE 'Packets: [0-9]+' | head -1 | grep -oE '[0-9]+'",
+        timeout=timeout,
+    ).stdout.strip()
+    return int(out or -1)
+
+
 def _state_diag(vm: SmokeVM) -> str:
     """On-box diagnostics for a killstates failure. Never raises."""
 
@@ -167,6 +185,24 @@ def _state_diag(vm: SmokeVM) -> str:
         "/var/log/pfblockerng/pfblockerng.log 2>/dev/null | tail -6 || true"
     )
     return f"  alias {ALIAS_TABLE}: {tbl!r}\n  rule: {rule!r}\n  lan_allow: {lan_allow!r}\n  log:\n{log}"
+
+
+def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
+    """Prove the floating reject rule actually DROPS a fresh connection to the victim.
+
+    A brand-new connection (no matching state) must traverse the rules and be dropped at
+    WAN egress, bumping the rule's packet counter. Asserting the delta — not just alias
+    membership — is the behavioural proof that the block is live, not inert.
+    """
+    pkts_before = _rule_block_packets(vm)
+    _civm_connect(cl)
+    time.sleep(1.5)
+    pkts_after = _rule_block_packets(vm)
+    assert pkts_before >= 0 and pkts_after > pkts_before, (
+        f"a fresh connection to the blocked {VICTIM} did not increment the reject rule's packet "
+        f"counter (before={pkts_before}, after={pkts_after}) — the rule is not dropping traffic.\n"
+        f"{_state_diag(vm)}"
+    )
 
 
 def _block_victim(vm: SmokeVM, *, timeout: float = 600.0) -> None:
@@ -239,8 +275,9 @@ def test_killstates_off_preserves_state_bypassing_new_block(ip_block_vm: SmokeVM
     When:  the victim is added to the block alias and pfBlockerNG runs an Update.
     Then:  the pre-existing state is STILL present — pf matches it before rules, so that
            flow bypasses the brand-new block.
-    And:   the victim IS in the live block alias (the rule is genuinely active) — proving the
-           survival is state-preservation, not an inert rule.
+    And:   the victim IS in the live block alias AND a brand-new connection is actively dropped
+           by the rule — so the survival above is genuine state-preservation (old flow bypasses,
+           new flow blocked), not an inert rule.
     """
     vm = ip_block_vm
     _unblock_baseline(vm, kill_on=False)
@@ -267,6 +304,10 @@ def test_killstates_off_preserves_state_bypassing_new_block(ip_block_vm: SmokeVM
         f"expected {VICTIM} in the live block alias {ALIAS_TABLE} (the rule is active), got:\n{table}"
     )
 
+    # And: a fresh (un-stated) connection to the victim is actually DROPPED by the rule — the
+    # behavioural proof that new flows are blocked while the old state above is preserved.
+    _assert_fresh_connection_blocked(vm, client_vm)
+
 
 # --------------------------------------------------------------------------- #
 # Test 2: killstates ON ⇒ the state is CLEARED so the block takes effect
@@ -281,6 +322,7 @@ def test_killstates_on_clears_state_so_block_takes_effect(ip_block_vm: SmokeVM, 
     When:  the victim is added to the block alias and pfBlockerNG runs an Update.
     Then:  the state for the victim is GONE — pfBlockerNG's pfb_remove_states killed it,
            so the existing flow now hits the reject too (no state to bypass the block).
+    And:   a connection to the victim is actively dropped by the rule (the block is live).
     """
     vm = ip_block_vm
     _unblock_baseline(vm, kill_on=True)
@@ -297,3 +339,6 @@ def test_killstates_on_clears_state_so_block_takes_effect(ip_block_vm: SmokeVM, 
         f"killstates ON must CLEAR the state to {VICTIM} on update, but it survived.\n"
         f"  before: {before!r}\n  after: {after!r}\n{_state_diag(vm)}"
     )
+
+    # And: the block is live — a connection to the victim is actually dropped by the rule.
+    _assert_fresh_connection_blocked(vm, client_vm)
