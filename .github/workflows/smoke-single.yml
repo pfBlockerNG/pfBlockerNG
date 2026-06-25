@@ -437,8 +437,13 @@ jobs:
         if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
         run: |
           set -eu
-          git clone --depth 1 -b pfblockerng/use-github \
-            https://github.com/pfBlockerNG/FreeBSD-ports "${{ runner.temp }}/ports-nightly"
+          sh scripts/sparse-clone-ports.sh \
+            https://github.com/pfBlockerNG/FreeBSD-ports \
+            pfblockerng/use-github \
+            "${{ runner.temp }}/ports-nightly" \
+            nightly \
+            '${{ inputs.php_version }}' \
+            '${{ inputs.py_flavor }}'
           mkdir -p out-nightly
           python3 scripts/build-pkg-portable.py \
             --ports "${{ runner.temp }}/ports-nightly" --channel nightly \
