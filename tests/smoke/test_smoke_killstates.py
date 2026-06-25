@@ -195,10 +195,17 @@ def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
     membership — is the behavioural proof that the block is live, not inert.
     """
     pkts_before = _rule_block_packets(vm)
+    assert pkts_before >= 0, (
+        f"could not read the floating reject rule's packet counter before the connection attempt "
+        f"— is the rule present and referencing {ALIAS_TABLE}?\n{_state_diag(vm)}"
+    )
     _civm_connect(cl)
     time.sleep(1.5)
     pkts_after = _rule_block_packets(vm)
-    assert pkts_before >= 0 and pkts_after > pkts_before, (
+    assert pkts_after >= 0, (
+        f"could not read the reject rule's packet counter after the connection attempt.\n{_state_diag(vm)}"
+    )
+    assert pkts_after > pkts_before, (
         f"a fresh connection to the blocked {VICTIM} did not increment the reject rule's packet "
         f"counter (before={pkts_before}, after={pkts_after}) — the rule is not dropping traffic.\n"
         f"{_state_diag(vm)}"
