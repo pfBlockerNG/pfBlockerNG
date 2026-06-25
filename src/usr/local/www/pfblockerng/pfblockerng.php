@@ -798,11 +798,18 @@ function pfblockerng_sync_cron() {
 
 
 /**
- * pfblockerng_tick — ADR-43 P4: due-ledger trigger-tick dispatcher.
+ * pfblockerng_tick — ADR-43 P5: apply-on-change due-ledger tick dispatcher.
  *
- * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via
- * exec() as a separate process, then marks each as ran. ss_refresh is called
- * directly every tick — it exits early when SafeSearch is inactive (no-op).
+ * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
+ * separate process, then marks each as ran. ss_refresh is called directly every tick.
+ *
+ * Apply-on-change (ADR-40 IP / ADR-10 DNSBL): a due job dispatches pfb_trigger, which
+ * calls sync_package_pfblockerng() — ADR-40 gates alias apply on pfb_alias_set_different()
+ * and ADR-10 uses zero-downtime swap for DNSBL; no apply happens when nothing changed.
+ *
+ * Optional quiet-hours window (pfb_quiet_hours): when set and the current time is OUTSIDE
+ * the window, a due job is deferred (pending_apply recorded in the ledger); the next tick
+ * inside the window applies it. Default '' = apply immediately on every due tick.
  *
  * Cadence seeding from legacy knobs (§2.G — no config.xml migration):
  *   feed cron : PfbConfig::read('pfb_interval') hours; skip when 'Disabled'.
@@ -830,40 +837,61 @@ function pfblockerng_tick(): void
 	// --- Due check ---
 	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs);
 
-	// --- Dispatch due jobs ---
-	// Feed cron: scope=both force=false trigger=cron (bypasses pfblockerng_sync_cron's
-	// hour gate, which is now superseded by the ledger-based due check).
-	if (!$cron_disabled && $due['cron']) {
-		logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=cron >> {$pfb['log']} 2>&1 &");
-		pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
+	// --- Apply-on-change window (ADR-43 P5) ---
+	// Empty window = apply immediately (default). Non-empty = defer outside window.
+	$window = (string) PfbConfig::read('pfb_quiet_hours');
+	$in_win = pfb_quiet_hours_in_window($now, $window);
+
+	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
+
+	// Feed cron: apply via ADR-40 (IP) + ADR-10 (DNSBL) inside sync_package_pfblockerng().
+	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
+		if ($in_win) {
+			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=cron >> {$pfb['log']} 2>&1 &");
+			pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
+		} else {
+			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('cron', $dbdir);
+		}
 	}
 
 	// MaxMind/TOP1M/ASN: daily, jittered.
-	if ($due['dcc']) {
-		logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
-		pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+	if ($due['dcc'] || pfb_due_ledger_is_pending('dcc', $dbdir)) {
+		if ($in_win) {
+			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
+			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+		} else {
+			logger(LOG_INFO, localize_text('Tick: dcc deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('dcc', $dbdir);
+		}
 	}
 
 	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
-	if ($due['bl'] && $pfb['enable'] == 'on' && !empty($pfb['blconfig']) &&
+	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] == 'on' &&
+	    !empty($pfb['blconfig']) &&
 	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
 	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
 
-		$bl_str  = '';
-		$bl_sel  = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: [];
-		foreach ($pfb['blconfig']['item'] as $bl_item) {
-			if (isset($bl_sel[$bl_item['xml']]) && !empty($bl_item['selected'])) {
-				$bl_str .= ",{$bl_item['xml']}";
+		if ($in_win) {
+			$bl_str = '';
+			$bl_sel = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: [];
+			foreach ($pfb['blconfig']['item'] as $bl_item) {
+				if (isset($bl_sel[$bl_item['xml']]) && !empty($bl_item['selected'])) {
+					$bl_str .= ",{$bl_item['xml']}";
+				}
 			}
-		}
-		$bl_str = pfb_filter(ltrim($bl_str, ','), PFB_FILTER_CSV, 'Tick bl dispatch');
+			$bl_str = pfb_filter(ltrim($bl_str, ','), PFB_FILTER_CSV, 'Tick bl dispatch');
 
-		if (!empty($bl_str)) {
-			logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
-			pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+			if (!empty($bl_str)) {
+				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
+				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+			}
+		} else {
+			logger(LOG_INFO, localize_text('Tick: bl deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('bl', $dbdir);
 		}
 	}
 

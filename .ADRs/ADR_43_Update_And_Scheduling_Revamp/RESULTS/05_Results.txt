@@ -1,0 +1,134 @@
+ADR-43 Phase 5 — Apply-on-change via ADR-40/10 with optional quiet-hours window
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=6
+
+STATUS: COMPLETE — all verification gates green.
+
+---
+
+WHAT WAS DONE
+
+1. pfb_quiet_hours registered in PfbConfig (pfblockerng_extra.inc)
+   - Section: pfblockerngconfiguration/config/0
+   - Default: '' (empty string = apply immediately, no window)
+   - No adapters (plain string)
+   - Since: '4.0.0'
+
+2. pfb_quiet_hours_in_window(int $now, string $window): bool
+   - Clock-injectable via $now parameter for PHPUnit determinism
+   - '' → TRUE (apply immediately)
+   - Malformed → TRUE (fail-safe: prefer applying over deferring forever)
+   - Zero-width (start == end) → TRUE (no meaningful deferral)
+   - Normal window "HH:MM-HH:MM": inclusive start, exclusive end
+   - Midnight-wrapping (start > end, e.g. "23:00-03:00"): supported
+
+3. pfb_due_ledger_set_pending(string $job_key, string $ledger_dir): void
+   - Reads existing entry, sets pending_apply=TRUE, writes back
+   - Absent entry → creates a "due-now" placeholder with pending_apply=TRUE
+   - Pending flag cleared implicitly by mark_ran (writes clean entry without it)
+
+4. pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
+   - Reads ledger entry, returns TRUE iff pending_apply is set and truthy
+
+5. pfblockerng_tick() replaced with window-aware version (pfblockerng.php)
+   - Reads pfb_quiet_hours via PfbConfig::read('pfb_quiet_hours')
+   - Calls pfb_quiet_hours_in_window($now, $window) once per tick
+   - For each job: dispatches if due OR pending, INSIDE window; defers if OUTSIDE
+   - Deferral: pfb_due_ledger_set_pending() records pending, mark_ran NOT called
+   - Apply: exec() dispatches job, pfb_due_ledger_mark_ran() clears pending
+   - ADR-40 (IP) + ADR-10 (DNSBL) apply occurs inside sync_package_pfblockerng()
+     which is called by pfb_trigger (the dispatched verb) — not reimplemented here
+
+6. RequireConfigGatewaySniff $registeredPaths updated
+   - 'installedpackages/pfblockerng/config/0/pfb_quiet_hours' added
+
+7. CfgGatewayTest.php: two new tests
+   - testPfbQuietHoursAbsentKeyReturnsDefault: absent key → ''
+   - testPfbQuietHoursRoundTrip: '02:00-06:00' survives write(read())
+   - Inventory: 'pfb_quiet_hours' added to testInventoryCompletenessAllKnownKeysAccountedFor
+
+8. QuietHoursApplyTest.php: 12 new PHPUnit tests (all red before Phase 5)
+   - pfb_quiet_hours_in_window: 10 cases covering all branches
+     (no window, inside, outside, boundary x4, midnight-wrap x3, malformed)
+   - pfb_due_ledger_set_pending + is_pending: 3 state tests
+   - Interaction: full defer → apply lifecycle integration test
+   - Not-due / not-pending: regression guard (no spurious dispatch)
+
+9. tests/smoke/test_smoke_apply_on_change.py: 4 smoke tests AUTHORED (not dispatched)
+   - test_apply_no_window_dispatches_immediately
+   - test_apply_inside_window_dispatches
+   - test_apply_outside_window_defers (skip guard for 00:00-00:01 edge)
+   - test_apply_pending_cleared_by_window_open
+   All marked @pytest.mark.smoke + @pytest.mark.apply_on_change
+
+10. pyproject.toml: 'apply_on_change' marker registered
+
+---
+
+VERIFICATION GATES (all passed)
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc     PASS
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php           PASS
+  vendor/bin/phpunit                                              PASS (1508 tests, 5669 assertions)
+  vendor/bin/phpstan analyse --memory-limit=1G                   PASS (0 errors)
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/               PASS (0 errors)
+  .venv/bin/python -m pytest -q                                  PASS (1882 passed, 4 skipped)
+  .venv/bin/ruff check .                                         PASS (0 errors)
+  smoke --collect-only: apply_on_change marker registered        PASS (no Unknown-mark warning)
+
+---
+
+§7 REJECT CRITERION CHECK
+
+ADR-40: pfb_alias_set_different() at pfblockerng.inc:3762,
+        pfb_apply_alias_delta() at pfblockerng.inc:3845
+        → Both exist; called inside sync_package_pfblockerng(). NOT flagged.
+
+ADR-10: pfb_reload_unbound() at pfblockerng.inc:6635 with zero-downtime swap at 6656
+        → Exists; called inside sync_package_pfblockerng(). NOT flagged.
+
+The tick dispatches `pfb_trigger scope=both force=false trigger=cron` which
+chains through sync_package_pfblockerng() → ADR-40 + ADR-10 apply. Phase 5
+does NOT reimplement these — it only controls WHEN the dispatch fires.
+
+---
+
+FILES CHANGED
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    - pfb_quiet_hours registry entry (ADR-29)
+    - pfb_quiet_hours_in_window()
+    - pfb_due_ledger_set_pending()
+    - pfb_due_ledger_is_pending()
+
+  src/usr/local/www/pfblockerng/pfblockerng.php
+    - pfblockerng_tick() replaced with window-aware dispatch
+
+  tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+    - pfb_quiet_hours added to $registeredPaths
+
+  tests/php/CfgGatewayTest.php
+    - testPfbQuietHoursAbsentKeyReturnsDefault
+    - testPfbQuietHoursRoundTrip
+    - inventory: 'pfb_quiet_hours'
+
+  tests/php/QuietHoursApplyTest.php  [NEW]
+    - 12 PHPUnit tests for window-check and pending-flag helpers
+
+  tests/smoke/test_smoke_apply_on_change.py  [NEW]
+    - 4 live-VM smoke tests (authored; dispatch in Phase 7)
+
+  pyproject.toml
+    - apply_on_change marker registered
+
+---
+
+PHASE 6 NOTES
+
+Phase 6 is the GUI: expose pfb_quiet_hours as a text field in the pfBlockerNG
+general settings page (pfblockerng.php www page, not the package php verb file).
+- Field: "Apply Window (HH:MM-HH:MM)" under the scheduling/tick section
+- Validation: accept '' (empty) or "HH:MM-HH:MM"; show example; sanitise with pfb_filter()
+- On save: PfbConfig::write('pfb_quiet_hours', pfb_filter($val, ...))
+- Display current value on load: PfbConfig::read('pfb_quiet_hours')
+- Tier A ui_render test: the new field renders without PHP errors + page marker present

@@ -579,6 +579,18 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
+		// ADR-43 P5: optional apply-on-change maintenance window ("HH:MM-HH:MM", local time).
+		// When set: detected changes outside the window are deferred (pending); the first tick
+		// inside the window applies them. Empty string (default) = apply immediately (no deferral).
+		// Wrapping windows (e.g. "23:00-03:00") span midnight. Malformed = fail-safe (apply now).
+		'pfb_quiet_hours' => [
+			'section'       => $gen,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
 		// -------------------------------------------------------------------
 		// DNSBL settings section (pfblockerngdnsblsettings/config/0)
 		// -------------------------------------------------------------------
@@ -2252,6 +2264,85 @@ function pfb_tick_due_jobs(
 		'dcc'  => pfb_due_ledger_is_due('dcc',  86400,          $now, $seed, $jitter_max,  $dbdir),
 		'bl'   => pfb_due_ledger_is_due('bl',   $bl_interval,   $now, $seed, $jitter_max,  $dbdir),
 	];
+}
+
+// ---------------------------------------------------------------------------
+// ADR-43 P5 — apply-on-change maintenance window + pending helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_quiet_hours_in_window — is $now inside the configured apply-on-change window?
+ *
+ * When set, detected changes are only applied INSIDE the window; outside they are
+ * deferred (pending) until the next tick inside the window. Format: "HH:MM-HH:MM"
+ * in local time (e.g. "02:00-06:00"). Wrapping midnight is supported ("23:00-03:00").
+ *
+ * Empty string ⇒ TRUE (apply immediately, no deferral — the default).
+ * Malformed string ⇒ TRUE (fail-safe: apply immediately rather than defer forever).
+ * Zero-width window (start == end) ⇒ TRUE (no meaningful deferral, apply immediately).
+ *
+ * @param int    $now    Current epoch timestamp (injectable for tests).
+ * @param string $window "HH:MM-HH:MM" (local time) or '' (no window, apply immediately).
+ * @return bool          TRUE = apply now; FALSE = outside window, defer.
+ */
+function pfb_quiet_hours_in_window(int $now, string $window): bool
+{
+	if ($window === '') {
+		return TRUE;
+	}
+	if (!preg_match('/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/', $window, $m)) {
+		return TRUE;	// malformed → fail-safe: apply immediately
+	}
+	$start = (int)$m[1] * 60 + (int)$m[2];
+	$end   = (int)$m[3] * 60 + (int)$m[4];
+	$cur   = (int)date('G', $now) * 60 + (int)date('i', $now);
+
+	if ($start === $end) {
+		return TRUE;	// zero-width window = no deferral
+	}
+	if ($start < $end) {
+		return $cur >= $start && $cur < $end;	// normal window e.g. 02:00–06:00
+	}
+	return $cur >= $start || $cur < $end;		// wraps midnight e.g. 23:00–03:00
+}
+
+/**
+ * pfb_due_ledger_set_pending — mark a job as pending-apply (deferred by quiet-hours window).
+ *
+ * Reads the existing ledger entry and sets pending_apply=TRUE, then writes back atomically.
+ * If no entry exists, creates a "due-now" placeholder with pending_apply=TRUE.
+ *
+ * The pending flag is cleared implicitly when pfb_due_ledger_mark_ran() writes a clean
+ * {last_run, next_due, jitter} entry (no pending_apply key).
+ *
+ * @param string $job_key    Job identifier (e.g. 'cron', 'dcc', 'bl').
+ * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
+ * @return void
+ */
+function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir): void
+{
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir);
+	if ($entry === NULL) {
+		$entry = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
+	}
+	$entry['pending_apply'] = TRUE;
+	pfb_due_ledger_write_entry($job_key, $entry, $ledger_dir);
+}
+
+/**
+ * pfb_due_ledger_is_pending — is there a deferred apply pending for this job?
+ *
+ * Returns TRUE iff pfb_due_ledger_set_pending() has been called for this job and
+ * pfb_due_ledger_mark_ran() has not yet cleared it.
+ *
+ * @param string $job_key    Job identifier (e.g. 'cron', 'dcc', 'bl').
+ * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
+ * @return bool              TRUE when pending_apply is set and not yet cleared.
+ */
+function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
+{
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir);
+	return $entry !== NULL && !empty($entry['pending_apply']);
 }
 
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
