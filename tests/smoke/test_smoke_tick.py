@@ -15,16 +15,39 @@ Tests:
 """
 
 import json
+import os
+from collections.abc import Iterator
 
 import pytest
 
 from . import helpers as h
+from .conftest import SmokeVM, _StubDnsServer
 
 # Module mark: 'tick' on every test. 'smoke' is applied PER-TEST (not module-wide)
 # so the reboot test — which reboots the shared session VM — carries 'reboot' but
 # NOT 'smoke', keeping it out of the -m smoke run (see the 'reboot' marker rationale
 # in pyproject.toml; mirrors test_smoke_boot_reload.py).
 pytestmark = [pytest.mark.tick]
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped deployed_vm: install the branch .pkg once for all tick tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+    """Deploy the branch .pkg once for the tick module."""
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    h.deploy(smoke_vm)
+    h.ensure_dnsbl_vip(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
+    try:
+        yield smoke_vm
+    finally:
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +66,7 @@ _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 
 def _read_ledger(vm) -> dict:
     """Return the parsed ledger as a dict (empty on absent/corrupt)."""
-    raw, _, _ = vm.ssh(f"/bin/sh -c 'cat {LEDGER_PATH} 2>/dev/null || echo {{}}'")
+    raw = vm.ssh(f"cat {LEDGER_PATH} 2>/dev/null || echo '{{}}'").stdout
     try:
         return json.loads(raw.strip()) if raw.strip() else {}
     except json.JSONDecodeError:
@@ -66,8 +89,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
 
 def _run_tick(vm) -> str:
     """Fire one tick synchronously and return its combined stdout+stderr."""
-    out, _, _ = vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1")
-    return out
+    return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +99,7 @@ def _run_tick(vm) -> str:
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_dispatches_due_feed(smoke_vm):
+def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
     """Tick fires a due feed sync when the cron ledger entry is past.
 
     Scenario:
@@ -87,9 +109,9 @@ def test_tick_dispatches_due_feed(smoke_vm):
             Then the log contains 'Tick: dispatching feed cron.'
             And  the 'cron' ledger entry's next_due is updated to the future.
     """
-    vm = smoke_vm
+    vm = deployed_vm
 
-    now_ts = int(vm.ssh("date +%s")[0].strip())
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
 
     # Given: force cron past.
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
@@ -115,7 +137,7 @@ def test_tick_dispatches_due_feed(smoke_vm):
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_skips_non_due_feed(smoke_vm):
+def test_tick_skips_non_due_feed(deployed_vm: SmokeVM):
     """Tick does NOT fire a feed sync when cron next_due is in the future.
 
     Scenario:
@@ -124,9 +146,9 @@ def test_tick_skips_non_due_feed(smoke_vm):
             When pfblockerng.php tick runs.
             Then the log does NOT contain 'Tick: dispatching feed cron.'
     """
-    vm = smoke_vm
+    vm = deployed_vm
 
-    now_ts = int(vm.ssh("date +%s")[0].strip())
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
     future = now_ts + 3600
 
     _write_ledger_entry(vm, "cron", now_ts - 86400, future)
@@ -140,7 +162,7 @@ def test_tick_skips_non_due_feed(smoke_vm):
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_wiped_ledger_jittered(smoke_vm):
+def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
     """After the ledger is wiped, the tick runs jobs but schedules them jittered.
 
     Scenario:
@@ -150,7 +172,7 @@ def test_tick_wiped_ledger_jittered(smoke_vm):
             Then all jobs run (due-now after absent ledger).
             And  the 'dcc' next_due has non-zero jitter (not exactly last_run+86400).
     """
-    vm = smoke_vm
+    vm = deployed_vm
 
     # Wipe the ledger.
     vm.ssh(f"rm -f {LEDGER_PATH}")
@@ -166,7 +188,7 @@ def test_tick_wiped_ledger_jittered(smoke_vm):
 
     # dcc should have run and have a non-zero jitter.
     assert "dcc" in ledger, f"dcc ledger entry missing after wiped-ledger tick; ledger={ledger}"
-    now_ts = int(vm.ssh("date +%s")[0].strip())
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
     no_jitter_next_due = ledger["dcc"]["last_run"] + 86400
     actual_next = ledger["dcc"]["next_due"]
     assert actual_next != no_jitter_next_due, (
@@ -179,7 +201,7 @@ def test_tick_wiped_ledger_jittered(smoke_vm):
 
 @pytest.mark.reboot
 @pytest.mark.tick
-def test_tick_reboot_persists_ledger(smoke_vm):
+def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
     """A clean reboot keeps the due-ledger (restored via #468 earlyshellcmd).
 
     Scenario:
@@ -189,15 +211,15 @@ def test_tick_reboot_persists_ledger(smoke_vm):
             Then the ledger is restored.
             And  the cron next_due is still in the future (no spurious dispatch).
     """
-    vm = smoke_vm
+    vm = deployed_vm
 
-    now_ts = int(vm.ssh("date +%s")[0].strip())
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
     future = now_ts + 7200  # 2 hours out
 
     _write_ledger_entry(vm, "cron", now_ts, future)
 
     # Reboot.
-    vm.reboot()
+    h.reboot_vm(vm)
 
     # After reboot: verify ledger was restored.
     after = _read_ledger(vm)

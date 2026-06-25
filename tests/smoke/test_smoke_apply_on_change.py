@@ -15,12 +15,37 @@ Tests:
 """
 
 import json
+import os
 import time
+from collections.abc import Iterator
 
 import pytest
 
+from . import helpers as h
+from .conftest import SmokeVM, _StubDnsServer
+
 # Module mark: 'apply_on_change' on every test; 'smoke' per-test.
 pytestmark = [pytest.mark.apply_on_change]
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped deployed_vm: install the branch .pkg once for all tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+    """Deploy the branch .pkg once for the apply_on_change module."""
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    h.deploy(smoke_vm)
+    h.ensure_dnsbl_vip(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
+    try:
+        yield smoke_vm
+    finally:
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +64,7 @@ _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 
 def _read_ledger(vm) -> dict:
     """Return the parsed ledger from the box (empty on absent/corrupt)."""
-    raw, _, _ = vm.ssh(f"/bin/sh -c 'cat {LEDGER_PATH} 2>/dev/null || echo {{}}'")
+    raw = vm.ssh(f"cat {LEDGER_PATH} 2>/dev/null || echo '{{}}'").stdout
     try:
         return json.loads(raw.strip()) if raw.strip() else {}
     except json.JSONDecodeError:
@@ -66,8 +91,11 @@ def _set_quiet_hours(vm, window: str) -> None:
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');"
         f"PfbConfig::write('pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
+        "echo 'OK';"
     )
-    vm.pfssh(snippet)
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_quiet_hours({window!r}) failed: rc={result.returncode} {result.stderr!r}")
 
 
 def _clear_quiet_hours(vm) -> None:
@@ -82,8 +110,7 @@ def _force_cron_due(vm) -> None:
 
 def _run_tick(vm) -> str:
     """Fire one tick synchronously and return combined stdout+stderr."""
-    out, _, _ = vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1")
-    return out
+    return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
 
 def _cron_ledger(vm) -> dict | None:
@@ -104,7 +131,7 @@ def _is_pending(vm) -> bool:
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_no_window_dispatches_immediately(smoke_vm):
+def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM):
     """No quiet-hours window → tick dispatches a due job without deferral.
 
     Scenario:
@@ -120,7 +147,7 @@ def test_apply_no_window_dispatches_immediately(smoke_vm):
     pfb_quiet_hours_in_window(). This test pins that the default behaviour is
     preserved after Phase 5.
     """
-    vm = smoke_vm
+    vm = deployed_vm
     now = int(time.time())
 
     _clear_quiet_hours(vm)
@@ -142,7 +169,7 @@ def test_apply_no_window_dispatches_immediately(smoke_vm):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_inside_window_dispatches(smoke_vm):
+def test_apply_inside_window_dispatches(deployed_vm: SmokeVM):
     """Window that covers now → tick dispatches, pending NOT set.
 
     Scenario:
@@ -153,7 +180,7 @@ def test_apply_inside_window_dispatches(smoke_vm):
       Then last_run is updated (job ran).
       And pending_apply is NOT set (was inside window).
     """
-    vm = smoke_vm
+    vm = deployed_vm
     now = int(time.time())
 
     _set_quiet_hours(vm, "00:00-23:59")  # always-open window covers any real clock
@@ -175,7 +202,7 @@ def test_apply_inside_window_dispatches(smoke_vm):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_outside_window_defers(smoke_vm):
+def test_apply_outside_window_defers(deployed_vm: SmokeVM):
     """Window that excludes now → tick defers (pending set, job NOT dispatched).
 
     Scenario:
@@ -193,7 +220,7 @@ def test_apply_outside_window_defers(smoke_vm):
     """
     import datetime
 
-    vm = smoke_vm
+    vm = deployed_vm
 
     # Assert we are not inside the 1-minute test window before proceeding.
     now_local = datetime.datetime.now()
@@ -229,7 +256,7 @@ def test_apply_outside_window_defers(smoke_vm):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_pending_cleared_by_window_open(smoke_vm):
+def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
     """Pending job is applied when window opens (pending cleared, last_run updated).
 
     Scenario:
@@ -244,7 +271,7 @@ def test_apply_pending_cleared_by_window_open(smoke_vm):
     Red→green: before Phase 5, is_pending/set_pending didn't exist — a
     "pending" entry written manually would be silently ignored.
     """
-    vm = smoke_vm
+    vm = deployed_vm
     now = int(time.time())
 
     # Arrange: force due + set pending manually (simulates a prior deferred tick).

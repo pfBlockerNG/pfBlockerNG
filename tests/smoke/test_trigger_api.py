@@ -19,12 +19,35 @@ Local (docs/misc/local-smoke-debian.md):
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _MockFeedServer
+from .conftest import SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped deployed_vm: install the branch .pkg once for all tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
+    """Deploy the branch .pkg once for the trigger_api module."""
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    h.deploy(smoke_vm)
+    h.ensure_dnsbl_vip(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
+    try:
+        yield smoke_vm
+    finally:
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +56,7 @@ pytestmark = pytest.mark.smoke
 
 
 @pytest.mark.smoke
-def test_pfb_trigger_verb_reloads_dnsbl(smoke_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_pfb_trigger_verb_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Scenario: pfb_trigger scope=both force=false trigger=cron reloads DNSBL.
 
     Given a DNSBL feed containing a unique test domain.
@@ -51,10 +74,10 @@ def test_pfb_trigger_verb_reloads_dnsbl(smoke_vm: SmokeVM, mock_feeds: _MockFeed
         header="pfb_trigger_dnsbl",
         mode=h.DnsblMode.VIP,
     )
-    with h.CaseContext(smoke_vm, spec):
+    with h.CaseContext(deployed_vm, spec):
         # CaseContext.__enter__ already called reload("update") via pfb_trigger.
         # Assert the block is live.
-        answer = h.dns_probe(smoke_vm, domain)
+        answer = h.dns_probe(deployed_vm, domain)
         assert h.is_vip(answer), (
             f"domain {domain!r} must be VIP-blocked after pfb_trigger reload\ngot answer: {answer!r}"
         )
@@ -67,7 +90,7 @@ def test_pfb_trigger_verb_reloads_dnsbl(smoke_vm: SmokeVM, mock_feeds: _MockFeed
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("verb", ["update", "updateip", "updatednsbl"])
-def test_deprecated_verb_logs_deprecation_warning(smoke_vm: SmokeVM, verb: str) -> None:
+def test_deprecated_verb_logs_deprecation_warning(deployed_vm: SmokeVM, verb: str) -> None:
     """Scenario: deprecated verb emits DEPRECATED line in pfblockerng.log.
 
     Given the count of 'DEPRECATED: pfblockerng verb {verb}' lines in pfblockerng.log.
@@ -79,16 +102,16 @@ def test_deprecated_verb_logs_deprecation_warning(smoke_vm: SmokeVM, verb: str) 
     the result is written via pfb_logger(). A future removal of the log line breaks this.
     """
     marker = f"DEPRECATED: pfblockerng verb '{verb}'"
-    before = h.count_log_marker(smoke_vm, h.PFB_LOG, marker)
-    h.reload_deprecated_verb(smoke_vm, verb)
-    after = h.count_log_marker(smoke_vm, h.PFB_LOG, marker)
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+    h.reload_deprecated_verb(deployed_vm, verb)
+    after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
     assert after > before, (
         f"deprecated verb {verb!r}: expected a new '{marker}' line in {h.PFB_LOG}\nbefore={before}, after={after}"
     )
 
 
 @pytest.mark.smoke
-def test_deprecated_update_verb_still_reloads_dnsbl(smoke_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_deprecated_update_verb_still_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Scenario: deprecated 'update' verb adapter still completes a DNSBL reload.
 
     Given a DNSBL feed containing a unique test domain.
@@ -107,9 +130,9 @@ def test_deprecated_update_verb_still_reloads_dnsbl(smoke_vm: SmokeVM, mock_feed
         mode=h.DnsblMode.VIP,
     )
     # Inject manually (no CaseContext — we control the reload verb ourselves)
-    h.inject(smoke_vm, spec)
-    h.reload_deprecated_verb(smoke_vm, "update")
-    answer = h.dns_probe(smoke_vm, domain)
+    h.inject(deployed_vm, spec)
+    h.reload_deprecated_verb(deployed_vm, "update")
+    answer = h.dns_probe(deployed_vm, domain)
     assert h.is_vip(answer), (
         f"domain {domain!r} must be VIP-blocked after deprecated 'update' reload\ngot answer: {answer!r}"
     )
