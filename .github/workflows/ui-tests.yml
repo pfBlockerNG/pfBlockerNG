@@ -80,6 +80,16 @@ on:
         required: false
         type: string
         default: "all"
+      scope:
+        description: "impacted | full. Blank on a call = full (preserve existing callers like test.yml/release.yml)."
+        required: false
+        type: string
+        default: ""
+      pytest_k:
+        description: "pytest -k selector — overrides the impacted auto-derivation. Blank = scope decides."
+        required: false
+        type: string
+        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default)."
         required: false
@@ -110,6 +120,18 @@ on:
           - functional
           - browser
           - all
+      scope:
+        description: "impacted (DEFAULT for a bare dispatch): min CE leg + only the UI tests changed vs origin/devel. full: every ci:true leg, whole tier — the nightly/release behaviour."
+        required: false
+        type: choice
+        default: "impacted"
+        options:
+          - impacted
+          - full
+      pytest_k:
+        description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the UI tests changed vs origin/devel (whole tier if none). e.g. 'test_dnsbl' or 'feeds and not browser'."
+        required: false
+        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default). Point a pre-merge run at a ports branch carrying a new plist entry."
         required: false
@@ -173,6 +195,7 @@ jobs:
       matrix: ${{ steps.gen.outputs.matrix }}
       build_matrix: ${{ steps.gen.outputs.build_matrix }}
       run: ${{ steps.gen.outputs.run }}
+      pytest_k: ${{ steps.gen.outputs.pytest_k }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -194,12 +217,30 @@ jobs:
           # ignores it and always runs the daily Tier-B set.
           TIER_INPUT: ${{ inputs.tier }}
           # Optional narrow-to-one filter: a pfsense_version (e.g. "2.8"). Blank =
-          # ALL ci:true legs (CE + Plus).
+          # scope decides (min CE for impacted, all legs for full).
           VERSION_INPUT: ${{ inputs.version }}
+          # Run scope: impacted (default for a bare dispatch) | full.
+          SCOPE_INPUT: ${{ inputs.scope }}
+          # -k override for the auto-derivation.
+          PYTEST_K_INPUT: ${{ inputs.pytest_k }}
           # The ci:true legs (CE + Plus) read from ci-metadata.
           CI_MATRIX: ${{ steps.matrix.outputs.ci_matrix }}
         run: |
           set -eu
+
+          # SCOPE: schedule is always full; otherwise honour an explicit input;
+          # otherwise default by trigger — a call (test.yml/release.yml) preserves
+          # the old full behaviour, a bare dispatch is the new lean `impacted`.
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            SCOPE="full"
+          elif [ -n "${SCOPE_INPUT:-}" ]; then
+            SCOPE="$SCOPE_INPUT"
+          elif [ "${EVENT_NAME}" = "workflow_call" ]; then
+            SCOPE="full"
+          else
+            SCOPE="impacted"
+          fi
+          case "$SCOPE" in impacted|full) ;; *) echo "::error::unknown scope '$SCOPE' (impacted|full)"; exit 1 ;; esac
 
           # Tier set the daily schedule runs (Tier B). DROP `browser` here to
           # disable the nightly browser leg (§7 demote/drop one-liner).
@@ -230,17 +271,42 @@ jobs:
           fi
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
 
-          # The legs: every ci:true entry (CE + Plus), optionally narrowed to one
-          # pfsense_version by the `version` input. jq emits one
-          # {pfsense_version,image_name,channel} object per surviving leg.
-          LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c \
-            --arg v "${VERSION_INPUT:-}" \
-            '[ .[] | select($v == "" or .pfsense_version == $v)
-               | {pfsense_version, image_name, channel, freebsd_major, php_version, py_flavor} ]')"
+          # The legs: an explicit `version` always wins (exact match). Else `full`
+          # keeps every ci:true leg (CE + Plus); `impacted` narrows to the
+          # minimum-version CE leg (numeric component sort, so 2.8 < 2.10). jq
+          # emits one {pfsense_version,image_name,channel,...} object per leg.
+          PROJECT='{pfsense_version, image_name, channel, freebsd_major, php_version, py_flavor}'
+          if [ -n "${VERSION_INPUT:-}" ]; then
+            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c --arg v "$VERSION_INPUT" \
+              "[ .[] | select(.pfsense_version == \$v) | ${PROJECT} ]")"
+          elif [ "$SCOPE" = "full" ]; then
+            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c "[ .[] | ${PROJECT} ]")"
+          else
+            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c \
+              "[ .[] | select(.channel == \"CE\") ] | sort_by(.pfsense_version | split(\".\") | map(tonumber)) | .[0:1] | map(${PROJECT})")"
+          fi
           LEG_COUNT="$(printf '%s\n' "$LEGS" | jq 'length')"
           if [ "${VERSION_INPUT:-}" != "" ] && [ "$LEG_COUNT" -eq 0 ]; then
             echo "::error::version filter '${VERSION_INPUT}' matched no ci:true leg"; exit 1
           fi
+
+          # EFFECTIVE -k: an explicit -k overrides. In `impacted` scope with no -k,
+          # auto-derive from the UI test modules changed vs origin/devel (empty ->
+          # whole tier, a safe over-approximation). `full` never auto-derives.
+          K=""
+          if [ -n "${PYTEST_K_INPUT:-}" ]; then
+            K="$PYTEST_K_INPUT"
+          elif [ "$SCOPE" = "impacted" ]; then
+            git fetch --no-tags --depth=200 origin devel:refs/remotes/origin/devel 2>/dev/null || true
+            K="$(sh scripts/impacted-tests.sh origin/devel tests/smoke/ui || true)"
+            if [ -n "$K" ]; then
+              echo "impacted: auto-derived -k from changed UI test modules: ${K}"
+            else
+              echo "impacted: no changed UI test modules vs origin/devel — running the whole tier on the min CE leg. Pass -f pytest_k=... to narrow."
+            fi
+          fi
+          { printf 'pytest_k<<__EOF__\n%s\n__EOF__\n' "$K"; } >> "$GITHUB_OUTPUT"
+          echo "scope=${SCOPE}  legs=${LEG_COUNT}  -k=[${K}]"
 
           # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
           # the tier axis — the tiers for a version all install the SAME package.
@@ -527,6 +593,10 @@ jobs:
           SMOKE_UI_VERSION: ${{ matrix.version }}
           # The functional DNSBL flow injects the sinkhole VIP; match the baked image.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+          # Resolved by the prepare step: an explicit -k input, else the impacted
+          # auto-derivation (UI tests changed vs origin/devel), else blank = whole tier.
+          PYTEST_K: ${{ needs.prepare.outputs.pytest_k }}
+          MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
           # The smoke package is --ignore'd by the default addopts; re-enable it
@@ -535,9 +605,13 @@ jobs:
           # (not the slow module fixtures: deploy ~1-2 min, the General save's
           # sync pass up to 300s) — so a wedged check fails fast without aborting
           # a legitimately slow fixture. No assertion auto-retry (C1).
-          python3 -m pytest tests/smoke/ui -m "${{ steps.tier.outputs.marker }}" \
+          # Build the argv so an optional -k selector rides as a SINGLE arg (a
+          # bare-var splice would word-split a multi-token "a and not b").
+          set -- tests/smoke/ui -m "${MARKER}" \
             --override-ini="addopts=" --override-ini="timeout_func_only=true" \
             --timeout=300 --timeout-method=signal -v
+          [ -n "${PYTEST_K:-}" ] && set -- "$@" -k "${PYTEST_K}"
+          python3 -m pytest "$@"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE
