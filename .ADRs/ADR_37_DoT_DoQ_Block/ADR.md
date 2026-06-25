@@ -6,8 +6,8 @@
 - **Folds in maintainer's working config** (config.xml filter "Block DNS-over-TLS (DoT)" —
   ground truth for the exact rule shape; see §2.2)
 - **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (rule builder + sync
-  wiring), `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` (PfbConfig registry — 4 new
-  fields, incl. `dnsbl_dot_block_action`; see Addendum 2026-06-25),
+  wiring), `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` (PfbConfig registry — 5 new
+  fields, incl. `dnsbl_dot_block_action` + `dnsbl_dot_block_floating`; see Addendum 2026-06-25),
   `src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc` (ADR-35 registration),
   `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (UI control block)
 - **Target runtime:** PHP 8.3 (pfSense CE 2.8)
@@ -39,6 +39,15 @@
 > (4.0.0 alpha), the absent-key default flips existing alpha installs to Reject on upgrade with no
 > grandfather seed: there was no user-chosen disposition to preserve (the prior value was an
 > implicit hardcode), and Reject is the corrected default the change exists to establish.
+>
+> The same addendum adds the **Floating Rule** option (`dnsbl_dot_block_floating`, toggle,
+> default off) — the "future maintainer decision moves to floating" path anticipated in the
+> §3 alternative below. **On** builds a **single floating rule** (`floating=yes`, `quick=yes`,
+> **`direction=in`** — explicitly set, per that note) over all selected interfaces, with the
+> shared `pfB_DoT_Block_Floating` marker; **off** keeps the per-interface default. The action
+> (Reject/Block), interface selection, and exception alias apply unchanged in both modes. The
+> sync reconcile prunes the other mode's rule(s) when the toggle flips. This brings the field
+> count to **five**.
 
 ## 1. Context
 
@@ -109,8 +118,9 @@ and removed through the ADR-35 seam. No ADR-35 marker/teardown logic is re-inven
 | Rule count per interface | 1 filter BLOCK rule per selected interface (not 4 like ADR-36 — no NAT, no associated filter; just the single block rule). |
 | Ownership + lifecycle | Each rule carries a pfBlockerNG descr marker (`pfB_DoT_Block_<iface>` — exact naming confirmed at implementation time against the `pfB_` codebase convention). Registered via `pfb_fwobj_register()` per ADR-35. Created/reconciled idempotently on `sync_package_pfblockerng()`; removed on disable; swept on uninstall via `pfb_fwobj_sweep()`. |
 | Reconcile (stale-interface pruning) | On each sync, rules for interfaces no longer in the selected set are pruned by the marker sweep. An interface removed from config is treated as absent. |
-| Config fields | 4 new registered `PfbConfig` fields in `pfblockerngdnsblsettings/config/0` (see §2.2). The fourth, `dnsbl_dot_block_action` (Rule Action; default `reject`), was added in the Addendum 2026-06-25. ADR-29 5-step adding process. |
+| Config fields | 5 new registered `PfbConfig` fields in `pfblockerngdnsblsettings/config/0` (see §2.2). The fourth (`dnsbl_dot_block_action`, Rule Action; default `reject`) and fifth (`dnsbl_dot_block_floating`, Floating Rule; default off) were added in the Addendum 2026-06-25. ADR-29 5-step adding process. |
 | Rule action (disposition) | **Reject by default**, user-selectable Block \| Reject (Addendum 2026-06-25). These are outbound LAN→WAN rules, so Reject matches `outbound_deny_action` and fast-fails the client to plain DNS; Block silently drops. |
+| Rule mode | **Per-interface by default** (one rule per selected interface). Opt-in **Floating Rule** (Addendum 2026-06-25) builds a single floating rule (`floating=yes`, `quick=yes`, `direction=in`) over all selected interfaces instead. Marker `pfB_DoT_Block_Floating`. |
 | UI location | DNSBL settings page (`pfblockerng_dnsbl.php`) — new control block adjacent to ADR-36's redirect control and the existing DoH/DoT/DoQ blocking section. Enable checkbox + interface multi-select + quick-fill + optional exception-alias field + brief help text. Server-side PFBL-01 validation before any rule build. |
 | Naming (config keys + marker) | **Provisional** — follow the `dnsbl_*` / `*_int` sibling convention beside `dnsbl_allow_int` and the ADR-36 keys: `dnsbl_dot_block` (enable toggle), `dnsbl_dot_block_int` (interface list), `dnsbl_dot_block_exclude` (exception alias). Final names aligned with the maintainer before keys are frozen (CLAUDE.md "Naming — follow the established pattern"; storage freeze applies once chosen). |
 | Complementary features | Port-853 block + ADR-36 port-53 redirect together close the standard-port bypass paths. Port 443 DoH is handled by the DoH-IP feed (IP-alias layer) and DNSBL domain blocking — not by this ADR. |
@@ -232,6 +242,13 @@ If a future maintainer decision moves to floating, the direction MUST be set exp
 and the smoke test MUST verify the pf rule is active and effective. The block-rule builder is
 designed to be upgraded to floating cleanly (a single field change in the rule array).
 
+**Update (Addendum 2026-06-25): floating is now an opt-in option, not the default.** Rather than
+choosing one model, the **Floating Rule** toggle (`dnsbl_dot_block_floating`, default off) lets the
+user pick: off keeps the safe per-interface default; on builds the single floating rule with
+`direction=in` set explicitly (honouring the requirement above), verified by a live-VM smoke case
+(`test_dot_doq_block_floating_mode_single_rule`). The per-interface model remains the default
+precisely because of the direction footgun described above.
+
 ## 4. Requirements (acceptance)
 
 - A pure `pfb_build_dot_block_rule($settings)` builder function returning the exact rule array
@@ -239,11 +256,11 @@ designed to be upgraded to floating cleanly (a single field change in the rule a
   (set/empty), and number of interfaces.
 - The builder registered via `pfb_fwobj_register()` (ADR-35); create/reconcile/remove/sweep
   wired into `sync_package_pfblockerng()` and the disable/uninstall paths.
-- Four new `PfbConfig`-registered fields: `dnsbl_dot_block` (toggle), `dnsbl_dot_block_int`
-  (plain string), `dnsbl_dot_block_exclude` (plain string), and `dnsbl_dot_block_action` (plain
-  string, `block` | `reject`, default `reject` — Addendum 2026-06-25) — ADR-29 5-step process,
-  including `CfgGatewayTest.php` round-trip tests + inventory update + `$registeredPaths` in the
-  sniff.
+- Five new `PfbConfig`-registered fields: `dnsbl_dot_block` (toggle), `dnsbl_dot_block_int`
+  (plain string), `dnsbl_dot_block_exclude` (plain string), `dnsbl_dot_block_action` (plain
+  string, `block` | `reject`, default `reject`), and `dnsbl_dot_block_floating` (toggle, default
+  off — both Addendum 2026-06-25) — ADR-29 5-step process, including `CfgGatewayTest.php`
+  round-trip tests + inventory update + `$registeredPaths` in the sniff.
 - UI control block on `pfblockerng_dnsbl.php`: enable checkbox + interface multi-select +
   quick-fill + exception-alias field + help text (noting DoH/443 is handled by the DoH-IP feed,
   not this control); server-side PFBL-01 validation.
