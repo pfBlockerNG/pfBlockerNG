@@ -342,6 +342,28 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
 
 
+def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
+    """The Update page's two log windows are display-only — they render readonly.
+
+    The 'pfb_status' (progress) and 'pfb_output' (log) textareas are live-tail
+    viewers, not input fields; before this change they were plain editable
+    textareas, so a user could accidentally cut/type into them (the content is
+    harmless — it is repopulated from the log file on refresh — but it is confusing
+    and a footgun). Each must now carry the readonly attribute.
+
+    Given the rendered Update page,
+    When each log textarea opening tag is located by name,
+    Then it contains the readonly attribute. (Pre-fix the tags had no readonly, so
+      these assertions FAIL on the old markup and pass only after it.)
+    """
+    body = webui.get(_UPDATE_PAGE).text
+    for name in ("pfb_status", "pfb_output"):
+        m = re.search(r"<textarea\b[^>]*\bname=([\"'])" + re.escape(name) + r"\1[^>]*>", body)
+        assert m is not None, f"update page is missing the '{name}' textarea"
+        tag = m.group(0)
+        assert "readonly" in tag, f"'{name}' textarea is editable (no readonly): {tag}"
+
+
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-08 'IDN Blocking' selector + its two Confusable sub-toggles render
     cleanly on the DNSBL page — so a regression that drops or breaks the field is
