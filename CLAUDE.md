@@ -691,6 +691,18 @@ in **`docs/misc/architecture-notes.md`** ("Change detection / content hashing") 
 touching `pfb_update_check`, `pfb_download`, or any feed/file change-detection site. Sibling of
 ADR-40 (IP pf-table set-membership gating); the deferred DNSBL structure-reuse ADR builds on it.
 
+**IP alias-table reload model (ADR-40).** Alias tables are reloaded iff their **final
+membership set changed** — not iff a member feed was re-fetched (the old feed-tracking model).
+`pfb_alias_set_different()` compares the freshly computed canonical set against the last-applied
+mirror at `/var/db/aliastables/pfB_<Alias>_v{4,6}.txt`; only aliases whose set actually changed
+reload. For changed tables, pfBlockerNG applies the diff as `pfctl -T add` / `pfctl -T delete`
+(forward delta, lock-hold O(churn)) unless the churn ratio ≥ 20% or
+`pfb_alias_delta_mode='replace'` is set, in which case it falls back to `pfctl -T replace`. Both
+paths produce the same `pfctl -t <t> -T show` membership (end-state invariant). Two registered
+`PfbConfig` fields control the apply path: `pfb_alias_delta_mode` (enum `auto`/`delta`/`replace`,
+default `auto`) and `pfb_alias_delta_batch` (chunk size, default 256, clamped 64–4096). See
+`docs/misc/architecture-notes.md` ("ADR-40") for the cross-list dedup/reputation scope rules.
+
 **Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
 `pfb_agg_types` multi-select (IP settings, **opt-in, default none**) builds, per selected
 action type, the Native urltable aliases **`pfB_<Type>_Aggregated_v4`/`_v6`** = the deduped,
