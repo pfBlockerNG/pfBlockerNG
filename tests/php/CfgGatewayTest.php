@@ -431,6 +431,67 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('30', config_get_path($path), "write(read('30'))=='30' for pfb_tick_interval");
 	}
 
+	// -----------------------------------------------------------------------
+	// ADR-43 P5 — pfb_quiet_hours (plain string; apply-on-change window)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * pfb_quiet_hours absent key returns the registered default '' (no window).
+	 *
+	 * Scenario:
+	 *   Background: pfb_quiet_hours is a plain-string field; default = '' (apply immediately).
+	 *     Given no stored value.
+	 *     When PfbConfig::read('pfb_quiet_hours').
+	 *     Then '' is returned (registered default = no window, apply immediately).
+	 *
+	 * Red→green: before Phase 5, 'pfb_quiet_hours' was not registered →
+	 *   PfbConfig::read('pfb_quiet_hours') threw InvalidArgumentException.
+	 */
+	public function testPfbQuietHoursAbsentKeyReturnsDefault(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_quiet_hours';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: pfb_quiet_hours must be absent');
+
+		// When/Then: absent → default '' (no window).
+		$result = PfbConfig::read('pfb_quiet_hours');
+		$this->assertSame('', $result, 'pfb_quiet_hours absent -> default empty string');
+	}
+
+	/**
+	 * pfb_quiet_hours round-trips a non-default window string.
+	 *
+	 * Scenario:
+	 *   Background: pfb_quiet_hours is a plain-string field (no adapter).
+	 *     Given stored = '02:00-06:00'.
+	 *     When PfbConfig::write('pfb_quiet_hours', PfbConfig::read('pfb_quiet_hours')).
+	 *     Then stored string == '02:00-06:00' (lossless round-trip).
+	 *
+	 * Red→green: before Phase 5, read/write threw InvalidArgumentException.
+	 */
+	public function testPfbQuietHoursRoundTrip(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_quiet_hours';
+
+		// Given: '02:00-06:00' stored.
+		$this->seedConfig($path, '02:00-06:00');
+
+		// Before: raw value is '02:00-06:00'.
+		$this->assertSame('02:00-06:00', config_get_path($path),
+			"before: pfb_quiet_hours seed is '02:00-06:00'");
+
+		// When: read -> write.
+		$val = PfbConfig::read('pfb_quiet_hours');
+		$this->assertSame('02:00-06:00', $val,
+			"read: pfb_quiet_hours '02:00-06:00' -> '02:00-06:00'");
+
+		// After: write back produces '02:00-06:00'.
+		PfbConfig::write('pfb_quiet_hours', $val);
+		$this->assertSame('02:00-06:00', config_get_path($path),
+			"write(read('02:00-06:00'))=='02:00-06:00' for pfb_quiet_hours");
+	}
+
 	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
 	// -----------------------------------------------------------------------
 
@@ -673,8 +734,9 @@ final class CfgGatewayTest extends TestCase
 			// ADR-40: alias-table apply mode + batch size
 			'pfb_alias_delta_mode',
 			'pfb_alias_delta_batch',
-			// ADR-43: tick-cron dispatch interval
+			// ADR-43: tick-cron dispatch interval + apply-on-change window
 			'pfb_tick_interval',
+			'pfb_quiet_hours',
 			// ADR-38: syslog export toggle
 			'log_syslog',
 
