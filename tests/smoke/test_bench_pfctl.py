@@ -1350,6 +1350,20 @@ def test_pfctl_reject_loop(
     # Upload the TCP probe script to civm.
     _upload_tcp_probe(client_vm)
 
+    # Ensure probe traffic (11.0.0.0/8 and 13.0.0.0/8) is routed through pfSense
+    # LAN, not via the SLIRP default route (ens4).  civm has two default routes at
+    # equal metric 100 (ECMP: ens4 via SLIRP + ens5 via pfSense LAN).  Without
+    # explicit routes, Linux ECMP may send probe packets via ens4 where pfSense
+    # never sees them and RST never comes back.
+    print("  civm: adding explicit routes for 11.0.0.0/8 and 13.0.0.0/8 via pfSense LAN")
+    route_result = client_vm.ssh(
+        "ip route replace 11.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && ip route replace 13.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && echo routes_ok",
+        timeout=10.0,
+    )
+    print(f"  civm routes: {route_result.stdout.strip()!r}")
+
     kv = _bench(smoke_vm, "system_info")
     print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
 
