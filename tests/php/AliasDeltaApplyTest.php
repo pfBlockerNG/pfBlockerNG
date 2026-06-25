@@ -223,7 +223,7 @@ SH
 	/**
 	 * Scenario B — small churn (mode auto) takes delta path.
 	 *
-	 * Given a 1000-entry table with 1-entry churn (0.1% << 20% threshold).
+	 * Given a 1000-entry table with 1-entry churn (0.1% << 5% threshold).
 	 * Before: pfb_apply_alias_delta returns FALSE (we'll verify the path).
 	 * When mode='auto' and churn_ratio=0.001 < PFB_DELTA_CHURN_THRESHOLD.
 	 * Then returns TRUE (delta path taken).
@@ -245,9 +245,9 @@ SH
 			$desired, $last, 'auto', 256
 		);
 
-		// Then: churn=2 (add 10.0.9.2 + del 10.0.9.1), table_size=10, ratio=0.2 == threshold
-		// At boundary we compare >= threshold → replace.  Use slightly under threshold instead.
-		// Let's use 100 entries, 1 churn = 0.01 < 0.20 → delta.
+		// Then: churn=2 (add 10.0.9.2 + del 10.0.9.1), table_size=10, ratio=0.2 > threshold
+		// At or above threshold we compare >= threshold → replace.  Use slightly under threshold instead.
+		// Let's use 100 entries, 1 churn = 0.01 < 0.05 → delta.
 		$large_base    = array_map(fn($i) => "10." . intdiv($i, 256) . "." . ($i % 256) . ".1", range(0, 99));
 		$large_desired = array_merge(array_slice($large_base, 0, 99), ['10.0.100.1']);
 		$large_file    = $this->write_alias_file('pfB_Large_v4', $large_desired);
@@ -259,7 +259,7 @@ SH
 		);
 
 		$this->assertTrue($used_delta,
-			'expected: delta path (TRUE); actual: replace path (FALSE) — churn=1/100=1% < 20% threshold');
+			'expected: delta path (TRUE); actual: replace path (FALSE) — churn=1/100=1% < 5% threshold');
 	}
 
 	// -----------------------------------------------------------------------
@@ -269,7 +269,7 @@ SH
 	/**
 	 * Scenario C — large churn (mode auto) falls back to replace.
 	 *
-	 * Given a 100-entry table with 30-entry churn (30% > 20% threshold).
+	 * Given a 100-entry table with 30-entry churn (30% > 5% threshold).
 	 * When mode='auto'.
 	 * Then returns FALSE (replace path taken).
 	 */
@@ -289,7 +289,7 @@ SH
 			$desired, $last, 'auto', 256
 		);
 
-		// Then: churn=70+70=140, table_size=max(60,100)=100, ratio=1.4 > 0.20 → replace.
+		// Then: churn=70+70=140, table_size=max(60,100)=100, ratio=1.4 > 0.05 → replace.
 		$this->assertFalse($used_delta,
 			"expected: replace path (FALSE) for large churn; actual: delta path (TRUE).\n"
 			. "churn=" . (count(array_diff($desired, $last)) + count(array_diff($last, $desired)))
@@ -513,14 +513,14 @@ SH
 	}
 
 	/**
-	 * Scenario H4 — pfb_alias_delta_batch absent default = '256'.
+	 * Scenario H4 — pfb_alias_delta_batch absent default = '512'.
 	 */
-	public function testAliasDeltaBatchAbsentDefaultIs256(): void
+	public function testAliasDeltaBatchAbsentDefaultIs512(): void
 	{
 		$GLOBALS['config'] = [];
 		$value = (string) PfbConfig::read('pfb_alias_delta_batch');
-		$this->assertSame('256', $value,
-			"expected: absent pfb_alias_delta_batch default = '256'; actual: '{$value}'");
+		$this->assertSame('512', $value,
+			"expected: absent pfb_alias_delta_batch default = '512'; actual: '{$value}'");
 	}
 
 	/**
@@ -531,7 +531,7 @@ SH
 		$cases = [
 			[63, 64],    // below min
 			[64, 64],    // at min
-			[256, 256],  // default
+			[512, 512],  // default
 			[1024, 1024],
 			[4096, 4096],// at max
 			[4097, 4096],// above max
@@ -546,23 +546,23 @@ SH
 	}
 
 	/**
-	 * Scenario H6 — empty-string POST field → default 256, not clamped-to-64.
+	 * Scenario H6 — empty-string POST field → default 512, not clamped-to-64.
 	 *
 	 * An HTML form submits an empty string when the user clears the batch-size
-	 * field.  The UI save path must treat '' as "use default 256", not cast to
+	 * field.  The UI save path must treat '' as "use default 512", not cast to
 	 * int(0) and clamp to 64.  Pinning the fix in pfblockerng_ip.php F1.
 	 *
 	 * Before the fix: (int)'' == 0 → pfb_alias_delta_batch_clamp(0) == 64.
-	 * After the fix: '' → 256 → pfb_alias_delta_batch_clamp(256) == 256.
+	 * After the fix: '' → 512 → pfb_alias_delta_batch_clamp(512) == 512.
 	 */
-	public function testEmptyStringBatchPostFieldDefaultsTo256(): void
+	public function testEmptyStringBatchPostFieldDefaultsTo512(): void
 	{
 		// Simulate the fixed UI save path logic (F1 fix in pfblockerng_ip.php).
 		$raw_empty  = '';
-		$batch_from_empty = pfb_alias_delta_batch_clamp($raw_empty === '' ? 256 : (int) $raw_empty);
+		$batch_from_empty = pfb_alias_delta_batch_clamp($raw_empty === '' ? 512 : (int) $raw_empty);
 
-		$this->assertSame(256, $batch_from_empty,
-			"expected: empty POST field → 256 (not 64); actual: {$batch_from_empty}\n"
+		$this->assertSame(512, $batch_from_empty,
+			"expected: empty POST field → 512 (not 64); actual: {$batch_from_empty}\n"
 			. "Bug: (int)'' == 0 → clamp(0) == 64 (incorrect default when user clears field)");
 
 		// Before-fix behaviour would produce 64 — ensure we're not checking the wrong thing.
@@ -572,7 +572,7 @@ SH
 
 		// Out-of-range value still clamps correctly.
 		$raw_oob  = '9999';
-		$batch_from_oob = pfb_alias_delta_batch_clamp($raw_oob === '' ? 256 : (int) $raw_oob);
+		$batch_from_oob = pfb_alias_delta_batch_clamp($raw_oob === '' ? 512 : (int) $raw_oob);
 		$this->assertSame(4096, $batch_from_oob,
 			"expected: out-of-range POST field → clamped to 4096; actual: {$batch_from_oob}");
 	}

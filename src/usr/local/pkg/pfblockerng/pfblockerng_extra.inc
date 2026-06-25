@@ -557,12 +557,12 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
-		// ADR-40: alias-table delta batch size (integer as string). Default '256'.
-		// Clamped to [64, 4096] on read. Batch=256 is optimal for sub-1M tables
+		// ADR-40: alias-table delta batch size (integer as string). Default '512'.
+		// Clamped to [64, 4096] on read. Batch=512 is optimal for sub-1M tables
 		// (zero ICMP stalls at 100k/1k-churn); batch=1024+ for 1M+ tables.
 		'pfb_alias_delta_batch' => [
 			'section'       => $gen,
-			'default'       => '256',
+			'default'       => '512',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'since'         => '4.0.0',
