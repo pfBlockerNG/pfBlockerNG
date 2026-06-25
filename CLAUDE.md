@@ -193,6 +193,55 @@ non-trivial `src/`/`tests/`/CI work.
 
 ---
 
+## Bounded waits — scheduled tasks / triggers must self-terminate
+
+**Any agent that waits on an external event MUST bound the wait so it dies on its own** — a
+cron self-check-in, a `ScheduleWakeup` / `/loop`, or a PR-activity subscription. There is **no
+platform-level timeout** on these (the only automatic backstop is a ~7-day hard expiry, far too
+long), so a wait that re-arms on its event alone hangs for days when the event never fires — the
+exact failure we are killing here. Two independent guards, **both required**:
+
+### 1 — Never trust the event trigger alone: arm a self-check heartbeat ladder
+
+A trigger can be **mis-wired** (wrong PR/run id, a webhook that never arrives, a queue that never
+emits) — then the event-driven wake never fires and the agent would wait forever. So **always**
+also arm a *self*-check-in, independent of the event, on this escalating ladder of delays:
+
+- **First self-check: 10 minutes** after arming the wait — the agent wakes and **checks the real
+  state itself** (poll the PR / CI run / job directly via its CLI or API; do **not** assume the
+  trigger will wake you).
+- **If still unresolved, re-arm on the ladder: 10, 10, 15, 15, 30, 30 minutes** — six further
+  self-checks. Total budget ≈ **120 min (2 h)** across the seven checks.
+- **After the final 30-minute rung with the awaited thing still not done → give up and die:**
+  `unsubscribe` / `CronDelete` the check-in (and any subscription), then report that the wait was
+  **abandoned because the event never fired** and that **the trigger may have been mis-configured**
+  — so the user can see it failed rather than find it hung hours later. **Never re-arm past the
+  ladder.**
+- **Any check where the awaited thing HAS happened ends the ladder early** — handle it and stop.
+  Genuine in-flight progress (e.g. CI still legitimately running) does not reset the ladder; the
+  2 h cap is hard. If the work genuinely needs longer, that is the user's call to extend, not a
+  silent re-arm.
+- **Cancel on resolution — leave no orphaned trigger.** The instant the task reaches a terminal
+  state by **any** path — a self-check (or the event) finds it done **whether the outcome is good
+  or bad**, the give-up rung is hit, **or the user interrupts to ask you to check it** — immediately
+  cancel **every** still-pending trigger tied to it: `CronDelete` each scheduled check-in, drop the
+  `ScheduleWakeup`, `unsubscribe` the PR/event subscription. A **user-driven check supersedes the
+  scheduled one** — once you have checked on request, the pending self-checks for that task are
+  redundant, so kill them then and there. Never let a stale trigger re-fire hours later for a task
+  that already moved on: **if the task moved on, good or bad, its future triggers are dead.**
+
+### 2 — Event-deadline on the happy path
+
+Independently, when waiting on a normal event (CI to go green, a PR to merge, a queued job), the
+event-driven wait still carries its own **explicit deadline** — never an open-ended re-arm. The
+ladder above is the safety net for a *broken* trigger; this is the cap for a *working* one. The
+default cap is the same **2 h / seven-check** budget unless the user sets a longer one.
+
+This is the org default for every pfBlockerNG-org repo. It supersedes any flow (the PR-babysit
+check-in included) that re-arms a wait without a deadline.
+
+---
+
 ## Code standards
 
 ### Naming — follow the established pattern
