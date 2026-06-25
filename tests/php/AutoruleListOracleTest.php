@@ -33,11 +33,15 @@ use PHPUnit\Framework\TestCase;
  *
  * The headline regression guard is testBehaviourEqualsProvenReferenceOnDupFreeMatrix(): the helper
  * is asserted BEHAVIOURALLY identical to the years-proven pre-ADR-41 emission
- * (pfb_autorule_reference_8c4c482, frozen below) across a matrix of dup-free configs — same
- * per-(interface, direction) evaluation sequence. The reference's two known defects (the user-pass
- * DUP across the in/out loops, and the empty-order DROP) are exactly what this change fixes, so the
- * differential is asserted only where the reference is dup-free; the dup-trigger cases are pinned
- * to the corrected ORDER-table behaviour by the explicit per-order fixtures.
+ * (pfb_autorule_reference_8c4c482, frozen below) across a matrix of configs — same
+ * per-(interface, direction) evaluation sequence AND the same full rule set (field-level, tracker
+ * aside). The reference mishandles three config classes — exactly what this change fixes — which
+ * are therefore SKIPPED from the differential and pinned to the corrected ORDER table by the
+ * explicit per-order fixtures instead: (1) the user-pass DUP when an interface is both in and out
+ * (order_1/order_2); (2) the order_2+float-on floating mis-order (it wedges the floating user
+ * pass/match into the inbound loop). The empty/unknown-order DROP (3) is NOT skipped — the
+ * differential feeds the reference the same `?: 'order_0'` normalization the production call site
+ * applies, so that case is compared, not excluded.
  *
  * Loads the real pfblockerng.inc off-appliance via tests/php/bootstrap.php (shims + doubles).
  */
@@ -481,24 +485,25 @@ final class AutoruleListOracleTest extends TestCase
 	}
 
 	/**
-	 * Fidelity contract (a): user rules survive as a multiset — no DROP, no DUP, content
-	 * untouched (bar the _v4 upgrade). Deliberately order-INDEPENDENT: cross-bucket reorder is
-	 * exactly what pass_order does, so a global-order check would be wrong. Within-bucket order
-	 * is pinned by the explicit per-order fixtures (and testWithinBucketOrderPreserved).
+	 * Fidelity contract (a): user rules survive as a multiset — no DROP, no DUP, and the FULL
+	 * content untouched (every field: source, destination, ipprotocol, associated-rule-id, …, not
+	 * just the descr/type/interface/floating/direction shape). Uses canonical (order-insensitive)
+	 * equality so cross-bucket reorder — exactly what pass_order does — is allowed while any
+	 * content mutation goes red. Within-bucket order is pinned by the explicit per-order fixtures.
+	 * (Callers that legitimately mutate content — the _v4 upgrade — assert that transform directly
+	 * instead of via this helper.)
 	 */
 	private function assertUserRulesIntact(array $input, array $output, string $ctx): void
 	{
-		$inUser  = $this->shapes(array_values(array_filter($input,  fn ($r) => $this->isUserRule($r))));
-		$outUser = $this->shapes(array_values(array_filter($output, fn ($r) => $this->isUserRule($r))));
-		sort($inUser);
-		sort($outUser);
-		$this->assertEquals(
+		$inUser  = array_values(array_filter($input,  fn ($r) => $this->isUserRule($r)));
+		$outUser = array_values(array_filter($output, fn ($r) => $this->isUserRule($r)));
+		$this->assertEqualsCanonicalizing(
 			$inUser,
 			$outUser,
-			"User-rule fidelity failure [{$ctx}]: user rules must survive exactly once, content "
-				. "intact (no drop, no dup, no mutation).\n\nExpected (multiset):\n"
-				. json_encode($inUser, JSON_PRETTY_PRINT) . "\n\nActual (multiset):\n"
-				. json_encode($outUser, JSON_PRETTY_PRINT)
+			"User-rule fidelity failure [{$ctx}]: every user rule must survive exactly once with its "
+				. "FULL content intact (no drop, no dup, no source/destination/ipprotocol mutation).\n\n"
+				. "Input user rules:\n" . json_encode($inUser, JSON_PRETTY_PRINT)
+				. "\n\nOutput user rules:\n" . json_encode($outUser, JSON_PRETTY_PRINT)
 		);
 	}
 
@@ -646,6 +651,37 @@ final class AutoruleListOracleTest extends TestCase
 		}
 	}
 
+	public function testOrder2FloatOnMatchPlacement(): void
+	{
+		// order_2 + float-on is the one case the proven-reference differential cannot oracle (the
+		// reference mis-orders it), so the floating MATCH placement must be pinned by a fixture:
+		// the pfB Match rides in the pfB pass/match bucket and the user float Match in the user
+		// pass/match bucket — both BEFORE the pfB Deny (order_2 = pfB p/m | user p/m | pfB b/r | …).
+		$gen = $this->genWithMatch();
+		$gen['permit_inbound'] = [
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass', 'interface' => '', 'direction' => 'in',
+			 'ipprotocol' => 'inet', 'floating' => 'yes', 'source' => ['address' => 'pfB_PermitList_v4'], 'destination' => ['any' => '']],
+		];
+		$gen['deny_inbound'][0]['floating'] = 'yes';
+		$gen['match_inbound'][0]['floating'] = 'yes';
+		$existing = [
+			$this->userPass('User float allow', 'lan', 'yes'),
+			$this->userMatch('User float match', 'lan'),
+			$this->userBlock('User float block', 'lan', 'yes'),
+		];
+		$result = pfb_build_autorule_list($existing, $gen, 'order_2', 'on', ['lan'], []);
+
+		$this->assertShapes([
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+			['descr' => 'pfB_MatchList_v4 Auto Rule',  'type' => 'match', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+			['descr' => 'User float allow',            'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			['descr' => 'User float match',            'type' => 'match', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+			['descr' => 'User float block',            'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+		], $result, 'order_2 float-on with match');
+		$this->assertUserRulesIntact($existing, $result, 'order_2 float-on with match');
+	}
+
 	// =======================================================================
 	// pfB rule generation invariants
 	// =======================================================================
@@ -698,6 +734,33 @@ final class AutoruleListOracleTest extends TestCase
 		$this->assertContains('pfB_DNS_Redirect_lan_v4', $descrs, 'DNS-redirect bypass kept');
 		$this->assertContains('pfB_DoT_Block_lan', $descrs, 'DoT-block bypass kept');
 		$this->assertUserRulesIntact($existing, $result, 'bypass kept');
+	}
+
+	public function testV4AliasSuffixUpgradeAppliedToUserRuleAddress(): void
+	{
+		// The ONE sanctioned content mutation: a user rule referencing a bare pfB_ alias on an
+		// inet rule has its source/destination address upgraded to the '_v4' form. A '_v6' alias
+		// on an inet6 rule is left untouched (the issue #360 guard — appending '_v4' would point
+		// at the nonexistent pfB_*_v6_v4). This is the only field-level change the helper may make
+		// to a user rule; assertUserRulesIntact would (correctly) reject it, so assert it directly.
+		$inetRule = ['descr' => 'User via pfB alias v4', 'type' => 'pass', 'interface' => 'lan',
+		             'ipprotocol' => 'inet', 'floating' => '', 'source' => ['address' => 'pfB_CustomList'],
+		             'destination' => ['any' => '']];
+		$inet6Rule = ['descr' => 'User via pfB alias v6', 'type' => 'pass', 'interface' => 'lan',
+		              'ipprotocol' => 'inet6', 'floating' => '', 'source' => ['address' => 'pfB_CustomList_v6'],
+		              'destination' => ['any' => '']];
+		$result = pfb_build_autorule_list([$inetRule, $inet6Rule], $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+
+		$byDescr = [];
+		foreach ($result as $r) {
+			$byDescr[$r['descr'] ?? ''] = $r;
+		}
+		$this->assertSame('pfB_CustomList_v4', $byDescr['User via pfB alias v4']['source']['address'] ?? null,
+			"bare pfB_ alias on an inet rule must be upgraded to '_v4'.\nActual: "
+				. json_encode($byDescr['User via pfB alias v4'] ?? null, JSON_PRETTY_PRINT));
+		$this->assertSame('pfB_CustomList_v6', $byDescr['User via pfB alias v6']['source']['address'] ?? null,
+			"a '_v6' alias on an inet6 rule must be left untouched (#360 guard).\nActual: "
+				. json_encode($byDescr['User via pfB alias v6'] ?? null, JSON_PRETTY_PRINT));
 	}
 
 	// =======================================================================
@@ -842,6 +905,16 @@ final class AutoruleListOracleTest extends TestCase
 					);
 				}
 			}
+			// Field-level fidelity (order-insensitive): the full rule set — source / destination /
+			// ipprotocol / every field EXCEPT the tracker — must match the proven reference, not
+			// just the descr/type/interface/floating/direction shape the eval-sequence compares.
+			// The tracker is stripped: pfb_tracker() is stateful (a per-call counter), so new and
+			// the reference legitimately mint different tracker ids; tracker PRESENCE is checked by
+			// assertTrackersSet, and tracker order/position by the eval-sequence above.
+			$strip = static fn (array $rules): array => array_map(
+				static function (array $r): array { unset($r['tracker']); return $r; }, $rules);
+			$this->assertEqualsCanonicalizing($strip($refClean), $strip($new),
+				"[{$label}] full rule set (field-level, tracker aside) diverges from the proven reference");
 			$compared++;
 		}
 

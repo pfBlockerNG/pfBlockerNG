@@ -10,7 +10,7 @@
   floating and interface pf groups), keeping the genuine ADR-41 wins (never duplicate/drop/mutate a
   user rule). Off-appliance contract pinned **red→green** in `AutoruleListOracleTest` (the
   pfB-Permit-vs-user-Block trap per order + behavioural equivalence to the frozen `8c4c482`
-  reference on every dup-free config). Full analysis: **`RESULTS/05`** (supersedes the binary-anchor
+  reference on every config it handles correctly). Full analysis: **`RESULTS/05`** (supersedes the binary-anchor
   `RESULTS/02`). Flips to **Accepted** once the §7 live-VM fan-out (CE + Plus) — the per-`pass_order`
   data-plane precedence sweep in `test_smoke_autorule_immutable.py` (still skipped pending Phase-4
   wiring) — is green.
@@ -244,8 +244,10 @@ once, verbatim — while the `pass_order` table still governs where the buckets 
   Pass — documented `pass_order` semantics, preserved here. (The binary-anchor revision wrongly
   deleted it by freezing user-rule order; that was a regression, not a feature.) The only visible
   `config.xml` change vs PR #561's behaviour is restoring the correct per-`pass_order` ordering;
-  vs the pre-ADR-41 baseline, behaviour is preserved on every dup-free config (the DROP/DUP cases
-  are the fixes). Release-notes call-out: the order_1/order_2 Permit-vs-Block precedence fix.
+  vs the pre-ADR-41 baseline, behaviour matches the proven `8c4c482` emission on every config except
+  the three it mishandled — the order_1/order_2 user-pass DUP, the empty-order DROP, and the
+  order_2+float-on floating mis-order — which are the fixes (the floating group now follows the
+  ORDER table there too). Release-notes call-out: the order_1/order_2 Permit-vs-Block precedence fix.
 - **Multi-interface / mixed pfB permit+deny configs are under-represented in the factory image.**
   The live image's user rules are LAN/opt1 pass rules; pfB permit rules (`Permit_*` actions) and
   inbound≠outbound need explicit fixtures. **Mitigation:** Phase 1 PHPUnit fixtures cover them
