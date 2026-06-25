@@ -7888,6 +7888,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				@touch("{$orig_download}", $remote_stamp);
 			}
 
+			// ADR-42 Phase 2: refresh the content-hash sidecar at every successful ingest
+			// so pfb_local_feed_changed() always compares against the last-ingested bytes.
+			// This covers both local and remote standard feeds (any path that finalises a
+			// plain .orig here).  geoip/asn early-returns (~line 7872) do not reach this
+			// block, so they correctly never get a sidecar.
+			pfb_hash_write("{$orig_download}", "{$orig_download}");
+
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
 				exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
@@ -9445,41 +9452,54 @@ function pfb_files_equal($a, $b) {
 // this function returns TRUE when the feed has changed (re-ingest needed), FALSE when it
 // has not. It never concludes "unchanged" on a read failure — fail-safe.
 //
-// Algorithm (today's mtime + md5-confirm, as in pfb_update_check pre-ADR-42-Phase-2):
+// Algorithm (ADR-42 Phase 2 — content-hash gate, mtime removed):
 //  1. If either file is absent → changed (no baseline = first run).
-//  2. If mtimes are equal → not changed (fast path: same second, assume same content).
-//  3. If mtimes differ → confirm with md5: if both readable and equal → not changed
-//     (a touch/cp bumped mtime without changing bytes); if md5 unreadable or differs → changed.
+//  2. Read the tagged sidecar for the .orig via pfb_hash_read():
+//     - sentinel (no/corrupt sidecar) → live-hash the .orig as the baseline (the
+//       first-pass-after-upgrade case; also handles new installs before any sidecar exists).
+//     - 'md5' → baseline = sidecar digest; compare source with md5_file().
+//     - 'xxh128' → baseline = sidecar digest; compare source with pfb_content_hash().
+//  3. Hash the source in the SAME algo as the baseline.
+//  4. changed = (source_hash !== baseline). Any read failure → TRUE (fail-safe).
 //
-// Phase 2 will replace this decision with xxh128 and drop mtime as the gate entirely.
+// NOTE: The sidecar is written (refreshed) at ingest time inside pfb_download(), so the
+// baseline is always the hash of the last-ingested .orig.  This prevents the staleness
+// trap: if the sidecar were only written here (before ingest) it would hold the OLD hash
+// after re-ingest, causing every subsequent cron to falsely report "changed".
 function pfb_local_feed_changed($source_path, $orig_path) {
 	if (!file_exists($source_path) || !file_exists($orig_path)) {
 		return TRUE;
 	}
 
-	$src_mtime  = pfb_file_mtime($source_path);
-	$orig_mtime = pfb_file_mtime($orig_path);
+	$sidecar = pfb_hash_read($orig_path);
 
-	// Both readable?
-	if ($src_mtime === FALSE || $orig_mtime === FALSE) {
+	if ($sidecar['algo'] === 'changed') {
+		// No or corrupt sidecar — fall back to live-hashing the .orig as the baseline.
+		$baseline = pfb_content_hash($orig_path, TRUE);
+		if ($baseline === FALSE) {
+			return TRUE;
+		}
+		$src_hash = pfb_content_hash($source_path, TRUE);
+		if ($src_hash === FALSE) {
+			return TRUE;
+		}
+		return ($src_hash !== $baseline);
+	}
+
+	if ($sidecar['algo'] === 'md5') {
+		$src_hash = @md5_file($source_path);
+		if ($src_hash === FALSE) {
+			return TRUE;
+		}
+		return ($src_hash !== $sidecar['digest']);
+	}
+
+	// 'xxh128' — canonical post-Phase-2 path.
+	$src_hash = pfb_content_hash($source_path, TRUE);
+	if ($src_hash === FALSE) {
 		return TRUE;
 	}
-
-	if ($src_mtime === $orig_mtime) {
-		// Same mtime — treat as unchanged (fast path).
-		return FALSE;
-	}
-
-	// Mtimes differ: confirm with md5 (fail open — if unreadable, re-ingest).
-	$src_md5 = @md5_file($source_path);
-	if ($src_md5 === FALSE) {
-		return TRUE;
-	}
-	$orig_md5 = @md5_file($orig_path);
-	if ($orig_md5 === FALSE) {
-		return TRUE;
-	}
-	return ($src_md5 !== $orig_md5);
+	return ($src_hash !== $sidecar['digest']);
 }
 
 // ADR-38 Amendment 1: keep the long-running filterlog daemon's view of the

@@ -6,18 +6,19 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-42 Phase 1 — hash helpers and local-feed change-detection oracle.
+ * ADR-42 Phase 1 + Phase 2 — hash helpers and local-feed change-detection.
  *
  * Tests cover:
  *   pfb_content_hash()      — xxh128 of a file or a string; known-answer vector.
  *   pfb_hash_read()         — tagged sidecar read: .xxhash128 (new), .md5 (legacy),
- *                             bare/untagged → md5, unknown tag → "changed" sentinel.
+ *                             no sidecar → "changed" sentinel.
  *   pfb_hash_write()        — writes .xxhash128, deletes superseded .md5; round-trip.
- *   pfb_local_feed_changed() — oracle-pin of today's mtime+md5-confirm decision.
+ *   pfb_local_feed_changed() — ADR-42 Phase 2 content-hash gate (mtime removed):
+ *                             content-identical → FALSE; content-different → TRUE;
+ *                             legacy .md5 sidecar read + migration; absent sidecar
+ *                             falls back to live .orig hash; idempotence guard.
  *
- * Every test carries a failable assertion. Behaviour-preserving phase: the
- * pfb_local_feed_changed() oracle tests pin TODAY's decision and must stay green across
- * the refactor. The new helper tests (hash, read/write, round-trip) are new assertions.
+ * Every test carries a failable assertion.
  */
 #[CoversFunction('pfb_content_hash')]
 #[CoversFunction('pfb_hash_read')]
@@ -374,7 +375,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// pfb_local_feed_changed() — oracle-pin of today's decision
+	// pfb_local_feed_changed() — ADR-42 Phase 2 content-hash gate
 	// -------------------------------------------------------------------------
 
 	/**
@@ -423,127 +424,187 @@ final class FeedChangeHashHelpersTest extends TestCase
 	}
 
 	/**
-	 * Oracle: identical content + same mtime → not changed.
-	 * Pins today's fast-path behaviour: same mtime = unchanged, skip md5.
+	 * Phase 2: identical content with .xxhash128 sidecar → not changed.
+	 * The core no-change path: source == .orig bytes, sidecar present and valid.
+	 * Mtime is irrelevant — the gate is entirely content-addressed.
 	 *
-	 *  GIVEN source and .orig with identical bytes and identical mtimes;
+	 *  GIVEN source and .orig with identical bytes and a matching .xxhash128 sidecar;
 	 *   WHEN pfb_local_feed_changed($source, $orig) is called;
 	 *   THEN it returns FALSE (not changed).
 	 */
-	public function test_local_feed_changed_same_mtime_is_not_changed(): void
+	public function test_local_feed_changed_identical_content_with_sidecar_is_not_changed(): void
 	{
-		$source = $this->dir . '/same_mtime_source.txt';
-		$orig   = $this->dir . '/same_mtime.orig';
 		$content = 'identical content';
+		$source  = $this->dir . '/identical_source.txt';
+		$orig    = $this->dir . '/identical.orig';
 		file_put_contents($source, $content);
 		file_put_contents($orig, $content);
-		// Force both to the same mtime.
-		$ts = time() - 100;
-		touch($source, $ts);
-		touch($orig, $ts);
+		// Write the sidecar that pfb_download would have written at last ingest.
+		pfb_hash_write($orig, $orig);
 
-		// Assert before-state: both files exist and share mtime.
-		$this->assertSame(filemtime($source), filemtime($orig), 'Precondition: mtimes must be equal');
+		// Precondition: .xxhash128 sidecar exists and reads back xxh128.
+		$sidecar = pfb_hash_read($orig);
+		$this->assertSame('xxh128', $sidecar['algo'], 'Precondition: sidecar must be xxh128');
 
 		$result = pfb_local_feed_changed($source, $orig);
 
 		$this->assertFalse(
 			$result,
-			'pfb_local_feed_changed() must return FALSE when source and .orig have the same mtime'
+			'pfb_local_feed_changed() must return FALSE when source content matches the .xxhash128 sidecar'
 		);
 	}
 
 	/**
-	 * Oracle: different mtime AND identical content → not changed (#540 confirm).
-	 * Pins the md5-confirm behaviour: a touch/cp that bumps mtime without changing
-	 * bytes must NOT trigger re-ingest.
+	 * Phase 2: different content with .xxhash128 sidecar → changed.
+	 * The core detection case: a real content change must always be detected,
+	 * regardless of mtime. The sidecar holds the OLD .orig hash; the new source differs.
 	 *
-	 *  GIVEN source and .orig with the same bytes but different mtimes;
-	 *   WHEN pfb_local_feed_changed($source, $orig) is called;
-	 *   THEN it returns FALSE (not changed — mtime was a false positive, md5 confirms).
-	 */
-	public function test_local_feed_changed_mtime_differs_but_content_same_is_not_changed(): void
-	{
-		$source  = $this->dir . '/mtime_differs_source.txt';
-		$orig    = $this->dir . '/mtime_differs.orig';
-		$content = 'byte-identical content';
-		file_put_contents($source, $content);
-		file_put_contents($orig, $content);
-		// Force different mtimes.
-		touch($source, time() - 200);
-		touch($orig, time() - 100);
-
-		// Assert before-state: files differ in mtime but have the same bytes.
-		$this->assertNotSame(filemtime($source), filemtime($orig), 'Precondition: mtimes must differ');
-		$this->assertSame(md5_file($source), md5_file($orig), 'Precondition: content must be identical');
-
-		$result = pfb_local_feed_changed($source, $orig);
-
-		$this->assertFalse(
-			$result,
-			'pfb_local_feed_changed() must return FALSE when bytes are identical (mtime-changed content-same)'
-		);
-	}
-
-	/**
-	 * Oracle: different mtime AND different content → changed.
-	 * The core detection case: a real content change must always be detected.
-	 *
-	 *  GIVEN source and .orig with different bytes and different mtimes;
+	 *  GIVEN a .xxhash128 sidecar seeded from OLD content, then source rewritten with NEW content;
 	 *   WHEN pfb_local_feed_changed($source, $orig) is called;
 	 *   THEN it returns TRUE (changed).
+	 *
+	 * RED on pre-Phase-2 code: equal mtime (explicitly forced) would return FALSE here.
 	 */
-	public function test_local_feed_changed_different_content_is_changed(): void
+	public function test_local_feed_changed_different_content_with_sidecar_is_changed(): void
 	{
 		$source = $this->dir . '/changed_source.txt';
 		$orig   = $this->dir . '/changed.orig';
+		file_put_contents($source, 'OLD content');
+		file_put_contents($orig,   'OLD content');
+		// Seed sidecar from OLD .orig — simulates a completed prior ingest.
+		pfb_hash_write($orig, $orig);
+		// Now rewrite source WITHOUT updating the .orig or sidecar — simulates an
+		// in-place local feed edit.
 		file_put_contents($source, 'NEW content');
-		file_put_contents($orig, 'OLD content');
-		// Different mtimes.
-		touch($source, time() - 50);
-		touch($orig, time() - 200);
 
-		// Assert before-state: content differs.
-		$this->assertNotSame(md5_file($source), md5_file($orig), 'Precondition: content must differ');
+		// Force EQUAL mtime so the old mtime gate would have returned FALSE here
+		// (this is the pre-Phase-2 blind spot: same mtime, different content).
+		$ts = time() - 100;
+		touch($source, $ts);
+		touch($orig,   $ts);
+
+		// Precondition: mtimes equal, content differs.
+		$this->assertSame(filemtime($source), filemtime($orig), 'Precondition: mtimes forced equal');
+		$this->assertNotSame(
+			pfb_content_hash($source, TRUE),
+			pfb_content_hash($orig, TRUE),
+			'Precondition: source and .orig must have different hashes'
+		);
 
 		$result = pfb_local_feed_changed($source, $orig);
 
 		$this->assertTrue(
 			$result,
-			'pfb_local_feed_changed() must return TRUE when source content has changed'
+			'pfb_local_feed_changed() must return TRUE when source hash differs from sidecar '
+			. '(the same-second blind spot: equal mtime but different content)'
 		);
 	}
 
 	/**
-	 * Idempotence: calling pfb_local_feed_changed() twice in a row on the same
-	 * unchanged pair returns FALSE both times.
-	 * ADR-42 §2: "Identical content ⇒ identical hash ⇒ no re-ingest."
+	 * Phase 2: legacy .md5 sidecar — reads correctly as md5 and detects a content change.
+	 * After detection and a simulated ingest (pfb_hash_write), the legacy sidecar is
+	 * migrated: .md5 removed, .xxhash128 written.
 	 *
-	 *  GIVEN an unchanged source + .orig pair (same mtime);
-	 *   WHEN pfb_local_feed_changed() is called twice;
-	 *   THEN both calls return FALSE.
+	 *  GIVEN a .md5 sidecar seeded from OLD content, source rewritten with NEW content;
+	 *   WHEN pfb_local_feed_changed($source, $orig) is called (step 1 — detect);
+	 *   THEN it returns TRUE (legacy md5 baseline compared correctly, change detected).
+	 *  WHEN pfb_hash_write($orig, $orig) is called (step 2 — simulate ingest);
+	 *   THEN the .md5 sidecar is removed and a .xxhash128 sidecar is present.
 	 */
-	public function test_local_feed_changed_idempotent_on_unchanged_pair(): void
+	public function test_local_feed_changed_legacy_md5_sidecar_detects_change_and_migrates(): void
 	{
+		$source = $this->dir . '/legacy_source.txt';
+		$orig   = $this->dir . '/legacy.orig';
+		file_put_contents($source, 'OLD');
+		file_put_contents($orig,   'OLD');
+		// Plant a legacy .md5 sidecar (as if written by the pre-Phase-2 code).
+		file_put_contents($orig . '.md5', md5_file($orig));
+		$this->assertFileDoesNotExist($orig . '.xxhash128', 'Precondition: no .xxhash128 yet');
+
+		// Rewrite source with new content — simulates an in-place feed edit.
+		file_put_contents($source, 'NEW');
+
+		// Step 1: detect.
+		$result = pfb_local_feed_changed($source, $orig);
+		$this->assertTrue(
+			$result,
+			'pfb_local_feed_changed() must return TRUE when source md5 differs from legacy .md5 sidecar'
+		);
+
+		// Step 2: simulate ingest — pfb_hash_write runs inside pfb_download after .orig update.
+		file_put_contents($orig, 'NEW'); // .orig updated to new content
+		pfb_hash_write($orig, $orig);
+
+		// Migration: .md5 gone, .xxhash128 present.
+		$this->assertFileDoesNotExist($orig . '.md5', 'pfb_hash_write() must delete legacy .md5 sidecar');
+		$this->assertFileExists($orig . '.xxhash128', 'pfb_hash_write() must create .xxhash128 sidecar');
+	}
+
+	/**
+	 * Phase 2: absent sidecar — falls back to live-hashing the .orig as baseline.
+	 * Covers the first-pass-after-upgrade case: .orig exists but no sidecar yet.
+	 * If source == .orig bytes → not changed (new install / upgrade, no prior sidecar).
+	 *
+	 *  GIVEN source == .orig bytes, no sidecar;
+	 *   WHEN pfb_local_feed_changed($source, $orig) is called;
+	 *   THEN it returns FALSE (content matches live .orig hash).
+	 */
+	public function test_local_feed_changed_absent_sidecar_falls_back_to_live_orig_hash(): void
+	{
+		$content = 'first run content';
+		$source  = $this->dir . '/nosidecar_source.txt';
+		$orig    = $this->dir . '/nosidecar.orig';
+		file_put_contents($source, $content);
+		file_put_contents($orig,   $content);
+		// Ensure no sidecar exists.
+		$this->assertFileDoesNotExist($orig . '.xxhash128', 'Precondition: no .xxhash128');
+		$this->assertFileDoesNotExist($orig . '.md5', 'Precondition: no .md5');
+
+		$result = pfb_local_feed_changed($source, $orig);
+
+		$this->assertFalse(
+			$result,
+			'pfb_local_feed_changed() must return FALSE when source matches the live .orig (no sidecar)'
+		);
+	}
+
+	/**
+	 * Phase 2 idempotence: calling pfb_local_feed_changed() twice after a completed ingest
+	 * (sidecar written by pfb_hash_write) returns FALSE BOTH times — no perpetual re-ingest.
+	 *
+	 * This is the anti-staleness guard: if the sidecar were NOT refreshed at ingest, the
+	 * second call would compare the new source against the OLD sidecar and falsely return TRUE.
+	 *
+	 *  GIVEN a fresh .xxhash128 sidecar matching unchanged source and .orig;
+	 *   WHEN pfb_local_feed_changed() is called twice;
+	 *   THEN both return FALSE (the sidecar is correct, no re-ingest triggered).
+	 *
+	 * RED on pre-Phase-2 code: if pfb_local_feed_changed writes the sidecar (instead of
+	 * pfb_download), the second call would see a stale sidecar and return TRUE.
+	 */
+	public function test_local_feed_changed_idempotent_after_ingest_with_sidecar(): void
+	{
+		$content = 'idempotence test';
 		$source  = $this->dir . '/idem_source.txt';
 		$orig    = $this->dir . '/idem.orig';
-		$content = 'idempotence test';
 		file_put_contents($source, $content);
-		file_put_contents($orig, $content);
-		$ts = time() - 100;
-		touch($source, $ts);
-		touch($orig, $ts);
+		file_put_contents($orig,   $content);
+		// Simulate a completed ingest: pfb_hash_write writes the sidecar from the .orig.
+		pfb_hash_write($orig, $orig);
+
+		// Precondition: sidecar present.
+		$this->assertFileExists($orig . '.xxhash128', 'Precondition: .xxhash128 sidecar must exist');
 
 		$first  = pfb_local_feed_changed($source, $orig);
 		$second = pfb_local_feed_changed($source, $orig);
 
 		$this->assertFalse(
 			$first,
-			sprintf('First call must return FALSE, got %s', var_export($first, TRUE))
+			sprintf('First call must return FALSE (content unchanged), got %s', var_export($first, TRUE))
 		);
 		$this->assertFalse(
 			$second,
-			sprintf('Second call must return FALSE (idempotent), got %s', var_export($second, TRUE))
+			sprintf('Second call must return FALSE (idempotent — no perpetual re-ingest), got %s', var_export($second, TRUE))
 		);
 	}
 }
