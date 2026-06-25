@@ -1547,3 +1547,353 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
             deployed_vm.ssh("/bin/rm", "-f", feed_path)
         if reset_exc is not None:
             raise reset_exc
+
+
+# --------------------------------------------------------------------------- #
+# ADR-42 Phase 3 — conditional GET (ETag / If-None-Match → 304) over the live box.
+#
+# Four cases prove the four reachable branches of pfb_conditional_get_decision():
+#
+#   (a) unchanged feed + matching ETag → 304 → "304 not modified" → no re-ingest.
+#   (b) changed feed + new ETag → 200 → body_hash != persisted → re-ingest.
+#   (c) server emits no ETag (no validator) → download + hash decides (same bytes →
+#       "content unchanged" → no re-ingest).
+#   (d) spurious 200 with identical bytes (server ignores If-None-Match) →
+#       body_hash == persisted → "content unchanged" → no re-ingest.
+#
+# The mock server is extended with ETag support (enable_etag / set_content).
+# All cases use the cron verb — the real detector path.  These run live in Phase 5;
+# they are correct by construction here.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(600)
+def test_cron_304_skips_unchanged_remote_feed(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-42 Phase 3 (a): 304 from a conditional GET skips re-ingest of an unchanged remote feed.
+
+    The primary Phase-3 win: the guest sends ``If-None-Match`` with the stored ETag; the
+    server returns 304 (no body); the detector logs "304 not modified" and skips re-ingest.
+
+    RED on pre-Phase-3 code: the old HEAD probe path logs "Remote timestamp: … Update not
+    required" — the "304 not modified" marker is the Phase-3 proof that the new code path
+    was taken; its absence would mean the old HEAD path is still running.
+
+    Scenario (BDD):
+      Given the remote DNSBL feed is loaded (Force Update writes .orig + .xxhash128 + .etag);
+        ``dom`` is VIP-blocked;
+      When feed content is UNCHANGED (same ETag on the server), pfb_reuse is OFF and
+        pfb_dailystart matches now, and the ``cron`` verb is run;
+      Then the detector logs "304 not modified", does NOT log "Downloading update",
+        and ``dom`` remains blocked.
+    """
+    dom = h.unique_domain("p3304skip")
+    header = "smokep3304skip"
+    etag = '"p3-etag-v1"'
+    feed_name = "p3_304_skip.txt"
+
+    try:
+        h.unblock_egress()
+
+        # Register the feed WITH an ETag so the guest can store a validator.
+        mock_feeds.register(feed_name, dom + "\n")
+        mock_feeds.enable_etag(feed_name, etag)
+        feed_url = mock_feeds.feed_url(feed_name)
+
+        # GIVEN — inject + Force Update to establish baseline + store .etag validator.
+        spec = h.DnsblCase(aliasname="smokep3304skip", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom is VIP-blocked.
+        h.flush_unbound_name(deployed_vm, dom)
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
+        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+
+        # Feed unchanged; ETag still matches.
+        _pin_cron_due(deployed_vm)
+        not_mod_before = _feed_log_count(deployed_vm, header, "304 not modified")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+
+        # WHEN — cron.
+        h.reload(deployed_vm, "cron")
+
+        # Fast guard.
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, (
+            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
+            f"EveryDay feed not due (hour rollover?); re-run"
+        )
+
+        # THEN — "304 not modified" appeared (Phase-3 code-path proof).
+        not_mod_after = _feed_log_count(deployed_vm, header, "304 not modified")
+        assert not_mod_after > not_mod_before, (
+            f"Expected '[ {header} ] ... 304 not modified' (Phase-3 conditional GET proof) "
+            f"(before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
+        )
+
+        # THEN — no re-ingest.
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after == dl_before, (
+            f"Expected NO '[ {header} ] ... Downloading update' after 304 "
+            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
+        )
+
+        # THEN — dom remains blocked.
+        ans_after = h.dns_probe_client(client_vm, dom, "A")
+        assert h.is_vip(ans_after), f"AFTER 304 cron: {dom} must remain VIP-blocked, got {ans_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_200_reingest_changed_remote_feed(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-42 Phase 3 (b): a changed remote feed (new ETag → 200) is re-ingested via hash compare.
+
+    The server bumps the ETag when the body changes; the guest's stored ETag no longer
+    matches → 200 with new body → body_hash != persisted_hash → re-ingest.
+
+    RED on a broken impl that only checks status (304/200) without the hash compare:
+    it would still re-ingest on 200, but the "content changed" marker proves the Phase-3
+    hash-comparison path is taken (not the old "md5 changed" path).
+
+    Scenario (BDD):
+      Given the remote DNSBL feed is loaded (``dom_old`` blocked; .etag=etag_v1);
+        ``dom_new`` is NOT blocked;
+      When the feed body is updated + ETag bumped to etag_v2, pfb_reuse is OFF and
+        pfb_dailystart matches now, and the ``cron`` verb runs;
+      Then the detector logs "content changed" + "Downloading update",
+        ``dom_new`` becomes VIP-blocked, and ``dom_old`` remains blocked.
+    """
+    dom_old = h.unique_domain("p3200old")
+    dom_new = h.unique_domain("p3200new")
+    header = "smokep3200chg"
+    etag_v1 = '"p3-etag-v1"'
+    etag_v2 = '"p3-etag-v2"'
+    feed_name = "p3_200_changed.txt"
+
+    try:
+        h.unblock_egress()
+
+        mock_feeds.register(feed_name, dom_old + "\n")
+        mock_feeds.enable_etag(feed_name, etag_v1)
+        feed_url = mock_feeds.feed_url(feed_name)
+
+        spec = h.DnsblCase(aliasname="smokep3200chg", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom_old blocked, dom_new resolves.
+        h.flush_unbound_name(deployed_vm, dom_old)
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
+        assert h.is_vip(ans_old_before), f"BEFORE: {dom_old} must be VIP-blocked, got {ans_old_before}"
+        ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
+        assert not h.is_vip(ans_new_before), f"BEFORE: {dom_new} must NOT be blocked, got {ans_new_before}"
+
+        # WHEN — update body + bump ETag on the server.
+        mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
+
+        _pin_cron_due(deployed_vm)
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+
+        h.reload(deployed_vm, "cron")
+
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
+
+        # THEN — "Downloading update" appeared (feed was re-ingested).
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after > dl_before, (
+            f"Expected '[ {header} ] ... Downloading update' after changed-feed cron "
+            f"(before={dl_before}, after={dl_after}) — detector did not detect the change"
+        )
+
+        # THEN — dom_new becomes blocked.
+        h.flush_unbound_name(deployed_vm, dom_new)
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
+        assert h.is_vip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be VIP-blocked (changed feed re-ingested), got {ans_new_after}"
+        )
+        ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
+        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_no_validator_download_hash_decides(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-42 Phase 3 (c): server with no ETag → download + hash decides (same bytes → no re-ingest).
+
+    When no validator is stored (server emits no ETag, no Last-Modified), the detector
+    downloads the full body and compares the xxh128 hash.  Identical bytes → "content
+    unchanged" → no re-ingest.  This proves the last-resort path never stalls.
+
+    RED on a broken impl that skips the download when no validator is stored: no
+    "content unchanged" marker would ever appear for a no-ETag server feed.
+
+    Scenario (BDD):
+      Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
+        ``dom`` is VIP-blocked;
+      When feed content is UNCHANGED, pfb_reuse is OFF, pfb_dailystart matches now,
+        and the ``cron`` verb runs;
+      Then the detector downloads the full body, logs "content unchanged",
+        does NOT log "Downloading update", and ``dom`` remains blocked.
+    """
+    dom = h.unique_domain("p3noetag")
+    header = "smokep3noetag"
+    feed_name = "p3_no_etag.txt"
+
+    try:
+        h.unblock_egress()
+
+        # Register WITHOUT ETag — server always returns plain 200 (no conditional support).
+        mock_feeds.register(feed_name, dom + "\n")
+        feed_url = mock_feeds.feed_url(feed_name)
+
+        spec = h.DnsblCase(aliasname="smokep3noetag", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom is blocked.
+        h.flush_unbound_name(deployed_vm, dom)
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
+        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+
+        # Feed unchanged; no If-None-Match will be sent (no stored ETag).
+        _pin_cron_due(deployed_vm)
+        not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+
+        h.reload(deployed_vm, "cron")
+
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
+
+        # THEN — "content unchanged" appeared (full download + hash comparison taken).
+        not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+        assert not_unch_after > not_unch_before, (
+            f"Expected 'content unchanged' log line after no-validator cron "
+            f"(before={not_unch_before}, after={not_unch_after}) — download+hash path not taken"
+        )
+
+        # THEN — no re-ingest (identical bytes).
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after == dl_before, (
+            f"Expected NO '[ {header} ] ... Downloading update' (same bytes) "
+            f"(before={dl_before}, after={dl_after}) — wrongly re-ingested"
+        )
+
+        # THEN — dom remains blocked.
+        ans_after = h.dns_probe_client(client_vm, dom, "A")
+        assert h.is_vip(ans_after), f"AFTER no-validator cron: {dom} must remain VIP-blocked, got {ans_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_spurious_200_same_bytes_no_reingest(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-42 Phase 3 (d) — §2 contract #5: a spurious 200 with identical bytes is NOT re-ingested.
+
+    A server that ignores conditional requests always answers 200.  body_hash ==
+    persisted_hash → "content unchanged" → no re-ingest.  This proves contract #5.
+
+    RED on a broken impl that treats every 200 as changed: it would log "Downloading update"
+    and re-ingest on every cron run — the "content unchanged" marker proves the hash
+    comparison is applied and wins over the raw status code.
+
+    Scenario (BDD):
+      Given the remote IP feed is loaded (``member_ip`` is in the pf table); server has no ETag;
+      When feed bytes are UNCHANGED, pfb_reuse is OFF, pfb_dailystart matches now,
+        and the ``cron`` verb runs (server returns plain 200 — no If-None-Match sent);
+      Then the detector logs "content unchanged", does NOT log "Downloading update",
+        and the pf table still contains ``member_ip``.
+    """
+    member_ip = "198.51.100.1"
+    feed_name = "p3_spurious_200.txt"
+    header = "smokep3spur200"
+
+    try:
+        h.unblock_egress()
+
+        # Register WITHOUT ETag → server always returns 200 (no conditional support).
+        mock_feeds.register(feed_name, member_ip + "\n")
+        feed_url = mock_feeds.feed_url(feed_name)
+
+        spec = h.IpCase(aliasname="smokep3spur200", feed_url=feed_url, header=header, family="v4")
+        with h.CaseContext(deployed_vm, spec):
+            members_before = h.wait_pfctl_table(deployed_vm, spec.alias)
+            assert h.member_present(members_before, member_ip), (
+                f"BEFORE: {member_ip} must be in {spec.alias}: {members_before}"
+            )
+
+            # Pin cron due (inside CaseContext so config is active).
+            _pin_cron_due(deployed_vm)
+            not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+            dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+            hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+
+            # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
+            h.reload(deployed_vm, "cron")
+
+            hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+            assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
+
+            # THEN — "content unchanged" appeared (spurious 200 detected by hash).
+            not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+            assert not_unch_after > not_unch_before, (
+                f"Expected 'content unchanged' after spurious-200 cron "
+                f"(before={not_unch_before}, after={not_unch_after}) — hash compare not applied"
+            )
+
+            # THEN — no re-ingest.
+            dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+            assert dl_after == dl_before, (
+                f"Expected NO '[ {header} ] ... Downloading update' (identical bytes) "
+                f"(before={dl_before}, after={dl_after}) — spurious 200 triggered wrong re-ingest"
+            )
+
+            # THEN — pf table still contains member_ip.
+            members_after = h.pfctl_table_members(deployed_vm, spec.alias)
+            assert h.member_present(members_after, member_ip), (
+                f"AFTER spurious-200 cron: {member_ip} must still be in {spec.alias}: {members_after}"
+            )
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if reset_exc is not None:
+            raise reset_exc
