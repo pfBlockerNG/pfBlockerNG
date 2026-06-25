@@ -692,9 +692,29 @@ def synthesize_uses_deps(
 
 def _glob_origin(ports_root: Path, pkgdir: str) -> str:
     """Find a port's <category>/<pkgdir> origin by globbing the ports tree (php
-    extensions live in assorted categories, e.g. devel/php83-intl)."""
+    extensions live in assorted categories, e.g. devel/php83-intl).
+
+    Falls back to ``git ls-files`` when the filesystem glob finds nothing AND the
+    ports_root is a git working tree — this works on a blobless/sparse clone where
+    only some Makefiles are checked out but git still knows all paths from the trees.
+    """
     for p in ports_root.glob(f"*/{pkgdir}/Makefile"):
         return f"{p.parent.parent.name}/{p.parent.name}"
+    # Blobless+sparse clone: filesystem glob yields nothing, but git knows all paths.
+    if (ports_root / ".git").exists():
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(ports_root), "ls-files", f"*/{pkgdir}/Makefile"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for line in r.stdout.splitlines():
+                parts = line.strip().split("/")
+                if len(parts) >= 3:
+                    return f"{parts[0]}/{parts[1]}"
+        except subprocess.CalledProcessError:
+            pass
     return ""
 
 
@@ -1171,17 +1191,94 @@ def seed_vars(portdir: Path, workdir: Path, py_flavor: str) -> dict[str, str]:
     }
 
 
+_CHANNEL_PORT_SUB = {
+    "stable": "pfSense-pkg-pfBlockerNG",
+    "devel": "pfSense-pkg-pfBlockerNG-devel",
+    "nightly": "pfSense-pkg-pfBlockerNG-nightly",
+}
+
+
+def print_build_origins(args: argparse.Namespace) -> int:
+    """Print (one per line) every ports-tree origin dir the build will read for
+    the given --channel / --php / --py-flavor, then exit 0.  Does NOT build.
+
+    The set is: the pfBlockerNG port's own origin; every DEPENDS origin from its
+    Makefile; ``lang/python{pyv}`` and ``lang/php{phpv}``; and each php extension's
+    origin resolved via ``_glob_origin`` (filesystem first, git ls-files fallback
+    for blobless/sparse clones).
+
+    Requires only the pfBlockerNG port Makefile to be present — dep dirs need not
+    be checked out.
+    """
+    ports_root = Path(args.ports).resolve()
+    if args.port_dir:
+        portdir = Path(args.port_dir).resolve()
+    else:
+        portdir = ports_root / "net" / _CHANNEL_PORT_SUB[args.channel]
+    makefile = portdir / "Makefile"
+    if not makefile.is_file():
+        sys.stderr.write(f"build-pkg-portable: port Makefile not found: {makefile}\n")
+        return 1
+
+    # Minimal seed — no workdir, no stage, no WRKSRC expansion needed.
+    seed: dict[str, str] = {
+        "PREFIX": "/usr/local",
+        "LOCALBASE": "/usr/local",
+        "DATADIR": "${PREFIX}/share/${PORTNAME}",
+        "FILESDIR": str(portdir / "files"),
+        "PORTREVISION": "0",
+        "PORTEPOCH": "0",
+    }
+    py_flavor = args.py_flavor or ""
+    if py_flavor:
+        seed["PYTHON_PKGNAMEPREFIX"] = f"{py_flavor}-"
+        seed["PY_FLAVOR"] = py_flavor
+    mk = Makefile(makefile, seed)
+
+    origins: set[str] = set()
+
+    # 1. The pfBlockerNG port's own origin.
+    categories = mk.get("CATEGORIES").split()
+    portname = mk.get("PORTNAME")
+    if categories and portname:
+        origins.add(f"{categories[0]}/{portname}")
+
+    # 2. Every RUN_DEPENDS / LIB_DEPENDS origin (strip @flavor).
+    for var in ("LIB_DEPENDS", "RUN_DEPENDS"):
+        for ent in mk.get(var).split():
+            _, _, origin_spec = ent.partition(":")
+            if origin_spec:
+                origin, _, _ = origin_spec.partition("@")
+                if origin:
+                    origins.add(origin)
+
+    # 3. USES-injected lang ports.
+    uses_bases = {u.split(":")[0] for u in mk.get("USES").split()}
+    if "python" in uses_bases and py_flavor:
+        pyv = py_flavor[2:] if py_flavor.startswith("py") else py_flavor
+        origins.add(f"lang/python{pyv}")
+    if "php" in uses_bases:
+        php_ver = args.php or ""
+        if php_ver:
+            phpv = php_ver.replace(".", "")
+            origins.add(f"lang/php{phpv}")
+            # 4. Each php extension's category-qualified origin.
+            for tok in mk.get("USE_PHP").split():
+                ext = tok.split(":")[0]
+                origin = _glob_origin(ports_root, f"php{phpv}-{ext}")
+                origins.add(origin if origin else f"lang/php{phpv}-{ext}")
+
+    for o in sorted(origins):
+        print(o)
+    return 0
+
+
 def run_build(args: argparse.Namespace) -> Build:
     ports_root = Path(args.ports).resolve()
     if args.port_dir:
         portdir = Path(args.port_dir).resolve()
     else:
-        sub = {
-            "stable": "pfSense-pkg-pfBlockerNG",
-            "devel": "pfSense-pkg-pfBlockerNG-devel",
-            "nightly": "pfSense-pkg-pfBlockerNG-nightly",
-        }[args.channel]
-        portdir = ports_root / "net" / sub
+        portdir = ports_root / "net" / _CHANNEL_PORT_SUB[args.channel]
     makefile = portdir / "Makefile"
     if not makefile.is_file():
         raise BuildError(f"port Makefile not found: {makefile}")
@@ -1433,8 +1530,20 @@ def main(argv: list[str]) -> int:
     )
     g_out.add_argument("--keep-work", action="store_true", help="keep the temporary work/staging dir")
     g_out.add_argument("--dry-run", action="store_true", help="print the build plan; do not write a .pkg")
+    g_out.add_argument(
+        "--print-build-origins",
+        action="store_true",
+        help=(
+            "print (one per line) every ports-tree origin dir the build will read "
+            "for the given --channel/--php/--py-flavor, then exit 0 without building. "
+            "Used by scripts/sparse-clone-ports.sh to derive the sparse-checkout set."
+        ),
+    )
 
     args = ap.parse_args(argv)
+
+    if args.print_build_origins:
+        return print_build_origins(args)
 
     try:
         b = run_build(args)

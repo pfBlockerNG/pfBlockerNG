@@ -847,9 +847,13 @@ jobs:
                 echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
 
                 PORTS_DIR="${RUNNER_TEMP}/ports-${VARSLUG}-${MAJOR}-${ARCH}"
-                git clone --depth 1 -b pfblockerng/use-github \
+                sh scripts/sparse-clone-ports.sh \
                   "https://github.com/pfBlockerNG/FreeBSD-ports" \
-                  "$PORTS_DIR"
+                  pfblockerng/use-github \
+                  "$PORTS_DIR" \
+                  "$PKG_CHANNEL" \
+                  "$PHP" \
+                  "$PY"
 
                 PKG_OUT="out/${VARSLUG}-major-${MAJOR}-${ARCH}"
                 mkdir -p "$PKG_OUT"

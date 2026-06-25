@@ -114,11 +114,16 @@ jobs:
         # builder also accepts the `zstandard` module, or --compression xz (stdlib).
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Clone the FreeBSD-ports tree (port + Mk framework)
+      - name: Clone the FreeBSD-ports tree (blobless + sparse, ~12x faster)
         run: |
           set -eu
-          git clone --depth 1 -b '${{ inputs.ports_ref }}' \
-            "https://github.com/${{ inputs.ports_repo }}" "${{ runner.temp }}/ports"
+          sh scripts/sparse-clone-ports.sh \
+            "https://github.com/${{ inputs.ports_repo }}" \
+            '${{ inputs.ports_ref }}' \
+            "${{ runner.temp }}/ports" \
+            '${{ inputs.channel }}' \
+            '${{ inputs.php_version }}' \
+            '${{ inputs.py_flavor }}'
 
       - name: Build the .pkg (portable, from the local tree)
         run: |
