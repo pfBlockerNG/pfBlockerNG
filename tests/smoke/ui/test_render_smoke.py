@@ -128,7 +128,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("log", "/pfblockerng/pfblockerng_log.php", ("Log/File Browser selections",)),
     Page("sync", "/pfblockerng/pfblockerng_sync.php", ("XMLRPC Sync Settings",)),
     Page("safesearch", "/pfblockerng/pfblockerng_safesearch.php", ("SafeSearch settings", "DNSBL SafeSearch")),
-    Page("update", "/pfblockerng/pfblockerng_update.php", ("Update Settings",)),
+    Page("update", "/pfblockerng/pfblockerng_update.php", ("Update Settings", "Schedule")),
     # blacklist.php is always the DNSBL Category view; the long info line is a stable literal.
     Page(
         "blacklist",
@@ -366,6 +366,60 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
         assert m is not None, f"update page is missing the '{name}' textarea"
         tag = m.group(0)
         assert re.search(r"\breadonly\b", tag), f"'{name}' textarea is editable (no readonly): {tag}"
+
+
+def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Phase-6 Update page revamp: new scope/force controls present; old opaque ones gone.
+
+    The opaque Force/Update/Cron/Reload radio trio was replaced with an explicit Run
+    Scope radio (ip / dnsbl / both) and a Force Reparse checkbox.  A read-only Schedule
+    section now shows last-run and next-due per ledger job.
+
+    Scenario: Update page revamp controls render after Phase 6.
+      Background: pfBlockerNG deployed; Update page renders cleanly.
+
+    Given the Update page renders via the clean-render oracle (200, no PHP diagnostic,
+      "Update Settings" + "Schedule" section markers present),
+
+    When the body is inspected for the new control ids and the old control ids,
+
+    Then the new scope radio IDs are PRESENT (``pfb_scope_both``, ``pfb_scope_ip``,
+      ``pfb_scope_dnsbl``) — proving the scope selector rendered;
+    And the Force Reparse checkbox name is PRESENT (``pfb_run_force``) — proving the
+      force toggle rendered;
+    And ``Run Scope`` and ``Force Reparse`` group labels are PRESENT — proving the new
+      form groups rendered;
+    And ``Schedule`` section text is PRESENT — proving the new section rendered;
+    And the old opaque radio IDs are ABSENT (``pfb_force_update``, ``pfb_force_cron``,
+      ``pfb_force_reload``, ``pfb_reload_option_all``) — PRESENT before Phase 6 in the
+      old Force/Reload radio groups, so their absence is the before/after fail guard.
+
+    ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
+    """
+    resp = webui.get(_UPDATE_PAGE)
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
+    assert result.ok, f"Update page render oracle failed: {result.detail}"
+    body = resp.text
+
+    # PRESENT: new Run Scope radio control IDs
+    for needle in ('id="pfb_scope_both"', 'id="pfb_scope_ip"', 'id="pfb_scope_dnsbl"'):
+        assert needle in body, f"Update page missing new scope radio {needle!r}"
+
+    # PRESENT: Force Reparse checkbox
+    assert 'name="pfb_run_force"' in body, "Update page missing 'pfb_run_force' checkbox"
+
+    # PRESENT: section / group labels confirming the new design
+    for needle in ("Run Scope", "Force Reparse", "Schedule"):
+        assert needle in body, f"Update page missing new label {needle!r}"
+
+    # ABSENT: old opaque force/reload radio IDs (PRESENT in old code → fail before Phase 6)
+    for needle in (
+        'id="pfb_force_update"',
+        'id="pfb_force_cron"',
+        'id="pfb_force_reload"',
+        'id="pfb_reload_option_all"',
+    ):
+        assert needle not in body, f"Update page still has old control {needle!r} — Phase-6 revamp not applied"
 
 
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

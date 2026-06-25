@@ -68,58 +68,45 @@ function pfbupdate_status($status) {
 }
 
 
-// Function to perform a Force Update, Cron or Reload
-function pfb_cron_update($type) {
-	global $pfb, $pconfig;
+// Dispatch pfb_trigger via the Phase-3 explicit API, stream log output,
+// then update the due ledger so the Schedule view reflects the manual run.
+function pfb_runnow(string $scope, bool $force): void {
+	global $pfb;
 
-	if (!in_array($type, array('update', 'cron', 'reload'))) {
-		exit;
-	}
-
-	// Query for any active pfBlockerNG CRON jobs
-	exec('/bin/ps -wx', $result_cron);
-	if (preg_grep("/pfblockerng[.]php\s+?(cron|update)/", $result_cron)) {
-		pfbupdate_status(gettext("Force {$type} Terminated - Failed due to Active Running Task. Click 'View' for running process"));
-		exit;
+	// Check for any active pfBlockerNG process before dispatching.
+	exec('/bin/ps -wax', $result_ps);
+	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick)/', $result_ps)) {
+		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
+		return;
 	}
 
 	if (!file_exists("{$pfb['log']}")) {
 		touch("{$pfb['log']}");
 	}
 
-	// Update status window with correct task
-	if ($type == 'update') {
-		pfbupdate_status(gettext('Running Force Update Task'));
-	} elseif ($type == 'reload') {
-		pfbupdate_status(gettext("Running Force Reload Task - {$pconfig['pfb_reload_option']}"));
-		switch ($pconfig['pfb_reload_option']) {
-			case 'IP':
-				$type = 'updateip';
-				break;
-			case 'DNSBL':
-				$type = 'updatednsbl';
-				rmdir_recursive("{$pfb['dnsdir']}");
-				break;
-			case 'All':
-			default:
-				$type = 'update';
-				rmdir_recursive("{$pfb['dnsdir']}");
-		}
-	} else {
-		pfbupdate_status(gettext('Running Force CRON Task'));
-	}
+	$trigger     = $force ? 'force' : 'manual';
+	$force_val   = $force ? 'true'  : 'false';
+	$scope_esc   = escapeshellarg($scope);
+	$trigger_esc = escapeshellarg($trigger);
 
-	// Remove any existing pfBlockerNG CRON Jobs
-	install_cron_job('pfblockerng.php cron', FALSE);
+	pfbupdate_status(gettext("Running: scope={$scope} force={$force_val}"));
 
-	// Execute PHP process in the background
-	pfb_logger("\n [ Force Reload Task - {$pconfig['pfb_reload_option']} ]\n", 1);
+	// Remove the tick cron to prevent overlap; sync_package_pfblockerng() restores it.
+	install_cron_job('pfblockerng.php tick', FALSE);
 
-	$type_esc = escapeshellarg($type);
-	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type_esc} >> {$pfb['log']} 2>&1");
+	pfb_logger("\n [ Run Now - scope={$scope} force={$force_val} trigger={$trigger} ]\n", 1);
 
-	// Execute Live Tail function
+	// Record $now before dispatching so last_run reflects when the run was requested.
+	$now = time();
+	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['log']} 2>&1");
+
+	// Block until the bg process writes "UPDATE PROCESS ENDED".
 	pfb_livetail($pfb['log'], 'force');
+
+	// Update the 'cron' ledger entry so the Schedule view reflects this manual run.
+	// jitter_max=0 mirrors the tick's cron dispatch (no spread for manual runs).
+	$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
+	pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));
@@ -132,19 +119,19 @@ if ($_POST) {
 	$pconfig = $_POST;
 }
 
-// Validate the user-supplied 'Force Reload' option against its allowed values,
-// defaulting to 'All' for any unexpected input.
-if (isset($pconfig['pfb_reload_option'])) {
-	$pconfig['pfb_reload_option'] = pfb_reload_option_value($pconfig['pfb_reload_option']);
-}
-
-// Load Wizard settings and reload pfBlockerNG
+// Wizard handler (updated to Phase-3 API: scope=both force-reparse).
 $pfb_wizard = FALSE;
 if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {
-	$pconfig['run']			= '';
-	$pconfig['pfb_force']		= 'reload';
-	$pconfig['pfb_reload_option']	= 'All';
-	$pfb_wizard			= TRUE;
+	$pconfig['run']           = '';
+	$pconfig['pfb_scope']     = 'both';
+	$pconfig['pfb_run_force'] = 'on';	// reparse = Force Reload equivalent
+	$pfb_wizard               = TRUE;
+}
+
+// Validate user-supplied scope; default to 'both' for unexpected input.
+$pfb_allowed_scopes = array('ip', 'dnsbl', 'both');
+if (isset($pconfig['pfb_scope']) && !in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE)) {
+	$pconfig['pfb_scope'] = 'both';
 }
 
 // Define default Alerts Tab href link (Top row)
@@ -249,7 +236,7 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 	$nextcron = "{$hour_final}:{$min_final}:{$sec_final}";
 }
 
-$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['log']} 2>&1";
+$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
 if ($pfb['interval'] == 1) {
 	$pfb_hour = '*';
 } elseif ($pfb['interval'] == 24) {
@@ -258,7 +245,7 @@ if ($pfb['interval'] == 1) {
 	$pfb_hour = implode(',', pfb_cron_base_hour($pfb['interval']));
 }
 
-// Determine if CRON job is missing
+// Determine if the tick CRON job is missing
 if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && $pfb['interval'] != 'Disabled' &&
     !pfblockerng_cron_exists($pfb_cmd, $pfb['min'], $pfb_hour, '*', '*')) {
 	$cronreal = ' [ Missing cron task ]';
@@ -275,25 +262,37 @@ $status = 'NEXT Scheduled CRON Event will run at'
 	. "&emsp;<strong>{$cronreal}</strong>&emsp;with<strong><span style=\"color: red;\">&emsp;{$nextcron}"
 	. '&emsp;</span></strong> time remaining.';
 
-// Query for any active pfBlockerNG CRON jobs
-exec('/bin/ps -wax', $result_cron);
-if (preg_grep("/pfblockerng[.]php\s+?(cron|update)/", $result_cron)) {
+// Query for any active pfBlockerNG task
+exec('/bin/ps -wax', $result_ps);
+if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick)/', $result_ps)) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'Active pfBlockerNG CRON JOB'
 		. '</span>&emsp;<i class="fa-solid fa-spinner fa-pulse fa-lg"></i>';
 }
 $status .= '<br />&emsp;<small><span style="color: red;">Refresh to update current status and time remaining.</span></small>';
 
-$options = '<div class="infoblock"><dl class="dl-horizontal">'
-	. '	<dt>Update:</dt><dd>will process new changes and download new Alias/Lists.</dd>'
-	. '	<dt>Cron:</dt><dd>will download any Alias/Lists that are within the Frequency Setting (due for Update).</dd>'
-	. '	<dt>Reload:</dt><dd>will reload all Lists using the existing Downloaded files.<br />'
-	. '	This is useful when Lists are out of <q>sync</q>, Whitelisting, Blacklisting, Suppression, TLD or Reputation changes were made.</dd>'
-	. '</dl></div>';
+// Read the due-ledger entries for the Schedule view (read-only at page load).
+$ledger_cron = pfb_due_ledger_read_entry('cron', $pfb['dbdir']);
+$ledger_dcc  = pfb_due_ledger_read_entry('dcc',  $pfb['dbdir']);
+$ledger_bl   = pfb_due_ledger_read_entry('bl',   $pfb['dbdir']);
+
+/**
+ * Format a ledger entry as "Last: YYYY-MM-DD HH:MM  Next: YYYY-MM-DD HH:MM"
+ * or "Not yet run" when the entry is absent.
+ */
+function pfb_ledger_entry_html(?array $entry): string {
+	if ($entry === NULL) {
+		return '<em>Not yet run</em>';
+	}
+	$last = isset($entry['last_run']) ? date('Y-m-d H:i', (int)$entry['last_run']) : '—';
+	$next = isset($entry['next_due']) ? date('Y-m-d H:i', (int)$entry['next_due']) : '—';
+	return "Last: <strong>{$last}</strong>&emsp;Next: <strong>{$next}</strong>";
+}
 
 // Create Form
 $form = new Form(FALSE);
 
+// ---- Update Settings section ----
 $section = new Form_Section('Update Settings');
 $section->addInput(new Form_StaticText(
 	'Links',
@@ -303,81 +302,51 @@ $section->addInput(new Form_StaticText(
 	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
 ));
 
-// Build Status section
-$section->addInput(new Form_StaticText(
-	'Status',
-	$status
-));
-$form->add($section);
-
-// Build Options section
-$group = new Form_Group('Force Options');
-$group->add(new Form_StaticText(
-	NULL,
-	'<span style="color: red;">** AVOID ** </span>&nbsp;Running these <q>Force</q> options - when CRON is expected to RUN!&emsp;'
-	. $options
-));
-
-$section->add($group);
-
-$group = new Form_Group('Select \'Force\' option');
+// Run Scope selector (ip / dnsbl / both)
+$pfb_scope_val = $pconfig['pfb_scope'] ?? 'both';
+$group = new Form_Group('Run Scope');
 $group->add(new Form_Checkbox(
-	'pfb_force',
+	'pfb_scope',
 	NULL,
-	'Update',
-	TRUE,
-	'update'
-))->displayAsRadio('pfb_force_update')->setAttribute('title', 'Force Update: IP & DNSBL.')->setWidth(1);
+	'Both',
+	$pfb_scope_val === 'both',
+	'both'
+))->displayAsRadio('pfb_scope_both')->setAttribute('title', 'Sync IP and DNSBL feeds.')->setWidth(1);
 
 $group->add(new Form_Checkbox(
-	'pfb_force',
-	NULL,
-	'Cron',
-	FALSE,
-	'cron'
-))->displayAsRadio('pfb_force_cron')->setAttribute('title', 'Force Cron: IP & DNSBL.')->setWidth(1);
-
-$group->add(new Form_Checkbox(
-	'pfb_force',
-	NULL,
-	'Reload',
-	FALSE,
-	'reload'
-))->displayAsRadio('pfb_force_reload')->setAttribute('title', 'Force Reload: IP & DNSBL.')->setWidth(1);
-$section->add($group);
-
-// Build 'Force Options' group section
-$group = new Form_Group('Select \'Reload\' option');
-$group->add(new Form_Checkbox(
-	'pfb_reload_option',
-	NULL,
-	'All',
-	TRUE,
-	'All'
-))->displayAsRadio('pfb_reload_option_all')->setAttribute('title', 'Reload: IP & DNSBL.')->setWidth(1);
-
-$group->add(new Form_Checkbox(
-	'pfb_reload_option',
+	'pfb_scope',
 	NULL,
 	'IP',
-	FALSE,
-	'IP'
-))->displayAsRadio('pfb_reload_option_ip')->setAttribute('title', 'Reload: IP only.')->setWidth(1);
+	$pfb_scope_val === 'ip',
+	'ip'
+))->displayAsRadio('pfb_scope_ip')->setAttribute('title', 'Sync IP feeds only.')->setWidth(1);
 
 $group->add(new Form_Checkbox(
-	'pfb_reload_option',
+	'pfb_scope',
 	NULL,
 	'DNSBL',
-	FALSE,
-	'DNSBL'
-))->displayAsRadio('pfb_reload_option_dnsbl')->setAttribute('title', 'Reload: DNSBL only.')->setWidth(1);
+	$pfb_scope_val === 'dnsbl',
+	'dnsbl'
+))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Sync DNSBL feeds only.')->setWidth(1);
+
+$group->setHelp('Which lists to sync on Run Now: Both, IP-only, or DNSBL-only.');
 $section->add($group);
 
+// Force Reparse toggle
+$group = new Form_Group('Force Reparse');
+$group->add(new Form_Checkbox(
+	'pfb_run_force',
+	NULL,
+	'Reparse',
+	isset($pconfig['pfb_run_force']) && $pconfig['pfb_run_force'] === 'on'
+))->setAttribute('title', 'Reparse cached downloads even if no changes are detected.');
+$group->setHelp('When checked, reprocesses existing downloaded files without re-checking for changes.');
+$section->add($group);
 
 $group = new Form_Group(NULL);
 $btn_run = new Form_Button(
 	'run',
-	'Run',
+	'Run Now',
 	NULL,
 	'fa-solid fa-play-circle'
 );
@@ -412,8 +381,29 @@ $group->add(new Form_StaticText(
 ));
 
 $section->add($group);
+$form->add($section);
 
-// Build 'textarea' windows
+// ---- Schedule section ----
+$section = new Form_Section('Schedule');
+$section->addInput(new Form_StaticText(
+	'Cron Status',
+	$status
+));
+$section->addInput(new Form_StaticText(
+	'Feed cron',
+	pfb_ledger_entry_html($ledger_cron)
+));
+$section->addInput(new Form_StaticText(
+	'MaxMind/Extras',
+	pfb_ledger_entry_html($ledger_dcc)
+));
+$section->addInput(new Form_StaticText(
+	'DNSBL category',
+	pfb_ledger_entry_html($ledger_bl)
+));
+$form->add($section);
+
+// ---- Log section ----
 $section = new Form_Section('Log');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -445,17 +435,12 @@ if (isset($pconfig['log_view'])) {
 	}
 }
 
-if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) && !empty($pconfig['pfb_force'])) {
-	// Run appropriate 'Force command'
-	if ($pconfig['pfb_force'] == 'update') {
-		pfb_cron_update('update');
-	} elseif ($pconfig['pfb_force'] == 'cron') {
-		pfb_cron_update('cron');
-	} elseif ($pconfig['pfb_force'] == 'reload') {
-		PfbConfig::write('pfb_reuse', 'on');
-		write_config('pfBlockerNG: Running Force Reload');
-		pfb_cron_update('reload');
-	}
+// Run Now handler — dispatches pfb_trigger via the Phase-3 explicit API.
+if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) &&
+    isset($pconfig['pfb_scope']) && !empty($pconfig['pfb_scope'])) {
+	$scope = in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE) ? $pconfig['pfb_scope'] : 'both';
+	$force = isset($pconfig['pfb_run_force']) && $pconfig['pfb_run_force'] === 'on';
+	pfb_runnow($scope, $force);
 
 	if ($pfb_wizard) {
 
@@ -496,58 +481,20 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run
 
 events.push(function(){
 
-	// Expand textarea to full width
-	$('label[class="col-sm-2 control-label"]:eq(6)').remove();
-	$('div[class="col-sm-10"]:eq(4), div[class="col-sm-10"]:eq(5)').removeClass('col-sm-10').addClass('col-sm-12');
-
-	// Hide/Show 'Force Reload' radios
-	function mode_change(mode) {
-		if (mode == 'on') {
-			hideCheckbox('pfb_reload_option_all', false);
-		} else {
-			hideCheckbox('pfb_reload_option_all',  true);
-		}
-	}
-	mode_change();
-
-	// On-click - toggle radios on/off
-	$('#pfb_force_update').click(function() {
-		$('#pfb_force_cron').prop('checked', false);
-		$('#pfb_force_reload').prop('checked', false);
-		mode_change();
-	});
-	$('#pfb_force_cron').click(function() {
-		$('#pfb_force_update').prop('checked', false);
-		$('#pfb_force_reload').prop('checked', false);
-		mode_change();
-	});
-	$('#pfb_force_reload').click(function() {
-		$('#pfb_force_update').prop('checked', false);
-		$('#pfb_force_cron').prop('checked', false);
-		mode_change('on');
+	// Expand log textareas to full width
+	$('textarea[name="pfb_status"], textarea[name="pfb_output"]').each(function() {
+		var $row = $(this).closest('.row.form-group, .form-group');
+		$row.find('label.col-sm-2').remove();
+		$row.find('div.col-sm-10').removeClass('col-sm-10').addClass('col-sm-12');
 	});
 
-	// On-click - toggle 'Reload' radios on/off
-	$('#pfb_reload_option_all').click(function() {
-		$('#pfb_reload_option_ip').prop('checked', false);
-		$('#pfb_reload_option_dnsbl').prop('checked', false);
-	});
-	$('#pfb_reload_option_ip').click(function() {
-		$('#pfb_reload_option_all').prop('checked', false);
-		$('#pfb_reload_option_dnsbl').prop('checked', false);
-	});
-	$('#pfb_reload_option_dnsbl').click(function() {
-		$('#pfb_reload_option_all').prop('checked', false);
-		$('#pfb_reload_option_ip').prop('checked', false);
-	});
-
-	// Scroll to the bottom of the page
+	// Scroll to the bottom of the page after wizard
 	var pfb_wizard = "<?=$pfb_wizard;?>";
 	if (pfb_wizard) {
 		$("html, body").animate({ scrollTop: $(document).height() }, 2000);
 	}
 
-	// Scroll to the bottom of the page
+	// Scroll to the bottom on Run Now click
 	$('#run').click(function() {
 		$("html, body").animate({ scrollTop: $(document).height() }, 2000);
 	});

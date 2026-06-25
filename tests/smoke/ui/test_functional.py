@@ -29,6 +29,7 @@ the output filter per render -- it must be re-extracted, never cached).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -92,6 +93,7 @@ class ToggleFlow:
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
+UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 # DNSBL_PAGE is defined further down (used by the auto-VIP test too).
 
 FLOWS: tuple[ToggleFlow, ...] = (
@@ -1188,3 +1190,93 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
         # and rebuild from baseline (reset = clearip/cleardnsbl + a forced update).
         helpers.set_dnsvip_auto(vm, False)
         helpers.reset(vm)
+
+
+# ---------------------------------------------------------------------------
+# ADR-43 Phase 6 — Update page Run Now updates the due ledger
+# ---------------------------------------------------------------------------
+
+_ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
+_LEDGER_PATH = f"{helpers.PFB_DBDIR}/pfb_due_ledger.json"
+
+
+def test_update_runnow_updates_ledger(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Phase-6 Run Now form POST dispatches pfb_trigger and updates the due ledger.
+
+    Scenario: Run Now with scope=ip updates cron ledger entry (before/after).
+      Background: pfBlockerNG deployed and enabled; no feeds configured (fast run).
+
+    Given pfBlockerNG is enabled,
+    And the VM clock is captured as before_ts,
+
+    When the Update page Run Now form is submitted with scope=ip and force unchecked,
+
+    Then the ``pfb_due_ledger.json`` 'cron' entry shows last_run >= before_ts —
+      proving pfb_runnow() dispatched pfb_trigger AND called pfb_due_ledger_mark_ran()
+      (the oracle is the ledger file on the VM, not the HTTP response body);
+    And the Update page re-renders with the Schedule section present — proving the
+      next-run view reflects the run without a PHP error.
+
+    The BEFORE assertion is that 'cron.last_run' (if present) is < before_ts — which
+    flips to >= after_ts after the POST — providing the transition evidence.
+    """
+    vm = smoke_vm
+    # Ensure pfBlockerNG is enabled; restore the original state at the end.
+    original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
+    if original_enabled != "on":
+        helpers.set_package_enabled(vm, True)
+
+    try:
+        # BEFORE: capture VM wall-clock timestamp so we can assert last_run was set
+        # by THIS run and not an earlier one.  Use the VM clock (not the runner clock)
+        # to avoid a cross-host time discrepancy.
+        before_ts = int(vm.ssh("/bin/date", "+%s").stdout.strip())
+
+        # BEFORE-state assertion: if a cron ledger entry exists, its last_run is older.
+        pre = vm.ssh("/bin/cat", _LEDGER_PATH)
+        if pre.returncode == 0:
+            pre_data = json.loads(pre.stdout)
+            pre_last = pre_data.get("cron", {}).get("last_run", 0)
+            assert pre_last < before_ts, (
+                f"cron.last_run ({pre_last}) already >= before_ts ({before_ts}) "
+                "before the Run Now POST — cannot confirm the POST caused the update"
+            )
+
+        # ACT: POST the Update page with scope=ip, force unchecked (reuse / no reparse).
+        # pfb_runnow() blocks until pfb_trigger writes 'UPDATE PROCESS ENDED', so the
+        # HTTP response comes back only after the run completes.
+        resp = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "ip"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "Run Now POST returned the login form (session lost)"
+
+        # AFTER: read the ledger from the VM and assert 'cron.last_run' was updated.
+        result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
+        assert result.returncode == 0, (
+            f"pfb_due_ledger.json not found after Run Now "
+            f"(rc={result.returncode} stderr={result.stderr!r}) — "
+            "pfb_due_ledger_mark_ran() may not have been called"
+        )
+        ledger = json.loads(result.stdout)
+        assert "cron" in ledger, f"ledger has no 'cron' key after Run Now: {ledger!r}"
+        last_run = ledger["cron"].get("last_run", 0)
+        assert last_run >= before_ts, (
+            f"ledger cron.last_run={last_run} < before_ts={before_ts} — "
+            "Run Now did not update the ledger (pfb_due_ledger_mark_ran() not called)"
+        )
+
+        # Re-render the Update page and confirm the Schedule section is present.
+        page_resp = webui.get(UPDATE_PAGE)
+        assert "Schedule" in page_resp.text, (
+            "Schedule section missing after Run Now re-render — ledger section not rendered"
+        )
+
+    finally:
+        if original_enabled != "on":
+            helpers.set_package_enabled(vm, False)
