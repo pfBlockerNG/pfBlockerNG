@@ -69,7 +69,11 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings")),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
-    Page("ip", "/pfblockerng/pfblockerng_ip.php", ("IP Configuration", "ASN configuration", "Aggregated Aliases")),
+    Page(
+        "ip",
+        "/pfblockerng/pfblockerng_ip.php",
+        ("IP Configuration", "ASN configuration", "Aggregated Aliases", "Alias Table Apply Mode"),
+    ),
     # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
     # "DoT/DoQ Block" is the ADR-37 section title added to this page (Phase 3).
     # "Permit Firewall Rules" + "Interface(s)" are the two field labels of the #478

@@ -764,7 +764,7 @@ final class RollbackContractTest extends TestCase
 	public function testAdapterTypeHelperReturnsValidTypeForEveryRegisteredField(): void
 	{
 		$registry    = pfb_cfg_registry();
-		$valid_types = ['toggle', 'lenient', 'idn', 'plain'];
+		$valid_types = ['toggle', 'lenient', 'idn', 'plain', 'alias_delta_mode'];
 
 		foreach ($registry as $key => $entry) {
 			$type = pfb_cfg_field_adapter_type($entry);

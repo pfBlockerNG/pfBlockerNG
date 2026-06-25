@@ -102,6 +102,9 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_filter',
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist',
 		'installedpackages/pfblockerng/config/0/pfb_reuse',
+		// ADR-40: alias-table apply mode + batch size
+		'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode',
+		'installedpackages/pfblockerng/config/0/pfb_alias_delta_batch',
 		// installedpackages/pfblockerngdnsblsettings/config/0 (DNSBL settings)
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',

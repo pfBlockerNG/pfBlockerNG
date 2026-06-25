@@ -570,4 +570,69 @@ final class CfgAdaptersTest extends TestCase
 				"Form_Checkbox pattern mismatch for stored value: " . var_export($v, true));
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// Scenario D — PfbAliasDeltaMode (pfb_alias_delta_mode, ADR-40)
+	//   Stored tokens: 'auto', 'delta', 'replace'. Unknown token -> Auto.
+	// -----------------------------------------------------------------------
+
+	public function testAliasDeltaModeReadAutoReturnsAuto(): void
+	{
+		$this->assertSame(PfbAliasDeltaMode::Auto, pfb_cfg_alias_delta_mode_read('auto'));
+	}
+
+	public function testAliasDeltaModeReadDeltaReturnsDelta(): void
+	{
+		$this->assertSame(PfbAliasDeltaMode::Delta, pfb_cfg_alias_delta_mode_read('delta'));
+	}
+
+	public function testAliasDeltaModeReadReplaceReturnsReplace(): void
+	{
+		$this->assertSame(PfbAliasDeltaMode::Replace, pfb_cfg_alias_delta_mode_read('replace'));
+	}
+
+	public function testAliasDeltaModeReadUnknownReturnsAuto(): void
+	{
+		// Unknown token → Auto (the default).
+		$this->assertSame(PfbAliasDeltaMode::Auto, pfb_cfg_alias_delta_mode_read('invalid'));
+	}
+
+	public function testAliasDeltaModeReadNullReturnsAuto(): void
+	{
+		$this->assertSame(PfbAliasDeltaMode::Auto, pfb_cfg_alias_delta_mode_read(null));
+	}
+
+	public function testAliasDeltaModeReadEmptyReturnsAuto(): void
+	{
+		$this->assertSame(PfbAliasDeltaMode::Auto, pfb_cfg_alias_delta_mode_read(''));
+	}
+
+	/** write(read(v)) == v for every canonical token. */
+	public function testAliasDeltaModeRoundTripCanonicalTokens(): void
+	{
+		foreach (['auto', 'delta', 'replace'] as $token) {
+			$written = pfb_cfg_alias_delta_mode_write(pfb_cfg_alias_delta_mode_read($token));
+			$this->assertSame($token, $written,
+				"expected write(read('{$token}')) == '{$token}'; actual: '{$written}'");
+		}
+	}
+
+	/** Unknown token maps to 'auto' (Auto is the canonical fallback). */
+	public function testAliasDeltaModeRoundTripUnknownMapsToAuto(): void
+	{
+		$written = pfb_cfg_alias_delta_mode_write(pfb_cfg_alias_delta_mode_read('junk'));
+		$this->assertSame('auto', $written,
+			"expected write(read('junk')) == 'auto'; actual: '{$written}'");
+	}
+
+	/** pfb_cfg_alias_delta_mode_write() accepts both an enum instance and a string. */
+	public function testAliasDeltaModeWriteAcceptsEnumOrString(): void
+	{
+		$this->assertSame('auto',    pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode::Auto));
+		$this->assertSame('delta',   pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode::Delta));
+		$this->assertSame('replace', pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode::Replace));
+		$this->assertSame('auto',    pfb_cfg_alias_delta_mode_write('auto'));
+		$this->assertSame('delta',   pfb_cfg_alias_delta_mode_write('delta'));
+		$this->assertSame('replace', pfb_cfg_alias_delta_mode_write('replace'));
+	}
 }

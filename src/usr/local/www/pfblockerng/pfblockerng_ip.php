@@ -41,6 +41,11 @@ $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
 $options_pfb_agg_types		= [ 'Deny' => 'Alias Deny', 'Permit' => 'Alias Permit', 'Match' => 'Alias Match', 'Native' => 'Alias Native' ];
 $pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('pfb_agg_types'));
 
+// ADR-40: alias-table apply mode (gateway-registered, general section).
+$options_pfb_alias_delta_mode	= [ 'auto' => 'Auto (delta for small churn, replace for large)', 'delta' => 'Delta (-T add/-T delete)', 'replace' => 'Replace (-T replace, pre-4.0 behaviour)' ];
+$pconfig['pfb_alias_delta_mode']	= (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
+$pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
+
 // Default to 'on' for new installation only
 $pconfig['suppression']		= isset($pfb['iconfig']['suppression'])			? $pfb['iconfig']['suppression'] : 'on';
 
@@ -222,6 +227,15 @@ if ($_POST) {
 						(array) ($_POST['pfb_agg_types'] ?? array())));
 			PfbConfig::write('pfb_agg_types', implode(',', $agg_types_post));
 
+			// ADR-40: alias-table apply mode (gateway-registered scalar).
+			$delta_mode_post = array_key_exists($_POST['pfb_alias_delta_mode'] ?? '', $options_pfb_alias_delta_mode)
+				? $_POST['pfb_alias_delta_mode']
+				: 'auto';
+			PfbConfig::write('pfb_alias_delta_mode', $delta_mode_post);
+
+			// ADR-40: batch size — clamp to [64, 4096].
+			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_clamp((int) ($_POST['pfb_alias_delta_batch'] ?? 256)));
+
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');
 			if (!empty($savemsg)) {
@@ -316,6 +330,30 @@ $section->addInput(new Form_Select(
 		. 'needed (e.g. your own rule or an HAProxy ACL). Each loads as a pf table, so enable only the type(s) you use.')
   ->setAttribute('size', count($options_pfb_agg_types))
   ->setAttribute('style', 'width: auto');
+
+// ADR-40: alias-table apply mode + batch size.
+$section->addInput(new Form_Select(
+	'pfb_alias_delta_mode',
+	'Alias Table Apply Mode',
+	$pconfig['pfb_alias_delta_mode'],
+	$options_pfb_alias_delta_mode
+))->setHelp('Default: <strong>Auto</strong><br />'
+		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for incremental feed updates with small churn; '
+		. 'full replace for initial load or when churn exceeds ~20% of the table.<br />'
+		. '<strong>Delta:</strong> always use delta apply (large-churn replace fallback still active for safety).<br />'
+		. '<strong>Replace:</strong> always full -T replace (pre-4.0 behaviour).')
+  ->setAttribute('id', 'pfb_alias_delta_mode')
+  ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Input(
+	'pfb_alias_delta_batch',
+	'Alias Table Delta Batch Size',
+	'number',
+	$pconfig['pfb_alias_delta_batch'],
+	[ 'min' => '64', 'max' => '4096', 'placeholder' => '256' ]
+))->setHelp('Default: <strong>256</strong> (range 64–4096). '
+		. 'Entries applied per pfctl call in delta mode. '
+		. 'Use 256 for typical tables; 1024+ for tables with 1M+ entries.');
 
 $section->addInput(new Form_Checkbox(
 	'suppression',
