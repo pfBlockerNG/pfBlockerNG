@@ -10930,6 +10930,35 @@ function pfb_clear_contents() {
 }
 
 
+// ADR-38: the canonical installedpackages/package <logging> block pfBlockerNG registers for its
+// dedicated syslog. The `pkg add` install path does NOT copy the package XML's <logging> block,
+// so sync_package_pfblockerng() asserts it here. 'logtab' pins the Status > System Logs > Packages
+// subtab label to "pfBlockerNG" on both channels (core else falls back to the package short name,
+// which reads "pfBlockerNG-devel" on the devel package).
+function pfb_syslog_logging_want() {
+	return array(
+		'logtab' => 'pfBlockerNG',
+		'facilityname' => 'pfblockerng',
+		'logfilename' => 'pfblockerng_syslog.log',
+	);
+}
+
+// TRUE when the stored <logging> block must be rewritten to the canonical one: any tracked field
+// (logtab / facilityname / logfilename) mismatches, or a stale <logsocket> is present (the removed
+// in-chroot socket, which core would otherwise regenerate). An already-canonical block with no
+// logsocket is left untouched.
+function pfb_syslog_logging_needs_update($current, $want) {
+	if (!is_array($current)) {
+		$current = array();
+	}
+	foreach (array('logtab', 'facilityname', 'logfilename') as $pfb_k) {
+		if (($current[$pfb_k] ?? '') !== ($want[$pfb_k] ?? '')) {
+			return TRUE;
+		}
+	}
+	return !empty($current['logsocket']);
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -10965,20 +10994,19 @@ function sync_package_pfblockerng($cron='') {
 	// section (only a GUI install does), so register it here, keyed on the
 	// configurationfile (channel-independent: pfBlockerNG vs pfBlockerNG-devel).
 	$pfb_pkg_logged = FALSE;
-	$pfb_log_want = array('facilityname' => 'pfblockerng', 'logfilename' => 'pfblockerng_syslog.log');
+	$pfb_log_want = pfb_syslog_logging_want();
 	foreach (config_get_path('installedpackages/package', array()) as $pfb_idx => $pfb_pkg) {
 		if (($pfb_pkg['configurationfile'] ?? '') !== 'pfblockerng.xml') {
 			continue;
 		}
-		// Write the canonical block when it is missing OR carries STALE values — not
-		// only when empty. An upgrade from a pre-Amendment-2 config can leave a row with
-		// a wrong facility/filename or a leftover <logsocket> (which would make core
-		// regenerate the now-removed in-chroot socket). Replacing the whole block on any
-		// mismatch drops the stale logsocket; an already-canonical row is left untouched.
-		$pfb_log_cur = $pfb_pkg['logging'] ?? array();
-		if (($pfb_log_cur['facilityname'] ?? '') !== $pfb_log_want['facilityname'] ||
-		    ($pfb_log_cur['logfilename'] ?? '') !== $pfb_log_want['logfilename'] ||
-		    !empty($pfb_log_cur['logsocket'])) {
+		// Write the canonical block when it is missing OR carries STALE values — not only
+		// when empty. An upgrade from an older config can leave a row with a wrong
+		// facility/filename, a missing 'logtab' (the pre-241302e block, which makes the
+		// Packages subtab read "pfBlockerNG-devel"), or a leftover <logsocket> (which would
+		// make core regenerate the now-removed in-chroot socket). Replacing the whole block
+		// on any mismatch fixes the label and drops the stale logsocket; an already-canonical
+		// row is left untouched.
+		if (pfb_syslog_logging_needs_update($pfb_pkg['logging'] ?? array(), $pfb_log_want)) {
 			config_set_path("installedpackages/package/{$pfb_idx}/logging", $pfb_log_want);
 			write_config('[pfBlockerNG] register syslog routing');
 		}
