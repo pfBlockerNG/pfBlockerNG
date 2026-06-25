@@ -1,31 +1,37 @@
 ---
 name: release
 description: >
-  Cut a pfBlockerNG release by validating and pushing a version tag — the tag
-  push is what triggers .github/workflows/release.yml (GitHub Release + .pkg
-  artifacts + self-hosted pkg-repo publish + FreeBSD-ports bump). Enforces the
-  tag scheme BEFORE the tag is pushed: prereleases (vX.Y.Z.alpha.N | .beta.N |
-  .rc.N) cut from `devel` only, stable (vX.Y.Z) from `main` only — the same
-  rule release-version.sh, the pre-push hook, and the workflow enforce, so a
-  bad tag is refused locally instead of failing in CI. Args: <tag> (e.g.
-  v4.0.0.alpha.1) [--dry-run]. Use when the user says "cut a release", "release
-  vX.Y.Z…", "tag a release", "publish the alpha", or invokes /release.
+  Cut a pfBlockerNG release by validating the tag scheme, then DISPATCHING
+  .github/workflows/release.yml — the workflow itself creates+pushes the tag and
+  publishes (GitHub Release + .pkg artifacts + self-hosted pkg-repo publish +
+  FreeBSD-ports bump). You do NOT push a tag by hand. Enforces the scheme before
+  dispatch: prereleases (vX.Y.Z.alpha.N | .beta.N | .rc.N) cut from `devel` only,
+  stable (vX.Y.Z) from `main` only — the same rule release-version.sh, the
+  workflow's prepare-release job, and the pre-push hook enforce, so a bad tag is
+  refused locally instead of failing in CI. Args: <tag> (e.g. v4.0.0.alpha.1)
+  [--dry-run]. Use when the user says "cut a release", "release vX.Y.Z…", "tag a
+  release", "publish the alpha", or invokes /release.
 ---
 
-You cut a pfBlockerNG release. The tag push is the trigger — there is no separate
-"publish" button. Everything below is about making sure the tag is correct and the
-commit is ready **before** the irreversible push, then pushing it.
+You cut a pfBlockerNG release. **`release.yml` is `workflow_dispatch`-only and does it
+all** — its `prepare-release` job resolves the channel-branch tip, commits the changelog
+when absent, **creates and pushes the tag itself**, then builds + publishes. So you do
+**not** `git tag`/`git push` a tag by hand; you **dispatch the workflow** with
+`dry_run=false`. Everything below is the friendly pre-check that the tag + commit are
+correct **before** that irreversible dispatch.
 
 `scripts/release-version.sh` is the single source of truth for the scheme; **call it,
-never re-implement the regex.** The `.githooks/pre-push` hook re-validates on push as
-the final gate — so this skill is the friendly pre-check, the hook is the backstop.
+never re-implement the regex.** The workflow's `prepare-release` job re-validates the
+scheme, and `.githooks/pre-push` re-validates the tag the workflow pushes — so this skill
+is the pre-check, those are the backstops.
 
 ## Arguments
 
 - `<tag>` — required, e.g. `v4.0.0.alpha.1` (must start with `v`).
-- `--dry-run` — do NOT push the tag. Instead dispatch the workflow's no-publish
-  harness (`gh workflow run release.yml -f tag=<tag> -f dry_run=true`) to validate the
-  scheme, build the `.pkg` artifacts, and render the release body — publishing nothing.
+- `--dry-run` — dispatch the workflow's no-publish harness
+  (`gh workflow run release.yml -f tag=<tag> -f dry_run=true`) to validate the scheme,
+  build the `.pkg` artifacts, and render the release body — publishing nothing, tag never
+  created. The real release is the same dispatch with `dry_run=false`.
 
 ## The scheme (enforced, not advisory)
 
@@ -60,16 +66,24 @@ devel" guard, applied before the tag exists.
      hook's `merge-base --is-ancestor` checks.
 
 4. **Pre-flight gates** (stop on any failure, report which):
-   - The tag does not already exist (`git tag -l <tag>` empty, and no remote
-     `refs/tags/<tag>`). Releases are immutable — never move an existing tag.
-   - Working tree is clean and the local channel branch is up to date with its remote
-     (no un-pushed release commit).
-   - **CI is green on the release commit** — the `All tests passed` check-run must be
-     `success` (the workflow's `verify-checks` job will hard-fail otherwise). Read it
-     via the GitHub MCP tools / `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`.
-     If it is pending, wait or tell the user to wait; if it failed, stop.
+   - **No PUBLISHED release for the tag.** A published GitHub Release is immutable+final
+     → refuse (bump the version). A tag that exists with **no release yet** (or only a
+     DRAFT) is a half-finished prior run — that is FINE: the workflow's `tag_state` step
+     **resumes** it (reuses the tag, updates the draft in place). So a bare pre-existing
+     tag is not a blocker; only a published release is. (`gh release view <tag>` ⇒ if it
+     exists and is not a draft, stop.)
+   - The local channel branch is up to date with its remote (the notes commit, if any, is
+     already pushed — the workflow tags the **remote** branch tip, so an un-pushed local
+     commit would be missed).
+   - **CI is green on the release commit** — the `All tests passed` check-run on the
+     channel-branch tip must be `success`. NOTE: the workflow's `verify-checks` walks back
+     first-parent ancestors past docs-only commits (a `docs/release-notes/<tag>.md` commit
+     skips CI via `paths-ignore` and carries no check-run), so check the nearest ancestor
+     **with** a check-run. Read via `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`.
+     If pending, wait; if failed, stop.
    - Git hooks are active (`git config core.hooksPath` = `.githooks`); if not, run
-     `sh scripts/setup-hooks.sh` so the pre-push backstop is armed.
+     `sh scripts/setup-hooks.sh` so the pre-push backstop (on the tag the workflow pushes)
+     is armed.
 
 5. **Notes source.** The release body comes from `docs/release-notes/<tag>.md` when that file
    is committed on the channel branch — it is **authoritative**, and the GitHub Models step is
@@ -79,20 +93,23 @@ devel" guard, applied before the tag exists.
    (or to "play the model" when Models is unavailable), use **`/release-with-changelog`** — it
    writes the file, commits it, then calls this skill. Don't author notes here unless asked.
 
-6. **Confirm, then push.** Pushing a release tag is **irreversible and public** (it cuts
-   a GitHub Release, publishes the `.pkg`, and bumps the ports fork). Confirm the
-   tag + commit + channel with the user, then:
+6. **Confirm, then dispatch.** Dispatching with `dry_run=false` is **irreversible and
+   public** (the workflow creates+pushes the tag, cuts a GitHub Release, publishes the
+   `.pkg`, republishes the pkg repo, and bumps the ports fork). Confirm the
+   tag + channel-branch tip with the user, then dispatch — **do not push a tag by hand**:
 
    ```sh
-   git tag -a <tag> <commit> -m "<tag>"
-   git push origin <tag>            # pre-push hook re-validates here
+   gh workflow run release.yml --ref <default-branch> -f tag=<tag> -f dry_run=false
    ```
 
-   On `--dry-run`, skip the tag entirely and dispatch the harness instead:
-   `gh workflow run release.yml -f tag=<tag> -f dry_run=true` (dispatchable only from
-   the default branch).
+   The workflow tags the channel-branch tip itself (resuming a pre-existing un-released
+   tag), and the `pre-push` hook re-validates that tag as it pushes. On `--dry-run`, the
+   same dispatch with `dry_run=false` → `dry_run=true` (publishes nothing). Dispatch is
+   only allowed from the default branch (`devel`), but the workflow operates on the
+   resolved channel branch regardless. After dispatching, find the run
+   (`gh run list --workflow=release.yml`) to report/watch it.
 
-7. **Report.** After the push, point at the running `Release` workflow (Actions tab),
+7. **Report.** After dispatch, point at the running `Release` workflow (Actions tab),
    and state what it will produce:
    - a GitHub **Release** (`pre-release` for alpha/beta/rc), title
      `pfBlockerNG <version> — <3-word summary>`, body grouped Features / Improvements /
@@ -108,10 +125,15 @@ devel" guard, applied before the tag exists.
 
 ## Guardrails
 
-- **Never** push a tag whose channel/branch pairing `release-version.sh <tag> <branch>`
-  rejects. The scheme is non-negotiable; the hook will reject it anyway, so catch it here.
-- **Never** move or delete an existing release tag to "re-release" — cut the next `.N`
-  (e.g. `.alpha.2`) instead.
-- **Never** push directly to `main`/`devel` from this skill — it only creates and pushes
-  a **tag**. Code reaches the channel branch through the normal PR/landing flow first.
-- The dry-run dispatch publishes nothing — use it freely to validate before the real tag.
+- **Never** dispatch a release whose channel/branch pairing
+  `release-version.sh <tag> <branch>` rejects. The scheme is non-negotiable; the
+  workflow's `prepare-release` (and the pre-push hook on the tag it pushes) will reject it
+  anyway, so catch it here.
+- **Don't push a tag by hand** — dispatching the workflow is the whole job; it creates and
+  pushes the tag. (A hand-pushed tag is tolerated only because `tag_state` resumes an
+  un-released tag — but the workflow is the intended tagger.)
+- **Never** re-release a tag with a **published** Release — cut the next `.N`
+  (e.g. `.alpha.2`) instead. A tag with no/draft release is resumable, not a re-release.
+- **Never** push directly to `main`/`devel` from this skill — code reaches the channel
+  branch through the normal PR/landing flow first; this skill only dispatches the workflow.
+- The dry-run dispatch publishes nothing — use it freely to validate before the real cut.
