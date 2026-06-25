@@ -611,13 +611,10 @@ def _print_row(row: BenchRow, baseline: ProbeWindow, error: str) -> None:
 # Runs for a specified duration then exits cleanly.
 _TCP_PROBE_SCRIPT = r"""
 #!/usr/bin/env python3
-"""
-_TCP_PROBE_SCRIPT += r"""\"\"\"TCP RST probe for ADR-40 reject-loop bench.
-
-Fires asyncio TCP connects to IPs in {in_table_ips} and {out_table_ips},
-rotating through both sets.  Time-to-ECONNREFUSED = RST RTT.
-Prints one JSON line per connection.
-\"\"\"
+# TCP RST probe for ADR-40 reject-loop bench.
+# Fires asyncio TCP connects to IPs in in_table_ips and out_table_ips,
+# rotating through both sets.  Time-to-ECONNREFUSED = RST RTT.
+# Prints one JSON line per connection: {"t": epoch, "rtt_ms": float, "ip": str}
 from __future__ import annotations
 import asyncio
 import json
@@ -627,7 +624,7 @@ import time
 PORT = 9  # discard port — destination port for probes (RST regardless of state)
 
 async def probe_once(ip: str) -> tuple[float, float]:
-    \"\"\"Return (recv_epoch, rtt_ms) for a TCP connect; -1 on timeout/error.\"\"\"
+    # Return (recv_epoch, rtt_ms); rtt_ms=-1 on asyncio.TimeoutError.
     t0 = time.monotonic()
     try:
         _, writer = await asyncio.wait_for(
