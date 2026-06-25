@@ -863,6 +863,14 @@ if ($_POST) {
 				@copy("/usr/local/www/pfblockerng/www/{$pfb['dconfig']['dnsbl_webpage']}", '/usr/local/www/pfblockerng/www/dnsbl_active.php');
 			}
 
+			// Flush the bulk DNSBL settings snapshot FIRST. writeSection() replaces the whole
+			// pfblockerngdnsblsettings/config/0 section with $pfb['dconfig'], which does NOT carry
+			// the per-field registered keys written via PfbConfig::write() below (dnsbl_redir*,
+			// dnsbl_dot_block*). Those leaf writes MUST therefore follow the section write — done
+			// before it they are silently clobbered before write_config() flushes, so enabling DNS
+			// Redirect or DoT/DoQ Block never persists. (safesearch_doh* target a different section.)
+			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
+
 			// Save DoH/DoT/DoQ blocking fields via gateway (registered keys in pfblockerngsafesearch)
 			PfbConfig::write('safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
 			PfbConfig::write('safesearch_doh_list', implode(',', (array)$_POST['safesearch_doh_list']) ?: '');
@@ -879,7 +887,6 @@ if ($_POST) {
 			PfbConfig::write('dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
 			PfbConfig::write('dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
-			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			write_config('[pfBlockerNG] save DNSBL settings');
 			if ($savemsg) {
 				header("Location: /pfblockerng/pfblockerng_dnsbl.php?savemsg={$savemsg}");
