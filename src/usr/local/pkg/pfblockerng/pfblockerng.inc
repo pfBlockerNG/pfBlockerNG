@@ -3199,6 +3199,61 @@ function pfb_hook_trigger($cron) {
 }
 
 
+// Detect a content change in a LOCAL-FILE feed and force its re-ingest (issue #533).
+//
+// A remote feed is re-fetched + re-parsed when it changes (pfb_download sets the
+// '{header}.update' marker on a real download); a local-file feed has no such signal, so
+// the IP/DNSBL reuse gate keeps serving the cached parse and an edited file is never picked
+// up until '.update' is forced or the cache cleared. This restores parity: for a feed whose
+// URL is an actual local file, compare the source against the last ingest and, on a change,
+// touch '{header}.update' so the existing gate re-reads/re-parses it.
+//
+// Change detection is a full md5 of the source content compared against the md5 recorded at
+// the last ingest. We deliberately do NOT gate on mtime: PHP's filemtime() is whole-second
+// granular (no sub-second in core PHP) AND stat-cached per-process, so an mtime gate both
+// misses a same-second rewrite and risks reading a stale timestamp. md5_file() reads the
+// content directly (no stat cache) and has no granularity blind spot; hashing a local file
+// each pass is cheap and only local-file feeds reach here (remote feeds are untouched).
+//
+// Returns TRUE when a change was detected (and '{header}.update' was touched).
+function pfb_localfile_feed_changed($url, $pfbfolder, $header) {
+
+	$url = trim((string) $url);
+
+	// Only ACTUAL local file paths -- anything with a scheme (http/https/ftp/rsync, or
+	// file://) is a URL handled by the download path, not here. A custom (inline) list has
+	// no URL and is skipped too.
+	if ($url === '' || parse_url($url, PHP_URL_SCHEME) !== NULL) {
+		return FALSE;
+	}
+
+	$real = realpath($url);
+	if ($real === FALSE || !is_file($real)) {
+		return FALSE;
+	}
+
+	$cur_md5 = md5_file($real);
+	if ($cur_md5 === FALSE) {
+		return FALSE;
+	}
+
+	// Last-ingest fingerprint: the source's md5, persisted next to the feed's cache. The
+	// '.lmd5' marker is excluded from the '*.txt' member glob, like '.update'/'.fail'.
+	$marker		= "{$pfbfolder}/{$header}.lmd5";
+	$stored_md5	= is_file($marker) ? trim((string) @file_get_contents($marker)) : '';
+
+	$changed = ($cur_md5 !== $stored_md5);
+	if ($changed) {
+		// Force the reuse gate below to re-read/re-parse, and record the new baseline so an
+		// unchanged file is not re-flagged next pass.
+		touch("{$pfbfolder}/{$header}.update");
+		@file_put_contents($marker, $cur_md5, LOCK_EX);
+	}
+
+	return $changed;
+}
+
+
 // Record failed IP/DNSBL Feed parse errors
 function pfb_parsed_fail($header, $line='', $oline, $logfile) {
 
@@ -12124,6 +12179,10 @@ function sync_package_pfblockerng($cron='') {
 							$pfbreuse	= $pfbarr['reuse'];
 							$logtab		= $pfbarr['logtab'];
 
+							// issue #533: a changed LOCAL-FILE feed has no download-side change
+							// signal; detect it here so the reuse gate below re-reads/re-parses it.
+							pfb_localfile_feed_changed($row['url'], $pfbfolder, $header);
+
 							if (file_exists("{$pfbfolder}/{$header}.txt") &&
 							    !file_exists("{$pfbfolder}/{$header}.update") &&
 							    !file_exists("{$pfbfolder}/{$header}.fail") &&
@@ -13770,6 +13829,10 @@ function sync_package_pfblockerng($cron='') {
 						if ($row['format'] == 'asn' && file_exists("{$pfb['dbdir']}/asn.update")) {
 							touch("{$pfbfolder}/{$header}.update");
 						}
+
+						// issue #533: a changed LOCAL-FILE DNSBL feed has no download-side
+						// change signal; detect it here so the reuse gate below re-parses it.
+						pfb_localfile_feed_changed($row['url'], $pfbfolder, $header);
 
 						if (file_exists("{$pfbfolder}/{$header}.txt") &&
 						    !file_exists("{$pfbfolder}/{$header}.update") &&
