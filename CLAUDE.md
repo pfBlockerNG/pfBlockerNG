@@ -705,6 +705,26 @@ always does a full `-T replace`. Both paths produce the same `pfctl -t <t> -T sh
 clamped 64–4096). See
 `docs/misc/architecture-notes.md` ("ADR-40") for the cross-list dedup/reputation scope rules.
 
+**Scheduling, trigger API & verb routing (ADR-43).** The reload entrypoint
+`sync_package_pfblockerng()` takes an explicit **`{scope, force, trigger}`** request — `scope`
+∈ ip/dnsbl/both, `force` bool (TRUE = always reparse; FALSE = respect ADR-42's detector), `trigger`
+∈ cron/manual/force (→ ADR-12 `PFB_TRIGGER` via `pfb_req_to_hook_trigger()`). The legacy verbs
+(`cron`/`update`/`updateip`/`updatednsbl` + Force) are **deprecated thin adapters** that build the
+request via `pfb_trigger_request()` and log one deprecation line; `cron`/`noupdates`/`''` stay silent
+internal triggers. CLI: `pfblockerng.php pfb_trigger scope=… force=true|false trigger=…`. **Scheduling
+is one cron tick** — `*/<pfb_tick_interval>` (default 15 min) running `pfblockerng.php tick`, which
+reads the **due-ledger** (`pfb_due_ledger.json` under `$pfb['dbdir']`: per-job `{last_run, next_due,
+jitter}`) and dispatches only due jobs; `ss_refresh` rides every tick. **Absent ledger ⇒
+due-now-jittered** (stable seeded jitter, no boot stampede), **`next_due` past ⇒ due** (offline
+catch-up, runs once), corrupt ⇒ fail-safe due; the ledger is in issue #468's persist set so a clean
+reboot keeps the schedule. A due job **applies on change** via ADR-40/ADR-10 (no separate apply
+schedule); an optional `pfb_quiet_hours` window defers apply. Two config-only `PfbConfig` knobs
+(no GUI, safe defaults): `pfb_tick_interval` (15) and `pfb_quiet_hours` (''=apply immediately). The
+Update page exposes `pfb_scope`+`pfb_run_force`→Run-now plus a ledger-sourced Schedule view.
+**This supersedes the old per-verb cron/hour-gate routing model** — see
+`docs/misc/architecture-notes.md` ("Scheduling, trigger API & the Update page (ADR-43)") for the
+full migration map + removal timeline.
+
 **Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
 `pfb_agg_types` multi-select (IP settings, **opt-in, default none**) builds, per selected
 action type, the Native urltable aliases **`pfB_<Type>_Aggregated_v4`/`_v6`** = the deduped,

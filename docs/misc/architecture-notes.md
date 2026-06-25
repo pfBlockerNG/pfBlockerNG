@@ -663,3 +663,108 @@ FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP ne
 Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
 `tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
 ADR-04 smoke (`tests/smoke/test_smoke_feeds.py`).
+
+## Scheduling, trigger API & the Update page (ADR-43)
+
+ADR-43 sits **above** change detection (ADR-42) and apply (ADR-40 IP / ADR-10 DNSBL): it owns
+*when the system looks* and *how an operator/cron asks it to*. It does not re-decide detection or
+apply — it consumes them. Three reworks: a named trigger request, one cron tick driven by a
+due-ledger, and apply-on-change.
+
+### The explicit trigger request (replaces the overloaded `$cron` string)
+
+The reload entrypoint `sync_package_pfblockerng()` now takes a `{scope, force, trigger}` request:
+
+- **`scope`** ∈ `ip` | `dnsbl` | `both` — which side reloads.
+- **`force`** ∈ bool — `TRUE` = always reparse (bypass the reuse gate); `FALSE` = respect ADR-42's
+  detector (an unchanged feed is reuse-cached, not reparsed — the #517-style "no change" pass).
+- **`trigger`** ∈ `cron` | `manual` | `force` — identity only, mapped to the ADR-12 hook env
+  `PFB_TRIGGER` by `pfb_req_to_hook_trigger()`: `cron`→`cron`, `manual`→`update`, `force`→`force-reload`.
+
+`sync_package_pfblockerng()` accepts the request array **or** a legacy verb string (back-compat).
+`pfb_trigger_request($verb)` maps each legacy verb to its request; the string path additionally
+emits one deprecation log line via `pfb_verb_deprecation_warning()`. The CLI exposes the new API as
+`pfblockerng.php pfb_trigger scope=<…> force=<true|false> trigger=<…>`. HA-sync (`pfblockerng.xml`)
+and the smoke harness (`tests/smoke/helpers.py` `reload()`) call the new API directly.
+
+**Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
+line is logged for the three operator-facing verbs):
+
+| Legacy verb | New request | `PFB_TRIGGER` | Deprecation logged |
+| --- | --- | --- | --- |
+| `cron` | `{both, force=FALSE, cron}` | `cron` | no (internal scheduled pass) |
+| `update` (GUI Update) | `{both, force=FALSE, manual}` | `update` | yes |
+| `updateip` | `{ip, force=TRUE, force}` | `force-reload` | yes |
+| `updatednsbl` | `{dnsbl, force=TRUE, force}` | `force-reload` | yes |
+| `noupdates` / `''` (HA) | `{both, force=FALSE, cron/manual}` | `cron` / `update` | no (internal) |
+
+Deprecation line: `DEPRECATED: pfblockerng verb '<verb>' — use explicit request (<hint>); removal
+scheduled`. **Removal timeline:** the verb strings keep working through the current major series;
+removal is targeted for a future **major** release (announced in its release notes), at which point
+callers must use `pfb_trigger` / the request array. External scripts should migrate during this
+window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 hook contract holds.
+
+### One trigger-tick + the due-ledger
+
+The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** crontab entry —
+`*/<pfb_tick_interval> … pfblockerng.php tick` (default every **15 min**). The tick carries **no**
+scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
+(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` every tick
+(cheap DNS re-resolution), then `mark_ran`s each dispatched job. `clearip`/`cleardnsbl` (ADR-30) and
+non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
+and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
+
+**The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
+per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
+`pfblockerng_extra.inc` (`pfb_due_ledger_*`); the tick wrapper `pfb_tick_due_jobs()` decides due-ness:
+
+- **Absent entry ⇒ due-now-but-jittered.** A wiped ledger (the issue-#468 MFS-RAM-disk reboot path)
+  makes every job due, but each picks up a **stable seeded jitter** (`crc32(seed ':' job_key) % max + 1`,
+  seed = `php_uname('n')`) so `dcc`/`bl` spread across the day instead of stampeding upstreams. The
+  jitter is deterministic for a fixed `(seed, job_key)` — not re-`rand()`'d each pass (the old model).
+- **`next_due` in the past ⇒ due** — free offline catch-up: a window missed during downtime runs
+  **once** on the next tick (`mark_ran` advances `next_due` past now, so no double-run).
+- **Corrupt/partial ledger ⇒ treated as absent** (fail-safe due).
+
+The ledger rides issue #468's persist/restore set (added to `pfb_aliastables('update')`'s backup),
+so a **clean** reboot keeps the schedule; only a true RAM-disk wipe falls back to due-now-jittered.
+Legacy cadence knobs (`pfb_interval`, per-feed `freq`/`updatefreq`; `dcc` daily; `bl` daily/weekly)
+are read at the ADR-28/29 boundary and reinterpreted as ledger next-due intervals — **no `config.xml`
+migration**.
+
+### Apply-on-change + quiet-hours window
+
+Because ADR-40/ADR-10 make apply cheap, a due job applies a detected change **immediately** — the
+tick dispatches the reload (`force=false`), the ADR-42 detector gates reparse, and ADR-40
+(`pfb_alias_set_different` / `pfb_apply_alias_delta`) / ADR-10 (`pfb_reload_unbound` zero-downtime
+swap) gate apply. No change ⇒ no apply. The separate "when to apply" schedule is gone; the only
+batching control is an **optional quiet-hours window** (`pfb_quiet_hours`, default empty = apply
+immediately). When set and the current time is **outside** the window, a detected change is recorded
+**pending** in the ledger and **deferred**; the first tick **inside** the window applies it. The
+window boundary check (`pfb_quiet_hours_in_window()`) is clock-injectable and handles
+midnight-wrapping ranges.
+
+### Operator surface — the Update page & the knobs
+
+The **Update page** (`www/pfblockerng/pfblockerng_update.php`) is rebuilt on the API: an explicit
+**Run Scope** selector (`pfb_scope`: ip/dnsbl/both) + a **Force Reparse** toggle (`pfb_run_force`)
+feeding one **Run now** that POSTs `pfb_trigger`; a read-only **Schedule** view sourced from the
+ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in the UI.
+
+Two registered `PfbConfig` knobs (ADR-29), both with safe defaults and **no GUI control** — set via
+config/CLI for advanced tuning:
+
+- **`pfb_tick_interval`** (default `15`) — tick cadence in minutes; `*/N` in crontab.
+- **`pfb_quiet_hours`** (default `''` = apply immediately) — maintenance window that defers apply.
+
+### Tests & DoD
+
+Off-appliance (PHPUnit): `TriggerRequestTest` (verb→request oracle), `TriggerAdaptersTest`
+(deprecation + force-vs-detector), `DueLedgerTest` (due/jitter/catch-up/round-trip/corrupt),
+`TickCronTest` (single-tick generator + due computation), `QuietHoursApplyTest` (apply-now / defer /
+boundary), `CfgGatewayTest` (knob round-trips). Live-VM (ADR-04 / ADR-14, dispatch-only):
+`tests/smoke/test_smoke_tick.py` (tick fires a due feed, wiped-ledger jitter, `-m reboot`
+persistence), `test_smoke_apply_on_change.py` (apply without Force; quiet-hours defer),
+`test_trigger_api.py` (new API + deprecation log + HA), and the Update-page Tier A/B in
+`tests/smoke/ui/`. Per CLAUDE.md "ADR acceptance", ADR-43 moves to Accepted on the green CE+Plus
+live-VM fan-out of those cases.

@@ -1,6 +1,8 @@
 # ADR-43: Unify the reload-trigger API, consolidate cron onto one due-ledger tick, and revamp the Update page
 
-- **Status:** **Proposed** (2026-06-25)
+- **Status:** **Implemented (pending live-VM fan-out)** (2026-06-25) — all 7 phases landed on
+  `adr/43-update-and-scheduling-revamp`; off-appliance suites green. Flips to **Accepted** on the
+  green CE+Plus live-VM fan-out of the ADR-43 smoke/UI cases (see RESULTS/07).
 - **Date:** 2026-06-25
 - **Branch:** `adr/43-update-and-scheduling-revamp` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):** the trigger/scheduling layer
