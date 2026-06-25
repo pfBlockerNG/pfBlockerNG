@@ -118,20 +118,25 @@ function pfb_remove_label() {
 
 
 // Greyout 'Disabled' State fields
-function pfb_chg_state_bkgd() {
+// Greyout selects whose value is 'Disabled' (live on change + on initial load).
+function pfb_greyout(sel) {
 
-	$("select[id^='state-']").click(function() {
+	$(sel).click(function() {
 		if ($(this).val() == 'Disabled') {
 			$(this).css('background-color', 'lightgrey');
 		} else {
 			$(this).css('background-color', '');
 		}
 	});
-	$("select[id^='state-']").each(function() {
+	$(sel).each(function() {
 		if ($(this).val() == 'Disabled') {
 			$(this).css('background-color', 'lightgrey');
 		}
 	});
+}
+
+function pfb_chg_state_bkgd() {
+	pfb_greyout("select[id^='state-']");
 }
 
 
@@ -152,18 +157,7 @@ events.push(function() {
 	pfb_remove_label();
 
 	// Greyout 'Disabled' Action fields
-	$("select[id^='action']").click(function() {
-		if ($(this).val() == 'Disabled') {
-			$(this).css('background-color', 'lightgrey');
-		} else {
-			$(this).css('background-color', '');
-		}
-	});
-	$("select[id^='action']").each(function() {
-		if ($(this).val() == 'Disabled') {
-			$(this).css('background-color', 'lightgrey');
-		}
-	});
+	pfb_greyout("select[id^='action']");
 
 	// Greyout 'Disabled' State fields
 	pfb_chg_state_bkgd();
