@@ -750,3 +750,55 @@ if (!function_exists('system_syslogd_start')) {
 		// No-op off-appliance.
 	}
 }
+
+// --- pfb_tracker() doubles (#482) ---
+//
+// pfb_tracker() calls four pfSense interface helpers that have no off-appliance
+// equivalent and were not previously exercised by the unit suite.  These minimal
+// doubles make pfb_tracker() callable in tests; each is seedable via $GLOBALS so
+// tests can control the char-sum and thus the natural tracker ID.
+
+if (!function_exists('get_real_interface')) {
+	// pfSense interfaces.inc: map friendly interface name to the real OS interface
+	// (e.g. 'lan' -> 'em1').  Tests seed $GLOBALS['pfb_test_real_interface'] (map
+	// of name => real-name); absent key returns the input unchanged (identity).
+	function get_real_interface($interface = 'wan', $type = '') {
+		$map = $GLOBALS['pfb_test_real_interface'] ?? [];
+		return $map[$interface] ?? $interface;
+	}
+}
+
+if (!function_exists('ip2long32')) {
+	// pfSense util.inc: like ip2long() but returns an UNSIGNED 32-bit integer
+	// (avoids sign issues on 64-bit PHP where ip2long returns a signed int for
+	// addresses >= 128.0.0.0).  Faithful: cast the signed result to unsigned via
+	// sprintf('%u').
+	function ip2long32($ip) {
+		$long = ip2long((string) $ip);
+		if ($long === false) {
+			return 0;
+		}
+		return (int) sprintf('%u', $long);
+	}
+}
+
+if (!function_exists('find_interface_subnet')) {
+	// pfSense interfaces.inc: returns the IPv4 prefix-length (as a string) for the
+	// REAL interface name (i.e. after get_real_interface() has resolved it).
+	// Tests seed $GLOBALS['pfb_test_find_interface_subnet'] (map of real-name =>
+	// bits string, default []); absent key returns null.
+	function find_interface_subnet($real_interface) {
+		$map = $GLOBALS['pfb_test_find_interface_subnet'] ?? [];
+		return $map[$real_interface] ?? null;
+	}
+}
+
+if (!function_exists('find_interface_subnetv6')) {
+	// pfSense interfaces.inc: IPv6 counterpart of find_interface_subnet.
+	// Tests seed $GLOBALS['pfb_test_find_interface_subnetv6'] (map of real-name =>
+	// bits string, default []); absent key returns null.
+	function find_interface_subnetv6($real_interface) {
+		$map = $GLOBALS['pfb_test_find_interface_subnetv6'] ?? [];
+		return $map[$real_interface] ?? null;
+	}
+}
