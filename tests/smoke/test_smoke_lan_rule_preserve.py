@@ -8,7 +8,7 @@ in config.xml with only pfBlockerNG's own auto-rule, silently deleting every use
 re-emitted for ``order_1``..``order_4`` — not for an empty order — so they were dropped from
 config.xml and live pf on reload #2, cutting LAN clients off via the default-deny.
 
-The fix (pfblockerng.inc:11035): ``$pfb['order']`` defaults to
+The fix (pfblockerng.inc:11044): ``$pfb['order']`` defaults to
 ``$pfb['ipconfig']['pass_order'] ?: 'order_0'``. Under ``order_0`` user pass-rules route into
 ``$other_rules`` and are always re-emitted.
 
@@ -62,6 +62,9 @@ LAN_IFACE = "lan"
 # but here we only care that the rule is built, not that it intercepts live traffic).
 FEED_HEADER = "pfblanpreserve"
 FEED_FILE = "pfb_lan_preserve_ip.txt"
+# write_local_feed() writes under /var/db/pfblockerng; the feed source's URL must be that
+# on-disk path (pfb_download() realpath()s a local-file feed), not the bare filename.
+FEED_PATH = f"{h.PFB_DBDIR}/{FEED_FILE}"
 ALIAS_TABLE = f"pfB_{FEED_HEADER}_v4"
 DUMMY_IP = "203.0.113.200"  # RFC 5737 TEST-NET-3, always-in alias so the rule is built
 
@@ -85,7 +88,7 @@ def _inject_lan_ip_rule(vm: SmokeVM, *, pass_order: str | None = None, timeout: 
     helper hardcodes ``SMOKE_IP_IFACE`` which defaults to ``'wan'``). ``pass_order`` is set
     in the list-group when provided; absent (``None``) reproduces the pre-fix trigger.
     """
-    row = {"header": FEED_HEADER, "url": FEED_FILE, "state": "Enabled", "format": "auto"}
+    row = {"header": FEED_HEADER, "url": FEED_PATH, "state": "Enabled", "format": "auto"}
     listcfg = {"aliasname": FEED_HEADER, "action": "Deny_Outbound", "cron": "EveryDay"}
     # Pass order: absent is the trigger; order_0 is the explicit-config branch test.
     order_line = f"$list['pass_order'] = {h._php_str(pass_order)};\n" if pass_order is not None else ""
@@ -319,7 +322,7 @@ def test_lan_user_rules_preserved_when_pass_order_absent(lan_rule_vm: SmokeVM) -
     pfctl_lan = vm.ssh(
         "/bin/sh", "-c", "pfctl -sr 2>/dev/null | grep -i 'Default' || echo '(none)'", timeout=30
     ).stdout.strip()
-    assert DEFAULT_ALLOW_LAN_DESCR.lower() in pfctl_lan.lower() or "pass" in pfctl_lan.lower(), (
+    assert DEFAULT_ALLOW_LAN_DESCR.lower() in pfctl_lan.lower(), (
         f"After reload #2: 'Default allow LAN to any' is in config.xml but NOT visible in live pf.\n"
         f"  expected: a 'pass ... label ...' line referencing the LAN allow\n"
         f"  actual pfctl -sr (Default lines):\n{pfctl_lan}" + _rule_diag(vm, "pfctl-check", rules_after_r2)
