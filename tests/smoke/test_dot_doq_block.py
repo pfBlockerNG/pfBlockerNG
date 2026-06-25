@@ -622,8 +622,14 @@ def test_dot_doq_block_floating_mode_single_rule(deployed_vm: SmokeVM, primary_i
         assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "floating") == "yes", (
             "floating rule must carry floating=yes"
         )
+        assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "quick") == "yes", (
+            "floating rule must carry quick=yes (first-match)"
+        )
         assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "direction") == "in", (
             "floating rule direction must be in"
+        )
+        assert _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "type") == "reject", (
+            "floating rule type must be reject (default action carried into floating mode)"
         )
         assert iface in _filter_rule_field(vm, _DOT_BLOCK_FLOATING_DESCR, "interface").split(","), (
             f"floating rule interface list must contain {iface}"

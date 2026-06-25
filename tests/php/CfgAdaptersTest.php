@@ -82,6 +82,30 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('off'));
 	}
 
+	public function testToggleReadIsIdempotentForEnumInput(): void
+	{
+		// A PfbToggle fed back through the read adapter must return itself, NOT collapse to
+		// the default. This is the double-apply footgun that silently mis-rendered toggle
+		// checkboxes as always-unchecked: a settings page does
+		//   pfb_cfg_toggle_read($pconfig['x']) === PfbToggle::On
+		// where $pconfig['x'] = PfbConfig::read('x') is ALREADY a PfbToggle. Without the
+		// idempotency guard, fromStored(PfbToggle::On) hits the non-scalar guard -> Off,
+		// so the comparison is always false. With it, the enum round-trips through the read.
+		$this->assertSame(PfbToggle::On, pfb_cfg_toggle_read(PfbToggle::On),
+			'reading an already-On toggle must stay On (idempotent), not collapse to Off');
+		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(PfbToggle::Off),
+			'reading an already-Off toggle must stay Off');
+	}
+
+	public function testStoredEnumReadIsIdempotentAcrossAllEnums(): void
+	{
+		// The idempotency guard lives in the shared PfbStoredEnumAdapter trait, so it holds
+		// for every enum using it — not just PfbToggle.
+		$this->assertSame(PfbLenient::On, PfbLenient::fromStored(PfbLenient::On));
+		$this->assertSame(PfbIdnMode::Confusable, PfbIdnMode::fromStored(PfbIdnMode::Confusable));
+		$this->assertSame(PfbAliasDeltaMode::Delta, PfbAliasDeltaMode::fromStored(PfbAliasDeltaMode::Delta));
+	}
+
 	public function testToggleRoundTripOn(): void
 	{
 		// Given: canonical 'on'.  write(read(v)) == v.

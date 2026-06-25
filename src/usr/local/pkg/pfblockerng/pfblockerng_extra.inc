@@ -66,6 +66,14 @@ trait PfbStoredEnumAdapter
 {
 	public static function fromStored(mixed $stored): static
 	{
+		// Idempotency: a value already adapted to this enum (e.g. a PfbConfig::read()
+		// result fed back through the read adapter) returns itself. Without this, the
+		// non-scalar guard below would collapse a valid enum to default() — a double-apply
+		// footgun that silently mis-rendered toggle checkboxes (always-unchecked) on the
+		// settings pages.
+		if ($stored instanceof static) {
+			return $stored;
+		}
 		if (!is_scalar($stored) && $stored !== NULL) {
 			return static::default();		// subtree / non-scalar guard
 		}

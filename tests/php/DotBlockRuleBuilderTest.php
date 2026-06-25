@@ -195,4 +195,14 @@ final class DotBlockRuleBuilderTest extends TestCase
 			'alias present -> negated alias source'
 		);
 	}
+
+	public function testFloatingBuilderOmitsTrackerAndEndsOnDescr(): void
+	{
+		// Same key-order invariant as the per-interface builder: the caller appends 'tracker'
+		// last, so the builder must not set it and 'descr' must be the final key. The sync
+		// change-detection compare ($dot_ex_owned !== $dot_new_owned) relies on this order.
+		$rule = pfb_dot_block_floating_rule(['lan'], '', 'reject');
+		$this->assertArrayNotHasKey('tracker', $rule, 'floating builder must not set tracker (caller appends it last)');
+		$this->assertSame('descr', array_key_last($rule), 'descr must be the last key before the tracker is appended');
+	}
 }
