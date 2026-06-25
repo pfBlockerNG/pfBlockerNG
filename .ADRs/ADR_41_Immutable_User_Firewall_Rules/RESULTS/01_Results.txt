@@ -1,0 +1,160 @@
+ADR-41 Phase 1 — Extract + oracle-pin the rule reconciliation
+=============================================================
+
+STATUS: COMPLETE — green on all gates. Go-ahead for Phase 2.
+
+
+HELPER SIGNATURE + LOCATION
+----------------------------
+
+Function: pfb_build_autorule_list()
+File:     src/usr/local/pkg/pfblockerng/pfblockerng.inc
+Line:     10987 (inserted just before sync_package_pfblockerng())
+
+Signature:
+    function pfb_build_autorule_list(
+        array  $existing_rules,
+        array  $pfb_generated,
+        string $order,
+        string $float,
+        array  $in_ifaces,
+        array  $out_ifaces
+    ): array
+
+Parameters:
+  $existing_rules  — the current filter/rule array from config.xml
+  $pfb_generated   — keyed array of pre-built pfB rule templates:
+                       permit_inbound, permit_outbound,
+                       deny_inbound, deny_outbound,
+                       match_inbound, match_outbound,
+                       inbound_floating, outbound_floating,
+                       dnsbl_float (0-2 pre-built DNSBL ping/permit rules)
+  $order           — pass_order value ('order_0'..'order_4' or '')
+  $float           — float mode: 'on' or '' (off)
+  $in_ifaces       — inbound interface name array
+  $out_ifaces      — outbound interface name array
+
+Returns: new filter/rule array (pure; no I/O, no config writes, no pfctl).
+
+
+ORACLE TEST FILE
+----------------
+
+File: tests/php/AutoruleListOracleTest.php
+
+21 tests, all green. Covers:
+
+  A. order_0,  float=off, inbound==outbound (lan), Deny_* only
+  B. order_0,  float=on,  inbound==outbound (lan), Deny_* only
+  C. order_1,  float=off, inbound==outbound (lan), Deny_* only  [KNOWN-BAD: dup]
+  D. order_1,  float=off, inbound!=outbound (lan+opt1), Deny_* only
+  E. order_1,  float=on,  inbound==outbound (lan), Deny_* only
+  F. order_2,  float=off, inbound==outbound (lan), Deny_* only  [KNOWN-BAD: dup]
+  G. order_2,  float=off, inbound!=outbound (lan+opt1), Deny_* only
+  H. order_2,  float=on,  inbound==outbound (lan), Deny_* only
+  I. order_3,  float=off, inbound==outbound (lan), Deny_* only
+  J. order_3,  float=on,  inbound==outbound (lan), Deny_* only
+  K. order_4,  float=off, inbound==outbound (lan), Deny_* only  [KNOWN-BAD: reorder pin]
+  L. order_4,  float=off, two ifaces (opt1 in, lan out)         [KNOWN-BAD: reorder]
+  M. order_4,  float=on,  inbound==outbound (lan), Deny_* only
+  N. empty/absent order  — user pass DROPPED (pin the DROP so Phase 3 can show fix)
+  O. order_1,  float=off, Permit_* + Deny_* present, separate ifaces
+  P. DNS-redirect bypass rule preserved (pfB_ prefix but not stripped)
+  Q. DoT-block bypass rule preserved (pfB_ prefix but not stripped)
+  R. pfB_ rules stripped and rebuilt (sanity)
+  S. DNSBL float rules emitted before iface loop
+  T. empty existing rules → only pfB rules
+  U. non-managed iface user rule → other_rules (emitted after managed rules)
+
+Each test asserts the FULL ordered [descr, type, interface, floating] list.
+
+
+KNOWN-BAD CASES (PINNED — Phase 3 flips them)
+----------------------------------------------
+
+C: testOrder1FloatOffSingleIfaceDenyOnlyKnownBadDuplicate
+   — order_1, float=off, inbound==outbound='lan':
+     user pass LAN emitted TWICE (once per loop: inbound + outbound).
+     Expected output has user_pass duplicated. Phase 3 removes the duplicate.
+
+F: testOrder2FloatOffSingleIfaceDenyOnlyKnownBadDuplicate
+   — order_2, float=off, inbound==outbound='lan':
+     Same duplication as C via the order_2 permit_rules block in both loops.
+     Expected output has user_pass duplicated. Phase 3 removes the duplicate.
+
+K/L: testOrder4FloatOff*KnownBadReorder
+   — order_4, float=off:
+     User pass rules are re-positioned relative to each other (emitted via
+     $permit_rules tail instead of original order). Phase 3 restores verbatim order.
+
+N: testAbsentOrderTreatedAsOrder0
+   — empty order string: user pass rule is DROPPED (goes to permit_rules but
+     no tail emits it). This pin documents WHY the caller defaults empty→order_0.
+     The fix (in the caller before calling the helper) already exists (#532/#539).
+     Phase 3 makes the drop structurally impossible (user rules never bucketed).
+
+
+CALL SITE CHANGES
+-----------------
+
+sync_package_pfblockerng() "Assign Rules" region:
+  - The large inline bucketing + per-interface emission loops REPLACED by:
+    1. Existing rule scan (for $pfb_active_aliases + $orig_rules_nocreated) —
+       kept in caller as a pure read loop (no bucketing).
+    2. DNSBL float pair built in caller ($pfb_dnsbl_float array, 0-2 rules).
+    3. $pfb_generated assembled from $pfb['permit_inbound'] etc.
+    4. pfb_build_autorule_list() called; result → $new_rules.
+  - Write gate unchanged: $orig_rules_nocreated != $new_rules_nocreated.
+  - Behaviour identical to before: same $new_rules array for same inputs.
+
+
+PFENSE DOUBLES ADDED
+--------------------
+
+None. All pfSense functions reached by pfb_build_autorule_list() (via pfb_tracker:
+get_real_interface, get_interface_ip, ip2long32, find_interface_subnet,
+get_interface_ipv6, find_interface_subnetv6) were already doubled in
+tests/php/pfsense_doubles.php before this phase.
+
+
+GATE RESULTS
+------------
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  -> No syntax errors detected (pre-existing E_DEPRECATED warnings are irrelevant)
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/
+  -> (no output = clean)
+
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+  -> No errors
+
+vendor/bin/phpunit --no-coverage
+  -> Tests: 1340, Assertions: 5162, Skipped: 3. OK
+     (1319 pre-existing + 21 new oracle tests)
+
+
+COMMIT
+------
+
+Commit subject (exact):
+  pfblockerng: extract autorule emission into pinned pfb_build_autorule_list() (ADR-41 P1)
+
+Files changed:
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc  (helper added + call site rewired)
+  tests/php/AutoruleListOracleTest.php            (21 oracle tests)
+  .ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/01_Results.txt  (this file)
+
+
+GO-AHEAD FOR PHASE 2
+---------------------
+
+Phase 2 (live-VM precedence kill-gate) can proceed:
+  - The pure helper pfb_build_autorule_list() is extracted and off-appliance-tested.
+  - Its current behaviour (including known-bad cases) is pinned.
+  - No production behaviour changed in this phase.
+  - Phase 2 does NO production code changes — it only proves the anchor model on
+    the live VM and records the pass_order → insertion-anchor mapping.
+  - Phase 3 will: (a) replace the helper's bucketing+interleaving with the
+    immutable-user splice, (b) flip the KNOWN-BAD oracle tests to the correct
+    expected output, and (c) add live-VM smoke tests.
