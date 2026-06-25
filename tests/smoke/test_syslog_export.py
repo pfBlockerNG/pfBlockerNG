@@ -6,11 +6,9 @@ Proves the §2.2 contract (as revised by Amendment 1) on a real pfSense CE VM:
   2. Toggle ON  ⇒ a ``pfblockerng`` key=value record per DNSBL block event in the
      dedicated /var/log/pfblockerng_syslog.log, emitted HOST-SIDE by
      ``pfb_daemon_filterlog`` — not by the chrooted python.
-  3. Toggle ON + IP path ⇒ a ``pfblockerng`` record per IP Block event. DEFERRED
-     (xfail) — the IP-block LIVE trigger needs harness work (a reachable non-infra
-     victim target + a WAN/floating rule; a LAN rule breaks civm connectivity).
-     The IP syslog mechanism is the same host-side path the DNSBL leg proves, and
-     ``pfb_syslog_format_ip`` is unit-tested. Tracked as a follow-up.
+  3. Toggle ON + IP path ⇒ a ``pfblockerng`` record per IP Block event, exercised
+     LIVE: civm reaches a blocked WAN-subnet IP through a floating, logged
+     Deny_Outbound rule on WAN, and the host daemon exports the act=block event.
   4. CSV logging is unchanged in both states (export is purely additive).
   5. The toggle takes effect LIVE — no service restart between flipping it and
      the next event (the daemon re-reads config on config.xml change).
@@ -41,7 +39,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -67,11 +65,14 @@ IP_BLOCK_LOG = f"{PFB_LOGDIR}/ip_block.log"
 # Config path for the syslog export toggle (under the General settings section).
 CFG_GENERAL = "installedpackages/pfblockerng/config/0"
 
-# A test IP range whose pfBlockerNG block rule we trigger traffic against.
-# RFC 5737 TEST-NET-3 (203.0.113.0/24) — not routable, but pf still blocks
-# an outbound connection attempt if it matches an alias table for that range.
-TEST_IP_BLOCK_RANGE = "203.0.113.0/24"
-TEST_IP_BLOCK_DST = "203.0.113.1"
+# The IP the pfBlockerNG floating Deny_Outbound rule blocks, exercised by civm.
+# It MUST sit in the pfSense WAN subnet (10.10.0.0/24, the QEMU SLIRP net) so the
+# forwarded SYN is routed straight out the directly-connected WAN — a non-WAN
+# TEST-NET dst depends on the SLIRP default gateway (flaky/down in CI) and never
+# traverses the WAN-out path, so the rule never matches. .9 is unused: NOT the
+# SLIRP gateway (.1), the runner/stub-DNS/mock-feed host alias (.2), or DNS (.3).
+TEST_IP_BLOCK_RANGE = "10.10.0.9/32"
+TEST_IP_BLOCK_DST = "10.10.0.9"
 
 # Settle budget for the tail_pfb → daemon → syslogd → file path.
 FILTERLOG_SETTLE_SECS = 5.0
@@ -121,11 +122,12 @@ def deployed_vm(
         ),
     )
 
-    # IP feed (alias only; default WAN rule). NOTE: the IP-block LIVE leg is deferred
-    # (see test_syslog_on_ip_block_event_exported xfail + follow-up). A LAN-interface
-    # rule was found to break ALL civm->pfSense traffic (the LAN filter rebuild drops
-    # the permissive allow), and a WAN rule to an unreachable TEST-NET IP never logs;
-    # a clean live test needs a reachable non-infra target + a WAN/floating rule.
+    # IP feed: a floating, LOGGED Deny_Outbound rule for a WAN-subnet victim IP.
+    # inject() wires inbound/outbound_interface=wan (SMOKE_IP_IFACE);
+    # _enable_ip_floating_logged_rule then flips it to a floating `block out quick log`
+    # on WAN — which catches civm's forwarded SYN leaving WAN (a non-floating WAN rule
+    # is block-IN and never matches forwarded-out traffic; a LAN-interface rule breaks
+    # civm connectivity) and emits a filter.log line the daemon can export.
     _ip_feed_path = h.write_local_feed(smoke_vm, "pfb_syslog_ip.txt", f"{TEST_IP_BLOCK_RANGE}\n")
     h.inject(
         smoke_vm,
@@ -137,6 +139,7 @@ def deployed_vm(
             header="pfb_syslog_ip",
         ),
     )
+    _enable_ip_floating_logged_rule(smoke_vm)
 
     # Syslog export OFF (the default) at module start.
     _set_syslog_enabled(smoke_vm, on=False)
@@ -193,6 +196,37 @@ def _set_syslog_enabled(vm: SmokeVM, *, on: bool, timeout: float = 60.0) -> None
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(
             f"_set_syslog_enabled({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _enable_ip_floating_logged_rule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Make pfBlockerNG emit the IP deny rule as a FLOATING, LOGGED ``out`` rule.
+
+    Two ipsettings flags, both required for the IP-block syslog leg:
+
+    * ``enable_float``: inject() wires inbound/outbound_interface=wan (SMOKE_IP_IFACE).
+      A *non*-floating Deny_Outbound on WAN is a block-IN rule (pfblockerng.inc:8142) —
+      it never sees civm's forwarded traffic LEAVING via WAN. enable_float flips it to
+      ``direction=out`` (inc:8148): a floating ``block out quick`` on WAN that DOES match
+      the forwarded SYN. Floating-on-WAN also leaves the LAN allow intact — a
+      per-interface LAN rule rebuild drops the "allow LAN→any" and breaks civm's DNS.
+    * ``enable_log`` (global IP logging): pfBlockerNG only stamps ``log`` on the rule when
+      global logging is on or the list's aliaslog='enabled' (inc:8175). Without it the
+      rule blocks SILENTLY — no filter.log line — so the host filterlog daemon never sees
+      the event and nothing is exported. This is the flag the IP syslog leg hinges on.
+    """
+    snippet = (
+        f"$ip = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"
+        "$ip['enable_float'] = 'on';\n"
+        "$ip['enable_log'] = 'on';\n"
+        f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG smoke: enable floating + logged IP rule');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_enable_ip_floating_logged_rule failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
 
 
@@ -291,17 +325,23 @@ def syslog_export_state_snapshot(vm: SmokeVM) -> str:
 
 
 def _trigger_ip_block(client: SmokeVM, *, timeout: float = 30.0) -> None:
-    """Generate a pf-logged IP block by curling a blocked IP FROM the civm client.
+    """Generate a pf-logged IP block by curling the blocked WAN IP FROM civm.
 
     The block must be triggered by PASS-THROUGH traffic — a client BEHIND the
-    firewall (civm, 192.168.1.10) reaching a blocked WAN IP — not by the pfSense
-    box itself: pfBlockerNG's deny rule acts on forwarded traffic, so a curl from
-    pfSense's own stack would not hit it. civm's outbound to 203.0.113.1 is routed
-    out WAN and dropped+logged by the pfB rule (curl uses busybox/debian on civm).
+    firewall (civm) reaching the blocked WAN IP — not by pfSense's own stack: the
+    floating Deny_Outbound rule acts on forwarded traffic leaving WAN, so a curl
+    from pfSense itself would not hit it.
+
+    civm has TWO equal-metric default routes (mgmt ens4 via the QEMU mgmt SLIRP,
+    and LAN ens5 via pfSense), so a bare curl may egress the mgmt NIC and never
+    reach pfSense. Pin a host route for the victim via pfSense (192.168.1.1) out
+    the LAN device first, forcing the SYN civm -> pfSense -> WAN-out -> the block.
     """
     client.ssh(
         "/bin/sh",
         "-c",
+        "dev=$(ip -4 -o addr show | awk '/192\\.168\\.1\\./{print $2; exit}'); "
+        f'ip route replace {TEST_IP_BLOCK_DST}/32 via {PFSENSE_LAN_IP} dev "$dev" 2>/dev/null || true; '
         f"curl --connect-timeout 2 --max-time 4 http://{TEST_IP_BLOCK_DST}/ >/dev/null 2>&1 || true",
         timeout=timeout,
     )
@@ -396,39 +436,33 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
 
 
 # --------------------------------------------------------------------------- #
-# Test 2: ON ⇒ IP Block event exported to the dedicated file
+# Test 2: ON ⇒ IP Block event exported to the dedicated file (LIVE).
 #
-# DEFERRED (xfail) — the IP-block LIVE leg needs harness work, tracked as a
-# follow-up. The IP syslog *mechanism* is the same host-side pfb_syslog_event +
-# daemon path proven live by the DNSBL leg, and pfb_syslog_format_ip is unit-
-# tested (tests/php/SyslogFormatTest.php). What is missing is a way to TRIGGER a
-# pf-logged IP block from civm in the single-runner smoke:
-#   * a LAN-interface pfB rule breaks ALL civm->pfSense traffic (the LAN filter
-#     rebuild drops the permissive allow; civm DNS/ICMP then hit the default
-#     block, rule 1000000103 — filterlog-confirmed);
-#   * a WAN rule to the unreachable TEST-NET IP never logs (the SYN never
-#     traverses the WAN-outbound path);
-#   * the only IP civm can reach through pfSense is the runner (10.10.0.2), which
-#     is the stub DNS + mock-feed server — blocking it breaks the harness.
-# The follow-up adds a reachable, non-infra victim target + a WAN/floating rule
-# (floating inbound/outbound/any) and un-xfails this.
+# The IP-block leg is exercised live via a FLOATING, LOGGED Deny_Outbound rule on
+# WAN (_enable_ip_floating_logged_rule) blocking a WAN-subnet victim (TEST_IP_BLOCK_DST):
+#   * a LAN-interface pfB rule was found to break ALL civm->pfSense traffic (the
+#     LAN filter rebuild drops the permissive allow; civm DNS/ICMP then hit the
+#     default block, rule 1000000103 — filterlog-confirmed);
+#   * a NON-floating WAN Deny_Outbound is a block-IN rule (inc:8142), so it never
+#     matches civm's forwarded traffic LEAVING via WAN;
+#   * a non-WAN TEST-NET dst depends on the (flaky) SLIRP default gateway and
+#     never traverses the WAN-out path;
+#   * without global IP logging the rule blocks SILENTLY (no `log`, inc:8175), so
+#     filter.log/the daemon never see it — enable_log is what makes it exportable.
+# The floating `block out quick log` on WAN matches the forwarded SYN AND leaves the
+# LAN allow intact (it matches only dst=<alias>); the WAN-subnet victim is
+# directly connected so it routes out WAN with no default-gateway dependency.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    reason="IP-block live trigger needs a reachable non-infra target + WAN/floating rule "
-    "(LAN rule breaks civm connectivity). Tracked as a follow-up; mechanism proven by the "
-    "DNSBL leg + pfb_syslog_format_ip unit test.",
-    strict=False,
-)
 def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """ON ⇒ a pfblockerng record per IP Block event in the dedicated file.
 
-    Given: an IP block alias covering 203.0.113.0/24; syslog export ON (from the
-           DNSBL test); the filterlog daemon running; the civm client behind the
-           firewall.
-    When:  the civm client (192.168.1.10) curls a blocked IP (pass-through traffic
-           pf blocks + logs — NOT pfSense's own traffic, which the rule misses).
+    Given: a floating Deny_Outbound rule covering TEST_IP_BLOCK_RANGE; syslog export
+           ON (from the DNSBL test); the filterlog daemon running; the civm client
+           behind the firewall.
+    When:  the civm client curls the blocked WAN IP (pass-through traffic pf blocks
+           + logs on WAN-out — NOT pfSense's own traffic, which the rule misses).
     Then:  a new pfblockerng record appears in the dedicated file with an IP action
            token (act=block/pass/match).
     And:   the CSV ip_block.log is also written (additive).
@@ -448,7 +482,7 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
         ps = vm.ssh("/bin/ps", "-wax", timeout=30)
         daemon_running = "pfblockerng.inc filterlog" in ps.stdout
         pfctl = vm.ssh("/sbin/pfctl", "-t", "pfB_pfb_syslog_iptest_v4", "-T", "show", timeout=30)
-        alias_populated = TEST_IP_BLOCK_RANGE in pfctl.stdout or "203.0.113" in pfctl.stdout
+        alias_populated = TEST_IP_BLOCK_DST in pfctl.stdout
         if not alias_populated:
             pytest.skip(
                 f"IP block alias pfB_pfb_syslog_iptest_v4 not populated with {TEST_IP_BLOCK_RANGE} "
@@ -479,7 +513,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
 
     Before/after proof: first assert ON produced records (true from prior tests),
     then disable LIVE and assert the count does NOT increase. Exercised via the
-    DNSBL leg (the IP-block live trigger is deferred — see the xfail above).
+    DNSBL leg (a re-probe of the blocked domain from civm).
 
     Given: syslog export ON (from prior tests), records already in the dedicated file.
     When:  log_syslog set OFF (write_config ONLY — no restart); the blocked domain is

@@ -469,24 +469,31 @@ the fidelity gate).
 - **Smoke** targets `/var/log/pfblockerng_syslog.log`: proves live toggle (no restart), exclusion from
   system.log, routing+rotation registration, and CSV-additive — via the **DNSBL leg** (civm-sourced).
 
-### A2.4 IP-block live leg — deferred (documented out-of-CI follow-up, §7)
+### A2.4 IP-block live leg — RESOLVED (now a live, CI smoke leg)
 
-The IP-block syslog leg is **xfailed** in the smoke and tracked as an immediate follow-up. The syslog
-**mechanism** is identical to the DNSBL leg (the same host-side `pfb_syslog_event` + `pfb_daemon_filterlog`
-path, proven live) and `pfb_syslog_format_ip` is unit-tested — what is missing is a way to **trigger a
-pf-logged IP block from the civm client** in the single-runner smoke. Findings (live, on the local
-two-VM box):
+The IP-block syslog leg is now exercised **live** (`test_syslog_on_ip_block_event_exported`, un-xfailed):
+civm reaches a blocked WAN-subnet IP through a **floating, logged** Deny_Outbound rule on WAN, and the
+host daemon exports the `act=block` event. The syslog **mechanism** is identical to the DNSBL leg (the
+same host-side `pfb_syslog_event` + `pfb_daemon_filterlog` path) and `pfb_syslog_format_ip` is unit-tested;
+what was missing was a way to **trigger a pf-logged IP block from the civm client** in the single-runner
+smoke. Findings (live, on the local two-VM box) that shaped the working recipe:
 
 - A **LAN-interface** pfBlockerNG rule breaks **all** civm→pfSense traffic: adding any pfB rule to the
   LAN interface triggers a filter rebuild that drops the LAN's permissive allow, so civm's DNS/ICMP fall
   through to the default block (filterlog-confirmed: civm→`192.168.1.1:53` dropped by rule `1000000103`,
-  not the pfB rule). So the rule must NOT be on LAN.
-- A **WAN** rule to the unreachable TEST-NET target (`203.0.113.1`) never logs (the SYN never traverses
-  the WAN-outbound path), and that range also overlaps the stub-DNS sentinel.
-- The only IP civm can reach **through** pfSense is the runner (`10.10.0.2`) — the stub DNS + mock-feed
-  server — so blocking it breaks the harness.
+  not the pfB rule). So the rule must **not** be on LAN.
+- A **non-floating WAN** Deny_Outbound is a `block in` rule (`inc:8142`) — it never matches civm's
+  forwarded traffic **leaving** via WAN. `enable_float` flips it to a floating `block out quick`
+  (`direction=out`, `inc:8148`), which does. Floating-on-WAN also leaves the LAN allow intact (it matches
+  only `dst=<alias>`).
+- The victim must sit in the **WAN subnet** (`10.10.0.0/24`, directly connected) so the SYN routes out
+  WAN with no dependency on the flaky SLIRP default gateway; an off-subnet TEST-NET target never
+  traverses the WAN-out path. `.9` is unused (not the SLIRP gateway `.1`, the runner/stub-DNS `.2`, or
+  DNS `.3`).
+- The rule must **log**: pfBlockerNG only stamps `log` on the rule when global IP logging is on or the
+  list's `aliaslog='enabled'` (`inc:8175`). Without it the rule blocks **silently** — no filter.log line,
+  so the daemon never sees the event. `enable_log='on'` closes this.
 
-The follow-up adds a **reachable, non-infra victim target** for civm plus a **WAN or floating rule**
-(exercising floating `inbound`/`outbound`/`any` modes), then un-xfails the IP-block test. Per §7 this is
-a documented out-of-CI limitation, not an acceptance blocker — the live DNSBL proof + the IP unit test
-cover the syslog behaviour.
+Net recipe: WAN-subnet victim + `enable_float` + `enable_log`, with the civm trigger pinning a host route
+for the victim via pfSense so the SYN takes the LAN→WAN path. This leg now runs in the CI smoke fan-out;
+the §7 manual-SIEM checklist remains the only out-of-CI item.
