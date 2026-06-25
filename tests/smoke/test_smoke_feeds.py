@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import shlex
 from collections.abc import Iterator
 
 import pytest
@@ -1100,3 +1101,257 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
         h.reset(deployed_vm)
         # Clean up the local feed files we wrote directly to /var/db/pfblockerng/.
         deployed_vm.ssh("/bin/rm", "-f", block_feed_url, permit_feed_url)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #538 — cron → pfb_update_check feed-change detector
+#
+# All other local-feed smoke cases drive feed reloads via the ``update``
+# (Force Update) verb or the ``force_dnsbl_refetch`` shortcut (which manually
+# touches ``{header}.update``), bypassing ``pfb_update_check`` entirely.
+# These two tests exercise the REAL scheduled-cron path and pin BOTH branches
+# of the detector:
+#
+#   CHANGED  — source mtime > .orig mtime → detector marks feed due → re-ingest
+#   UNCHANGED — source mtime == .orig mtime → detector skips feed  → reuse/exists
+#
+# This gap caused the #533 misdiagnosis ("local edits never re-ingested").
+# They ARE — but only on ``cron``, not on Force Update.
+# --------------------------------------------------------------------------- #
+
+
+def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 30.0) -> int:
+    """Count main-log lines for THIS feed (``[ <header> ]``) that also contain ``phrase``."""
+    cmd = (
+        f"/usr/bin/grep -F {shlex.quote(f'[ {header} ]')} {shlex.quote(h.PFB_LOG)} 2>/dev/null "
+        f"| /usr/bin/grep -Fc {shlex.quote(phrase)}"
+    )
+    res = vm.ssh(cmd, timeout=timeout)
+    try:
+        return int(res.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def _pin_cron_due(vm: SmokeVM) -> None:
+    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due."""
+    snippet = (
+        f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"  # noqa: SLF001
+        "$g['pfb_reuse'] = '';\n"
+        "$g['pfb_dailystart'] = date('G');\n"
+        f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"  # noqa: SLF001
+        "write_config('pfBlockerNG smoke #538: due cron');\n"
+        "echo 'OK';"
+    )
+    res = h.php_eval(vm, snippet)
+    if res.returncode != 0 or "OK" not in res.stdout:
+        raise RuntimeError(f"_pin_cron_due failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
+
+
+def _bump_feed_mtime(
+    vm: SmokeVM, feed_path: str, orig_path: str, *, advance: str | None = None, timeout: float = 30.0
+) -> None:
+    """Set ``feed_path``'s mtime relative to ``orig_path`` — entirely on the guest, timezone-free.
+
+    ``touch -r`` copies ``orig``'s mtime onto the feed (→ equal). When ``advance`` is given (a
+    FreeBSD ``touch -A [[hh]mm]SS`` offset, e.g. ``"0200"`` = +2 min), the feed mtime is then
+    advanced by that amount (→ strictly later than ``.orig``). Relative ops only: an absolute
+    ``touch -t`` built from the runner's local time would be re-interpreted in the GUEST's
+    timezone, skewing the mtime when runner and guest timezones differ.
+    """
+    r = vm.ssh(f"/usr/bin/touch -r {shlex.quote(orig_path)} {shlex.quote(feed_path)}", timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(f"touch -r {orig_path} -> {feed_path} failed: rc={r.returncode} {r.stderr!r}")
+    if advance is not None:
+        a = vm.ssh(f"/usr/bin/touch -A {shlex.quote(advance)} {shlex.quote(feed_path)}", timeout=timeout)
+        if a.returncode != 0:
+            raise RuntimeError(f"touch -A {advance} {feed_path} failed: rc={a.returncode} {a.stderr!r}")
+
+
+@pytest.mark.timeout(600)
+def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #538 guard: the scheduled cron path detects an in-place local-feed edit and re-ingests it.
+
+    This pins the CHANGED branch of ``pfb_update_check`` (cron verb → mtime diff detected →
+    ``{header}.update`` touched → feed re-downloaded). It is the production path the #533
+    misdiagnosis missed, distinct from the Force/``force_dnsbl_refetch`` shortcut that all
+    other local-feed smoke tests use.
+
+    Scenario (BDD):
+      Given the feed contains only ``dom_old`` (initial ingest via Force Update blocks it);
+        and ``dom_new`` is NOT on any feed (resolves via stub sentinel, not blocked);
+      When the feed source is edited in-place to add ``dom_new`` (mtime made strictly later
+        than the ``.orig`` baseline), pfb_reuse is OFF and pfb_dailystart matches the current
+        guest hour (so the EveryDay feed is due), and the ``cron`` verb is run (NOT
+        ``force_dnsbl_refetch`` — that is the shortcut this test replaces);
+      Then ``dom_new`` becomes BLOCKED (detector re-ingested the edited feed),
+        ``dom_old`` stays BLOCKED, and the main log gained a header-scoped
+        "Downloading update" line for this feed during the cron run.
+    """
+    dom_old = h.unique_domain("cronchgold")
+    dom_new = h.unique_domain("cronchgnew")
+    header = "smokecronchg"
+    feed_path: str | None = None
+
+    try:
+        h.unblock_egress()
+
+        # GIVEN — write initial feed (dom_old only); ingest (a single updatednsbl creates the
+        # .orig baseline + .txt and blocks dom_old — the targeted DNSBL sync, as CaseContext uses).
+        feed_path = h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n")
+        spec = h.DnsblCase(aliasname="smokecronchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE state: dom_old blocked, dom_new resolves via stub.
+        h.flush_unbound_name(deployed_vm, dom_old)
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
+        assert h.is_vip(ans_old_before), (
+            f"BEFORE: {dom_old} must be VIP-blocked after initial ingest, got {ans_old_before}"
+        )
+        ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
+        assert h.resolves_to(ans_new_before, STUB_DNS_A), (
+            f"BEFORE: {dom_new} must resolve via stub (not yet listed), got {ans_new_before}"
+        )
+        assert not h.is_vip(ans_new_before), (
+            f"BEFORE: {dom_new} must NOT be blocked before feed edit, got {ans_new_before}"
+        )
+
+        # WHEN — edit feed in-place (add dom_new), make source mtime strictly LATER than .orig.
+        # Drive the mtime entirely on the guest with RELATIVE ops (no runner-vs-guest timezone
+        # skew, which an absolute `touch -t` built from runner-local time would introduce):
+        # copy .orig's mtime onto the source, then advance it by +120s (`touch -A 0200`).
+        h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n" + dom_new + "\n")
+        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+        _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
+
+        # Pin pfb_reuse=off and dailystart=now (just before cron to dodge hour-rollover race).
+        _pin_cron_due(deployed_vm)
+
+        # Capture baselines BEFORE the cron run: the per-feed header line (proves the detector
+        # actually evaluated THIS feed) and the re-ingest marker.
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+
+        # WHEN — run the genuine cron path (NOT force_dnsbl_refetch — that is the shortcut).
+        h.reload(deployed_vm, "cron")
+
+        # THEN (fast guard) — the cron actually evaluated this feed. If the EveryDay feed was not
+        # due (e.g. the wall-clock hour rolled over between _pin_cron_due and the cron), no
+        # detector line appears; fail HERE with a clear reason instead of a 120s probe timeout.
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, (
+            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — the "
+            f"EveryDay feed was not due (hour rollover?), so this run proves nothing; re-run"
+        )
+
+        # THEN — dom_new becomes blocked (cron re-ingested the edited feed).
+        h.flush_unbound_name(deployed_vm, dom_new)
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
+        assert h.is_vip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be VIP-blocked (detector re-ingested edited feed), got {ans_new_after}"
+        )
+        # dom_old stays blocked (it was already listed).
+        ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
+        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+
+        # Corroborate: detector fired — "Downloading update" count increased for this header.
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after > dl_before, (
+            f"Expected a new '[ {header} ] ... Downloading update' line in {h.PFB_LOG} "
+            f"after cron (before={dl_before}, after={dl_after}) — detector did not re-ingest"
+        )
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if feed_path:
+            deployed_vm.ssh("/bin/rm", "-f", feed_path)
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #538 guard: an unchanged local feed on a cron run is NOT re-parsed.
+
+    This pins the UNCHANGED branch of ``pfb_update_check``: equal source/orig mtimes → the
+    detector logs "Update not required" and touches no ``{header}.update`` marker, so the feed
+    is not re-ingested. With nothing due, the cron takes the ``noupdates`` path, which SKIPS the
+    sync feed-loop entirely (it is gated by ``!$pfb['save']`` and noupdates sets save=TRUE) — so
+    the reuse is proven by the DETECTOR verdict ("Update not required", emitted before that
+    dispatch), NOT a sync-loop "exists" line (that loop never runs on a no-update cron).
+
+    Scenario (BDD):
+      Given the feed contains ``dom`` (initial ingest blocks it);
+      When the source mtime is made EQUAL to the ``.orig`` mtime (``touch -r``), pfb_reuse
+        is OFF and pfb_dailystart matches the current guest hour, and the ``cron`` verb runs;
+      Then the detector logs a new "Update not required" verdict for the due feed (no re-ingest),
+        no "Downloading update" line appears for this header, and ``dom`` remains blocked
+        (steady state — feed was not cleared).
+    """
+    dom = h.unique_domain("cronunchg")
+    header = "smokecronunchg"
+    feed_path: str | None = None
+
+    try:
+        h.unblock_egress()
+
+        # GIVEN — write feed, ingest (a single updatednsbl creates the .orig baseline + .txt).
+        feed_path = h.write_local_feed(deployed_vm, "smoke_cronunchg.txt", dom + "\n")
+        spec = h.DnsblCase(aliasname="smokecronunchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE state: dom blocked.
+        h.flush_unbound_name(deployed_vm, dom)
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
+        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+
+        # WHEN — make source mtime EQUAL to .orig (timezone-free: touch -r copies orig's mtime).
+        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+        _bump_feed_mtime(deployed_vm, feed_path, orig_path)
+
+        # Pin pfb_reuse=off and dailystart=now.
+        _pin_cron_due(deployed_vm)
+
+        # Capture baselines BEFORE cron. With an unchanged feed the cron takes the noupdates
+        # path (sync feed-loop skipped), so the reliable positive signal is the DETECTOR verdict
+        # "Update not required" — emitted by pfb_update_check, which runs BEFORE that dispatch.
+        notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+
+        # WHEN — cron.
+        h.reload(deployed_vm, "cron")
+
+        # THEN — no new "Downloading update" (reuse held — feed not re-ingested).
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after == dl_before, (
+            f"Expected NO new '[ {header} ] ... Downloading update' after unchanged cron "
+            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
+        )
+
+        # THEN — the detector evaluated the due feed and saw no change (equal mtimes).
+        notreq_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
+        assert notreq_after > notreq_before, (
+            f"Expected a new 'Update not required' detector verdict after unchanged cron "
+            f"(before={notreq_before}, after={notreq_after}) — reuse path not confirmed"
+        )
+
+        # THEN — dom remains blocked (feed was not cleared).
+        ans_after = h.dns_probe_client(client_vm, dom, "A")
+        assert h.is_vip(ans_after), f"AFTER unchanged cron: {dom} must remain VIP-blocked, got {ans_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if feed_path:
+            deployed_vm.ssh("/bin/rm", "-f", feed_path)
+        if reset_exc is not None:
+            raise reset_exc
