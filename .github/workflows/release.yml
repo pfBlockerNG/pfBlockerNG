@@ -1039,12 +1039,19 @@ jobs:
   # release must be fully attached, healthchecked, AND flipped to published first.
   # publish-release only publishes a COMPLETE draft (healthcheck), so by the time this
   # fires the published release carries every expected .pkg.
-  # ADDITIVE + ISOLATED — sync-ports-fork does NOT `needs:` this, so a failure here can
-  # NEVER gate or break release / sync-ports-fork / attach-pkgs.
+  # ISOLATED — sync-ports-fork does NOT `needs:` this, so a failure here can NEVER gate or
+  # break release / sync-ports-fork / attach-pkgs.
+  # ORDERED AFTER sync-ports-fork — pfBlockerNG/pkg's publish.yml derives the NIGHTLY version
+  # from the `-nightly` port's PORTVERSION in the FreeBSD-ports fork, which sync-ports-fork
+  # bumps. If this dispatch raced sync-ports-fork, the pkg repo read the OLD PORTVERSION and
+  # shipped a stale-versioned nightly (e.g. 4.0.0.alpha.3.* on the alpha.4 commit). Waiting for
+  # sync-ports-fork guarantees the bump has landed before the pkg repo reads it. The retained
+  # `always()` keeps this running even if sync-ports-fork fails — it ORDERS, never hard-gates;
+  # the `if` still requires the release itself to have published.
   repo-publish:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
-    needs: [prepare-release, release, attach-pkgs, publish-release]
+    needs: [prepare-release, release, attach-pkgs, publish-release, sync-ports-fork]
     if: always() && needs.release.result == 'success' && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
       contents: read
