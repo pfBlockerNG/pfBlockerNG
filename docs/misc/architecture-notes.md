@@ -462,30 +462,42 @@ Full design: ADR-39.
 
 The IP-side autorule pass in `sync_package_pfblockerng()` reconciles pfBlockerNG's own
 `filter/rule` entries each update via the pure helper `pfb_build_autorule_list($existing_rules,
-$pfb_generated, $order, $float, $in_ifaces, $out_ifaces)` (pfblockerng.inc). It treats **user
-rules as immutable**: the kept list is the live `filter/rule` minus only the pfB-owned rules this
-region regenerates (descr starts `pfB_`, **excluding** the DNS-redirect/DoT-block bypass rules,
-which are kept like user rules), in their **original order**; pfBlockerNG's rules are generated
-unchanged and **spliced as one contiguous block at a single anchor**. No user rule is ever
-bucketed, filtered, duplicated, split, or reordered — eliminating the #532 drop / order_1·2
-duplication / order_4 reorder as a class.
+$pfb_generated, $order, $float, $in_ifaces, $out_ifaces)` (pfblockerng.inc). It is a **stable
+bucket reorder**: every surviving rule is sorted into one of four buckets — pfB pass/match, pfB
+block/reject, user pass/match, user block/reject — and the buckets are concatenated in the
+sequence the `pass_order` setting dictates. The pfB-owned rules (descr starts `pfB_`, **excluding**
+the DNS-redirect/DoT-block bypass rules, which are kept like user rules) are regenerated unchanged;
+user rules pass through verbatim. Whole buckets move — nothing **inside** a bucket is reordered,
+and **no user rule is duplicated (#532), dropped, or content-mutated** (bar the legacy `_v4`
+alias-suffix upgrade). Cross-bucket movement is exactly what `pass_order` means and is allowed.
 
-The anchor is **binary**, because pf is per-interface first-match (`quick`) so the only
-user-visible interaction is pfB-block-vs-user-**pass** (pass-vs-pass and block-vs-block are moot):
+The reorder is applied **independently to the two pf rule groups**, because pf evaluates them
+separately: the **floating** group (always carries the DNSBL/match pass rules; also the pfB
+permit/deny when float mode is on, since the call site then builds them from `base_rule_float`) and
+the **interface** group (the per-interface pfB permit/deny when float mode is off). Each group
+orders its own four buckets by the same ORDER table (GUI `pfblockerng_ip.php`):
 
-- `order_0` / `order_3` / `order_4` / absent / unknown → pfB block **before** the kept user rules
-  (pfB wins; absent→order_0 subsumes the #539 default).
-- `order_1` / `order_2` → pfB block **after** the kept user rules (user pass wins).
+```text
+order_0 | pfB p/m | pfB b/r | user (not split)
+order_1 | user p/m | pfB p/m | pfB b/r | user b/r
+order_2 | pfB p/m | user p/m | pfB b/r | user b/r
+order_3 | pfB p/m | pfB b/r | user p/m | user b/r
+order_4 | pfB p/m | pfB b/r | user b/r | user p/m
+absent / unknown → order_0
+```
 
-The contract (user-rule fidelity, pfB-rule-set identical, idempotence) is pinned off-appliance in
+A single before/after anchor for the whole pfB block **cannot** express this: `order_1`/`order_2`
+split the user rules (user pass/match in front, user block/reject behind the pfB block), so a pfB
+**Permit** list (pass) must precede a user **Block** — putting the whole user block of rules ahead
+of the pfB block lets a user Block shadow a pfB Permit. `order_4` likewise places the user's own
+**Block** before its **Pass** (intended `pass_order` semantics, not a removable reorder).
+
+The contract (per-order placement incl. the pfB-Permit-vs-user-Block trap, user-rule fidelity,
+pfB-rule-set identical, idempotence, and behavioural equivalence to the years-proven `8c4c482`
+emission on every dup-free config) is pinned off-appliance in
 `tests/php/AutoruleListOracleTest.php`; the live data-plane precedence sweep is
-`tests/smoke/test_smoke_autorule_immutable.py` (ADR-04). Design + the live pf-precedence kill-gate
-evidence: `.ADRs/ADR_41_Immutable_User_Firewall_Rules/`.
-
-**Deliberate behaviour change (release notes):** `order_4` (and the old managed/non-managed split)
-no longer **reorders** the user's own rules — user rules are now kept verbatim. Functionally inert
-under per-interface first-match, but some installs' `config.xml` rule order changes on
-`order_1`/`order_2`/`order_4`.
+`tests/smoke/test_smoke_autorule_immutable.py` (ADR-04). Design + the corrected pf-precedence
+analysis: `.ADRs/ADR_41_Immutable_User_Firewall_Rules/` (`RESULTS/05`).
 
 ## Managed firewall object ownership and teardown (ADR-35)
 

@@ -1,0 +1,111 @@
+ADR-41 Phase 5 Results — course correction: restore the 4-way pass_order assembly
+=================================================================================
+Branch: fix/adr-41-restore-pass-order (off devel)   Supersedes: the binary-anchor design (Phase 3)
+Verdict: the Phase-2 GO (RESULTS/02) was FALSE; the binary anchor is replaced by the 4-bucket
+         stable reorder. Off-appliance contract red->green; live data-plane sweep still deferred.
+
+
+1. THE FLAW (what shipped wrong on PR #561)
+-------------------------------------------
+Phase 3 collapsed the five pass_order layouts into ONE before/after anchor for the whole
+contiguous pfB rule block:
+
+    order_1 / order_2        -> pfB block AFTER  the kept user rules
+    order_0 / 3 / 4 / absent -> pfB block BEFORE the kept user rules
+
+That is incorrect. RESULTS/02 S2 reduced the 4-way ORDER table to a single binary question
+("does the pfB block sit before or after the user PASS rules?") by enumerating only:
+    pfB-block vs user-PASS   (significant)
+    pfB-pass  vs user-PASS   (moot)
+    pfB-block vs user-block  (moot)
+It OMITTED the fourth cross-action interaction:
+    pfB-PASS (Permit list) vs user-BLOCK  -> SIGNIFICANT.
+
+A pfB Permit (pass) rule is an admin allowlist; it must override a user Block (the ORDER table
+puts pfB p/m ahead of user b/r in EVERY order_1..order_4). The binary anchor puts the WHOLE user
+block of rules -- including user Block rules -- ahead of the pfB block for order_1/order_2, so a
+pfB Permit lands behind a user Block and loses. order_3/order_4 happened to work (pfB before all
+user rules), which is why a Deny-only kill-gate (the pfB-pass bucket empty) never saw it -- the
+exact "mixed pfB permit+deny + user rules" config the ADR's own S7 reject criterion named as the
+falsifier. The single live case in Phase 2 was Deny-only, so the gate false-GO'd.
+
+Second error: RESULTS/02 S6 and ADR S3 called order_4's user-block-before-user-pass emission a
+"deliberate behaviour change ADR-41 removes". It is NOT a defect -- it is the documented order_4
+semantics (GUI: order_4 = pfB p/m | pfB b/r | pfSense Block/Reject | pfSense Pass/Match). The
+binary anchor, by keeping user rules in original order, silently DROPPED that intended reorder.
+
+
+2. CONFIRMED pf FACTS (re-verified)
+-----------------------------------
+Re-checked against upstream pfSense src/etc/inc/filter.inc (master + RELENG_2_7_2, byte-identical):
+  * filter_generate_user_rule: `if (!isset($rule['floating']) || isset($rule['quick'])) quick`.
+    A NON-floating rule => always quick (first-match). NOTE: a rule that carries floating='' (key
+    present, as pfB rules and many config rows do) does NOT auto-get quick -- so "interface rules
+    are always quick" is an over-claim, and the precedence argument should NOT lean on it.
+  * Floating rules are emitted as a SEPARATE group, BEFORE interface rules (util.inc PFCONFIG
+    category order; RELENG_2_7_2 explicit "Floating, then if-group, then regular" comment).
+The corrected design does NOT depend on the quick claim at all: pfBlockerNG's contract is simply to
+emit its rules in the documented pass_order sequence; the binary anchor violated that sequence.
+
+
+3. THE CORRECT DESIGN — 4-bucket stable reorder
+-----------------------------------------------
+Four buckets: pfB pass/match, pfB block/reject, user pass/match, user block/reject. Concatenate
+them in the pass_order sequence; apply the SAME table INDEPENDENTLY to the two pf groups (because
+pf evaluates them separately):
+  * FLOATING group: always the DNSBL/match pass rules; ALSO the pfB permit/deny when float mode is
+    on (the call site builds them from base_rule_float, so they are floating).
+  * INTERFACE group: the per-interface pfB permit/deny when float mode is off.
+
+    order_0 | pfB p/m | pfB b/r | user (not split)
+    order_1 | user p/m | pfB p/m | pfB b/r | user b/r
+    order_2 | pfB p/m | user p/m | pfB b/r | user b/r
+    order_3 | pfB p/m | pfB b/r | user p/m | user b/r
+    order_4 | pfB p/m | pfB b/r | user b/r | user p/m
+    absent / unknown -> order_0
+
+Whole buckets move; within-bucket order is preserved; no user rule is duplicated (#532), dropped,
+or content-mutated (bar the legacy _v4 upgrade). The ADR-41 "good parts" are kept: bypass rules
+(pfB_DNS_Redirect_ / pfB_DoT_Block_) treated as user-managed; pfB generation unchanged; the
+floating-match-emitted-once invariant; null-$order/$float tolerance; write iff changed.
+
+
+4. VALIDATION (off-appliance; red->green)
+-----------------------------------------
+tests/php/AutoruleListOracleTest.php (rewritten):
+  * Per-order fixtures for the pfB-Permit + pfB-Deny + user-Pass + user-Block trap on one
+    interface, all five orders -- pfB Permit precedes user Block for order_1..4; order_4 emits
+    user Block before user Pass. RED on the binary helper (testTrapOrder1/2/4 + the float-on +
+    differential fail), GREEN on the 4-bucket helper.
+  * Headline guard: the years-proven 8c4c482 emission is embedded FROZEN as
+    pfb_autorule_reference_8c4c482() and the helper is asserted BEHAVIOURALLY identical to it on
+    every dup-free config (per-interface, per-direction projection) -- proving the restore
+    reproduces the proven behaviour everywhere except the two reference defects it fixes (the
+    order_1/order_2 user-pass DUP across the in/out loops, and the empty-order / order_2-float-on
+    DROP). Those dup/drop-trigger configs are skipped from the differential and pinned to the
+    corrected behaviour by the fixtures + a dedicated no-drop test.
+  * Kept: user-rule fidelity (no drop/dup/mutation), idempotence, match-emitted-once, dnsbl lead,
+    bypass preservation, pfB-owned stripping, within-bucket order, null tolerance.
+  Result: 17 tests, 7703 assertions GREEN on the 4-bucket helper; 5 of them FAIL on the binary
+  helper (the precedence + order-table + differential tests). PHPUnit (full 1453), PHPStan,
+  PHPCS, php -l all green.
+
+A development-time differential harness (PHP, 4000 randomized configs) confirmed the helper is
+behaviourally == the 8c4c482 reference on every dup-free config and never duplicates a user rule;
+its logic is committed as the in-suite differential.
+
+
+5. LIVE (out-of-CI; the acceptance gate)
+----------------------------------------
+tests/smoke/test_smoke_autorule_immutable.py updated to a pfB-Permit + pfB-Deny + user-pass/block
+per-pass_order data-plane precedence sweep (blocked-vs-allowed probe), CE + Plus fan-out. Still
+skip-deferred (pytest.mark.skip) pending Phase-4 live wiring -- the off-appliance contract above is
+the proof for now. ADR flips to Accepted only once that live CE+Plus fan-out is green. This is the
+kill-gate the Deny-only Phase-2 probe should have been.
+
+
+6. STATUS
+---------
+Implemented (4-way restored) pending live-VM smoke. ADR S2 (binary -> 4-bucket), S3 (order_4
+reorder is intended, not removed), and Status corrected; RESULTS/02 GO marked FALSE; architecture
+-notes rewritten. Lands via PR on fix/adr-41-restore-pass-order (touches src/ + tests/).
