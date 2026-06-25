@@ -1,7 +1,11 @@
 # ADR-40: Content-addressed alias-table updates — gate reloads on the final set, apply forward deltas
 
-- **Status:** **Proposed** (2026-06-24)
-- **Date:** 2026-06-24
+- **Status:** **Accepted** (2026-06-25) — implemented on `devel` (PR #560); live-VM smoke
+  fan-out green on **CE 2.8 + Plus 26.03**. Deferred to the maintainer manual-smoke checklist
+  (§7): the multi-million-entry data-plane latency check, and the cross-list-dedup / reputation
+  *live* legs (their decision logic is pinned off-appliance by PHPUnit; the live legs await
+  `enable_dup` smoke fixtures, tracked as a follow-up).
+- **Date:** 2026-06-24 (accepted 2026-06-25)
 - **Branch:** `adr/40-content-addressed-alias` (off **`devel`**; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming"). / **Component(s):** the IP-side alias-table update path —
   `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (the alias-build + `pfctl` reload region of
