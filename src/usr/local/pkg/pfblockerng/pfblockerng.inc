@@ -3292,6 +3292,42 @@ function pfb_hook_trigger($cron) {
 }
 
 
+/*
+ * Map a pfblockerng.php verb (or the $cron value passed to sync_package_pfblockerng())
+ * to an explicit trigger request struct: reload scope, force flag, and trigger identity.
+ *
+ * Returns: array { 'scope'   => 'ip'|'dnsbl'|'both',
+ *                  'force'   => bool,
+ *                  'trigger' => 'cron'|'force' }
+ *
+ * The 'trigger' field uses the ADR-43 vocabulary (cron|force; Phase 3 will add 'manual').
+ * PFB_TRIGGER is currently derived by pfb_hook_trigger() — Phase 3 will fold that into
+ * this struct's 'trigger' field once the mapping is changed.
+ *
+ * 'update' (the pfblockerng.php "Force Update" verb) maps identically to 'cron' because
+ * pfblockerng.php calls sync_package_pfblockerng('cron') for both verbs — they are
+ * INDISTINGUISHABLE inside the pass (same $cron). Phase 3 will assign 'update' its own
+ * 'manual' trigger identity and a distinct PFB_TRIGGER.
+ *
+ * 'noupdates' and '' (settings save / de-install) carry the same struct as 'cron'; their
+ * side-channel behaviour ($pfb['save']=TRUE; no-scope-change) is handled by callers.
+ *
+ * ADR-43 Phase 1 — oracle: this table is pinned by TriggerRequestTest.php so Phase 3 can
+ * safely break it red→green when migrating to the explicit trigger API.
+ */
+function pfb_trigger_request($verb) {
+	switch ((string) $verb) {
+		case 'updateip':
+			return ['scope' => 'ip',   'force' => TRUE,  'trigger' => 'force'];
+		case 'updatednsbl':
+			return ['scope' => 'dnsbl', 'force' => TRUE,  'trigger' => 'force'];
+		default:
+			// 'cron', 'update' (pfblockerng.php maps it to $cron='cron'), 'noupdates', ''
+			return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'cron'];
+	}
+}
+
+
 // Record failed IP/DNSBL Feed parse errors
 function pfb_parsed_fail($header, $line='', $oline, $logfile) {
 
@@ -11817,31 +11853,33 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['reuse'] = $pfb['config']['pfb_reuse'];
 	$pfb['reuse_dnsbl'] = '';
 
+	// ADR-43 Phase 1: derive scope/force/trigger from the explicit request struct.
+	// pfb_trigger_request() encapsulates the verb→scope/force/trigger mapping so
+	// Phase 3 can change it in one place. Behaviour is byte-for-byte identical here.
+	$pfb_req = pfb_trigger_request($cron);
+
 	// Define update process (update or reload)
-	switch ($cron) {
-		case 'noupdates':
-			// Force update - Set 'save' variable when 'No updates' found.
-			$pfb['save'] = TRUE;
-			break;
-		case 'cron':
-			if ($pfb['reuse'] == 'on') {
-				$pfb['reuse_dnsbl'] = 'on';
-				unlink_if_exists("{$pfb['dbdir']}/masterfile");
-				unlink_if_exists("{$pfb['dbdir']}/mastercat");
-			}
-			break;
-		case 'updatednsbl':
-			$pfb['reuse'] = '';
-			$pfb['reuse_dnsbl'] = 'on';
-			$pfb['updatednsbl'] = TRUE;
-			break;
-		case 'updateip':
-			$pfb['reuse'] = 'on';
-			$pfb['reuse_dnsbl'] = '';
-			unlink_if_exists("{$pfb['dbdir']}/masterfile");
-			unlink_if_exists("{$pfb['dbdir']}/mastercat");
-			break;
+	if ($cron === 'noupdates') {
+		// Cron pass with no feed changes: save the configuration; nothing to reload.
+		$pfb['save'] = TRUE;
+	} elseif ($pfb_req['scope'] === 'ip' && $pfb_req['force']) {
+		// updateip: Force Reload IP — apply IP tables from cached lists, no re-download.
+		$pfb['reuse']       = 'on';
+		$pfb['reuse_dnsbl'] = '';
+		unlink_if_exists("{$pfb['dbdir']}/masterfile");
+		unlink_if_exists("{$pfb['dbdir']}/mastercat");
+	} elseif ($pfb_req['scope'] === 'dnsbl' && $pfb_req['force']) {
+		// updatednsbl: Force Reload DNSBL — apply from cached data, always reload Unbound.
+		$pfb['reuse']        = '';
+		$pfb['reuse_dnsbl']  = 'on';
+		$pfb['updatednsbl']  = TRUE;
+	} elseif ($cron === 'cron' && $pfb['reuse'] == 'on') {
+		// Scheduled/update cron with global Reload toggle on: propagate reuse to DNSBL side.
+		$pfb['reuse_dnsbl'] = 'on';
+		unlink_if_exists("{$pfb['dbdir']}/masterfile");
+		unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	}
+	// '' (settings save / de-install) and any other $cron: no scope adjustment.
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
 	if ($pfb['enable'] == 'on' && !$pfb['save']) {
