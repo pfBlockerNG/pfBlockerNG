@@ -171,6 +171,7 @@ if ($_POST) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'), gettext('Hooks'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_update.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 if ($input_errors) {

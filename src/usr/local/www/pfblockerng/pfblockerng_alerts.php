@@ -3309,6 +3309,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Alerts'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 ?>
 

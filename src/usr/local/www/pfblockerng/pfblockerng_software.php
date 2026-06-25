@@ -157,6 +157,7 @@ if ($pfb_sw_action === 'check') {
 	exit;
 }
 
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 // Tab bar (the Software tab is the active one here; gated like every page).

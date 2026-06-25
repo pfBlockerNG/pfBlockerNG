@@ -600,6 +600,7 @@ $type_label = array('ipv4' => 'IPv4', 'ipv6' => 'IPv6', 'dnsbl' => 'DNSBL');
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), gettext($type_label[$gtype]));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', "/pfblockerng/pfblockerng_feeds.php?type={$gtype}", '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 if ($input_errors) {

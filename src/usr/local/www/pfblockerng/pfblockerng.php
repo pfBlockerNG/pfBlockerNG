@@ -1832,6 +1832,7 @@ if ($_POST) {
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('IP'), gettext('GeoIP'), $continent_display);
 $pglinks = array( '', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_ip.php',
 		'/pfblockerng/pfblockerng_category.php?type=geoip', '@self');
+$shortcut_section = 'pfblockerng';
 
 include_once('head.inc');
 
@@ -2378,6 +2379,7 @@ if ($_POST) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('IP'), gettext('Reputation'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_ip.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 // Define default Alerts Tab href link (Top row)

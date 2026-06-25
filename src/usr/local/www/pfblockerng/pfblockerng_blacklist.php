@@ -302,6 +302,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNSBL'), gettext('DNSBL Category'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_dnsbl.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 if ($input_errors) {

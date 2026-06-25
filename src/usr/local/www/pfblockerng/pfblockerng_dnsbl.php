@@ -886,6 +886,7 @@ if ($_POST) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNSBL'));
 $pglinks = array('', '/pfblockerng/pfblockerng_dnsbl.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 if ($input_errors) {

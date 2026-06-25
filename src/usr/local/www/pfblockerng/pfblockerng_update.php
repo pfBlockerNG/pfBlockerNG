@@ -124,6 +124,7 @@ function pfb_cron_update($type) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
+$shortcut_section = 'pfblockerng';
 include_once('head.inc');
 
 $pconfig = array();

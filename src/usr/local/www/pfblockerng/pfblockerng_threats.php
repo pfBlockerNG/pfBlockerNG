@@ -21,6 +21,7 @@
  */
 
 require('guiconfig.inc');
+$shortcut_section = 'pfblockerng';
 include('head.inc');
 
 $title = $host = $domain = $port = '';
