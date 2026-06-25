@@ -501,3 +501,96 @@ class TestDenyModeByteIdentical:
 
         assert _is_blocked(result, "explicit.deny.example.com"), "mode='deny' feed must produce a block, not an allow"
         assert "explicit.deny.example.com" not in result.white_db, "mode='deny' entry must NOT appear in white_db"
+
+
+# --------------------------------------------------------------------------- #
+# Contract — §2.2.3: a permit allow (band 2) must NOT override a USER block (band 5)
+# --------------------------------------------------------------------------- #
+
+
+def _build_user_block_and_permit(domain: str, *, with_permit: bool) -> P.BuildResult:
+    """Band-5 USER ``Custom_List`` block for ``domain`` (plain feed, ``provenance='user'``),
+    optionally plus a band-2 permit feed for the SAME domain.
+
+    NO ABP / ``$important`` / regex rule is loaded, so ``important_rules`` can be engaged
+    ONLY by the permit insertion under test — exactly the plain-hosts config in which the
+    fast path would otherwise fail-open.
+    """
+    feeds: list[dict[str, Any]] = [
+        {
+            "feed": "Custom_List",
+            "group": "DNSBL_Custom",
+            "format_hint": "plain",
+            "log_flag": "1",
+            "provenance": "user",  # -> band 5 (PRIO_USER_BLOCK)
+            "raw": _RAW_BLOCK,
+        }
+    ]
+    lines_map: dict[str, list[str]] = {_RAW_BLOCK: [domain]}
+    if with_permit:
+        feeds.append(
+            {
+                "feed": "PermitFeed",
+                "group": "TestPermit",
+                "format_hint": "plain",
+                "log_flag": "1",
+                "mode": "permit",  # -> band 2 (PRIO_FEED_ALLOW)
+                "raw": _RAW_PERMIT,
+            }
+        )
+        lines_map[_RAW_PERMIT] = [domain]
+    manifest: dict[str, Any] = {"feeds": feeds}
+
+    def reader(raw: str) -> list[str]:
+        return list(lines_map[raw])
+
+    return P.build(manifest, _BASE_CONFIG, line_reader=reader)
+
+
+class TestPermitFeedNeverOverridesUserBlock:
+    """ADR-31 §2.2.3 (reject criterion (b)): a third-party DNSWL permit feed must NEVER
+    un-block a domain the operator explicitly blocked via a Custom_List.
+
+    The manual Custom_List block bands at 5 (PRIO_USER_BLOCK); a permit-feed allow bands
+    at 2 (PRIO_FEED_ALLOW). 5 > 2, so the block must win. The pre-fix bug: a plain permit
+    feed (no ABP/$important/regex) left ``important_rules`` False, so ``evaluate_domain``
+    took the band-AGNOSTIC fast path where ANY whiteDB hit overrides the block — a security
+    fail-open. The build must engage the numeric band-aware path whenever it inserts a
+    permit allow, exactly as it already does for an ABP ``@@`` feed allow.
+    """
+
+    def test_user_block_survives_a_permit_feed_allow(self) -> None:
+        """Scenario: a manually blocked domain stays blocked when a permit feed also lists it.
+
+        Given: a domain on a band-5 user Custom_List block feed, NO permit feed.
+        When:  the domain is queried.
+        Then:  it is BLOCKED (before-state — proves the block is real and not a no-op).
+
+        Given: the SAME domain ALSO on a band-2 permit feed, no ABP/$important/regex loaded.
+        When:  the domain is queried.
+        Then:  it STAYS BLOCKED — the manual block (band 5) beats the permit allow (band 2).
+        """
+        domain = "user-blocked.permit.test.example.com"
+
+        # Given / When / Then — user Custom_List block only -> blocked (before-state).
+        before = _build_user_block_and_permit(domain, with_permit=False)
+        dec_before = _decide(before, domain)
+        assert dec_before.is_found and not dec_before.in_whitelist, (
+            f"expected the band-5 user Custom_List block to BLOCK {domain!r} before any permit feed; "
+            f"got is_found={dec_before.is_found} in_whitelist={dec_before.in_whitelist}"
+        )
+
+        # Given / When / Then — add a band-2 permit allow for the same domain.
+        after = _build_user_block_and_permit(domain, with_permit=True)
+        # The permit insertion must engage the numeric band-aware resolution; without this
+        # flag the fast path treats the band-2 allow as an unconditional override.
+        assert after.important_rules is True, (
+            "a permit feed that inserts a band-2 allow must set important_rules so the "
+            "band-aware resolution runs; expected True, got False (ADR-31 §2.2.3 fail-open)"
+        )
+        dec_after = _decide(after, domain)
+        assert dec_after.is_found and not dec_after.in_whitelist, (
+            f"expected the band-5 user block to still BEAT the band-2 permit allow for {domain!r}; "
+            f"got is_found={dec_after.is_found} in_whitelist={dec_after.in_whitelist} "
+            f"(important_rules={after.important_rules}) — ADR-31 §2.2.3 reject criterion (b)"
+        )
