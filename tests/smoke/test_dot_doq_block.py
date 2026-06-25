@@ -384,7 +384,7 @@ def _cleanup_dot_block(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     try:
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update", wait_unbound=False, timeout=timeout)
-        h.apply_filter_sync(vm)
+        h.apply_filter_sync(vm, timeout=timeout)
     except Exception:
         pass  # best-effort in teardown; don't mask the test failure
 
