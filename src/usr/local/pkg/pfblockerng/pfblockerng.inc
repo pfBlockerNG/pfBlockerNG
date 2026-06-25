@@ -8941,7 +8941,12 @@ function pfb_aliastables($mode) {
 			// #468: IP-only. The DNSBL python integration is archived separately by
 			// pfb_dnsbl_cache() (different lifecycle); ADR-08 had wrongly piggybacked
 			// the /var/unbound/pfb_unbound* + pfb_py_* files onto this IP archive.
-			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf}", GLOB_BRACE);
+			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf}", GLOB_BRACE) ?: [];
+			// ADR-43 P4: include the due-ledger so cron schedules survive a RAM-disk reboot.
+			$pfb_ledger = "{$pfb['dbdir']}/pfb_due_ledger.json";
+			if (is_file($pfb_ledger)) {
+				$files[] = $pfb_ledger;
+			}
 			if (!empty($files)) {
 				$files_to_backup = implode(' ', array_map('escapeshellarg', array_filter($files)));
 			}
@@ -15924,129 +15929,28 @@ function sync_package_pfblockerng($cron='') {
 	#	Define/Apply CRON Jobs		#
 	#########################################
 
-	// Replace CRON job with any user changes to $pfb_min
-	if ($pfb['enable'] == 'on' && $pfb['interval'] != 'Disabled') {
-		// Define pfBlockerNG CRON job
-		$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['log']} 2>&1";
-		// $pfb['min'] ( User defined variable. Variable defined at start of script )
+	// ADR-43 P4: one trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
+	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
+	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
+	// are out of scope (ADR-30 territory) and remain as separate jobs below.
+	$pfb_tick_min = '*/' . PfbConfig::read('pfb_tick_interval');
+	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
 
-		// Define CRON hour (CRON interval & start hour)
-		if ($pfb['interval'] == 1) {
-			$pfb_hour = '*';
-		} elseif ($pfb['interval'] == 24) {
-			$pfb_hour = $pfb['24hour'];
-		} else {
-			$pfb_hour = implode(',', pfb_cron_base_hour($pfb['interval']));
-		}
-
-		if ($pfb_hour == 0 || !empty(pfb_filter($pfb_hour, PFB_FILTER_CSV_CRON, 'Define pfBlockerNG CRON job'))) {
-			$pfb_mday	= '*';
-			$pfb_month	= '*';
-			$pfb_wday	= '*';
-			$pfb_who	= 'root';
-
-			// Determine if CRON job requires updating
-			if (!pfblockerng_cron_exists($pfb_cmd, $pfb['min'], $pfb_hour, $pfb_mday, $pfb_wday)) {
-				install_cron_job('pfblockerng.php cron', FALSE);
-				install_cron_job($pfb_cmd, TRUE, $pfb['min'], $pfb_hour, $pfb_mday, $pfb_month, $pfb_wday, $pfb_who);
-			}
-		}
-		else {
-			pfb_logger("\n Failed to create pfBlockerNG cron task [{$pfb_hour}]", 1);
-		}
-	}
-	else {
-		// Clear any existing pfBlockerNG CRON jobs
-		install_cron_job('pfblockerng.php cron', FALSE);
-	}
-
-	// Define pfBlockerNG MaxMind/TOP1M/ASN Cron job
 	if ($pfb['enable'] == 'on') {
-		$pfb_gcmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1";
-		// CRON hour is randomized between 0-23 Hour to minimize effect on Servers
-		$pfb_gmin	= '0';
-		$pfb_ghour	= rand(0,23);
-		$pfb_gmday	= '*';
-		$pfb_gmonth	= '*';
-		$pfb_gwday	= '*';
-		$pfb_gwho	= 'root';
-
-		// Determine if CRON job requires updating
-		if (!pfblockerng_cron_exists($pfb_gcmd, $pfb_gmin, 'random', $pfb_gmday, $pfb_gwday)) {
-			install_cron_job('pfblockerng.php dcc', FALSE);
-			install_cron_job($pfb_gcmd, TRUE, $pfb_gmin, $pfb_ghour, $pfb_gmday, $pfb_gmonth, $pfb_gwday, $pfb_gwho);
+		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
+			install_cron_job('pfblockerng.php tick', FALSE);	// remove stale tick (interval changed)
+			install_cron_job($pfb_tick_cmd, TRUE, $pfb_tick_min, '*', '*', '*', '*', 'root');
 		}
 	}
 	else {
-		// Clear any existing pfBlockerNG CRON jobs
-		install_cron_job('pfblockerng.php dcc', FALSE);
+		install_cron_job('pfblockerng.php tick', FALSE);
 	}
 
-	// Define pfBlockerNG SafeSearch CNAME fallback freshness cron (issue #149).
-	// The SafeSearch CNAMEs (duckduckgo/pixabay) are redirected in Python; their
-	// baked #2-fallback IPs can drift between full DNSBL rebuilds, so this light
-	// job re-resolves them every 15 minutes and reloads only on change. Installed
-	// only while SafeSearch is enabled (the only source of CNAME entries).
-	if ($pfb['enable'] == 'on' && $pfb['safesearch_enable'] !== 'Disable') {
-		$pfb_sscmd	= "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ss_refresh >> {$pfb['log']} 2>&1";
-		$pfb_ssmin	= '*/15';
-		$pfb_sshour	= '*';
-		$pfb_ssmday	= '*';
-		$pfb_ssmonth	= '*';
-		$pfb_sswday	= '*';
-		$pfb_sswho	= 'root';
-
-		if (!pfblockerng_cron_exists($pfb_sscmd, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_sswday)) {
-			install_cron_job('pfblockerng.php ss_refresh', FALSE);
-			install_cron_job($pfb_sscmd, TRUE, $pfb_ssmin, $pfb_sshour, $pfb_ssmday, $pfb_ssmonth, $pfb_sswday, $pfb_sswho);
-		}
-	}
-	else {
-		// Clear the SafeSearch freshness CRON job when SafeSearch is disabled
-		install_cron_job('pfblockerng.php ss_refresh', FALSE);
-	}
-
-
-	// Define pfBlockerNG Blacklist CRON job
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['blconfig'] &&
-	    $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
-	    $pfb['blconfig']['blacklist_freq'] != 'Never' &&
-	    !empty($pfb['blconfig']['blacklist_selected']) &&
-	    isset($pfb['blconfig']['item'])) {
-
-		$bl_string = '';
-		$selected = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: array();
-		foreach ($pfb['blconfig']['item'] as $item) {
-			if (isset($selected[$item['xml']]) && !empty($item['selected'])) {
-				$bl_string .= ",{$item['xml']}";
-			}
-		}
-		$bl_string = pfb_filter(ltrim($bl_string, ','), PFB_FILTER_CSV, 'Define pfBlockerNG Blacklist CRON job');
-
-		if (!empty($bl_string)) {
-			$pfb_bcmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl {$bl_string} >> {$pfb['extraslog']} 2>&1";
-
-			$pfb_bmin	= '0';
-			$pfb_bhour	= rand(0,23);
-			$pfb_bmday	= '*';
-			$pfb_bmonth	= '*';
-			$pfb_bwday	= ($pfb['blconfig']['blacklist_freq'] == 'Weekly' ? '7' : '*');
-			$pfb_bwho	= 'root';
-
-			// Determine if CRON job requires updating
-			if (!pfblockerng_cron_exists($pfb_bcmd, $pfb_bmin, 'random', $pfb_bmday, $pfb_bwday)) {
-				install_cron_job('pfblockerng.php bl', FALSE);
-				install_cron_job($pfb_bcmd, TRUE, $pfb_bmin, $pfb_bhour, $pfb_bmday, $pfb_bmonth, $pfb_bwday, $pfb_bwho);
-			}
-		}
-		else {
-			pfb_logger("\n Failed to create pfBlockerNG Blacklist cron task [{$bl_string}]", 1);
-		}
-	}
-	else {
-		// Clear any existing pfBlockerNG Blacklist CRON jobs
-		install_cron_job('pfblockerng.php bl', FALSE);
-	}
+	// Migration teardown: remove old fleet jobs from pre-ADR-43 installs.
+	install_cron_job('pfblockerng.php cron', FALSE);
+	install_cron_job('pfblockerng.php dcc', FALSE);
+	install_cron_job('pfblockerng.php ss_refresh', FALSE);
+	install_cron_job('pfblockerng.php bl', FALSE);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {

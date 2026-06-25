@@ -568,6 +568,17 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
+		// ADR-43: tick-cron dispatch interval in minutes (1–60). Default '15'.
+		// One cron tick fires every */pfb_tick_interval; jobs run only when due
+		// per the due-ledger. Default 15 matches the tightest existing job (ss_refresh).
+		'pfb_tick_interval' => [
+			'section'       => $gen,
+			'default'       => '15',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
 		// -------------------------------------------------------------------
 		// DNSBL settings section (pfblockerngdnsblsettings/config/0)
 		// -------------------------------------------------------------------
@@ -2197,6 +2208,50 @@ function pfb_due_ledger_mark_ran(
 		'next_due' => $now + $interval + $jitter,
 		'jitter'   => $jitter,
 	], $ledger_dir);
+}
+
+/**
+ * pfb_tick_seed — stable per-install seed for the due-ledger jitter.
+ *
+ * Uses the system hostname (stable across reboots unless the admin changes it).
+ *
+ * @return string  Non-empty seed string.
+ */
+function pfb_tick_seed(): string
+{
+	$h = php_uname('n');
+	return ($h !== '') ? $h : 'pfblockerng';
+}
+
+/**
+ * pfb_tick_due_jobs — which scheduled jobs are due this tick?
+ *
+ * Delegates to the Phase-2 due-ledger API for each job. The $now, $seed, and
+ * $dbdir are injectable so PHPUnit can verify cadence without filesystem or
+ * wall-clock dependencies. ss_refresh is not returned — it runs every tick
+ * unconditionally (called directly by pfblockerng_tick()).
+ *
+ * @param int    $now            Current epoch timestamp.
+ * @param string $seed           Per-install seed for seeded_jitter.
+ * @param string $dbdir          Ledger directory (live = $pfb['dbdir']).
+ * @param int    $cron_interval  Feed cron interval in seconds.
+ * @param int    $bl_interval    Blacklist interval in seconds (86400 or 604800).
+ * @return array<string,bool>    Map: job_key => TRUE when due.
+ */
+function pfb_tick_due_jobs(
+	int    $now,
+	string $seed,
+	string $dbdir,
+	int    $cron_interval,
+	int    $bl_interval
+): array {
+	$jitter_max = 23 * 3600;	// ponytail: 82800 s mirrors the old rand(0,23)*3600 spread
+
+	return [
+		'cron' => pfb_due_ledger_is_due('cron', $cron_interval, $now, $seed, 0,           $dbdir),
+		'dcc'  => pfb_due_ledger_is_due('dcc',  86400,          $now, $seed, $jitter_max,  $dbdir),
+		'bl'   => pfb_due_ledger_is_due('bl',   $bl_interval,   $now, $seed, $jitter_max,  $dbdir),
+	];
 }
 
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)

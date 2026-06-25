@@ -19,6 +19,7 @@ markers = [
     "upstream: live-VM upstream/external-block detection (issue #267); ALSO marked smoke (runs under -m smoke); focused dispatch via -m upstream",
     "reboot: live-VM guest-reboot regression (issue #334); REBOOTS the shared session VM, so distinct from -m smoke; deselected from the default run",
     "pfctl_bench: ADR-40 Phase 2 pfctl table benchmark; two-VM topology required; dispatch-only, NEVER PR-gating",
+    "tick: live-VM due-ledger trigger-tick (ADR-43); ALSO marked smoke; focused dispatch via -m tick",
 ]
 
 # coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line

@@ -107,6 +107,12 @@ if (isset($argv[1])) {
 		pfblockerng_ss_refresh();
 		exit;
 	}
+	// ADR-43 P4: due-ledger trigger-tick. Reads the ledger, dispatches each job
+	// that is due (feeds, dcc, bl), then calls ss_refresh unconditionally (cheap).
+	elseif ($argv[1] == 'tick') {
+		pfblockerng_tick();
+		exit;
+	}
 	// PFBL-03: root-only DNSBL-control entrypoint. Writes a validated command to the
 	// local privileged command channel consumed by pfb_unbound.py.
 	// Usage: pfblockerng.php dnsbl-control <disable [sec] | enable |
@@ -228,7 +234,7 @@ if ($argv[1] == 'bl' || $argv[1] == 'bls') {
 }
 
 // Call include file and collect updated Global settings
-if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger'))) {
+if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger', 'tick'))) {
 	pfb_global();
 
 	$pfb['extras_update'] = FALSE;  // Flag when Extras (MaxMind/TOP1M) are updateded via cron job
@@ -788,6 +794,81 @@ function pfblockerng_sync_cron() {
 	// runs first; the reset then empties the log for the new period. Per-log
 	// boundary-gated: a no-op for every log except those whose period just rolled.
 	pfb_log_reset();
+}
+
+
+/**
+ * pfblockerng_tick — ADR-43 P4: due-ledger trigger-tick dispatcher.
+ *
+ * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via
+ * exec() as a separate process, then marks each as ran. ss_refresh is called
+ * directly every tick — it exits early when SafeSearch is inactive (no-op).
+ *
+ * Cadence seeding from legacy knobs (§2.G — no config.xml migration):
+ *   feed cron : PfbConfig::read('pfb_interval') hours; skip when 'Disabled'.
+ *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
+ *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
+ */
+function pfblockerng_tick(): void
+{
+	global $pfb;
+
+	$now   = time();
+	$seed  = pfb_tick_seed();
+	$dbdir = $pfb['dbdir'];
+
+	// --- Cadence from legacy knobs ---
+	$raw_interval  = PfbConfig::read('pfb_interval');
+	$cron_disabled = ($raw_interval === 'Disabled');
+	$cron_secs     = $cron_disabled ? 0 : (max(1, (int)$raw_interval) * 3600);
+
+	$bl_secs = 86400;
+	if (!empty($pfb['blconfig']['blacklist_freq']) && $pfb['blconfig']['blacklist_freq'] === 'Weekly') {
+		$bl_secs = 604800;
+	}
+
+	// --- Due check ---
+	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs);
+
+	// --- Dispatch due jobs ---
+	// Feed cron: scope=both force=false trigger=cron (bypasses pfblockerng_sync_cron's
+	// hour gate, which is now superseded by the ledger-based due check).
+	if (!$cron_disabled && $due['cron']) {
+		logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=cron >> {$pfb['log']} 2>&1 &");
+		pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
+	}
+
+	// MaxMind/TOP1M/ASN: daily, jittered.
+	if ($due['dcc']) {
+		logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
+		pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+	}
+
+	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
+	if ($due['bl'] && $pfb['enable'] == 'on' && !empty($pfb['blconfig']) &&
+	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
+	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
+
+		$bl_str  = '';
+		$bl_sel  = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: [];
+		foreach ($pfb['blconfig']['item'] as $bl_item) {
+			if (isset($bl_sel[$bl_item['xml']]) && !empty($bl_item['selected'])) {
+				$bl_str .= ",{$bl_item['xml']}";
+			}
+		}
+		$bl_str = pfb_filter(ltrim($bl_str, ','), PFB_FILTER_CSV, 'Tick bl dispatch');
+
+		if (!empty($bl_str)) {
+			logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
+			pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+		}
+	}
+
+	// SafeSearch CNAME freshness: every tick (cheap DNS re-resolution).
+	pfblockerng_ss_refresh();
 }
 
 
