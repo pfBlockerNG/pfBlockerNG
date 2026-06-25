@@ -760,6 +760,15 @@ mechanics, CI wiring (`ui-tests.yml`), gate status — are documented in
   schedule/dispatch-only (non-PR-blocking). Run a tier: `python -m pytest tests/smoke/ui -m
   ui_render --override-ini="addopts="` (`SMOKE_ADMIN_PASSWORD` must be set, else the UI fixtures
   SKIP, never fail).
+- **Selective dispatch (validate your own change cheaply).** A bare `gh workflow run
+  smoke.yml`/`ui-tests.yml` defaults to **`scope=impacted`**: the **min CE leg** + only the test
+  modules **changed vs `origin/devel`** (auto-derived). Pass **`-f pytest_k="a or b"`** to add the
+  tests covering changed *non-test* code (a live-VM suite can't map src→test for you);
+  `-f version=` / `-f pytest_marker=` (smoke) / `-f tier=` (UI) narrow further; **`-f scope=full`**
+  is the every-leg whole-marker run. The nightly `schedule`, `version-tracker`'s post-bump
+  dispatch, and the `workflow_call` gates (`test.yml`, `release.yml`) stay **full**. Locally it's
+  pytest-native — pass `-k`/`-m` to `scripts/local-smoke.sh`. Full reference:
+  `docs/misc/architecture-notes.md` ("Selective dispatch").
 - Smoke feed fixtures live in `tests/smoke/fixtures/` (inert data — RFC 5737/3849 IPs,
   `uuid-*.com`; never RFC 6761 TLDs or HSTS-preload names). Add one: drop the file there, update
   `tests/smoke/fixtures/README.md`, add a case in `test_smoke_feeds.py` via
