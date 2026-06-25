@@ -15445,6 +15445,14 @@ function sync_package_pfblockerng($cron='') {
 			#  ORDER 3 |	pfB (p/m)	| pfB (b/r) 	| pfSense (p/m)	| pfSense (b/r)	#
 			#  ORDER 4 |	pfB (p/m)	| pfB (b/r)	| pfSense (b/r)	| pfSense (p/m)	#
 			#################################################################################
+			# NOTE (ADR-41): the 4-column interleaving above is the ORIGINAL strip-and-rebuild
+			# intent. pfb_build_autorule_list() now keeps user rules IMMUTABLE and reduces this to a
+			# BINARY anchor for the contiguous pfB block:
+			#   order_1 / order_2        -> pfB block AFTER  the kept user rules (user pass wins)
+			#   order_0 / 3 / 4 / absent -> pfB block BEFORE the kept user rules (pfB wins)
+			# The pfB-p/m-vs-pfSense-p/m distinction is moot under per-interface first-match pf
+			# (interface rules are always `quick`; proven live in ADR-41 Phase 2 -> RESULTS/02), so
+			# it is no longer reproduced. order_4 no longer reorders the user's own rules.
 
 			$new_rules = pfb_build_autorule_list(
 				$rules ?? [],
