@@ -1137,6 +1137,24 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	);
 }
 
+/* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. a non-empty
+   pfb_py_data, an existing pfb_py_zone, or at least one per-feed *.raw file. Deliberately
+   EXCLUDES the shipped pfb_py_hsts and the always-present manifest/whitelist, which are NOT
+   feed-derived: counting them makes a no-feed setup look "loaded" and triggers a clear+reload
+   every cron pass (#546). Pure (no global access). */
+function pfb_dnsbl_has_loaded_feeds(array $pfb): bool {
+	if (is_file($pfb['unbound_py_data']) && filesize($pfb['unbound_py_data']) > 0) {
+		return TRUE;
+	}
+	if (is_file($pfb['unbound_py_zone'])) {
+		return TRUE;
+	}
+	if (!empty(glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array())) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
 /* Return a stable fingerprint of the given input-file set.
    A missing/unreadable file contributes '-' so that all-missing == all-missing (equal),
    and a first-seen file vs no-file produces a difference. Path list is sorted so
@@ -13051,31 +13069,26 @@ function sync_package_pfblockerng($cron='') {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
-				// Only clear (and flag domain_clear) when something is actually loaded;
-				// otherwise a no-feeds DNSBL setup would log "Clearing all DNSBL Feeds"
-				// and churn every cron. The fingerprint gate below is the reload authority
-				// (empty→empty => equal fingerprints => skip); domain_clear stays for the
-				// TLD-mode fallback path, where the fingerprint is not computed.
-				$pfb_loaded = FALSE;
-				foreach (pfb_dnsbl_loaded_input_paths($pfb) as $pfb_lf) {
-					if (file_exists($pfb_lf)) {
-						$pfb_loaded = TRUE;
-						break;
-					}
-				}
-				if ($pfb_loaded) {
+				// Only log/flag domain_clear when feeds were actually loaded (#546):
+				// pfb_dnsbl_has_loaded_feeds() excludes the shipped pfb_py_hsts and the
+				// always-present manifest/whitelist so a no-feeds setup never looks "loaded".
+				$had_feeds = pfb_dnsbl_has_loaded_feeds($pfb);
+				if ($had_feeds) {
 					pfb_logger("\nClearing all DNSBL Feeds", 1);
 					$pfb['domain_clear'] = TRUE;
-
-					// Clear out Unbound DNSBL files
-					unlink_if_exists($pfb['unbound_py_data']);
-					unlink_if_exists($pfb['unbound_py_zone']);
-					unlink_if_exists($pfb['unbound_py_wh']);
-					unlink_if_exists($pfb['unbound_py_count']);
-					unlink_if_exists($pfb['unbound_py_regex_count']);	// ADR-07 P8
-					unlink_if_exists($pfb['unbound_py_sources']);
-					rmdir_recursive("{$pfb['unbound_py_rawdir']}");
 				}
+
+				// Materialize canonical files as present-but-EMPTY rather than deleting them
+				// (#546). Empty-but-present files are byte-identical pass-to-pass, so the
+				// fingerprint gate treats empty→empty as unchanged (no reload). A genuine
+				// loaded→empty transition still diverges on the first pass (one reload), then
+				// stabilises. DO NOT delete pfb_py_wh: pfb_unbound_python() reads it to detect
+				// a whitelist change; missing=FALSE !== '' triggers $pfbpython=TRUE every pass.
+				pfb_unbound_python_sources(array());		// valid feeds:[] manifest + empty rawdir
+				@file_put_contents($pfb['unbound_py_data'], '', LOCK_EX);	// present-but-empty CSV
+				unlink_if_exists($pfb['unbound_py_zone']);			// python mode: zone must be absent
+				unlink_if_exists($pfb['unbound_py_count']);
+				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07 P8
 			}
 		}
 		else {
