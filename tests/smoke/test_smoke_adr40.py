@@ -174,7 +174,9 @@ def test_adr40_content_gate_idempotence(adr40_vm: SmokeVM) -> None:
     )
 
     # Before-state: pf table is populated with the settled IP.
-    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns;
+    # a bare pfctl_table_members read can race and miss the table.
+    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
     assert any(fed_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} does not contain {fed_ip}: {members_before}"
     )
@@ -253,7 +255,8 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
     assert env_settle is not None, "post hook did not fire on the settling update"
 
     # Before-state: only old_ip in the table; new_ip absent.
-    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
+    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
     assert any(old_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
     )
@@ -263,8 +266,10 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
 
     # Change: rewrite feed with a DIFFERENT IP; invalidate the reuse cache so
     # pfBlockerNG re-reads the file (force_ip_refetch touches the .update marker).
+    # Pass the full on-disk header including the family suffix (e.g. "smokeadr40chng_v4");
+    # force_ip_refetch creates {header}.update and the IP loop checks {header}_v4.update.
     h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
-    h.force_ip_refetch(adr40_vm, ip_spec.header)
+    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
     h.clear_hook_markers(adr40_vm, token)
     h.reload(adr40_vm, "update")
@@ -373,7 +378,8 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
     assert env_settle is not None, "post hook did not fire on settling update"
 
     # Before-state: old_ip in table, new_ip absent.
-    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
+    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
     assert any(old_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
     )
@@ -383,7 +389,7 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
 
     # Change the feed; invalidate the reuse cache.
     h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
-    h.force_ip_refetch(adr40_vm, ip_spec.header)
+    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
     h.clear_hook_markers(adr40_vm, token)
     h.reload(adr40_vm, "update")
@@ -462,7 +468,8 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
     assert env_settle is not None, "post hook did not fire on settling update"
 
     # Before-state: old_ip in table, new_ip absent.
-    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
+    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
     assert any(old_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
     )
@@ -472,7 +479,7 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
 
     # Change the feed; invalidate the reuse cache.
     h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
-    h.force_ip_refetch(adr40_vm, ip_spec.header)
+    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
     h.clear_hook_markers(adr40_vm, token)
     h.reload(adr40_vm, "update")
