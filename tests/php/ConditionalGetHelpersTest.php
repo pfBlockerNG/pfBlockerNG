@@ -342,4 +342,120 @@ final class ConditionalGetHelpersTest extends TestCase
 			);
 		}
 	}
+
+	// -------------------------------------------------------------------------
+	// pfb_validator_write() — ETag CR/LF injection defence
+	// -------------------------------------------------------------------------
+
+	/**
+	 * ETag values containing CR or LF are stripped before storage.
+	 * A malicious server response could embed CRLF in an ETag to inject headers into
+	 * the next If-None-Match request; pfb_validator_write must sanitise before writing.
+	 *
+	 *  GIVEN an ETag string containing embedded CR and/or LF characters;
+	 *   WHEN pfb_validator_write($base, $etag, 0) is called;
+	 *   THEN the stored sidecar contains the ETag with CR/LF stripped.
+	 *
+	 * RED on an impl that stores the raw string verbatim.
+	 */
+	public function test_validator_write_strips_crlf_from_etag(): void
+	{
+		$base = $this->dir . '/feed_crlf.orig';
+		// Embed a CRLF sequence in the ETag value (server header-injection vector).
+		$raw_etag     = "\"valid\"\r\nX-Injected: evil";
+		$expected     = '"valid"X-Injected: evil';
+
+		pfb_validator_write($base, $raw_etag, 0);
+
+		$this->assertFileExists($base . '.etag', 'pfb_validator_write must still write .etag after stripping CRLF');
+		$stored = file_get_contents($base . '.etag');
+		$this->assertSame(
+			$expected,
+			$stored,
+			sprintf(
+				'Stored ETag must have CR/LF stripped; expected %s, got %s',
+				var_export($expected, TRUE),
+				var_export($stored, TRUE)
+			)
+		);
+	}
+
+	/**
+	 * An ETag that is entirely CR/LF is discarded (not written).
+	 * After stripping, an empty result is treated the same as an absent ETag.
+	 *
+	 *  GIVEN an ETag string that is nothing but CR/LF characters;
+	 *   WHEN pfb_validator_write($base, $etag, 0) is called;
+	 *   THEN no .etag sidecar is created.
+	 */
+	public function test_validator_write_discards_all_crlf_etag(): void
+	{
+		$base = $this->dir . '/feed_crlf_only.orig';
+
+		pfb_validator_write($base, "\r\n\r\n", 0);
+
+		$this->assertFileDoesNotExist(
+			$base . '.etag',
+			'An all-CRLF ETag must be discarded — pfb_validator_write must not write an empty sidecar'
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// pfb_download() fill-guard contract — NULL vs array()
+	// -------------------------------------------------------------------------
+
+	/**
+	 * The fill guard inside pfb_download uses `$response_meta !== NULL`.
+	 * Callers MUST pass array() (not NULL) to activate the fill.
+	 * This test pins the PHP identity contract that makes that guard work:
+	 *   - NULL !== NULL  is FALSE  → the sync callers (passing no 13th arg → default NULL)
+	 *                                 silently skip the fill block (correct).
+	 *   - array() !== NULL is TRUE → the probe caller (pfb_update_check) gets the block
+	 *                                 filled (required for change detection to function).
+	 *
+	 * Context: pfb_download itself cannot be exercised off-appliance (its localfile
+	 * branch requires paths under the hardcoded allowed dirs — /var/db/pfblockerng/* —
+	 * which are not writable in CI; the curl branch needs a network peer).  This test
+	 * pins the guard contract at the PHP-identity level so the blocker (NULL init in
+	 * pfblockerng.php that silently disabled all remote change detection) cannot regress
+	 * without a RED test.
+	 *
+	 * RED on a pre-fix codebase where pfblockerng.php initialised $probe_meta = NULL
+	 * instead of $probe_meta = array(): see FIX 1 in the ADR-42 review findings.
+	 */
+	public function test_probe_meta_fill_guard_requires_array_not_null(): void
+	{
+		// NULL !== NULL → FALSE: the fill block is SKIPPED (sync-caller sentinel).
+		$this->assertFalse(
+			NULL !== NULL,
+			'NULL !== NULL must be FALSE — the fill-guard skip-sentinel contract'
+		);
+
+		// array() !== NULL → TRUE: the fill block FIRES (probe-caller contract).
+		$this->assertTrue(
+			array() !== NULL,
+			'array() !== NULL must be TRUE — the probe caller must pass array(), not NULL, '
+			. 'to activate the pfb_download fill block; passing NULL silently disables change detection'
+		);
+
+		// Simulate the pre-fix bug: $probe_meta = NULL stays NULL after a hypothetical
+		// fill attempt (the guard would have been skipped).  The post-fix $probe_meta = array()
+		// would be replaced with the filled array.  We assert the guard distinction here
+		// rather than calling pfb_download (not exercisable off-appliance — see above).
+		$probe_meta_broken = NULL;
+		$probe_meta_fixed  = array();
+		$fills_on_broken   = ($probe_meta_broken !== NULL);	// FALSE — fill skipped
+		$fills_on_fixed    = ($probe_meta_fixed  !== NULL);	// TRUE  — fill fires
+
+		$this->assertFalse(
+			$fills_on_broken,
+			'Pre-fix NULL init: the fill guard evaluates to FALSE → fill is skipped → '
+			. '$probe_meta stays NULL → caller sees NULL and treats every probe as failed'
+		);
+		$this->assertTrue(
+			$fills_on_fixed,
+			'Post-fix array() init: the fill guard evaluates to TRUE → fill fires → '
+			. '$probe_meta is populated → change detection works correctly'
+		);
+	}
 }

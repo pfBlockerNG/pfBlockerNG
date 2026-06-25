@@ -502,7 +502,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// The SSRF guard (pfb_feed_host_allowed + CURLOPT_RESOLVE IP-pin) and the
 			// manual redirect revalidation loop stay fully intact because the probe goes
 			// through pfb_download(), not a separate bare curl_init().
-			$probe_meta = NULL;
+			$probe_meta = array();
 			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint, $probe_meta);
 
 			if (!$probe_ok || $probe_meta === NULL) {
@@ -530,6 +530,10 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				// Compute the body hash and compare against the persisted .orig hash.
 				$body_hash      = pfb_content_hash("{$pfborig}/{$header}.md5.raw", TRUE);
 				$persisted_sidecar = pfb_hash_read($local_file);
+				// A legacy .md5 sidecar (algo !== 'xxh128') collapses to '' intentionally:
+				// remote feeds do not carry a dual-hash .md5 baseline, so the first cron
+				// after upgrade cannot confirm "unchanged" and re-ingests once.  The next
+				// write lays down an .xxhash128 sidecar and subsequent runs go conditional.
 				$persisted_hash = ($persisted_sidecar['algo'] === 'xxh128') ? $persisted_sidecar['digest'] : '';
 
 				$changed = pfb_conditional_get_decision($probe_status, $body_hash, $persisted_hash);
