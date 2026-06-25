@@ -323,8 +323,8 @@ final class AutoruleListOracleTest extends TestCase
 			$descr = $rule['descr'] ?? "(rule {$i})";
 			// Only pfB-generated rules (those from $pfb_generated) get trackers assigned;
 			// user rules pass through without tracker. Skip user rules.
-			if (!str_starts_with($descr, 'pfB_') || str_starts_with($descr, 'pfB_DNS_Redirect_')
-			    || str_starts_with($descr, 'pfB_DoT_Block_')) {
+			if (!str_starts_with($descr, 'pfB_') || str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
+			    || str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX)) {
 				continue;
 			}
 			$this->assertArrayHasKey('tracker', $rule,
@@ -349,8 +349,8 @@ final class AutoruleListOracleTest extends TestCase
 			if (!str_starts_with($descr, 'pfB_')) {
 				return TRUE;
 			}
-			return str_starts_with($descr, 'pfB_DNS_Redirect_') ||
-			       str_starts_with($descr, 'pfB_DoT_Block_');
+			return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+			       str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
 		};
 
 		$user_in  = array_values(array_filter($input,  $is_user));
@@ -953,6 +953,7 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DNS_Redirect_lan_v4',   'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'DNS-redirect bypass rule preserved (not stripped)');
+		$this->assertTrackersSet($result, 'dns-redirect bypass');
 		$this->assertUserRulesPreserved($existing, $result, 'dns-redirect bypass');
 		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dns-redirect bypass');
 	}
@@ -987,6 +988,7 @@ final class AutoruleListOracleTest extends TestCase
 			['descr' => 'pfB_DoT_Block_lan',         'type' => 'block',  'interface' => 'lan', 'floating' => ''],
 			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
 		], $result, 'DoT-block bypass rule preserved (not stripped)');
+		$this->assertTrackersSet($result, 'dot-block bypass');
 		$this->assertUserRulesPreserved($existing, $result, 'dot-block bypass');
 		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dot-block bypass');
 	}
@@ -1145,5 +1147,39 @@ final class AutoruleListOracleTest extends TestCase
 			'null $order/$float must behave identically to empty-string (regression for the live '
 				. 'TypeError that aborted the update verb when enable_float was unset)'
 		);
+	}
+
+	/**
+	 * A pfB match rule is floating-only and emitted ONCE across all inbound interfaces (the
+	 * $pfbrunonce gate), carrying $pfb_generated['inbound_floating'] as its interface — not once
+	 * per interface. Pins that emit-once logic, which no fixture above exercises (all leave
+	 * match_inbound empty), so a regression in $pfbrunonce can't slip past the off-appliance suite.
+	 */
+	public function testMatchInboundEmittedOnceAcrossMultipleInterfaces(): void
+	{
+		$existing = [$this->userPassLan()];
+		$gen = $this->pfbGeneratedDenyOnly();
+		$gen['inbound_floating'] = 'lan,opt1';   // the floating interface group set by the package
+		$gen['match_inbound'] = [[
+			'descr'       => 'pfB_DenyList_v4 Auto Rule',
+			'type'        => 'match',
+			'interface'   => '',  // set by helper to inbound_floating
+			'ipprotocol'  => 'inet',
+			'floating'    => 'yes',
+			'source'      => ['address' => 'pfB_DenyList_v4'],
+			'destination' => ['any' => ''],
+			'created'     => ['time' => 0, 'username' => 'Auto'],
+		]];
+
+		// Two inbound interfaces — the match rule must still appear EXACTLY ONCE.
+		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan', 'opt1'], ['lan', 'opt1']);
+
+		$matches = array_values(array_filter($result, static fn (array $r): bool => ($r['type'] ?? '') === 'match'));
+		$this->assertCount(1, $matches,
+			'pfB match rule must be emitted once across all inbound interfaces ($pfbrunonce), got '
+				. count($matches) . ': ' . json_encode($this->shapes($result), JSON_PRETTY_PRINT));
+		$this->assertSame('lan,opt1', $matches[0]['interface'] ?? null,
+			'the match rule carries inbound_floating as its interface');
+		$this->assertUserRulesPreserved($existing, $result, 'match-once');
 	}
 }
