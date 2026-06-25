@@ -228,7 +228,7 @@ if ($argv[1] == 'bl' || $argv[1] == 'bls') {
 }
 
 // Call include file and collect updated Global settings
-if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc'))) {
+if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger'))) {
 	pfb_global();
 
 	$pfb['extras_update'] = FALSE;  // Flag when Extras (MaxMind/TOP1M) are updateded via cron job
@@ -239,12 +239,28 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfblockerng_sync_cron();
 			break;
-		case 'updateip':	// Sync 'Force Reload IP only'
-		case 'updatednsbl':	// Sync 'Force Reload DNSBL only'
-			sync_package_pfblockerng($argv[1]);
+		case 'updateip':	// Sync 'Force Reload IP only' [DEPRECATED — use pfb_trigger scope=ip force=true trigger=force]
+		case 'updatednsbl':	// Sync 'Force Reload DNSBL only' [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
+			sync_package_pfblockerng($argv[1]);	// deprecation warning logged inside sync_package_pfblockerng
 			break;
-		case 'update':		// Sync 'Force update'
-			sync_package_pfblockerng('cron');
+		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=cron]
+			sync_package_pfblockerng('update');	// deprecation warning logged inside sync_package_pfblockerng
+			break;
+		case 'pfb_trigger':	// ADR-43 Phase 3: explicit {scope, force, trigger} API
+			// Usage: pfblockerng.php pfb_trigger scope=<both|ip|dnsbl> force=<true|false> trigger=<cron|manual|force>
+			$pfb_tscope   = 'both';
+			$pfb_tforce   = FALSE;
+			$pfb_ttrigger = 'cron';
+			foreach (array_slice($argv, 2) as $pfb_targ) {
+				if (str_starts_with($pfb_targ, 'scope=')) {
+					$pfb_tscope = substr($pfb_targ, 6);
+				} elseif ($pfb_targ === 'force=true') {
+					$pfb_tforce = TRUE;
+				} elseif (str_starts_with($pfb_targ, 'trigger=')) {
+					$pfb_ttrigger = substr($pfb_targ, 8);
+				}
+			}
+			sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger));
 			break;
 		case 'dc':		// Update Extras - MaxMind/TOP1M/ASN database files
 		case 'dcc':

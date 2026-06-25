@@ -62,25 +62,27 @@ final class TriggerRequestTest extends TestCase
 	}
 
 	/**
-	 * Oracle: 'update' verb → same struct as 'cron' (indistinguishable today).
+	 * Oracle: 'update' verb → scope=both, force=false, trigger='manual' (ADR-43 Phase 3).
 	 *
-	 * pfblockerng.php calls sync_package_pfblockerng('cron') for BOTH the 'cron' and
-	 * 'update' verbs; inside the pass they are IDENTICAL. The PFB_TRIGGER is 'cron' for
-	 * both. Phase 3 will break this test by assigning 'update' its own 'manual' trigger.
+	 * Phase 3 assigns 'update' its own 'manual' trigger identity, distinguishing a GUI Force
+	 * Update from the scheduled cron. PFB_TRIGGER = pfb_req_to_hook_trigger('manual') = 'update'.
+	 *
+	 * NOTE: this test was previously 'testUpdateVerbMapsIdenticallyToCronToday' and asserted
+	 * trigger='cron' — that was the Phase 1 oracle that went RED on the Phase 3 change (as
+	 * predicted in the Phase 1 comment). It is now updated to the Phase 3 contract.
 	 */
-	public function testUpdateVerbMapsIdenticallyToCronToday(): void
+	public function testUpdateVerbMapsToManualTrigger(): void
 	{
 		$req = pfb_trigger_request('update');
 
-		$this->assertSame('both',  $req['scope'],
-			"'update': scope must be 'both' — covers IP + DNSBL (same as cron)\n" .
+		$this->assertSame('both',   $req['scope'],
+			"'update': scope must be 'both' — covers IP + DNSBL\n" .
 			'got: ' . json_encode($req['scope']));
 		$this->assertFalse($req['force'],
-			"'update': force must be false — respects change detector (same as cron)\n" .
+			"'update': force must be false — respects change detector\n" .
 			'got: ' . json_encode($req['force']));
-		$this->assertSame('cron',  $req['trigger'],
-			"'update': trigger must be 'cron' today — indistinguishable from scheduled cron\n" .
-			"Phase 3 will change this to 'manual' (red→green signal)\n" .
+		$this->assertSame('manual', $req['trigger'],
+			"'update': trigger must be 'manual' — operator-initiated, distinct from cron\n" .
 			'got: ' . json_encode($req['trigger']));
 	}
 

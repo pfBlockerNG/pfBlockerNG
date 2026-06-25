@@ -92,7 +92,7 @@
 		<![CDATA[
 		global $pfb;
 		$pfb['save'] = TRUE;
-		sync_package_pfblockerng();
+		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
 		]]>
 	</custom_php_resync_config_command>
 </packagegui>
