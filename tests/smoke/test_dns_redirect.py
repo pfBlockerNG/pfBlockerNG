@@ -455,7 +455,7 @@ def _cleanup_redirect(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     try:
         _set_dns_redirect(vm, enabled=False, ifaces=[], exception="")
         h.reload(vm, "update", timeout=timeout, wait_unbound=False)
-        h.apply_filter_sync(vm)
+        h.apply_filter_sync(vm, timeout=timeout)
     except Exception:
         pass  # best-effort in teardown; don't mask the test failure
 
