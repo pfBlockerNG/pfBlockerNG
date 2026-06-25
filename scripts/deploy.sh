@@ -59,17 +59,25 @@ fi
 
 echo "==> Deploying pfBlockerNG ($CHANNEL) to $SSH_TARGET"
 
-# Sync all source files, preserving permissions. src/ mirrors the filesystem
-# root, so src/usr/local/ maps to /usr/local/ — syncing src/usr/ -> /usr/local/
-# would land everything under /usr/local/local/ (silently a no-op on a running
-# box). Matches the port's WRKSRC${PREFIX} -> ${PREFIX} install.
-rsync -az --rsync-path="rsync" \
+# Sync all source files. src/ mirrors the filesystem root, so src/usr/local/ maps
+# to /usr/local/ — syncing src/usr/ -> /usr/local/ would land everything under
+# /usr/local/local/ (silently a no-op on a running box). Matches the port's
+# WRKSRC${PREFIX} -> ${PREFIX} install.
+#
+# OVERWRITE CONTENTS ONLY — never touch the box's ownership/permissions. We push
+# from a dev checkout where the files are owned by the local user (uid 501/staff),
+# NOT root:wheel; with -a's -o/-g/-p, root rsync would rewrite the live files'
+# owner/group/mode to those bogus dev values. --no-owner/--no-group/--no-perms
+# leave each existing file's owner/group/mode exactly as pfSense installed them
+# and only replace the bytes (-t still preserved for an efficient size+mtime sync;
+# a freshly edited file carries a recent mtime, so php-fpm opcache revalidates it).
+rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
     --exclude="*.pyc" \
     --exclude="__pycache__/" \
     "${REPO_ROOT}/src/usr/local/" \
     "${SSH_TARGET}:${PKG_PREFIX}/"
 
-rsync -az --rsync-path="rsync" \
+rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
     "${REPO_ROOT}/src/etc/" \
     "${SSH_TARGET}:/etc/"
 
@@ -78,7 +86,7 @@ sed "s|%%PKGNAME%%|${PKG_NAME}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${REPO_ROOT}/.info.xml.tmp"
 ssh "$SSH_TARGET" mkdir -p "${PKG_PREFIX}/share/pfSense-pkg-${PKG_NAME}"
-rsync -az "${REPO_ROOT}/.info.xml.tmp" \
+rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" "${REPO_ROOT}/.info.xml.tmp" \
     "${SSH_TARGET}:${PKG_PREFIX}/share/pfSense-pkg-${PKG_NAME}/info.xml"
 rm -f "${REPO_ROOT}/.info.xml.tmp"
 
