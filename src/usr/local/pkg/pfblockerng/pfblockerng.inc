@@ -339,6 +339,11 @@ define('PFB_DNS_REDIR_DESCR_V4_SFX', '_v4');
 define('PFB_DNS_REDIR_DESCR_V6_SFX', '_v6');
 // Descr prefix for DoT/DoQ block filter rules. Pattern: pfB_DoT_Block_<iface>
 define('PFB_DOT_BLOCK_DESCR_PFX', 'pfB_DoT_Block_');
+// Descr marker for the single floating DoT/DoQ block rule (floating mode). Carries the
+// shared prefix so the disable/uninstall sweep removes it like the per-interface rules.
+// 'Floating' is never a real (WAN-excluded) interface key, so it cannot collide with a
+// per-interface marker.
+define('PFB_DOT_BLOCK_FLOATING_DESCR', PFB_DOT_BLOCK_DESCR_PFX . 'Floating');
 
 // Returns TRUE iff $descr indicates pfBlockerNG ownership.
 // Recognised patterns (UNION — any one match → owned):
@@ -511,6 +516,33 @@ function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action
 		'destination' => ['network' => '(self)', 'not' => '', 'port' => '853'],
 		'statetype'   => 'keep state',
 		'descr'       => PFB_DOT_BLOCK_DESCR_PFX . $iface,
+	];
+}
+
+// Build the SINGLE floating DoT/DoQ block filter/rule covering all selected $ifaces in
+// one rule (floating mode), instead of one rule per interface. $action is the disposition
+// ('block' | 'reject', default Reject via pfb_dot_block_action()). The rule is floating +
+// quick with direction 'in' (matches client egress entering the firewall on the selected
+// interfaces — the direction ADR-37 mandates for a floating variant) and carries the same
+// negated-(self):853 destination + optional exception-alias source as the per-interface
+// rule. The caller appends the 'tracker' (last key) after build.
+function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, string $action): array {
+	$source = ($exclude_alias !== '')
+		? ['address' => $exclude_alias, 'not' => '']
+		: ['any' => ''];
+
+	return [
+		'type'        => pfb_dot_block_action($action),
+		'interface'   => implode(',', $ifaces),
+		'floating'    => 'yes',
+		'quick'       => 'yes',
+		'direction'   => 'in',
+		'ipprotocol'  => 'inet46',
+		'protocol'    => 'tcp/udp',
+		'source'      => $source,
+		'destination' => ['network' => '(self)', 'not' => '', 'port' => '853'],
+		'statetype'   => 'keep state',
+		'descr'       => PFB_DOT_BLOCK_FLOATING_DESCR,
 	];
 }
 
@@ -14028,10 +14060,12 @@ function sync_package_pfblockerng($cron='') {
 				$dot_changed = TRUE;
 			}
 		} else {
-			// ENABLED: read interfaces (comma-separated), exception alias, rule action.
+			// ENABLED: read interfaces (comma-separated), exception alias, rule action, floating mode.
 			$dot_iface_raw    = (string) PfbConfig::read('dnsbl_dot_block_int');
 			$dot_exclude_alias = trim((string) PfbConfig::read('dnsbl_dot_block_exclude'));
 			$dot_action       = pfb_dot_block_action((string) PfbConfig::read('dnsbl_dot_block_action'));
+			$dot_floating_cfg = PfbConfig::read('dnsbl_dot_block_floating');
+			$dot_floating     = ($dot_floating_cfg instanceof PfbToggle && $dot_floating_cfg === PfbToggle::On);
 
 			$dot_ifaces_raw = array_filter(array_map('trim', explode(',', $dot_iface_raw)), 'strlen');
 			$dot_ifaces     = [];
@@ -14053,10 +14087,17 @@ function sync_package_pfblockerng($cron='') {
 					$dot_changed = TRUE;
 				}
 			} else {
-				// Build the expected marker set for the current iface set.
-				$dot_expected_descrs = [];
-				foreach ($dot_ifaces as $dot_iface) {
-					$dot_expected_descrs[] = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+				// Build the expected marker set for the current mode. Floating mode owns a
+				// single marker (one rule for all interfaces); per-interface mode owns one
+				// marker per interface. The stale-prune below removes any owned row not in
+				// this set — so switching modes drops the other mode's rule(s) automatically.
+				if ($dot_floating) {
+					$dot_expected_descrs = [PFB_DOT_BLOCK_FLOATING_DESCR];
+				} else {
+					$dot_expected_descrs = [];
+					foreach ($dot_ifaces as $dot_iface) {
+						$dot_expected_descrs[] = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+					}
 				}
 
 				// Stale-interface prune: remove pfB_DoT_Block_* rows no longer in the expected set.
@@ -14097,16 +14138,24 @@ function sync_package_pfblockerng($cron='') {
 					}
 				}
 
-				// Build new DoT/DoQ block filter rules for each interface. The rule
-				// shape (incl. the configurable block/reject disposition) is built by
-				// pfb_dot_block_rule(); the deterministic tracker is appended here
-				// (last key) so the change-detection compare below stays stable.
+				// Build the new owned rule(s). The rule shape (incl. the configurable
+				// block/reject disposition) is built by the per-mode builder; the
+				// deterministic tracker is appended here (last key) so the change-detection
+				// compare below stays stable. Floating mode = one rule for all interfaces;
+				// per-interface mode = one rule each.
 				$dot_new_owned = [];
-				foreach ($dot_ifaces as $dot_iface) {
-					$dot_descr = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
-					$dot_rule  = pfb_dot_block_rule($dot_iface, $dot_exclude_alias, $dot_action);
+				if ($dot_floating) {
+					$dot_descr = PFB_DOT_BLOCK_FLOATING_DESCR;
+					$dot_rule  = pfb_dot_block_floating_rule($dot_ifaces, $dot_exclude_alias, $dot_action);
 					$dot_rule['tracker'] = $dot_existing_trackers[$dot_descr] ?? (string) pfb_managed_rule_tracker($dot_descr);
 					$dot_new_owned[] = $dot_rule;
+				} else {
+					foreach ($dot_ifaces as $dot_iface) {
+						$dot_descr = PFB_DOT_BLOCK_DESCR_PFX . $dot_iface;
+						$dot_rule  = pfb_dot_block_rule($dot_iface, $dot_exclude_alias, $dot_action);
+						$dot_rule['tracker'] = $dot_existing_trackers[$dot_descr] ?? (string) pfb_managed_rule_tracker($dot_descr);
+						$dot_new_owned[] = $dot_rule;
+					}
 				}
 
 				if ($dot_ex_owned !== $dot_new_owned) {
