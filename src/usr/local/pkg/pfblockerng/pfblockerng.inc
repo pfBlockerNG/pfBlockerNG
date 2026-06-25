@@ -3640,6 +3640,81 @@ function pfb_canonical_alias_set(string $member_content): array {
 	return $unique;
 }
 
+/**
+ * Write the canonical alias set to its last-applied mirror file (the aliasdir .txt).
+ *
+ * The file written here becomes the reference for pfb_alias_set_different() on
+ * the next pass. Format: one entry per line, trailing newline, no comments or blanks.
+ *
+ * @param string   $path          Absolute path to the aliasdir .txt file.
+ * @param string[] $canonical_set Sorted, unique entries (output of pfb_canonical_alias_set).
+ */
+function pfb_write_canonical_alias(string $path, array $canonical_set): void {
+	$content = empty($canonical_set) ? '' : implode("\n", $canonical_set) . "\n";
+	@file_put_contents($path, $content, LOCK_EX);
+}
+
+/**
+ * Compare a freshly-computed canonical set against the last-applied mirror.
+ *
+ * Returns TRUE when the alias table must be reloaded this pass — i.e. when
+ * the desired membership set differs from what was last applied (or the mirror
+ * does not exist yet, as on boot/initial-load for non-empty sets).
+ *
+ * Set comparison is ORDER- and DUPLICATE-immune: the mirror is also passed
+ * through pfb_canonical_alias_set() before comparing, so a pre-Phase-3
+ * non-canonical mirror (raw concat with dups) round-trips correctly on
+ * the first upgrade pass.
+ *
+ * ADR-40 contract items satisfied:
+ *   (3)  Cross-list dedup: sibling B returns TRUE when feed A removal freed an
+ *        IP from B's effective set — even though B's own feed was not refetched.
+ *   (4)  Reputation non-amplification: unchanged alias returns FALSE even when
+ *        rep is on and its set did not move.
+ *   (5)  Empty-table repopulation: missing mirror returns TRUE for non-empty set.
+ *   (8)  Idempotence: same set on second pass returns FALSE.
+ *
+ * @param string[] $new_set     Desired canonical set (sorted, unique IPs/CIDRs).
+ * @param string   $mirror_path Absolute path to the last-applied aliasdir .txt file.
+ * @return bool TRUE = reload required; FALSE = set unchanged, skip reload.
+ */
+function pfb_alias_set_different(array $new_set, string $mirror_path): bool {
+	if (!file_exists($mirror_path)) {
+		// No mirror: treat as changed for non-empty sets (empty-table repopulation).
+		return !empty($new_set);
+	}
+	$mirror_content = @file_get_contents($mirror_path);
+	if ($mirror_content === FALSE) {
+		// Unreadable mirror → assume changed.
+		return !empty($new_set);
+	}
+	$mirror_set = pfb_canonical_alias_set($mirror_content);
+	return $new_set !== $mirror_set;
+}
+
+/**
+ * Return TRUE when a cross-list feature is active and ALL aliases must be
+ * recomputed (not just feed-changed ones) this pass.
+ *
+ * Two features make a feed-A change able to alter a sibling alias B's
+ * effective membership set:
+ *   - Deduplication ($dup_on / enable_dup): the masterfile dedup is cross-list;
+ *     removing an IP from feed A can release it to a lower-priority alias B.
+ *   - Reputation ($rep_on / drep or prep on): dMax/pMax are cross-list;
+ *     reputation scoring on one alias feeds into another.
+ *
+ * When either is active, the desired set of EVERY alias must be recomputed
+ * and content-gated; with both off, single-feed → single-table already holds
+ * and only the touched alias needs recomputing (hybrid scope, ADR §2).
+ *
+ * @param bool $dup_on  TRUE when dedup (enable_dup) is enabled.
+ * @param bool $rep_on  TRUE when drep or prep reputation is enabled.
+ * @return bool TRUE = recompute all aliases; FALSE = recompute touched-feed alias only.
+ */
+function pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool {
+	return $dup_on || $rep_on;
+}
+
 // ---------------------------------------------------------------------------
 
 // Determine if cron task requires updating
@@ -14721,6 +14796,15 @@ function sync_package_pfblockerng($cron='') {
 	#	CONFIGURE ALIASES AND FIREWALL RULES	#
 	#################################################
 
+	// ADR-40 P3: Snapshot the feed-changed set (populated by the download loop above)
+	// before the file-write loop.  The file-write loop will rebuild $pfb_alias_lists
+	// as the content-diff set (aliases whose canonical membership set actually changed),
+	// which is what the pfctl regions and ADR-12 emit consume.
+	// $pfb_feed_changed: input to the hybrid scope gate; keeps the suppression sub-process
+	// and "read member files" decision anchored to feed-changed aliases.
+	$pfb_feed_changed    = $pfb_alias_lists;
+	$pfb_alias_lists     = array();   // reset: refilled below with content-validated aliases
+
 	foreach ($ip_types as $ip_type => $vtype) {
 
 		// Only the '_v4'/'_v6' suffix may build an alias/path
@@ -14775,12 +14859,29 @@ function sync_package_pfblockerng($cron='') {
 				$pfbdescr	= $pfbarr['descr'];
 				$pfbfolder	= $pfbarr['folder'];
 
-				// Only Save aliases that have been updated.
-				// When 'Reputation' is used, all aliases need to be updated.
-				// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
-				$final_alias = pfb_select_reload_aliases(
-					$pfb['drep'] == 'on' || $pfb['prep'] == 'on',
-					$pfb_alias_lists,
+				// ADR-40 P3: Content-addressed reload gate (hybrid scope).
+				//
+				// When a cross-list feature (dedup or reputation) is active, a change
+				// in one feed can shift membership in any sibling alias via the shared
+				// masterfile dedup / dMax-pMax recompute.  To catch those moves every
+				// alias must be recomputed this pass.  With both features off, only
+				// feed-changed aliases need recomputing (the cheap "surgical" path).
+				//
+				// The old $final_alias (feed-tracking) is still used to gate the
+				// suppression sub-process (which only makes sense on changed feeds),
+				// but member-file collection now happens for ALL aliases when
+				// pfb_cross_list_scope() is TRUE, or for feed-changed aliases only
+				// otherwise.
+				$pfb_cross_list = pfb_cross_list_scope(
+					$pfb['dup'] == 'on',
+					$pfb['drep'] == 'on' || $pfb['prep'] == 'on'
+				);
+				// $final_alias_old: feed-changed aliases only (for suppression gate).
+				// Uses $pfb_feed_changed (the pre-write-loop snapshot) — not $pfb_alias_lists
+				// which is now being built as the content-diff set this pass.
+				$final_alias_old = pfb_select_reload_aliases(
+					FALSE,
+					$pfb_feed_changed,
 					$pfb_alias_lists_all
 				);
 
@@ -14807,15 +14908,22 @@ function sync_package_pfblockerng($cron='') {
 									'-Tshow', '|', $pfb['wc'], '-l'
 								])));
 
-								// Update alias if list file exists and its been updated or if the alias URL table is empty.
-								if (file_exists("{$pfbfolder}/{$header}.txt") && (in_array($alias, $final_alias) || empty($pfctlck))) {
+								// ADR-40 P3: read member files when:
+								//   (a) cross-list scope → always (dedup/rep can shift any alias), OR
+								//   (b) this alias had a feed change this pass, OR
+								//   (c) kernel table is empty (boot/repopulation).
+								$member_eligible = $pfb_cross_list
+									|| in_array($alias, $final_alias_old)
+									|| empty($pfctlck);
+								if (file_exists("{$pfbfolder}/{$header}.txt") && $member_eligible) {
 									// Script to run suppression process (print header only)
 									if ($pfbrunonce && $pfb['supp'] == 'on' && $vtype == '_v4' && $pfb['supp_update']) {
 										exec("{$pfb['script']} suppress suppressheader {$elog}");
 										$pfbrunonce = FALSE;
 									}
-									// Script to run suppression process (body)
-									if ($pfb['supp'] == 'on' && $vtype == '_v4' && $pfb['supp_update'] && $pfbadv) {
+									// Script to run suppression process (body) — only for feed-changed aliases.
+									if ($pfb['supp'] == 'on' && $vtype == '_v4' && $pfb['supp_update'] && $pfbadv
+									    && in_array($alias, $final_alias_old)) {
 										if ($pfb['dup'] == 'on') {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} on {$elog}");
 										} else {
@@ -14841,8 +14949,10 @@ function sync_package_pfblockerng($cron='') {
 					])));
 					if (!empty($list['custom'])) {
 						$urlvalue .= "{$aliasname},";
-						if (file_exists("{$pfbfolder}/{$aliasname}.txt") && in_array($alias, $final_alias) ||
-						    file_exists("{$pfbfolder}/{$aliasname}.txt") && empty($pfctlck)) {
+						// ADR-40 P3: same scope logic for custom lists.
+						$custom_eligible = file_exists("{$pfbfolder}/{$aliasname}.txt")
+							&& ($pfb_cross_list || in_array($alias, $final_alias_old) || empty($pfctlck));
+						if ($custom_eligible) {
 							$alias_ips .= file_get_contents("{$pfbfolder}/{$aliasname}.txt");
 							$pfbupdate = TRUE;
 						}
@@ -14853,9 +14963,20 @@ function sync_package_pfblockerng($cron='') {
 						unlink_if_exists("{$pfb['aliasdir']}/{$alias}.txt");
 					}
 					else {
-						// Save only aliases that have been updated.
+						// ADR-40 P3: Compute the canonical set from the raw concat, compare
+						// against the last-applied mirror (the existing aliasdir file), and write
+						// only when the set changed.  This replaces the old pfbupdate flag write
+						// (which wrote on every feed-fetch) with a content-addressed gate.
 						if ($pfbupdate) {
-							@file_put_contents("{$pfb['aliasdir']}/{$alias}.txt", $alias_ips, LOCK_EX);
+							$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
+							$canonical_set = pfb_canonical_alias_set($alias_ips);
+							if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
+								// Set changed (or kernel table is empty) → write the new canonical
+								// mirror and flag this alias for pfctl reload.
+								pfb_write_canonical_alias($alias_mirror, $canonical_set);
+								$pfb_alias_lists[] = "{$alias}";
+							}
+							// When set is unchanged: aliasdir file is already correct; no reload needed.
 						}
 
 						// Add '[s]' to Alias descriptions (Bypass States removal feature)
@@ -15317,14 +15438,16 @@ function sync_package_pfblockerng($cron='') {
 
 		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
 		if (isset($pfb_tables)) {
-			// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
+			// ADR-40 P3: $pfb_alias_lists is now the content-diff set (aliases whose
+			// canonical membership set changed this pass).  Use it directly; rep/dup
+			// widening to $pfb_alias_lists_all is no longer needed here — the file-write
+			// loop already content-gated every alias and populated $pfb_alias_lists with
+			// only the truly-changed ones.  Still intersect with $pfb_active_aliases
+			// (the active/wired aliases) to exclude removed aliases that were cleaned up.
 			$pfb_active_aliases = isset($pfb_active_aliases) ? array_unique($pfb_active_aliases) : [];
-			$final_alias        = pfb_select_reload_aliases(
-				$pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on'),
-				$pfb_alias_lists,
-				$pfb_alias_lists_all,
-				$pfb_active_aliases
-			);
+			$final_alias        = empty($pfb_alias_lists)
+				? []
+				: array_values(array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases));
 			foreach ($pfb_tables as $pfb_table) {
 				$pfb_table_esc = escapeshellarg($pfb_table);
 				$pfb_table_path_esc	= escapeshellarg("{$pfb['aliasdir']}/{$pfb_table}.txt");
@@ -15363,16 +15486,19 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_ip_unlock_forced = TRUE;
 				unlink_if_exists("{$pfb['ip_unlock']}");
 				$pfb['repcheck'] = TRUE;
+				// ADR-40 P3: ip_unlock forces a re-block of all active aliases (the previously
+				// unlocked IP must be re-added to every alias it belongs to).  With content
+				// gating, $pfb_alias_lists may be empty (if no feed changed this pass), so
+				// explicitly add all active aliases to the reload set here — same as the old
+				// $pfb_alias_lists_all widening via repcheck, but explicit (#519 contract).
+				$pfb_alias_lists = array_unique(array_merge($pfb_alias_lists, $pfb_alias_lists_all));
 			}
 
-			// Only Save Aliases that have been updated.
-			// When 'Reputation' is used, all aliases need to be updated when any alias has been updated.
-			// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
-			$final_alias = pfb_select_reload_aliases(
-				$pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on'),
-				$pfb_alias_lists,
-				$pfb_alias_lists_all
-			);
+			// ADR-40 P3: $pfb_alias_lists is now the content-diff set — aliases whose
+			// canonical membership set changed this pass (or ip_unlock forced a re-block).
+			// Use it directly; rep/dup widening to $pfb_alias_lists_all is no longer needed
+			// — the file-write loop already content-gated every alias.
+			$final_alias = array_unique($pfb_alias_lists);
 
 			if (!empty($final_alias)) {
 				foreach ($final_alias as $final) {
@@ -15714,9 +15840,10 @@ function sync_package_pfblockerng($cron='') {
 	//       whose block did not run — no undefined-variable warning.
 	//   PFB_TRIGGER       = pfb_hook_trigger($cron).
 	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
-	//       this pass (ADR-12 Phase 6) = $pfb_alias_lists (the genuinely-updated set --
-	//       pfB_*_v4/_v6 -- populated only inside the per-feed "changed"/"removed"
-	//       branches; NOT $final_alias, which rep mode inflates to all active aliases).
+	//       this pass (ADR-12 Phase 6) = $pfb_alias_lists (the content-diff set --
+	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
+	//       as determined by pfb_alias_set_different(); ADR-40 P3).  Reputation/dedup
+	//       no longer inflate this to all active aliases -- only moved tables appear here.
 	//       The IP locals are in scope only at this tail, so they are merged into
 	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.
 	//   PFB_CHANGED_DNSBL_GROUPS = the space-separated list of DNSBL groups UPDATED this
