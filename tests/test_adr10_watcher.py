@@ -25,6 +25,8 @@ import threading
 import time
 from typing import Any
 
+import pytest
+
 import pfb_unbound as P
 
 # --------------------------------------------------------------------------- #
@@ -210,6 +212,10 @@ class _Harness:
         self._gate = threading.Event()
         self._gate.set()  # un-gated by default; tests can clear() to make a build block
         self._lock = threading.Lock()
+        # issue #456: the builder SIGNALS each recorded build on this Condition so
+        # wait_builds blocks deterministically on the daemon thread instead of polling
+        # a deadline and hoping -- the latter races (and returns silently) under load.
+        self._builds_cond = threading.Condition(self._lock)
         self.fail = False
         self.os = os
         P.pfb_reload_stop = threading.Event()
@@ -219,8 +225,9 @@ class _Harness:
         # Record the generation observed at build time; optionally block to simulate a
         # slow ABP build so a concurrent trigger can be tested for coalescing.
         gen = P._reload_read_generation(self.sentinel) or 0
-        with self._lock:
+        with self._builds_cond:
             self.builds.append(gen)
+            self._builds_cond.notify_all()  # wake any wait_builds waiter.
         self._gate.wait(1.0)
         if self.fail:
             return None
@@ -240,27 +247,63 @@ class _Harness:
         return P._reload_read_generation(self.applied)
 
     def wait_builds(self, n: int, timeout: float = 3.0) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._lock:
-                if len(self.builds) >= n:
-                    return
-            time.sleep(0.01)
+        # Block on the builder's signal until >= n builds are recorded. The timeout is a
+        # deadlock safety-guard only: on expiry FAIL LOUD (issue #456) so a starved daemon
+        # surfaces as an honest timeout, not a misleading downstream equality mismatch.
+        with self._builds_cond:
+            if not self._builds_cond.wait_for(lambda: len(self.builds) >= n, timeout=timeout):
+                raise AssertionError(
+                    "wait_builds timed out after {:.1f}s: expected >= {} build(s), got {} ({!r})".format(
+                        timeout, n, len(self.builds), self.builds
+                    )
+                )
 
     def wait_snapshot_changed(self, old: Any, timeout: float = 3.0) -> None:
-        # wait_builds returns when a build is RECORDED (before the builder returns),
-        # so P._snapshot may not be swapped yet. Poll until the swap completes.
+        # wait_builds returns when a build is RECORDED (before the builder returns), so
+        # P._snapshot may not be swapped yet. The swap is done by production code on a
+        # module-level variable we cannot signal from here, so this stays a poll -- but
+        # with a loud timeout assertion (safety-guard, never a silent return; issue #456).
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if P._snapshot is not old:
                 return
             time.sleep(0.005)
+        raise AssertionError(
+            "wait_snapshot_changed timed out after {:.1f}s: P._snapshot was never swapped "
+            "from the old snapshot (expected a new snapshot to be installed)".format(timeout)
+        )
 
     def stop_join(self, timeout: float = 5.0) -> None:
         P.pfb_reload_stop.set()
         self._gate.set()  # release a blocked build so the thread can exit promptly
         if self.thread is not None:
             self.thread.join(timeout=timeout)
+
+
+class TestHarnessWaiterDiagnostics:
+    """issue #456: the harness waiters must FAIL LOUD on timeout, never return silently.
+
+    The original flake (TestWatcherLoop::test_single_flight_coalesces_concurrent_triggers)
+    came from wait_builds returning silently when the daemon thread was starved, so the
+    real symptom -- "the build never happened in time" -- was masked into a misleading
+    downstream ``builds == [2, 3]`` equality mismatch. These pin the contract directly:
+    when the awaited condition is never met, the waiter raises a descriptive AssertionError.
+    (Against the pre-fix silent-return waiters these tests FAIL -- no exception is raised.)
+    """
+
+    def test_wait_builds_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # No watcher thread started -> no build is ever recorded. wait_builds must raise.
+        h = _Harness(tmp_path, monkeypatch)
+        with pytest.raises(AssertionError, match=r"wait_builds timed out.*expected >= 1"):
+            h.wait_builds(1, timeout=0.1)
+
+    def test_wait_snapshot_changed_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # No swap ever happens -> the snapshot stays the old object. wait_snapshot_changed must raise.
+        h = _Harness(tmp_path, monkeypatch)
+        old = _snapshot(tag="old.example.com", counts=0)
+        P._snapshot = old
+        with pytest.raises(AssertionError, match=r"wait_snapshot_changed timed out"):
+            h.wait_snapshot_changed(old, timeout=0.1)
 
 
 class TestWatcherLoop:

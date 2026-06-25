@@ -270,6 +270,15 @@ off-pattern name is a smell even when it works.
 - Type-hint new functions; leave existing untyped code alone unless touching it.
 - No bare `except:` — `except Exception` minimum.
 - `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
+- **No fixed-time waits to coordinate concurrency (issue #456).** Synchronising async work
+  (threads, daemon loops, test harnesses) with `time.sleep()` or a polling deadline is a
+  classical anti-pattern — flaky under load, needlessly slow otherwise. Use a synchronisation
+  primitive so one side **signals** and the other **blocks deterministically**:
+  `threading.Event` / `Condition` / `Semaphore`, or `queue.Queue`. A timeout is allowed **only**
+  as a deadlock safety-guard, and must then **raise an explicit assertion** (never return
+  silently) — exemplar `_Harness.wait_builds` in `tests/test_adr10_watcher.py`. (A poll is a last
+  resort only when the other side is production code you cannot signal — keep the loud-timeout
+  assertion regardless.)
 - Unbound injects API symbols (`log_info`, `RR_TYPE_*`, `DNSMessage`, …) as runtime globals,
   used as bare names. Declared once in `stubs/python/unboundmodule.py` (Pylance/mypy resolve
   via the `TYPE_CHECKING` import; the suite copies them onto `builtins`, see
