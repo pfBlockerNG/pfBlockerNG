@@ -270,6 +270,11 @@ off-pattern name is a smell even when it works.
 - Type-hint new functions; leave existing untyped code alone unless touching it.
 - No bare `except:` — `except Exception` minimum.
 - `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
+- **Content hashing = `md5` on the Python side (ADR-42 policy).** `hashlib` has no xxhash and the
+  module is stdlib-only + chrooted, so Python uses `hashlib.md5` for its own self-comparisons only
+  — never a cross-language digest (PHP/shell use `xxh128`). No Python hashing code lands in ADR-42;
+  it ships with its consumer (the deferred DNSBL structure-reuse ADR). See the architecture-notes
+  "Change detection / content hashing" section.
 - **No fixed-time waits to coordinate concurrency (issue #456).** Synchronising async work
   (threads, daemon loops, test harnesses) with `time.sleep()` or a polling deadline is a
   classical anti-pattern — flaky under load, needlessly slow otherwise. Use a synchronisation
@@ -675,6 +680,16 @@ ADR-10 (zero-downtime DNSBL swap), ADR-12 (update hooks) — and the per-ADR tes
 are summarized in **`docs/misc/architecture-notes.md`**; read it before touching
 `pfb_unbound.py`, the manifest boundary, the swap/watcher, or the hooks. Full design in each
 `.ADRs/ADR_NN_*/`.
+
+**Feed change detection (ADR-42)** — detection is **content-addressed**, not mtime-based: a
+self-describing hash (`xxh128` on the PHP/shell side via `hash('xxh128')` / `xxh128sum`; `md5` on
+the Python side, policy-only — code lands with its consumer), persisted as tagged
+`{base}.xxhash128` sidecars (legacy `.md5` read + replaced on the next write), plus a real
+conditional GET (`If-None-Match`/`If-Modified-Since` → `304` skips the body). Four comparison
+scenarios, the migration, the downgrade/fail-safe rule, and the conditional-GET-first contract are
+in **`docs/misc/architecture-notes.md`** ("Change detection / content hashing") — read it before
+touching `pfb_update_check`, `pfb_download`, or any feed/file change-detection site. Sibling of
+ADR-40 (IP pf-table set-membership gating); the deferred DNSBL structure-reuse ADR builds on it.
 
 **Aggregated "Uber" aliases (ADR-11, IP side — `pfblockerng.inc` + `pfblockerng.sh`).** The
 `pfb_agg_types` multi-select (IP settings, **opt-in, default none**) builds, per selected
