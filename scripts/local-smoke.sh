@@ -115,7 +115,7 @@ done
 # Explicit pytest args (if any) override the default target; quote everything (repo
 # shell rule) and branch instead of relying on word-splitting an unquoted $target.
 if [ "$#" -gt 0 ]; then
-	echo "local-smoke: running smoke suite ($* ${marker_args})" >&2
+	echo "local-smoke: running smoke suite ($*${marker_args:+ $marker_args})" >&2
 	# shellcheck disable=SC2086  # marker_args is a deliberate 0-or-2-word default
 	exec "$PYTHON" -m pytest "$@" $marker_args --override-ini="addopts="
 fi

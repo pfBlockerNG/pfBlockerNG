@@ -289,6 +289,9 @@ jobs:
           if [ "${VERSION_INPUT:-}" != "" ] && [ "$LEG_COUNT" -eq 0 ]; then
             echo "::error::version filter '${VERSION_INPUT}' matched no ci:true leg"; exit 1
           fi
+          if [ "$SCOPE" = "impacted" ] && [ -z "${VERSION_INPUT:-}" ] && [ "$LEG_COUNT" -eq 0 ]; then
+            echo "::error::impacted scope found no CE leg in the CI matrix"; exit 1
+          fi
 
           # EFFECTIVE -k: an explicit -k overrides. In `impacted` scope with no -k,
           # auto-derive from the UI test modules changed vs origin/devel (empty ->
