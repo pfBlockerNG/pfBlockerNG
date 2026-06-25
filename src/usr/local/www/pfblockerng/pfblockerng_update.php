@@ -104,9 +104,14 @@ function pfb_runnow(string $scope, bool $force): void {
 	pfb_livetail($pfb['log'], 'force');
 
 	// Update the 'cron' ledger entry so the Schedule view reflects this manual run.
+	// Only advance the full-pass ledger when scope=both — a partial scope=ip/dnsbl run
+	// does not complete a full cron pass, and advancing next_due here would suppress the
+	// next DNSBL-inclusive tick for up to pfb_interval hours.
 	// jitter_max=0 mirrors the tick's cron dispatch (no spread for manual runs).
-	$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
-	pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
+	if ($scope === 'both') {
+		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
+		pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
+	}
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));

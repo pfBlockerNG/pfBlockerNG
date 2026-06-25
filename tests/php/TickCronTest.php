@@ -275,6 +275,44 @@ final class TickCronTest extends TestCase
 			'bl jitter must differ from dcc jitter (independent spread)');
 	}
 
+	// -----------------------------------------------------------------------
+	// pfb_tick_interval_clamp — cron minute field safety.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * pfb_tick_interval_clamp maps invalid raw values to a valid [1, 60] minute interval.
+	 *
+	 * The cron minute field must be a positive integer ≤ 60; '0' produces "* /0" which
+	 * is invalid, '100' produces "* /100" which is a silent no-op, 'abc' breaks cron parsing.
+	 *
+	 * Scenario:
+	 *   Given raw values: '0' (zero), '100' (over-max), 'abc' (non-numeric), '15' (valid).
+	 *   When pfb_tick_interval_clamp($raw).
+	 *   Then: '0' → 1, '100' → 60, 'abc' → 1, '15' → 15.
+	 *
+	 * Red→green: before the clamp, '0' produced an invalid "* /0" cron entry.
+	 */
+	public function testTickIntervalClampPinsInvalidValues(): void
+	{
+		// Below minimum: clamp to 1.
+		$this->assertSame(1,  pfb_tick_interval_clamp('0'),
+			"clamp('0'): expected 1 (*/0 is invalid cron); got " . pfb_tick_interval_clamp('0'));
+		// Above maximum: clamp to 60.
+		$this->assertSame(60, pfb_tick_interval_clamp('100'),
+			"clamp('100'): expected 60 (*/100 is a no-op); got " . pfb_tick_interval_clamp('100'));
+		// Non-numeric: (int)'abc' = 0, clamps to 1.
+		$this->assertSame(1,  pfb_tick_interval_clamp('abc'),
+			"clamp('abc'): expected 1 (non-numeric coerces to 0); got " . pfb_tick_interval_clamp('abc'));
+		// Valid value passes through unchanged.
+		$this->assertSame(15, pfb_tick_interval_clamp('15'),
+			"clamp('15'): expected 15 (valid value unchanged); got " . pfb_tick_interval_clamp('15'));
+		// Boundary: 1 and 60 are both valid.
+		$this->assertSame(1,  pfb_tick_interval_clamp('1'),
+			"clamp('1'): expected 1 (minimum valid); got " . pfb_tick_interval_clamp('1'));
+		$this->assertSame(60, pfb_tick_interval_clamp('60'),
+			"clamp('60'): expected 60 (maximum valid); got " . pfb_tick_interval_clamp('60'));
+	}
+
 	/**
 	 * mark_ran writes jitter = 0 for cron (no jitter on feed sync).
 	 *
