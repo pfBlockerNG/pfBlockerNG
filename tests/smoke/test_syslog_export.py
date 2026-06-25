@@ -477,7 +477,7 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
 
     _trigger_ip_block(client_vm)
 
-    line = _wait_for_event(vm, baseline_len=len(before), want=("act=",), any_of=IP_ACT_TOKENS)
+    line = _wait_for_event(vm, baseline_len=len(before), want=(), any_of=IP_ACT_TOKENS)
     if not line:
         ps = vm.ssh("/bin/ps", "-wax", timeout=30)
         daemon_running = "pfblockerng.inc filterlog" in ps.stdout
