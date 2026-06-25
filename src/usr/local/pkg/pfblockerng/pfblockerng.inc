@@ -3477,8 +3477,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			@file_put_contents($memberlist, $members ? (implode("\n", $members) . "\n") : '', LOCK_EX);
 
 			// mtime BEFORE the build, to detect whether the action actually rebuilt.
-			clearstatcache();
-			$mtime_before = file_exists($aggout) ? filemtime($aggout) : 0;
+			$mtime_before = file_exists($aggout) ? pfb_file_mtime($aggout) : 0;
 
 			$family_esc	= escapeshellarg($family);
 			$memberlist_esc	= escapeshellarg($memberlist);
@@ -3486,8 +3485,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			$consumer_esc	= escapeshellarg($consumer);
 			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} 2>&1");
 
-			clearstatcache();
-			$rebuilt = file_exists($aggout) && (filemtime($aggout) > $mtime_before);
+			$rebuilt = file_exists($aggout) && (pfb_file_mtime($aggout) > $mtime_before);
 
 			// Register the Native urltable alias (mirror the member-alias shape).
 			// NEVER pfb_firewall_rule() -- Native means no firewall rule.
@@ -9276,20 +9274,28 @@ function pfb_rdns_seed_value(array $gconfig, array $ipconfig): ?string {
 }
 
 
+// Read $path's modification time with the per-process stat cache CLEARED first, so a
+// long-lived process (e.g. the filterlog daemon) — and any caller — always sees the true
+// on-disk mtime rather than a value PHP cached on an earlier stat of the same path. Single
+// choke point so no call site has to remember to clear the cache. Returns the mtime, or
+// FALSE if $path is absent.
+function pfb_file_mtime($path) {
+	clearstatcache(TRUE, $path);
+	return @filemtime($path);
+}
+
 // ADR-38 Amendment 1: keep the long-running filterlog daemon's view of the
 // log_syslog toggle fresh. The daemon loads $config once at start; a live toggle
 // (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
 // so the syslog gate would not change until a restart (a bug: enabled+syslog-on
 // must emit; enabled+syslog-off must not, with no restart). Reload $config from
-// disk ONLY when config.xml actually changes (mtime-gated) — a cheap filemtime()
-// per block event, a full read only on an actual change. Called on the block-emit
-// path (low volume), not per packet.
+// disk ONLY when config.xml actually changes (mtime-gated) — a cheap
+// pfb_file_mtime() per block event, a full read only on an actual change.
+// Called on the block-emit path (low volume), not per packet.
 function pfb_filterlog_refresh_config() {
-	// PHP caches filemtime() per process (the stat cache), so in this long-lived
-	// daemon a later config.xml write would otherwise read the STALE cached mtime and
-	// the live toggle would be missed. Clear the cache for this path before stat'ing.
-	clearstatcache(TRUE, '/conf/config.xml');
-	$cur = @filemtime('/conf/config.xml');
+	// pfb_file_mtime() clears PHP's per-process stat cache before stat'ing,
+	// so in this long-lived daemon a later config.xml write is always detected.
+	$cur = pfb_file_mtime('/conf/config.xml');
 	if ($cur === FALSE) {
 		return;
 	}
@@ -9311,7 +9317,10 @@ function pfb_daemon_filterlog() {
 	// ADR-38 Amendment 1: baseline mtime for the live log_syslog refresh (see
 	// pfb_filterlog_refresh_config). Captured at daemon start — when $config was
 	// loaded — so any later config.xml change is detected on the block path.
-	$GLOBALS['pfb_daemon_config_mtime'] = @filemtime('/conf/config.xml');
+	// pfb_file_mtime() clears the stat cache first (#536: without this the
+	// baseline could read a PHP-cached mtime from before the daemon's config load,
+	// defeating the change-detection on the very first reload check).
+	$GLOBALS['pfb_daemon_config_mtime'] = pfb_file_mtime('/conf/config.xml');
 
 	// ASN Reporting - cached setting
 	if ($pfb['asn_reporting'] != 'disabled') {

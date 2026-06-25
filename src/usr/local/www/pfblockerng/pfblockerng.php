@@ -471,8 +471,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		}
 
 		if ($localfile) {
-			clearstatcache();
-			$remote_tds = gmdate('D, j M Y H:i:s T', @filemtime("{$list_download}"));
+			$remote_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime("{$list_download}"));
 		}
 		else {
 			// Download URL headers and compare previously downloaded file with remote timestamp
@@ -556,8 +555,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		else {
 			$log = "  Remote timestamp: {$remote_tds}\n";
 			pfb_logger("{$log}", 1);
-			clearstatcache();
-			$local_tds = gmdate('D, j M Y H:i:s T', @filemtime($local_file));
+			$local_tds = gmdate('D, j M Y H:i:s T', pfb_file_mtime($local_file));
 			$log = "  Local  timestamp: {$local_tds}\t";
 			pfb_logger("{$log}", 1);
 	
@@ -799,7 +797,7 @@ function pfblockerng_uc_countries() {
 	}
 
 	// Save Date/Time stamp to MaxMind version file
-	$local_tds	 = @gmdate('D, j M Y H:i:s T', @filemtime($maxmind_cont));
+	$local_tds	 = @gmdate('D, j M Y H:i:s T', pfb_file_mtime($maxmind_cont));
 	$maxmind_ver	 = "MaxMind GeoLite2 Date/Time Stamp\n";
 	$maxmind_ver	.= "Last-Modified: {$local_tds}\n";
 	@file_put_contents("{$pfb['logdir']}/maxmind_ver", $maxmind_ver, LOCK_EX);

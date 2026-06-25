@@ -4602,9 +4602,9 @@ elseif ($alert_summary):
 if (!$pfb['filterlogentries']):?>
 
 <form action="/pfblockerng/pfblockerng_alerts.php" method="post" name="iform_stats" id="iform_stats" class="form-horizontal">
-<script src="../vendor/d3/d3.min.js?v=<?=filemtime('/usr/local/www/vendor/d3/d3.min.js')?>"></script>
+<script src="../vendor/d3/d3.min.js?v=<?=pfb_file_mtime('/usr/local/www/vendor/d3/d3.min.js')?>"></script>
 <script src="../vendor/d3pie/d3pie.min.js"></script>
-<script src="../vendor/nvd3/nv.d3.min.js?v=<?=filemtime('/usr/local/www/vendor/nvd3/nv.d3.min.js')?>"></script>
+<script src="../vendor/nvd3/nv.d3.min.js?v=<?=pfb_file_mtime('/usr/local/www/vendor/nvd3/nv.d3.min.js')?>"></script>
 <link href="../vendor/nvd3/nv.d3.min.css" media="screen, projection" rel="stylesheet" type="text/css">
 
 <div class="panel panel-default">
