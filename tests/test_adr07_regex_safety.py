@@ -38,7 +38,6 @@ from pfb_unbound import (
     PRIO_FEED_BLOCK,
     RegexRule,
     _dnsbl_compile_regex_rules,
-    _regex_exceeds_static_cap,
     _regex_is_catastrophic_shape,
     _scan_allow_regex_band,
     evaluate_domain,
@@ -187,26 +186,6 @@ class TestCatastrophicShapeHeuristic:
         assert _regex_is_catastrophic_shape(_long_benign_pattern()) is False
         # And a SHORT catastrophic shape IS flagged regardless of being well under length.
         assert _regex_is_catastrophic_shape(r"(a+)+") is True
-
-
-# --------------------------------------------------------------------------- #
-# (1b) STATIC LENGTH CAP -- combined length-OR-shape helper (gated path)
-# --------------------------------------------------------------------------- #
-class TestStaticCapHeuristic:
-    def test_normal_pattern_passes(self) -> None:
-        assert _regex_exceeds_static_cap(r"^(.+\.)?doubleclick\.net$") is False
-        assert _regex_exceeds_static_cap(r"ad[0-9]\.example\.com$") is False
-
-    def test_over_length_flagged(self) -> None:
-        long_pat = "a" * (pfb_unbound.REGEX_STATIC_LEN_CAP + 1)
-        assert _regex_exceeds_static_cap(long_pat) is True
-        # Exactly at the cap is allowed (strictly greater is the cap).
-        assert _regex_exceeds_static_cap("a" * pfb_unbound.REGEX_STATIC_LEN_CAP) is False
-
-    def test_catastrophic_shape_also_flagged(self) -> None:
-        # The combined helper folds in the shape gate too (used only on the gated path).
-        for pat in (r"(a+)+$", r"^(a|a)+$", r"(a+)(a+)+", r"a{500}{500}"):
-            assert _regex_exceeds_static_cap(pat) is True, pat
 
 
 # --------------------------------------------------------------------------- #

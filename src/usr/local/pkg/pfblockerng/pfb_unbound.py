@@ -4394,18 +4394,6 @@ def _regex_is_catastrophic_shape(pattern: str) -> bool:
     return budget > _REGEX_BUDGET_MAX
 
 
-def _regex_exceeds_static_cap(pattern: str) -> bool:
-    """Pure static-cap check (NO execution): True if ``pattern`` is over the length
-    ceiling OR carries a catastrophic shape. Used at LOAD time for the opt-in "Limit
-    long/complex regex" setting -- when the setting is OFF the length ceiling is NOT
-    enforced (long-but-safe patterns load). The catastrophic-shape half is also enforced
-    UNCONDITIONALLY via ``_regex_is_catastrophic_shape`` regardless of this setting; this
-    wrapper folds in the additional length ceiling for the gated path."""
-    if len(pattern) > REGEX_STATIC_LEN_CAP:
-        return True
-    return _regex_is_catastrophic_shape(pattern)
-
-
 def _regex_timed_search(pattern: Any, q_name: str) -> tuple[Any, float]:
     """Run ``pattern.search(q_name)`` and return ``(match, elapsed_ms)`` where
     ``elapsed_ms`` is per-thread CPU time (``time.thread_time``) when available, else
