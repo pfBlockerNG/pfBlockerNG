@@ -11716,10 +11716,12 @@ function pfb_syslog_logging_needs_update($current, $want) {
  *                                  'inbound_floating' => interface string for match_inbound floating
  *                                  'outbound_floating'=> interface string for match_outbound floating
  *                                  'dnsbl_float'      => array of 0-2 pre-built DNSBL ping/permit rules
- * @param ?string $order          The pass_order value ('order_0' .. 'order_4', or ''); null (the
- *                                unconfigured $pfb['order']) is coerced to '' (matches no order).
+ * @param ?string $order          The pass_order value ('order_0' .. 'order_4'). The production
+ *                                call site already passes `$pfb['order'] ?: 'order_0'`, so this is
+ *                                never null/empty there (#532); nullable + the order_0 normalisation
+ *                                below are defensive so any empty/unknown value behaves as order_0.
  * @param ?string $float          Float mode: 'on' or '' (off); null (the unconfigured
- *                                $pfb['float']) is coerced to '' (off).
+ *                                $pfb['float']) is coerced to '' (off) — this one IS passed unset.
  * @param array  $in_ifaces       Inbound interface names.
  * @param array  $out_ifaces      Outbound interface names.
  * @return array The new filter/rule array to write back to config.xml.
@@ -11732,11 +11734,12 @@ function pfb_build_autorule_list(
 	array   $in_ifaces,
 	array   $out_ifaces
 ): array {
-	// $order/$float come straight from $pfb['order']/$pfb['float'], which are unset (null)
-	// until configured. The historical inline code used those raw values in loose comparisons
-	// ('== on' / '== order_N'), where null simply matches nothing -- so a null is behaviour-
-	// equivalent to ''. Coerce here (the params are nullable) rather than let a strict string
-	// typehint TypeError on the null the call site legitimately passes (e.g. enable_float unset).
+	// $float comes straight from $pfb['float'], which is unset (null) until configured; $order
+	// arrives pre-defaulted to 'order_0' from the call site (#532) but is accepted nullable too.
+	// The historical inline code used these raw values in loose comparisons ('== on' / '== order_N'),
+	// where null simply matches nothing -- so a null is behaviour-equivalent to ''. Coerce here
+	// (the params are nullable) rather than let a strict string typehint TypeError on the null the
+	// call site legitimately passes (e.g. enable_float unset).
 	$order = $order ?? '';
 	$float = $float ?? '';
 
