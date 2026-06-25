@@ -2188,7 +2188,13 @@ def reload(
     deadline = time.monotonic() + timeout
     result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
     if result.returncode != 0:
-        raise RuntimeError(f"reload({scope}) failed: rc={result.returncode} stderr={result.stderr!r}")
+        # Report STDOUT too, not just stderr: pfBlockerNG writes a PHP fatal (e.g. an uncaught
+        # TypeError that aborts the verb) to stdout, while stderr may only carry incidental noise
+        # like "pfctl: Table does not exist." A stderr-only message hides the real cause and can
+        # read like a transport failure -- surface both so the actual error is visible.
+        raise RuntimeError(
+            f"reload({scope}) failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
+        )
     if data_path:
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
         # of wait_zero_downtime_swap's shorter default.
@@ -2594,6 +2600,39 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -
             return
         time.sleep(delay)
     raise RuntimeError("Unbound did not become ready after reload")
+
+
+def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.0) -> None:
+    """Block until pfSense has FINISHED booting (``is_platform_booting()`` false).
+
+    pfSense's rc removes ``/var/run/booting`` only at the very END of bootup -- AFTER
+    the web port (which ``wait_ready.sh`` keys on) already answers. So a fast box can
+    reach "ready" and run a pfBlockerNG update while ``is_platform_booting()`` is still
+    true, and pfBlockerNG ABORTS every sync during boot ("Sync terminated during boot
+    process.", pfblockerng.inc) -- a silent no-op: no feed load, no rule, then a later
+    reload trips "pfctl: Table does not exist". Observed live: at 35s uptime the flag was
+    still set; it cleared by 40s. We gate on the REAL function the package's guard checks,
+    not the bare ``/var/run/booting`` file, so this matches pfBlockerNG's own condition.
+
+    This is a last-resort poll of production-side state we cannot signal (issue #456);
+    the timeout RAISES loudly rather than returning, so a never-completing boot fails the
+    run instead of silently racing.
+    """
+    deadline = time.monotonic() + timeout
+    snippet = "echo '<<BOOT>>' . (is_platform_booting() ? '1' : '0') . '<<END>>';"
+    last = "?"
+    while time.monotonic() < deadline:
+        out = php_eval(vm, snippet, timeout=30.0).stdout
+        if "<<BOOT>>" in out and "<<END>>" in out:
+            last = out.split("<<BOOT>>", 1)[1].split("<<END>>", 1)[0].strip()
+            if last == "0":
+                return
+        time.sleep(delay)
+    raise RuntimeError(
+        f"pfSense still booting after {timeout:.0f}s: is_platform_booting() last returned "
+        f"{last!r} (expected '0'). /var/run/booting never cleared -- pfBlockerNG updates "
+        f"would abort as boot-time syncs."
+    )
 
 
 # --------------------------------------------------------------------------- #

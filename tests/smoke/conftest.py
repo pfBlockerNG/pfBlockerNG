@@ -326,6 +326,15 @@ def boot_and_probe(
 
     # Surface "boot-to-ready: N seconds" so it lands in the captured output.
     print(result.stdout.strip())
+
+    # wait_ready.sh keys on the web port, which answers BEFORE pfSense's rc finishes and
+    # removes /var/run/booting. Block until boot is actually complete so the first
+    # pfBlockerNG update does not race it (is_platform_booting() true -> "Sync terminated
+    # during boot process." -> silent no-op). Local import avoids the conftest<->helpers
+    # module cycle (helpers imports from conftest at module load).
+    from . import helpers  # noqa: PLC0415
+
+    helpers.wait_boot_complete(vm)
     return BootHandle(process=process, vm=vm, log_file=log_file)
 
 
