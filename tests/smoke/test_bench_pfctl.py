@@ -154,7 +154,9 @@ def _run_icmp_probe(
     the pfctl table op stalls the data plane, not whether packets are blocked.
     """
     count = max(1, int(duration_s / interval_s))
-    cmd = f"ping -c {count} -i {interval_s} -W 1 {shlex.quote(target)} 2>&1"
+    # LC_ALL=C: pin locale so the ping summary and RTT lines match the regex
+    # regardless of the civm Debian locale setting.
+    cmd = f"LC_ALL=C ping -c {count} -i {interval_s} -W 1 {shlex.quote(target)} 2>&1"
     result = client_vm.ssh(cmd, timeout=duration_s + 30.0)
     return _parse_ping(result.stdout)
 
@@ -201,9 +203,10 @@ class _LiveProbe:
 
     def _run(self) -> None:
         # Fire batches of ~100 pings, collect, repeat until stopped.
+        # LC_ALL=C: pin locale so ping output matches the RTT regex on any Debian locale.
         batch_count = 100
         while not self._stop_evt.is_set():
-            cmd = f"ping -c {batch_count} -i {self._interval} -W 1 {shlex.quote(self._target)} 2>&1"
+            cmd = f"LC_ALL=C ping -c {batch_count} -i {self._interval} -W 1 {shlex.quote(self._target)} 2>&1"
             duration = batch_count * self._interval + 5.0
             result = self._client.ssh(cmd, timeout=duration + 10.0)
             pw = _parse_ping(result.stdout)
@@ -212,10 +215,15 @@ class _LiveProbe:
                 self._lost += pw.lost
 
     def snapshot_since(self, since_epoch: float) -> ProbeWindow:
-        """Return samples collected at or after since_epoch (approx — seq-based)."""
-        # We don't have per-packet timestamps; return all collected so far as a
-        # coarse approximation.  The caller records epoch_start from the guest and
-        # compares against baseline collected just before.
+        """Return samples collected at or after since_epoch.
+
+        We do not have per-packet timestamps from the probe; the caller aligns
+        the "during" window to the op by recording ``epoch_start``/``epoch_end``
+        from the guest bench script and calling ``stop()`` (which bounds the
+        collection to the op duration).  ``snapshot_since`` is provided for
+        future callers that want a finer sub-window; it currently returns all
+        accumulated samples as a coarse approximation.
+        """
         with self._lock:
             pw = ProbeWindow()
             pw.samples = list(self._samples)

@@ -27,8 +27,9 @@ Size      wall_ms  ICMP_p50  ICMP_p99  ICMP_max  loss%  spikes/n   ctrl_p99
 1,000,000   871ms      0.8ms   552.0ms   553.0ms   0.0%    50/200      447ms
 5,000,000 4,536ms      2.4ms   768.0ms   862.0ms  19.8%   200/600    3102ms
 
-Note: 5M data included for reference; 1M is the production ceiling pfBlockerNG
-targets. At 5M, 19.8% packet loss confirms the 1M limit is well-founded.
+Note: 5M data is a non-harness/reference measurement (collected manually outside the
+automated bench harness); 1M is the production ceiling pfBlockerNG targets.
+At 5M, 19.8% packet loss confirms the 1M limit is well-founded.
 
 
 ========== (b) Chunked -T add / -T delete — batch-size sweep ==========
@@ -70,6 +71,24 @@ Size     Churn   Batch   wall_ms  ICMP_p50  ICMP_p99  ICMP_max  loss%  spikes/n
 1,000,000 100,000   1,024    4,811ms  (no live ICMP probe — collected post-run)
 1,000,000 100,000   4,096    3,610ms  (no live ICMP probe — collected post-run)
 1,000,000 100,000       1   TIMEOUT (>1200s; extrapolated ~2000s at observed rate)
+
+
+CORRECTION (post-review): the original do_delta() harness built the _adds set
+from the HEAD of the same table file already loaded as the baseline, so those
+-T add calls were no-ops (entries already in the kernel table).  Only the
+-T delete calls genuinely mutated the table; the add-side latency was
+under-measured (reflects the kernel overhead of re-adding no-op entries, not
+the cost of inserting truly new ones).
+
+The harness is corrected in scripts/bench_pfctl_tables.sh: _adds is now
+generated from a DISJOINT set (172.16.x.x), keeping table cardinality stable
+across add+delete.
+
+Impact on the BUILD verdict: the verdict is unchanged.  The primary evidence
+for BUILD is real deletes (correctly measured above) and the live end-state ==
+replace smoke (tests/smoke/test_smoke_adr40.py), which verifies correctness not
+throughput.  The add-side numbers above under-represent add cost; a fresh live
+re-run with the corrected harness is a pending maintainer/orchestrator item.
 
 
 ========== (c) Recompute cost — LC_ALL=C sort -u (pfb_canonical_alias_set proxy) ==========

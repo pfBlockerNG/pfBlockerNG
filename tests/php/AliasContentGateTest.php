@@ -385,16 +385,22 @@ final class AliasContentGateTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Scenario F: pfb_write_canonical_alias writes one entry per line, sorted, unique.
+	 * Scenario F: pfb_write_canonical_alias writes the provided canonical set as-is.
 	 *
-	 * The written file is the new last-applied mirror. Its format must be the
-	 * canonical set: C-locale sorted, unique, one entry per line, trailing newline.
-	 * pfb_alias_set_different() must accept its own output (round-trip stable).
+	 * pfb_write_canonical_alias() writes caller-supplied entries verbatim, one per
+	 * line with a trailing newline.  The CALLER is responsible for providing a
+	 * canonical (sorted, unique) set; the writer does NOT re-sort or de-duplicate.
+	 * This matches the ADR-40 design: pfb_canonical_alias_set() canonicalises
+	 * before handing off to the writer.
+	 *
+	 * The input here is already sorted so the assertion is unambiguous: the file
+	 * must contain exactly these entries in exactly this order.
 	 */
 	public function testWriteCanonicalAliasProducesCanonicalFormat(): void
 	{
 		$path = "{$this->tmp}/pfB_Format_v4.txt";
-		$set  = ['192.0.2.3', '10.0.0.1', '192.0.2.1'];	// unsorted input
+		// Pre-sorted canonical set (as pfb_canonical_alias_set() would return it).
+		$set  = ['10.0.0.1', '192.0.2.1', '192.0.2.3'];
 
 		pfb_write_canonical_alias($path, $set);
 
@@ -405,13 +411,12 @@ final class AliasContentGateTest extends TestCase
 		);
 
 		$written = file_get_contents($path);
-		// Set is already sorted when passed in (caller provides canonical set)
-		// but the writer must not re-order; it writes as-is with trailing newline.
+		// Writer must preserve caller order and append a trailing newline.
 		$lines = array_filter(explode("\n", rtrim($written)));
 		$this->assertSame(
 			$set,
 			array_values($lines),
-			"written file must contain exactly the set entries, one per line\n" .
+			"written file must contain exactly the canonical set entries, one per line\n" .
 			"set:     " . implode(', ', $set) . "\n" .
 			"written: " . json_encode($written)
 		);

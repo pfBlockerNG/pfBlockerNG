@@ -195,13 +195,20 @@ do_delta() {
     _half=$(( _n / 2 ))
     [ "${_churn}" -gt "${_half}" ] && _actual_churn="${_half}"
 
-    # Build adds/dels: first/last _actual_churn lines of the table.
-    # These are non-overlapping because _actual_churn <= n/2 and the table is sequential.
+    # Build adds/dels.
+    # _dels: last _actual_churn lines of the table (entries to remove from baseline).
+    # _adds: a DISJOINT set of _actual_churn entries NOT in the baseline table, so
+    #   that the -T add calls genuinely insert new entries (not no-ops on already-
+    #   loaded IPs).  Generated from 172.16.x.x, which do_gen() never uses.
     _adds="${TMP}/adds_${_n}_${_actual_churn}.txt"
     _dels="${TMP}/dels_${_n}_${_actual_churn}.txt"
     if [ ! -f "${_adds}" ]; then
-        head -n "${_actual_churn}" "${_file}" > "${_adds}"
         tail -n "${_actual_churn}" "${_file}" > "${_dels}"
+        awk -v n="${_actual_churn}" 'BEGIN {
+            c = 0
+            for (a = 0; a <= 255 && c < n; a++)
+                for (b = 1; b <= 254 && c < n; b++) { print "172.16." a "." b; c++ }
+        }' > "${_adds}"
     fi
 
     # Load baseline table.
@@ -211,10 +218,21 @@ do_delta() {
     _epoch_start=$(now_epoch)
     _t0=$(now_ms)
 
+    _chunk_errors=0
+
+    _pfctl_op() {
+        # Run pfctl; on failure increment _chunk_errors and log to stderr (row still recorded).
+        _op_out=$("${PFCTL}" "$@" 2>&1) || {
+            _chunk_errors=$(( _chunk_errors + 1 ))
+            printf 'chunk_error: pfctl %s rc=%d detail=%s\n' \
+                "$*" "$?" "$(printf '%s' "${_op_out}" | head -1 | tr ' ' '_')" >&2
+        }
+    }
+
     if [ "${_batch}" -eq 0 ]; then
         # Single-giant-op: one pfctl call per direction.
-        "${PFCTL}" -t "${TABLE}" -T add    -f "${_adds}" >/dev/null 2>&1 || true
-        "${PFCTL}" -t "${TABLE}" -T delete -f "${_dels}" >/dev/null 2>&1 || true
+        _pfctl_op -t "${TABLE}" -T add    -f "${_adds}" >/dev/null
+        _pfctl_op -t "${TABLE}" -T delete -f "${_dels}" >/dev/null
     else
         # Chunked: split each direction into files of at most _batch lines, call pfctl per chunk.
         _chunk_dir="${TMP}/chunks_${_n}_${_actual_churn}_${_batch}"
@@ -229,7 +247,7 @@ do_delta() {
             printf '%s\n' "${_line}" >> "${_chunk}"
             _line_count=$(( _line_count + 1 ))
             if [ "${_line_count}" -ge "${_batch}" ]; then
-                "${PFCTL}" -t "${TABLE}" -T add -f "${_chunk}" >/dev/null 2>&1 || true
+                _pfctl_op -t "${TABLE}" -T add -f "${_chunk}" >/dev/null
                 _chunk_idx=$(( _chunk_idx + 1 ))
                 _line_count=0
                 _chunk="${_chunk_dir}/add_$(printf '%07d' "${_chunk_idx}").txt"
@@ -237,7 +255,7 @@ do_delta() {
         done < "${_adds}"
         # Flush last partial chunk.
         if [ -f "${_chunk}" ] && [ -s "${_chunk}" ]; then
-            "${PFCTL}" -t "${TABLE}" -T add -f "${_chunk}" >/dev/null 2>&1 || true
+            _pfctl_op -t "${TABLE}" -T add -f "${_chunk}" >/dev/null
         fi
 
         # Split and apply deletes.
@@ -248,14 +266,14 @@ do_delta() {
             printf '%s\n' "${_line}" >> "${_chunk}"
             _line_count=$(( _line_count + 1 ))
             if [ "${_line_count}" -ge "${_batch}" ]; then
-                "${PFCTL}" -t "${TABLE}" -T delete -f "${_chunk}" >/dev/null 2>&1 || true
+                _pfctl_op -t "${TABLE}" -T delete -f "${_chunk}" >/dev/null
                 _chunk_idx=$(( _chunk_idx + 1 ))
                 _line_count=0
                 _chunk="${_chunk_dir}/del_$(printf '%07d' "${_chunk_idx}").txt"
             fi
         done < "${_dels}"
         if [ -f "${_chunk}" ] && [ -s "${_chunk}" ]; then
-            "${PFCTL}" -t "${TABLE}" -T delete -f "${_chunk}" >/dev/null 2>&1 || true
+            _pfctl_op -t "${TABLE}" -T delete -f "${_chunk}" >/dev/null
         fi
 
         rm -rf "${_chunk_dir}"
@@ -269,10 +287,13 @@ do_delta() {
     _batch_label="${_batch}"
     [ "${_batch}" -eq 0 ] && _batch_label="giant"
 
-    printf 'op=delta size=%d churn=%d batch=%s wall_ms=%d epoch_start=%s epoch_end=%s\n' \
+    printf 'op=delta size=%d churn=%d batch=%s wall_ms=%d epoch_start=%s epoch_end=%s chunk_errors=%d\n' \
         "${_n}" "${_actual_churn}" "${_batch_label}" \
-        "${_wall_ms}" "${_epoch_start}" "${_epoch_end}"
+        "${_wall_ms}" "${_epoch_start}" "${_epoch_end}" "${_chunk_errors}"
     pctls_from_file "${CTRL_PROBE_OUT}" "ctrl_"
+    if [ "${_chunk_errors}" -gt 0 ]; then
+        printf 'error=chunk_failures count=%d\n' "${_chunk_errors}"
+    fi
 }
 
 # (c) Recompute cost: LC_ALL=C sort -u (lower bound — omits file read/concat).
