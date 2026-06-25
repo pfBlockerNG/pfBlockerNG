@@ -3542,6 +3542,106 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 }
 
 
+// ---------------------------------------------------------------------------
+// ADR-40 Phase 1 — alias reload-scope helpers (extracted from sync_package_pfblockerng)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the reload alias set from the feed-tracking state.
+ *
+ * Encapsulates the three $final_alias computations in sync_package_pfblockerng:
+ *   (a) file-write scope  (14410–14420): pass repEnabled = (drep||prep on), active = null
+ *   (b) rule-change pfctl (14955–14964): pass repEnabled = (repcheck && drep||prep), active = $pfb_active_aliases
+ *   (c) no-rule-change    (15008–15016): pass repEnabled = (repcheck && drep||prep), active = null
+ *
+ * @param bool        $rep_enabled   TRUE when the reputation branch should use $alias_lists_all.
+ *                                   Caller derives this as: (repcheck && (drep=='on' || prep=='on'))
+ *                                   for pfctl paths, or (drep=='on' || prep=='on') for the file-write path.
+ * @param array       $alias_lists     $pfb_alias_lists  — aliases with a changed feed this pass.
+ * @param array       $alias_lists_all $pfb_alias_lists_all — all active aliases.
+ * @param array|null  $active_aliases  When non-null the result is intersected with this set
+ *                                     (the rule-change pfctl path only). Pass null to skip.
+ * @return array Ordered, unique list of alias names to reload. Empty = nothing to reload.
+ */
+function pfb_select_reload_aliases(
+	bool   $rep_enabled,
+	array  $alias_lists,
+	array  $alias_lists_all,
+	?array $active_aliases = null
+): array {
+	$final_alias = array();
+	if ($rep_enabled) {
+		if (!empty($alias_lists_all)) {
+			$final_alias = array_unique($alias_lists_all);
+		}
+	} else {
+		if (!empty($alias_lists)) {
+			$final_alias = array_unique($alias_lists);
+		}
+	}
+
+	if ($active_aliases !== null) {
+		$final_alias = array_intersect($final_alias, array_unique($active_aliases));
+	}
+
+	return $final_alias;
+}
+
+/**
+ * Concatenate the content of the member .txt files for one alias.
+ *
+ * The current aliasdir file is a raw concatenation of each enabled member feed's .txt
+ * (pfblockerng.inc:14460 / :14481) — order-dependent, not deduplicated. This helper
+ * captures that exact semantic: read each existing path in order and concatenate.
+ *
+ * Phase 3 will replace callers with pfb_canonical_alias_set() once content-addressed
+ * gating is wired in. Until then this is the oracle for the current behaviour.
+ *
+ * @param string[] $member_paths Absolute paths to the per-feed .txt files, in the order
+ *                               they should be concatenated (matches the row iteration order
+ *                               in the alias build loop).
+ * @return string Raw concatenated content — may contain duplicates and is NOT sorted.
+ *                Returns '' when no paths are provided or none exist.
+ */
+function pfb_concat_member_files(array $member_paths): string {
+	$out = '';
+	foreach ($member_paths as $path) {
+		if (file_exists($path)) {
+			$out .= file_get_contents($path);
+		}
+	}
+	return $out;
+}
+
+/**
+ * Build the canonical membership set for an alias.
+ *
+ * Applies LC_ALL=C sort -u (ADR-26) to the concatenated member content, returning
+ * an array of unique, C-sorted IP/CIDR strings with blank lines and comments stripped.
+ *
+ * NOTE: This helper is DEAD CODE in Phase 1 — it is tested but NOT wired into the
+ * live reload path. Phase 3 will wire it as the content-addressed gate input.
+ *
+ * @param string $member_content Raw concatenated member content (output of pfb_concat_member_files).
+ * @return string[] Sorted, unique, non-empty lines. Empty array for empty/blank input.
+ */
+function pfb_canonical_alias_set(string $member_content): array {
+	if ($member_content === '') {
+		return array();
+	}
+	// Split on newlines, strip blank lines and comment lines, dedup, then C-locale sort.
+	$lines = array_filter(
+		explode("\n", $member_content),
+		static fn(string $l): bool => $l !== '' && $l[0] !== '#'
+	);
+	$unique = array_unique(array_values($lines));
+	// LC_ALL=C sort: strcmp gives the byte-level C-locale order.
+	usort($unique, 'strcmp');
+	return $unique;
+}
+
+// ---------------------------------------------------------------------------
+
 // Determine if cron task requires updating
 function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_wday) {
 	foreach (config_get_path('cron/item', []) as $item) {
@@ -14677,17 +14777,12 @@ function sync_package_pfblockerng($cron='') {
 
 				// Only Save aliases that have been updated.
 				// When 'Reputation' is used, all aliases need to be updated.
-				$final_alias = array();
-				if ($pfb['drep'] == 'on' || $pfb['prep'] == 'on') {
-					if (!empty($pfb_alias_lists_all)) {
-						$final_alias = array_unique($pfb_alias_lists_all);
-					}
-				}
-				else {
-					if (!empty($pfb_alias_lists)) {
-						$final_alias = array_unique($pfb_alias_lists);
-					}
-				}
+				// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
+				$final_alias = pfb_select_reload_aliases(
+					$pfb['drep'] == 'on' || $pfb['prep'] == 'on',
+					$pfb_alias_lists,
+					$pfb_alias_lists_all
+				);
 
 				if ($list['action'] != 'Disabled') {
 					$pfbupdate	= FALSE;
@@ -15222,17 +15317,14 @@ function sync_package_pfblockerng($cron='') {
 
 		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
 		if (isset($pfb_tables)) {
-			$final_alias = array();
+			// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
 			$pfb_active_aliases = isset($pfb_active_aliases) ? array_unique($pfb_active_aliases) : [];
-			if ($pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
-				if (!empty($pfb_alias_lists_all)) {
-					$final_alias = array_intersect(array_unique($pfb_alias_lists_all), $pfb_active_aliases);
-				}
-			} else {
-				if (!empty($pfb_alias_lists)) {
-					$final_alias = array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases);
-				}
-			}
+			$final_alias        = pfb_select_reload_aliases(
+				$pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on'),
+				$pfb_alias_lists,
+				$pfb_alias_lists_all,
+				$pfb_active_aliases
+			);
 			foreach ($pfb_tables as $pfb_table) {
 				$pfb_table_esc = escapeshellarg($pfb_table);
 				$pfb_table_path_esc	= escapeshellarg("{$pfb['aliasdir']}/{$pfb_table}.txt");
@@ -15275,16 +15367,12 @@ function sync_package_pfblockerng($cron='') {
 
 			// Only Save Aliases that have been updated.
 			// When 'Reputation' is used, all aliases need to be updated when any alias has been updated.
-			$final_alias = array();
-			if ($pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
-				if (!empty($pfb_alias_lists_all)) {
-					$final_alias = array_unique($pfb_alias_lists_all);
-				}
-			} else {
-				if (!empty($pfb_alias_lists)) {
-					$final_alias = array_unique($pfb_alias_lists);
-				}
-			}
+			// ADR-40 P1: extracted to pfb_select_reload_aliases(); behaviour unchanged.
+			$final_alias = pfb_select_reload_aliases(
+				$pfb['repcheck'] && ($pfb['drep'] == 'on' || $pfb['prep'] == 'on'),
+				$pfb_alias_lists,
+				$pfb_alias_lists_all
+			);
 
 			if (!empty($final_alias)) {
 				foreach ($final_alias as $final) {
