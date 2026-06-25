@@ -1,6 +1,12 @@
 # ADR-41: Immutable user firewall rules in the IP autorule reconciliation
 
-- **Status:** **Proposed** (2026-06-25)
+- **Status:** **Implemented (pending live-VM smoke)** (2026-06-25) — Phases 1–3 landed: the
+  emission is extracted + the reconciliation rewritten to the immutable-user splice (binary anchor),
+  with the off-appliance contract (user-rule fidelity, pfB-set-identical, idempotence) pinned
+  red→green in `AutoruleListOracleTest`. Phase 2's pf-precedence kill-gate returned **GO** (live
+  first-match confirmed; `RESULTS/02`). Flips to **Accepted** once the §7 live-VM fan-out (CE + Plus)
+  — the per-`pass_order` data-plane precedence sweep in `test_smoke_autorule_immutable.py` (currently
+  skipped pending Phase-4 wiring) — is green.
 - **Date:** 2026-06-25
 - **Branch:** `adr/41-immutable-user-firewall-rules` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):** the IP-side autorule

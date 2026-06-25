@@ -1,0 +1,52 @@
+ADR-41 Phase 4 Results — docs + DoD (off-box parts; live precedence sweep deferred)
+===================================================================================
+Branch: adr/41-immutable-user-firewall-rules
+Status set: Implemented (pending live-VM smoke)
+
+SCOPE NOTE: the live pfSense VM was flaky/occupied this session (a state-flushing reload
+transiently cut the harness control SSH — see RESULTS/02 §7), and the maintainer opted to run the
+live precedence fan-out later. So this phase delivered the OFF-BOX parts; the live data-plane
+precedence sweep is the one remaining acceptance item.
+
+DONE THIS PHASE
+---------------
+- docs/misc/architecture-notes.md: added "IP autorule reconciliation — immutable user rules
+  (ADR-41)" — the immutable-user splice, the binary anchor mapping, where the contract is pinned,
+  and the deliberate order_4 (no-reorder) behaviour change for release notes.
+- ADR.md Status -> "Implemented (pending live-VM smoke)" with the path to Accepted.
+- tests/smoke/test_smoke_autorule_immutable.py (the Phase-3 live oracle) hardened for landing:
+  * `_get_filter_rules` fixed to the proven h.php_eval(<<RULES>>..<<END>>) delimiter pattern
+    (was a non-existent `vm.php_eval`);
+  * relative import `from . import helpers as h` + `import json` (was an absolute import + a
+    function-local import);
+  * module mark changed from an UNREGISTERED `immutable_autorule` to
+    `[pytest.mark.smoke, pytest.mark.skip(...)]` — so it JOINS the ADR-04 fan-out but SKIPS cleanly
+    (4 skipped, no error) until Phase 4 removes the skip and wires the live fixtures. Verified it
+    collects + skips under `-m smoke`; ruff/format/mypy clean.
+
+OFF-APPLIANCE EVIDENCE (the landed proof)
+-----------------------------------------
+- pfb_build_autorule_list() = immutable splice: keep (non-pfB, original order) + contiguous pfB
+  block, spliced AFTER keep for order_1/order_2, BEFORE otherwise. All bucketing/per-interface user
+  emission removed.
+- AutoruleListOracleTest: 22 tests assert the CONTRACT (user-rule fidelity multiset+order,
+  pfB-set-identical, idempotence). Proven RED on the old Phase-1 bucketing helper (8 failures =
+  order_1/2 dup + order_4 reorder/drop), GREEN (100 assertions) on the new splice. Full PHP suite
+  green; phpcs/phpstan/php-l clean.
+
+REMAINING FOR ACCEPTANCE (maintainer / stable box — §7 DoD)
+----------------------------------------------------------
+- Wire the live fixtures in test_smoke_autorule_immutable.py (h.deploy + a Deny_* feed +
+  force-update), remove the module skip, and run the live-VM fan-out (CE + Plus):
+  * user-rule preservation sweep across pass_order x float (exact multiset + stability);
+  * per-pass_order DATA-PLANE precedence (a blocked-vs-allowed probe — pfB block effective AND the
+    LAN allow still passes), including an inbound!=outbound and a Permit_* case;
+  * keep #544's test_smoke_lan_rule_preserve.py green.
+- Then flip ADR.md Status -> Accepted.
+- MEASUREMENT TIP (RESULTS/02 §7): a state-flushing reload can transiently drop the control SSH;
+  prefer fewer reloads per session / fresh-boot-per-case, or a completion-polling reload.
+
+DoD VERDICT
+-----------
+Implemented (pending live-VM smoke). Off-appliance contract proven; pf-precedence kill-gate GO;
+docs updated. Acceptance gated only on the live fan-out above.

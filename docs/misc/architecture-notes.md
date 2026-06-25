@@ -458,6 +458,35 @@ Full design: ADR-39.
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
   branch).
 
+## IP autorule reconciliation — immutable user rules (ADR-41)
+
+The IP-side autorule pass in `sync_package_pfblockerng()` reconciles pfBlockerNG's own
+`filter/rule` entries each update via the pure helper `pfb_build_autorule_list($existing_rules,
+$pfb_generated, $order, $float, $in_ifaces, $out_ifaces)` (pfblockerng.inc). It treats **user
+rules as immutable**: the kept list is the live `filter/rule` minus only the pfB-owned rules this
+region regenerates (descr starts `pfB_`, **excluding** the DNS-redirect/DoT-block bypass rules,
+which are kept like user rules), in their **original order**; pfBlockerNG's rules are generated
+unchanged and **spliced as one contiguous block at a single anchor**. No user rule is ever
+bucketed, filtered, duplicated, split, or reordered — eliminating the #532 drop / order_1·2
+duplication / order_4 reorder as a class.
+
+The anchor is **binary**, because pf is per-interface first-match (`quick`) so the only
+user-visible interaction is pfB-block-vs-user-**pass** (pass-vs-pass and block-vs-block are moot):
+
+- `order_0` / `order_3` / `order_4` / absent / unknown → pfB block **before** the kept user rules
+  (pfB wins; absent→order_0 subsumes the #539 default).
+- `order_1` / `order_2` → pfB block **after** the kept user rules (user pass wins).
+
+The contract (user-rule fidelity, pfB-rule-set identical, idempotence) is pinned off-appliance in
+`tests/php/AutoruleListOracleTest.php`; the live data-plane precedence sweep is
+`tests/smoke/test_smoke_autorule_immutable.py` (ADR-04). Design + the live pf-precedence kill-gate
+evidence: `.ADRs/ADR_41_Immutable_User_Firewall_Rules/`.
+
+**Deliberate behaviour change (release notes):** `order_4` (and the old managed/non-managed split)
+no longer **reorders** the user's own rules — user rules are now kept verbatim. Functionally inert
+under per-interface first-match, but some installs' `config.xml` rule order changes on
+`order_1`/`order_2`/`order_4`.
+
 ## Managed firewall object ownership and teardown (ADR-35)
 
 A small shared ownership-and-teardown layer for pfBlockerNG-managed objects in pfSense-core sections
