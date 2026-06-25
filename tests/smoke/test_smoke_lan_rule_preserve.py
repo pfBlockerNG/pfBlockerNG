@@ -21,8 +21,9 @@ Non-obvious facts:
   rule (``enable_float=on``) uses a different code path and does not trigger it. The killstates
   test deliberately uses floating to AVOID this bug; this test intentionally uses non-floating
   on the LAN to DETECT it.
-* Two reloads are required: reload #1 builds the alias; reload #2 is when the pfB deny rule
-  lands and the reconciliation rewrites filter/rule. Before the fix, reload #2 drops user rules.
+* Two consecutive reloads bound the cycle: the alias builds, the pfB deny rule lands, and the
+  reconciliation rewrites filter/rule at least once. Before the fix, the user LAN rules are gone
+  by the end of the cycle (observed as early as reload #1, depending on install-time syncs).
 * The harness SSH/control plane runs over the WAN SLIRP path (port 2222 on 127.0.0.1), not the
   LAN. A pfB LAN rule cannot cut our own harness access (we never talked over the LAN).
 * We use ``inbound_interface``/``outbound_interface`` = ``'lan'`` (the pfSense friendly name),
@@ -39,6 +40,7 @@ cases skip cleanly.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Iterator
@@ -85,27 +87,29 @@ def _inject_lan_ip_rule(vm: SmokeVM, *, pass_order: str | None = None, timeout: 
 
     Mirrors ``_ip_inject_snippet`` from helpers.py but targets ``'lan'`` for both
     inbound/outbound — the exact interface configuration that triggers the bug (the existing
-    helper hardcodes ``SMOKE_IP_IFACE`` which defaults to ``'wan'``). ``pass_order`` is set
-    in the list-group when provided; absent (``None``) reproduces the pre-fix trigger.
+    helper hardcodes ``SMOKE_IP_IFACE`` which defaults to ``'wan'``).
+
+    ``pass_order`` drives the IP-settings ``pass_order`` field — the one the reconciliation
+    reads (``$pfb['ipconfig']['pass_order']``, pfblockerng.inc:11044), NOT a list-row key.
+    ``None`` removes it (the absent-key pre-fix trigger); an explicit value (e.g. ``'order_0'``)
+    exercises the configured-order branch.
     """
     row = {"header": FEED_HEADER, "url": FEED_PATH, "state": "Enabled", "format": "auto"}
     listcfg = {"aliasname": FEED_HEADER, "action": "Deny_Outbound", "cron": "EveryDay"}
-    # Pass order: absent is the trigger; order_0 is the explicit-config branch test.
-    order_line = f"$list['pass_order'] = {h._php_str(pass_order)};\n" if pass_order is not None else ""
     ipset = {"inbound_interface": LAN_IFACE, "outbound_interface": LAN_IFACE}
+    pass_order_line = (
+        f"$ip['pass_order'] = {h._php_str(pass_order)};\n" if pass_order is not None else "unset($ip['pass_order']);\n"
+    )
     snippet = (
         f"$g = config_get_path({h._php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({h._php_str(CFG_GLOBAL)}, $g);\n"
         f"$ip = config_get_path({h._php_str(CFG_IP_SETTINGS)}, array());\n"
         f"$ip = array_merge($ip, {h._php_kv_array(ipset)});\n"
-        # Explicitly UNSET pass_order from the IP-settings section so we test its absence
-        # on the list level — the bug was in the list's pass_order, not the global settings.
-        "unset($ip['pass_order']);\n"
+        f"{pass_order_line}"
         f"config_set_path({h._php_str(CFG_IP_SETTINGS)}, $ip);\n"
         f"$list = {h._php_kv_array(listcfg)};\n"
         f"$list['row'] = array({h._php_kv_array(row)});\n"
-        f"{order_line}"
         f"config_set_path({h._php_str(CFG_IP_V4_LISTS)}, array($list));\n"
         "write_config('pfBlockerNG smoke: LAN rule preserve test');\n"
         "echo 'OK';"
@@ -121,38 +125,33 @@ def _get_filter_rules(vm: SmokeVM, *, timeout: float = 60.0) -> list[dict[str, s
     Each entry has keys ``descr``, ``type``, ``interface`` so callers can assert
     presence/absence of specific rules without parsing XML directly.
     """
+    # json_encode the rows (NOT implode) — a delimiter-joined string is fragile: a single-quoted
+    # PHP '\n' is a literal backslash-n, not a newline, and a descr can contain the field
+    # separator. JSON round-trips descr/type/interface verbatim.
     snippet = (
         "$out = array();\n"
         "foreach (config_get_path('filter/rule', array()) as $r) {\n"
-        "    $out[] = ($r['descr'] ?? '') . '|' . ($r['type'] ?? '') . '|' . ($r['interface'] ?? '');\n"
+        "    $out[] = array('descr' => $r['descr'] ?? '', 'type' => $r['type'] ?? '', "
+        "'interface' => $r['interface'] ?? '');\n"
         "}\n"
-        "echo '<<RULES>>' . implode('\\n', $out) . '<<END>>';"
+        "echo '<<RULES>>' . json_encode($out) . '<<END>>';"
     )
     res = h.php_eval(vm, snippet, timeout=timeout)
     if "<<RULES>>" not in res.stdout or "<<END>>" not in res.stdout:
         raise RuntimeError(f"_get_filter_rules: unexpected output: {res.stdout!r} {res.stderr!r}")
     raw = res.stdout.split("<<RULES>>", 1)[1].split("<<END>>", 1)[0]
-    rules = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("|", 2)
-        rules.append(
-            {
-                "descr": parts[0] if len(parts) > 0 else "",
-                "type": parts[1] if len(parts) > 1 else "",
-                "interface": parts[2] if len(parts) > 2 else "",
-            }
-        )
-    return rules
+    return json.loads(raw)
 
 
 def _has_default_allow_lan(rules: list[dict[str, str]]) -> bool:
-    """True iff a pass rule for the LAN named 'Default allow LAN to any' is present."""
-    return any(
-        r["descr"] == DEFAULT_ALLOW_LAN_DESCR and r["type"] == "pass" and r["interface"] == LAN_IFACE for r in rules
-    )
+    """True iff the LAN 'Default allow LAN to any' pass rule is present.
+
+    Matched case-insensitively as a substring: the factory descr carries a ' rule' suffix and
+    varies in capitalisation across images ('Default Allow LAN to any rule'). The needle excludes
+    the sibling IPv6 rule ('... LAN IPv6 to any ...'), so only the IPv4 LAN allow matches.
+    """
+    needle = DEFAULT_ALLOW_LAN_DESCR.lower()
+    return any(needle in r["descr"].lower() and r["type"] == "pass" and r["interface"] == LAN_IFACE for r in rules)
 
 
 def _has_pfb_lan_rule(rules: list[dict[str, str]]) -> bool:
@@ -207,7 +206,8 @@ def lan_rule_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
 
     h.deploy(smoke_vm)
-    h.use_system_dns_upstream(smoke_vm)
+    # No DNS upstream needed: this test exercises firewall-rule reconciliation only (a LOCAL
+    # feed file, no name resolution), so it does not depend on the stub-DNS relay fixture.
     h.write_local_feed(smoke_vm, FEED_FILE, f"{DUMMY_IP}/32\n")
 
     yield smoke_vm
@@ -257,7 +257,7 @@ def _run_two_reload_cycle(
 
 
 def test_lan_user_rules_preserved_when_pass_order_absent(lan_rule_vm: SmokeVM) -> None:
-    """LAN user pass rules survive two reloads when the list has no explicit pass_order.
+    """LAN user pass rules survive two reloads when IP settings have no explicit pass_order.
 
     Scenario: pfBlockerNG Deny_Outbound on the LAN interface, pass_order absent — the
     exact configuration that triggered the bug. The fix defaults order to 'order_0', routing
@@ -265,17 +265,17 @@ def test_lan_user_rules_preserved_when_pass_order_absent(lan_rule_vm: SmokeVM) -
     for empty order).
 
     Given: pfBlockerNG enabled; one Deny_Outbound feed targeting the LAN interface; NO
-           pass_order set on the list; "Default allow LAN to any" present in filter/rule.
-    When:  reload #1 (alias built, deny rule not yet committed) — user rules still present.
-    And:   reload #2 (deny rule lands, reconciliation rewrites filter/rule).
-    Then:  "Default allow LAN to any" is STILL in config.xml filter/rule AND visible to
-           pfctl — the fix routes it through $other_rules instead of the dropped $permit_rules.
+           pass_order in IP settings; "Default allow LAN to any" present in filter/rule.
+    When:  two consecutive reloads run (alias build, then the pfB deny rule landing and the
+           reconciliation rewriting filter/rule).
+    Then:  "Default allow LAN to any" is STILL in config.xml filter/rule after EACH reload AND
+           visible to pfctl — the fix routes it through $other_rules instead of $permit_rules.
     And:   the pfBlockerNG deny auto-rule for the LAN feed IS present in filter/rule (proves
            the reconciliation actually ran and the assertion is not vacuous).
 
-    Fail-before: on pre-fix code reload #2 drops user pass rules (pass_order unset ->
-    $pfb['order'] empty -> bucketed into $permit_rules -> silently omitted). Test fails at the
-    "after reload #2" assertion.
+    Fail-before: on pre-fix code the reload cycle drops the user pass rules (pass_order unset ->
+    $pfb['order'] empty -> bucketed into $permit_rules -> silently omitted), caught at the
+    after-reload-#1 or after-reload-#2 assertion.
     Pass-after: fix defaults $pfb['order'] = 'order_0' -> routes into $other_rules -> preserved.
     """
     vm = lan_rule_vm
