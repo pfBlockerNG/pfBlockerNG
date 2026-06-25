@@ -234,9 +234,9 @@ if ($_POST) {
 			PfbConfig::write('pfb_alias_delta_mode', $delta_mode_post);
 
 			// ADR-40: batch size — clamp to [64, 4096].  An empty field (user
-			// cleared the value) must default to 256, not cast to 0 and clamp to 64.
+			// cleared the value) must default to 512, not cast to 0 and clamp to 64.
 			$_pfb_batch_raw = trim((string) ($_POST['pfb_alias_delta_batch'] ?? ''));
-			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_clamp($_pfb_batch_raw === '' ? 256 : (int) $_pfb_batch_raw));
+			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_clamp($_pfb_batch_raw === '' ? 512 : (int) $_pfb_batch_raw));
 
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');
@@ -340,7 +340,7 @@ $section->addInput(new Form_Select(
 	$pconfig['pfb_alias_delta_mode'],
 	$options_pfb_alias_delta_mode
 ))->setHelp('Default: <strong>Auto</strong><br />'
-		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~20%); '
+		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~5%); '
 		. 'full replace for initial load, boot, or large churn. Safe default.<br />'
 		. '<strong>Delta:</strong> always delta apply — no large-churn replace fallback. Power-user override; '
 		. 'can be slow on a full-table rebuild.<br />'
@@ -353,10 +353,10 @@ $section->addInput(new Form_Input(
 	'Alias Table Delta Batch Size',
 	'number',
 	$pconfig['pfb_alias_delta_batch'],
-	[ 'min' => '64', 'max' => '4096', 'placeholder' => '256' ]
-))->setHelp('Default: <strong>256</strong> (range 64–4096). '
+	[ 'min' => '64', 'max' => '4096', 'placeholder' => '512' ]
+))->setHelp('Default: <strong>512</strong> (range 64–4096). '
 		. 'Entries applied per pfctl call in delta mode. '
-		. 'Use 256 for typical tables; 1024+ for tables with 1M+ entries.');
+		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries.');
 
 $section->addInput(new Form_Checkbox(
 	'suppression',

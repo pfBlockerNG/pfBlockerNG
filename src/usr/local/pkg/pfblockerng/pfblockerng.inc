@@ -3875,8 +3875,8 @@ function pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool {
 // ADR-40 Phase 4 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------
 
-/** Churn-ratio threshold above which 'auto' mode falls back to -T replace (20%). */
-const PFB_DELTA_CHURN_THRESHOLD = 0.20;
+/** Churn-ratio threshold above which 'auto' mode falls back to -T replace (5%). */
+const PFB_DELTA_CHURN_THRESHOLD = 0.05;
 
 /**
  * Clamp an integer batch-size value to the valid range [64, 4096].
