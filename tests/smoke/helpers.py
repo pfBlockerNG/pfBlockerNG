@@ -2146,7 +2146,9 @@ def _ip_inject_snippet(spec: IpCase) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeout: float = 600.0) -> None:
+def reload(
+    vm: SmokeVM, scope: str = "update", *, data_path: bool = False, wait_unbound: bool = True, timeout: float = 600.0
+) -> None:
     """Run a pfBlockerNG reload via the PHP CLI cron verb.
 
     ``scope`` is the verb: ``updatednsbl`` / ``updateip`` (targeted, faster per
@@ -2172,6 +2174,13 @@ def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeo
       :func:`wait_zero_downtime_swap` (the swap-applied signal). The caller is asserting
       the no-restart invariant (pid unchanged), so use this only when a config-clean
       python-mode DNSBL data update is expected; it RAISES if the swap line never appears.
+
+    ``wait_unbound=False`` (only honoured on the default ``data_path=False`` path) SKIPS the
+    ``wait_unbound_ready`` poll. Pass it from a test that asserts only pf-level state (NAT/
+    filter rules via ``pfctl``) and never probes DNS resolution — the resolver-readiness wait
+    is pure wasted wall-clock there. Pair it with :func:`apply_filter_sync` so the live pf
+    ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
+    it must wait on the zero-downtime swap signal regardless.
     """
     if scope not in ("update", "updateip", "updatednsbl", "cron"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron, got {scope!r}")
@@ -2184,8 +2193,32 @@ def reload(vm: SmokeVM, scope: str = "update", *, data_path: bool = False, timeo
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
         # of wait_zero_downtime_swap's shorter default.
         wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
-    else:
+    elif wait_unbound:
         wait_unbound_ready(vm)
+
+
+def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Force a BLOCKING pf filter reload via ``/etc/rc.filter_configure_sync``.
+
+    pfBlockerNG's reload triggers ``filter_configure()`` ASYNCHRONOUSLY (``send_event
+    ("filter reload")``), so a pf-level rule (rdr / block) lands a few seconds AFTER
+    ``reload()`` returns — which is why the older tests wrapped every ``pfctl`` read in a
+    bounded :func:`wait_until` poll, racing the event against a fixed timeout. This runs the
+    documented synchronous pfSense entrypoint instead: it returns only once the ruleset has
+    been rebuilt and applied, so the FIRST ``pfctl -sn`` / ``-sr`` read afterwards is
+    authoritative — assert once, no poll, no flake.
+
+    A bare ``filter_configure_sync()`` from ``pfSsh.php`` eval is NOT equivalent — it needs
+    the full rc environment (``shaper.inc`` / ``interfaces.inc`` globals) and throws
+    "undefined function" or builds a degraded result; the ``/etc/rc.*`` entrypoint is the
+    supported path (see ``docs/misc/local-smoke-debian.md``). Raises ``RuntimeError`` on a
+    non-zero exit.
+    """
+    result = vm.ssh("/etc/rc.filter_configure_sync", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"apply_filter_sync failed: rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
 
 
 def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
