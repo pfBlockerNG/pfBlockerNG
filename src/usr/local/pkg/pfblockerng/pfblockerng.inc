@@ -15309,11 +15309,6 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 
-	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
-		$log = "\n UPDATE PROCESS ENDED [ NOW ]\n";
-		pfb_logger("{$log}", 1);
-	}
-
 	// ADR-12: post-update hooks. Fire at the closing tail -- AFTER the IP/DNSBL
 	// reloads, filter_configure(), and the FINAL REPORTING 'closing' step above --
 	// so the change flags are final. Context is derived ONLY from existing flags
@@ -15362,6 +15357,15 @@ function sync_package_pfblockerng($cron='') {
 		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
 		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),
 	));
+
+	// Terminal marker -- emitted AFTER the post-update hooks so it is genuinely the
+	// last line of the update log. The Update-page live tail (pfb_livetail) stops on
+	// this marker; emitting it before the hooks truncated their progressive output
+	// from the live view (e.g. a HAProxy reload hook running up to its timeout) -- it
+	// then only reappeared on a manual 'View'.
+	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
+		pfb_logger("\n UPDATE PROCESS ENDED [ NOW ]\n", 1);
+	}
 }
 
 
