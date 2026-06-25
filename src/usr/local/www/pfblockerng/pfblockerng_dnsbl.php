@@ -2981,7 +2981,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl_nonat',
 	gettext('Auto NAT'),
 	gettext('Disable automatic NAT rule creation'),
-	($pconfig['pfb_dnsbl_nonat'] == 'on'),
+	(pfb_cfg_toggle_read($pconfig['pfb_dnsbl_nonat']) === PfbToggle::On),
 	'on'
 ))->setHelp('When set, pfBlockerNG will not auto-create the DNSBL NAT port-forward rules (non-Localhost interface only); manage them manually.');
 
