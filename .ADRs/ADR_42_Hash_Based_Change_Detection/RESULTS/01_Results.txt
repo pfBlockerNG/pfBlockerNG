@@ -1,0 +1,106 @@
+ADR-42 Phase 1 Results
+======================
+Branch: adr/42-hash-based-change-detection
+Commit: 7c3cfd8
+Status: COMPLETE — all gates green; push succeeded.
+
+ADR-RESUME: branch=adr/42-hash-based-change-detection next-phase=2
+
+=== New Helper Signatures (pfblockerng.inc) ===
+
+All new helpers added after pfb_file_mtime() at line 9332 (post-insertion).
+
+1. pfb_content_hash($path_or_data, $is_file = TRUE): string|false
+   Returns xxh128 hex digest of a file ($is_file=TRUE) or a string ($is_file=FALSE).
+   Returns FALSE on any I/O error or missing file.
+   File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9343
+
+2. pfb_hash_read($base): array
+   Reads the tagged hash sidecar for a base path.
+   Returns: ['algo' => 'xxh128'|'md5', 'digest' => <32-hex>]
+   Returns sentinel ['algo' => 'changed', 'digest' => ''] when:
+     - no sidecar exists
+     - sidecar is unreadable / has invalid content
+     - unknown extension tag (downgrade-safe)
+   File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9362
+
+3. pfb_hash_write($base, $path): bool
+   Computes xxh128 of $path, writes {$base}.xxhash128 (LOCK_EX),
+   and calls unlink_if_exists("{$base}.md5") (migration step).
+   Returns TRUE on success, FALSE if hash fails or write fails.
+   File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9393
+
+4. pfb_files_equal($a, $b): bool
+   Compares two files byte-for-byte via /usr/bin/cmp -s (early-exit, no hashing).
+   Both paths validated with pfb_filter(PFB_FILTER_URL) before exec (PFBL-01).
+   Returns TRUE iff files are byte-identical; FALSE on any error or invalid path.
+   Added to scopeFunctions in tests/phpcs/PfBlockerNG/Sniffs/Validation/RequirePfbFilterSniff.php.
+   File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9408
+
+5. pfb_local_feed_changed($source_path, $orig_path): bool
+   Extracted local-feed change decision from pfb_update_check() — callable off-appliance.
+   Algorithm (today's mtime + md5-confirm, will be replaced in Phase 2):
+     1. Either file absent → TRUE (changed — no baseline = first run)
+     2. mtimes equal → FALSE (fast path: same second, assume unchanged)
+     3. mtimes differ → confirm with md5: both readable and equal → FALSE (mtime false-positive);
+        otherwise → TRUE (fail open: unreadable md5 or content differs → re-ingest)
+   File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9437
+
+=== Tagged Sidecar Naming Convention ===
+
+  {base}.xxhash128   — new; read and write; 32 lowercase hex chars
+  {base}.md5         — legacy; read-only (write deletes it, replaced by .xxhash128)
+  no sidecar         — treat as changed (sentinel: algo='changed', digest='')
+  malformed content  — treat as changed (sentinel)
+
+The sentinel ensures fail-safe / downgrade-safe behaviour: an older release that cannot
+read a .xxhash128 sidecar re-ingests rather than falsely skipping.
+
+=== Known-Answer xxh128 Vector ===
+
+  Input:    'pfBlockerNG'   (string, no newline)
+  Expected: 4a2690170244f2e853151c59fbcb2105
+  Verified: php -r 'echo hash("xxh128", "pfBlockerNG");'  →  4a2690170244f2e853151c59fbcb2105
+            printf 'pfBlockerNG' | xxh128sum             →  4a2690170244f2e853151c59fbcb2105  stdin
+  Pinned in: tests/php/FeedChangeHashHelpersTest.php::test_content_hash_string_known_answer_vector
+
+=== Phase 2 Rewire Entry Point ===
+
+pfb_update_check() in src/usr/local/www/pfblockerng/pfblockerng.php
+  Line ~478: $pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
+
+Phase 2 replaces pfb_local_feed_changed() in pfblockerng.inc with the xxh128-based
+decision (drop mtime as gate, use pfb_hash_read/pfb_hash_write). The call site in
+pfb_update_check() stays unchanged.
+
+=== PHPUnit Counts ===
+
+New tests: 16 tests, 35 assertions (FeedChangeHashHelpersTest.php)
+Full suite: 1335 tests, 5148 assertions, 3 skipped — all pass
+
+=== Gate Results ===
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc    → No syntax errors
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php    → No syntax errors
+  vendor/bin/phpunit                                       → 1335 tests, 0 failures
+  vendor/bin/phpstan analyse --memory-limit=1G            → No errors
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/         → No output (clean)
+  pre-commit hook (php -l / phpstan / phpcs)              → All passed on commit
+
+=== Files Changed ===
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc          — 5 new helpers added
+  src/usr/local/www/pfblockerng/pfblockerng.php          — pfb_update_check() refactored
+                                                            to call pfb_local_feed_changed()
+                                                            for local-file feeds (behaviour-
+                                                            preserving, remote path unchanged)
+  tests/phpcs/.../RequirePfbFilterSniff.php              — pfb_files_equal added to scopeFunctions
+  tests/php/FeedChangeHashHelpersTest.php                — new (16 tests)
+
+=== Go-ahead for Phase 2 ===
+
+All Phase 1 gates green. Phase 2 may proceed:
+  - Replace pfb_local_feed_changed() body with xxh128-based decision
+  - Wire pfb_hash_read/pfb_hash_write into the detection path
+  - Drop mtime as the gate (or keep only as pre-filter)
+  - Migrate smoke cron tests to assert hash-based detection
