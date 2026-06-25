@@ -11517,6 +11517,278 @@ function pfb_syslog_logging_needs_update($current, $want) {
 	return !empty($current['logsocket']);
 }
 
+/**
+ * pfb_build_autorule_list() — pure emission helper extracted from sync_package_pfblockerng().
+ *
+ * Takes the current filter/rule list and the pre-built pfB rule templates, buckets the
+ * surviving user rules (same logic as the "Assign Rules" region of sync_package_pfblockerng()),
+ * and re-emits them interleaved with the generated pfB rules according to the ORDER table.
+ * Returns the new filter/rule array. No I/O, no config writes, no pfctl — pure array logic.
+ *
+ * @param array  $existing_rules  The current filter/rule array from config.xml.
+ * @param array  $pfb_generated   Pre-built pfB rule templates and DNSBL float rules:
+ *                                  'permit_inbound'   => array of pfB pass template rules (inbound)
+ *                                  'permit_outbound'  => array of pfB pass template rules (outbound)
+ *                                  'deny_inbound'     => array of pfB block/reject template rules (inbound)
+ *                                  'deny_outbound'    => array of pfB block/reject template rules (outbound)
+ *                                  'match_inbound'    => array of pfB match template rules (inbound)
+ *                                  'match_outbound'   => array of pfB match template rules (outbound)
+ *                                  'inbound_floating' => interface string for match_inbound floating
+ *                                  'outbound_floating'=> interface string for match_outbound floating
+ *                                  'dnsbl_float'      => array of 0-2 pre-built DNSBL ping/permit rules
+ * @param ?string $order          The pass_order value ('order_0' .. 'order_4', or ''); null (the
+ *                                unconfigured $pfb['order']) is coerced to '' (matches no order).
+ * @param ?string $float          Float mode: 'on' or '' (off); null (the unconfigured
+ *                                $pfb['float']) is coerced to '' (off).
+ * @param array  $in_ifaces       Inbound interface names.
+ * @param array  $out_ifaces      Outbound interface names.
+ * @return array The new filter/rule array to write back to config.xml.
+ */
+function pfb_build_autorule_list(
+	array   $existing_rules,
+	array   $pfb_generated,
+	?string $order,
+	?string $float,
+	array   $in_ifaces,
+	array   $out_ifaces
+): array {
+	// $order/$float come straight from $pfb['order']/$pfb['float'], which are unset (null)
+	// until configured. The original inline code used those raw values in loose comparisons
+	// ('== on' / '== order_N'), where null simply matches nothing -- so a null is behaviour-
+	// equivalent to ''. Coerce here (the params are nullable) rather than let a strict string
+	// typehint TypeError on the null the call site legitimately passes (e.g. enable_float unset).
+	$order = $order ?? '';
+	$float = $float ?? '';
+	$new_rules     = [];
+	$permit_rules  = [];
+	$match_rules   = [];
+	$other_rules   = [];
+	$fpermit_rules = [];
+	$fmatch_rules  = [];
+	$fother_rules  = [];
+
+	// Bucket surviving user rules (same logic as sync_package_pfblockerng() "Assign Rules").
+	foreach ($existing_rules as $rule) {
+		$descr              = $rule['descr'] ?? '';
+		$is_dns_bypass_rule =
+		    str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+		    str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
+
+		if (!str_starts_with($rule['descr'], 'pfB_') || $is_dns_bypass_rule) {
+			// Upgrade previous IPv4 pfBlockerNG alias names to '_v4' suffix format.
+			foreach (array('source', 'destination') as $rtype) {
+				if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
+					$rule[$rtype]['address'] = "{$rule[$rtype]['address']}_v4";
+				}
+			}
+
+			if ($float == 'on') {
+				if ($order == 'order_0' && $rule['floating'] == 'yes') {
+					$fother_rules[] = $rule;
+				}
+				else {
+					if ($rule['type'] == 'pass' && $rule['floating'] == 'yes') {
+						$fpermit_rules[] = $rule;
+					} elseif ($rule['type'] == 'match' && $rule['floating'] == 'yes') {
+						$fmatch_rules[] = $rule;
+					} elseif ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} else {
+						$other_rules[] = $rule;
+					}
+				}
+			} else {
+				if (in_array($rule['interface'], $in_ifaces) ||
+				    in_array($rule['interface'], $out_ifaces)) {
+					if ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} elseif ($rule['type'] == 'pass' || isset($rule['associated-rule-id'])) {
+						if ($order == 'order_0') {
+							$other_rules[] = $rule;
+						} else {
+							$permit_rules[] = $rule;
+						}
+					} else {
+						$other_rules[] = $rule;
+					}
+				} else {
+					if ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} else {
+						$other_rules[] = $rule;
+					}
+				}
+			}
+		}
+	}
+
+	// Pre-interface-loop emission (ORDER 1 non-float: user-permit first; ORDER 1 float: fpermit/fmatch first).
+	if ($float == '' && $order == 'order_1' && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($float == 'on' && $order == 'order_1') {
+		foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
+			if (!empty($rtype)) {
+				foreach ($rtype as $cb_rules) {
+					$new_rules[] = $cb_rules;
+				}
+			}
+		}
+	}
+
+	// Emit pre-built DNSBL floating pass rules (ping + permit pair, or empty).
+	foreach ($pfb_generated['dnsbl_float'] as $cb_rules) {
+		$new_rules[] = $cb_rules;
+	}
+
+	// Inbound interface rules.
+	if (!empty($in_ifaces)) {
+		$pfbrunonce = TRUE;
+		foreach ($in_ifaces as $inbound_interface) {
+			if ($order == 'order_1' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $inbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['permit_inbound'])) {
+				foreach ($pfb_generated['permit_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $inbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'permit_in');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+			// Match inbound rules are floating-only (emit once).
+			if ($pfbrunonce && !empty($pfb_generated['match_inbound'])) {
+				foreach ($pfb_generated['match_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $pfb_generated['inbound_floating'];
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'match_in');
+					$new_rules[]           = $cb_rules;
+					$pfbrunonce            = FALSE;
+				}
+			}
+			if ($order == 'order_2') {
+				foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
+					if (!empty($rtype)) {
+						foreach ($rtype as $cb_rules) {
+							$new_rules[] = $cb_rules;
+						}
+					}
+				}
+				if (!empty($permit_rules)) {
+					foreach ($permit_rules as $cb_rules) {
+						if ($cb_rules['interface'] == $inbound_interface) {
+							$new_rules[] = $cb_rules;
+						}
+					}
+				}
+			}
+			if (!empty($pfb_generated['deny_inbound'])) {
+				foreach ($pfb_generated['deny_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $inbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_in');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+		}
+	}
+
+	// Outbound interface rules.
+	if (!empty($out_ifaces)) {
+		$pfbrunonce = TRUE;
+		foreach ($out_ifaces as $outbound_interface) {
+			if ($order == 'order_1' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $outbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['permit_outbound'])) {
+				foreach ($pfb_generated['permit_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $outbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'permit_out');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+			// Match outbound rules are floating-only (emit once).
+			if ($pfbrunonce && !empty($pfb_generated['match_outbound'])) {
+				foreach ($pfb_generated['match_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $pfb_generated['outbound_floating'];
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'match_out');
+					$new_rules[]           = $cb_rules;
+					$pfbrunonce            = FALSE;
+				}
+			}
+			if ($order == 'order_2' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $outbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['deny_outbound'])) {
+				foreach ($pfb_generated['deny_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $outbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'deny_out');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+		}
+	}
+
+	// Tail: float rule groups and trailing user buckets.
+	if ($float == 'on' && in_array($order, array('order_0', 'order_3', 'order_4'))) {
+		if ($order != 'order_3') {
+			$rule_order = array($fother_rules, $fpermit_rules, $fmatch_rules);
+		} else {
+			$rule_order = array($fpermit_rules, $fmatch_rules, $fother_rules);
+		}
+		foreach ($rule_order as $rtype) {
+			if (!empty($rtype)) {
+				foreach ($rtype as $cb_rules) {
+					$new_rules[] = $cb_rules;
+				}
+			}
+		}
+	}
+	if ($float == 'on' && in_array($order, array('order_1', 'order_2')) && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($float == '' && $order != 'order_1' && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_4' && !empty($other_rules)) {
+		foreach ($other_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_4' && !empty($permit_rules)) {
+		foreach ($permit_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_3' && !empty($permit_rules)) {
+		foreach ($permit_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order != 'order_4' && !empty($other_rules)) {
+		foreach ($other_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+
+	return $new_rules;
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -15221,7 +15493,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		if (empty($message)) {
-			$new_rules = $permit_rules = $match_rules = $other_rules = $fpermit_rules = $fmatch_rules = $fother_rules = array();
+			$new_rules = array();
 
 			// Reload config.xml to get any recent changes
 			config_read_file(FALSE, TRUE);
@@ -15232,83 +15504,17 @@ function sync_package_pfblockerng($cron='') {
 			// Collect all existing rules
 			$rules = config_get_path('filter/rule', []);
 
-			// Collect existing pfSense rules 'pass', 'match' and 'other' pfSense rules into new arrays.
+			// Track pfB aliases referenced by any rule; also build orig_rules_nocreated
+			// for the write-gate comparison (done here, before calling the helper, so
+			// the helper stays side-effect-free).
 			if (!empty($rules)) {
 				foreach ($rules as $rule) {
-
-					// The DNS-redirect NAT companion rules and DoT/DoQ block filter rules
-					// carry a 'pfB_' descr but are managed by the inline redirect/DoT sync
-					// above, NOT this legacy auto-rule rebuild. Preserve them like user rules
-					// so the rebuild below does not strip them.
-					$descr = $rule['descr'] ?? '';
-					$is_dns_bypass_rule =
-					    str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
-					    str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
-
-					// Remove all existing rules that start with 'pfB_' in the Rule Description
-					// (the legacy auto-rules this region rebuilds) — but keep user rules and
-					// the DNS-bypass rules above.
-					if (!str_starts_with($rule['descr'], 'pfB_') || $is_dns_bypass_rule) {
-
-						// Upgrade previous IPv4 pfBlockerNG 'alias type' aliasnames to new '_v4' suffix format
-						foreach (array('source', 'destination') as $rtype) {
-							if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
-								// Add '_v4' suffix
-								$rule[$rtype]['address'] = "{$rule[$rtype]['address']}_v4";
-							}
-						}
-
-						// Floating rules collection 'Floating Pass/Match', balance to 'other'
-						if ($pfb['float'] == 'on') {
-							if ($pfb['order'] == 'order_0' && $rule['floating'] == 'yes') {
-								$fother_rules[] = $rule;
-							}
-							else {
-								if ($rule['type'] == 'pass' && $rule['floating'] == 'yes') {
-									$fpermit_rules[] = $rule;
-								} elseif ($rule['type'] == 'match' && $rule['floating'] == 'yes') {
-									$fmatch_rules[] = $rule;
-								} elseif ($rule['floating'] == 'yes') {
-									$fother_rules[] = $rule;
-								} else {
-									$other_rules[] = $rule;
-								}
-							}
-						} else {
-							// Collect only 'selected inbound and outbound interfaces'. balance to 'other'
-							if (in_array($rule['interface'], $pfb['inbound_interfaces']) ||
-							    in_array($rule['interface'], $pfb['outbound_interfaces'])) {
-								// Floating rules 'off'. Collect 'floating other', pass, balance to 'other'
-								if ($rule['floating'] == 'yes') {
-									$fother_rules[] = $rule;
-								} elseif ($rule['type'] == 'pass' || isset($rule['associated-rule-id'])) {
-									if ($pfb['order'] == 'order_0') {
-										$other_rules[] = $rule;
-									} else {
-										$permit_rules[] = $rule;
-									}
-								} else {
-									$other_rules[] = $rule;
-								}
-							} else {
-								if ($rule['floating'] == 'yes') {
-									$fother_rules[] = $rule;
-								} else {
-									$other_rules[] = $rule;
-								}
-							}
-						}
-					}
-
-					// Track pfB aliases referenced by rules.
 					foreach (array('source', 'destination') as $rtype) {
-						if ((str_starts_with($rule[$rtype]['address'], 'pfB_')) &&
+						if ((str_starts_with($rule[$rtype]['address'] ?? '', 'pfB_')) &&
 						    !in_array($rule[$rtype]['address'], $pfb_active_aliases)) {
 							$pfb_active_aliases[] = $rule[$rtype]['address'];
 						}
 					}
-
-					// Remove 'created' tag
 					if (isset($rule['created'])) {
 						unset($rule['created']);
 					}
@@ -15316,32 +15522,8 @@ function sync_package_pfblockerng($cron='') {
 				}
 			}
 
-			#################################################################################
-			#			IP FIREWALL RULES ORDER					#
-			#  ORDER 0 |	pfB (p/m/b/r)	| All other	|				#
-			#  ORDER 1 |	pfSense (p/m)	| pfB (p/m)	| pfB (b/r) 	| pfSense (b/r)	#
-			#  ORDER 2 |	pfB (p/m)	| pfSense (p/m) | pfB (b/r)	| pfSense (b/r)	#
-			#  ORDER 3 |	pfB (p/m)	| pfB (b/r) 	| pfSense (p/m)	| pfSense (b/r)	#
-			#  ORDER 4 |	pfB (p/m)	| pfB (b/r)	| pfSense (b/r)	| pfSense (p/m)	#
-			#################################################################################
-
-
-			if ($pfb['float'] == '' && $pfb['order'] == 'order_1' && !empty($fother_rules)) {
-				foreach ($fother_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['float'] == 'on' && $pfb['order'] == 'order_1') {
-				foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
-					if (!empty($rtype)) {
-						foreach ($rtype as $cb_rules) {
-							$new_rules[] = $cb_rules;
-						}
-					}
-				}
-			}
-
-			// Define DNSBL 'Floating' pass rule for selected 'OPT' segments to be able to access the LAN DNSBL VIP
+			// Build the DNSBL floating pass rules (ping + permit pair) to pass into the helper.
+			$pfb_dnsbl_float = [];
 			if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_rule'] != 'Disabled'
 			    && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
 			    && !empty($pfb['dnsblconfig']['dnsbl_allow_int'])) {
@@ -15358,7 +15540,7 @@ function sync_package_pfblockerng($cron='') {
 				$rule['source']		= array('any' => '');
 				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']));
 				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
-				$new_rules[]		= $rule;
+				$pfb_dnsbl_float[]	= $rule;
 
 				$rule			= $pfb['base_rule_float'];
 				$rule['tracker']	= pfb_tracker('pfB_DNSBL_Permit', '', '');
@@ -15372,154 +15554,42 @@ function sync_package_pfblockerng($cron='') {
 				$rule['destination']	= array('address' => (!empty($pfb['dnsbl_vip6']) ? 'pfB_DNSBL_VIPs' : $pfb['dnsbl_vip4']),
 								 'port' => 'pfB_DNSBL_Ports');
 				$rule['created']	= array('time' => (int)microtime(TRUE), 'username' => 'Auto');
-				$new_rules[]		= $rule;
+				$pfb_dnsbl_float[]	= $rule;
 			}
 
-			// Define inbound interface rules
-			if (!empty($pfb['inbound_interfaces'])) {
-				$pfbrunonce = TRUE;
-				foreach ($pfb['inbound_interfaces'] as $inbound_interface) {
-					if ($pfb['order'] == 'order_1' && !empty($permit_rules)) {
-						foreach ($permit_rules as $cb_rules) {
-							if ($cb_rules['interface'] == $inbound_interface) {
-								$new_rules[] = $cb_rules;
-							}
-						}
-					}
-					if (!empty($pfb['permit_inbound'])) {
-						foreach ($pfb['permit_inbound'] as $cb_rules) {
-							$cb_rules['interface'] = $inbound_interface;
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'permit_in');
-							$new_rules[] = $cb_rules;
-						}
-					}
-					// Match inbound rules defined as floating only.
-					if ($pfbrunonce && !empty($pfb['match_inbound'])) {
-						foreach ($pfb['match_inbound'] as $cb_rules) {
-							$cb_rules['interface'] = $pfb['inbound_floating'];
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'match_in');
-							$new_rules[] = $cb_rules;
-							$pfbrunonce = FALSE;
-						}
-					}
-					if ($pfb['order'] == 'order_2') {
-						foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
-							if (!empty($rtype)) {
-								foreach ($rtype as $cb_rules) {
-									$new_rules[] = $cb_rules;
-								}
-							}
-						}
-						if (!empty($permit_rules)) {
-							foreach ($permit_rules as $cb_rules) {
-								if ($cb_rules['interface'] == $inbound_interface) {
-									$new_rules[] = $cb_rules;
-								}
-							}
-						}
-					}
-					if (!empty($pfb['deny_inbound'])) {
-						foreach ($pfb['deny_inbound'] as $cb_rules) {
-							$cb_rules['interface'] = $inbound_interface;
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_in');
-							$new_rules[] = $cb_rules;
-						}
-					}
-				}
-			}
+			// Build the pfB-generated rule templates (produced by pfb_firewall_rule() above).
+			$pfb_generated = [
+				'permit_inbound'    => $pfb['permit_inbound']    ?? [],
+				'permit_outbound'   => $pfb['permit_outbound']   ?? [],
+				'deny_inbound'      => $pfb['deny_inbound']      ?? [],
+				'deny_outbound'     => $pfb['deny_outbound']     ?? [],
+				'match_inbound'     => $pfb['match_inbound']     ?? [],
+				'match_outbound'    => $pfb['match_outbound']    ?? [],
+				'inbound_floating'  => $pfb['inbound_floating']  ?? '',
+				'outbound_floating' => $pfb['outbound_floating'] ?? '',
+				'dnsbl_float'       => $pfb_dnsbl_float,
+			];
 
-			// Define outbound interface rules
-			if (!empty($pfb['outbound_interfaces'])) {
-				$pfbrunonce = TRUE;
-				foreach ($pfb['outbound_interfaces'] as $outbound_interface) {
-					if ($pfb['order'] == 'order_1' && !empty($permit_rules)) {
-						foreach ($permit_rules as $cb_rules) {
-							if ($cb_rules['interface'] == $outbound_interface) {
-								$new_rules[] = $cb_rules;
-							}
-						}
-					}
-					if (!empty($pfb['permit_outbound'])) {
-						foreach ($pfb['permit_outbound'] as $cb_rules) {
-							$cb_rules['interface'] = $outbound_interface;
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $outbound_interface, 'permit_out');
-							$new_rules[] = $cb_rules;
-						}
-					}
-					// Match outbound rules defined as floating only.
-					if ($pfbrunonce && !empty($pfb['match_outbound'])) {
-						foreach ($pfb['match_outbound'] as $cb_rules) {
-							$cb_rules['interface'] = $pfb['outbound_floating'];
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $outbound_interface, 'match_out');
-							$new_rules[] = $cb_rules;
-							$pfbrunonce = FALSE;
-						}
-					}
-					if ($pfb['order'] == 'order_2' && !empty($permit_rules)) {
-						foreach ($permit_rules as $cb_rules) {
-							if ($cb_rules['interface'] == $outbound_interface) {
-								$new_rules[] = $cb_rules;
-							}
-						}
-					}
-					if (!empty($pfb['deny_outbound'])) {
-						foreach ($pfb['deny_outbound'] as $cb_rules) {
-							$cb_rules['interface'] = $outbound_interface;
-							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $outbound_interface, 'deny_out');
-							$new_rules[] = $cb_rules;
-						}
-					}
-				}
-			}
+			#################################################################################
+			#			IP FIREWALL RULES ORDER					#
+			#  ORDER 0 |	pfB (p/m/b/r)	| All other	|				#
+			#  ORDER 1 |	pfSense (p/m)	| pfB (p/m)	| pfB (b/r) 	| pfSense (b/r)	#
+			#  ORDER 2 |	pfB (p/m)	| pfSense (p/m) | pfB (b/r)	| pfSense (b/r)	#
+			#  ORDER 3 |	pfB (p/m)	| pfB (b/r) 	| pfSense (p/m)	| pfSense (b/r)	#
+			#  ORDER 4 |	pfB (p/m)	| pfB (b/r)	| pfSense (b/r)	| pfSense (p/m)	#
+			#################################################################################
 
-			if ($pfb['float'] == 'on' && in_array($pfb['order'], array('order_0', 'order_3', 'order_4'))) {
-				if ($pfb['order'] != 'order_3') {
-					$rule_order = array($fother_rules, $fpermit_rules, $fmatch_rules);
-				} else {
-					$rule_order = array($fpermit_rules, $fmatch_rules, $fother_rules);
-				}
-				foreach ($rule_order as $rtype) {
-					if (!empty($rtype)) {
-						foreach ($rtype as $cb_rules) {
-							$new_rules[] = $cb_rules;
-						}
-					}
-				}
-			}
-			if ($pfb['float'] == 'on' && in_array($pfb['order'], array('order_1', 'order_2')) && !empty($fother_rules)) {
-				foreach ($fother_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['float'] == '' && $pfb['order'] != 'order_1' && !empty($fother_rules)) {
-				foreach ($fother_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['order'] == 'order_4' && !empty($other_rules)) {
-				foreach ($other_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['order'] == 'order_4' && !empty($permit_rules)) {
-				foreach ($permit_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['order'] == 'order_3' && !empty($permit_rules)) {
-				foreach ($permit_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
-			if ($pfb['order'] != 'order_4' && !empty($other_rules)) {
-				foreach ($other_rules as $cb_rules) {
-					$new_rules[] = $cb_rules;
-				}
-			}
+			$new_rules = pfb_build_autorule_list(
+				$rules ?? [],
+				$pfb_generated,
+				$pfb['order'],
+				$pfb['float'],
+				$pfb['inbound_interfaces']  ?? [],
+				$pfb['outbound_interfaces'] ?? []
+			);
 
 			unset($pfb['permit_inbound'], $pfb['permit_outbound'], $pfb['deny_inbound'],
 			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound']);
-			unset($cb_rules, $other_rules, $fother_rules, $permit_rules, $fpermit_rules, $match_rules, $fmatch_rules);
 
 			// Remove 'created' tag (New vs old rules array comparison)
 			foreach ($new_rules as $rule) {
