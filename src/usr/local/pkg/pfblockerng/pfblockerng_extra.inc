@@ -163,11 +163,13 @@ enum PfbIdnMode: string implements PfbStoredEnum
 // PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
 //
 // Three modes control how pfBlockerNG applies alias-table changes to the pf kernel:
-//   Auto    ('auto')    — default; delta for incremental updates (churn < threshold),
-//                         full replace for initial load / large churn.
-//   Delta   ('delta')   — always prefer -T add/-T delete (incremental path); the large-
-//                         churn replace fallback is still applied to preserve atomicity
-//                         when the churn ratio exceeds the threshold under this mode.
+//   Auto    ('auto')    — default; delta (-T add/-T delete) for small churn (< ~20%),
+//                         full -T replace for initial load / boot / large churn. Safe
+//                         default for all deployments.
+//   Delta   ('delta')   — ALWAYS apply via forward delta (-T add/-T delete); NO
+//                         large-churn replace fallback. Power-user/controlled-incremental
+//                         override — can be slow on a full-table rebuild. Use 'auto' for
+//                         the safe default.
 //   Replace ('replace') — always full -T replace (pre-ADR-40 behaviour).
 //
 // Absent-default = 'auto' for ALL installs (new AND existing): ADR-40 end-state is
@@ -534,9 +536,9 @@ function pfb_cfg_registry(): array
 		],
 
 		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. Default 'auto'.
-		// 'auto' = delta for incremental updates (churn < ~20%), full replace for
-		// initial load / large churn; 'delta' = prefer delta path (replace fallback
-		// still fires for large churn); 'replace' = always full -T replace.
+		// 'auto' = delta for small churn (< ~20%), full replace for initial load / large churn;
+		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);
+		// 'replace' = always full -T replace.
 		// Absent-default 'auto' is safe for existing installs (end-state identical to
 		// replace — ADR-40 contract item 1); no grandfather seed needed.
 		'pfb_alias_delta_mode' => [
