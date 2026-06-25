@@ -1,37 +1,63 @@
-"""ADR-40 Phase 3 — live-VM smoke coverage: content-addressed alias reload gating.
+"""ADR-40 live-VM smoke coverage: content-addressed alias reload gating + forward-delta apply.
 
-pfBlockerNG now gates alias reloads on CONTENT, not feed-fetch.  After this
-phase, the last-applied set mirror (``/var/db/aliastables/<alias>.txt``) is
-compared against the newly computed canonical set; ``pfctl -T replace`` and
+Covers the three independently-valuable correctness properties that ADR-40
+ships, each pinned by a before-and-after assertion so it is evidence the code
+works, not just that it runs:
+
+Phase 3 — content-addressed gate
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+pfBlockerNG gates alias reloads on CONTENT, not feed-fetch.  The last-applied
+set mirror (``/var/db/aliastables/<alias>.txt``) is compared against the newly
+computed canonical set; ``pfctl -T replace`` (or ``-T add``/``-T delete``) and
 ADR-12 ``PFB_CHANGED_IP_ALIASES`` are driven ONLY by aliases whose membership
 set actually changed.
 
+* **Idempotence** — a second update over unchanged feed content emits an empty
+  ``PFB_CHANGED_IP_ALIASES``.  The content-gate short-circuits the reload.
+
+* **Surgical reload on content change** — when feed content changes, the alias
+  appears in ``PFB_CHANGED_IP_ALIASES`` and the pf table reflects the new set.
+
+Phase 4 — forward-delta apply
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For a changed table, pfBlockerNG applies ``pfctl -t <t> -T add / -T delete``
+for small-churn changes (churn ratio < ``PFB_DELTA_CHURN_THRESHOLD`` = 0.20)
+and falls back to ``pfctl -T replace`` for large-churn or when
+``pfb_alias_delta_mode`` is forced to ``'replace'``.  The key invariant in
+both cases: ``pfctl -t <t> -T show`` membership equals the canonical desired
+set (the same end-state as a full replace).
+
+* **Delta apply (small churn)** — a one-entry change applies as ``-T add`` +
+  the old entry ``-T delete``; the pf table end-state is exactly the new
+  feed content.
+
+* **Replace fallback (mode=replace)** — with ``pfb_alias_delta_mode='replace'``
+  forced, the same change applies as a full ``-T replace`` (not delta); the
+  pf table end-state is still correct.
+
+* **Delta end-state == replace** — the above two together prove that delta and
+  replace produce identical pf table membership; there is no drift.
+
 These tests drive the REAL production path via ``helpers.reload(vm, 'update')``
-and observe the content-gate through the ADR-12 post-hook env (same technique
-as ``test_smoke_hooks.py``).
-
-WHAT THIS FILE AUTOMATES (ADR-40 Phase 3 acceptance criteria):
-
-* **Idempotence** — after a first update that loads a feed, a second update over
-  the SAME feed content produces ``PFB_CHANGED_IP_ALIASES=''`` (empty) — the
-  content-gate skips aliases whose set did not change.  This is the core
-  Phase 3 correctness claim: ``PFB_CHANGED_IP_ALIASES`` empty does NOT mean
-  "no reload was attempted"; it means "the canonical set was identical, so
-  the alias was not reloaded".
-
-* **Surgical reload on content change** — after settling, if the feed content
-  changes (a new IP is added), the alias appears in ``PFB_CHANGED_IP_ALIASES``
-  on the next update (the content-gate fires); the pf table gains the new IP.
-
-These two together exercise both sides of ``pfb_alias_set_different()``:
-  FALSE (idempotence, skip) and TRUE (content changed, reload).
+and observe results through the ADR-12 post-hook env and on-box
+``pfctl -t <alias> -T show`` (same pattern as ``test_smoke_hooks.py``).
 
 WHAT STAYS MANUAL / OUT OF SCOPE HERE:
 
-* Cross-list (dedup/reputation) scope widening (ADR-40 §2 hybrid scope) — the
-  enable_dup / enable_drep config toggles require new harness helpers not yet
-  in the smoke fixture set.  Covered by unit tests (AliasContentGateTest:
-  testCrossListScopeWidensDuplicateList).
+* **Cross-list dedup/reputation scope widening** (ADR-40 §2 hybrid scope) —
+  ``enable_dup`` / ``enable_drep`` config toggles require harness helpers not
+  yet in the fixture set.  The correctness property is unit-pinned in
+  ``AliasContentGateTest::testCrossListScopeWidensDuplicateList``.
+
+* **Multi-million-entry data-plane latency measurement** — the lock-hold drop
+  from ``-T replace`` to ``-T add``/``-T delete`` at scale requires live
+  traffic on real hardware; not reproducible in CI.  Owner: maintainer manual
+  smoke (ADR-40 §7).
+
+* **Large-churn replace fallback (auto mode)** — crossing the 20% threshold
+  requires synthesising a large alias table in the smoke harness, which would
+  dominate test time.  The churn-ratio logic is unit-pinned in
+  ``AliasDeltaApplyTest::testLargeChurnFallsBackToReplace``.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``).
 Run via the smoke workflow or locally::
@@ -262,4 +288,210 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
         f"after content change: pf table {ip_spec.alias} still contains old IP {old_ip}: {members_after}"
     )
 
+    h.clear_update_hooks(adr40_vm)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-12 helper — set pfb_alias_delta_mode via CFG_IP_SETTINGS
+# --------------------------------------------------------------------------- #
+
+
+def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
+    """Persist ``pfb_alias_delta_mode`` in the IP-settings config section.
+
+    Mirrors the UI save path (pfblockerng_ip.php POST → PfbConfig::write).
+    Valid stored values: ``'auto'`` / ``'delta'`` / ``'replace'``.  An empty
+    string is the absent-default for existing installs (reads to ``'auto'``
+    via the PfbAliasDeltaMode adapter); the tests write the explicit token so
+    the stored value is unambiguous.
+
+    Call BEFORE the reload under test.  The next ``reload()`` reads this value
+    once per pass via ``PfbConfig::read('pfb_alias_delta_mode')``.
+    """
+    snippet = (
+        f"$ip = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"
+        f"$ip['pfb_alias_delta_mode'] = {h._php_str(mode)};\n"
+        f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG smoke: set pfb_alias_delta_mode');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_set_delta_mode({mode!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 3) Delta apply — small-churn change applies as -T add/-T delete, not replace
+# --------------------------------------------------------------------------- #
+
+
+def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
+    """A one-IP change in delta mode applies as -T add/-T delete; end-state == new feed.
+
+    Scenario C (ADR-40 §2 Phase 4): forward-delta apply for small churn.
+
+    **Given** a single IPv4 feed settled with one IP (192.0.2.210, RFC 5737);
+    mode=delta forced; the pf table holds only the OLD IP (before-state assertion).
+
+    **When** the feed is rewritten with a DIFFERENT single IP (192.0.2.211) and
+    ``force_ip_refetch`` invalidates the reuse cache, then ``reload('update')`` runs.
+
+    **Then** the alias appears in ``PFB_CHANGED_IP_ALIASES`` — the content-gate
+    fired (the sets differ); AND the pf table contains ONLY the NEW IP (the delta
+    add/delete produced the correct end-state); AND the OLD IP is absent (the
+    delete side ran).
+
+    This is the end-state invariant (ADR-40 §2 contract 1): after a delta apply,
+    ``pfctl -t <t> -T show`` membership equals the canonical desired set —
+    identical to what a full ``-T replace`` would produce.
+
+    Together with ``test_adr40_delta_replace_mode`` (which uses mode=replace and
+    asserts the same end-state) this proves the two apply paths are equivalent.
+    """
+    token = "p4delta"
+    marker = h.hook_marker_path(token, "post")
+    old_ip = "192.0.2.210"
+    new_ip = "192.0.2.211"
+    feed_file = "smoke_adr40_delta.txt"
+
+    _set_delta_mode(adr40_vm, "delta")
+    h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
+    feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
+    ip_spec = h.IpCase(
+        aliasname="smokeadr40delta",
+        feed_url=feed_url,
+        header="smokeadr40delta",
+    )
+    h.inject(adr40_vm, ip_spec)
+
+    # Settle with OLD IP.
+    h.clear_hook_markers(adr40_vm, token)
+    h.reload(adr40_vm, "update")
+    env_settle = h.read_hook_env(adr40_vm, marker)
+    assert env_settle is not None, "post hook did not fire on settling update"
+
+    # Before-state: old_ip in table, new_ip absent.
+    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    assert any(old_ip in m for m in members_before), (
+        f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
+    )
+    assert not any(new_ip in m for m in members_before), (
+        f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
+    )
+
+    # Change the feed; invalidate the reuse cache.
+    h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
+    h.force_ip_refetch(adr40_vm, ip_spec.header)
+
+    h.clear_hook_markers(adr40_vm, token)
+    h.reload(adr40_vm, "update")
+    env_changed = h.read_hook_env(adr40_vm, marker)
+    assert env_changed is not None, "post hook did not fire after feed content change (delta mode)"
+
+    changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
+    assert ip_spec.alias in changed, (
+        f"ADR-40 P4 delta FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\n"
+        f"Got PFB_CHANGED_IP_ALIASES={changed!r}\n"
+        f"Feed changed from {old_ip!r} to {new_ip!r}; content-gate should have fired."
+    )
+
+    # End-state: new_ip only; old_ip removed by the delta delete.
+    members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    assert any(new_ip in m for m in members_after), (
+        f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\n"
+        f"Expected end-state to match the canonical desired set (new feed content).\n"
+        f"Got: {members_after}"
+    )
+    assert not any(old_ip in m for m in members_after), (
+        f"ADR-40 P4 delta end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\n"
+        f"The delta delete (-T delete) should have removed the old IP.\n"
+        f"Got: {members_after}"
+    )
+
+    _set_delta_mode(adr40_vm, "auto")
+    h.clear_update_hooks(adr40_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 4) Replace mode — mode=replace forces a full replace; end-state still correct
+# --------------------------------------------------------------------------- #
+
+
+def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
+    """mode=replace forces a full -T replace; pf table end-state equals the new feed.
+
+    Scenario D (ADR-40 §2 Phase 4): replace-mode override.
+
+    **Given** a single IPv4 feed settled with one IP (192.0.2.220); mode=replace
+    forced; pf table holds only OLD IP (before-state assertion).
+
+    **When** the feed is rewritten with a different IP (192.0.2.221) and
+    ``reload('update')`` runs.
+
+    **Then** the alias appears in ``PFB_CHANGED_IP_ALIASES`` (the content-gate
+    fired); AND the pf table contains ONLY the NEW IP; AND the OLD IP is absent.
+
+    This is the complementary branch to ``test_adr40_delta_apply_small_churn``:
+    both prove the ADR-40 end-state invariant (contract 1) — ``pfctl -T show``
+    membership equals the canonical desired set — irrespective of whether the
+    delta or replace path was taken.  Together they make the delta/replace
+    equivalence provable from smoke alone.
+    """
+    token = "p4repl"
+    marker = h.hook_marker_path(token, "post")
+    old_ip = "192.0.2.220"
+    new_ip = "192.0.2.221"
+    feed_file = "smoke_adr40_repl.txt"
+
+    _set_delta_mode(adr40_vm, "replace")
+    h.set_update_hooks(adr40_vm, [h.env_dump_hook(token, "post")])
+    feed_url = h.write_local_feed(adr40_vm, feed_file, f"{old_ip}\n")
+    ip_spec = h.IpCase(
+        aliasname="smokeadr40repl",
+        feed_url=feed_url,
+        header="smokeadr40repl",
+    )
+    h.inject(adr40_vm, ip_spec)
+
+    # Settle.
+    h.clear_hook_markers(adr40_vm, token)
+    h.reload(adr40_vm, "update")
+    env_settle = h.read_hook_env(adr40_vm, marker)
+    assert env_settle is not None, "post hook did not fire on settling update"
+
+    # Before-state: old_ip in table, new_ip absent.
+    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    assert any(old_ip in m for m in members_before), (
+        f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
+    )
+    assert not any(new_ip in m for m in members_before), (
+        f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
+    )
+
+    # Change the feed; invalidate the reuse cache.
+    h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
+    h.force_ip_refetch(adr40_vm, ip_spec.header)
+
+    h.clear_hook_markers(adr40_vm, token)
+    h.reload(adr40_vm, "update")
+    env_changed = h.read_hook_env(adr40_vm, marker)
+    assert env_changed is not None, "post hook did not fire after feed change (replace mode)"
+
+    changed = env_changed.get("PFB_CHANGED_IP_ALIASES") or ""
+    assert ip_spec.alias in changed, (
+        f"ADR-40 P4 replace-mode FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\nGot {changed!r}"
+    )
+
+    # End-state: new_ip only; old_ip removed by the full replace.
+    members_after = h.pfctl_table_members(adr40_vm, ip_spec.alias)
+    assert any(new_ip in m for m in members_after), (
+        f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} missing {new_ip}.\nGot: {members_after}"
+    )
+    assert not any(old_ip in m for m in members_after), (
+        f"ADR-40 P4 replace-mode end-state FAILED: pf table {ip_spec.alias} still has {old_ip}.\nGot: {members_after}"
+    )
+
+    _set_delta_mode(adr40_vm, "auto")
     h.clear_update_hooks(adr40_vm)

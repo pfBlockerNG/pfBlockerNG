@@ -118,6 +118,57 @@ decision is unit-pinned off-box in `tests/php/AggregateMemberListTest.php`; HAPr
 referenceability + the GeoIP/suppress content spot-check stay ADR §7 maintainer-manual. The
 General-page `pfb_agg_types` render is covered by the ADR-14 Tier-A gate (next section).
 
+### ADR-40 — content-addressed alias-table reload gating + forward-delta apply
+
+**Reload gate (ADR-40 Phase 3).** Alias tables are reloaded iff their **final membership set**
+changed — not iff a member feed was re-fetched. On each pass `pfb_alias_set_different()` compares
+the freshly computed canonical set (post-suppression, post-dedup, `LC_ALL=C sort -u`) against the
+last-applied mirror `/var/db/aliastables/pfB_<Alias>_v{4,6}.txt`. Only aliases whose set
+actually changed enter `$pfb_alias_lists` and trigger a reload. `PFB_CHANGED_IP_ALIASES` is
+driven by this content-diff set — signal-only, no forced `filter_configure()` (same precedent
+as #517/#519's ip_unlock path, which applies a real `-T replace` and signals the change without
+triggering a rule reload). The empty-mirror case (first load / alias reset) treats the set as
+changed (missing mirror → always reload). `filter_configure()` still fires only for actual
+firewall *rule* changes.
+
+**Forward-delta apply (ADR-40 Phase 4).** For a changed alias table, pfBlockerNG applies the
+diff as `pfctl -t <t> -T add -f <adds>` then `-T delete -f <dels>` (lock-hold O(churn) rather
+than O(table)), falling back to atomic `pfctl -T replace` when the churn ratio ≥
+`PFB_DELTA_CHURN_THRESHOLD` (0.20), when `pfb_alias_delta_mode='replace'` is forced, or on the
+boot/enable-disable path. In all cases the **end-state invariant** holds: `pfctl -t <t> -T show`
+membership is the canonical desired set — identical to what a full replace would load.
+
+**Config fields** (both registered in `PfbConfig` / `pfb_cfg_registry()`; IP Settings page):
+
+| Key | Type | Default | Notes |
+| --- | ---- | ------- | ----- |
+| `pfb_alias_delta_mode` | `alias_delta_mode` | `'auto'` | `PfbAliasDeltaMode` enum: `auto`/`delta`/`replace` |
+| `pfb_alias_delta_batch` | `plain` | `'256'` | Chunk size for `-T add`/`-T delete`; clamped to \[64, 4096\] |
+
+**Cross-list correctness.** When dedup (`enable_dup`) or reputation is active, a feed-A change
+that shifts sibling table B's effective membership (through the shared `masterfile` dedup path)
+causes B's desired set to be recomputed and diffed this pass, so B reloads when its membership
+actually changed. This closes the §1.2(1) eventual-consistency gap from the old feed-fetch model
+(where B would defer until a Force Reload). The hybrid-scope guard (`pfb_cross_list_scope()`)
+enables the all-aliases recompute only when a cross-list feature is active; with both off, a
+single-feed change remains surgical (only that feed's table).
+
+**Smoke coverage** (`tests/smoke/test_smoke_adr40.py`, marker `smoke`, dispatch-only):
+
+- Idempotence (P3): second update over unchanged feed → `PFB_CHANGED_IP_ALIASES=''`; pf table
+  unchanged.
+- Surgical reload on content change (P3): feed updated → alias in `PFB_CHANGED_IP_ALIASES`; pf
+  table reflects new set; old IP absent.
+- Delta apply, small churn (P4, mode=delta): one-IP swap → end-state contains only new IP;
+  `PFB_CHANGED_IP_ALIASES` fires.
+- Replace-mode override (P4, mode=replace): same one-IP swap → end-state also correct; proves
+  delta and replace are equivalent (same `pfctl -T show` membership).
+
+Cross-list dedup/reputation and multi-million-entry data-plane latency are deferred to the
+maintainer manual-smoke checklist (ADR-40 §7) — the `enable_dup`/`enable_drep` toggles need
+additional harness helpers not yet in the fixture set, and real lock-hold measurement requires
+live traffic on production hardware.
+
 ---
 
 ## Web UI test tiers (ADR-14) — `tests/smoke/ui/`
