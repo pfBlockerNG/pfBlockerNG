@@ -9330,6 +9330,158 @@ function pfb_file_mtime($path) {
 	return @filemtime($path);
 }
 
+// ADR-42: content-hash helpers — xxh128-based, tagged sidecar format, and file comparison.
+//
+// Hash convention: PHP uses hash('xxh128')/hash_file('xxh128'); shell uses xxh128sum + the
+// .xxhash128 extension. Legacy .md5 sidecars are read but never written (they are replaced
+// on the first write). An unknown tag → sentinel 'changed' so an older release always
+// re-ingests rather than falsely skipping.
+//
+// Sidecar naming: {base}.xxhash128  (new),  {base}.md5  (legacy read-only).
+
+// Returns the xxh128 hex digest of a file or a string (caller picks via $is_file).
+// Returns FALSE on any I/O error (file unreadable or non-existent).
+// Pure — no I/O side effects beyond reading the input file when $is_file === TRUE.
+function pfb_content_hash($path_or_data, $is_file = TRUE) {
+	if ($is_file) {
+		if (!is_string($path_or_data) || !file_exists($path_or_data)) {
+			return FALSE;
+		}
+		$digest = @hash_file('xxh128', $path_or_data);
+		return ($digest !== FALSE) ? $digest : FALSE;
+	}
+	return hash('xxh128', (string) $path_or_data);
+}
+
+// Read the tagged hash sidecar for a base path (e.g. {pfborig}/{header}.orig).
+// Preference order: .xxhash128 (compare with xxh128) → .md5 (compare with md5) → bare
+// untagged legacy content treated as md5.
+//
+// Returns an array: ['algo' => 'xxh128'|'md5', 'digest' => <hex string>].
+// Returns ['algo' => 'changed', 'digest' => ''] as a sentinel when the sidecar is
+// unreadable, has an unknown extension tag, or has no content — so any consumer that
+// cannot read the sidecar treats the file as changed and re-ingests (fail-safe / downgrade).
+function pfb_hash_read($base) {
+	$sentinel = array('algo' => 'changed', 'digest' => '');
+
+	// Prefer the new xxhash128 sidecar.
+	$xxh_path = "{$base}.xxhash128";
+	if (file_exists($xxh_path)) {
+		$raw = @file_get_contents($xxh_path);
+		if ($raw === FALSE) {
+			return $sentinel;
+		}
+		$digest = trim($raw);
+		// A valid xxh128 digest is exactly 32 lowercase hex chars.
+		if (!preg_match('/^[0-9a-f]{32}$/', $digest)) {
+			return $sentinel;
+		}
+		return array('algo' => 'xxh128', 'digest' => $digest);
+	}
+
+	// Legacy .md5 sidecar (read-only; next write replaces it with .xxhash128).
+	$md5_path = "{$base}.md5";
+	if (file_exists($md5_path)) {
+		$raw = @file_get_contents($md5_path);
+		if ($raw === FALSE) {
+			return $sentinel;
+		}
+		$digest = trim($raw);
+		if (!preg_match('/^[0-9a-f]{32}$/', $digest)) {
+			return $sentinel;
+		}
+		return array('algo' => 'md5', 'digest' => $digest);
+	}
+
+	// No sidecar found — treat as changed (fail-safe).
+	return $sentinel;
+}
+
+// Write the xxhash128 sidecar for a file path and remove any superseded .md5 sidecar.
+// $base is the base path (e.g. {pfborig}/{header}.orig); the hash is computed from $path.
+// Returns TRUE on success, FALSE if the hash cannot be computed or the write fails.
+function pfb_hash_write($base, $path) {
+	$digest = pfb_content_hash($path, TRUE);
+	if ($digest === FALSE) {
+		return FALSE;
+	}
+	$xxh_path = "{$base}.xxhash128";
+	$ok = (bool) @file_put_contents($xxh_path, $digest, LOCK_EX);
+	if ($ok) {
+		// Remove the superseded legacy sidecar if present — migration step.
+		unlink_if_exists("{$base}.md5");
+	}
+	return $ok;
+}
+
+// Compare two files byte-for-byte using `cmp -s` (early-exit on first differing byte,
+// lighter than hashing both). Both paths must sit in pfBlockerNG's allowed directories.
+// Returns TRUE when the files are byte-identical, FALSE otherwise or on any error.
+//
+// Validation is required (PFBL-01): both paths are validated with pfb_filter before
+// the exec call to ensure no shell-injection vector reaches the sink.
+function pfb_files_equal($a, $b) {
+	// PFBL-01: validate both paths before the exec sink. pfb_filter PFB_FILTER_URL
+	// (non-URL branch) accepts paths inside pfBlockerNG's allowed directories
+	// (/var/db/pfblockerng/*) and rejects everything else.
+	if (!pfb_filter($a, PFB_FILTER_URL, 'pfb_files_equal')) {
+		return FALSE;
+	}
+	if (!pfb_filter($b, PFB_FILTER_URL, 'pfb_files_equal')) {
+		return FALSE;
+	}
+	if (!file_exists($a) || !file_exists($b)) {
+		return FALSE;
+	}
+	$a_esc = escapeshellarg($a);
+	$b_esc = escapeshellarg($b);
+	$retval = -1;
+	@exec("/usr/bin/cmp -s {$a_esc} {$b_esc}", $unused, $retval);
+	return ($retval === 0);
+}
+
+// Extract the local-feed change decision from pfb_update_check() as a named,
+// off-appliance-testable helper. Callers pass the source path and the .orig baseline;
+// this function returns TRUE when the feed has changed (re-ingest needed), FALSE when it
+// has not. It never concludes "unchanged" on a read failure — fail-safe.
+//
+// Algorithm (today's mtime + md5-confirm, as in pfb_update_check pre-ADR-42-Phase-2):
+//  1. If either file is absent → changed (no baseline = first run).
+//  2. If mtimes are equal → not changed (fast path: same second, assume same content).
+//  3. If mtimes differ → confirm with md5: if both readable and equal → not changed
+//     (a touch/cp bumped mtime without changing bytes); if md5 unreadable or differs → changed.
+//
+// Phase 2 will replace this decision with xxh128 and drop mtime as the gate entirely.
+function pfb_local_feed_changed($source_path, $orig_path) {
+	if (!file_exists($source_path) || !file_exists($orig_path)) {
+		return TRUE;
+	}
+
+	$src_mtime  = pfb_file_mtime($source_path);
+	$orig_mtime = pfb_file_mtime($orig_path);
+
+	// Both readable?
+	if ($src_mtime === FALSE || $orig_mtime === FALSE) {
+		return TRUE;
+	}
+
+	if ($src_mtime === $orig_mtime) {
+		// Same mtime — treat as unchanged (fast path).
+		return FALSE;
+	}
+
+	// Mtimes differ: confirm with md5 (fail open — if unreadable, re-ingest).
+	$src_md5 = @md5_file($source_path);
+	if ($src_md5 === FALSE) {
+		return TRUE;
+	}
+	$orig_md5 = @md5_file($orig_path);
+	if ($orig_md5 === FALSE) {
+		return TRUE;
+	}
+	return ($src_md5 !== $orig_md5);
+}
+
 // ADR-38 Amendment 1: keep the long-running filterlog daemon's view of the
 // log_syslog toggle fresh. The daemon loads $config once at start; a live toggle
 // (GUI save / CLI) writes config.xml, but the daemon's in-memory $config is stale,
