@@ -6,256 +6,295 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Contract tests for pfb_build_autorule_list() — ADR-41 Phase 3.
+ * Oracle for pfb_build_autorule_list() — the IP auto-rule reconciler (ADR-41).
  *
- * Three invariants hold for every fixture (ADR-41 §2 Decision table):
- *   (a) USER-RULE FIDELITY: every non-pfB rule in $existing_rules appears in the output
- *       in the SAME relative order and with the SAME count (no drop, no dup, no reorder).
- *   (b) PFB-SET IDENTICAL: the pfB rules emitted are the same set (descr/type/interface/
- *       floating) as would have been generated from the same $pfb_generated inputs.
- *   (c) IDEMPOTENCE: running the helper on its own output is a no-op (second pass
- *       produces the same result as the first).
+ * pfBlockerNG regenerates its own firewall rules on every sync and must splice them around the
+ * user's rules. The helper does a STABLE bucket reorder: each surviving rule is sorted into one
+ * of four buckets — pfB pass/match, pfB block/reject, user pass/match, user block/reject — and
+ * the buckets are concatenated in the sequence the `pass_order` setting dictates. The reorder is
+ * applied independently to the two pf rule groups (FLOATING and INTERFACE), because pf evaluates
+ * them separately. The ORDER table (GUI: pfblockerng_ip.php):
  *
- * Anchor mapping (per-interface first-match — live-confirmed, ADR-41 Phase 2):
- *   order_1 / order_2           → pfB block AFTER  kept user rules (user pass wins)
- *   order_0 / order_3 / order_4 → pfB block BEFORE kept user rules (pfB wins)
- *   absent / unknown            → BEFORE (subsumes #539 drop bug)
+ *   order_0 | pfB p/m | pfB b/r | user (not split)               (default)
+ *   order_1 | user p/m | pfB p/m | pfB b/r | user b/r
+ *   order_2 | pfB p/m | user p/m | pfB b/r | user b/r
+ *   order_3 | pfB p/m | pfB b/r | user p/m | user b/r
+ *   order_4 | pfB p/m | pfB b/r | user b/r | user p/m
+ *   absent / unknown → order_0
  *
- * Fixture matrix covered (each pass_order × float on/off unless noted):
- *   A. order_0,  float=off, inbound==outbound ('lan'), Deny_* only
- *   B. order_0,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   C. order_1,  float=off, inbound==outbound ('lan'), Deny_* only
- *   D. order_1,  float=off, inbound!=outbound ('lan'+'opt1'), Deny_* only
- *   E. order_1,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   F. order_2,  float=off, inbound==outbound ('lan'), Deny_* only
- *   G. order_2,  float=off, inbound!=outbound ('lan'+'opt1'), Deny_* only
- *   H. order_2,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   I. order_3,  float=off, inbound==outbound ('lan'), Deny_* only
- *   J. order_3,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   K. order_4,  float=off, inbound==outbound ('lan'), Deny_* only
- *   L. order_4,  float=off, two ifaces (opt1 in, lan out)
- *   M. order_4,  float=on,  inbound==outbound ('lan'), Deny_* only
- *   N. absent/empty pass_order, float=off — treated as BEFORE (same as order_0)
- *   O. Permit_* (permit_inbound + permit_outbound) present, order_1, float=off
- *   P. DNS-redirect bypass rule present (pfB_ descr but NOT stripped), order_0, float=off
- *   Q. DoT-block bypass rule present, order_0, float=off
- *   R. pfB_ rules stripped and rebuilt (sanity)
- *   S. DNSBL float rules emitted before iface loop
- *   T. Empty existing rules → only pfB rules
- *   U. Non-managed iface user rule preserved in output
+ * Contract pinned here:
+ *   (a) every non-pfB (user) rule survives exactly once, with its content untouched (bar the
+ *       legacy `_v4` alias-suffix upgrade) — no DROP (#532), no DUP, no mutation. Cross-bucket
+ *       reorder IS allowed (it is what pass_order means); within-bucket order is preserved.
+ *   (b) the pfB rules are regenerated and ordered per the ORDER table — in particular a pfB
+ *       Permit list (pass) precedes a user Block for order_1..4 (the precedence a single binary
+ *       anchor broke), and order_4 places the user's own Block before its Pass (intended).
+ *   (c) running the helper on its own output is a no-op (idempotent).
  *
- * No live pfSense state involved — pfb_tracker() is called via the existing
- * doubles (get_real_interface/get_interface_ip/etc. all seeded to deterministic
- * no-op values by default).
+ * The headline regression guard is testBehaviourEqualsProvenReferenceOnDupFreeMatrix(): the helper
+ * is asserted BEHAVIOURALLY identical to the years-proven pre-ADR-41 emission
+ * (pfb_autorule_reference_8c4c482, frozen below) across a matrix of dup-free configs — same
+ * per-(interface, direction) evaluation sequence. The reference's two known defects (the user-pass
+ * DUP across the in/out loops, and the empty-order DROP) are exactly what this change fixes, so the
+ * differential is asserted only where the reference is dup-free; the dup-trigger cases are pinned
+ * to the corrected ORDER-table behaviour by the explicit per-order fixtures.
+ *
+ * Loads the real pfblockerng.inc off-appliance via tests/php/bootstrap.php (shims + doubles).
  */
+
+/**
+ * FROZEN reference — pfb_build_autorule_list() exactly as it stood at commit 8c4c482 (ADR-41 P1,
+ * a behaviour-preserving extraction of the inline auto-rule emission that shipped for years). It
+ * carries the historical DUP/DROP defects on purpose: it is the behavioural oracle for every
+ * dup-free config. DO NOT "fix" or refactor it — its value is being an independent, unchanging
+ * witness of the proven pre-change behaviour. Calls the real pfb_tracker()/constants/
+ * pfb_rule_alias_needs_v4_suffix() from the loaded pfblockerng.inc.
+ */
+function pfb_autorule_reference_8c4c482(
+	array   $existing_rules,
+	array   $pfb_generated,
+	?string $order,
+	?string $float,
+	array   $in_ifaces,
+	array   $out_ifaces
+): array {
+	$order = $order ?? '';
+	$float = $float ?? '';
+	$new_rules     = [];
+	$permit_rules  = [];
+	$match_rules   = [];
+	$other_rules   = [];
+	$fpermit_rules = [];
+	$fmatch_rules  = [];
+	$fother_rules  = [];
+
+	foreach ($existing_rules as $rule) {
+		$descr              = $rule['descr'] ?? '';
+		$is_dns_bypass_rule =
+		    str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+		    str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
+
+		if (!str_starts_with($rule['descr'], 'pfB_') || $is_dns_bypass_rule) {
+			foreach (array('source', 'destination') as $rtype) {
+				if (pfb_rule_alias_needs_v4_suffix($rule[$rtype]['address'] ?? '', $rule['ipprotocol'] ?? '')) {
+					$rule[$rtype]['address'] = "{$rule[$rtype]['address']}_v4";
+				}
+			}
+
+			if ($float == 'on') {
+				if ($order == 'order_0' && $rule['floating'] == 'yes') {
+					$fother_rules[] = $rule;
+				}
+				else {
+					if ($rule['type'] == 'pass' && $rule['floating'] == 'yes') {
+						$fpermit_rules[] = $rule;
+					} elseif ($rule['type'] == 'match' && $rule['floating'] == 'yes') {
+						$fmatch_rules[] = $rule;
+					} elseif ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} else {
+						$other_rules[] = $rule;
+					}
+				}
+			} else {
+				if (in_array($rule['interface'], $in_ifaces) ||
+				    in_array($rule['interface'], $out_ifaces)) {
+					if ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} elseif ($rule['type'] == 'pass' || isset($rule['associated-rule-id'])) {
+						if ($order == 'order_0') {
+							$other_rules[] = $rule;
+						} else {
+							$permit_rules[] = $rule;
+						}
+					} else {
+						$other_rules[] = $rule;
+					}
+				} else {
+					if ($rule['floating'] == 'yes') {
+						$fother_rules[] = $rule;
+					} else {
+						$other_rules[] = $rule;
+					}
+				}
+			}
+		}
+	}
+
+	if ($float == '' && $order == 'order_1' && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($float == 'on' && $order == 'order_1') {
+		foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
+			if (!empty($rtype)) {
+				foreach ($rtype as $cb_rules) {
+					$new_rules[] = $cb_rules;
+				}
+			}
+		}
+	}
+
+	foreach ($pfb_generated['dnsbl_float'] as $cb_rules) {
+		$new_rules[] = $cb_rules;
+	}
+
+	if (!empty($in_ifaces)) {
+		$pfbrunonce = TRUE;
+		foreach ($in_ifaces as $inbound_interface) {
+			if ($order == 'order_1' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $inbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['permit_inbound'])) {
+				foreach ($pfb_generated['permit_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $inbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'permit_in');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+			if ($pfbrunonce && !empty($pfb_generated['match_inbound'])) {
+				foreach ($pfb_generated['match_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $pfb_generated['inbound_floating'];
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'match_in');
+					$new_rules[]           = $cb_rules;
+					$pfbrunonce            = FALSE;
+				}
+			}
+			if ($order == 'order_2') {
+				foreach (array($fpermit_rules, $fmatch_rules) as $rtype) {
+					if (!empty($rtype)) {
+						foreach ($rtype as $cb_rules) {
+							$new_rules[] = $cb_rules;
+						}
+					}
+				}
+				if (!empty($permit_rules)) {
+					foreach ($permit_rules as $cb_rules) {
+						if ($cb_rules['interface'] == $inbound_interface) {
+							$new_rules[] = $cb_rules;
+						}
+					}
+				}
+			}
+			if (!empty($pfb_generated['deny_inbound'])) {
+				foreach ($pfb_generated['deny_inbound'] as $cb_rules) {
+					$cb_rules['interface'] = $inbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_in');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+		}
+	}
+
+	if (!empty($out_ifaces)) {
+		$pfbrunonce = TRUE;
+		foreach ($out_ifaces as $outbound_interface) {
+			if ($order == 'order_1' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $outbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['permit_outbound'])) {
+				foreach ($pfb_generated['permit_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $outbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'permit_out');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+			if ($pfbrunonce && !empty($pfb_generated['match_outbound'])) {
+				foreach ($pfb_generated['match_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $pfb_generated['outbound_floating'];
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'match_out');
+					$new_rules[]           = $cb_rules;
+					$pfbrunonce            = FALSE;
+				}
+			}
+			if ($order == 'order_2' && !empty($permit_rules)) {
+				foreach ($permit_rules as $cb_rules) {
+					if ($cb_rules['interface'] == $outbound_interface) {
+						$new_rules[] = $cb_rules;
+					}
+				}
+			}
+			if (!empty($pfb_generated['deny_outbound'])) {
+				foreach ($pfb_generated['deny_outbound'] as $cb_rules) {
+					$cb_rules['interface'] = $outbound_interface;
+					$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $outbound_interface, 'deny_out');
+					$new_rules[]           = $cb_rules;
+				}
+			}
+		}
+	}
+
+	if ($float == 'on' && in_array($order, array('order_0', 'order_3', 'order_4'))) {
+		if ($order != 'order_3') {
+			$rule_order = array($fother_rules, $fpermit_rules, $fmatch_rules);
+		} else {
+			$rule_order = array($fpermit_rules, $fmatch_rules, $fother_rules);
+		}
+		foreach ($rule_order as $rtype) {
+			if (!empty($rtype)) {
+				foreach ($rtype as $cb_rules) {
+					$new_rules[] = $cb_rules;
+				}
+			}
+		}
+	}
+	if ($float == 'on' && in_array($order, array('order_1', 'order_2')) && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($float == '' && $order != 'order_1' && !empty($fother_rules)) {
+		foreach ($fother_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_4' && !empty($other_rules)) {
+		foreach ($other_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_4' && !empty($permit_rules)) {
+		foreach ($permit_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order == 'order_3' && !empty($permit_rules)) {
+		foreach ($permit_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+	if ($order != 'order_4' && !empty($other_rules)) {
+		foreach ($other_rules as $cb_rules) {
+			$new_rules[] = $cb_rules;
+		}
+	}
+
+	return $new_rules;
+}
+
 #[CoversFunction('pfb_build_autorule_list')]
 final class AutoruleListOracleTest extends TestCase
 {
 	// -----------------------------------------------------------------------
-	// Fixtures
+	// $GLOBALS['pfb'] sandbox (pfb_tracker() reads trackerids off it)
 	// -----------------------------------------------------------------------
 
-	/** A minimal user 'pass' rule on 'lan'. */
-	private function userPassLan(string $descr = 'Default allow LAN to any'): array
-	{
-		return [
-			'descr'       => $descr,
-			'type'        => 'pass',
-			'interface'   => 'lan',
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/** A minimal user 'pass' rule on 'opt1'. */
-	private function userPassOpt1(string $descr = 'Default allow OPT1 to any'): array
-	{
-		return [
-			'descr'       => $descr,
-			'type'        => 'pass',
-			'interface'   => 'opt1',
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/** A minimal user floating 'pass' rule. */
-	private function userFloatPass(string $descr = 'User Float Pass'): array
-	{
-		return [
-			'descr'       => $descr,
-			'type'        => 'pass',
-			'interface'   => '',
-			'ipprotocol'  => 'inet',
-			'floating'    => 'yes',
-			'direction'   => 'any',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/** A pfB_ deny rule — should be STRIPPED by the helper (it rebuilds these). */
-	private function pfbDenyRule(string $iface = 'lan'): array
-	{
-		return [
-			'descr'       => 'pfB_DenyAlias_v4 Auto Rule',
-			'type'        => 'block',
-			'interface'   => $iface,
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['address' => 'pfB_DenyAlias_v4'],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/** A DNS-redirect bypass rule — pfB_ descr but must NOT be stripped. */
-	private function dnsRedirectBypassRule(): array
-	{
-		return [
-			'descr'       => 'pfB_DNS_Redirect_lan_v4',  // starts with PFB_DNS_REDIR_DESCR_V4_PFX
-			'type'        => 'pass',
-			'interface'   => 'lan',
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/** A DoT-block bypass rule — pfB_ descr but must NOT be stripped. */
-	private function dotBlockBypassRule(): array
-	{
-		return [
-			'descr'       => 'pfB_DoT_Block_lan',  // starts with PFB_DOT_BLOCK_DESCR_PFX
-			'type'        => 'block',
-			'interface'   => 'lan',
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-	}
-
-	/**
-	 * A minimal $pfb_generated with one deny_inbound rule (deny 'lan' inbound).
-	 * The deny template has no interface/tracker yet — those are set per-interface in the helper.
-	 */
-	private function pfbGeneratedDenyOnly(): array
-	{
-		return [
-			'permit_inbound'    => [],
-			'permit_outbound'   => [],
-			'deny_inbound'      => [
-				[
-					'descr'       => 'pfB_DenyList_v4 Auto Rule',
-					'type'        => 'block',
-					'interface'   => '',  // set by helper
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['address' => 'pfB_DenyList_v4'],
-					'destination' => ['any' => ''],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'deny_outbound'     => [
-				[
-					'descr'       => 'pfB_DenyList_v4 Auto Rule',
-					'type'        => 'reject',
-					'interface'   => '',  // set by helper
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['any' => ''],
-					'destination' => ['address' => 'pfB_DenyList_v4'],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'match_inbound'     => [],
-			'match_outbound'    => [],
-			'inbound_floating'  => '',
-			'outbound_floating' => '',
-			'dnsbl_float'       => [],
-		];
-	}
-
-	/**
-	 * $pfb_generated with permit_inbound + deny_inbound (Permit_* action present).
-	 */
-	private function pfbGeneratedPermitAndDeny(): array
-	{
-		return [
-			'permit_inbound'    => [
-				[
-					'descr'       => 'pfB_PermitList_v4 Auto Rule',
-					'type'        => 'pass',
-					'interface'   => '',
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['address' => 'pfB_PermitList_v4'],
-					'destination' => ['any' => ''],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'permit_outbound'   => [
-				[
-					'descr'       => 'pfB_PermitList_v4 Auto Rule',
-					'type'        => 'pass',
-					'interface'   => '',
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['any' => ''],
-					'destination' => ['address' => 'pfB_PermitList_v4'],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'deny_inbound'      => [
-				[
-					'descr'       => 'pfB_DenyList_v4 Auto Rule',
-					'type'        => 'block',
-					'interface'   => '',
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['address' => 'pfB_DenyList_v4'],
-					'destination' => ['any' => ''],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'deny_outbound'     => [
-				[
-					'descr'       => 'pfB_DenyList_v4 Auto Rule',
-					'type'        => 'reject',
-					'interface'   => '',
-					'ipprotocol'  => 'inet',
-					'floating'    => '',
-					'source'      => ['any' => ''],
-					'destination' => ['address' => 'pfB_DenyList_v4'],
-					'created'     => ['time' => 0, 'username' => 'Auto'],
-				],
-			],
-			'match_inbound'     => [],
-			'match_outbound'    => [],
-			'inbound_floating'  => '',
-			'outbound_floating' => '',
-			'dnsbl_float'       => [],
-		];
-	}
-
-	// -----------------------------------------------------------------------
-	// $GLOBALS['pfb'] sandbox helpers
-	// -----------------------------------------------------------------------
-
-	private array $origPfb    = [];
-	private bool  $hadPfb     = FALSE;
+	private array $origPfb = [];
+	private bool  $hadPfb  = FALSE;
 
 	protected function setUp(): void
 	{
-		$this->hadPfb   = array_key_exists('pfb', $GLOBALS);
-		$this->origPfb  = $GLOBALS['pfb'] ?? [];
-
-		// Minimal pfb globals needed by pfb_tracker() (trackerids collision check).
+		$this->hadPfb  = array_key_exists('pfb', $GLOBALS);
+		$this->origPfb = $GLOBALS['pfb'] ?? [];
 		$GLOBALS['pfb'] = [
 			'trackerids'         => [],
 			'foreign_trackerids' => [],
@@ -273,913 +312,647 @@ final class AutoruleListOracleTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// Rule fixtures
+	// -----------------------------------------------------------------------
+
+	private function userPass(string $descr, string $iface = 'lan', string $floating = ''): array
+	{
+		return ['descr' => $descr, 'type' => 'pass', 'interface' => $iface, 'ipprotocol' => 'inet',
+		        'floating' => $floating, 'source' => ['any' => ''], 'destination' => ['any' => '']];
+	}
+
+	private function userBlock(string $descr, string $iface = 'lan', string $floating = ''): array
+	{
+		return ['descr' => $descr, 'type' => 'block', 'interface' => $iface, 'ipprotocol' => 'inet',
+		        'floating' => $floating, 'source' => ['address' => 'EvilHosts'], 'destination' => ['any' => '']];
+	}
+
+	private function userMatch(string $descr, string $iface = 'lan', string $floating = 'yes'): array
+	{
+		return ['descr' => $descr, 'type' => 'match', 'interface' => $iface, 'ipprotocol' => 'inet',
+		        'floating' => $floating, 'source' => ['any' => ''], 'destination' => ['any' => '']];
+	}
+
+	/** A pfB-owned auto rule — the helper must STRIP and regenerate these (not keep them). */
+	private function pfbOwnedDeny(string $iface = 'lan'): array
+	{
+		return ['descr' => 'pfB_DenyAlias_v4 Auto Rule', 'type' => 'block', 'interface' => $iface,
+		        'ipprotocol' => 'inet', 'floating' => '', 'direction' => 'in',
+		        'source' => ['address' => 'pfB_DenyAlias_v4'], 'destination' => ['any' => '']];
+	}
+
+	/** DNS-redirect bypass rule — pfB_ descr but must NOT be stripped (stays user-managed). */
+	private function dnsRedirectBypass(): array
+	{
+		return ['descr' => 'pfB_DNS_Redirect_lan_v4', 'type' => 'pass', 'interface' => 'lan',
+		        'ipprotocol' => 'inet', 'floating' => '', 'source' => ['any' => ''], 'destination' => ['any' => '']];
+	}
+
+	/** DoT-block bypass rule — pfB_ descr but must NOT be stripped. */
+	private function dotBlockBypass(): array
+	{
+		return ['descr' => 'pfB_DoT_Block_lan', 'type' => 'block', 'interface' => 'lan',
+		        'ipprotocol' => 'inet', 'floating' => '', 'source' => ['any' => ''], 'destination' => ['any' => '']];
+	}
+
+	// -----------------------------------------------------------------------
+	// pfB-generated templates (direction-faithful: inbound rules carry
+	// direction='in', outbound direction='out' — as filter.inc emits them)
+	// -----------------------------------------------------------------------
+
+	/** @param string $float 'on' makes the per-interface permit/deny floating (base_rule_float). */
+	private function genPermitDeny(string $float = ''): array
+	{
+		$flo = $float === 'on' ? 'yes' : '';
+		return [
+			'permit_inbound'  => [['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass', 'interface' => '',
+			    'direction' => 'in', 'ipprotocol' => 'inet', 'floating' => $flo,
+			    'source' => ['address' => 'pfB_PermitList_v4'], 'destination' => ['any' => '']]],
+			'permit_outbound' => [['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass', 'interface' => '',
+			    'direction' => 'out', 'ipprotocol' => 'inet', 'floating' => $flo,
+			    'source' => ['any' => ''], 'destination' => ['address' => 'pfB_PermitList_v4']]],
+			'deny_inbound'    => [['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block', 'interface' => '',
+			    'direction' => 'in', 'ipprotocol' => 'inet', 'floating' => $flo,
+			    'source' => ['address' => 'pfB_DenyList_v4'], 'destination' => ['any' => '']]],
+			'deny_outbound'   => [['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => '',
+			    'direction' => 'out', 'ipprotocol' => 'inet', 'floating' => $flo,
+			    'source' => ['any' => ''], 'destination' => ['address' => 'pfB_DenyList_v4']]],
+			'match_inbound'   => [], 'match_outbound' => [],
+			'inbound_floating' => '', 'outbound_floating' => '', 'dnsbl_float' => [],
+		];
+	}
+
+	/** Permit-list inbound only (the common case used by the precedence-trap fixtures). */
+	private function genPermitDenyInbound(): array
+	{
+		$g = $this->genPermitDeny('');
+		$g['permit_outbound'] = [];
+		$g['deny_outbound']   = [];
+		return $g;
+	}
+
+	private function genDenyOnly(): array
+	{
+		$g = $this->genPermitDeny('');
+		$g['permit_inbound']  = [];
+		$g['permit_outbound'] = [];
+		$g['deny_outbound']   = [];
+		return $g;
+	}
+
+	/** Deny + a floating Match rule (inbound + outbound); inbound_floating='lan'. */
+	private function genWithMatch(): array
+	{
+		$g = $this->genDenyOnly();
+		$g['match_inbound']  = [['descr' => 'pfB_MatchList_v4 Auto Rule', 'type' => 'match', 'interface' => '',
+		    'direction' => 'in', 'ipprotocol' => 'inet', 'floating' => 'yes',
+		    'source' => ['address' => 'pfB_MatchList_v4'], 'destination' => ['any' => '']]];
+		$g['match_outbound'] = [['descr' => 'pfB_MatchList_v4 Auto Rule', 'type' => 'match', 'interface' => '',
+		    'direction' => 'out', 'ipprotocol' => 'inet', 'floating' => 'yes',
+		    'source' => ['any' => ''], 'destination' => ['address' => 'pfB_MatchList_v4']]];
+		$g['inbound_floating']  = 'lan';
+		$g['outbound_floating'] = 'lan';
+		return $g;
+	}
+
+	/** Deny + the DNSBL floating pass pair (always floating). */
+	private function genWithDnsbl(): array
+	{
+		$g = $this->genDenyOnly();
+		$g['dnsbl_float'] = [
+			['descr' => 'pfB_DNSBL_Permit', 'type' => 'pass', 'interface' => 'lan', 'direction' => '',
+			 'ipprotocol' => 'inet', 'floating' => 'yes', 'source' => ['any' => ''], 'destination' => ['address' => 'pfB_DNSBL_VIPs']],
+		];
+		return $g;
+	}
+
+	// -----------------------------------------------------------------------
 	// Assertion helpers
 	// -----------------------------------------------------------------------
 
-	/**
-	 * Extract [descr, type, interface, floating] from each rule in $result.
-	 * This is the "shape" used for oracle assertions — enough to pin ORDER and
-	 * presence without being brittle about tracker/created timestamps.
-	 *
-	 * @param array<int, array<string, mixed>> $result
-	 * @return list<array{descr: string, type: string, interface: string, floating: string}>
-	 */
-	private function shapes(array $result): array
+	/** [descr, type, interface, floating, direction] per rule — enough to pin ORDER + presence. */
+	private function shapes(array $rules): array
 	{
-		return array_map(static function (array $rule): array {
-			return [
-				'descr'     => $rule['descr']     ?? '',
-				'type'      => $rule['type']       ?? '',
-				'interface' => $rule['interface']  ?? '',
-				'floating'  => $rule['floating']   ?? '',
-			];
-		}, array_values($result));
+		return array_map(static fn (array $r): array => [
+			'descr'     => $r['descr']     ?? '',
+			'type'      => $r['type']      ?? '',
+			'interface' => $r['interface'] ?? '',
+			'floating'  => $r['floating']  ?? '',
+			'direction' => $r['direction'] ?? '',
+		], array_values($rules));
 	}
 
-	/**
-	 * Assert the full ordered shape list equals $expected.
-	 * On failure, print expected vs actual for diagnosis.
-	 *
-	 * @param list<array{descr: string, type: string, interface: string, floating: string}> $expected
-	 * @param array<int, array<string, mixed>> $result
-	 */
-	private function assertShapes(array $expected, array $result, string $context = ''): void
+	private function assertShapes(array $expected, array $result, string $ctx): void
 	{
-		$actual = $this->shapes($result);
-		$label  = $context !== '' ? " [{$context}]" : '';
 		$this->assertSame(
 			$expected,
-			$actual,
-			"Rule shape mismatch{$label}."
-				. "\n\nExpected:\n" . json_encode($expected, JSON_PRETTY_PRINT)
-				. "\n\nActual:\n"   . json_encode($actual,   JSON_PRETTY_PRINT)
+			$this->shapes($result),
+			"Rule shape mismatch [{$ctx}].\n\nExpected:\n" . json_encode($expected, JSON_PRETTY_PRINT)
+				. "\n\nActual:\n" . json_encode($this->shapes($result), JSON_PRETTY_PRINT)
 		);
 	}
 
-	/** Assert each rule in $result has a 'tracker' key (set by pfb_tracker). */
-	private function assertTrackersSet(array $result, string $context = ''): void
+	/** Every pfB-generated rule must carry a 'tracker' (user/bypass rules pass through without). */
+	private function assertTrackersSet(array $result, string $ctx): void
 	{
 		foreach ($result as $i => $rule) {
 			$descr = $rule['descr'] ?? "(rule {$i})";
-			// Only pfB-generated rules (those from $pfb_generated) get trackers assigned;
-			// user rules pass through without tracker. Skip user rules.
-			if (!str_starts_with($descr, 'pfB_') || str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX)
-			    || str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX)) {
+			if (!$this->isPfbOwned($rule)) {
 				continue;
 			}
 			$this->assertArrayHasKey('tracker', $rule,
-				"pfB rule [{$i}] '{$descr}' must have 'tracker' key set by pfb_tracker()");
+				"pfB rule [{$i}] '{$descr}' must carry a tracker [{$ctx}]");
 		}
 	}
 
-	/**
-	 * CONTRACT (a): every non-pfB rule from $input appears in $output in the same
-	 * relative order with the same count. A rule is pfB-owned iff its descr starts
-	 * with 'pfB_' AND it is NOT a bypass rule (DNS-redirect / DoT-block).
-	 *
-	 * Fails on: user-rule drop (count < input), duplication (count > input), or reorder.
-	 *
-	 * @param array<int, array<string, mixed>> $input
-	 * @param array<int, array<string, mixed>> $output
-	 */
-	private function assertUserRulesPreserved(array $input, array $output, string $context = ''): void
+	private function isUserRule(array $rule): bool
 	{
-		$is_user = static function (array $rule): bool {
-			$descr = $rule['descr'] ?? '';
-			if (!str_starts_with($descr, 'pfB_')) {
-				return TRUE;
-			}
-			return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
-			       str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
-		};
+		$descr = $rule['descr'] ?? '';
+		if (!str_starts_with($descr, 'pfB_')) {
+			return TRUE;
+		}
+		return str_starts_with($descr, PFB_DNS_REDIR_DESCR_V4_PFX) ||
+		       str_starts_with($descr, PFB_DOT_BLOCK_DESCR_PFX);
+	}
 
-		$user_in  = array_values(array_filter($input,  $is_user));
-		$user_out = array_values(array_filter($output, $is_user));
-
-		$label = $context !== '' ? " [{$context}]" : '';
-		$this->assertSame(
-			$this->shapes($user_in),
-			$this->shapes($user_out),
-			"User-rule fidelity failure{$label}: non-pfB rules must be preserved exactly "
-				. "(same set, count, and original relative order — no drop, dup, or reorder)."
-				. "\n\nExpected (input user rules):\n"  . json_encode($this->shapes($user_in),  JSON_PRETTY_PRINT)
-				. "\n\nActual (output user rules):\n"   . json_encode($this->shapes($user_out), JSON_PRETTY_PRINT)
-		);
+	private function isPfbOwned(array $rule): bool
+	{
+		return !$this->isUserRule($rule);
 	}
 
 	/**
-	 * CONTRACT (c): running the helper on its own output is a no-op.
-	 *
-	 * Second-pass $existing_rules = first-pass $output. Same $pfb_generated / $order / $float /
-	 * $in_ifaces / $out_ifaces. Result must be shape-identical to the first pass.
-	 *
-	 * @param array<int, array<string, mixed>> $output
-	 * @param array<int, string>               $in_ifaces
-	 * @param array<int, string>               $out_ifaces
+	 * Fidelity contract (a): user rules survive as a multiset — no DROP, no DUP, content
+	 * untouched (bar the _v4 upgrade). Deliberately order-INDEPENDENT: cross-bucket reorder is
+	 * exactly what pass_order does, so a global-order check would be wrong. Within-bucket order
+	 * is pinned by the explicit per-order fixtures (and testWithinBucketOrderPreserved).
 	 */
-	private function assertIdempotent(
-		array  $output,
-		array  $gen,
-		string $order,
-		string $float,
-		array  $in_ifaces,
-		array  $out_ifaces,
-		string $context = ''
-	): void {
-		$second = pfb_build_autorule_list($output, $gen, $order, $float, $in_ifaces, $out_ifaces);
-		$label  = $context !== '' ? " [{$context}]" : '';
+	private function assertUserRulesIntact(array $input, array $output, string $ctx): void
+	{
+		$inUser  = $this->shapes(array_values(array_filter($input,  fn ($r) => $this->isUserRule($r))));
+		$outUser = $this->shapes(array_values(array_filter($output, fn ($r) => $this->isUserRule($r))));
+		sort($inUser);
+		sort($outUser);
+		$this->assertEquals(
+			$inUser,
+			$outUser,
+			"User-rule fidelity failure [{$ctx}]: user rules must survive exactly once, content "
+				. "intact (no drop, no dup, no mutation).\n\nExpected (multiset):\n"
+				. json_encode($inUser, JSON_PRETTY_PRINT) . "\n\nActual (multiset):\n"
+				. json_encode($outUser, JSON_PRETTY_PRINT)
+		);
+	}
+
+	/** Contract (c): running the helper on its own output is a no-op. */
+	private function assertIdempotent(array $output, array $gen, ?string $order, ?string $float,
+	                                  array $in, array $out, string $ctx): void
+	{
+		$second = pfb_build_autorule_list($output, $gen, $order, $float, $in, $out);
 		$this->assertSame(
 			$this->shapes($output),
 			$this->shapes($second),
-			"Idempotence failure{$label}: running the helper on its own output must be a no-op."
-				. "\n\nFirst pass:\n"  . json_encode($this->shapes($output), JSON_PRETTY_PRINT)
-				. "\n\nSecond pass:\n" . json_encode($this->shapes($second), JSON_PRETTY_PRINT)
+			"Idempotence failure [{$ctx}]: a second pass must be a no-op.\n\nFirst:\n"
+				. json_encode($this->shapes($output), JSON_PRETTY_PRINT) . "\n\nSecond:\n"
+				. json_encode($this->shapes($second), JSON_PRETTY_PRINT)
 		);
 	}
 
-	// -----------------------------------------------------------------------
-	// A. order_0, float=off, inbound==outbound='lan', Deny_* only
-	// -----------------------------------------------------------------------
+	// =======================================================================
+	// THE PRECEDENCE TRAP — pfB Permit + pfB Deny + user Pass + user Block on
+	// one interface. This is the case a single binary anchor got wrong: it put
+	// the whole block of user rules (incl. the user Block) before the pfB block,
+	// so a pfB Permit could not override a user Block for order_1/order_2, and
+	// order_4 stopped reordering the user's own Pass/Block. RED on that helper.
+	// =======================================================================
 
-	public function testOrder0FloatOffSingleIfaceDenyOnly(): void
+	public function testTrapOrder0KeepsUserRulesTogetherAfterPfb(): void
 	{
-		/**
-		 * Scenario: ORDER 0, float off, single managed iface (lan), Deny_* pfB rules.
-		 *
-		 * Given: existing rules = [pfB deny (stripped), user pass LAN].
-		 *        pfB generated = deny_inbound + deny_outbound templates.
-		 *        order=order_0, float=off, in+out ifaces = ['lan'].
-		 *
-		 * ORDER 0 anchor = BEFORE: pfB block first, then kept user rules.
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
+		// order_0: pfB pass, pfB block, then ALL user rules (not split), original order.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_0', '', ['lan'], ['lan']);
 
 		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_0 float=off single iface');
-		$this->assertTrackersSet($result, 'order_0 float=off');
-		$this->assertUserRulesPreserved($existing, $result, 'order_0 float=off');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'order_0 float=off');
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'User block evil',             'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => ''],
+		], $result, 'trap order_0');
+		$this->assertUserRulesIntact($existing, $result, 'trap order_0');
 	}
 
-	// -----------------------------------------------------------------------
-	// B. order_0, float=on, single iface, Deny_* only
-	// -----------------------------------------------------------------------
-
-	public function testOrder0FloatOnSingleIfaceDenyOnly(): void
+	public function testTrapOrder1PfbPermitBeatsUserBlock(): void
 	{
-		/**
-		 * Scenario: ORDER 0, float=on.
-		 *
-		 * ORDER 0 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
-		 *
-		 * pf evaluates floating rules in a separate group regardless of config.xml
-		 * interleaving, so the relative position of user_float_pass vs interface rules
-		 * in config.xml does not affect pf precedence.
-		 */
+		// order_1: user p/m, pfB p/m, pfB b/r, user b/r. The pfB Permit MUST precede the user
+		// Block (the binary anchor put the user Block first -> pfB Permit lost).
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', '', ['lan'], ['lan']);
 
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->userFloatPass(),
-			$this->userPassLan(),
+		$this->assertShapes([
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User block evil',             'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => ''],
+		], $result, 'trap order_1');
+		$this->assertUserRulesIntact($existing, $result, 'trap order_1');
+	}
+
+	public function testTrapOrder2PfbPermitBeatsUserBlock(): void
+	{
+		// order_2: pfB p/m, user p/m, pfB b/r, user b/r. pfB Permit still precedes the user Block.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_2', '', ['lan'], ['lan']);
+
+		$this->assertShapes([
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User block evil',             'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => ''],
+		], $result, 'trap order_2');
+		$this->assertUserRulesIntact($existing, $result, 'trap order_2');
+	}
+
+	public function testTrapOrder3PfbBlockBeforeUserRules(): void
+	{
+		// order_3: pfB p/m, pfB b/r, user p/m, user b/r.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_3', '', ['lan'], ['lan']);
+
+		$this->assertShapes([
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'User block evil',             'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => ''],
+		], $result, 'trap order_3');
+		$this->assertUserRulesIntact($existing, $result, 'trap order_3');
+	}
+
+	public function testTrapOrder4ReordersUserBlockBeforeUserPass(): void
+	{
+		// order_4: pfB p/m, pfB b/r, user b/r, user p/m. The user's OWN Block precedes its Pass —
+		// an intended pass_order reorder the binary anchor wrongly dropped.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_4', '', ['lan'], ['lan']);
+
+		$this->assertShapes([
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'User block evil',             'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+		], $result, 'trap order_4');
+		$this->assertUserRulesIntact($existing, $result, 'trap order_4');
+	}
+
+	// =======================================================================
+	// Float mode ON — the per-interface pfB rules become floating, so pass_order
+	// orders the FLOATING group (same ORDER table applied symmetrically).
+	// =======================================================================
+
+	public function testFloatOnAppliesOrderTableToFloatingGroup(): void
+	{
+		$existing = [$this->userPass('User float allow', 'lan', 'yes'), $this->userBlock('User float block', 'lan', 'yes')];
+		$gen      = $this->genPermitDeny('on');
+		$gen['permit_outbound'] = [];
+		$gen['deny_outbound']   = [];
+
+		$expected = [
+			'order_1' => [
+				['descr' => 'User float allow',            'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+				['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'User float block',            'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			],
+			'order_2' => [
+				['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'User float allow',            'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+				['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'User float block',            'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			],
+			'order_3' => [
+				['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'User float allow',            'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+				['descr' => 'User float block',            'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			],
+			'order_4' => [
+				['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
+				['descr' => 'User float block',            'type' => 'block', 'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+				['descr' => 'User float allow',            'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			],
 		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', 'on', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_0 float=on');
-		$this->assertTrackersSet($result, 'order_0 float=on');
-		$this->assertUserRulesPreserved($existing, $result, 'order_0 float=on');
-		$this->assertIdempotent($result, $gen, 'order_0', 'on', ['lan'], ['lan'], 'order_0 float=on');
+		foreach ($expected as $order => $shape) {
+			$result = pfb_build_autorule_list($existing, $gen, $order, 'on', ['lan'], []);
+			$this->assertShapes($shape, $result, "float-on {$order}");
+			$this->assertUserRulesIntact($existing, $result, "float-on {$order}");
+		}
 	}
 
-	// -----------------------------------------------------------------------
-	// C. order_1, float=off, inbound==outbound='lan'  [KNOWN-BAD: duplication]
-	// -----------------------------------------------------------------------
+	// =======================================================================
+	// pfB rule generation invariants
+	// =======================================================================
 
-	public function testOrder1FloatOffSingleIfaceDenyOnly(): void
+	public function testMatchRuleEmittedOnceAcrossInterfaces(): void
 	{
-		/**
-		 * Scenario: ORDER 1, float=off, SAME interface for inbound AND outbound ('lan').
-		 *
-		 * ORDER 1 anchor = AFTER: kept user rules first, then pfB block.
-		 * keep = [user_pass(lan)] (pfB deny stripped; no dup — verbatim keep).
-		 * pfB block = [deny_in(lan), deny_out(lan)].
-		 * Expected: user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
-		 *
-		 * Fail-before: old bucket-per-iface code emitted user_pass TWICE (once per loop
-		 * over the shared 'lan' interface). The immutable-splice model strips pfB rules
-		 * and keeps the verbatim user list exactly once — no dup possible.
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_1', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_1 float=off single iface');
-		$this->assertTrackersSet($result, 'order_1 float=off single');
-		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=off single');
-		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['lan'], 'order_1 float=off single');
-	}
-
-	// -----------------------------------------------------------------------
-	// D. order_1, float=off, inbound!=outbound ('lan' in, 'opt1' out)
-	// -----------------------------------------------------------------------
-
-	public function testOrder1FloatOffSeparateIfacesDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 1, float=off, separate inbound (lan) and outbound (opt1).
-		 *
-		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
-		 * keep = [user_pass(lan), user_pass(opt1)] (original order).
-		 * pfB block = [deny_in(lan), deny_out(opt1)].
-		 * Expected: user_pass(lan), user_pass(opt1), pfB deny_in(lan), pfB deny_out(opt1).
-		 *
-		 * Under per-interface first-match pf semantics the pfB-block-vs-user-BLOCK ordering
-		 * is moot; only pfB-block-vs-user-PASS matters, and both user pass rules precede
-		 * both pfB deny rules — user wins on both interfaces.
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->pfbDenyRule('opt1'),
-			$this->userPassLan(),
-			$this->userPassOpt1(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_1', '', ['lan'], ['opt1']);
-
-		$this->assertShapes([
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
-		], $result, 'order_1 float=off separate ifaces');
-		$this->assertTrackersSet($result, 'order_1 float=off separate');
-		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=off separate');
-		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['opt1'], 'order_1 float=off separate');
-	}
-
-	// -----------------------------------------------------------------------
-	// E. order_1, float=on, single iface
-	// -----------------------------------------------------------------------
-
-	public function testOrder1FloatOnSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 1, float=on.
-		 *
-		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
-		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
-		 * pfB block = [deny_in(lan), deny_out(lan)].
-		 * Expected: user_float_pass, user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
-		 *
-		 * pf evaluates floating rules in a separate group regardless of config.xml
-		 * interleaving, so the relative position of user_float_pass vs interface rules
-		 * in config.xml does not affect pf precedence.
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->userFloatPass(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_1', 'on', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_1 float=on single iface');
-		$this->assertTrackersSet($result, 'order_1 float=on');
-		$this->assertUserRulesPreserved($existing, $result, 'order_1 float=on');
-		$this->assertIdempotent($result, $gen, 'order_1', 'on', ['lan'], ['lan'], 'order_1 float=on');
-	}
-
-	// -----------------------------------------------------------------------
-	// F. order_2, float=off, inbound==outbound='lan'  [KNOWN-BAD: duplication]
-	// -----------------------------------------------------------------------
-
-	public function testOrder2FloatOffSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 2, float=off, SAME interface for inbound AND outbound ('lan').
-		 *
-		 * ORDER 2 anchor = AFTER: kept user rules first (verbatim), then pfB block.
-		 * keep = [user_pass(lan)] (pfB deny stripped; no dup).
-		 * pfB block = [deny_in(lan), deny_out(lan)].
-		 * Expected: user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
-		 *
-		 * Fail-before: old bucket-based code emitted user_pass TWICE (once per iface loop
-		 * iteration). The immutable-splice model keeps the verbatim list exactly once.
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_2', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_2 float=off single iface');
-		$this->assertTrackersSet($result, 'order_2 float=off single');
-		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=off single');
-		$this->assertIdempotent($result, $gen, 'order_2', '', ['lan'], ['lan'], 'order_2 float=off single');
-	}
-
-	// -----------------------------------------------------------------------
-	// G. order_2, float=off, inbound!=outbound
-	// -----------------------------------------------------------------------
-
-	public function testOrder2FloatOffSeparateIfacesDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 2, float=off, separate ifaces (lan in, opt1 out).
-		 *
-		 * ORDER 2 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
-		 * keep = [user_pass(lan), user_pass(opt1)] (original order).
-		 * pfB block = [deny_in(lan), deny_out(opt1)].
-		 * Expected: user_pass(lan), user_pass(opt1), pfB deny_in(lan), pfB deny_out(opt1).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->pfbDenyRule('opt1'),
-			$this->userPassLan(),
-			$this->userPassOpt1(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_2', '', ['lan'], ['opt1']);
-
-		$this->assertShapes([
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
-		], $result, 'order_2 float=off separate ifaces');
-		$this->assertTrackersSet($result, 'order_2 float=off separate');
-		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=off separate');
-		$this->assertIdempotent($result, $gen, 'order_2', '', ['lan'], ['opt1'], 'order_2 float=off separate');
-	}
-
-	// -----------------------------------------------------------------------
-	// H. order_2, float=on, single iface
-	// -----------------------------------------------------------------------
-
-	public function testOrder2FloatOnSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 2, float=on.
-		 *
-		 * ORDER 2 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
-		 * keep = [user_float_pass, user_pass(lan)] (original order; pfB deny stripped).
-		 * pfB block = [deny_in(lan), deny_out(lan)].
-		 * Expected: user_float_pass, user_pass(lan), pfB deny_in(lan), pfB deny_out(lan).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->userFloatPass(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_2', 'on', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_2 float=on single iface');
-		$this->assertTrackersSet($result, 'order_2 float=on');
-		$this->assertUserRulesPreserved($existing, $result, 'order_2 float=on');
-		$this->assertIdempotent($result, $gen, 'order_2', 'on', ['lan'], ['lan'], 'order_2 float=on');
-	}
-
-	// -----------------------------------------------------------------------
-	// I. order_3, float=off, single iface
-	// -----------------------------------------------------------------------
-
-	public function testOrder3FloatOffSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 3, float=off.
-		 *
-		 * ORDER 3 anchor = BEFORE: pfB block first, then kept user rules.
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan).
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_3', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_3 float=off single iface');
-		$this->assertTrackersSet($result, 'order_3 float=off');
-		$this->assertUserRulesPreserved($existing, $result, 'order_3 float=off');
-		$this->assertIdempotent($result, $gen, 'order_3', '', ['lan'], ['lan'], 'order_3 float=off');
-	}
-
-	// -----------------------------------------------------------------------
-	// J. order_3, float=on, single iface
-	// -----------------------------------------------------------------------
-
-	public function testOrder3FloatOnSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 3, float=on.
-		 *
-		 * ORDER 3 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * keep = [user_float_pass, user_pass(lan)] (original order).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->userFloatPass(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_3', 'on', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_3 float=on single iface');
-		$this->assertTrackersSet($result, 'order_3 float=on');
-		$this->assertUserRulesPreserved($existing, $result, 'order_3 float=on');
-		$this->assertIdempotent($result, $gen, 'order_3', 'on', ['lan'], ['lan'], 'order_3 float=on');
-	}
-
-	// -----------------------------------------------------------------------
-	// K. order_4, float=off, inbound==outbound='lan'  [KNOWN-BAD: reorder]
-	// -----------------------------------------------------------------------
-
-	public function testOrder4FloatOffSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 4, float=off, single managed iface (lan).
-		 *
-		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan).
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_4', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_4 float=off single iface');
-		$this->assertTrackersSet($result, 'order_4 float=off');
-		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=off');
-		$this->assertIdempotent($result, $gen, 'order_4', '', ['lan'], ['lan'], 'order_4 float=off');
-	}
-
-	public function testOrder4FloatOffTwoIfacesDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 4, float=off, two managed ifaces (opt1 inbound, lan outbound).
-		 *
-		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * keep = [user_pass(lan), user_pass(opt1)] (original order in existing_rules).
-		 * pfB block = [deny_in(opt1), deny_out(lan)].
-		 * Expected: pfB deny_in(opt1), pfB deny_out(lan), user_pass(lan), user_pass(opt1).
-		 *
-		 * The deliberate behaviour change from Phase 1's KNOWN-BAD oracle: the old bucket-based
-		 * code emitted user rules in accumulated-bucket order (also lan then opt1 for this
-		 * fixture, but would diverge for a different existing_rules order). The immutable-splice
-		 * always preserves the original config.xml order verbatim.
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('opt1'),
-			$this->pfbDenyRule('lan'),
-			$this->userPassLan(),
-			$this->userPassOpt1(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		// inbound='opt1', outbound='lan' — mimics a config where opt1 is the inbound iface.
-		$result = pfb_build_autorule_list($existing, $gen, 'order_4', '', ['opt1'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'opt1', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow OPT1 to any', 'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-		], $result, 'order_4 float=off two ifaces');
-		$this->assertTrackersSet($result, 'order_4 float=off two ifaces');
-		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=off two ifaces');
-		$this->assertIdempotent($result, $gen, 'order_4', '', ['opt1'], ['lan'], 'order_4 float=off two ifaces');
-	}
-
-	// -----------------------------------------------------------------------
-	// L. order_4, float=on, single iface
-	// -----------------------------------------------------------------------
-
-	public function testOrder4FloatOnSingleIfaceDenyOnly(): void
-	{
-		/**
-		 * Scenario: ORDER 4, float=on.
-		 *
-		 * ORDER 4 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * keep = [user_float_pass, user_pass(lan)] (original order).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_float_pass, user_pass(lan).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->userFloatPass(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_4', 'on', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'User Float Pass',            'type' => 'pass',   'interface' => '',    'floating' => 'yes'],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'order_4 float=on single iface');
-		$this->assertTrackersSet($result, 'order_4 float=on');
-		$this->assertUserRulesPreserved($existing, $result, 'order_4 float=on');
-		$this->assertIdempotent($result, $gen, 'order_4', 'on', ['lan'], ['lan'], 'order_4 float=on');
-	}
-
-	// -----------------------------------------------------------------------
-	// M. absent/empty pass_order -> treated as order_0 (the #532 default fix)
-	// -----------------------------------------------------------------------
-
-	public function testAbsentOrderTreatedAsBefore(): void
-	{
-		/**
-		 * Scenario: empty pass_order string (absent / unknown).
-		 *
-		 * The immutable-splice model maps any unknown order to the BEFORE anchor (pfB
-		 * block first, then kept user rules). This makes the drop bug (#532) impossible
-		 * by construction — user rules are never bucketed and cannot be omitted.
-		 *
-		 * Fail-before: the old bucket-based code sent user pass rules to $permit_rules
-		 * for unrecognised orders, which had no tail emission → user rule DROPPED.
-		 * The caller's order_0 default (#539) defended against that; the immutable-splice
-		 * makes the helper itself safe regardless of what the caller passes.
-		 *
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)  (same as order_0).
-		 */
-
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, '', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'empty order -> BEFORE anchor (user rule preserved, same as order_0)');
-		$this->assertTrackersSet($result, 'absent order');
-		$this->assertUserRulesPreserved($existing, $result, 'absent order');
-		$this->assertIdempotent($result, $gen, '', '', ['lan'], ['lan'], 'absent order');
-	}
-
-	// -----------------------------------------------------------------------
-	// N. Permit_* config present (order_1, float=off, separate ifaces)
-	// -----------------------------------------------------------------------
-
-	public function testOrder1FloatOffPermitAndDenyRulesPresent(): void
-	{
-		/**
-		 * Scenario: pfB has BOTH permit_inbound and deny_inbound (Permit_* list present).
-		 * order_1, float=off, separate ifaces (lan in, opt1 out).
-		 *
-		 * ORDER 1 anchor = AFTER: all kept user rules first (verbatim), then pfB block.
-		 * keep = [user_pass(lan), user_pass(opt1)] (original order; pfB deny rules stripped).
-		 * pfB block = [permit_in(lan), deny_in(lan), permit_out(opt1), deny_out(opt1)].
-		 * Expected: user_pass(lan), user_pass(opt1), pfB permit_in(lan), pfB deny_in(lan),
-		 *           pfB permit_out(opt1), pfB deny_out(opt1).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->pfbDenyRule('opt1'),
-			$this->userPassLan(),
-			$this->userPassOpt1(),
-		];
-		$gen = $this->pfbGeneratedPermitAndDeny();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_1', '', ['lan'], ['opt1']);
-
-		$this->assertShapes([
-			['descr' => 'Default allow LAN to any',      'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow OPT1 to any',     'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-			['descr' => 'pfB_PermitList_v4 Auto Rule',   'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule',     'type' => 'block',  'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_PermitList_v4 Auto Rule',   'type' => 'pass',   'interface' => 'opt1', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule',     'type' => 'reject', 'interface' => 'opt1', 'floating' => ''],
-		], $result, 'order_1 float=off Permit_* + Deny_* separate ifaces');
-		$this->assertTrackersSet($result, 'order_1 permit+deny');
-		$this->assertUserRulesPreserved($existing, $result, 'order_1 permit+deny');
-		$this->assertIdempotent($result, $gen, 'order_1', '', ['lan'], ['opt1'], 'order_1 permit+deny');
-	}
-
-	// -----------------------------------------------------------------------
-	// O. DNS-redirect bypass rule present — must survive (not stripped)
-	// -----------------------------------------------------------------------
-
-	public function testDnsRedirectBypassRulePreserved(): void
-	{
-		/**
-		 * Scenario: existing rules include a DNS-redirect bypass rule.
-		 * Its descr starts with PFB_DNS_REDIR_DESCR_V4_PFX ('pfB_DNS_Redirect_').
-		 * The helper must treat it like a user rule — NOT strip it.
-		 *
-		 * order_0 anchor = BEFORE: pfB block first, then kept user rules verbatim.
-		 * keep = [bypass_rule(lan), user_pass(lan)] (original order; pfB deny stripped).
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), bypass_rule(lan), user_pass(lan).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->dnsRedirectBypassRule(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DNS_Redirect_lan_v4',   'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'DNS-redirect bypass rule preserved (not stripped)');
-		$this->assertTrackersSet($result, 'dns-redirect bypass');
-		$this->assertUserRulesPreserved($existing, $result, 'dns-redirect bypass');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dns-redirect bypass');
-	}
-
-	// -----------------------------------------------------------------------
-	// P. DoT-block bypass rule present — must survive (not stripped)
-	// -----------------------------------------------------------------------
-
-	public function testDotBlockBypassRulePreserved(): void
-	{
-		/**
-		 * Scenario: existing rules include a DoT-block bypass rule.
-		 * Its descr starts with PFB_DOT_BLOCK_DESCR_PFX ('pfB_DoT_Block_').
-		 * Must be preserved like a user rule — NOT stripped.
-		 *
-		 * order_0 anchor = BEFORE. keep = [dot_block_rule(lan), user_pass(lan)].
-		 * Expected: pfB deny_in(lan), pfB deny_out(lan), dot_block_rule(lan), user_pass(lan).
-		 */
-
-		$existing = [
-			$this->pfbDenyRule('lan'),
-			$this->dotBlockBypassRule(),
-			$this->userPassLan(),
-		];
-		$gen = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DoT_Block_lan',         'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'DoT-block bypass rule preserved (not stripped)');
-		$this->assertTrackersSet($result, 'dot-block bypass');
-		$this->assertUserRulesPreserved($existing, $result, 'dot-block bypass');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dot-block bypass');
-	}
-
-	// -----------------------------------------------------------------------
-	// Q. pfB_ rules stripped (sanity check)
-	// -----------------------------------------------------------------------
-
-	public function testPfbRulesAreStripped(): void
-	{
-		/**
-		 * Scenario: existing rules contain only a pfB_ deny rule (no bypass prefix).
-		 * It must be stripped and rebuilt from the template.
-		 * Result: exactly the rebuilt pfB rules, no user rules (keep = []).
-		 */
-
-		$existing = [$this->pfbDenyRule('lan')];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'pfB_ rules stripped and rebuilt');
-		$this->assertTrackersSet($result, 'pfB stripped');
-		$this->assertUserRulesPreserved($existing, $result, 'pfB stripped');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'pfB stripped');
-	}
-
-	// -----------------------------------------------------------------------
-	// R. DNSBL float rules emitted when present
-	// -----------------------------------------------------------------------
-
-	public function testDnsblFloatRulesEmittedBeforeIfaceLoop(): void
-	{
-		/**
-		 * Scenario: pfb_generated['dnsbl_float'] contains the pre-built ping+permit pair.
-		 * They must appear BEFORE the inbound/outbound interface rules.
-		 *
-		 * order_0, float=off.
-		 * Expected: dnsbl_ping, dnsbl_permit, pfB deny_in(lan), pfB deny_out(lan), user_pass(lan)
-		 */
-
-		$existing = [$this->userPassLan()];
-
-		$gen                 = $this->pfbGeneratedDenyOnly();
-		$gen['dnsbl_float']  = [
-			['descr' => 'pfB_DNSBL_Ping Auto Rule',   'type' => 'pass', 'interface' => 'opt2', 'floating' => 'yes',
-			 'direction' => 'any', 'ipprotocol' => 'inet', 'source' => ['any' => ''],
-			 'destination' => ['address' => '10.0.0.1'], 'created' => ['time' => 0, 'username' => 'Auto']],
-			['descr' => 'pfB_DNSBL_Permit Auto Rule', 'type' => 'pass', 'interface' => 'opt2', 'floating' => 'yes',
-			 'direction' => 'any', 'ipprotocol' => 'inet', 'source' => ['any' => ''],
-			 'destination' => ['address' => '10.0.0.1', 'port' => 'pfB_DNSBL_Ports'],
-			 'created' => ['time' => 0, 'username' => 'Auto']],
-		];
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DNSBL_Ping Auto Rule',   'type' => 'pass',   'interface' => 'opt2', 'floating' => 'yes'],
-			['descr' => 'pfB_DNSBL_Permit Auto Rule', 'type' => 'pass',   'interface' => 'opt2', 'floating' => 'yes'],
-			['descr' => 'pfB_DenyList_v4 Auto Rule',  'type' => 'block',  'interface' => 'lan',  'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule',  'type' => 'reject', 'interface' => 'lan',  'floating' => ''],
-			['descr' => 'Default allow LAN to any',   'type' => 'pass',   'interface' => 'lan',  'floating' => ''],
-		], $result, 'DNSBL float rules emitted before iface loop');
-		$this->assertUserRulesPreserved($existing, $result, 'dnsbl float');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'dnsbl float');
-	}
-
-	// -----------------------------------------------------------------------
-	// S. Empty existing rules — no user rules, no pfB old rules
-	// -----------------------------------------------------------------------
-
-	public function testEmptyExistingRulesProducesOnlyPfbRules(): void
-	{
-		/**
-		 * Scenario: no existing rules at all. Only pfB templates.
-		 */
-
-		$gen    = $this->pfbGeneratedDenyOnly();
-		$result = pfb_build_autorule_list([], $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-		], $result, 'empty existing rules');
-		$this->assertTrackersSet($result, 'empty existing');
-		$this->assertUserRulesPreserved([], $result, 'empty existing');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'empty existing');
-	}
-
-	// -----------------------------------------------------------------------
-	// T. Non-managed iface user rule goes to other_rules (float=off)
-	// -----------------------------------------------------------------------
-
-	public function testNonManagedIfaceRulePreservedVerbatim(): void
-	{
-		/**
-		 * Scenario: user rule on 'wan' — NOT in the managed inbound/outbound iface list.
-		 * order_0, float=off, managed=['lan'].
-		 *
-		 * The immutable splice keeps ALL non-pfB-owned rules verbatim, regardless of
-		 * interface. Non-managed rules are not singled out — they stay in their original
-		 * position relative to other user rules in $keep.
-		 * Expected: pfB BEFORE, then keep = [wan_rule, user_pass(lan)] (original order).
-		 */
-
-		$nonManagedRule = [
-			'descr'       => 'WAN rule',
-			'type'        => 'pass',
-			'interface'   => 'wan',
-			'ipprotocol'  => 'inet',
-			'floating'    => '',
-			'source'      => ['any' => ''],
-			'destination' => ['any' => ''],
-		];
-
-		$existing = [$nonManagedRule, $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan'], ['lan']);
-
-		$this->assertShapes([
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block',  'interface' => 'lan', 'floating' => ''],
-			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'reject', 'interface' => 'lan', 'floating' => ''],
-			['descr' => 'WAN rule',                  'type' => 'pass',   'interface' => 'wan', 'floating' => ''],
-			['descr' => 'Default allow LAN to any',  'type' => 'pass',   'interface' => 'lan', 'floating' => ''],
-		], $result, 'non-managed iface rule preserved verbatim in original position');
-		$this->assertUserRulesPreserved($existing, $result, 'non-managed iface');
-		$this->assertIdempotent($result, $gen, 'order_0', '', ['lan'], ['lan'], 'non-managed iface');
-	}
-
-	/**
-	 * Regression: a null $float / $order must be tolerated exactly as ''.
-	 *
-	 * The call site passes $pfb['float'] / $pfb['order'] straight through, and those are
-	 * unset (null) until configured (e.g. enable_float not set). The original inline code
-	 * used the raw null in loose comparisons, so null is behaviour-equivalent to ''. The
-	 * Phase-1 extraction's strict `string` typehint instead TypeError'd on the null the call
-	 * site legitimately passes -- which on a live VM aborted `pfblockerng.php update` with a
-	 * fatal ("Argument #4 ($float) must be of type string, null given"), so no pfB rule was
-	 * built. This pins that the null path produces the SAME output as the empty-string path.
-	 */
-	public function testNullOrderAndFloatTreatedAsEmptyString(): void
-	{
-		$existing = [$this->pfbDenyRule('lan'), $this->userPassLan()];
-		$gen      = $this->pfbGeneratedDenyOnly();
-
-		$withEmpty = pfb_build_autorule_list($existing, $gen, '', '', ['lan'], ['lan']);
-		$withNull  = pfb_build_autorule_list($existing, $gen, null, null, ['lan'], ['lan']);
-
-		$this->assertSame(
-			$this->shapes($withEmpty),
-			$this->shapes($withNull),
-			'null $order/$float must behave identically to empty-string (regression for the live '
-				. 'TypeError that aborted the update verb when enable_float was unset)'
-		);
-	}
-
-	/**
-	 * A pfB match rule is floating-only and emitted ONCE across all inbound interfaces (the
-	 * $pfbrunonce gate), carrying $pfb_generated['inbound_floating'] as its interface — not once
-	 * per interface. Pins that emit-once logic, which no fixture above exercises (all leave
-	 * match_inbound empty), so a regression in $pfbrunonce can't slip past the off-appliance suite.
-	 */
-	public function testMatchInboundEmittedOnceAcrossMultipleInterfaces(): void
-	{
-		$existing = [$this->userPassLan()];
-		$gen = $this->pfbGeneratedDenyOnly();
-		$gen['inbound_floating'] = 'lan,opt1';   // the floating interface group set by the package
-		$gen['match_inbound'] = [[
-			'descr'       => 'pfB_DenyList_v4 Auto Rule',
-			'type'        => 'match',
-			'interface'   => '',  // set by helper to inbound_floating
-			'ipprotocol'  => 'inet',
-			'floating'    => 'yes',
-			'source'      => ['address' => 'pfB_DenyList_v4'],
-			'destination' => ['any' => ''],
-			'created'     => ['time' => 0, 'username' => 'Auto'],
-		]];
-
-		// Two inbound interfaces — the match rule must still appear EXACTLY ONCE.
-		$result = pfb_build_autorule_list($existing, $gen, 'order_0', '', ['lan', 'opt1'], ['lan', 'opt1']);
-
-		$matches = array_values(array_filter($result, static fn (array $r): bool => ($r['type'] ?? '') === 'match'));
+		// Match rules are floating-only and must be emitted ONCE even with multiple inbound ifaces.
+		$result = pfb_build_autorule_list([$this->userPass('User allow LAN')], $this->genWithMatch(),
+		                                  'order_0', '', ['lan', 'opt1'], []);
+		$matches = array_filter($result, static fn ($r) => ($r['descr'] ?? '') === 'pfB_MatchList_v4 Auto Rule');
 		$this->assertCount(1, $matches,
-			'pfB match rule must be emitted once across all inbound interfaces ($pfbrunonce), got '
-				. count($matches) . ': ' . json_encode($this->shapes($result), JSON_PRETTY_PRINT));
-		$this->assertSame('lan,opt1', $matches[0]['interface'] ?? null,
-			'the match rule carries inbound_floating as its interface');
-		$this->assertUserRulesPreserved($existing, $result, 'match-once');
+			"Floating Match rule must be emitted exactly once across interfaces.\n\nActual:\n"
+				. json_encode($this->shapes($result), JSON_PRETTY_PRINT));
+		// The single Match carries the inbound_floating interface, not a per-iface value.
+		$this->assertSame('lan', array_values($matches)[0]['interface'], 'match interface = inbound_floating');
+		$this->assertTrackersSet($result, 'match-once');
+	}
+
+	public function testDnsblFloatPairLeadsThePfbPassBucket(): void
+	{
+		$result = pfb_build_autorule_list([$this->userPass('User allow LAN')], $this->genWithDnsbl(),
+		                                  'order_0', '', ['lan'], []);
+		$this->assertShapes([
+			['descr' => 'pfB_DNSBL_Permit',          'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
+			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block', 'interface' => 'lan', 'floating' => '',    'direction' => 'in'],
+			['descr' => 'User allow LAN',            'type' => 'pass',  'interface' => 'lan', 'floating' => '',    'direction' => ''],
+		], $result, 'dnsbl lead');
+	}
+
+	public function testPfbOwnedRulesStrippedAndRegenerated(): void
+	{
+		// A stale pfB_DenyAlias auto rule in the input must be removed; the fresh pfB Deny appears.
+		$existing = [$this->pfbOwnedDeny('lan'), $this->userPass('User allow LAN')];
+		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+
+		$descrs = array_column($result, 'descr');
+		$this->assertNotContains('pfB_DenyAlias_v4 Auto Rule', $descrs,
+			"Stale pfB-owned rule must be stripped.\n\nActual:\n" . json_encode($descrs, JSON_PRETTY_PRINT));
+		$this->assertContains('pfB_DenyList_v4 Auto Rule', $descrs, 'fresh pfB Deny regenerated');
+		$this->assertContains('User allow LAN', $descrs, 'user rule kept');
+	}
+
+	public function testBypassRulesAreKeptNotStripped(): void
+	{
+		// DNS-redirect / DoT-block bypass rules keep their pfB_ prefix but are user-managed.
+		$existing = [$this->dnsRedirectBypass(), $this->dotBlockBypass(), $this->userPass('User allow LAN')];
+		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+
+		$descrs = array_column($result, 'descr');
+		$this->assertContains('pfB_DNS_Redirect_lan_v4', $descrs, 'DNS-redirect bypass kept');
+		$this->assertContains('pfB_DoT_Block_lan', $descrs, 'DoT-block bypass kept');
+		$this->assertUserRulesIntact($existing, $result, 'bypass kept');
+	}
+
+	// =======================================================================
+	// Immutability contract (no drop / no dup / no mutation) + within-bucket order
+	// =======================================================================
+
+	public function testNoUserRuleDuplicationWhenInterfaceIsBothInAndOut(): void
+	{
+		// The #532 dup: a Permit list whose interface is BOTH inbound and outbound previously
+		// emitted the user pass rule twice (once per loop). It must now appear exactly once.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny(''), 'order_2', '', ['lan'], ['lan']);
+
+		foreach (['User allow LAN', 'User block evil'] as $descr) {
+			$count = count(array_filter($result, static fn ($r) => ($r['descr'] ?? '') === $descr));
+			$this->assertSame(1, $count,
+				"User rule '{$descr}' must appear exactly once (in==out dup guard).\n\nActual:\n"
+					. json_encode($this->shapes($result), JSON_PRETTY_PRINT));
+		}
+		$this->assertUserRulesIntact($existing, $result, 'in==out no-dup');
+	}
+
+	public function testFloatingUserRulesNotDroppedWhenNoInboundInterface(): void
+	{
+		// Reference DROP bug: order_2 + float-on emitted floating user pass/match only inside the
+		// inbound loop, so with NO inbound interface (outbound-only list) they vanished. They must
+		// survive — a user rule is never dropped, whatever the iface/order/float combination.
+		$existing = [$this->userPass('User float allow', 'lan', 'yes'), $this->userMatch('User float match', 'lan')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny('on'), 'order_2', 'on', [], ['lan']);
+
+		$descrs = array_column($result, 'descr');
+		$this->assertContains('User float allow', $descrs,
+			"Floating user pass must survive with no inbound iface.\n\nActual:\n" . json_encode($descrs, JSON_PRETTY_PRINT));
+		$this->assertContains('User float match', $descrs, 'floating user match must survive');
+		$this->assertUserRulesIntact($existing, $result, 'order_2 float-on outbound-only no-drop');
+	}
+
+	public function testWithinBucketOrderPreserved(): void
+	{
+		// Two user pass rules on the same managed iface land in the same bucket; order_1 must keep
+		// their RELATIVE order (only whole buckets move, never the rules inside one).
+		$existing = [$this->userPass('User allow LAN'), $this->userPass('User allow LAN 2')];
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', '', ['lan'], ['lan']);
+
+		$this->assertShapes([
+			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'User allow LAN 2',            'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
+			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+			['descr' => 'pfB_DenyList_v4 Auto Rule',   'type' => 'block', 'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
+		], $result, 'within-bucket order');
+	}
+
+	public function testEmptyAndUnknownOrderBehaveAsOrder0(): void
+	{
+		// An empty/unknown pass_order must NOT drop a user rule (#532/#539) — it acts as order_0.
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
+		$order0   = $this->shapes(pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], ['lan']));
+
+		foreach (['', 'totally_bogus', null] as $order) {
+			$result = pfb_build_autorule_list($existing, $this->genDenyOnly(), $order, '', ['lan'], ['lan']);
+			$this->assertSame($order0, $this->shapes($result),
+				'order ' . var_export($order, TRUE) . ' must match order_0');
+			$this->assertUserRulesIntact($existing, $result, 'empty/unknown order');
+		}
+	}
+
+	public function testNullFloatTolerated(): void
+	{
+		// $pfb['float'] is null until configured; the helper coerces it to off, never TypeErrors.
+		$existing = [$this->userPass('User allow LAN')];
+		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', null, ['lan'], []);
+		$this->assertSame(
+			$this->shapes(pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], [])),
+			$this->shapes($result),
+			'null float == off'
+		);
+	}
+
+	public function testIdempotentAcrossOrdersAndFloat(): void
+	{
+		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil'),
+		             $this->userPass('User allow OPT1', 'opt1')];
+		foreach (['order_0', 'order_1', 'order_2', 'order_3', 'order_4'] as $order) {
+			foreach (['', 'on'] as $float) {
+				$gen   = $this->genPermitDeny($float);
+				$first = pfb_build_autorule_list($existing, $gen, $order, $float, ['lan'], ['opt1']);
+				$this->assertIdempotent($first, $gen, $order, $float, ['lan'], ['opt1'], "{$order} float='{$float}'");
+			}
+		}
+	}
+
+	// =======================================================================
+	// HEADLINE GUARD — behavioural equivalence to the proven 8c4c482 reference
+	// on every dup-free config (the dup-trigger configs are the bug we fix and
+	// are pinned to the corrected ORDER table by the fixtures above).
+	// =======================================================================
+
+	public function testBehaviourEqualsProvenReferenceOnDupFreeMatrix(): void
+	{
+		$compared = 0;
+
+		foreach ($this->differentialMatrix() as $label => $c) {
+			[$existing, $gen, $order, $float, $in, $out] = $c;
+
+			$new = pfb_build_autorule_list($existing, $gen, $order, $float, $in, $out);
+
+			// (1) the dup fix holds for EVERY config: no user rule appears more than once.
+			$userShapes = $this->shapes(array_values(array_filter($new, fn ($r) => $this->isUserRule($r))));
+			$dups = array_filter(array_count_values(array_map('json_encode', $userShapes)), fn ($n) => $n > 1);
+			$this->assertSame([], $dups,
+				"[{$label}] user rule duplicated:\n" . json_encode(array_keys($dups), JSON_PRETTY_PRINT));
+
+			// (2) behavioural equivalence to the proven reference — asserted ONLY where the
+			//     reference is itself defect-free; the configs skipped here are exactly the bugs
+			//     this change fixes, pinned to the corrected behaviour by the fixtures above:
+			//       * an interface in BOTH in+out dups the user-pass rule (order_1/order_2);
+			//       * order_2 + float-on wedges the floating user pass/match into the inbound loop
+			//         (dropping them with no inbound iface, dup'ing them with >1) and emits the
+			//         pfB match_outbound only later in the outbound loop — so the reference
+			//         mis-orders that whole case. Our helper applies the ORDER table cleanly to
+			//         the floating group (pinned by testFloatOnAppliesOrderTableToFloatingGroup).
+			$overlap        = array_intersect($in, $out) !== [];
+			$userDup        = ($order === 'order_1' || $order === 'order_2') && $overlap;
+			$order2FloatBug = ($order === 'order_2' && $float === 'on');
+			if ($userDup || $order2FloatBug) {
+				continue;
+			}
+
+			// The production call site feeds the helper `pass_order ?: 'order_0'`, so the proven
+			// reference only ever saw order_0..4 — never '' / unknown (its empty-order path is the
+			// #532 drop we fix). Feed it the normalised order, exactly as the call site would.
+			$refOrder = in_array($order, ['order_1', 'order_2', 'order_3', 'order_4'], TRUE) ? $order : 'order_0';
+			$refClean = $this->dedup(pfb_autorule_reference_8c4c482($existing, $gen,
+			    $refOrder, $float, $in, $out));
+
+			foreach ($this->allIfaces($existing, $in, $out) as $iface) {
+				foreach (['in', 'out'] as $dir) {
+					$this->assertSame(
+						$this->evalSeq($refClean, $iface, $dir),
+						$this->evalSeq($new, $iface, $dir),
+						"[{$label}] iface '{$iface}' dir '{$dir}' eval-sequence diverges from the proven reference"
+					);
+				}
+			}
+			$compared++;
+		}
+
+		// Guard against an accidentally-empty matrix silently passing.
+		$this->assertGreaterThan(60, $compared, 'differential must compare a meaningful number of dup-free configs');
+	}
+
+	/**
+	 * Deterministic enumerated config matrix: orders × float × iface layouts × user-rule sets ×
+	 * pfB generators. Disjoint iface layouts keep most configs dup-free; the few dup-trigger ones
+	 * are filtered inside the test. No RNG — fully reproducible.
+	 *
+	 * @return array<string, array{0: array, 1: array, 2: ?string, 3: ?string, 4: array, 5: array}>
+	 */
+	private function differentialMatrix(): array
+	{
+		$ifaceLayouts = [
+			'in-lan'              => [['lan'], []],
+			'out-lan'             => [[], ['lan']],
+			'in-lan/out-opt1'     => [['lan'], ['opt1']],
+			'in-lanopt1/out-opt2' => [['lan', 'opt1'], ['opt2']],
+			'in-lanopt1'          => [['lan', 'opt1'], []],
+			'in-lan/out-lan'      => [['lan'], ['lan']],     // overlap (dup-trigger, filtered)
+		];
+		$userSets = [
+			'empty'        => [],
+			'pass+block'   => [$this->userPass('U-pass', 'lan'), $this->userBlock('U-block', 'lan')],
+			'mixed-ifaces' => [$this->userPass('U-pass-lan', 'lan'), $this->userBlock('U-block-opt1', 'opt1'),
+			                   $this->userBlock('U-float', 'lan', 'yes')],
+			'floatpass+match+unmanaged' => [$this->userPass('U-float-pass', 'lan', 'yes'),
+			                   $this->userMatch('U-float-match', 'lan'), $this->userPass('U-wan', 'wan')],
+			'bypass+stale' => [$this->dnsRedirectBypass(), $this->pfbOwnedDeny('lan'), $this->userPass('U-keep', 'lan')],
+		];
+		$orders = ['order_0', 'order_1', 'order_2', 'order_3', 'order_4', '', 'bogus'];
+
+		$cases = [];
+		foreach ($orders as $order) {
+			foreach (['', 'on'] as $float) {
+				foreach ($ifaceLayouts as $ilabel => [$in, $out]) {
+					foreach ($userSets as $ulabel => $users) {
+						foreach (['permit+deny', 'deny-only', 'with-match', 'with-dnsbl'] as $glabel) {
+							$gen = match ($glabel) {
+								'permit+deny' => $this->genPermitDeny($float),
+								'deny-only'   => $this->genDenyOnly(),
+								'with-match'  => $this->genWithMatch(),
+								'with-dnsbl'  => $this->genWithDnsbl(),
+							};
+							$cases["o={$order};f={$float};if={$ilabel};u={$ulabel};g={$glabel}"]
+								= [$users, $gen, $order, $float, $in, $out];
+						}
+					}
+				}
+			}
+		}
+		return $cases;
+	}
+
+	// --- differential projection primitives (mirror the pf evaluation model) ---------------
+
+	/** Remove genuinely-identical duplicate rules, keeping first occurrence. */
+	private function dedup(array $arr): array
+	{
+		$seen = []; $out = [];
+		foreach ($arr as $r) {
+			$k = json_encode($r);
+			if (isset($seen[$k])) {
+				continue;
+			}
+			$seen[$k] = TRUE;
+			$out[]    = $r;
+		}
+		return $out;
+	}
+
+	private function dirOk(array $r, string $dir): bool
+	{
+		$d = $r['direction'] ?? '';
+		return $d === '' || $d === 'any' || $d === $dir;
+	}
+
+	/**
+	 * Rules a packet on ($iface,$dir) actually sees, in evaluation order: the floating rules that
+	 * apply to it (in $dir, and either unscoped or scoped to $iface), then this interface's own
+	 * non-floating rules. A floating rule scoped to another interface is NOT seen — so a reorder
+	 * of two different-interface floating rules is inert, and this projection treats it as such.
+	 */
+	private function evalSeq(array $arr, string $iface, string $dir): array
+	{
+		$float = []; $ifc = [];
+		foreach ($arr as $r) {
+			if (!$this->dirOk($r, $dir)) {
+				continue;
+			}
+			$ri = $r['interface'] ?? '';
+			if (($r['floating'] ?? '') === 'yes') {
+				if ($ri === '' || $ri === 'any' || $ri === $iface) {
+					$float[] = $r;
+				}
+			} elseif ($ri === $iface) {
+				$ifc[] = $r;
+			}
+		}
+		return $this->shapes(array_merge($float, $ifc));
+	}
+
+	private function allIfaces(array $existing, array $in, array $out): array
+	{
+		$s = array_merge($in, $out);
+		foreach ($existing as $r) {
+			$s[] = $r['interface'] ?? '';
+		}
+		return array_values(array_unique($s));
 	}
 }
