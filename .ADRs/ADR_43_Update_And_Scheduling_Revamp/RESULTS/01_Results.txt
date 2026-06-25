@@ -1,0 +1,71 @@
+ADR-43 Phase 1 — Pin Verbs And Extract Request
+===============================================
+Branch: adr/43-update-and-scheduling-revamp
+Status: COMPLETE
+
+## What was done
+
+1. Added `pfb_trigger_request($verb)` to pfblockerng.inc after `pfb_hook_trigger()`
+   (at ~line 3219). Pure function, no side-effects.
+
+2. Replaced the `switch ($cron)` block in `sync_package_pfblockerng()` (~line 11639)
+   with struct-based routing through `$pfb_req = pfb_trigger_request($cron)`.
+   Observable behaviour is BYTE-FOR-BYTE IDENTICAL.
+
+3. Created tests/php/TriggerRequestTest.php — 14 oracle tests (36 assertions)
+   pinning the current verb→struct and verb→PFB_TRIGGER mappings.
+
+## Contract table (oracle — pinned by TriggerRequestTest.php)
+
+  verb/path    $cron arg   scope   force   trigger  PFB_TRIGGER
+  ----------   ---------   -----   -----   -------  -----------
+  'cron'       'cron'      both    false   cron     cron
+  'update'     'cron'*     both    false   cron     cron      (*indistinguishable inside pass)
+  'updateip'   'updateip'  ip      true    force    force-reload
+  'updatednsbl''updatednsbl'dnsbl  true    force    force-reload
+  'noupdates'  'noupdates' both    false   cron     cron
+  '' / unknown ''          both    false   cron     update
+
+  * 'update' (GUI Force Update) maps identically to 'cron' today because pfblockerng.php
+    calls sync_package_pfblockerng('cron') for both. Phase 3 will assign 'update' its own
+    'manual' trigger identity and distinct PFB_TRIGGER.
+
+## Key constraints satisfied
+
+- NO deprecation log, NO new public entrypoint, NO scheduling/cron/GUI/HA-sync/smoke change
+- NO Python/shell changes
+- pfb_hook_trigger() and its two call sites are UNCHANGED (both still call it directly)
+- 'noupdates' $pfb['save']=TRUE side-channel kept as explicit $cron === 'noupdates' check
+- 'cron' reuse propagation kept as explicit $cron === 'cron' && $pfb['reuse'] == 'on' check
+  (struct alone can't distinguish 'cron' from '' / 'update' inside the pass)
+
+## Context-dependency note (force_ip_refetch)
+
+The ADR prompt mentioned `force_ip_refetch()`. No such function exists in the codebase.
+The "Force" mechanism is CONFIG-layer context: pfblockerng_update.php sets pfb_reuse='on'
+in config BEFORE calling the verb, then the 'cron' switch-case propagates reuse_dnsbl='on'.
+This is NOT a verb-level concern — the verb→struct mapping is still clean.
+
+## Verification gates
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc  → No syntax errors
+  vendor/bin/phpunit                                      → 1425 tests, 3 skipped, OK
+  vendor/bin/phpunit --filter TriggerRequestTest          → 14/14, 36 assertions, OK
+  vendor/bin/phpstan analyse --memory-limit=1G            → No errors
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/        → (clean)
+  python -m pytest -q                                     → 1882 passed, 4 skipped
+  ruff check .                                            → All checks passed
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc  (added pfb_trigger_request; refactored switch)
+  tests/php/TriggerRequestTest.php               (new — 14 oracle tests)
+
+## Handoff to Phase 2
+
+Next phase: route the pre-hook call (pfb_run_hooks 'pre', TRIGGER) and the post-hook call
+at line ~16013 through the struct. Also audit any other pfb_hook_trigger() consumers.
+The struct's 'trigger' field ('cron'|'force') is the hook-identity vocabulary; Phase 3
+will fold PFB_TRIGGER derivation into it.
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=2
