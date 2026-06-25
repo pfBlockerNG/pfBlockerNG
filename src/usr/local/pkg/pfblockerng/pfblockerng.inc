@@ -11912,7 +11912,13 @@ function sync_package_pfblockerng($cron='') {
 		$pfb_req       = pfb_trigger_request($pfb_cron_str);
 		$pfb_hook_val  = pfb_hook_trigger($pfb_cron_str);
 		$pfb_is_noups  = ($pfb_cron_str === 'noupdates');
-		$pfb_cron_tick = ($pfb_cron_str === 'cron');
+		// 'update' is the deprecated CLI verb that historically called sync_package_pfblockerng('cron'),
+		// so it got $pfb_cron_tick=TRUE and the reuse_dnsbl propagation below fired.
+		// Post-Phase-3 it reaches here as 'update' → trigger='manual' → cron_tick FALSE.
+		// Restore back-compat for this DEPRECATED STRING path only: treat 'update' like 'cron'
+		// for the reuse_dnsbl elseif guard. The new ARRAY path stays unaffected (trigger='manual'
+		// from pfb_trigger_request('update') keeps cron_tick FALSE there, as intended).
+		$pfb_cron_tick = ($pfb_cron_str === 'cron' || $pfb_cron_str === 'update');
 	}
 
 	// ADR-12: pre-update hooks. Fire at the TOP of the pass (after the boot/install
@@ -15933,7 +15939,7 @@ function sync_package_pfblockerng($cron='') {
 	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	$pfb_tick_min = '*/' . PfbConfig::read('pfb_tick_interval');
+	$pfb_tick_min = '*/' . pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval'));
 	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
 
 	if ($pfb['enable'] == 'on') {

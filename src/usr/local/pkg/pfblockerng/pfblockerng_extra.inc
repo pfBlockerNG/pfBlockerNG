@@ -2223,6 +2223,21 @@ function pfb_due_ledger_mark_ran(
 }
 
 /**
+ * pfb_tick_interval_clamp — clamp a raw pfb_tick_interval config value to a valid cron minute.
+ *
+ * Accepts the raw string from PfbConfig::read('pfb_tick_interval') and returns an int
+ * suitable for use as the cron minute field (1–60). Non-numeric or out-of-range values
+ * are clamped: 0 → 1, >60 → 60, non-int (e.g. 'abc') → 1.
+ *
+ * @param string $raw   Raw config value (e.g. '15', '0', '100', 'abc').
+ * @return int          Clamped interval in [1, 60].
+ */
+function pfb_tick_interval_clamp(string $raw): int
+{
+	return max(1, min(60, (int) $raw));
+}
+
+/**
  * pfb_tick_seed — stable per-install seed for the due-ledger jitter.
  *
  * Uses the system hostname (stable across reboots unless the admin changes it).
@@ -2292,6 +2307,11 @@ function pfb_quiet_hours_in_window(int $now, string $window): bool
 	}
 	if (!preg_match('/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/', $window, $m)) {
 		return TRUE;	// malformed → fail-safe: apply immediately
+	}
+	// Validate hour ≤ 23 and minute ≤ 59 for both endpoints; the regex allows h=25/m=99.
+	// Out-of-range → fail-safe: apply immediately (defers forever otherwise).
+	if ((int)$m[1] > 23 || (int)$m[2] > 59 || (int)$m[3] > 23 || (int)$m[4] > 59) {
+		return TRUE;	// out-of-range → fail-safe: apply immediately
 	}
 	$start = (int)$m[1] * 60 + (int)$m[2];
 	$end   = (int)$m[3] * 60 + (int)$m[4];

@@ -1200,13 +1200,13 @@ _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 _LEDGER_PATH = f"{helpers.PFB_DBDIR}/pfb_due_ledger.json"
 
 
-def test_update_runnow_updates_ledger(
+def test_update_runnow_scope_guard_and_ledger(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Phase-6 Run Now form POST dispatches pfb_trigger and updates the due ledger.
+    """Phase-6 Run Now only advances the cron ledger entry when scope=both.
 
-    Scenario: Run Now with scope=ip updates cron ledger entry (before/after).
+    Scenario: scope-guard — partial scope=ip must NOT advance cron.last_run.
       Background: pfBlockerNG deployed and enabled; no feeds configured (fast run).
 
     Given pfBlockerNG is enabled,
@@ -1214,14 +1214,16 @@ def test_update_runnow_updates_ledger(
 
     When the Update page Run Now form is submitted with scope=ip and force unchecked,
 
-    Then the ``pfb_due_ledger.json`` 'cron' entry shows last_run >= before_ts —
-      proving pfb_runnow() dispatched pfb_trigger AND called pfb_due_ledger_mark_ran()
-      (the oracle is the ledger file on the VM, not the HTTP response body);
-    And the Update page re-renders with the Schedule section present — proving the
-      next-run view reflects the run without a PHP error.
+    Then the ``pfb_due_ledger.json`` 'cron' entry is UNCHANGED (last_run < before_ts) —
+      proving pfb_runnow() guards mark_ran('cron') to scope=both only;
 
-    The BEFORE assertion is that 'cron.last_run' (if present) is < before_ts — which
-    flips to >= after_ts after the POST — providing the transition evidence.
+    When the Update page Run Now form is submitted a second time with scope=both,
+
+    Then the 'cron' entry shows last_run >= before_ts —
+      proving the full-pass scope=both DOES advance the ledger.
+
+    The BEFORE assertion establishes the pre-state; the two-step ACT proves the guard
+    fires on scope=ip and releases on scope=both (transition evidence per mandate).
     """
     vm = smoke_vm
     # Ensure pfBlockerNG is enabled; restore the original state at the end.
@@ -1245,30 +1247,51 @@ def test_update_runnow_updates_ledger(
                 "before the Run Now POST — cannot confirm the POST caused the update"
             )
 
-        # ACT: POST the Update page with scope=ip, force unchecked (reuse / no reparse).
-        # pfb_runnow() blocks until pfb_trigger writes 'UPDATE PROCESS ENDED', so the
-        # HTTP response comes back only after the run completes.
+        # ACT 1: POST scope=ip — a partial run; the cron ledger must NOT advance.
+        # pfb_runnow() blocks until pfb_trigger writes 'UPDATE PROCESS ENDED'.
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "ip"},
             submit=("run", "Run Now"),
             timeout=SAVE_TIMEOUT,
         )
-        assert not looks_like_login_page(resp.text), "Run Now POST returned the login form (session lost)"
+        assert not looks_like_login_page(resp.text), "scope=ip POST returned the login form (session lost)"
 
-        # AFTER: read the ledger from the VM and assert 'cron.last_run' was updated.
+        # AFTER scope=ip: cron ledger must be UNCHANGED — the scope-guard fires.
         result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
-        assert result.returncode == 0, (
-            f"pfb_due_ledger.json not found after Run Now "
-            f"(rc={result.returncode} stderr={result.stderr!r}) — "
+        cron_last_after_ip = 0
+        if result.returncode == 0:
+            ledger_ip = json.loads(result.stdout)
+            cron_last_after_ip = ledger_ip.get("cron", {}).get("last_run", 0)
+        assert cron_last_after_ip < before_ts, (
+            f"ledger cron.last_run={cron_last_after_ip} >= before_ts={before_ts} after scope=ip — "
+            "pfb_runnow() must NOT call mark_ran('cron') for a partial scope=ip run "
+            "(would suppress the next DNSBL-inclusive full pass)"
+        )
+
+        # ACT 2: POST scope=both — a full-pass run; the cron ledger MUST advance.
+        ts_before_both = int(vm.ssh("/bin/date", "+%s").stdout.strip())
+        resp2 = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "both"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
+
+        # AFTER scope=both: cron ledger must reflect the full-pass run.
+        result2 = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
+        assert result2.returncode == 0, (
+            f"pfb_due_ledger.json not found after scope=both Run Now "
+            f"(rc={result2.returncode} stderr={result2.stderr!r}) — "
             "pfb_due_ledger_mark_ran() may not have been called"
         )
-        ledger = json.loads(result.stdout)
-        assert "cron" in ledger, f"ledger has no 'cron' key after Run Now: {ledger!r}"
-        last_run = ledger["cron"].get("last_run", 0)
-        assert last_run >= before_ts, (
-            f"ledger cron.last_run={last_run} < before_ts={before_ts} — "
-            "Run Now did not update the ledger (pfb_due_ledger_mark_ran() not called)"
+        ledger_both = json.loads(result2.stdout)
+        assert "cron" in ledger_both, f"ledger has no 'cron' key after scope=both: {ledger_both!r}"
+        last_run_both = ledger_both["cron"].get("last_run", 0)
+        assert last_run_both >= ts_before_both, (
+            f"ledger cron.last_run={last_run_both} < ts_before_both={ts_before_both} after scope=both — "
+            "Run Now with scope=both must advance the cron ledger entry"
         )
 
         # Re-render the Update page and confirm the Schedule section is present.

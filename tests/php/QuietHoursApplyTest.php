@@ -292,6 +292,50 @@ final class QuietHoursApplyTest extends TestCase
 		);
 	}
 
+	/**
+	 * Out-of-range hour (e.g. "25:00-03:00") returns TRUE (fail-safe).
+	 *
+	 * The regex accepts \d{1,2} for hours, so h=25 passes the pattern but is not a valid
+	 * clock hour. Without the bounds check, the function would parse start=1500 (25*60)
+	 * which can never match cur (max 1439), deferring applies forever.
+	 *
+	 * Scenario:
+	 *   Given window = "25:00-03:00" (hour 25 is out of range).
+	 *   When pfb_quiet_hours_in_window($now, $window).
+	 *   Then TRUE (fail-safe: apply immediately, not defer forever).
+	 *
+	 * Red→green: before the bounds check, the function returned FALSE (start=1500, never matches).
+	 */
+	public function testOutOfRangeHourReturnsTrueFailSafe(): void
+	{
+		$this->assertTrue(
+			pfb_quiet_hours_in_window($this->t1000, '25:00-03:00'),
+			'out-of-range hour (25) must return TRUE (fail-safe: apply immediately, not defer forever)'
+		);
+	}
+
+	/**
+	 * Out-of-range minute (e.g. "10:60-11:00") returns TRUE (fail-safe).
+	 *
+	 * The regex accepts \d{2} for minutes, so m=60 passes the pattern but is not a valid
+	 * minute. Without the bounds check, start=660 (10*60+60) = 11:00 which could produce
+	 * a window equal to "11:00-11:00" (zero-width) or silently mis-match.
+	 *
+	 * Scenario:
+	 *   Given window = "10:60-11:00" (minute 60 is out of range).
+	 *   When pfb_quiet_hours_in_window($now, $window).
+	 *   Then TRUE (fail-safe: apply immediately).
+	 *
+	 * Red→green: before the bounds check, the function silently mis-calculated the window.
+	 */
+	public function testOutOfRangeMinuteReturnsTrueFailSafe(): void
+	{
+		$this->assertTrue(
+			pfb_quiet_hours_in_window($this->t1000, '10:60-11:00'),
+			'out-of-range minute (60) must return TRUE (fail-safe: apply immediately)'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_due_ledger_set_pending + pfb_due_ledger_is_pending
 	// -----------------------------------------------------------------------

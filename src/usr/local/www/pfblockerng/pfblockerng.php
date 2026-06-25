@@ -249,14 +249,14 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 		case 'updatednsbl':	// Sync 'Force Reload DNSBL only' [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
 			sync_package_pfblockerng($argv[1]);	// deprecation warning logged inside sync_package_pfblockerng
 			break;
-		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=cron]
+		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
 			sync_package_pfblockerng('update');	// deprecation warning logged inside sync_package_pfblockerng
 			break;
 		case 'pfb_trigger':	// ADR-43 Phase 3: explicit {scope, force, trigger} API
 			// Usage: pfblockerng.php pfb_trigger scope=<both|ip|dnsbl> force=<true|false> trigger=<cron|manual|force>
 			$pfb_tscope   = 'both';
 			$pfb_tforce   = FALSE;
-			$pfb_ttrigger = 'cron';
+			$pfb_ttrigger = 'manual';
 			foreach (array_slice($argv, 2) as $pfb_targ) {
 				if (str_starts_with($pfb_targ, 'scope=')) {
 					$pfb_tscope = substr($pfb_targ, 6);
@@ -265,6 +265,16 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 				} elseif (str_starts_with($pfb_targ, 'trigger=')) {
 					$pfb_ttrigger = substr($pfb_targ, 8);
 				}
+			}
+			// Allow-list: reject unknown scope/trigger values (argv is user-controlled).
+			// Unknown scope → 'both' (full pass); unknown trigger → 'manual' (safe default).
+			if (!in_array($pfb_tscope, array('ip', 'dnsbl', 'both'), TRUE)) {
+				pfb_logger("pfb_trigger: unknown scope={$pfb_tscope} ignored — defaulting to 'both'\n", 1);
+				$pfb_tscope = 'both';
+			}
+			if (!in_array($pfb_ttrigger, array('cron', 'manual', 'force'), TRUE)) {
+				pfb_logger("pfb_trigger: unknown trigger={$pfb_ttrigger} ignored — defaulting to 'manual'\n", 1);
+				$pfb_ttrigger = 'manual';
 			}
 			sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger));
 			break;
