@@ -932,9 +932,14 @@ change, land its PR with **`/pr-merge-flow N`** — roughly `/pr-comments N
 reply, then (only if that completes cleanly) rebase-merge once real CI is green. The review
 source adapts: **CodeRabbit** when active on the repo (it is — installed on the `pfBlockerNG`
 org), else a **Claude Sonnet sub-agent reviewer**. **Snyk** reviews PRs too: when it is
-reviewing (detectable via its PR check / review comments), wait for it **in parallel** and
-handle its security findings the same way — except Snyk posts **no** nitpick or
-outside-diff-range comments, so every Snyk finding is an in-diff item to fix or justify-skip.
+reviewing (detectable via its `code/snyk` **commit status/gate** on the head SHA — Snyk posts
+**no** review comments), wait for it **in parallel** and handle its security findings the same
+way — every Snyk finding is an in-diff item to fix or justify-skip, read from the status detail.
+**Either bot can run out of quota** — CodeRabbit replies with a "Review limit reached" / "run out
+of usage credits" / "rate limited by coderabbit.ai" comment; Snyk's status goes to `error` ("Code
+test limit reached"). A quota notice is an **acknowledgement with no review**, never a clean pass:
+treat the bot as did-not-review — CodeRabbit's quota falls through to the Sonnet substitute, Snyk's
+is dropped from the gate — and **surface the skipped reviewer** so it never reads as "PR is clean".
 The **only** exemptions are the dev-only
 classes that go straight to `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills
 — see "Worktrees"); everything touching `src/`, `tests/`, or CI uses this flow.

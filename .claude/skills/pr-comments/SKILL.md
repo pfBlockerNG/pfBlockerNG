@@ -56,12 +56,16 @@ typically run the instant you push the PR). Block here until `<handle>` has
 **Multiple handles** (`--wait-for=coderabbitai,snyk`): run the wait below **once per handle**
 and continue only when **all engaged** reviewers have finished. **Tolerate an absent reviewer:**
 the loop emits **`NOTPRESENT`** for a handle with zero engagement (no review, comment, or — for
-Snyk — PR check) after the presence window (`PRESENCE` polls, ~5 min) — that handle isn't
+Snyk — PR status/check) after the presence window (`PRESENCE` polls, ~5 min) — that handle isn't
 reviewing this PR, so **skip it and don't block**. The `DECLINE`/`PAUSE`/`@coderabbitai`-nudge
 machinery below is **CodeRabbit-specific**; other handles (**Snyk**, human reviewers) use only
-`FINISHED` / `NOTPRESENT` / `TIMEOUT`. For **Snyk**, `FINISHED` also counts its **PR check**
-reaching a terminal state (a completed `code/snyk` check-run on the head SHA), not just review
-comments.
+`FINISHED` / `QUOTA` / `NOTPRESENT` / `TIMEOUT`. **Snyk posts NO review comments** — it surfaces
+as a commit **status** (`code/snyk (…)` on the head SHA; some setups use a check-run), so for Snyk
+`FINISHED` = that status reaching a terminal **verdict** (`success`/`failure`). A Snyk status in
+**`error`** ("Code test limit reached") is **`QUOTA`**, not `FINISHED` — Snyk didn't run, so it is
+never treated as a clean security pass. **`QUOTA`** (either bot hit a usage/rate limit) is handled
+like an absent reviewer here: drop the handle and continue, but **surface** the limit so the user
+knows the bot was skipped rather than that the PR is clean.
 
 - **"Finished" = the reviewer has posted its findings in the PR** — inline review
   comments and/or a final summary message. It does **not** mean any code/commit
@@ -100,18 +104,35 @@ while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
   # Snyk often posts ONLY a PR check, no comment: a completed Snyk check-run = finished; ANY Snyk
   # check (even in-progress) = engaged. (ponytail: one completed check ⇒ done; a Snyk that finishes
   # piecemeal across several checks is close enough — tighten only if it ever misfires.)
-  scheck=""
+  scheck=""; sinfo=""
   if [ "$HANDLE" = snyk ]; then
-    runs=$(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
-      -q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | .status' 2>/dev/null)
-    [ -n "$runs" ] && seen=1
-    printf '%s' "$runs" | grep -q '^completed$' && scheck=1
+    # Snyk posts NO review comments — it surfaces as a commit STATUS ("code/snyk (…)" on the head
+    # SHA; some setups use a check-run). state/conclusion success|failure = a real verdict (FINISHED);
+    # state=error (e.g. "Code test limit reached") = Snyk did NOT run → QUOTA below, never a clean pass.
+    sinfo=$(gh api "repos/$OWNER_REPO/commits/$SHA/status" \
+      -q '.statuses[] | select((.context|ascii_downcase)|test("snyk")) | "\(.state) \(.description)"' 2>/dev/null)
+    sinfo="$sinfo
+$(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
+      -q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | "\(.conclusion // .status) \(.output.title // "")"' 2>/dev/null)"
+    [ -n "$(printf '%s' "$sinfo" | tr -dc 'a-z')" ] && seen=1
+    printf '%s' "$sinfo" | grep -Eqi '^(success|failure|neutral|completed)' && scheck=1
   fi
   [ -n "$inline$review$issuec" ] && seen=1
-  # FINISHED = a TERMINAL result: an inline comment, a submitted review, a completed Snyk check, the
+  # QUOTA = the reviewer hit a usage/rate limit and did NOT actually review — CodeRabbit's
+  # "Review limit reached" / "run out of usage credits" / "rate limited by coderabbit.ai" comment,
+  # or a Snyk status in `error` ("Code test limit reached"). It is an ACK with NO findings and must
+  # NOT be read as a clean pass — Snyk especially, where a limit/error status is an infra error, not
+  # "no vulns". Checked BEFORE FINISHED so a Snyk error-status never slips through as a verdict.
+  quota=""
+  printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' && quota=1
+  printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)' && quota=1
+  if [ -n "$quota" ]; then
+    { echo QUOTA; printf '%s\n' "$issuec$sinfo"; } > "$RESULT"; exit 0
+  fi
+  # FINISHED = a TERMINAL result: an inline comment, a submitted review, a terminal Snyk verdict, the
   # "Actionable comments posted: N" header, OR a clean pass ("No actionable comments were
-  # generated"). A clean pass IS success — nothing to apply. An ERROR (rate limit / service
-  # failure) matches none of these → falls through → eventually TIMEOUT (surfaced), never success.
+  # generated"). A clean pass IS success — nothing to apply. A non-quota error matches none of these
+  # → falls through → eventually TIMEOUT (surfaced), never success.
   if [ -n "$inline" ] || [ -n "$review" ] || [ -n "$scheck" ] \
        || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
     { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
@@ -141,10 +162,19 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
 **When it wakes you, read `$RESULT` and branch:**
 
 - **`FINISHED`** → the reviewer has posted a terminal result. Fall through to Step 3.
-  This includes a **clean pass** ("No actionable comments were generated") — a
-  success with nothing to apply; Steps 4–5 will simply find no actionable items and
-  Step 9 reports it clean. (An error/rate-limit message is deliberately NOT treated
-  as finished — it falls through to `TIMEOUT`, which is surfaced to the user.)
+  This includes a **clean pass** ("No actionable comments were generated", or a Snyk
+  `success` status) — a success with nothing to apply; Steps 4–5 will simply find no
+  actionable items and Step 9 reports it clean. (A usage/rate-limit message is `QUOTA`,
+  not `FINISHED`; a non-quota service error matches nothing and falls to `TIMEOUT`.)
+- **`QUOTA`** → the reviewer hit a usage/rate limit and did **not** actually review:
+  CodeRabbit posted "Review limit reached" / "run out of usage credits" / "rate limited
+  by coderabbit.ai", or Snyk's `code/snyk` status is in `error` ("Code test limit
+  reached"). Treat it as **did-not-review, NOT a clean pass** — never conclude the PR is
+  clean from a quota message (a Snyk limit-reached status is an infra error, not "no
+  vulns"). In a multi-handle wait, **drop this handle and continue** with the others. For
+  a lone-CodeRabbit wait, fall through and let the caller (`/pr-merge-flow`) stand up the
+  Sonnet substitute reviewer. **Do not retry-loop** — the limit won't clear in this
+  window. Always **surface** the skipped reviewer to the user.
 - **`NOTPRESENT`** → no engagement within the presence window — this handle isn't
   reviewing the PR. **Skip it** (in a multi-handle wait, drop this handle and continue
   with the others); it is not a stall, so don't report it as a failure.
@@ -217,11 +247,14 @@ diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
 enumerate every finding (inline + nitpick + outside-diff-range) and its location.
 Build the full list before fixing anything.
 
-**Snyk** (when reviewing the PR — `--wait-for=snyk`, or a Snyk PR check / `snyk`-login review
-comments are present) is an **additional** source: pull its inline review comments the same way
-(source 1 above) and read its PR-check detail. Snyk reports **security** findings only and posts
-**no** nitpick or outside-diff-range buckets — so there is just the one in-diff class, each
-finding handled with the same Step-5 verdict + Step-7 reply as a CodeRabbit inline finding.
+**Snyk** (when reviewing the PR — `--wait-for=snyk`, or a `code/snyk` commit status is present on
+the head SHA) is an **additional** source. **Snyk posts NO review comments** — it surfaces as a
+commit **status/check** (`code/snyk (…)`), so read its detail from the status `description` +
+`target_url` rather than looking for inline threads. Snyk reports **security** findings only and
+posts **no** nitpick or outside-diff-range buckets — so there is just the one in-diff class, each
+finding handled with the same Step-5 verdict + Step-7 reply as a CodeRabbit inline finding. If the
+Snyk status is `error` ("Code test limit reached"), that is a **quota/infra error, not a clean
+pass** — note the skipped scan to the user and do **not** report Snyk as green (see `QUOTA`, Step 2).
 
 **Every enumerated finding is mandatory to handle** — inline, **🧹 Nitpick**, AND
 **⚠️ Outside diff range** alike. Each MUST get an explicit Step-5 verdict

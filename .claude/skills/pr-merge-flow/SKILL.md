@@ -80,6 +80,12 @@ while :; do
       gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
         -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
     } 2>/dev/null)
+  # A CodeRabbit message that is a usage/rate-limit notice is an ACK with NO review — detect it so
+  # we don't waste Step 1b waiting on a review that will never come (a nudge can't restore credits).
+  bodies=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
+    -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.body' 2>/dev/null)
+  printf '%s' "$bodies" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' \
+    && { echo QUOTA > "$RESULT"; exit 0; }
   [ -n "$hits" ] && { echo ACK > "$RESULT"; exit 0; }
   [ "$(date -u +%s)" -ge "$deadline" ] && { echo NOACK > "$RESULT"; exit 0; }
   sleep 30
@@ -88,6 +94,10 @@ done
 
 - **`ACK`** (a CodeRabbit message appeared) → **Step 1b**.
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
+- **`QUOTA`** (CodeRabbit replied only with a usage/rate-limit notice — "Review limit
+  reached" / "run out of usage credits" / "rate limited by coderabbit.ai") → it will **not**
+  review; skip the nudge (credits won't return in-window) and go straight to **Step 1d**
+  (Sonnet substitute). **Surface** that CodeRabbit was skipped for quota in the final report.
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
@@ -100,6 +110,10 @@ done
   do not stall the flow — fall back to the Sonnet stand-in (**Step 1d**); the nudge in
   Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
   acknowledged.
+- If the wait returns **`QUOTA`** for CodeRabbit (it acknowledged only with a usage/rate-limit
+  notice — see Step 2 of `pr-comments`), it will not review: go to the Sonnet stand-in
+  (**Step 1d**) and note the quota skip in the final report. (A `QUOTA` for **Snyk** just
+  drops Snyk from this wait — surface the skipped scan; it does not trigger the substitute.)
 
 ### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
 
@@ -169,19 +183,23 @@ instead of it. **The wait runs through `/pr-comments`, not a bespoke poll here:*
 CodeRabbit-present path (1b) Snyk is already folded into that one call's
 `--wait-for=coderabbitai,snyk`; on the **Sonnet-substitute path (1d)** — where no CodeRabbit
 `pr-comments` wait runs — invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
-its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` check/comment ⇒
-skipped, no stall), so it is always safe to include. This step just records Snyk's specifics:
+its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` status ⇒ skipped,
+no stall), so it is always safe to include. This step just records Snyk's specifics:
 
-- **Detect** whether Snyk is reviewing THIS PR: a Snyk **PR check** (a status/check-run whose
-  context/name contains `snyk`, e.g. `code/snyk`) on the head SHA, and/or **review comments**
-  from a Snyk app/bot (login contains `snyk`). Either presence ⇒ Snyk is engaged; neither ⇒ not
-  active on this PR (the `--wait-for=snyk` wait skips it).
-- **Handle every finding.** Snyk reports **security** issues and, unlike CodeRabbit, posts **no**
+- **Detect** whether Snyk is reviewing THIS PR. **Snyk posts NO review comments** — it surfaces as
+  a commit **status/gate** whose context contains `snyk` (e.g. `code/snyk (…)`) on the head SHA, not
+  as inline threads. A `snyk` status present ⇒ Snyk is engaged; absent ⇒ not active on this PR (the
+  `--wait-for=snyk` wait skips it). Read the finding detail from the status `description` + `target_url`.
+- **A Snyk status in `error` ("Code test limit reached") is a quota/infra error, not a clean pass**
+  — `pr-comments` returns `QUOTA` for it (Step 2). Drop Snyk from the gate and **surface the skipped
+  scan** to the user; never report Snyk as green from a limit-reached status, and never let it block
+  the merge (it is a Snyk-side limit, not a vulnerability in the PR).
+- **Handle every real finding.** Snyk reports **security** issues and, unlike CodeRabbit, posts **no**
   nitpick or outside-diff-range comments — so there are no buckets to sort: every Snyk finding is
   a substantive, in-diff item. Apply the same per-finding triage as CodeRabbit — **APPLY** (fix
   the vulnerability) · **SKIP** (false positive / not introduced by this PR / accepted risk —
   record the reason) · **DEFER** (real but pre-existing/orthogonal → tracking issue) — and reply
-  on each Snyk thread. A failing Snyk check that flags a **real vulnerability the PR introduces**
+  on the PR. A `failure` Snyk status that flags a **real vulnerability the PR introduces**
   is **blocking**: fix it (or, for an unavoidable accepted risk, get the user's call) before
   merging. Honour the `private`-repo disclosure rules when the finding is security-sensitive.
 
