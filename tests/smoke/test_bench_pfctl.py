@@ -1400,15 +1400,16 @@ def test_pfctl_reject_loop(
     print("\n--- Verify: TCP RST probe to in-table and out-table IPs ---")
     in_arg = ",".join(_PROBE_IN_TABLE_IPS[:3])
     out_arg = ",".join(_PROBE_OUT_TABLE_IPS[:3])
-    verify_cmd = f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 2.0 2>/dev/null"
+    # Keep stderr visible (no 2>/dev/null) for diagnostic purposes on failure.
+    verify_cmd = f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 2.0"
     verify_result = client_vm.ssh(verify_cmd, timeout=10.0)
     verify_samples = _parse_tcp_probe_output(verify_result.stdout)
     if not verify_samples:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
         pytest.skip(
-            "TCP RST probe returned no samples — reject loop not working. "
-            "Possible causes: rules not loaded, civm has no route to 11.x/13.x, "
-            "or python3 not available on civm. STOP."
+            f"TCP RST probe returned no samples — reject loop not working. "
+            f"stdout={verify_result.stdout!r} stderr={verify_result.stderr!r} "
+            f"rc={verify_result.returncode}. STOP."
         )
     verify_rtts = sorted(s.rtt_ms for s in verify_samples)
     verify_p99 = verify_rtts[min(int(len(verify_rtts) * 0.99), len(verify_rtts) - 1)]
