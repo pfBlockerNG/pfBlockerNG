@@ -29,7 +29,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Locator, Page
 
     from .webui import WebUI
 
@@ -216,14 +216,21 @@ def test_log_settings_grouped_layout(
     expect(form_group.locator(".control-label")).to_contain_text("pfBlockerNG", timeout=JS_TIMEOUT_MS)
 
     # Polish discriminators: shaded category headers, the IP/DNS renames, per-control labels.
-    expect(page.locator(".form-group.pfb-loghdr").first).to_be_attached(timeout=JS_TIMEOUT_MS)
+    # EXACTLY three shaded category headers (General / IP / DNS) -- assert the count, not just
+    # "at least one", so a dropped/extra category divider fails the test.
+    expect(page.locator(".form-group.pfb-loghdr")).to_have_count(3, timeout=JS_TIMEOUT_MS)
 
-    def _row_label(field: str):
+    def _row_label(field: str) -> Locator:
         ctl = page.locator(f'select[name="{field}"], input[name="{field}"]').first
         return ctl.locator("xpath=ancestor::div[contains(@class,'form-group')]").locator(".control-label")
 
     expect(_row_label("log_max_ip_blocklog")).to_have_text("Block", timeout=JS_TIMEOUT_MS)
     expect(_row_label("log_max_dnsreplylog")).to_have_text("Reply", timeout=JS_TIMEOUT_MS)
 
-    # Per-control mobile labels exist (label.form-label, emitted by Form_Input label-start).
-    expect(page.locator('label.form-label').first).to_be_attached(timeout=JS_TIMEOUT_MS)
+    # EVERY log control carries a per-control mobile label (Form_Input label-start): three per
+    # log row (Max lines / Schedule / Keep lines). Derive the row count from the page (one
+    # log_max_* select per row) so the assertion tracks the real log list, then assert the full
+    # label count rather than just one -- proving every control is labelled, not merely some.
+    log_rows = page.locator('select[name^="log_max_"]').count()
+    assert log_rows >= 1, f"expected at least one log row (select[name^=log_max_]), found {log_rows}"
+    expect(page.locator("label.form-label")).to_have_count(log_rows * 3, timeout=JS_TIMEOUT_MS)
