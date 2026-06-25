@@ -246,6 +246,48 @@ def test_hooks_pre_and_post_fire_with_context(deployed_vm: SmokeVM, mock_feeds: 
     h.clear_update_hooks(deployed_vm)
 
 
+def test_post_hook_output_precedes_end_marker(deployed_vm: SmokeVM) -> None:
+    """The "UPDATE PROCESS ENDED" marker is logged AFTER the post-update hooks.
+
+    The Update-page live tail (``pfb_livetail``, 'force' mode) stops streaming when
+    the log reaches the ``UPDATE PROCESS ENDED`` marker. The ADR-12 post-update hooks
+    log their output (``[ pfB Hook ] post <name> ...``) progressively — a HAProxy
+    reload hook can run up to its timeout — so emitting the marker BEFORE the hooks
+    truncated their output from the live view (it only reappeared on a manual 'View').
+    The marker is now emitted after ``pfb_run_hooks('post', ...)``.
+
+    Given a clean update log and an enabled post hook,
+    When a force update runs,
+    Then the post hook's runner line appears in the log BEFORE the terminal marker.
+    Pre-fix the order was reversed (marker first), so this assertion FAILED then and
+    passes only after the relocation.
+    """
+    token = "endorder"
+    h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
+    h.clear_hook_markers(deployed_vm, token)
+
+    # Truncate the update log so the slice we read is exactly this one pass (truncate(1)
+    # is a clean argv command — no shell redirection through the guest login shell).
+    deployed_vm.ssh("/usr/bin/truncate", "-s", "0", h.PFB_LOG)
+
+    h.reload(deployed_vm, "update")
+
+    log = deployed_vm.ssh("cat", h.PFB_LOG).stdout
+    hook_line = "[ pfB Hook ] post"
+    marker = "UPDATE PROCESS ENDED"
+    hook_pos = log.find(hook_line)
+    marker_pos = log.find(marker)
+
+    assert hook_pos != -1, f"post hook runner line {hook_line!r} absent from the update log:\n{log[-2000:]}"
+    assert marker_pos != -1, f"terminal marker {marker!r} absent from the update log:\n{log[-2000:]}"
+    assert hook_pos < marker_pos, (
+        "post-hook output must be logged BEFORE the terminal marker so the live tail "
+        f"streams it; got hook@{hook_pos} marker@{marker_pos} (marker emitted too early):\n{log[-2000:]}"
+    )
+
+    h.clear_update_hooks(deployed_vm)
+
+
 # --------------------------------------------------------------------------- #
 # 4) PFB_TRIGGER — both reachable values (branch coverage of pfb_hook_trigger)
 # --------------------------------------------------------------------------- #
