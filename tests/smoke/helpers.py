@@ -2622,7 +2622,14 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
     snippet = "echo '<<BOOT>>' . (is_platform_booting() ? '1' : '0') . '<<END>>';"
     last = "?"
     while time.monotonic() < deadline:
-        out = php_eval(vm, snippet, timeout=30.0).stdout
+        # Under boot load pfSsh.php (full config load+lock) can be slow; let one over-30s probe
+        # retry on the remaining budget instead of aborting the whole wait. The deadline still
+        # bounds it -- a persistently slow box times out loudly below.
+        try:
+            out = php_eval(vm, snippet, timeout=30.0).stdout
+        except subprocess.TimeoutExpired:
+            last = "timeout"
+            continue
         if "<<BOOT>>" in out and "<<END>>" in out:
             last = out.split("<<BOOT>>", 1)[1].split("<<END>>", 1)[0].strip()
             if last == "0":
