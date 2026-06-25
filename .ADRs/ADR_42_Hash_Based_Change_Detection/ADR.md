@@ -1,6 +1,9 @@
 # ADR-42: Hash-based feed change detection + conditional GET — replace mtime with content hashing
 
-- **Status:** **Proposed** (2026-06-25)
+- **Status:** **Implemented (pending live-VM smoke)** (2026-06-25) — all five phases landed on
+  `adr/42-hash-based-change-detection`; off-appliance coverage (PHPUnit + the smoke matrix
+  collection) is green. Flips to **Accepted** once the ADR-04 live-VM fan-out (CE + Plus) for the
+  feed cases is green (maintainer-dispatched per §7 / CLAUDE.md "ADR acceptance").
 - **Date:** 2026-06-25
 - **Branch:** `adr/42-hash-based-change-detection` (off **`devel`**; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming"). / **Component(s):** the feed download + change-detection
