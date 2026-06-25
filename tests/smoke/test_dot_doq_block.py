@@ -316,9 +316,18 @@ def _set_dot_block(
     """
     toggle = "on" if enabled else ""
     iface_val = ",".join(ifaces)
-    action_line = f"$d['dnsbl_dot_block_action'] = {h._php_str(action)};\n" if action is not None else ""
+    # When action/floating is None, UNSET the key so the gateway's registered default applies
+    # (reject / per-interface). Merely omitting the assignment would leave a prior test's value
+    # in config.xml, making the default-path cases depend on VM state and test order.
+    action_line = (
+        f"$d['dnsbl_dot_block_action'] = {h._php_str(action)};\n"
+        if action is not None
+        else "unset($d['dnsbl_dot_block_action']);\n"
+    )
     floating_line = (
-        f"$d['dnsbl_dot_block_floating'] = {h._php_str('on' if floating else '')};\n" if floating is not None else ""
+        f"$d['dnsbl_dot_block_floating'] = {h._php_str('on' if floating else '')};\n"
+        if floating is not None
+        else "unset($d['dnsbl_dot_block_floating']);\n"
     )
     snippet = (
         f"$d = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"

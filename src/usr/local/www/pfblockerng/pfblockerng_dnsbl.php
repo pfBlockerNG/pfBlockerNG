@@ -539,7 +539,8 @@ if ($_POST) {
 						'autoproto_in'		=> 'any',
 						'autoproto_out'		=> 'any',
 						'agateway_in'		=> 'default',
-						'agateway_out'		=> 'default'
+						'agateway_out'		=> 'default',
+						'dnsbl_dot_block_action'=> 'reject'
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
