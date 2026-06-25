@@ -239,10 +239,13 @@ class DnsblCase:
                        and count toward pfb_py_regex_count.
       regex_cap     -> the opt-in "Limit long/complex regex" static cap
                        (CFG_DNSBL_SETTINGS/pfb_regex_cap 'on', inc:2685 -> ini
-                       regex_cap=on). When on, an over-length (>200) / nested-
-                       quantifier / alternation-overlap pattern is DROPPED at load
-                       for FEED and USER regex (pfb_unbound.py:_regex_exceeds_
-                       static_cap), so it never enters regexDB or the admitted count.
+                       regex_cap=on). When on, an over-length (>200) pattern is
+                       DROPPED at load for FEED and USER regex (the inlined
+                       len > REGEX_STATIC_LEN_CAP check), so it never enters regexDB
+                       or the admitted count. Catastrophic shapes (nested-quantifier
+                       / alternation-overlap) are dropped always-on via
+                       pfb_unbound.py:_regex_is_catastrophic_shape, independent of
+                       this flag.
       custom_domains -> the DNSBL Group "Custom_List" (the list's base64 'custom'
                        field). pfBlockerNG auto-generates a synthetic
                        '{aliasname}_custom' row from it (inc:7752) which the manifest
