@@ -1,0 +1,71 @@
+================================================================================
+PHASE 2 PROMPT — Content-hash local-feed detection (mtime -> hash)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md   (read §2 + the contract first)
+================================================================================
+
+ROLE
+You implement Phase 2 of ADR-42 on branch `adr/42-hash-based-change-detection`. This phase is
+BEHAVIOUR-CHANGING (mtime -> content hash for local feeds). Work inline on the branch, one commit,
+push directly (PR only if the push is rejected).
+
+WHY THIS PHASE EXISTS
+mtime is whole-second on pfSense, so a content change within the same second as the last ingest is
+MISSED today (the blind spot #540 left open). This phase makes the local-feed gate content-addressed
+via xxh128, using the tagged read/write helper from Phase 1, closing that hole.
+
+REQUIRED READING
+- FIRST, read the prior handoff: .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/01_Results.txt —
+  it must confirm the helper names/signatures, the tagged-file naming, the downgrade sentinel, and
+  the extracted decision entry point. If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md (§2 local-feed gate + migration; the contract #1-#4,#6,#8)
+- src/usr/local/www/pfblockerng/pfblockerng.php — `pfb_update_check()` local-file branch (the mtime
+  compare :562 and #540 md5-confirm :572) — the code this phase replaces.
+- tests/smoke/test_smoke_feeds.py — `test_cron_detects_changed_local_feed`,
+  `test_cron_skips_unchanged_local_feed`, `test_cron_skips_local_feed_with_bumped_mtime_but_same_content`
+  (#538/#540): these are MTIME-based and must be migrated to hash-based, plus a NEW same-second case.
+  Reuse helpers `_pin_cron_due`, `_feed_log_count`, `_bump_feed_mtime`, `h.*`.
+- tests/php/ ; CLAUDE.md (Smoke-tests section: unique_domain(), cron verb + pfb_dailystart due, the
+  noupdates path skips the sync feed-loop -> assert detector verdict not the `exists` line).
+
+ACTION PLAN (tests express intent; red->green for the new behaviour)
+1. In the local-file branch of `pfb_update_check`, REPLACE the mtime compare (+ #540 md5-confirm)
+   with: read the persisted source hash (tagged helper), compute `xxh128(source)`, and treat the
+   feed as changed iff they differ (or the persisted value is absent/unknown -> changed). On a
+   detected change (and after the sync re-ingests) the persisted hash is rewritten via the Phase-1
+   write helper (`.xxhash128`, deleting any legacy `.md5`). mtime is no longer the gate.
+2. Keep the existing `.update` marker contract (touch on change) so the downstream sync path is
+   unchanged — this phase changes only HOW "changed" is decided.
+3. PHPUnit: pin the new decision — content-identical -> unchanged; content-different -> changed;
+   legacy `.md5` present -> reads md5, then a change writes `.xxhash128` + removes `.md5`; absent ->
+   changed; idempotence (same content twice -> no re-ingest).
+4. Smoke: migrate the three #538/#540 cron cases from mtime to hash semantics, and ADD a
+   same-second case — write a local feed, ingest, then rewrite DIFFERENT content while forcing the
+   source mtime EQUAL to the prior (`touch -r` the old mtime onto it) so mtime cannot distinguish;
+   a `cron` run MUST now detect+re-ingest (RED on pre-change mtime code, GREEN after). Drive via the
+   genuine `cron` verb (not force_dnsbl_refetch).
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; PFBL-01 green. Do NOT change the sync/parse path or the `.update`
+  contract. Do NOT touch the remote/conditional-GET path (Phase 3). Do NOT touch Python/shell.
+- The detector stays read-only (no filter_configure/pkg/network beyond what already runs).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit ; php -l ; vendor/bin/phpstan ; vendor/bin/phpcs   → green/clean
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only -q     → new/migrated cases collect
+- ruff check tests/ ; ruff format --check tests/                        → clean
+- diff-read: the local branch now hashes; mtime is gone from the gate; legacy-md5 path present.
+- (Live-VM smoke is Phase 5 / maintainer — do NOT spin up a VM here.)
+
+EXPECTED RESULT
+Local-feed change detection is content-hash-based (xxh128, tagged, legacy-md5-read); the same-second
+blind spot is closed; the #538/#540 smoke cases assert hashing, not mtime.
+
+COMMIT (single)
+    pfblockerng: detect local feed changes by content hash, not mtime (ADR-42 P2)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/02_Results.txt
+Record: the new local-detection flow + file:line; how the persisted hash is written/removed; the
+migrated + new smoke case names and their red->green basis; PHPUnit counts; what Phase 3 (remote /
+conditional GET) must not disturb; the go-ahead.
