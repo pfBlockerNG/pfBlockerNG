@@ -3298,22 +3298,19 @@ function pfb_hook_trigger($cron) {
  *
  * Returns: array { 'scope'   => 'ip'|'dnsbl'|'both',
  *                  'force'   => bool,
- *                  'trigger' => 'cron'|'force' }
+ *                  'trigger' => 'cron'|'manual'|'force' }
  *
- * The 'trigger' field uses the ADR-43 vocabulary (cron|force; Phase 3 will add 'manual').
- * PFB_TRIGGER is currently derived by pfb_hook_trigger() — Phase 3 will fold that into
- * this struct's 'trigger' field once the mapping is changed.
- *
- * 'update' (the pfblockerng.php "Force Update" verb) maps identically to 'cron' because
- * pfblockerng.php calls sync_package_pfblockerng('cron') for both verbs — they are
- * INDISTINGUISHABLE inside the pass (same $cron). Phase 3 will assign 'update' its own
- * 'manual' trigger identity and a distinct PFB_TRIGGER.
+ * ADR-43 Phase 3: 'update' gets its own 'manual' trigger identity (was 'cron' in Phase 1).
+ * PFB_TRIGGER is now derived by pfb_req_to_hook_trigger() from the struct's 'trigger' field:
+ *   'cron'   → 'cron'          (scheduled cron and noupdates)
+ *   'manual' → 'update'        (pfblockerng.php 'update' verb, HA-sync, settings save)
+ *   'force'  → 'force-reload'  (updateip / updatednsbl)
  *
  * 'noupdates' and '' (settings save / de-install) carry the same struct as 'cron'; their
- * side-channel behaviour ($pfb['save']=TRUE; no-scope-change) is handled by callers.
+ * side-channel behaviour ($pfb['save']=TRUE; no-scope-change) is handled by sync_package.
  *
- * ADR-43 Phase 1 — oracle: this table is pinned by TriggerRequestTest.php so Phase 3 can
- * safely break it red→green when migrating to the explicit trigger API.
+ * ADR-43 Phase 1 — oracle: TriggerRequestTest.php pins this table; Phase 3 breaks
+ * testUpdateVerbMapsIdenticallyToCronToday (trigger 'cron'→'manual') red→green.
  */
 function pfb_trigger_request($verb) {
 	switch ((string) $verb) {
@@ -3321,10 +3318,60 @@ function pfb_trigger_request($verb) {
 			return ['scope' => 'ip',   'force' => TRUE,  'trigger' => 'force'];
 		case 'updatednsbl':
 			return ['scope' => 'dnsbl', 'force' => TRUE,  'trigger' => 'force'];
+		case 'update':
+			// ADR-43 Phase 3: 'update' gets its own 'manual' trigger identity.
+			// pfblockerng.php now passes 'update' (not 'cron') so the verb is distinguishable
+			// inside the pass. PFB_TRIGGER = pfb_req_to_hook_trigger('manual') = 'update'.
+			return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'];
 		default:
-			// 'cron', 'update' (pfblockerng.php maps it to $cron='cron'), 'noupdates', ''
+			// 'cron', 'noupdates', '', unknown
 			return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'cron'];
 	}
+}
+
+
+/*
+ * Map the 'trigger' field of a pfb_trigger_request() struct to the ADR-12 PFB_TRIGGER value.
+ *
+ * ADR-43 Phase 3: replaces the direct pfb_hook_trigger($cron) calls in sync_package_pfblockerng()
+ * for the array (new API) path. The string path still uses pfb_hook_trigger() directly so the
+ * back-compat mapping is preserved without duplication.
+ *
+ *   'force'  → 'force-reload'
+ *   'manual' → 'update'
+ *   'cron'   → 'cron'   (default)
+ */
+function pfb_req_to_hook_trigger($trigger) {
+	switch ((string) $trigger) {
+		case 'force':  return 'force-reload';
+		case 'manual': return 'update';
+		default:       return 'cron';
+	}
+}
+
+
+/*
+ * Return the deprecation warning string for a legacy verb string, or '' if not deprecated.
+ *
+ * ADR-43 Phase 3: 'update', 'updateip', 'updatednsbl' are DEPRECATED as sync_package_pfblockerng()
+ * string arguments. Callers should pass the explicit {scope, force, trigger} request array instead
+ * (or use pfb_trigger_request($verb) to build it). Removal is scheduled for a future major release.
+ *
+ * Called from sync_package_pfblockerng()'s string-path normalization for the safety-net case where
+ * a caller bypasses the pfblockerng.php adapters and passes a deprecated string directly.
+ * Also called from pfblockerng.php's deprecated verb cases before they route to the new API.
+ */
+function pfb_verb_deprecation_warning($verb) {
+	static $map = [
+		'update'      => 'scope=both force=false trigger=manual',
+		'updateip'    => 'scope=ip force=true trigger=force',
+		'updatednsbl' => 'scope=dnsbl force=true trigger=force',
+	];
+	$v = (string) $verb;
+	if (!isset($map[$v])) {
+		return '';
+	}
+	return "DEPRECATED: pfblockerng verb '{$v}' — use explicit request ({$map[$v]}); removal scheduled";
 }
 
 
@@ -11843,23 +11890,38 @@ function sync_package_pfblockerng($cron='') {
 		return;
 	}
 
+	// ADR-43 Phase 3: normalize the trigger input.
+	// Array = new API (explicit request, no deprecation log).
+	// String = back-compat (routes through pfb_trigger_request(); deprecated verbs log once).
+	if (is_array($cron)) {
+		$pfb_req       = $cron;
+		$pfb_hook_val  = pfb_req_to_hook_trigger($pfb_req['trigger']);
+		$pfb_is_noups  = FALSE;
+		$pfb_cron_tick = ($pfb_req['trigger'] === 'cron' && !$pfb_req['force']);
+	} else {
+		$pfb_cron_str  = (string) $cron;
+		$pfb_dep_warn  = pfb_verb_deprecation_warning($pfb_cron_str);
+		if ($pfb_dep_warn !== '') {
+			pfb_logger("{$pfb_dep_warn}\n", 1);
+		}
+		$pfb_req       = pfb_trigger_request($pfb_cron_str);
+		$pfb_hook_val  = pfb_hook_trigger($pfb_cron_str);
+		$pfb_is_noups  = ($pfb_cron_str === 'noupdates');
+		$pfb_cron_tick = ($pfb_cron_str === 'cron');
+	}
+
 	// ADR-12: pre-update hooks. Fire at the TOP of the pass (after the boot/install
 	// early-return above, before any feed processing). 'pre' cannot know what changed
 	// yet -- nothing is downloaded -- so its context is just the trigger. No enabled
 	// 'pre' hook => pfb_run_hooks() returns immediately (byte-identical pass).
-	pfb_run_hooks('pre', array('TRIGGER' => pfb_hook_trigger($cron)));
+	pfb_run_hooks('pre', array('TRIGGER' => $pfb_hook_val));
 
 	// Reloads existing lists without downloading new lists when defined 'on'
 	$pfb['reuse'] = $pfb['config']['pfb_reuse'];
 	$pfb['reuse_dnsbl'] = '';
 
-	// ADR-43 Phase 1: derive scope/force/trigger from the explicit request struct.
-	// pfb_trigger_request() encapsulates the verb→scope/force/trigger mapping so
-	// Phase 3 can change it in one place. Behaviour is byte-for-byte identical here.
-	$pfb_req = pfb_trigger_request($cron);
-
 	// Define update process (update or reload)
-	if ($cron === 'noupdates') {
+	if ($pfb_is_noups) {
 		// Cron pass with no feed changes: save the configuration; nothing to reload.
 		$pfb['save'] = TRUE;
 	} elseif ($pfb_req['scope'] === 'ip' && $pfb_req['force']) {
@@ -11873,20 +11935,20 @@ function sync_package_pfblockerng($cron='') {
 		$pfb['reuse']        = '';
 		$pfb['reuse_dnsbl']  = 'on';
 		$pfb['updatednsbl']  = TRUE;
-	} elseif ($cron === 'cron' && $pfb['reuse'] == 'on') {
-		// Scheduled/update cron with global Reload toggle on: propagate reuse to DNSBL side.
+	} elseif ($pfb_cron_tick && $pfb['reuse'] == 'on') {
+		// Scheduled cron tick with global Reload toggle on: propagate reuse to DNSBL side.
 		$pfb['reuse_dnsbl'] = 'on';
 		unlink_if_exists("{$pfb['dbdir']}/masterfile");
 		unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	}
-	// '' (settings save / de-install) and any other $cron: no scope adjustment.
+	// manual / '' (settings save / de-install) and any other non-cron path: no scope adjustment.
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
 	if ($pfb['enable'] == 'on' && !$pfb['save']) {
 		$log = " UPDATE PROCESS START [ " . pfb_pkg_ver() . " ] [ NOW ]\n";
 		pfb_logger("{$log}", 1);
 	} else {
-		if ($cron != 'noupdates') {
+		if (!$pfb_is_noups) {
 			$log = "\n**Saving configuration [ NOW ]**\n";
 			pfb_logger("{$log}", 1);
 		}
@@ -14229,7 +14291,7 @@ function sync_package_pfblockerng($cron='') {
 	// marker can't serve as this
 	// signal — cron-reuse mode and the dnsbl-missing path also set them, which would
 	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY
-	// by the Force-Reload-DNSBL path (see the $cron switch).
+	// by the Force-Reload-DNSBL path (scope=dnsbl + force=true in the normalization block).
 	if (!empty($pfb['updatednsbl'])) {
 		$pfb_data_changed = TRUE;
 	}
@@ -16054,7 +16116,7 @@ function sync_package_pfblockerng($cron='') {
 	//       Reports '1' only when a reload actually fired, so a skipped pass (unchanged
 	//       blocklist, fingerprints equal) correctly emits '0'. !empty() guards any flag
 	//       whose block did not run — no undefined-variable warning.
-	//   PFB_TRIGGER       = pfb_hook_trigger($cron).
+	//   PFB_TRIGGER       = $pfb_hook_val (from pfb_req_to_hook_trigger / pfb_hook_trigger).
 	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
 	//       this pass (ADR-12 Phase 6) = $pfb_alias_lists (the content-diff set --
 	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
@@ -16078,7 +16140,7 @@ function sync_package_pfblockerng($cron='') {
 		$pfb['changed_ip_aliases'] = array_merge($pfb['changed_ip_aliases'], $pfb_alias_lists);
 	}
 	pfb_run_hooks('post', array(
-		'TRIGGER'		=> pfb_hook_trigger($cron),
+		'TRIGGER'		=> $pfb_hook_val,
 		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
 		'DNSBL_CHANGED'		=> (!empty($pfb_data_changed) || !empty($pfbupdate) || !empty($pfbpython) ||
 						!empty($safesearch_update) || !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',

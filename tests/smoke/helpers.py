@@ -2146,17 +2146,28 @@ def _ip_inject_snippet(spec: IpCase) -> str:
 # --------------------------------------------------------------------------- #
 
 
+# ADR-43 Phase 3: maps the legacy reload() scope names to pfb_trigger args.
+# "update" preserves its pre-Phase-3 behavior (scope=both force=false trigger=cron,
+# same as the old pfblockerng.php 'update' → sync_package_pfblockerng('cron') path).
+# Use reload_deprecated_verb() to exercise the deprecated verb strings themselves.
+_SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
+    "update": ("both", "false", "cron"),
+    "updateip": ("ip", "true", "force"),
+    "updatednsbl": ("dnsbl", "true", "force"),
+}
+
+
 def reload(
     vm: SmokeVM, scope: str = "update", *, data_path: bool = False, wait_unbound: bool = True, timeout: float = 600.0
 ) -> None:
-    """Run a pfBlockerNG reload via the PHP CLI cron verb.
+    """Run a pfBlockerNG reload via the PHP CLI.
 
-    ``scope`` is the verb: ``updatednsbl`` / ``updateip`` (targeted, faster per
-    case), ``update`` (full force, IP+DNSBL), or ``cron`` (the scheduled cron
-    tick, ``pfblockerng_sync_cron()``). NOTE: ``cron`` is the ONLY verb that runs
-    the ADR-30 per-log scheduled reset (``pfb_log_reset()``); ``update`` calls
-    ``sync_package_pfblockerng('cron')`` directly and bypasses it, so a test that
-    needs a scheduled log reset to fire MUST use ``cron``, not ``update``.
+    ``scope`` maps to an explicit trigger request (ADR-43 Phase 3, via ``pfb_trigger``):
+    ``update`` (scope=both force=false trigger=cron — full update, respects change detector),
+    ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
+    ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload), or
+    ``cron`` (the scheduled cron tick via ``pfblockerng_sync_cron()``, the ONLY path that
+    runs ADR-30 per-log scheduled reset; ``update`` bypasses it).
 
     READINESS depends on whether a restart is expected (ADR-10):
 
@@ -2182,11 +2193,15 @@ def reload(
     ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
     it must wait on the zero-downtime swap signal regardless.
     """
-    if scope not in ("update", "updateip", "updatednsbl", "cron"):
+    if scope not in _SCOPE_TO_PFBTRIGGER and scope != "cron":
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
-    result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
+    if scope == "cron":
+        result = vm.ssh(PHP_BIN, PFB_CLI, "cron", timeout=timeout)
+    else:
+        s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
+        result = vm.ssh(PHP_BIN, PFB_CLI, "pfb_trigger", f"scope={s}", f"force={f}", f"trigger={t}", timeout=timeout)
     if result.returncode != 0:
         # Report STDOUT too, not just stderr: pfBlockerNG writes a PHP fatal (e.g. an uncaught
         # TypeError that aborts the verb) to stdout, while stderr may only carry incidental noise
@@ -2201,6 +2216,24 @@ def reload(
         wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
     elif wait_unbound:
         wait_unbound_ready(vm)
+
+
+def reload_deprecated_verb(vm: SmokeVM, verb: str, *, timeout: float = 600.0) -> None:
+    """Invoke a deprecated pfblockerng CLI verb (ADR-43 Phase 3 adapter coverage only).
+
+    Tests that ``update``/``updateip``/``updatednsbl`` still reload AND emit the
+    deprecation warning in pfblockerng.log. Use :func:`reload` for all test fixtures;
+    this is the dedicated deprecated-verb exercise path.
+    """
+    if verb not in ("update", "updateip", "updatednsbl"):
+        raise ValueError(f"reload_deprecated_verb: expected a deprecated verb, got {verb!r}")
+    result = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"reload_deprecated_verb({verb!r}) failed: rc={result.returncode} "
+            f"stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
+        )
+    wait_unbound_ready(vm)
 
 
 def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
