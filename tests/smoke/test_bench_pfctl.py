@@ -1,23 +1,41 @@
-"""ADR-40 Phase 2 — pfctl table benchmark (dispatch-only, NOT PR-gating).
+"""ADR-40 pfctl table benchmark (dispatch-only, NOT PR-gating).
 
-Measures on the real two-VM topology:
-  (a) -T replace wall-time + data-plane stall at 10k / 100k / 1M entries.
-  (b) Chunked -T add/-T delete at batch sizes {giant, 1, 64, 256, 1024, 4096}
-      × churn {1, 1k, 100k} × table {100k, 1M} — sweep batch sizes at larger
-      tables where it matters; 10k × small churn for context.
-  (c) LC_ALL=C sort -u recompute cost (pfb_canonical_alias_set proxy).
+Two benchmark tests, both marked ``pfctl_bench``:
 
-PRIMARY SIGNAL: ICMP RTT distribution (p50/p99/max) + packet loss from civm
-to pfSense LAN IP (192.168.1.1) during each pfctl op.  Captures whether a
-table replace/delta stalls the data plane while pf holds the rules write lock.
+``test_pfctl_bench``
+    Original Phase 2 broad matrix: replace + delta at multiple batch/churn/size
+    combos + recompute cost.  Single-pass, single-rep per cell.  Kept for
+    historical comparison and quick orientation runs.
 
-SECONDARY SIGNAL: concurrent pfctl -T show latency on the pfSense guest
-(control-plane lock proxy) — emitted by the shell script, reported here.
+``test_pfctl_knee_sweep``
+    Production-calibrated, well-sampled benchmark added in the follow-up review
+    run.  Measures:
+      - Replace baselines at 100k, 462k, 1M (production sizes).
+      - Batch-size knee sweep: {256,384,512,768,1024,2048,4096} at churn=46k/462k
+        and 100k/1M (the two production-relevant knee cells).
+      - Realistic small-churn reference: ~1% and ~5% at 100k/462k at the
+        recommended batch and at 256 (contrast).
+    20 repeats per cell; 500 pps ICMP probe (ping -i 0.002); op-aligned windows
+    (CR#12).  Per-cell pooled RTT distribution: n, mean, stddev (pstdev), min,
+    p50, p95, p99, p99.9, max, loss%, spikes.  Percentile method: nearest-rank.
+    Confidence flags: p99 [unreliable] when n<100; p99.9 [low-confidence] when
+    n<1000.
 
-Marker: pfctl_bench — NEVER PR-gating (not in default -m smoke/-m reboot/etc.).
+PRIMARY SIGNAL: ICMP RTT distribution + packet loss from civm (192.168.1.10)
+  to pfSense LAN IP (192.168.1.1) during each pfctl op.
+SECONDARY SIGNAL: pfctl -T show latency on the pfSense guest (control-plane
+  lock proxy).
+
+Marker: pfctl_bench — NEVER PR-gating.
 Run via:
     scripts/local-smoke.sh tests/smoke/test_bench_pfctl.py -m pfctl_bench \\
         --override-ini="addopts="
+
+For the production-calibrated knee sweep with 3 cores/VM and 6 GiB pfSense RAM:
+    SMOKE_VM_SMP="3,sockets=1,cores=3" SMOKE_VM_MEM=6144 \\
+    SMOKE_CLIENT_SMP="3,sockets=1,cores=3" \\
+    scripts/local-smoke.sh tests/smoke/test_bench_pfctl.py \\
+        -m pfctl_bench -k test_pfctl_knee_sweep --override-ini="addopts="
 
 Requires: smoke_vm + client_vm (two-VM topology) + lan_interface.  Skips
 cleanly when civm is unavailable (pfSense-only environments).
@@ -25,14 +43,15 @@ cleanly when civm is unavailable (pfSense-only environments).
 Design notes for Phase 4 (recorded here per ADR §7):
   - Boot / enable-disable: one-shot -T replace is correct (no delta needed).
   - Incremental feed updates: this benchmark's verdict decides replace vs delta.
-  - Recommended batch size + mode recorded in the verdict section of the
-    handoff (RESULTS/02_Results.txt).
+  - Recommended batch size + mode recorded in RESULTS/02_Results.txt.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
+import statistics
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -50,12 +69,44 @@ _BENCH_SH = Path(__file__).parents[2] / "scripts" / "bench_pfctl_tables.sh"
 # Spike threshold: RTT > baseline_p99 * this factor counts as a stall event.
 _SPIKE_FACTOR = 3.0
 
-# Table sizes to benchmark.
+# Table sizes for the original broad-matrix benchmark.
 _SIZES = [10_000, 100_000, 1_000_000]
 
-# Batch sizes for delta apply.  0 = single-giant-op (one pfctl call for all).
-# Sweep is done at 100k and 1M tables with churn 1k and 100k (most informative).
+# Batch sizes for the original benchmark.  0 = single-giant-op.
 _BATCH_SIZES = [0, 1, 64, 256, 1024, 4096]
+
+# --------------------------------------------------------------------------- #
+# Production-calibrated knee sweep parameters
+# --------------------------------------------------------------------------- #
+
+# Production-realistic table sizes (100k = common, 462k = QFeeds max, 1M = stress).
+_KNEE_SIZES = [100_000, 462_000, 1_000_000]
+
+# Batch sizes to sweep for the knee curve.
+_KNEE_BATCHES = [256, 384, 512, 768, 1024, 2048, 4096]
+
+# Churn cells: (table_size, churn) for the knee sweep.
+# 46k/462k = 10% of the production-max table.
+# 100k/1M  = 10% of the stress table.
+# Both are large enough that every batch genuinely chunks (churn >> 4096).
+_KNEE_CELLS = [(462_000, 46_000), (1_000_000, 100_000)]
+
+# Small-churn reference cells: (table_size, churn_pct_label, churn).
+# Validates the everyday daily-feed-update case.
+_SMALL_CHURN_CELLS = [
+    (100_000, "1pct", 1_000),
+    (100_000, "5pct", 5_000),
+    (462_000, "1pct", 4_620),
+    (462_000, "5pct", 23_100),
+]
+
+# Repeats per cell.  20 reps × 500 pps yields ≥1000 pooled samples for ops ≥100ms.
+# Short ops (replace 100k ~90ms → ~45 samples/rep → ~900 total) may fall below 1000;
+# confidence flags mark those cells.
+_REPS = 20
+
+# Ping interval for the knee sweep: 0.002s = 500 pps.
+_KNEE_INTERVAL = 0.002
 
 
 # --------------------------------------------------------------------------- #
@@ -135,6 +186,109 @@ class BenchRow:
 
 
 # --------------------------------------------------------------------------- #
+# Pooled-distribution stats (for the knee sweep)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class PooledStats:
+    """Full RTT distribution pooled across all repeats of a cell.
+
+    Percentile method: nearest-rank (floor(n*p) index, 0-based, clamped to n-1).
+    Confidence:
+      n < 100  → p99 [unreliable]; p99.9 meaningless.
+      n < 1000 → p99.9 [low-confidence].
+    """
+
+    n: int = 0
+    mean_ms: float = 0.0
+    stddev_ms: float = 0.0  # population stdev (statistics.pstdev)
+    min_ms: float = 0.0
+    p50_ms: float = 0.0
+    p95_ms: float = 0.0
+    p99_ms: float = 0.0
+    p999_ms: float = 0.0  # p99.9
+    max_ms: float = 0.0
+    total_loss: int = 0
+    total_sent: int = 0
+    spikes: int = 0
+    spike_threshold_ms: float = 0.0
+
+    def loss_pct(self) -> float:
+        return 100.0 * self.total_loss / self.total_sent if self.total_sent > 0 else 0.0
+
+    def p99_conf(self) -> str:
+        return "unreliable" if self.n < 100 else "ok"
+
+    def p999_conf(self) -> str:
+        return "low-confidence" if self.n < 1000 else "ok"
+
+
+def _compute_pooled(
+    windows: list[ProbeWindow],
+    baseline_windows: list[ProbeWindow],
+) -> PooledStats:
+    """Pool RTT samples from all repeat windows; compute full distribution."""
+    all_samples: list[IcmpProbe] = []
+    for w in windows:
+        all_samples.extend(w.samples)
+
+    total_loss = sum(w.lost for w in windows)
+    total_sent = sum(w.sent() for w in windows)
+
+    baseline_p99s = [w.p99() for w in baseline_windows if w.samples]
+    median_bp99 = statistics.median(baseline_p99s) if baseline_p99s else 0.0
+    spike_thresh = median_bp99 * _SPIKE_FACTOR
+
+    n = len(all_samples)
+    if n == 0:
+        return PooledStats(total_loss=total_loss, total_sent=total_sent)
+
+    rtts = sorted(s.rtt_ms for s in all_samples)
+    spikes = sum(1 for r in rtts if r > spike_thresh) if spike_thresh > 0 else 0
+
+    def pct(p: float) -> float:
+        idx = min(int(math.floor(n * p)), n - 1)
+        return rtts[idx]
+
+    return PooledStats(
+        n=n,
+        mean_ms=statistics.mean(rtts),
+        stddev_ms=statistics.pstdev(rtts),
+        min_ms=rtts[0],
+        p50_ms=pct(0.50),
+        p95_ms=pct(0.95),
+        p99_ms=pct(0.99),
+        p999_ms=pct(0.999),
+        max_ms=rtts[-1],
+        total_loss=total_loss,
+        total_sent=total_sent,
+        spikes=spikes,
+        spike_threshold_ms=spike_thresh,
+    )
+
+
+def _fmt_pct(label: str, val: float, conf: str) -> str:
+    flag = "" if conf == "ok" else f" [{conf}]"
+    return f"{label}={val:.1f}ms{flag}"
+
+
+def _print_pooled(tag: str, n_reps: int, med_wall: float, ps: PooledStats) -> None:
+    print(
+        f"  {tag}"
+        f"\n    wall_ms (median/{n_reps} reps): {med_wall:.0f}ms"
+        f"\n    pooled n={ps.n} (loss {ps.total_loss}/{ps.total_sent} = {ps.loss_pct():.1f}%)"
+        f" spikes>{ps.spike_threshold_ms:.0f}ms={ps.spikes}"
+        f"\n    mean={ps.mean_ms:.1f}ms stddev={ps.stddev_ms:.1f}ms"
+        f"\n    min={ps.min_ms:.1f}ms {_fmt_pct('p50', ps.p50_ms, 'ok')}"
+        f" {_fmt_pct('p95', ps.p95_ms, 'ok')}"
+        f" {_fmt_pct('p99', ps.p99_ms, ps.p99_conf())}"
+        f" {_fmt_pct('p99.9', ps.p999_ms, ps.p999_conf())}"
+        f" max={ps.max_ms:.1f}ms"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # ICMP probe runner (civm side)
 # --------------------------------------------------------------------------- #
 
@@ -148,34 +302,21 @@ def _run_icmp_probe(
     """Run ping from civm to target for duration_s; return per-packet stats.
 
     Uses ``ping -i <interval> -W 1 <target>`` on the civm Debian guest (as root,
-    civm is Debian not pfSense so /bin/sh parses it correctly).  Interval 0.02s
-    (~50 pps) gives enough resolution to catch sub-100ms stalls.
-
-    The probe is ALLOWED traffic — ICMP to pfSense LAN IP.  We measure whether
-    the pfctl table op stalls the data plane, not whether packets are blocked.
+    civm is Debian not pfSense so /bin/sh parses it correctly).
+    -D: prefix each reply line with [unix_ts.us] for op-window slicing.
     """
     count = max(1, int(duration_s / interval_s))
-    # LC_ALL=C: pin locale so the ping summary and RTT lines match the regex
-    # regardless of the civm Debian locale setting.
-    # -D: prefix each reply line with [unix_ts.us] for op-window slicing.
     cmd = f"LC_ALL=C ping -D -c {count} -i {interval_s} -W 1 {shlex.quote(target)} 2>&1"
     result = client_vm.ssh(cmd, timeout=duration_s + 30.0)
     return _parse_ping(result.stdout)
 
 
 def _parse_ping(output: str) -> ProbeWindow:
-    """Parse ``ping -D`` output into per-packet RTT samples + loss count.
-
-    With ``-D``, each reply line is prefixed: ``[unix_ts.us] 64 bytes from ...``
-    We capture the timestamp for op-window slicing.  Falls back gracefully when
-    the prefix is absent (non-``-D`` output: recv_epoch=0.0).
-    """
+    """Parse ``ping -D`` output into per-packet RTT samples + loss count."""
     window = ProbeWindow()
-    # Optional [timestamp] prefix from ping -D; rest is the standard reply line.
     for m in re.finditer(r"(?:\[([\d.]+)\]\s+)?.*?icmp_seq=(\d+).*?time=([\d.]+)\s+ms", output):
         recv_epoch = float(m.group(1)) if m.group(1) else 0.0
         window.samples.append(IcmpProbe(seq=int(m.group(2)), rtt_ms=float(m.group(3)), recv_epoch=recv_epoch))
-    # Loss from summary: "N packets transmitted, M received, P% packet loss"
     summary = re.search(r"(\d+) packets transmitted, (\d+) received", output)
     if summary:
         sent = int(summary.group(1))
@@ -190,10 +331,10 @@ def _parse_ping(output: str) -> ProbeWindow:
 
 
 class _LiveProbe:
-    """Runs a continuous ping on civm in a background thread.
+    """Continuous ping on civm in a background thread.
 
-    Accumulates per-packet samples; the caller snapshots windows by
-    calling ``snapshot()`` at op-start and ``stop()`` at op-end.
+    Accumulates per-packet samples; caller calls ``start()``, then
+    ``slice_window(t0, t1)`` to get op-aligned samples, then ``stop()``.
     """
 
     def __init__(self, client_vm: SmokeVM, target: str, interval_s: float = 0.02) -> None:
@@ -212,7 +353,6 @@ class _LiveProbe:
     def _run(self) -> None:
         # Fire batches of ~100 pings with per-packet timestamps (-D), collect, repeat until stopped.
         # LC_ALL=C: pin locale so ping output matches the RTT regex on any Debian locale.
-        # -D: per-packet [unix_ts.us] prefix enables op-window slicing in snapshot_since().
         batch_count = 100
         while not self._stop_evt.is_set():
             cmd = f"LC_ALL=C ping -D -c {batch_count} -i {self._interval} -W 1 {shlex.quote(self._target)} 2>&1"
@@ -224,35 +364,24 @@ class _LiveProbe:
                 self._lost += pw.lost
 
     def snapshot_since(self, since_epoch: float) -> ProbeWindow:
-        """Return samples whose recv_epoch >= since_epoch.
-
-        Uses the per-packet timestamps from ``ping -D`` (stored as
-        ``IcmpProbe.recv_epoch``).  When recv_epoch is 0.0 (non-``-D`` output),
-        all samples are included (graceful degradation).
-        """
+        """Return samples whose recv_epoch >= since_epoch (gracefully degrades when epoch=0)."""
         with self._lock:
             pw = ProbeWindow()
             pw.samples = [s for s in self._samples if s.recv_epoch == 0.0 or s.recv_epoch >= since_epoch]
-            # lost packets have no timestamp; conservatively include them all.
             pw.lost = self._lost
             return pw
 
     def slice_window(self, t0: float, t1: float) -> ProbeWindow:
-        """Return samples whose recv_epoch falls in [t0, t1].
-
-        When recv_epoch is 0.0 (non-``-D`` output), all samples are included.
-        Used to build the op-aligned during-window from civm's own clock.
-        """
+        """Return samples in [t0, t1] by civm clock (op-aligned, CR#12)."""
         with self._lock:
             pw = ProbeWindow()
             pw.samples = [
                 s for s in self._samples if s.recv_epoch == 0.0 or (s.recv_epoch >= t0 and s.recv_epoch <= t1)
             ]
-            pw.lost = 0  # lost packets: not attributable to a window; omit from sliced window
+            pw.lost = 0  # lost packets: not attributable to a window
             return pw
 
     def stop(self) -> None:
-        """Signal the background thread to stop and wait for it to finish."""
         self._stop_evt.set()
         self._thread.join(timeout=30.0)
 
@@ -263,20 +392,13 @@ class _LiveProbe:
 
 
 def _bench(smoke_vm: SmokeVM, *args: str, timeout: float = 600.0) -> dict[str, str]:
-    """Run bench_pfctl_tables.sh <args> on the pfSense guest; parse key=val output.
-
-    Returns ``{"timeout": "true", ...op=, size=, ...}`` when the op exceeds ``timeout``.
-    This lets very-slow batch cases (e.g. batch=1 at large churn) be recorded as TIMEOUT
-    rather than crashing the whole benchmark run.
-    """
+    """Run bench_pfctl_tables.sh <args> on the pfSense guest; parse key=val output."""
     script_content = _BENCH_SH.read_text()
-    # Upload the script to the guest on first call (idempotent: write same path).
     _upload_bench_script(smoke_vm, script_content)
     cmd = "/tmp/bench_pfctl_tables.sh " + " ".join(shlex.quote(str(a)) for a in args)
     try:
         result = smoke_vm.ssh(cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
-        # Record the timeout as a special row so the summary table stays intact.
         op = args[0] if args else "unknown"
         size = args[1] if len(args) > 1 else "0"
         churn = args[2] if len(args) > 2 else "0"
@@ -308,7 +430,6 @@ def _upload_bench_script(smoke_vm: SmokeVM, content: str) -> None:
     global _SCRIPT_UPLOADED  # noqa: PLW0603  # ponytail: module-level flag; reset per session
     if _SCRIPT_UPLOADED:
         return
-    # Write via tee (avoids scp dependency and works via ssh stdio).
     proc = subprocess.run(
         smoke_vm.ssh_argv("tee /tmp/bench_pfctl_tables.sh > /dev/null && chmod +x /tmp/bench_pfctl_tables.sh"),
         input=content,
@@ -323,12 +444,7 @@ def _upload_bench_script(smoke_vm: SmokeVM, content: str) -> None:
 
 
 def _parse_kv(text: str) -> dict[str, str]:
-    """Parse key=val output; each token of the form key=val is extracted.
-
-    Each line may contain one or more space-separated key=val tokens.
-    Tokens without '=' are silently ignored (progress messages, etc.).
-    Last writer wins when a key appears on multiple lines.
-    """
+    """Parse key=val output; last writer wins on duplicate keys."""
     out: dict[str, str] = {}
     for line in text.splitlines():
         for token in line.split():
@@ -340,7 +456,6 @@ def _parse_kv(text: str) -> dict[str, str]:
 
 
 def _parse_guest_row(kv: dict[str, str]) -> dict[str, object]:
-    """Extract typed fields from the key=val dict returned by the bench script."""
     return {
         "op": kv.get("op", ""),
         "size": int(kv.get("size", 0)),
@@ -369,30 +484,30 @@ def _measure_with_probe(
     bench_args: tuple[str, ...],
     baseline_duration_s: float = 3.0,
     op_timeout_s: float = 600.0,
+    interval_s: float = 0.02,
 ) -> BenchRow:
     """Run one bench op while capturing ICMP baseline and during-op windows.
 
     If client_vm is None, skips the ICMP probe (returns empty ProbeWindows).
+    interval_s controls the ping send rate (default 0.02s = 50 pps).
+    The during-window is op-aligned via civm's own clock (CR#12 fix).
     """
     # ---- baseline probe ---- #
     baseline_window = ProbeWindow()
     if client_vm is not None:
-        baseline_window = _run_icmp_probe(client_vm, PFSENSE_LAN_IP, duration_s=baseline_duration_s)
+        baseline_window = _run_icmp_probe(
+            client_vm, PFSENSE_LAN_IP, duration_s=baseline_duration_s, interval_s=interval_s
+        )
 
     # ---- launch background probe ---- #
     probe: _LiveProbe | None = None
     if client_vm is not None:
-        probe = _LiveProbe(client_vm, PFSENSE_LAN_IP)
+        probe = _LiveProbe(client_vm, PFSENSE_LAN_IP, interval_s=interval_s)
         probe.start()
 
     # ---- bracket the op with civm's own clock (CR#12 fix) ---- #
-    # We capture t0/t1 on civm's clock — the same clock ping -D uses for
-    # recv_epoch — so the during-window is sliced to ONLY samples that arrived
-    # while the pfctl op was actually running.  This prevents idle pre/post
-    # batches from diluting the stall numbers.
     t0_civm: float = 0.0
     if client_vm is not None:
-        # date +%s.%N gives nanosecond epoch on Debian (GNU date).
         res = client_vm.ssh("date +%s.%N", timeout=5.0)
         try:
             t0_civm = float(res.stdout.strip())
@@ -411,10 +526,10 @@ def _measure_with_probe(
         except ValueError:
             t1_civm = 0.0
 
-    # ---- stop background probe; build op-aligned during-window ---- #
+    # ---- stop probe; build op-aligned during-window ---- #
     during_window = ProbeWindow()
     if probe is not None:
-        probe.stop()  # flush all samples
+        probe.stop()
         if t0_civm > 0.0 and t1_civm > t0_civm:
             during_window = probe.slice_window(t0_civm, t1_civm)
             print(
@@ -424,7 +539,6 @@ def _measure_with_probe(
                 f" (expected ≈{(t1_civm - t0_civm) / probe._interval:.0f})"
             )
         else:
-            # Fallback: no civm clock captured; use all samples (degraded mode).
             during_window = probe.slice_window(0.0, float("inf"))
 
     # ---- build result row ---- #
@@ -469,7 +583,7 @@ def _print_row(row: BenchRow, baseline: ProbeWindow, error: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# The benchmark test
+# Original broad-matrix benchmark (Phase 2, single-rep per cell)
 # --------------------------------------------------------------------------- #
 
 
@@ -479,7 +593,7 @@ def test_pfctl_bench(
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
 ) -> None:
-    """ADR-40 Phase 2: measure pfctl replace vs chunked delta + recompute cost.
+    """ADR-40 Phase 2: broad-matrix pfctl replace vs chunked delta + recompute.
 
     Scenario:
       Given a pfSense VM with a synthetic pf table
@@ -487,11 +601,10 @@ def test_pfctl_bench(
       When a pfctl table op (replace / chunked delta / recompute) runs
       Then we capture wall-time + ICMP stall profile + control-plane lock latency
 
-    The test always passes (it is a measurement harness, not a correctness gate).
-    All numbers are printed so the verdict can be read from the test output.
+    Single-rep per cell; kept for historical comparison and quick orientation.
+    Always passes — measurement harness; results recorded in RESULTS/02_Results.txt.
     """
-    # ---- setup ---- #
-    print("\n=== ADR-40 Phase 2: pfctl table benchmark ===")
+    print("\n=== ADR-40 Phase 2: pfctl table benchmark (original broad matrix) ===")
 
     kv = _bench(smoke_vm, "system_info")
     print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
@@ -499,14 +612,12 @@ def test_pfctl_bench(
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit raised to: {kv.get('pf_table_limit')}")
 
-    # Generate all needed tables.
     for sz in _SIZES:
         kv = _bench(smoke_vm, "gen", str(sz), timeout=120.0)
         print(f"  gen {sz:,}: {kv.get('generated', kv.get('cached', '?'))}")
 
     rows: list[BenchRow] = []
 
-    # ---- (a) replace at all sizes ---- #
     print("\n--- (a) -T replace ---")
     for sz in _SIZES:
         row = _measure_with_probe(
@@ -518,13 +629,8 @@ def test_pfctl_bench(
         )
         rows.append(row)
 
-    # ---- (b) delta at multiple batch sizes and churn levels ---- #
     print("\n--- (b) -T delta (chunked) ---")
-
-    # Full sweep at 100k and 1M (where it matters most).
-    # At 10k, only do 1 and 256 batches to keep matrix tractable.
     delta_plan = [
-        # (size, churn, batch_sizes_for_this_size_churn)
         (10_000, 1, [0, 256]),
         (10_000, 1_000, [0, 256]),
         (100_000, 1, [0, 256]),
@@ -534,14 +640,11 @@ def test_pfctl_bench(
         (1_000_000, 1_000, _BATCH_SIZES),
         (1_000_000, 100_000, _BATCH_SIZES),
     ]
-
     for sz, churn, batch_sizes in delta_plan:
         for batch in batch_sizes:
-            # Timeout: large churn + small batch = many pfctl calls; allow 10min.
             op_timeout = 600.0
             if batch == 1 and churn >= 1_000:
-                op_timeout = 1200.0  # 1-by-1 at 100k churn can be very slow
-
+                op_timeout = 1200.0
             row = _measure_with_probe(
                 smoke_vm,
                 client_vm,
@@ -551,7 +654,6 @@ def test_pfctl_bench(
             )
             rows.append(row)
 
-    # ---- (c) recompute at all sizes ---- #
     print("\n--- (c) recompute (sort -u) ---")
     for sz in _SIZES:
         kv = _bench(smoke_vm, "recompute", str(sz), timeout=120.0)
@@ -566,15 +668,9 @@ def test_pfctl_bench(
         rows.append(row)
         print(f"\n[bench] op=recompute size={row.size:,} wall_ms={row.wall_ms:,}")
 
-    # ---- summary table ---- #
     _print_summary(rows)
-
-    # ---- cleanup ---- #
     _bench(smoke_vm, "cleanup", timeout=30.0)
 
-    # The test always passes — it is a measurement harness.
-    # The verdict (build/drop Phase 4; keep/re-scope cross-list arm) is derived
-    # from the printed numbers and recorded in RESULTS/02_Results.txt.
     assert rows, "expected at least one benchmark row"
 
 
@@ -601,3 +697,207 @@ def _print_summary(rows: list[BenchRow]) -> None:
             f"{row.ctrl_p99_ms:>9}"
         )
     print("")
+
+
+# --------------------------------------------------------------------------- #
+# Production-calibrated knee sweep (follow-up run)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.pfctl_bench
+def test_pfctl_knee_sweep(
+    smoke_vm: SmokeVM,
+    lan_interface: SmokeVM,
+    client_vm: SmokeVM,
+) -> None:
+    """ADR-40 production-calibrated batch-size knee sweep with pooled distributions.
+
+    Scenario:
+      Given pfSense with synthetic pf tables at production sizes (100k, 462k, 1M)
+      And a civm client probing at 500 pps ICMP to pfSense LAN (192.168.1.1)
+      When replace baselines, batch-knee cells, and small-churn reference cells
+        are each run for 20 repeats with op-aligned probe windows (CR#12)
+      Then per-cell pooled RTT distributions are reported (n, mean, stddev,
+        min, p50, p95, p99, p99.9, max, loss%, spikes) with confidence flags
+      And the batch-knee curve (stall vs batch at 462k/46k and 1M/100k) reveals
+        the recommended default batch for the production 100k–462k range
+
+    Always passes — measurement harness; results + verdict in RESULTS/02_Results.txt.
+    Confidence: p99 [unreliable] when n<100; p99.9 [low-confidence] when n<1000.
+    Percentile method: nearest-rank (floor(n*p), clamped to [0, n-1]).
+    """
+    pps = int(1.0 / _KNEE_INTERVAL)
+    print("\n=== ADR-40 production-calibrated knee sweep ===")
+    print(f"  Sizes: {[f'{s:,}' for s in _KNEE_SIZES]}")
+    print(f"  Batches: {_KNEE_BATCHES}")
+    print(f"  Knee cells: {[f'{s:,}/{c:,}' for s, c in _KNEE_CELLS]}")
+    print(f"  Small-churn ref: {[f'{s:,}/{c:,}({lbl})' for s, lbl, c in _SMALL_CHURN_CELLS]}")
+    print(f"  {_REPS} reps per cell | {pps} pps ICMP | op-aligned window (CR#12)")
+
+    kv = _bench(smoke_vm, "system_info")
+    print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
+
+    kv = _bench(smoke_vm, "raise_limits", "10000000")
+    print(f"  pf table limit: {kv.get('pf_table_limit')}")
+
+    # Generate all needed tables (gen is idempotent/cached).
+    for sz in _KNEE_SIZES:
+        kv = _bench(smoke_vm, "gen", str(sz), timeout=300.0)
+        print(f"  gen {sz:,}: {kv.get('generated', kv.get('cached', '?'))}")
+
+    # ------------------------------------------------------------------ #
+    # A: Replace baselines
+    # ------------------------------------------------------------------ #
+    print(f"\n--- A: replace baselines ({_REPS} reps each, {pps} pps) ---")
+    replace_rows: dict[int, list[BenchRow]] = {sz: [] for sz in _KNEE_SIZES}
+    replace_stats: dict[int, PooledStats] = {}
+
+    for sz in _KNEE_SIZES:
+        for rep in range(_REPS):
+            print(f"  replace {sz:,} rep={rep + 1}/{_REPS}", flush=True)
+            row = _measure_with_probe(
+                smoke_vm,
+                client_vm,
+                bench_args=("replace", str(sz)),
+                baseline_duration_s=2.0,
+                op_timeout_s=300.0,
+                interval_s=_KNEE_INTERVAL,
+            )
+            replace_rows[sz].append(row)
+        ps = _compute_pooled(
+            [r.icmp_during for r in replace_rows[sz]],
+            [r.icmp_baseline for r in replace_rows[sz]],
+        )
+        replace_stats[sz] = ps
+        med_wall = statistics.median(r.wall_ms for r in replace_rows[sz])
+        _print_pooled(f"replace size={sz:,}", _REPS, med_wall, ps)
+
+    # ------------------------------------------------------------------ #
+    # B: Batch-knee sweep
+    # ------------------------------------------------------------------ #
+    print(f"\n--- B: batch-knee sweep ({_REPS} reps per cell, {pps} pps) ---")
+    # key = (size, churn, batch)
+    knee_rows: dict[tuple[int, int, int], list[BenchRow]] = {}
+    knee_stats: dict[tuple[int, int, int], PooledStats] = {}
+
+    for sz, churn in _KNEE_CELLS:
+        print(f"\n  == knee size={sz:,} churn={churn:,} ==")
+        for batch in _KNEE_BATCHES:
+            key = (sz, churn, batch)
+            knee_rows[key] = []
+            for rep in range(_REPS):
+                print(f"  delta {sz:,}/{churn:,}/batch={batch} rep={rep + 1}/{_REPS}", flush=True)
+                row = _measure_with_probe(
+                    smoke_vm,
+                    client_vm,
+                    bench_args=("delta", str(sz), str(churn), str(batch)),
+                    baseline_duration_s=2.0,
+                    op_timeout_s=600.0,
+                    interval_s=_KNEE_INTERVAL,
+                )
+                knee_rows[key].append(row)
+            ps = _compute_pooled(
+                [r.icmp_during for r in knee_rows[key]],
+                [r.icmp_baseline for r in knee_rows[key]],
+            )
+            knee_stats[key] = ps
+            med_wall = statistics.median(r.wall_ms for r in knee_rows[key])
+            _print_pooled(f"delta {sz:,}/{churn:,}/batch={batch}", _REPS, med_wall, ps)
+
+    # ------------------------------------------------------------------ #
+    # C: Small-churn reference (everyday feed-update case)
+    # ------------------------------------------------------------------ #
+    print(f"\n--- C: small-churn reference ({_REPS} reps, {pps} pps) ---")
+    # Key batches for small-churn: recommended (1024) and contrast (256).
+    _SC_BATCHES = [256, 1024]
+    # key = (size, churn_label, churn, batch)
+    sc_rows: dict[tuple[int, str, int, int], list[BenchRow]] = {}
+    sc_stats: dict[tuple[int, str, int, int], PooledStats] = {}
+
+    for sz, lbl, churn in _SMALL_CHURN_CELLS:
+        print(f"\n  == small-churn size={sz:,} churn={churn:,} ({lbl}) ==")
+        for batch in _SC_BATCHES:
+            key = (sz, lbl, churn, batch)
+            sc_rows[key] = []
+            for rep in range(_REPS):
+                print(f"  delta {sz:,}/{churn:,}/batch={batch} rep={rep + 1}/{_REPS}", flush=True)
+                row = _measure_with_probe(
+                    smoke_vm,
+                    client_vm,
+                    bench_args=("delta", str(sz), str(churn), str(batch)),
+                    baseline_duration_s=2.0,
+                    op_timeout_s=300.0,
+                    interval_s=_KNEE_INTERVAL,
+                )
+                sc_rows[key].append(row)
+            ps = _compute_pooled(
+                [r.icmp_during for r in sc_rows[key]],
+                [r.icmp_baseline for r in sc_rows[key]],
+            )
+            sc_stats[key] = ps
+            med_wall = statistics.median(r.wall_ms for r in sc_rows[key])
+            _print_pooled(f"delta {sz:,}/{churn:,}({lbl})/batch={batch}", _REPS, med_wall, ps)
+
+    # ------------------------------------------------------------------ #
+    # Summary table
+    # ------------------------------------------------------------------ #
+    print("\n\n=== KNEE SWEEP SUMMARY (pooled distribution, nearest-rank percentile) ===")
+    print("Percentile confidence: p99 [!] when n<100; p99.9 [?] when n<1000.")
+    _hdr = (
+        f"{'op':<7} {'size':>9} {'churn':>7} {'batch':>6} "
+        f"{'wall_ms':>9} {'n':>5} "
+        f"{'mean':>7} {'std':>7} {'p50':>7} {'p95':>7} "
+        f"{'p99':>13} {'p99.9':>17} {'max':>7} "
+        f"{'loss%':>6} {'spk':>5}"
+    )
+    print(_hdr)
+    print("-" * len(_hdr))
+
+    def _row_str(op: str, sz: int, churn: int | str, batch: int | str, ps: PooledStats, med_wall: float) -> str:
+        p99f = "!" if ps.p99_conf() != "ok" else " "
+        p999f = "?" if ps.p999_conf() != "ok" else " "
+        churn_s = f"{churn:,}" if isinstance(churn, int) else str(churn)
+        batch_s = f"{batch}" if isinstance(batch, int) else str(batch)
+        return (
+            f"{op:<7} {sz:>9,} {churn_s:>7} {batch_s:>6} "
+            f"{med_wall:>9.0f} {ps.n:>5} "
+            f"{ps.mean_ms:>7.1f} {ps.stddev_ms:>7.1f} {ps.p50_ms:>7.1f} {ps.p95_ms:>7.1f} "
+            f"{p99f}{ps.p99_ms:>12.1f} {p999f}{ps.p999_ms:>16.1f} {ps.max_ms:>7.1f} "
+            f"{ps.loss_pct():>6.1f} {ps.spikes:>5}"
+        )
+
+    print("\n-- A: replace baselines --")
+    for sz in _KNEE_SIZES:
+        ps = replace_stats[sz]
+        med_wall = statistics.median(r.wall_ms for r in replace_rows[sz])
+        print(_row_str("replace", sz, "—", "—", ps, med_wall))
+
+    print("\n-- B: batch-knee sweep --")
+    for sz, churn in _KNEE_CELLS:
+        print(f"  --- size={sz:,} churn={churn:,} ---")
+        for batch in _KNEE_BATCHES:
+            key = (sz, churn, batch)
+            ps = knee_stats[key]
+            med_wall = statistics.median(r.wall_ms for r in knee_rows[key])
+            print(_row_str("delta", sz, churn, batch, ps, med_wall))
+
+    print("\n-- C: small-churn reference --")
+    for sz, lbl, churn in _SMALL_CHURN_CELLS:
+        print(f"  --- size={sz:,} churn={churn:,} ({lbl}) ---")
+        for batch in _SC_BATCHES:
+            key = (sz, lbl, churn, batch)
+            ps = sc_stats[key]
+            med_wall = statistics.median(r.wall_ms for r in sc_rows[key])
+            print(_row_str("delta", sz, churn, batch, ps, med_wall))
+
+    print(
+        f"\n! = p99 unreliable (n<100)"
+        f"\n? = p99.9 low-confidence (n<1000)"
+        f"\nSpike threshold = median baseline p99 × {_SPIKE_FACTOR} per cell."
+        f"\n{_REPS} reps × {pps} pps; op-aligned window (CR#12)."
+        f"\nBaseline addr block: 11.0.0.0/8; add block: 13.0.0.0/8 (disjoint)."
+    )
+
+    _bench(smoke_vm, "cleanup", timeout=30.0)
+
+    assert knee_stats, "expected at least one knee measurement"

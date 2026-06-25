@@ -76,13 +76,16 @@ DEFAULT_CE_MAC="$(printf '%s\n' \
     BC:24:11:46:D1:DE)"
 VM_MAC="${SMOKE_VM_MAC:-$DEFAULT_CE_MAC}"
 VM_SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-58fd7964-c40c-4f47-bf02-3fdad18f8b00}"
-VM_SMP="2,sockets=1,cores=2"
-VM_MEM="4096"
+# VM_SMP / VM_MEM / CLIENT_SMP / CLIENT_MEM: env-overridable for benchmarks that
+# need more cores/RAM (e.g. SMOKE_VM_SMP="3,sockets=1,cores=3" SMOKE_VM_MEM=6144).
+# Defaults kept at the CI/smoke baseline — do not change without updating CI.
+VM_SMP="${SMOKE_VM_SMP:-2,sockets=1,cores=2}"
+VM_MEM="${SMOKE_VM_MEM:-4096}"
 
 # civm is a lightweight client, but pin it to the 2-core / 2 GB floor — not because the
 # Debian client needs it, just to keep boot + the LAN link a tad smoother under CI load.
-CLIENT_SMP="2,sockets=1,cores=2"
-CLIENT_MEM="2048"
+CLIENT_SMP="${SMOKE_CLIENT_SMP:-2,sockets=1,cores=2}"
+CLIENT_MEM="${SMOKE_CLIENT_MEM:-2048}"
 # civm source-VM NIC MACs (committed non-secret defaults): net0 management, net1
 # data. The data MAC keys pfSense's static DHCP lease (-> 192.168.1.10), so it
 # must match the lease baked into the pfSense image. Override either via env.
