@@ -184,16 +184,20 @@ def test_log_settings_grouped_layout(
     When the DOM is inspected for the new grouped-column structure,
 
     Then the three column-header texts are visible on the page ("Max lines", "Schedule",
-      "Keep lines") — these are NEW elements (the per-category header ``Form_StaticText``
-      children); the old layout had no such header row, so this discriminates new from old;
+      "Keep lines") — emitted by the per-category header ``Form_StaticText`` children;
     And the ``log_max_log`` control is present and its enclosing ``.form-group`` left label
       (``col-sm-2.control-label``) shows the log name "pfBlockerNG" — proving per-log rows
-      carry the individual log name as the left label, where the OLD layout carried the
-      category name "General" on that group, so this too discriminates new from old.
+      carry the individual log name as the left label.
 
-    (Category-name presence is deliberately NOT asserted: "General"/"IP"/"DNSBL" also appear
-    as top tabs and the old group labels, so they would pass on the old layout and add no
-    signal. The two checks above are the real before/after discriminators.)
+    Plus the issue #489 follow-up polish (this commit), each a before/after discriminator:
+    And each category header row is a SHADED divider — its ``.form-group`` carries the
+      ``pfb-loghdr`` class (absent in the pre-polish layout);
+    And the IP rows are renamed to bare "Block"/"Permit"/"Match": the ``log_max_ip_blocklog``
+      row's left label reads "Block", NOT the old "IP Block" (so it fails on the old layout);
+    And the DNS-Reply log is now folded into the merged "DNS" category as the "Reply" row:
+      the ``log_max_dnsreplylog`` row's left label reads "Reply", NOT the old "DNS Reply";
+    And every control carries a per-control ``label.form-label`` (the mobile column label) —
+      the pre-polish layout emitted none.
 
     A full-page screenshot is saved as a human-review artifact (not an asserted baseline).
     """
@@ -209,5 +213,17 @@ def test_log_settings_grouped_layout(
     log_max_log = page.locator('select[name="log_max_log"]')
     expect(log_max_log).to_be_attached(timeout=JS_TIMEOUT_MS)
     form_group = log_max_log.locator("xpath=ancestor::div[contains(@class,'form-group')]")
-    label = form_group.locator(".control-label")
-    expect(label).to_contain_text("pfBlockerNG", timeout=JS_TIMEOUT_MS)
+    expect(form_group.locator(".control-label")).to_contain_text("pfBlockerNG", timeout=JS_TIMEOUT_MS)
+
+    # Polish discriminators: shaded category headers, the IP/DNS renames, per-control labels.
+    expect(page.locator(".form-group.pfb-loghdr").first).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    def _row_label(field: str):
+        ctl = page.locator(f'select[name="{field}"], input[name="{field}"]').first
+        return ctl.locator("xpath=ancestor::div[contains(@class,'form-group')]").locator(".control-label")
+
+    expect(_row_label("log_max_ip_blocklog")).to_have_text("Block", timeout=JS_TIMEOUT_MS)
+    expect(_row_label("log_max_dnsreplylog")).to_have_text("Reply", timeout=JS_TIMEOUT_MS)
+
+    # Per-control mobile labels exist (label.form-label, emitted by Form_Input label-start).
+    expect(page.locator('label.form-label').first).to_be_attached(timeout=JS_TIMEOUT_MS)
