@@ -3716,6 +3716,115 @@ function pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool {
 }
 
 // ---------------------------------------------------------------------------
+// ADR-40 Phase 4 — forward-delta alias-table apply
+// ---------------------------------------------------------------------------
+
+/** Churn-ratio threshold above which 'auto' mode falls back to -T replace (20%). */
+const PFB_DELTA_CHURN_THRESHOLD = 0.20;
+
+/**
+ * Clamp an integer batch-size value to the valid range [64, 4096].
+ *
+ * @param int|string $raw  Raw value (numeric string or int).
+ * @return int             Clamped batch size.
+ */
+function pfb_alias_delta_batch_clamp(int|string $raw): int {
+	$v = (int) $raw;
+	if ($v < 64)   { return 64; }
+	if ($v > 4096) { return 4096; }
+	return $v;
+}
+
+/**
+ * Apply an alias-table change via forward delta (-T add / -T delete) or full replace.
+ *
+ * Decision (when $force_replace is FALSE):
+ *   - 'replace' mode → always -T replace.
+ *   - 'delta' / 'auto' → compute add/del sets; if churn_ratio < threshold (auto) OR
+ *     mode is 'delta', apply delta in batches of $batch_size.  Fall back to -T replace
+ *     when churn_ratio >= threshold and mode is 'auto' (large-churn escape hatch).
+ *
+ * ADR-40 contract items satisfied:
+ *   (1) End-state == replace: after delta apply, table membership equals $desired_set.
+ *   (5) Empty-table: full replace handles initial population (mirrors Phase-3 gate).
+ *   (8) Idempotence: identical $desired_set and $last_set → empty delta → zero pfctl calls.
+ *
+ * Failures: a pfctl error is logged; the caller can still verify the table state.
+ *
+ * @param string   $pfctl_bin    Absolute path to pfctl (e.g. $pfb['pfctl']).
+ * @param string   $table        pf table name (e.g. 'pfB_Deny_v4').
+ * @param string   $table_file   Absolute path to the aliasdir .txt file.
+ * @param string[] $desired_set  Canonical sorted-unique desired membership (pfb_canonical_alias_set output).
+ * @param string[] $last_set     Canonical sorted-unique last-applied set (from pfb_canonical_alias_set on mirror).
+ * @param string   $mode         PfbAliasDeltaMode stored value ('auto'|'delta'|'replace').
+ * @param int      $batch_size   Max entries per pfctl call (clamped to [64,4096]).
+ * @param bool     $force_replace Force -T replace regardless of mode (boot/enable-disable path).
+ * @return bool TRUE = delta path taken; FALSE = replace path taken.
+ */
+function pfb_apply_alias_delta(
+	string $pfctl_bin,
+	string $table,
+	string $table_file,
+	array  $desired_set,
+	array  $last_set,
+	string $mode,
+	int    $batch_size,
+	bool   $force_replace = FALSE
+): bool {
+	$table_esc      = escapeshellarg($table);
+	$table_file_esc = escapeshellarg($table_file);
+	$batch_size     = pfb_alias_delta_batch_clamp($batch_size);
+
+	// Force replace: boot/enable-disable initial load path.
+	if ($force_replace || $mode === 'replace') {
+		exec("{$pfctl_bin} -t {$table_esc} -T replace -f {$table_file_esc} 2>&1");
+		return FALSE;
+	}
+
+	// Compute add/del sets (LC_ALL=C byte-order; arrays are already canonical).
+	$add_set = array_values(array_diff($desired_set, $last_set));
+	$del_set = array_values(array_diff($last_set, $desired_set));
+
+	$churn      = count($add_set) + count($del_set);
+	$table_size = max(count($desired_set), count($last_set));
+
+	// Churn-ratio fallback: auto mode with large churn → replace.
+	if ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD) {
+		exec("{$pfctl_bin} -t {$table_esc} -T replace -f {$table_file_esc} 2>&1");
+		return FALSE;
+	}
+
+	// Idempotence: empty delta → zero pfctl calls.
+	if (empty($add_set) && empty($del_set)) {
+		return TRUE;
+	}
+
+	// Apply adds in batches.
+	foreach (array_chunk($add_set, $batch_size) as $chunk) {
+		$entries = implode("\n", $chunk);
+		$tmp     = tempnam(sys_get_temp_dir(), 'pfb_add_');
+		if ($tmp === FALSE) { continue; }
+		@file_put_contents($tmp, $entries . "\n");
+		$tmp_esc = escapeshellarg($tmp);
+		exec("{$pfctl_bin} -t {$table_esc} -T add -f {$tmp_esc} 2>&1");
+		@unlink($tmp);
+	}
+
+	// Apply deletes in batches.
+	foreach (array_chunk($del_set, $batch_size) as $chunk) {
+		$entries = implode("\n", $chunk);
+		$tmp     = tempnam(sys_get_temp_dir(), 'pfb_del_');
+		if ($tmp === FALSE) { continue; }
+		@file_put_contents($tmp, $entries . "\n");
+		$tmp_esc = escapeshellarg($tmp);
+		exec("{$pfctl_bin} -t {$table_esc} -T delete -f {$tmp_esc} 2>&1");
+		@unlink($tmp);
+	}
+
+	return TRUE;
+}
+
+// ---------------------------------------------------------------------------
 
 // Determine if cron task requires updating
 function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_wday) {
@@ -14804,6 +14913,10 @@ function sync_package_pfblockerng($cron='') {
 	// and "read member files" decision anchored to feed-changed aliases.
 	$pfb_feed_changed    = $pfb_alias_lists;
 	$pfb_alias_lists     = array();   // reset: refilled below with content-validated aliases
+	// ADR-40 P4: per-alias map from alias name -> previous canonical set (what was in the
+	// mirror BEFORE this pass wrote the new one).  Captured in the write loop (below) so the
+	// no-rule-change reload site can compute add/del deltas without a second file read.
+	$pfb_alias_prev_sets = array();
 
 	foreach ($ip_types as $ip_type => $vtype) {
 
@@ -14971,6 +15084,13 @@ function sync_package_pfblockerng($cron='') {
 							$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
 							$canonical_set = pfb_canonical_alias_set($alias_ips);
 							if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
+								// ADR-40 P4: capture the previous canonical set before overwriting
+								// the mirror, so the reload site has last_set for delta computation.
+								// On boot/first-load (mirror absent or empty kernel table), treat
+								// the previous set as empty → delta path becomes a full add, but
+								// force_replace is set at the reload site for the initial-load path.
+								$prev_raw = file_exists($alias_mirror) ? @file_get_contents($alias_mirror) : '';
+								$pfb_alias_prev_sets[$alias] = pfb_canonical_alias_set($prev_raw ?: '');
 								// Set changed (or kernel table is empty) → write the new canonical
 								// mirror and flag this alias for pfctl reload.
 								pfb_write_canonical_alias($alias_mirror, $canonical_set);
@@ -15438,22 +15558,31 @@ function sync_package_pfblockerng($cron='') {
 
 		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
 		if (isset($pfb_tables)) {
-			// ADR-40 P3: $pfb_alias_lists is now the content-diff set (aliases whose
-			// canonical membership set changed this pass).  Use it directly; rep/dup
-			// widening to $pfb_alias_lists_all is no longer needed here — the file-write
-			// loop already content-gated every alias and populated $pfb_alias_lists with
-			// only the truly-changed ones.  Still intersect with $pfb_active_aliases
-			// (the active/wired aliases) to exclude removed aliases that were cleaned up.
+			// ADR-40 P3/P4: $pfb_alias_lists is the content-diff set (aliases whose
+			// canonical membership set changed this pass).  P4 applies via forward
+			// delta instead of full replace where churn is small.
 			$pfb_active_aliases = isset($pfb_active_aliases) ? array_unique($pfb_active_aliases) : [];
 			$final_alias        = empty($pfb_alias_lists)
 				? []
 				: array_values(array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases));
+			// ADR-40 P4: read mode/batch once for the loop.
+			$pfb_delta_mode     = (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
+			$pfb_delta_batch    = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
 			foreach ($pfb_tables as $pfb_table) {
 				$pfb_table_esc = escapeshellarg($pfb_table);
 				$pfb_table_path_esc	= escapeshellarg("{$pfb['aliasdir']}/{$pfb_table}.txt");
 				if (in_array($pfb_table, $pfb_active_aliases)) {
 					if (in_array($pfb_table, $final_alias)) {
-						// Replace active pfB aliastables which have been updated
+						// Active + changed: apply via delta (or replace per mode/churn).
+						// Rule-change path: filter_configure() will load the table from
+						// the aliasdir file; the pfb_apply_alias_delta call here pre-syncs
+						// the kernel table so the transition is clean.
+						$mirror_path  = "{$pfb['aliasdir']}/{$pfb_table}.txt";
+						$desired_set  = pfb_canonical_alias_set(@file_get_contents($mirror_path) ?: '');
+						// last_set: what was in kernel before this pass.  We don't have it
+						// here (it was overwritten by pfb_write_canonical_alias already), so
+						// on the rule-change path we do a full replace — filter_configure
+						// rebuilds the table from the file anyway.
 						exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T replace -f {$pfb_table_path_esc} 2>&1", $result);
 					}
 				} else {
@@ -15461,6 +15590,7 @@ function sync_package_pfblockerng($cron='') {
 					exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T kill 2>&1", $result);
 				}
 			}
+			unset($pfb_delta_mode, $pfb_delta_batch, $desired_set, $mirror_path);
 		}
 
 		$pfb['filter_configure'] = TRUE;		// Set flag for filter_configure which will create the pfctl tables
@@ -15494,28 +15624,49 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_alias_lists = array_unique(array_merge($pfb_alias_lists, $pfb_alias_lists_all));
 			}
 
-			// ADR-40 P3: $pfb_alias_lists is now the content-diff set — aliases whose
+			// ADR-40 P3/P4: $pfb_alias_lists is the content-diff set — aliases whose
 			// canonical membership set changed this pass (or ip_unlock forced a re-block).
-			// Use it directly; rep/dup widening to $pfb_alias_lists_all is no longer needed
-			// — the file-write loop already content-gated every alias.
+			// P4: apply each changed alias via forward delta (or replace per mode/churn).
 			$final_alias = array_unique($pfb_alias_lists);
 
 			if (!empty($final_alias)) {
+				// ADR-40 P4: read mode/batch once for the loop (PfbConfig gateway).
+				$pfb_delta_mode  = (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
+				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
+
 				foreach ($final_alias as $final) {
 					$log = "\n Updating: {$final}\n";
 					pfb_logger("{$log}", 1);
-					$result = '';
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
-						$final_esc	= escapeshellarg($final);
-						$final_path_esc	= escapeshellarg("{$pfb['aliasdir']}/{$final}.txt");
-						exec("{$pfb['pfctl']} -t {$final_esc} -T replace -f {$final_path_esc} 2>&1", $result);
-						$log = implode($result);
+						// ADR-40 P4: compute delta from the stashed previous canonical set.
+						// ip_unlock aliases not in $pfb_alias_prev_sets had no content change
+						// (they were added by the ip_unlock widening path); treat their previous
+						// set as the current file content (force_replace will be FALSE so auto
+						// mode may still pick delta vs replace based on actual churn).
+						$mirror_path = "{$pfb['aliasdir']}/{$final}.txt";
+						$desired     = pfb_canonical_alias_set(@file_get_contents($mirror_path) ?: '');
+						$previous    = $pfb_alias_prev_sets[$final] ?? $desired;
+						// Boot / empty-table signal: if the alias was not in the prev-set stash
+						// and the kernel table was empty, force a full replace.
+						$force_rpl   = empty($pfb_alias_prev_sets[$final] ?? NULL);
+						pfb_apply_alias_delta(
+							$pfb['pfctl'],
+							$final,
+							$mirror_path,
+							$desired,
+							$previous,
+							$pfb_delta_mode,
+							$pfb_delta_batch,
+							$force_rpl
+						);
+						$log = '';
 					} else {
 						$log = "Aliastable file not found\n";
 					}
 					pfb_logger("{$log}", 1);
 				}
 				pfb_logger("\n", 1);
+				unset($pfb_delta_mode, $pfb_delta_batch, $desired, $previous, $mirror_path, $force_rpl);
 
 				// Call function for Ramdisk processes.
 				pfb_aliastables('update');

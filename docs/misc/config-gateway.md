@@ -11,6 +11,12 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
   `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
   - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
     `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
+  - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
+    `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (default) / `'delta'` / `'replace'`.
+    Unknown or absent token reads as `Auto`. Absent on a pre-4.0.0 install → feature silently
+    absent (full replace, the pre-4.0.0 behaviour). `pfb_alias_delta_batch` (plain string,
+    `NULL`/`NULL` adapters) is the batch-size companion field; its stored value is a decimal
+    integer string, clamped to `[64, 4096]` at read time by `pfb_alias_delta_batch_clamp()`.
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
     `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
     token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading
@@ -67,10 +73,11 @@ at/after that version; it is a per-field scope marker, not a migration.
 
 | Adapter type | Stored vocabulary |
 | ------------ | ----------------- |
-| `toggle`     | `{'on', ''}` |
-| `lenient`    | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
-| `idn`        | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
-| `plain`      | identity — any stored value passes through unchanged |
+| `toggle`            | `{'on', ''}` |
+| `lenient`           | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
+| `idn`               | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
+| `alias_delta_mode`  | `{'auto', 'delta', 'replace'}` — unknown/absent token reads as `'auto'` (ADR-40, since 4.0.0) |
+| `plain`             | identity — any stored value passes through unchanged |
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
 it is now adopted as `PfbIdnMode` (see ADR-28 §2.2). `All` reuses the legacy `'on'` token, so the

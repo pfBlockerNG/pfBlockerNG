@@ -160,6 +160,46 @@ enum PfbIdnMode: string implements PfbStoredEnum
 	}
 }
 
+// PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
+//
+// Three modes control how pfBlockerNG applies alias-table changes to the pf kernel:
+//   Auto    ('auto')    — default; delta for incremental updates (churn < threshold),
+//                         full replace for initial load / large churn.
+//   Delta   ('delta')   — always prefer -T add/-T delete (incremental path); the large-
+//                         churn replace fallback is still applied to preserve atomicity
+//                         when the churn ratio exceeds the threshold under this mode.
+//   Replace ('replace') — always full -T replace (pre-ADR-40 behaviour).
+//
+// Absent-default = 'auto' for ALL installs (new AND existing): ADR-40 end-state is
+// identical to replace (contract item 1 — table membership unchanged), so no
+// grandfather seed is required. Downgrade-safe: an older release lacking this key
+// ignores it and performs its existing full replace.
+enum PfbAliasDeltaMode: string implements PfbStoredEnum
+{
+	use PfbStoredEnumAdapter;
+
+	case Auto    = 'auto';
+	case Delta   = 'delta';
+	case Replace = 'replace';
+
+	public static function default(): static
+	{
+		return self::Auto;
+	}
+}
+
+/** Read a PfbAliasDeltaMode from a raw stored value. */
+function pfb_cfg_alias_delta_mode_read(mixed $stored): PfbAliasDeltaMode
+{
+	return PfbAliasDeltaMode::fromStored($stored);
+}
+
+/** Write a PfbAliasDeltaMode back to its canonical stored token. */
+function pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode|string $mode): string
+{
+	return ($mode instanceof PfbAliasDeltaMode ? $mode : PfbAliasDeltaMode::fromStored($mode))->toStored();
+}
+
 // Thin delegations to the enum adapters (PfbStoredEnum::fromStored / toStored).
 // Kept so the registry callables + the direct www/ callers have a free-function
 // handle; all semantics live on the enums.
@@ -491,6 +531,31 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'since'         => '2.0.0',
+		],
+
+		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. Default 'auto'.
+		// 'auto' = delta for incremental updates (churn < ~20%), full replace for
+		// initial load / large churn; 'delta' = prefer delta path (replace fallback
+		// still fires for large churn); 'replace' = always full -T replace.
+		// Absent-default 'auto' is safe for existing installs (end-state identical to
+		// replace — ADR-40 contract item 1); no grandfather seed needed.
+		'pfb_alias_delta_mode' => [
+			'section'       => $gen,
+			'default'       => 'auto',
+			'read_adapter'  => 'pfb_cfg_alias_delta_mode_read',
+			'write_adapter' => 'pfb_cfg_alias_delta_mode_write',
+			'since'         => '4.0.0',
+		],
+
+		// ADR-40: alias-table delta batch size (integer as string). Default '256'.
+		// Clamped to [64, 4096] on read. Batch=256 is optimal for sub-1M tables
+		// (zero ICMP stalls at 100k/1k-churn); batch=1024+ for 1M+ tables.
+		'pfb_alias_delta_batch' => [
+			'section'       => $gen,
+			'default'       => '256',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
 		],
 
 		// -------------------------------------------------------------------
@@ -1315,6 +1380,12 @@ function pfb_cfg_field_vocab(): array
 		// neither is ever WRITTEN, so they are not in the backward (write) vocabulary.
 		'idn'     => ['on', 'confusable', 'off'],
 
+		// Alias-table apply mode (PfbAliasDeltaMode, ADR-40): tokens a write can emit.
+		// 'auto' (default), 'delta', 'replace'. Unknown tokens read as 'auto' (default()).
+		// An older release (pre-4.0.0) has no knowledge of these fields; they simply
+		// do not exist in config.xml, and the feature falls back to full replace.
+		'alias_delta_mode' => ['auto', 'delta', 'replace'],
+
 		// Plain string (null/null adapters): identity. Backward-safe by construction.
 		// The 'plain' vocabulary contains the sentinel empty string; individual
 		// field values are arbitrary strings (numeric, named option, etc.) but the
@@ -1343,6 +1414,9 @@ function pfb_cfg_field_adapter_type(array $entry): string
 	}
 	if ($read === 'pfb_cfg_idn_mode_read') {
 		return 'idn';
+	}
+	if ($read === 'pfb_cfg_alias_delta_mode_read') {
+		return 'alias_delta_mode';
 	}
 	// All other adapters are toggle (pfb_cfg_toggle_read).
 	return 'toggle';

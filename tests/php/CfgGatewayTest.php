@@ -594,6 +594,9 @@ final class CfgGatewayTest extends TestCase
 			'pfb_feed_internal_filter',
 			'pfb_feed_internal_allowlist',
 			'pfb_reuse',
+			// ADR-40: alias-table apply mode + batch size
+			'pfb_alias_delta_mode',
+			'pfb_alias_delta_batch',
 			// ADR-38: syslog export toggle
 			'log_syslog',
 
