@@ -361,7 +361,7 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
         m = re.search(r"<textarea\b[^>]*\bname=([\"'])" + re.escape(name) + r"\1[^>]*>", body)
         assert m is not None, f"update page is missing the '{name}' textarea"
         tag = m.group(0)
-        assert "readonly" in tag, f"'{name}' textarea is editable (no readonly): {tag}"
+        assert re.search(r"\breadonly\b", tag), f"'{name}' textarea is editable (no readonly): {tag}"
 
 
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
