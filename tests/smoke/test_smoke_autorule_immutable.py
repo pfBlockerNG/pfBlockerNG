@@ -1,24 +1,34 @@
 """
-Live-VM oracle: immutable-user-rule splice (ADR-41 Phase 3).
+Live-VM oracle: the IP auto-rule reconciler (ADR-41), 4-way pass_order assembly.
 
 Verifies that pfb_build_autorule_list() applied by sync_package_pfblockerng()
-never drops, duplicates, or reorders user-authored firewall rules across an
-Enable/Force-Update cycle.
+(a) never drops, duplicates, or content-mutates a user-authored firewall rule
+across an Enable/Force-Update cycle, and (b) orders pfBlockerNG's own rules
+around the user's per the pass_order ORDER table — in particular that a pfB
+**Permit** list (pass) precedes a user **Block** for order_1..order_4.
+
+THE PRECEDENCE TRAP (why this file exists)
+------------------------------------------
+The binary-anchor design (PR #561) put the whole block of user rules — including
+user Block rules — ahead of the pfB block for order_1/order_2, so a pfB Permit
+list could not override a user Block. The Deny-only kill-gate never saw it
+(the pfB-pass bucket was empty). The acceptance sweep here MUST use a config
+with BOTH a pfB Permit and a pfB Deny list AND a user pass AND a user block on
+the same interface, and assert the data-plane verdict per pass_order — this is
+the falsifying case the Phase-2 gate omitted (RESULTS/05).
 
 LIVE RUN DEFERRED TO PHASE 4
 -----------------------------
 The live-VM harness (ADR-04) proves the on-box pf state after pfBlockerNG reloads;
-Phase 4 is the designated phase for the per-pass_order precedence sweep.
-This file is written in Phase 3 so Phase 4 can extend and execute it without
-rewriting the fixture structure from scratch.
+Phase 4 wires the fixtures + the per-pass_order data-plane sweep. This file is
+written so Phase 4 can extend and execute it without rebuilding the structure.
+The off-appliance contract (incl. the Permit-vs-Block trap, all five orders) is
+already pinned in tests/php/AutoruleListOracleTest.php.
 
 To run manually once Phase 4 is underway (box at 10.0.0.23, NO_TWO_VM=1):
 
     python -m pytest tests/smoke/test_smoke_autorule_immutable.py \
         --override-ini="addopts=" -v
-
-All tests in this file are marked ``immutable_autorule`` (a Phase-4 gate marker
-— not yet wired into CI).
 """
 
 from __future__ import annotations
@@ -276,5 +286,112 @@ def test_order1_user_pass_before_pfb_block(smoke_vm: h.SmokeVM) -> None:
     assert user_pass_idx < pfb_block_idx, (
         f"order_1: user pass must appear BEFORE pfB block (user wins).\n"
         f"User pass at index {user_pass_idx}, pfB block at index {pfb_block_idx}.\n"
+        f"Actual rule descrs:\n  {descrs}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixture + sweep: THE PRECEDENCE TRAP — pfB Permit + pfB Deny + user pass + block
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def pfb_enabled_permit_and_deny(smoke_vm: h.SmokeVM) -> h.SmokeVM:  # type: ignore[return]
+    """
+    Given:
+        pfBlockerNG enabled with BOTH a Permit_* and a Deny_* v4 IP list active on LAN
+        (RFC-5737 addresses), plus a user PASS rule and a user BLOCK rule on LAN.
+
+    This is the config the binary-anchor design got wrong and the Deny-only gate missed:
+    the pfB Permit (pass) must precede the user Block for order_1..order_4.
+    """
+    # Phase 4: wire h.ensure_pfblockerng_enabled() + a Permit_* list + a Deny_* list +
+    # inject a user pass and a user block rule on LAN via h.php_eval(config_set_path).
+    raise NotImplementedError(
+        "Phase 4: wire pfb_enabled_permit_and_deny (Permit_* + Deny_* lists + user pass + user "
+        "block on LAN) using h.deploy() + h.write_local_feed() + h.reload()."
+    )
+
+
+# order -> (does pfB Permit precede the user Block?  does the user Pass precede the pfB Deny?)
+# Per the ORDER table, the pfB Permit (pass) precedes the user Block in EVERY order_1..order_4
+# (and order_0); order_1/order_2 additionally place the user Pass ahead of the pfB Deny.
+_TRAP_ORDERS = ["order_0", "order_1", "order_2", "order_3", "order_4"]
+
+
+@pytest.mark.parametrize("pass_order", _TRAP_ORDERS)
+@pytest.mark.usefixtures("pfb_enabled_permit_and_deny")
+def test_pfb_permit_precedes_user_block_every_order(smoke_vm: h.SmokeVM, pass_order: str) -> None:
+    """
+    Scenario: with a pfB Permit list AND a user Block on LAN, the pfB Permit (pass) must precede
+    the user Block for every pass_order — so the admin's allowlist overrides the user's block.
+
+    THIS IS THE TRAP. The binary-anchor design failed it for order_1/order_2 (it put the whole
+    user block of rules, including the user Block, ahead of the pfB Permit).
+
+    Given:
+        pass_order=<param>; pfB Permit_* + Deny_* lists; user pass + user block on LAN.
+
+    When:
+        Force-Update applied with pass_order set to <param>.
+
+    Then:
+        config.xml index(pfB Permit pass) < index(user Block) on LAN, AND a data-plane probe
+        confirms a host on the Permit list is REACHABLE despite the user Block (pf first-match).
+
+    Evidence requirement: assert the data-plane verdict (a permit-listed host reachable, a
+    block-listed host unreachable), not just config.xml index order — see ADR-41 §7.
+    """
+    # Phase 4: set pass_order=<param> via h.php_eval(config_set_path) before the reload, then
+    # probe the data plane (e.g. a TCP connect / ICMP to a permit-listed vs block-listed host).
+    h.reload(smoke_vm)
+    rules = _get_filter_rules(smoke_vm)
+    descrs = _descr_list(rules)
+
+    pfb_permit_idx = next(
+        (i for i, r in enumerate(rules) if r.get("descr", "").startswith("pfB_") and r.get("type") == "pass"),
+        None,
+    )
+    user_block_idx = next(
+        (
+            i
+            for i, r in enumerate(rules)
+            if not r.get("descr", "").startswith("pfB_") and r.get("type") in ("block", "reject")
+        ),
+        None,
+    )
+
+    assert pfb_permit_idx is not None, f"No pfB Permit (pass) rule found.\nActual rule descrs:\n  {descrs}"
+    assert user_block_idx is not None, f"No user block rule found.\nActual rule descrs:\n  {descrs}"
+    assert pfb_permit_idx < user_block_idx, (
+        f"{pass_order}: pfB Permit (pass) must precede the user Block — a pfB allowlist must "
+        f"override a user block.\npfB Permit at index {pfb_permit_idx}, user block at index "
+        f"{user_block_idx}.\nActual rule descrs:\n  {descrs}"
+    )
+
+
+@pytest.mark.usefixtures("pfb_enabled_permit_and_deny")
+def test_order4_reorders_user_block_before_user_pass(smoke_vm: h.SmokeVM) -> None:
+    """
+    Scenario: order_4 places the user's own Block before its Pass (intended pass_order semantics:
+    order_4 = pfB p/m | pfB b/r | pfSense Block/Reject | pfSense Pass/Match).
+
+    The binary-anchor design wrongly dropped this (it froze user-rule order). Confirm the user
+    Block precedes the user Pass under order_4.
+    """
+    # Phase 4: set pass_order=order_4 via h.php_eval() before the reload.
+    h.reload(smoke_vm)
+    rules = _get_filter_rules(smoke_vm)
+    descrs = _descr_list(rules)
+    user_rules = _user_rules(rules)
+
+    user_block_idx = next((i for i, r in enumerate(user_rules) if r.get("type") in ("block", "reject")), None)
+    user_pass_idx = next((i for i, r in enumerate(user_rules) if r.get("type") == "pass"), None)
+
+    assert user_block_idx is not None, f"No user block rule found.\nActual rule descrs:\n  {descrs}"
+    assert user_pass_idx is not None, f"No user pass rule found.\nActual rule descrs:\n  {descrs}"
+    assert user_block_idx < user_pass_idx, (
+        f"order_4: the user's own Block must precede its Pass (intended pass_order layout).\n"
+        f"user block at index {user_block_idx}, user pass at index {user_pass_idx}.\n"
         f"Actual rule descrs:\n  {descrs}"
     )

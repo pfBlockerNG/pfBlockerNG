@@ -1,8 +1,27 @@
 ADR-41 Phase 2 Results — pf-precedence kill-gate
 ================================================
 Branch: adr/41-immutable-user-firewall-rules   Phase: 2 (measurement / design-proof; NO production code)
-Verdict: GO  (single contiguous anchor per pass_order reproduces the intended pfB-vs-user
-              precedence WITHOUT splitting/reordering user rules)
+Verdict: GO  -- *** SUPERSEDED: THIS GO WAS FALSE *** (see CORRECTION below and RESULTS/05)
+
+*** CORRECTION (post-merge, fix/adr-41-restore-pass-order) **************************************
+The GO verdict below is WRONG. Section 2's "first-match reduction" enumerated pfB-block-vs-user-PASS,
+pfB-pass-vs-user-PASS, and pfB-block-vs-user-block -- but OMITTED the pfB-PASS (Permit list) vs
+user-BLOCK interaction, which is SIGNIFICANT: a pfB Permit rule placed AFTER a user Block loses, so
+a Permit list cannot override a user block. Because that interaction was missed, Section 2's claim
+that the 4-way ORDER table "collapses to one binary question" (pfB block before/after user pass) is
+false, and so is Section 5's proof that a single contiguous anchor suffices. The binary anchor that
+Phase 3 then shipped breaks pfB-Permit-vs-user-Block precedence for order_1/order_2 (and dropped
+order_4's INTENDED user-block-before-user-pass reorder, mis-classified as a defect in Section 6).
+This was not caught because the only live kill-gate case was Deny-only (the pfB-pass bucket empty) --
+exactly the "mixed pfB permit+deny + user rules" config the ADR's own S7 reject criterion named.
+
+CORRECT verdict: a single contiguous anchor does NOT reproduce the precedence; the 4-way bucket
+assembly (pfB p/m, pfB b/r, user p/m, user b/r, ordered per pass_order, applied independently to the
+floating and interface pf groups) is required. Restored on fix/adr-41-restore-pass-order; full
+analysis in RESULTS/05. The Section 1 pf-evaluation facts (per-interface first-match; floating a
+separate group) remain correct; only the Section 2 reduction, the Section 5 GO, and the Section 6
+"order_4 reorder is a removable defect" claim are wrong.
+************************************************************************************************
 
 This phase establishes (a) the real pf evaluation model on a live VM, (b) the
 pass_order -> insertion-anchor mapping the Phase-3 immutable splice implements, and (c) that a

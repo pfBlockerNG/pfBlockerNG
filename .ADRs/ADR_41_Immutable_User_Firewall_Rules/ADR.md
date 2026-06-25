@@ -1,12 +1,19 @@
 # ADR-41: Immutable user firewall rules in the IP autorule reconciliation
 
-- **Status:** **Implemented (pending live-VM smoke)** (2026-06-25) — Phases 1–3 landed: the
-  emission is extracted + the reconciliation rewritten to the immutable-user splice (binary anchor),
-  with the off-appliance contract (user-rule fidelity, pfB-set-identical, idempotence) pinned
-  red→green in `AutoruleListOracleTest`. Phase 2's pf-precedence kill-gate returned **GO** (live
-  first-match confirmed; `RESULTS/02`). Flips to **Accepted** once the §7 live-VM fan-out (CE + Plus)
-  — the per-`pass_order` data-plane precedence sweep in `test_smoke_autorule_immutable.py` (currently
-  skipped pending Phase-4 wiring) — is green.
+- **Status:** **Implemented — 4-way restored (pending live-VM smoke)** (2026-06-25). PR #561
+  shipped a **flawed** binary-anchor design (Phase 3): its Phase-2 kill-gate (`RESULTS/02`) returned
+  a **false GO** — its precedence reduction omitted the **pfB-Permit (pass) vs user-Block**
+  interaction, so the single anchor broke that precedence for `order_1`/`order_2` (a pfB Permit list
+  could not override a user Block) and dropped `order_4`'s **intended** user-block-before-user-pass
+  emission. Corrected on `fix/adr-41-restore-pass-order` to the **4-way bucket stable reorder** (pfB
+  p/m · pfB b/r · user p/m · user b/r, ordered per `pass_order`, applied independently to the
+  floating and interface pf groups), keeping the genuine ADR-41 wins (never duplicate/drop/mutate a
+  user rule). Off-appliance contract pinned **red→green** in `AutoruleListOracleTest` (the
+  pfB-Permit-vs-user-Block trap per order + behavioural equivalence to the frozen `8c4c482`
+  reference on every dup-free config). Full analysis: **`RESULTS/05`** (supersedes the binary-anchor
+  `RESULTS/02`). Flips to **Accepted** once the §7 live-VM fan-out (CE + Plus) — the per-`pass_order`
+  data-plane precedence sweep in `test_smoke_autorule_immutable.py` (still skipped pending Phase-4
+  wiring) — is green.
 - **Date:** 2026-06-25
 - **Branch:** `adr/41-immutable-user-firewall-rules` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):** the IP-side autorule
@@ -76,9 +83,19 @@ swept across every `pass_order` × float on/off, asserting the exact user-rule m
    `order_4` emitted the `opt1` rules *before* the `lan` rules, inverting their `config.xml`
    order vs the factory layout.
 
-These are three symptoms of **one** fragile design: *strip everything and rebuild, re-bucketing
-user rules*. Patching each symptom (the #539 empty-order default; a dedup guard for #2) is
-whack-a-mole on code that should never be touching user rules in the first place.
+> **Correction (`fix/adr-41-restore-pass-order`).** Only **DROP (#1)** and **DUPLICATE (#2)** are
+> genuine defects. The "REORDER" (#3) is two separate things, and neither is a removable bug:
+> (a) `order_4` placing a user **Block** before a user **Pass** is the *intended* `pass_order`
+> semantics (GUI `order_4 = pfB p/m | pfB b/r | pfSense Block/Reject | pfSense Pass/Match`); and
+> (b) the cross-interface reposition (`opt1` before `lan`) is **behaviourally inert** under
+> per-interface first-match (different-interface rules never interact). The fix keeps both: it
+> restores the 4-way `pass_order` bucketing and eliminates only the DROP and the DUP. The
+> binary-anchor design (PR #561) wrongly "fixed" #3 by freezing user-rule order — which deleted
+> order_4's intended reorder **and** broke pfB-Permit-vs-user-Block precedence (see §2/§3).
+
+These symptoms come from **one** fragile design: *strip everything and rebuild, re-bucketing
+user rules*. The fix removes the DROP and DUP while preserving the intended `pass_order` bucketing
+— not by abandoning the bucketing, but by making it a stable reorder that never dups/drops/mutates.
 
 ### 1.3 Load-bearing facts
 
@@ -127,25 +144,38 @@ tests — not an inline edit.
 
 ## 2. Decision
 
-Stop rebuilding the rule list. Treat **user rules as immutable** and only **move pfBlockerNG's own
-rules**:
+Stop *mutating* user rules. Reconcile by a **stable bucket reorder** — the same `pass_order`
+bucketing as before, but one that can never drop, duplicate, or content-mutate a user rule:
 
-> Take the live `filter/rule` list. **Remove only the pfB-owned rules** this region regenerates
-> (descr starts `pfB_`, excluding the DNS-redirect/DoT bypass rules). Keep every remaining rule —
-> user rules and bypass rules — **exactly where it is, in its existing order, with its existing
-> count**. **Generate** the pfB rules (unchanged generation). **Splice** them into the kept list
-> at a single anchor computed from `pass_order`. Write back.
+> Sort every surviving rule (user rules and the regenerated pfB rules) into one of four buckets —
+> **pfB pass/match**, **pfB block/reject**, **user pass/match**, **user block/reject** — preserving
+> each rule's content verbatim (bar the legacy `_v4` upgrade) and the original order **within** each
+> bucket. Concatenate the buckets in the `pass_order` sequence (the ORDER table), applying it
+> **independently** to the two pf groups pf evaluates separately — the **floating** group (DNSBL/
+> match pass rules; plus pfB permit/deny when float mode is on) and the **interface** group (pfB
+> permit/deny when float mode is off). pfB-owned rules (descr starts `pfB_`, excluding the
+> DNS-redirect/DoT bypass rules) are regenerated; everything else passes through. Write back.
+>
+> **Correction (`fix/adr-41-restore-pass-order`).** The original Decision below said "keep every
+> remaining rule **exactly where it is, in its existing order**" and splice the pfB block at a
+> **single anchor**. That is wrong: `order_1`/`order_2` deliberately **split** the user rules around
+> the pfB block (user pass/match in front, user block/reject behind), and `order_4` places the
+> user's own Block before its Pass — so the buckets *must* be reordered relative to one another.
+> Freezing user-rule order (the single-anchor design) breaks pfB-Permit-vs-user-Block precedence
+> and deletes order_4's intended layout. The corrected invariant is **no DROP, no DUP, no content
+> mutation, and within-bucket order preserved** — *cross*-bucket placement is exactly what
+> `pass_order` controls.
 
-Drop, duplicate, and reorder of user rules become **structurally impossible** for every
-`pass_order` and interface config, because the code never buckets, filters, or re-emits a user
-rule — it only deletes pfB rules and inserts pfB rules.
+DROP, DUPLICATE, and content-MUTATION of user rules become **structurally impossible** for every
+`pass_order` and interface config, because each user rule lands in exactly one bucket and is emitted
+once, verbatim — while the `pass_order` table still governs where the buckets sit.
 
 | Area | Decision |
 | --- | --- |
-| **User rules** | **Immutable.** Never bucketed, filtered, duplicated, or reordered. The kept list = the live `filter/rule` minus the pfB-owned rules this region regenerates, in original order. |
-| **Bypass rules** | DNS-redirect / DoT-block (`pfB_` descr, but inline-managed) are **kept** in place like user rules — not stripped, not regenerated here. |
+| **User rules** | **Content-immutable.** Never duplicated, dropped, or content-mutated; within-bucket order preserved. They ARE sorted into the user pass/match and user block/reject buckets and placed per `pass_order` (that cross-bucket placement is what `pass_order` means). |
+| **Bypass rules** | DNS-redirect / DoT-block (`pfB_` descr, but inline-managed) are **kept** like user rules — not stripped, not regenerated here. |
 | **pfB rule generation** | **Unchanged.** `pfb_firewall_rule()` and the `$pfb['permit_*']`/`$pfb['deny_*']`/DNSBL-float builders produce the same rules (same trackers, interfaces, types) as today. |
-| **Placement** | A single **insertion anchor** per `pass_order`, derived from the ORDER table and **validated against live pf first-match precedence (Phase 2)**: the contiguous pfB block(s) are spliced before/after the kept user rules so the intended pfB-vs-user precedence holds **per interface** (where pf actually evaluates them). The `order_2`/`order_3`/`order_4` pfB-pm-vs-pfB-br distinction is preserved by splicing the pfB pass/match block and the pfB block/reject block at their table positions — still without touching user rules. |
+| **Placement** | The **4-bucket stable reorder** (pfB p/m · pfB b/r · user p/m · user b/r), concatenated in the ORDER-table sequence and applied **independently** to the floating and interface pf groups. NOT a single before/after anchor: `order_1`/`order_2` split the user rules around the pfB block so a pfB **Permit** precedes a user **Block**, and `order_4` places the user's own Block before its Pass — neither expressible with one contiguous anchor. (The Phase-2 "single anchor" claim was a false GO; see `RESULTS/02` correction + `RESULTS/05`.) |
 | **Float vs non-float** | Both paths use the same immutable-user model. The floating path is already correct (live-confirmed); the rewrite must not regress it. Floating rules' relative order is preserved by keeping user rules verbatim (pf separates floating from interface rules regardless of `config.xml` interleaving). |
 | **Empty/unknown `pass_order`** | Sanely defaulted (subsumes the #539 fix): an unrecognised order maps to the `order_0` anchor. With user rules immutable, an unknown order can at worst mis-*position* the pfB block — it can never drop a user rule. |
 | **Write gate** | Unchanged: write + `filter_configure()` only when the rebuilt list differs from the original. |
@@ -153,8 +183,10 @@ rule — it only deletes pfB rules and inserts pfB rules.
 ### Semantics that MUST be preserved (the contract — pin with tests before swapping)
 
 1. **User-rule fidelity.** Every non-pfB rule present before the reconciliation is present after,
-   **exactly once**, in its **original relative order** — set, count, and order identical.
-   (red→green for `order_1`/`order_2` dup and `order_4` reorder; oracle-green for `order_0`/`order_3`.)
+   **exactly once**, with its **content intact** and its order preserved **within its bucket** —
+   no drop, no dup, no mutation. (Cross-bucket placement follows `pass_order`; a global "same
+   order" check would be wrong — it would forbid order_1/2/4's intended reorder.) Pinned red→green:
+   the pfB-Permit-vs-user-Block precedence trap fails on the binary helper, green on the 4-way.
 2. **Bypass-rule fidelity.** DNS-redirect/DoT-block rules are preserved (not stripped, not
    duplicated) — same as today.
 3. **pfB rule set identical.** The pfB rules emitted (descr, type, interface, tracker, ipprotocol,
@@ -199,14 +231,21 @@ rule — it only deletes pfB rules and inserts pfB rules.
 
 **Negative / risks**
 
-- **Precedence premise (ADR-01 trap).** If a single anchor per `pass_order` cannot reproduce the
-  intended precedence for some config without splitting user pass vs user block rules (which would
-  violate immutability), the design must narrow. **Mitigation:** Phase 2 proves the anchor model on
-  live pf *before* Phase 3; if it fails, re-scope (see §7 reject criteria).
-- **Deliberate behaviour change.** `order_4` (and the managed/non-managed split) no longer reorders
-  user rules; some installs' `config.xml` rule order changes. Functionally inert where pf is
-  per-interface first-match, but visible. **Mitigation:** documented; Phase 2 confirms no
-  precedence regression on the same interface; release-notes call-out.
+- **Precedence premise (ADR-01 trap) — this is exactly what bit PR #561.** The premise "a single
+  anchor per `pass_order` reproduces the intended precedence" is **false**: `order_1`/`order_2` need
+  the pfB block *between* the user pass/match and user block/reject rules, so a pfB **Permit** can
+  override a user **Block** — impossible with one contiguous anchor. The Phase-2 gate false-GO'd by
+  reducing the table to "pfB-block vs user-pass" and omitting the **pfB-pass vs user-block**
+  interaction, then testing only a Deny-only config (pfB-pass bucket empty). **Resolution:** the
+  4-way bucket assembly (this revision); the off-appliance trap fixture is the gate the Deny-only
+  live probe should have been. The genuine ADR-01 lesson holds: a kill-gate that does not exercise
+  the falsifying case (mixed pfB permit+deny + user pass+block) proves nothing.
+- **`order_4` reorder is INTENDED, not removed.** `order_4` emits the user's own Block before its
+  Pass — documented `pass_order` semantics, preserved here. (The binary-anchor revision wrongly
+  deleted it by freezing user-rule order; that was a regression, not a feature.) The only visible
+  `config.xml` change vs PR #561's behaviour is restoring the correct per-`pass_order` ordering;
+  vs the pre-ADR-41 baseline, behaviour is preserved on every dup-free config (the DROP/DUP cases
+  are the fixes). Release-notes call-out: the order_1/order_2 Permit-vs-Block precedence fix.
 - **Multi-interface / mixed pfB permit+deny configs are under-represented in the factory image.**
   The live image's user rules are LAN/opt1 pass rules; pfB permit rules (`Permit_*` actions) and
   inbound≠outbound need explicit fixtures. **Mitigation:** Phase 1 PHPUnit fixtures cover them
@@ -244,6 +283,13 @@ rule — it only deletes pfB rules and inserts pfB rules.
   `src/`/`tests/` phase uses the full worktree + rebase-only-PR flow.
 
 ## 6. Action plan
+
+> **Correction (`fix/adr-41-restore-pass-order`).** The Phases below are the *original* plan, which
+> built the **binary-anchor** design. Phase 2's GO was false and Phase 3 shipped a flawed helper
+> (PR #561). The course correction (Phase 5, `RESULTS/05`) replaces it with the **4-way bucket
+> stable reorder** and supersedes the "single anchor" / "remove the bucketing" / "order_4 reorder
+> removed" framing here: the `pass_order` bucketing is **kept** (as a no-dup/no-drop/no-mutate
+> stable reorder), not deleted. Read the §0 Status, §2, and §3 corrections for the current design.
 
 Front-loaded with behaviour-preserving prep (extract + oracle-pin the emission) and a **precedence
 kill-gate** before any splice. The core rewrite (Phase 3) only proceeds once Phase 2 proves the
