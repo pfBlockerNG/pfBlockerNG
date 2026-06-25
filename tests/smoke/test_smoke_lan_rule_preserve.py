@@ -227,10 +227,10 @@ def _run_two_reload_cycle(
 ]:
     """Capture filter/rule state at baseline, after reload #1, and after reload #2.
 
-    Reload #1 builds the alias table (no deny rule yet).
-    Reload #2 is when the pfB deny rule lands and the reconciliation rewrites filter/rule.
-    Before the fix, reload #2 drops user LAN pass rules (the pass_order bug).
-    After the fix, reload #2 preserves them.
+    Two reloads bound the cycle: the alias builds, the pfB deny rule lands, and the
+    reconciliation rewrites filter/rule at least once. Before the fix, the user LAN pass rules
+    are dropped during the cycle (the pass_order bug, observable as early as reload #1 depending
+    on install-time syncs); after the fix they survive both snapshots.
 
     Returns three rule snapshots for the caller's assertions.
     """
