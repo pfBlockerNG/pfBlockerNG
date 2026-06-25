@@ -1172,18 +1172,21 @@ def _bump_feed_mtime(
 def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Issue #538 guard: the scheduled cron path detects an in-place local-feed edit and re-ingests it.
 
-    This pins the CHANGED branch of ``pfb_update_check`` (cron verb → mtime diff detected →
+    ADR-42 Phase 2: detection is now content-hash based (xxh128 sidecar), not mtime-based.
+    The feed edit writes different bytes; the hash differs → re-ingest regardless of mtime.
+    This pins the CHANGED branch of ``pfb_update_check`` (cron verb → hash change detected →
     ``{header}.update`` touched → feed re-downloaded). It is the production path the #533
     misdiagnosis missed, distinct from the Force/``force_dnsbl_refetch`` shortcut that all
     other local-feed smoke tests use.
 
     Scenario (BDD):
-      Given the feed contains only ``dom_old`` (initial ingest via Force Update blocks it);
+      Given the feed contains only ``dom_old`` (initial ingest via Force Update blocks it,
+        and writes the .xxhash128 sidecar for the .orig);
         and ``dom_new`` is NOT on any feed (resolves via stub sentinel, not blocked);
-      When the feed source is edited in-place to add ``dom_new`` (mtime made strictly later
-        than the ``.orig`` baseline), pfb_reuse is OFF and pfb_dailystart matches the current
-        guest hour (so the EveryDay feed is due), and the ``cron`` verb is run (NOT
-        ``force_dnsbl_refetch`` — that is the shortcut this test replaces);
+      When the feed source is edited in-place to add ``dom_new`` (content changes, so the
+        xxh128 hash differs from the sidecar baseline), pfb_reuse is OFF and
+        pfb_dailystart matches the current guest hour (so the EveryDay feed is due),
+        and the ``cron`` verb is run (NOT ``force_dnsbl_refetch``);
       Then ``dom_new`` becomes BLOCKED (detector re-ingested the edited feed),
         ``dom_old`` stays BLOCKED, and the main log gained a header-scoped
         "Downloading update" line for this feed during the cron run.
@@ -1197,7 +1200,7 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         h.unblock_egress()
 
         # GIVEN — write initial feed (dom_old only); ingest (a single updatednsbl creates the
-        # .orig baseline + .txt and blocks dom_old — the targeted DNSBL sync, as CaseContext uses).
+        # .orig baseline + .xxhash128 sidecar + .txt and blocks dom_old).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n")
         spec = h.DnsblCase(aliasname="smokecronchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
@@ -1217,13 +1220,10 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
             f"BEFORE: {dom_new} must NOT be blocked before feed edit, got {ans_new_before}"
         )
 
-        # WHEN — edit feed in-place (add dom_new), make source mtime strictly LATER than .orig.
-        # Drive the mtime entirely on the guest with RELATIVE ops (no runner-vs-guest timezone
-        # skew, which an absolute `touch -t` built from runner-local time would introduce):
-        # copy .orig's mtime onto the source, then advance it by +120s (`touch -A 0200`).
+        # WHEN — edit feed in-place (add dom_new).  Content changes → xxh128 hash differs
+        # from the sidecar → cron will detect and re-ingest.  No mtime manipulation needed:
+        # detection is hash-based, not mtime-based (ADR-42 Phase 2).
         h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n" + dom_new + "\n")
-        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
-        _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
 
         # Pin pfb_reuse=off and dailystart=now (just before cron to dodge hour-rollover race).
         _pin_cron_due(deployed_vm)
@@ -1278,20 +1278,21 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Issue #538 guard: an unchanged local feed on a cron run is NOT re-parsed.
 
-    This pins the UNCHANGED branch of ``pfb_update_check``: equal source/orig mtimes → the
-    detector logs "Update not required" and touches no ``{header}.update`` marker, so the feed
-    is not re-ingested. With nothing due, the cron takes the ``noupdates`` path, which SKIPS the
-    sync feed-loop entirely (it is gated by ``!$pfb['save']`` and noupdates sets save=TRUE) — so
-    the reuse is proven by the DETECTOR verdict ("Update not required", emitted before that
-    dispatch), NOT a sync-loop "exists" line (that loop never runs on a no-update cron).
+    ADR-42 Phase 2: detection is now content-hash based (xxh128 sidecar).  The source bytes
+    are identical to the last-ingested .orig, so the hash matches the sidecar and the
+    detector takes the "Update not required" path without re-ingesting.
+
+    This pins the UNCHANGED branch of ``pfb_update_check``.  With nothing due, the cron
+    takes the ``noupdates`` path, which SKIPS the sync feed-loop entirely — so the reuse is
+    proven by the DETECTOR verdict ("Update not required"), NOT a sync-loop "exists" line.
 
     Scenario (BDD):
-      Given the feed contains ``dom`` (initial ingest blocks it);
-      When the source mtime is made EQUAL to the ``.orig`` mtime (``touch -r``), pfb_reuse
-        is OFF and pfb_dailystart matches the current guest hour, and the ``cron`` verb runs;
-      Then the detector logs a new "Update not required" verdict for the due feed (no re-ingest),
-        no "Downloading update" line appears for this header, and ``dom`` remains blocked
-        (steady state — feed was not cleared).
+      Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
+        sidecar for the .orig);
+      When no content change is made to the source, pfb_reuse is OFF and pfb_dailystart
+        matches the current guest hour, and the ``cron`` verb runs;
+      Then the detector logs a new "Update not required" verdict (hash matches sidecar),
+        no "Downloading update" line appears for this header, and ``dom`` remains blocked.
     """
     dom = h.unique_domain("cronunchg")
     header = "smokecronunchg"
@@ -1300,7 +1301,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
     try:
         h.unblock_egress()
 
-        # GIVEN — write feed, ingest (a single updatednsbl creates the .orig baseline + .txt).
+        # GIVEN — write feed, ingest (a single updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronunchg.txt", dom + "\n")
         spec = h.DnsblCase(aliasname="smokecronunchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
@@ -1311,9 +1312,8 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # WHEN — make source mtime EQUAL to .orig (timezone-free: touch -r copies orig's mtime).
-        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
-        _bump_feed_mtime(deployed_vm, feed_path, orig_path)
+        # No content change — source bytes == .orig bytes → hash matches sidecar.
+        # No mtime manipulation is needed: detection is hash-based (ADR-42 Phase 2).
 
         # Pin pfb_reuse=off and dailystart=now.
         _pin_cron_due(deployed_vm)
@@ -1361,31 +1361,35 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Local feed change detection: a bumped mtime with IDENTICAL content is NOT re-ingested.
 
-    A differing source mtime is only a hint; ``pfb_update_check`` now confirms the bytes actually
-    changed (md5 source vs ``.orig``) before re-ingesting a LOCAL feed, so a touch/cp/rsync that
-    bumps mtime without changing content takes the reuse path.
+    ADR-42 Phase 2: the old mtime-then-md5 two-step is replaced by a pure content-hash gate
+    (xxh128 sidecar).  The source bytes are unchanged → the hash equals the sidecar → the
+    detector takes "Update not required" regardless of mtime.
 
-    RED on pre-change code: a differing mtime alone logs "Update found" -> re-download
-    ("Downloading update"), and the "( mtime changed, content identical )" marker does not exist.
-    GREEN after the fix: that marker is logged and no re-ingest occurs.
+    The old "( mtime changed, content identical )" log marker no longer exists; the verdict
+    is now the same "Update not required" path used by the no-change case.
+
+    RED on pre-Phase-2 code: the old code compared mtimes first — if the mtime differed it
+    would fall through to md5 confirmation and emit "mtime changed, content identical", which
+    passed.  The same-second edge case (equal mtime, different content) was the blind spot.
+    GREEN after Phase 2: the single hash path catches both cases consistently.
 
     Scenario (BDD):
-      Given the feed contains ``dom`` (initial ingest blocks it; ``.orig`` == source bytes);
-      When the source mtime is bumped LATER than ``.orig`` (``touch -r`` + ``touch -A``) WITHOUT changing content,
-        pfb_reuse is OFF and pfb_dailystart matches the guest hour, and the ``cron`` verb runs;
-      Then a new "( mtime changed, content identical )" verdict appears (md5 confirmed no change),
+      Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
+        sidecar; ``.orig`` bytes == source bytes);
+      When the source mtime is bumped LATER than ``.orig`` WITHOUT changing content
+        (``touch -r`` + ``touch -A``), pfb_reuse is OFF and pfb_dailystart matches the
+        guest hour, and the ``cron`` verb runs;
+      Then the detector logs a new "Update not required" verdict (hash matches sidecar),
         no "Downloading update" line appears for this header, and ``dom`` remains blocked.
     """
     dom = h.unique_domain("cronsame")
     header = "smokecronsame"
     feed_path: str | None = None
-    marker = "mtime changed, content identical"
 
     try:
         h.unblock_egress()
 
-        # GIVEN — write feed, ingest (a single updatednsbl creates the .orig baseline, a
-        # byte-identical copy of the source).
+        # GIVEN — write feed, ingest (updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronsame.txt", dom + "\n")
         spec = h.DnsblCase(aliasname="smokecronsame", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
@@ -1397,33 +1401,141 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
         # WHEN — bump source mtime LATER than .orig WITHOUT changing content (timezone-free:
-        # copy orig's mtime onto the source, then advance it by +120s — no absolute touch -t).
+        # copy orig's mtime onto source, then advance it by +120 s — no absolute touch -t).
         orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
         _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
 
         # Pin pfb_reuse=off and dailystart=now (just before cron).
         _pin_cron_due(deployed_vm)
-        marker_before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — cron (the genuine detector path).
         h.reload(deployed_vm, "cron")
 
-        # THEN — md5 content-confirm skipped the re-ingest: new marker present, no download.
-        marker_after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
-        assert marker_after > marker_before, (
-            f"Expected a new '{marker}' verdict after cron (before={marker_before}, after={marker_after}) "
-            f"— md5 content-confirm did not run (RED on pre-change code: a mtime diff re-ingests)"
+        # THEN — hash confirms no content change: "Update not required" appeared, no download.
+        # (ADR-42 Phase 2: the old "mtime changed, content identical" marker no longer exists;
+        # both mtime-equal and mtime-bumped-same-content cases share the same "Update not
+        # required" path because the gate is purely hash-based.)
+        notreq_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
+        assert notreq_after > notreq_before, (
+            f"Expected a new 'Update not required' verdict after cron "
+            f"(before={notreq_before}, after={notreq_after}) — hash gate did not confirm unchanged content"
         )
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
         assert dl_after == dl_before, (
-            f"Expected NO '[ {header} ] ... Downloading update' (content identical) "
+            f"Expected NO '[ {header} ] ... Downloading update' (content identical, hash unchanged) "
             f"(before={dl_before}, after={dl_after}) — feed was wrongly re-ingested"
         )
 
         # THEN — dom remains blocked (feed not cleared).
         ans_after = h.dns_probe_client(client_vm, dom, "A")
         assert h.is_vip(ans_after), f"AFTER cron: {dom} must remain VIP-blocked, got {ans_after}"
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if feed_path:
+            deployed_vm.ssh("/bin/rm", "-f", feed_path)
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """ADR-42 Phase 2: a same-second content change (mtime indistinguishable) is detected.
+
+    This is the blind spot that ADR-42 Phase 2 closes.  The old mtime gate compared
+    whole-second timestamps: a content change written within the same second as the prior
+    ingest produced EQUAL mtimes → the old code concluded "unchanged" and missed the
+    re-ingest.  The new xxh128-sidecar gate compares bytes, so it catches the change even
+    when mtime is forced to be identical.
+
+    RED on pre-Phase-2 code: equal mtime → ``pfb_local_feed_changed`` returns FALSE →
+    cron logs "Update not required" → ``dom_new`` is never blocked (assertion fails).
+    GREEN after Phase 2: different bytes → different hash → "Update found" → re-ingest →
+    ``dom_new`` becomes blocked.
+
+    Scenario (BDD):
+      Given the feed contains only ``dom_old`` (initial ingest blocks it and writes the
+        .xxhash128 sidecar for the .orig);
+        and ``dom_new`` is NOT blocked;
+      When the source is rewritten with DIFFERENT content (add ``dom_new``) AND the source
+        mtime is forced EQUAL to the ``.orig`` mtime (``touch -r`` — simulates same-second
+        write), pfb_reuse is OFF and pfb_dailystart matches the guest hour, and the ``cron``
+        verb is run;
+      Then ``dom_new`` becomes BLOCKED (detector re-ingested despite equal mtime),
+        ``dom_old`` stays BLOCKED, and a new "Downloading update" line appears for this header.
+    """
+    dom_old = h.unique_domain("cronsamesold")
+    dom_new = h.unique_domain("cronsamesnew")
+    header = "smokecronamess"
+    feed_path: str | None = None
+
+    try:
+        h.unblock_egress()
+
+        # GIVEN — write initial feed (dom_old only); ingest creates .orig + .xxhash128 sidecar.
+        feed_path = h.write_local_feed(deployed_vm, "smoke_cronamess.txt", dom_old + "\n")
+        spec = h.DnsblCase(aliasname="smokecronamess", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom_old blocked, dom_new resolves via stub.
+        h.flush_unbound_name(deployed_vm, dom_old)
+        ans_old_before = h.dns_probe_client_until(client_vm, dom_old, h.is_vip)
+        assert h.is_vip(ans_old_before), (
+            f"BEFORE: {dom_old} must be VIP-blocked after initial ingest, got {ans_old_before}"
+        )
+        ans_new_before = h.dns_probe_client(client_vm, dom_new, "A")
+        assert not h.is_vip(ans_new_before), (
+            f"BEFORE: {dom_new} must NOT be blocked before feed edit, got {ans_new_before}"
+        )
+
+        # WHEN — rewrite feed with NEW content (add dom_new) AND force source mtime to EQUAL
+        # the .orig mtime (touch -r copies the .orig mtime onto the source file).
+        # This simulates the same-second write: mtime is identical → old code would skip;
+        # new code hashes the bytes and detects the change.
+        orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+        h.write_local_feed(deployed_vm, "smoke_cronamess.txt", dom_old + "\n" + dom_new + "\n")
+        # Force source mtime = orig mtime — the defining condition for the blind spot.
+        _bump_feed_mtime(deployed_vm, feed_path, orig_path)  # touch -r: source mtime := orig mtime
+
+        # Pin pfb_reuse=off and dailystart=now.
+        _pin_cron_due(deployed_vm)
+
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+
+        # WHEN — cron (genuine detector path).
+        h.reload(deployed_vm, "cron")
+
+        # Fast guard: cron actually evaluated this feed.
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, (
+            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
+            f"EveryDay feed not due (hour rollover?); re-run"
+        )
+
+        # THEN — dom_new becomes blocked (detector caught the same-second change).
+        h.flush_unbound_name(deployed_vm, dom_new)
+        ans_new_after = h.dns_probe_client_until(client_vm, dom_new, h.is_vip, timeout=120.0)
+        assert h.is_vip(ans_new_after), (
+            f"AFTER cron: {dom_new} must be VIP-blocked (same-second change detected by hash), "
+            f"got {ans_new_after} — ADR-42 Phase 2 blind-spot guard"
+        )
+        ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
+        assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
+
+        # Corroborate: detector fired — "Downloading update" count increased.
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after > dl_before, (
+            f"Expected a new '[ {header} ] ... Downloading update' line (same-second change detected) "
+            f"(before={dl_before}, after={dl_after}) — hash gate did not trigger re-ingest"
+        )
 
     finally:
         reset_exc = None
