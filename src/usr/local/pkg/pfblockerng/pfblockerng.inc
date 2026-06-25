@@ -4038,7 +4038,7 @@ function pfb_create_dnsbl_cert() {
 // [ #381 ] DNSBL sinkhole NAT generation is gated on a real (non-lo0) listening
 // interface AND the user not having opted out via pfb_dnsbl_nonat. Pure predicate so
 // the branch is unit-testable off-appliance (PfbDnsblNatEnabledTest).
-function pfb_dnsbl_nat_enabled(string $iface, $nonat): bool {
+function pfb_dnsbl_nat_enabled(string $iface, string $nonat): bool {
 	return $iface !== 'lo0' && empty($nonat);
 }
 

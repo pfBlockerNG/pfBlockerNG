@@ -234,6 +234,14 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_idn_escalate_suspicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
     ),
+    # issue #381: opt out of automatic DNSBL NAT-rule creation (default '' = NAT on).
+    # The form POST exercises the new save handler; config.xml is the oracle.
+    ToggleFlow(
+        name="dnsbl_nonat",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_dnsbl_nonat",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
+    ),
 )
 
 
