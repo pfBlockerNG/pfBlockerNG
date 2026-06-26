@@ -78,14 +78,18 @@ VM_MAC="${SMOKE_VM_MAC:-$DEFAULT_CE_MAC}"
 VM_SMBIOS_UUID="${SMOKE_VM_SMBIOS_UUID:-58fd7964-c40c-4f47-bf02-3fdad18f8b00}"
 # VM_SMP / VM_MEM / CLIENT_SMP / CLIENT_MEM: env-overridable for benchmarks that
 # need more cores/RAM (e.g. SMOKE_VM_SMP="3,sockets=1,cores=3" SMOKE_VM_MEM=6144).
-# Defaults kept at the CI/smoke baseline — do not change without updating CI.
+# 2 GB is ample for the smoke pfSense (FreeBSD pre-allocates — no ballooning): a
+# production box with 500k+ IPs in pf + full DNSBL sits at ~10% of 4 GB; the smoke
+# tests load tiny fixtures. Smaller default = denser parallel lanes (2 GB pfSense +
+# 1 GB civm = 3 GB/lane). Bump via SMOKE_VM_MEM for the benchmark runner.
 VM_SMP="${SMOKE_VM_SMP:-2,sockets=1,cores=2}"
-VM_MEM="${SMOKE_VM_MEM:-4096}"
+VM_MEM="${SMOKE_VM_MEM:-2048}"
 
-# civm is a lightweight client, but pin it to the 2-core / 2 GB floor — not because the
-# Debian client needs it, just to keep boot + the LAN link a tad smoother under CI load.
+# civm is a light Debian client (sshd + occasional dig/curl); 1 GB is ample, and
+# virtio-balloon lets Linux return unused RAM to the host.  pfSense/FreeBSD does NOT
+# support ballooning — leave VM_MEM (4096) and every pfSense-role arg untouched.
 CLIENT_SMP="${SMOKE_CLIENT_SMP:-2,sockets=1,cores=2}"
-CLIENT_MEM="${SMOKE_CLIENT_MEM:-2048}"
+CLIENT_MEM="${SMOKE_CLIENT_MEM:-1024}"
 # civm source-VM NIC MACs (committed non-secret defaults): net0 management, net1
 # data. The data MAC keys pfSense's static DHCP lease (-> 192.168.1.10), so it
 # must match the lease baked into the pfSense image. Override either via env.
@@ -100,6 +104,12 @@ SSH_HOSTPORT="${SMOKE_SSH_HOSTPORT:-2222}"
 WEB_HOSTPORT="${SMOKE_WEB_HOSTPORT:-8080}"
 CLIENT_SSH_HOSTPORT="${SMOKE_CLIENT_SSH_HOSTPORT:-2223}"
 PFSENSE_MGMT_IP="10.0.0.20"   # static management IP baked into the pfSense image
+# Forward-compat for a future DHCP management interface: the hostfwd TARGET defaults to
+# the baked static IP above.  When the image makes MGT1 DHCP (no fixed IP), the caller
+# exports SMOKE_PFSENSE_MGT_TARGET="" so SLIRP forwards to its own DHCP-assigned guest
+# address (mirroring civm net0 — see hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22 below).
+# Single-dash form: an explicit empty override IS honored (vs :- which ignores empty).
+PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"
 
 # pfSense<->civm LAN crossover socket (point-to-point; pfSense listens, civm connects).
 LAN_SOCKET_PORT="${SMOKE_LAN_SOCKET_PORT:-12340}"
@@ -204,7 +214,7 @@ if [ "$ROLE" = pfsense ]; then
     # SMBIOS identity (license/NDI-keyed for Plus; public pin for CE).
     set -- "$@" -smbios "type=1,uuid=${VM_SMBIOS_UUID}"
 
-    echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGMT_IP}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGMT_IP}:80 (mgmt net1)" >&2
+    echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGT_TARGET}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGT_TARGET}:80 (mgmt net1)" >&2
     echo "boot_vm: pfsense LAN socket LISTEN 127.0.0.1:${LAN_SOCKET_PORT} (net2)" >&2
 
     i=0
@@ -215,7 +225,7 @@ if [ "$ROLE" = pfsense ]; then
             # a VIP that overlaps an interface subnet and disables DNSBL wholesale.
             # 10.10.0.0/24 keeps the host alias 10.10.0.2 while leaving 10.10.10.x free.
             0) netdev="user,id=net0,net=10.10.0.0/24,host=10.10.0.2" ;;
-            1) netdev="user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGMT_IP}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGMT_IP}:80" ;;
+            1) netdev="user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80" ;;
             2) netdev="socket,id=net2,listen=127.0.0.1:${LAN_SOCKET_PORT}" ;;
             # net3..7: present so the 8-NIC image sees no hardware change, but
             # isolated (restrict=on) with distinct dummy subnets — pfSense leaves
@@ -241,7 +251,8 @@ else
         -netdev "user,id=net0,hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22" \
         -device "virtio-net-pci,mac=${CLIENT_MGMT_MAC},netdev=net0,id=nic0" \
         -netdev "socket,id=net1,connect=127.0.0.1:${LAN_SOCKET_PORT}" \
-        -device "virtio-net-pci,mac=${CLIENT_MAC},netdev=net1,id=nic1"
+        -device "virtio-net-pci,mac=${CLIENT_MAC},netdev=net1,id=nic1" \
+        -device virtio-balloon
 fi
 
 set -- "$@" -display none
