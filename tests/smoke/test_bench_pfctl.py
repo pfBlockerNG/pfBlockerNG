@@ -1650,3 +1650,350 @@ def test_pfctl_reject_loop(
     _bench(smoke_vm, "cleanup", timeout=30.0)
 
     assert verify_samples, "expected at least one TCP RST sample in verification"
+
+
+# --------------------------------------------------------------------------- #
+# Replace-only service-disruption baseline (ADR-40 follow-up)
+# --------------------------------------------------------------------------- #
+
+# Table sizes for the replace disruption curve.
+# Finer sweep than the existing 3-point baseline: 8 sizes spanning 10k–1M.
+# 462k = production max; most real tables ≤100k.
+_REPLACE_DISRUPT_SIZES = [10_000, 50_000, 100_000, 200_000, 350_000, 462_000, 750_000, 1_000_000]
+
+# Reps per size; 20 reps × ~500 conn/s gives large pooled n at op durations ≥20ms.
+_REPLACE_DISRUPT_REPS = 20
+
+# Disruption latency buckets for the service-disruption signal.
+# These are the concrete "how many connections were stalled, and how badly" metrics.
+_DISRUPT_BUCKETS_MS = [50, 100, 250, 500]
+
+# Spike threshold factor applied to the quiescent baseline p95 (not p99 — p99
+# was polluted by occasional SYN-retransmit yielding ~500ms, causing 3× p99 ≈ 1505ms
+# which is never exceeded, making the spike count 0 everywhere and the metric useless).
+# Baseline p95 ≈ 10–20ms in quiescent conditions; × 3.0 ≈ 30–60ms is a meaningful
+# threshold that will be exceeded by connections landing during a lock-hold window.
+_DISRUPT_SPIKE_FACTOR = 3.0
+
+
+def _compute_disrupt_buckets(rtts: list[float]) -> dict[int, tuple[int, float]]:
+    """Return {threshold_ms: (count, pct)} for each threshold in _DISRUPT_BUCKETS_MS."""
+    n = len(rtts)
+    result: dict[int, tuple[int, float]] = {}
+    for thresh in _DISRUPT_BUCKETS_MS:
+        cnt = sum(1 for r in rtts if r > thresh)
+        pct = 100.0 * cnt / n if n > 0 else 0.0
+        result[thresh] = (cnt, pct)
+    return result
+
+
+def _compute_pooled_tcp_full(
+    windows: list[TcpRstWindow],
+    baseline_windows: list[TcpRstWindow],
+) -> tuple[PooledStats, dict[int, tuple[int, float]], float]:
+    """Pool TCP RST RTT samples; return (PooledStats, bucket_counts, spike_threshold_ms).
+
+    spike_threshold_ms is derived from the quiescent baseline p95 × _DISRUPT_SPIKE_FACTOR
+    (NOT p99 × 3.0, which was degenerate in the prior run — see 02b_Replace_Disruption_Baseline.txt).
+    """
+    all_rtts: list[float] = []
+    for w in windows:
+        all_rtts.extend(s.rtt_ms for s in w.samples)
+
+    # Compute spike threshold from baseline p95.
+    baseline_rtts: list[float] = []
+    for w in baseline_windows:
+        baseline_rtts.extend(s.rtt_ms for s in w.samples)
+    baseline_p95 = 0.0
+    if baseline_rtts:
+        sbl = sorted(baseline_rtts)
+        idx = min(int(math.floor(len(sbl) * 0.95)), len(sbl) - 1)
+        baseline_p95 = sbl[idx]
+    spike_thresh = baseline_p95 * _DISRUPT_SPIKE_FACTOR
+
+    n = len(all_rtts)
+    if n == 0:
+        return PooledStats(), {t: (0, 0.0) for t in _DISRUPT_BUCKETS_MS}, spike_thresh
+
+    rtts_s = sorted(all_rtts)
+    spikes = sum(1 for r in rtts_s if r > spike_thresh) if spike_thresh > 0 else 0
+
+    def pct(p: float) -> float:
+        idx = min(int(math.floor(n * p)), n - 1)
+        return rtts_s[idx]
+
+    ps = PooledStats(
+        n=n,
+        mean_ms=statistics.mean(rtts_s),
+        stddev_ms=statistics.pstdev(rtts_s),
+        min_ms=rtts_s[0],
+        p50_ms=pct(0.50),
+        p95_ms=pct(0.95),
+        p99_ms=pct(0.99),
+        p999_ms=pct(0.999),
+        max_ms=rtts_s[-1],
+        total_loss=0,
+        total_sent=n,
+        spikes=spikes,
+        spike_threshold_ms=spike_thresh,
+    )
+    buckets = _compute_disrupt_buckets(rtts_s)
+    return ps, buckets, spike_thresh
+
+
+@pytest.mark.pfctl_bench
+def test_pfctl_replace_disruption_baseline(
+    smoke_vm: SmokeVM,
+    lan_interface: SmokeVM,
+    client_vm: SmokeVM,
+) -> None:
+    """ADR-40 follow-up: replace-only service-disruption baseline across table sizes.
+
+    Scenario:
+      Given pfSense with floating reject rules (same as test_pfctl_reject_loop)
+      And a civm client firing TCP connects at ~500 conn/s to in-table (11.x) IPs
+      When pfctl -T replace is run at 8 table sizes (10k–1M) for 20 reps each
+      Then we capture the full RTT distribution + concrete disruption buckets
+        (>50ms, >100ms, >250ms, >500ms count + %) per size
+      And the disruption-vs-size curve reveals how service stall scales with table size
+
+    This is the REPLACE-ONLY baseline that the ADR-40 delta apply aims to reduce.
+    The delta comparison data lives in RESULTS/02_Results.txt.
+    Results here: RESULTS/02b_Replace_Disruption_Baseline.txt.
+
+    Key difference from prior spike metric: spike_threshold = baseline p95 × 3.0
+    (NOT baseline p99 × 3.0 — p99 was ~500ms from occasional SYN-retransmit, making
+    3×p99 ≈ 1505ms a threshold never exceeded and the spike count always 0/useless).
+    Baseline p95 ≈ 10–20ms yields a ~30–60ms threshold that genuinely fires on
+    connections stalled during a lock-hold window.
+
+    Always passes — measurement harness; results in RESULTS/02b_Replace_Disruption_Baseline.txt.
+    """
+    print("\n=== ADR-40 replace-only service-disruption baseline ===")
+    print(f"  Sizes: {[f'{s:,}' for s in _REPLACE_DISRUPT_SIZES]}")
+    print(f"  {_REPLACE_DISRUPT_REPS} reps per size | ~500 conn/s TCP-RST | op-aligned (CR#12)")
+    print(f"  Disruption buckets: >{_DISRUPT_BUCKETS_MS}ms")
+    print(f"  Spike threshold: baseline p95 × {_DISRUPT_SPIKE_FACTOR} (not p99 — see docstring)")
+
+    # Upload TCP probe to civm.
+    _upload_tcp_probe(client_vm)
+
+    # Route probe IPs through pfSense LAN on civm (same as test_pfctl_reject_loop).
+    print("  civm: adding explicit routes for 11.0.0.0/8 and 13.0.0.0/8 via pfSense LAN")
+    client_vm.ssh(
+        "ip route replace 11.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && ip route replace 13.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && echo routes_ok",
+        timeout=10.0,
+    )
+
+    kv = _bench(smoke_vm, "system_info")
+    print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
+
+    kv = _bench(smoke_vm, "raise_limits", "10000000")
+    print(f"  pf table limit: {kv.get('pf_table_limit')}")
+
+    # Generate all needed tables (idempotent).
+    for sz in _REPLACE_DISRUPT_SIZES:
+        kv = _bench(smoke_vm, "gen", str(sz), timeout=300.0)
+        print(f"  gen {sz:,}: {kv.get('generated', kv.get('cached', '?'))}")
+
+    # Load the largest table first so setup_rules can verify table is loaded.
+    kv = _bench(smoke_vm, "replace", "1000000", timeout=120.0)
+    print(f"  Loaded 1M table: wall_ms={kv.get('wall_ms')} loaded={kv.get('loaded')}")
+
+    # Set up floating reject rules (same ruleset as test_pfctl_reject_loop).
+    print("\n--- Setting up floating reject rules ---")
+    kv = _bench(smoke_vm, "setup_rules", "floating", timeout=30.0)
+    print(f"  setup_rules: {kv}")
+    if "error" in kv:
+        pytest.skip(f"Cannot set up reject rules: {kv.get('error')} — STOP")
+
+    # Verify the reject loop with a short probe.
+    print("\n--- Verifying reject loop ---")
+    in_arg = ",".join(_PROBE_IN_TABLE_IPS[:3])
+    out_arg = ",".join(_PROBE_OUT_TABLE_IPS[:3])
+    verify_result = client_vm.ssh(f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 2.0", timeout=10.0)
+    verify_samples_disrupt = _parse_tcp_probe_output(verify_result.stdout)
+    if not verify_samples_disrupt:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        _bench(smoke_vm, "cleanup", timeout=30.0)
+        pytest.skip(
+            f"TCP RST probe returned no samples — reject loop not working. "
+            f"stdout={verify_result.stdout!r} rc={verify_result.returncode}. STOP."
+        )
+    verify_rtts = sorted(s.rtt_ms for s in verify_samples_disrupt)
+    verify_p99 = verify_rtts[min(int(len(verify_rtts) * 0.99), len(verify_rtts) - 1)]
+    print(
+        f"  verify probe: n={len(verify_samples_disrupt)}"
+        f" p50={verify_rtts[len(verify_rtts) // 2]:.2f}ms p99={verify_p99:.2f}ms"
+    )
+    if verify_p99 > 100.0:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        _bench(smoke_vm, "cleanup", timeout=30.0)
+        pytest.skip(f"RST p99={verify_p99:.1f}ms > 100ms — reject loop too slow. STOP.")
+    print(f"  VERIFY PASSED: RST p99={verify_p99:.2f}ms")
+
+    # Verify SSH still works after loading reject rules.
+    try:
+        smoke_vm.ssh("echo ssh_ok", timeout=10.0)
+        print("  SSH control path: ok")
+    except Exception as exc:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        _bench(smoke_vm, "cleanup", timeout=30.0)
+        pytest.skip(f"SSH to pfSense lost after loading reject rules: {exc} — STOP.")
+
+    # ------------------------------------------------------------------ #
+    # Main measurement loop: replace at each size, 20 reps
+    # ------------------------------------------------------------------ #
+    # Collect per-size: list of (baseline_window, during_window, wall_ms)
+    size_data: dict[int, list[tuple[TcpRstWindow, TcpRstWindow, int]]] = {sz: [] for sz in _REPLACE_DISRUPT_SIZES}
+    size_stats: dict[int, PooledStats] = {}
+    size_buckets: dict[int, dict[int, tuple[int, float]]] = {}
+    size_spike_thresh: dict[int, float] = {}
+    size_wall_ms: dict[int, list[int]] = {sz: [] for sz in _REPLACE_DISRUPT_SIZES}
+
+    print(f"\n--- Replace disruption measurement ({_REPLACE_DISRUPT_REPS} reps per size) ---")
+    for sz in _REPLACE_DISRUPT_SIZES:
+        print(f"\n  == size={sz:,} ==")
+        for rep in range(_REPLACE_DISRUPT_REPS):
+            print(f"  replace {sz:,} rep={rep + 1}/{_REPLACE_DISRUPT_REPS}", flush=True)
+            row, bl_w, dur_w = _measure_with_rst_probe(
+                smoke_vm,
+                client_vm,
+                ("replace", str(sz)),
+                op_timeout_s=300.0,
+            )
+            size_data[sz].append((bl_w, dur_w, row.wall_ms))
+            size_wall_ms[sz].append(row.wall_ms)
+
+        # Compute pooled stats for this size.
+        bl_wins = [r[0] for r in size_data[sz]]
+        dur_wins = [r[1] for r in size_data[sz]]
+        ps, buckets, spike_thresh = _compute_pooled_tcp_full(dur_wins, bl_wins)
+        size_stats[sz] = ps
+        size_buckets[sz] = buckets
+        size_spike_thresh[sz] = spike_thresh
+        med_wall = statistics.median(size_wall_ms[sz])
+        print(
+            f"  [size={sz:,}] wall_ms(med)={med_wall:.0f} n={ps.n}"
+            f" p50={ps.p50_ms:.2f}ms p95={ps.p95_ms:.2f}ms"
+            f" p99={ps.p99_ms:.2f}ms p99.9={ps.p999_ms:.2f}ms max={ps.max_ms:.2f}ms"
+            f" spike_thresh={spike_thresh:.1f}ms spikes={ps.spikes}"
+        )
+        for thresh in _DISRUPT_BUCKETS_MS:
+            cnt, pct = buckets[thresh]
+            print(f"    >{thresh}ms: {cnt} ({pct:.2f}%)")
+
+    _bench(smoke_vm, "teardown_rules", timeout=30.0)
+
+    # ------------------------------------------------------------------ #
+    # Quiescent baseline (no-op, table loaded, rules active but no pfctl op)
+    # Collect quiescent RTT distribution per size for reference.
+    # We reuse the verify windows collected before measurement as the reference,
+    # but also collect a dedicated quiescent window per size here.
+    # ------------------------------------------------------------------ #
+    print("\n--- Quiescent baseline (no pfctl op, rules active) per size ---")
+    # Reload rules for quiescent measurement.
+    kv = _bench(smoke_vm, "setup_rules", "floating", timeout=30.0)
+    quiet_stats: dict[int, PooledStats] = {}
+    quiet_buckets: dict[int, dict[int, tuple[int, float]]] = {}
+
+    for sz in _REPLACE_DISRUPT_SIZES:
+        # Load the table for this size (so the quiescent baseline matches the same table).
+        _bench(smoke_vm, "replace", str(sz), timeout=120.0)
+        # Kill civm states before quiescent probe.
+        smoke_vm.ssh("/sbin/pfctl -k 192.168.1.10 2>/dev/null || true", timeout=10.0)
+        # Collect quiescent samples: 5s at ~500 conn/s.
+        in_arg2 = ",".join(_PROBE_IN_TABLE_IPS)
+        out_arg2 = ",".join(_PROBE_OUT_TABLE_IPS)
+        qcmd = f"python3 /tmp/tcp_rst_probe.py {in_arg2} {out_arg2} 5.0 2>/dev/null"
+        qresult = client_vm.ssh(qcmd, timeout=20.0)
+        q_samples = _parse_tcp_probe_output(qresult.stdout)
+        if q_samples:
+            q_rtts = sorted(s.rtt_ms for s in q_samples)
+            q_n = len(q_rtts)
+            q_p95 = q_rtts[min(int(math.floor(q_n * 0.95)), q_n - 1)]
+            q_p99 = q_rtts[min(int(math.floor(q_n * 0.99)), q_n - 1)]
+            q_p50 = q_rtts[q_n // 2]
+            # Compute stats.
+            q_ps = PooledStats(
+                n=q_n,
+                mean_ms=statistics.mean(q_rtts),
+                stddev_ms=statistics.pstdev(q_rtts),
+                min_ms=q_rtts[0],
+                p50_ms=q_p50,
+                p95_ms=q_p95,
+                p99_ms=q_p99,
+                p999_ms=q_rtts[min(int(math.floor(q_n * 0.999)), q_n - 1)],
+                max_ms=q_rtts[-1],
+                total_loss=0,
+                total_sent=q_n,
+                spikes=0,
+                spike_threshold_ms=0.0,
+            )
+            q_buckets = _compute_disrupt_buckets(q_rtts)
+        else:
+            q_ps = PooledStats()
+            q_buckets = {t: (0, 0.0) for t in _DISRUPT_BUCKETS_MS}
+        quiet_stats[sz] = q_ps
+        quiet_buckets[sz] = q_buckets
+        print(
+            f"  quiescent size={sz:,}: n={q_ps.n}"
+            f" p50={q_ps.p50_ms:.2f}ms p95={q_ps.p95_ms:.2f}ms"
+            f" p99={q_ps.p99_ms:.2f}ms max={q_ps.max_ms:.2f}ms"
+        )
+
+    _bench(smoke_vm, "teardown_rules", timeout=30.0)
+
+    # ------------------------------------------------------------------ #
+    # Summary table
+    # ------------------------------------------------------------------ #
+    print("\n\n=== REPLACE DISRUPTION BASELINE SUMMARY ===")
+    print("Replace-only ops; floating reject rules; TCP-RST probe at ~500 conn/s.")
+    print("Spike threshold = quiescent baseline p95 × 3.0 (per cell).")
+    print("Disruption buckets = connections stalled DURING the replace op.")
+    print()
+    _hdr3 = (
+        f"{'size':>9} {'wall_ms':>9} {'n':>6} "
+        f"{'mean':>7} {'std':>7} {'p50':>8} {'p95':>8} {'p99':>8} "
+        f"{'p99.9':>9} {'max':>8} "
+        f"{'spk_thr':>8} {'spikes':>7} "
+        f"{'|>50ms':>10} {'|>100ms':>10} {'|>250ms':>10} {'|>500ms':>10}"
+    )
+    print(_hdr3)
+    print("-" * len(_hdr3))
+    for sz in _REPLACE_DISRUPT_SIZES:
+        ps = size_stats[sz]
+        bkts = size_buckets[sz]
+        med_wall = statistics.median(size_wall_ms[sz])
+        st = size_spike_thresh[sz]
+        b50_cnt, b50_pct = bkts.get(50, (0, 0.0))
+        b100_cnt, b100_pct = bkts.get(100, (0, 0.0))
+        b250_cnt, b250_pct = bkts.get(250, (0, 0.0))
+        b500_cnt, b500_pct = bkts.get(500, (0, 0.0))
+        print(
+            f"{sz:>9,} {med_wall:>9.0f} {ps.n:>6} "
+            f"{ps.mean_ms:>7.2f} {ps.stddev_ms:>7.2f} {ps.p50_ms:>8.2f} {ps.p95_ms:>8.2f} "
+            f"{ps.p99_ms:>8.2f} {ps.p999_ms:>9.2f} {ps.max_ms:>8.2f} "
+            f"{st:>8.1f} {ps.spikes:>7} "
+            f"{b50_cnt:>5}({b50_pct:>4.1f}%) "
+            f"{b100_cnt:>5}({b100_pct:>4.1f}%) "
+            f"{b250_cnt:>5}({b250_pct:>4.1f}%) "
+            f"{b500_cnt:>5}({b500_pct:>4.1f}%)"
+        )
+    print()
+    print("Quiescent baseline (no-op, rules active):")
+    _hdr4 = f"{'size':>9} {'n':>6} {'p50':>8} {'p95':>8} {'p99':>8} {'max':>8}"
+    print(_hdr4)
+    print("-" * len(_hdr4))
+    for sz in _REPLACE_DISRUPT_SIZES:
+        q_ps = quiet_stats[sz]
+        print(f"{sz:>9,} {q_ps.n:>6} {q_ps.p50_ms:>8.2f} {q_ps.p95_ms:>8.2f} {q_ps.p99_ms:>8.2f} {q_ps.max_ms:>8.2f}")
+
+    _bench(smoke_vm, "cleanup", timeout=30.0)
+
+    # Final assertions: data was collected.
+    assert any(size_stats[sz].n > 0 for sz in _REPLACE_DISRUPT_SIZES), (
+        "expected non-empty pooled samples for at least one size"
+    )
