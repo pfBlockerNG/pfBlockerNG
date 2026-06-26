@@ -1,6 +1,6 @@
 # ADR-47: Local/CI execution parity — CI as parallel dispatch of shared, isolated scripts
 
-- **Status:** **Proposed** (2026-06-26)
+- **Status:** **Proposed** (2026-06-26; design resolved + adversarially verified 2026-06-27; **P1 landed** — `sparse-clone-ports.sh` idempotent, PR #591)
 - **Date:** 2026-06-26
 - **Branch:** authored directly on `devel` (ADR-text carve-out) / **Component(s):** `scripts/`, `tests/`, `.github/workflows/`
 - **Target runtime:** GitHub Actions runners (CI) and developer LXC/KVM boxes (local) — POSIX sh + Python 3.11
@@ -88,22 +88,71 @@ CI fans legs across cloud runners (inherently isolated, one leg per runner); loc
 
 ---
 
-## 5. Scope and phases
+## 5. Resolved design
 
-Implementation is staged; each phase is independently landable.
+The three open questions are now resolved. The design is grounded in a survey of the actual build/smoke/git flows and was hardened by an adversarial pass (§7).
 
-- **P1 — Shared ports-prep (done).** `sparse-clone-ports.sh` idempotent, CI = fresh-clone special case (PR #591).
-- **P2 — Extract remaining CI build steps into shared scripts.** Audit `build-pkg-linux.yml` / `release.yml`; move any per-leg logic into `scripts/`; workflows call them.
-- **P3 — Run-id parameterisation.** Generalise `SMOKE_LANE` to a pipeline-wide run-id keying ports dir, workdir, overlays, ports, and the git worktree.
-- **P4 — Box selection + lease.** The single `select-box` script over the LXC pool; agents acquire/release a box.
-- **P5 — Smoke fanout as local parallel dispatch.** The CE+Plus (and beyond) fanout runs as parallel-isolated local legs mirroring CI, sharing the per-leg suite.
+### 5.1 One run-id keyed everywhere; the box lease keys per-box state
 
-**Out of scope:** provisioning the LXC containers themselves; the specific lease backend beyond "simplest that works"; the GHA-only orchestration steps.
+A single `RUN_ID` keys every per-**run** mutable path; the **box lease** (not `RUN_ID`) keys persistent per-**box** state. Both mint paths share one definition in `scripts/lib/run-id.sh`, so local and CI cannot drift:
+
+- **Local** (minted by `select-box.sh` *after* it leases a box): `RUN_ID=local-<box>-<epoch>-<rand>` — `<box>` = the leased LXC container, `<epoch>` = `date +%s`, `<rand>` ≥ 8 bytes of `/dev/urandom` hex (POSIX; no `$RANDOM`).
+- **CI** (`run-id.sh --print-id`, no lease — the ephemeral runner *is* a pre-leased box): `ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-<leg>`, where `<leg>` reuses the existing per-leg coords (varslug/major/arch per ADR-20, never bare `${ABI}`; smoke/UI append the marker).
+- **No aliasing:** the literal `local-` vs `ci-` prefix is a hard structural split (no `GITHUB_RUN_ID` equals the string `local`); within each space the tails are unique by construction (the adversarial pass confirmed this).
+
+`RUN_ID` keys the *ephemeral* `PFB_RUN_DIR=${PFB_RUN_ROOT}/${RUN_ID}/` (the build `out/` — which also defeats `build-pkg-portable.py`'s deterministic `{pkgname}.pkg` filename collision — and `smoke-diag/`). The *lease* keys the *persistent* per-box state — the ports cache, the `127.0.0.1:53` stub bind, the `ip_unprivileged_port_start` sysctl, `pkill qemu`, the per-box git checkout — all single-writer because only one run holds the box, so they need no run-id suffix. `SMOKE_LANE` stays the within-box port-stride primitive (default lane 0), composed under the run-id umbrella for the degenerate one-shared-box fallback.
+
+### 5.2 The select-box script + the simplest correct lease
+
+`scripts/select-box.sh` is the keystone and sole local entry — the analog of GitHub handing a leg a fresh runner, over the pool of LXC containers on the one host. CI never calls it (its runner is already an isolated box — the one permitted orchestration-only divergence). It scrubs `GIT_*` once for the whole pipeline (kills the shared-ref corruption class at the source), leases a box, mints `RUN_ID`, creates `PFB_RUN_DIR`, emits eval-able `KEY=value` (mirroring `release-version.sh`), dispatches `lxc exec "$box" -- <cmd>`, and trap-releases on `EXIT/INT/TERM`. `--print-id` mints without leasing (CI); `--release <RUN_ID>` frees a box after verifying the owner.
+
+The lease is the **only** synchronization primitive in the design, so it must be correct:
+
+- **Acquire** = atomic `mkdir "${PFB_LEASE_DIR}/<box>.lock"` (create-or-fail; exactly one racer wins), then **atomically publish** the owner (`pid host epoch runid`) by writing a temp file inside the lockdir and `mv`-ing it onto `owner` — so a reader never sees a half-written owner.
+- **Pick** = random index over the pool (`od /dev/urandom`), advancing on `EEXIST` — avoids a thundering herd on box 0.
+- **Retry** = one pass; if all held, a short jittered backoff and re-scan, hard-bounded (default minutes; never past the CLAUDE.md 2 h cap). On exhaustion, exit non-zero printing each held box's owner — never hang, never silent.
+- **Stale reclaim** (the part the adversarial pass corrected): a held box is reclaimable when (a) `now-epoch > PFB_LEASE_TTL` (the cross-host backstop), (b) a same-host owner whose `pid` fails `kill -0` (crash), or (c) the owner is absent/empty past a short grace (a crash *between* `mkdir` and the owner publish). Reclaim is **atomic-capture, not `rmdir`+`mkdir`**: a reclaimer renames the stale lockdir to a reclaimer-unique name (`mv "<box>.lock" "<box>.lock.reclaim.<RUN_ID>"`) — `rename(2)` of a directory is atomic, so for one source exactly one concurrent reclaimer wins (the loser gets `ENOENT` and rescans); the winner verifies the captured owner still equals the stale tuple it observed (a TOCTOU guard — never steal a freshly-acquired live lease), then `mkdir`s a fresh lock and publishes its owner. This serializes reclaim through one atomic op, closing the double-grant hole where two reclaimers would otherwise both believe they own the box.
+- **Release** is idempotent (owner-runid-checked), armed in the exit trap; a hard-kill miss is reaped by the next contender's stale rules.
+
+### 5.3 The shared per-leg scripts (no logic in YAML)
+
+Three homes for per-leg logic, each one shared script both CI and local call:
+
+- **`scripts/build-leg.sh`** — the missing "build ONE leg" wrapper over `sparse-clone-ports.sh` + `build-pkg-portable.py` with a single unified arg set. It converts today's real step divergence into parameters: `build-pkg-linux.yml` passes *neither* `--pkgversion` nor `--annotate`; `release.yml` passes *both*; `smoke-single.yml` hard-codes `--pkgversion 3.2.16.20260606.2`. `ports_repo`/`ports_ref` also become params (killing `release.yml`'s hard-coded ref). DEST/OUT become box/run-keyed.
+- **`scripts/run-smoke.sh`** — the one canonical pytest argv, replacing three drifting copies (`smoke-single.yml`, `ui-tests.yml`, `local-smoke.sh`); marker/timeout/`-k` as params, so the CI-vs-local timeout/verbosity drift cannot recur.
+- **`scripts/resolve-legs.sh`** — the shared leg-filter (the `scope`/legs/`-k` jq currently copy-pasted across `smoke.yml`/`ui-tests.yml`) plus the shared image-ref / oras-digest / VM-identity-redaction / diagnostics-scrub helpers.
+
+A small **parity-guard lint test** fails CI if any per-leg job body carries build/test *step* logic — including inline *arg derivation* (the `release-version.sh`/jq/sed prep that feeds a leg), not only the leg invocation — so CI-only step logic cannot survive by living one line above the call. Build parity is "**same script + same defaulting logic**", *not* byte-equal artifacts: the smoke and released `.pkg` are deliberately different builds (different `--pkgversion`, a non-deterministic `--annotate created=` timestamp), so a byte-equal claim is impossible and is explicitly not the goal.
+
+The `GIT_*` scrub gets one mechanical chokepoint for the *test* path too: a shared `scripts/lib/git-env-scrub.sh` sourced from a shellspec helper that every spec includes, plus a parity-guard assertion that every git-touching spec pulls it — so a new spec cannot silently re-open the shared-ref corruption (the per-spec `BeforeEach unset` that even this ADR's P1 relied on stops being a "must-remember").
 
 ---
 
-## 6. Open questions (to resolve during implementation)
+## 6. Phases
 
-- **Lease mechanism:** `flock` on a shared path vs. a per-box marker file vs. a tiny service. Start with the simplest; pin the chosen contract with a self-check.
-- **Isolation granularity:** one box per run vs. lanes within a box. Both compose; the box pool is the throughput lever and may be deferred behind lane-only isolation.
-- **Run-id source:** how a CI leg's matrix coordinates and a local run's id are minted so they never alias (and so a local id is stable across a run's steps).
+Each phase is independently landable, behaviour-preserving where it can be (the single-box/lane-0 path reproduces today's paths), and carries its own tests.
+
+- **P1 — Shared ports-prep (DONE, `devel` 1b0d64a9 / PR #591).** `sparse-clone-ports.sh` idempotent: reuse fetches + checks out REF instead of trusting the checked-out branch, so a stale tree can no longer build the empty-stub `.pkg`. Pinned by `tests/shell/sparse_clone_ports_spec.sh`.
+- **P2 — Run-id backbone + lease (local-only, additive).** Add `scripts/lib/run-id.sh` + `scripts/select-box.sh` (the corrected lease) + `tests/shell/select_box_spec.sh` (stub `lxc` on PATH; acquire/conflict/random-spread/TTL/dead-pid/**two-concurrent-reclaimers**/exhaustion/release/no-alias). Validate on the real LXC host: two concurrent `select-box` invocations get distinct boxes + run-ids. Mechanism only.
+- **P3 — Shared BUILD script + converge the build sites.** Add `scripts/build-leg.sh` + spec; rewire `build-pkg-linux.yml` and `release.yml`'s matrix loop to call it; delete the `--pkgversion`/`--annotate`/ports-dir/ports-ref step divergences. Gate: build the smoke leg the old way vs `build-leg.sh` with identical inputs and `cmp` byte-for-byte (reproducible — no version/annotate on that leg); for the release leg, compare manifest fields modulo the known-nondeterministic `created=` timestamp.
+- **P4 — Local-smoke parity + shared SMOKE launcher.** Add `scripts/run-smoke.sh` + spec; rewire `local-smoke.sh` to lease via `select-box.sh`, gate the host-global `pkill qemu` behind a held lease (drop the unconditional kill), trap-release, and call `run-smoke.sh`; point `conftest.py` `DIAG_DIR` at `PFB_DIAG_DIR` (`SMOKE_LANE` unchanged) and fix the `bind(:0)` TOCTOU by lane-striding. Rewire `smoke-single.yml`/`ui-tests.yml` to mint `RUN_ID` + call `run-smoke.sh`. Prove no cross-run collision with a 2-box concurrent local smoke.
+- **P5 — CI collapse to dispatch + parity guard + docs.** Lift the duplicated leg-resolution into `scripts/resolve-legs.sh` + helpers; each per-leg job body becomes {mint RUN_ID; call one shared script}. Add the parity-guard lint + the `git-env-scrub.sh` chokepoint. Document the model in `architecture-notes.md` / `local-smoke-debian.md` / README.
+
+**Out of scope:** provisioning the LXC containers (user-owned infra); the GHA-only orchestration steps (artifact upload, OIDC, the matrix definition) — the one legitimate divergence.
+
+---
+
+## 7. Adversarial verification
+
+The design was stress-tested by independent adversarial lenses (collision / failure / parity). Four real gaps were found and folded into §5 before this revision:
+
+1. **Stale-reclaim double-grant** — the original `rmdir`+`mkdir` reclaim let two reclaimers both "win" and run on one box (catastrophic: duplicate `:53` bind, one run's `pkill qemu` killing the other's VMs, a concurrent ports checkout re-summoning P1's wrong-branch class). Fixed by atomic `rename`-capture (§5.2).
+2. **Acquire-window leak** — a crash between `mkdir` and the owner write left a box stuck "busy" forever (no owner ⇒ no stale rule can fire). Fixed by the missing-owner-after-grace reclaim rule + atomic owner publish (§5.2).
+3. **Test-path scrub was a "must-remember"** — only a per-spec `BeforeEach unset` guarded the corruption class. Fixed by the shared `git-env-scrub.sh` + a parity-guard assertion (§5.3).
+4. **Build parity mis-specified** — the smoke `.pkg` can never be byte-equal to the released one (`--pkgversion`/non-deterministic `--annotate`). Re-specified as same-script-same-defaulting + a closed legitimate-divergence parameter set, with the parity-guard also forbidding inline arg-derivation (§5.3).
+
+---
+
+## 8. Acceptance
+
+Per the CLAUDE.md ADR-acceptance rule (green automated coverage, no manual sign-off): each phase's shellspec/pytest gates green, including the §7-hardened `select_box_spec.sh`. The out-of-CI acceptance item (a documented limitation, not a blocker) is a **concurrent multi-box run on the real LXC host** — a local run and a CI-leg-shaped run at once — asserting zero shared-state collisions across ports, `:53`, the ports cache, diagnostics, and git refs.
