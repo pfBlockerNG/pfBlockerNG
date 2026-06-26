@@ -158,29 +158,51 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.tick
+@pytest.mark.timeout(150)  # drain + bounded no-dispatch poll can exceed the 30s body cap
 def test_tick_skips_non_due_feed(deployed_vm: SmokeVM):
-    """Tick does NOT fire a feed sync when cron next_due is in the future.
+    """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due.
+
+    The tick logs to syslog (not stdout), so observe the NON-dispatch via the
+    ' CRON  PROCESS  START' marker (logged only by pfblockerng_sync_cron): a non-due cron
+    must produce NO new marker. Drain any in-flight cron from a prior tick test first so the
+    marker baseline is stable. This is marker-based (not ledger-value-based) so it is immune
+    to a prior test's mark_ran overwriting the cron entry — both values stay 'future' anyway.
+    (Positive-control hardening — proving the tick itself ran — is tracked in #582.)
 
     Scenario:
         Background: pfBlockerNG installed.
             Given the 'cron' ledger entry has next_due = now + 1 hour.
             When pfblockerng.php tick runs.
-            Then the log does NOT contain 'Tick: dispatching feed cron.'
+            Then NO new ' CRON  PROCESS  START' marker appears (the cron was skipped).
     """
     vm = deployed_vm
+    marker = "CRON  PROCESS  START"
+
+    # Drain any in-flight backgrounded cron from a prior tick test so the marker baseline
+    # is stable (a still-running prior cron would log a marker unrelated to this tick).
+    assert h.wait_until(
+        lambda: (
+            vm.ssh("pgrep -f 'pfblockerng[.]php cron' >/dev/null && echo BUSY || echo CLEAR").stdout.strip() == "CLEAR"
+        ),
+        timeout=90,
+        interval=3,
+    ), "a prior backgrounded cron never finished; cannot isolate this tick"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
-    future = now_ts + 3600
+    _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
+    before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
-    _write_ledger_entry(vm, "cron", now_ts - 86400, future)
-
-    # The tick logs to syslog, not stdout, so observe via the ledger: a non-due cron is
-    # NOT dispatched, so mark_ran does not run and next_due stays at the future value.
+    # When: tick fires — cron is not due.
     _run_tick(vm)
 
-    assert _read_ledger(vm).get("cron", {}).get("next_due", 0) == future, (
-        f"expected NO dispatch (cron not yet due) — next_due should stay {future}; ledger={_read_ledger(vm)}"
-    )
+    # Then: no new CRON PROCESS pass appeared (cron skipped). The bounded poll gives any
+    # erroneous late dispatch a window to show; wait_until returns False (good) when the
+    # count never rises.
+    assert not h.wait_until(
+        lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
+        timeout=20,
+        interval=4,
+    ), f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
 
 
 @pytest.mark.smoke
