@@ -70,7 +70,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     The scheduled reset (``pfb_log_reset()``) and the line-cap trim (``pfb_log_mgmt()``)
     live in ``pfblockerng_sync_cron()``.  On a live appliance that function is reached by
     the scheduled tick, which dispatches the ``cron`` verb (issue #570: the tick routes
-    through ``pflblockerng_sync_cron`` — a bare ``pfb_trigger`` would skip both); the
+    through ``pfblockerng_sync_cron`` — a bare ``pfb_trigger`` would skip both); the
     end-to-end tick path is pinned by ``test_smoke_tick.test_tick_feed_cron_routes_through_sync_cron``.
     These cases drive the ``cron`` verb directly to exercise the reset LOGIC without
     waiting on the tick cadence.  We still need pfBlockerNG installed and ``enable_cb=on``

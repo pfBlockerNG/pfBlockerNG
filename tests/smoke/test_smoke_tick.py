@@ -235,15 +235,15 @@ def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
 @pytest.mark.timeout(120)  # the cron pass is backgrounded + serialised behind sibling ticks'
 #                            crons; its CRON PROCESS marker can land past the 30s body cap.
 def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
-    """The tick's due feed-cron dispatches the ``cron`` verb (-> pflblockerng_sync_cron),
+    """The tick's due feed-cron dispatches the ``cron`` verb (-> pfblockerng_sync_cron),
     NOT a bare ``pfb_trigger scope=both`` (issue #570).
 
-    Only ``pflblockerng_sync_cron()`` applies each feed's per-list Update Frequency
+    Only ``pfblockerng_sync_cron()`` applies each feed's per-list Update Frequency
     (``$list['cron']``: EveryDay/Weekly/NNhour) and runs the scheduled log trim + reset
     (``pfb_log_mgmt``/``pfb_log_reset``).  A bare ``pfb_trigger`` does neither — it would
     poll every feed on every tick (provider-ban risk) and never rotate the report logs
     (ADR-30 dead on-box).  The discriminator is the `` CRON  PROCESS  START`` marker that
-    ONLY ``pflblockerng_sync_cron()`` logs; if the tick regresses to dispatching
+    ONLY ``pfblockerng_sync_cron()`` logs; if the tick regresses to dispatching
     ``pfb_trigger`` directly the marker count never increases.
 
     Scenario:
@@ -253,7 +253,7 @@ def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
             When  pfblockerng.php tick runs (it backgrounds the cron pass).
             Then  the tick logs 'Tick: dispatching feed cron.'
             And   the ' CRON  PROCESS  START' marker count increases — proving the pass
-                  ran through pflblockerng_sync_cron, not a bare pfb_trigger.
+                  ran through pfblockerng_sync_cron, not a bare pfb_trigger.
     """
     vm = deployed_vm
     marker = "CRON  PROCESS  START"
@@ -269,13 +269,13 @@ def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
     # tick stdout — the CRON PROCESS marker below is the actual discriminator.
     _run_tick(vm)
 
-    # Then: the backgrounded pass ran through pflblockerng_sync_cron (marker count rose).
+    # Then: the backgrounded pass ran through pfblockerng_sync_cron (marker count rose).
     assert h.wait_until(
         lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
         timeout=90,
         interval=3,
     ), (
-        "tick must route the feed cron through pflblockerng_sync_cron — the "
+        "tick must route the feed cron through pfblockerng_sync_cron — the "
         f"' {marker}' marker count did not increase (before={before}, "
         f"after={h.count_log_marker(vm, h.PFB_LOG, marker)}).  A bare pfb_trigger would "
         "skip per-list Update Frequency and the scheduled log reset (issue #570 / ADR-30)."
