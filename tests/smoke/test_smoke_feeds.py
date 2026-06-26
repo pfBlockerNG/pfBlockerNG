@@ -1627,11 +1627,9 @@ def test_cron_304_skips_unchanged_remote_feed(
         # exists — so the store-then-read can span a couple of cron passes. Run cron until
         # "304 not modified" appears (the #572 fix aligned the read base to {header}.orig),
         # capped so a genuine failure still surfaces.
-        got_304 = False
         for _pass in range(4):
             h.reload(deployed_vm, "cron")
             if h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified") > not_mod_before:
-                got_304 = True
                 break
 
         # Fast guard — the feed was evaluated at least once.
@@ -1643,7 +1641,7 @@ def test_cron_304_skips_unchanged_remote_feed(
 
         # THEN — "304 not modified" appeared within the cap (Phase-3 code-path proof).
         not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
-        assert got_304 and not_mod_after > not_mod_before, (
+        assert not_mod_after > not_mod_before, (
             f"Expected '( 304 not modified )' (Phase-3 conditional GET proof) within 4 cron "
             f"passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
         )
