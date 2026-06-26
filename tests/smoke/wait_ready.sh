@@ -25,9 +25,14 @@
 #     host-forwarded management NIC with the baked test key.
 #
 # Poll cadence: no VM answers in under ~8s, so wait out an initial grace, then
-# poll every 1s while readiness is imminent (< 30s elapsed) and every 5s after
-# that, up to the hard timeout (~1 min). A local-loopback connect that cannot
+# poll every 1s while readiness is plausible (< 75s elapsed) and every 5s after
+# that, up to the hard timeout (~3 min). A local-loopback connect that cannot
 # complete in 1s is dead, so the per-probe connect timeout is 1s.
+#
+# The windows fit MEASURED boots, not the rule of thumb: pfSense reaches
+# web-ready in ~15s on a fast bare-metal host but ~55-60s on a nested-KVM /
+# low-power box (the boot is single-threaded + CPU-bound; see the ADR-04 notes).
+# The 1s window spans both; 180s leaves headroom for parallel-lane CPU contention.
 #
 # POSIX sh; quoted expansions; absolute binary paths.
 
@@ -46,7 +51,7 @@ usage() {
 SSH_KEY="$1"
 HOST="${2:-127.0.0.1}"
 PORT="${3:-2222}"
-TIMEOUT="${4:-60}"
+TIMEOUT="${4:-180}"
 VM_PID="${5:-}"
 WEB_PORT="${6:-}"
 
@@ -70,7 +75,9 @@ if [ -n "$WEB_PORT" ]; then
 fi
 
 # Throwaway VM: skip host-key verification, but keep the private key private.
-SSH_OPTS="-i ${SSH_KEY} -p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=1 -o BatchMode=yes -o LogLevel=ERROR"
+# The key path is passed quoted at the callsite (it may contain spaces); only the
+# space-free static options live in this word-split string.
+SSH_OPTS="-p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=1 -o BatchMode=yes -o LogLevel=ERROR"
 
 # Neither VM becomes reachable in under ~8s, so probing before then is pure waste
 # (the old exponential backoff's early probes). Wait out this grace — still watching
@@ -119,15 +126,16 @@ while :; do
         # tcsh (pfSense). A richer command must be wrapped in `/bin/sh -c '<blob>'`
         # (see scripts/install-pkg.sh / tests/smoke/roundtrip.sh).
         # shellcheck disable=SC2086
-        if "$SSH" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
+        if "$SSH" -i "$SSH_KEY" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
             echo "boot-to-ready: ${ELAPSED} seconds"
             exit 0
         fi
         PENDING=ssh
     fi
 
-    # Tight 1s cadence while readiness is imminent; relax to 5s past the 30s mark.
-    if [ "$ELAPSED" -lt 30 ]; then
+    # Tight 1s cadence while readiness is plausible (covers a ~15s fast boot and a
+    # ~55-60s slow/contended one); relax to 5s past the 75s mark.
+    if [ "$ELAPSED" -lt 75 ]; then
         INTERVAL=1
     else
         INTERVAL=5
