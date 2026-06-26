@@ -41,14 +41,15 @@ def test_initial_grace_skips_early_probes() -> None:
 
 
 def test_poll_cadence_is_one_then_five_seconds_not_exponential() -> None:
-    """Poll every 1s while readiness is imminent (< 30s), then every 5s — no backoff.
+    """Poll every 1s while readiness is plausible (< 75s), then every 5s — no backoff.
 
-    Pins both branches of the cadence (1s and 5s at the 30s boundary) AND that the
-    old exponential backoff is gone: a `BACKOFF` doubling toward a 15s cap would
-    reintroduce the overshoot this change removes.
+    The 75s window spans both a ~15s fast boot and a ~55-60s slow/contended one (so
+    the real readiness is caught within 1s, not 5s). Pins both branches of the
+    cadence (1s and 5s at the 75s boundary) AND that the old exponential backoff is
+    gone: a `BACKOFF` doubling toward a 15s cap would reintroduce the overshoot.
     """
     text = _wait_ready_text()
-    assert 'if [ "$ELAPSED" -lt 30 ]; then' in text
+    assert 'if [ "$ELAPSED" -lt 75 ]; then' in text
     assert "INTERVAL=1" in text
     assert "INTERVAL=5" in text
     # The exponential backoff (BACKOFF=2; BACKOFF*2; cap 15) must be gone.
@@ -65,14 +66,16 @@ def test_connect_timeouts_are_one_second() -> None:
     assert "--max-time 5" not in text
 
 
-def test_default_timeout_is_about_one_minute() -> None:
-    """The hard readiness ceiling defaults to ~1 min (was 600s).
+def test_default_timeout_has_headroom_over_slow_boot() -> None:
+    """The hard readiness ceiling defaults to ~3 min (was 600s).
 
-    A dead qemu fails the poll immediately via its PID watch, so the ceiling only
-    bounds an alive-but-hung boot; ~1 min is ample and surfaces a wedge fast.
+    Web-ready is ~55-60s on a nested-KVM / low-power box and higher under
+    parallel-lane CPU contention, so ~1 min was too tight; ~3 min leaves headroom.
+    A dead qemu still fails the poll immediately via its PID watch, so the ceiling
+    only bounds an alive-but-hung boot.
     """
     text = _wait_ready_text()
-    assert 'TIMEOUT="${4:-60}"' in text
+    assert 'TIMEOUT="${4:-180}"' in text
 
 
 def test_pfsense_gates_on_web_and_civm_on_ssh() -> None:

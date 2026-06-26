@@ -118,10 +118,11 @@ STUB_DNS_A = stub_responses.STUB_DNS_A  # RFC 5737 documentation range
 STUB_DNS_AAAA = stub_responses.STUB_DNS_AAAA  # RFC 3849 documentation range
 
 # Hard readiness ceiling for wait_ready.sh's poll (8s grace -> 1s, then 5s past
-# 30s). Both VMs reach ready in well under a minute, and a dead qemu fails the poll
-# IMMEDIATELY via its PID watch (not by burning this ceiling), so ~1 min is ample;
-# raise SMOKE_BOOT_TIMEOUT for an unusually slow runner.
-DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "60"))
+# 75s). Measured web-ready is ~15s on a fast bare-metal host but ~55-60s on a
+# nested-KVM / low-power box, and parallel-lane CPU contention pushes it higher, so
+# ~3 min leaves headroom; a dead qemu still fails IMMEDIATELY via its PID watch (not
+# by burning this ceiling). Raise SMOKE_BOOT_TIMEOUT for an unusually slow runner.
+DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "180"))
 
 # civm client VM ssh host-forward port (host -> civm:22). Honour the same
 # SMOKE_CLIENT_SSH_HOSTPORT override boot_vm.sh reads (default 2223), so a custom
