@@ -460,9 +460,17 @@ def lan_socket_port() -> Iterator[int]:
 # Session-scoped VM fixture
 # --------------------------------------------------------------------------- #
 
+# Records the booted pfSense VM on the session so the per-module isolation teardown
+# (`_pfb_module_baseline`) can find it WITHOUT calling getfixturevalue — which would
+# re-enter fixture setup (deprecated in pytest 9.1 for a not-already-requested fixture)
+# and could boot a VM purely to reset a module that never used one. None once torn down.
+SMOKE_VM_KEY: pytest.StashKey[SmokeVM | None] = pytest.StashKey()
+
 
 @pytest.fixture(scope="session")
-def smoke_vm(lan_socket_port: int, tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
+def smoke_vm(
+    lan_socket_port: int, tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
+) -> Iterator[SmokeVM]:
     """Pull -> boot -> wait-ready -> yield -> teardown, once per session.
 
     Per-case isolation (Phase 4 provides the reset verbs): cases run against
@@ -520,9 +528,11 @@ def smoke_vm(lan_socket_port: int, tmp_path_factory: pytest.TempPathFactory) -> 
         log_path=work / "vm.log",
         boot_timeout=DEFAULT_BOOT_TIMEOUT,
     )
+    request.session.stash[SMOKE_VM_KEY] = handle.vm
     try:
         yield handle.vm
     finally:
+        request.session.stash[SMOKE_VM_KEY] = None
         _kill(handle.process)
         with contextlib.suppress(Exception):
             handle.log_file.close()
@@ -1364,8 +1374,10 @@ def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None
 
     Scoped to the SMOKE tier only — the UI tier (``tests/smoke/ui/``) shares a session-scoped
     login + box and is reset separately, so it is excluded here. A strict no-op unless
-    ``SMOKE_PKG`` is set (a package was actually deployed), so off-box modules that never touch
-    the VM are untouched. Wrapped in suppress so a teardown reset can never MASK a test failure.
+    ``SMOKE_PKG`` is set (a package was actually deployed) AND the VM was actually booted, so
+    off-box modules that never touch the VM are untouched (and never boot one just to reset).
+    A genuine reset failure is allowed to SURFACE — silently swallowing it would leak dirty
+    state into the next module, defeating the isolation this fixture exists to provide.
     """
     yield
     # UI tier shares session state (deferred to its own per-test reset) — leave it alone.
@@ -1374,15 +1386,18 @@ def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None
     # No-op outside a real deployed smoke run, so off-box modules (no VM) are unaffected.
     if not os.environ.get("SMOKE_PKG"):
         return
+    # Read the already-booted VM from the session stash — NEVER getfixturevalue (it re-enters
+    # setup and could boot a VM just to reset it). None ⇒ the VM was never booted this run, so
+    # there is nothing to reset.
+    vm = request.session.stash.get(SMOKE_VM_KEY, None)
+    if vm is None:
+        return
     from . import helpers  # local import: helpers imports from conftest (avoid cycle)
 
-    try:
-        # Resolve the already-booted session VM lazily — never FORCE a boot just to reset.
-        vm = request.getfixturevalue("smoke_vm")
-    except Exception:
-        return
-    with contextlib.suppress(Exception):
-        helpers.reset_pfb_baseline(vm)
+    # Let a genuine baseline-reset failure propagate rather than silently leaking dirty state
+    # into the next module. The module's test results are already recorded before this teardown
+    # runs, so a teardown error is reported separately and cannot mask a test outcome.
+    helpers.reset_pfb_baseline(vm)
 
 
 @pytest.fixture(autouse=True)
