@@ -9924,8 +9924,9 @@ function pfb_hash_write($base, $path) {
 // and the conditional GET never sends If-None-Match (the 304 fast-path stays dead).
 // Strip a single trailing `.md5` before appending the `.orig` baseline suffix.
 function pfb_conditional_get_validator_base($file_dwn) {
-	if (str_ends_with((string) $file_dwn, '.md5')) {
-		$file_dwn = substr((string) $file_dwn, 0, -4);
+	$file_dwn = (string) $file_dwn;
+	if (str_ends_with($file_dwn, '.md5')) {
+		$file_dwn = substr($file_dwn, 0, -4);
 	}
 	return "{$file_dwn}.orig";
 }
