@@ -1,0 +1,88 @@
+================================================================================
+PHASE 3 PROMPT — Remove stale TODO; update inline documentation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_44_MIME_Normalization/ADR.md   (read §1 and §6 Phase 3 first)
+================================================================================
+
+ROLE
+Branch: adr/44-mime-normalisation (off devel)
+Phase 3 of 4 — behaviour-preserving cleanup phase.
+Inline on adr/44-mime-normalisation, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+After Phase 2, pfb_mime_normalise() is live and the MIME gate correctly handles
+ZIP variant strings. However, the ZIP dispatch branch in pfb_download() still
+contains:
+  - A TODO comment explaining why PFB_FILTER_FILE_MIME_COMPRESSED was commented
+    out for ZIP ("incompatability with ZIP files").
+  - Possibly other inline comments that describe the old, pre-normalisation flow.
+
+These are now misleading. This phase removes the stale TODO and updates inline
+documentation to reflect the ADR-44 decision. No functional change.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_44_MIME_Normalization/RESULTS/02_Results.txt
+  Confirm normalisation is wired, all tests are green, and the handoff notes the
+  TODO comment location. If this file is missing; STOP and report.
+- .ADRs/ADR_44_MIME_Normalization/ADR.md  (§1, §6 Phase 3)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    pfb_download() ZIP branch — the TODO comment block referencing
+    "incompatability with ZIP files" and the commented-out
+    PFB_FILTER_FILE_MIME_COMPRESSED call.
+    pfb_filter() — any comments describing the pre-normalisation MIME flow.
+- CLAUDE.md
+
+ACTION PLAN (ordered)
+
+1. Locate the TODO comment block in the pfb_download() ZIP branch. It references
+   "incompatability with ZIP files" and explains why the _COMPRESSED check was
+   commented out. Remove this block.
+
+2. In its place, add a brief comment referencing the resolution:
+       // ZIP MIME variant normalisation is handled in pfb_filter() via
+       // pfb_mime_normalise() — see ADR-44. Inner-content validation for
+       // ZIP is addressed by ADR-44.
+
+3. Review all other inline comments in pfb_filter() constants 16, 17, 18 that
+   describe MIME handling. Update any that still describe the old un-normalised
+   flow to reflect that normalisation now precedes the allow-list lookup in
+   constant 17.
+
+4. Do NOT remove the commented-out PFB_FILTER_FILE_MIME_COMPRESSED call in the
+   ZIP branch if it exists — that is addressed by ADR-44, not this ADR. Only
+   update its accompanying TODO/comment text.
+
+5. Run the full test suite to confirm behaviour-preserving (all Phase 1 + Phase 2
+   tests remain green).
+
+CONSTRAINTS
+- No functional changes to pfb_filter() or pfb_download() in this phase.
+- Only comment/documentation changes in pfblockerng.inc.
+- Do not remove the commented-out _COMPRESSED call itself — only its TODO text.
+- PHP 8.3; no new dependencies.
+
+VERIFICATION (must all pass before this phase is done)
+- vendor/bin/phpunit                → green (all Phase 1 + Phase 2 tests; no regressions)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc  → no syntax errors
+- git diff --stat                   → only pfblockerng.inc (comment changes only)
+- Eyeball git diff: confirm no logic lines changed, only comment lines.
+
+EXPECTED RESULT
+- Stale TODO comment is removed; ADR-44 / ADR-44 reference comment is in its place.
+- pfb_filter() inline docs accurately describe the normalise-then-lookup flow.
+- All tests remain green. No functional change.
+
+COMMIT (single)
+    pfb_filter: remove stale ZIP-MIME TODO; reference ADR-44/ADR-44 (ADR-44 P3)
+Push directly to adr/44-mime-normalisation.
+Open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_44_MIME_Normalization/RESULTS/03_Results.txt
+Include:
+- Confirmation of which comment block(s) were removed/updated and their line refs.
+- Confirmation that the commented-out _COMPRESSED call was NOT removed.
+- PHPUnit summary (all green, same count as Phase 2).
+- git diff --stat output (expected: pfblockerng.inc only, small line delta).
+- Commit hash and push confirmation.
+- Go-ahead for Phase 4 (smoke checklist + ADR acceptance).
