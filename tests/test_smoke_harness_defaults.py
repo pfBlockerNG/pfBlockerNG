@@ -117,16 +117,26 @@ def test_client_smbios_uuid_default_with_env_override() -> None:
 
 
 def test_pfsense_management_path_targets_static_ip() -> None:
-    """The host->guest ssh/web forwards target the image's static management IP.
+    """The host->guest ssh/web forwards target an overridable mgmt address, default = static IP.
 
     The forwards live on net1 (management, 10.0.0.0/16) and point at
-    10.0.0.20 — the harness control path. A drift in either the subnet or the IP
-    would break SSH/Web reachability.
+    PFSENSE_MGT_TARGET, which defaults to the baked static IP 10.0.0.20 — the
+    harness control path. The target is overridable via SMOKE_PFSENSE_MGT_TARGET
+    using the SINGLE-DASH form, so an explicit empty value is honored (forward-compat
+    for a future DHCP MGT1 with no fixed IP: SLIRP then forwards to its own
+    DHCP-assigned guest address). A drift in the subnet, the default IP, or the
+    target indirection would break SSH/Web reachability.
     """
     text = _boot_vm_text()
+    # Default branch: the target falls back to the baked static management IP.
     assert f'PFSENSE_MGMT_IP="{PFSENSE_MGMT_IP}"' in text
     assert "net=10.0.0.0/16" in text
-    assert "hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGMT_IP}:22" in text
+    # Override branch: single-dash (not :-) so an explicit empty SMOKE_PFSENSE_MGT_TARGET
+    # is honored, defaulting to the static IP when unset.
+    assert 'PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"' in text
+    # Both forwards (ssh:22, web:80) target the indirection, not the literal IP.
+    assert "hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22" in text
+    assert "hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80" in text
 
 
 def test_pfsense_wan_and_lan_topology() -> None:
