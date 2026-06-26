@@ -171,7 +171,7 @@ enum PfbIdnMode: string implements PfbStoredEnum
 // PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
 //
 // Three modes control how pfBlockerNG applies alias-table changes to the pf kernel:
-//   Auto    ('auto')    — default; delta (-T add/-T delete) for small churn (< ~20%),
+//   Auto    ('auto')    — default; delta (-T add/-T delete) for small churn (< ~5%),
 //                         full -T replace for initial load / boot / large churn. Safe
 //                         default for all deployments.
 //   Delta   ('delta')   — ALWAYS apply via forward delta (-T add/-T delete); NO
@@ -544,7 +544,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. Default 'auto'.
-		// 'auto' = delta for small churn (< ~20%), full replace for initial load / large churn;
+		// 'auto' = delta for small churn (< ~5%), full replace for initial load / large churn;
 		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);
 		// 'replace' = always full -T replace.
 		// Absent-default 'auto' is safe for existing installs (end-state identical to

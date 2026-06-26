@@ -142,7 +142,7 @@ SH
 	/**
 	 * Scenario A — end-state == replace oracle (low-churn, delta path guaranteed).
 	 *
-	 * Given a 100-entry table with 1-entry churn (1% << 20% threshold).
+	 * Given a 100-entry table with 4-entry churn (3.9% < 5% threshold).
 	 * When pfb_apply_alias_delta() is called with mode='auto'.
 	 * Then the delta path is taken (returns TRUE) AND the resulting set equals
 	 *   the desired set: (last ∪ adds) \ dels == desired.
@@ -154,7 +154,7 @@ SH
 	public function testEndStateEqualsReplaceOracle(): void
 	{
 		// Given: 100-entry base; add 3 new entries, drop 1 existing entry.
-		// Churn = 3 adds + 1 del = 4/100 = 4% < 20% → delta path guaranteed in auto mode.
+		// Churn = 3 adds + 1 del = 4/102 = 3.9% < 5% → delta path guaranteed in auto mode.
 		// Asymmetric counts (3 ≠ 1) let us distinguish correct from swapped diff:
 		//   correct: add_entries=3, del_entries=1
 		//   swapped: add_entries=1, del_entries=3
@@ -176,7 +176,7 @@ SH
 			$desired, $last, 'auto', 256
 		);
 
-		// Then: delta path taken (churn=4/100=4% < 20% threshold).
+		// Then: delta path taken (churn=4/102=3.9% < 5% threshold).
 		$this->assertTrue($used_delta,
 			'expected: delta path (TRUE) for 4% churn; actual: replace path (FALSE)');
 
@@ -354,7 +354,7 @@ SH
 		$desired    = array_map(fn($i) => "10.0.{$i}.1", range(50, 149));  // 50% churn (100 entries, 50 overlap)
 		$table_file = $this->write_alias_file($table, $desired);
 
-		// When: mode='delta' with 100-entry churn (would be > 20% threshold in auto)
+		// When: mode='delta' with 100-entry churn (would be > 5% threshold in auto)
 		$used_delta = pfb_apply_alias_delta(
 			$this->pfctl(), $table, $table_file,
 			$desired, $last, 'delta', 256
