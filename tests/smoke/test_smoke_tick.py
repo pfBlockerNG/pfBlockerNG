@@ -99,39 +99,61 @@ def _run_tick(vm) -> str:
 
 @pytest.mark.smoke
 @pytest.mark.tick
+@pytest.mark.timeout(150)  # the cron pass is backgrounded; its CRON PROCESS marker lands async
 def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
-    """Tick fires a due feed sync when the cron ledger entry is past.
+    """Tick fires a due feed sync, dispatched THROUGH pfblockerng_sync_cron (issue #570).
+
+    Two observables (the tick logs to syslog, not stdout, so we never assert on tick stdout):
+      1. mark_ran updates the 'cron' ledger next_due (the tick dispatched a cron job), and
+      2. a ' CRON  PROCESS  START' marker appears in pfblockerng.log — that marker is logged
+         ONLY by pfblockerng_sync_cron, so it proves the tick dispatches the `cron` verb
+         (-> per-list Update Frequency + scheduled log reset) and NOT a bare
+         `pfb_trigger scope=both` (which logs no CRON PROCESS pass). This is the FIRST tick
+         test, so it runs on a clean box (no prior backgrounded cron holding the sync lock).
 
     Scenario:
         Background: pfBlockerNG installed with at least one enabled feed.
             Given the 'cron' ledger entry has next_due in the past.
             When pfblockerng.php tick runs.
-            Then the log contains 'Tick: dispatching feed cron.'
-            And  the 'cron' ledger entry's next_due is updated to the future.
+            Then the 'cron' ledger entry's next_due is updated to the future,
+            And  a ' CRON  PROCESS  START' marker appears (dispatched via pfblockerng_sync_cron).
     """
     vm = deployed_vm
+    marker = "CRON  PROCESS  START"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
 
-    # Given: force cron past.
+    # Given: force cron past; snapshot the sync_cron marker count before the tick.
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+    cron_marker_before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
     before = _read_ledger(vm)
     assert before.get("cron", {}).get("next_due", 0) < now_ts, (
         f"before: cron next_due should be in the past; ledger={before}"
     )
 
-    # When: tick fires. Its "Tick: dispatching feed cron." line goes to SYSLOG via logger()
-    # (NOT stdout), and the cron pass is backgrounded to the log file — so the tick's stdout
-    # is empty. Observe the dispatch through the ledger (mark_ran updates next_due), not stdout.
+    # When: tick fires (backgrounds the `cron` verb).
     _run_tick(vm)
 
-    # Then: mark_ran persisted the updated next_due — proves the tick dispatched the cron.
+    # Then (1): mark_ran persisted the updated next_due — proves the tick dispatched the cron.
     assert h.wait_until(
         lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
         timeout=30,
         interval=2,
     ), f"after: cron next_due should be in the future;\n  ledger={_read_ledger(vm)}, now_ts={now_ts}"
+
+    # Then (2): the backgrounded pass ran through pfblockerng_sync_cron (marker count rose) —
+    # a bare pfb_trigger would never log CRON PROCESS, so this is the routing discriminator.
+    assert h.wait_until(
+        lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > cron_marker_before,
+        timeout=90,
+        interval=3,
+    ), (
+        "tick must route the feed cron through pfblockerng_sync_cron — the "
+        f"' {marker}' marker count did not increase (before={cron_marker_before}, "
+        f"after={h.count_log_marker(vm, h.PFB_LOG, marker)}).  A bare pfb_trigger would "
+        "skip per-list Update Frequency and the scheduled log reset (issue #570 / ADR-30)."
+    )
 
 
 @pytest.mark.smoke
@@ -227,68 +249,4 @@ def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
     assert "cron" in after, f"cron ledger entry missing after reboot; ledger={after}"
     assert after["cron"]["next_due"] == future, (
         f"cron next_due changed across reboot;\n  before={future} after={after['cron']['next_due']}"
-    )
-
-
-@pytest.mark.smoke
-@pytest.mark.tick
-@pytest.mark.timeout(220)  # the cron pass is backgrounded + serialised behind sibling ticks'
-#                            crons; its CRON PROCESS marker can land past the 30s body cap.
-def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
-    """The tick's due feed-cron dispatches the ``cron`` verb (-> pfblockerng_sync_cron),
-    NOT a bare ``pfb_trigger scope=both`` (issue #570).
-
-    Only ``pfblockerng_sync_cron()`` applies each feed's per-list Update Frequency
-    (``$list['cron']``: EveryDay/Weekly/NNhour) and runs the scheduled log trim + reset
-    (``pfb_log_mgmt``/``pfb_log_reset``).  A bare ``pfb_trigger`` does neither — it would
-    poll every feed on every tick (provider-ban risk) and never rotate the report logs
-    (ADR-30 dead on-box).  The discriminator is the `` CRON  PROCESS  START`` marker that
-    ONLY ``pfblockerng_sync_cron()`` logs; if the tick regresses to dispatching
-    ``pfb_trigger`` directly the marker count never increases.
-
-    Scenario:
-        Background: pfBlockerNG installed.
-            Given the 'cron' ledger entry is due (next_due in the past).
-            And   a count of the ' CRON  PROCESS  START' marker taken BEFORE the tick.
-            When  pfblockerng.php tick runs (it backgrounds the cron pass).
-            Then  the tick logs 'Tick: dispatching feed cron.'
-            And   the ' CRON  PROCESS  START' marker count increases — proving the pass
-                  ran through pfblockerng_sync_cron, not a bare pfb_trigger.
-    """
-    vm = deployed_vm
-    marker = "CRON  PROCESS  START"
-
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-
-    # Drain any in-flight backgrounded cron from a prior tick test first: a sync pass holds
-    # a lock, so a second cron launched while one is running exits early WITHOUT its own
-    # CRON PROCESS pass — which would leave our marker count flat even though the tick
-    # dispatched correctly. Wait until no `pfblockerng.php cron` process remains.
-    assert h.wait_until(
-        lambda: (
-            vm.ssh("pgrep -f 'pfblockerng[.]php cron' >/dev/null && echo BUSY || echo CLEAR").stdout.strip() == "CLEAR"
-        ),
-        timeout=90,
-        interval=3,
-    ), "a prior backgrounded cron never finished; cannot isolate this tick's sync_cron pass"
-
-    # Given: cron due, and the sync_cron marker count BEFORE this tick.
-    _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
-    before = h.count_log_marker(vm, h.PFB_LOG, marker)
-
-    # When: the tick fires (backgrounds the cron pass via the `cron` verb). The tick's
-    # "Tick: dispatching feed cron." line goes to syslog, not stdout, so do not assert on
-    # tick stdout — the CRON PROCESS marker below is the actual discriminator.
-    _run_tick(vm)
-
-    # Then: the backgrounded pass ran through pfblockerng_sync_cron (marker count rose).
-    assert h.wait_until(
-        lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
-        timeout=90,
-        interval=3,
-    ), (
-        "tick must route the feed cron through pfblockerng_sync_cron — the "
-        f"' {marker}' marker count did not increase (before={before}, "
-        f"after={h.count_log_marker(vm, h.PFB_LOG, marker)}).  A bare pfb_trigger would "
-        "skip per-list Update Frequency and the scheduled log reset (issue #570 / ADR-30)."
     )
