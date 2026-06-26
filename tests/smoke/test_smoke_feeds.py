@@ -1601,7 +1601,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         mock_feeds.enable_etag(feed_name, etag)
         feed_url = mock_feeds.feed_url(feed_name)
 
-        # GIVEN — inject + Force Update to establish baseline + store .etag validator.
+        # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
         spec = h.DnsblCase(aliasname="smokep3304skip", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
@@ -1617,8 +1617,13 @@ def test_cron_304_skips_unchanged_remote_feed(
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
-        # WHEN — cron.
-        h.reload(deployed_vm, "cron")
+        # WHEN — the conditional-GET 304 needs TWO cron passes: the validator is persisted
+        # by the cron detector (pfb_update_check), NOT by the updatednsbl Force ingest above.
+        # Pass 1 probes with no stored validator -> server 200 -> the detector writes the
+        # ETag sidecar to {header}.orig. Pass 2 reads it (the #572 fix aligned that base),
+        # sends If-None-Match, and the server returns 304 -> "304 not modified".
+        h.reload(deployed_vm, "cron")  # pass 1: store the validator at {header}.orig
+        h.reload(deployed_vm, "cron")  # pass 2: read it -> If-None-Match -> 304
 
         # Fast guard.
         hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
