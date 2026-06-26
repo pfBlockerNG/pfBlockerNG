@@ -1,6 +1,6 @@
 # ADR-44: Normalise MIME-type strings before the allow-list gate in pfb_filter()
 
-- **Status:** **Proposed** (2026-06-25)
+- **Status:** **Implemented (pending live-box smoke)** (2026-06-26; PR #589 merged to `devel`) — all four phases landed (`pfb_mime_in_allowlist()` + `pfb_mime_normalise()` wired into the `PFB_FILTER_FILE_MIME` gate, oracle + red→green PHPUnit coverage incl. the gzip/bzip2 guard). The §7 manual live-box smoke (`RESULTS/SMOKE_CHECKLIST.md`) is the out-of-CI acceptance item — flip to **Accepted** after it passes.
 - **Date:** 2026-06-25
 - **Branch:** `adr/44-mime-normalisation` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; shell via `exec()` to `/usr/bin/file`
