@@ -641,6 +641,29 @@ function pfb_mime_in_allowlist(string $mime, array $allowlist): bool {
 	return isset($allowlist[$mime]);
 }
 
+// ADR-44: canonicalise known archive MIME variants so valid feeds packaged by
+// non-canonical tools pass the allow-list gate. Pure: string in -> string out,
+// never promotes a non-archive string.
+function pfb_mime_normalise(string $raw): string {
+	// Exact-match canonicalisations first (so x-gzip maps to gzip, NOT zip).
+	switch ($raw) {
+		case 'application/x-zip-compressed':
+		case 'application/x-zip':
+			return 'application/zip';
+		case 'application/x-gzip':
+			return 'application/gzip';
+	}
+	// Generic catch-all for other ZIP-creator variant strings — but the literal
+	// substring "zip" also lives inside "gzip"/"bzip2", which are distinct valid
+	// archive types that MUST pass through unchanged. Exclude them explicitly.
+	if (stripos($raw, 'zip') !== FALSE
+	    && stripos($raw, 'gzip') === FALSE
+	    && stripos($raw, 'bzip') === FALSE) {
+		return 'application/zip';
+	}
+	return $raw;
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -1014,6 +1037,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				return FALSE;
 			}
 			exec("/usr/bin/file -b --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
+			if (!empty($output[0])) {
+				$mime_raw = $output[0];
+				$output[0] = pfb_mime_normalise($mime_raw);
+				if ($output[0] !== $mime_raw) {
+					// ADR-44: debug-log every normalisation event (raw -> canonical).
+					pfb_logger("MIME normalised: raw=\"" . htmlspecialchars($mime_raw) . "\" -> canonical=\"" . htmlspecialchars($output[0]) . "\"", 5);
+				}
+			}
 			if ($retval != 0 || empty($output[0]) || !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])) {
 
 				// Exceptions
