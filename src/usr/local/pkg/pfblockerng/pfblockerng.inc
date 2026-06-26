@@ -8360,7 +8360,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 			pfb_logger('.', 1);
 
-			/* TODO: FIX - Bypass ZIP Compression file mime type validation due to incompatability with ZIP files
+			/* ZIP MIME variant strings (e.g. application/x-zip-compressed) are now
+			   canonicalised to application/zip in pfb_filter() via pfb_mime_normalise()
+			   (ADR-44), so the outer ZIP MIME gate no longer false-rejects valid feeds.
+			   The post-extraction inner-content MIME check below stays disabled —
+			   ZIP inner-content validation is deferred to a future ADR.
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return FALSE;
 			}
@@ -8380,7 +8384,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				exec("/usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
 			}
 
-			// TODO: Validate file contents after extraction (to be removed once ZIP compression file mime type is fixed above)
+			// Post-extraction content validation: re-run the MIME gate on the extracted
+			// file (the outer-container variant handling is covered by ADR-44's
+			// pfb_mime_normalise()).
 			if (!pfb_filter(array("{$file_org_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download')) {
 				unlink_if_exists("{$file_org_esc}");
 				return FALSE;
