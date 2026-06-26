@@ -232,6 +232,8 @@ def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.tick
+@pytest.mark.timeout(120)  # the cron pass is backgrounded + serialised behind sibling ticks'
+#                            crons; its CRON PROCESS marker can land past the 30s body cap.
 def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
     """The tick's due feed-cron dispatches the ``cron`` verb (-> pflblockerng_sync_cron),
     NOT a bare ``pfb_trigger scope=both`` (issue #570).
