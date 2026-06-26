@@ -725,6 +725,10 @@ def _b64_textarea(lines: list[str]) -> str:
 # Control records — DNS-Resolver Host Overrides, set IN CONFIG before update
 # --------------------------------------------------------------------------- #
 
+# The descr stamped on every smoke control Host Override row. reset_pfb_baseline prunes
+# unbound/hosts rows by this marker, so the two MUST stay in sync — keep it a constant.
+CONTROL_DESCR = "pfBlockerNG smoke control"
+
 
 def _host_override_rows(local_data: dict[str, dict[str, str]]) -> list[dict[str, str]]:
     """Build ``unbound/hosts`` rows from ``{name: {rtype: ip}}``.
@@ -745,7 +749,7 @@ def _host_override_rows(local_data: dict[str, dict[str, str]]) -> list[dict[str,
                 "host": label,
                 "domain": domain,
                 "ip": ",".join(ips),
-                "descr": "pfBlockerNG smoke control",
+                "descr": CONTROL_DESCR,
                 "aliases": "",
             }
         )
@@ -1946,6 +1950,32 @@ def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
     )
 
 
+# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsvip_auto),
+# not per-case behaviour. _dnsbl_settings_replace_php preserves these across a settings
+# replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
+_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
+
+
+def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
+    """PHP that sets the DNSBL settings to EXACTLY ``{infra keys} + settings`` (replace, not merge).
+
+    Keeps only the VIP/port infrastructure (:data:`_DNSBL_INFRA_KEYS`) the deployed_vm fixture
+    set and REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
+    ``pfb_idn`` / ``pfb_hsts`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
+    config, so within a module a case would inherit toggles it never declared. Shared by
+    :func:`_dnsbl_inject_snippet` and :func:`inject_dnsbl_lists`."""
+    keep = ", ".join(_php_str(k) for k in _DNSBL_INFRA_KEYS)
+    return (
+        f"$prev = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        "$keep = array();\n"
+        f"foreach (array({keep}) as $k) {{\n"
+        "  if (isset($prev[$k])) { $keep[$k] = $prev[$k]; }\n"
+        "}\n"
+        f"$s = array_merge($keep, {_php_kv_array(settings)});\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
+    )
+
+
 def inject_dnsbl_lists(
     vm: SmokeVM,
     specs_and_actions: list[tuple[DnsblCase, str]],
@@ -2004,9 +2034,7 @@ def inject_dnsbl_lists(
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
-        f"$s = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$s = array_merge($s, {_php_kv_array(settings)});\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
+        f"{_dnsbl_settings_replace_php(settings)}"
         f"config_set_path({_php_str(CFG_DNSBL_LISTS)}, array({lists_php}));\n"
         "write_config('pfBlockerNG smoke: DNSBL multi-list (ADR-31)');\n"
         "echo 'OK';"
@@ -2090,9 +2118,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
-        f"$s = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$s = array_merge($s, {_php_kv_array(settings)});\n"
-        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
+        f"{_dnsbl_settings_replace_php(settings)}"
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = {rows_php};\n"
         # 'logging' is a per-LIST field — pfBlockerNG reads $list['logging']
@@ -2272,6 +2298,94 @@ def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"reset {verb} failed: rc={result.returncode} stderr={result.stderr!r}")
     reload(vm, "update", timeout=timeout)
+
+
+# Whole config sections a smoke case injects into. reset_pfb_baseline DELETES these — they
+# are pure test-injected (feed lists) or fully re-established by each module's deployed_vm
+# fixture on setup (the DNSBL VIP/ports via ensure_dnsbl_vip, the IP/DNSBL settings via
+# inject()), so wiping them between modules costs nothing the next setup does not rebuild.
+# CFG_GLOBAL (config/0) is deliberately NOT here: it also holds the package's install
+# defaults + wizard flag, so only the toggles a case writes are unset there (below).
+_BASELINE_DEL_SECTIONS = (
+    CFG_DNSBL_LISTS,
+    CFG_IP_V4_LISTS,
+    CFG_IP_V6_LISTS,
+    CFG_DNSBL_SETTINGS,
+    CFG_IP_SETTINGS,
+)
+# Behaviour toggles a case writes into CFG_GLOBAL (config/0). Derived from every config/0
+# write-site in this module + the apply/tick tests: the IP master switch (enable_cb), the
+# ADR-38 syslog toggle (log_syslog), the cron knobs (pfb_dailystart/pfb_reuse), the
+# managed-objects keep flag (pfb_keep), the ADR-11 aggregate selector (pfb_agg_types) and
+# the ADR-43 PfbConfig knobs (pfb_quiet_hours/pfb_tick_interval). Unset (not section-
+# deleted) so the section's install defaults survive.
+_BASELINE_GLOBAL_KEYS = (
+    "enable_cb",
+    "log_syslog",
+    "pfb_dailystart",
+    "pfb_keep",
+    "pfb_reuse",
+    "pfb_agg_types",
+    "pfb_quiet_hours",
+    "pfb_tick_interval",
+)
+
+
+def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
+    """Wipe pfBlockerNG config to a known-EMPTY baseline (cross-module isolation).
+
+    The session VM is ONE long-lived boot whose copy-on-write disk persists across every
+    test and module; :func:`reset` only drops the pf tables/sqlite, NOT ``config.xml``, so
+    injected feeds / settings / host-overrides / global toggles bleed into the NEXT module
+    along collection order (the #532-style false-green this guards against). This is the
+    missing clean slate: it
+
+      * deletes every test-injected pfBlockerNG config section (:data:`_BASELINE_DEL_SECTIONS`
+        + the update hooks + the SafeSearch toggle);
+      * unsets the behaviour toggles a case writes into ``config/0``
+        (:data:`_BASELINE_GLOBAL_KEYS`), leaving the package's install defaults intact;
+      * removes the ``pfBlockerNG smoke control`` Host Overrides (so a stale ``local-data``
+        row cannot answer a later module's probe before the DNSBL module) and regenerates
+        the resolver config so the live daemon matches;
+      * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
+        ``apply_filter_sync`` (pf rules).
+
+    NO forced ``update`` (unlike :func:`reset`): the config is now empty, so there is nothing
+    to rebuild — the next module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it
+    needs. Used by the module-scoped autouse teardown in ``conftest.py``; safe to call
+    directly. Raises on a non-zero ``pfSsh.php`` eval so a broken baseline surfaces loudly.
+    """
+    del_sections = "".join(f"config_del_path({_php_str(s)});\n" for s in _BASELINE_DEL_SECTIONS)
+    unset_keys = "".join(f"unset($g[{_php_str(k)}]);\n" for k in _BASELINE_GLOBAL_KEYS)
+    snippet = (
+        f"{del_sections}"
+        f"config_del_path({_php_str(CFG_HOOKS)});\n"
+        f"config_del_path({_php_str(CFG_SAFESEARCH_ENABLE)});\n"
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        f"{unset_keys}"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        # Drop the smoke control Host Overrides (descr-tagged) so a stale local-data row
+        # cannot answer a later module's probe before the DNSBL python module runs.
+        f"$hosts = config_get_path({_php_str(CFG_UNBOUND_HOSTS)}, array());\n"
+        "$hosts = array_values(array_filter($hosts, function($r) {\n"
+        f"  return ($r['descr'] ?? '') !== {_php_str(CONTROL_DESCR)};\n"
+        "}));\n"
+        f"config_set_path({_php_str(CFG_UNBOUND_HOSTS)}, $hosts);\n"
+        "write_config('pfBlockerNG smoke: reset to clean baseline');\n"
+        # Regenerate host_entries.conf so the live resolver matches the emptied config —
+        # the control-record removal only takes effect after an unbound reconfigure.
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"reset_pfb_baseline failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # Drop the derived state: tables/sqlite (clearip/cleardnsbl) + pf rules (blocking sync).
+    for verb in ("clearip", "cleardnsbl"):
+        cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
+        if cleared.returncode != 0:
+            raise RuntimeError(f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}")
+    apply_filter_sync(vm)
 
 
 # --------------------------------------------------------------------------- #
@@ -4151,6 +4265,12 @@ class CaseContext:
         if isinstance(self.spec, IpCase):
             reload(self.vm, "update")
         reload(self.vm, self.scope)
+        if isinstance(self.spec, IpCase):
+            # filter_configure() is async (send_event); the pf table + Deny rule land a few
+            # seconds AFTER reload() returns. Force a blocking apply so the case's FIRST
+            # pfctl read is authoritative, not racing the apply. DNSBL cases probe DNS (gated
+            # by reload's wait_unbound_ready), so they need no pf gate.
+            apply_filter_sync(self.vm)
         snap_state(self.vm, f"{self.spec.aliasname}_reloaded")
         # NOW block egress: the per-case probe must prove the block/pass with no
         # upstream (a non-blocked name would hang, not silently resolve upstream).
