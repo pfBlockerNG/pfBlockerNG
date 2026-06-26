@@ -1341,3 +1341,62 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
     from . import helpers  # local import: helpers imports from conftest (avoid cycle)
 
     helpers.dump_diagnostics(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Cross-test isolation — the session VM is ONE boot whose disk persists across every
+# test/module. reset() clears only the pf tables, NOT config.xml, so without these two
+# autouse guards injected feeds/settings/toggles/host-overrides and a runner egress block
+# bleed into the next test along collection order (a real false-green source).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Wipe pfBlockerNG config to a clean baseline AFTER each smoke module (cross-module isolation).
+
+    Each module's ``deployed_vm`` deploys on top of whatever the PREVIOUS module left behind,
+    and ``reset()`` only drops the pf tables — so injected feeds/settings/global toggles and
+    the smoke control Host Overrides leak forward (e.g. ``killstates`` leaving ``enable_float``
+    on flips the next module's intended non-floating rule to floating). This teardown calls
+    :func:`helpers.reset_pfb_baseline` so the next module starts from an empty pfBlockerNG
+    config; module 1 is already clean from the fresh boot.
+
+    Scoped to the SMOKE tier only — the UI tier (``tests/smoke/ui/``) shares a session-scoped
+    login + box and is reset separately, so it is excluded here. A strict no-op unless
+    ``SMOKE_PKG`` is set (a package was actually deployed), so off-box modules that never touch
+    the VM are untouched. Wrapped in suppress so a teardown reset can never MASK a test failure.
+    """
+    yield
+    # UI tier shares session state (deferred to its own per-test reset) — leave it alone.
+    if Path(str(request.path)).parent.name == "ui":
+        return
+    # No-op outside a real deployed smoke run, so off-box modules (no VM) are unaffected.
+    if not os.environ.get("SMOKE_PKG"):
+        return
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+
+    try:
+        # Resolve the already-booted session VM lazily — never FORCE a boot just to reset.
+        vm = request.getfixturevalue("smoke_vm")
+    except Exception:
+        return
+    with contextlib.suppress(Exception):
+        helpers.reset_pfb_baseline(vm)
+
+
+@pytest.fixture(autouse=True)
+def _restore_egress() -> Generator[None, None, None]:
+    """Restore the runner's egress after every test (cross-test guard).
+
+    ``block_egress()`` / ``unblock_egress()`` flip the runner's GLOBAL iptables OUTPUT policy;
+    a test that blocks egress (e.g. a ``CaseContext`` probe) and dies before unblocking would
+    leave dark egress for every later test — every later ``pkg``/feed fetch then fails. This
+    always unblocks on teardown. A strict no-op unless ``SMOKE_BLOCK_EGRESS`` is set, so a local
+    run never touches the dev machine's firewall.
+    """
+    yield
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+
+    with contextlib.suppress(Exception):
+        helpers.unblock_egress()
