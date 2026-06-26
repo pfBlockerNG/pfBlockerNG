@@ -854,8 +854,8 @@ function pfblockerng_tick(): void
 
 	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
 
-	// Feed cron: dispatch the `cron` verb (-> pflblockerng_sync_cron), NOT pfb_trigger
-	// directly.  pflblockerng_sync_cron applies each feed's per-list Update Frequency
+	// Feed cron: dispatch the `cron` verb (-> pfblockerng_sync_cron), NOT pfb_trigger
+	// directly.  pfblockerng_sync_cron applies each feed's per-list Update Frequency
 	// ($list['cron']: EveryDay/Weekly/NNhour) before its final sync_package_pfblockerng('cron'),
 	// and runs the scheduled log trim + reset (pfb_log_mgmt/pfb_log_reset) and the ADR-19
 	// software-update check at the end -- all of which a bare `pfb_trigger scope=both` skips
