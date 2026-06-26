@@ -121,13 +121,12 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
         f"before: cron next_due should be in the past; ledger={before}"
     )
 
-    # When: tick fires.
-    tick_out = _run_tick(vm)
+    # When: tick fires. Its "Tick: dispatching feed cron." line goes to SYSLOG via logger()
+    # (NOT stdout), and the cron pass is backgrounded to the log file — so the tick's stdout
+    # is empty. Observe the dispatch through the ledger (mark_ran updates next_due), not stdout.
+    _run_tick(vm)
 
-    # Then: dispatch log line present.
-    assert "Tick: dispatching feed cron" in tick_out, f"expected dispatch log line; tick output:\n{tick_out}"
-
-    # Poll until mark_ran has persisted the updated next_due (VM clock as reference).
+    # Then: mark_ran persisted the updated next_due — proves the tick dispatched the cron.
     assert h.wait_until(
         lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
         timeout=30,
@@ -153,10 +152,12 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM):
 
     _write_ledger_entry(vm, "cron", now_ts - 86400, future)
 
-    tick_out = _run_tick(vm)
+    # The tick logs to syslog, not stdout, so observe via the ledger: a non-due cron is
+    # NOT dispatched, so mark_ran does not run and next_due stays at the future value.
+    _run_tick(vm)
 
-    assert "Tick: dispatching feed cron" not in tick_out, (
-        f"expected no dispatch (not yet due); tick output:\n{tick_out}"
+    assert _read_ledger(vm).get("cron", {}).get("next_due", 0) == future, (
+        f"expected NO dispatch (cron not yet due) — next_due should stay {future}; ledger={_read_ledger(vm)}"
     )
 
 
@@ -261,11 +262,10 @@ def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
     before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
-    # When: the tick fires (backgrounds the cron pass via the `cron` verb).
-    tick_out = _run_tick(vm)
-    assert "Tick: dispatching feed cron" in tick_out, (
-        f"tick should dispatch the due feed cron; tick output:\n{tick_out}"
-    )
+    # When: the tick fires (backgrounds the cron pass via the `cron` verb). The tick's
+    # "Tick: dispatching feed cron." line goes to syslog, not stdout, so do not assert on
+    # tick stdout — the CRON PROCESS marker below is the actual discriminator.
+    _run_tick(vm)
 
     # Then: the backgrounded pass ran through pflblockerng_sync_cron (marker count rose).
     assert h.wait_until(
