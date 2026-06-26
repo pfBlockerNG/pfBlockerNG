@@ -1,0 +1,135 @@
+ADR-44 Phase 1 — Extract pfb_mime_in_allowlist() + oracle tests
+================================================================
+Status: COMPLETE — 1542 tests, 0 failures
+
+---
+
+1. Helper extraction
+--------------------
+Function added to pfblockerng.inc at line 640:
+
+    function pfb_mime_in_allowlist(string $mime, array $allowlist): bool {
+        return isset($allowlist[$mime]);
+    }
+
+Behaviour is exactly behaviour-preserving: isset() on the array_flip'ed
+allow-list is the existing membership test; the helper is a named wrapper only.
+
+Wired into:
+  - PFB_FILTER_FILE_MIME (17) branch, line 1017:
+      !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])
+    replacing: !isset($pfb['mime_types'][$output[0]])
+
+  - PFB_FILTER_FILE_MIME_COMPRESSED (18) branch, line 1052:
+      !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])
+    replacing: !isset($pfb['mime_types'][$output[0]])
+
+Constant 16 (PFB_FILTER_FILE_MIME_COMPARE) is UNTOUCHED — still uses
+$output[0] !== $input[1] (exact-match; no allow-list lookup).
+
+$pfb['mime_types'] (lines 274–287) is UNTOUCHED.
+
+---
+
+2. Oracle test file
+-------------------
+tests/php/PfbMimeAllowlistTest.php (PascalCase + Test.php, final class,
+strict_types=1, CoversFunction('pfb_mime_in_allowlist'))
+
+All 7 oracle tests — all GREEN (pass) on Phase 1 code:
+
+  a. test_pfb_mime_allowlist_accepts_canonical_zip()
+       assertsTrue  — 'application/zip' is in the allow-list
+       PASS
+
+  b. test_pfb_mime_allowlist_rejects_x_zip_compressed()
+       assertsFalse — 'application/x-zip-compressed' NOT in allow-list (RED BASELINE)
+       PASS
+
+  c. test_pfb_mime_allowlist_rejects_x_zip()
+       assertsFalse — 'application/x-zip' NOT in allow-list (RED BASELINE)
+       PASS
+
+  d. test_pfb_mime_allowlist_accepts_canonical_gzip()
+       assertsTrue  — 'application/gzip' is in the allow-list
+       PASS
+
+  e. test_pfb_mime_allowlist_accepts_x_gzip()
+       assertsTrue  — 'application/x-gzip' IS in the allow-list (confirmed)
+       PASS
+
+  f. test_pfb_mime_allowlist_rejects_octet_stream()
+       assertsFalse — 'application/octet-stream' NOT in allow-list
+       PASS
+
+  g. test_pfb_mime_allowlist_accepts_text_plain()
+       assertsTrue  — 'text/plain' is in the allow-list
+       PASS
+
+---
+
+3. Explicit RED-BASELINE record
+--------------------------------
+These are the bug entries Phase 2 will fix via normalisation before the
+allow-list lookup:
+
+  application/x-zip-compressed  →  pfb_mime_in_allowlist == FALSE
+    (file(1) returns this for ZIPs made by Info-ZIP, Windows Explorer, etc.)
+    Phase 2 normalises → 'application/zip' before the allow-list check.
+
+  application/x-zip             →  pfb_mime_in_allowlist == FALSE
+    (file(1) returns this for some ZIP creators)
+    Phase 2 normalises → 'application/zip' before the allow-list check.
+
+---
+
+4. PHPUnit summary
+------------------
+Tests: 1542, Assertions: 14897, Skipped: 3, Failures: 0
+
+Suite is FULLY GREEN. The 3 skips are pre-existing (unrelated to this phase).
+
+---
+
+5. Linting / static analysis
+-----------------------------
+  php -l pfblockerng.inc      → No syntax errors (pre-existing Deprecated notices
+                                 for optional-before-required params are unchanged)
+  phpcs --standard=phpcs.xml.dist src/  → 0 errors (no new violations)
+
+---
+
+6. Test isolation note
+-----------------------
+PfbFileMimeSinkEscapeTest::tearDown() calls unset($GLOBALS['pfb']['mime_types']),
+which clobbers the bootstrap-populated global. PfbMimeAllowlistTest::setUp()
+detects an empty global and falls back to constructing array_flip([...]) from
+the exact shipped strings (pfblockerng.inc:274-287). This is intentional and
+documented in the setUp comment.
+
+---
+
+7. Watch-outs for Phase 2
+--------------------------
+Insertion point in const-17 (PFB_FILTER_FILE_MIME):
+  ~line 1015: exec("/usr/bin/file -b --mime-type ...") populates $output[0].
+  ~line 1017: the allow-list check (now via pfb_mime_in_allowlist).
+  Phase 2 inserts pfb_mime_normalise($output[0]) between these two lines,
+  i.e. $output[0] = pfb_mime_normalise($output[0]) before the check.
+
+Debug log sink: pfb_logger level 5 → /tmp/pfb_debug is the "Print to debugger"
+  path. Phase 2 adds a level-5 log recording raw→normalised when normalisation
+  fires. The pfb_logger call at ~line 1021 (failed/invalid) is level 2 (warning);
+  the normalisation-event log is a separate level-5 call inserted just after
+  the normalise call.
+
+Const-18 (PFB_FILTER_FILE_MIME_COMPRESSED): Phase 2 does NOT add normalisation
+  here (per ADR §2 decision table: "No change" for const-18). Only const-17
+  gets the normalise call.
+
+---
+
+8. Commit hash + push
+----------------------
+See git log for the commit hash (appended after push completes).
+Branch: adr/44-mime-normalisation
