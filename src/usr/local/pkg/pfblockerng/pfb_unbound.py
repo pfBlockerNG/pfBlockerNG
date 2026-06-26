@@ -4620,8 +4620,9 @@ def build(
     abp_rules: list[Rule] = []
     # ADR-31 §2.2.3: a permit feed that inserts a band-2 allow must engage the numeric
     # band-aware resolution (exactly as any feed @@ allow does via reconcile, line ~4095),
-    # so a higher-band user/Custom_List block (band 5) still wins. Without it the fast path
-    # treats ANY whiteDB hit as an unconditional override -- a security fail-open.
+    # so a higher-band block still wins -- a band-5 user/Custom_List block (the headline
+    # security case) and equally a band-3 $important feed block. Without it the fast path
+    # treats ANY whiteDB hit as an unconditional override -- a fail-open.
     permit_allow_inserted = False
 
     for feed_row in manifest.get("feeds", []):
@@ -5228,10 +5229,11 @@ class _LruCache:
 # a block wins iff block_prio > allow_prio (no ties: block in {1,3,5}, allow in {2,4,6}).
 #   6 user allow   5 user block   4 feed allow+important
 #   3 feed block+important   2 feed allow (@@)   1 feed block (||)
-# These name the bands the (currently UNREACHABLE) numeric resolution assigns; the
-# fast path never computes them. Until a later phase tags rule provenance, every
-# loaded BLOCK is a feed rule (band 1, or 3 with $important); user provenance reaches
-# the numeric branch only via the whiteDB ``important`` flag (a user allow -> band 6).
+# The numeric resolution engages whenever important_rules is True: a feed @@ allow
+# (reconcile, ~line 4095), a feed regex, or a permit-feed allow insertion (ADR-31 §2.2.3,
+# permit_allow_inserted in build()). Otherwise the fast path runs (any whiteDB hit
+# overrides any block). USER blocks (Custom_List, provenance='user') emit at band 5 in
+# build(); feed blocks at band 1 (3 with $important).
 PRIO_FEED_BLOCK = 1
 PRIO_FEED_ALLOW = 2
 PRIO_FEED_BLOCK_IMPORTANT = 3
